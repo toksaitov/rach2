@@ -2289,9 +2289,32 @@ struct ext2_time ext2_time_fit(const struct ext2_node *n, uint32_t extra_end, in
     return t;
 }
 
+/**
+ * Mark node `n` as changed in memory past its last store (`n->unstored`),
+ * as Linux's `mark_inode_dirty` marks an inode at every change
+ * (fs/ext2/dir.c:92-95, fs/ext2/inode.c:603 and 1303). Called before or
+ * with every change of a field `inode_encode` writes, but the batch's,
+ * under `n`'s lock or on a node the caller has alone. The mark keeps the
+ * node from being dropped, synced past or left behind the valid bit until
+ * a store of it succeeds.
+ */
+void ext2_node_dirty(struct ext2_node *n)
+{
+    n->unstored = 1;
+}
+
 /** Set the times of `n` that `which` selects (T_ATIME, T_MTIME, T_CTIME)
- * to the real time, as finely as the inode keeps each. */
+ * to the real time, as finely as the inode keeps each, and mark the node
+ * (`ext2_node_dirty`). */
 void ext2_stamp(struct ext2_node *n, int which)
+{
+    ext2_node_dirty(n);
+    ext2_stamp_batch(n, which);
+}
+
+/** `ext2_stamp` without the mark, for a piece of the file-write batch,
+ * which holds the node until its drain stores it. */
+void ext2_stamp_batch(struct ext2_node *n, int which)
 {
     int64_t sec = 0, nsec = 0;
 
@@ -2665,6 +2688,22 @@ static int inode_time_byte(uint32_t at)
     return (at >= 8 && at < 20) || (at >= EXT2_CTIME_EXTRA && at < EXT2_CRTIME_EXTRA + 4);
 }
 
+/** Whether the bytes `len` of an inode slot changed from `was` to `now` in
+ * a field other than the times and the deletion time, which the encoder
+ * clears on a live inode whatever the slot had: a change that only
+ * `ext2_node_dirty` makes legal. */
+static int inode_field_changed(const uint8_t *was, const uint8_t *now, uint32_t len)
+{
+    uint32_t i;
+
+    for (i = 0; i < len; i++) {
+        if (now[i] != was[i] && !inode_time_byte(i) && (i < 20 || i >= 24)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Set `n->dirty_meta` under `em->share_lock`, which an `fsync` clears
  * without `n`'s lock. Call after the table buffer's store attempt, so a
  * sync cannot take a completed store's mark before that store. */
@@ -2717,10 +2756,19 @@ int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, 
  * freed at its last put; that keeps the slot's bytes and the batch's hold
  * on `n` from changing under the read, the batch test and the write, so it
  * needs no big lock. 0, or -errno.
+ *
+ * Only a store that succeeds clears the node's mark (`n->unstored`), and
+ * so does one left to a drain still to come, which owes it. A failed one
+ * leaves it, so that the next settle stores the node again. A slot whose
+ * fields but the times and the deletion time would change on a node that
+ * has no mark, and that the batch does not hold, is a change made without
+ * `ext2_node_dirty`, and
+ * panics, as `ext2_assert_node_locked` does for a change outside the lock,
+ * so that any test that runs the operation finds the missed site.
  */
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how)
 {
-    uint8_t raw[256];
+    uint8_t raw[256], was[EXT2_LARGE];
     uint64_t at;
     uint32_t len = em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD;
     int rc = ext2_slot_at(em, READ_SLOT, n->ino, &at), changed = fresh;
@@ -2737,7 +2785,13 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
         if (rc != 0) {
             return rc;
         }
+        k_memcpy(was, raw, len);
         changed = ext2_inode_encode(em, n, raw, len);
+        if (changed && !n->unstored && !ext2_writeback_holds(em, n) &&
+            inode_field_changed(was, raw, len)) {
+            klog(KLOG_CRIT, "ext2", "inode %d: changed but not marked", (int)n->ino);
+            k_panic("ext2: a change of an inode without its mark");
+        }
     }
     if ((n->mode & S_IFMT_) == S_IFREG_ && n->size >= 0x80000000u &&
         !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
@@ -2748,11 +2802,15 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
         }
     }
     if (!fresh && ext2_writeback_keeps(em, n)) {
+        n->unstored = 0;
         return 0;
     }
     rc = ext2_write_bytes(em, at, raw, len, how);
     if (changed) {
         ext2_node_meta_dirty(em, n);
+    }
+    if (rc == 0) {
+        n->unstored = 0;
     }
     return rc;
 }
@@ -2917,10 +2975,11 @@ static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
  * its extended-attribute block (`ext2_attr_release`), then its bit and counts,
  * these two under their groups' locks with the blocks they read fetched
  * first, so that a lock waits on the disk only for a block evicted again.
- * The node's `unlinked` mark is cleared. Each step reads through the
- * reclaim reader (`ext2_read_reclaim`), which reports a damaged or unread
- * block and leaves what it holds taken, so a step returns only a failed
- * write, after which nothing further would land. 0, or -errno.
+ * The node's `unlinked` mark is cleared, and once the bit is free its
+ * `unstored` mark, since nothing of it is left to store. Each step reads
+ * through the reclaim reader (`ext2_read_reclaim`), which reports a damaged
+ * or unread block and leaves what it holds taken, so a step returns only a
+ * failed write, after which nothing further would land. 0, or -errno.
  */
 int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -2951,6 +3010,9 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
     if (rc == 0) {
         n->unlinked = 0;
         rc = ext2_inode_bit_free(em, n->ino, was_dir);
+    }
+    if (rc == 0) {
+        n->unstored = 0;
     }
     return rc;
 }
@@ -3571,6 +3633,7 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
         rc = attr_feature(em);
     if (rc)
         return rc;
+    ext2_node_dirty(n);
     n->file_acl = fresh;
     n->blocks += (fresh != 0 ? em->block_size / 512 : 0);
     n->blocks -= (old != 0 ? em->block_size / 512 : 0);

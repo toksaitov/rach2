@@ -627,7 +627,7 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
     if (offset + len > n->size) {
         ext2_node_size_set(n, offset + len);
     }
-    ext2_stamp(n, T_MTIME | T_CTIME);
+    ext2_stamp_batch(n, T_MTIME | T_CTIME);
     plan->table->dirty = 1;
     if (wb->bytes == 0) {
         wb->born = tick_count();

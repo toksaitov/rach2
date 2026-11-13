@@ -230,11 +230,15 @@ struct ext2_node {
     uint32_t lookup_from;
     /* Entry changes, under the directory lock; not stored on disk. */
     uint64_t dir_version;
-    /* A directory whose size grew in memory and whose inode has not reached
-     * the device since, under its lock: set by `dir_grow` and cleared only
-     * by a store and commit that succeeded (`dir_settle`), which every
-     * change of its entries makes first. */
-    int store_pending;
+    /* A field `inode_encode` writes changed in memory and no store of it
+     * has succeeded since, under the node lock: set by every change outside
+     * the batch (`ext2_node_dirty`) and cleared only by a store that
+     * succeeded (`ext2_inode_write`) or the inode's free
+     * (`ext2_release_inode`). The last put, `sync`, `fsync` and a remount
+     * writable store a marked node, and every change of a directory's
+     * entries stores it first (`dir_settle`). The batch sets no mark: it
+     * holds its nodes and its drain stores them. */
+    int unstored;
     int unlinked;                /* no name left; the inode and its blocks go at the last put */
     int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
     int load_error;              /* the -errno of a load that failed */
@@ -613,7 +617,9 @@ void ext2_device_write_end(struct ext2_mount *em);
 int ext2_em_write_out(struct vfs_mount *mnt);
 struct ext2_time ext2_time_fit(const struct ext2_node *n, uint32_t extra_end, int64_t sec,
                                int64_t nsec);
+void ext2_node_dirty(struct ext2_node *n);
 void ext2_stamp(struct ext2_node *n, int which);
+void ext2_stamp_batch(struct ext2_node *n, int which);
 int ext2_em_strict(const struct ext2_mount *em);
 int ext2_big_enter(void);
 void ext2_big_exit(int taken);
