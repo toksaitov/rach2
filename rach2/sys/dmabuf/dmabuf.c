@@ -45,32 +45,67 @@ void dma_resv_fini(struct dma_resv *r)
     r->cap = 0;
 }
 
-/** Retain outstanding writers and readers when adding another producer,
- * with the lock held, as Linux's dma_resv_add_fence (dma-resv.c:287-296). */
+/** Whether `f` takes the place of `old` in a reservation, as Linux's
+ * dma_resv_add_fence replaces a fence that has signalled, or one of the
+ * same context that `f` is as late as or later than (dma-resv.c:306-317):
+ * a single fence, not an array or a chain's point, whose leaves may be of
+ * other contexts. */
+static int resv_replaces(struct dma_fence *old, struct dma_fence *f)
+{
+    if (dma_fence_is_signaled(old))
+        return 1;
+    return old->context == f->context && !dma_fence_is_container(old) &&
+           !dma_fence_is_container(f) && (int64_t)(f->seqno - old->seqno) >= 0;
+}
+
+/**
+ * Make `f` a writer or a reader of `r`, with the lock held, as Linux's
+ * dma_resv_add_fence (dma-resv.c:287-326): a fence it replaces goes, so
+ * that a timeline's newer point takes its older one's place with nothing
+ * made; a writer that does not replace the one before, or holds other
+ * fences, is merged with it, and a reader that replaces none is added to
+ * the readers. 0, -EINVAL for no fence, or -ENOMEM.
+ */
 int32_t dma_resv_add_fence_locked(struct dma_resv *r, struct dma_fence *f, int write)
 {
     struct dma_fence **p, *inputs[2], *merged;
     uint32_t i, n;
+    int placed = 0;
     lockdep_assert_held(&r->lock);
     if (!f)
         return -EINVAL;
     if (write) {
-        inputs[0] = dma_fence_is_signaled(r->write) ? NULL : r->write;
-        inputs[1] = f;
-        merged = dma_fence_merge(inputs, 2);
-        if (!merged)
-            return -ENOMEM;
+        /* A container is flattened by the merge, as the writer always
+         * was, so that the writer is never a chain's point. */
+        if (!dma_fence_is_container(f) && (!r->write || resv_replaces(r->write, f))) {
+            merged = dma_fence_get(f);
+        } else {
+            inputs[0] = dma_fence_is_signaled(r->write) ? NULL : r->write;
+            inputs[1] = f;
+            merged = dma_fence_merge(inputs, 2);
+            if (!merged)
+                return -ENOMEM;
+        }
         dma_fence_put(r->write);
         r->write = merged;
         return 0;
     }
     for (i = 0; i < r->nreads;) {
-        if (dma_fence_is_signaled(r->reads[i])) {
+        if (!resv_replaces(r->reads[i], f)) {
+            i++;
+        } else if (!placed) {
+            /* The take before the put, since the old may be `f`. */
+            merged = r->reads[i];
+            r->reads[i++] = dma_fence_get(f);
+            dma_fence_put(merged);
+            placed = 1;
+        } else {
             dma_fence_put(r->reads[i]);
             r->reads[i] = r->reads[--r->nreads];
-        } else
-            i++;
+        }
     }
+    if (placed)
+        return 0;
     if (r->nreads == r->cap) {
         n = r->cap ? r->cap * 2 : 4;
         if (n < r->cap || (size_t)n * sizeof(*p) / sizeof(*p) != n)
