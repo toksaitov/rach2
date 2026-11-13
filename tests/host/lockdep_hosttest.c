@@ -108,6 +108,29 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
     return old;
 }
 
+/** The compare-and-exchange, on one processor. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    unsigned int was = *p;
+
+    if (was == old) {
+        *p = value;
+    }
+    return was;
+}
+
+/** A byte's store, on one processor. */
+void arch_store_u8(volatile unsigned char *p, unsigned char value)
+{
+    *p = value;
+}
+
+/** A half-word's store, on one processor. */
+void arch_store_u16(volatile unsigned short *p, unsigned short value)
+{
+    *p = value;
+}
+
 /** Whether the test holds the modelled big lock. */
 int smp_serialized(void)
 {
