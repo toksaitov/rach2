@@ -1072,11 +1072,13 @@ static int hold(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain
 static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain *c,
                    uint32_t type, uint32_t len)
 {
-    struct vd_hdr h, *o = (struct vd_hdr *)d->resp;
+    struct vd_hdr h, o;
     int per_ctx;
 
+    /* resp is a byte array in struct vd, so its header goes by memcpy. */
     memcpy(&h, d->cmd, sizeof(h));
-    o->type = type;
+    memcpy(&o, d->resp, sizeof(o));
+    o.type = type;
     if (type >= VD_RESP_ERR_UNSPEC) {
         d->n.errors++;
         if (d->verbose) {
@@ -1085,10 +1087,13 @@ static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_ch
         }
     }
     if (h.flags & VD_FLAG_FENCE) {
-        o->flags = h.flags & (VD_FLAG_FENCE | VD_FLAG_INFO_RING_IDX);
-        o->fence_id = h.fence_id;
-        o->ctx_id = h.ctx_id;
-        o->ring_idx = h.ring_idx;
+        o.flags = h.flags & (VD_FLAG_FENCE | VD_FLAG_INFO_RING_IDX);
+        o.fence_id = h.fence_id;
+        o.ctx_id = h.ctx_id;
+        o.ring_idx = h.ring_idx;
+    }
+    memcpy(d->resp, &o, sizeof(o));
+    if (h.flags & VD_FLAG_FENCE) {
         per_ctx = (h.flags & VD_FLAG_INFO_RING_IDX) != 0;
         if (type == VD_RESP_OK_NODATA && (!per_ctx || ctx_live(d, h.ctx_id)) &&
             hold(d, qi, head, c, &h, d->resp) == 0) {
@@ -1190,8 +1195,11 @@ static int serve(struct vd *d, uint32_t qi)
             continue;
         }
         if (off < sizeof(struct vd_hdr)) {
-            memset(d->resp, 0, sizeof(struct vd_hdr));
-            ((struct vd_hdr *)d->resp)->type = VD_RESP_ERR_PARAMETER;
+            struct vd_hdr e;
+
+            memset(&e, 0, sizeof(e));
+            e.type = VD_RESP_ERR_PARAMETER;
+            memcpy(d->resp, &e, sizeof(e));
             complete(d, qi, head, put_response(d, &c, d->resp, sizeof(struct vd_hdr)));
             d->n.errors++;
             continue;
