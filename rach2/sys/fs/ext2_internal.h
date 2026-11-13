@@ -430,18 +430,6 @@ struct ext2_mount {
     /* The free counts, kept equal to the sums of the descriptors'. */
     uint64_t free_blocks, free_inodes;
     int valid_cleared; /* the superblock's valid bit was cleared by this mount */
-    /* Set when this mount's check stopped at one of its own limits before
-     * it could judge the volume: no unmount sets the valid bit, so the
-     * volume keeps the state that called for a check, as Linux puts back at
-     * unmount the state the volume had at mount (`ext2_put_super`). */
-    int check_owed;
-    /* Set when this mount's check stopped and could not then find every
-     * live inode and every block one names (`check_protect` in
-     * ext2_check.c): the mount gives out no block or inode
-     * (`ext2_allocates`), since a block or inode whose bit a stop left clear
-     * could go to a second file. The next writable
-     * mount or remount's check clears it. */
-    int alloc_withheld;
     /* Why the volume may only be read, which a remount cannot change, or
      * NULL for a volume read-only because it was asked to be. */
     const char *readonly_why;
@@ -586,12 +574,18 @@ struct punch_list {
     int count, cap;
 };
 
-/* A file with more than one link: its inode, its link count, and the names
- * the walk has found for it. */
+/* A file the check counts names for, one with more than one link or a live
+ * inode the walk from the root did not reach: its inode, its link count, the
+ * names found for it, and, for such an orphan, the flags below and the `..`
+ * of an orphan directory, which a directory that names it must be. */
 struct ext2_link {
     struct ext2_link *next;
     uint32_t ino;
     uint32_t expect, found;
+    uint32_t parent;
+    uint8_t orphan; /* an orphan no entry of a live directory has named yet */
+    uint8_t dir;    /* the orphan is a directory, its entries walked apart */
+    uint8_t bit;    /* the inode bitmap calls it free, so the check sets its bit */
 };
 
 /* Set field `f` of node `n` to `v` and mark the node (`ext2_node_dirty`) in

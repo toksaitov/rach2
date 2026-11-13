@@ -119,7 +119,6 @@ rach2/sys/fs/exfat.c:set_read complexity 50 one file system operation over the o
 rach2/sys/fs/exfat.c:set_read lines 139 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:upcase_check complexity 28 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/ext2_check.c:check_dir complexity 31 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2_check.c:check_level params 8 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/ext2_dir.c:dirent_write params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/ext2.c:ext2_mount_on complexity 73 one file system operation over the on-disk format, each step a rule of the format
