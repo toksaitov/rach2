@@ -74,7 +74,7 @@ Every block of metadata is read through one primitive with the kind of what it r
 | Kind | Before the read | A failed read | Read by | Linux |
 |---|---|---|---|---|
 | `READ_SLOT`, an inode table block | the number check (`ext2_slot_at`): the root or at least `s_first_ino`, and within the count | reported | the load, the store, the writes of a slot and the batch's image of the table | fs/ext2/inode.c:1322-1349 |
-| `READ_BITMAP`, a block or inode bitmap | the descriptor's block; a group's block bitmap is checked once a mount for its own bitmaps' and inode table's bits (`bitmap_check`), reported and used still | reported; a free skips the group | the allocator, the frees and the batch | fs/ext2/balloc.c:85-163, fs/ext2/ialloc.c:58 |
+| `READ_BITMAP`, a block or inode bitmap | the descriptor's block; a group's block bitmap is checked once a mount for its own bitmaps' and inode table's bits (`bitmap_check`), reported and used still | reported; a free skips the group, and one that cannot read it again at a clear, or its descriptor at the count's write, leaves that block or inode taken, or the count in memory, and goes on | the allocator, the frees and the batch | fs/ext2/balloc.c:85-163, fs/ext2/ialloc.c:58 |
 | `READ_DESC`, a descriptor block | none | reported | the batch and the writes of a descriptor | read at the mount |
 | `READ_SUPER`, the superblock | none | reported | the batch, the attribute feature and the writes of the counts and state | read at the mount |
 | `READ_MAP`, a pointer block of a lookup or a map | the data zone | not reported | the block map, the batch's plan and a new pointer's write (`map_point`) | fs/ext2/inode.c:248-250 |

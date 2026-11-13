@@ -196,6 +196,36 @@ static int bit_put(struct ext2_mount *em, uint32_t g, int which, uint32_t index,
     return bit_write(em, g, which, index, value, WRITE_THROUGH);
 }
 
+/**
+ * Clear bit `index` of group `g`'s bitmap that `which` names, for a free, as
+ * `bit_write` does in the way `how` says: 0, 1 when the bit was clear
+ * already, or 2 when the bitmap could not be read again after the free's
+ * look at it (`bitmap_reclaim`), by the read of the byte or by the write's
+ * own (`ext2_write_owned`), each of which reported it (READ_BITMAP): what
+ * the bit covers stays taken and the free goes on, as one whose look found
+ * the bitmap unread does, as Linux's `ext2_free_blocks` keeps its bitmap's
+ * buffer through the free (fs/ext2/balloc.c:521) and so meets no second
+ * read. A failed device is -errno. The caller holds the group's lock.
+ */
+static int bit_clear(struct ext2_mount *em, uint32_t g, int which, uint32_t index, int how)
+{
+    int rc = bit_write(em, g, which, index, 0, how);
+
+    return rc == -EIO && !ext2_failed(em) ? 2 : rc;
+}
+
+/** Write group `g`'s descriptor for a free, as `gd_write` does in the way
+ * `how` says: a descriptor block that cannot be read again, which the write
+ * reported (READ_DESC), leaves the count raised in memory, which the group's
+ * next write takes to the disk, and is no failure of the free. 0, or the
+ * -errno of a failed device. The caller holds the group's lock. */
+static int gd_write_freed(struct ext2_mount *em, uint32_t g, int how)
+{
+    int rc = gd_write(em, g, how);
+
+    return rc == -EIO && !ext2_failed(em) ? 0 : rc;
+}
+
 /** Whether group `g`'s bitmap that `which` names cannot be read, for a free,
  * which then leaves what it would clear taken: 1 once the reclaim reader has
  * reported it (`ext2_read_reclaim`), and 0 otherwise. The caller holds the
@@ -383,8 +413,9 @@ static void block_free_refused(struct ext2_mount *em, uint32_t b, int cleared)
  * `bit_put` and `ext2_gd_store` write them, under the group's lock, which
  * the caller may hold already. A block that may not hold data, or whose
  * bit is clear already, is refused (`block_free_refused`), and one whose
- * bitmap cannot be read left taken (`bitmap_reclaim`). 0, -EIO for a block
- * out of range, or the -errno of a write. */
+ * bitmap cannot be read, at the look or again at the clear, left taken
+ * (`bitmap_reclaim`, `bit_clear`), the read reported. 0, -EIO for a block
+ * out of range, or the -errno of a failed device. */
 static int block_free(struct ext2_mount *em, uint32_t b)
 {
     uint32_t g, i;
@@ -403,15 +434,17 @@ static int block_free(struct ext2_mount *em, uint32_t b)
         ext2_group_unlock(em, g);
         return 0;
     }
-    rc = bit_put(em, g, EXT2_BLOCK_BITMAP, i, 0);
+    rc = bit_clear(em, g, EXT2_BLOCK_BITMAP, i, WRITE_THROUGH);
     if (rc > 0) {
-        block_free_refused(em, b, 1);
+        if (rc == 1) {
+            block_free_refused(em, b, 1);
+        }
         ext2_group_unlock(em, g);
         return 0;
     }
     if (rc == 0) {
         LE16_PUT(gd + 12, ext2_le16(gd + 12) + 1);
-        rc = ext2_gd_store(em, g);
+        rc = gd_write_freed(em, g, WRITE_THROUGH);
     }
     if (rc == 0) {
         ext2_count_blocks(em, 1, 0);
@@ -532,9 +565,10 @@ int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, str
  * one whose bit is clear already are refused as Linux's `ext2_free_inode`
  * refuses them (fs/ext2/ialloc.c:129-147): logged and reported to the
  * mount's policy (`ext2_mark_error`), with nothing freed or counted; one
- * whose bitmap cannot be read is left taken (`bitmap_reclaim`), as Linux's
- * `ext2_free_inode` returns when `read_inode_bitmap` fails. 0, or the
- * -errno of a write. */
+ * whose bitmap cannot be read, at the look or again at the clear, is left
+ * taken (`bitmap_reclaim`, `bit_clear`), as Linux's `ext2_free_inode`
+ * returns when `read_inode_bitmap` fails. 0, or the -errno of a failed
+ * device. */
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
 {
     uint32_t g = (ino - 1) / em->ipg;
@@ -552,11 +586,13 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
         ext2_group_unlock(em, g);
         return 0;
     }
-    rc = bit_put(em, g, EXT2_INODE_BITMAP, i, 0);
+    rc = bit_clear(em, g, EXT2_INODE_BITMAP, i, WRITE_THROUGH);
     if (rc > 0) {
         ext2_group_unlock(em, g);
-        klog(KLOG_WARN, "ext2", "free of inode %d, whose bit is clear", (int)ino);
-        ext2_mark_error(em);
+        if (rc == 1) {
+            klog(KLOG_WARN, "ext2", "free of inode %d, whose bit is clear", (int)ino);
+            ext2_mark_error(em);
+        }
         return 0;
     }
     if (rc == 0) {
@@ -564,7 +600,7 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
         if (was_dir && ext2_le16(gd + 16) > 0) {
             LE16_PUT(gd + 16, ext2_le16(gd + 16) - 1);
         }
-        rc = ext2_gd_store(em, g);
+        rc = gd_write_freed(em, g, WRITE_THROUGH);
     }
     if (rc == 0) {
         ext2_count_inodes(em, 1);
@@ -585,8 +621,9 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
  * reports each and goes on (fs/ext2/xattr.c:832-853). The count is read
  * and written under the lock of the block's group, which the free takes
  * again, so that two inodes that share the block and go at once each count
- * once, as Linux holds the block's buffer lock for it. 0, or the -errno of
- * a write.
+ * once, as Linux holds the block's buffer lock for it; a block that cannot
+ * be read again for the write of the count, which the write reported
+ * (READ_ATTR_FREE), is left as it is. 0, or the -errno of a failed device.
  */
 int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
 {
@@ -611,6 +648,9 @@ int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
         refs = ext2_le32(raw + 4);
         LE32_PUT(raw + 4, refs - 1);
         rc = ext2_write_bytes(em, at + 4, raw + 4, 4, WRITE_THROUGH | WRITE_KIND(READ_ATTR_FREE));
+        if (rc == -EIO && !ext2_failed(em)) {
+            rc = 0;
+        }
     } else if (rc == 0) {
         rc = block_free(em, b);
     }
@@ -699,7 +739,10 @@ int ext2_alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out)
  * reader reports (`ext2_read_reclaim`) and which stay taken, as Linux's
  * `ext2_free_blocks` goes on past a group whose `read_block_bitmap` fails
  * (fs/ext2/balloc.c:522): the file's other blocks and its inode are still
- * freed. 0, or the -errno of a write.
+ * freed. A bitmap or descriptor block that cannot be read again after that
+ * look, at a clear or at the descriptor's write, reported there, leaves the
+ * block taken or its count in memory alone (`bit_clear`, `gd_write_freed`),
+ * so that a free sees no read error. 0, or the -errno of a failed device.
  */
 int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_list *list)
 {
@@ -731,10 +774,11 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
             if (skip) {
                 continue;
             }
-            err =
-                bit_write(em, g, EXT2_BLOCK_BITMAP, (b - em->first_data) % em->bpg, 0, WRITE_AFTER);
-            if (err > 0) {
+            err = bit_clear(em, g, EXT2_BLOCK_BITMAP, (b - em->first_data) % em->bpg, WRITE_AFTER);
+            if (err == 1) {
                 block_free_refused(em, b, 1);
+            }
+            if (err > 0) {
                 continue;
             }
             if (err != 0) {
@@ -746,7 +790,7 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
         }
         list->count = left;
         if (freed) {
-            int err = gd_write(em, g, WRITE_AFTER);
+            int err = gd_write_freed(em, g, WRITE_AFTER);
 
             rc = rc != 0 ? rc : err;
             ext2_count_blocks(em, freed, 0);
