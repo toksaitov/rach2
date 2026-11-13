@@ -1727,9 +1727,10 @@ static int ext2_prepare_unmount(struct vfs_mount *mnt)
 }
 
 /**
- * The `abort_unmount` of `vfs_ops`: on a writable mount, the valid bit that
- * `ext2_prepare_unmount` set is cleared again in the superblock and the
- * device synced and flushed, since the unmount is not happening. A failure
+ * The `abort_unmount` of `vfs_ops`: on a writable mount that no fault made
+ * read-only (`em->stopped`), the valid bit that `ext2_prepare_unmount` set
+ * is cleared again in the superblock and the device synced and flushed,
+ * since the unmount is not happening. A failure
  * is recorded as the batch's error. The state is written under
  * `em->super`, and the sync and the flush run with no lock held.
  */
@@ -1838,11 +1839,13 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
 }
 
 /**
- * Make a read-only mount writable: the writes the batch accepted before a
- * fault made the mount read-only (`ext2_mark_error`) drained, so that the
- * check reads the volume they leave, a volume whose valid bit is clear or
- * whose error bit is set checked as a writable mount checks it, the batch
- * set up when the mount has none, and the valid bit cleared on the medium.
+ * Make a read-only mount writable, or one a fault made read-only
+ * (`em->stopped`), whose operations under way `em_close` waited for: the
+ * writes the batch accepted before the fault (`ext2_mark_error`) drained,
+ * so that the check reads the volume they leave, a volume whose valid bit
+ * is clear or whose error bit is set checked as a writable mount checks it,
+ * the batch set up when the mount has none, and the valid bit cleared on
+ * the medium.
  * 0, -EROFS for a volume whose features keep it read-only
  * (`em->readonly_why`), -ENOMEM for a batch the heap cannot give, the
  * drain's -errno, or -errno.
@@ -1897,7 +1900,7 @@ static int remount_writable(struct ext2_mount *em)
  * `s_umount` (fs/ext2/super.c:1336). A failed write, or a fault under
  * EXT2_ERRORS_RO, that makes the mount read-only is no remount: it sets the
  * flags at once and waits for nobody (`ext2_writeback_error`,
- * `ext2_mark_error`), and the fault's clears `writable` too, so that a
+ * `ext2_mark_error`), and the fault's sets `stopped` too, so that a
  * remount writable after it is one (`remount_writable`).
  */
 static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
@@ -2531,15 +2534,17 @@ int ext2_inode_times_later(struct ext2_mount *em, struct ext2_node *d)
  * reaches the disk while a remount syncs. Then the mount's policy
  * (`em->errors`): EXT2_ERRORS_CONTINUE goes on; EXT2_ERRORS_RO makes a
  * writable mount read-only at once, waiting for nobody, as Linux sets
- * SB_RDONLY: `writable` is cleared under the same hold of `em->super`, so
- * that no later step of an operation under way writes the volume
- * (`ext2_write_owned`) and only a remount writable, which checks the
- * volume, opens it again (`remount_writable`), and the batch's writes
- * accepted before are drained by the flusher, a sync or that remount; and
- * EXT2_ERRORS_PANIC stops the kernel, on any mount. A read-only mount
- * keeps the bit in memory alone, which a remount writable writes. A reader
- * without the big lock takes it, for the mount's flags. The caller holds
- * no buffer.
+ * SB_RDONLY: `stopped` is set under the same hold of `em->super`, so that
+ * no new operation changes the volume and no block or inode is allocated
+ * (`ext2_alloc_stopped`), while the operations under way, the caller's
+ * among them, write what finishes or rolls back their changes, as Linux's
+ * ext2 does under SB_RDONLY, and only a remount writable, which waits for
+ * them and checks the volume, opens it again (`remount_writable`); the
+ * batch's writes accepted before are drained by the flusher, a sync or
+ * that remount; and EXT2_ERRORS_PANIC stops the kernel, on any mount. A
+ * read-only mount keeps the bit in memory alone, which a remount writable
+ * writes. A reader without the big lock takes it, for the mount's flags.
+ * The caller holds no buffer.
  */
 void ext2_mark_error(struct ext2_mount *em)
 {
@@ -2557,7 +2562,7 @@ void ext2_mark_error(struct ext2_mount *em)
     }
     stop = writable && em->errors == EXT2_ERRORS_RO;
     if (stop) {
-        em->writable = 0;
+        em->stopped = 1;
     }
     ext2_super_unlock(em);
     if (em->errors == EXT2_ERRORS_PANIC) {

@@ -373,9 +373,17 @@ struct ext2_mount {
     /* Whether the mount writes. A remount read-only clears it under
      * `em->super`, where a sync reads it again before it notes the
      * superblock (`ext2_sync`), and under `count_lock` in one step with its
-     * last look at `state` (`finish_writes`); a fault under EXT2_ERRORS_RO
-     * clears it under `em->super` (`ext2_mark_error`). */
+     * last look at `state` (`finish_writes`). */
     int writable;
+    /* Set under `em->super` by a fault under EXT2_ERRORS_RO on a writable
+     * mount (`ext2_mark_error`), which makes the mount read-only: no new
+     * operation is admitted to change the volume and no block or inode is
+     * allocated (`ext2_alloc_stopped`), while the operations already inside
+     * still write, so that each finishes or rolls back what it changed, as
+     * Linux's ext2 goes on under SB_RDONLY. `writable` stays set; only a
+     * remount writable, which checks the volume, clears it
+     * (`remount_writable`). */
+    int stopped;
     /* Set while a writable mount or remount checks and opens the volume,
      * before `writable` is: the only time a mount that is not writable may
      * write (`ext2_write_owned`). */
@@ -595,6 +603,7 @@ int ext2_gd_store(struct ext2_mount *em, uint32_t g);
 int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
                          uint32_t count, uint32_t *out);
 int ext2_may_use_reserved(void);
+int ext2_alloc_stopped(struct ext2_mount *em);
 int ext2_block_refused(struct ext2_mount *em, uint32_t bitmap, uint32_t bit, uint32_t b);
 int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n);
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir);

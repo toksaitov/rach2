@@ -291,11 +291,14 @@ static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint3
             continue;
         }
         rc = ext2_block_refused(em, ext2_le32(gd), bit, block);
+        if (rc > 0) {
+            rc = ext2_alloc_stopped(em);
+            if (rc == 0) {
+                continue;
+            }
+        }
         if (rc < 0) {
             return rc;
-        }
-        if (rc > 0) {
-            continue;
         }
         r->bitmap = writeback_meta(em, ext2_le32(gd), WB_ALLOC, 0, &rc);
         if (!r->bitmap) {
@@ -324,8 +327,9 @@ static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint3
  * this piece's reservations, so those are subtracted before another block
  * is admitted, against the reserved blocks for a caller that is not
  * privileged. A clear bit on a block that may not hold data is refused
- * (`ext2_block_refused`) and the search goes on past it. 0, -ENOSPC, or
- * the errors of `writeback_meta`.
+ * (`ext2_block_refused`) and the search goes on past it, unless the fault
+ * stopped the mount's allocations. 0, -ENOSPC, -EROFS once a fault stopped
+ * them (`ext2_alloc_stopped`), or the errors of `writeback_meta`.
  */
 static int writeback_reserve(struct ext2_mount *em, struct ext2_write_plan *plan)
 {
@@ -334,6 +338,9 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_write_plan *plan
     uint32_t g0, tried, g;
     int count = plan->allocs, rc;
 
+    if (ext2_alloc_stopped(em)) {
+        return -EROFS;
+    }
     if (free <= (uint32_t)count ||
         (!ext2_may_use_reserved() && free - (uint32_t)count <= em->r_blocks)) {
         return -ENOSPC;
