@@ -56,6 +56,33 @@ static uint64_t remap_cpus(void)
 static const struct pci_msi_remap remap_ops = {remap_message, unmap_message, move_message,
                                                remap_cpus};
 
+/** Switching a multi-entry function to MSI drops every MSI-X record. */
+static void msix_to_msi_row(void)
+{
+    pci_device_t dev;
+    uint32_t table[8];
+    uint64_t requested, effective;
+
+    k_memset(&dev, 0, sizeof(dev));
+    k_memset(table, 0, sizeof(table));
+    model_reset();
+    model_cap(0x90, PCI_CAP_ID_MSIX, 0x34);
+    space[0x92] = 1;
+    check(pci_msix_hold(&dev) == 0 && pci_msix_entry_set(&dev, (uintptr_t)table, 0, 60) == 0 &&
+              pci_msix_entry_set(&dev, (uintptr_t)table, 1, 61) == 0,
+          "enable two MSI-X entries on one function");
+    pci_msix_unmask(&dev);
+    model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
+    space[0x62] = PCI_MSI_64BIT;
+    model_cap(0x90, PCI_CAP_ID_MSIX, 0x60);
+    check(pci_msi_enable(&dev, 48) == 0 && !(cfg16(0x92) & PCI_MSIX_ENABLE),
+          "switch the function from MSI-X to MSI");
+    check(pci_irq_affinity(60, &requested, &effective) == -ENOENT &&
+              pci_irq_affinity(61, &requested, &effective) == -ENOENT,
+          "both old vectors disappear from the affinity records");
+    pci_msi_disable(&dev);
+}
+
 /** Allocate, migrate, rebalance and shut down MSI and MSI-X messages. */
 int main(void)
 {
@@ -128,6 +155,7 @@ int main(void)
         check(pci_irq_affinity(48 + (int)i, &requested, &effective) == -ENOENT,
               "disable removes the affinity record");
     }
+    msix_to_msi_row();
     printf("pci_affinity_hosttest: %s\n", fails ? "failed" : "ok");
     return fails != 0;
 }
