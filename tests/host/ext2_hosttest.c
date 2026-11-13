@@ -4874,15 +4874,26 @@ static const char *const removal_ways[3] = {"unlinked", "unlinked with its inode
                                             "renamed over"};
 
 /* The repairs e2fsck may ask for after a stop of a removal on a mount that
-   writes back: counts and bitmaps, an inode left with no name, and the name
-   `new` written before its inode, as Linux's ext2_add_link writes it too.
-   No finding of `gone` or `src`, an entry naming a free inode or one of
-   another type, is among them. `#` is a run of digits. */
+   writes back: counts and bitmaps, an inode left with no name, a new
+   directory's inode, which is written before its parent names it, left
+   unconnected with its `..` naming the root, and the name `new` written
+   before its inode, as Linux's ext2_add_link writes it too. No finding of
+   `gone` or `src`, an entry naming a free inode or one of another type, is
+   among them. `#` is a run of digits. */
 static const char *const removal_findings[] = {
-    "Free inodes count wrong",        "Free blocks count wrong",   "Directories count wrong",
-    "Block bitmap differences",       "Inode bitmap differences",  "Inode #, i_size is",
-    "Inode #, i_blocks is",           "Inode # ref count is",      "Unattached inode #",
-    "Unattached zero-length inode #", "Entry 'new' in / (2) has ",
+    "Free inodes count wrong",
+    "Free blocks count wrong",
+    "Directories count wrong",
+    "Block bitmap differences",
+    "Inode bitmap differences",
+    "Inode #, i_size is",
+    "Inode #, i_blocks is",
+    "Inode # ref count is",
+    "Unattached inode #",
+    "Unattached zero-length inode #",
+    "Unconnected directory inode #",
+    "'..' in ... (#) is / (2), should be <The NULL inode> (0).",
+    "Entry 'new' in / (2) has ",
 };
 
 /**
