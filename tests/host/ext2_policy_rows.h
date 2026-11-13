@@ -31,10 +31,23 @@ static void *policy_open(const char *name, void **h)
     return n;
 }
 
+/** Fail the first read that covers `fail_read_block`, and no later one. */
+static void policy_fail_once(void)
+{
+    if (fail_read_block >= 0 && (uint64_t)fail_read_block >= request_block &&
+        (uint64_t)fail_read_block < request_block + request_blocks) {
+        read_pause = 0;
+        fail_read_hits++;
+        read_fails = 1;
+    }
+}
+
 /**
- * The transitions of the mode, on a volume whose /dir/sub/deep.txt has no
- * links, a mode and no deletion time, which a lookup reports as Linux's
- * `ext2_iget` does. Two files are made, held open and removed; the fault
+ * The transitions of the mode, on a volume that stays whole, so that a
+ * remount's check passes it: two files are made, held open and removed, the
+ * cache is emptied, and the lookup of /dir/sub/deep.txt fails at the one
+ * read of its inode table's block that fails, which the read primitive
+ * reports as Linux's `ext2_get_inode` reports a failed `sb_bread`. The fault
  * makes the mount STOPPED, which must:
  *
  * - admit no create, EROFS;
@@ -53,12 +66,13 @@ static void policy_mode_rows(void)
     const char *img = fix_path("mode.ext2");
     void *a, *b, *ha = 0, *hb = 0, *n;
     uint64_t ffree;
+    int64_t table;
     int rc = 0, writes;
 
-    if (!damage_mount(img, "sif /dir/sub/deep.txt links_count 0\n", 0,
-                      "the mode rows' volume mounts writable")) {
+    if (!damage_mount(img, 0, 0, "the mode rows' volume mounts writable")) {
         return;
     }
+    table = inode_block_of(img, "/dir/sub/deep.txt");
     ffree = policy_ffree();
     a = policy_open("held", &ha);
     b = policy_open("kept", &hb);
@@ -71,7 +85,16 @@ static void policy_mode_rows(void)
     if (b) {
         OPS->put(&mnt, b);
     }
-    check(damage_lookup("/dir/sub/deep.txt") == -EIO && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+    check(table > 0 && OPS->sync(&mnt) == 0 && bcache_invalidate(&dev) == 0,
+          "the mode rows' cache is emptied");
+    fail_read_block = table;
+    fail_read_hits = 0;
+    read_pause = policy_fail_once;
+    rc = damage_lookup("/dir/sub/deep.txt");
+    read_pause = 0;
+    read_fails = 0;
+    fail_read_block = -1;
+    check(rc == -EIO && fail_read_hits == 1 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
               streq(last_log, "error: remounting read-only"),
           "a fault under errors=remount-ro stops the mount by name");
     check(make_file(mnt.root, "new", &rc) == 0 && rc == -EROFS, "and a create is EROFS");

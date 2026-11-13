@@ -7108,8 +7108,9 @@ static void extra_isize_row(void)
  * write failure, since no device write failed, so that the flusher still
  * drains the first write, as Linux's flusher writes back past an inode's
  * `ext2_error`, and a remount writable, which the VFS refuses after a
- * write failure, checks the volume and opens it; the first write must then
- * read back and the error bit stay through the unmount.
+ * write failure, checks the volume, which stops at the damaged pointer and
+ * leaves the mount read-only; the first write must then read back and the
+ * error bit stay through the unmount.
  */
 static void pending_damage_row(void)
 {
@@ -7159,9 +7160,9 @@ static void pending_damage_row(void)
     }
     last_check[0] = 0;
     rc = OPS->remount(&mnt, rw_flags, NULL);
-    check(rc == 0 && last_check[0] != 0 && mnt.write_error == 0,
-          "and a remount writable, which no write failure refuses, checks the volume");
-    mnt.flags = rw_flags;
+    check(rc == -EROFS && strstr(last_check, "a block claimed twice") != 0 && mnt.write_error == 0,
+          "and a remount writable, which no write failure refuses, checks the volume and "
+          "stops at the damaged pointer");
     check(file_is("/hello.txt", want, 6), "and the pending write reads back");
     check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
 }
