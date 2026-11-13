@@ -87,20 +87,21 @@ struct percpu {
     volatile uint64_t switches;                 /* switches from one thread to another */
     volatile uint64_t steal_ns;                 /* the steal time its counts reach, ns */
     volatile int64_t accounted_ns;              /* the monotonic time its counts reach, ns */
-    int idle_short;                   /* last halt ended before a scheduler period without a tick */
-    volatile int tick_stopped;        /* idle span projected by sched_cpu_ticks */
-    uint64_t user_cycles;             /* cycle count at its last return to user mode */
-    uint64_t entry_cycles;            /* cycle count at its last entry from user mode */
-    uint64_t idle_cycles;             /* cycle count as its last idle wait began */
-    uint64_t idle_end_cycles;         /* and as its halt ended */
-    int64_t tick_late_ns;             /* average delay of its tick's interrupt, ns */
-    uint64_t bkl_since;               /* cycle count when it last took the big lock */
-    uint32_t bkl_vector;              /* the vector of the entry that holds it, or 0 */
-    int32_t bkl_nr;                   /* its system call, -1 or BKL_NR_* (smp.h) */
-    uint64_t bkl_waited;              /* cycles the hold under way waited for the lock */
-    int bkl_ioctl;                    /* its ioctl request's slot plus one, or 0 */
-    int32_t bkl_slept;                /* a switch take's system call or -1 (`bkl_take_as`) */
-    volatile uint32_t wake_bkl_start; /* current lock wait's clock, microseconds */
+    int idle_short;            /* last halt ended before a scheduler period without a tick */
+    volatile int tick_stopped; /* idle span projected by sched_cpu_ticks */
+    volatile uint32_t tick_stop_period; /* its scheduler period, ms, as its tick stopped */
+    uint64_t user_cycles;               /* cycle count at its last return to user mode */
+    uint64_t entry_cycles;              /* cycle count at its last entry from user mode */
+    uint64_t idle_cycles;               /* cycle count as its last idle wait began */
+    uint64_t idle_end_cycles;           /* and as its halt ended */
+    int64_t tick_late_ns;               /* average delay of its tick's interrupt, ns */
+    uint64_t bkl_since;                 /* cycle count when it last took the big lock */
+    uint32_t bkl_vector;                /* the vector of the entry that holds it, or 0 */
+    int32_t bkl_nr;                     /* its system call, -1 or BKL_NR_* (smp.h) */
+    uint64_t bkl_waited;                /* cycles the hold under way waited for the lock */
+    int bkl_ioctl;                      /* its ioctl request's slot plus one, or 0 */
+    int32_t bkl_slept;                  /* a switch take's system call or -1 (`bkl_take_as`) */
+    volatile uint32_t wake_bkl_start;   /* current lock wait's clock, microseconds */
     volatile uint32_t wake_bkl_waiting; /* published after start, cleared under the lock */
     uint32_t wake_bkl_total;            /* completed lock waits, microseconds modulo 2^32 */
     uint32_t wake_irq_start;            /* latest serviced timer interrupt, at its entry */
