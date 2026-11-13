@@ -47,7 +47,7 @@ A device node has its numbers in the first pointer word, a byte each of major an
 
 ### Errors
 
-A fault is reported to the mount's policy (`ext2_mark_error`) by the read primitive, for the kinds of block whose failed read Linux reports, and by a named check of what was read, below; no caller reports an errno it was handed, since a failure it is handed was reported where it arose or is a device's, but for the write funnel's `EIO` for a block it writes in part and cannot read again, which no reader met, and which the store of an inode and the rollback of a block report (`store_failed`, `ext2_block_unwind`). The error bit is set in memory and, while the mount keeps the superblock's state, the superblock written at once under `em->super`, so that the next writable mount checks the volume. Then the mount's policy applies, from `s_errors`, whose unknown values count as `remount-ro` as in Linux, or from the `errors=` option: `continue` goes on; `remount-ro` stops a writable mount, logged as `ext2: error: remounting read-only`; and `panic` stops the kernel with `ext2: panic from previous error`. `mke2fs` writes `continue`. A read-only mount sets the bit in memory alone, which a remount writable puts on the disk after its check. The check of a writable mount or remount judges the volume itself and reports nothing (`ext2_inode_check_load`).
+A fault is reported to the mount's policy (`ext2_mark_error`) by the read primitive, for the kinds of block whose failed read Linux reports, and by a named check of what was read, below; no caller reports an errno it was handed, since a failure it is handed was reported where it arose or is a device's. The write funnel is a reader too: a write of part of a block the cache lacks reads it first under the kind its caller names (`WRITE_KIND`), with that kind's report. The error bit is set in memory and, while the mount keeps the superblock's state, the superblock written at once under `em->super`, so that the next writable mount checks the volume. Then the mount's policy applies, from `s_errors`, whose unknown values count as `remount-ro` as in Linux, or from the `errors=` option: `continue` goes on; `remount-ro` stops a writable mount, logged as `ext2: error: remounting read-only`; and `panic` stops the kernel with `ext2: panic from previous error`. `mke2fs` writes `continue`. A read-only mount sets the bit in memory alone, which a remount writable puts on the disk after its check. The check of a writable mount or remount judges the volume itself and reports nothing (`ext2_inode_check_load`).
 
 The mount is in one mode, `em->mode`: RO, RW, or STOPPED, a writable mount the policy stopped. FAILED is derived, not stored (`ext2_failed`): a write to the device failed (`mnt->write_error`), or the device failed or is gone (`BLOCK_WRITE_FAILED`, `BLOCK_GONE`), which `vfs_device_failed` sets without calling the driver; it lasts until the unmount. Only a failed or removed device is recorded as a write failure (`ext2_writeback_error`). The driver sets `VFS_MS_RDONLY` for the VFS and never reads it to decide. The code asks one of four predicates, and only the predicates, the four transitions and `ext2_remount`, which switches on the mode, read it:
 
@@ -73,18 +73,18 @@ Every block of metadata is read through one primitive with the kind of what it r
 
 | Kind | Before the read | A failed read | Read by | Linux |
 |---|---|---|---|---|
-| `READ_SLOT`, an inode table block | the number check (`ext2_slot_at`): the root or at least `s_first_ino`, and within the count | reported | the load, the store and the batch's image of the table | fs/ext2/inode.c:1322-1349 |
+| `READ_SLOT`, an inode table block | the number check (`ext2_slot_at`): the root or at least `s_first_ino`, and within the count | reported | the load, the store, the writes of a slot and the batch's image of the table | fs/ext2/inode.c:1322-1349 |
 | `READ_BITMAP`, a block or inode bitmap | the descriptor's block; a group's block bitmap is checked once a mount for its own bitmaps' and inode table's bits (`bitmap_check`), reported and used still | reported; a free skips the group | the allocator, the frees and the batch | fs/ext2/balloc.c:85-163, fs/ext2/ialloc.c:58 |
-| `READ_DESC`, a descriptor block | none | reported | the batch | read at the mount |
-| `READ_SUPER`, the superblock | none | reported | the batch, the attribute feature | read at the mount |
-| `READ_MAP`, a pointer block of a lookup or a map | the data zone | not reported | the block map and the batch's plan | fs/ext2/inode.c:248-250 |
-| `READ_RECLAIM`, a pointer block of a free | the data zone | reported; the block is abandoned and the free goes on | `punch_level` | fs/ext2/inode.c:1146-1156 |
+| `READ_DESC`, a descriptor block | none | reported | the batch and the writes of a descriptor | read at the mount |
+| `READ_SUPER`, the superblock | none | reported | the batch, the attribute feature and the writes of the counts and state | read at the mount |
+| `READ_MAP`, a pointer block of a lookup or a map | the data zone | not reported | the block map, the batch's plan and a new pointer's write (`map_point`) | fs/ext2/inode.c:248-250 |
+| `READ_RECLAIM`, a pointer block of a free | the data zone | reported; the block is abandoned and the free goes on | `punch_level` and its clear of a slot, which keeps the slot and its block | fs/ext2/inode.c:1146-1156 |
 | `READ_ATTR`, an attribute block of a get, list or set | the data zone | not reported | `attr_read` | fs/ext2/xattr.c:229, 315, 456 |
 | `READ_ATTR_FREE`, an attribute block being released | the data zone | reported; the block is abandoned | `attr_release` | fs/ext2/xattr.c:832-853 |
-| `READ_DATA`, a directory's or file's block | none | not reported; `readdir` reports its own | the directories and the batch's data | fs/ext2/dir.c:282 |
+| `READ_DATA`, a directory's or file's block | none | not reported; `readdir` reports its own | the directories, their entries' writes, a truncated tail's zeros and the batch's data | fs/ext2/dir.c:282 |
 | `READ_QUIET`, any block | none | not reported | the mount, the check and the hints of the readers | none |
 
-So `volume_get` and `bcache_get` are called only by the primitive (`volume_get`, `ext2_volume_fetch`, `ext2_block_get`, `ext2_read_bytes`), by the write funnel (`ext2_write_owned`), by the drain's `bcache_get_blank`, and by the paths of a file's data (`read_fetch`, `read_piece`). `READ_QUIET` is used only by `ext2_check.c`, the mount, `read_missing`'s hint, `ext2_fast_link` and the quiet slot of the check.
+So `volume_get` and `bcache_get` are called only by the primitive (`volume_get`, `ext2_volume_fetch`, `ext2_block_get`, `ext2_read_bytes`), by the write funnel (`ext2_write_owned`), whose read of part of a block takes its caller's kind, by the drain's `bcache_get_blank`, and by the paths of a file's data (`read_fetch`, `read_piece`). `ext2_volume_fetch` brings a block in ahead of the lock that reads it and leaves a failed read to that read, or to the write that follows it. `READ_QUIET` is used only by `ext2_check.c`, the mount, `read_missing`'s hint, `ext2_fast_link` and the quiet slot of the check.
 
 The callers of `ext2_mark_error` are the primitive and the named checks of what was read, each a site of Linux's `ext2_error`:
 
@@ -107,8 +107,7 @@ The callers of `ext2_mark_error` are the primitive and the named checks of what 
 | `ext2_readdir` | a block of a directory being listed that cannot be read | fs/ext2/dir.c:282 |
 | `link_damaged` | a symbolic link whose size or block is wrong | none, Rach2's own check |
 | `file_sync` | an `fsync` whose write fails | fs/ext2/file.c:161 |
-| `store_failed` | a store of an inode that cannot read again a block it writes part of | fs/ext2/inode.c:1530-1531 |
-| `ext2_block_unwind` | a block a failed operation took and nothing names, which cannot be freed again | fs/ext2/inode.c:549-555, through `ext2_free_blocks` |
+| `ext2_write_owned` | a failed read of a block a write changes in part, of a kind that reports | the kind table |
 
 ### Symbolic links
 
@@ -189,7 +188,7 @@ A failed store keeps the mark, and the inode is stored again before its node goe
 * by `fsync` and `fdatasync` of the file;
 * by a remount writable of a STOPPED mount, before its check.
 
-A failed operation takes back in memory what it changed, with no store that could fail in turn, as Linux's `out_fail` does (fs/ext2/namei.c:157-266), and the node keeps its mark, so that the next store writes what memory holds. A block taken that nothing names is freed again and `i_blocks` lowered (`ext2_block_unwind`), as `ext2_alloc_branch` frees its blocks (fs/ext2/inode.c:549-555), and a free that fails is logged as `ext2: block B: not freed after its operation failed`. A failed shrink puts the old size back. A raised link count is lowered. A new inode no entry names gets a count of 0 and is freed at its last put (`inode_abandon`). An attribute block that the inode could not be stored with is given back, and the old one named again. Once a change of entries is on the device, a failed store of a count or of times no longer fails the operation: `unlink`, `rmdir`, `link` and both renames succeed and leave the node marked. A store that cannot read again a block it writes part of is logged as `ext2: inode N: not stored: a block cannot be read again` and reported, as a failed read of the table block is.
+A failed operation takes back in memory what it changed, with no store that could fail in turn, as Linux's `out_fail` does (fs/ext2/namei.c:157-266), and the node keeps its mark, so that the next store writes what memory holds. A block taken that nothing names is freed again and `i_blocks` lowered (`ext2_block_unwind`), as `ext2_alloc_branch` frees its blocks (fs/ext2/inode.c:549-555), and a free that fails is logged as `ext2: block B: not freed after its operation failed`. A failed shrink puts the old size back. A raised link count is lowered. A new inode no entry names gets a count of 0 and is freed at its last put (`inode_abandon`). An attribute block that the inode could not be stored with is given back, and the old one named again. Once a change of entries is on the device, a failed store of a count or of times no longer fails the operation: `unlink`, `rmdir`, `link` and both renames succeed and leave the node marked. A store whose write cannot read its table block again is reported as the read of the slot is (READ_SLOT).
 
 ### The file-write batch
 

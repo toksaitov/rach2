@@ -634,7 +634,9 @@ struct punch_walk {
  * Linux's `ext2_free_branches` clears the slot and goes on
  * (fs/ext2/inode.c:1146-1156), so that the rest of the file and its inode
  * can still be freed, and `*emptied` is set; a block whose range the walk
- * keeps in part stays, -EIO. 0, or -errno.
+ * keeps in part stays, -EIO, and so does one whose slot's own block cannot
+ * be read again for the clear, reported (READ_RECLAIM), with 0 and
+ * `*emptied` clear. 0, or -errno.
  */
 static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int whole,
                          int *emptied)
@@ -648,7 +650,11 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
     if (slot_at != 0) {
         uint8_t zero[4] = {0, 0, 0, 0};
 
-        rc = ext2_write_owned(em, w->n->ino, slot_at, zero, 4, WRITE_FIRST);
+        rc = ext2_write_owned(em, w->n->ino, slot_at, zero, 4,
+                              WRITE_FIRST | WRITE_KIND(READ_RECLAIM));
+        if (rc == -EIO && !ext2_failed(em)) {
+            return 0;
+        }
         if (rc != 0) {
             return rc;
         }
@@ -674,8 +680,11 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
  * and the listed blocks stay taken until the round frees them. A pointer
  * block is read by the reclaim reader (`ext2_read_reclaim`), and one out of
  * range or that cannot be read, which it reports, is abandoned
- * (`punch_refused`) and the walk goes on. 0, PUNCH_FULL when the list has
- * no room for the next block, or -errno.
+ * (`punch_refused`) and the walk goes on. A pointer block that cannot be
+ * read again to clear a slot in it, which the write funnel reports
+ * (READ_RECLAIM), keeps that slot: its block and what is below it stay
+ * taken, and `*emptied` clear, so that the rest is still freed. 0,
+ * PUNCH_FULL when the list has no room for the next block, or -errno.
  */
 static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int level,
                        uint32_t base, int *emptied)
@@ -747,7 +756,10 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
     if (slot_at != 0) {
         uint8_t zero[4] = {0, 0, 0, 0};
 
-        rc = ext2_write_owned(em, n->ino, slot_at, zero, 4, WRITE_FIRST);
+        rc = ext2_write_owned(em, n->ino, slot_at, zero, 4, WRITE_FIRST | WRITE_KIND(READ_RECLAIM));
+        if (rc == -EIO && !ext2_failed(em)) {
+            return 0;
+        }
         if (rc != 0) {
             return rc;
         }
@@ -915,7 +927,8 @@ static int map_point(struct ext2_mount *em, uint32_t owner, uint64_t slot_at, ui
     uint8_t raw[4];
 
     LE32_PUT(raw, b);
-    return ext2_write_owned(em, owner, slot_at, raw, 4, WRITE_LEVEL(level) | WRITE_THROUGH);
+    return ext2_write_owned(em, owner, slot_at, raw, 4,
+                            WRITE_LEVEL(level) | WRITE_THROUGH | WRITE_KIND(READ_MAP));
 }
 
 /**
@@ -1223,7 +1236,7 @@ int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                 uint32_t in = (uint32_t)size & (em->block_size - 1);
 
                 rc = ext2_write_owned(em, n->ino, (uint64_t)b * em->block_size + in, 0,
-                                      em->block_size - in, 0);
+                                      em->block_size - in, WRITE_KIND(READ_DATA));
             }
         }
         if (rc == 0) {

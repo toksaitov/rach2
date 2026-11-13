@@ -914,7 +914,7 @@ static int dirent_write(struct ext2_mount *em, uint64_t off, uint32_t ino, uint3
     uint32_t type = (em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0;
     uint32_t len = dirent_encode(raw, ino, rec_len, name, name_len, type);
 
-    return ext2_write_bytes(em, off, raw, len, WRITE_THROUGH);
+    return ext2_write_bytes(em, off, raw, len, WRITE_THROUGH | WRITE_KIND(READ_DATA));
 }
 
 /**
@@ -940,14 +940,14 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
     if ((off >> 9) == ((off + used + len - 1) >> 9)) {
         dirent_encode(pair, old->ino, used, old->name, old->name_len, old->type);
         k_memcpy(pair + used, entry, len);
-        return ext2_write_bytes(em, off, pair, used + len, WRITE_THROUGH);
+        return ext2_write_bytes(em, off, pair, used + len, WRITE_THROUGH | WRITE_KIND(READ_DATA));
     }
-    rc = ext2_write_bytes(em, off + used, entry, len, WRITE_THROUGH);
+    rc = ext2_write_bytes(em, off + used, entry, len, WRITE_THROUGH | WRITE_KIND(READ_DATA));
     if (rc != 0) {
         return rc;
     }
     used = dirent_encode(pair, old->ino, used, old->name, old->name_len, old->type);
-    return ext2_write_bytes(em, off, pair, used, WRITE_THROUGH);
+    return ext2_write_bytes(em, off, pair, used, WRITE_THROUGH | WRITE_KIND(READ_DATA));
 }
 
 /**
@@ -1031,7 +1031,7 @@ static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *hea
     int rc = ext2_write_bytes(em, off, 0, em->block_size, ext2_em_strict(em) ? 0 : WRITE_AFTER);
 
     if (rc == 0) {
-        rc = ext2_write_bytes(em, off, head, len, WRITE_THROUGH);
+        rc = ext2_write_bytes(em, off, head, len, WRITE_THROUGH | WRITE_KIND(READ_DATA));
     }
     if (rc == 0) {
         rc = dir_commit(em, off, em->block_size);
@@ -1267,7 +1267,7 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
 
         rc = dir_block_at(em, d, at, &off);
         if (rc == 0) {
-            rc = ext2_write_bytes(em, off, zero, 4, 1);
+            rc = ext2_write_bytes(em, off, zero, 4, WRITE_THROUGH | WRITE_KIND(READ_DATA));
         }
         return rc == 0 ? dir_commit(em, off, 4) : rc;
     } else {
@@ -1284,7 +1284,7 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
             return rc;
         }
         LE16_PUT(raw, ps.rec_len + sc->rec_len);
-        rc = ext2_write_bytes(em, off + 4, raw, 2, 1);
+        rc = ext2_write_bytes(em, off + 4, raw, 2, WRITE_THROUGH | WRITE_KIND(READ_DATA));
         return rc == 0 ? dir_commit(em, off + 4, 2) : rc;
     }
 }
@@ -1341,7 +1341,7 @@ static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t p
             }
             dir_changed(d);
             LE32_PUT(raw, parent);
-            rc = ext2_write_bytes(em, off, raw, 4, 1);
+            rc = ext2_write_bytes(em, off, raw, 4, WRITE_THROUGH | WRITE_KIND(READ_DATA));
             return rc == 0 ? dir_commit(em, off, 4) : rc;
         }
     }
@@ -1493,7 +1493,7 @@ static int inode_make(struct ext2_mount *em, const struct ext2_node *dir, uint32
     n->generation = ext2_generation_next(em);
     rc = store ? ext2_inode_write(em, n, 1, WRITE_THROUGH)
                : ext2_write_bytes(em, ext2_inode_offset(em, n->ino), 0, em->inode_size,
-                                  WRITE_THROUGH);
+                                  WRITE_THROUGH | WRITE_KIND(READ_SLOT));
     if (rc != 0) {
         ext2_inode_bit_free(em, n->ino, is_dir);
         ext2_node_settle(em, n, rc);
@@ -2289,7 +2289,7 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
             LE16_PUT(raw + 4, nsc->rec_len);
             raw[6] = (uint8_t)nsc->name_len;
             raw[7] = (em->incompat & EXT2_INCOMPAT_FILETYPE) ? (uint8_t)ext2_ftype_of(n->mode) : 0;
-            rc = ext2_write_bytes(em, off, raw, 8, WRITE_THROUGH);
+            rc = ext2_write_bytes(em, off, raw, 8, WRITE_THROUGH | WRITE_KIND(READ_DATA));
         }
         if (rc == 0) {
             rc = dir_commit(em, off, 8);

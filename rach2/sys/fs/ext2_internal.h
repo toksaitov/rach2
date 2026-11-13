@@ -298,6 +298,11 @@ struct ext2_handle {
  * writes it after the blocks below it (`bcache_dirty_pointer`). */
 #define WRITE_LEVEL(level) ((level) << 4)
 #define WRITE_WAY          15
+/* The kind of the block a write changes, a READ_ kind, added to the above:
+ * a write of part of a block the cache lacks reads it first under that
+ * kind's rule (`read_failed`), so that a failed read is logged and reported
+ * as the read primitive's of that kind is. */
+#define WRITE_KIND(kind)   ((kind) << 8)
 
 /*
  * The file-write batch's limits: the bytes it takes, its data and metadata

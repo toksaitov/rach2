@@ -14,7 +14,7 @@ static int gd_write(struct ext2_mount *em, uint32_t g, int how)
     uint64_t at = (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32;
 
     ext2_assert_group_locked(em, g);
-    return ext2_write_bytes(em, at, em->gd + g * 32, 32, how);
+    return ext2_write_bytes(em, at, em->gd + g * 32, 32, how | WRITE_KIND(READ_DESC));
 }
 
 /** The block of the cache that holds group `g`'s descriptor. */
@@ -187,7 +187,7 @@ static int bit_write(struct ext2_mount *em, uint32_t g, int which, uint32_t inde
     } else {
         byte = (uint8_t)(byte & ~(1u << (index % 8)));
     }
-    return ext2_write_bytes(em, at, &byte, 1, how);
+    return ext2_write_bytes(em, at, &byte, 1, how | WRITE_KIND(READ_BITMAP));
 }
 
 /** `bit_write` with WRITE_THROUGH. */
@@ -610,7 +610,7 @@ int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
     } else if (rc == 0 && ext2_le32(raw + 4) > 1) {
         refs = ext2_le32(raw + 4);
         LE32_PUT(raw + 4, refs - 1);
-        rc = ext2_write_bytes(em, at + 4, raw + 4, 4, WRITE_THROUGH);
+        rc = ext2_write_bytes(em, at + 4, raw + 4, 4, WRITE_THROUGH | WRITE_KIND(READ_ATTR_FREE));
     } else if (rc == 0) {
         rc = block_free(em, b);
     }
@@ -642,12 +642,10 @@ void ext2_group_fetch(struct ext2_mount *em, uint32_t hint)
  * the group's bitmap and descriptor block fetched with no lock held, then
  * the block freed under the group's lock (`block_free`). A free that fails,
  * or that a mount that writes nothing cannot make, leaves a lost block for
- * e2fsck, logged as `ext2: block B: not freed after its operation failed`.
- * The bitmap's reader reports a fault it meets, and a failed write is
- * recorded as one; an -EIO of a mount whose device has not failed is the
- * write funnel's, which could not read again the block it writes in part,
- * and which no reader met, so it is reported here (`ext2_mark_error`). The
- * caller holds no group's lock.
+ * e2fsck, logged as `ext2: block B: not freed after its operation failed`;
+ * a fault it met was reported where it arose, by the reader, the write
+ * funnel (`ext2_write_owned`) or `block_free_refused`, and a failed write is
+ * recorded as one. The caller holds no group's lock.
  */
 void ext2_block_unwind(struct ext2_mount *em, uint32_t b)
 {
@@ -659,9 +657,6 @@ void ext2_block_unwind(struct ext2_mount *em, uint32_t b)
     }
     if (rc != 0) {
         klog(KLOG_WARN, "ext2", "block %d: not freed after its operation failed", (int)b);
-        if (rc == -EIO && !ext2_failed(em)) {
-            ext2_mark_error(em);
-        }
     }
 }
 
