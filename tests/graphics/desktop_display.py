@@ -7,6 +7,7 @@ machine, by QMP, before the subcommand goes on.
 """
 import http.server
 import os
+import pty
 from pathlib import Path
 import re
 import signal
@@ -208,17 +209,38 @@ def cmd_mode(mode):
 
 
 def cmd_egl():
-    """Run weston-simple-egl in the session and require frames drawn with GL."""
-    with tempfile.TemporaryDirectory(prefix="desktop-egl-", dir="/tmp") as name:
-        os.chown(name, 1001, 1001)
-        out = Path(name) / "egl.log"
-        line = ("EGL_LOG_LEVEL=info exec timeout -s INT 20 weston-simple-egl -b > %s 2>&1"
-                % out)
-        status = subprocess.call(desktop(line))
-        text = out.read_text(errors="replace")
-        frames = [int(n) for n in re.findall(r"(\d+) frames in", text)]
-        assert status in (0, 124, 130) and frames and sum(frames) > 0, (status, text[-4000:])
-        print("desktop: result: egl: %d frames" % sum(frames), flush=True)
+    """Run weston-simple-egl in the session and require frames drawn with GL.
+
+    The client reports the frames it drew each time five seconds have passed
+    since its last report. Its output is a terminal, on which the C library
+    writes each line as it ends, so the first report is read as it comes; the
+    client is then stopped by SIGINT, as by a user's ^C. The wait has no limit
+    of its own: on an emulated machine llvmpipe draws the first frames late.
+    """
+    master, slave = pty.openpty()
+    client = subprocess.Popen(desktop("EGL_LOG_LEVEL=info exec weston-simple-egl -b"),
+                              stdin=subprocess.DEVNULL, stdout=slave, stderr=slave,
+                              start_new_session=True)
+    os.close(slave)
+    text = ""
+    try:
+        while not re.search(r"\d+ frames in", text):
+            try:
+                data = os.read(master, 4096)
+            except OSError:  # EIO: every writer has closed the terminal
+                data = b""
+            if not data:
+                break
+            text += data.decode(errors="replace")
+    finally:
+        if client.poll() is None:
+            os.killpg(client.pid, signal.SIGINT)
+        status = client.wait()
+        os.close(master)
+    frames = [int(n) for n in re.findall(r"(\d+) frames in", text)]
+    assert status in (0, 130, -signal.SIGINT) and frames and sum(frames) > 0, (status,
+                                                                              text[-4000:])
+    print("desktop: result: egl: %d frames" % sum(frames), flush=True)
 
 
 PAGE = b'''<!doctype html><title>Desktop input</title>
