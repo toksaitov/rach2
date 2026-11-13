@@ -7580,6 +7580,9 @@ static void reuse_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
 }
 
+/* The options `retry_mount` mounts with. */
+static const char *retry_options = "";
+
 /**
  * Make `retry_row`'s volume: /dst with its first `blocks` blocks full
  * (`growth_fill`) and an empty /src whose inode lies in another table block
@@ -7597,7 +7600,7 @@ static int retry_mount(int blocks, int64_t *table)
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     use_image(wimg, wbytes);
     stop_after = -1;
-    rc = mount_flags(0);
+    rc = mount_options(0, retry_options);
     if (rc == 0) {
         rc = growth_fill(blocks);
     }
@@ -8177,6 +8180,357 @@ static void mark_rows(void)
     map_row();
 }
 
+/* ---- the error policy's stops beside final puts, frees and the mark ---- */
+
+/* The removed file `stop_close` closes, and the inode bitmap whose read in
+   the check gives it its turn at the next read, once. */
+static void *stop_node, *stop_handle;
+static int64_t stop_bitmap = -1;
+static int stop_seen, stop_passed;
+
+/** Process B of `stop_put_row`: the last close of the removed file. */
+static void stop_close(void)
+{
+    OPS->release(&mnt, stop_handle);
+    OPS->put(&mnt, stop_node);
+    stop_handle = stop_node = 0;
+}
+
+/** The read hook of `stop_put_row`: process B's turn at the first read after
+ * one of the inode bitmap. */
+static void stop_turn(void)
+{
+    if (stop_seen && !stop_passed) {
+        stop_passed = 1;
+        pass_turn();
+    }
+    if (read_covers(stop_bitmap)) {
+        stop_seen = 1;
+    }
+}
+
+/** Look up /hello.txt, for `policy_unread`; the lookup's error. */
+static int stop_lookup(void)
+{
+    return damage_lookup("/hello.txt");
+}
+
+/**
+ * A final put that comes while a remount writable checks the volume waits
+ * for the check (`em_hold`), so that the check does not write counts read
+ * before the free over it. Under `errors=remount-ro` a file is made, held
+ * open and removed, and a lookup whose table block cannot be read stops
+ * the mount; the cache is emptied and the remount writable runs, while
+ * another process closes the file at the first read after the check reads
+ * the inode bitmap. The remount must succeed, the file be freed once the
+ * mount is open, and e2fsck find the counts the bitmaps give.
+ */
+static void stop_put_row(void)
+{
+    const char *img = fix_path("stop.ext2");
+    uint64_t ffree;
+    int rc = 0, hits;
+
+    if (!damage_mount(img, 0, 0, "the final-put row's volume mounts")) {
+        return;
+    }
+    ffree = policy_ffree();
+    stop_node = policy_open("held", &stop_handle);
+    check(stop_node && stop_handle && OPS->unlink(&mnt, mnt.root, "held") == 0,
+          "a file is made, held open and removed");
+    stop_bitmap = debugfs_number(img, "stats", "inode bitmap at ");
+    hits = policy_unread(inode_block_of(img, "/hello.txt"), stop_lookup, &rc);
+    check(hits > 0 && rc == -EIO && (mnt.flags & VFS_MS_RDONLY) != 0,
+          "and a lookup whose table block cannot be read stops the mount");
+    if (!stop_node || !stop_handle || OPS->sync(&mnt) != 0 || bcache_invalidate(&dev) != 0) {
+        check(0, "the final-put row's cache is emptied");
+        unmount_image();
+        return;
+    }
+    stop_seen = stop_passed = 0;
+    read_pause = stop_turn;
+    start_turns(stop_close);
+    rc = OPS->remount(&mnt, rw_flags, NULL);
+    read_pause = 0;
+    finish_turns();
+    mnt.flags = rw_flags;
+    check(rc == 0 && stop_passed,
+          "a remount writable whose check meets the last close of a removed file succeeds");
+    check(policy_ffree() == ffree, "and the file is freed once the mount is open");
+    rc = unmount_rw();
+    check(rc == 0 && fsck_judged(img) >= 0 && findings_among(0, 0),
+          "and e2fsck finds the counts the bitmaps give");
+}
+
+/**
+ * The free of an inode reports a table block it cannot read, as a load
+ * does: under `errors=remount-ro` an empty file is made, held open and
+ * removed, the cache emptied, and its last close made while every read of
+ * its table block fails, where the write of the zeroed slot reads the block
+ * (`ext2_write_owned`, READ_SLOT). The free must be logged as not made, the
+ * mount stopped and the error bit on the disk.
+ */
+static void stop_release_row(void)
+{
+    const char *img = fix_path("stop.ext2");
+    char cmd[32];
+    int64_t table = -1;
+    void *n, *h = 0;
+    int ok;
+
+    if (!damage_mount(img, 0, 0, "the release row's volume mounts")) {
+        return;
+    }
+    n = policy_open("gone", &h);
+    ok = n && h && OPS->unlink(&mnt, mnt.root, "gone") == 0 && OPS->sync(&mnt) == 0;
+    if (ok) {
+        snprintf(cmd, sizeof cmd, "<%lu>", (unsigned long)held_ino(&mnt, n));
+        table = inode_block_of(img, cmd);
+    }
+    ok = ok && table > 0 && bcache_invalidate(&dev) == 0;
+    check(ok, "an empty file is made, held open and removed, and the cache emptied");
+    fail_read_block = table;
+    fail_read_hits = 0;
+    read_pause = fail_block_reads;
+    last_warn[0] = 0;
+    if (h) {
+        OPS->release(&mnt, h);
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    read_pause = 0;
+    read_fails = 0;
+    fail_read_block = -1;
+    check(ok && fail_read_hits > 0 && strstr(last_warn, "not freed at its last put") &&
+              (mnt.flags & VFS_MS_RDONLY) != 0 && disk_state(img) == 2,
+          "and its last close, whose table block cannot be read, reports the read and stops "
+          "the mount");
+    if (!strstr(last_warn, "not freed at its last put")) {
+        printf("  failed reads %d, last warning '%s'\n", fail_read_hits, last_warn);
+    }
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+}
+
+/**
+ * A remount writable stores a directory whose growth failed to store it
+ * before the check reads the volume (`nodes_settle`). On a mount that writes
+ * back under `errors=remount-ro`, a rename into a directory of one full
+ * block fails at the store of its grown size, whose table block cannot be
+ * read, which stops the mount; with the reads whole, the remount writable
+ * must succeed through a clean check, and after the unmount e2fsck must ask
+ * nothing and the directory hold its grown size.
+ */
+static void stop_settle_row(void)
+{
+    int64_t table = -1;
+    void *dst;
+    int rc, failed;
+
+    retry_options = "errors=remount-ro";
+    rc = retry_mount(1, &table);
+    retry_options = "";
+    if (rc != 0) {
+        check(0, "the settle row's volume mounts and takes its files");
+        return;
+    }
+    failed = retry_fail(table, 1, &dst);
+    if (failed < 0) {
+        check(0, "the settle row's directory is held and its cache emptied");
+        unmount_image();
+        return;
+    }
+    check(failed == 1 && (mnt.flags & VFS_MS_RDONLY) != 0,
+          "under errors=remount-ro, a rename into a full directory whose table block cannot be "
+          "read fails and stops the mount");
+    last_check[0] = 0;
+    rc = OPS->remount(&mnt, 0, NULL);
+    mnt.flags = 0;
+    check(rc == 0 && streq(last_check, "check: clean"),
+          "and a remount writable stores the directory and passes its check clean");
+    if (rc != 0 || !streq(last_check, "check: clean")) {
+        printf("  rc %d, last check '%s'\n", rc, last_check);
+    }
+    OPS->put(&mnt, dst);
+    rc = unmount_rw();
+    fflush(image);
+    check(rc == 0 && fsck_judged(wimg) >= 0 && findings_among(0, 0) && mark_grown(wimg, 1),
+          "and e2fsck asks nothing, the directory grown");
+}
+
+/**
+ * A bitmap check that stops the mount takes no block after it
+ * (`group_take_block`). Under `errors=remount-ro`, /many/file0.txt and
+ * file1.txt share an attribute block, and the bit of the group's inode
+ * table, below that block, is clear; a change of file0's attribute, which
+ * replaces the shared block and so searches for a block from it, meets the
+ * bitmap's check, which stops the mount. The change must fail, no block be
+ * taken, and the shared block stay file0's with its count.
+ */
+static void stop_alloc_row(void)
+{
+    const char *img = fix_path("stop.ext2");
+    uint64_t bytes = attr_image(img, 2, 2);
+    struct vfs_statfs sf;
+    char script[64];
+    int64_t blk = inode_block_of(img, "<2>");
+    uint64_t bfree = 0;
+    void *n;
+    int rc = -1, err = 0;
+
+    snprintf(script, sizeof(script), "freeb %ld\n", (long)blk);
+    if (blk <= 0 || !debugfs_script(img, script)) {
+        check(0, "the allocation row's volume is made");
+        return;
+    }
+    use_image(img, bytes);
+    if (mount_options(rw_flags, "errors=remount-ro") != 0 || (mnt.flags & VFS_MS_RDONLY) ||
+        OPS->statfs(&mnt, &sf) != 0) {
+        check(0, "the allocation row's volume mounts writable");
+        unmount_image();
+        return;
+    }
+    bfree = sf.bfree;
+    n = walk("/many/file0.txt", &err);
+    if (n) {
+        rc = xa_call(n, VFS_XATTR_SET, "user.a", "changed", 7, 0);
+        OPS->put(&mnt, n);
+    }
+    check(rc != 0 && (mnt.flags & VFS_MS_RDONLY) != 0 && OPS->statfs(&mnt, &sf) == 0 &&
+              sf.bfree == bfree,
+          "a change of a shared attribute whose search meets a bitmap without its tables' "
+          "bits fails, the mount stopped, and takes no block");
+    if (rc == 0 || sf.bfree != bfree) {
+        printf("  rc %d, free blocks %lu, %lu before\n", rc, (unsigned long)sf.bfree,
+               (unsigned long)bfree);
+    }
+    check(unmount_rw() == 0 &&
+              debugfs_number(img, "stat /many/file0.txt", "File ACL: ") == attr_shared &&
+              attr_refs(img, attr_shared) == 2,
+          "and the shared block stays the file's, its count 2");
+}
+
+/* The block bitmap whose reads `stop_free_turn` counts, and the read from
+   which it fails each read of it, 0 for none. */
+static int64_t stop_free_bitmap = -1;
+static int stop_free_reads, stop_free_from;
+
+/** The read hook of `stop_free_row`: a turn for the reclaim, then the count
+ * of the block bitmap's reads and, from the `stop_free_from`th on, each
+ * failed. */
+static void stop_free_turn(void)
+{
+    pass_turn();
+    if (read_covers(stop_free_bitmap)) {
+        stop_free_reads++;
+        if (stop_free_from > 0 && stop_free_reads >= stop_free_from) {
+            fail_read_hits++;
+            read_fails = 1;
+        }
+    }
+}
+
+/**
+ * Unlink /hello.txt on a fresh volume under `errors=remount-ro`, its cache
+ * emptied, under reclaim at every read, with each read of the block bitmap
+ * from the `from`th on failed (none for 0); the reads of it in `*reads`, the
+ * free inodes before the unlink in `*ffree`, and the unlink's result
+ * returned, or 1 when the volume would not come to it. The volume is left
+ * mounted.
+ */
+static int stop_free_run(int from, int *reads, uint64_t *ffree)
+{
+    const char *img = fix_path("stop.ext2");
+    int rc;
+
+    *reads = 0;
+    if (!damage_mount(img, 0, 0, "the free row's volume mounts")) {
+        return 1;
+    }
+    *ffree = policy_ffree();
+    stop_free_bitmap = debugfs_number(img, "stats", "block bitmap at ");
+    if (stop_free_bitmap <= 0 || OPS->sync(&mnt) != 0 || bcache_invalidate(&dev) != 0) {
+        unmount_image();
+        return 1;
+    }
+    stop_free_reads = 0;
+    stop_free_from = from;
+    fail_read_hits = 0;
+    reuse_done = 0;
+    read_pause = stop_free_turn;
+    start_turns(reuse_reclaim);
+    rc = OPS->unlink(&mnt, mnt.root, "hello.txt");
+    read_pause = 0;
+    stop_free_from = 0;
+    read_fails = 0;
+    reuse_done = 1;
+    finish_turns();
+    *reads = stop_free_reads;
+    return rc;
+}
+
+/**
+ * A free that cannot read its block bitmap again after its look at it
+ * leaves the block taken and still frees the inode (`bit_clear`). The unlink
+ * of /hello.txt runs once whole under reclaim at every read, counting the
+ * reads of the block bitmap, and then on a fresh volume for each k with each
+ * read of the bitmap from the kth on failed: the unlink must succeed, the
+ * inode be freed and the mount stopped by the report.
+ */
+static void stop_free_row(void)
+{
+    char what[200];
+    uint64_t ffree;
+    int k, n, got, rc;
+
+    rc = stop_free_run(0, &n, &ffree);
+    check(rc == 0 && n > 0 && policy_ffree() == ffree + 1,
+          "an unlink of a file with a block runs whole under reclaim at every read");
+    if (rc != 0 || n == 0) {
+        printf("  rc %d, reads of the block bitmap %d\n", rc, n);
+        unmount_image();
+        return;
+    }
+    check(unmount_rw() == 0, "and the volume unmounts");
+    for (k = 1; k <= n; k++) {
+        rc = stop_free_run(k, &got, &ffree);
+        if (rc > 0) {
+            check(0, "the volume of the free rows mounts");
+            return;
+        }
+        snprintf(what, sizeof what,
+                 "an unlink whose block bitmap cannot be read from read %d of %d on frees the "
+                 "inode and stops the mount",
+                 k, n);
+        check(rc == 0 && fail_read_hits > 0 && policy_ffree() == ffree + 1 &&
+                  (mnt.flags & VFS_MS_RDONLY) != 0,
+              what);
+        if (rc != 0 || policy_ffree() != ffree + 1) {
+            printf("  rc %d, failed reads %d, free inodes %lu, %lu before\n", rc, fail_read_hits,
+                   (unsigned long)policy_ffree(), (unsigned long)ffree);
+        }
+        (void)unmount_rw();
+    }
+}
+
+/**
+ * The rows of the error policy's stops beside the paths review j140 named:
+ * a final put while a remount checks the volume (`stop_put_row`), the free
+ * of an inode whose table block cannot be read (`stop_release_row`), a
+ * directory left marked by a stop before a remount writable
+ * (`stop_settle_row`), a bitmap check that stops the mount during a search
+ * (`stop_alloc_row`), and a free that cannot read its bitmap again
+ * (`stop_free_row`).
+ */
+static void stop_rows(void)
+{
+    stop_put_row();
+    stop_release_row();
+    stop_settle_row();
+    stop_alloc_row();
+    stop_free_row();
+}
+
 /**
  * The rows of what a change of names puts on the device before its next
  * step on a mount that writes back: a rename into a directory that grows,
@@ -8260,6 +8614,7 @@ static const struct {
     {"--removal-only", removal_rows},
     {"--dir-commit-only", dir_commit_rows},
     {"--mark-only", mark_rows},
+    {"--stop-only", stop_rows},
 };
 
 /**
@@ -8268,12 +8623,13 @@ static const struct {
  * KiB, the 1 KiB levels, the failures, the write sequences, the types of
  * replaced entries, the removals stopped on a mount that writes back, the
  * directory's inode and a reused block before the next step, the marks of nodes
- * whose change is not stored, the order rows, the writer's failures, the dirty
- * volumes, the read-only volumes, the matrix and the batch rows, the node rows,
- * the fsync rows, the group rows, the rows of one file's writes and the rows of
- * operations on names, both without the big lock. An option of `only_rows` runs
- * its rows alone; `--capture-only` checks independent tool output capture
- * alone. Returns 0, and calls `fix_passed`, when every row passed.
+ * whose change is not stored, the error policy's stops beside them, the order
+ * rows, the writer's failures, the dirty volumes, the read-only volumes, the
+ * matrix and the batch rows, the node rows, the fsync rows, the group rows, the
+ * rows of one file's writes and the rows of operations on names, both without
+ * the big lock. An option of `only_rows` runs its rows alone; `--capture-only`
+ * checks independent tool output capture alone. Returns 0, and calls
+ * `fix_passed`, when every row passed.
  */
 int main(int argc, char **argv)
 {
@@ -8315,6 +8671,7 @@ int main(int argc, char **argv)
     removal_rows();
     dir_commit_rows();
     mark_rows();
+    stop_rows();
     time_rows();
     order_row();
     refusal_write_rows();
