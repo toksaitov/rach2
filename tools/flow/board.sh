@@ -375,8 +375,8 @@ issue_cards()
 items()
 {
     # The issues are read while the board's list is, from a file.
-    items_dir=$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null)/../build/tmp
-    mkdir -p "$items_dir" 2> /dev/null || items_dir=${TMPDIR:-/tmp}
+    items_dir=$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null)/../build/tmp &&
+        mkdir -p "$items_dir" 2> /dev/null || items_dir=${TMPDIR:-/tmp}
     items_tmp=$(mktemp "$items_dir/board-items.XXXXXX") || return 1
     {
         issue_cards OPEN || exit 1

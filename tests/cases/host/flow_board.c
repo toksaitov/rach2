@@ -346,9 +346,32 @@ static int issue_view(struct board *b, const char *n, const char *all)
     else if (strstr(all, "--json assignees ")) {
         translated(clean_field(r, F_ASSIGNEES), ',', '\n');
         putchar('\n');
+    } else if (strstr(all, "--json labels ")) {
+        translated(clean_field(r, F_LABELS), ',', '\n');
+        putchar('\n');
     } else
         return 2;
     return 0;
+}
+
+/* Remove LABEL from issue N's labels. */
+static int unlabel(struct board *b, const char *n, const char *label)
+{
+    struct issue *i = issue(b, n);
+    char list[4096] = "", copy[4096], *p, *next;
+    if (!i)
+        return 0;
+    snprintf(copy, sizeof(copy), "%s", clean_field(i, F_LABELS));
+    for (p = copy; *p; p = next) {
+        next = strchr(p, ',');
+        if (next)
+            *next++ = 0;
+        else
+            next = p + strlen(p);
+        if (*p && strcmp(p, label))
+            snprintf(list + strlen(list), sizeof(list) - strlen(list), "%s%s", *list ? "," : "", p);
+    }
+    return change(b, n, F_LABELS, list);
 }
 
 /* Answer the REST reads of milestones as board.sh's filters print them:
@@ -436,7 +459,19 @@ int flow_board_mock(int argc, char **argv)
     struct board b;
     struct request r = request(argc, argv);
     char *all = words(argc, argv);
+    const char *name = strrchr(argv[0], '/');
     int status = 2;
+    /* git answers only board.sh's question for the main working tree's
+     * common directory, BOARD_TEST_GIT, and fails when that is empty, as
+     * outside a clone. */
+    if (!strcmp(name ? name + 1 : argv[0], "git")) {
+        status = all && strstr(all, "rev-parse") && strstr(all, "--git-common-dir") &&
+                         *env("BOARD_TEST_GIT")
+                     ? puts(env("BOARD_TEST_GIT")) < 0
+                     : 128;
+        free(all);
+        return status;
+    }
     if (argc < 3 || !all || !board_read(&b)) {
         free(all);
         return 2;
@@ -458,7 +493,8 @@ int flow_board_mock(int argc, char **argv)
             char labels[4096];
             snprintf(labels, sizeof(labels), "%s,%s", i ? field(i, F_LABELS) : "", argv[argc - 1]);
             status = !change(&b, argv[3], F_LABELS, labels);
-        }
+        } else if (!strcmp(argv[2], "edit") && strstr(all, " --remove-label "))
+            status = !unlabel(&b, argv[3], argv[argc - 1]);
     }
     board_free(&b);
     free(all);
@@ -501,7 +537,10 @@ static int use(struct fixture *f, const char *data)
         snprintf(name, sizeof(name), "BOARD_TEST_%s", names[i]);
         fx_env(name, values[i]);
     }
-    return flow_put(f, "data", data);
+    /* The main working tree of the clone, whose Lenovo lock is free. */
+    fx_env("BOARD_TEST_GIT", flow_path(f, "main/.git"));
+    return fx_remove(flow_path(f, "main")) && fx_mkdir(flow_path(f, "main/.git")) &&
+           flow_put(f, "data", data);
 }
 
 static int run(struct fixture *f, const char *const args[])
@@ -590,6 +629,9 @@ static int next_rows(struct fixture *f)
         const char *name, *me, *setup, *words;
     } rows[] = {{"next-order", "alpha", "", "40 30 31 33 36 55"},
                 {"next-owner", "toksaitov", "", "40 30 31 47 33 36 55"},
+                {"next-owner-lenovo", "toksaitov", "lenovo", "40 30 31 33 36 55"},
+                {"next-owner-busy", "toksaitov", "busy", "40 30 31 33 36 55"},
+                {"next-owner-no-clone", "toksaitov", "no-clone", "40 30 31 33 36 55"},
                 {"next-flaky", "alpha", "flaky", "40 30 31 33 36 55"},
                 {"next-lost", "alpha", "board", NULL},
                 {"next-unlisted", "alpha", "unlisted", "40 30 33 36 55 31"},
@@ -607,6 +649,15 @@ static int next_rows(struct fixture *f)
         if ((!strcmp(rows[i].setup, "unlisted") || !strcmp(rows[i].setup, "repo")) &&
             !alter("31", F_UNLISTED, "unlisted"))
             return 0;
+        /* The Lenovo's lock is held, another owner-only task is In
+         * progress, or no main working tree is found: each offers no step
+         * on the Lenovo. */
+        if (!strcmp(rows[i].setup, "lenovo") && !fx_mkdir(flow_path(f, "main/build/flow/lenovo")))
+            return 0;
+        if (!strcmp(rows[i].setup, "busy") && !alter("49", F_LABELS, "bug,owner-only"))
+            return 0;
+        if (!strcmp(rows[i].setup, "no-clone"))
+            fx_env("BOARD_TEST_GIT", "");
         call(f, "next", NULL, NULL);
         held = rows[i].words ? first_words(f, rows[i].words) : refused(f, "cannot read the board");
         if (i == 0)
@@ -702,11 +753,13 @@ static int take_rows(struct fixture *f)
 static int release_rows(struct fixture *f)
 {
     static const struct {
-        const char *name, *n, *how, *status, *labels;
-    } rows[] = {{"release-open", "49", NULL, "Ready", "bug"},
-                {"release-owner", "49", "owner", "Backlog", "bug,owner"},
-                {"release-only", "49", "owner-only", "Ready", "bug,owner-only"},
-                {"release-closed", "51", NULL, "Done", "bug"}};
+        const char *name, *n, *how, *status, *labels, *assignees;
+    } rows[] = {{"release-open", "49", NULL, "Ready", "bug", "-"},
+                {"release-owner", "49", "owner", "Backlog", "bug,owner", "-"},
+                {"release-only", "49", "owner-only", "Ready", "bug,owner-only", "-"},
+                {"release-trial", "49", "trial", "Backlog", "bug,owner-only", "-"},
+                {"release-only-linux", "55", "owner-only", "Ready", "bug,owner-only", "-"},
+                {"release-closed", "51", NULL, "Done", "bug", "alpha"}};
     unsigned i;
     int ok = 1, held;
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
@@ -716,7 +769,7 @@ static int release_rows(struct fixture *f)
         call(f, "release", rows[i].n, rows[i].how);
         held = !f->status && is_field(rows[i].n, F_STATUS, rows[i].status) &&
                is_field(rows[i].n, F_LABELS, rows[i].labels) &&
-               is_field(rows[i].n, F_ASSIGNEES, i == 3 ? "alpha" : "-");
+               is_field(rows[i].n, F_ASSIGNEES, rows[i].assignees);
         ok = fx_check(f, held, rows[i].name) && ok;
     }
     if (!use(f, board_main))
@@ -919,8 +972,10 @@ int flow_board(struct fixture *f)
     fx_env("BOARD_WAIT", "0");
     /* A copy on the testing host lets this account take #55 on any system. */
     fx_env("RACH2_TESTING_COPY", "copy");
+    /* release's rows are a person's, outside a worker loop. */
+    fx_env("RACH2_WORKER_STATE", NULL);
     if (!flow_copy(f, "tools/flow/board.sh", "board.sh") || !fx_mock(f, "gh") ||
-        !fx_mkdir(flow_path(f, "state")))
+        !fx_mock(f, "git") || !fx_mkdir(flow_path(f, "state")))
         return 0;
     ok = next_rows(f) && ok;
     ok = take_refusals(f) && ok;
