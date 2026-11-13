@@ -4,11 +4,11 @@
 # on Linux with this directory's copy and a Proton that -p names, as gpu.sh
 # runs the gpu row. Usage: trip.sh [-u USER] [-r RENDERER] [-p PROTON]
 # [-n RUNS] [-t THREAD] OUT. OUT receives trip.py's results and the
-# machine's identity, and goes to USER; its parent must be root's or the
-# operator's, since root makes and gives away OUT by its path. Root writes
-# nothing in OUT: USER writes the identity and makes and removes its home
-# there. -t has Rach2's bkl/calls count the thread THREAD
-# alone, by ID or name, as wined3d_cs, for the runs (debugfs(5)).
+# machine's identity, and goes to USER. trip.py --out makes OUT by descriptor
+# and refuses it unless every directory above it is root's and writable by
+# root alone; root writes nothing in OUT: USER writes the identity and makes
+# and removes its home there. -t has Rach2's bkl/calls count the thread
+# THREAD alone, by ID or name, as wined3d_cs, for the runs (debugfs(5)).
 set -eu
 
 user='test'
@@ -27,6 +27,9 @@ while getopts u:r:p:n:t: opt; do
     esac
 done
 shift $((OPTIND - 1))
+case $runs in
+    '' | 0* | *[!0-9]*) echo 'trip: -n: RUNS must be a positive number' >&2; exit 2 ;;
+esac
 [ $# -eq 1 ] || { echo 'usage: trip.sh [-u USER] [-r RENDERER] [-p PROTON] [-n RUNS] [-t THREAD] OUT' >&2; exit 2; }
 [ "$(id -u)" -eq 0 ] || { echo 'trip: run as root' >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
@@ -39,17 +42,13 @@ case $proton in
 esac
 made=
 home=
-reader=
-bkl=
 chosen=
 # The EXIT trap's cleanup, each step of which runs whether or not the one
-# before it failed: a reader already reaped makes kill fail.
+# before it failed.
 # shellcheck disable=SC2329 # the exit trap calls it
 cleanup() {
     [ -z "$made" ] || rm -f /opt/proton || true
     [ -z "$home" ] || su -s /bin/sh "$user" -c "rm -rf '$home'" || true
-    [ -z "$reader" ] || { kill "$reader" 2> /dev/null || true; wait "$reader" 2> /dev/null || true; }
-    [ -z "$bkl" ] || rm -rf "$bkl" || true
     [ -z "$chosen" ] || echo all > "$chosen" || true
 }
 trap cleanup EXIT
@@ -57,21 +56,17 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-mkdir -p "$out"
-out=$(cd "$out" && pwd -P)
-chown -h "$user" "$out"
+out=$(PYTHONPATH="$here" python3 "$here/trip.py" --out "$user" "$out")
 
 # trip.py, as USER, takes Rach2's bkl/calls, bkl/profile and bkl/tick at the
-# loop's start and end, but debugfs is root's alone (0700) and stays so: a
-# reader of root's (trip.py --reader) copies those three files, and nothing
-# else, into BKL/snap, which USER may read but not write, for each request
-# USER appends to BKL/ask, its one file there. trip.py --prepare makes BKL in
-# /tmp, never in TMPDIR or OUT, with every directory root's and writable by
-# root alone, so that USER can rename or replace nothing that root writes.
+# loop's start and end, but debugfs is root's alone (0700) and stays so: USER's
+# command runs under a reader of root's, trip.py --reader LIMIT, which answers
+# at most LIMIT requests over a socket that is the command's standard input,
+# each with those three files read afresh, and touches no other file. trip.py
+# makes two requests a probe and at most RUNS + 3 probes.
+limit=
 if [ -d /sys/kernel/debug/bkl ]; then
-    bkl=$(PYTHONPATH="$here" python3 "$here/trip.py" --prepare "$(id -u "$user")")
-    PYTHONPATH="$here" python3 "$here/trip.py" --reader "$bkl" &
-    reader=$!
+    limit=$((2 * (runs + 3)))
 fi
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
@@ -101,19 +96,14 @@ fi
 } 2>&1 | su -s /bin/sh "$user" -c "cat > '$out/identity.txt'"
 home=$out/home
 su -s /bin/sh "$user" -c "mkdir -p '$home'"
+set -- su -s /bin/sh "$user" -c "cd '$out' && HOME='$out/home' TMPDIR='$out' GAMES_RENDERER='$renderer' \
+    GAMES_LAUNCHER='$launcher' TRIP_BKL='${limit:+1}' PYTHONPATH='$here' \
+    python3 '$here/trip.py' '$out/trip' '$runs'"
+[ -z "$limit" ] || set -- env PYTHONPATH="$here" python3 "$here/trip.py" --reader "$limit" "$@"
 status=0
-su -s /bin/sh "$user" -c "cd '$out' && HOME='$out/home' TMPDIR='$out' GAMES_RENDERER='$renderer' \
-    GAMES_LAUNCHER='$launcher' TRIP_BKL='$bkl' TRIP_BKL_PID='$reader' PYTHONPATH='$here' \
-    python3 '$here/trip.py' '$out/trip' '$runs'" || status=$?
+"$@" || status=$?
 su -s /bin/sh "$user" -c "rm -rf '$home'" || true
 home=
-if [ -n "$reader" ]; then
-    kill "$reader" 2> /dev/null || true
-    wait "$reader" 2> /dev/null || true
-    reader=
-fi
-[ -z "$bkl" ] || rm -rf "$bkl"
-bkl=
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
 fi
