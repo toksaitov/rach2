@@ -1516,7 +1516,11 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
 
 /**
  * The body of `fsync` and `fdatasync`: the batch drained under `em->batch`,
- * then a regular file's blocks written as `node_write_out` says,
+ * the node stored when it has its mark (`ext2_node_write_marked`), as
+ * Linux's `generic_buffers_fsync` writes a dirty inode
+ * (`sync_inode_metadata`, fs/buffer.c:607), its failure returned as it
+ * stands, since it was reported where it arose or is a device's, then a
+ * regular file's blocks written as `node_write_out` says,
  * `data_only` for `fdatasync`. Any other file, a mount that is not
  * writable, and the sync of a whole mount (a NULL `handle`) write the
  * device's dirty buffers instead (`ext2_em_write_out`): a directory's entries
@@ -1544,6 +1548,9 @@ static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
     rc = ext2_writeback_drain(em);
     if (rc != 0) {
         rc = ext2_writeback_error(em, rc);
+    } else if (n && ext2_writes(em) && (rc = ext2_node_write_marked(em, n)) != 0) {
+        ext2_big_exit(big);
+        return rc;
     } else if (!n || (n->mode & S_IFMT_) != S_IFREG_ || !ext2_admits(em)) {
         rc = ext2_em_write_out(mnt);
     } else {

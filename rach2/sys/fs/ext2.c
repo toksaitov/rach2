@@ -1833,14 +1833,106 @@ int ext2_em_write_out(struct vfs_mount *mnt)
     return rc;
 }
 
+/** Whether admission to the mount is closed with no writer inside
+ * (`em_close`): no node changes then, and a writer that waits at the gate
+ * may hold a node's lock, which a settle must not wait for. Read under
+ * `em->admit_lock`. */
+static int em_quiet(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+    int quiet = em->closing && em->writers == 0;
+
+    spin_unlock_irqrestore(&em->admit_lock, flags);
+    return quiet;
+}
+
 /**
- * The `sync` of `vfs_ops`: the batch drained, the final puts left on
- * `em->reap` done, and, on a writable mount, the superblock's free counts
- * and state left dirty under `em->super`, then the device's dirty buffers
- * written and the disk's cache flushed with no lock held (`ext2_em_write_out`).
- * The caller holds no file lock. Returns this sync's result, with a failure
- * recorded as the batch's error and for the descriptions' syncs to report
- * (`ext2_writeback_error`).
+ * Store node `n`, which the caller holds, when it has its mark
+ * (`n->unstored`), under its lock, or without it while the mount is quiet
+ * (`em_quiet`), when nothing changes a node and the lock's holder may be a
+ * writer waiting at the gate a remount closed. 0, or the store's -errno,
+ * which was reported where it arose (`ext2_inode_write`) or is a device's,
+ * with the mark kept. The caller holds no file lock and the mount writes.
+ */
+int ext2_node_write_marked(struct ext2_mount *em, struct ext2_node *n)
+{
+    int locked, rc = 0;
+
+    if (!n->unstored) {
+        return 0;
+    }
+    locked = !em_quiet(em);
+    if (locked) {
+        ext2_node_lock(n);
+    }
+    if (n->unstored) {
+        rc = ext2_inode_store(em, n);
+    }
+    if (locked) {
+        ext2_node_unlock(n);
+    }
+    return rc;
+}
+
+/** The first node on the mount's list from `n` on that is live and marked
+ * (`n->unstored`), or NULL. Under the big lock. */
+static struct ext2_node *marked_from(struct ext2_node *n)
+{
+    while (n && (n->state != N_LIVE || !n->unstored)) {
+        n = n->next;
+    }
+    return n;
+}
+
+/**
+ * Store every live node of the mount that has its mark, as Linux's
+ * `sync_filesystem` writes every dirty inode (fs/sync.c) and an unmount
+ * syncs before it evicts (fs/super.c:618-640): each held across its store
+ * (`ext2_node_write_marked`), and the next held before it is put, so that
+ * the walk of the list survives the sleeps and a node's last put. The walk
+ * goes on past a failure. The caller holds no file lock and the mount
+ * writes. 0, or the first failure's -errno, reported where it arose.
+ */
+static int nodes_settle(struct ext2_mount *em)
+{
+    int big = ext2_big_enter();
+    struct ext2_node *n = marked_from(em->nodes);
+    int rc = 0;
+
+    if (n) {
+        ext2_node_ref(n, 1);
+    }
+    while (n) {
+        struct ext2_node *next;
+        int err = ext2_node_write_marked(em, n);
+
+        if (err != 0 && rc == 0) {
+            rc = err;
+        }
+        next = marked_from(n->next);
+        if (next) {
+            ext2_node_ref(next, 1);
+        }
+        ext2_put(em->mnt, n);
+        n = next;
+    }
+    ext2_big_exit(big);
+    return rc;
+}
+
+/**
+ * The work of `sync`: the batch drained, the final puts left on `em->reap`
+ * done, every marked node stored (`nodes_settle`) on a mount that writes,
+ * and, on one that keeps its state, the superblock's free counts and state
+ * left dirty under `em->super`, then the device's dirty buffers written and
+ * the disk's cache flushed with no lock held (`ext2_em_write_out`). The
+ * caller holds no file lock. Returns the result of the writes, with a
+ * failure recorded as the batch's error and for the descriptions' syncs to
+ * report (`ext2_writeback_error`), and the settle's into `*settle`: a store
+ * that failed was reported where it arose or is a device's, so it fails no
+ * write and records nothing more, and its node keeps its mark for the next
+ * sync. The valid bit is written only after a settle that left none
+ * (`finish_writes`).
  *
  * The superblock is noted only on a mount that keeps its state
  * (`ext2_keeps_state`). A sync is outside admission, so a remount read-only
@@ -1850,13 +1942,17 @@ int ext2_em_write_out(struct vfs_mount *mnt)
  * stopped meanwhile keeps its superblock as it was written, and no write is
  * refused.
  */
-static int ext2_sync(struct vfs_mount *mnt)
+static int sync_volume(struct vfs_mount *mnt, int *settle)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     int rc;
 
+    *settle = 0;
     rc = ext2_writeback_drain(em);
     em_reap(em);
+    if (rc == 0 && ext2_writes(em)) {
+        *settle = nodes_settle(em);
+    }
     if (rc == 0 && ext2_keeps_state(em)) {
         ext2_volume_fetch(em, 0);
         ext2_super_lock(em);
@@ -1866,6 +1962,18 @@ static int ext2_sync(struct vfs_mount *mnt)
         ext2_super_unlock(em);
     }
     return rc != 0 ? ext2_writeback_error(em, rc) : ext2_em_write_out(mnt);
+}
+
+/**
+ * The `sync` of `vfs_ops`: `sync_volume`, whose result it returns, or the
+ * settle's failure when the writes succeeded.
+
+ */
+static int ext2_sync(struct vfs_mount *mnt)
+{
+    int settle, rc = sync_volume(mnt, &settle);
+
+    return rc != 0 ? rc : settle;
 }
 
 /**
@@ -1898,11 +2006,15 @@ static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
 
 /**
  * The end of a writable mount's writes, for an unmount and, with `readonly`
- * set, a remount read-only: `ext2_sync`, which leaves no final put undone,
- * and then, on a mount that keeps its superblock's state
- * (`ext2_keeps_state`), the valid bit set again when this mount cleared it,
- * the error bit is clear and no check was left owed (`em->check_owed`), and
- * the state written to the medium under `em->super`. With `readonly`, the
+ * set, a remount read-only: `sync_volume`, which leaves no final put undone
+ * and stores every marked node, and then, on a mount that keeps its
+ * superblock's state (`ext2_keeps_state`), the valid bit set again when this
+ * mount cleared it, the error bit is clear, no check was left owed
+ * (`em->check_owed`) and no marked node failed its store, and the state
+ * written to the medium under `em->super`. A store that failed was reported
+ * where it arose, so it fails neither the unmount nor the remount: the node's
+ * change is lost with it, as Linux loses a dirty inode whose write fails,
+ * and the error bit has the next mount check the volume. With `readonly`, the
  * mode goes from EXT2_MODE_RW to EXT2_MODE_RO under the same hold of
  * `em->super`, so that a sync sees the mount writable before the write of
  * the state or read-only after it (`ext2_sync`); a mount a fault stopped
@@ -1923,7 +2035,7 @@ static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
 static int finish_writes(struct vfs_mount *mnt, int readonly)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
-    int rc = ext2_sync(mnt);
+    int settle, rc = sync_volume(mnt, &settle);
     uint32_t state, flags;
     int again;
 
@@ -1932,7 +2044,7 @@ static int finish_writes(struct vfs_mount *mnt, int readonly)
     }
     ext2_super_lock(em);
     if (ext2_keeps_state(em)) {
-        if (em->valid_cleared && !(em->state & EXT2_ERROR_FS) && !em->check_owed) {
+        if (em->valid_cleared && !(em->state & EXT2_ERROR_FS) && !em->check_owed && settle == 0) {
             (void)ext2_state_change(em, EXT2_VALID_FS, 0);
         }
         do {
@@ -2085,14 +2197,16 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
  * Make a read-only mount writable, or one a fault stopped
  * (EXT2_MODE_STOPPED), whose operations under way `em_close` waited for:
  * the only way a stop ends. The writes the batch accepted before the fault
- * (`ext2_mark_error`) are drained,
- * so that the check reads the volume they leave, a volume whose valid bit
- * is clear or whose error bit is set checked as a writable mount checks it,
- * the batch set up when the mount has none, the valid bit cleared on the
- * medium, and the mode set EXT2_MODE_RW under `em->super`.
+ * (`ext2_mark_error`) are drained, and a stopped mount's marked nodes stored
+ * (`nodes_settle`), so that the check reads the volume they leave; a volume
+ * whose valid bit is clear or whose error bit is set is checked as a
+ * writable mount checks it, the batch set up when the mount has none, the
+ * valid bit cleared on the medium, and the mode set EXT2_MODE_RW under
+ * `em->super`.
  * 0, -EROFS for a volume whose features keep it read-only
  * (`em->readonly_why`) or a failed mount (`ext2_failed`), -ENOMEM for a
- * batch the heap cannot give, the drain's -errno, or -errno.
+ * batch the heap cannot give, the drain's or a marked node's store's
+ * -errno, or -errno.
  *
  * The check holds no lock: admission is closed (`em_close`) and the mount
  * admits no change and allocates nothing, so no writer, allocation or free
@@ -2107,6 +2221,9 @@ static int remount_writable(struct ext2_mount *em)
         return -EROFS;
     }
     rc = ext2_writeback_drain(em);
+    if (rc == 0 && em->mode == EXT2_MODE_STOPPED) {
+        rc = nodes_settle(em);
+    }
     if (rc != 0) {
         return rc;
     }
