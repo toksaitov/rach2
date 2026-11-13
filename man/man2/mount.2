@@ -479,6 +479,11 @@ A fault an ext2 mount meets later sets the error bit on a writable
 mount and then, as Linux's
 .Ql errors=
 says, continues, makes the mount read-only, or stops the kernel.
+A mount made read-only by a fault writes only the file data it accepted
+before, and a remount writable checks the volume again.
+A remount without
+.Ql errors=
+keeps the policy in force.
 .Ss Unmounting
 .Fn umount2
 requires
