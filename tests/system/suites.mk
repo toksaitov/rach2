@@ -227,7 +227,8 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # run out. They are the machine cases of tests/cases/machine.memory.json, which
 # etude runs, and have no target here. The case of 8 MiB boots the recovery
 # kernel with an image of its own: the recovery manifest less the Wi-Fi
-# programs, in 5 MiB, since QEMU loads the kernel and its image only where
+# programs, mke2fs and resize2fs, none of which runs before the kernel refuses
+# the machine, in 5 MiB, since QEMU loads the kernel and its image only where
 # both fit in the machine's memory, and they must leave the kernel less than
 # the 1 MiB it needs to manage. The copy keeps the manifest's name, by which
 # tools/inspect/setid.allow knows it, and the image's name does not depend on
@@ -236,6 +237,7 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach
 	@mkdir -p $(@D)/memory-test
 	sed -e '/ build\/vendor\/hostap\//d' -e '/ build\/vendor\/iw\//d' \
 	    -e '/ build\/vendor\/libnl\//d' -e '/ build\/vendor\/openssl\//d' \
+	    -e '/ build\/vendor\/e2fsprogs\/mke2fs$$/d' -e '/ build\/vendor\/e2fsprogs\/resize2fs$$/d' \
 	    krffs/manifests/rach2-recovery.manifest > $(@D)/memory-test/rach2-recovery.manifest
 	$(MKIMAGE) $(@D)/memory-test/rach2-recovery.manifest $@ 5
 # `tests/run pools`: many pipes, ptys, sockets and processes live at once,
