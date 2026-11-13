@@ -1,6 +1,7 @@
 /*
  * ext2_check.c: the check of an ext2 volume that was not unmounted cleanly, at
- * its writable mount, which repairs nothing but free counts.
+ * its writable mount, which repairs nothing but free counts and the bits of
+ * blocks a file names.
  */
 
 #include "ext2_internal.h"
@@ -15,21 +16,27 @@
  * is walked from the root and every block every reached inode names is
  * marked, its extended-attribute block among them, the inodes the inode
  * bitmap calls used but the walk did not reach are scanned as orphans, and
- * the bitmaps are compared with the marks. Nothing is repaired. Lost
- * blocks, orphans and shared attribute blocks whose reference count is
- * above the inodes that name them are counted and kept, held out of the
- * allocator by the bits and counts they still have, and the error bit is
- * set so that the volume is not marked clean again before `e2fsck` has
- * run. A fault names the first one met and sets the error bit: a block
- * claimed twice or out of range, an inode whose pointers do not match its
- * size or its `i_blocks`, an attribute block of the wrong form or named by
- * more inodes than its count, a directory with two parents or without its
- * parent, an entry of the wrong form, a link count that does not match the
- * entries, a used block or a reached inode the bitmap calls free. The
- * volume mounts writable all the same, as Linux's ext2 mounts a volume
- * whose error bit is set with a warning (`ext2_setup_super`). The group
- * descriptors' free counts are recomputed from the bitmaps rather than
- * taken from the disk, since a crash leaves them stale.
+ * the bitmaps are compared with the marks. A block a file names whose bit
+ * is clear, which a stop leaves when a pointer block reached the disk
+ * before the bitmap, has its bit set, so that the allocator cannot give it
+ * to another file while the pointer names it. Nothing else is repaired.
+ * Lost blocks, orphans, regular files whose size or `i_blocks` disagrees
+ * with their pointers, which a stop leaves when the pointers reached the
+ * disk before the inode, and shared attribute blocks whose reference count
+ * is above the inodes that name them are counted and kept, held out of the
+ * allocator by the bits and counts they have, and the error bit is set so
+ * that the volume is not marked clean again before `e2fsck` has run. A
+ * fault names the first one met and sets the error bit: a block claimed
+ * twice or out of range, an inode not a regular file whose pointers do not
+ * match its size or its `i_blocks`, an attribute block of the wrong form or
+ * named by more inodes than its count, a directory with two parents or
+ * without its parent, an entry of the wrong form, a link count that does
+ * not match the entries, a block of the volume's tables or a reached inode
+ * the bitmap calls free. The volume mounts writable all the same, as
+ * Linux's ext2 mounts a volume whose error bit is set with a warning
+ * (`ext2_setup_super`). The group descriptors' free counts are recomputed
+ * from the bitmaps rather than taken from the disk, since a crash leaves
+ * them stale.
  *
  * The walk keeps its state on the heap rather than on the stack: the node
  * of each directory level, the hard links and the shared attribute blocks
@@ -56,7 +63,9 @@ struct ext2_attr {
 
 /*
  * The check's state: the first fault and its inode; the lost blocks, the
- * orphans, the shared attribute blocks counting more references than the
+ * orphans, the blocks a file names whose bits it set (`marked`), the
+ * regular files whose size or `i_blocks` disagrees with their pointers
+ * (`sized`), the shared attribute blocks counting more references than the
  * inodes that name them (`stale`), the chained records of `link` and the
  * `attrs` entries of `attr`; the inode of each directory level being
  * walked; the set of reached inodes; and one bitmap block.
@@ -66,7 +75,9 @@ struct ext2_check {
     const char *fault;
     uint32_t fault_ino;
     int limit; /* `fault` is a limit of the check's, not of the volume */
-    uint32_t lost, orphans, stale, attrs;
+    uint32_t lost, orphans, marked, sized, stale, attrs;
+    int keep; /* the inode being marked keeps a mismatch for e2fsck */
+    int past; /* and `check_level` met a pointer block past its size */
     int link_nomem;
     struct ext2_link *link[EXT2_CHECK_LINK_BUCKETS];
     struct ext2_attr attr[EXT2_CHECK_ATTRS];
@@ -174,8 +185,9 @@ static int check_mark(struct ext2_check *c, uint32_t ino, uint32_t b)
  * `index` being the data index its first entry stands for; `*count` gains
  * every block, data and pointer, and `*last` is the highest data index
  * named. A pointer block for an index at or past `limit`, the blocks the
- * size covers, is a fault. 0, or -EIO with the fault recorded or for a
- * failed read.
+ * size covers, sets `c->past` and is marked with all it names when
+ * `c->keep` is set, and is a fault otherwise. 0, or -EIO with the fault
+ * recorded or for a failed read.
  */
 static int check_level(struct ext2_check *c, uint32_t ino, uint32_t b, int level, uint32_t index,
                        uint32_t limit, uint32_t *count, uint32_t *last)
@@ -186,7 +198,10 @@ static int check_level(struct ext2_check *c, uint32_t ino, uint32_t b, int level
     int i, rc;
 
     if (index >= limit) {
-        return check_fault(c, ino, "a pointer block past the size");
+        if (!c->keep) {
+            return check_fault(c, ino, "a pointer block past the size");
+        }
+        c->past = 1;
     }
     rc = check_mark(c, ino, b);
     if (rc != 0) {
@@ -278,11 +293,39 @@ static int check_attr(struct ext2_check *c, const struct ext2_node *n)
 }
 
 /**
+ * Judge inode `n` once its blocks are marked: `blocks_wrong` when its
+ * `i_blocks` does not match them, `past` when a data block is past its
+ * size, `c->past` when a pointer block is. A regular file (`c->keep`) with
+ * any of them is counted in `c->sized`; any other inode with one is a
+ * fault. 0, or -EIO with the fault recorded.
+ */
+static int check_size(struct ext2_check *c, const struct ext2_node *n, int blocks_wrong, int past)
+{
+    if (c->keep) {
+        if (blocks_wrong || past || c->past) {
+            c->sized++;
+        }
+        return 0;
+    }
+    if (blocks_wrong) {
+        return check_fault(c, n->ino, "i_blocks that does not match its pointers");
+    }
+    if (past) {
+        return check_fault(c, n->ino, "a block past the size");
+    }
+    return 0;
+}
+
+/**
  * Mark every block `n` names and check them against its size and its
  * `i_blocks`, which counts the extended-attribute block too (`check_attr`).
  * A fast symbolic link, a device, a pipe and a socket keep no other;
  * `as_data` treats the inode as a file whatever its mode, for the reserved
- * inodes. 0, or -EIO with the fault recorded or for a failed read.
+ * inodes. A regular file whose blocks pass its size or disagree with its
+ * `i_blocks` is counted in `c->sized` and kept for `e2fsck`, every block it
+ * names marked, since a stop leaves its pointer blocks on the disk before
+ * its inode (ext2.Readme.md, The order of writing back); in any other inode
+ * it is a fault. 0, or -EIO with the fault recorded or for a failed read.
  */
 static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_data)
 {
@@ -294,6 +337,8 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
     int named = 0, rc;
 
     limit = (uint32_t)((n->size + em->block_size - 1) >> em->block_shift);
+    c->keep = !as_data && type == S_IFREG_;
+    c->past = 0;
     if (n->file_acl != 0) {
         rc = check_attr(c, n);
         if (rc != 0) {
@@ -332,13 +377,8 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
         }
         named = 1;
     }
-    if (n->blocks != count * (em->block_size / 512) + attr) {
-        return check_fault(c, n->ino, "i_blocks that does not match its pointers");
-    }
-    if (named && last >= limit) {
-        return check_fault(c, n->ino, "a block past the size");
-    }
-    return 0;
+    return check_size(c, n, n->blocks != count * (em->block_size / 512) + attr,
+                      named && last >= limit);
 }
 
 static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int depth);
@@ -537,15 +577,88 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
 }
 
 /**
+ * Compare each group's block bitmap with the marks. A used block nothing
+ * marked is lost. A marked block the bitmap calls free is a fault when it
+ * holds the volume's tables (`ext2_data_block_ok`), which only a damaged
+ * bitmap leaves; one a file names, which a stop leaves when its pointer
+ * reached the disk before its bit, has its bit set and is counted in
+ * `c->marked`. Without `repair` nothing is counted or written, so that a
+ * fault leaves the bitmaps as they were; with it each changed bitmap block
+ * is written and the free counts are recounted into the descriptors in
+ * memory and into the mount's total. 0, or -EIO with the fault recorded,
+ * or the -errno of a failed read or write.
+ */
+static int check_block_bitmaps(struct ext2_check *c, int repair)
+{
+    struct ext2_mount *em = c->em;
+    uint32_t g, i;
+    int rc;
+
+    if (repair) {
+        em->free_blocks = 0;
+    }
+    for (g = 0; g < em->groups; g++) {
+        uint8_t *gd = em->gd + g * 32;
+        uint64_t at = (uint64_t)ext2_le32(gd + 0) * em->block_size;
+        uint32_t lo = em->first_data + g * em->bpg;
+        uint32_t free = 0;
+        int changed = 0;
+
+        rc = ext2_read_bytes(em, READ_QUIET, 0, at, c->bitmap, em->block_size);
+        if (rc != 0) {
+            return rc;
+        }
+        for (i = 0; i < em->bpg && lo + i < em->blocks; i++) {
+            int used = (c->bitmap[i >> 3] >> (i & 7)) & 1;
+            int marked = fat_walk_marked(lo + i);
+
+            if (!used && marked) {
+                if (!ext2_data_block_ok(em, lo + i)) {
+                    return check_fault(c, 0, "a used block the bitmap calls free");
+                }
+                if (repair) {
+                    c->bitmap[i >> 3] = (uint8_t)(c->bitmap[i >> 3] | (1u << (i & 7)));
+                    c->marked++;
+                    changed = 1;
+                }
+                used = 1;
+            }
+            if (!used) {
+                free++;
+            } else if (!marked && repair) {
+                c->lost++;
+            }
+        }
+        if (!repair) {
+            continue;
+        }
+        if (changed) {
+            ext2_group_lock(em, g);
+            rc = ext2_write_bytes(em, at, c->bitmap, em->block_size,
+                                  WRITE_THROUGH | WRITE_KIND(READ_BITMAP));
+            ext2_group_unlock(em, g);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        LE16_PUT(gd + 12, free);
+        em->free_blocks += free;
+    }
+    return 0;
+}
+
+/**
  * The inode scan and the bitmap compare, group by group. An orphan is an
  * inode at or past `s_first_ino` the bitmap calls used that the walk did
  * not reach, its blocks marked so that nothing else may claim them; one
  * whose link count is zero is a deleted inode whose bit was not yet
  * cleared, counted with them for `e2fsck` to clear, its pointers not read,
- * since they mean nothing, as `e2fsck` reads such an inode. A used block the
- * walk did not mark is lost. The free counts are recounted into the
- * descriptors in memory and into the mount's totals. 0, or -EIO with the
- * fault recorded or for a failed read.
+ * since they mean nothing, as `e2fsck` reads such an inode. The block
+ * bitmaps are compared twice (`check_block_bitmaps`), first for a fault
+ * and then to set the bits of blocks a file names and recount. The free
+ * inode counts are recounted into the descriptors in memory and into the
+ * mount's totals. 0, or -EIO with the fault recorded, or the -errno of a
+ * failed read or write.
  */
 static int check_bitmaps(struct ext2_check *c)
 {
@@ -554,7 +667,6 @@ static int check_bitmaps(struct ext2_check *c)
     int rc;
 
     em->free_inodes = 0;
-    em->free_blocks = 0;
     for (g = 0; g < em->groups; g++) {
         uint8_t *gd = em->gd + g * 32;
         uint32_t free = 0;
@@ -597,40 +709,16 @@ static int check_bitmaps(struct ext2_check *c)
         LE16_PUT(gd + 14, free);
         em->free_inodes += free;
     }
-    for (g = 0; g < em->groups; g++) {
-        uint8_t *gd = em->gd + g * 32;
-        uint32_t lo = em->first_data + g * em->bpg;
-        uint32_t free = 0;
-
-        rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)ext2_le32(gd + 0) * em->block_size,
-                             c->bitmap, em->block_size);
-        if (rc != 0) {
-            return rc;
-        }
-        for (i = 0; i < em->bpg && lo + i < em->blocks; i++) {
-            int used = (c->bitmap[i >> 3] >> (i & 7)) & 1;
-            int marked = fat_walk_marked(lo + i);
-
-            if (!used) {
-                free++;
-                if (marked) {
-                    return check_fault(c, 0, "a used block the bitmap calls free");
-                }
-            } else if (!marked) {
-                c->lost++;
-            }
-        }
-        LE16_PUT(gd + 12, free);
-        em->free_blocks += free;
-    }
-    return 0;
+    rc = check_block_bitmaps(c, 0);
+    return rc != 0 ? rc : check_block_bitmaps(c, 1);
 }
 
 /**
- * Log what a check without a fault leaves for e2fsck, setting the error bit
- * when it leaves anything: the shared attribute blocks whose count is above
- * the inodes found naming them, then the lost blocks and orphans; or that
- * the volume is clean.
+ * Log what a check without a fault repaired and leaves for e2fsck, setting
+ * the error bit when it leaves anything: the blocks whose bits it set, the
+ * regular files whose size or `i_blocks` disagrees with their pointers, the
+ * shared attribute blocks whose count is above the inodes found naming
+ * them, then the lost blocks and orphans; or that the volume is clean.
  */
 static void check_report(struct ext2_check *c)
 {
@@ -640,6 +728,17 @@ static void check_report(struct ext2_check *c)
         if (c->attr[i].found < c->attr[i].expect) {
             c->stale++;
         }
+    }
+    if (c->marked != 0) {
+        klog(KLOG_WARN, "ext2", "check: %d blocks named by files were free, marked used",
+             (int)c->marked);
+    }
+    if (c->sized != 0) {
+        klog(KLOG_WARN, "ext2",
+             "check: %d files with a size or i_blocks that does not match their blocks, kept for "
+             "e2fsck",
+             (int)c->sized);
+        c->em->state |= EXT2_ERROR_FS;
     }
     if (c->stale != 0) {
         klog(KLOG_WARN, "ext2",
@@ -651,7 +750,7 @@ static void check_report(struct ext2_check *c)
         klog(KLOG_WARN, "ext2", "check: %d lost blocks, %d orphan inodes, kept for e2fsck",
              (int)c->lost, (int)c->orphans);
         c->em->state |= EXT2_ERROR_FS;
-    } else if (c->stale == 0) {
+    } else if (c->stale == 0 && c->sized == 0 && c->marked == 0) {
         klog(KLOG_INFO, "ext2", "check: clean");
     }
 }
@@ -701,10 +800,12 @@ static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t fr
  * Returns 0 and leaves the volume to be mounted writable, as Linux's ext2
  * mounts any volume it supports whatever its state (`ext2_setup_super`):
  *
- * - a check that ends writes the recounted free counts to the descriptors
- *   and the superblock, with the error bit set when blocks were lost,
- *   inodes orphaned or attribute blocks left counting inodes that no longer
- *   name them;
+ * - a check that ends writes the bits it set of blocks files name and the
+ *   recounted free counts to the bitmaps, the descriptors and the
+ *   superblock, with the error bit set when blocks were lost, inodes
+ *   orphaned, regular files left with a size or `i_blocks` that does not
+ *   match their pointers or attribute blocks left counting inodes that no
+ *   longer name them;
  * - a fault is logged as `ext2: check: inode N: WHY` and sets the error
  *   bit in memory, which the mount's write of the superblock puts on the
  *   disk, with the counts as the disk has them, since the recount may have
