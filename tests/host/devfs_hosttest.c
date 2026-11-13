@@ -969,18 +969,17 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** Interrupts masked, which no row needs. */
+/** Interrupts masked, under the lock of the owner records, which the
+ * registry's rows take; the model has no interrupts. */
 uint32_t kirq_save(void)
 {
-    unexpected();
     return 0;
 }
 
-/** Interrupts restored, which no row needs. */
+/** Interrupts restored as `kirq_save` found them. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
-    unexpected();
 }
 
 /** A temporary map of a frame for /dev/mem, which no row reads. */
