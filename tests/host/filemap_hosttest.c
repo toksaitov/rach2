@@ -39,7 +39,9 @@
  * mapping and its descriptor go and leaves the page, its bit and the
  * handle, which sync(2), inside the mount, fsync, msync, the flusher and a
  * later release each write through, and which the record lets go with
- * itself once the page is clean; the failure is recorded. A release's or a
+ * itself once the page is clean; the failure is recorded on each
+ * description of the file then open, which reports it once at its next
+ * fsync or MS_SYNC after any of those retries. A release's or a
  * sync's success before a later release's failure keeps the later store,
  * in either order, and a truncation to zero takes the dirty page with the
  * rest. A descriptor write puts its bytes into a dirty page from its own
@@ -738,25 +740,69 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
     return vfs_fsync_error(mnt, seen);
 }
 
+/* The descriptions a row has open, which fd.c's walk of the live
+ * descriptions finds (`fd_ofd_map_err_set`); `writeback_file` starts the
+ * list again for each row. */
+#define MODEL_OFDS 8
+static struct open_file *model_ofds[MODEL_OFDS];
+static int model_nofds;
+
+/** Put `ofd` on the descriptions a failed pass may mark. */
+static void model_open(struct open_file *ofd)
+{
+    check(model_nofds < MODEL_OFDS, "the model has room for the row's descriptions");
+    if (model_nofds < MODEL_OFDS) {
+        model_ofds[model_nofds++] = ofd;
+    }
+}
+
+/** Record `rc` on each open description of the file `ino` of the file
+ * system `mnt` shows, as fd.c does. */
+void fd_ofd_map_err_set(const struct vfs_mount *mnt, uint64_t ino, int rc)
+{
+    int i;
+
+    for (i = 0; i < model_nofds; i++) {
+        struct open_file *o = model_ofds[i];
+
+        if (o->vmnt && vfs_mount_base(o->vmnt) == vfs_mount_base(mnt) && o->ino == ino) {
+            o->map_err = (uint32_t)-rc;
+        }
+    }
+}
+
+/** Take the failure recorded on `ofd`, as fd.c does. */
+int fd_ofd_map_err_take(struct open_file *ofd)
+{
+    int rc = -(int)ofd->map_err;
+
+    ofd->map_err = 0;
+    return rc;
+}
+
 /** The cursors a description `ofd` of a file of `mnt` opened now starts
  * with, as `vfs_wb_err_sample` gives them: before an error nobody has
- * reported. */
+ * reported. The description joins those a failed pass marks. */
 static void model_sample(struct open_file *ofd, const struct vfs_mount *mnt)
 {
     mnt = vfs_mount_base(mnt);
     ofd->wb_seen = (mnt->wb_err & MODEL_ERR_SEEN) ? mnt->wb_err : 0u;
     ofd->sb_seen = (mnt->sb_wb_err & MODEL_ERR_SEEN) ? mnt->sb_wb_err : 0u;
+    model_open(ofd);
 }
 
 /** fsync(2) of the description `ofd`, as syscall_fs.c's `sync_entry` makes
  * it: the file's shared pages written back, then the file system's fsync
- * through the description's cursor, and the write-back's own errno first. */
+ * through the description's cursor, then the failure of an earlier pass
+ * left on the description, taken whatever the answer, and the write-back's
+ * own errno first. */
 static int model_fsync(struct open_file *ofd)
 {
     int mapped = filemap_sync_file(ofd);
     int rc = vfs_fsync(ofd->vmnt, ofd->fhandle, &ofd->wb_seen);
+    int kept = fd_ofd_map_err_take(ofd);
 
-    return mapped != 0 ? mapped : rc;
+    return mapped != 0 ? mapped : rc != 0 ? rc : kept;
 }
 
 /** The clock, which no row reads. */
@@ -1131,6 +1177,8 @@ static struct vm_file *writeback_file(struct vfs_mount *mnt, struct open_file *o
     e.ofd = ofd;
     ofd->vmnt = mnt;
     ofd->ino = 93;
+    model_nofds = 0;
+    model_open(ofd);
     f = filemap_disk_shared(&e);
     check(f != NULL, "a shared writeback mapping is made");
     if (!f) {
@@ -1150,10 +1198,10 @@ static struct vm_file *writeback_file(struct vfs_mount *mnt, struct open_file *o
 
 /** A failed final write lets the mapping and its descriptor go and keeps
  * the dirty page, its bit and the record's own writer, opened at the
- * mapping, and records its failure for syncfs alone; fsync writes the page,
- * lets the writer and the record go, and answers 0, since its own pass
- * wrote every store, where a record for fsync would answer the release's
- * failure the retry repaired. */
+ * mapping, and records its failure for syncfs and on the description; fsync
+ * writes the page, lets the writer and the record go, and reports the
+ * release's failure, which its own pass repaired, once, as Linux's fsync
+ * reports the inode's error through the file's cursor (j168's finding 1). */
 static void writeback_retry_rows(void)
 {
     struct vfs_mount mnt;
@@ -1179,13 +1227,14 @@ static void writeback_retry_rows(void)
               writers_open() == 1 && writer_mount == &mnt,
           "a failed final write frees the mapping and its descriptor and keeps its page, bit "
           "and the record's writer");
-    check(err_records == 0 && sb_records == 1, "and records its failure once, for syncfs alone");
+    check(err_records == 0 && sb_records == 1 && ofd.map_err == EIO,
+          "and records its failure once for syncfs and on the description");
     disk_error = 0;
-    check(model_fsync(&ofd) == 0 && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
-          "fsync retries the stored bytes and answers its own pass, which wrote them");
+    check(model_fsync(&ofd) == -EIO && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "fsync retries the stored bytes and reports the release's failure");
     check(dshare_count == 0 && shmem_frees == freed + 1 && backing_releases == released + 1 &&
               writers_open() == 0 && node_holds == 0 && model_fsync(&ofd) == 0,
-          "the successful retry frees the record and its writer, and fsync hears nothing after");
+          "the successful retry frees the record and its writer, and the next fsync answers 0");
 }
 
 /** Final release allocates no buffer, and fsync writes the stores of a
@@ -1313,7 +1362,8 @@ static void writeback_bounded_rows(void)
 }
 
 /** A retry by sync(2) alone frees what a failed release kept, the file's
- * record with it, and leaves the error to the descriptions' cursors. */
+ * record with it, and leaves the error on the description, which its next
+ * fsync reports once: the case of j168's finding 1. */
 static void writeback_sync_retry_rows(void)
 {
     struct vfs_mount mnt;
@@ -1339,7 +1389,7 @@ static void writeback_sync_retry_rows(void)
               mount_enters == 0 && entered_mount == &mnt,
           "a successful sync(2) frees the kept pages, the writer and the file's record, inside "
           "the mount");
-    check(model_fsync(&ofd) == -EIO, "the next fsync reports the error through the cursor");
+    check(model_fsync(&ofd) == -EIO, "the next fsync reports the release's failure");
     check(model_fsync(&ofd) == 0, "and reports it once");
 }
 
@@ -1352,6 +1402,7 @@ static struct vm_file *second_mapping(struct open_file *ofd, struct open_file *o
 
     own->vmnt = ofd->vmnt;
     own->ino = ofd->ino;
+    model_open(own);
     k_memset(&e, 0, sizeof(e));
     e.type = FD_TYPE_FILE;
     e.flags = FD_FLAG_READ | (write ? FD_FLAG_WRITE : 0u);
@@ -1360,17 +1411,19 @@ static struct vm_file *second_mapping(struct open_file *ofd, struct open_file *o
 }
 
 /**
- * A failed release records its failure for syncfs alone, and MS_SYNC after
- * it, whose retry writes every store, answers 0, as do the fsync of the
- * region's description, of a descriptor dup(2) or fork(2) made, of a
- * description opened after the failure and of one open before it: a
- * failure a later pass repaired is no fsync's to report, and Linux reports
- * a write-back's error only to the files of its inode. The description open
- * before the failure hears it once at syncfs. A failed write is MS_ASYNC's
- * answer, and again is told to no other description's fsync and once to its
- * syncfs. The region here maps through a description open only for reading,
- * so the failed release is the file's last writer; the retry writes through
- * the record's own writer, and the later failure through a new writable
+ * A failed release records its failure for syncfs and on each description
+ * of the file then open, and MS_SYNC after it, whose retry writes every
+ * store, reports it through the region's description, as Linux's msync
+ * checks the file's cursor into the inode's error; the fsync of that
+ * description and of a descriptor dup(2) or fork(2) made of it answer 0
+ * after, and so does a description opened after the report. A description
+ * open before the failure reports it once at fsync and once at syncfs,
+ * though the retry wrote the page (j168's finding 1). A failed write is
+ * MS_ASYNC's answer, which the region's description is not told again, and
+ * is told once to the fsync and once to the syncfs of another description.
+ * The region here maps through a description open only for reading, so the
+ * failed release is the file's last writer; the retry writes through the
+ * record's own writer, and the later failure through a new writable
  * mapping.
  */
 static void msync_retry_rows(void)
@@ -1408,17 +1461,19 @@ static void msync_retry_rows(void)
     disk_error = 0;
     k_memset(disk_bytes, 0, sizeof(disk_bytes));
     rc = filemap_msync(g, 1);
-    check(rc == 0 && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
-          "MS_SYNC retries the stored bytes and answers its own pass, which wrote them");
-    check(model_fsync(&ofd2) == 0, "fsync of the msync's description does not report it");
+    check(rc == -EIO && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "MS_SYNC retries the stored bytes and reports the release's failure");
+    check(model_fsync(&ofd2) == 0, "fsync of the msync's description does not report it again");
     dup.ofd = &ofd2;
     check(model_fsync(dup.ofd) == 0, "nor does fsync of a dup'd or forked descriptor");
     late.vmnt = &mnt;
     late.ino = ofd.ino;
     model_sample(&late, &mnt);
     check(model_fsync(&late) == 0, "nor of a description opened after the failure");
-    check(model_fsync(&early) == 0, "nor fsync of a description open before the failure");
-    check(model_syncfs(&early) == -EIO, "whose syncfs is told");
+    check(model_fsync(&early) == -EIO,
+          "fsync of a description open before the failure reports it, though the retry wrote it");
+    check(model_fsync(&early) == 0, "once");
+    check(model_syncfs(&early) == -EIO, "and its syncfs is told");
     check(model_syncfs(&early) == 0, "once");
     check(maps == (struct filemap *)g && !maps->next && !ds->wr_handle && ds->ndirty == 0 &&
               writers_open() == 0,
@@ -1429,8 +1484,9 @@ static void msync_retry_rows(void)
     check(filemap_msync(g, 0) == -EIO, "MS_ASYNC answers a failed write");
     disk_error = 0;
     check(model_fsync(&ofd2) == 0, "which fsync of the same description does not report again");
-    check(model_fsync(&early) == 0 && model_syncfs(&early) == -EIO && model_syncfs(&early) == 0,
-          "while another description's fsync hears nothing and its syncfs is told once");
+    check(model_fsync(&early) == -EIO && model_fsync(&early) == 0 && model_syncfs(&early) == -EIO &&
+              model_syncfs(&early) == 0,
+          "while another description's fsync and its syncfs are each told once");
     if (h) {
         vm_file_put(h);
     }
@@ -1565,6 +1621,8 @@ enum retry_kind { RETRY_SYNC, RETRY_FSYNC, RETRY_MSYNC, RETRY_FLUSHER, RETRY_REL
  * of another mapping, the flusher, whose turn calls the same
  * `filemap_sync_all` as sync(2) (fs/writeback.c), and the release of a
  * writable mapping made after the failure, which is the file's last writer.
+ * After each, the description open at the failure reports it once at its
+ * fsync (j168's finding 1).
  */
 static void retry_rows(void)
 {
@@ -1620,7 +1678,8 @@ static void retry_rows(void)
                   !maps && shmem_frees == freed + 1 &&
                   backing_releases == released + 1 + (g != NULL) && writers_open() == 0,
               names[kind]);
-        (void)model_fsync(&ofd);
+        check(model_fsync(&ofd) == -EIO && model_fsync(&ofd) == 0,
+              "and the description open at the failure reports it once after the retry");
     }
 }
 
@@ -1939,6 +1998,7 @@ static void two_pass_rows(void)
     }
     other.vmnt = &mnt;
     other.ino = 94;
+    model_open(&other);
     k_memset(&e, 0, sizeof(e));
     e.type = FD_TYPE_FILE;
     e.flags = FD_FLAG_READ | FD_FLAG_WRITE;
