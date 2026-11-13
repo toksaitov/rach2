@@ -671,11 +671,16 @@ static void read_notes(int fd)
     }
 }
 
+static void unmount_volume(void);
+
 /** Run a phase of `rounds` rounds on the mounted volume: start its
- * processes, read their notes and wait for them all. */
+ * processes, read their notes and wait for them all. When one failed, the
+ * volume is unmounted before the program fails, so that the host's e2fsck
+ * judges what the driver left at a clean unmount, not a volume stopped with
+ * its cache unwritten. */
 static void run_phase(int phase, unsigned rounds, int fast)
 {
-    int notes[2], tokens[2];
+    int notes[2], tokens[2], failed = 0;
     pid_t pids[ROLES];
     unsigned i;
 
@@ -709,11 +714,16 @@ static void run_phase(int phase, unsigned rounds, int fast)
     for (i = 0; i < ROLES; i++) {
         int status = 0;
 
-        if (waitpid(pids[i], &status, 0) != pids[i] || !WIFEXITED(status) ||
-            WEXITSTATUS(status) != 0) {
-            errno = 0;
-            fail("a process failed", "phase", (uint64_t)status);
+        if ((waitpid(pids[i], &status, 0) != pids[i] || !WIFEXITED(status) ||
+             WEXITSTATUS(status) != 0) &&
+            !failed) {
+            failed = status ? status : -1;
         }
+    }
+    if (failed) {
+        unmount_volume();
+        errno = 0;
+        fail("a process failed", "phase", (uint64_t)(int64_t)failed);
     }
 }
 
