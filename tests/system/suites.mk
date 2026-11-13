@@ -228,9 +228,10 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # etude runs, and have no target here. The case of 8 MiB boots the recovery
 # kernel with an image of its own: the recovery manifest less the Wi-Fi
 # programs, mke2fs and resize2fs, none of which runs before the kernel refuses
-# the machine, in 5 MiB, since QEMU loads the kernel and its image only where
-# both fit in the machine's memory, and they must leave the kernel less than
-# the 1 MiB it needs to manage. The copy keeps the manifest's name, by which
+# the machine, in 5 MiB. Both kernels end past 8 MiB, so the loader's entry
+# refuses the machine; a kernel that ended below it would leave the image past
+# the end of memory and less than the 1 MiB the memory report requires the
+# kernel to manage. The copy keeps the manifest's name, by which
 # tools/inspect/setid.allow knows it, and the image's name does not depend on
 # whether it carries a key.
 $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach2-recovery.manifest

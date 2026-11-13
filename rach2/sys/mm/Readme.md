@@ -107,7 +107,7 @@ A file named alone is in `sys/mm/`; other paths start at `rach2/`.
 
 ### The boot
 
-`kernel_main` (`kernel.c`) sets memory up in this order.
+`kernel_main` (`kernel.c`) sets memory up in this order. Before it runs, the loader's entry has refused a machine whose memory ends before `_end` ([arch/Readme.md](../arch/Readme.md)).
 
 1. `modlayout_check` refuses a module that is empty, ends past 4 GiB, starts below the end of the kernel image or overlaps another, with the module's number and range in the panic. A module that ends within the first 64 MiB moves the boot allocator's break past it, and `init_mm` (`heap.c`) moves the break to `_end`, the end of the image, if it is lower.
 2. `frame_map_build` (`frame.c`) reads the loader's memory map, in 64-bit arithmetic, into a sorted list of disjoint ranges: those the map calls available, less every range of another type that overlaps them, with what lies at or above the reach counted apart as unreachable. Without a usable map it takes `mem_upper` as one range from 1 MiB. The list has room for `FRAME_MAP_RANGES`, 265: the boot record's 256 entries give at most 256 ranges, and each later reservation, one of at most eight modules or the frame table, splits at most one more. The kernel then reserves the range from 0 to `_end` and each module.

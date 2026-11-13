@@ -250,7 +250,7 @@
     },
     {
       "case_id": "machine.memory.refused",
-      "behavior": "A machine of 8 MiB, too small for the recovery kernel and its image, is refused by name in the memory report, with no fault",
+      "behavior": "A machine of 8 MiB, too small for the recovery kernel and its image, is refused by name, by the loader's entry or the memory report, with no fault",
       "units": ["memory"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
