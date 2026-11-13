@@ -1,0 +1,127 @@
+## j8: the milestone head 719d619c2 (kernel-m76) against Linux
+j8: 06:52:09 start rach2-mR1 load 0.39
+j8: 06:52:46 end rach2-mR1 status 0 loading time: 8.50 seconds
+j8: 06:52:46 start linux-mL1 load 1.03
+j8: 06:53:18 end linux-mL1 status 0 loading time: 8.68 seconds
+j8: 06:53:18 start rach2-mR2 load 1.84
+j8: 06:53:52 end rach2-mR2 status 0 loading time: 8.48 seconds
+j8: 06:53:52 start linux-mL2 load 2.13
+j8: 06:54:24 end linux-mL2 status 0 loading time: 8.71 seconds
+j8: 06:54:24 start rach2-mR3 load 2.04
+j8: 06:54:59 end rach2-mR3 status 0 loading time: 8.36 seconds
+j8: 06:54:59 start linux-mL3 load 2.11
+j8: 06:55:34 end linux-mL3 status 0 loading time: 8.93 seconds
+j8: 06:55:34 start rach2-mR4 load 2.69
+j8: 06:56:09 end rach2-mR4 status 0 loading time: 8.44 seconds
+j8: 06:56:09 start linux-mL4 load 3.01
+j8: 06:56:44 end linux-mL4 status 0 loading time: 8.99 seconds
+j8: 06:56:44 start rach2-mR5 load 2.64
+j8: 06:57:22 end rach2-mR5 status 0 loading time: 9.30 seconds
+j8: 06:57:22 start linux-mL5 load 3.23
+j8: 06:59:01 end linux-mL5 status 0 loading time: 11.33 seconds
+j8: 06:59:01 start rach2-mR6 load 5.26
+j8: 06:59:40 end rach2-mR6 status 0 loading time: 8.62 seconds
+j8: 06:59:40 start linux-mL6 load 3.79
+j8: 07:00:12 end linux-mL6 status 0 loading time: 8.46 seconds
+j8: done
+rach2-mR1      load   8.50  main    475+89 llvmpipe    174+2 all   656+109 steal    0 qemu-host  1633+269
+linux-mL1      load   8.68  main   556+180 llvmpipe   560+14 all  1218+260 steal    0 qemu-host  1621+229
+rach2-mR2      load   8.48  main    510+98 llvmpipe    201+1 all   730+127 steal    0 qemu-host  1739+232
+linux-mL2      load   8.71  main   572+168 llvmpipe   557+11 all  1216+257 steal    0 qemu-host  1608+232
+rach2-mR3      load   8.36  main    498+93 llvmpipe    142+3 all   649+115 steal    0 qemu-host  1710+245
+linux-mL3      load   8.93  main   616+202 llvmpipe   641+17 all  1385+314 steal    1 qemu-host  1842+266
+rach2-mR4      load   8.44  main    504+99 llvmpipe    120+1 all   631+118 steal    0 qemu-host  1695+211
+linux-mL4      load   8.99  main   625+196 llvmpipe   641+14 all  1379+313 steal    0 qemu-host  1825+266
+rach2-mR5      load   9.30  main   533+127 llvmpipe    155+1 all   736+248 steal    0 qemu-host  1777+201
+linux-mL5      load  11.33  main   796+284 llvmpipe   559+33 all  1664+647 steal    1 qemu-host  2600+265
+rach2-mR6      load   8.62  main    536+99 llvmpipe    133+1 all   681+121 steal    0 qemu-host  1596+205
+linux-mL6      load   8.46  main   550+185 llvmpipe   540+10 all  1219+273 steal    1 qemu-host  1718+263
+
+## j9: the stopped tick's account to its last edge (kernel-m76f, 92dc0b997) and the head (kernel-m76) against Linux
+j9: 07:09:11 start rach2-nF1 load 0.85
+j9: 07:09:47 end rach2-nF1 status 0 loading time: 8.62 seconds
+j9: 07:09:47 start linux-nL1 load 1.37
+j9: 07:10:19 end linux-nL1 status 0 loading time: 8.44 seconds
+j9: 07:10:19 start rach2-nB1 load 1.74
+j9: 07:10:53 end rach2-nB1 status 0 loading time: 8.16 seconds
+j9: 07:10:53 start rach2-nF2 load 1.63
+j9: 07:11:27 end rach2-nF2 status 0 loading time: 8.17 seconds
+j9: 07:11:27 start linux-nL2 load 1.79
+j9: 07:11:58 end linux-nL2 status 0 loading time: 8.41 seconds
+j9: 07:11:58 start rach2-nB2 load 1.85
+j9: 07:12:31 end rach2-nB2 status 0 loading time: 8.07 seconds
+j9: 07:12:31 start rach2-nF3 load 1.98
+j9: 07:13:06 end rach2-nF3 status 0 loading time: 8.14 seconds
+j9: 07:13:06 start linux-nL3 load 2.91
+j9: 07:13:38 end linux-nL3 status 0 loading time: 9.04 seconds
+j9: 07:13:38 start rach2-nB3 load 3.62
+j9: 07:14:14 end rach2-nB3 status 0 loading time: 8.47 seconds
+j9: done
+rach2-nF1      load   8.62  main    464+96 llvmpipe    159+2 all   634+118 steal    1 qemu-host  1689+222
+linux-nL1      load   8.44  main   602+190 llvmpipe   710+16 all  1417+295 steal    0 qemu-host  1853+262
+rach2-nB1      load   8.16  main    454+88 llvmpipe    112+0 all   571+101 steal    0 qemu-host  1488+185
+rach2-nF2      load   8.17  main    469+88 llvmpipe    106+0 all   586+101 steal    1 qemu-host  1413+218
+linux-nL2      load   8.41  main   585+193 llvmpipe   413+12 all  1088+287 steal    0 qemu-host  1482+240
+rach2-nB2      load   8.07  main   481+103 llvmpipe     84+0 all   573+117 steal    1 qemu-host  1369+186
+rach2-nF3      load   8.14  main    481+88 llvmpipe    125+0 all   615+103 steal    1 qemu-host  1396+204
+linux-nL3      load   9.04  main   587+182 llvmpipe   454+15 all  1135+275 steal    0 qemu-host  1523+234
+rach2-nB3      load   8.47  main   500+108 llvmpipe    174+0 all   684+123 steal    0 qemu-host  1648+225
+
+## j10: every halt's account to its last edge (kernel-m76g, 3cf59abfa) against Linux
+j10: 07:28:01 start rach2-oG1 load 1.04
+j10: 07:28:35 end rach2-oG1 status 0 loading time: 8.17 seconds
+j10: 07:28:35 start linux-oL1 load 1.00
+j10: 07:29:07 end linux-oL1 status 0 loading time: 8.44 seconds
+j10: 07:29:07 start rach2-oG2 load 1.29
+j10: 07:29:41 end rach2-oG2 status 0 loading time: 8.18 seconds
+j10: 07:29:41 start linux-oL2 load 1.87
+j10: 07:30:12 end linux-oL2 status 0 loading time: 8.36 seconds
+j10: 07:30:12 start rach2-oG3 load 1.69
+j10: 07:30:47 end rach2-oG3 status 0 loading time: 8.16 seconds
+j10: 07:30:47 start linux-oL3 load 1.83
+j10: 07:31:28 end linux-oL3 status 0 loading time: 9.49 seconds
+j10: done
+rach2-oG1      load   8.17  main   617+153 llvmpipe    362+5 all  1027+207 steal    0 qemu-host  1372+177
+linux-oL1      load   8.44  main   580+194 llvmpipe   412+12 all  1078+283 steal    0 qemu-host  1495+228
+rach2-oG2      load   8.18  main   628+154 llvmpipe   683+10 all  1373+239 steal    0 qemu-host  1729+221
+linux-oL2      load   8.36  main   584+184 llvmpipe    411+8 all  1083+269 steal    0 qemu-host  1481+225
+rach2-oG3      load   8.16  main   579+147 llvmpipe    530+8 all  1165+204 steal    1 qemu-host  1427+238
+linux-oL3      load   9.49  main   613+202 llvmpipe   604+16 all  1392+399 steal    0 qemu-host  1957+238
+
+## the kernels
+ccd0d23a4c28b03f74f640a54dfd2382e22f331418e1eabba995cb13646c751a  kernel-m76
+3b889e7b593219a12ad2354409012c1238f4241200dd8d5eba65c0f69590df69  kernel-m76f
+07c30e1308e19a3c1f75272df478c0711587c3b359c21375f30e47f3d9d3e731  kernel-m76g
+587104fd95d4404e6d4c4cbda97f4c8e7952a31d5fb30f2f36898a540731bb69  kernel-j5B
+
+## burst: busy time by the clock against the time charged
+== b1: booted rach2 /home/testing/rach2/build/worktrees/m1/build/runs/task4159/kernel-m76
+burst 1000 us sleep 2000 us: busy 6.54 s by the clock, charged 0.97 s user + 0.00 s system (100 per second), ratio 0.15
+burst 300 us sleep 700 us: busy 5.72 s by the clock, charged 0.42 s user + 0.00 s system (100 per second), ratio 0.07
+burst 3000 us sleep 3000 us: busy 9.92 s by the clock, charged 4.81 s user + 0.00 s system (100 per second), ratio 0.48
+burst 20000 us sleep 0 us: busy 20.00 s by the clock, charged 19.97 s user + 0.00 s system (100 per second), ratio 1.00
+== f1: booted rach2 /home/testing/rach2/build/worktrees/m1/build/runs/task4159/kernel-m76f
+burst 1000 us sleep 2000 us: busy 6.55 s by the clock, charged 1.78 s user + 0.00 s system (100 per second), ratio 0.27
+burst 300 us sleep 700 us: busy 5.75 s by the clock, charged 0.11 s user + 0.00 s system (100 per second), ratio 0.02
+burst 3000 us sleep 3000 us: busy 9.91 s by the clock, charged 6.12 s user + 0.00 s system (100 per second), ratio 0.62
+burst 20000 us sleep 0 us: busy 20.00 s by the clock, charged 19.97 s user + 0.00 s system (100 per second), ratio 1.00
+== g1: booted rach2 /home/testing/rach2/build/worktrees/m1/build/runs/task4159/kernel-m76g
+burst 1000 us sleep 2000 us: busy 6.54 s by the clock, charged 6.43 s user + 0.04 s system (100 per second), ratio 0.99
+burst 300 us sleep 700 us: busy 5.75 s by the clock, charged 5.75 s user + 0.12 s system (100 per second), ratio 1.02
+burst 3000 us sleep 3000 us: busy 9.92 s by the clock, charged 9.80 s user + 0.00 s system (100 per second), ratio 0.99
+burst 20000 us sleep 0 us: busy 20.00 s by the clock, charged 19.99 s user + 0.00 s system (100 per second), ratio 1.00
+== g2: booted rach2 /home/testing/rach2/build/worktrees/m1/build/runs/task4159/kernel-m76g
+burst 1000 us sleep 2000 us: busy 6.55 s by the clock, charged 6.49 s user + 0.04 s system (100 per second), ratio 1.00
+burst 300 us sleep 700 us: busy 5.77 s by the clock, charged 5.71 s user + 0.14 s system (100 per second), ratio 1.01
+burst 3000 us sleep 3000 us: busy 9.93 s by the clock, charged 9.72 s user + 0.02 s system (100 per second), ratio 0.98
+burst 20000 us sleep 0 us: busy 20.00 s by the clock, charged 19.98 s user + 0.00 s system (100 per second), ratio 1.00
+== p1: booted rach2 /home/testing/rach2/build/worktrees/m1/build/runs/task4159/kernel-j5B
+burst 1000 us sleep 2000 us: busy 6.47 s by the clock, charged 6.52 s user + 0.43 s system (100 per second), ratio 1.07
+burst 300 us sleep 700 us: busy 5.53 s by the clock, charged 5.18 s user + 1.31 s system (100 per second), ratio 1.17
+burst 3000 us sleep 3000 us: busy 9.89 s by the clock, charged 9.89 s user + 0.13 s system (100 per second), ratio 1.01
+burst 20000 us sleep 0 us: busy 20.00 s by the clock, charged 20.00 s user + 0.00 s system (100 per second), ratio 1.00
+== l1: booted linux none
+burst 1000 us sleep 2000 us: busy 6.47 s by the clock, charged 6.51 s user + 0.02 s system (100 per second), ratio 1.01
+burst 300 us sleep 700 us: busy 5.51 s by the clock, charged 5.65 s user + 0.09 s system (100 per second), ratio 1.04
+burst 3000 us sleep 3000 us: busy 9.84 s by the clock, charged 9.88 s user + 0.00 s system (100 per second), ratio 1.00
+burst 20000 us sleep 0 us: busy 20.00 s by the clock, charged 19.96 s user + 0.00 s system (100 per second), ratio 1.00
