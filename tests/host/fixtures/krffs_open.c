@@ -389,6 +389,34 @@ static void filecache_forget(struct vfs_mount *mnt, void *node)
     forgot_node = node;
 }
 
+/* What a file was before a write or a truncation, as mm/filecache.h has it. */
+struct filecache_was {
+    uint64_t size;
+    int64_t mtime;
+    uint32_t generation;
+    int known;
+};
+
+/** Note nothing of the file: the cache keeps no page of the fixture's. */
+static void filecache_before(struct vfs_mount *mnt, void *node, struct filecache_was *was)
+{
+    (void)mnt;
+    (void)node;
+    k_memset(was, 0, sizeof(*was));
+}
+
+/** Record, as `filecache_forget` does, the file whose changed pages the
+ * wrapper asked the cache to drop. */
+static void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache_was *was,
+                              uint64_t from, uint64_t to)
+{
+    (void)was;
+    (void)from;
+    (void)to;
+    forgot_mnt = mnt;
+    forgot_node = node;
+}
+
 /** inotify's report of a new entry, which no row watches. */
 static void watch_made(struct vfs_mount *mnt, void *dir, const char *name, uint32_t isdir)
 {
