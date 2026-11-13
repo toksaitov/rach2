@@ -115,7 +115,9 @@ void isr_cpu_offline(void);
 /** Whether the platform line `line` has raised an interrupt not yet taken. */
 int isr_line_pending(int line);
 
-/** Whether `vector` has a message delivered and not yet taken. */
+/** Whether `vector` has a message pending on any online processor or a
+ * chain entered but not completed. Uses smp_call for remote controller
+ * reads; any context except an NMI, with no lock a callback may need. */
 int isr_vector_pending(int vector);
 
 /** The interrupts that went away before the processor took them, which the

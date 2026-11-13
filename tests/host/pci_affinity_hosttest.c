@@ -56,6 +56,39 @@ static uint64_t remap_cpus(void)
 static const struct pci_msi_remap remap_ops = {remap_message, unmap_message, move_message,
                                                remap_cpus};
 
+/** Early boot allocations are replayed in order once all CPUs are online. */
+static void boot_spread_row(void)
+{
+    pci_device_t dev[6];
+    uint64_t requested, effective;
+    unsigned int i, c;
+
+    k_memset(cpu_table, 0, sizeof(cpu_table));
+    cpu_table[0].online = 1;
+    for (i = 0; i < 6; i++) {
+        k_memset(&dev[i], 0, sizeof(dev[i]));
+        dev[i].device = (uint8_t)i;
+        model_reset();
+        model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
+        space[0x62] = PCI_MSI_64BIT;
+        check(pci_msi_enable(&dev[i], (uint8_t)(60 + i)) == 0,
+              "enable six messages while only the boot processor is online");
+    }
+    for (c = 0; c < 4; c++) {
+        cpu_table[c].online = 1;
+    }
+    pci_msi_rebalance();
+    for (i = 0; i < 6; i++) {
+        check(!pci_irq_affinity(60 + (int)i, &requested, &effective) &&
+                  effective == ((uint64_t)1 << (i % 4)),
+              "replay boot allocations in matrix order, including the sixth device");
+        model_reset();
+        model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
+        space[0x62] = PCI_MSI_64BIT;
+        pci_msi_disable(&dev[i]);
+    }
+}
+
 /** Switching a multi-entry function to MSI drops every MSI-X record. */
 static void msix_to_msi_row(void)
 {
@@ -156,6 +189,7 @@ int main(void)
               "disable removes the affinity record");
     }
     msix_to_msi_row();
+    boot_spread_row();
     printf("pci_affinity_hosttest: %s\n", fails ? "failed" : "ok");
     return fails != 0;
 }
