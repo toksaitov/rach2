@@ -54,11 +54,12 @@
 #include "drm/i915/i915_cmd_parser.c"
 
 /* The heap's blocks a Crocus call takes at most, on an idle ring and on a
- * busy one: the call's objects, its fence array, its hold and its request,
- * and on a busy ring a new shadow, whose pool's are all in use. Before
- * 84-146 the reservations' merges and copies made them 21 and 23. */
-#define HEAP_IDLE_CALL 4
-#define HEAP_BUSY_CALL 7
+ * busy one: the call's objects, its fence array, and its request with its
+ * hold in one block, and on a busy ring a new shadow, whose pool's are all
+ * in use. Before 84-146 the reservations' merges and copies made them 21
+ * and 23, and before 84-157 the hold's own block 4 and 7. */
+#define HEAP_IDLE_CALL 3
+#define HEAP_BUSY_CALL 6
 
 /* The batch's commands the chip runs: a store to a GTT address. */
 #define MI_STORE_DATA_IMM_GTT (MI_INSTR(0x20, 2) | (1u << 22))

@@ -3824,8 +3824,9 @@ struct i915_file {
  */
 struct i915_await;
 
-/* What a request holds for its batch until it retires; `release` frees it
- * with what it holds, in process context. */
+/* What a request holds for its batch until it retires; `release` lets go
+ * of what it holds, and frees the hold unless the request's block holds it,
+ * in process context. */
 struct i915_request_hold {
     void (*release)(struct i915_request_hold *hold);
 };
@@ -3988,6 +3989,15 @@ uint16_t i915_engine_uabi_class(const struct i915_engine *engine);
  *         the GTT for an image.
  */
 int32_t i915_request_create(struct intel_context *ce, struct i915_request **out);
+
+/**
+ * `i915_request_create` with `room` zeroed bytes after the request, at
+ * `rq + 1`, in the request's own block and freed with it: where
+ * EXECBUFFER2 keeps its hold, so that a call takes one block for both, as
+ * Linux's request comes from its slab and its vmas' activity from nodes it
+ * keeps for each timeline (i915_active.c:270-330).
+ */
+int32_t i915_request_create_room(struct intel_context *ce, size_t room, struct i915_request **out);
 
 /** Room for `ndw` dwords of the request's commands in its ring, as
  * Linux's intel_ring_begin, or NULL when the ring cannot give it. */

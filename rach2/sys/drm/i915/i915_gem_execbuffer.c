@@ -79,12 +79,13 @@ struct eb_fence {
 
 /*
  * What a request holds for the call until it retires: a reference to each
- * of `count` objects, the call's and the parser's shadow.
+ * of `count` objects, the call's and the parser's shadow. It lies in the
+ * request's own block, after the request.
  */
 struct eb_hold {
     struct i915_request_hold base;
     uint32_t count;
-    struct drm_i915_gem_object **obj; /* in the same allocation */
+    struct drm_i915_gem_object **obj; /* after the hold, in the same block */
 };
 
 /*
@@ -96,8 +97,7 @@ struct eb_hold {
  * `relocs_in` once the relocations are copied in, which with
  * I915_EXEC_NO_RELOC waits until an object moves.
  * `shadow` is the parser's copy of the batch, with a reference, and
- * `shadow_vma` its pinned binding, which run in the batch's place. `hold`
- * goes to the request.
+ * `shadow_vma` its pinned binding, which run in the batch's place.
  */
 struct eb {
     struct drm_i915_private *i915;
@@ -120,7 +120,6 @@ struct eb {
     size_t nfences;
     struct drm_i915_gem_object *shadow;
     struct i915_vma *shadow_vma;
-    struct eb_hold *hold;
     struct sync_file *out; /* the out-fence's file, attached after the lock */
 };
 
@@ -1422,7 +1421,7 @@ static int32_t eb_parse(struct eb *eb)
     return err;
 }
 
-/** Free a hold and let go of what it holds. */
+/** Let go of what a hold holds; the hold is in its request's block. */
 static void eb_hold_release(struct i915_request_hold *base)
 {
     struct eb_hold *hold = (struct eb_hold *)base;
@@ -1431,23 +1430,26 @@ static void eb_hold_release(struct i915_request_hold *base)
     for (i = 0; i < hold->count; i++) {
         i915_gem_object_put(hold->obj[i]);
     }
-    kfree(hold);
 }
 
-/** Make the call's hold, with a reference to each object and the shadow.
- * 0, or -ENOMEM. */
-static int32_t eb_hold_make(struct eb *eb)
+/** The bytes of the call's hold: its objects and the shadow. */
+static size_t eb_hold_size(const struct eb *eb)
 {
-    uint32_t n = eb->count + (eb->shadow ? 1u : 0u), i;
-    struct eb_hold *hold;
+    uint32_t n = eb->count + (eb->shadow ? 1u : 0u);
 
-    hold = (struct eb_hold *)kmalloc(sizeof(*hold) + (size_t)n * sizeof(hold->obj[0]));
-    if (!hold) {
-        return -ENOMEM;
-    }
+    return sizeof(struct eb_hold) + (size_t)n * sizeof(struct drm_i915_gem_object *);
+}
+
+/** Make the call's hold in the room after `rq`, with a reference to each
+ * object and the shadow, and give it to the request. */
+static void eb_hold_make(struct eb *eb, struct i915_request *rq)
+{
+    struct eb_hold *hold = (struct eb_hold *)(void *)(rq + 1);
+    uint32_t i;
+
     hold->base.release = eb_hold_release;
     hold->obj = (struct drm_i915_gem_object **)(void *)(hold + 1);
-    hold->count = n;
+    hold->count = eb->count + (eb->shadow ? 1u : 0u);
     for (i = 0; i < eb->count; i++) {
         hold->obj[i] = eb->ev[i].obj;
         drm_gem_object_get(&hold->obj[i]->base);
@@ -1456,8 +1458,7 @@ static int32_t eb_hold_make(struct eb *eb)
         hold->obj[i] = eb->shadow;
         drm_gem_object_get(&eb->shadow->base);
     }
-    eb->hold = hold;
-    return 0;
+    rq->hold = &hold->base;
 }
 
 /**
@@ -1469,7 +1470,7 @@ static int32_t eb_hold_make(struct eb *eb)
  * the program after the GEM lock, only when all went well. Under the GEM
  * lock, which nothing between the request's creation and its add lets go.
  *
- * The request takes the call's hold, made first.
+ * The request takes the call's hold, made in the request's own block.
  *
  * @return 0; the errors of `i915_request_create`; -ENOMEM; -EAGAIN; -EINVAL
  *         for I915_EXEC_GEN7_SOL_RESET off the render ring; -ENOENT for a
@@ -1481,17 +1482,11 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
     int32_t err, err2;
 
     lockdep_assert_held(&eb->i915->gem.lock);
-    err = eb_hold_make(eb);
+    err = i915_request_create_room(eb->ce, eb_hold_size(eb), &rq);
     if (err < 0) {
         return err;
     }
-    err = i915_request_create(eb->ce, &rq);
-    if (err < 0) {
-        return err;
-    }
-    rq->hold = &eb->hold->base;
-    eb->hold = 0;
-    err = 0;
+    eb_hold_make(eb, rq);
     if (out_fd >= 0) {
         eb->out = sync_file_new(&rq->fence.base, NULL);
         err = eb->out ? 0 : -ENOMEM;
@@ -1521,8 +1516,7 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
 }
 
 /** Give back what the call took: the pins, the objects, the shadow, the
- * hold the request did not take, the context and its state, the syncobjs
- * and the table. */
+ * context and its state, the syncobjs and the table. */
 static void eb_release(struct eb *eb)
 {
     uint32_t i;
@@ -1531,9 +1525,6 @@ static void eb_release(struct eb *eb)
         i915_vma_unpin(eb->shadow_vma);
     }
     i915_gem_object_put(eb->shadow);
-    if (eb->hold) {
-        eb_hold_release(&eb->hold->base);
-    }
     for (i = 0; eb->ev && i < eb->count; i++) {
         eb_unpin(&eb->ev[i]);
         i915_gem_object_put(eb->ev[i].obj);
