@@ -338,7 +338,7 @@ static int32_t copy_write(const char __user *buf, uint32_t len, char *out, uint3
 /** The ticks `t` as milliseconds. */
 static uint64_t ticks_ms(uint64_t t)
 {
-    return t * (1000u / TICK_HZ);
+    return tick_msecs(t);
 }
 
 /** Whether VT-d translates for the device, Linux's i915_vtd_active, as

@@ -709,7 +709,7 @@ struct ath9k_cal {
     int32_t meas_iq[AR9300_MAX_CHAINS];
 
     /* The periodic work: whether the short calibrations are done, and the
-     * worker ticks (milliseconds) at which each job last ran. */
+     * kernel ticks at which each job last ran. */
     uint8_t done;
     uint8_t running; /* between ath9k_cal_start and ath9k_cal_stop */
     uint8_t temp;    /* the thermometer's latest reading */

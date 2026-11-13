@@ -79,6 +79,10 @@ The driver prints one result, assertion and progress record per completed check,
 
 A check passes only after exit status zero, confirmed process cleanup and unchanged binary and input hashes. Every sanitizer is fatal. Each check has private scratch under the driver's `rach2-host.XXXXXX` directory in `TMPDIR`; complete output goes to its `NAME.log`. Failed evidence is kept and its directory printed. Successful runs remove their scratch. A stopped driver cancels and reaps its children before removing scratch; unconfirmed cleanup retains it. The case has no time limit of its own. Each completed check writes `progress checks N` for etude's watchdog.
 
+`sched_hosttest.c` also checks slice events with only lower-priority work, a single selection request at expiry and a competitor becoming ineligible before selection.
+
+The wireless station and ath9k fixtures whose literal clocks count milliseconds declare `TICK_HZ=1000`; production uses 250 Hz. `i915_base_hosttest.c` selects its device's register lock in the shared time stub, which traps if a service deadline is published while that lock is held. The forcewake row also checks the published timestamp and its independent two-millisecond deadline.
+
 ## Design
 
 ### The compile

@@ -342,7 +342,7 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
             for (tid = 0; tid < WLAN_NUM_TIDS; tid++)
                 if (old->key.rx_pn[tid] > fresh.old_pn)
                     fresh.old_pn = old->key.rx_pn[tid];
-            fresh.old_until = tick_count() + WLAN_DATA_REKEY_SETTLE;
+            fresh.old_until = tick_count() + MS_TO_TICKS(WLAN_DATA_REKEY_SETTLE);
         }
     }
     if (pairwise)

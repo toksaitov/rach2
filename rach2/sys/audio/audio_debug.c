@@ -531,13 +531,14 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
                                          ? (snapshot.lpib - last_lpib)
                                          : (snapshot.lpib + snapshot.cbl - last_lpib);
                     console_printf("t=%dms lpib=%d (+%d) ctl=0x%x sts=0x%x fmt=0x%x\n",
-                                   (now_ticks() - start_ticks) * (1000u / TICK_HZ), snapshot.lpib,
-                                   delta, snapshot.ctl, (uint32_t)snapshot.sts,
+                                   (uint32_t)tick_msecs((uint32_t)(now_ticks() - start_ticks)),
+                                   snapshot.lpib, delta, snapshot.ctl, (uint32_t)snapshot.sts,
                                    (uint32_t)snapshot.fmt);
                 } else {
                     console_printf("t=%dms lpib=%d ctl=0x%x sts=0x%x fmt=0x%x\n",
-                                   (now_ticks() - start_ticks) * (1000u / TICK_HZ), snapshot.lpib,
-                                   snapshot.ctl, (uint32_t)snapshot.sts, (uint32_t)snapshot.fmt);
+                                   (uint32_t)tick_msecs((uint32_t)(now_ticks() - start_ticks)),
+                                   snapshot.lpib, snapshot.ctl, (uint32_t)snapshot.sts,
+                                   (uint32_t)snapshot.fmt);
                 }
                 last_lpib = snapshot.lpib;
             }

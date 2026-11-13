@@ -169,10 +169,15 @@ void timer_service_ipi(void)
     }
 }
 
-/** Selection rows have no real device to program. */
+/* The last requested event and the number of timer programming requests. */
+static int64_t slice_event;
+static unsigned slice_arms;
+
+/** Record a requested event without programming a host timer. */
 void timer_wake_at(int64_t ns)
 {
-    (void)ns;
+    slice_event = ns;
+    slice_arms++;
 }
 
 /** A local event timer is present in the idle prediction model. */
@@ -1229,6 +1234,53 @@ static void tick_slice(void)
     clock_ns = 0;
 }
 
+/** A lower-priority queue never arms RR's slice, an expired slice asks
+ * once for selection, and selection that keeps the current thread renews
+ * its slice even when its competitor became ineligible. */
+static void slice_events(void)
+{
+    unsigned i, armed;
+
+    clock_ns = 1000000000u;
+    setup();
+    for (i = 2; i < 7; i++) {
+        sched_forget(&procs[i]);
+        procs[i].state = PROC_BLOCKED;
+    }
+    procs[0].sched_policy = procs[1].sched_policy = SCHED_RR;
+    procs[0].rt_priority = 50;
+    procs[1].rt_priority = 40;
+    sched_priority_changed(&procs[1]);
+    procs[0].slice_ns = clock_ns;
+    irq_flags = 0;
+    slice_arms = 0;
+    sched_slice_rearm();
+    clock_ns += 2u * SCHED_INTERVAL_NS;
+    sched_slice_rearm();
+    CHECK(!slice_arms && !procs[0].need_resched,
+          "lower-priority work arms no RR event, even after expiry");
+    schedule();
+    CHECK(current_proc == &procs[0] && procs[0].slice_ns == clock_ns,
+          "selection that keeps RR consumes the old slice");
+
+    procs[1].rt_priority = 50;
+    sched_slice_rearm();
+    CHECK(slice_arms == 1 && slice_event == (int64_t)(clock_ns + SCHED_INTERVAL_NS),
+          "an eligible equal RR peer arms the slice once");
+    clock_ns += SCHED_INTERVAL_NS;
+    armed = slice_arms;
+    sched_slice_rearm();
+    sched_slice_rearm();
+    CHECK(procs[0].need_resched && (procs[0].work & WORK_RESCHED) && slice_arms == armed,
+          "expiry requests selection without an immediate event");
+    procs[1].affinity = 2;
+    schedule();
+    CHECK(current_proc == &procs[0] && !procs[0].need_resched && procs[0].slice_ns == clock_ns &&
+              slice_arms == armed,
+          "an ineligible peer leaves a fresh slice and no repeated event");
+    clock_ns = 0;
+}
+
 /**
  * Within the slice the tick takes a queued real-time thread only when it
  * outranks the current one: an equal SCHED_RR peer waits for the slice, as
@@ -2025,6 +2077,7 @@ int main(int argc, char **argv)
     migration();
     run_delay();
     tick_slice();
+    slice_events();
     tick_rr();
     tick_rt();
     affinity_rows();

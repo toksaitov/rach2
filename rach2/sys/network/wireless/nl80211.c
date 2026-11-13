@@ -1214,6 +1214,12 @@ static void put_scan_request(struct genl_msg *msg, const struct sta *s, uint64_t
     }
 }
 
+/** Clamp a reported duration to the unsigned 32-bit netlink field. */
+static uint32_t duration_u32(uint64_t value)
+{
+    return value > 0xffffffffu ? 0xffffffffu : (uint32_t)value;
+}
+
 /** Put one BSS of the table, with its status when it is the station's. */
 static void put_bss(struct genl_msg *msg, const struct wlan_bss *b, const struct nl80211_status *st,
                     uint64_t now)
@@ -1227,9 +1233,10 @@ static void put_bss(struct genl_msg *msg, const struct wlan_bss *b, const struct
     nla_put_u16(msg, NL80211_BSS_CAPABILITY, b->capability);
     nla_put(msg, NL80211_BSS_INFORMATION_ELEMENTS, b->ies, b->ies_len);
     nla_put_u32(msg, NL80211_BSS_SIGNAL_MBM, (uint32_t)b->signal);
-    nla_put_u32(msg, NL80211_BSS_SEEN_MS_AGO, now > b->seen ? (uint32_t)(now - b->seen) : 0);
-    /* Ticks are milliseconds since boot; the attribute is nanoseconds. */
-    nla_put_u64(msg, NL80211_BSS_LAST_SEEN_BOOTTIME, b->seen * (uint64_t)1000000);
+    nla_put_u32(msg, NL80211_BSS_SEEN_MS_AGO,
+                now > b->seen ? duration_u32(tick_msecs(now - b->seen)) : 0);
+    /* The attribute reports nanoseconds since boot. */
+    nla_put_u64(msg, NL80211_BSS_LAST_SEEN_BOOTTIME, b->seen * (uint64_t)TICK_NS);
     if (st->state != WLAN_STA_NONE && same_addr(st->bssid, b->bssid) &&
         (!st->frequency || st->frequency == b->frequency)) {
         nla_put_u32(msg, NL80211_BSS_STATUS,
@@ -1258,7 +1265,7 @@ static int dump_scan(struct genl_dump *dump, struct genl_msg *msg)
         return rc;
     }
     if (!dump->args[1]) {
-        wlan_bss_expire(s->table, now, WLAN_BSS_EXPIRE_MS);
+        wlan_bss_expire(s->table, now, MS_TO_TICKS(WLAN_BSS_EXPIRE_MS));
         dump->args[1] = 1;
     }
     b = wlan_bss_next(s->table, &cursor);
@@ -1311,7 +1318,7 @@ static uint64_t join_due(const struct sta *s, const uint8_t *bssid)
     if (!s->left_at || (bssid && !same_addr(s->left_ap, bssid))) {
         return 0;
     }
-    return s->left_at + LEAVE_SETTLE;
+    return s->left_at + MS_TO_TICKS(LEAVE_SETTLE);
 }
 
 /** Authenticate on the worker. */
@@ -2023,7 +2030,7 @@ static int new_key(const struct genl_info *info)
     }
     rc = on_worker(s, new_key_hop, &k);
     while (rc == -EINPROGRESS) {
-        rc = on_worker_at(s, new_key_hop, &k, tick_count() + NEW_KEY_RETRY);
+        rc = on_worker_at(s, new_key_hop, &k, tick_count() + MS_TO_TICKS(NEW_KEY_RETRY));
     }
     k_memset(&k.key, 0, sizeof(k.key));
     return rc;
@@ -2185,7 +2192,8 @@ static void put_station(struct genl_msg *msg, struct sta *s, const struct nl8021
     nla_put_u32(msg, NL80211_ATTR_GENERATION, generation);
     info = nla_nest_start(msg, NL80211_ATTR_STA_INFO);
     if (st->last_rx && now >= st->last_rx) {
-        nla_put_u32(msg, NL80211_STA_INFO_INACTIVE_TIME, (uint32_t)(now - st->last_rx));
+        nla_put_u32(msg, NL80211_STA_INFO_INACTIVE_TIME,
+                    duration_u32(tick_msecs(now - st->last_rx)));
     }
     nla_put_u32(msg, NL80211_STA_INFO_RX_BYTES, n->rx_bytes);
     nla_put_u32(msg, NL80211_STA_INFO_TX_BYTES, n->tx_bytes);
@@ -2205,11 +2213,9 @@ static void put_station(struct genl_msg *msg, struct sta *s, const struct nl8021
     put_rate(msg, NL80211_STA_INFO_TX_BITRATE, st->tx_rate);
     put_rate(msg, NL80211_STA_INFO_RX_BITRATE, st->rx_rate);
     if (st->assoc_at && now >= st->assoc_at) {
-        /* Seconds, from 32-bit milliseconds: i686 has no 64-bit divide. */
-        uint32_t ms =
-            now - st->assoc_at > 0xffffffffu ? 0xffffffffu : (uint32_t)(now - st->assoc_at);
+        uint64_t seconds = tick_div(now - st->assoc_at, TICK_HZ, NULL);
 
-        nla_put_u32(msg, NL80211_STA_INFO_CONNECTED_TIME, ms / 1000);
+        nla_put_u32(msg, NL80211_STA_INFO_CONNECTED_TIME, duration_u32(seconds));
     }
     if (b) {
         nest = nla_nest_start(msg, NL80211_STA_INFO_BSS_PARAM);

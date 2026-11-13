@@ -184,7 +184,7 @@ int vtd_hw_fault_vector(void)
  * in milliseconds. */
 uint32_t vtd_hw_ms(void)
 {
-    return (uint32_t)kernel_ticks * (1000u / TICK_HZ);
+    return (uint32_t)tick_msecs((uint32_t)kernel_ticks);
 }
 
 uint32_t vtd_hw_apic_id(void)

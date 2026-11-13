@@ -38,8 +38,8 @@
 #define TTY_PUMP_BUDGET 64
 #define TTY_ECHO_MAX    64
 
-/* The ticks in VTIME's unit, a tenth of a second. */
-#define TTY_TICKS_PER_VTIME (TICK_HZ / 10u)
+/* VTIME's unit, a tenth of a second, in milliseconds. */
+#define TTY_VTIME_MS 100u
 
 /** A sink that discards: tty_init installs it when the caller gives none, so
  * the discipline's echo and output never call through NULL. */
@@ -501,7 +501,7 @@ static void tty_wait_arm(struct tty_wait *w)
     if (timer == N_TTY_TIMER_NONE || (timer == N_TTY_TIMER_BYTE && n == 0)) {
         w->armed = 0;
     } else if (!w->armed || (timer == N_TTY_TIMER_BYTE && n != w->pending)) {
-        w->deadline = rtc_ticks_now() + ld->tio.c_cc[VTIME] * TTY_TICKS_PER_VTIME;
+        w->deadline = rtc_ticks_now() + MS_TO_TICKS(ld->tio.c_cc[VTIME] * TTY_VTIME_MS);
         w->armed = 1;
     }
     w->pending = n;
@@ -1094,7 +1094,7 @@ void tty_console_counters(struct console_counters *out)
  * that has an interrupt from no timer; its backup timer only sends, for a
  * UART with the THRE bug (8250_core.c:269-275), and a port without an
  * interrupt is polled every uart_poll_timeout (8250_core.c:207-213). */
-#define CONSOLE_BACKUP_TICKS (TICK_HZ / 5)
+#define CONSOLE_BACKUP_TICKS MS_TO_TICKS(200)
 
 static void console_deliver(void);
 

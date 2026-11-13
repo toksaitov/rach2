@@ -137,6 +137,7 @@ capability, elements and age, and
 .Dv NL80211_BSS_STATUS
 for the access point the station is with.
 Entries not heard for 30 s leave the table first.
+Age is in milliseconds; last-seen boot time is in nanoseconds.
 .It Dv AUTHENTICATE
 Authenticates with a BSS of the table by Open System, or by SAE with the
 frame's fields in
@@ -194,7 +195,8 @@ another flag is
 .Er EINVAL .
 .It Dv GET_STATION
 Describes the access point: signal, byte and packet counts, retries and
-failures, inactive and connected time, beacon loss, rates and flags.
+failures, inactive time in milliseconds, connected time in seconds,
+beacon loss, rates and flags.
 The counts start at the association and take in every frame sent to the
 access point, management and null frames among them.
 Another address is

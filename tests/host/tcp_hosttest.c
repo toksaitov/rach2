@@ -22,6 +22,7 @@
  *
  * The file is included, not linked, so each case can put the table back to its
  * initial state; the kernel has one boot per run and needs no such thing.
+ * host-deps: rach2/sys/tick.c
  */
 
 extern int printf(const char *fmt, ...);

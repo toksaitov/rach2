@@ -1895,11 +1895,11 @@ static uint64_t itimer_ns(long sec, long usec)
     return (uint64_t)sec * 1000000000u + sub;
 }
 
-/** Store a nanosecond span as a timeval, rounded up to one microsecond. */
+/** Store a nanosecond span as a timeval, truncating below a microsecond. */
 static void itimer_put_ns(uint64_t ns, long *sec, long *usec)
 {
     uint64_t rem;
-    uint64_t seconds = tick_div64(ns + 999u, 1000000000u, &rem);
+    uint64_t seconds = tick_div64(ns, 1000000000u, &rem);
 
     if (seconds > (uint64_t)(~0UL >> 1)) {
         *sec = (long)(~0UL >> 1);
@@ -2041,11 +2041,10 @@ long sys_alarm(isr_params_t *params)
     uint64_t rest, interval;
     uint64_t left = proc_alarm_read_ns(current_proc->tg->leader, &interval);
     uint32_t seconds = (uint32_t)tick_div64(left, 1000000000u, &rest);
-    uint32_t usec = (uint32_t)rest / 1000u;
 
     itimer_set(ITIMER_REAL, (uint64_t)(uint32_t)SC_ARG(params, 0) * 1000000000u, 0);
     kirq_restore(flags);
-    if ((seconds == 0 && usec != 0) || usec >= 500000u) {
+    if ((seconds == 0 && rest != 0) || rest >= 500000000u) {
         seconds++;
     }
     return (int32_t)seconds;

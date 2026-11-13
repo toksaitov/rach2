@@ -1192,12 +1192,12 @@ struct intel_ddi_port {
  * pulses the handler took on a port with DisplayPort, `long_mask` and
  * `short_mask`, for its pulse handler, and the pins whose outputs are to be
  * probed, `event_bits`; and each pin's state, `state` HPD_*, with its storm
- * window's start `storm_start` (ms of rtc_ticks_now) and count
+ * window's start `storm_start` (kernel ticks of rtc_ticks_now) and count
  * `storm_count`. The work's own: `retry_bits`, the pins probed again at
  * `retry_at`, and `retries`, how many times in a row each was; when the
  * storm's pins come back, `reenable_at`, and when they are next polled,
- * `poll_at`, all ms, 0 for none. `work` is the DRM core's deferred work
- * that runs it in process context. `pulses` counts the interrupts taken
+ * `poll_at`, all kernel ticks, 0 for none. `work` is the DRM core's deferred
+ * work that runs it in process context. `pulses` counts the interrupts taken
  * and `storms` the storms; `ready` says the interrupts are hooked.
  */
 struct intel_hotplug {

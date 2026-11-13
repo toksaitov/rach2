@@ -12,6 +12,7 @@
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-cflags: -DTICK_HZ=1000
  */
 #include "ath9k_model.h"
 #include "network/wireless/work.h"

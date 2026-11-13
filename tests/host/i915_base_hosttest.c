@@ -19,7 +19,8 @@
  * owns, and the IOMMU names the Lenovo's reserved region for the GPU.
  *
  * The rows: forcewake's request, acknowledgement and reference count, its
- * release timer and its deadline as the idle service, a slow and a stuck
+ * release timer, publication after the register lock and its idle deadline,
+ * a slow and a stuck
  * acknowledgement, a stuck release, the GT's threads, and the reads that take
  * it; the GT FIFO's reserve, a slow and a stuck FIFO; the power well taken over
  * from the BIOS, turned off, kept on while the firmware's pipe needs it, held
@@ -230,6 +231,7 @@ const struct i915_id *i915_id_lookup(uint16_t device_id)
 /* ---- the device ---- */
 
 static struct drm_i915_private dev;
+extern struct spinlock *host_i915_register_lock;
 
 /** A fresh model on the bus and a device record over it, as the bind
  * makes one; the kernel's records cleared. */
@@ -238,6 +240,7 @@ static struct drm_i915_private *fresh(struct i915_model *m)
     CHECK("the model is made", i915_model_init(m) == 0);
     bus = m;
     k_memset(&dev, 0, sizeof(dev));
+    host_i915_register_lock = &dev.uncore.lock;
     dev.pci = m->pci;
     dev.hw = m->hw;
     dev.mmio_phys = LENOVO_GPU_BAR0;
@@ -262,6 +265,7 @@ static void done(struct i915_model *m)
 {
     i915_model_free(m);
     bus = 0;
+    host_i915_register_lock = NULL;
 }
 
 /* ---- forcewake ---- */
@@ -1211,7 +1215,7 @@ static void row_forcewake_fine(void)
     i915_uncore_init(i915);
     CHECK("fine: arm two milliseconds", i915_forcewake_get(i915) == 0);
     i915_forcewake_put(i915);
-    CHECK("fine: published after the device lock",
+    CHECK("fine: published release timestamp",
           host_i915_deadline == (int64_t)i915->uncore.timer_due);
     CHECK("fine: deadline independent of HZ", i915->uncore.timer_due == (start + 2u) * 1000000u);
     i915_uncore_tick(i915);

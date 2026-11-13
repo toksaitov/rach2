@@ -474,17 +474,17 @@ static int tsc_one_rate(void)
 }
 
 /** `gone` TSC counts over `seen` counts of a reference of `ref_hz` as the
- * TSC's counts in a tick, from a quarter of the counts a second; 0 when the
- * quotient does not fit. */
+ * TSC's counts in a tick; 0 when the quotient does not fit. Multiply the
+ * full reference frequency before dividing, retaining fractional ticks. */
 static uint32_t tsc_per_tick_of(uint64_t gone, uint32_t seen, uint32_t ref_hz)
 {
-    uint32_t counts;
+    uint64_t counts;
 
     if (seen == 0 || (gone >> 32) != 0) {
         return 0; /* 20 ms is under 2^32 counts below a 200 GHz clock */
     }
-    counts = refclock_scale((uint32_t)gone, ref_hz / 4u, seen);
-    return counts == 0xFFFFFFFFu ? 0 : counts / (TICKS_PER_SECOND / 4u);
+    counts = tick_div64(gone * ref_hz, (uint64_t)seen * TICKS_PER_SECOND, NULL);
+    return counts > 0xffffffffu ? 0 : (uint32_t)counts;
 }
 
 /**

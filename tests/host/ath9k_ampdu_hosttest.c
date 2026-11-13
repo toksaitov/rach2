@@ -39,6 +39,7 @@
  * the filter's compressed BlockAckReqs, the drain of a reset, and the boot
  * option that turns aggregation off. It exits with the count of failed
  * checks, at most 255.
+ * host-cflags: -DTICK_HZ=1000
  */
 #include "ath9k_model.h"
 #include "network/wireless/data.h"

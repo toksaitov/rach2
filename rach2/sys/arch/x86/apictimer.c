@@ -665,7 +665,7 @@ static uint32_t apic_phase_us(void)
 {
     uint32_t initial, gone = apic_elapsed(&initial);
 
-    return initial ? refclock_scale(gone, 1000000u / tick_hz, initial) : 0;
+    return initial ? refclock_scale(gone, 1000000u, initial) / tick_hz : 0;
 }
 
 /** The counter's place within the tick, in nanoseconds. */
@@ -673,7 +673,7 @@ static uint32_t apic_phase_ns(void)
 {
     uint32_t initial, gone = apic_elapsed(&initial);
 
-    return initial ? refclock_scale(gone, 1000000000u / tick_hz, initial) : 0;
+    return initial ? refclock_scale(gone, 1000000000u, initial) / tick_hz : 0;
 }
 
 /** The tick's period, in microseconds. */

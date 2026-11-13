@@ -123,8 +123,8 @@ reports the time left before the next signal, zero when the timer is
 disarmed or stopped, and the interval.
 For
 .Dv ITIMER_REAL
-the time left is measured from its monotonic deadline and rounded up to a
-microsecond.
+the time left is measured from its monotonic deadline and truncated to
+whole microseconds.
 A due callback not yet collected reports one microsecond;
 a collected expiry waiting to post its signal reports zero, as on Linux.
 .Pp

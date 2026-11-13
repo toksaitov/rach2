@@ -75,6 +75,7 @@
  * description, is the trial's to find.
  *
  * The test exits with the number of failed checks, at most 255.
+ * host-cflags: -DTICK_HZ=1000
  */
 
 #include "ath9k_model.h"

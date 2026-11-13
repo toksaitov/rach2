@@ -24,6 +24,8 @@ A transmit operation copies its frame and metadata before returning success and 
 
 ### Execution and ownership
 
+Wireless work deadlines, BSS sightings, data-path ages and station status timestamps use kernel ticks. Millisecond durations are rounded up to ticks where a deadline or age bound is formed, including management retries, beacon loss, channel switching, fragments, BlockAck and rekey waits. Netlink converts BSS age and inactivity to milliseconds, last-seen boot time to nanoseconds and connected time to seconds; each 32-bit duration saturates in its reported unit.
+
 One wireless worker serializes station transitions, scans, BSS changes, keys and events. Driver operations and nl80211 handlers run in process context under the kernel lock without `net_lock`; operations documented as sleeping may release the kernel lock through the scheduler. Code takes `net_lock` only around a network-stack operation and never waits for the worker while holding it. Interrupt entry points only copy and enqueue receive frames, completion records, scan completion or rfkill changes. They never run management or encryption code in the interrupt handler.
 
 A work record remains live until its callback returns or cancellation finishes. Queuing an already pending or running record returns `-EBUSY`. A callback uses another work record for a later operation. Cancellation may sleep and cannot be called by the callback being cancelled. Event delivery borrows its frame only for the call; nl80211 must copy what it queues. Registry and key calls state their context and errors in the headers.
