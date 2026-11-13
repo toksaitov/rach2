@@ -708,7 +708,10 @@ static void row_gmbus_sleep(void)
     took = gmbus_slept_us - t0;
     CHECK(g->timeouts == timeouts + 1 && gmbus_sleeps > 0 && gmbus_sleeps == gmbus_sleeps_held,
           "gmbus sleep: the hung wait slept after its spin, holding the GMBUS mutex");
-    CHECK(gmbus_slept_us > t0 && took >= GMBUS_WAIT_US && took <= GMBUS_WAIT_US + 3000u,
+    /* The deadline is in ticks, the bound rounded up and one more, from the
+     * tick the wait began in; the model's clock moves a millisecond a step. */
+    CHECK(gmbus_slept_us > t0 && took >= GMBUS_WAIT_US &&
+              took < GMBUS_WAIT_US + 2u * TICK_US + 1000u,
           "gmbus sleep: the wait ended at its deadline, not after fifty sleeps");
     CHECK(!mutex_held(&disp->gmbus_mutex), "gmbus sleep: the GMBUS mutex free after the timeout");
     g->force_bit = 0;
