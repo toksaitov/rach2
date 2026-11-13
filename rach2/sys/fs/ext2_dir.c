@@ -14,6 +14,7 @@ struct ext2_scan {
     uint32_t name_len;
     uint32_t type;
     char name[EXT2_NAME_MAX + 1];
+    int unread; /* the scan failed at a read of the directory's block */
 };
 
 /* A copy of one block of a directory, for a scan that reads all of a block's
@@ -23,6 +24,7 @@ struct ext2_scan {
 struct ext2_window {
     uint8_t *data;
     int64_t index;
+    int unread; /* the last scan failed at a read of the directory's block */
 };
 
 /** Advance the directory's entry version before a write that may change
@@ -52,7 +54,9 @@ static void window_close(struct ext2_window *w)
  * Copy `len` bytes at byte `at` of directory `d` into `dst`: through window
  * `w` when it has a copy and the bytes lie inside one block, which a valid
  * entry's do, and by `ext2_read_data` otherwise, for a scan without a copy or a
- * corrupt record whose header runs past its block. 0, or -EIO.
+ * corrupt record whose header runs past its block, a window without a copy
+ * as for the latter. 0, or -EIO, with `w->unread` set when a read failed
+ * (`ext2_read_data`).
  */
 static int dir_bytes(struct ext2_mount *em, const struct ext2_node *d, struct ext2_window *w,
                      uint32_t at, void *dst, uint32_t len)
@@ -60,12 +64,13 @@ static int dir_bytes(struct ext2_mount *em, const struct ext2_node *d, struct ex
     int64_t index = (int64_t)(at >> em->block_shift);
     int rc;
 
-    if (!w || !w->data || (at & (em->block_size - 1)) + len > em->block_size) {
-        return ext2_read_data(em, d, at, dst, len);
+    if (!w->data || (at & (em->block_size - 1)) + len > em->block_size) {
+        return ext2_read_data(em, d, at, dst, len, &w->unread);
     }
     if (w->index != index) {
         w->index = -1;
-        rc = ext2_read_data(em, d, (uint64_t)index << em->block_shift, w->data, em->block_size);
+        rc = ext2_read_data(em, d, (uint64_t)index << em->block_shift, w->data, em->block_size,
+                            &w->unread);
         if (rc != 0) {
             return rc;
         }
@@ -79,8 +84,12 @@ static int dir_bytes(struct ext2_mount *em, const struct ext2_node *d, struct ex
  * The entry at byte `*cursor` of directory `d`, the cursor moved past it: 1
  * with `sc` filled, 0 at the directory's end, or -EIO. A malformed entry, a
  * `rec_len` below 8 or not a multiple of 4, a record past its block or the
- * directory's size, a name past its record or an inode past the count, is
- * -EIO with the error bit set and a record. An entry with inode 0 is
+ * directory's size, a name past its record or an inode past the count, and
+ * a directory whose size is not a whole number of blocks, as Linux's
+ * `ext2_check_folio` refuses them (fs/ext2/dir.c:110-180), are -EIO with
+ * the error bit set and a record; a failed read of the directory's block
+ * is -EIO with `sc->unread` set and no report, which only a listing makes
+ * (`ext2_readdir`). An entry with inode 0 is
  * returned with that inode and no name, and the caller skips it. With window
  * `w` the entry is read from a copy of its block, which the caller must not
  * write while it scans.
@@ -88,17 +97,32 @@ static int dir_bytes(struct ext2_mount *em, const struct ext2_node *d, struct ex
 static int dir_scan_in(struct ext2_mount *em, const struct ext2_node *d, struct ext2_window *w,
                        uint32_t *cursor, struct ext2_scan *sc)
 {
+    struct ext2_window none;
     uint8_t head[8];
     uint32_t at = *cursor;
     uint32_t in;
     int rc;
 
+    if (!w) {
+        none.data = 0;
+        none.index = -1;
+        w = &none;
+    }
+    w->unread = 0;
+    sc->unread = 0;
     if (at >= d->size) {
         return 0;
+    }
+    if (d->size & (em->block_size - 1)) {
+        klog(KLOG_WARN, "ext2", "directory %d: size %d is not a whole number of blocks",
+             (int)d->ino, (int)d->size);
+        ext2_mark_error(em);
+        return -EIO;
     }
     in = at % em->block_size;
     rc = dir_bytes(em, d, w, at, head, 8);
     if (rc != 0) {
+        sc->unread = w->unread;
         return rc;
     }
     sc->ino = ext2_le32(head);
@@ -115,6 +139,7 @@ static int dir_scan_in(struct ext2_mount *em, const struct ext2_node *d, struct 
     if (sc->ino != 0) {
         rc = dir_bytes(em, d, w, at + 8, sc->name, sc->name_len);
         if (rc != 0) {
+            sc->unread = w->unread;
             return rc;
         }
     } else {
@@ -130,6 +155,16 @@ static int dir_scan(struct ext2_mount *em, const struct ext2_node *d, uint32_t *
                     struct ext2_scan *sc)
 {
     return dir_scan_in(em, d, 0, cursor, sc);
+}
+
+/** Refuse directory inode `ino`, damaged as `why` says: logged, reported to
+ * the mount's policy (`ext2_mark_error`) and -EIO. The caller holds no
+ * buffer. */
+static int dir_damaged(struct ext2_mount *em, uint32_t ino, const char *why)
+{
+    klog(KLOG_WARN, "ext2", "directory %d: %s", (int)ino, why);
+    ext2_mark_error(em);
+    return -EIO;
 }
 
 /** Whether the strings `a` and `b` are equal. */
@@ -226,8 +261,11 @@ static int dir_names_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at,
  * from the search until it has the node, as Linux's lookup holds the
  * directory's `i_rwsem` across `ext2_lookup` and `ext2_iget` (fs/namei.c:1761,
  * fs/ext2/namei.c:71), so changes of other names in a busy directory cannot
- * send it round for ever. The node table's big lock, which `ext2_node_for`
- * takes, comes after a node's lock, and the load takes no node lock.
+ * send it round for ever. A freed inode the first try finds sends it to the
+ * second too; one found with the lock held is damage, reported as Linux's
+ * `ext2_lookup` reports `deleted inode referenced` (`ext2_stale`). The node
+ * table's big lock, which `ext2_node_for` takes, comes after a node's lock,
+ * and the load takes no node lock.
  */
 int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
@@ -267,8 +305,11 @@ int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
         if (held) {
             ext2_node_unlock(d);
         }
+        if (!n && rc == -ESTALE && !kept) {
+            continue;
+        }
         if (!n) {
-            return rc;
+            return rc == -ESTALE ? ext2_stale(em, ino) : rc;
         }
         rc = kept ? 1 : dir_names_at(em, d, at, name, ino, version);
         if (rc == 1) {
@@ -298,10 +339,13 @@ static int ext2_dtype(uint32_t ft)
 /**
  * The entry after byte `*cursor` of directory `d` that names an inode, for
  * `ext2_readdir`, whose caller holds `d`'s lock: 1 with `ent` filled and the
- * cursor past it, 0 at the end, -ENOENT for a removed directory, or -EIO.
+ * cursor past it, 0 at the end, -ENOENT for a removed directory, or -EIO,
+ * with `*unread` set for a failed read of a block (`dir_scan_in`). Without
+ * the filetype feature an entry's inode is loaded for its type, and one
+ * that is freed is reported (`ext2_stale`).
  */
 static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor,
-                    struct vfs_dirent *ent)
+                    struct vfs_dirent *ent, int *unread)
 {
     if (d->unlinked) {
         return -ENOENT;
@@ -311,6 +355,7 @@ static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor
         int got = dir_scan(em, d, cursor, &sc);
 
         if (got <= 0) {
+            *unread = sc.unread;
             return got;
         }
         if (sc.ino == 0) {
@@ -327,7 +372,7 @@ static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor
             int rc = ext2_inode_load(em, sc.ino, &probe);
 
             if (rc != 0) {
-                return rc;
+                return rc == -ESTALE ? ext2_stale(em, sc.ino) : rc;
             }
             ent->is_dir = (probe.mode & S_IFMT_) == S_IFDIR_;
             ent->type = (int)VFS_DT_OF(probe.mode);
@@ -338,11 +383,12 @@ static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor
 
 /**
  * Move `*cursor` to the first current record boundary at or after it, from
- * the start of its block, under `d`'s lock. Returns 0 or -EIO. A removal
- * can merge the saved offset into a name written later in that space;
- * only the block's current boundaries may be parsed as headers.
+ * the start of its block, under `d`'s lock. Returns 0 or -EIO, with
+ * `*unread` set for a failed read of a block. A removal can merge the saved
+ * offset into a name written later in that space; only the block's current
+ * boundaries may be parsed as headers.
  */
-static int dir_realign(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor)
+static int dir_realign(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor, int *unread)
 {
     uint32_t at = *cursor & ~(em->block_size - 1u);
     struct ext2_scan sc;
@@ -354,6 +400,7 @@ static int dir_realign(struct ext2_mount *em, struct ext2_node *d, uint32_t *cur
     while (at < *cursor) {
         got = dir_scan(em, d, &at, &sc);
         if (got < 0) {
+            *unread = sc.unread;
             return got;
         }
         if (got == 0) {
@@ -371,14 +418,17 @@ static int dir_realign(struct ext2_mount *em, struct ext2_node *d, uint32_t *cur
  * and from the inode's mode otherwise, which costs a read of the inode. 1
  * with `ent` filled, 0 at the end, -ENOTDIR, -ENOENT for a directory removed
  * while held, or -EIO. Under the directory's lock, a version mismatch or
- * a seek realigns the cursor from its block's start before `dir_next`.
+ * a seek realigns the cursor from its block's start before `dir_next`. A
+ * block that cannot be read is logged and reported to the mount's policy
+ * (`ext2_mark_error`), as Linux's `ext2_readdir` reports a bad page
+ * (fs/ext2/dir.c:282); a lookup's failed read is not, as Linux's is not.
  */
 int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
     struct ext2_handle *h = handle;
     struct ext2_node *d = h->node;
     struct ext2_mount *em = ext2_em_of(mnt);
-    int rc;
+    int rc, unread = 0;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
         return -ENOTDIR;
@@ -386,10 +436,14 @@ int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct v
     ext2_node_lock(d);
     rc = d->unlinked ? -ENOENT : 0;
     if (rc == 0 && (h->dir_version != d->dir_version || h->cursor != *cursor)) {
-        rc = dir_realign(em, d, cursor);
+        rc = dir_realign(em, d, cursor, &unread);
     }
     if (rc == 0) {
-        rc = dir_next(em, d, cursor, ent);
+        rc = dir_next(em, d, cursor, ent, &unread);
+    }
+    if (rc == -EIO && unread) {
+        klog(KLOG_WARN, "ext2", "directory %d: a block cannot be read", (int)d->ino);
+        ext2_mark_error(em);
     }
     if (rc >= 0) {
         h->dir_version = d->dir_version;
@@ -399,17 +453,29 @@ int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct v
     return rc;
 }
 
+/** Refuse symbolic link `n`, damaged as `why` says: logged, reported to the
+ * mount's policy (`ext2_mark_error`) and -EIO. The caller holds no buffer. */
+static int link_damaged(struct ext2_mount *em, const struct ext2_node *n, const char *why)
+{
+    klog(KLOG_WARN, "ext2", "symbolic link %d: %s", (int)n->ino, why);
+    ext2_mark_error(em);
+    return -EIO;
+}
+
 /**
  * The target of symbolic link `n` into `buf`, as `ext2_readlink` gives it,
  * for a caller that holds `n`'s lock, or a hold alone on a fast link
- * (`fast_target`), whose words do not change.
+ * (`fast_target`), whose words do not change. A size of a block or more, a
+ * fast link of 60 bytes or more, and a long link without its block are
+ * damage, refused by `link_damaged`; `ext2_readlink_cached` passes none of
+ * them here.
  */
 static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *buf, uint32_t cap)
 {
     uint32_t len;
 
     if (n->size >= em->block_size) {
-        return -EIO;
+        return link_damaged(em, n, "its size is a block or more");
     }
     len = (uint32_t)n->size;
     if (len + 1 > cap) {
@@ -419,7 +485,8 @@ static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *b
         uint32_t i;
 
         if (len >= EXT2_FAST_LINK) {
-            return -EIO; /* the pointer words hold at most 59 bytes */
+            /* the pointer words hold at most 59 bytes */
+            return link_damaged(em, n, "a fast link of 60 bytes or more");
         }
         for (i = 0; i < len; i++) {
             buf[i] = (char)((n->block[i / 4] >> ((i % 4) * 8)) & 0xFFu);
@@ -428,9 +495,9 @@ static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *b
         int rc;
 
         if (n->block[0] == 0) {
-            return -EIO;
+            return link_damaged(em, n, "a long link without its block");
         }
-        rc = ext2_read_data(em, n, 0, buf, len);
+        rc = ext2_read_data(em, n, 0, buf, len, 0);
         if (rc != 0) {
             return rc;
         }
@@ -524,7 +591,9 @@ static int dir_live(const struct ext2_node *d)
  * inode `ino` after byte `*cursor`, into `sc`, read under the directory's
  * lock with the node held, and whether the inode it names is a directory,
  * into `*is_dir`. 1, 0 at the directory's end, or -errno. The lock is let
- * go before the next step, so the walk holds one directory at a time.
+ * go before the next step, so the walk holds one directory at a time, and a
+ * directory freed since its number was read has no entries (`dir_live`),
+ * as one given to another file has not.
  */
 static int path_step(struct ext2_mount *em, uint32_t ino, uint32_t *cursor, struct ext2_scan *sc,
                      int *is_dir)
@@ -535,7 +604,7 @@ static int path_step(struct ext2_mount *em, uint32_t ino, uint32_t *cursor, stru
     *is_dir = 0;
     d = ext2_node_for(em, ino, &got);
     if (!d) {
-        return got;
+        return got == -ESTALE ? 0 : got;
     }
     ext2_node_lock(d);
     got = dir_live(d) ? dir_scan(em, d, cursor, sc) : 0;
@@ -546,7 +615,7 @@ static int path_step(struct ext2_mount *em, uint32_t ino, uint32_t *cursor, stru
             struct ext2_node child;
 
             got = ext2_inode_load(em, sc->ino, &child);
-            got = got != 0 ? got : 1;
+            got = got == -ESTALE ? ext2_stale(em, sc->ino) : got != 0 ? got : 1;
             *is_dir = got == 1 && (child.mode & S_IFMT_) == S_IFDIR_;
         }
     }
@@ -634,14 +703,15 @@ static int ext2_file_path(struct ext2_mount *em, uint32_t wanted, char *buf, uin
  * The parent of directory `cur`, held, into `*parent`, by its `..` entry,
  * read under `cur`'s lock; the node is had with the lock let go, as a
  * lookup has it, and the caller checks under the parent's own lock that it
- * is a directory still. 0, -ENOENT for a removed directory or one without
- * `..`, or -errno.
+ * is a directory still. 0, -ENOENT for a removed directory or one whose
+ * parent was freed after the entry was read, -EIO for a live directory
+ * without `..`, which is damage (`dir_damaged`), or -errno.
  */
 static int dir_parent(struct ext2_mount *em, struct ext2_node *cur, struct ext2_node **parent)
 {
     struct ext2_scan sc;
     uint32_t cursor = 0;
-    int rc = 0;
+    int rc = 0, gone;
 
     ext2_node_lock(cur);
     while (!cur->unlinked) {
@@ -650,9 +720,16 @@ static int dir_parent(struct ext2_mount *em, struct ext2_node *cur, struct ext2_
             break;
         }
     }
+    gone = cur->unlinked;
     ext2_node_unlock(cur);
+    if (rc == 0 && !gone) {
+        return dir_damaged(em, cur->ino, "it has no '..'");
+    }
     if (rc == 1) {
         *parent = ext2_node_for(em, sc.ino, &rc);
+        if (rc == -ESTALE) {
+            rc = -ENOENT;
+        }
     } else if (rc == 0) {
         rc = -ENOENT;
     }
@@ -791,7 +868,9 @@ static int dir_find(struct ext2_mount *em, const struct ext2_node *d, const char
 }
 
 /** The byte offset on the volume of byte `at` of directory `d`, through its
- * map, into `*off`; 0, -EIO for a hole, or the errors of `ext2_block_at`. */
+ * map, into `*off`; 0, -EIO for a hole inside the size, which is damage
+ * (`dir_damaged`), as Linux's `ext2_find_entry` reports a size past the
+ * blocks (fs/ext2/dir.c:384), or the errors of `ext2_block_at`. */
 static int dir_block_at(struct ext2_mount *em, const struct ext2_node *d, uint32_t at,
                         uint64_t *off)
 {
@@ -802,7 +881,7 @@ static int dir_block_at(struct ext2_mount *em, const struct ext2_node *d, uint32
         return rc;
     }
     if (b == 0) {
-        return -EIO;
+        return dir_damaged(em, d->ino, "a hole inside its size");
     }
     *off = (uint64_t)b * em->block_size + at % em->block_size;
     return 0;
@@ -1197,7 +1276,7 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
         int got = dir_scan(em, d, &cursor, &ps);
 
         if (got <= 0) {
-            return got < 0 ? got : -EIO;
+            return got < 0 ? got : dir_damaged(em, d->ino, "an entry's predecessor is gone");
         }
         rc = dir_block_at(em, d, prev_at, &off);
         if (rc != 0) {
@@ -1234,7 +1313,8 @@ static int dir_is_empty(struct ext2_mount *em, const struct ext2_node *d, int *e
 }
 
 /** Make the `..` entry of directory `d` name `parent`, with WRITE_THROUGH; 0,
- * -EIO for a directory without one, or -errno. */
+ * -EIO for a directory without one, which is damage (`dir_damaged`), or
+ * -errno. */
 static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t parent)
 {
     uint32_t cursor = 0;
@@ -1248,7 +1328,7 @@ static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t p
         int got = dir_scan(em, d, &cursor, &sc);
 
         if (got <= 0) {
-            return got < 0 ? got : -EIO;
+            return got < 0 ? got : dir_damaged(em, d->ino, "it has no '..'");
         }
         if (sc.ino != 0 && names_equal(sc.name, "..")) {
             rc = dir_block_at(em, d, here, &off);
@@ -1269,7 +1349,8 @@ static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t p
 /**
  * Whether directory inode `ino` is `ancestor` or below it, into `*below`,
  * by the `..` entries from `ino` up to the root: 0, -ELOOP past PATH_DEPTH
- * levels, -EIO for a directory without `..`, or -errno.
+ * levels, -EIO for a directory without `..` or for a freed inode one names,
+ * which are damage (`dir_damaged`, `ext2_stale`), or -errno.
  *
  * The caller holds the mount's rename lock, under which no directory
  * changes its parent, and may hold the locks of directories on the way;
@@ -1302,7 +1383,7 @@ static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int 
         }
         rc = ext2_inode_load(em, ino, &cur);
         if (rc != 0) {
-            return rc;
+            return rc == -ESTALE ? ext2_stale(em, ino) : rc;
         }
         for (;;) {
             int got = dir_scan(em, &cur, &cursor, &sc);
@@ -1311,7 +1392,7 @@ static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int 
                 return got;
             }
             if (got == 0) {
-                return -EIO;
+                return dir_damaged(em, ino, "it has no '..'");
             }
             if (sc.ino != 0 && names_equal(sc.name, "..")) {
                 break;
@@ -1429,7 +1510,9 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
  * holder of the inode shares (`ext2_node_for`), never a copy, so that a change
  * made here is the one an open file sees. The VFS locks the node of the
  * name in unlink, rmdir and rename before it calls the type, and this takes
- * that lock again by depth. 0, or the errors of `ext2_node_for`.
+ * that lock again by depth. 0, or the errors of `ext2_node_for`, a freed
+ * inode reported as damage (`ext2_stale`), since the caller holds the lock
+ * of the directory that names it.
  */
 static int child_take(struct ext2_mount *em, uint32_t ino, struct ext2_node **out)
 {
@@ -1437,7 +1520,7 @@ static int child_take(struct ext2_mount *em, uint32_t ino, struct ext2_node **ou
     struct ext2_node *c = ext2_node_for(em, ino, &rc);
 
     if (!c) {
-        return rc;
+        return rc == -ESTALE ? ext2_stale(em, ino) : rc;
     }
     ext2_node_lock(c);
     *out = c;
@@ -2296,13 +2379,13 @@ int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *
     }
     n = ext2_node_for(em, osc.ino, &rc);
     if (!n) {
-        return rc;
+        return rc == -ESTALE ? ext2_stale(em, osc.ino) : rc;
     }
     if (have_new) {
         victim = ext2_node_for(em, nsc.ino, &rc);
         if (!victim) {
             ext2_put(mnt, n);
-            return rc;
+            return rc == -ESTALE ? ext2_stale(em, nsc.ino) : rc;
         }
     }
     rc = rename_check(em, od, nd, n, victim);
