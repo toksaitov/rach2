@@ -129,11 +129,11 @@ void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t of
  * stores of shared mappings without writing them back. The copy stays
  * within that page; the caller has cut `count` at the file's end. Returns
  * the bytes copied; 0 when the page is not in memory, and the caller then
- * reads the file; -ENOMEM when the page is in memory but no temporary
- * mapping is free, since the file may lack the mappings' stores and its
- * bytes would be stale, as Linux's filemap_read fails rather than read
- * around a folio it has; or -EFAULT when the buffer cannot be written. A
- * reference on the page is held across the copy, which may sleep.
+ * reads the file; or -EFAULT when the buffer cannot be written. A reference
+ * on the page is held across the copy, which may sleep; the page is mapped
+ * (`kmap_cpu`) only to copy each piece of at most 512 bytes into a buffer
+ * on the stack, so no mapping is held across the user copy, whose fault may
+ * wait for a file's lock.
  */
 int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_t off,
                               char __user *dst, uint32_t count);

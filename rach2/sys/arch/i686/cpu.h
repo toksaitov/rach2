@@ -180,8 +180,9 @@ typedef uint32_t pte_t;
  * reach the directories made before. */
 #define KVA_MMIO_LARGE   0
 #define KVA_TEMP         0xF8000000u
-/* Policy: the temporary mappings held at once, one page each, the whole
- * of the region's 4 MiB; a caller that finds none free is told so. */
+/* Policy: the region's 4 MiB of temporary mappings, one page each: the
+ * pools `kmap_temp` gives out, whose caller is told when it finds none
+ * free, and last a slot for each of NR_CPUS processors (`kmap_cpu`). */
 #define KVA_TEMP_SLOTS   1024u
 #define KVA_MODULES      0xF8400000u
 #define KVA_MODULES_SIZE 0x04000000u

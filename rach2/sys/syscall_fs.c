@@ -7419,9 +7419,8 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
  * any other from `file_read_plain`, whose bytes are the page's when it was
  * chosen, since a mapping that brings the page in while that read sleeps
  * can hold only stores made after it. The bytes read, which stop at the
- * first page that fails after
- * some were read, 0 at the end, or the type's error, or -ENOMEM for a page
- * in memory that no temporary mapping is free for.
+ * first page that fails after some were read, 0 at the end, or the type's
+ * error.
  */
 static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
                                 uint64_t pos, int *big)

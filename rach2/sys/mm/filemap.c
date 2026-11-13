@@ -18,6 +18,7 @@
 #include "../block/loop.h"
 #include "../klog.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../proc/smp.h"
 #include "../timer.h"
 #include "../lib/kerrno.h"
@@ -465,24 +466,23 @@ static void dshare_settle(struct dshare *ds)
 
 /**
  * Write `len` bytes of frame `phys` at `at` through `via`, under the file's
- * lock. A small stack buffer keeps no temporary mapping across a sleep
- * and needs no allocation at unmap or exit. 0 or the first write error.
+ * lock. A small stack buffer keeps no mapping of the frame across a sleep,
+ * which `kmap_cpu` could not keep, needs no allocation at unmap or exit,
+ * and takes no slot of `kmap_temp`'s pools, none of which may be free. 0 or
+ * the first write error.
  */
 static int dshare_write_bytes(fd_entry_t *via, uintptr_t phys, uint32_t len, uint64_t at)
 {
     uint8_t buf[1024];
-    uint32_t done = 0;
+    uint32_t done = 0, flags;
 
     while (done < len) {
         uint32_t take = len - done < sizeof(buf) ? len - done : (uint32_t)sizeof(buf);
-        uint8_t *page = kmap_temp(phys);
+        uint8_t *page = kmap_cpu(phys, &flags);
         int32_t n;
 
-        if (!page) {
-            return -EIO;
-        }
         k_memcpy(buf, page + done, take);
-        kunmap_temp(page);
+        kunmap_cpu(page, flags);
         n = fs_write_at(via, buf, take, at + done);
         if (n != (int32_t)take) {
             return n < 0 ? n : -EIO;
@@ -505,8 +505,9 @@ static int dshare_write_bytes(fd_entry_t *via, uintptr_t phys, uint32_t len, uin
  * folio by (`write_cache_pages`, mm/page-writeback.c): it equals the file,
  * and writing a page read from a hole would allocate the hole's blocks. A
  * partial page's tail is zeroed before writing, as Linux's mpage_writepage
- * zeros bytes beyond EOF. A file a loop device stands on is not written, as
- * write(2) does not write it.
+ * zeros bytes beyond EOF; the frame is mapped by `kmap_cpu`, which cannot
+ * fail, so a page is never left unwritten for want of a mapping. A file a
+ * loop device stands on is not written, as write(2) does not write it.
  *
  * A write that succeeds clears the page's bit in the same hold of the lock
  * when no writable mapping lived as the copy began (`writers`): a store
@@ -525,7 +526,7 @@ static int dshare_write_page(struct dshare *ds, fd_entry_t *via, uint32_t i)
     struct vfs_stat st;
     uintptr_t phys;
     uint8_t *page;
-    uint32_t len;
+    uint32_t len, flags;
     int rc = 0, clean;
 
     file.mnt = mnt;
@@ -541,19 +542,15 @@ static int dshare_write_page(struct dshare *ds, fd_entry_t *via, uint32_t i)
         dshare_clear(ds, i);
     } else {
         clean = *(volatile uint32_t *)&ds->writers == 0;
-        page = kmap_temp(phys);
-        if (!page) {
-            rc = -EIO;
-        } else {
-            len = st.size - at < PAGE_SIZE ? (uint32_t)(st.size - at) : PAGE_SIZE;
-            k_memset(page + len, 0, PAGE_SIZE - len);
-            kunmap_temp(page);
-            rc = dshare_write_bytes(via, phys, len, at);
-            if (rc == 0 && clean) {
-                dshare_clear(ds, i);
-            }
-            rc = rc == 0 ? 1 : rc;
+        len = st.size - at < PAGE_SIZE ? (uint32_t)(st.size - at) : PAGE_SIZE;
+        page = kmap_cpu(phys, &flags);
+        k_memset(page + len, 0, PAGE_SIZE - len);
+        kunmap_cpu(page, flags);
+        rc = dshare_write_bytes(via, phys, len, at);
+        if (rc == 0 && clean) {
+            dshare_clear(ds, i);
         }
+        rc = rc == 0 ? 1 : rc;
     }
     vfs_node_unlock(&file);
     return rc;
@@ -1375,10 +1372,11 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
                               char __user *dst, uint32_t count)
 {
     struct dshare *ds = dshare_of(mnt, ino);
-    uint32_t in = (uint32_t)(off % PAGE_SIZE);
+    uint32_t in = (uint32_t)(off % PAGE_SIZE), done, take, flags;
+    uint8_t buf[512];
     uintptr_t phys;
     uint8_t *page;
-    int rc;
+    int rc = 0;
 
     if (!ds || count == 0 || off / PAGE_SIZE >= ds->sh.npages) {
         return 0;
@@ -1391,23 +1389,28 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
         count = PAGE_SIZE - in;
     }
     frame_ref(phys);
-    page = kmap_temp(phys);
-    if (!page) {
-        free_frame(phys);
-        return -ENOMEM;
+    for (done = 0; done < count && rc == 0; done += take) {
+        take = count - done < sizeof(buf) ? count - done : (uint32_t)sizeof(buf);
+        page = kmap_cpu(phys, &flags);
+        k_memcpy(buf, page + in + done, take);
+        kunmap_cpu(page, flags);
+        rc = copy_to_user(dst + done, buf, take);
     }
-    rc = copy_to_user(dst, page + in, count);
-    kunmap_temp(page);
     free_frame(phys);
     return rc == 0 ? (int32_t)count : -EFAULT;
 }
+
+/* The reads of the bytes a write left in the file that `filemap_file_written`
+ * makes for one piece before it gives up. */
+#define WRITTEN_READS 8
 
 void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
 {
     struct dshare *ds = e->ofd ? dshare_of(e->ofd->vmnt, e->ofd->ino) : NULL;
     uint64_t stop = off + len;
     uint8_t buf[512];
-    uint32_t i;
+    uint32_t i, flags;
+    int tries;
 
     if (!ds || len == 0) {
         return;
@@ -1418,24 +1421,30 @@ void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
         uint64_t from = off > base ? off : base;
         uint64_t to = stop < base + PAGE_SIZE ? stop : base + PAGE_SIZE;
         int32_t got;
+        uintptr_t phys;
         uint8_t *page;
 
-        if (!shmem_resident(&ds->sh, i)) {
-            continue;
-        }
-        while (from < to) {
+        for (tries = 0; from < to && shmem_resident(&ds->sh, i);) {
             uint32_t take = to - from > sizeof(buf) ? sizeof(buf) : (uint32_t)(to - from);
 
             got = fs_read_at(e, buf, take, from);
-            if (got <= 0 || !shmem_resident(&ds->sh, i)) {
+            if (got <= 0) {
+                if (++tries < WRITTEN_READS) {
+                    sched_service_point();
+                    continue;
+                }
+                klog(KLOG_ERR, "mm", "shared mapping: page %u lacks a write: read: %d", i,
+                     (int)got);
                 break;
             }
-            page = kmap_temp(shmem_resident(&ds->sh, i));
-            if (page) {
-                k_memcpy(page + (from - base), buf, (uint32_t)got);
-                kunmap_temp(page);
+            if ((phys = shmem_resident(&ds->sh, i)) == 0) {
+                break;
             }
+            page = kmap_cpu(phys, &flags);
+            k_memcpy(page + (from - base), buf, (uint32_t)got);
+            kunmap_cpu(page, flags);
             from += (uint32_t)got;
+            tries = 0;
         }
     }
     dshare_put(ds);
@@ -1449,16 +1458,17 @@ void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t of
 
     while (ds && len) {
         uint32_t at = (uint32_t)(off % PAGE_SIZE);
-        uint32_t take = PAGE_SIZE - at;
+        uint32_t take = PAGE_SIZE - at, flags;
         uintptr_t phys = shmem_resident(&ds->sh, (uint32_t)(off / PAGE_SIZE));
-        uint8_t *page = phys ? kmap_temp(phys) : NULL;
+        uint8_t *page;
 
         if (take > len) {
             take = len;
         }
-        if (page) {
+        if (phys) {
+            page = kmap_cpu(phys, &flags);
             k_memcpy(page + at, in, take);
-            kunmap_temp(page);
+            kunmap_cpu(page, flags);
         }
         in += take;
         off += take;
