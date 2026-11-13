@@ -1289,6 +1289,21 @@ uint32_t procfs_ino_dir(void)
     return 0;
 }
 
+/** No message interrupt is present in the core-file model: 0. */
+int procfs_irq_exists(int vector)
+{
+    (void)vector;
+    return 0;
+}
+
+/** The inode number of an interrupt affinity file, which no row reads: 0. */
+uint32_t procfs_ino_irq(int vector, int attr)
+{
+    (void)vector;
+    (void)attr;
+    return 0;
+}
+
 /** The inode number of /proc/cmdline, which no row reads: 0. */
 uint32_t procfs_ino_cmdline(void)
 {
