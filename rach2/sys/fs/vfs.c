@@ -6613,7 +6613,6 @@ static int unmount_mount(struct vfs_mount *m)
     }
     inotify_unmount(m);
     filecache_forget_mount(m);
-    filemap_forget_mount(m);
     if (m->type->ops->unmount) {
         m->type->ops->unmount(m);
     }
