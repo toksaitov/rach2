@@ -1508,9 +1508,11 @@ static int build_rows(struct release *r)
              FLOW_OWNER_HOME);
     ok = check(r,
                f->status == 75 && !fx_has(record(r), "build done ") && called(r, expected) &&
-                   called(r, "^ +sh ports/doom/fetch_wad.sh && ARCH=x86_64 make clean && "
-                             "ARCH=x86_64 make machine GNU_AGENTS=all && "),
-               "machine build takes the host's WAD and starts clean");
+                   called(r, "^ +sh ports/doom/fetch_wad.sh && "
+                             "ARCH=x86_64 make machine GNU_AGENTS=all && ") &&
+                   !called(r, "make clean"),
+               "machine build takes the host's WAD and builds incrementally, with no make "
+               "clean");
     run(r, &(struct release_row){.record = r->head, .git = "yes", .testing = "pass"});
     return check(
                r,
@@ -2352,11 +2354,11 @@ static int claim_rows(struct release *r)
  * refresh in a clone of its own then; `wtlost` runs release.sh's wt_new
  * beside a job of an earlier release whose holder ended without its end,
  * and `discardlost` its job_wait and discard on such a job of this run; and
- * `prepare` and `recovery` run prepare_host's script for WSL here, through
- * an ssh that runs it with sh, `prepare` with an etude that recovers the
- * ledger, and `recovery` with one that fails and a scan of the processes
- * that succeeds and finds nothing. Usage: sh driver DIR HOLD SCENARIO
- * RELEASE.
+ * `prepare`, `recovery` and `keep` run prepare_host's script for WSL here,
+ * through an ssh that runs it with sh, `prepare` with an etude that recovers
+ * the ledger, `recovery` with one that fails and a scan of the processes
+ * that succeeds and finds nothing, and `keep` with both succeeding. Usage:
+ * sh driver DIR HOLD SCENARIO RELEASE.
  */
 static const char hold_driver[] =
     "H=$1 P=$2 how=$3 R=$4\n"
@@ -2626,14 +2628,14 @@ static const char hold_driver[] =
     "    discard \"$H/f\"\n"
     "    echo \"discard $?\"\n"
     "    [ -e \"$H/f\" ] || echo removed ;;\n"
-    "prepare | recovery)\n"
+    "prepare | recovery | keep)\n"
     "    # WSL's script runs here, as a user whose scan of the copy's processes\n"
     "    # cannot read every process's directory, or /proc at all, with an etude\n"
     "    # and a ledger of its own; recovery's etude fails.\n"
-    "    # recovery's scan of the processes succeeds and finds nothing, so that\n"
-    "    # only the ledger's recovery can keep the copy.\n"
+    "    # The scan of recovery and keep succeeds and finds nothing, so that\n"
+    "    # only the ledger's recovery can fail recovery's.\n"
     "    scan=\n"
-    "    [ \"$how\" != recovery ] || scan='s|cat \"$repo/tools/flow/procs.pl\"|echo \"exit 0;\"|'\n"
+    "    [ \"$how\" = prepare ] || scan='s|cat \"$repo/tools/flow/procs.pl\"|echo \"exit 0;\"|'\n"
     "    eval \"$(sed -n '/^prepare_host()$/,/^}$/p' \"$R\" |\n"
     "        sed -e \"s|/usr/local/libexec/rach2/etude|$H/bin/etude|\" -e "
     "\"s|/var/lib/rach2-etude/ledger|$H/ledger|\" ${scan:+-e \"$scan\"})\"\n"
@@ -2642,7 +2644,7 @@ static const char hold_driver[] =
     "    echo 'etude-ledger 1' > \"$H/ledger/claims\"\n"
     "    printf '#!/bin/sh\\nexec /bin/sh -s\\n' > \"$H/bin/ssh\"\n"
     "    printf '#!/bin/sh\\nshift\\nexec \"$@\"\\n' > \"$H/bin/timeout\"\n"
-    "    printf '#!/bin/sh\\nexit %s\\n' \"$([ \"$how\" = prepare ] && echo 0 || echo 1)\" > "
+    "    printf '#!/bin/sh\\nexit %s\\n' \"$([ \"$how\" = recovery ] && echo 1 || echo 0)\" > "
     "\"$H/bin/etude\"\n"
     "    chmod +x \"$H/bin/ssh\" \"$H/bin/timeout\" \"$H/bin/etude\"\n"
     "    out=$( (PATH=$H/bin:$PATH; prepare_host) 2> /dev/null)\n"
@@ -2697,9 +2699,10 @@ static int hold_saw(struct release *r, const char *scenario, const char *want)
  * session.pl starts no session, until the group is gone (j154 1, j163 1); a
  * worktree stays while a job of an earlier release is lost under its run's
  * directory, and job_wait and discard keep a lost job's directory and its
- * part's files (j163 2, 3); and -p's preparation keeps its copy when the scan
+ * part's files (j163 2, 3); and -p's check of its copy fails when the scan
  * of its processes fails, or when the ledger's recovery fails while the scan
- * succeeds (j154 5, j163 5).
+ * succeeds (j154 5, j163 5), and keeps the copy, with its build, when both
+ * succeed.
  */
 static int hold_rows(struct release *r)
 {
@@ -2783,16 +2786,20 @@ static int hold_rows(struct release *r)
         ok = check(r,
                    hold_saw(r, "prepare",
                             "status 1\nthe processes in H/copy could not be read\n"
-                            "the copy H/copy stays\nkept\n"),
-                   "-p's preparation keeps its copy in WSL when the scan of its processes "
+                            "what runs in H/copy is not confirmed stopped\nkept\n"),
+                   "-p's check of its copy in WSL fails when the scan of its processes "
                    "fails") &&
              ok;
     ok = check(r,
                hold_saw(r, "recovery",
                         "status 1\netude status did not recover H/ledger/claims\n"
-                        "the copy H/copy stays\nkept\n"),
-               "-p's preparation keeps its copy in WSL when the ledger's recovery fails while "
+                        "what runs in H/copy is not confirmed stopped\nkept\n"),
+               "-p's check of its copy in WSL fails when the ledger's recovery fails while "
                "the scan of its processes succeeds and finds nothing (j163 5)") &&
+         ok;
+    ok = check(r, hold_saw(r, "keep", "status 0\n\nkept\n"),
+               "-p's check of its copy in WSL succeeds when nothing runs there, and keeps the "
+               "copy with its build for the next -p") &&
          ok;
     fx_remove(flow_path(f, "hold"));
     return ok;
