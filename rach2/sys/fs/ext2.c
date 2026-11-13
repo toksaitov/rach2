@@ -2915,7 +2915,7 @@ int ext2_admits(const struct ext2_mount *em)
 /** Whether the mount gives out blocks and inodes: as `ext2_admits`, so that
  * an operation under way on a stopped mount that needs one gives up and
  * rolls back as at ENOSPC, and not when the mount's check could not find
- * every block a live inode names (`em->alloc_withheld`). */
+ * every live inode and every block one names (`em->alloc_withheld`). */
 int ext2_allocates(const struct ext2_mount *em)
 {
     return em->mode == EXT2_MODE_RW && !ext2_failed(em) && !em->alloc_withheld;

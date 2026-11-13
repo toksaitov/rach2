@@ -436,9 +436,10 @@ struct ext2_mount {
      * unmount the state the volume had at mount (`ext2_put_super`). */
     int check_owed;
     /* Set when this mount's check stopped and could not then find every
-     * block a live inode names (`check_protect` in ext2_check.c): the mount
-     * gives out no block or inode (`ext2_allocates`), since a block whose
-     * bit a stop left clear could go to a second file. The next writable
+     * live inode and every block one names (`check_protect` in
+     * ext2_check.c): the mount gives out no block or inode
+     * (`ext2_allocates`), since a block or inode whose bit a stop left clear
+     * could go to a second file. The next writable
      * mount or remount's check clears it. */
     int alloc_withheld;
     /* Why the volume may only be read, which a remount cannot change, or
