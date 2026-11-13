@@ -547,6 +547,23 @@ under_home() { # under_home ROOT PATH
     return 1
 }
 
+# keep_root_directory PATH COPY: copies the directory PATH of the root at
+# TARGET_MNT to COPY, PATH read inside that root by root_path, as a home is.
+# A PATH that is a symbolic link leading under /home is copied as the link,
+# since /home is kept whole and the link leads to the same tree after the
+# write; any other PATH is copied as the tree it leads to, which may not be on
+# the new root. A PATH that leads to the root itself or to no directory is not
+# copied. Status 1 when PATH leads through too many links or the copy fails.
+keep_root_directory() { # keep_root_directory PATH COPY
+    kept_dir=$(root_path "$TARGET_MNT" "$1") || return 1
+    [ "$kept_dir" != "$TARGET_MNT" ] && [ -d "$kept_dir" ] || return 0
+    if [ -L "$TARGET_MNT$1" ] && under_home "$TARGET_MNT" "$kept_dir"; then
+        cp -a "$TARGET_MNT$1" "$2"
+    else
+        cp -a "$kept_dir" "$2"
+    fi
+}
+
 # archive_account_keys ROOTDIR: stores the .ssh directory of each account of
 # ROOTDIR/etc/passwd with a numeric id and an absolute home in the tar file
 # keys/UID.tar of the slot next_archive names, the home read inside ROOTDIR
@@ -1647,17 +1664,18 @@ whole configuration archived on its recovery partition; its accounts are not the
         { mkdir -p "$keep/etc/ssh" && cp -a "$TARGET_MNT"/etc/ssh/ssh_host_* "$keep/etc/ssh/"; } ||
             die "OpenSSH's host keys could not be kept"
     fi
-    if [ -d "$TARGET_MNT/home" ] && [ -n "$mounted_root" ]; then
-        cp -a "$TARGET_MNT/home" "$keep/home" || die "the home directories could not be kept"
-    fi
-    # Root's home is kept whole, as the homes under /home are, apart from the
-    # keys, which the loop below keeps in "$keep/root" for the archive.
-    if [ -d "$TARGET_MNT/root" ] && [ -n "$mounted_root" ]; then
-        cp -a "$TARGET_MNT/root" "$keep/root-home" || die "root's home directory could not be kept"
+    # /home is kept whole, and root's home is too, apart from the keys,
+    # which the loop below keeps in "$keep/root" for the archive.
+    if [ -n "$mounted_root" ]; then
+        keep_root_directory /home "$keep/home" || die "the home directories could not be kept"
+        keep_root_directory /root "$keep/root-home" || die "root's home directory could not be kept"
     fi
     # Each home is read inside the old root and kept at the same home read
-    # inside the copy, and a .ssh that is a link is kept as the tree it
-    # leads to, which may not be on the new root.
+    # inside the copy, and a .ssh that is a link leading out of /home is kept
+    # as the tree it leads to, which may not be on the new root. Such a link
+    # that the copy of /home holds is replaced there by its tree, since the
+    # copy goes back in place of the image's /home and the archive reads the
+    # keys in the copy.
     if [ -n "$mounted_root" ]; then
         while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
             case "$home" in /*) ;; *) continue ;; esac
@@ -1665,7 +1683,11 @@ whole configuration archived on its recovery partition; its accounts are not the
             under_home "$TARGET_MNT" "$from" && continue
             [ -d "$from" ] || continue
             to=$(root_path "$keep" "$home") || die "$home leads through too many links in $keep"
-            [ ! -e "$to/.ssh" ] && [ ! -L "$to/.ssh" ] || continue
+            if [ -L "$to/.ssh" ]; then
+                rm -f "$to/.ssh" || die "$home/.ssh could not be kept"
+            elif [ -e "$to/.ssh" ]; then
+                continue
+            fi
             { mkdir -p "$to" && cp -a "$from" "$to/.ssh"; } ||
                 die "$home/.ssh could not be kept"
         done < "$keep/etc/passwd"
@@ -1818,17 +1840,21 @@ whole configuration archived on its recovery partition; its accounts are not the
                 die "$home could not be made"
         done < "$TARGET_MNT/etc/passwd"
     fi
-    # Root's home is the machine's where it was kept; its keys are put back
-    # with the other homes' below.
-    if [ -d "$keep/root-home" ]; then
+    # Root's home is the machine's where it was kept, a tree or a link into
+    # /home; its keys are put back with the other homes' below.
+    if [ -d "$keep/root-home" ] || [ -L "$keep/root-home" ]; then
         rm -rf "${TARGET_MNT:?}/root" || die "the image's home for root could not be removed"
         cp -a "$keep/root-home" "$TARGET_MNT/root" || die "root's home directory could not be put back"
     fi
-    # The image's keys go from every home outside /home, kept keys or not.
-    # Each home is read inside the new root and inside the copy by root_path,
-    # so that a home such as `/../../mnt/other`, or one through a link, is
-    # the root's own and not a directory of another disk.
-    rm -rf "$TARGET_MNT/root/.ssh" || die "the image's keys for root could not be removed"
+    # The image's keys go from /root and from every home outside /home, kept
+    # keys or not. /root and each home are read inside the new root, and
+    # each home inside the copy, by root_path, so that a home such as
+    # `/../../mnt/other`, or one through a link, is the root's own and not a
+    # directory of another disk or of the system running the update.
+    root_home=$(root_path "$TARGET_MNT" /root) || die "/root leads through too many links"
+    if ! under_home "$TARGET_MNT" "$root_home"; then
+        rm -rf "$root_home/.ssh" || die "the image's keys for root could not be removed"
+    fi
     while IFS=: read -r _name _password uid gid _gecos home _shell; do
         case "$home" in /*) ;; *) continue ;; esac
         to=$(root_path "$TARGET_MNT" "$home") || die "$home leads through too many links"

@@ -271,10 +271,15 @@ A home that leads through more than 40 links stops the update before the
 root is written.
 Normal updates preserve .ssh in every passwd home, including homes outside
 .Pa /home ,
-with their owners and modes; a .ssh that is a symbolic link is kept as the
-tree it leads to.
-Before restoring retained keys, the image's .ssh is removed from every
-account home outside /home, including accounts with no archived keys.
+with their owners and modes; a .ssh that is a symbolic link leading out of
+.Pa /home
+is kept as the tree it leads to, and one in a home under
+.Pa /home
+comes back as that tree in place of the link.
+Before restoring retained keys, the image's .ssh is removed from
+.Pa /root
+and from every account home, each read inside the new root and lying
+outside /home, including accounts with no archived keys.
 Passwords are stored as hashes.
 The archive preserves accounts and keys for an update when the root cannot
 be read.
@@ -358,7 +363,12 @@ home directories under
 .Pa /home
 and root's home,
 .Pa /root ,
-which it keeps in
+each read inside the root as a home is and kept as the tree it leads to,
+except a
+.Pa /root
+that is a symbolic link into
+.Pa /home ,
+which is kept as the link; it keeps them in
 .Pa /dev/shm ,
 the recovery system's tmpfs of half the machine's memory; an update whose
 homes do not fit there stops before the root is written.
