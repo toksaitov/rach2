@@ -1531,8 +1531,17 @@ static void nohz_accounting(void)
     clock_ns = 3144000000u;
     sched_account_tick(1, 0);
     CHECK(procs[0].utime == 5 && this_cpu()->idle_ticks == 2012,
-          "the next tick charges its whole period to the thread, the stretch before the halt with "
-          "it");
+          "the next tick charges its whole period to the thread, the run before the halt with it");
+    /* A halt under a running tick, whose ticks charged its edges. */
+    this_cpu()->idle_wait = 1;
+    clock_ns = 3146500000u;
+    sched_idle_account(this_cpu());
+    CHECK(this_cpu()->idle_ticks == 2012 && this_cpu()->accounted_ns == 3144000000u,
+          "the end of a halt under a running tick charges the last thread's run to no one");
+    this_cpu()->idle_wait = 0;
+    clock_ns = 3148000000u;
+    sched_account_tick(1, 0);
+    CHECK(procs[0].utime == 9, "the tick after it charges that run with its period");
     load_tick = 1000;
     load_wait = 5001;
     kernel_ticks = 5999;
@@ -1552,6 +1561,7 @@ static void nohz_switch(void)
         sched_forget(&procs[i]);
     }
     this_cpu()->idle = &procs[0];
+    clock_ns = 4000000000u;
     this_cpu()->accounted_ns = clock_ns;
     this_cpu()->steal_ns = steal_clock_ns;
     idle_timer_ready = 1;
@@ -1562,12 +1572,12 @@ static void nohz_switch(void)
     schedule();
     CHECK(current_proc == &procs[0] && this_cpu()->tick_stopped && !idle_timer_exits,
           "an empty run queue keeps the stopped tick across a selection");
-    clock_ns += 2u * TICK_NS;
+    clock_ns += 10u * TICK_NS;
     sched_make_ready(&procs[1]);
     schedule();
     CHECK(current_proc == &procs[1] && !this_cpu()->tick_stopped && idle_timer_exits == 1 &&
-              this_cpu()->idle_ticks == 2 && !procs[1].stime,
-          "the switch accounts the last idle span and restarts before the new thread");
+              this_cpu()->idle_ticks == 8 && !procs[1].stime,
+          "the switch accounts the idle span to its last edge and restarts before the new thread");
     idle_timer_ready = 0;
 }
 
