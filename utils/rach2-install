@@ -538,8 +538,9 @@ write_archive() { # write_archive ROOTDIR [MARK]
 # `/../../mnt/other`, or one through a link to `/mnt`, would otherwise reach
 # outside the disk being written. A component that does not exist is taken as
 # written. Status 1 after 40 links, as Linux's ELOOP, or when a link cannot be
-# read. Run it in a command substitution.
-root_path() { # root_path ROOT PATH
+# read. With LINKS, the path inside ROOT of each link followed is appended to
+# the file LINKS, a line each. Run it in a command substitution.
+root_path() { # root_path ROOT PATH [LINKS]
     rest=$2
     done_path=""
     links=0
@@ -567,6 +568,9 @@ root_path() { # root_path ROOT PATH
             links=$((links + 1))
             [ "$links" -le 40 ] || return 1
             link=$(readlink "$1$done_path/$part") || return 1
+            if [ -n "${3:-}" ]; then
+                printf '%s\n' "$done_path/$part" >> "$3" || return 1
+            fi
             case "$link" in /*) done_path="" ;; esac
             rest=$link${rest:+/$rest}
             continue
@@ -576,10 +580,72 @@ root_path() { # root_path ROOT PATH
     printf '%s\n' "$1$done_path"
 }
 
-# Whether the resolved path PATH is ROOT/home or a path below it.
-under_home() { # under_home ROOT PATH
-    case "$2" in "$1/home" | "$1/home/"*) return 0 ;; esac
-    return 1
+# An update's copy of the old root keeps the homes and keys at the paths they
+# had in that root, with the links that lead to them, as a tree of its own
+# beside the configuration; the file KEPT_PATHS at its top lists each tree and
+# link it keeps, a path inside the root to a line, none of them below another.
+# Only what it lists goes back over the image after the write, at the same
+# path, so that every home and every key of passwd reads as it did whatever
+# links the image has. A path in that list, or one written while the list is
+# made, is the output of root_path: it begins with `/` and has no `.`, `..`
+# or empty component.
+KEPT_PATHS=rach2-kept-paths
+
+# kept_path_fault PATH: prints why the directory or link PATH of a root may
+# not be kept and put back over the image's, or nothing when it may: the root
+# itself and the directories the image's system lives in would be replaced
+# by the old root's, and two names are the copy's own.
+kept_path_fault() {
+    case "$1" in
+        "" | /) echo "it is the root itself" ;;
+        /bin | /boot | /dev | /etc | /lib | /lib32 | /lib64 | /libx32 | /proc | /run | \
+            /sbin | /sys | /tmp | /usr | /var)
+            echo "it is the system's $1, which the image replaces" ;;
+        "/$KEPT_PATHS" | /root-written) echo "the copy of the root uses that name" ;;
+    esac
+}
+
+# Whether PATH is a path of the list in the file LIST, or lies below one.
+kept_within() { # kept_within LIST PATH
+    [ -f "$1" ] || return 1
+    KEPT_PATH=$2 awk 'BEGIN { p = ENVIRON["KEPT_PATH"] }
+        $0 == p || index(p, $0 "/") == 1 { found = 1 }
+        END { exit !found }' "$1"
+}
+
+# Adds PATH to the list in the file LIST and takes from it the paths below
+# PATH, which PATH's tree holds.
+kept_add() { # kept_add LIST PATH
+    if [ -f "$1" ]; then
+        KEPT_PATH=$2 awk 'BEGIN { p = ENVIRON["KEPT_PATH"] }
+            $0 != p && index($0, p "/") != 1' "$1" > "$1.new" &&
+            mv "$1.new" "$1" || return 1
+    fi
+    printf '%s\n' "$2" >> "$1"
+}
+
+# make_parents FROM TO PATH: makes each directory above PATH in the tree at
+# TO a directory, without following anything there: a link or a file in its
+# place is removed, and one that is missing is made with the owner and mode
+# of the same directory in the tree at FROM, when FROM has it. A directory
+# already there is left as it is. Status 1 when one cannot be made.
+make_parents() { # make_parents FROM TO PATH
+    mp_rest=${3#/}
+    mp_at=""
+    while :; do
+        case "$mp_rest" in */*) ;; *) break ;; esac
+        mp_at=$mp_at/${mp_rest%%/*}
+        mp_rest=${mp_rest#*/}
+        if [ -L "$2$mp_at" ] || { [ -e "$2$mp_at" ] && [ ! -d "$2$mp_at" ]; }; then
+            rm -f "$2$mp_at" || return 1
+        fi
+        [ ! -d "$2$mp_at" ] || continue
+        mkdir "$2$mp_at" || return 1
+        if [ -d "$1$mp_at" ] && [ ! -L "$1$mp_at" ]; then
+            chown "$(stat -c %u:%g "$1$mp_at")" "$2$mp_at" &&
+                chmod "$(stat -c %a "$1$mp_at")" "$2$mp_at" || return 1
+        fi
+    done
 }
 
 # pin_key_links ROOT TREE COPY [KEPT]: makes each symbolic link of COPY, a
@@ -588,9 +654,10 @@ under_home() { # under_home ROOT PATH
 # another depth, or into a root that has nothing of TREE's surroundings, so
 # a link as written may lead elsewhere there or nowhere. Each link is read
 # where it stands in TREE, by root_path. One that leads inside TREE is
-# written again relative to its place in COPY. With KEPT, the update's copy,
-# one that leads under ROOT/home, which the update keeps whole, is written
-# again as the absolute path it leads to. One that leads to a regular file
+# written again relative to its place in COPY. With KEPT, the file that
+# lists what the update's copy keeps, KEPT_PATHS, one that leads to a path
+# the list holds or below one, which the update puts back at that path, is
+# written again as the absolute path it leads to. One that leads to a regular file
 # elsewhere is replaced by a copy of that file, with its owner and mode, and
 # a later link to the same file, by name or by a hard link, by a link to that
 # copy. Any other, leading to a directory, a device or nothing outside TREE,
@@ -620,7 +687,7 @@ pin_key_links() { # pin_key_links ROOT TREE COPY [KEPT]
                 die "${2#"$1"}/$pin_p could not be kept"
             continue
         fi
-        if [ -n "${4:-}" ] && under_home "$1" "$pin_t"; then
+        if [ -n "${4:-}" ] && kept_within "$4" "$pin_abs"; then
             { rm -f "$pin_l" && ln -s "$pin_abs" "$pin_l"; } ||
                 die "${2#"$1"}/$pin_p could not be kept"
             continue
@@ -650,24 +717,35 @@ $pin_links
 EOF
 }
 
-# keep_root_directory PATH COPY: copies the directory PATH of the root at
-# TARGET_MNT to COPY, PATH read inside that root by root_path, as a home is.
-# A PATH that is a symbolic link leading under /home is kept as a link straight
-# to the directory it leads to, since /home is kept whole and that directory
-# is there after the write; a link through other links, such as /root to
-# /srv/root and /srv/root to /home/root, would lead through directories that
-# neither the copy nor the new root may have. Any other PATH is copied as the
-# tree it leads to, which may not be on the new root. A PATH that leads to the
-# root itself or to no directory is not copied. Status 1 when PATH leads
-# through too many links or the copy fails.
-keep_root_directory() { # keep_root_directory PATH COPY
-    kept_dir=$(root_path "$TARGET_MNT" "$1") || return 1
-    [ "$kept_dir" != "$TARGET_MNT" ] && [ -d "$kept_dir" ] || return 0
-    if [ -L "$TARGET_MNT$1" ] && under_home "$TARGET_MNT" "$kept_dir"; then
-        ln -s "${kept_dir#"$TARGET_MNT"}" "$2"
-    else
-        cp -a "$kept_dir" "$2"
-    fi
+# keep_tree PATH: keeps in the copy at `keep` the directory PATH of the old
+# root at TARGET_MNT, read inside that root by root_path, whole, at the path
+# it leads to, and each link followed on the way at its own path, and lists
+# them in KEPT_PATHS. What the list holds already is not copied again, and a
+# tree copied takes the place of the ones it holds. A PATH that leads to no
+# directory keeps nothing. It ends the run when PATH leads through too many
+# links, or to a directory or through a link that kept_path_fault refuses,
+# since the update could put back neither, or when a copy fails.
+keep_tree() { # keep_tree PATH
+    : > "$keep.links" || die "there is nowhere to note the links of $1"
+    kt_dir=$(root_path "$TARGET_MNT" "$1" "$keep.links") || die "$1 leads through too many links"
+    [ -d "$kt_dir" ] || return 0
+    kt_path=${kt_dir#"$TARGET_MNT"}
+    kt_fault=$(kept_path_fault "$kt_path")
+    [ -z "$kt_fault" ] ||
+        die "$1 leads to ${kt_path:-/}, which an update cannot keep: $kt_fault; the root was not written"
+    while IFS= read -r kt_link; do
+        kept_within "$keep/$KEPT_PATHS" "$kt_link" && continue
+        kt_fault=$(kept_path_fault "$kt_link")
+        [ -z "$kt_fault" ] ||
+            die "$1 leads through the link $kt_link, which an update cannot keep: $kt_fault; the root was not written"
+        { make_parents "$TARGET_MNT" "$keep" "$kt_link" && rm -rf "$keep$kt_link" &&
+            cp -a "$TARGET_MNT$kt_link" "$keep$kt_link" &&
+            kept_add "$keep/$KEPT_PATHS" "$kt_link"; } || die "the link $kt_link could not be kept"
+    done < "$keep.links"
+    kept_within "$keep/$KEPT_PATHS" "$kt_path" && return 0
+    { make_parents "$TARGET_MNT" "$keep" "$kt_path" && rm -rf "$keep$kt_path" &&
+        cp -a "$kt_dir" "$keep$kt_path" && kept_add "$keep/$KEPT_PATHS" "$kt_path"; } ||
+        die "$kt_path could not be kept"
 }
 
 # archive_account_keys ROOTDIR: stores the .ssh directory of each account of
@@ -780,36 +858,44 @@ keep_image_accounts() {
 # neither owners nor modes on FAT32, and SSH checks them, so it is given
 # OWNER, mode 700 on its directories and 600 on its files, before cp -a puts
 # the copy on the new root; a symbolic link is given the owner and not
-# followed.
+# followed. The tree is made whole in the private directory `$keep.restore`
+# and only then takes the place of whatever DESTINATION was, so that no link
+# a tree restored earlier left there or above it is followed. DESTINATION's
+# directory must be there, made of directories alone.
 restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
+    { rm -rf "$keep.restore" && mkdir -m 700 "$keep.restore"; } ||
+        die "there is nowhere to restore $1"
     if [ -f "$1" ]; then
-        { mkdir -p "$2" && tar -xf "$1" --numeric-owner -C "$2"; } ||
-            die "$1 could not be restored to $2"
-        return 0
+        tar -xf "$1" --numeric-owner -C "$keep.restore" || die "$1 could not be restored"
+    else
+        cp -R "$1/." "$keep.restore/" || die "$1 could not be restored"
+        if ! { chown -R -h "$3" "$keep.restore" &&
+            find "$keep.restore" -type d -exec chmod 700 {} + &&
+            find "$keep.restore" -type f -exec chmod 600 {} +; }; then
+            die "$1 could not be restored with its owner and modes"
+        fi
     fi
-    { mkdir -p "$2" && cp -R "$1/." "$2/"; } || die "$1 could not be restored to $2"
-    if ! { chown -R -h "$3" "$2" &&
-        find "$2" -type d -exec chmod 700 {} + &&
-        find "$2" -type f -exec chmod 600 {} +; }; then
-        die "$1 could not be restored with its owner and modes"
-    fi
+    { rm -rf "$2" && mv "$keep.restore" "$2"; } || die "$1 could not be restored to $2"
 }
 
 # Puts the archive's host keys and account keys into the copy at `keep`, for
-# an update that takes the configuration from the archive. Each account of
-# keep/etc/passwd with an id of 1000 or more and a home under /home is given
-# that home, empty when the archive has no keys for it, since the copy's home
-# tree replaces all of the image's homes after the write. An account has keys
-# only when the archive has keys/UID.tar for its id, or keys/UID from an older
-# version. A home is read inside `keep` by root_path, and one that is not
-# there yet is made with the account's owner and mode 700; one that is there
-# keeps its own. Accounts of different ids whose homes are one directory
-# share its .ssh, which the archive holds once for each id: it is restored
-# once, from the first of them in passwd, and the others' copies must be the
-# same, or the run ends before the root is written, since the update cannot
-# give that .ssh to both. The recovery partition must be mounted at
-# RECOVERY_MNT. It runs in a subshell, and its status is 1 when a home or a
-# key could not be restored.
+# an update that takes the configuration from the archive, and lists in
+# KEPT_PATHS what goes back over the image. An account has keys only when
+# the archive has keys/UID.tar for its id, or keys/UID from an older version.
+# Its keys go to its home's .ssh read inside `keep` by root_path, the whole
+# path, so that a link restored with another account's keys is followed
+# inside the copy and never out of it; a destination that kept_path_fault
+# refuses ends the run before the root is written. Accounts of different ids
+# whose .ssh is one directory share it, which the archive holds once for
+# each id: it is restored once, from the first of them in passwd, and the
+# others' copies must be the same, or the run ends before the root is
+# written, since the update cannot give that .ssh to both. Each account with
+# an id of 1000 or more and a home under /home is given that home, empty
+# when it has no keys, since the image's homes are removed after the write.
+# A home is read inside `keep` by root_path, and one that is not there yet is
+# made with the account's owner and mode 700; one that is there keeps its
+# own. The recovery partition must be mounted at RECOVERY_MNT. It runs in a
+# subshell, and its status is 1 when a home or a key could not be restored.
 restore_archive_keys() (
     restored=""
     recover_archive
@@ -822,6 +908,8 @@ restore_archive_keys() (
             public_keys_readable "$keep/etc/ssh"; } ||
             die "OpenSSH's host keys could not be restored with their owner and modes"
     fi
+    list=$keep/$KEPT_PATHS
+    rm -f "$list" || exit 1
     while IFS=: read -r _name _password uid gid _gecos home _shell; do
         case "$uid" in "" | *[!0-9]*) continue ;; esac
         case "$home" in /*) ;; *) continue ;; esac
@@ -837,11 +925,20 @@ restore_archive_keys() (
             *) [ -n "$keys" ] || continue ;;
         esac
         if [ ! -d "$dir" ]; then
-            mkdir -p "$dir" && chmod 700 "$dir" && chown "$uid:$gid" "$dir" || exit 1
+            { mkdir -p "${dir%/*}" && mkdir "$dir" && chmod 700 "$dir" &&
+                chown "$uid:$gid" "$dir"; } || exit 1
+            if [ -z "$keys" ] && ! kept_within "$list" "${dir#"$keep"}"; then
+                kept_add "$list" "${dir#"$keep"}" || exit 1
+            fi
         fi
         [ -n "$keys" ] || continue
+        to=$(root_path "$keep" "$home/.ssh") || exit 1
+        path=${to#"$keep"}
+        fault=$(kept_path_fault "$path")
+        [ -z "$fault" ] ||
+            die "the keys of $home/.ssh lead to ${path:-/}, which an update cannot restore: $fault; the root was not written"
         # $keys is under RECOVERY_MNT and has no space; the rest is the place.
-        first=$(printf '%s' "$restored" | D="$dir/.ssh" awk '
+        first=$(printf '%s' "$restored" | D="$to" awk '
             substr($0, index($0, " ") + 1) == ENVIRON["D"] { print $1; exit }')
         if [ -n "$first" ]; then
             if [ -f "$first" ] && [ -f "$keys" ]; then
@@ -851,14 +948,36 @@ restore_archive_keys() (
             else
                 false
             fi || die "$first and $keys are different keys for one $home/.ssh, shared by accounts \
-of different ids, and the update cannot restore both; nothing was written"
+of different ids, and the update cannot restore both; the root was not written"
             continue
         fi
-        restored="$restored$keys $dir/.ssh
+        restored="$restored$keys $to
 "
-        restore_key_directory "$keys" "$dir/.ssh" "$uid:$gid"
+        mkdir -p "${to%/*}" || exit 1
+        restore_key_directory "$keys" "$to" "$uid:$gid"
+        kept_within "$list" "$path" || kept_add "$list" "$path" || exit 1
     done < "$keep/etc/passwd"
 )
+
+# put_kept: puts back over the new root at TARGET_MNT each tree and link that
+# the copy at `keep` lists in KEPT_PATHS, at the path it had in the old root:
+# the directories above it are made directories, as make_parents makes them,
+# and whatever the image has at that path is replaced, unless the image has
+# the same link there. Nothing of the image is followed, so all that is
+# written stays in the new root. Status 1 when something could not be put
+# back.
+put_kept() {
+    [ -f "$keep/$KEPT_PATHS" ] || return 0
+    while IFS= read -r pk_path; do
+        [ -e "$keep$pk_path" ] || [ -L "$keep$pk_path" ] || continue
+        make_parents "$keep" "$TARGET_MNT" "$pk_path" || return 1
+        if [ -L "$keep$pk_path" ] && [ -L "$TARGET_MNT$pk_path" ] &&
+            [ "$(readlink "$keep$pk_path")" = "$(readlink "$TARGET_MNT$pk_path")" ]; then
+            continue
+        fi
+        rm -rf "${TARGET_MNT:?}$pk_path" && cp -a "$keep$pk_path" "$TARGET_MNT$pk_path" || return 1
+    done < "$keep/$KEPT_PATHS"
+}
 
 # ---- an MBR disk's conversion ----
 #
@@ -2113,7 +2232,7 @@ $update_disk was not installed from here"
             umount "$TARGET_MNT" || die "${update_disk}p${p} would not unmount"
             mounted_root=""
         done
-        rm -rf "$keep" || die "an old copy of the configuration could not be removed"
+        rm -rf "$keep" "$keep.restore" "$keep.links" || die "an old copy of the configuration could not be removed"
         { mkdir -p "$keep" && chmod 700 "$keep"; } || die "there is nowhere to keep the machine's configuration"
     fi
     find_recovery "$target"
@@ -2218,51 +2337,50 @@ whole configuration archived on its recovery partition; its accounts are not the
         { mkdir -p "$keep/etc/ssh" && cp -a "$TARGET_MNT"/etc/ssh/ssh_host_* "$keep/etc/ssh/"; } ||
             die "OpenSSH's host keys could not be kept"
     fi
-    # /home is kept whole, and root's home is too, apart from the keys,
-    # which the loop below keeps in "$keep/root" for the archive.
+    # The homes and keys are kept at the paths they have in the old root, as
+    # keep_tree keeps them, with the links that lead to them: /home and
+    # /root whole, every home of passwd under /home whole wherever it leads,
+    # and so the directory each link at the top of /home leads to, and the
+    # .ssh of every account wherever it lies. A link at the top of /home that
+    # leads where nothing may be kept stays a link, and what it leads to is
+    # the image's after the write. Then the links inside each .ssh kept are
+    # made by pin_key_links to lead where they led in the old root, or the
+    # update stops here.
     if [ -n "$mounted_root" ]; then
-        keep_root_directory /home "$keep/home" || die "the home directories could not be kept"
-        keep_root_directory /root "$keep/root-home" || die "root's home directory could not be kept"
-        # A /root kept as its link into /home is root's home in the copy too,
-        # where the archive and the restore read root's keys.
-        if [ -L "$keep/root-home" ]; then
-            cp -a "$keep/root-home" "$keep/root" || die "root's home directory could not be kept"
-        fi
-    fi
-    # Each home is read inside the old root and kept at the same home read
-    # inside the copy, and a .ssh that is a link leading out of /home is kept
-    # as the tree it leads to, which may not be on the new root. Such a link
-    # that the copy of /home holds is replaced there by its tree, since the
-    # copy goes back in place of the image's /home and the archive reads the
-    # keys in the copy. The links inside each .ssh kept are made by
-    # pin_key_links to lead where they led in the old root, in the copy of
-    # /home as in a tree kept on its own, or the update stops here.
-    if [ -n "$mounted_root" ]; then
-        pinned=""
+        rm -f "$keep/$KEPT_PATHS" || die "the list of what the copy keeps could not be begun"
+        keep_tree /home
+        keep_tree /root
+        homes=$(root_path "$TARGET_MNT" /home) || die "/home leads through too many links"
+        for entry in "$homes"/* "$homes"/.[!.]* "$homes"/..?*; do
+            [ -L "$entry" ] || continue
+            entry=${entry#"$TARGET_MNT"}
+            led=$(root_path "$TARGET_MNT" "$entry") || die "$entry leads through too many links"
+            [ -d "$led" ] || continue
+            fault=$(kept_path_fault "${led#"$TARGET_MNT"}")
+            if [ -n "$fault" ]; then
+                say "the link $entry is kept and not what it leads to: $fault"
+                continue
+            fi
+            keep_tree "$entry"
+        done
+        while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
+            case "$home" in /*) ;; *) continue ;; esac
+            case "$home" in /home/*) keep_tree "$home" ;; esac
+            keep_tree "$home/.ssh"
+        done < "$keep/etc/passwd"
+        rm -f "$keep.links"
+        pinned="
+"
         while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
             case "$home" in /*) ;; *) continue ;; esac
             from=$(root_path "$TARGET_MNT" "$home/.ssh") || die "$home/.ssh leads through too many links"
-            [ "$from" != "$TARGET_MNT" ] && [ -d "$from" ] || continue
-            if under_home "$TARGET_MNT" "$from"; then
-                to=$keep/home${from#"$TARGET_MNT/home"}
-                case "$pinned" in *"
+            [ -d "$from" ] || continue
+            case "$pinned" in *"
 $from
 "*) continue ;; esac
-                pinned="$pinned
-$from
+            pinned="$pinned$from
 "
-                [ ! -d "$to" ] || [ -L "$to" ] || pin_key_links "$TARGET_MNT" "$from" "$to" kept
-                continue
-            fi
-            to=$(root_path "$keep" "$home") || die "$home leads through too many links in $keep"
-            if [ -L "$to/.ssh" ]; then
-                rm -f "$to/.ssh" || die "$home/.ssh could not be kept"
-            elif [ -e "$to/.ssh" ]; then
-                continue
-            fi
-            { mkdir -p "$to" && cp -a "$from" "$to/.ssh"; } ||
-                die "$home/.ssh could not be kept"
-            pin_key_links "$TARGET_MNT" "$from" "$to/.ssh" kept
+            pin_key_links "$TARGET_MNT" "$from" "$keep${from#"$TARGET_MNT"}" "$keep/$KEPT_PATHS"
         done < "$keep/etc/passwd"
     fi
     if [ -n "$mounted_root" ]; then
@@ -2441,52 +2559,30 @@ $from
     fi
     # The image's home directories go, with the keys they carry, whether or
     # not the machine's were kept: an account that has the image's name must
-    # not regain the image's key. Where the machine's homes were not kept,
-    # each account of the archive gets a home with its archived keys.
+    # not regain the image's key. What the copy kept of the machine's homes
+    # and keys goes back at the paths it had, by put_kept, so that each home
+    # and .ssh of passwd leads where it led before whatever links the image
+    # has; a home the copy took from the archive is put where the archive's
+    # passwd names it.
     rm -rf "${TARGET_MNT:?}/home" || die "the image's home directories could not be removed"
-    if [ -d "$keep/home" ]; then
-        cp -a "$keep/home" "$TARGET_MNT/home" || die "the home directories could not be put back"
-    else
-        mkdir -p "$TARGET_MNT/home" || die "the home directory could not be made"
-        while IFS=: read -r _name _password uid gid _gecos home _shell; do
-            case "$uid" in "" | *[!0-9]*) continue ;; esac
-            [ "$uid" -ge 1000 ] || continue
+    put_kept || die "the home directories and keys could not be put back"
+    if [ ! -e "$TARGET_MNT/home" ] && [ ! -L "$TARGET_MNT/home" ]; then
+        mkdir "$TARGET_MNT/home" || die "the home directory could not be made"
+    fi
+    # Then the image's keys go from /root and from every home, read inside
+    # the new root by root_path, wherever that .ssh is not one the copy put
+    # back, so that an account without keys before the update has none after
+    # it.
+    { echo "root:x:0:0::/root:"; cat "$keep/etc/passwd"; } |
+        while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
             case "$home" in /*) ;; *) continue ;; esac
-            dir=$(root_path "$TARGET_MNT" "$home") || die "$home leads through too many links"
-            case "$dir" in "$TARGET_MNT/home/"*) ;; *) continue ;; esac
-            [ ! -d "$dir" ] || continue
-            { mkdir -p "$dir" && chmod 700 "$dir" && chown "$uid:$gid" "$dir"; } ||
-                die "$home could not be made"
-        done < "$TARGET_MNT/etc/passwd"
-    fi
-    # Root's home is the machine's where it was kept, a tree or a link into
-    # /home; its keys are put back with the other homes' below.
-    if [ -d "$keep/root-home" ] || [ -L "$keep/root-home" ]; then
-        rm -rf "${TARGET_MNT:?}/root" || die "the image's home for root could not be removed"
-        cp -a "$keep/root-home" "$TARGET_MNT/root" || die "root's home directory could not be put back"
-    fi
-    # The image's keys go from /root and from every home outside /home, kept
-    # keys or not. /root and each home are read inside the new root, and
-    # each home inside the copy, by root_path, so that a home such as
-    # `/../../mnt/other`, or one through a link, is the root's own and not a
-    # directory of another disk or of the system running the update.
-    root_home=$(root_path "$TARGET_MNT" /root) || die "/root leads through too many links"
-    if ! under_home "$TARGET_MNT" "$root_home"; then
-        rm -rf "$root_home/.ssh" || die "the image's keys for root could not be removed"
-    fi
-    while IFS=: read -r _name _password uid gid _gecos home _shell; do
-        case "$home" in /*) ;; *) continue ;; esac
-        to=$(root_path "$TARGET_MNT" "$home") || die "$home leads through too many links"
-        under_home "$TARGET_MNT" "$to" && continue
-        rm -rf "$to/.ssh" || die "$home/.ssh could not be removed"
-        from=$(root_path "$keep" "$home") || die "$home leads through too many links in $keep"
-        [ -d "$from/.ssh" ] || continue
-        if [ ! -d "$to" ]; then
-            { mkdir -p "$to" && chmod 700 "$to" && chown "$uid:$gid" "$to"; } ||
-                die "$home could not be made"
-        fi
-        cp -a "$from/.ssh" "$to/.ssh" || die "$home/.ssh could not be put back"
-    done < "$keep/etc/passwd"
+            to=$(root_path "$TARGET_MNT" "$home/.ssh") || die "$home/.ssh leads through too many links"
+            [ -e "$to" ] || [ -L "$to" ] || continue
+            path=${to#"$TARGET_MNT"}
+            [ -z "$(kept_path_fault "$path")" ] || continue
+            kept_within "$keep/$KEPT_PATHS" "$path" && continue
+            rm -rf "$to" || die "the image's keys in $home/.ssh could not be removed"
+        done || exit 1
     sync
     umount "$TARGET_MNT" || die "the new root would not unmount"
     mounted_root=""
@@ -2518,7 +2614,7 @@ root is written and its archive still says an update is in progress; run the upd
         fi
         say "the configuration is archived on ${update_disk}p${recovery_entry}"
     fi
-    rm -rf "$keep"
+    rm -rf "$keep" "$keep.restore" "$keep.links"
 
     set_update_recordfail "${update_disk}p1"
     if [ -n "$update_console" ] || [ -n "$update_i915" ]; then

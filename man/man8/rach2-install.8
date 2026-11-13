@@ -285,25 +285,23 @@ A home that leads through more than 40 links stops the update before the
 root is written.
 Normal updates preserve .ssh in every passwd home, including homes outside
 .Pa /home ,
-with their owners and modes; a .ssh that is a symbolic link leading out of
-.Pa /home
-is kept as the tree it leads to, and one in a home under
-.Pa /home
-comes back as that tree in place of the link.
+with their owners and modes.
+Each kept tree, and each symbolic link followed to reach it, goes back at
+the path it had in the old root, replacing what the image has at that path
+and any symbolic link of the image above it, so that every home and .ssh of
+passwd leads where it led before the update.
 Each symbolic link inside a kept .ssh is made to lead where it led in the
 old root: one into the same .ssh is written relative to its place, one into
-.Pa /home
-as the absolute path it led to, and one to a regular file elsewhere is
-replaced by a copy of that file with its owner and mode, a later link to the
-same file becoming a link to that copy.
-A link that leads to a directory, a device or nothing outside
-.Pa /home
+a kept tree or link as the absolute path it led to, and one to a regular
+file elsewhere is replaced by a copy of that file with its owner and mode, a
+later link to the same file becoming a link to that copy.
+A link that leads to a directory, a device or nothing that is not kept
 stops the update before the root is written, since the update would lose
 what it leads to or let it lead to the image's file of that name.
-Before restoring retained keys, the image's .ssh is removed from
+After the kept trees are back, the image's .ssh is removed from
 .Pa /root
-and from every account home, each read inside the new root and lying
-outside /home, including accounts with no archived keys.
+and from every account home, each read inside the new root, wherever it is
+not one of the kept trees, including accounts with no archived keys.
 Passwords are stored as hashes.
 The archive preserves accounts and keys for an update when the root cannot
 be read.
@@ -384,17 +382,30 @@ Before replacing a readable root, the installer copies its account files,
 SSH policy,
 .Pa /etc/vconsole.conf ,
 saved Wi-Fi networks, machine identifiers, kept sound and backlight levels,
-server host keys, account keys, including root's keys, the
-home directories under
-.Pa /home
-and root's home,
-.Pa /root ,
-each read inside the root as a home is and kept as the tree it leads to,
-except a
-.Pa /root
-that is a symbolic link into
+server host keys, account keys, including root's keys, and the home
+directories:
 .Pa /home ,
-which is kept as the link; it keeps them in
+root's home
+.Pa /root ,
+every passwd home under
+.Pa /home ,
+and the directory each symbolic link at the top of
+.Pa /home
+leads to.
+Each is read inside the root as a home is and kept at the path it leads to,
+with the symbolic links followed on the way, and so is the .ssh of every
+account, wherever it lies.
+An update stops before anything is written when one of these, or a link on
+the way to one, is the root itself, one of
+.Pa /bin , /boot , /dev , /etc , /lib , /lib32 , /lib64 , /libx32 , /proc , /run ,
+.Pa /sbin , /sys , /tmp , /usr
+or
+.Pa /var ,
+which the image replaces, or a name the copy uses for itself; a link at the
+top of
+.Pa /home
+that leads to one of them is kept as the link alone.
+It keeps them in
 .Pa /dev/shm ,
 the recovery system's tmpfs of half the machine's memory; an update whose
 homes do not fit there stops before the root is written.
@@ -500,9 +511,17 @@ links are root's.
 A key directory of an older archive, which records no owners, receives the
 account's uid and gid, mode 700 on its directories and 600 on its files,
 and a symbolic link keeps its own mode.
-Accounts of different UIDs whose homes are one directory have its .ssh
-restored once, from the first of them in passwd; when their archived copies
-differ, the update stops before the root is written.
+The whole path of an account's .ssh is read inside the copy, so a symbolic
+link restored with another account's keys is followed inside the copy and
+never out of it; each key tree is unpacked into a private directory and
+replaces what is at that path only when whole.
+An update stops before the root is written when such a path is one the
+copy may not keep, as above.
+Accounts of different UIDs whose .ssh is one directory have it restored
+once, from the first of them in passwd; when their archived copies differ,
+the update stops before the root is written.
+The keys go back at the paths that archived passwd names, whatever
+symbolic links the image has there.
 The server's host keys receive owner 0:0.
 A missing home is created with mode 700 and the same owner.
 Keys for a UID absent from the archived passwd are ignored.
