@@ -9,7 +9,7 @@
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_held.c
- * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/rcu_none.c
  * host-deps: tests/host/compat/mmap_lock_host.c tests/host/compat/fsize_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
@@ -290,26 +290,32 @@ void park(void);
 
 static process_t proc, other, third;
 static fd_table_t files;
-/* The hold maps of the three threads, as wide as the model's tables grow. */
-static uint32_t proc_held[FD_TABLE_LIMIT / 32], other_held[FD_TABLE_LIMIT / 32],
-    third_held[FD_TABLE_LIMIT / 32];
+/* A hold map as wide as the model's tables grow: the kernel's record with
+ * room for its words after it. */
+struct held_room {
+    struct fd_hold_map map;
+    unsigned int more[FD_TABLE_LIMIT / 32 - 1];
+};
+
+/* The hold maps of the three threads. */
+static struct held_room proc_held, other_held, third_held;
 
 /** Give the three threads their hold maps, which a reset of a record
  * clears. */
 static void give_maps(void)
 {
-    proc.fd_held = proc_held;
-    proc.fd_held_words = FD_TABLE_LIMIT / 32;
-    other.fd_held = other_held;
-    other.fd_held_words = FD_TABLE_LIMIT / 32;
-    third.fd_held = third_held;
-    third.fd_held_words = FD_TABLE_LIMIT / 32;
+    proc_held.map.words = FD_TABLE_LIMIT / 32;
+    other_held.map.words = FD_TABLE_LIMIT / 32;
+    third_held.map.words = FD_TABLE_LIMIT / 32;
+    proc.fd_held = &proc_held.map;
+    other.fd_held = &other_held.map;
+    third.fd_held = &third_held.map;
 }
 
 /** Mark `fd` held by a call of `t`, as `fd_get` marks it. */
 static void hold_fd(process_t *t, int fd)
 {
-    t->fd_held[fd / 32] |= 1u << (fd % 32);
+    t->fd_held->bits[fd / 32] |= 1u << (fd % 32);
     if (t->fd_holding <= fd / 32) {
         t->fd_holding = fd / 32 + 1;
     }
@@ -2803,9 +2809,9 @@ static void row_end(void)
           "every path page given back");
     k_memset(&other, 0, sizeof(other));
     k_memset(&third, 0, sizeof(third));
-    k_memset(proc_held, 0, sizeof(proc_held));
-    k_memset(other_held, 0, sizeof(other_held));
-    k_memset(third_held, 0, sizeof(third_held));
+    k_memset(&proc_held, 0, sizeof(proc_held));
+    k_memset(&other_held, 0, sizeof(other_held));
+    k_memset(&third_held, 0, sizeof(third_held));
     give_maps();
     proc.fd_holding = 0;
     proc.next = 0;

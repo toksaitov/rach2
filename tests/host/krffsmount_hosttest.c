@@ -9,7 +9,7 @@
  * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
- * host-deps: tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/bkl_none.c tests/host/compat/rcu_none.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *

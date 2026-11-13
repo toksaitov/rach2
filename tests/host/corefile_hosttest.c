@@ -7,7 +7,7 @@
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
- * host-deps: tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/bkl_none.c tests/host/compat/rcu_none.c
  * host-deps: tests/host/compat/atomic_host.c rach2/sys/fs/fsize.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
@@ -217,8 +217,15 @@ extern void free(void *ptr);
 /* The dumping process and the process that shares its descriptor table,
  * each the only thread of its process. */
 static process_t self, sharer;
-/* The hold maps of the two, as wide as the model's table grows. */
-static uint32_t self_held[FD_TABLE_LIMIT / 32], sharer_held[FD_TABLE_LIMIT / 32];
+/* A hold map as wide as the model's table grows: the kernel's record with
+ * room for its words after it. */
+struct held_room {
+    struct fd_hold_map map;
+    unsigned int more[FD_TABLE_LIMIT / 32 - 1];
+};
+
+/* The hold maps of the two. */
+static struct held_room self_held, sharer_held;
 static struct tgroup group, sharer_group;
 static struct fs_struct dirs;
 static fd_table_t files;
@@ -2030,9 +2037,11 @@ static void row_end(void)
     check(opens == releases && ns_depth == 0,
           "the file's description is closed and no namespace lock is held");
     fd_table_free(&files);
-    k_memset(self_held, 0, sizeof(self_held));
+    k_memset(&self_held, 0, sizeof(self_held));
+    self_held.map.words = FD_TABLE_LIMIT / 32;
     self.fd_holding = 0;
-    k_memset(sharer_held, 0, sizeof(sharer_held));
+    k_memset(&sharer_held, 0, sizeof(sharer_held));
+    sharer_held.map.words = FD_TABLE_LIMIT / 32;
     sharer.fd_holding = 0;
 }
 
@@ -2294,10 +2303,10 @@ static void stream_writev(void)
 int main(void)
 {
     self.pid = self.tgid = 3;
-    self.fd_held = self_held;
-    self.fd_held_words = FD_TABLE_LIMIT / 32;
-    sharer.fd_held = sharer_held;
-    sharer.fd_held_words = FD_TABLE_LIMIT / 32;
+    self_held.map.words = FD_TABLE_LIMIT / 32;
+    sharer_held.map.words = FD_TABLE_LIMIT / 32;
+    self.fd_held = &self_held.map;
+    sharer.fd_held = &sharer_held.map;
     self.tg = &group;
     self.fs = &dirs;
     self.state = PROC_RUNNING;

@@ -7,7 +7,7 @@
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
- * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: rach2/sys/lib/rcu.c
  * host-deps: tests/host/compat/host_threads.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-cflags: -pthread
@@ -19,6 +19,12 @@
  * handle read before that wait would still name the old node, though
  * `fd_ofd_repoint` has updated the description. The row of the status flags
  * runs two host threads on one description at once.
+ *
+ * The atomic exchanges are the test's, over the compiler's builtins, so
+ * that the rows of a lookup or a call's end racing another sharer's close,
+ * dup2 or growth can act as that sharer just before or just after the
+ * exchange that sets or clears a hold (`race_before`, `race_after`). The
+ * grace periods are the real ones of rach2/sys/lib/rcu.c, run by `grace`.
  */
 #include "fs/vfs.h"
 #include "compat/waketime_none.h"
@@ -133,6 +139,59 @@ static void status_flags_row(void)
     }
     check(status_lost[0] == 0 && status_lost[1] == 0 && status_ofd.status_flags == 0,
           "two threads change a description's status flags without losing a change");
+}
+
+/* What a race row does as the other sharer at the next exchange, before
+ * or after it; each runs once. */
+static void (*race_before)(void);
+static void (*race_after)(void);
+
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value);
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value);
+
+/** Take the race row's actions for this exchange, so that each runs once
+ * and none runs inside another. */
+static void race_take(void (**before)(void), void (**after)(void))
+{
+    *before = race_before;
+    *after = race_after;
+    race_before = 0;
+    race_after = 0;
+}
+
+/** Store `value` at `*p` and return what was there, as one full barrier,
+ * running a race row's other sharer first or after. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    void (*before)(void), (*after)(void);
+    unsigned int was;
+
+    race_take(&before, &after);
+    if (before) {
+        before();
+    }
+    was = __atomic_exchange_n(p, value, __ATOMIC_SEQ_CST);
+    if (after) {
+        after();
+    }
+    return was;
+}
+
+/** Store `value` at `*p` if `*p` is `old`, and return what was there,
+ * running a race row's other sharer first or after. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    void (*before)(void), (*after)(void);
+
+    race_take(&before, &after);
+    if (before) {
+        before();
+    }
+    __atomic_compare_exchange_n(p, &old, value, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    if (after) {
+        after();
+    }
+    return old;
 }
 
 /** Zeroed host memory, counted in `allocations`, or NULL once `fail_after`
@@ -899,6 +958,277 @@ static void shared_dup2_open(void)
     check(!proc_list && !allocations, "the dup2 onto an open descriptor leaves nothing allocated");
 }
 
+/* The two sharers of the race rows, the descriptor the second looks up,
+ * what the first's close returned, and the dup2's copy and old entry. */
+static process_t *race_first, *race_second;
+static int race_fd, race_closed;
+static fd_entry_t *race_was;
+
+/** The first sharer closes the race's descriptor. */
+static void race_close(void)
+{
+    fd_entry_t *claimed = 0;
+
+    current_proc = race_first;
+    race_closed = fd_close_claim(race_first->fds, race_fd, &claimed);
+    current_proc = race_second;
+}
+
+/** The first sharer puts a copy of the race's descriptor in its place by
+ * dup2, as `shared_dup2` does. */
+static void race_dup2(void)
+{
+    fd_entry_t *home = fd_table_entry(race_first->fds, race_fd), copy;
+
+    current_proc = race_first;
+    k_memset(&copy, 0, sizeof(copy));
+    copy.type = FD_TYPE_CONSOLE;
+    copy.ofd = home->ofd;
+    fd_ofd_ref(home->ofd);
+    check(fd_dup_swap(race_first->fds, race_fd, &copy, &race_was) == 0 && race_was == home,
+          "the other sharer's dup2 replaces the descriptor");
+    current_proc = race_second;
+}
+
+/** The first sharer grows the table to 600 descriptors, past the 512 the
+ * second's hold map covers. */
+static void race_grow(void)
+{
+    current_proc = race_first;
+    check(fd_table_reach(race_first->fds, 599) == 0, "the other sharer grows the table");
+    current_proc = race_second;
+}
+
+/** The first sharer grows the table to 2048 descriptors, past the 1024
+ * the second's map covers after `race_grow`. */
+static void race_grow_more(void)
+{
+    current_proc = race_first;
+    check(fd_table_reach(race_first->fds, 2047) == 0, "the other sharer grows the table again");
+    current_proc = race_second;
+}
+
+/** Run grace periods until the callbacks queued are run. */
+static void grace(void)
+{
+    while (rcu_gp_begin()) {
+        check(rcu_gp_ended(), "no processor of the model holds a grace period");
+        rcu_gp_finish();
+    }
+}
+
+/** Two processes that share one table, `race_first` and `race_second`, and
+ * descriptor `race_fd` open on the console, held by no call; 0, or -1. */
+static int race_setup(void)
+{
+    fd_entry_t *claimed = 0;
+    int i;
+
+    race_first = alloc_process();
+    race_second = alloc_process();
+    if (!race_first || !race_second) {
+        return -1;
+    }
+    for (i = FD_STDIN; i <= FD_STDERR; i++) {
+        fd_free(race_second->fds, i);
+    }
+    fd_table_delete(race_second->fds);
+    race_second->fds = 0;
+    if (fd_table_share(race_first->fds, race_second) != 0) {
+        return -1;
+    }
+    current_proc = race_first;
+    race_fd = fd_alloc(race_first->fds);
+    if (race_fd < 0) {
+        return -1;
+    }
+    fd_slot(race_first->fds, race_fd)->type = FD_TYPE_CONSOLE;
+    fd_install(race_first->fds, race_fd);
+    check(fd_holds_claim(0, &claimed) == -1, "the opener's call holds nothing past its end");
+    current_proc = race_second;
+    return 0;
+}
+
+/** The first sharer releases the race's descriptor, which a close
+ * claimed, and opens a new one that no call holds, as the second sharer
+ * goes on. */
+static void race_reopen(void)
+{
+    fd_entry_t *claimed = 0;
+
+    current_proc = race_first;
+    fd_free(race_first->fds, race_fd);
+    race_fd = fd_alloc(race_first->fds);
+    fd_slot(race_first->fds, race_fd)->type = FD_TYPE_CONSOLE;
+    fd_install(race_first->fds, race_fd);
+    check(fd_holds_claim(0, &claimed) == -1, "the new descriptor is held by no call");
+    current_proc = race_second;
+}
+
+/** Release the race's descriptor if it is still open, then both
+ * processes, and require nothing left allocated. */
+static void race_teardown(const char *what)
+{
+    current_proc = 0;
+    if (fd_table_entry(race_first->fds, race_fd)->type != FD_TYPE_NONE) {
+        fd_free(race_first->fds, race_fd);
+    }
+    free_process(race_second);
+    close_process(race_first);
+    grace();
+    check(!proc_list && !allocations, what);
+}
+
+/**
+ * A lookup in a shared table takes no lock (`fd_get`): it finds the slot
+ * open, holds it and finds it open again. A close by the other sharer
+ * between the first look and the hold finds no hold and releases the
+ * descriptor at once, so the second look must find it closing and the
+ * lookup fail; one after the lookup finds the hold and leaves the release
+ * to the end of the lookup's call. A lookup with no second look would give
+ * the call an entry being released, and one with no hold would let the
+ * close release what the call uses. The end of the call clears the hold
+ * and then reads the slot: a close before the clear leaves the release to
+ * the call's end, and one after it releases at once.
+ */
+static void lookup_races_close(void)
+{
+    fd_entry_t *e, *claimed = 0;
+
+    check(race_setup() == 0, "two sharers for the lookup and the close");
+    race_closed = -2;
+    race_before = race_close;
+    e = fd_get(race_second->fds, race_fd);
+    check(race_closed == 1 && !e,
+          "a close before the lookup's hold releases at once, and the lookup fails");
+    check(fd_holds_claim(0, &claimed) == -1 && race_second->fd_holding == 0,
+          "the failed lookup's call has nothing to release");
+    current_proc = race_first;
+    check(fd_slot(race_first->fds, race_fd)->flags & FD_FLAG_RELEASING,
+          "the close is the one that releases");
+    race_reopen();
+    e = fd_get(race_second->fds, race_fd);
+    check(e == fd_slot(race_second->fds, race_fd), "an open descriptor is found");
+    race_close();
+    check(race_closed == 0 && fd_get(race_second->fds, race_fd) == 0,
+          "a close after the lookup leaves the release to the lookup's call");
+    check(fd_holds_claim(0, &claimed) == race_fd && claimed == e && (e->flags & FD_FLAG_RELEASING),
+          "the lookup's call claims the release at its end");
+    race_reopen();
+    check(fd_get(race_second->fds, race_fd) != 0, "the descriptor is held again");
+    race_closed = -2;
+    race_before = race_close;
+    check(fd_holds_claim(0, &claimed) == race_fd && race_closed == 0,
+          "a close just before the call's end clears the hold leaves the release to it");
+    race_reopen();
+    check(fd_get(race_second->fds, race_fd) != 0, "the descriptor is held once more");
+    race_closed = -2;
+    race_after = race_close;
+    check(fd_holds_claim(0, &claimed) == -1 && race_closed == 1,
+          "a close just after the call's end clears the hold releases at once");
+    check(!race_first->fds->lock.locked, "the table's lock is free after the lookups");
+    race_teardown("the lookup and the close leave nothing allocated");
+}
+
+/**
+ * A dup2 by the other sharer between a lookup's first look and its hold
+ * marks the old entry closing and gives the number a spare, so the second
+ * look sends the lookup to the lock, which finds the copy, and the old
+ * entry is the dup2's to release. A dup2 just after the hold finds it and
+ * moves it to the old entry, which the lookup's call keeps until it ends
+ * and then releases; the second look sends the lookup to the lock, which
+ * finds the copy. A lookup that passed a dup2 by without its second look
+ * would give the call the old entry with no hold on it, which the dup2's
+ * call would release under it.
+ */
+static void lookup_races_dup2(void)
+{
+    fd_entry_t *e, *home, *claimed = 0;
+    fd_table_t *table = 0;
+
+    check(race_setup() == 0, "two sharers for the lookup and the dup2");
+    home = fd_table_entry(race_first->fds, race_fd);
+    race_before = race_dup2;
+    e = fd_get(race_second->fds, race_fd);
+    check(e && e != home && e == fd_table_entry(race_first->fds, race_fd) && !race_second->fd_gone,
+          "a dup2 before the lookup's hold leads the lookup to the copy");
+    check(fd_holds_claim(0, &claimed) == -1 && fd_gone_claim(&table, &claimed) == -1,
+          "the lookup's call keeps nothing of the old entry");
+    current_proc = race_first;
+    check(fd_holds_claim(0, &claimed) == -1 && fd_gone_claim(&table, &claimed) == race_fd &&
+              claimed == home,
+          "the dup2's call releases the old entry");
+    fd_ofd_unref(home->ofd);
+    fd_free_after(table, race_fd, home);
+    check(fd_free(race_first->fds, race_fd) == 0 &&
+              fd_table_entry(race_first->fds, race_fd) == home,
+          "a close of the copy leads the number back to the slot");
+    race_reopen();
+
+    race_after = race_dup2;
+    e = fd_get(race_second->fds, race_fd);
+    check(e && e != home && e == fd_table_entry(race_first->fds, race_fd) && race_second->fd_gone &&
+              fd_slot(race_second->fds, race_fd) == e,
+          "a dup2 just after the hold leads the lookup to the copy and keeps the old entry");
+    current_proc = race_first;
+    check(fd_holds_claim(0, &claimed) == -1 && fd_gone_claim(&table, &claimed) == -1,
+          "the dup2's call does not release what the lookup's call keeps");
+    current_proc = race_second;
+    check(fd_holds_claim(0, &claimed) == -1 && fd_gone_claim(&table, &claimed) == race_fd &&
+              claimed == home,
+          "the lookup's call releases the old entry at its end");
+    fd_ofd_unref(home->ofd);
+    fd_free_after(table, race_fd, home);
+    check(!race_first->fds->lock.locked, "the table's lock is free after the dup2s");
+    race_teardown("the lookup and the dup2 leave nothing allocated");
+}
+
+/**
+ * A growth past the second sharer's hold map, by the first sharer between
+ * the second's look and its hold, replaces the map: the hold lands in the
+ * old map, which the growth marked stale before it copied it, so the
+ * lookup sets it again in the new map, where the first sharer's close then
+ * finds it. The old map is freed only after a grace period, since the
+ * lookup wrote it after the growth; a map freed at once would be written
+ * after its free. A call's end racing a growth the same way clears the
+ * hold in both maps, so a close after it releases at once.
+ */
+static void lookup_races_growth(void)
+{
+    struct fd_hold_map *old;
+    fd_entry_t *claimed = 0;
+    int before;
+
+    check(race_setup() == 0, "two sharers for the lookup and the growth");
+    old = race_second->fd_held;
+    race_before = race_grow;
+    check(fd_get(race_second->fds, race_fd) == fd_slot(race_first->fds, race_fd),
+          "the lookup finds the descriptor across the growth");
+    check(race_second->fd_held != old && race_second->fd_held->words >= 600 / 32 && old->stale,
+          "the growth replaced the lookup's map");
+    before = allocations;
+    race_close();
+    check(race_closed == 0, "the close finds the hold in the new map");
+    check(fd_holds_claim(0, &claimed) == race_fd, "the lookup's call claims the release");
+    race_reopen();
+    check(allocations == before, "the old maps stay until a grace period has passed");
+    grace();
+    check(allocations == before - 2, "the grace period frees both sharers' old maps");
+
+    current_proc = race_second;
+    check(fd_get(race_second->fds, race_fd) != 0, "the second sharer holds the descriptor");
+    old = race_second->fd_held;
+    race_first->rlim[RLIM_NOFILE].cur = 4096;
+    race_before = race_grow_more;
+    check(fd_holds_claim(0, &claimed) == -1, "the call's end across a growth claims nothing");
+    check(race_second->fd_held != old && old->stale &&
+              !(race_second->fd_held->bits[race_fd / 32] & (1u << (race_fd % 32))),
+          "the call's end clears the hold in the map the growth made too");
+    race_close();
+    check(race_closed == 1, "a close after the call's end releases at once");
+    race_teardown("the lookup and the growth leave nothing allocated");
+}
+
 /**
  * A growth adds a chunk as large as the table and moves no entry, so the
  * address of an entry stays its slot's: chunk k > 0 holds the entries from
@@ -1207,6 +1537,9 @@ int main(void)
     description_holders();
     description_watch();
     shared_closes();
+    lookup_races_close();
+    lookup_races_dup2();
+    lookup_races_growth();
     shared_dup2();
     shared_dup2_open();
     table_chunks();
