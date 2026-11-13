@@ -2,6 +2,7 @@
  * drm_vblank64_hosttest.c: the rows of drm_vblank_hosttest.c with x86-64's
  * `cpu.h`, whose structures are 64 bits wide.
  *
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/spinlock_host.c

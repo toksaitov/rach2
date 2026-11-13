@@ -1,5 +1,6 @@
 /* debugfs's tree, its VFS operations, and a software fence made, signalled
  * and read through sync/sw_sync and sync/info.
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/fd_flat.c
@@ -57,13 +58,6 @@ void rtc_monotonic(int64_t *sec, int64_t *ns)
 uint64_t rtc_ticks_now(void)
 {
     return 1000;
-}
-/** Host arithmetic for the kernel's division helper. */
-uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
-{
-    if (rem)
-        *rem = (uint32_t)(n % d);
-    return n / d;
 }
 /** Initialize a model queue. */
 void wait_queue_init(wait_queue_t *wq)

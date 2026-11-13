@@ -1,4 +1,5 @@
 /* The real block request pool and lag queue under explicit completion control.
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  */

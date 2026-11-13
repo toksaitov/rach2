@@ -259,6 +259,29 @@ void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
     p->alarm_interval = tick != 0 ? interval : 0;
 }
 
+/** Set a fine real timer; process_timer_hosttest checks list membership. */
+void proc_alarm_set_ns(process_t *p, uint64_t ns, uint64_t interval)
+{
+    uint64_t now = (uint64_t)rtc_monotonic_ns();
+    uint64_t top = 0x7FFFFFFFFFFFFFFFull;
+
+    p->alarm_tick = ns == 0 ? 0 : ns > top - now ? top : now + ns;
+    p->alarm_interval = ns != 0 ? interval : 0;
+    p->alarm_fine = 1;
+    p->alarm_due = 0;
+}
+
+/** Read the fine timer, retaining one microsecond until expiry is collected. */
+uint64_t proc_alarm_read_ns(const process_t *p, uint64_t *interval)
+{
+    uint64_t now = (uint64_t)rtc_monotonic_ns();
+
+    *interval = p->alarm_interval;
+    return p->alarm_due || p->alarm_tick == 0 ? 0
+           : p->alarm_tick > now              ? p->alarm_tick - now
+                                              : 1000;
+}
+
 /** The real-time timer's due tick as the kernel reads it, 0 when it is
  * disarmed or its SIGALRM is marked. */
 uint64_t proc_alarm_due_tick(const process_t *p)
@@ -1347,67 +1370,59 @@ static void sleep_between(void)
     wake_between = 0;
 }
 
-/**
- * The timer's first SIGALRM is never early, and getitimer reads back what
- * was set.
- *
- * The tick in progress is not counted, so a timer of three ticks set at tick
- * 1000 is due at 1004, and getitimer reads it back as the three ticks set and
- * its interval. A tick before it is due, the time left is between none and a
- * tick, and it reads as one tick, since zero means disarmed. A timer of half a
- * tick, and one of 1 us, is armed, due at the tick after next, and an
- * interval of half a tick is a tick. A timer of 1 s reads back as 1 s. The
- * count is 64 bits wide, so a timer of 42949673 s is due whole, and the
- * longest timer, 2^31 - 1 s and 999999 us, which rounds up to 2^31 s, reads
- * back as that on the host's 64-bit long; the i686's long cuts it to the
- * longest it holds. An interval of a second and more reads back whole. An
- * interval of a whole second in microseconds fails with -EINVAL, and so does
- * a getitimer of a timer other than the three. `alarm` rounds the seconds
- * left to the nearest, a half second up, and to 1 when under a second is
- * left, and leaves no interval.
- */
+/** Start a real-timer row with its coarse and fine clocks together. */
+static void timer_at(uint64_t at)
+{
+    model_at(at);
+    kernel_uptime_seconds = (uint32_t)(at / TICK_HZ);
+    kernel_second_ticks = (uint32_t)(at % TICK_HZ);
+    mono_phase_ns = 0;
+}
+
+/** Check fine real-timer values, long durations and alarm's rounding. */
 static void timer_first_expiry(void)
 {
     struct kernel_itimerval cur;
 
-    model_at(1000);
-    CHECK(set_timer(0, TICKS_US(3), 0, 250000) == 0 && proc.alarm_tick == 1004,
-          "a timer of three ticks set at tick 1000 is due at 1004");
+    timer_at(1000);
+    CHECK(set_timer(0, TICKS_US(3), 0, 250000) == 0 && proc.alarm_tick == 1003ull * TICK_NS,
+          "a timer of three ticks expires after exactly three ticks");
     cur = read_timer();
     CHECK(cur.value_sec == 0 && cur.value_usec == TICKS_US(3),
           "and it reads back as the three ticks set");
     CHECK(cur.interval_sec == 0 && cur.interval_usec == 250000, "and its interval");
-    model_at(1003);
+    timer_at(1003);
     cur = read_timer();
-    CHECK(cur.value_sec == 0 && cur.value_usec == TICKS_US(1),
-          "a timer due at the next tick reads as one tick");
+    CHECK(cur.value_sec == 0 && cur.value_usec == 1,
+          "an expiry not yet collected reads as one microsecond");
     CHECK(set_timer(0, 0, 0, 0) == 0 && proc.alarm_tick == 0, "a value of zero disarms the timer");
 
-    model_at(1200);
-    CHECK(set_timer(0, TICKS_US(1) / 2, 0, 0) == 0 && proc.alarm_tick == 1202,
-          "a timer of half a tick is armed, due at 1202");
-    CHECK(set_timer(0, 1, 0, 0) == 0 && proc.alarm_tick == 1202,
-          "a timer of 1 us is armed, due at 1202");
+    timer_at(1200);
+    CHECK(set_timer(0, TICKS_US(1) / 2, 0, 0) == 0 &&
+              proc.alarm_tick == 1200ull * TICK_NS + TICK_NS / 2,
+          "a timer of half a tick keeps its fine expiry");
+    CHECK(set_timer(0, 1, 0, 0) == 0 && proc.alarm_tick == 1200ull * TICK_NS + 1000,
+          "a timer of one microsecond keeps its fine expiry");
     CHECK(set_timer(0, TICKS_US(3), 0, TICKS_US(1) / 2) == 0 &&
-              read_timer().interval_usec == TICKS_US(1),
-          "an interval of half a tick rounds up to a tick");
-    model_at(1300);
+              read_timer().interval_usec == TICKS_US(1) / 2,
+          "an interval of half a tick stays half a tick");
+    timer_at(1300);
     CHECK(set_timer(1, 0, 0, 0) == 0, "set a timer of 1 s");
     cur = read_timer();
     CHECK(cur.value_sec == 1 && cur.value_usec == 0, "a timer of 1 s reads back as 1 s");
-    model_at(1400);
+    timer_at(1400);
     CHECK(set_timer(42949673, 0, 0, 0) == 0 &&
-              proc.alarm_tick == 1400u + 42949673ull * TICK_HZ + 1u,
+              proc.alarm_tick == 1400ull * TICK_NS + 42949673ull * 1000000000u,
           "a timer of 42949673 s is due whole, past 32 bits of ticks");
 
-    model_at(0x100000001ull);
+    timer_at(0x100000001ull);
     CHECK(set_timer(0x7FFFFFFF, 999999, 0, 0) == 0, "set the longest timer past 2^32 ticks");
     cur = read_timer();
-    CHECK(cur.value_sec == 0x80000000L && cur.value_usec == 0,
-          "the longest timer reads back as 2^31 s, its ticks rounded up");
+    CHECK(cur.value_sec == 0x7FFFFFFFL && cur.value_usec == 999999,
+          "the longest timer reads back without rounding to ticks");
     CHECK(set_timer(0, 0, 0, 0) == 0 && proc.alarm_tick == 0, "and a value of zero disarms it");
 
-    model_at(900);
+    timer_at(900);
     CHECK(set_timer(1, 0, 1, 500000) == 0, "set a timer of 1 s, then every 1.5 s");
     cur = read_timer();
     CHECK(cur.interval_sec == 1 && cur.interval_usec == 500000,
@@ -1419,18 +1434,18 @@ static void timer_first_expiry(void)
     CHECK(cur.interval_sec == 0 && cur.interval_usec == 0, "and leaves no interval");
     CHECK(call_alarm(0) == 5 && proc.alarm_tick == 0, "and alarm(0) disarms it");
 
-    model_at(1000);
+    timer_at(1000);
     CHECK(call_alarm(5) == 0, "alarm returns 0 when none was armed");
-    model_at(1000u + 3u * TICK_HZ / 10u);
+    timer_at(1000u + 3u * TICK_HZ / 10u);
     CHECK(call_alarm(5) == 5, "alarm reports 4.7 s left as 5");
-    model_at(1000u + 3u * TICK_HZ / 10u + 5u * TICK_HZ - 2u);
+    timer_at(1000u + 3u * TICK_HZ / 10u + 5u * TICK_HZ - 2u);
     CHECK(call_alarm(5) == 1, "alarm reports two ticks left as 1, since 0 means none was armed");
-    model_at(1000u + 3u * TICK_HZ / 10u + 5u * TICK_HZ - 2u + 57u * TICK_HZ / 100u);
+    timer_at(1000u + 3u * TICK_HZ / 10u + 5u * TICK_HZ - 2u + 57u * TICK_HZ / 100u);
     CHECK(call_alarm(0) == 4, "alarm reports 4.43 s left as 4");
     CHECK(proc.alarm_tick == 0, "and alarm(0) leaves none");
-    model_at(2000);
+    timer_at(2000);
     CHECK(call_alarm(5) == 0, "arm an alarm of 5 s at tick 2000");
-    model_at(2000u + TICK_HZ / 2u);
+    timer_at(2000u + TICK_HZ / 2u);
     CHECK(call_alarm(0) == 5, "alarm reports 4.5 s left as 5");
 }
 
@@ -1449,10 +1464,10 @@ static void timer_marked(void)
 {
     struct kernel_itimerval cur;
 
-    model_at(3000);
-    CHECK(set_timer(1, 0, 0, 500000) == 0 && proc.alarm_tick == 3000u + TICK_HZ + 1u,
+    timer_at(3000);
+    CHECK(set_timer(1, 0, 0, 500000) == 0 && proc.alarm_tick == 3000ull * TICK_NS + 1000000000u,
           "set a timer of 1 s, then every 0.5 s, at tick 3000");
-    model_at(3000u + TICK_HZ + 1u);
+    timer_at(3000u + TICK_HZ + 1u);
     proc.alarm_due = 1;
     cur = read_timer();
     CHECK(cur.value_sec == 0 && cur.value_usec == 0 && cur.interval_sec == 0 &&

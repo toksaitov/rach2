@@ -129,7 +129,7 @@ void rtc_monotonic(int64_t *sec, int64_t *nsec)
 /** The ticks of the model's time, a millisecond each. */
 uint64_t rtc_ticks_now(void)
 {
-    return (uint64_t)(model_now_ns / 1000000);
+    return (uint64_t)(model_now_ns / TICK_NS);
 }
 
 /** Initialize a queue. */
