@@ -109,15 +109,17 @@ uint32_t ext2_node_ref(struct ext2_node *n, int delta)
 }
 
 /**
- * Set the size of `n`, whose lock the caller holds, so that `node_size`
- * reads it whole without the lock: on i686 the 64-bit store is two, and a
- * reader between them would see half of each. `size_seq` is odd while the
- * size changes, as Linux's `i_size_write` keeps a sequence around the size
- * of a 32-bit kernel (include/linux/fs.h:976-981). Interrupts stay off
- * while the count is odd: an interrupt waiting for the big lock must not
- * stop a writer whose reader holds that lock.
+ * Set the size of `n`, whose lock the caller holds, without its mark, for a
+ * piece of the file-write batch, which holds the node until its drain stores
+ * it: stored so that `node_size` reads it whole without the lock, since on
+ * i686 the 64-bit store is two, and a reader between them would see half of
+ * each. `size_seq` is odd while the size changes, as Linux's `i_size_write`
+ * keeps a sequence around the size of a 32-bit kernel
+ * (include/linux/fs.h:976-981). Interrupts stay off while the count is odd:
+ * an interrupt waiting for the big lock must not stop a writer whose reader
+ * holds that lock.
  */
-void ext2_node_size_set(struct ext2_node *n, uint64_t size)
+void ext2_node_size_batch(struct ext2_node *n, uint64_t size)
 {
     volatile unsigned int *seq = (volatile unsigned int *)&n->size_seq;
     uint32_t flags = kirq_save();
@@ -126,6 +128,14 @@ void ext2_node_size_set(struct ext2_node *n, uint64_t size)
     n->size = size;
     (void)arch_atomic_xchg(seq, *seq + 1u);
     kirq_restore(flags);
+}
+
+/** Set the size of `n`, whose lock the caller holds, as
+ * `ext2_node_size_batch` does, and mark the node (`ext2_node_dirty`). */
+void ext2_node_size_set(struct ext2_node *n, uint64_t size)
+{
+    ext2_node_dirty(n);
+    ext2_node_size_batch(n, size);
 }
 
 /** The size of `n`, read whole without its lock, as Linux's `i_size_read`
@@ -2567,15 +2577,56 @@ struct ext2_time ext2_time_fit(const struct ext2_node *n, uint32_t extra_end, in
 /**
  * Mark node `n` as changed in memory past its last store (`n->unstored`),
  * as Linux's `mark_inode_dirty` marks an inode at every change
- * (fs/ext2/dir.c:92-95, fs/ext2/inode.c:603 and 1303). Called before or
- * with every change of a field `inode_encode` writes, but the batch's,
- * under `n`'s lock or on a node the caller has alone. The mark keeps the
- * node from being dropped, synced past or left behind the valid bit until
- * a store of it succeeds.
+ * (fs/ext2/dir.c:92-95, fs/ext2/inode.c:603 and 1303). The primitive that
+ * changes a field `inode_encode` writes calls it with the change, so that a
+ * store in the middle of an operation, which clears the mark, cannot leave a
+ * later change unmarked: `ext2_node_size_set`, `ext2_node_blocks_add` and
+ * `ext2_node_blocks_sub`, `ext2_node_slot_set`, `ext2_node_nlink_set`,
+ * `ext2_stamp` and, for any other field, `EXT2_NODE_SET`. Only the load and
+ * the batch, which holds its nodes until its drain stores them, change the
+ * fields without it. The caller holds `n`'s lock or has the node alone. The
+ * mark keeps the node from being dropped, synced past or left behind the
+ * valid bit until a store of it succeeds.
  */
 void ext2_node_dirty(struct ext2_node *n)
 {
     n->unstored = 1;
+}
+
+/** Add `sectors` 512-byte units to `n`'s `i_blocks` and mark the node
+ * (`ext2_node_dirty`). */
+void ext2_node_blocks_add(struct ext2_node *n, uint32_t sectors)
+{
+    ext2_node_dirty(n);
+    n->blocks += sectors;
+}
+
+/** Take `sectors` 512-byte units from `n`'s `i_blocks`, down to 0 at the
+ * least, and mark the node (`ext2_node_dirty`). */
+void ext2_node_blocks_sub(struct ext2_node *n, uint32_t sectors)
+{
+    ext2_node_dirty(n);
+    n->blocks = n->blocks >= sectors ? n->blocks - sectors : 0;
+}
+
+/** Set the block pointer `*slot` of `n`'s tree to `b`: one in a pointer block
+ * at byte `slot_at` of the volume is the caller's copy, which it writes there
+ * itself, and one in the inode, for a `slot_at` of 0, marks the node
+ * (`ext2_node_dirty`). */
+void ext2_node_slot_set(struct ext2_node *n, uint32_t *slot, uint64_t slot_at, uint32_t b)
+{
+    if (slot_at == 0) {
+        ext2_node_dirty(n);
+    }
+    *slot = b;
+}
+
+/** Set the link count of `n` to `nlink` and mark the node
+ * (`ext2_node_dirty`). */
+void ext2_node_nlink_set(struct ext2_node *n, uint32_t nlink)
+{
+    ext2_node_dirty(n);
+    n->nlink = nlink;
 }
 
 /** Set the times of `n` that `which` selects (T_ATIME, T_MTIME, T_CTIME)
@@ -3928,15 +3979,14 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
             ext2_block_unwind(em, fresh);
         return rc;
     }
-    ext2_node_dirty(n);
-    n->file_acl = fresh;
-    n->blocks += (fresh != 0 ? em->block_size / 512 : 0);
-    n->blocks -= (old != 0 ? em->block_size / 512 : 0);
+    EXT2_NODE_SET(n, file_acl, fresh);
+    ext2_node_blocks_add(n, fresh != 0 ? em->block_size / 512 : 0);
+    ext2_node_blocks_sub(n, old != 0 ? em->block_size / 512 : 0);
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_write(em, n, 0, WRITE_DURABLE);
     if (rc) {
-        n->file_acl = old;
-        n->blocks = blocks;
+        EXT2_NODE_SET(n, file_acl, old);
+        EXT2_NODE_SET(n, blocks, blocks);
         if (fresh)
             ext2_block_unwind(em, fresh);
         return rc;

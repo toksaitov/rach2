@@ -625,7 +625,7 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
     k_memcpy(plan->data->data + ((uint32_t)offset & 4095u), src, len);
     plan->data->dirty = 1;
     if (offset + len > n->size) {
-        ext2_node_size_set(n, offset + len);
+        ext2_node_size_batch(n, offset + len);
     }
     ext2_stamp_batch(n, T_MTIME | T_CTIME);
     plan->table->dirty = 1;
