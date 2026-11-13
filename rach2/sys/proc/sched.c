@@ -1117,7 +1117,9 @@ void sched_idle_balance(void)
     }
     flags = spin_lock_irqsave(&sched_lock);
     for (c = 0; c < NR_CPUS && kick < 0; c++) {
-        if (c != me && timer_tick_stopped(c) && sched_cpu_idle(c) && sched_find(me, c, 0)) {
+        if (c != me && timer_tick_stopped(c) && sched_cpu_idle(c) &&
+            !cpu_table[c].current->need_resched && sched_find(me, c, 0)) {
+            cpu_table[c].current->need_resched = 1;
             kick = c;
         }
     }
@@ -1694,11 +1696,13 @@ void sched_loadavg(uint32_t avg[3])
  * (`arch_irq_waiting`), and halts on it, which takes it while the processor
  * is still marked idle: held to the poll's end, a disk's completion made
  * each of its random reads some 90 us longer, and a tick held past a kick
- * was charged to the thread the processor switched to. A kicked poll
- * likewise lets interrupts in for one instruction before it returns, so
- * that one pending then, seen or not, is taken while the processor is
- * still marked idle, not after its caller waited for the big lock or
- * switched threads.
+ * was charged to the thread the processor switched to. A kicked wait,
+ * after its poll or with none, likewise lets interrupts in for one
+ * instruction before it returns (`idle_kicked_window`), so that one pending
+ * then, seen or not, is taken while the processor is still marked idle, not
+ * after its caller waited for the big lock or switched threads, as Linux's
+ * call_cpuidle enables interrupts when a reschedule request cancels the
+ * idle entry (kernel/sched/idle.c:144-148).
  *
  * The length adapts as Linux 6.12.115's haltpoll governor adapts its own
  * (adjust_poll_limit, drivers/cpuidle/governors/haltpoll.c): a wait the
@@ -1716,6 +1720,14 @@ void sched_loadavg(uint32_t avg[3])
  * at the request register is an exit. Without a measured counter there is
  * no poll either.
  */
+/** Let a pending interrupt in for one instruction, with the processor
+ * still marked idle: `sti` takes effect after the return that follows it. */
+static void idle_kicked_window(void)
+{
+    arch_irq_enable();
+    arch_irq_disable();
+}
+
 static void idle_halt(void)
 {
     struct percpu *cpu = this_cpu();
@@ -1724,6 +1736,7 @@ static void idle_halt(void)
     uint32_t grow;
 
     if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
+        idle_kicked_window();
         return;
     }
     if (per_us == 0 || !arch_idle_poll()) {
@@ -1750,8 +1763,7 @@ static void idle_halt(void)
             arch_relax();
         }
         if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
-            arch_irq_enable(); /* `sti` lets a pending interrupt in after the return */
-            arch_irq_disable();
+            idle_kicked_window();
             return;
         }
     }

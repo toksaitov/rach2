@@ -178,7 +178,12 @@ void sched_idle_loop(void);
  * take, so that it steals it (`sched_steal`) at once, as Linux's busy
  * processor kicks an idle one into NO_HZ balancing (nohz_balancer_kick,
  * kernel/sched/fair.c:12426-12540): a processor that ticked took such a
- * thread at its next tick. From the tick, with interrupts off.
+ * thread at its next tick. The kick claims the idle task's request
+ * (`need_resched`) under the run queues' lock, as a wake's does, and skips
+ * a processor whose request is already set, so that two balancers that
+ * choose one idle processor before its selection kick it once, as Linux's
+ * kick_ilb sends nothing when the flags it would set are set
+ * (fair.c:12403-12404). From the tick, with interrupts off.
  */
 void sched_idle_balance(void);
 
@@ -190,9 +195,10 @@ void sched_idle_balance(void);
  * and sends none (`smp_kick`), as Linux's idle task keeps its polling bit
  * set outside the halt itself while it is current (kernel/sched/idle.c:257,
  * 282-290). The switch to a thread clears the mark under the run queues'
- * lock, and the next halt clears it first and does not halt when a kick
- * came (`idle_halt`). From the interrupt that ended the halt, with
- * interrupts off; a thread halted in place is not marked.
+ * lock, and the next halt clears it first and, when a kick came, lets a
+ * pending interrupt in and does not halt (`idle_halt`). From the interrupt
+ * that ended the halt, with interrupts off; a thread halted in place is not
+ * marked.
  */
 void sched_idle_awake(void);
 
