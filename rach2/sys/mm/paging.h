@@ -522,6 +522,25 @@ void mmio_usage(size_t *used, size_t *largest);
 void *kmap_temp(uintptr_t phys);
 
 /**
+ * Map the frame at physical `phys` at a kernel address of this processor's
+ * own and return it, with interrupts off from here to `kunmap_cpu`, which
+ * restores them as `*flags` saved them. It never fails, so a copy that
+ * must reach a frame while holding a file's lock neither fails nor waits
+ * for a slot another holder of `kmap_temp` may keep across a sleep on that
+ * lock. Nothing may sleep or fault between the two, and a processor maps
+ * one frame so at a time: on i686 each has a slot past the pools of
+ * `kmap_temp` that no other processor uses, as Linux's kmap_atomic maps a
+ * fixmap slot of the processor's own with preemption off (mm/highmem.c).
+ * Where the direct map reaches every frame (`ARCH_DIRECT_MAP_ALL`), the
+ * address is the frame's there. Any context.
+ */
+void *kmap_cpu(uintptr_t phys, uint32_t *flags);
+
+/** Release the mapping `kmap_cpu` returned and restore interrupts as
+ * `flags`, which it saved, says. */
+void kunmap_cpu(void *va, uint32_t flags);
+
+/**
  * Split the temporary slots into a pool for each of `cpus` processors, at
  * most 32, of whole words of the slot maps; with more processors, several
  * share a pool by their index modulo the count. Called once, while the boot

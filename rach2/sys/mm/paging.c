@@ -109,15 +109,18 @@ int paging_framefail_arm(uint32_t count)
 }
 
 #ifndef ARCH_DIRECT_MAP_ALL
-/* The temporary mappings: one bit per slot of the region set while a caller
+/* The slots of the region `kmap_temp` gives out, those before the slot of
+ * each processor's own that `kmap_cpu` maps. */
+#define TEMP_POOL_SLOTS (KVA_TEMP_SLOTS - NR_CPUS)
+/* The temporary mappings: one bit per slot of the pools set while a caller
  * holds it, and one per slot given back but still mapped, which no caller is
  * given until the next sweep of its pool unmaps it. A pool's lock covers its
  * bits. */
-static uint32_t _temp_slots[KVA_TEMP_SLOTS / 32];
-static uint32_t _temp_stale[KVA_TEMP_SLOTS / 32];
+static uint32_t _temp_slots[TEMP_POOL_SLOTS / 32];
+static uint32_t _temp_stale[TEMP_POOL_SLOTS / 32];
 /* The most pools: each has whole words of the two maps, so that no two
  * pools' locks cover one word. */
-#define TEMP_POOLS_MAX (KVA_TEMP_SLOTS / 32u)
+#define TEMP_POOLS_MAX (TEMP_POOL_SLOTS / 32u)
 /*
  * The slots split into a pool for each processor, as Linux gives each its
  * own slots of the kmap_local fixmap (`kmap_local_calc_idx`,
@@ -131,12 +134,12 @@ struct temp_pool {
     uint32_t next;        /* the slot the next search starts at */
 };
 static struct temp_pool _temp_pools[TEMP_POOLS_MAX] = {
-    {SPINLOCK_INIT_NAMED("kva_temp_pool"), 0, KVA_TEMP_SLOTS, 0}};
+    {SPINLOCK_INIT_NAMED("kva_temp_pool"), 0, TEMP_POOL_SLOTS, 0}};
 /* The pools in use and the slots of each but the last, which also has the
  * rest; one pool of every slot until `paging_temp_split`, which sets them
  * once, before a second processor runs. */
 static uint32_t _temp_pool_count = 1;
-static uint32_t _temp_pool_size = KVA_TEMP_SLOTS;
+static uint32_t _temp_pool_size = TEMP_POOL_SLOTS;
 #endif
 /* The pages of the MMIO region, a bit each, set while a window or a
  * mapping of `map_mmio` has the page. `mmio_lock` covers them, the large
@@ -2682,6 +2685,18 @@ void kunmap_temp(void *va)
     (void)va;
 }
 
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
+{
+    *flags = kirq_save();
+    return phys_to_virt(phys);
+}
+
+void kunmap_cpu(void *va, uint32_t flags)
+{
+    (void)va;
+    kirq_restore(flags);
+}
+
 void paging_temp_split(unsigned int cpus)
 {
     (void)cpus;
@@ -2693,12 +2708,12 @@ void paging_temp_split(unsigned int cpus)
     uint32_t p;
 
     _temp_pool_count = cpus < 1u ? 1u : cpus > TEMP_POOLS_MAX ? TEMP_POOLS_MAX : cpus;
-    _temp_pool_size = (KVA_TEMP_SLOTS / _temp_pool_count) & ~31u;
+    _temp_pool_size = (TEMP_POOL_SLOTS / _temp_pool_count) & ~31u;
     for (p = 0; p < _temp_pool_count; p++) {
         struct temp_pool *pool = &_temp_pools[p];
 
         pool->first = p * _temp_pool_size;
-        pool->end = p + 1u == _temp_pool_count ? KVA_TEMP_SLOTS : pool->first + _temp_pool_size;
+        pool->end = p + 1u == _temp_pool_count ? TEMP_POOL_SLOTS : pool->first + _temp_pool_size;
         pool->next = pool->first;
     }
     kirq_restore(flags);
@@ -2809,7 +2824,7 @@ void kunmap_temp(void *va)
     struct temp_pool *pool;
     uint32_t flags;
 
-    if (addr < KVA_TEMP || slot >= KVA_TEMP_SLOTS) {
+    if (addr < KVA_TEMP || slot >= TEMP_POOL_SLOTS) {
         return;
     }
     pool = temp_pool_of(slot);
@@ -2817,6 +2832,31 @@ void kunmap_temp(void *va)
     _temp_slots[slot / 32] &= ~(1u << (slot % 32));
     _temp_stale[slot / 32] |= 1u << (slot % 32);
     spin_unlock_irqrestore(&pool->lock, flags);
+}
+/**
+ * The slot past the pools of this processor, which interrupts off keep from
+ * any other user while it is mapped: no other processor touches it, so its
+ * entry's translation is dropped on this processor alone, at each map and
+ * unmap.
+ */
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
+{
+    uintptr_t va;
+
+    *flags = kirq_save();
+    va = KVA_TEMP + (TEMP_POOL_SLOTS + arch_cpu_id()) * PAGE_SIZE;
+    *kernel_pte(va) = (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | PTE_W;
+    arch_tlb_flush_page(va);
+    return (void *)(va + (phys & (PAGE_SIZE - 1)));
+}
+
+void kunmap_cpu(void *va, uint32_t flags)
+{
+    uintptr_t addr = (uintptr_t)va & ~(PAGE_SIZE - 1);
+
+    *kernel_pte(addr) = 0;
+    arch_tlb_flush_page(addr);
+    kirq_restore(flags);
 }
 #endif
 

@@ -247,12 +247,11 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
     cut_pages(sh, keep, 0);
     last = keep ? shmem_resident(sh, keep - 1u) : 0;
     if (size % PAGE_SIZE && last) {
-        uint8_t *page = kmap_temp(last);
+        uint32_t flags;
+        uint8_t *page = kmap_cpu(last, &flags);
 
-        if (page) {
-            k_memset(page + size % PAGE_SIZE, 0, PAGE_SIZE - (uint32_t)(size % PAGE_SIZE));
-            kunmap_temp(page);
-        }
+        k_memset(page + size % PAGE_SIZE, 0, PAGE_SIZE - (uint32_t)(size % PAGE_SIZE));
+        kunmap_cpu(page, flags);
     }
     sh->size = size;
     return 0;
@@ -361,6 +360,7 @@ void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len)
         uint32_t from = start < off ? (uint32_t)(off - start) : 0u;
         uint32_t to = end - start < PAGE_SIZE ? (uint32_t)(end - start) : PAGE_SIZE;
         uintptr_t *e = slot(sh, (uint32_t)i, 0);
+        uint32_t flags;
         uint8_t *page;
 
         if (!e) {
@@ -376,11 +376,9 @@ void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len)
             give_page(sh);
             continue;
         }
-        page = kmap_temp(*e);
-        if (page) {
-            k_memset(page + from, 0, to - from);
-            kunmap_temp(page);
-        }
+        page = kmap_cpu(*e, &flags);
+        k_memset(page + from, 0, to - from);
+        kunmap_cpu(page, flags);
     }
 }
 

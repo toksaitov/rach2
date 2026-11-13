@@ -40,7 +40,9 @@
  * which the record lets go with itself once the page is clean; the failure
  * is recorded once. A release's or a sync's success before a later
  * release's failure keeps the later store, in either order, and a
- * truncation to zero takes the dirty page with the rest.
+ * truncation to zero takes the dirty page with the rest. A descriptor
+ * write's copy into a dirty page reads the written bytes again when a read
+ * fails, so the page's write-back keeps the write.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -249,11 +251,40 @@ void kunmap_temp(void *va)
     (void)va;
 }
 
-/** Read a page of the file: `count` bytes of 0x5a. */
+/* Whether a processor's own mapping (`kmap_cpu`) is held, which no write
+ * of the file, a sleep in the kernel, may come under. */
+static int cpu_mapped;
+
+/** The page MODEL_FRAME holds, as `kmap_temp` gives it; it never fails. */
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
+{
+    *flags = 0;
+    check(phys == MODEL_FRAME && !cpu_mapped, "a processor maps one model frame at a time");
+    cpu_mapped = 1;
+    return model_bytes;
+}
+
+/** End what `kmap_cpu` mapped. */
+void kunmap_cpu(void *va, uint32_t flags)
+{
+    (void)va;
+    (void)flags;
+    cpu_mapped = 0;
+}
+
+/* The reads of the file still to fail with EIO. */
+static int read_fails;
+
+/** Read a page of the file: `count` bytes of 0x5a, or EIO while
+ * `read_fails` lasts. */
 int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off)
 {
     (void)e;
     (void)off;
+    if (read_fails > 0) {
+        read_fails--;
+        return -EIO;
+    }
     reads++;
     k_memset(buf, 0x5a, count);
     return (int32_t)count;
@@ -377,6 +408,7 @@ void free_frame(uintptr_t phys)
 int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off)
 {
     (void)e;
+    check(!cpu_mapped, "no write of the file holds a processor's own mapping");
     disk_writes++;
     if (disk_error) {
         return disk_error;
@@ -428,6 +460,11 @@ void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo
     (void)match;
     (void)arg;
 }
+
+/** A read of what a write left in a file fails in no row, so nothing gives
+ * way between its tries. */
+void sched_service_point(void)
+{}
 
 /** Not reached. */
 int proc_in_syscall(void)
@@ -1399,6 +1436,36 @@ static void truncate_rows(void)
     (void)model_fsync(&ofd);
 }
 
+/** A descriptor write's copy into a dirty resident page whose read of the
+ * written bytes fails reads them again, so the page never keeps bytes older
+ * than the file's for a later write-back to put over the write. */
+static void written_copy_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+    fd_entry_t e;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_FILE;
+    e.ofd = &ofd;
+    read_fails = 2;
+    filemap_file_written(&e, 0, 16);
+    check(read_fails == 0 && model_bytes[0] == 0x5a && model_bytes[15] == 0x5a &&
+              model_bytes[16] == 0x65 && !cpu_mapped,
+          "a descriptor write's copy reads the written bytes again after a failed read");
+    vm_file_put(f);
+    vm_file_reap();
+    check(disk_bytes[0] == 0x5a && disk_bytes[16] == 0x65 && dshare_count == 0,
+          "and the page's write-back keeps the descriptor's write");
+}
+
 /** Stores beyond EOF are zeroed before a later growth can expose them. */
 static void writeback_tail_rows(void)
 {
@@ -1440,6 +1507,7 @@ int main(void)
     sync_order_rows();
     retry_rows();
     truncate_rows();
+    written_copy_rows();
     writeback_tail_rows();
     if (fails) {
         printf("filemap-hosttest: %d failed\n", fails);
