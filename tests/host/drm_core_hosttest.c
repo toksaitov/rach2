@@ -949,10 +949,11 @@ static void test_identity(void)
     struct drm_stats st;
     struct drm_set_version sv;
     char name[4], date[16], desc[64], uniq[32];
+    int opened = opens, closed = postcloses; /* test_inherited's come first */
 
     CHECK("open card0", open_node("dri/card0", &user_a, 0, &card) == 0);
     CHECK("open renderD128", open_node("dri/renderD128", &user_a, 0, &render) == 0);
-    CHECK("the driver saw both opens", opens == 2);
+    CHECK("the driver saw both opens", opens == opened + 2);
 
     k_memset(&v, 0, sizeof(v));
     v.name_len = sizeof(name);
@@ -1012,7 +1013,7 @@ static void test_identity(void)
 
     close_node(&render);
     close_node(&card);
-    CHECK("the driver saw each close", postcloses == 3);
+    CHECK("the driver saw each close", postcloses == closed + 3);
     CHECK("no master after the close", fake_dev.master == NULL && fake_dev.open_count == 0);
 }
 
