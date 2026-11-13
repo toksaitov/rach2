@@ -5667,9 +5667,11 @@ static int copy_file(const char *src, const char *dst)
  * Whether the mount's check accepts a copy of the crash state in `img`: a
  * writable mount whose check finds no fault, or, where `counts_written`
  * says the sequence writes counts apart from their entries, only a fault
- * the order writes in more than one step, a link count after its entry or
- * a directory's two entries and its `..` across a move, which mounts the
- * volume read-only for e2fsck. A file's size or `i_blocks` behind its
+ * the order writes in more than one step, a link count after its entry, a
+ * directory's two entries and its `..` across a move, or a directory's
+ * inode and its entry across its mkdir or rmdir, which leaves an orphan
+ * directory whose `..` names its live parent, which mounts the volume
+ * read-only for e2fsck. A file's size or `i_blocks` behind its
  * pointers the check keeps for e2fsck, and a bit behind a pointer it sets,
  * so neither is a fault.
  */
@@ -5681,6 +5683,7 @@ static int check_accepts(const char *img, uint64_t bytes, int counts_written)
         "named twice with one link",
         "a directory with two parents",
         "a second entry that is not the parent",
+        "an orphan directory whose .. names no orphan directory",
     };
     int ok, faulted, i;
 
@@ -5696,7 +5699,7 @@ static int check_accepts(const char *img, uint64_t bytes, int counts_written)
     }
     faulted = (mnt.flags & VFS_MS_RDONLY) != 0;
     ok = !faulted;
-    for (i = 0; !ok && counts_written && i < 5; i++) {
+    for (i = 0; !ok && counts_written && i < (int)(sizeof(counts) / sizeof(counts[0])); i++) {
         ok = strstr(last_check, counts[i]) != 0;
     }
     ok = ok && (!faulted || streq(last_warn, STOPPED_WARN));
