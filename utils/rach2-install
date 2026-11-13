@@ -98,7 +98,6 @@ ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 # The recovery system's key, on the recovery partition, where its init reads it.
 RECOVERY_KEYS_FILE=boot/recovery_authorized_keys
 
-# Prints MESSAGE on stdout as `rach2-install: MESSAGE`, a note of progress.
 # keep_copy SRC DST: copy a kept file, or a directory such as var/lib/backlight
 # whole, to DST, making DST's directory.
 keep_copy() {
@@ -110,6 +109,7 @@ keep_copy() {
     fi
 }
 
+# Prints MESSAGE on stdout as `rach2-install: MESSAGE`, a note of progress.
 say() { echo "$ME: $1"; }
 # Text addressed to the person, with no `rach2-install: ` in front of it. The
 # prefix is for a diagnostic, which says which program is reporting a fault; a
@@ -877,18 +877,18 @@ resume_boot_partition() { # resume_boot_partition BOOT
     mounted_recovery=""
 }
 
-# A file of the boot partition that is replaced whole, the menu or GRUB's
-# EFI image, is replaced so that a stop leaves it whole under its name or
-# under FILE.keep. FAT32 renames over a name by freeing the old file's
-# entries and the new one's before it writes the name again (fat_rename in
-# fat32.c), so a stop between those writes leaves neither name. The new
-# bytes are written to FILE.new; a copy of them, FILE.keep, is compared and
-# synced before FILE.new is renamed over FILE; and FILE.keep is removed only
-# once FILE has its name again. So FILE.keep is whole whenever FILE is not
-# there. While the rename runs, UEFI firmware finds no loader by its name,
-# and a stop there leaves the loader to be put back by this program run
-# again, from the install stick or a BIOS boot; a missing menu sends the
-# BIOS core and the EFI image to the recovery partition's own menu.
+# The menu, a file of the boot partition that is replaced whole, is replaced
+# so that a stop leaves it whole under its name or under FILE.keep. FAT32
+# renames over a name by freeing the old file's entries and the new one's
+# before it writes the name again (fat_rename in fat32.c), so a stop between
+# those writes leaves neither name. The new bytes are written to FILE.new; a
+# copy of them, FILE.keep, is compared and synced before FILE.new is renamed
+# over FILE; and FILE.keep is removed only once FILE has its name again. So
+# FILE.keep is whole whenever FILE is not there. A missing menu sends the BIOS
+# core and the EFI image to the recovery partition's own menu. GRUB's EFI
+# image never loses its name, since UEFI firmware finds no other loader on
+# the disk (`replace_loader`); `finish_file` also puts back the FILE.keep of
+# it that an older version of this program left.
 
 # Status 0 when FILE, on a boot partition mounted writable, is whole under
 # its name: put back from FILE.keep when a stop in `publish_file` took its
@@ -918,6 +918,192 @@ publish_file() { # publish_file FILE
     mv -f "$1.new" "$1" && sync && rm -f "$1.keep" && sync
 }
 
+# ---- GRUB's EFI image ----
+#
+# UEFI firmware finds the loader of an MBR disk by one name alone,
+# \EFI\BOOT\BOOTX64.EFI, so GRUB's EFI image is replaced without a moment in
+# which that name is missing or holds part of a file, and a stop anywhere
+# leaves the disk booting by UEFI. The new image is written beside the old one
+# as BOOTX64.TMP, whose name, like BOOTX64.EFI, is a short name with one
+# directory entry, synced and compared with the image. With no loader there
+# yet, BOOTX64.TMP is renamed, which rewrites its one entry in place. With
+# one, the volume is unmounted and the two entries' first clusters and sizes
+# are swapped in one write of the directory sector that holds both, which
+# moves the name from the old file to the new one at once; the old image,
+# then named BOOTX64.TMP, is removed. A stop leaves BOOTX64.EFI whole, with
+# the old image or the new one, and perhaps a BOOTX64.TMP, which
+# `finish_loader` removes.
+
+# Status 0 when the directory DIR of a boot partition mounted writable,
+# \EFI\BOOT, holds no copy that a stop in `replace_loader` left: a
+# BOOTX64.TMP is removed, as is the BOOTX64.NEW an older version of this
+# program wrote, and a BOOTX64.EFI.keep is put back or removed as
+# `finish_file` does. Status 1 when a write fails.
+finish_loader() { # finish_loader DIR
+    finish_file "$1/BOOTX64.EFI" || return 1
+    [ -e "$1/BOOTX64.TMP" ] || [ -e "$1/BOOTX64.NEW" ] || return 0
+    rm -f "$1/BOOTX64.TMP" "$1/BOOTX64.NEW" && sync
+}
+
+# Reads the boot sector of the FAT32 volume on NODE past the cache into
+# fat_spc, its sectors to a cluster, fat_reserved, the sectors before the
+# first FAT, fat_data, the first sector of cluster 2, fat_count, its
+# clusters, and fat_root, the root directory's first cluster. Status 1 for a
+# volume that is not FAT32 with 512-byte sectors, or a failed read.
+fat_geometry() { # fat_geometry NODE
+    fat_geo=$(dd if="$1" bs=512 count=1 2>/dev/null | od -An -tu1 -v | awk '
+        { for (i = 1; i <= NF; i++) b[n++] = $i }
+        END {
+            total = b[19] + 256 * b[20]
+            if (total == 0) total = b[32] + 256 * (b[33] + 256 * (b[34] + 256 * b[35]))
+            fat = b[36] + 256 * (b[37] + 256 * (b[38] + 256 * b[39]))
+            if (n != 512 || b[11] + 256 * b[12] != 512 || b[13] == 0 ||
+                b[22] + 256 * b[23] != 0 || fat == 0) exit 1
+            reserved = b[14] + 256 * b[15]
+            data = reserved + b[16] * fat
+            print b[13], reserved, data, int((total - data) / b[13]),
+                b[44] + 256 * (b[45] + 256 * (b[46] + 256 * b[47]))
+        }') || return 1
+    # shellcheck disable=SC2086
+    set -- $fat_geo
+    [ "$#" -eq 5 ] || return 1
+    fat_spc=$1 fat_reserved=$2 fat_data=$3 fat_count=$4 fat_root=$5
+}
+
+# Prints the cluster after CLUSTER in its chain, from the first FAT of the
+# volume on NODE that `fat_geometry` read. Status 1 when the read fails.
+fat_next() { # fat_next NODE CLUSTER
+    dd if="$1" bs=512 skip=$((fat_reserved + $2 / 128)) count=1 2>/dev/null |
+        od -An -tu1 -v -j $(($2 % 128 * 4)) -N 4 |
+        awk 'NF == 4 { print $1 + 256 * ($2 + 256 * ($3 + 256 * ($4 % 16))); found = 1 }
+            END { exit !found }'
+}
+
+# Prints the short directory entry NAME, its eleven bytes as FAT stores
+# them, of the directory whose first cluster is CLUSTER on the volume on NODE
+# that `fat_geometry` read, past the cache: the sector that holds it, its
+# offset there, its attributes, its first cluster and its size. Status 1
+# when the directory has no such entry or a read fails.
+fat_entry() { # fat_entry NODE CLUSTER NAME
+    fat_want=$(printf '%s' "$3" | od -An -tu1 -v)
+    fat_at=$2
+    fat_steps=0
+    while [ "$fat_at" -ge 2 ] && [ "$fat_at" -lt $((fat_count + 2)) ] &&
+        [ "$fat_steps" -le "$fat_count" ]; do
+        fat_sector=$((fat_data + (fat_at - 2) * fat_spc))
+        fat_got=$(dd if="$1" bs=512 skip="$fat_sector" count="$fat_spc" 2>/dev/null |
+            od -An -tu1 -v | awk -v want="$fat_want" -v sector="$fat_sector" \
+            -v bytes=$((fat_spc * 512)) '
+            BEGIN { split(want, w, " ") }
+            { for (i = 1; i <= NF; i++) b[n++] = $i }
+            END {
+                if (n != bytes) { print "fault"; exit }
+                for (e = 0; e < n; e += 32) {
+                    if (b[e] == 0) { print "end"; exit }
+                    if (b[e] == 229 || b[e + 11] % 64 == 15) continue
+                    i = 0
+                    while (i < 11 && b[e + i] == w[i + 1]) i++
+                    if (i < 11) continue
+                    print sector + int(e / 512), e % 512, b[e + 11],
+                        (b[e + 20] + 256 * b[e + 21]) * 65536 + b[e + 26] + 256 * b[e + 27],
+                        b[e + 28] + 256 * (b[e + 29] + 256 * (b[e + 30] + 256 * b[e + 31]))
+                    exit
+                }
+            }')
+        case "$fat_got" in
+            "") ;;
+            end | fault) return 1 ;;
+            *)
+                echo "$fat_got"
+                return 0
+                ;;
+        esac
+        fat_at=$(fat_next "$1" "$fat_at") || return 1
+        fat_steps=$((fat_steps + 1))
+    done
+    return 1
+}
+
+# Copies COUNT bytes at offset FROM of the file SOURCE to offset TO of DEST.
+put_bytes() { # put_bytes SOURCE DEST FROM TO COUNT
+    dd if="$1" of="$2" bs=1 skip="$3" seek="$4" count="$5" conv=notrunc 2>/dev/null
+}
+
+# Make IMAGE GRUB's EFI image on the boot partition BOOT, mounted writable at
+# $BOOT_MNT, where `finish_loader` has run, as described above; BOOT is
+# mounted there again when it returns. A failure ends the run, with
+# BOOTX64.EFI whole.
+replace_loader() { # replace_loader BOOT IMAGE
+    loader_dir="$BOOT_MNT/EFI/BOOT"
+    loader_fail="GRUB's EFI image on $1 was not replaced; the root is not written"
+    { cp "$2" "$loader_dir/BOOTX64.TMP" && sync && cmp -s "$2" "$loader_dir/BOOTX64.TMP"; } ||
+        die "GRUB's EFI image could not be written to $1 beside the old one; $loader_fail"
+    if [ ! -e "$loader_dir/BOOTX64.EFI" ]; then
+        { mv "$loader_dir/BOOTX64.TMP" "$loader_dir/BOOTX64.EFI" && sync; } ||
+            die "GRUB's EFI image on $1 could not take its name; the root is not written"
+        return 0
+    fi
+    umount "$BOOT_MNT" || die "$1 would not unmount; $loader_fail"
+    mounted_boot=""
+    loader_node=$1
+    loader_image=$2
+    loader_size=$(wc -c < "$loader_image")
+    fat_geometry "$loader_node" || die "$loader_node is not a FAT32 volume of 512-byte sectors; $loader_fail"
+    loader_at=$fat_root
+    for loader_name in "EFI        " "BOOT       "; do
+        loader_entry=$(fat_entry "$loader_node" "$loader_at" "$loader_name") ||
+            die "the directory \\EFI\\BOOT of $loader_node could not be read; $loader_fail"
+        # shellcheck disable=SC2086
+        set -- $loader_entry
+        [ $(($3 & 16)) -ne 0 ] || die "\\EFI\\BOOT of $loader_node is not a directory; $loader_fail"
+        loader_at=$4
+    done
+    { loader_old=$(fat_entry "$loader_node" "$loader_at" "BOOTX64 EFI") &&
+        loader_new=$(fat_entry "$loader_node" "$loader_at" "BOOTX64 TMP"); } ||
+        die "BOOTX64.EFI or BOOTX64.TMP has no short entry in \\EFI\\BOOT of $loader_node; $loader_fail"
+    # The fields: sector, offset, attributes, first cluster and size of
+    # BOOTX64.EFI, then of BOOTX64.TMP.
+    # shellcheck disable=SC2086
+    set -- $loader_old $loader_new
+    [ "$#" -eq 10 ] && [ $(( ($3 | $8) & 24 )) -eq 0 ] && [ "$4" -ne "$9" ] &&
+        [ "${10}" -eq "$loader_size" ] ||
+        die "BOOTX64.EFI and BOOTX64.TMP in \\EFI\\BOOT of $loader_node are not the files written; $loader_fail"
+    [ "$1" -eq "$6" ] ||
+        die "the directory entries of BOOTX64.EFI and BOOTX64.TMP are in different sectors of \
+$loader_node, so one write cannot swap them; remove the other files of \\EFI\\BOOT and run the update again"
+    loader_tmp=$(mktemp -d /tmp/rach2-install.XXXXXX) || die "there is nowhere to change a sector; $loader_fail"
+    loader_ok=0
+    dd if="$loader_node" of="$loader_tmp/old" bs=512 skip="$1" count=1 2>/dev/null &&
+        cp "$loader_tmp/old" "$loader_tmp/new" || loader_ok=1
+    for loader_field in 20:2 26:2 28:4; do
+        loader_by=${loader_field#*:}
+        loader_field=${loader_field%:*}
+        put_bytes "$loader_tmp/old" "$loader_tmp/new" $(($2 + loader_field)) \
+            $(($7 + loader_field)) "$loader_by" &&
+            put_bytes "$loader_tmp/old" "$loader_tmp/new" $(($7 + loader_field)) \
+                $(($2 + loader_field)) "$loader_by" || loader_ok=1
+    done
+    [ "$loader_ok" -eq 0 ] && [ "$(wc -c < "$loader_tmp/new")" -eq 512 ] || {
+        rm -rf "$loader_tmp"
+        die "the sector of \\EFI\\BOOT on $loader_node could not be changed; $loader_fail"
+    }
+    # One sector, written whole or not at all, moves the name.
+    dd if="$loader_tmp/new" of="$loader_node" bs=512 seek="$1" count=1 conv=notrunc 2>/dev/null &&
+        sync && dd if="$loader_node" bs=512 skip="$1" count=1 2>/dev/null | cmp -s - "$loader_tmp/new" ||
+        loader_ok=1
+    rm -rf "$loader_tmp"
+    [ "$loader_ok" -eq 0 ] ||
+        die "the sector of \\EFI\\BOOT on $loader_node was not written; BOOTX64.EFI holds the old \
+image or the new one, and the update run again finishes it"
+    mount -t vfat "$loader_node" "$BOOT_MNT" ||
+        die "$loader_node would not mount again; the root is not written"
+    mounted_boot=$BOOT_MNT
+    cmp -s "$loader_image" "$loader_dir/BOOTX64.EFI" 2>/dev/null ||
+        die "BOOTX64.EFI on $loader_node does not hold the new image after the swap; the root is not written"
+    { rm -f "$loader_dir/BOOTX64.TMP" && sync; } ||
+        die "the old GRUB EFI image on $loader_node could not be removed; the root is not written"
+}
+
 # Finish or undo what a stop left of a slot's move on the boot partition
 # BOOT, so that bootctl reads it again: it refuses a volume without both
 # /boot/kernel and /boot/fallback. A slot's grown copy, kernel.new or
@@ -932,15 +1118,16 @@ publish_file() { # publish_file FILE
 # are 8.3, so the rename rewrites the copy's one directory entry in place,
 # and the slot's name never holds part of a kernel. The menu and GRUB's EFI
 # image are put back first when a stop took their names while they were
-# replaced (`finish_file`). The caller has proved that BOOT is this system's
+# replaced (`finish_file`, `finish_loader`). The caller has proved that BOOT is this system's
 # by reads alone (`boot_ours`).
 finish_slots() { # finish_slots BOOT
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to look at its kernel slots"
     mounted_boot=$BOOT_MNT
-    for slot_file in "$BOOT_MNT/boot/grub/grub.cfg" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"; do
-        finish_file "$slot_file" || die "$slot_file, which a stop left, could not be put back"
-    done
+    finish_file "$BOOT_MNT/boot/grub/grub.cfg" ||
+        die "$BOOT_MNT/boot/grub/grub.cfg, which a stop left, could not be put back"
+    finish_loader "$BOOT_MNT/EFI/BOOT" ||
+        die "GRUB's EFI image, which a stop left on $1, could not be put back"
     for slot in kernel fallback; do
         slot_copy="$BOOT_MNT/boot/$slot.tmp"
         [ -e "$slot_copy" ] || continue
@@ -1251,9 +1438,9 @@ set_update_recordfail() { # set_update_recordfail BOOT
 # checks, or a failure while the boot partition is changed, ends the run.
 #
 # A new loader is written beside the old one, compared with the image, and
-# put in place by `publish_file`, so that a stop leaves the old one or the
-# new one whole; UEFI firmware knows the loader by that one name. The same
-# loader is left as it is.
+# put in place by `replace_loader`, so that the name UEFI firmware knows it
+# by holds the old one or the new one whole at every moment. The same loader
+# is left as it is.
 convert_mbr_disk() {
     efi_image="$(dirname "$update_image")/bootx64.efi"
     boot="${update_disk}p1"
@@ -1295,15 +1482,12 @@ system is made again, so it boots by BIOS alone"
     mounted_boot=$BOOT_MNT
     efi_dir="$BOOT_MNT/EFI/BOOT"
     efi_file="$efi_dir/BOOTX64.EFI"
-    { mkdir -p "$efi_dir" && finish_file "$efi_file"; } ||
+    { mkdir -p "$efi_dir" && finish_loader "$efi_dir"; } ||
         die "GRUB's EFI image that a stop left on $boot could not be put back; the root is not written"
     if cmp -s "$efi_image" "$efi_file"; then
         say "GRUB's EFI image on $boot is already this one"
     else
-        # BOOTX64.NEW is the copy an older version of this program wrote.
-        { rm -f "$efi_dir/BOOTX64.NEW" && cp "$efi_image" "$efi_file.new" && sync &&
-            cmp -s "$efi_image" "$efi_file.new" && publish_file "$efi_file"; } ||
-            die "GRUB's EFI image was not put on $boot; the root is not written"
+        replace_loader "$boot" "$efi_image"
     fi
     umount "$BOOT_MNT" || die "$boot would not unmount; the root is not written"
     mounted_boot=""

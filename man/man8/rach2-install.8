@@ -649,9 +649,7 @@ partition of an installed disk has.
 .Ss Replacing a boot file
 The menu,
 .Pa /boot/grub/grub.cfg ,
-and GRUB's EFI image,
-.Pa \eEFI\eBOOT\eBOOTX64.EFI ,
-are replaced whole on the boot partition.
+is replaced whole on the boot partition.
 FAT32 renames over a name by freeing the old file's directory entries and
 the new one's before it writes the name again, so a stop between those
 writes leaves neither name.
@@ -671,9 +669,35 @@ which the next update or
 puts back before it changes anything else; the menu is read from
 .Pa grub.cfg.keep
 meanwhile when the disk is proved this system's.
-While the rename runs, UEFI firmware finds no loader by its name; GRUB,
-started by BIOS or by the EFI image, opens the recovery partition's menu
-when the boot partition has none.
+GRUB, started by BIOS or by the EFI image, opens the recovery partition's
+menu when the boot partition has none.
+.Pp
+GRUB's EFI image,
+.Pa \eEFI\eBOOT\eBOOTX64.EFI ,
+is the one name UEFI firmware finds a loader by on an MBR disk, so it never
+loses that name.
+The new image is written beside it as
+.Pa BOOTX64.TMP ,
+synced and compared.
+With no image there yet,
+.Pa BOOTX64.TMP
+is renamed, which rewrites its one directory entry in place.
+With one, the partition is unmounted and the first clusters and sizes of
+the two files' directory entries are swapped in one write of the sector
+that holds both, so that the name moves from the old image to the new one
+at once, and the old image, then
+.Pa BOOTX64.TMP ,
+is removed.
+A stop leaves
+.Pa BOOTX64.EFI
+whole, with the old image or the new one, and perhaps a
+.Pa BOOTX64.TMP ,
+which the next update or
+.Fl -slots
+removes.
+When the two entries are in different sectors, as only other files in
+.Pa \eEFI\eBOOT
+can make them, the update stops with the old image in place.
 .Sh EXIT STATUS
 The exit status is 0 when the disk contains the installed system,
 for an update, when the new root is on disk and armed for a trial boot,
