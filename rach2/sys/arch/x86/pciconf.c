@@ -17,20 +17,25 @@
  * second selected. An interrupt handler can reach configuration space: the
  * USB handler silences its controllers from inside an interrupt under
  * `rach2.msidrop`. Every mechanism #1 access below is therefore taken with
- * interrupts off, which is two instructions on a path that already costs two
- * port writes.
+ * interrupts off and config_lock held, so accesses on other processors
+ * cannot change the selected address between the two port operations.
  */
 
 #include "lapic.h"
 #include "pciconf.h"
 #include "portio.h"
+#include "smpboot.h"
+#include "../../proc/percpu.h"
 
 #include "../../pci.h"
 
 #include "../../lib/kirq.h"
+#include "../../lib/spinlock.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8
 #define PCI_CONFIG_DATA    0xCFC
+
+static struct spinlock config_lock = SPINLOCK_INIT_NAMED("pci_config");
 
 /* The ECAM window `pci_ecam_set` gave, and the buses it covers. */
 static uintptr_t ecam;
@@ -85,10 +90,10 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_
     if (e) {
         return *(volatile uint32_t *)e;
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&config_lock);
     outl(PCI_CONFIG_ADDRESS, addr);
     value = inl(PCI_CONFIG_DATA);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&config_lock, flags);
     return value;
 }
 
@@ -103,10 +108,10 @@ void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
         *(volatile uint32_t *)e = value;
         return;
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&config_lock);
     outl(PCI_CONFIG_ADDRESS, addr);
     outl(PCI_CONFIG_DATA, value);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&config_lock, flags);
 }
 
 /**
@@ -129,10 +134,10 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
         *(volatile uint16_t *)e = value;
         return;
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&config_lock);
     outl(PCI_CONFIG_ADDRESS, addr);
     outw((uint16_t)(PCI_CONFIG_DATA + (offset & 2)), value);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&config_lock, flags);
 }
 
 /** One `outb` at the data port's byte the offset selects, or one 8-bit
@@ -147,10 +152,10 @@ void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t of
         *(volatile uint8_t *)e = value;
         return;
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&config_lock);
     outl(PCI_CONFIG_ADDRESS, addr);
     outb((uint16_t)(PCI_CONFIG_DATA + (offset & 3)), value);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&config_lock, flags);
 }
 
 uint32_t pci_read_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset)
@@ -246,5 +251,35 @@ void pci_io_write32(uint16_t port, uint32_t value)
 void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data)
 {
     *address = PCI_MSI_ADDRESS_BASE | ((lapic_id() & 0xFFu) << 12);
+    *data = vector;
+}
+
+/** The online processors reached by a compatibility-format message.
+ * APIC id 255 is the broadcast id and cannot name one processor. */
+uint64_t pci_msi_cpus(void)
+{
+    uint64_t mask = 0;
+    int c, any_online = 0;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        any_online |= cpu_table[c].online != 0;
+        if (cpu_table[c].online && smpboot_apic_id(c) < 255u) {
+            mask |= (uint64_t)1 << c;
+        }
+    }
+    /* Before smp_start the boot processor alone takes interrupts. */
+    if (!any_online) {
+        mask = 1;
+    }
+    return mask;
+}
+
+/** Compose the unchanged vector for one logical processor, retaining the
+ * whole destination for a remapper even before x2APIC mode starts. */
+void pci_msi_message_cpu(uint8_t vector, int cpu, uint32_t *address, uint32_t *data,
+                         uint32_t *destination)
+{
+    *destination = cpu == 0 ? lapic_x2apic_id() : smpboot_apic_id(cpu);
+    *address = PCI_MSI_ADDRESS_BASE | ((*destination & 0xFFu) << 12);
     *data = vector;
 }

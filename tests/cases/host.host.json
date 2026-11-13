@@ -1111,6 +1111,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "pci_affinity",
+          "checks": "tests/host/pci_affinity_hosttest.c allocates and migrates MSI and MSI-X messages under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "pcimsi",
           "checks": "tests/host/pcimsi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

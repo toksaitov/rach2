@@ -26,6 +26,25 @@
 
 extern int printf(const char *fmt, ...);
 
+#include "../../rach2/sys/proc/percpu.h"
+#include "../../rach2/sys/arch/x86/smpboot.h"
+#include "../../rach2/sys/arch/x86/lapic.h"
+
+struct percpu cpu_table[NR_CPUS];
+static uint32_t model_apic[NR_CPUS];
+
+/** The APIC id supplied by the chip model for logical processor `cpu`. */
+uint32_t smpboot_apic_id(int cpu)
+{
+    return model_apic[cpu];
+}
+
+/** The model's boot processor keeps the same id in both APIC modes. */
+uint32_t lapic_x2apic_id(void)
+{
+    return lapic_id();
+}
+
 /* ---- the model ---- */
 
 #define CONFIG_BYTES 256
@@ -241,6 +260,17 @@ void *k_memcpy(void *dest, const void *src, size_t n)
         *d++ = *s++;
     }
     return dest;
+}
+
+/** Fill the allocation-count array with the requested byte. */
+void *k_memset(void *ptr, int c, size_t n)
+{
+    unsigned char *p = ptr;
+
+    while (n--) {
+        *p++ = (unsigned char)c;
+    }
+    return ptr;
 }
 
 /* The local APIC identity of the boot processor, set by each row. */

@@ -155,6 +155,30 @@ static int find(const char *hay, const char *needle)
     return -1;
 }
 
+/** Sum the processor counts starting at `p`, leaving `*after` at the
+ * source field or newline. A special line with one count works too. */
+static int interrupt_sum(const char *p, const char **after)
+{
+    int sum = 0;
+
+    for (;;) {
+        int value = 0;
+
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p < '0' || *p > '9') {
+            break;
+        }
+        while (*p >= '0' && *p <= '9') {
+            value = value * 10 + (*p++ - '0');
+        }
+        sum += value;
+    }
+    *after = p;
+    return sum;
+}
+
 /**
  * The count on the line that begins with `label`, or -1 when there is none.
  *
@@ -175,20 +199,9 @@ static int count_for(const char *label, const char *file)
             /* compare */
         }
         if (j == n) {
-            int value = 0;
-            int k = start + n;
+            const char *after;
 
-            while (file[k] == ' ' || file[k] == '\t') {
-                k++;
-            }
-            if (file[k] < '0' || file[k] > '9') {
-                return -1;
-            }
-            while (file[k] >= '0' && file[k] <= '9') {
-                value = value * 10 + (file[k] - '0');
-                k++;
-            }
-            return value;
+            return interrupt_sum(file + start + n, &after);
         }
         while (file[i] != '\0' && file[i] != '\n') {
             i++;
@@ -334,63 +347,39 @@ static int option_value(const char *key)
  */
 static int count_for_named(const char *kind, const char *name, const char *file)
 {
-    int i = 0;
+    const char *p = file;
+    int m = (int)strlen(name), source_len = (int)strlen(kind);
 
-    while (file[i] != '\0') {
-        int start = i;
-        int k = start;
+    while (*p) {
+        const char *line = p, *source, *names;
+        int value;
 
-        while (file[k] >= '0' && file[k] <= '9') {
-            k++;
+        while (*p >= '0' && *p <= '9') {
+            p++;
         }
-        if (k > start && file[k] == ':') {
-            int j;
-            const char *fields[3];
-            int f = 0;
-
-            k++;
-            for (j = k; file[j] != '\0' && file[j] != '\n'; j++) {
-                if (file[j] == '\t' && f < 3) {
-                    fields[f++] = file + j + 1;
-                }
-            }
-            if (f == 3 && find(fields[1], kind) == 0 && fields[1][strlen(kind)] == '\t') {
-                const char *names = fields[2];
-                int m = (int)strlen(name);
-                int found = 0;
-
-                while (*names != '\0' && *names != '\n') {
+        if (p > line && *p == ':') {
+            value = interrupt_sum(p + 1, &source);
+            if (find(source, kind) == 0 && source[source_len] == '\t') {
+                names = source + source_len + 1;
+                while (*names && *names != '\n') {
                     if (find(names, name) == 0 &&
                         (names[m] == ',' || names[m] == '\n' || names[m] == '\0')) {
-                        found = 1;
-                        break;
+                        return value;
                     }
-                    while (*names != '\0' && *names != '\n' && *names != ' ') {
+                    while (*names && *names != '\n' && *names != ' ') {
                         names++;
                     }
                     while (*names == ' ') {
                         names++;
                     }
                 }
-                if (found) {
-                    int value = 0;
-
-                    while (fields[0][0] == ' ') {
-                        fields[0]++;
-                    }
-                    while (fields[0][0] >= '0' && fields[0][0] <= '9') {
-                        value = value * 10 + (fields[0][0] - '0');
-                        fields[0]++;
-                    }
-                    return value;
-                }
             }
         }
-        while (file[i] != '\0' && file[i] != '\n') {
-            i++;
+        while (*p && *p != '\n') {
+            p++;
         }
-        if (file[i] == '\n') {
-            i++;
+        if (*p) {
+            p++;
         }
     }
     return -1;

@@ -64,6 +64,19 @@ extern void *memset(void *d, int c, unsigned long n);
 #define CAP_LENOVO1  0xd2008020660462ull
 #define ECAP_LENOVO1 0xf010daull
 
+#include "../../rach2/sys/proc/percpu.h"
+#include "../../rach2/sys/arch/x86/smpboot.h"
+#include "../../rach2/sys/arch/x86/lapic.h"
+
+struct percpu cpu_table[NR_CPUS];
+static uint32_t model_apic[NR_CPUS];
+
+/** The APIC id supplied by the chip model for logical processor `cpu`. */
+uint32_t smpboot_apic_id(int cpu)
+{
+    return model_apic[cpu];
+}
+
 /* ---- the log ---- */
 
 static char logbuf[1 << 17];
@@ -127,6 +140,12 @@ void kirq_restore(uint32_t flags)
  * moves to x2APIC mode; in xAPIC mode the first is the second's low eight
  * bits, as the SDM has them. */
 static uint32_t boot_apic, boot_x2apic;
+
+/** The model keeps the whole x2APIC id even before switching modes. */
+uint32_t lapic_x2apic_id(void)
+{
+    return boot_x2apic;
+}
 
 /** The boot processor, which every message goes to. */
 uint32_t lapic_id(void)
@@ -2570,9 +2589,57 @@ void mmio_unmap(uintptr_t va, size_t size)
     (void)size;
 }
 
-int main(void)
+/** Migrate real PCI messages through the real remapper, with its chip
+ * model retaining interrupt-entry caches until invalidated. */
+static void row_ir_affinity(void)
+{
+    uint32_t address, data, before_address, before_data;
+    uint64_t requested, effective;
+    unsigned int c;
+
+    row_begin("ir_affinity");
+    setup_lenovo();
+    x2_possible = 1;
+    check(t_msi(0, DF(2, 0), 49) == 0 && t_msix(2, DF(0, 0), 1, 51) == 0,
+          "enable the GPU's MSI and the network card's MSI-X");
+    check(vtd_start() == 2 && intremap_active() && x2_on, "start the real remapper");
+    for (c = 0; c < 4; c++) {
+        cpu_table[c].online = 1;
+        model_apic[c] = c == 3 ? 0x1234 : c;
+    }
+    msi_of(0, DF(2, 0), &before_address, &before_data);
+    check(m_msi(M(0), 0x0010, before_address, before_data) == 49 && M(0)->last_dest == 0,
+          "prime the model's old destination cache");
+    check(pci_irq_set_affinity(49, 8) == 0, "move the GPU's interrupt to processor 3");
+    msi_of(0, DF(2, 0), &address, &data);
+    check(address == before_address && data == before_data &&
+              m_msi(M(0), 0x0010, address, data) == 49 && M(0)->last_dest == 0x1234,
+          "the same in-flight message handle reaches the whole new x2APIC id");
+    check(pci_irq_set_affinity(51, 4) == 0 &&
+              m_msi(M(1), 0x0200, msix_tables[1][0], msix_tables[1][2]) == 51 &&
+              M(1)->last_dest == 2,
+          "MSI-X reaches its new processor through the same remapper");
+    cpu_table[3].online = 0;
+    pci_msi_rebalance();
+    check(!pci_irq_affinity(49, &requested, &effective) && !(effective & 8) && requested == 8,
+          "a destination going offline breaks effective placement and retains the request");
+    pci_msi_shutdown(0);
+    check(m_msi(M(0), 0x0010, address, data) == 49 && M(0)->last_dest == 0,
+          "normal shutdown leaves the live remapping entry aimed at processor 0");
+    memset(cpu_table, 0, sizeof(cpu_table));
+    row_end();
+}
+
+int main(int argc, char **argv)
 {
     ecam_mem = (unsigned char *)aligned_alloc(4096, (unsigned long)ECAM_BUSES << 20);
+    if (argc == 2 && !__builtin_strcmp(argv[1], "--affinity-only")) {
+        row_ir_affinity();
+        free(ecam_mem);
+        printf("vtd_hosttest: affinity: %s: %d checks\n", fails ? "fail" : "pass", checks);
+        return fails != 0;
+    }
+    row_ir_affinity();
     row_dmar_qemu();
     row_dmar_lenovo();
     row_dmar_malformed();

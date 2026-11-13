@@ -56,6 +56,9 @@ static uint32_t procfs_ino_usb(void);
 static uint32_t procfs_ino_audio(void);
 static uint32_t procfs_ino_loop(void);
 static uint32_t procfs_ino_interrupts(void);
+static uint32_t procfs_ino_irq(int vector, int attr);
+static uint32_t procfs_ino_irqdir(void);
+static int procfs_irq_exists(int vector);
 static uint32_t procfs_ino_console(void);
 static uint32_t procfs_ino_filesystems(void);
 static uint32_t procfs_ino_netroute(void);
@@ -4143,6 +4146,88 @@ static void input_guest_rows(void)
     evdev_sysfs_sync();
 }
 
+/* The affinity row's requested and effective masks, and the mask a
+ * successful store last gave the PCI layer. */
+static uint64_t irq_requested = 15, irq_effective = 8, irq_written;
+
+/** Supply one live message at vector 48 to the procfs affinity rows. */
+int pci_irq_affinity(int vector, uint64_t *requested, uint64_t *effective)
+{
+    if (vector != 48) {
+        return -ENOENT;
+    }
+    *requested = irq_requested;
+    *effective = irq_effective;
+    return 0;
+}
+
+/** Record the mask the actual procfs writer parsed. */
+int pci_irq_set_affinity(int vector, uint64_t mask)
+{
+    if (vector != 48) {
+        return -ENOENT;
+    }
+    irq_written = mask;
+    return 0;
+}
+
+/** Exercise the real affinity file operations without the other rows. */
+static void irq_rows(void)
+{
+    struct procfs_file file;
+    struct open_file desc;
+    fd_entry_t entry;
+    char buf[32];
+    const char *text = "1,00000002\n";
+    int32_t n;
+
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&desc, 0, sizeof(desc));
+    k_memset(&entry, 0, sizeof(entry));
+    entry.priv = &file;
+    entry.ofd = &desc;
+    file.origin_pid = 48;
+    n = procfs_irq_write(&entry, (const char __user *)text, 11);
+    check(n == 11 && irq_written == 0x100000002ull,
+          "a comma begins a new 32-bit word rather than one more digit");
+    text = "1,2";
+    check(procfs_irq_write(&entry, (const char __user *)text, 3) == 3 &&
+              irq_written == 0x100000002ull,
+          "a short lower word still has 32-bit place");
+    text = "80000000,00000000";
+    check(procfs_irq_write(&entry, (const char __user *)text, 17) == 17 &&
+              irq_written == ((uint64_t)1 << 63),
+          "the highest processor bit is retained");
+    text = "0";
+    check(procfs_irq_write(&entry, (const char __user *)text, 1) == 1 &&
+              irq_written == ~(uint64_t)0,
+          "a zero mask restores default affinity");
+    text = "1,2,3";
+    check(procfs_irq_write(&entry, (const char __user *)text, 5) == -EINVAL,
+          "a mask wider than the processor map is refused");
+    text = "fffffffff,1";
+    check(procfs_irq_write(&entry, (const char __user *)text, 11) == -EINVAL,
+          "an oversized high word is refused");
+    check(procfs_irq_write(&entry, NULL, 1) == -EFAULT, "a failed user copy changes no affinity");
+    file.origin_task = 1;
+    check(procfs_irq_write(&entry, (const char __user *)"1", 1) == -EACCES,
+          "effective_affinity is read-only");
+    n = procfs_irq_read(&entry, (char __user *)buf, sizeof(buf));
+    check(n == 2 && __builtin_memcmp(buf, "8\n", 2) == 0,
+          "effective_affinity reads the processor actually selected");
+    check(procfs_irq_read(&entry, (char __user *)buf, sizeof(buf)) == 0,
+          "an affinity read reaches EOF");
+    file.origin_task = 0;
+    desc.offset = 0;
+    irq_requested = 0x100000002ull;
+    n = procfs_irq_read(&entry, (char __user *)buf, sizeof(buf));
+    check(n == 11 && __builtin_memcmp(buf, "1,00000002\n", 11) == 0,
+          "requested affinity prints both hexadecimal words");
+    file.origin_pid = 49;
+    check(procfs_irq_read(&entry, (char __user *)buf, sizeof(buf)) == -ENOENT,
+          "a removed interrupt gives no stale mask");
+}
+
 int main(int argc, char **argv)
 {
     struct procfs_text text;
@@ -4163,6 +4248,12 @@ int main(int argc, char **argv)
         printf("procfs-hosttest: pci config: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
+    if (argc == 2 && __builtin_strcmp(argv[1], "--irq-only") == 0) {
+        irq_rows();
+        printf("procfs-hosttest: irq affinity: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
+    irq_rows();
     procfs_text_init(&text);
     thp_rows();
     refuse = 1;
