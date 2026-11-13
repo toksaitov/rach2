@@ -3,6 +3,7 @@
  * dma-buf and fence code, on the chip of i915_gem_model.c, whose aperture
  * holds what a program or the kernel last wrote through it until the driver
  * syncs it.
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/mmap_lock_host.c tests/host/compat/fd_flat.c
