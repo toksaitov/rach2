@@ -118,8 +118,8 @@
         {"assertion_id": "verify-exit", "checks": "bigfileprobe verify, in a second boot, returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
         {"assertion_id": "verify-ok", "checks": "bigfileprobe verify says BIGFILE OK (verify) and never BIGFILE FAIL: after the new mount the file has the size the write left, every block has its number and a read at its end gives nothing", "source": "scenario"},
         {"assertion_id": "limit-exit", "checks": "bigfileprobe limit at offset 9223372036854775807 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
-        {"assertion_id": "limit-ok", "checks": "bigfileprobe limit says BIGFILE OK (limit) and never BIGFILE FAIL: a one-byte write at the format's limit of 2^63 - 1 bytes is refused with EFBIG and the file stays empty", "source": "scenario"},
-        {"assertion_id": "limit-named", "checks": "the kernel's log says exfat: write: offset past the format's limit", "source": "scenario"},
+        {"assertion_id": "limit-ok", "checks": "bigfileprobe limit says BIGFILE OK (limit) and never BIGFILE FAIL: a one-byte write at offset 2^63 - 1, whose end passes the largest signed offset, is refused with EINVAL above the file system, as Linux's rw_verify_area refuses it, and the file stays empty", "source": "scenario"},
+        {"assertion_id": "limit-named", "checks": "the kernel's log never says exfat: write: offset past the format's limit, since the write never reaches the file system", "source": "scenario"},
         {"assertion_id": "fsck", "checks": "the prepared exfatprogs checker in the declared GNU helper exits 0 on a private copy of the volume after the machine, finding it consistent; a missing checker fails preparation", "source": "scenario"}
       ],
       "branches": [],

@@ -191,20 +191,32 @@ static char *bigfile(struct lc *l, struct etude_case_machine *m, const char *mac
 }
 
 /**
- * Run bigfileprobe's limit mode with `args` at machine `m` in step `limit`,
- * and report assertion `limit-named`: the kernel's log has `record`, its
- * refusal of the write by name.
+ * Run bigfileprobe's limit mode with `args` at machine `m` in step `limit`.
+ * Returns what the machine printed, which the caller frees, or NULL when the
+ * step did not run.
  */
-static void limit(struct lc *l, struct etude_case_machine *m, const char *machine, const char *args,
-                  const char *record, uint64_t *at)
+static char *limit(struct lc *l, struct etude_case_machine *m, const char *machine,
+                   const char *args, uint64_t *at)
+{
+    if (!lc_step(l, "limit"))
+        return NULL;
+    return bigfile(l, m, machine, "limit", args, at);
+}
+
+/**
+ * Report assertion `limit-named` on `w`, what the limit step printed, and
+ * free it: the kernel's log has `record`, the file system's refusal of the
+ * write by name, when `named` is 1, and lacks it when `named` is 0, for a
+ * write the kernel refuses above the file system. A NULL `w` reports nothing.
+ */
+static void limit_named(struct lc *l, char *w, const char *record, int named)
 {
     char why[200];
-    char *w;
 
-    if (!lc_step(l, "limit") || (w = bigfile(l, m, machine, "limit", args, at)) == NULL)
+    if (w == NULL)
         return;
-    snprintf(why, sizeof(why), "the kernel never says %s", record);
-    lc_assert(l, "limit-named", strstr(w, record) != NULL, why);
+    snprintf(why, sizeof(why), named ? "the kernel never says %s" : "the kernel says %s", record);
+    lc_assert(l, "limit-named", (strstr(w, record) != NULL) == named, why);
     free(w);
 }
 
@@ -331,10 +343,10 @@ static void ext2(struct lc *l)
     if (lc_step(l, "sparse") &&
         (w = bigfile(l, m, "check", "sparse", "/dev/disk0p1 ext2 0", &at)) != NULL)
         free(w);
-    limit(l, m, "check", "/dev/disk0p1 ext2 2196873666560",
-          "ext2: write: offset 2095101 MiB is past the file limit of 2095101 MiB for 4096-byte "
-          "blocks",
-          &at);
+    limit_named(l, limit(l, m, "check", "/dev/disk0p1 ext2 2196873666560", &at),
+                "ext2: write: offset 2095101 MiB is past the file limit of 2095101 MiB for "
+                "4096-byte blocks",
+                1);
     check(l, m, fsck);
 }
 
@@ -386,7 +398,8 @@ static void cache(struct lc *l)
 /**
  * Run case `exfat`: the volume made by the host's own exFAT formatter
  * through fstool; the file written, and read back in a second boot; a write
- * past the format's limit, the largest offset a seek can name; and the
+ * at the largest offset a seek can name, which ends past 2^63 - 1 and is
+ * refused above the file system, as Linux refuses it; and the
  * host's own exFAT checker on the volume after the machine.
  */
 static void exfat(struct lc *l)
@@ -403,8 +416,8 @@ static void exfat(struct lc *l)
     write_file(l, "/dev/disk0p2", "exfat");
     if ((m = verify(l, "/dev/disk0p2", "exfat", &at)) == NULL)
         return;
-    limit(l, m, "check", "/dev/disk0p2 exfat 9223372036854775807",
-          "exfat: write: offset past the format's limit", &at);
+    limit_named(l, limit(l, m, "check", "/dev/disk0p2 exfat 9223372036854775807", &at),
+                "exfat: write: offset past the format's limit", 0);
     check(l, m, fsck);
 }
 
@@ -426,8 +439,8 @@ static void fat32(struct lc *l)
     volume(l, path, make, "mformat", NULL);
     if ((m = lc_shell(l, "boot", "fixture", &at)) == NULL)
         return;
-    limit(l, m, "fixture", "/dev/disk0p3 vfat 4294967295",
-          "vfat: write: offset 4095 MiB is past the format's limit of 4 GiB", &at);
+    limit_named(l, limit(l, m, "fixture", "/dev/disk0p3 vfat 4294967295", &at),
+                "vfat: write: offset 4095 MiB is past the format's limit of 4 GiB", 1);
     lc_quit(l, m, NULL);
 }
 

@@ -21,8 +21,10 @@
  * line and removes it; seconds, where `write` at that size is an hour.
  *
  * `limit OFFSET`: seeks a new file to OFFSET, a decimal number of bytes,
- * and requires the one-byte write there to be refused with `EFBIG`; the
- * kernel log has the refusal by name.
+ * and requires the one-byte write there to be refused and the file to stay
+ * empty: with `EINVAL` when the write would end past 2^63 - 1, which the
+ * kernel refuses above the file system, as Linux's rw_verify_area does, and
+ * with `EFBIG` from the file system otherwise.
  *
  * `write-verify MIB`: `write`, an unmount and a new mount, and `verify`, for
  * a run that cannot boot again between the two.
@@ -53,7 +55,8 @@ typedef unsigned long long u64;
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-#define EFBIG 27
+#define EINVAL 22
+#define EFBIG  27
 
 #define BLOCK 4096u
 #define CHUNK (1u << 20)
@@ -609,13 +612,14 @@ static void sparse_mode(void)
     syscall1(SYS_UNLINK, (long)sparse_path);
 }
 
-/** The limit mode: a one-byte write at `offset` of a new file must fail with
- * -EFBIG and leave the file empty. */
+/** The limit mode: a one-byte write at `offset` of a new file must fail,
+ * with -EINVAL when it would end past 2^63 - 1 and -EFBIG below that, and
+ * leave the file empty. */
 static void limit_mode(u64 offset)
 {
     int fd = syscall3(SYS_OPEN, (long)limit_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     long long got;
-    int rc;
+    int rc, want = offset >= 0x7FFFFFFFFFFFFFFFull ? -EINVAL : -EFBIG;
 
     if (fd < 0) {
         fail_with("creating limit.bin", fd);
@@ -625,8 +629,10 @@ static void limit_mode(u64 offset)
         fail_with("the seek to the offset", got);
     }
     rc = syscall3(SYS_WRITE, fd, (long)chunk, 1);
-    if (rc != -EFBIG) {
-        fail_with("the write at the offset was not refused with EFBIG", rc);
+    if (rc != want) {
+        fail_with(want == -EINVAL ? "the write at the offset was not refused with EINVAL"
+                                  : "the write at the offset was not refused with EFBIG",
+                  rc);
     }
     got = size_of(fd);
     if (got != 0) {
