@@ -686,10 +686,13 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count)
 
 /** A poller for POLLOUT alone on stopped output waits on `input_wq` too,
  * which a restart wakes, and drains the pump, so a VSTART from COM1 reaches
- * the discipline while it waits. */
+ * the discipline while it waits. The poll core calls with interrupts on, and
+ * the console's tick and interrupt fill the discipline, so the pump and the
+ * reads run with interrupts off, as in tty_inq. */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq)
 {
     short revents = 0;
+    uint32_t flags = kirq_save();
 
     if ((events & POLLIN) || ((events & POLLOUT) && t->ldisc.stopped)) {
         *wq = &t->input_wq;
@@ -703,6 +706,7 @@ short tty_poll(struct tty *t, short events, wait_queue_t **wq)
     if ((events & POLLOUT) && !t->ldisc.stopped) {
         revents = (short)(revents | POLLOUT);
     }
+    kirq_restore(flags);
     return revents;
 }
 
