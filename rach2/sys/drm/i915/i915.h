@@ -550,7 +550,10 @@ struct i915_rc6 {
  * frequency asked for the work, Linux's queue_work of rps_work, under the
  * interrupt mask's lock with `pm_iir`. `lock` is the frequency lock of
  * i915.h's order, over the rest. `work_runs` counts the events the work
- * acted on.
+ * acted on; `up_events`, `down_events` and `timeout_events` count the
+ * up-threshold, down-threshold and down-timeout events among them, and
+ * `parks` and `unparks` the GT's parks and unparks that RPS took, for
+ * i915_rps_boost_info.
  *
  * The waitboost, Linux's: `num_waiters` counts the requests boosted that
  * have yet to retire, each marked by its `boosted`, and while any is
@@ -580,6 +583,11 @@ struct i915_rps {
     uint32_t pm_intrmsk_mbz;
     uint32_t pm_iir;
     uint32_t work_runs;
+    uint32_t up_events;
+    uint32_t down_events;
+    uint32_t timeout_events;
+    uint32_t parks;
+    uint32_t unparks;
     int num_waiters;
     int interactive;
     uint32_t boosts;

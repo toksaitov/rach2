@@ -1102,7 +1102,10 @@ static int32_t frequency_show(void *data, char *buf, uint32_t cap)
 /**
  * i915_rps_boost_info, Linux's i915_rps_boost_info: whether RPS runs and
  * the GT is awake, the waitboosts outstanding and the flips pending, the
- * requested and actual frequency with the limits, and the boosts counted.
+ * requested and actual frequency with the limits, the boosts counted, and,
+ * past Linux's lines, the work's runs with the up-threshold,
+ * down-threshold and down-timeout events among them and RPS's parks and
+ * unparks.
  */
 static int32_t rps_boost_show(void *data, char *buf, uint32_t cap)
 {
@@ -1129,6 +1132,9 @@ static int32_t rps_boost_show(void *data, char *buf, uint32_t cap)
     emitf(&e, "  idle:%d, efficient:%d, boost:%d\n", rps->idle_freq * FREQ_MHZ,
           rps->efficient_freq * FREQ_MHZ, rps->boost_freq * FREQ_MHZ);
     emitf(&e, "Wait boosts: %u\n", rps->boosts);
+    emitf(&e, "Work runs: %u, up %u, down %u, timeout %u\n", rps->work_runs, rps->up_events,
+          rps->down_events, rps->timeout_events);
+    emitf(&e, "Parks: %u, unparks %u\n", rps->parks, rps->unparks);
     return emit_end(&e);
 }
 

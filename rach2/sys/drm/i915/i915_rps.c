@@ -432,6 +432,7 @@ void i915_rps_unpark(struct drm_i915_private *i915)
     }
     flags = spin_lock_irqsave(&rps->lock);
     rps->active = 1;
+    rps->unparks++;
     (void)i915_rps_set_locked(
         i915, rps_clamp(rps->cur_freq, rps->min_freq_softlimit, rps->max_freq_softlimit));
     spin_unlock_irqrestore(&rps->lock, flags);
@@ -455,6 +456,7 @@ void i915_rps_park(struct drm_i915_private *i915)
     }
     flags = spin_lock_irqsave(&rps->lock);
     rps->active = 0;
+    rps->parks++;
     spin_unlock_irqrestore(&rps->lock, flags);
     if (rps->interrupts) {
         rps_disable_interrupts(i915);
@@ -504,6 +506,9 @@ void i915_rps_work(struct drm_i915_private *i915)
         spin_unlock_irqrestore(&rps->lock, flags);
         return;
     }
+    rps->up_events += (pm_iir & GEN6_PM_RP_UP_THRESHOLD) != 0;
+    rps->down_events += (pm_iir & GEN6_PM_RP_DOWN_THRESHOLD) != 0;
+    rps->timeout_events += (pm_iir & GEN6_PM_RP_DOWN_TIMEOUT) != 0;
     adj = rps->last_adj;
     new_freq = rps->cur_freq;
     max = client_boost ? rps->max_freq : rps->max_freq_softlimit;
