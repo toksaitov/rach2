@@ -32,7 +32,7 @@ int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void 
  * `phys[i]` is 0, in `phys[i]` with a reference for the caller, leaving the
  * other entries as they are. The frame stays the cache's too, so its holder
  * changes it only as a write or a truncation of the file changes the file,
- * which then drops the file's pages from the cache (`filecache_forget`).
+ * which then drops the pages it changed from the cache (`filecache_changed`).
  * One look at the file serves the whole range. Returns the frames lent.
  */
 uint32_t filecache_lend(const struct fd_entry *e, uint32_t first, uint32_t count, uintptr_t *phys);
@@ -107,9 +107,32 @@ int filecache_keeps(const struct fd_entry *e);
 void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, const void *buf,
                           uint32_t epoch);
 
-/** Drop every page of the file `node` of `mnt`, which a write, a truncation
- * or an allocation in it has just changed. */
+/** Drop every page of the file `node` of `mnt`, which an allocation or a
+ * change of its size has just changed. */
 void filecache_forget(struct vfs_mount *mnt, void *node);
+
+/* What a file was before a write or a truncation (`filecache_before`). */
+struct filecache_was {
+    uint64_t size;
+    int64_t mtime;
+    uint32_t generation;
+    int known; /* 0: not a file whose pages the cache keeps */
+};
+
+/** Note in `*was` what the file `node` of `mnt` is now, before a write or a
+ * truncation changes it (`filecache_changed`). */
+void filecache_before(struct vfs_mount *mnt, void *node, struct filecache_was *was);
+
+/**
+ * Drop the pages of the file `node` of `mnt` that hold bytes `from` up to
+ * `to`, `to` excluded, which a write or a truncation has just changed, and
+ * keep its others, as Linux's page cache keeps the folios a write does not
+ * touch. The pages kept were read from the file as `*was`, from
+ * `filecache_before`, has it: when the cache's record of the file says
+ * otherwise, the file changed some other way too, and every page goes.
+ */
+void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache_was *was,
+                       uint64_t from, uint64_t to);
 
 /** Drop every page of the file numbered `ino` on `mnt`, as
  * `filecache_forget` does, without asking the file system. */

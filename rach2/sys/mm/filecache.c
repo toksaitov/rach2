@@ -2,29 +2,31 @@
  * filecache.c: the pages of ext2 files that read(2), private mappings and
  * exec read, kept between them, as filecache.h describes them.
  *
- * The buffer cache, held to half the kernel's heap, keeps at most a gigabyte
- * of a machine of 16 GiB, so a file read again, a program started again or a
- * library mapped again would come from the disk again. This cache keeps a
- * copy of each page read any of those ways in a free frame, found by its
- * file's mount, inode number and generation, and checked against the size
- * and the modification time the file has when the page is asked for. A
- * write, a truncation and an allocation through the VFS drop the file's pages
- * after they change it, and an unmount every page of its files; each counts
- * as a change of the file, and a page read while a change of its file ran is
- * not kept, since the read may have seen part of it. A private mapping gets
- * a copy of a cached page. The pages in memory of a disk file that no shared
- * mapping through a writable descriptor maps share the cache's frame, as
- * Linux's page cache gives read(2) and every mapping one folio: the file's
- * pages change only as a write or a truncation changes the file, which
- * drops its pages here after, and such a mapping, whose stores reach the
- * pages before the file, drops them when it is made. Each file that has
- * pages has a record that lists them and holds the size and the modification
- * time they were read at, so a change drops that file's pages without a
- * search of every other file's. The frames are the machine's free memory:
- * the cache takes a new one only while a quarter of the frames are free and
- * its records fit in an eighth of the heap, and past either uses the frame
- * of its least recently used page; it gives frames back, the least recently
- * used first, when memory runs short (`mem_reclaim`).
+ * The buffer cache, held to half the kernel's heap, keeps at most a gigabyte of
+ * a machine of 16 GiB, so a file read again, a program started again or a
+ * library mapped again would come from the disk again. This cache keeps a copy
+ * of each page read any of those ways in a free frame, found by its file's
+ * mount, inode number and generation, and checked against the size and the
+ * modification time the file has when the page is asked for. A write and a
+ * truncation through the VFS drop the pages they changed after they change the
+ * file, and keep its others, an allocation and a change of size every page of
+ * the file, and an unmount every page of its files; each counts as a change of
+ * the file, and a page read while a change of its file ran is not kept, since
+ * the read may have seen part of it. A private mapping gets a copy of a cached
+ * page. The pages in memory of a disk file that no shared mapping through a
+ * writable descriptor maps share the cache's frame, as Linux's page cache gives
+ * read(2) and every mapping one folio: the file's pages change only as a write
+ * or a truncation changes the file, which drops the pages it changed here
+ * after, and such a mapping, whose stores reach the pages before the file,
+ * drops them when it is made. Each file that has pages has a record that lists
+ * them and holds the size and the modification time they were read at, which a
+ * write or a truncation moves to the file's new ones once it has dropped the
+ * pages it changed, so a change drops that file's pages without a search of
+ * every other file's. The frames are the machine's free memory: the cache takes
+ * a new one only while a quarter of the frames are free and its records fit in
+ * an eighth of the heap, and past either uses the frame of its least recently
+ * used page; it gives frames back, the least recently used first, when memory
+ * runs short (`mem_reclaim`).
  *
  * The table of the pages and the table of the files each have a list for
  * every four to eight frames the machine has, a power of two set at boot, so
@@ -1434,6 +1436,51 @@ void filecache_forget(struct vfs_mount *mnt, void *node)
     file = pages ? fc_find(f.mnt, f.ino) : NULL;
     if (file) {
         fc_drop_file(file);
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+}
+
+void filecache_before(struct vfs_mount *mnt, void *node, struct filecache_was *was)
+{
+    struct fc_file f;
+
+    was->known = fc_file_of(mnt, node, &f);
+    was->size = was->known ? f.size : 0;
+    was->mtime = was->known ? f.mtime : 0;
+    was->generation = was->known ? f.generation : 0;
+}
+
+void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache_was *was,
+                       uint64_t from, uint64_t to)
+{
+    struct fc_inode *file;
+    struct fc_page *p, *next;
+    struct fc_file f;
+    uint64_t first = from / PAGE_SIZE, last = to > from ? (to - 1u) / PAGE_SIZE : first;
+    uint32_t flags;
+
+    if (!was->known || !fc_file_of(mnt, node, &f)) {
+        filecache_forget(mnt, node);
+        return;
+    }
+    flags = spin_lock_irqsave(&fc_lock);
+    (*fc_changes(f.mnt, f.ino))++;
+    file = pages ? fc_find(f.mnt, f.ino) : NULL;
+    if (file && (file->generation != was->generation || file->size != was->size ||
+                 file->mtime != was->mtime)) {
+        fc_drop_file(file);
+        file = NULL;
+    }
+    for (p = file ? file->pages : NULL; p; p = next) {
+        next = p->sibling;
+        if (p->pgoff >= first && p->pgoff <= last) {
+            fc_drop(p);
+        }
+    }
+    file = pages ? fc_find(f.mnt, f.ino) : NULL;
+    if (file) {
+        file->size = f.size;
+        file->mtime = f.mtime;
     }
     spin_unlock_irqrestore(&fc_lock, flags);
 }

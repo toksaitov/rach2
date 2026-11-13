@@ -1361,9 +1361,11 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to);
  * `vfs_fallocate` and the wrappers that remove, rename or link a name
  * enforce the immutable and append-only flags a type reports with
  * `flags_known`, by Linux's rules, with -EPERM. After a namespace change or
- * a setattr succeeds, the wrapper tells inotify while any watch exists, and
- * a write, a truncation, an fallocate or a size change drops the file's
- * pages from the file cache.
+ * a setattr succeeds, the wrapper tells inotify while any watch exists. A
+ * write drops from the file cache the pages of its bytes, and those from the
+ * file's old end on when it starts past it, a truncation those from the
+ * shorter of the old and the new end on, and an fallocate or a size change
+ * every page of the file.
  */
 /** The type's read: the bytes read, 0 at the end, -EINVAL for a type without
  * `read`, or the type's error. */

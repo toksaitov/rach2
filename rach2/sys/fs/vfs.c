@@ -3048,6 +3048,7 @@ static void *handle_node(struct vfs_mount *mnt, void *handle)
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset)
 {
+    struct filecache_was was;
     int32_t n;
 
     if (vfs_mount_gone(mnt)) {
@@ -3056,13 +3057,16 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     if (mount_rdonly(mnt) || !mnt->type->ops->write) {
         return -EROFS;
     }
+    filecache_before(mnt, handle_node(mnt, handle), &was);
     n = mnt->type->ops->write(mount_base(mnt), handle, buf, count, offset);
-    filecache_forget(mnt, handle_node(mnt, handle));
+    filecache_changed(mnt, handle_node(mnt, handle), &was, offset < was.size ? offset : was.size,
+                      offset + (count ? count : 1u));
     return n;
 }
 
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
+    struct filecache_was was;
     int rc;
 
     if (vfs_mount_gone(mnt)) {
@@ -3074,8 +3078,10 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (mount_rdonly(mnt) || !mnt->type->ops->truncate) {
         return -EROFS;
     }
+    filecache_before(mnt, handle_node(mnt, handle), &was);
     rc = mnt->type->ops->truncate(mount_base(mnt), handle, size);
-    filecache_forget(mnt, handle_node(mnt, handle));
+    filecache_changed(mnt, handle_node(mnt, handle), &was, size < was.size ? size : was.size,
+                      ~(uint64_t)0);
     return rc;
 }
 
