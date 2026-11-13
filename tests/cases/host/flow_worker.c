@@ -321,8 +321,8 @@ static int worker_row(struct fixture *f, const struct worker_test *t)
 }
 /**
  * Check that `refresh` in a linked worktree on a finished task's branch,
- * while the main working tree has master checked out, detaches it at the new
- * `origin/master`.
+ * while the main working tree has master checked out and no session of the
+ * loop may still run, detaches it at the new `origin/master`.
  */
 static int worker_refresh(struct fixture *f)
 {
@@ -337,7 +337,9 @@ static int worker_refresh(struct fixture *f)
     G("push", "-q", "origin", "master");
     G("rev-parse", "HEAD");
     snprintf(master, sizeof(master), "%s", f->out);
-    snprintf(command, sizeof(command), ". '%s'; refresh", flow_source(f, "tools/flow/lib.sh"));
+    fx_mkdir(flow_path(f, "refresh"));
+    snprintf(command, sizeof(command), "state='%s' flowbin='%s/tools/flow'; . '%s'; refresh",
+             flow_path(f, "refresh"), f->tree, flow_source(f, "tools/flow/lib.sh"));
     snprintf(cwd, sizeof(cwd), "%s/linked", f->work);
     if (fx_run(f, run, cwd, NULL, NULL))
         return fx_check(f, 0, "refresh");

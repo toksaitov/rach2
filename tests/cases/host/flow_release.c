@@ -2346,12 +2346,17 @@ static int claim_rows(struct release *r)
  * perl on the path that waits a second before it runs, and `jobwriter` the
  * same with held's job opening its reader a second late; `drain` runs its
  * mac_live and held_gone on a run whose job has ended and left a process in
- * its group; `session` runs lib.sh's wait_session and locked, and
- * `lostsession` session.pl and wait_session after a supervisor is killed
- * while its session runs; and `prepare` and `recovery` run prepare_host's
- * script for WSL here, through an ssh that runs it with sh, with an etude
- * that recovers the ledger and one that fails. Usage: sh driver DIR HOLD
- * SCENARIO RELEASE.
+ * its group; `session` runs lib.sh's wait_session and session_state, and
+ * `lostsession` session.pl, wait_session and session_state after a
+ * supervisor is killed while its session runs, and `lostrefresh` lib.sh's
+ * refresh in a clone of its own then; `wtlost` runs release.sh's wt_new
+ * beside a job of an earlier release whose holder ended without its end,
+ * and `discardlost` its job_wait and discard on such a job of this run; and
+ * `prepare` and `recovery` run prepare_host's script for WSL here, through
+ * an ssh that runs it with sh, `prepare` with an etude that recovers the
+ * ledger, and `recovery` with one that fails and a scan of the processes
+ * that succeeds and finds nothing. Usage: sh driver DIR HOLD SCENARIO
+ * RELEASE.
  */
 static const char hold_driver[] =
     "H=$1 P=$2 how=$3 R=$4\n"
@@ -2359,7 +2364,7 @@ static const char hold_driver[] =
     "# A scenario that orphans processes runs below a perl that adopts and reaps\n"
     "# them, as init does, since a runner above may adopt them and reap none.\n"
     "case $how in\n"
-    "lostgroup | lostsession)\n"
+    "lostgroup | lostsession | lostrefresh)\n"
     "    [ -n \"${REAPED-}\" ] || exec env REAPED=1 perl -MConfig -e '\n"
     "        my %n = (x86_64 => 157, aarch64 => 167, i686 => 172, i386 => 172);\n"
     "        my ($m) = $Config{archname} =~ /^([^-]+)/;\n"
@@ -2370,7 +2375,7 @@ static const char hold_driver[] =
     "        exit 1' /bin/sh \"$0\" \"$@\" ;;\n"
     "esac\n"
     "rm -rf \"$d\" \"$H/ran\" \"$H/ready\" \"$H/state\" \"$H/bin\" \"$H/left\" \"$H/copy\" "
-    "\"$H/ledger\" \"$H/survived\"\n"
+    "\"$H/ledger\" \"$H/survived\" \"$H/git\" \"$H/origin.git\" \"$H/wt\" \"$H/mac\" \"$H/f\"\n"
     "mkdir \"$d\" || exit 1\n"
     "look() { perl \"$P\" state \"$d\"; }\n"
     "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
@@ -2454,7 +2459,7 @@ static const char hold_driver[] =
     "/')\n"
     "    [ \"$late\" != \"$job\" ] || echo 'no reader of its own'\n"
     "    eval \"$late\"\n"
-    "    state=$H/state HOLD_KILL=1\n"
+    "    RACH2_HOLD_DIR=$H/state HOLD_KILL=1\n"
     "    j=$(job_dir t) || exit 1\n"
     "    held \"$j\" sh -c 'exit 3' &\n"
     "    job_wait \"$! $j\"\n"
@@ -2462,7 +2467,7 @@ static const char hold_driver[] =
     "    [ -d \"$j\" ] || echo removed ;;\n"
     "jobfast | jobstop)\n"
     "    eval \"$(sed -n '/^# job_dir NAME:/,/^# tssh ARG/p' \"$R\")\"\n"
-    "    state=$H/state HOLD_KILL=1\n"
+    "    RACH2_HOLD_DIR=$H/state HOLD_KILL=1\n"
     "    j=$(job_dir t) || exit 1\n"
     "    if [ \"$how\" = jobfast ]; then\n"
     "        # A perl that waits a second before it runs holds back hold.pl's\n"
@@ -2505,27 +2510,41 @@ static const char hold_driver[] =
     "    wait\n"
     "    held_gone \"$d\" && [ ! -d \"$d\" ] && echo removed ;;\n"
     "session)\n"
-    "    . \"$repo/tools/flow/lib.sh\"\n"
+    "    flowbin=$repo/tools/flow\n"
+    "    . \"$flowbin/lib.sh\"\n"
     "    state=$H/state\n"
     "    mkdir \"$state\" || exit 1\n"
     "    # A group that no process can be in, beyond every system's pid_max.\n"
     "    echo '99999999 -' > \"$state/session\"\n"
     "    wait_session\n"
-    "    [ ! -e \"$state/session\" ] || echo 'record kept'\n"
+    "    echo \"wait $?\"\n"
+    "    [ -e \"$state/session\" ] || echo 'record removed'\n"
     "    perl -MFcntl=:flock -e 'open(L, \">>\", shift) && flock(L, LOCK_EX) or exit 1;\n"
     "        open(R, \">\", shift) && close(R); sleep 60' \"$state/session.live\" \"$H/ready\" &\n"
     "    i=0\n"
     "    until [ -e \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
-    "    ! locked \"$state/session.live\" || echo held\n"
+    "    session_state\n"
     "    kill \"$!\"\n"
     "    wait\n"
-    "    locked \"$state/session.live\" || echo free ;;\n"
-    "lostsession)\n"
+    "    session_state ;;\n"
+    "lostsession | lostrefresh)\n"
     "    # A session whose supervisor is killed while its group runs keeps its\n"
-    "    # record, and no other session starts until the group is gone.\n"
-    "    . \"$repo/tools/flow/lib.sh\"\n"
-    "    state=$H/state S=$repo/tools/flow/session.pl\n"
+    "    # record, and session.pl -q says lost: wait_session waits until\n"
+    "    # STATE/stop, refresh changes nothing in the clone, and no other session\n"
+    "    # starts, until the group is gone.\n"
+    "    flowbin=$repo/tools/flow\n"
+    "    . \"$flowbin/lib.sh\"\n"
+    "    state=$H/state S=$flowbin/session.pl\n"
     "    mkdir \"$state\" || exit 1\n"
+    "    if [ \"$how\" = lostrefresh ]; then\n"
+    "        g() { git -c user.name=t -c user.email=t@invalid -c core.hooksPath=/dev/null -c "
+    "commit.gpgsign=false \"$@\"; }\n"
+    "        { g init -q --bare \"$H/origin.git\" && mkdir \"$H/git\" && cd \"$H/git\" && g init "
+    "-q &&\n"
+    "            g symbolic-ref HEAD refs/heads/master && g commit -q --allow-empty -m one &&\n"
+    "            g remote add origin \"$H/origin.git\" && g push -q origin master &&\n"
+    "            g switch -q -c task && g push -q origin task; } > /dev/null 2>&1 || exit 1\n"
+    "    fi\n"
     "    perl \"$S\" \"$state/session\" \"$state/log\" 600 sh -c 'echo $$ > \"$1/ready.part\"\n"
     "        mv \"$1/ready.part\" \"$1/ready\"; exec sleep 60' sh \"$H\" &\n"
     "    sup=$!\n"
@@ -2533,26 +2552,91 @@ static const char hold_driver[] =
     "    until [ -s \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
     "    kill -KILL \"$sup\"\n"
     "    wait \"$sup\" 2> /dev/null\n"
-    "    wait_session\n"
-    "    [ ! -e \"$state/session\" ] || echo kept\n"
-    "    perl \"$S\" \"$state/session\" \"$state/log\" 600 sh -c ': > \"$1/ran\"' sh \"$H\"\n"
-    "    echo \"status $?\"\n"
-    "    [ -e \"$H/ran\" ] || echo 'ran nothing'\n"
+    "    if [ \"$how\" = lostrefresh ]; then\n"
+    "        refresh\n"
+    "        echo \"refresh $?\"\n"
+    "        git symbolic-ref --short HEAD\n"
+    "    else\n"
+    "        : > \"$state/stop\"\n"
+    "        wait_session\n"
+    "        echo \"wait $?\"\n"
+    "        rm -f \"$state/stop\"\n"
+    "        [ ! -e \"$state/session\" ] || echo kept\n"
+    "        session_state | cut -d ' ' -f 1\n"
+    "        perl \"$S\" \"$state/session\" \"$state/log\" 600 sh -c ': > \"$1/ran\"' sh \"$H\"\n"
+    "        echo \"status $?\"\n"
+    "        [ -e \"$H/ran\" ] || echo 'ran nothing'\n"
+    "    fi\n"
     "    g=$(cut -d ' ' -f 1 \"$state/session\")\n"
     "    kill -KILL \"$(cat \"$H/ready\")\"\n"
     "    i=0\n"
     "    while ps -A -o pgid= | grep -qx \" *$g\" && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; "
     "done\n"
-    "    perl \"$S\" \"$state/session\" \"$state/log\" 600 sh -c ': > \"$1/ran\"' sh \"$H\"\n"
-    "    echo \"status $?\"\n"
-    "    [ -e \"$H/ran\" ] && [ ! -e \"$state/session\" ] && echo 'ran; record removed' ;;\n"
+    "    if [ \"$how\" = lostrefresh ]; then\n"
+    "        refresh\n"
+    "        echo \"refresh $?\"\n"
+    "        git symbolic-ref --short HEAD\n"
+    "    else\n"
+    "        perl \"$S\" \"$state/session\" \"$state/log\" 600 sh -c ': > \"$1/ran\"' sh \"$H\"\n"
+    "        echo \"status $?\"\n"
+    "        [ -e \"$H/ran\" ] && [ ! -e \"$state/session\" ] && echo 'ran; record removed'\n"
+    "    fi ;;\n"
+    "wtlost)\n"
+    "    # A worktree stays while a job of an earlier release, under its run's\n"
+    "    # directory, is lost, and is made new once that job's end is proved.\n"
+    "    eval \"$(sed -n '/^# mac_live DIR:/,/^# mac_start:/p; /^# job_dir NAME:/,/^# tssh ARG/p' "
+    "\"$R\")\"\n"
+    "    say() { :; }\n"
+    "    g() { git -c user.name=t -c user.email=t@invalid -c core.hooksPath=/dev/null -c "
+    "commit.gpgsign=false \"$@\"; }\n"
+    "    repo=$H/git state=$H/state macdir=$H/mac RACH2_HOLD_DIR=\n"
+    "    { mkdir -p \"$repo/tools/flow\" && cp \"$P\" \"$repo/tools/flow/hold.pl\" && cd \"$repo\" "
+    "&&\n"
+    "        g init -q && g commit -q --allow-empty -m one; } > /dev/null 2>&1 || exit 1\n"
+    "    r=$state/held/release-1\n"
+    "    mkdir -p \"$r/jobs/wsl.1\" \"$H/wt\" || exit 1\n"
+    "    : > \"$r/live\"\n"
+    "    echo 0 > \"$r/end\"\n"
+    "    : > \"$r/jobs/wsl.1/live\"\n"
+    "    : > \"$H/wt/mine\"\n"
+    "    wt_new \"$H/wt\" HEAD\n"
+    "    echo \"wt_new $?\"\n"
+    "    [ ! -e \"$H/wt/mine\" ] || echo kept\n"
+    "    echo 0 > \"$r/jobs/wsl.1/end\"\n"
+    "    wt_new \"$H/wt\" HEAD 2> /dev/null\n"
+    "    echo \"wt_new $?\"\n"
+    "    [ ! -e \"$H/wt/mine\" ] && [ -e \"$H/wt/.git\" ] && [ ! -d \"$r\" ] && echo replaced ;;\n"
+    "discardlost)\n"
+    "    # A job whose holder ended without its end keeps its directory, and\n"
+    "    # discard keeps a part's files until that job's end is proved.\n"
+    "    eval \"$(sed -n '/^# job_dir NAME:/,/^# tssh ARG/p' \"$R\")\"\n"
+    "    say() { :; }\n"
+    "    RACH2_HOLD_DIR=$H/state\n"
+    "    j=$(job_dir t) || exit 1\n"
+    "    : > \"$j/live\"\n"
+    "    : > \"$H/f\"\n"
+    "    true &\n"
+    "    job_wait \"$! $j\"\n"
+    "    echo \"job_wait $?\"\n"
+    "    [ ! -d \"$j\" ] || echo stays\n"
+    "    discard \"$H/f\"\n"
+    "    echo \"discard $?\"\n"
+    "    [ ! -e \"$H/f\" ] || echo kept\n"
+    "    echo 0 > \"$j/end\"\n"
+    "    discard \"$H/f\"\n"
+    "    echo \"discard $?\"\n"
+    "    [ -e \"$H/f\" ] || echo removed ;;\n"
     "prepare | recovery)\n"
     "    # WSL's script runs here, as a user whose scan of the copy's processes\n"
     "    # cannot read every process's directory, or /proc at all, with an etude\n"
     "    # and a ledger of its own; recovery's etude fails.\n"
+    "    # recovery's scan of the processes succeeds and finds nothing, so that\n"
+    "    # only the ledger's recovery can keep the copy.\n"
+    "    scan=\n"
+    "    [ \"$how\" != recovery ] || scan='s|cat \"$repo/tools/flow/procs.pl\"|echo \"exit 0;\"|'\n"
     "    eval \"$(sed -n '/^prepare_host()$/,/^}$/p' \"$R\" |\n"
     "        sed -e \"s|/usr/local/libexec/rach2/etude|$H/bin/etude|\" -e "
-    "\"s|/var/lib/rach2-etude/ledger|$H/ledger|\")\"\n"
+    "\"s|/var/lib/rach2-etude/ledger|$H/ledger|\" ${scan:+-e \"$scan\"})\"\n"
     "    PREPARE_COPY=$H/copy\n"
     "    mkdir -p \"$H/copy/build/held\" \"$H/bin\" \"$H/ledger\" || exit 1\n"
     "    echo 'etude-ledger 1' > \"$H/ledger/claims\"\n"
@@ -2607,10 +2691,15 @@ static int hold_saw(struct release *r, const char *scenario, const char *want)
  * and a job that opens its reader after hold.pl has written its go still
  * reads it (j154 3); a Mac run is live, and its directory stays, until what
  * its job left in its group has ended, so that no new run starts beside it;
- * a STATE/session whose supervisor is gone stays, and session.pl starts no
- * session until the group it names is gone (j154 1); and -p's preparation
- * keeps its copy when the scan of its processes fails, or when the ledger's
- * recovery fails (j154 5).
+ * a STATE/session whose group is proved gone goes, and one whose supervisor
+ * was killed while its group runs stays: session.pl -q says lost,
+ * wait_session waits, refresh leaves the clone's HEAD where it was, and
+ * session.pl starts no session, until the group is gone (j154 1, j163 1); a
+ * worktree stays while a job of an earlier release is lost under its run's
+ * directory, and job_wait and discard keep a lost job's directory and its
+ * part's files (j163 2, 3); and -p's preparation keeps its copy when the scan
+ * of its processes fails, or when the ledger's recovery fails while the scan
+ * succeeds (j154 5, j163 5).
  */
 static int hold_rows(struct release *r)
 {
@@ -2663,15 +2752,32 @@ static int hold_rows(struct release *r)
                "a Mac run whose job has ended stays live, without its end, while a process it "
                "left runs in its group, and held_gone keeps its directory until the run ends") &&
          ok;
-    ok = check(r, hold_saw(r, "session", "record kept\nheld\nfree\n"),
-               "wait_session keeps a STATE/session whose supervisor is gone, and locked reads "
-               "a lock as held while a process holds it") &&
+    ok = check(r, hold_saw(r, "session", "wait 0\nrecord removed\nrunning\nended\n"),
+               "wait_session removes a STATE/session whose group is proved gone, and "
+               "session_state reads a session as running while a process holds its lock") &&
          ok;
     ok = check(r,
                hold_saw(r, "lostsession",
-                        "kept\nstatus 125\nran nothing\nstatus 0\nran; record removed\n"),
-               "a session whose supervisor was killed keeps its record, and session.pl starts "
-               "no other until its group is gone, and then removes the record") &&
+                        "wait 1\nkept\nlost\nstatus 125\nran nothing\nstatus 0\n"
+                        "ran; record removed\n"),
+               "a session whose supervisor was killed keeps its record, which session_state "
+               "reads as lost, wait_session waits until STATE/stop, and session.pl starts no "
+               "other until its group is gone, and then removes the record") &&
+         ok;
+    ok = check(r, hold_saw(r, "lostrefresh", "refresh 1\ntask\nrefresh 0\nmaster\n"),
+               "refresh leaves HEAD where it was while a session whose supervisor was killed "
+               "may still run, and moves the clone to master once its group is gone (j163 1)") &&
+         ok;
+    ok = check(r, hold_saw(r, "wtlost", "wt_new 1\nkept\nwt_new 0\nreplaced\n"),
+               "wt_new leaves a worktree while a job of an earlier release is lost under its "
+               "run's directory, and makes it new once that job's end is proved (j163 2)") &&
+         ok;
+    ok = check(r,
+               hold_saw(r, "discardlost",
+                        "job_wait 127\nstays\ndiscard 1\nkept\ndiscard 0\nremoved\n"),
+               "job_wait gives 127 and keeps the directory of a job whose holder ended "
+               "without its end, and discard keeps a part's files until that end is proved "
+               "(j163 3)") &&
          ok;
     if (prepare_scan_fails())
         ok = check(r,
@@ -2681,14 +2787,13 @@ static int hold_rows(struct release *r)
                    "-p's preparation keeps its copy in WSL when the scan of its processes "
                    "fails") &&
              ok;
-    if (prepare_scan_fails())
-        ok = check(r,
-                   hold_saw(r, "recovery",
-                            "status 1\nthe processes in H/copy could not be read\n"
-                            "etude status did not recover H/ledger/claims\n"
-                            "the copy H/copy stays\nkept\n"),
-                   "-p's preparation keeps its copy in WSL when the ledger's recovery fails") &&
-             ok;
+    ok = check(r,
+               hold_saw(r, "recovery",
+                        "status 1\netude status did not recover H/ledger/claims\n"
+                        "the copy H/copy stays\nkept\n"),
+               "-p's preparation keeps its copy in WSL when the ledger's recovery fails while "
+               "the scan of its processes succeeds and finds nothing (j163 5)") &&
+         ok;
     fx_remove(flow_path(f, "hold"));
     return ok;
 }
@@ -3392,7 +3497,7 @@ static int stop_rows(struct release *r)
     int fd[2], ok;
     pid_t c, held_release;
     const char *files[] = {"stop.sh",  "lib.sh",   "machines", "winclean.sh", "winjob.sh",
-                           "winjob.c", "bound.pl", "procs.pl", "hold.pl"};
+                           "winjob.c", "bound.pl", "procs.pl", "hold.pl",     "session.pl"};
     unsigned i;
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         snprintf(path, sizeof(path), "%s/tools/flow/%s", r->tree, files[i]);

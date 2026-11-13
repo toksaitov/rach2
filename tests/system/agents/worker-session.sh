@@ -29,16 +29,21 @@
 
 LOOP=
 
-# Stop the loop and the session group it records, if either still runs.
+# Stop the loop and its session, if either still runs, as stop.sh does, by
+# their files and with no signal: STATE/stop ends the loop once its session
+# has, and STATE/session.stop has the session's supervisor stop its group.
+# The row's files go only once session.pl -q, the one decider, says that no
+# session of the loop may still run.
 row_cleanup() {
-    local group
+    [ -d "$WORK/state" ] && [ -f "$WORK/clone/tools/flow/session.pl" ] || return 0
+    touch "$WORK/state/stop" "$WORK/state/session.stop"
     if [ -n "$LOOP" ]; then
-        kill "$LOOP" 2> /dev/null
         wait "$LOOP" 2> /dev/null
         LOOP=
     fi
-    group=$(cat "$WORK/state/session" 2> /dev/null)
-    [ -z "$group" ] || kill -KILL "-$group" 2> /dev/null || true
+    until [ "$(perl "$WORK/clone/tools/flow/session.pl" -q "$WORK/state/session")" = ended ]; do
+        sleep 1
+    done
 }
 
 # board: write the board fakegh.py serves, with the origin at WORK/origin.git.
