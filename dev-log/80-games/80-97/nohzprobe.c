@@ -5,10 +5,18 @@
 #define SYS_ADJTIMEX 159
 #define SYS_TIMERFD_CREATE 283
 #define SYS_TIMERFD_SETTIME 286
+#define SYS_TIMER_CREATE 222
+#define SYS_TIMER_SETTIME 223
+#define SYS_TIMER_GETTIME 224
+#define SYS_TIMER_DELETE 226
 #else
 #define SYS_ADJTIMEX 124
 #define SYS_TIMERFD_CREATE 322
 #define SYS_TIMERFD_SETTIME 325
+#define SYS_TIMER_CREATE 259
+#define SYS_TIMER_SETTIME 260
+#define SYS_TIMER_GETTIME 261
+#define SYS_TIMER_DELETE 263
 #endif
 
 struct timespec { long sec; long ns; };
@@ -120,12 +128,20 @@ PROBE_START void _start(void)
     long fd, rc, count[2] = {0, 0};
     long timex[32] = {0};
     int round;
+    int timer = -1;
+    struct { long value; int signo; int notify; char pad[64 - sizeof(long) - 8]; } event = {0};
+    struct { struct timespec interval; struct timespec value; } setting;
     unsigned long long blocked = 1ull << 13;
     unsigned long long pending = 0;
 
     check(syscall3(SYS_SCHED_SETAFFINITY, 0, sizeof(mask), (long)&mask) == 0, "pin cpu0");
     req.sec = 0; req.ns = 20000000;
     check(syscall2(SYS_NANOSLEEP, (long)&req, 0) == 0, "settle");
+    event.notify = 1;
+    check(syscall3(SYS_TIMER_CREATE, 1, (long)&event, (long)&timer) == 0, "create SIGEV_NONE timer");
+    setting.interval.sec = 0; setting.interval.ns = 100000;
+    setting.value = setting.interval;
+    check(syscall4(SYS_TIMER_SETTIME, timer, 0, (long)&setting, 0) == 0, "arm SIGEV_NONE timer");
     check(read_proc("/proc/interrupts", before) > 0, "read interrupt baseline");
     syscall2(SYS_CLOCK_GETTIME, 1, (long)&a);
     req.sec = 6; req.ns = 0;
@@ -137,6 +153,10 @@ PROBE_START void _start(void)
     print("NOHZPROBE interrupts after\n"); print(after);
     check(t0 != ~0ul && t1 != ~0ul && t1 >= t0 && t1 - t0 < 128, "idle interval takes no periodic tick");
     check(b.sec - a.sec > 6 || (b.sec - a.sec == 6 && b.ns >= a.ns), "idle clock advances");
+    check(syscall2(SYS_TIMER_GETTIME, timer, (long)&setting) == 0 &&
+          setting.interval.ns == 100000 && setting.value.sec == 0 &&
+          setting.value.ns > 0 && setting.value.ns <= 100000, "SIGEV_NONE advances lazily");
+    check(syscall1(SYS_TIMER_DELETE, timer) == 0, "delete SIGEV_NONE timer");
     check(syscall3(SYS_POLL, 0, 0, 17) == 0, "poll timeout with no runnable thread");
     req.sec = 0; req.ns = 3100000;
     rc = syscall6(SYS_FUTEX, (long)&word, 128, 1, (long)&req, 0, 0);
