@@ -533,12 +533,17 @@ static int writers_open(void)
     return writer_opens - writer_releases;
 }
 
-/** Not reached. */
+/* A record whose `bits` no log may be made under, or NULL. */
+static struct dshare *bits_watched;
+
+/** Log nothing; a log made under the watched record's `bits` fails. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
     (void)subsystem;
     (void)format;
+    check(!bits_watched || !bits_watched->bits.locked,
+          "no log is made under a record's bitmap lock");
 }
 
 /** Not reached. */
@@ -1613,11 +1618,11 @@ static void truncate_rows(void)
     (void)model_fsync(&ofd);
 }
 
-/** A descriptor write puts the bytes the file system accepted into the
- * file's dirty page in memory from the write's own buffer, with no read of
- * the file, so that reads failing any number of times cannot leave the page
- * older than the write for its write-back to put over it (j153's finding
- * 2). */
+/** `filemap_disk_written` copies the bytes it is given into the file's
+ * dirty page in memory, with no read of the file, and the page's write-back
+ * keeps them. That the descriptor write gives it the bytes the file system
+ * accepted, from one kernel copy of the caller's buffer, is the open model's
+ * row (`tests/host/open_hosttest.c`, j153's finding 2). */
 static void written_copy_rows(void)
 {
     struct vfs_mount mnt;
@@ -1639,12 +1644,12 @@ static void written_copy_rows(void)
     check(read_fails == 100 && reads == before && model_bytes[0] == 0x5a &&
               model_bytes[15] == 0x5a && model_bytes[16] == 0x65 && !cpu_mapped &&
               record_of(f)->ndirty == 1,
-          "a descriptor write's bytes reach the dirty page from its buffer, with no read");
+          "filemap_disk_written copies its bytes into the dirty page, with no read");
     read_fails = 0;
     vm_file_put(f);
     vm_file_reap();
     check(disk_bytes[0] == 0x5a && disk_bytes[16] == 0x65 && dshare_count == 0,
-          "and the page's write-back keeps the descriptor's write");
+          "and the page's write-back keeps the bytes it copied");
 }
 
 /** A failed final write on a mount whose device has gone drops the dirty
@@ -1815,6 +1820,9 @@ static void two_pass_rows(void)
     e.flags = FD_FLAG_READ | FD_FLAG_WRITE;
     e.ofd = &other;
     g = filemap_disk_shared(&e);
+    if (g) {
+        record_of(g)->sh.npages = 1;
+    }
     check(g && g->mkwrite(g, 0, model_page) == 0, "a second file of the mount is stored to");
     watch.vmnt = &mnt;
     watch.ino = 95;
@@ -1992,6 +2000,60 @@ static void pin_rows(struct vm_file *f, struct open_file *ofd, struct dshare *ds
           "a release after the last pass marks the page, and the next pass writes it");
 }
 
+/* The directory of `stored` whose free the row watches, the mapping whose
+ * pin is released at that free, and the frees seen. */
+static void *grow_dir;
+static struct vm_file *grow_file;
+static int grow_frees;
+
+/** At the heap's free of `grow_dir`, check that the record has published
+ * another and let `bits` go, overwrite the first pointer as the kernel's
+ * heap does, and release a write pin of page 0, as a device's release on
+ * another processor may at that moment (`filemap_pin_dirty`). Every other
+ * free checks only that `bits` is free. */
+static void grow_freeing(void *p)
+{
+    check(!bits_watched->bits.locked, "nothing is freed under a record's bitmap lock");
+    if (p != grow_dir) {
+        return;
+    }
+    grow_frees++;
+    check(bits_watched->stored != p,
+          "the old directory is freed only after its successor is published");
+    ((uint32_t **)p)[0] = NULL;
+    filemap_pin_dirty(grow_file, 0, MODEL_FRAME);
+}
+
+/**
+ * The release of a write pin that comes while a write fault grows the
+ * directory of dirty bits, at the heap's free of the old directory, marks
+ * its page in the directory that is published, and the fault's page is
+ * marked as well: j165's ordering, where the release read the freed
+ * directory. The mapping `f` holds page 0 at MODEL_FRAME and the record
+ * `ds` has its writer and no dirty page.
+ */
+static void pin_grow_rows(struct vm_file *f, struct dshare *ds)
+{
+    extern void (*kheap_host_freeing)(void *p);
+
+    check(dshare_mark(ds, 1) == 0 && ds->nstored == 1 && ds->ndirty == 1,
+          "a mark of page 1 makes a directory of one leaf");
+    check(dshare_unmark_from(ds, 0) == 1 && ds->nstored == 1 && !ds->stored[0] && ds->ndirty == 0,
+          "and clearing it frees the leaf and keeps the directory");
+    grow_dir = ds->stored;
+    grow_file = f;
+    grow_frees = 0;
+    kheap_host_freeing = grow_freeing;
+    check(dshare_mark(ds, SHMEM_LEAF) == 0,
+          "a fault's mark of the second leaf grows the directory");
+    kheap_host_freeing = NULL;
+    check(grow_frees == 1 && ds->nstored == 2 && dshare_stored(ds, 0) &&
+              dshare_stored(ds, SHMEM_LEAF) && ds->ndirty == 2 && !ds->bits.locked,
+          "a pin released at the free of the old directory marks page 0 in the new one, "
+          "beside the fault's page");
+    check(dshare_unmark_from(ds, 0) == 2 && ds->ndirty == 0, "and both bits clear together");
+}
+
 /**
  * A pass writes only the pages stored since the last write of each, while a
  * writable mapping lives, as Linux's clear_page_dirty_for_io and
@@ -2021,6 +2083,7 @@ static void clean_rows(void)
         return;
     }
     ds = record_of(f);
+    bits_watched = ds;
     own.vmnt = &mnt;
     own.ino = ofd.ino;
     k_memset(&e, 0, sizeof(e));
@@ -2039,11 +2102,13 @@ static void clean_rows(void)
     clean_store_rows(f, &ofd, ds);
     clean_keep_rows(f, &ofd, ds);
     pin_rows(f, &ofd, ds);
+    pin_grow_rows(f, ds);
     if (p) {
         filemap_pin_dirty(p, 0, MODEL_FRAME);
         check(ds->ndirty == 0, "a release through a private mapping marks nothing");
         vm_file_put(p);
     }
+    bits_watched = NULL;
     vm_file_put(f);
     vm_file_reap();
     check(!maps && dshare_count == 0 && !model_dead, "the clean rows leave no mapping");

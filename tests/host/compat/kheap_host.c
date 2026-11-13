@@ -40,9 +40,17 @@ void *kzalloc(size_t size)
     return size && !too_large(size) ? calloc(1, size) : NULL;
 }
 
-/** `free`. */
+/* Called with each block `kfree` is given, before it is freed, when a test
+ * sets it: a row that stands in for what another processor does while the
+ * code frees a block. */
+void (*kheap_host_freeing)(void *p);
+
+/** `free`, after `kheap_host_freeing` when it is set. */
 void kfree(void *p)
 {
+    if (p && kheap_host_freeing) {
+        kheap_host_freeing(p);
+    }
     free(p);
 }
 
