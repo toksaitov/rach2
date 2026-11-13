@@ -19,6 +19,7 @@
  * written while the controller's input buffer is full.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-cflags: -DTICK_HZ=1000
  */
 
 #include "arch/x86/i8042.c"
