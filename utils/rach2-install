@@ -582,6 +582,74 @@ under_home() { # under_home ROOT PATH
     return 1
 }
 
+# pin_key_links ROOT TREE COPY [KEPT]: makes each symbolic link of COPY, a
+# copy of the key directory TREE of the root at ROOT, lead where it led in
+# TREE. TREE is a path root_path printed, ROOT in front. COPY goes back at
+# another depth, or into a root that has nothing of TREE's surroundings, so
+# a link as written may lead elsewhere there or nowhere. Each link is read
+# where it stands in TREE, by root_path. One that leads inside TREE is
+# written again relative to its place in COPY. With KEPT, the update's copy,
+# one that leads under ROOT/home, which the update keeps whole, is written
+# again as the absolute path it leads to. One that leads to a regular file
+# elsewhere is replaced by a copy of that file, with its owner and mode, and
+# a later link to the same file, by name or by a hard link, by a link to that
+# copy. Any other, leading to a directory, a device or nothing outside TREE,
+# is written as the absolute path it leads to in the archive's copy, and
+# with KEPT ends the run, before the root is written: the update would lose
+# what it leads to, or let it lead to the new image's file of that name. A
+# name with a newline in COPY ends the run too.
+pin_key_links() { # pin_key_links ROOT TREE COPY [KEPT]
+    pin_bad=$(find "$3" -name '*
+*') || die "${2#"$1"} could not be read"
+    [ -z "$pin_bad" ] || die "${2#"$1"} holds a name with a newline, which the update cannot keep"
+    pin_links=$(find "$3" -type l) || die "${2#"$1"} could not be read"
+    pin_made=""
+    while IFS= read -r pin_l; do
+        [ -n "$pin_l" ] || continue
+        pin_p=${pin_l#"$3"/}
+        pin_t=$(root_path "$1" "${2#"$1"}/$pin_p") ||
+            die "${2#"$1"}/$pin_p leads through too many links"
+        pin_abs=${pin_t#"$1"}
+        pin_abs=${pin_abs:-/}
+        if [ "$pin_t" = "$2" ] || [ "${pin_t#"$2"/}" != "$pin_t" ]; then
+            pin_up=$(printf '%s\n' "$pin_p" | sed 's|[^/]*/|../|g; s|[^/]*$||')
+            pin_to=${pin_t#"$2"}
+            pin_to=$pin_up${pin_to#/}
+            pin_to=${pin_to%/}
+            { rm -f "$pin_l" && ln -s "${pin_to:-.}" "$pin_l"; } ||
+                die "${2#"$1"}/$pin_p could not be kept"
+            continue
+        fi
+        if [ -n "${4:-}" ] && under_home "$1" "$pin_t"; then
+            { rm -f "$pin_l" && ln -s "$pin_abs" "$pin_l"; } ||
+                die "${2#"$1"}/$pin_p could not be kept"
+            continue
+        fi
+        if [ -f "$pin_t" ]; then
+            pin_id=$(stat -c %d:%i "$pin_t") || die "$pin_abs could not be read"
+            pin_first=$(printf '%s' "$pin_made" | awk -v id="$pin_id" '$1 == id {
+                print substr($0, length(id) + 2); exit }')
+            if [ -n "$pin_first" ]; then
+                pin_up=$(printf '%s\n' "$pin_p" | sed 's|[^/]*/|../|g; s|[^/]*$||')
+                { rm -f "$pin_l" && ln -s "$pin_up$pin_first" "$pin_l"; } ||
+                    die "${2#"$1"}/$pin_p could not be kept"
+            else
+                { rm -f "$pin_l" && cp -a "$pin_t" "$pin_l"; } ||
+                    die "$pin_abs, which ${2#"$1"}/$pin_p leads to, could not be kept"
+                pin_made="$pin_made$pin_id $pin_p
+"
+            fi
+            continue
+        fi
+        [ -z "${4:-}" ] || die "${2#"$1"}/$pin_p leads to $pin_abs, which is no file the \
+update keeps; copy what it needs into ${2#"$1"} or remove the link, and run this again; nothing was written"
+        { rm -f "$pin_l" && ln -s "$pin_abs" "$pin_l"; } ||
+            die "${2#"$1"}/$pin_p could not be kept"
+    done <<EOF
+$pin_links
+EOF
+}
+
 # keep_root_directory PATH COPY: copies the directory PATH of the root at
 # TARGET_MNT to COPY, PATH read inside that root by root_path, as a home is.
 # A PATH that is a symbolic link leading under /home is kept as a link straight
@@ -608,11 +676,20 @@ keep_root_directory() { # keep_root_directory PATH COPY
 # by root_path. A tar file keeps the tree's names as they are, where FAT32
 # would fold their case and match a name such as `ABCDEF~1` to the short
 # alias of another, and keeps its symbolic and hard links, which FAT32 cannot
-# hold. The file is named by the id, which has no case to fold, and when
-# accounts share an id the first of them in passwd has it, whether or not
-# that account has keys. It runs in a subshell, and its status is 1 when a
-# home could not be read or a tree could not be stored.
+# hold. The tree is copied first to a scratch directory under /dev/shm, or
+# /tmp where there is none, and its links made by pin_key_links to lead where
+# they led in ROOTDIR, so that a key that is a link out of .ssh is archived
+# with its bytes. The file is named by the id, which has no case to fold, and
+# when accounts share an id the first of them in passwd has it, whether or
+# not that account has keys. A .ssh that leads to ROOTDIR itself is not
+# stored. It runs in a subshell, and its status is 1 when a home could not be
+# read or a tree could not be stored.
 archive_account_keys() (
+    scratch=/tmp
+    [ -d /dev/shm ] && scratch=/dev/shm
+    stage=$(mktemp -d "$scratch/rach2-install.XXXXXX") ||
+        die "there is nowhere to stage the account keys"
+    trap 'rm -rf "$stage"' EXIT
     seen=" "
     while IFS=: read -r _name _password uid _gid _gecos home _shell; do
         case "$uid" in "" | *[!0-9]*) continue ;; esac
@@ -620,11 +697,15 @@ archive_account_keys() (
         seen="$seen$uid "
         case "$home" in /*) ;; *) continue ;; esac
         keys=$(root_path "$1" "$home/.ssh") || die "$home/.ssh leads through too many links"
-        [ -d "$keys" ] || continue
+        [ "$keys" != "$1" ] && [ -d "$keys" ] || continue
+        { rm -rf "$stage/keys" && cp -a "$keys" "$stage/keys"; } ||
+            die "$home/.ssh could not be archived"
+        pin_key_links "$1" "$keys" "$stage/keys"
         { mkdir -p "$next_archive/keys" &&
-            tar -cf "$next_archive/keys/$uid.tar" -C "$keys" .; } ||
+            tar -cf "$next_archive/keys/$uid.tar" -C "$stage/keys" .; } ||
             die "$home/.ssh could not be archived"
     done < "$1/etc/passwd"
+    rm -rf "$stage"
 )
 
 # add_lines FILE TEXT: TEXT's lines appended to FILE, after a newline when
@@ -688,19 +769,25 @@ keep_image_accounts() {
     add_lines "$2/etc/shadow" "$lines"
 }
 
-# Copies the key tree SOURCE, taken from the archive, to DESTINATION with
-# OWNER, mode 700 on its directories and 600 on its files, and ends the run
-# when it cannot. SOURCE is a tar file, as archive_account_keys writes, or a
-# directory, as an archive of an older version holds. FAT32 records neither
-# owners nor modes, and SSH checks them, so they are set here, before cp -a
-# puts the copy on the new root; a symbolic link is given the owner and not
+# Copies the key tree SOURCE, taken from the archive, to DESTINATION, and
+# ends the run when it cannot. SOURCE is a tar file, as archive_account_keys
+# writes, or a directory, as an archive of an older version holds. A tar file
+# gives each file and directory, DESTINATION among them, the numeric owner
+# and the mode it had in the tree archived: a file of root's, or of another
+# account, that the tree held through a hard link or a link out of .ssh
+# stays that owner's, and is not given to the account whose home it is
+# restored to. A symbolic link it holds is root's. A directory records
+# neither owners nor modes on FAT32, and SSH checks them, so it is given
+# OWNER, mode 700 on its directories and 600 on its files, before cp -a puts
+# the copy on the new root; a symbolic link is given the owner and not
 # followed.
 restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
     if [ -f "$1" ]; then
-        mkdir -p "$2" && tar -xf "$1" -C "$2"
-    else
-        mkdir -p "$2" && cp -R "$1/." "$2/"
-    fi || die "$1 could not be restored to $2"
+        { mkdir -p "$2" && tar -xf "$1" --numeric-owner -C "$2"; } ||
+            die "$1 could not be restored to $2"
+        return 0
+    fi
+    { mkdir -p "$2" && cp -R "$1/." "$2/"; } || die "$1 could not be restored to $2"
     if ! { chown -R -h "$3" "$2" &&
         find "$2" -type d -exec chmod 700 {} + &&
         find "$2" -type f -exec chmod 600 {} +; }; then
@@ -716,10 +803,15 @@ restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
 # only when the archive has keys/UID.tar for its id, or keys/UID from an older
 # version. A home is read inside `keep` by root_path, and one that is not
 # there yet is made with the account's owner and mode 700; one that is there
-# keeps its own. The recovery partition must
-# be mounted at RECOVERY_MNT. It runs in a subshell, and its status is 1 when
-# a home or a key could not be restored.
+# keeps its own. Accounts of different ids whose homes are one directory
+# share its .ssh, which the archive holds once for each id: it is restored
+# once, from the first of them in passwd, and the others' copies must be the
+# same, or the run ends before the root is written, since the update cannot
+# give that .ssh to both. The recovery partition must be mounted at
+# RECOVERY_MNT. It runs in a subshell, and its status is 1 when a home or a
+# key could not be restored.
 restore_archive_keys() (
+    restored=""
     recover_archive
     if [ -d "$archive/etc/dropbear" ]; then
         restore_key_directory "$archive/etc/dropbear" "$keep/etc/dropbear" 0:0
@@ -747,7 +839,24 @@ restore_archive_keys() (
         if [ ! -d "$dir" ]; then
             mkdir -p "$dir" && chmod 700 "$dir" && chown "$uid:$gid" "$dir" || exit 1
         fi
-        [ -z "$keys" ] || restore_key_directory "$keys" "$dir/.ssh" "$uid:$gid"
+        [ -n "$keys" ] || continue
+        # $keys is under RECOVERY_MNT and has no space; the rest is the place.
+        first=$(printf '%s' "$restored" | D="$dir/.ssh" awk '
+            substr($0, index($0, " ") + 1) == ENVIRON["D"] { print $1; exit }')
+        if [ -n "$first" ]; then
+            if [ -f "$first" ] && [ -f "$keys" ]; then
+                cmp -s "$first" "$keys"
+            elif [ -d "$first" ] && [ -d "$keys" ]; then
+                diff -r "$first" "$keys" > /dev/null 2>&1
+            else
+                false
+            fi || die "$first and $keys are different keys for one $home/.ssh, shared by accounts \
+of different ids, and the update cannot restore both; nothing was written"
+            continue
+        fi
+        restored="$restored$keys $dir/.ssh
+"
+        restore_key_directory "$keys" "$dir/.ssh" "$uid:$gid"
     done < "$keep/etc/passwd"
 )
 
@@ -2125,13 +2234,26 @@ whole configuration archived on its recovery partition; its accounts are not the
     # as the tree it leads to, which may not be on the new root. Such a link
     # that the copy of /home holds is replaced there by its tree, since the
     # copy goes back in place of the image's /home and the archive reads the
-    # keys in the copy.
+    # keys in the copy. The links inside each .ssh kept are made by
+    # pin_key_links to lead where they led in the old root, in the copy of
+    # /home as in a tree kept on its own, or the update stops here.
     if [ -n "$mounted_root" ]; then
+        pinned=""
         while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
             case "$home" in /*) ;; *) continue ;; esac
             from=$(root_path "$TARGET_MNT" "$home/.ssh") || die "$home/.ssh leads through too many links"
-            under_home "$TARGET_MNT" "$from" && continue
-            [ -d "$from" ] || continue
+            [ "$from" != "$TARGET_MNT" ] && [ -d "$from" ] || continue
+            if under_home "$TARGET_MNT" "$from"; then
+                to=$keep/home${from#"$TARGET_MNT/home"}
+                case "$pinned" in *"
+$from
+"*) continue ;; esac
+                pinned="$pinned
+$from
+"
+                [ ! -d "$to" ] || [ -L "$to" ] || pin_key_links "$TARGET_MNT" "$from" "$to" kept
+                continue
+            fi
             to=$(root_path "$keep" "$home") || die "$home leads through too many links in $keep"
             if [ -L "$to/.ssh" ]; then
                 rm -f "$to/.ssh" || die "$home/.ssh could not be kept"
@@ -2140,6 +2262,7 @@ whole configuration archived on its recovery partition; its accounts are not the
             fi
             { mkdir -p "$to" && cp -a "$from" "$to/.ssh"; } ||
                 die "$home/.ssh could not be kept"
+            pin_key_links "$TARGET_MNT" "$from" "$to/.ssh" kept
         done < "$keep/etc/passwd"
     fi
     if [ -n "$mounted_root" ]; then

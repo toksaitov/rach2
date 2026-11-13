@@ -263,6 +263,12 @@ Numeric file names keep accounts whose names differ only in case
 separate on FAT32, and the tar file keeps the names, symbolic links and
 hard links of the tree, which FAT32 would fold to one case, match to a short
 alias or refuse.
+The tree is copied first and each symbolic link in it made to lead where it
+led in the root: one into the tree is written relative to its place, one to
+a regular file elsewhere is replaced by a copy of that file with its owner
+and mode, a later link to the same file, by name or by a hard link, becoming
+a link to that copy, and any other is written as the absolute path it led
+to.
 A restore reads
 .Pa keys/UID
 as a directory when an archive written by an older version has one.
@@ -284,6 +290,16 @@ with their owners and modes; a .ssh that is a symbolic link leading out of
 is kept as the tree it leads to, and one in a home under
 .Pa /home
 comes back as that tree in place of the link.
+Each symbolic link inside a kept .ssh is made to lead where it led in the
+old root: one into the same .ssh is written relative to its place, one into
+.Pa /home
+as the absolute path it led to, and one to a regular file elsewhere is
+replaced by a copy of that file with its owner and mode, a later link to the
+same file becoming a link to that copy.
+A link that leads to a directory, a device or nothing outside
+.Pa /home
+stops the update before the root is written, since the update would lose
+what it leads to or let it lead to the image's file of that name.
 Before restoring retained keys, the image's .ssh is removed from
 .Pa /root
 and from every account home, each read inside the new root and lying
@@ -475,11 +491,19 @@ The next update, when the copy in
 is gone, uses the file the marked archive names; when an archive marked by
 an earlier version names none, it uses the marked archive, preserving the
 server's identity and the accounts' keys and not the other home files.
-Restored key directories receive mode 700 and key files mode 600, and a
-symbolic link keeps its own mode.
+Each archived account receives its UID's keys in the home from passwd.
+A tree from
+.Pa keys/UID.tar
+keeps the numeric owners and modes it was archived with, so a file of
+root's or of another account that it holds stays that owner's; its symbolic
+links are root's.
+A key directory of an older archive, which records no owners, receives the
+account's uid and gid, mode 700 on its directories and 600 on its files,
+and a symbolic link keeps its own mode.
+Accounts of different UIDs whose homes are one directory have its .ssh
+restored once, from the first of them in passwd; when their archived copies
+differ, the update stops before the root is written.
 The server's host keys receive owner 0:0.
-Each archived account receives its UID's keys in the home from passwd,
-with that account's uid and gid.
 A missing home is created with mode 700 and the same owner.
 Keys for a UID absent from the archived passwd are ignored.
 Other home files are not archived.
