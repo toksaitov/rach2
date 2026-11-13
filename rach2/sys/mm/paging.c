@@ -451,6 +451,8 @@ static int cow_fault(struct mm *mm, uintptr_t addr);
 static int page_private(struct mm *mm, uintptr_t addr, int writable);
 static uint32_t frame_maps(uintptr_t frame);
 static int frame_get(uintptr_t phys);
+static int install_entry(struct mm *mm, uintptr_t page, uintptr_t phys, pte_t flags,
+                         const uint32_t *seq);
 
 /** The entry of `dir`'s own table for the user address `addr`, or NULL where
  * there is no table. */
@@ -538,12 +540,28 @@ static void table_refused(void)
  */
 static int install_new(struct mm *mm, uintptr_t page, uintptr_t phys, pte_t flags)
 {
+    return install_entry(mm, page, phys, flags, NULL);
+}
+
+/**
+ * `install_new`, which with `seq` not NULL also installs nothing, and
+ * answers 1, once the space's count of zaps has moved from `*seq`: a shared
+ * page whose file's `mkwrite` marked it before a write-protecting walk
+ * (`paging_wrprotect_where`) cleared the mark again gets no writable entry
+ * after it, and its store faults and marks it once more, as Linux's
+ * do_shared_fault holds the folio's lock from page_mkwrite to the entry.
+ * The walk moves the count under the page-table lock, under which it is
+ * read here.
+ */
+static int install_entry(struct mm *mm, uintptr_t page, uintptr_t phys, pte_t flags,
+                         const uint32_t *seq)
+{
     uint32_t lock = mm_ptl_lock(mm);
     pte_t *table = mmu_user_table(mm->dir, page, 1);
     int rc = -1;
 
     if (table) {
-        rc = table[MMU_INDEX(page)] != 0;
+        rc = table[MMU_INDEX(page)] != 0 || (seq && mm->zaps != *seq);
         if (rc == 0) {
             table[MMU_INDEX(page)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
             mm_resident_add(mm->dir, 1);
@@ -850,7 +868,7 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
         return rc < 0 ? -1 : 0;
     }
     if (rc == 1) {
-        rc = install_new(mm, page, phys, flags);
+        rc = install_entry(mm, page, phys, flags, notify && write ? &seq : NULL);
         if (rc == 0) {
             fault_count(got > 0);
             if (write) {
@@ -873,11 +891,13 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
  * (mm/memory.c). `mkwrite` may sleep, so it runs as `shared_fault`'s
  * share does, with the file and frame held and the region looked up again
  * after; an entry changed meanwhile is left as it is and the access runs
- * again. No flush follows: a processor that kept the read-only entry
- * faults on it,
- * which drops it, and finds the page writable. 1 with the page writable, 0
- * when the file could not mark it or the lock could not be let go, -1 to
- * resolve again.
+ * again, and so is one of a space whose count of zaps a write-back's walk
+ * moved since the mark (`paging_wrprotect_where`), which the walk moves
+ * under the page-table lock and this reads under it, so that no entry is
+ * made writable after a write-back cleared the mark. No flush follows: a
+ * processor that kept the read-only entry faults on it, which drops it, and
+ * finds the page writable. 1 with the page writable, 0 when the file could
+ * not mark it or the lock could not be let go, -1 to resolve again.
  */
 static int shared_mkwrite(struct mm *mm, const vma_t *vma, uintptr_t addr)
 {
@@ -911,8 +931,8 @@ static int shared_mkwrite(struct mm *mm, const vma_t *vma, uintptr_t addr)
     }
     lock = mm_ptl_lock(mm);
     e = user_pte(mm->dir, page);
-    if (!e || *e != before) {
-        rc = -1;
+    if (!e || *e != before || mm->zaps != seq) {
+        rc = -1; /* changed, or a write-back's walk came after the mark */
     } else {
         *e = before | PTE_W;
     }
@@ -3743,10 +3763,53 @@ static int zap_lock(struct mm *mm, int *taken)
     return -1;
 }
 
-/* The number of the last walk of `paging_zap_where`, under the big lock. */
+/* The number of the last walk of `paging_zap_where` or
+ * `paging_wrprotect_where`, under the big lock. */
 static uint32_t zap_walks;
 
 /**
+ * Take write access from every present entry of [start, end) of `mm`, for
+ * `paging_wrprotect_where`, with one flush at the end. The count of zaps
+ * moves first, under the page-table lock, under which a fault that gives a
+ * shared page write access reads it again before its entry
+ * (`install_entry`, `shared_mkwrite`), so that a fault whose file's
+ * `mkwrite` ran before this walk makes no entry writable after it. Each
+ * table's entries change under the page-table lock as well, so a fault of
+ * a space the caller holds only to read changes none of them meanwhile.
+ */
+static void wrprotect_user_range(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    struct flush_batch b;
+    uintptr_t addr, next;
+    uint32_t lock = mm_ptl_lock(mm);
+
+    mm->zaps++;
+    mm_ptl_unlock(mm, lock);
+    batch_start(&b, mm->dir);
+    for (addr = start; addr < end; addr = next) {
+        pte_t *table = user_span(mm->dir, addr, end, &next);
+
+        if (!table) {
+            continue;
+        }
+        lock = mm_ptl_lock(mm);
+        for (; addr < next; addr += PAGE_SIZE) {
+            pte_t *e = &table[MMU_INDEX(addr)];
+
+            if ((*e & (PTE_P | PTE_W)) == (PTE_P | PTE_W)) {
+                *e &= ~(pte_t)PTE_W;
+                batch_add(&b, addr);
+            }
+        }
+        mm_ptl_unlock(mm, lock);
+    }
+    batch_flush(&b);
+}
+
+/**
+ * The walk of `paging_zap_where`, with `event` MMN_TRUNCATE, and of
+ * `paging_wrprotect_where`, with MMN_PROTECT.
+ *
  * Each thread of a process has its own record on the process list and the
  * address space of its process; a walk changes each space once, the first
  * time it meets it, and passes it for the threads after, as Linux's
@@ -3756,17 +3819,20 @@ static uint32_t zap_walks;
  * each revoke of a blob. When the count of walks wraps, every space's mark
  * is cleared first, so that no stale mark passes a space. A walk that
  * waited for a lock starts again from the first record with a new number
- * and zaps every space again, since the big lock was free during the wait
- * and a thread of a space already changed may have faulted the object back
- * in; only the last pass, which waits for nothing, runs whole under the big
- * lock, as Linux's unmap_mapping_pages holds i_mmap_rwsem across its whole
- * walk (mm/memory.c:3822-3838). Each space is changed under its regions' lock
- * held to write (`zap_lock`), and its count of zaps moves, so that a fault
- * that let the lock go across a file's or a device's operation maps no
- * page taken back meanwhile.
+ * and changes every space again, since the big lock was free during the
+ * wait and a thread of a space already changed may have faulted the object
+ * back in or made its page writable; only the last pass, which waits for
+ * nothing, runs whole under the big lock, as Linux's unmap_mapping_pages
+ * holds i_mmap_rwsem across its whole walk (mm/memory.c:3822-3838). Each
+ * space is changed under its regions' lock held to write (`zap_lock`), and
+ * its count of zaps moves, so that a fault that let the lock go across a
+ * file's or a device's operation maps no page taken back meanwhile and
+ * makes no page writable that the walk made read-only; a write-protecting
+ * walk moves it only in a space where a region matched, so that the faults
+ * of other spaces do not start again.
  */
-void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
-                      void *arg)
+static void walk_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
+                       void *arg, int event)
 {
     process_t *p;
     const vma_t *r;
@@ -3795,14 +3861,20 @@ again:
         if (held < 0) {
             goto again;
         }
-        mm->zaps++;
+        if (event == MMN_TRUNCATE) {
+            mm->zaps++;
+        }
         mm->zap_walk = walk;
         for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
             if (match(r, arg, &lo, &hi)) {
                 /* Under way, for a space this thread holds only to read. */
                 mmn_change_begin(mm);
-                mmn_notify(mm, MMN_TRUNCATE, lo, hi);
-                unmap_user_range(mm->dir, lo, hi);
+                mmn_notify(mm, event, lo, hi);
+                if (event == MMN_TRUNCATE) {
+                    unmap_user_range(mm->dir, lo, hi);
+                } else {
+                    wrprotect_user_range(mm, lo, hi);
+                }
                 mmn_change_end(mm);
             }
         }
@@ -3810,6 +3882,19 @@ again:
             mmap_unlock(mm);
         }
     }
+}
+
+void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
+                      void *arg)
+{
+    walk_where(match, arg, MMN_TRUNCATE);
+}
+
+void paging_wrprotect_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo,
+                                         uintptr_t *hi),
+                            void *arg)
+{
+    walk_where(match, arg, MMN_PROTECT);
 }
 
 /** What `paging_zap_device` unmaps: its object, and pages `first` to `end`

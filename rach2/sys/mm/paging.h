@@ -417,6 +417,22 @@ void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo
                       void *arg);
 
 /**
+ * Take write access from every entry of the part of each region that
+ * `match` picks, as `paging_zap_where` picks it, in every address space, as
+ * Linux's folio_mkclean does to each mapping of a folio before its write-back
+ * (mm/rmap.c:1014-1118): the next store to such a page faults and calls its
+ * file's `mkwrite`. The registered ranges hear MMN_PROTECT first, and each
+ * space has one flush. Each space is changed under its regions' lock held
+ * to write, which the walk may wait for, and its count of zaps moves under
+ * the page-table lock, so that a fault that marked a page before the walk
+ * makes it writable only by marking it again. The caller holds the big lock,
+ * and holds the file's lock, under which its `mkwrite` marks a page.
+ */
+void paging_wrprotect_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo,
+                                         uintptr_t *hi),
+                            void *arg);
+
+/**
  * Move the entries of [from, from + len) in `dir` to [to, to + len), for
  * mremap: each frame moves with its flags and keeps its references, and a
  * page never backed stays so. The two ranges must not overlap. Returns 0,
