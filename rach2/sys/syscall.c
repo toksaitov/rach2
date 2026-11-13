@@ -3731,7 +3731,9 @@ static void _syscall_handler(isr_params_t *params)
  * pwrite64 and writev write a regular file of a type that sets
  * `writes_unlocked` without it (`file_vfs_writes_unlocked`), and
  * ftruncate, fallocate, fsync and fdatasync run without it for such a file
- * alone (`fd_change_lock`). Every
+ * alone (`fd_change_lock`); splice between two pipes and tee need only the
+ * pipes' locks, and splice takes the big lock for any other pair
+ * (`splice_file`). Every
  * other step those calls make takes the locks of what it touches; the
  * user-memory copies take the big lock until address spaces have locks of
  * their own. The forms of an architecture's own, i686's split offsets and
@@ -3745,7 +3747,7 @@ static void unlock_file_calls(void)
         sys_close,     sys_poll,      sys_ppoll,     sys_fstatat64,  sys_getdents64, sys_open,
         sys_openat,    sys_readv,     sys_writev,    sys_flock,      sys_fcntl64,    sys_lseek,
         sys__llseek,   sys_access,    sys_faccessat, sys_faccessat2, sys_readlink,   sys_readlinkat,
-        sys_ftruncate, sys_fallocate, sys_fsync,     sys_fdatasync,
+        sys_ftruncate, sys_fallocate, sys_fsync,     sys_fdatasync,  sys_splice,     sys_tee,
     };
     uint32_t i;
 
