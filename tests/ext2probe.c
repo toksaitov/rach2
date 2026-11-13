@@ -1204,10 +1204,55 @@ static void copy_names(int i)
     detach_line[7] = digit;
 }
 
+/* The loop device over a fill file, the one the copies leave free. */
+#define FILL_LOOP "3"
+
+/**
+ * Attach the loop device FILL_LOOP over the fill file `path`, on an ext2
+ * volume, for `fill_read`.
+ */
+static void fill_attach(const char *path)
+{
+    static char line[48] = "attach ro " FILL_LOOP " ";
+    int at = 12, i;
+
+    for (i = 0; path[i] && at + i < (int)sizeof(line) - 1; i++) {
+        line[at + i] = path[i];
+    }
+    line[at + i] = '\0';
+    loop_control(line, "attaching a loop device over a fill file");
+}
+
+/**
+ * Read the fill file attached to FILL_LOOP through the device, and detach
+ * it unless `keep`. A read of the file itself fills pages of the file page
+ * cache straight from the disk, as Linux's readahead does, and leaves the
+ * buffer cache alone; the loop device reads its file through ext2's own
+ * read, which gets each block from the buffer cache, so this read fills it
+ * with the volume's blocks. A detach walks the whole cache for the device's
+ * buffers, which a judged read leaves out by keeping it.
+ */
+static void fill_read(int keep)
+{
+    read_through("/dev/loop" FILL_LOOP);
+    if (!keep) {
+        loop_control("detach " FILL_LOOP, "detaching the fill file's loop device");
+    }
+}
+
+/** Read the fill file `path` through FILL_LOOP, as `fill_read` says. */
+static void fill_through(const char *path)
+{
+    fill_attach(path);
+    fill_read(0);
+}
+
 /**
  * Fill the buffer cache to its limit: the fill file on the fixture, the
  * fixture unmounted and copied LOOKUP_COPIES times to a tmpfs, each copy on a
- * loop device mounted read-only, and every copy's fill file read. The last
+ * loop device mounted read-only, and each fill file read through a loop
+ * device over it (`fill_through`), more blocks than the cache holds. The
+ * fixture's fill file, whose blocks went first, is read again last; that
  * read is at the cap, where each miss takes a victim, and the walks of its
  * gets are judged. The cache must then be full, larger than its first
  * index, and its index must have a bucket for each buffer it may hold.
@@ -1232,15 +1277,16 @@ static void lookup_fill(void)
     }
     expect_ok(syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2", 0, 0),
               "mounting the fixture again");
-    read_through("/e2/lk-fill");
-    for (i = 0; i < LOOKUP_COPIES - 1; i++) {
+    fill_through("/e2/lk-fill");
+    for (i = 0; i < LOOKUP_COPIES; i++) {
         copy_names(i);
-        read_through(loop_file);
+        fill_through(loop_file);
     }
-    copy_names(LOOKUP_COPIES - 1);
+    fill_attach("/e2/lk-fill");
     before = cache_counts();
-    read_through(loop_file);
+    fill_read(1);
     after = cache_counts();
+    loop_control("detach " FILL_LOOP, "detaching the fill file's loop device");
     lookup_report("buffers=", after.buffers);
     lookup_report("limit=", after.limit);
     lookup_report("buckets=", after.buckets);
