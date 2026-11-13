@@ -10,6 +10,7 @@
 #include "../io/inotify.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../lib/rcu.h"
 #include "../arch/arch.h"
 #include "../mm/kheap.h"
 
@@ -836,6 +837,30 @@ static int entry_free(const fd_entry_t *e)
     return e->type == FD_TYPE_NONE && e->ofd == NULL && !e->pending;
 }
 
+/** Clear entry `e` under the table's lock: its type first, so that a
+ * lookup without the lock, which reads the flags and the reservation
+ * before the type (`slot_open_unlocked`), never takes an entry half
+ * cleared for open. */
+static void slot_clear(fd_entry_t *e)
+{
+    ((volatile fd_entry_t *)e)->type = FD_TYPE_NONE;
+    k_barrier();
+    k_memset(e, 0, sizeof(*e));
+}
+
+/** Fill free entry `e` with `nw` under the table's lock, its type last,
+ * so that a lookup without the lock never takes it for open before the
+ * rest is in place; x86 keeps the stores in order. */
+static void slot_fill(fd_entry_t *e, const fd_entry_t *nw)
+{
+    fd_entry_t v = *nw;
+
+    v.type = FD_TYPE_NONE;
+    *e = v;
+    k_barrier();
+    ((volatile fd_entry_t *)e)->type = nw->type;
+}
+
 /** Lead the number `fd` back to its slot's own entry when it leads to a
  * spare that is free and the slot's own entry is no longer kept, and free
  * the spare. The caller holds the lock, and no call holds a free spare. */
@@ -1054,27 +1079,71 @@ void fd_table_delete(fd_table_t *table)
     kfree(table);
 }
 
-/** Widen the hold map of `t` to cover `cap` descriptors, its bits kept;
- * 0, or -ENOMEM. The caller holds the lock of `t`'s table, or `t` shares
- * none yet. */
+/* The fewest words a hold map has: 512 descriptors, and with its header
+ * more than a cache line, so that two threads' maps, each written by its
+ * own thread at every call, seldom share one. */
+#define HOLD_MIN_WORDS 16
+
+/** Free a hold map a growth replaced, once a grace period has passed: its
+ * `rcu` is its first member, so `head` is the map. */
+static void hold_map_free(struct rcu_head *head)
+{
+    kfree(head);
+}
+
+/** Set the bits `set` and clear the bits `clear` of hold map word `*w` in
+ * one locked compare-and-exchange, a full barrier on x86: the thread whose
+ * map it is changes its bits without the table's lock while a dup2 by
+ * another sharer may clear one of them under it (`gone_make`), so neither
+ * may write back a word it read before the other's change. */
+static void hold_word_change(volatile unsigned int *w, unsigned int set, unsigned int clear)
+{
+    unsigned int old;
+
+    do {
+        old = *w;
+    } while (arch_atomic_cmpxchg(w, old, (old | set) & ~clear) != old);
+}
+
+/**
+ * Give `t` a map of held descriptors that covers `cap`, its bits kept; 0,
+ * or -ENOMEM. The caller holds the lock of `t`'s table, or `t` shares none
+ * yet. The thread may be setting or clearing a bit of the old map without
+ * the lock as it is replaced, so the old map is marked stale with a full
+ * barrier before it is read: a bit changed before the mark is seen by the
+ * copy, and the thread finds the mark after a change and makes the change
+ * again in the new map under the lock (`hold_set`, `fd_holds_claim`). The
+ * old map is freed after a grace period, since the thread may still be
+ * writing it, as Linux's `expand_fdtable` frees a table's old array by
+ * `call_rcu` (fs/file.c:207).
+ */
 static int held_fit(process_t *t, int cap)
 {
     int words = (cap + 31) / 32;
-    uint32_t *map;
+    struct fd_hold_map *old = t->fd_held, *map;
+    int w;
 
-    if (t->fd_held_words >= words) {
+    if (old && old->words >= words) {
         return 0;
     }
-    map = kzalloc(sizeof(uint32_t) * (size_t)words);
+    if (words < HOLD_MIN_WORDS) {
+        words = HOLD_MIN_WORDS;
+    }
+    map = kzalloc(sizeof(*map) + sizeof(map->bits[0]) * (size_t)(words - 1));
     if (!map) {
         return -ENOMEM;
     }
-    if (t->fd_held) {
-        k_memcpy(map, t->fd_held, sizeof(uint32_t) * (size_t)t->fd_held_words);
-        kfree(t->fd_held);
+    map->words = words;
+    if (old) {
+        (void)arch_atomic_xchg(&old->stale, 1u);
+        for (w = 0; w < old->words; w++) {
+            map->bits[w] = old->bits[w];
+        }
     }
     t->fd_held = map;
-    t->fd_held_words = words;
+    if (old) {
+        call_rcu(&old->rcu, hold_map_free);
+    }
     return 0;
 }
 
@@ -1210,7 +1279,7 @@ int fd_table_share(fd_table_t *table, struct process *child)
 int fd_table_fit(fd_table_t *table, int cap)
 {
     uint32_t flags = fd_table_lock(table);
-    int rc = cap <= table->cap ? 0 : chunks_reach(table, cap);
+    int rc = fd_table_resize(table, cap);
 
     fd_table_unlock(table, flags);
     return rc;
@@ -1230,13 +1299,55 @@ static void fd_hold(fd_table_t *table, int fd)
     if (p && p->fd_gone) {
         gone_shadow(table, fd);
     }
-    if (table->refs > 1 && p && table == p->fds && w < p->fd_held_words) {
-        p->fd_held[w] |= 1u << (fd % 32);
+    if (table->refs > 1 && p && table == p->fds && p->fd_held && w < p->fd_held->words) {
         if (p->fd_holding <= w) {
             p->fd_holding = w + 1;
         }
+        p->fd_held->bits[w] |= 1u << (fd % 32);
     }
 }
+
+/**
+ * Mark descriptor `fd` of `table`, the shared table of the calling thread
+ * `p`, held by its call, without the table's lock, inside the caller's read
+ * section, since a growth frees a map it replaced after a grace period.
+ * `fd_holding` is stored before the bit, and the bit is set by a locked
+ * compare-and-exchange, which orders it before the caller's second look at
+ * the slot. A close or a dup2 stores its mark of the slot and takes a full
+ * barrier before it reads the maps (`fd_close_claim`, `gone_make`), so of
+ * the two, either it finds the bit or the second look finds the mark, as
+ * Linux's `__fget_files_rcu` takes the file's reference before it reads the
+ * slot again. A growth that replaced the map meanwhile marked the old one
+ * stale before it copied it, so the bit is set again in the new map under
+ * the lock. 0, or -1 when the map does not reach `fd`, which a growth of
+ * the table never leaves.
+ */
+static int hold_set(fd_table_t *table, process_t *p, int fd)
+{
+    struct fd_hold_map *map = p->fd_held;
+    unsigned int bit = 1u << (fd % 32);
+    int w = fd / 32;
+    uint32_t flags;
+
+    if (!map || w >= map->words) {
+        return -1;
+    }
+    if (p->fd_holding <= w) {
+        p->fd_holding = w + 1;
+    }
+    hold_word_change(&map->bits[w], bit, 0);
+    if (map->stale) {
+        flags = fd_table_lock(table);
+        p->fd_held->bits[w] |= bit;
+        fd_table_unlock(table, flags);
+    }
+    return 0;
+}
+
+/** Whether a call of a thread other than the caller that shares `table`
+ * holds `fd`. The caller holds the lock, so each map is its thread's
+ * newest, and has stored its own mark of the slot with a full barrier
+ * first. */
 
 int fd_held_elsewhere(fd_table_t *table, int fd)
 {
@@ -1247,7 +1358,7 @@ int fd_held_elsewhere(fd_table_t *table, int fd)
     }
     for (t = table->sharers; t; t = t->fd_sharer_next) {
         if (t != current_proc && fd / 32 < t->fd_holding &&
-            (t->fd_held[fd / 32] & (1u << (fd % 32)))) {
+            (t->fd_held->bits[fd / 32] & (1u << (fd % 32)))) {
             return 1;
         }
     }
@@ -1267,12 +1378,14 @@ int fd_close_claim(fd_table_t *table, int fd, fd_entry_t **claimed)
     e = fd_table_entry(table, fd);
     if (slot_unready(e) || (e->flags & FD_FLAG_CLOSING)) {
         rc = -EBADF;
-    } else if (fd_held_elsewhere(table, fd)) {
-        e->flags |= FD_FLAG_CLOSING;
-        rc = 0;
     } else {
-        e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
-        rc = 1;
+        (void)arch_atomic_xchg(&e->flags, e->flags | FD_FLAG_CLOSING);
+        if (fd_held_elsewhere(table, fd)) {
+            rc = 0;
+        } else {
+            e->flags |= FD_FLAG_RELEASING;
+            rc = 1;
+        }
     }
     if (rc >= 0) {
         *claimed = e;
@@ -1285,7 +1398,7 @@ int fd_close_claim(fd_table_t *table, int fd, fd_entry_t **claimed)
  * lock of `t`'s table. */
 static int held_by(const process_t *t, int fd)
 {
-    return fd / 32 < t->fd_holding && (t->fd_held[fd / 32] & (1u << (fd % 32)));
+    return fd / 32 < t->fd_holding && (t->fd_held->bits[fd / 32] & (1u << (fd % 32)));
 }
 
 /** A hold of `t`'s call on `g`'s entry, pushed on its `fd_gone` with the
@@ -1305,6 +1418,47 @@ static void gone_push(process_t *t, struct fd_gone *g, struct fd_gone_hold *h, f
 }
 
 /**
+ * Take from the heap what `gone_make` needs to replace an entry of chunk
+ * `k` of `table` that `need` - 1 calls hold: the chunk's `moved` array when
+ * it has none, the spare `*sp`, the record `*g` and `need` holds on
+ * `*holds`. 0, or -ENOMEM with nothing taken but the array, which stays
+ * for a later dup2. The caller holds the lock, under which the heap may be
+ * called.
+ */
+static int gone_alloc(fd_table_t *table, int k, int need, struct fd_spare **sp, struct fd_gone **g,
+                      struct fd_gone_hold **holds)
+{
+    struct fd_gone_hold *h;
+
+    *holds = NULL;
+    if (!table->moved[k]) {
+        fd_entry_t **moved = kzalloc(sizeof(fd_entry_t *) * (size_t)chunk_size(k));
+
+        if (!moved) {
+            return -ENOMEM;
+        }
+        *(fd_entry_t * *volatile *)(void *)&table->moved[k] = moved;
+    }
+    *sp = kzalloc(sizeof(**sp));
+    *g = kzalloc(sizeof(**g));
+    while (*sp && *g && need-- > 0 && (h = kzalloc(sizeof(*h))) != NULL) {
+        h->next = *holds;
+        *holds = h;
+    }
+    if (*sp && *g && need < 0) {
+        return 0;
+    }
+    kfree(*sp);
+    kfree(*g);
+    while (*holds) {
+        h = *holds;
+        *holds = h->next;
+        kfree(h);
+    }
+    return -ENOMEM;
+}
+
+/**
  * Put a spare holding `nw` in place of `old`, the entry of `fd`, for dup2,
  * in one step, and keep `old` for the calls that hold it: each sharer whose
  * call holds `fd` lets the number go and keeps `old` instead, its `fd_slot`
@@ -1315,9 +1469,12 @@ static void gone_push(process_t *t, struct fd_gone *g, struct fd_gone_hold *h, f
  * that hold it let the number go and keep nothing. A lookup finds `old`
  * before the step and the copy after it, never a slot that is empty or
  * reserved, as Linux's do_dup2 swaps the file in the slot under the
- * table's lock. Everything is taken from the heap first, under the lock,
- * which the heap allows. 0, or -ENOMEM with nothing changed. The caller
- * holds the lock.
+ * table's lock. An open `old` is marked closing with a full barrier
+ * before the holds are read, as a close marks it (`fd_close_claim`), so
+ * that a lookup without the lock either holds it before the reading or
+ * finds the mark at its second look (`hold_set`). Everything is taken from
+ * the heap first, under the lock, which the heap allows. 0, or -ENOMEM
+ * with nothing changed. The caller holds the lock.
  */
 static int gone_make(fd_table_t *table, int fd, fd_entry_t *old, const fd_entry_t *nw)
 {
@@ -1325,43 +1482,23 @@ static int gone_make(fd_table_t *table, int fd, fd_entry_t *old, const fd_entry_
     int first, k = chunk_of(fd, &first);
     int releasing = (old->flags & FD_FLAG_RELEASING) != 0;
     int was_open = !(old->flags & FD_FLAG_CLOSING);
-    struct fd_gone_hold *holds = NULL, *h;
+    struct fd_gone_hold *holds, *h;
     struct fd_spare *sp;
     struct fd_gone *g;
     process_t *t;
     int need = 1, self_held = 0;
 
+    if (was_open) {
+        (void)arch_atomic_xchg(&old->flags, old->flags | FD_FLAG_CLOSING);
+    }
     for (t = table->sharers; t; t = t->fd_sharer_next) {
         if (held_by(t, fd)) {
             need++;
         }
     }
-    if (!table->moved[k]) {
-        fd_entry_t **moved = kzalloc(sizeof(fd_entry_t *) * (size_t)chunk_size(k));
-
-        if (!moved) {
-            return -ENOMEM;
-        }
-        *(fd_entry_t * *volatile *)(void *)&table->moved[k] = moved;
-    }
-    sp = kzalloc(sizeof(*sp));
-    g = kzalloc(sizeof(*g));
-    while (sp && g && need-- > 0 && (h = kzalloc(sizeof(*h))) != NULL) {
-        h->next = holds;
-        holds = h;
-    }
-    if (!sp || !g || need >= 0) {
-        kfree(sp);
-        kfree(g);
-        while (holds) {
-            h = holds;
-            holds = h->next;
-            kfree(h);
-        }
+    if (gone_alloc(table, k, need, &sp, &g, &holds) != 0) {
+        old->flags &= ~(uint32_t)(was_open ? FD_FLAG_CLOSING : 0);
         return -ENOMEM;
-    }
-    if (was_open) {
-        old->flags |= FD_FLAG_CLOSING;
     }
     g->entry = old;
     g->fd = fd;
@@ -1370,7 +1507,7 @@ static int gone_make(fd_table_t *table, int fd, fd_entry_t *old, const fd_entry_
         if (!held_by(t, fd)) {
             continue;
         }
-        t->fd_held[fd / 32] &= ~(1u << (fd % 32));
+        hold_word_change(&t->fd_held->bits[fd / 32], 0, 1u << (fd % 32));
         if (releasing) {
             continue;
         }
@@ -1415,7 +1552,7 @@ int fd_dup_swap(fd_table_t *table, int fd, const fd_entry_t *nw, fd_entry_t **wa
     }
     e = fd_table_entry(table, fd);
     if (entry_free(e)) {
-        *e = *nw;
+        slot_fill(e, nw);
         if (current_proc && current_proc->fd_gone) {
             gone_shadow(table, fd);
         }
@@ -1481,11 +1618,68 @@ int fd_gone_take(fd_table_t *table, fd_entry_t **e)
     return fd;
 }
 
+/** Whether the entry descriptor `fd` of `table` leads to may be closing
+ * with no one releasing it yet, read without the lock: its number leads to
+ * a spare, which only the lock may read, or its slot's own entry bears the
+ * mark a close left for the calls that hold it. */
+static int slot_left(fd_table_t *table, int fd)
+{
+    fd_entry_t **moved;
+    uint32_t flags;
+    int first, k;
+
+    if (fd >= fd_table_cap(table)) {
+        return 0;
+    }
+    k_barrier();
+    k = chunk_of(fd, &first);
+    moved = *(fd_entry_t * *const volatile *)&table->moved[k];
+    if (moved && *(fd_entry_t *const volatile *)&moved[fd - first]) {
+        return 1;
+    }
+    flags = ((const volatile fd_entry_t *)&table->chunks[k][fd - first])->flags;
+    return (flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING;
+}
+
+/** Under the table's lock, clear bit `fd` of the newest map of the
+ * calling thread `p` and claim the release of the entry its number leads
+ * to when a close left it to the calls that held it and no other holds it:
+ * 1, with the entry marked releasing and in `*claimed`, or 0. */
+static int hold_drop_locked(fd_table_t *table, process_t *p, int fd, fd_entry_t **claimed)
+{
+    uint32_t flags = fd_table_lock(table);
+    fd_entry_t *e;
+    int rc = 0;
+
+    p->fd_held->bits[fd / 32] &= ~(1u << (fd % 32));
+    if (fd < table->cap) {
+        e = fd_table_entry(table, fd);
+        if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
+            !fd_held_elsewhere(table, fd)) {
+            e->flags |= FD_FLAG_RELEASING;
+            *claimed = e;
+            rc = 1;
+        }
+    }
+    fd_table_unlock(table, flags);
+    return rc;
+}
+
+/**
+ * Each bit is cleared by a locked compare-and-exchange and the slot's mark
+ * read after it: a close that stored its mark after this read finds the
+ * bit clear and releases the slot itself (`fd_close_claim`), and a dup2
+ * that read the bit first moved the hold to the entry it replaced
+ * (`fd_gone_claim`), so only a slot found marked or leading to a spare, or
+ * a map a growth replaced, needs the lock, as Linux's `fput` at a call's
+ * end takes no table lock.
+ */
 int fd_holds_claim(int from, fd_entry_t **claimed)
 {
     process_t *p = current_proc;
     fd_table_t *table = p ? p->fds : NULL;
-    uint32_t flags;
+    struct fd_hold_map *map;
+    unsigned int word, bit;
     int fd;
 
     if (!table) {
@@ -1494,33 +1688,26 @@ int fd_holds_claim(int from, fd_entry_t **claimed)
         }
         return -1;
     }
-    flags = fd_table_lock(table);
+    rcu_read_lock();
     for (fd = from; fd / 32 < p->fd_holding; fd++) {
-        uint32_t *word = &p->fd_held[fd / 32];
-        fd_entry_t *e;
-
-        if (*word == 0) {
+        map = p->fd_held;
+        word = map->bits[fd / 32];
+        bit = 1u << (fd % 32);
+        if (word == 0) {
             fd = (fd / 32) * 32 + 31;
             continue;
         }
-        if (!(*word & (1u << (fd % 32)))) {
+        if (!(word & bit)) {
             continue;
         }
-        *word &= ~(1u << (fd % 32));
-        if (fd >= table->cap) {
-            continue;
-        }
-        e = fd_table_entry(table, fd);
-        if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
-            !fd_held_elsewhere(table, fd)) {
-            e->flags |= FD_FLAG_RELEASING;
-            *claimed = e;
-            fd_table_unlock(table, flags);
+        hold_word_change(&map->bits[fd / 32], 0, bit);
+        if ((map->stale || slot_left(table, fd)) && hold_drop_locked(table, p, fd, claimed)) {
+            rcu_read_unlock();
             return fd;
         }
     }
     p->fd_holding = 0;
-    fd_table_unlock(table, flags);
+    rcu_read_unlock();
     return -1;
 }
 
@@ -1678,7 +1865,7 @@ int fd_free(fd_table_t *table, int fd)
     fd_table_unlock(table, flags);
     fd_ofd_unref(ofd);
     flags = fd_table_lock(table);
-    k_memset(e, 0, sizeof(*e));
+    slot_clear(e);
     if (fd < table->next_free) {
         table->next_free = fd;
     }
@@ -1705,10 +1892,10 @@ void fd_free_after(fd_table_t *table, int fd, fd_entry_t *e)
         *link = g->next;
         kfree(g);
         if (!spare_drop(table, e)) {
-            k_memset(e, 0, sizeof(*e));
+            slot_clear(e);
         }
     } else {
-        k_memset(e, 0, sizeof(*e));
+        slot_clear(e);
         if (fd < table->next_free) {
             table->next_free = fd;
         }
@@ -1740,12 +1927,57 @@ static int fd_table_alone(const fd_table_t *table)
 }
 
 /**
+ * Whether entry `e` is open, read without the table's lock: published, not
+ * closing and of a type. The flags and the reservation are read before the
+ * type, and a release clears the type before the rest (`slot_clear`) and a
+ * dup2 into a free entry fills it last (`slot_fill`), so an entry being
+ * cleared or filled is never taken for open. An entry being filled after
+ * `fd_alloc` keeps its reservation until `fd_install` publishes it, after
+ * the fill's stores.
+ */
+static int slot_open_unlocked(const fd_entry_t *e)
+{
+    const volatile fd_entry_t *v = e;
+    uint32_t flags = v->flags;
+    uint32_t pending = v->pending;
+
+    return !(flags & FD_FLAG_CLOSING) && !pending && v->type != FD_TYPE_NONE;
+}
+
+/** The slot's own entry of descriptor `fd` < `fd_table_cap(table)` when
+ * its number leads there, read without the lock, or NULL when it leads to
+ * a spare dup2 made, which a release may free under the lock. */
+static fd_entry_t *slot_home_unlocked(const fd_table_t *table, int fd)
+{
+    fd_entry_t **moved;
+    int first, k;
+
+    k = chunk_of(fd, &first);
+    moved = *(fd_entry_t * *const volatile *)&table->moved[k];
+    if (moved && *(fd_entry_t *const volatile *)&moved[fd - first]) {
+        return NULL;
+    }
+    return &table->chunks[k][fd - first];
+}
+
+/**
  * A lookup in a table the caller alone has (`fd_table_alone`) takes no lock
  * and marks no hold, since no other thread can close the slot during the
- * call; any other lookup takes the table's lock.
+ * call, as Linux's `__fget_light`. A lookup in the caller's shared table
+ * finds the slot's own entry open, holds it (`hold_set`) and finds it open
+ * and still the number's again, with no lock, as Linux's `__fget_files_rcu`
+ * reads the slot, takes the file's reference and reads the slot again: a
+ * close or a dup2 that the second look misses finds the hold. The slot's
+ * address is stable, since a growth adds chunks and moves no entry, and is
+ * read after `cap`, which a growth raises after its chunk is published. A
+ * slot found changing, by a close, a release or a dup2, a number that
+ * leads to a spare, and a call that keeps an entry dup2 replaced, whose
+ * `fd_slot` must follow the lookup (`gone_shadow`), are looked up again
+ * under the lock; so is any other process's table.
  */
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
+    process_t *p = current_proc;
     fd_entry_t *e = NULL;
     uint32_t flags;
 
@@ -1764,6 +1996,21 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
             gone_shadow(table, fd);
         }
         return e;
+    }
+    if (p && table == p->fds && !p->fd_gone) {
+        if (fd >= fd_table_cap(table)) {
+            return NULL;
+        }
+        k_barrier();
+        rcu_read_lock();
+        e = slot_home_unlocked(table, fd);
+        if (e && slot_open_unlocked(e) && hold_set(table, p, fd) == 0 &&
+            slot_home_unlocked(table, fd) == e && slot_open_unlocked(e)) {
+            rcu_read_unlock();
+            return e;
+        }
+        rcu_read_unlock();
+        e = NULL;
     }
     flags = fd_table_lock(table);
     if (fd < table->cap) {

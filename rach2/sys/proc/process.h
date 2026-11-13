@@ -669,16 +669,18 @@ struct process {
      * it on and exec keeps it. */
     uint32_t persona;
     /* The descriptors of its shared table the current call has looked up
-     * or reserved, one bit each, which a close by another sharer leaves in
-     * place until the call ends (`fd_holds_release`): `fd_held_words`
-     * words from the heap, NULL until the thread first shares a table, and
-     * as wide as the table, which grows every sharer's map before it grows
-     * (fs/fd.c). `fd_holding` says whether any bit is set. */
-    uint32_t *fd_held;
-    int fd_held_words;
+     * or reserved, which a close by another sharer leaves in place until
+     * the call ends (`fd_holds_release`): a map from the heap, NULL until
+     * the thread first shares a table, and as wide as the table, which
+     * replaces every sharer's map with a wider one before it grows
+     * (`struct fd_hold_map`, fs/fd.h). Only the thread sets and clears its
+     * bits, and it does so without the table's lock. `fd_holding` is one
+     * more than the highest word with a bit set, written by the thread
+     * alone before it sets the bit. */
+    struct fd_hold_map *volatile fd_held;
     int fd_holding;
-    /* The next sharer of its descriptor table (`fd_table_t.sharers`). The
-     * map, this link and `fd_holding` change under the table's lock. */
+    /* The next sharer of its descriptor table (`fd_table_t.sharers`),
+     * which changes under the table's lock. */
     struct process *fd_sharer_next;
     /* The entries dup2 replaced while the current call held them, which
      * the call keeps until it ends (`fd_gone_claim`, fs/fd.c): pushed by

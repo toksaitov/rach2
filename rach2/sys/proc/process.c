@@ -919,7 +919,6 @@ void free_process(process_t *proc)
     }
     kfree(proc->fd_held);
     proc->fd_held = NULL;
-    proc->fd_held_words = 0;
     if (proc->fs && --proc->fs->refs == 0) {
         kfree(proc->fs->cwd_long);
         kfree(proc->fs);

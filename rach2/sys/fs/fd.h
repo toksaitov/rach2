@@ -15,6 +15,7 @@
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 #include "../lib/spinlock.h"
+#include "../lib/rcu.h"
 
 /*
  * A table starts with FD_TABLE_FIRST entries and doubles as it fills, up to
@@ -341,19 +342,22 @@ typedef struct fd_entry {
  * sharers' POSIX record locks (`lock.h`), which its release drops as it
  * closes the descriptors.
  *
- * `lock` guards the entries, `cap`, `next_free`, the sharer list and every
- * sharer's map of held descriptors (`fd_held` in process.h), as Linux's
- * `files->file_lock` (include/linux/fdtable.h:51). It is a spinlock, taken
- * with interrupts off and held for no sleep, below the big lock and the
- * sleeping locks and above the scheduler's locks and the heap's, which a
- * growth under it takes. Every reservation, publication, change of a
- * descriptor's flags, release of a slot and growth takes it, and so does
- * every lookup but one in a table that only its caller has (`fd_get`), so
- * a call that runs without the big lock may use the table while another
- * sharer runs with it, and another process's table is read only under it
- * (`fd_peek`). A slot that a call has looked up or reserved is held by the
- * call (`fd_get`), so that no other sharer releases what it names until
- * the call ends.
+ * `lock` guards the entries, `cap`, `next_free`, the sharer list and the
+ * replacement of every sharer's map of held descriptors (`fd_held` in
+ * process.h), as Linux's `files->file_lock` (include/linux/fdtable.h:51).
+ * It is a spinlock, taken with interrupts off and held for no sleep, below
+ * the big lock and the sleeping locks and above the scheduler's locks and
+ * the heap's, which a growth under it takes. Every reservation,
+ * publication, change of a descriptor's flags, release of a slot, dup2 and
+ * growth takes it, and another process's table is read only under it
+ * (`fd_peek`). A lookup in the caller's own table takes it only when it
+ * finds the slot changing: a table only the caller has is read as it is,
+ * as Linux's `__fget_light`, and a shared one is read with the hold set in
+ * between two looks at the slot, as Linux's `__fget_files_rcu` takes the
+ * file's reference between two reads of the array (`fd_get`). A slot that
+ * a call has looked up or reserved is held by the call, so that no other
+ * sharer releases what it names until the call ends, which also lets go
+ * of the holds without the lock (`fd_holds_claim`).
  *
  * A descriptor that dup2 replaces while calls of other sharers hold it
  * stays where those calls read it until the last of them ends, as Linux's
@@ -386,6 +390,26 @@ typedef struct fd_table {
      * `fd_sharer_next`; a table the kernel fills for nobody has none. */
     struct process *sharers;
 } fd_table_t;
+
+/*
+ * A sharer's map of the descriptors its call holds in its shared table
+ * (process.h's `fd_held`), one bit each, Linux's file references of a
+ * call's fdget: the thread sets its bits as it looks a descriptor up and
+ * clears them as the call ends, without the table's lock, and a close or a
+ * dup2 by another sharer reads them under the lock (`fd_held_elsewhere`),
+ * where a dup2 also clears the bit of a hold it moves to the entry it
+ * replaced (`gone_make`); every change of a word is one locked
+ * compare-and-exchange. A map never shrinks; a growth of the table past it
+ * replaces it under the lock with a wider copy, marking it stale first, and
+ * frees it after a grace period, since its thread may still be changing a
+ * bit in it (fd.c).
+ */
+struct fd_hold_map {
+    struct rcu_head rcu;           /* first: the record `call_rcu` frees */
+    volatile unsigned int stale;   /* 1 once a growth has copied it */
+    int words;                     /* the words of `bits` */
+    volatile unsigned int bits[1]; /* `words` words, from the heap */
+};
 
 /** Release every descriptor of `table`, its object and then its slot, when
  * the last process that shares the table lets it go; a second call finds
@@ -550,9 +574,10 @@ void fd_free_after(fd_table_t *table, int fd, fd_entry_t *e);
 
 /**
  * The entry for fd, or NULL if fd is out of range, free, not yet published
- * or closing: looked up with no lock in the calling thread's table when no
- * other thread shares it, since only the caller changes it then, and under
- * the table's lock otherwise. A lookup in the calling thread's shared table
+ * or closing: looked up with no lock in the calling thread's own table,
+ * and under the lock in another's, when the slot is changing, when its
+ * number leads to a spare dup2 made, or while the call keeps an entry dup2
+ * replaced. A lookup in the calling thread's shared table
  * marks the descriptor held by the call until it ends, as Linux's
  * `__fget_files` (fs/file.c:1006) takes a reference: a close by another
  * sharer then leaves the slot and what it names in place until the call
@@ -626,7 +651,9 @@ int fd_dup_swap(fd_table_t *table, int fd, const fd_entry_t *nw, fd_entry_t **e)
  * yet being released, marked releasing for the caller to release, with
  * `*e` its entry, or -1 once none is left, when the thread holds nothing
  * more. The dispatcher calls it from 0, and again past each descriptor it
- * releases, as each call ends (`fd_holds_release`).
+ * releases, as each call ends (`fd_holds_release`). The lock is taken only
+ * for a descriptor that a close marked meanwhile or whose number leads to
+ * a spare, and when a growth replaced the map.
  */
 int fd_holds_claim(int from, fd_entry_t **e);
 
