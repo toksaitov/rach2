@@ -504,6 +504,15 @@ int vfs_name_seq_still(uint32_t seq)
     return names_changed == seq;
 }
 
+/** Start a description's cursor into its file's write-back error sequence at
+ * none, since no row records a write-back error. */
+uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+    return 0;
+}
+
 /** Capture a regular file's last name for the cached walk: the model's one
  * record, counted. */
 int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t seq,
