@@ -118,15 +118,19 @@ os-real-gnu-ext2: $(OS_REAL_GNU_EXT2)
 os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
 
 ifeq ($(GNU_TOOLING),)
+# The builder guest that makes IGT, VK-GL-CTS and Weston runs under QEMU: a
+# Linux host without it, such as the Windows collection machine, makes the
+# images without them, as the tooling machine does.
+GNU_BUILDER_ON ?= $(if $(filter x86_64,$(ARCH)),$(if $(shell command -v qemu-system-x86_64 2>/dev/null),1))
 $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_TEST_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
     $(GNU_SANITIZERS_STAMP) $(GNU_FSTOOLS_STAMP) tests/cases/host/fstool.c \
-    $(if $(filter x86_64,$(ARCH)),$(GNU_VK_GL_CTS_STAMP) $(GNU_WESTON_STAMP)) | $(GNU_IMAGE_ORDER)
+    $(if $(GNU_BUILDER_ON),$(GNU_VK_GL_CTS_STAMP) $(GNU_WESTON_STAMP)) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 GNU_I386=$(GNU_I386_ON) \
-	    GNU_VK_GL_CTS=$(if $(filter x86_64,$(ARCH)),1) GNU_WESTON=$(if $(filter x86_64,$(ARCH)),1) \
+	    GNU_VK_GL_CTS=$(GNU_BUILDER_ON) GNU_WESTON=$(GNU_BUILDER_ON) \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    $(GNU_TEST_MANIFEST) $@ 24576
 
-GNU_IGT_ON = $(if $(filter x86_64,$(ARCH)),1)
+GNU_IGT_ON = $(GNU_BUILDER_ON)
 $(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) $(GNU_LOGINS_STAMP) \
                      $(if $(GNU_IGT_ON),$(GNU_IGT_STAMP) $(GNU_VK_GL_CTS_STAMP) $(GNU_WESTON_STAMP)) tools/image/stage_logins.sh | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_IGT=$(GNU_IGT_ON) GNU_VK_GL_CTS=$(GNU_IGT_ON) GNU_WESTON=$(GNU_IGT_ON) \
