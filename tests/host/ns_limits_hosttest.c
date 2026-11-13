@@ -454,6 +454,7 @@ static void maps(void)
     }
     CHECK(ns_map_write(v, NS_MAP_UID, "0 100 2\n2 300 2\n4 104 1\n", 24, &root) == 24,
           "a map of three extents");
+    ns_release(&grand);
     as_user(&grand, 0);
     grand2.ns_granted = 1;
     current_proc = &grand2;
