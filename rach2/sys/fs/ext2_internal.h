@@ -592,6 +592,8 @@ int ext2_plan_has(struct ext2_mount *em, uint32_t blk);
 void ext2_volume_fetch(struct ext2_mount *em, uint64_t blk);
 int ext2_read_bytes(struct ext2_mount *em, int kind, uint32_t ino, uint64_t off, void *dst,
                     uint32_t len);
+int ext2_read_reclaim(struct ext2_mount *em, int kind, uint32_t ino, uint64_t off, void *dst,
+                      uint32_t len);
 int ext2_has_super(const struct ext2_mount *em, uint32_t g);
 uint32_t ext2_gd_blocks(const struct ext2_mount *em);
 uint32_t ext2_inode_table_blocks(const struct ext2_mount *em);
