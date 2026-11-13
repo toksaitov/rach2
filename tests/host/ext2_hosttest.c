@@ -5958,7 +5958,11 @@ static void entry_cleared_on(const char *img, uint64_t bytes, int orphan, const 
  * - /gone with no link, a deletion time and its bit set must lose its
  *   entry, the inode counted with the orphans for `e2fsck -p`;
  * - /td/t, an empty file whose entry's type byte says a symbolic link,
- *   must have the type of a regular file written into its entry.
+ *   must have the type of a regular file written into its entry;
+ * - /tk/t, an empty file with one link given mode 0600, of no kind, whose
+ *   entry's type byte is 0, and /nk, the same file on a volume without
+ *   FILETYPE, must stop the check as faults, since the inode is live and
+ *   no file the check could judge, with neither entry cleared.
  */
 static void entry_rows(void)
 {
@@ -5996,6 +6000,29 @@ static void entry_rows(void)
         check(unmount_rw() == 0 && disk_state(img) == 1 && e2fsck_clean(img),
               "and the unmount leaves the volume valid and clean");
     }
+
+    ft = 0;
+    bytes = dirty_image(img, "mkdir /tk\ncd /tk\nwrite /dev/null t\ncd /\nsif /tk/t mode 0600\n");
+    td = debugfs_number(img, "blocks /tk", "");
+    if (td <= 0) {
+        check(0, "the directory of the untyped-entry row is made");
+        return;
+    }
+    poke(img, td * 4096 + 24 + 7, &ft, 1);
+    fault_on(img, bytes, "an entry naming an inode of no kind",
+             "an untyped entry naming a live inode of no kind mounts read-only");
+
+    bytes = build_image(img, 4096, 128,
+                        "sparse_super,large_file,^filetype,^dir_index,resize_inode,^ext_attr,"
+                        "^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,"
+                        "^dir_nlink,^extra_isize",
+                        16, "tree");
+    if (!debugfs_script(img, "ssv state 0\nwrite /dev/null nk\nsif /nk mode 0600\n")) {
+        printf("ext2_hosttest: debugfs failed on %s\n", img);
+        exit(1);
+    }
+    fault_on(img, bytes, "an entry naming an inode of no kind",
+             "a live inode of no kind on a volume without filetype mounts read-only");
 }
 
 /**
@@ -6026,7 +6053,8 @@ static void entry_rows(void)
  *   or another orphan directory (`orphan_rows`);
  * - an entry naming an unused inode is cleared and an entry of another
  *   type than its inode has the type set, as `e2fsck -p` repairs both, and
- *   the volume mounts writable (`entry_rows`);
+ *   the volume mounts writable, while an entry naming a live inode of no
+ *   kind mounts read-only, whatever its type byte (`entry_rows`);
  * - a read-only mount runs no check and writes nothing.
  */
 static int lost_block_reported(void)
