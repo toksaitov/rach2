@@ -853,12 +853,20 @@ build()
             debugfs -R 'cat /demo/doom1.wad' $ARCH_DIR/images/os-real-gnu.ext2 2> /dev/null |
                 cmp -s - ports/doom/doom1.wad ) ||
             { echo 'release: wad: the root has no /demo/doom1.wad equal to ports/doom/doom1.wad' >&2; false; }; }"
-    if ! RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh run \
-        "$WAD && ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && $staged &&
-        $native cd $ARCH_DIR &&
-        gzip -1 -c images/os-real-gnu.ext2 > images/os-real-gnu.ext2.gz &&
-        sha256sum rach2/kernel rach2-recovery/kernel utils/sbin/bootctl $RECOVERY_IMAGE images/os-real-gnu.ext2 $payload \
-            > images/release.sha256" > "$state/build.log" 2>&1; then
+    # The build runs as a job that hold.pl holds, so that a stop of the
+    # release stops it here and, through testing.sh, on the host.
+    bd_job=$(job_dir build) || later "no directory for a job under $state/jobs"
+    (
+        RACH2_TESTING_COPY=$COPY
+        export RACH2_TESTING_COPY
+        held "$bd_job" sh tools/dev/testing.sh run \
+            "$WAD && ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && $staged &&
+            $native cd $ARCH_DIR &&
+            gzip -1 -c images/os-real-gnu.ext2 > images/os-real-gnu.ext2.gz &&
+            sha256sum rach2/kernel rach2-recovery/kernel utils/sbin/bootctl $RECOVERY_IMAGE images/os-real-gnu.ext2 $payload \
+                > images/release.sha256"
+    ) > "$state/build.log" 2>&1 &
+    if ! job_wait "$! $bd_job"; then
         if grep -q 'testing: the copy at .* is in use\|testing: the host did not answer' "$state/build.log"; then
             later "the build copy is busy or the host does not answer"
         fi
@@ -1235,6 +1243,7 @@ mac_launch()
     mkdir -p "$runs/$1"
     note "mac started $1"
     ml_dir=$macdir/held/$1
+    perl "$repo/tools/flow/hold.pl" sweep "$macdir/held"
     { mkdir -p "$macdir/held" && mkdir "$ml_dir"; } || fail mac "$ml_dir cannot be made"
     { echo "$ml_dir $1" > "$macdir/run.new" && mv "$macdir/run.new" "$macdir/run"; } ||
         fail mac "$macdir/run cannot be written"
@@ -2329,34 +2338,72 @@ prepare_wsl()
         ARCH='i686 x86_64' tests/run style host"
 }
 
-# prepare_host: stop each process on the testing host whose working directory
-# is in the copy of prepare_wsl, which a stopped testing.sh leaves running,
-# through procs.pl, which sends each TERM through a pidfd, and remove the
-# copy; print a line for each stopped process whose claim stays in WSL's
-# admission ledger.
+# prepare_host: stop what of prepare_wsl still runs in its copy on the
+# testing host, and remove the copy once that is confirmed, as root in WSL,
+# which reads every process's directory. Its build and suites run under the
+# copy's hold.pl in a run directory under the copy's build/held, as
+# testing.sh says, which holds everything they started: each such run is
+# stopped through its directory's stop, five minutes at most. Then procs.pl,
+# whose scan fails rather than read part of /proc, lists and stops through a
+# pidfd each other process whose directory is in the copy, as the sync lock's
+# shell of a lost connection may be, and waits a minute for them to end.
+# Once something was stopped, etude status recovers the admission ledger, a
+# minute at most, which drops a dead owner, and each process that procs.pl
+# stopped is looked up there by its number and its start, as the ledger
+# keeps them. The copy is removed only when every run there has ended, the
+# scan succeeded and nothing is left in the copy; a line says what stays.
+# The whole is bounded at fifteen minutes.
 prepare_host()
 {
     {
         echo "copy=$PREPARE_COPY"
+        echo "hold() { perl - \"\$@\" << 'END_OF_HOLD'"
+        cat "$repo/tools/flow/hold.pl"
+        echo 'END_OF_HOLD'
+        echo '}'
         echo "procs() { perl - \"\$@\" << 'END_OF_PROCS'"
         cat "$repo/tools/flow/procs.pl"
         echo 'END_OF_PROCS'
         echo '}'
         cat << 'END'
-ledger=/var/lib/rach2-etude/ledger/claims
+ledger=/var/lib/rach2-etude/ledger
 [ -d "$copy" ] || exit 0
-pids=$(procs -k -d "$copy" | cut -d ' ' -f 1)
-if [ -n "$pids" ]; then
+left='' stopped=''
+for h in "$copy"/build/held/*; do
+    [ -d "$h" ] || continue
+    case $(hold state "$h") in "ended "*) continue ;; esac
+    stopped=1
+    s=$(hold stop "$h" 300) || { echo "the run in $h is not confirmed stopped: $s"; left=1; }
+done
+if ! out=$(procs -k -d "$copy"); then
+    echo "the processes in $copy could not be read"
+    left=1
+elif [ -n "$out" ]; then
+    stopped=1
     i=0
-    while [ -n "$(procs -d "$copy")" ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 2; done
-    for p in $pids; do
-        ! grep -q "^owner $p " "$ledger" 2> /dev/null ||
-            echo "the stopped process $p keeps a claim in $ledger; a person checks it and removes it"
+    while now=$(procs -d "$copy") && [ -n "$now" ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 2; done
+    if ! now=$(procs -d "$copy") || [ -n "$now" ]; then
+        echo "processes in $copy did not end: $(printf '%s\n' "$now" | cut -d ' ' -f 1 | tr '\n' ' ')"
+        left=1
+    fi
+fi
+if [ -n "$stopped" ]; then
+    timeout 60 /usr/local/libexec/rach2/etude status "$ledger" > /dev/null 2>&1 ||
+        echo "etude status did not recover $ledger/claims"
+    printf '%s\n' "$out" | while read -r p st rest; do
+        [ -n "$p" ] || continue
+        ! grep -Eq "^owner $p ($st |[0-9]+ 0\$)" "$ledger/claims" 2> /dev/null ||
+            echo "the stopped process $p keeps a claim in $ledger/claims; a person checks it and removes it"
     done
+fi
+if [ -n "$left" ]; then
+    echo "the copy $copy stays"
+    exit 1
 fi
 rm -rf "$copy"
 END
-    } | tssh "$WSL"
+    } | perl "$repo/tools/flow/bound.pl" 900 ssh -o BatchMode=yes -o ConnectTimeout=10 \
+        -o ServerAliveInterval=15 -o ServerAliveCountMax=4 testing 'MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s'
 }
 
 # prepare_windows_clean: stop Windows' preparation pwid where it still runs on
@@ -2848,6 +2895,9 @@ main()
         # of its own, made new, which STATE/run names before the start; the
         # hold.pl sends it TERM once that directory's stop exists, as stop.sh
         # -r asks, and KILL an hour later. Both keep the lock on descriptor 9.
+        # The run directories of runs and jobs that have ended go first.
+        perl "$repo/tools/flow/hold.pl" sweep "$state/held"
+        perl "$repo/tools/flow/hold.pl" sweep "$state/jobs"
         rl_dir=$state/held/release-$(stamp)
         { mkdir -p "$state/held" && mkdir "$rl_dir"; } || later "$rl_dir cannot be made"
         { echo "$rl_dir" > "$state/run.new" && mv "$state/run.new" "$state/run"; } ||

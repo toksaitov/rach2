@@ -7,6 +7,7 @@
 #        perl hold.pl run [-P] [-k SECONDS] DIR -p PID
 #        perl hold.pl state DIR
 #        perl hold.pl stop DIR SECONDS
+#        perl hold.pl sweep PARENT
 #
 # DIR is the run's directory, which the caller makes once, by a mkdir that
 # fails when it exists, and never makes again; its name is the run's, unique,
@@ -72,6 +73,10 @@
 # turns of a second, while the run is `running` or `starting`; print the
 # state then. Exit 0 on `ended` or `absent`, 1 otherwise.
 #
+# sweep: remove each run directory in PARENT whose run has ended, as state
+# reads it, and nothing else, since a run that has not ended may still be
+# held or stopped through its directory. Exit 0.
+#
 # Nothing reads a clock: each wait counts turns of a sleep, which a suspended
 # host stretches and never shortens.
 
@@ -83,7 +88,7 @@ use Fcntl qw(:flock O_CREAT O_EXCL O_RDWR O_WRONLY);
 use POSIX qw(WNOHANG);
 
 my $usage = "usage: hold.pl run [-g] [-P] [-k SECONDS] DIR COMMAND... | run [-P] [-k SECONDS] DIR -p PID | " .
-    "state DIR | stop DIR SECONDS\n";
+    "state DIR | stop DIR SECONDS | sweep PARENT\n";
 
 # create FILE TEXT: create FILE holding TEXT whole, by a link that fails when
 # FILE exists; return whether this call created it.
@@ -139,6 +144,17 @@ if ($mode eq 'stop') {
     }
     print "$s\n";
     exit($s =~ /^(ended|absent)/ ? 0 : 1);
+}
+if ($mode eq 'sweep') {
+    @ARGV == 1 or die $usage;
+    require File::Path;
+    opendir(my $d, $ARGV[0]) or exit 0;
+    for my $n (grep { !/^\.\.?$/ } readdir($d)) {
+        my $dir = "$ARGV[0]/$n";
+        -d $dir && !-l $dir && state($dir) =~ /^ended / or next;
+        File::Path::remove_tree($dir);
+    }
+    exit 0;
 }
 $mode eq 'run' or die $usage;
 
