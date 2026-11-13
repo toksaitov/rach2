@@ -634,7 +634,9 @@ struct punch_walk {
  * Linux's `ext2_free_branches` clears the slot and goes on
  * (fs/ext2/inode.c:1146-1156), so that the rest of the file and its inode
  * can still be freed, and `*emptied` is set; a block whose range the walk
- * keeps in part stays, -EIO. 0, or -errno.
+ * keeps in part stays, -EIO, and so does one whose slot's own block cannot
+ * be read again for the clear, reported (READ_RECLAIM), with 0 and
+ * `*emptied` clear. 0, or -errno.
  */
 static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int whole,
                          int *emptied)
@@ -648,10 +650,16 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
     if (slot_at != 0) {
         uint8_t zero[4] = {0, 0, 0, 0};
 
-        rc = ext2_write_owned(em, w->n->ino, slot_at, zero, 4, WRITE_FIRST);
+        rc = ext2_write_owned(em, w->n->ino, slot_at, zero, 4,
+                              WRITE_FIRST | WRITE_KIND(READ_RECLAIM));
+        if (rc == -EIO && !ext2_failed(em)) {
+            return 0;
+        }
         if (rc != 0) {
             return rc;
         }
+    } else {
+        ext2_node_dirty(w->n);
     }
     *slot = 0;
     *emptied = 1;
@@ -666,13 +674,17 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
  * dirtied `first`, or for 0 in the inode in memory, which the caller stores;
  * a pointer block whose children are all gone goes the same way. No bit
  * changes here. `*emptied` says whether the pointer is now 0, and
- * `n->blocks` is kept current. A slot's read may sleep, so a service point
+ * `n->blocks` is kept current, the node marked (`ext2_node_dirty`) for the
+ * change. A slot's read may sleep, so a service point
  * before it asks nothing more of the walk: every removal so far is whole,
  * and the listed blocks stay taken until the round frees them. A pointer
  * block is read by the reclaim reader (`ext2_read_reclaim`), and one out of
  * range or that cannot be read, which it reports, is abandoned
- * (`punch_refused`) and the walk goes on. 0, PUNCH_FULL when the list has
- * no room for the next block, or -errno.
+ * (`punch_refused`) and the walk goes on. A pointer block that cannot be
+ * read again to clear a slot in it, which the write funnel reports
+ * (READ_RECLAIM), keeps that slot: its block and what is below it stay
+ * taken, and `*emptied` clear, so that the rest is still freed. 0,
+ * PUNCH_FULL when the list has no room for the next block, or -errno.
  */
 static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int level,
                        uint32_t base, int *emptied)
@@ -744,11 +756,15 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
     if (slot_at != 0) {
         uint8_t zero[4] = {0, 0, 0, 0};
 
-        rc = ext2_write_owned(em, n->ino, slot_at, zero, 4, WRITE_FIRST);
+        rc = ext2_write_owned(em, n->ino, slot_at, zero, 4, WRITE_FIRST | WRITE_KIND(READ_RECLAIM));
+        if (rc == -EIO && !ext2_failed(em)) {
+            return 0;
+        }
         if (rc != 0) {
             return rc;
         }
     }
+    ext2_node_dirty(n);
     *slot = 0;
     list->blocks[list->count++] = b;
     if (n->blocks >= sectors) {
@@ -837,13 +853,17 @@ static void punch_settle(struct ext2_mount *em, const struct punch_list *list)
  * still frees what its round listed, in the same order, once the inode is
  * stored and a strict mount's sync has put the pointers on the medium;
  * otherwise the blocks stay taken, lost blocks for e2fsck, and the free counts
- * stay exact. A device that failed a write is -EIO and not written to again:
- * the blocks go to the cache first and would reach the device at the sync that
- * ends the round, past the check a write through makes. A round ends at a
- * service point, since a file of gigabytes in the cache frees with no sleep and
- * what is ready on the processor waits for it; a device that failed meanwhile
- * stops the next round. The caller holds `n`'s lock and not `em->batch`. 0, or
- * -errno.
+ * stay exact. A failed store of the inode leaves its pointers cleared in memory
+ * under its mark, which the next store writes, and the blocks they named taken
+ * with no field naming them: the store reported its failure where it arose or
+ * is a device's (`ext2_inode_write`), so the mount's error bit or its failure
+ * has the next writable mount check the volume. A device that failed a write is
+ * -EIO and not written to again: the blocks go to the cache first and would
+ * reach the device at the sync that ends the round, past the check a write
+ * through makes. A round ends at a service point, since a file of gigabytes in
+ * the cache frees with no sleep and what is ready on the processor waits for
+ * it; a device that failed meanwhile stops the next round. The caller holds
+ * `n`'s lock and not `em->batch`. 0, or -errno.
  */
 int ext2_punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
@@ -907,7 +927,8 @@ static int map_point(struct ext2_mount *em, uint32_t owner, uint64_t slot_at, ui
     uint8_t raw[4];
 
     LE32_PUT(raw, b);
-    return ext2_write_owned(em, owner, slot_at, raw, 4, WRITE_LEVEL(level) | WRITE_THROUGH);
+    return ext2_write_owned(em, owner, slot_at, raw, 4,
+                            WRITE_LEVEL(level) | WRITE_THROUGH | WRITE_KIND(READ_MAP));
 }
 
 /**
@@ -945,6 +966,53 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
 }
 
 /**
+ * A new pointer block at `level` of `n`'s tree for the missing pointer
+ * `*slot`, which lies in a pointer block at byte `slot_at` of the volume
+ * or, for 0, in the inode, for `ext2_map_alloc`: the block allocated from
+ * `hint` and its zeros written (`map_zero`), `n->blocks` raised, and the
+ * pointer written, or set in the inode and the inode stored, then `*slot`
+ * set. A failure before anything names the block takes `n->blocks` back and
+ * frees it (`ext2_block_unwind`); a failed store of the inode leaves the
+ * pointer in memory, where the mark has the next store write it, as it
+ * names a block that is taken and zeroed. The caller has marked `n` and
+ * holds its lock. 0, or -errno.
+ */
+static int map_branch(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot, uint64_t slot_at,
+                      int level, uint32_t hint)
+{
+    uint32_t owner = (n->mode & S_IFMT_) == S_IFREG_ ? n->ino : 0;
+    uint32_t b;
+    int rc = ext2_alloc_block(em, hint, &b);
+
+    if (rc != 0) {
+        return rc;
+    }
+    ext2_node_share_group(em, n, (b - em->first_data) / em->bpg, 0);
+    rc = map_zero(em, owner, b, level);
+    if (rc != 0) {
+        ext2_block_unwind(em, b);
+        return rc;
+    }
+    n->blocks += em->block_size / 512;
+    if (slot_at != 0) {
+        rc = map_point(em, owner, slot_at, b, level + 1);
+        if (rc != 0) {
+            n->blocks -= em->block_size / 512;
+            ext2_block_unwind(em, b);
+            return rc;
+        }
+    } else {
+        *slot = b;
+        rc = ext2_inode_store(em, n);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    *slot = b;
+    return 0;
+}
+
+/**
  * The block for data index `index` of `n`, allocated when missing, into
  * `*out`, with `*fresh` set for a new data block. A missing pointer block is
  * allocated and its zeros written before the pointer to it (`map_zero`), so
@@ -956,8 +1024,11 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
  * block's zeros. Each pointer block is marked at its level (`WRITE_LEVEL`),
  * so that a mount that writes back keeps that order too. A directory's
  * blocks are shared, as its entries are, and a regular file's are its own.
- * `n->blocks` and the inode's own pointers change in memory; the caller
- * stores the inode with them, and holds `n`'s lock and not `em->batch`. 0,
+ * `n->blocks` and the inode's own pointers change in memory, the node
+ * marked first (`ext2_node_dirty`); the caller stores the inode with them,
+ * and holds `n`'s lock and not `em->batch`. A block taken that a failure
+ * leaves unnamed is freed again and `n->blocks` lowered, in memory and with
+ * no store (`map_branch`). 0,
  * -EFBIG past the triple indirect's reach, -ENOSPC, -EIO for a block out of
  * range, reported (`ext2_zone_check`), or -errno.
  */
@@ -974,6 +1045,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
     int level, rc;
 
     *fresh = 0;
+    ext2_node_dirty(n);
     if (index < EXT2_NDIR) {
         slot = &n->block[index];
     } else {
@@ -994,7 +1066,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
         slot = &n->block[EXT2_NDIR + level - 1];
         rest = index;
         while (level > 0) {
-            uint32_t div = 1, b;
+            uint32_t div = 1;
             uint8_t ptr[4];
             int i;
 
@@ -1002,33 +1074,13 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
                 div *= per;
             }
             if (*slot == 0) {
-                rc = ext2_alloc_block(em, hint, &b);
+                rc = map_branch(em, n, slot, slot_at, level, hint);
                 if (rc != 0) {
                     return rc;
                 }
-                ext2_node_share_group(em, n, (b - em->first_data) / em->bpg, 0);
-                rc = map_zero(em, owner, b, level);
-                if (rc != 0) {
-                    return rc;
-                }
-                n->blocks += sectors;
-                if (slot_at != 0) {
-                    rc = map_point(em, owner, slot_at, b, level + 1);
-                    if (rc != 0) {
-                        return rc;
-                    }
-                } else {
-                    *slot = b;
-                    rc = ext2_inode_store(em, n);
-                    if (rc != 0) {
-                        return rc;
-                    }
-                }
-                *slot = b;
-                hint = b + 1;
+                hint = *slot + 1;
             }
-            b = *slot;
-            slot_at = (uint64_t)b * em->block_size + (uint64_t)(rest / div) * 4;
+            slot_at = (uint64_t)*slot * em->block_size + (uint64_t)(rest / div) * 4;
             rc = ext2_read_bytes(em, READ_MAP, n->ino, slot_at, ptr, 4);
             if (rc != 0) {
                 return rc;
@@ -1054,6 +1106,8 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
                 rc = map_point(em, owner, slot_at, b, 1);
             }
             if (rc != 0) {
+                n->blocks -= sectors;
+                ext2_block_unwind(em, b);
                 return rc;
             }
         }
@@ -1087,6 +1141,7 @@ int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_s
         ext2_node_unlock(n);
         return rc;
     }
+    ext2_node_dirty(n);
     if (what & VFS_SET_MODE) {
         n->mode = (n->mode & S_IFMT_) | (st->mode & 07777u);
     }
@@ -1135,13 +1190,17 @@ static int past_limit(const struct ext2_mount *em, const char *op, uint64_t offs
  * A shrink writes the smaller size first, then zeroes the tail of the last
  * block kept, so that a later growth over it reads zeros and not what was
  * there, then frees the blocks from the end (`ext2_punch`) and stores the inode
- * again; a stop between leaves blocks past the end. A growth leaves the gap
- * a hole, and puts the zeroed tail a shrink may have left unsynced on the
- * disk before the size covers it. A growth past the volume's file limit is
- * -EFBIG; a shrink is not checked against it, so a file larger than the
- * limit, which a volume may hold from another system, can still be cut, as
- * Linux's `inode_newsize_ok` checks `s_maxbytes` only for growth. 0, -EINVAL
- * for a file that is not regular, -EFBIG, -EROFS, or -errno.
+ * again; a stop between leaves blocks past the end. A shrink that fails before
+ * its blocks are freed puts the old size back in memory, which the node's mark
+ * has the next store write, so that a retry of the same size shrinks again
+ * instead of finding the size already there, and zeroes the tail and frees the
+ * blocks a growth would otherwise read back. A growth leaves the gap a hole,
+ * and puts the zeroed tail a shrink may have left unsynced on the disk before
+ * the size covers it. A growth past the volume's file limit is -EFBIG; a shrink
+ * is not checked against it, so a file larger than the limit, which a volume
+ * may hold from another system, can still be cut, as Linux's `inode_newsize_ok`
+ * checks `s_maxbytes` only for growth. 0, -EINVAL for a file that is not
+ * regular, -EFBIG, -EROFS, or -errno.
  */
 int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
@@ -1164,6 +1223,7 @@ int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     ext2_assert_node_locked(n);
     if (size < n->size) {
         uint32_t keep = (uint32_t)((size + em->block_size - 1) >> em->block_shift);
+        uint64_t old = n->size;
 
         ext2_node_size_set(n, size);
         ext2_stamp(n, T_MTIME | T_CTIME);
@@ -1176,13 +1236,15 @@ int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                 uint32_t in = (uint32_t)size & (em->block_size - 1);
 
                 rc = ext2_write_owned(em, n->ino, (uint64_t)b * em->block_size + in, 0,
-                                      em->block_size - in, 0);
+                                      em->block_size - in, WRITE_KIND(READ_DATA));
             }
         }
         if (rc == 0) {
             rc = ext2_punch(em, n, keep);
         }
-        if (rc == 0) {
+        if (rc != 0) {
+            ext2_node_size_set(n, old);
+        } else {
             rc = ext2_inode_store(em, n);
         }
     } else if (size > n->size) {
@@ -1489,7 +1551,11 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
 
 /**
  * The body of `fsync` and `fdatasync`: the batch drained under `em->batch`,
- * then a regular file's blocks written as `node_write_out` says,
+ * the node stored when it has its mark (`ext2_node_write_marked`), as
+ * Linux's `generic_buffers_fsync` writes a dirty inode
+ * (`sync_inode_metadata`, fs/buffer.c:607), its failure returned as it
+ * stands, since it was reported where it arose or is a device's, then a
+ * regular file's blocks written as `node_write_out` says,
  * `data_only` for `fdatasync`. Any other file, a mount that is not
  * writable, and the sync of a whole mount (a NULL `handle`) write the
  * device's dirty buffers instead (`ext2_em_write_out`): a directory's entries
@@ -1517,6 +1583,9 @@ static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
     rc = ext2_writeback_drain(em);
     if (rc != 0) {
         rc = ext2_writeback_error(em, rc);
+    } else if (n && ext2_writes(em) && (rc = ext2_node_write_marked(em, n)) != 0) {
+        ext2_big_exit(big);
+        return rc;
     } else if (!n || (n->mode & S_IFMT_) != S_IFREG_ || !ext2_admits(em)) {
         rc = ext2_em_write_out(mnt);
     } else {

@@ -2717,6 +2717,11 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want);
 /** Take the GEM lock (the Locking rule above) unless the caller holds it
  * already: whether it was taken, for `i915_gem_unlock`. May sleep. */
 int i915_gem_lock(struct drm_i915_private *i915);
+/** Take the GEM lock only if it is free, as Linux's retire worker only
+ * tries a timeline's mutex: 1 with `*taken` set as `i915_gem_lock` returns
+ * it, the caller's own hold counting as had, or 0 when another thread
+ * holds it. Does not sleep. */
+int i915_gem_trylock(struct drm_i915_private *i915, int *taken);
 /** Give back the GEM lock `i915_gem_lock` took when `taken` says so,
  * after the userptr invalidations that waited for it and the frees of
  * `gem.freed`, which give way. The caller may sleep. */
@@ -4090,6 +4095,13 @@ int i915_submit_work(void);
  * first on each engine. The GT stays awake: only `i915_gt_retire_requests`
  * parks it. */
 void i915_retire_requests(struct drm_i915_private *i915);
+
+/** Retire the requests before `rq` on its engine whose breadcrumb the chip
+ * has written, oldest first, after `rq`'s add, as Linux's eb_request_add
+ * retires the client's timeline after it queues the request, short of the
+ * new one (gem/i915_gem_execbuffer.c:3058-3065, 3104-3106). Under the GEM
+ * lock. */
+void i915_request_retire_engine(struct i915_request *rq);
 
 /** Retire every completed request as Linux's intel_gt_retire_requests
  * does, all of an engine's once its last request is complete, and park the

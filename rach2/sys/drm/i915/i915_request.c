@@ -381,14 +381,13 @@ static int submit_ready(void *arg)
 /**
  * The submission worker, ki915: sleep in an idle wait until a fence a request
  * waited for signals or the next heartbeat of an unparked GT is due, then give
- * the chip what is ready and beat, holding the big lock as kernel code does.
- * The heartbeat is the driver's hang detection, as Linux's heartbeat worker is
- * (i915_hangcheck.c). Like every kernel thread, it is not switched by the tick
- * (`no_tick_switch`, which `setup_process_stack` sets): a retire's last put of
- * an imported buffer runs the exporter's free, virtio-gpu's among them, whose
- * state and its transport's the big lock alone guards, so the worker gives way
- * only where it sleeps and between passes, as a kworker of Linux without full
- * preemption gives way only between works (process_one_work's cond_resched,
+ * the chip what is ready and beat, holding the big lock as kernel code does,
+ * but for its retire passes (`retire_work`). The heartbeat is the driver's
+ * hang detection, as Linux's heartbeat worker is (i915_hangcheck.c). Like
+ * every kernel thread, it is not switched by the tick (`no_tick_switch`,
+ * which `setup_process_stack` sets), so it gives way only where it sleeps and
+ * between passes, as a kworker of Linux without full preemption gives way
+ * only between works (process_one_work's cond_resched,
  * kernel/workqueue.c:3298-3299 in 6.12.115).
  */
 static void submit_thread_main(void)
@@ -853,9 +852,11 @@ static void gt_park(struct drm_i915_private *i915)
 /**
  * Take from `e`'s list each request whose breadcrumb is written, or every
  * one for a cancel (`all`), oldest first, its fence signalled, its
- * waitboost let go, and release it; the user interrupt stays armed until
- * the GT parks. Each finished request moves the ring's head to its end,
- * as Linux's i915_request_retire, so that the room it took is free again;
+ * waitboost let go, and release it; with `end` set, only those before it,
+ * and the fences of the rest are left to the interrupt. The user interrupt
+ * stays armed until the GT parks. Each finished request moves the ring's
+ * head to its end, as Linux's i915_request_retire, so that the room it
+ * took is free again;
  * a cancel leaves the head to the ring's restart. Every request taken off
  * is signalled under `request_signal_locked`'s rule, a breadcrumb the chip
  * wrote after `i915_request_signal`'s pass included, so that a listened
@@ -864,12 +865,13 @@ static void gt_park(struct drm_i915_private *i915)
  * it the engine's on the GT, in every path (i915_request.c:409,
  * gt/intel_context.h:225-233).
  */
-static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, int all)
+static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, int all,
+                          const struct i915_request *end)
 {
     struct i915_request *done = 0, **tail = &done, *rq;
     uint32_t flags;
 
-    if (!all) {
+    if (!all && !end) {
         i915_request_signal(i915, e);
     }
     flags = spin_lock_irqsave(&e->lock);
@@ -877,7 +879,7 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
         e->queued = 0;
         e->unretired = 0;
     }
-    while ((rq = e->requests) != 0 && (all || i915_engine_passed(e, rq->seqno))) {
+    while ((rq = e->requests) != 0 && rq != end && (all || i915_engine_passed(e, rq->seqno))) {
         e->requests = rq->next;
         rq->next = 0;
         if (!all) {
@@ -908,39 +910,70 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
     }
 }
 
+#ifndef RACH2_HOSTTEST
+/** Let go of the big lock, which the worker holds as kernel code does, for
+ * its retire pass: the depth for `retire_big_take`. */
+static int retire_big_drop(void)
+{
+    uint32_t flags = kirq_save();
+    int depth = bkl_drop();
+
+    kirq_restore(flags);
+    return depth;
+}
+
+/** Take the big lock back at `depth` after the retire pass. */
+static void retire_big_take(int depth)
+{
+    uint32_t flags = kirq_save();
+
+    bkl_take(depth);
+    kirq_restore(flags);
+}
+#else
+/** The host tests have no big lock. */
+static int retire_big_drop(void)
+{
+    return 0;
+}
+
+/** The host tests have no big lock. */
+static void retire_big_take(int depth)
+{
+    (void)depth;
+}
+#endif
+
 /**
- * Retire each engine's completed requests and, when `park` is set and no
- * engine has a request on its list, one being built or one Linux would not
- * yet have retired, park the GT. Under the GEM lock, since a request's
- * release lets go of its objects and their bindings.
+ * Retire each engine's completed requests and, when `park` is set, the
+ * pass of Linux's intel_gt_retire_requests: first each engine whose last
+ * request is complete counts as one Linux would have retired
+ * (`unretired` cleared), then, when no engine has a request on its list,
+ * one being built or one Linux would not yet have retired, the GT parks,
+ * and the pool's stale shadows go. Under the GEM lock, since a request's
+ * release lets go of its objects and their bindings. For the retire
+ * worker (`worker`) the lock is only tried, and the pass skipped,
+ * returning 0, when another thread holds it, as Linux's retire worker
+ * does with each timeline's mutex (gt/intel_gt_requests.c:77-80,
+ * 144-145); and the worker's big lock goes while the GEM lock is held,
+ * which keeps the device on the worker's list meanwhile, since its unplug
+ * takes the GEM lock. Returns 1 when the pass ran.
  */
-static void retire_pass(struct drm_i915_private *i915, int park)
+static int retire_pass(struct drm_i915_private *i915, int park, int worker)
 {
     struct i915_gt *gt = &i915->gt;
-    int i, held = 0, taken = i915_gem_lock(i915);
-
-    for (i = 0; i < I915_NUM_ENGINES; i++) {
-        engine_retire(i915, &gt->engine[i], 0);
-        held |= gt->engine[i].requests != 0 || gt->engine[i].unretired || gt->engine[i].building;
-    }
-    if (park && gt->awake && !held) {
-        gt_park(i915);
-    }
-    i915_gem_unlock(i915, taken);
-}
-
-void i915_retire_requests(struct drm_i915_private *i915)
-{
-    retire_pass(i915, 0);
-}
-
-void i915_gt_retire_requests(struct drm_i915_private *i915)
-{
     uint32_t flags;
-    int i;
+    int i, held = 0, taken, depth = 0;
 
-    for (i = 0; i < I915_NUM_ENGINES; i++) {
-        struct i915_engine *e = &i915->gt.engine[i];
+    if (!worker) {
+        taken = i915_gem_lock(i915);
+    } else if (!i915_gem_trylock(i915, &taken)) {
+        return 0;
+    } else {
+        depth = retire_big_drop();
+    }
+    for (i = 0; park && i < I915_NUM_ENGINES; i++) {
+        struct i915_engine *e = &gt->engine[i];
 
         /* One being built is busy, as Linux's trylock of a held timeline
          * mutex counts it (gt/intel_gt_requests.c:144-145). */
@@ -951,8 +984,39 @@ void i915_gt_retire_requests(struct drm_i915_private *i915)
         }
         spin_unlock_irqrestore(&e->lock, flags);
     }
-    retire_pass(i915, 1);
-    i915_gem_pool_trim(i915, I915_POOL_STALE);
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        engine_retire(i915, &gt->engine[i], 0, 0);
+        held |= gt->engine[i].requests != 0 || gt->engine[i].unretired || gt->engine[i].building;
+    }
+    if (park && gt->awake && !held) {
+        gt_park(i915);
+    }
+    if (park) {
+        /* Under the lock, so that a shadow's last put joins `gem.freed`
+         * and the worker never waits for the lock in its free. */
+        i915_gem_pool_trim(i915, I915_POOL_STALE);
+    }
+    if (worker) {
+        retire_big_take(depth);
+    }
+    i915_gem_unlock(i915, taken);
+    return 1;
+}
+
+void i915_retire_requests(struct drm_i915_private *i915)
+{
+    (void)retire_pass(i915, 0, 0);
+}
+
+void i915_gt_retire_requests(struct drm_i915_private *i915)
+{
+    (void)retire_pass(i915, 1, 0);
+}
+
+void i915_request_retire_engine(struct i915_request *rq)
+{
+    lockdep_assert_held(&rq->i915->gem.lock);
+    engine_retire(rq->i915, rq->engine, 0, rq);
 }
 
 /**
@@ -966,15 +1030,25 @@ void i915_gt_retire_requests(struct drm_i915_private *i915)
  * 1,013 of the GPU's interrupts for 1,003 calls, where a park after each
  * would add the switch's own (dev-log/84-locks/84-157.md). So the GT
  * stays awake between a client's requests, and RC6 and RPS's down
- * interrupts lower its power meanwhile. In the worker, or a host test's
- * call of `i915_submit_work`.
+ * interrupts lower its power meanwhile.
+ *
+ * Each pass only tries the GEM lock and is skipped while another thread
+ * holds it, as Linux's worker only tries each timeline's mutex: a holder
+ * that builds a request retires the engine itself, at the request's
+ * creation and after its add, and what no holder retires waits for the
+ * next pass, within two seconds. A pass runs without the big lock, which
+ * nothing in a retire needs, as EXECBUFFER2's retires run without it: what
+ * it changes is the GEM lock's and the engines' locks', and the one free
+ * that reaches state of the big lock's, an import's exporter on a device
+ * without DRIVER_KMS_UNLOCKED, takes it there (drm_prime.c). In the
+ * worker, or a host test's call of `i915_submit_work`.
  */
 static void retire_work(void)
 {
     struct drm_i915_private *i915;
     uint64_t now = rtc_ticks_now();
     uint32_t flags;
-    int kicked;
+    int kicked, due;
 
     /* Taken and cleared in one step, Linux's xchg(&engine->retire, NULL)
      * (gt/intel_gt_requests.c:64): a signal after it kicks the next pass. */
@@ -986,12 +1060,14 @@ static void retire_work(void)
         if (!i915->gt.awake) {
             continue;
         }
-        if (now >= i915->gt.retire_next) {
-            i915->gt.retire_next = retire_deadline(now);
-            i915_gt_retire_requests(i915);
-        } else if (kicked) {
-            i915_retire_requests(i915);
+        due = now >= i915->gt.retire_next;
+        if (!due && !kicked) {
+            continue;
         }
+        if (due) {
+            i915->gt.retire_next = retire_deadline(now);
+        }
+        (void)retire_pass(i915, due, 1);
     }
 }
 
@@ -1761,7 +1837,7 @@ void i915_requests_unplug(struct drm_i915_private *i915)
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         struct i915_engine *e = &gt->engine[i];
 
-        engine_retire(i915, e, 1);
+        engine_retire(i915, e, 1, 0);
         e->irq_notify = 0;
         intel_context_put(e->last_ce);
         e->last_ce = 0;
@@ -1815,7 +1891,7 @@ void i915_requests_cancel(struct drm_i915_private *i915)
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         gt->engine[i].hc_armed = 0;
         engine_cancel_queued(&gt->engine[i]);
-        engine_retire(i915, &gt->engine[i], 1);
+        engine_retire(i915, &gt->engine[i], 1, 0);
     }
     if (gt->awake) {
         gt_park(i915);

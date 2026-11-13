@@ -34,9 +34,25 @@
  * mounted on /sys/kernel/debug first when it is not there. Linux has no
  * such file, and the word does nothing there.
  *
- * Arguments: [ROUNDS [PAUSE [load] [calls]]], 20000 wakes a row and 50 us
- * by default. Prints one line for each row and "WAKEMUSL OK", or "WAKEMUSL
- * FAIL (detail)" and exits 1. It needs at least two processors.
+ * With the word `busy`, it runs two other rows in place of all of these,
+ * for a wake that finds the processors busy; they need four processors.
+ * In the first, a thread spins in user mode on processor 1, where the
+ * waiter sleeps, and the futex wake's time to run is that of the
+ * scheduler's preemption of the spinner. In the second, two threads that
+ * may run anywhere sleep on one futex, and one FUTEX_WAKE wakes both, as
+ * the GPU's one interrupt wakes WineD3D's command thread and the i915
+ * worker. Before each round a thread pinned to each processor of 1 to 3
+ * that either sleeper ran on last spins until both have run, as the main
+ * thread spins on processor 0, so that each wake must find a processor of
+ * its own; each woken thread spins 20 us before it answers, so that one
+ * placed behind the other waits for it. The row gives the wake-to-run of
+ * the first and of the second woken in each round, the rounds in which
+ * both ran on one processor, and those in which either ran on a processor
+ * whose spinner it had to preempt.
+ *
+ * Arguments: [ROUNDS [PAUSE [load] [calls] [busy]]], 20000 wakes a row and
+ * 50 us by default. Prints one line for each row and "WAKEMUSL OK", or
+ * "WAKEMUSL FAIL (detail)" and exits 1. It needs at least two processors.
  */
 
 #define _GNU_SOURCE
@@ -392,12 +408,221 @@ static void wake_row(const char *name, int kind)
     }
 }
 
+/* The busy rows' two sleepers and the spinners on processors 1 to 3. */
+#define PAIR_WORK_US 20
+static volatile int pair_word;     /* the futex both sleepers wait on */
+static volatile int pair_answered; /* the sleepers that ran this round */
+static volatile int pair_last[2];  /* each sleeper's processor last round */
+static volatile int pair_stop;
+static uint64_t *pair_run[2];           /* each round's wake-to-run, by sleeper */
+static int *pair_cpu[2];                /* each round's processor, by sleeper */
+static volatile int hot[4];             /* the futex a spinner sleeps on while 0 */
+static volatile int hot_running[4];     /* set by a spinner that runs */
+static int hot_index[4] = {0, 1, 2, 3}; /* each spinner's argument */
+
+/** A spinner of the busy rows, on processor `arg` points to: spin while its
+ * word is set, sleep on it while it is 0. */
+static void *hot_spinner(void *arg)
+{
+    int c = *(const int *)arg;
+
+    pin(c);
+    while (!pair_stop) {
+        while (hot[c] == 0 && !pair_stop) {
+            futex(&hot[c], FUTEX_WAIT_PRIVATE, 0);
+        }
+        __atomic_store_n(&hot_running[c], 1, __ATOMIC_SEQ_CST);
+        while (hot[c] != 0 && !pair_stop) {
+        }
+        __atomic_store_n(&hot_running[c], 0, __ATOMIC_SEQ_CST);
+    }
+    return NULL;
+}
+
+/** One of the busy row's two sleepers, which may run anywhere; `arg`
+ * points to its index. */
+static void *pair_sleeper(void *arg)
+{
+    int me = *(const int *)arg;
+    uint64_t work = (uint64_t)(PAIR_WORK_US * cycles_per_us), t;
+    cpu_set_t set;
+    int r;
+
+    /* The main thread's pin to processor 0 is inherited: undo it. */
+    CPU_ZERO(&set);
+    for (r = 0; r < 4; r++) {
+        CPU_SET(r, &set);
+    }
+    if (sched_setaffinity(0, sizeof set, &set) != 0) {
+        fail("sched_setaffinity");
+    }
+    for (r = 0; r < rounds; r++) {
+        while (pair_word == r) {
+            futex(&pair_word, FUTEX_WAIT_PRIVATE, r);
+        }
+        t = tsc();
+        pair_run[me][r] = t - sent;
+        pair_cpu[me][r] = sched_getcpu();
+        while (tsc() - t < work) {
+        }
+        pair_last[me] = pair_cpu[me][r];
+        __atomic_add_fetch(&pair_answered, 1, __ATOMIC_SEQ_CST);
+    }
+    return NULL;
+}
+
+/** Print the mean, median, p90 and p99 of `n` counter values, which it
+ * sorts, after `name`. */
+static void print_spread(const char *name, uint64_t *v, int n)
+{
+    uint64_t sum = 0;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        sum += v[i];
+    }
+    qsort(v, (size_t)n, sizeof v[0], by_value);
+    printf("wakemusl: %s: mean %.3f us, median %.3f, p90 %.3f, p99 %.3f\n", name,
+           sum / cycles_per_us / n, v[n / 2] / cycles_per_us, v[n * 9 / 10] / cycles_per_us,
+           v[n * 99 / 100] / cycles_per_us);
+}
+
+/** The first busy row: a futex wake onto processor 1 while a thread spins
+ * there in user mode. */
+static void spin_row(void)
+{
+    pthread_t t;
+
+    sibling_mode = SIB_SPIN;
+    sibling_stop = 0;
+    sibling_ready = 0;
+    if (pthread_create(&t, NULL, sibling, NULL) != 0) {
+        fail("pthread_create");
+    }
+    while (!sibling_ready) {
+    }
+    wake_row("futex wake onto a spinning thread's processor", WAKE_FUTEX);
+    sibling_stop = 1;
+    pthread_join(t, NULL);
+}
+
+/** Set the spinners of the processors in `busy` spinning, or with `on` 0
+ * stop them all, and wait until each has done so. */
+static void hot_set(const int *busy, int on)
+{
+    int c;
+
+    for (c = 1; c < 4; c++) {
+        if (busy[c] || !on) {
+            __atomic_store_n(&hot[c], on, __ATOMIC_SEQ_CST);
+            if (on) {
+                futex(&hot[c], FUTEX_WAKE_PRIVATE, 1);
+            }
+        }
+    }
+    for (c = 1; c < 4; c++) {
+        while ((busy[c] || !on) && __atomic_load_n(&hot_running[c], __ATOMIC_SEQ_CST) != on) {
+        }
+    }
+}
+
+/** Whether processor `cpu`, which a sleeper ran on, had a spinner to
+ * preempt: one of 1 to 3 set spinning in `busy`. */
+static int was_busy(const int *busy, int cpu)
+{
+    return cpu > 0 && cpu < 4 && busy[cpu];
+}
+
+/** Round `r` of the second busy row: the spinners of the sleepers' last
+ * processors set spinning, the pause, the one wake of both, and the wait
+ * for both; the first to run's time goes in pair_run[0]. Adds the round to
+ * `shared`, `preempted` and `where`. */
+static void pair_round(int r, int *shared, int *preempted, int *where)
+{
+    uint64_t pause = (uint64_t)(pause_us * cycles_per_us), start, x;
+    int busy[4] = {1, 0, 0, 0}, i;
+
+    for (i = 0; i < 2; i++) {
+        busy[pair_last[i]] = 1;
+    }
+    hot_set(busy, 1);
+    start = tsc();
+    while (tsc() - start < pause) {
+    }
+    __atomic_store_n(&pair_answered, 0, __ATOMIC_SEQ_CST);
+    sent = tsc();
+    __atomic_store_n(&pair_word, r + 1, __ATOMIC_SEQ_CST);
+    futex(&pair_word, FUTEX_WAKE_PRIVATE, 2);
+    while (__atomic_load_n(&pair_answered, __ATOMIC_SEQ_CST) < 2) {
+    }
+    hot_set(busy, 0);
+    for (i = 0; i < 2; i++) {
+        where[pair_cpu[i][r] >= 0 && pair_cpu[i][r] < 4 ? pair_cpu[i][r] : 4]++;
+    }
+    *shared += pair_cpu[0][r] == pair_cpu[1][r];
+    *preempted += was_busy(busy, pair_cpu[0][r]) || was_busy(busy, pair_cpu[1][r]);
+    if (pair_run[0][r] > pair_run[1][r]) {
+        x = pair_run[0][r];
+        pair_run[0][r] = pair_run[1][r];
+        pair_run[1][r] = x;
+    }
+}
+
+/** The second busy row: two wakes in one call whose sleepers' last
+ * processors are busy. */
+static void pair_row(void)
+{
+    pthread_t t[2], spinners[3];
+    int side[2] = {0, 1}, r, c, i, shared = 0, preempted = 0;
+    int where[5] = {0, 0, 0, 0, 0}; /* the wakes run on processors 0 to 3, or elsewhere */
+
+    for (i = 0; i < 2; i++) {
+        pair_run[i] = calloc((size_t)rounds, sizeof pair_run[i][0]);
+        pair_cpu[i] = calloc((size_t)rounds, sizeof pair_cpu[i][0]);
+        if (!pair_run[i] || !pair_cpu[i]) {
+            fail("calloc");
+        }
+    }
+    for (c = 1; c < 4; c++) {
+        if (pthread_create(&spinners[c - 1], NULL, hot_spinner, &hot_index[c]) != 0) {
+            fail("pthread_create");
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        if (pthread_create(&t[i], NULL, pair_sleeper, &side[i]) != 0) {
+            fail("pthread_create");
+        }
+    }
+    for (r = 0; r < rounds; r++) {
+        pair_round(r, &shared, &preempted, where);
+    }
+    for (i = 0; i < 2; i++) {
+        pthread_join(t[i], NULL);
+    }
+    pair_stop = 1;
+    for (c = 1; c < 4; c++) {
+        futex(&hot[c], FUTEX_WAKE_PRIVATE, 1);
+        pthread_join(spinners[c - 1], NULL);
+    }
+    printf("wakemusl: two futex wakes in one call, last processors busy, after %.0f us: "
+           "%d of %d rounds on one processor, %d with a spinner preempted\n",
+           pause_us, shared, rounds, preempted);
+    printf("wakemusl: two wakes, processors run on: 0 %d, 1 %d, 2 %d, 3 %d, other %d\n", where[0],
+           where[1], where[2], where[3], where[4]);
+    print_spread("two wakes, first to run", pair_run[0], rounds);
+    print_spread("two wakes, second to run", pair_run[1], rounds);
+    for (i = 0; i < 2; i++) {
+        free(pair_run[i]);
+        free(pair_cpu[i]);
+    }
+}
+
 int main(int argc, char **argv)
 {
     double t0;
     uint64_t c0;
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    int loaded = 0, calls = 0, i;
+    int loaded = 0, calls = 0, busy = 0, i;
     pthread_t loaders[2];
     double l0;
 
@@ -411,8 +636,9 @@ int main(int argc, char **argv)
     for (i = 3; i < argc; i++) {
         loaded |= strcmp(argv[i], "load") == 0;
         calls |= strcmp(argv[i], "calls") == 0;
+        busy |= strcmp(argv[i], "busy") == 0;
     }
-    if (rounds < 100 || cpus < (loaded ? 4 : 2)) {
+    if (rounds < 100 || cpus < (loaded || busy ? 4 : 2)) {
         errno = 0;
         fail(rounds < 100 ? "fewer than 100 rounds" : "too few processors");
     }
@@ -428,6 +654,12 @@ int main(int argc, char **argv)
     cycles_per_us = (tsc() - c0) / (now_us() - t0);
     printf("wakemusl: %ld processors, %.1f cycles a microsecond, %d rounds%s\n", cpus,
            cycles_per_us, rounds, loaded ? ", under load" : "");
+    if (busy) {
+        spin_row();
+        pair_row();
+        printf("WAKEMUSL OK\n");
+        return 0;
+    }
     l0 = now_us();
     if (loaded && (pthread_create(&loaders[0], NULL, load, &load_side[0]) != 0 ||
                    pthread_create(&loaders[1], NULL, load, &load_side[1]) != 0)) {

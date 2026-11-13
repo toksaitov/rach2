@@ -583,8 +583,10 @@ static struct dma_fence *wrap_point(fd_entry_t *timeline, uint32_t value, int *f
 
 /** Order a 32-bit timeline's points across its wrap, as Linux's
  * dma_fence_is_later: on a timeline at 0xfffffffc, point 1 comes after
- * 0xfffffffe, so a reservation that takes them as readers in that order,
- * and a merge of the two in either order, keep point 1. */
+ * 0xfffffffe, so a merge of the two in either order keeps point 1, and a
+ * reservation that takes them as readers in that order keeps both, since
+ * the earlier point replaces no later one, and blocks a writer until
+ * point 1 signals. */
 static void wrap_cases(void)
 {
     struct dma_buf *b = dma_buf_export(4096, &model_ops, NULL, NULL);
@@ -608,8 +610,8 @@ static void wrap_cases(void)
     data.fd = early_fd;
     CHECK(!buf_ioctl(e, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, (uintptr_t)&data),
           "import point 0xfffffffe");
-    CHECK(b->resv->nreads == 1 && b->resv->reads[0] == late,
-          "the earlier point does not replace the later reader across the wrap");
+    CHECK(b->resv->nreads == 2 && b->resv->reads[0] == late && b->resv->reads[1] == early,
+          "the earlier point is added beside the later reader across the wrap");
     inputs[0] = late;
     inputs[1] = early;
     f = dma_fence_merge(inputs, 2);
@@ -623,7 +625,7 @@ static void wrap_cases(void)
     step = 2;
     sw_ioctl(&timeline, SW_SYNC_IOC_INC, (uintptr_t)&step);
     CHECK(dma_fence_status(early) == 1 && !dma_fence_status(late), "0xfffffffe signals first");
-    CHECK(buf_poll(e, 5, &q) == 1, "the pending reader still holds write access");
+    CHECK(buf_poll(e, 5, &q) == 1, "the later reader still blocks write access");
     step = 3;
     sw_ioctl(&timeline, SW_SYNC_IOC_INC, (uintptr_t)&step);
     CHECK(dma_fence_status(late) == 1 && buf_poll(e, 5, &q) == 5,

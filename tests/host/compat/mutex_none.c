@@ -60,8 +60,10 @@ void mutex_unlock(struct mutex *m)
     m->owner = 0;
 }
 
-/** Whether `m` is held, by the one thread there is. */
+/** Whether `m` is held by the one thread there is, which marks its takes
+ * with `m` itself; any other owner a row sets stands for another thread,
+ * whose hold a try fails on and a take would wait for. */
 int mutex_held(const struct mutex *m)
 {
-    return m->owner != 0;
+    return m->owner == m;
 }

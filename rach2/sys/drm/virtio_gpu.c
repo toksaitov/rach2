@@ -340,8 +340,9 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
 /**
  * A queue's `done`: the device answered `cmd` with `len` bytes. Under the
  * device's lock, which keeps the list of live commands, the fence signals
- * first, failing with -EIO on an error answer, and with it every earlier
- * fence of its fence context, whose order the device keeps, as Linux's
+ * first, failing with -EIO on an error answer, and with it every fence of
+ * its fence context that it comes after by dma_fence_is_later, the
+ * producer's 32-bit ordering, whose order the device keeps, as Linux's
  * virtio_gpu_fence_event_process does under its fence lock
  * (virtgpu_fence.c:134-174), while the command is still neither its
  * waiter's to free nor on the done list; then it is marked done, and the
@@ -375,16 +376,14 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
         if (!ok) {
             dma_fence_set_error(cmd->fence, -EIO);
         }
-        if (!valid_fence) {
-            dma_fence_signal(cmd->fence);
-        } else {
+        if (valid_fence) {
             for (prior = vg->live; prior; prior = prior->live_next) {
-                if (prior->queued && prior->fence && prior->fence->context == cmd->fence->context &&
-                    prior->fence->seqno <= cmd->fence->seqno) {
+                if (prior->queued && prior->fence && dma_fence_is_later(cmd->fence, prior->fence)) {
                     dma_fence_signal(prior->fence);
                 }
             }
         }
+        dma_fence_signal(cmd->fence);
     }
     cmd->resp_type = type;
     cmd->done = 1;
