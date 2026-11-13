@@ -340,35 +340,43 @@ mounted_elsewhere() { # mounted_elsewhere DEVICE
 }
 
 # The recovery partition's number goes in recovery_found, empty when the disk
-# has none; it is left mounted at RECOVERY_MNT, with the archive's files
-# readable by root alone. It runs in this shell and not in a command
+# has none; it is left mounted at RECOVERY_MNT, which mounted_recovery then
+# names, with the archive's files readable by root alone. It runs in this shell and not in a command
 # substitution, so that `die` ends the run: a partition mounted elsewhere,
 # which a mount here cannot open, may be the recovery partition, and a run
 # that went on without it would write a root with no archive of the
 # machine's configuration behind it. A volume that was mounted to look and
 # will not unmount ends the run too, since the raw writer fails on a disk
 # with a mount on it. Status 0 when the disk has a recovery partition and 1
-# when it has none. With ro, every volume is mounted read-only, so that a
-# disk not yet proved this system's is looked at without a write: a writable
-# mount of a FAT volume left dirty repairs it.
+# when it has none. Every volume is looked at mounted read-only, since a
+# writable mount of a FAT volume left dirty repairs it, and the disk may
+# hold another system's beside this one's; only the recovery partition, once
+# found, is mounted again writable, and with ro it is left read-only.
 find_recovery() { # find_recovery DISKNUMBER [ro]
     recovery_found=""
-    recovery_options=umask=077
-    [ "${2:-}" != ro ] || recovery_options=ro,umask=077
     for p in 1 2 3 4; do
         [ -e "/dev/disk${1}p${p}" ] || continue
         mkdir -p "$RECOVERY_MNT" 2>/dev/null
-        if ! mount -t vfat -o "$recovery_options" "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null; then
+        if ! mount -t vfat -o ro,umask=077 "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null; then
             if where=$(mounted_elsewhere "/dev/disk${1}p${p}"); then
                 die "/dev/disk${1}p${p} is mounted at $where, so it cannot be looked at for the recovery partition; unmount it and run this again"
             fi
             continue
         fi
+        mounted_recovery=$RECOVERY_MNT
         if [ -f "$RECOVERY_MNT/boot/recovery" ]; then
             recovery_found=$p
+            [ "${2:-}" != ro ] || return 0
+            umount "$RECOVERY_MNT" ||
+                die "/dev/disk${1}p${p} was mounted read-only to find the recovery partition and would not unmount"
+            mounted_recovery=""
+            mount -t vfat -o umask=077 "/dev/disk${1}p${p}" "$RECOVERY_MNT" ||
+                die "the recovery partition /dev/disk${1}p${p} would not mount to be written"
+            mounted_recovery=$RECOVERY_MNT
             return 0
         fi
         umount "$RECOVERY_MNT" || die "/dev/disk${1}p${p} was mounted to look for the recovery partition and would not unmount"
+        mounted_recovery=""
     done
     return 1
 }
