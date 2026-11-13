@@ -167,18 +167,31 @@ static int zero_boot(struct repair_fixture *f)
             ok = 0;
     return !close(fd) && ok;
 }
+/**
+ * Plant a conversion stopped after its keep: the boot partition's first
+ * sector and files on the recovery partition under /rach2-boot-keep, marked
+ * whole, and the boot partition's first 64 sectors zeroed.
+ *
+ * The files go from one volume to the other by mcopy, with the boot partition
+ * as drive b: of an mtools configuration in the work directory. The helper's
+ * /tmp has some 11 MiB free and the two 16 MiB kernel slots do not fit there.
+ * Returns 1, or 0 when a step fails.
+ */
 int ir_keep(struct repair_fixture *f)
 {
-    const char *read[] = {"-s", "-n", "::*", ir_path(f, "boot-keep/files/"), NULL};
-    const char *keep[] = {"-s", ir_path(f, "boot-keep"), "::/rach2-boot-keep", NULL};
-    char recovery[4200];
-    snprintf(recovery, sizeof(recovery), "%s", f->volume);
-    if (mkdir(ir_path(f, "boot-keep"), 0700) || mkdir(ir_path(f, "boot-keep/files"), 0700) ||
-        !keep_sector(f) || !ir_text(f, "boot-keep/complete", "whole\n"))
+    const char *make[] = {"::/rach2-boot-keep", "::/rach2-boot-keep/files", NULL};
+    const char *files[] = {"-s", "b:/*", "::/rach2-boot-keep/files/", NULL};
+    const char *mark[] = {ir_path(f, "boot-keep/sector"), ir_path(f, "boot-keep/complete"),
+                          "::/rach2-boot-keep/", NULL};
+    char drive[4300];
+    if (mkdir(ir_path(f, "boot-keep"), 0700) || !keep_sector(f) ||
+        !ir_text(f, "boot-keep/complete", "whole\n"))
         return 0;
-    snprintf(f->volume, sizeof(f->volume), "%s@@%llu", f->disk, (unsigned long long)f->boot * 512);
-    if (!ir_mtools(f, "mcopy", read))
+    if (snprintf(drive, sizeof(drive), "drive b: file=\"%s\" offset=%llu\n", f->disk,
+                 (unsigned long long)f->boot * 512) >= (int)sizeof(drive) ||
+        strchr(f->disk, '"') || !ir_text(f, "mtoolsrc", drive) ||
+        setenv("MTOOLSRC", ir_path(f, "mtoolsrc"), 1))
         return 0;
-    strcpy(f->volume, recovery);
-    return ir_mtools(f, "mcopy", keep) && zero_boot(f);
+    return ir_mtools(f, "mmd", make) && ir_mtools(f, "mcopy", files) &&
+           ir_mtools(f, "mcopy", mark) && zero_boot(f);
 }
