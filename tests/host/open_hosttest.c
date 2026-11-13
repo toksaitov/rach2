@@ -1574,13 +1574,6 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     (void)rc;
 }
 
-/** The records of failed write-backs, of which no row makes any. */
-uint32_t vfs_wb_err_sets(struct vfs_mount *mnt)
-{
-    (void)mnt;
-    return 0;
-}
-
 /** The fdatasync of a file, which no row makes. */
 int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
@@ -2507,6 +2500,15 @@ void vfs_ref_hold(const struct vfs_ref *r)
         return;
     }
     check(0, "unexpected hold of a process's root");
+}
+
+/** Fail the row: no row gives a disk file's record a writer of its own,
+ * whose node a put lets go. */
+void vfs_ref_put(struct vfs_ref *r)
+{
+    check(0, "unexpected put of a record writer's node");
+    r->mnt = 0;
+    r->node = 0;
 }
 
 /** Whether a change to the root runs in the hold of the root's lock that

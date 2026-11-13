@@ -1552,11 +1552,29 @@ uint32_t procfs_ino_sys(int entry)
     return 0;
 }
 
-/** A write to a file a shared mapping has, which no row makes. */
-void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
+/** No message interrupt is present in the core file model. */
+int procfs_irq_exists(int vector)
 {
-    (void)e;
+    (void)vector;
+    return 0;
+}
+
+/** The inode number of an interrupt's file, which no row reads: 0. */
+uint32_t procfs_ino_irq(int vector, int attr)
+{
+    (void)vector;
+    (void)attr;
+    return 0;
+}
+
+/** A write to a file a shared mapping has, which no row makes. */
+void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
+                          uint32_t len)
+{
+    (void)mnt;
+    (void)ino;
     (void)off;
+    (void)buf;
     (void)len;
 }
 

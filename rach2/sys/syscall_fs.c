@@ -894,10 +894,31 @@ struct file_write_state {
     int big;
 };
 
+/* The most bytes one piece of a write to a file whose pages mappings hold
+ * copies from the caller (`file_write_piece`). */
+#define WRITE_SNAPSHOT_BYTES 4096u
+
+/* The kernel copy a write to a file whose pages mappings hold is made from
+ * (`file_write_piece`): a heap buffer of WRITE_SNAPSHOT_BYTES, made at the
+ * first such piece, or `small` when the heap has no room; and what the
+ * last piece did. */
+struct write_snap {
+    uint8_t *buf;  /* NULL until the first piece that needs a copy */
+    uint32_t size; /* the bytes `buf` holds */
+    /* The last piece was copied and the file system wrote all it was given,
+     * so the next piece follows at once. */
+    int next;
+    /* The last piece was to be copied and the caller's first page of it was
+     * not present, so nothing was written. */
+    int absent;
+    uint8_t small[256];
+};
+
 /**
  * Whether the pages mappings hold of the file of `ofd` must take the bytes
- * a write moves (`filemap_disk_mapped`), asked under the file's lock, which
- * keeps a no true until it is let go. Their copy (`filemap_file_written`)
+ * a write moves (`filemap_disk_mapped`), asked under the file's lock before
+ * each piece, which keeps a no true until it is let go, since a page joins
+ * a file's pages only under that lock. Their copy (`filemap_disk_written`)
  * walks them under the big lock, which is taken for the rest of the call
  * when the caller lacks it and recorded in `state`.
  */
@@ -926,12 +947,63 @@ static int user_resident(uintptr_t addr, uint32_t len)
 }
 
 /**
+ * One piece of a write, `len` bytes of the caller's memory at `from` to
+ * `pos`. When mappings hold pages of the file (`file_write_mapped`), asked
+ * under the file's lock, which then holds the big lock as well, at most
+ * the size of `snap`'s buffer is copied into it, as ext2's commit reads the
+ * caller, while the bytes are present (`vm_resident`), stopping at the
+ * first page of the caller's that is not; the file is written from that
+ * copy and the same bytes put into the file's pages (`filemap_disk_written`),
+ * so that every byte the file system accepts is in the pages before the
+ * lock goes, with no read and no failure path, and no write-back of a page
+ * can put older bytes over the write. Otherwise the file system copies from
+ * the caller itself. `snap` says what the piece did. Returns the bytes
+ * written or the write's error.
+ */
+static int32_t file_write_piece(const struct open_file *ofd, struct file_write_state *state,
+                                uintptr_t from, uint32_t len, uint64_t pos, struct write_snap *snap)
+{
+    uint32_t take, page_left = PAGE_SIZE - (uint32_t)(from % PAGE_SIZE);
+    int present;
+    int32_t n;
+
+    snap->next = snap->absent = 0;
+    if (!file_write_mapped(ofd, state)) {
+        return vfs_write(ofd->vmnt, ofd->fhandle, (const char *)from, len, pos);
+    }
+    if (!snap->buf) {
+        snap->buf = kmalloc(WRITE_SNAPSHOT_BYTES);
+        snap->size = snap->buf ? WRITE_SNAPSHOT_BYTES : (uint32_t)sizeof(snap->small);
+        snap->buf = snap->buf ? snap->buf : snap->small;
+    }
+    take = len < snap->size ? len : snap->size;
+    present = vm_resident(from, take, 0);
+    if (!present && take > page_left) {
+        take = page_left;
+        present = vm_resident(from, take, 0);
+    }
+    if (!present) {
+        snap->absent = 1;
+        return 0;
+    }
+    k_memcpy(snap->buf, (const void *)from, take);
+    n = vfs_write(ofd->vmnt, ofd->fhandle, snap->buf, take, pos);
+    if (n > 0) {
+        filemap_disk_written(ofd->vmnt, ofd->ino, pos, snap->buf, (uint32_t)n);
+    }
+    snap->next = n > 0 && (uint32_t)n == take;
+    return n;
+}
+
+/**
  * The writes of `file_write`: `count` bytes of `buf` from `*pos`, which
- * moves past each piece written, the bytes copied into any pages shared
- * mappings now hold (`filemap_file_written`), asked under the file's lock
- * after each piece, since a fault while the lock was let go may have
- * brought one in, and copied under the big lock (`file_write_mapped`).
- * Returns the bytes written, or the first write's error when none were.
+ * moves past each piece written. Before each piece the file's lock is asked
+ * whether mappings hold pages of the file (`file_write_piece`), since a
+ * fault while the lock was let go may have brought one in: when they do,
+ * the piece is written from a kernel copy of the caller's bytes, which the
+ * pages take too, in pieces of at most WRITE_SNAPSHOT_BYTES, a heap
+ * buffer's or a smaller stack buffer's when the heap has no room. Returns
+ * the bytes written, or the first write's error when none were.
  *
  * On a type that sets `file_locked`, `state` names the file whose lock
  * the caller holds, with `own` clear on another type. The file system
@@ -952,22 +1024,27 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
 {
     struct open_file *ofd = entry->ofd;
     uintptr_t from = (__force uintptr_t)buf;
+    struct write_snap snap;
     uint32_t done = 0;
     int refaults = 0;
     int32_t n;
 
+    snap.buf = NULL;
     for (;;) {
-        n = vfs_write(ofd->vmnt, ofd->fhandle, (const char *)(from + done), count - done, *pos);
+        n = file_write_piece(ofd, state, from + done, count - done, *pos, &snap);
         if (n > 0) {
-            if (file_write_mapped(ofd, state)) {
-                filemap_file_written(entry, *pos, (uint32_t)n);
-            }
             done += (uint32_t)n;
             state->moved = 1;
             *pos += (uint64_t)n;
             refaults = 0;
         }
-        if (!state->own || n < 0 || done == count || user_resident(from + done, count - done)) {
+        if (n < 0 || done == count) {
+            break;
+        }
+        if (snap.next) {
+            continue;
+        }
+        if (!state->own || (!snap.absent && user_resident(from + done, count - done))) {
             break;
         }
         if (state->moved) {
@@ -996,6 +1073,9 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
             }
             count = done + fsize_fit(*pos, count - done);
         }
+    }
+    if (snap.buf && snap.buf != snap.small) {
+        kfree(snap.buf);
     }
     return done > 0 ? (int32_t)done : n;
 }
@@ -1121,9 +1201,10 @@ static long write_synced(fd_entry_t *entry, long written)
  * grow relocates a KRFFS file and repoints every holder), and a privileged
  * writer is exempt: that is the CAP_FSETID analogue, without which any root
  * process disarms /bin/su by rewriting it. A file whose pages shared
- * mappings hold in memory has the bytes written copied into them under the
- * file's lock, held from before the write, so that no write-back of the
- * pages comes between the two (`filemap_file_written`). Under
+ * mappings hold in memory is written from a kernel copy of the caller's
+ * bytes, which the pages take under the file's lock, held from before the
+ * write, so that no write-back of the pages comes between the two
+ * (`file_write_piece`). Under
  * RLIMIT_FSIZE a write that would pass the limit writes what fits, and one
  * that starts at it fails (`vfs_fsize_refused`).
  *
@@ -17182,8 +17263,8 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
 {
     struct core_file *cf = ctx;
     struct vfs_ref file;
-    fd_entry_t entry;
     int32_t n;
+    int big;
 
     if (current_proc->sig_pending & KSIG_BIT(SIGKILL)) {
         return -EINTR;
@@ -17197,11 +17278,10 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
             return -EBUSY;
         }
         n = vfs_write(cf->ofd->vmnt, cf->ofd->fhandle, buf, len, cf->pos);
-        if (n > 0) {
-            k_memset(&entry, 0, sizeof(entry));
-            entry.type = FD_TYPE_FILE;
-            entry.ofd = cf->ofd;
-            filemap_file_written(&entry, cf->pos, (uint32_t)n);
+        if (n > 0 && filemap_disk_mapped(cf->ofd->vmnt, cf->ofd->ino)) {
+            big = big_take();
+            filemap_disk_written(cf->ofd->vmnt, cf->ofd->ino, cf->pos, buf, (uint32_t)n);
+            big_give(big);
         }
         vfs_node_unlock(&file);
         if (n < 0) {

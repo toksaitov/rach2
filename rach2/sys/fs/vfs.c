@@ -3173,18 +3173,7 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     flags = spin_lock_irqsave(&wb_err_lock);
     wb_err_record(&base->wb_err, rc);
     wb_err_record(&base->sb_wb_err, rc);
-    base->wb_err_records++;
     spin_unlock_irqrestore(&wb_err_lock, flags);
-}
-
-uint32_t vfs_wb_err_sets(struct vfs_mount *mnt)
-{
-    struct vfs_mount *base = mount_base(mnt);
-    uint32_t flags = spin_lock_irqsave(&wb_err_lock);
-    uint32_t n = base->wb_err_records;
-
-    spin_unlock_irqrestore(&wb_err_lock, flags);
-    return n;
 }
 
 void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)
@@ -6572,8 +6561,6 @@ static int unmount_mount(struct vfs_mount *m)
     while (*(volatile uint32_t *)&m->inprogress > 0) {
         wq_wait_event_nointr(&m->drain_wq, drained, m);
     }
-    /* The descriptions a file's dirty pages keep are let go of first. */
-    filemap_unmount(m);
     if (m->refs > 0) {
         m->state = VFS_ACTIVE;
         return -EBUSY;
@@ -6581,6 +6568,8 @@ static int unmount_mount(struct vfs_mount *m)
     if (m->bind_of) {
         return unmount_bind(m);
     }
+    /* The pages in memory of its files are written, or dropped. */
+    filemap_unmount(m);
     dcache_forget_mount(m);
     vfs_ns_lock(m);
     gone = vfs_mount_gone(m);
