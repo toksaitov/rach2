@@ -554,7 +554,17 @@ int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t t
     int64_t deadline = -1;
     uint32_t i, n;
     int32_t err = 0;
+    int busy;
 
+    /* An object with nothing busy has nothing to wait for or boost, and
+     * takes no copy of its fences, as Linux's walk of them makes none
+     * (gem/i915_gem_wait.c:67-90). */
+    dma_resv_lock(obj->base.resv);
+    busy = all ? i915_gem_object_is_active_locked(obj) : fence_busy(obj->base.resv->write);
+    dma_resv_unlock(obj->base.resv);
+    if (!busy) {
+        return 0;
+    }
     /* The fences of now, each with a reference, since the reservation may
      * change while a wait sleeps, as Linux's iterator walks a snapshot. */
     if (dma_resv_get_fences(obj->base.resv, all, &fences, &n) < 0) {
