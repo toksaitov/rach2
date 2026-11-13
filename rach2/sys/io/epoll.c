@@ -484,8 +484,12 @@ static void batch_end(struct epoll *ep, struct ep_batch *b)
  * until one is ready, and each that is not leaves the list. A set deeper
  * than EP_MAX_NESTS gives nothing. A registration whose poll needs the big
  * lock, met without it, counts as ready, since its poll cannot be asked
- * under the set's `mtx`; a wait on the set then asks it. Sleeps, for the
- * set's `mtx`.
+ * under the set's `mtx`; a wait on the set then asks it. The list is read
+ * only under the `mtx`, as Linux reads it (fs/eventpoll.c:1191-1192): a
+ * wait on the set holds the `mtx` while its batch has the list, and an
+ * outer set that found the list empty meanwhile would drop its
+ * registration of this set, which the batch's end, waking only this set's
+ * sleepers, would not put back. Sleeps, for the set's `mtx`.
  */
 static int set_poll(struct epoll *ep, int depth)
 {
@@ -494,9 +498,6 @@ static int set_poll(struct epoll *ep, int depth)
     int ready = 0;
 
     if (depth > EP_MAX_NESTS) {
-        return 0;
-    }
-    if (!ep->rdhead) {
         return 0;
     }
     mutex_lock_nested(&ep->mtx, (unsigned int)depth);
