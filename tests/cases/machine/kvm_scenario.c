@@ -236,7 +236,10 @@ static void runner_command(struct kvm_case *s, char *command, size_t cap)
 
 /**
  * Run the case's runner, assert its result line, the one assertion of the
- * case, and print what it printed for the run's log.
+ * case, and print what it printed for the run's log. A failed corpus or
+ * boot is quoted by its result line, which names the failed tests, and by
+ * standard error's first line only when it printed none, since corpus.sh
+ * prints each test's progress there; a failed probe by standard error.
  */
 static void run(struct kvm_case *s)
 {
@@ -267,7 +270,8 @@ static void run(struct kvm_case *s)
     result = net_find(r.out, s->runner >= ENTRY  ? pattern[s->runner]
                              : s->runner == BOOT ? "kvm-boot: result: "
                                                  : "kvm-corpus: result: ");
-    if (!net_exited0(&r) && r.err != NULL && r.err[0] != '\0')
+    if ((result == NULL || s->runner >= ENTRY) && !net_exited0(&r) && r.err != NULL &&
+        r.err[0] != '\0')
         result = r.err;
     net_assert(&s->u, assertion[s->runner],
                net_exited0(&r) && net_find(r.out, pattern[s->runner]) != NULL, "%s",
