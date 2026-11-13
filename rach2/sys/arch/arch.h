@@ -153,6 +153,15 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value);
  * step no other processor's access comes between, and as a full barrier. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value);
 
+/** Store `value` at the byte `*p` as one access, after every load and store
+ * of this processor before it (a release): the spinlock's unlock, which
+ * gives back the locked byte of a word whose other bytes other processors
+ * change with compare-and-exchange. */
+void arch_store_u8(volatile unsigned char *p, unsigned char value);
+
+/** `arch_store_u8` of a 16-bit half-word, aligned. */
+void arch_store_u16(volatile unsigned short *p, unsigned short value);
+
 /** `arch_atomic_xchg` of a word as wide as a pointer, for a lock word that
  * holds its holder's record. */
 uintptr_t arch_atomic_xchg_ptr(volatile uintptr_t *p, uintptr_t value);

@@ -144,6 +144,20 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     return old;
 }
 
+/** An x86 store is not moved before an older load or store, so a store
+ * after a compiler barrier is a release. */
+void arch_store_u8(volatile unsigned char *p, unsigned char value)
+{
+    __asm__ __volatile__("" : : : "memory");
+    *p = value;
+}
+
+void arch_store_u16(volatile unsigned short *p, unsigned short value)
+{
+    __asm__ __volatile__("" : : : "memory");
+    *p = value;
+}
+
 /** The exchange of `arch_atomic_xchg` at the width of a pointer: `xchgq` on
  * x86-64 and `xchgl` on i686. */
 uintptr_t arch_atomic_xchg_ptr(volatile uintptr_t *p, uintptr_t value)
