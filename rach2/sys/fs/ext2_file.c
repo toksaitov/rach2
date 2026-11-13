@@ -652,6 +652,8 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
         if (rc != 0) {
             return rc;
         }
+    } else {
+        ext2_node_dirty(w->n);
     }
     *slot = 0;
     *emptied = 1;
@@ -666,7 +668,8 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
  * dirtied `first`, or for 0 in the inode in memory, which the caller stores;
  * a pointer block whose children are all gone goes the same way. No bit
  * changes here. `*emptied` says whether the pointer is now 0, and
- * `n->blocks` is kept current. A slot's read may sleep, so a service point
+ * `n->blocks` is kept current, the node marked (`ext2_node_dirty`) for the
+ * change. A slot's read may sleep, so a service point
  * before it asks nothing more of the walk: every removal so far is whole,
  * and the listed blocks stay taken until the round frees them. A pointer
  * block is read by the reclaim reader (`ext2_read_reclaim`), and one out of
@@ -749,6 +752,7 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
             return rc;
         }
     }
+    ext2_node_dirty(n);
     *slot = 0;
     list->blocks[list->count++] = b;
     if (n->blocks >= sectors) {
@@ -945,6 +949,46 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
 }
 
 /**
+ * A new pointer block at `level` of `n`'s tree for the missing pointer
+ * `*slot`, which lies in a pointer block at byte `slot_at` of the volume
+ * or, for 0, in the inode, for `ext2_map_alloc`: the block allocated from
+ * `hint` and its zeros written (`map_zero`), `n->blocks` raised, and the
+ * pointer written, or set in the inode and the inode stored, then `*slot`
+ * set. The caller has marked `n` and holds its lock. 0, or -errno.
+ */
+static int map_branch(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot, uint64_t slot_at,
+                      int level, uint32_t hint)
+{
+    uint32_t owner = (n->mode & S_IFMT_) == S_IFREG_ ? n->ino : 0;
+    uint32_t b;
+    int rc = ext2_alloc_block(em, hint, &b);
+
+    if (rc != 0) {
+        return rc;
+    }
+    ext2_node_share_group(em, n, (b - em->first_data) / em->bpg, 0);
+    rc = map_zero(em, owner, b, level);
+    if (rc != 0) {
+        return rc;
+    }
+    n->blocks += em->block_size / 512;
+    if (slot_at != 0) {
+        rc = map_point(em, owner, slot_at, b, level + 1);
+        if (rc != 0) {
+            return rc;
+        }
+    } else {
+        *slot = b;
+        rc = ext2_inode_store(em, n);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    *slot = b;
+    return 0;
+}
+
+/**
  * The block for data index `index` of `n`, allocated when missing, into
  * `*out`, with `*fresh` set for a new data block. A missing pointer block is
  * allocated and its zeros written before the pointer to it (`map_zero`), so
@@ -956,8 +1000,9 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
  * block's zeros. Each pointer block is marked at its level (`WRITE_LEVEL`),
  * so that a mount that writes back keeps that order too. A directory's
  * blocks are shared, as its entries are, and a regular file's are its own.
- * `n->blocks` and the inode's own pointers change in memory; the caller
- * stores the inode with them, and holds `n`'s lock and not `em->batch`. 0,
+ * `n->blocks` and the inode's own pointers change in memory, the node
+ * marked first (`ext2_node_dirty`); the caller stores the inode with them,
+ * and holds `n`'s lock and not `em->batch`. 0,
  * -EFBIG past the triple indirect's reach, -ENOSPC, -EIO for a block out of
  * range, reported (`ext2_zone_check`), or -errno.
  */
@@ -974,6 +1019,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
     int level, rc;
 
     *fresh = 0;
+    ext2_node_dirty(n);
     if (index < EXT2_NDIR) {
         slot = &n->block[index];
     } else {
@@ -994,7 +1040,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
         slot = &n->block[EXT2_NDIR + level - 1];
         rest = index;
         while (level > 0) {
-            uint32_t div = 1, b;
+            uint32_t div = 1;
             uint8_t ptr[4];
             int i;
 
@@ -1002,33 +1048,13 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
                 div *= per;
             }
             if (*slot == 0) {
-                rc = ext2_alloc_block(em, hint, &b);
+                rc = map_branch(em, n, slot, slot_at, level, hint);
                 if (rc != 0) {
                     return rc;
                 }
-                ext2_node_share_group(em, n, (b - em->first_data) / em->bpg, 0);
-                rc = map_zero(em, owner, b, level);
-                if (rc != 0) {
-                    return rc;
-                }
-                n->blocks += sectors;
-                if (slot_at != 0) {
-                    rc = map_point(em, owner, slot_at, b, level + 1);
-                    if (rc != 0) {
-                        return rc;
-                    }
-                } else {
-                    *slot = b;
-                    rc = ext2_inode_store(em, n);
-                    if (rc != 0) {
-                        return rc;
-                    }
-                }
-                *slot = b;
-                hint = b + 1;
+                hint = *slot + 1;
             }
-            b = *slot;
-            slot_at = (uint64_t)b * em->block_size + (uint64_t)(rest / div) * 4;
+            slot_at = (uint64_t)*slot * em->block_size + (uint64_t)(rest / div) * 4;
             rc = ext2_read_bytes(em, READ_MAP, n->ino, slot_at, ptr, 4);
             if (rc != 0) {
                 return rc;
@@ -1087,6 +1113,7 @@ int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_s
         ext2_node_unlock(n);
         return rc;
     }
+    ext2_node_dirty(n);
     if (what & VFS_SET_MODE) {
         n->mode = (n->mode & S_IFMT_) | (st->mode & 07777u);
     }
