@@ -507,7 +507,7 @@ static void inventory(struct acceptance *a)
         lines(a, interrupts, "", "interrupts: ");
         snprintf(count, sizeof(count), "%llu",
                  interrupt_total(record_line(interrupts, "32:", line)));
-        if (count[0] == '\0' || strspn(count, "0123456789") != strlen(count))
+        if (count[0] == '0' || count[0] == '\0' || strspn(count, "0123456789") != strlen(count))
             message(a, 1, "the timer's vector has no interrupt count");
         else
             message(a, 0, "interrupts: the timer has taken %s, so its interrupts arrive", count);
