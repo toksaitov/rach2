@@ -175,12 +175,16 @@ The first waiter acquires a free mutex immediately; others wait behind its owner
 The result counts transferred waiters.
 .El
 .Pp
-A deadline is rounded up to whole 1 ms ticks, counted from the tick the
+A wait ends when the monotonic clock reaches its deadline, between
+ticks, as Linux's hrtimer ends it; a deadline on the real-time clock is
+the monotonic time at which real time reaches it.
+Where the timer has no interrupt between ticks, the wait ends at a tick:
+its deadline is rounded up to whole 4 ms ticks, counted from the tick the
 monotonic clock is in, a tick whose interrupt has not yet been taken
 included, and the tick in progress is not counted, so a wait never ends
 before the time asked by that clock.
-It is fixed when the call begins, so the time taken to bring in the
-word's page counts against it.
+The deadline is fixed when the call begins, so the time taken to bring in
+the word's page counts against it.
 .Pp
 A signal the process acts on ends a wait.
 A wait without a timeout is restarted when no handler runs, as after a
@@ -194,7 +198,7 @@ A wait with a timeout fails with
 after a handler, whatever its flags, and when no handler runs it goes on
 through
 .Xr restart_syscall 2
-to the deadline tick fixed at the first call, as Linux's does.
+to the deadline fixed at the first call, as Linux's does.
 i386's time64 form, number 422, takes a timespec of 64-bit fields, whose
 nanoseconds' high word is ignored as Linux ignores it; on i686 a count of
 seconds past 2147483647 is held there.

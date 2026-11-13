@@ -107,6 +107,10 @@ struct futex_sleeper {
     int woken;       /* a wake marked one of its waiters */
     int timed;       /* the wait has a deadline */
     uint64_t target; /* the tick the sleep ends at, with `timed` */
+    /* With `timed`, the time of the monotonic clock in nanoseconds since
+     * boot at which the sleep ends, between ticks, before `target`; 0 for
+     * one that ends at `target` alone (`futex_ns_of`). */
+    int64_t ns;
     wait_queue_t wq; /* the sleeper's own queue, which only it sleeps on */
     /* With `timed`, whether the deadline is the absolute time `at_sec` and
      * `at_nsec` of real time, and the clock's step count `target` was
@@ -278,6 +282,48 @@ static uint64_t futex_ticks_until(int64_t at_sec, uint32_t at_nsec, int realtime
 }
 
 /**
+ * The time `sec` seconds and `nsec` nanoseconds since boot as nanoseconds,
+ * for a sleeper's `ns`: 1, a time already past, for one before boot, and 0,
+ * a sleep that ends at its tick alone, for one that does not fit, as Linux
+ * takes such a time as KTIME_MAX (include/linux/ktime.h:36-41).
+ */
+static int64_t futex_ns_of(int64_t sec, int64_t nsec)
+{
+    if (sec < 0) {
+        return 1;
+    }
+    if (sec >= 9223372036ll) {
+        return 0;
+    }
+    return sec * 1000000000ll + nsec > 0 ? sec * 1000000000ll + nsec : 1;
+}
+
+/**
+ * The time of the monotonic clock `sec` seconds and `nsec` nanoseconds from
+ * now, as `futex_ns_of` gives it, for a relative timeout, which Linux's
+ * futex_init_timeout adds to ktime_get (kernel/futex/syscalls.c:175-186).
+ */
+static int64_t futex_ns_from_now(int64_t sec, int64_t nsec)
+{
+    int64_t now_sec, now_nsec;
+
+    rtc_monotonic(&now_sec, &now_nsec);
+    nsec += now_nsec;
+    if (nsec >= 1000000000) {
+        nsec -= 1000000000;
+        sec++;
+    }
+    return sec > 9223372036ll - now_sec ? 0 : futex_ns_of(now_sec + sec, nsec);
+}
+
+/** Whether the monotonic clock has reached the time `s` ends at between
+ * ticks, `ns`; never for a sleep that ends at its tick alone. */
+static int futex_ns_come(const struct futex_sleeper *s)
+{
+    return s->timed && s->ns != 0 && rtc_monotonic_ns() >= s->ns;
+}
+
+/**
  * The name of the futex at `uaddr`: its address space and address, or, when
  * `shared` and the word is in a shared mapping, the page's frame and the
  * offset in it, which every process mapping that page names alike. A futex
@@ -339,13 +385,18 @@ static int futex_name(uintptr_t uaddr, int shared, const void **space, uintptr_t
 
 /**
  * Make `s`'s deadline the absolute time `sec` and `nsec` of real time, and
- * count its tick from the clock now; the ticks to it, 0 when it has passed.
+ * count its tick and its time of the monotonic clock, real time less the
+ * offset, as Linux's hrtimer subtracts its base's offset
+ * (kernel/time/hrtimer.c:922), from the clock now; the ticks to it, 0 when
+ * it has passed.
  * The step count is read before the clock, so that a setting between the
  * two readings leaves it behind and the wait counts again.
  */
 static uint64_t futex_rt_deadline(struct futex_sleeper *s, int64_t sec, uint32_t nsec)
 {
     uint64_t ticks;
+    int64_t mono_sec;
+    int32_t mono_nsec;
 
     s->rt = 1;
     s->at_sec = sec;
@@ -353,6 +404,8 @@ static uint64_t futex_rt_deadline(struct futex_sleeper *s, int64_t sec, uint32_t
     s->steps = rtc_step_count();
     ticks = futex_ticks_until(sec, nsec, 1);
     s->target = ticks ? rtc_ticks_now() + ticks + 1u : tick_count();
+    rtc_mono_of_real(sec, (int32_t)nsec, &mono_sec, &mono_nsec);
+    s->ns = futex_ns_of(mono_sec, mono_nsec);
     return ticks;
 }
 
@@ -374,21 +427,23 @@ static int futex_rt_count(struct futex_sleeper *s)
     return futex_rt_deadline(s, s->at_sec, s->at_nsec) != 0;
 }
 
-/** The wait's condition: a waiter was woken, the deadline has come, or the
- * real-time clock was set since a deadline on it was counted
- * (`futex_rt_count`). */
+/** The wait's condition: a waiter was woken, the deadline has come, by its
+ * tick or by the monotonic clock (`futex_ns_come`), or the real-time clock
+ * was set since a deadline on it was counted (`futex_rt_count`). */
 static int futex_sleeper_done(void *arg)
 {
     const struct futex_sleeper *s = (const struct futex_sleeper *)arg;
 
-    return s->woken || (s->timed && tick_count() >= s->target) ||
+    return s->woken || (s->timed && tick_count() >= s->target) || futex_ns_come(s) ||
            (s->rt && s->steps != rtc_step_count());
 }
 
 /** Sleep on `s` until `futex_sleeper_done`, the tick waking the sleep once
  * the real-time clock is set (`rt_steps`), and count a deadline on real time
- * again and sleep on while that leaves it to come. Returns as
- * `wq_wait_event_as` does. */
+ * again and sleep on while that leaves it to come. A deadline with a time
+ * of the monotonic clock (`ns`) ends at that time, by the interrupt between
+ * ticks, as Linux's hrtimer ends the wait (kernel/futex/waitwake.c:356-357),
+ * and not at the tick. Returns as `wq_wait_event_as` does. */
 static int futex_sleep(struct futex_sleeper *s, const char *wchan)
 {
     int rc;
@@ -396,9 +451,11 @@ static int futex_sleep(struct futex_sleeper *s, const char *wchan)
     (void)futex_rt_count(s);
     for (;;) {
         current_proc->wakeup_tick = s->timed ? (s->target != 0 ? s->target : 1u) : 0;
+        current_proc->wakeup_ns = s->timed ? s->ns : 0;
         current_proc->rt_steps = s->rt ? s->steps : 0;
         rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, wchan);
         current_proc->wakeup_tick = 0;
+        current_proc->wakeup_ns = 0;
         current_proc->rt_steps = 0;
         if (rc != 0 || s->woken || !futex_rt_count(s)) {
             return rc;
@@ -560,7 +617,7 @@ static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper 
     if (futex_rt_count(s)) {
         ticks = 1u; /* a setting of the clock put the time ahead again */
     }
-    if (s->timed && (ticks == 0 || tick_count() >= s->target)) {
+    if (s->timed && (ticks == 0 || tick_count() >= s->target || futex_ns_come(s))) {
         woken = futex_unqueue(v, n);
         return woken >= 0 ? woken : -ETIMEDOUT;
     }
@@ -580,18 +637,19 @@ static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper 
 static long futex_wait_restart(isr_params_t *params);
 
 /**
- * Sleep on `uaddr` while it holds `val` until the tick `target` of `s`,
- * with `s->timed`, and file a wait a signal cut short for its restart, as
+ * Sleep on `uaddr` while it holds `val` until the deadline of `s`, with
+ * `s->timed`, and file a wait a signal cut short for its restart, as
  * Linux's futex_wait does: without a deadline it stands for ERESTARTSYS,
  * which SA_RESTART restarts; with one, for ERESTART_RESTARTBLOCK, whose
- * restart (`futex_wait_restart`) sleeps on to the same tick and which a
- * handler ends with EINTR. `ticks` is 0 for a deadline that had passed when
- * the call began. Returns as `futex_wait` does.
+ * restart (`futex_wait_restart`) sleeps on to the same tick and time and
+ * which a handler ends with EINTR. `ticks` is 0 for a deadline that had
+ * passed when the call began. Returns as `futex_wait` does.
  */
 static int32_t futex_wait_until(uintptr_t uaddr, uint32_t val, uint32_t bitset, int flags_op,
                                 struct futex_sleeper *s, uint64_t ticks)
 {
     struct futex_vec v;
+    uint64_t rem;
     int rc;
 
     v.addr = uaddr;
@@ -608,8 +666,13 @@ static int32_t futex_wait_until(uintptr_t uaddr, uint32_t val, uint32_t bitset, 
         b->bitset = bitset;
         b->flags = flags_op;
         b->tick = s->target;
-        b->sec = s->rt ? s->at_sec : 0;
-        b->nsec = s->rt ? (int64_t)s->at_nsec : 0;
+        if (s->rt) {
+            b->sec = s->at_sec;
+            b->nsec = (int64_t)s->at_nsec;
+        } else {
+            b->sec = (int64_t)tick_div64((uint64_t)s->ns, 1000000000u, &rem);
+            b->nsec = (int64_t)rem;
+        }
         current_proc->restart_kind = RESTART_BLOCK;
     }
     return rc > 0 ? 0 : rc;
@@ -618,9 +681,10 @@ static int32_t futex_wait_until(uintptr_t uaddr, uint32_t val, uint32_t bitset, 
 /**
  * The resumption of a timed futex wait a signal that ran no handler cut
  * short (restart_syscall): the same word, value and bitset, to the same
- * deadline tick, or with FUTEX_CLOCK_REALTIME to the same time of real time,
- * with the block cleared first, as Linux's futex_wait_restart clears it and
- * keeps the time and its clock.
+ * deadline tick and time of the monotonic clock, kept as time since boot,
+ * or with FUTEX_CLOCK_REALTIME to the same time of real time, with the
+ * block cleared first, as Linux's futex_wait_restart clears it and keeps
+ * the time and its clock.
  */
 static long futex_wait_restart(isr_params_t *params)
 {
@@ -634,6 +698,7 @@ static long futex_wait_restart(isr_params_t *params)
     s.timed = 1;
     s.rt = 0;
     s.target = b->tick;
+    s.ns = b->sec != 0 || b->nsec != 0 ? futex_ns_of(b->sec, b->nsec) : 0;
     ticks = s.target > now ? s.target - now : 0;
     if (b->flags & FUTEX_CLOCK_REALTIME) {
         ticks = futex_rt_deadline(&s, b->sec, (uint32_t)b->nsec);
@@ -663,6 +728,7 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
 
     s.timed = 0;
     s.rt = 0;
+    s.ns = 0;
     if (utime) {
         if (copy_from_user(&ts, utime, sizeof(ts)) != 0) {
             return -EFAULT;
@@ -682,6 +748,8 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
         }
         ticks = absolute ? futex_ticks_until(ts.tv_sec, (uint32_t)ts.tv_nsec, 0)
                          : tick_span(ts.tv_sec, (uint32_t)ts.tv_nsec);
+        s.ns = absolute ? futex_ns_of(ts.tv_sec, ts.tv_nsec)
+                        : futex_ns_from_now(ts.tv_sec, ts.tv_nsec);
     }
     s.target = rtc_ticks_now() + ticks + 1u;
     return futex_wait_until(uaddr, val, bitset, flags_op, &s, ticks);
@@ -1367,6 +1435,7 @@ static int pi_deadline(struct futex_sleeper *s, const struct kernel_timespec __u
 
     s->timed = utime != NULL;
     s->rt = 0;
+    s->ns = 0;
     s->woken = 0;
     wait_queue_init(&s->wq);
     if (!utime) {
@@ -1388,6 +1457,7 @@ static int pi_deadline(struct futex_sleeper *s, const struct kernel_timespec __u
     }
     ticks = futex_ticks_until(ts.tv_sec, (uint32_t)ts.tv_nsec, 0);
     s->target = ticks ? rtc_ticks_now() + ticks + 1u : tick_count();
+    s->ns = futex_ns_of(ts.tv_sec, ts.tv_nsec);
     return 0;
 }
 
@@ -2164,6 +2234,7 @@ static int futex2_deadline(const struct futex_timespec64 __user *utime, int32_t 
 
     s->timed = 0;
     s->rt = 0;
+    s->ns = 0;
     *ticks = 0;
     if (utime) {
         if (clockid != CLOCK_REALTIME && clockid != CLOCK_MONOTONIC) {
@@ -2184,6 +2255,7 @@ static int futex2_deadline(const struct futex_timespec64 __user *utime, int32_t 
             return 0;
         }
         *ticks = futex_ticks_until(ts.tv_sec, (uint32_t)ts.tv_nsec, 0);
+        s->ns = futex_ns_of(ts.tv_sec, ts.tv_nsec);
     }
     s->target = rtc_ticks_now() + *ticks + 1u;
     return 0;
