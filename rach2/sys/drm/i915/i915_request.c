@@ -830,9 +830,9 @@ static void request_release(struct i915_request *rq)
 /** Park the GT, which is awake, and count the ticks it was awake, as
  * Linux's __gt_park adds to its awake time. Each engine's user interrupt,
  * armed since its first request of the GT's wake, is let go, as Linux's
- * engine park disarms its breadcrumbs (gt/intel_engine_pm.c:263,
- * gt/intel_breadcrumbs.c:316-323). The pool's idle shadows go, since no
- * retire pass runs to age them while the GT sleeps. */
+ * engine park disarms its breadcrumbs (gt/intel_engine_pm.c:280,
+ * gt/intel_breadcrumbs.c:317-324, 266-272). The pool's idle shadows go,
+ * since no retire pass runs to age them while the GT sleeps. */
 static void gt_park(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
@@ -961,7 +961,7 @@ void i915_gt_retire_requests(struct drm_i915_private *i915)
  * `retire_deadline`, which parks an idle GT, and the requests of an engine
  * whose last request signalled to a listener at once, which does not.
  * Linux parks an engine only after a switch to its kernel context has run
- * and retired (gt/intel_engine_pm.c:150-230, 255-288), and on the Lenovo
+ * and retired (gt/intel_engine_pm.c:151-288), and on the Lenovo
  * its GT stayed awake from one call of WineD3D's round trip to the next:
  * 1,013 of the GPU's interrupts for 1,003 calls, where a park after each
  * would add the switch's own (dev-log/84-locks/84-157.md). So the GT
@@ -1384,8 +1384,8 @@ int32_t i915_request_add(struct i915_request *rq)
     /* The interrupt is unmasked before the chip can reach the breadcrumb,
      * and stays so until the GT parks, as Linux arms the breadcrumbs' and
      * disarms them only when the engine parks or an interrupt finds no
-     * listener (gt/intel_breadcrumbs.c:229-262); here every breadcrumb
-     * interrupts. */
+     * listener (gt/intel_breadcrumbs.c:182-207, 266-272); here every
+     * breadcrumb interrupts. */
     if (!e->irq_armed) {
         e->irq_armed = 1;
         i915_engine_irq_get(i915, e);
