@@ -115,7 +115,7 @@ mkdir -p "$(dirname "$OUT")"
 # An image of 8 GiB or more, such as the GNU roots, needs room for its staged
 # tree and its volume at once while it is built, so such images in one
 # directory are built one at a time: parallel builds of three of them filled
-# Windows' 96 GiB build volume. flock(1) frees the lock when the build ends,
+# Windows' build volume. flock(1) frees the lock when the build ends,
 # however it ends.
 case "$SIZE" in
     *[!0-9]* | '') ;;

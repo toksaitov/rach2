@@ -1027,19 +1027,36 @@ static int col_disk_create(const char *path, uint64_t size)
     return rc;
 }
 
-/* Publish a complete new workspace without replacing a concurrent owner. */
+/* The workspace's size. A workspace made at the 96 GiB of earlier versions is
+ * grown to it in place, and the job grows its file system to match; the file
+ * is sparse, so the host holds only the blocks the job writes. */
+#define COL_WORKSPACE_BYTES     (128ull << 30)
+#define COL_WORKSPACE_OLD_BYTES (96ull << 30)
+
+/* Publish a complete new workspace without replacing a concurrent owner, or
+ * grow one of the old size to COL_WORKSPACE_BYTES. */
 static int col_workspace_ready(struct col_job *job, const char *disk)
 {
     struct stat st;
-    if (!lstat(disk, &st))
-        return S_ISREG(st.st_mode) && st.st_size == (96ll << 30) ? 0 : -1;
+    if (!lstat(disk, &st)) {
+        if (!S_ISREG(st.st_mode))
+            return -1;
+        if ((uint64_t)st.st_size == COL_WORKSPACE_OLD_BYTES) {
+            int fd = open(disk, O_WRONLY);
+            int rc = fd < 0 || ftruncate(fd, (off_t)COL_WORKSPACE_BYTES);
+            if (fd >= 0 && close(fd))
+                rc = -1;
+            return rc ? -1 : 0;
+        }
+        return (uint64_t)st.st_size == COL_WORKSPACE_BYTES ? 0 : -1;
+    }
     if (errno != ENOENT)
         return -1;
     char *part = col_format("%s/workspace.img", job->work);
-    int rc = !part || col_disk_create(part, 96ull << 30);
+    int rc = !part || col_disk_create(part, COL_WORKSPACE_BYTES);
     if (!rc && link(part, disk)) {
         rc = errno != EEXIST || lstat(disk, &st) || !S_ISREG(st.st_mode) ||
-             st.st_size != (96ll << 30);
+             (uint64_t)st.st_size != COL_WORKSPACE_BYTES;
     }
     if (part && unlink(part) && errno != ENOENT)
         rc = -1;
@@ -1508,6 +1525,9 @@ static int col_prepare_script(struct col_job *job, struct jbuf *script, const ch
     jbuf_puts(script, "set -eu\nblkid -s TYPE -o value \"$ETUDE_DISK1\" | "
                       "grep -qx ext4 || mkfs.ext4 -q -F \"$ETUDE_DISK1\"\n");
     jbuf_puts(script, col_mount);
+    jbuf_puts(script,
+              "resize2fs \"$ETUDE_DISK1\" >/dev/null 2>&1 || "
+              "{ echo 'collection: the workspace could not grow to its disk' >&2; exit 1; }\n");
     jbuf_puts(script, "mkdir -p /mnt/collection/store /var/cache/rach2-store\n"
                       "mount --bind /mnt/collection/store /var/cache/rach2-store\n"
                       "trap 'cd /; umount /var/cache/rach2-store; "
@@ -1659,7 +1679,7 @@ static int col_prepare_job(struct col_job *job, const char *arch, const char *ke
     char *disk = col_workspace(job, arch);
     int bad = !disk || col_workspace_ready(job, disk);
     if (bad && disk && !errno)
-        col_failed("%s is not a file of 96 GiB", disk);
+        col_failed("%s is not a file of 128 GiB", disk);
     if (!bad) {
         col_step("products disk");
         bad = col_disk_create(products, 64ull << 30) || col_add(&job->disks, disk) ||
