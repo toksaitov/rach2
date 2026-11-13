@@ -19,7 +19,6 @@
 #include "../klog.h"
 #include "../proc/process.h"
 #include "../proc/smp.h"
-#include "../proc/wait_queue.h"
 #include "../timer.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
@@ -79,7 +78,6 @@ struct dshare {
      * dirty since then, which it tells the flusher (`vfs_writeback_aged`),
      * since the pages keep no age of their own. */
     uint64_t clean;
-    wait_queue_t left;
     struct shmem sh;
     /* The pages a shared mapping may have stored into and the file may
      * lack, a dirty bit each, in leaves of SHMEM_LEAF bits made at a page's
@@ -121,8 +119,7 @@ struct filemap {
     struct shmem *sh;
     struct shmem own;
     struct dshare *ds;
-    int shared;  /* stores may change the file, and may be written back */
-    int writing; /* its release is writing shared pages back */
+    int shared; /* stores may change the file, and may be written back */
     /* Shared anonymous memory's inode number on the mount
      * `vfs_memfd_mount` has; 0 for any other. */
     uint64_t anon_ino;
@@ -614,28 +611,6 @@ static int dshare_pass(struct dshare *ds, fd_entry_t *via, uint32_t first, uint3
     return rc;
 }
 
-/* A sync waits only for releases published at or before its boundary. */
-struct dshare_drain {
-    const struct dshare *ds;
-    uint64_t gen;
-};
-
-/** Whether every release of `arg`'s file published before its boundary
- * has finished writing. Under the big lock; later releases do not delay
- * this wait. */
-static int dshare_settled(void *arg)
-{
-    const struct dshare_drain *drain = arg;
-    const struct filemap *m;
-
-    for (m = maps; m; m = m->next) {
-        if (m->ds == drain->ds && m->writing && m->vf.dead_gen <= drain->gen) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 /**
  * Write the dirty pages of `ds` from `first` up to `end` back in the one
  * pass (`dshare_pass`), through the record's own writer or a writable
@@ -643,11 +618,12 @@ static int dshare_settled(void *arg)
  * msync was given, and `flush`, for MS_SYNC, run the file system's fsync
  * after them through `own`'s description, whose cursor into the write-back
  * errors moves, as Linux's msync syncs the region's own file
- * (mm/msync.c:87). Take a zero-publication boundary and own references to
- * both descriptions before sleeping: only releases at or before that
- * boundary are drained or waited for. The page range is bounded before the
- * drain, so later mappings and faults cannot extend the call. Then the
- * record lets its writer go once no page is dirty and no writer lives
+ * (mm/msync.c:87). References to both descriptions are taken before the
+ * pass sleeps, and the page range is bounded before it, so later mappings
+ * and faults cannot extend the call. The pass needs no release to end
+ * first: a mapping whose release has not begun, or is writing, keeps its
+ * pages' bits, so the pass writes its stores itself. Then the record lets
+ * its writer go once no page is dirty and no writer lives
  * (`dshare_settle`).
  *
  * A failed page write is recorded once in the file system's write-back
@@ -661,21 +637,16 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, struct f
                        int flush)
 {
     fd_entry_t via;
-    struct dshare_drain drain;
     struct open_file *mine = NULL;
     int have, rc, wrote = 0;
 
     ds->users++;
-    drain.ds = ds;
-    drain.gen = vm_file_reap_start();
     end = end < ds->sh.npages ? end : ds->sh.npages;
     have = dshare_writer(ds, &via);
     if (own && own->entry.ofd && own->entry.ofd->vmnt) {
         mine = own->entry.ofd;
         fd_ofd_ref(mine);
     }
-    vm_file_reap_until(drain.gen);
-    (void)wq_wait_event_nointr(&ds->left, dshare_settled, &drain);
     if (have) {
         wrote = dshare_pass(ds, &via, first, end);
     }
@@ -1105,8 +1076,7 @@ static uint32_t filemap_around_disk(struct vm_file *f, uint32_t first, uint32_t 
  *
  * The last writable shared mapping of a disk file to go (`writers`) writes
  * its dirty pages back first, in the one pass (`dshare_pass`), before it
- * takes that lock; a sync whose boundary covers this release waits for the
- * pass to end (`writing`). The mapping always goes. When pages are still
+ * takes that lock. The mapping always goes. When pages are still
  * dirty after it, which the bits decide and not the pass's answer, since
  * another thread may store into a page between the pass's write of it and
  * its end, the record takes the mapping's descriptor as its own writer
@@ -1122,12 +1092,8 @@ static void filemap_release(struct vm_file *f)
     int writes = filemap_writes(m);
 
     if (writes && --ds->writers == 0) {
-        int rc;
+        int rc = dshare_pass(ds, &m->entry, 0, ds->sh.npages);
 
-        m->writing = 1;
-        rc = dshare_pass(ds, &m->entry, 0, ds->sh.npages);
-        m->writing = 0;
-        wq_wake_all(&ds->left);
         if (rc != 0) {
             klog(KLOG_WARN, "mm", "shared mapping: %s: write-back failed: %d",
                  m->vf.path ? m->vf.path : "a file", rc);
@@ -1269,7 +1235,6 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
         }
         ds->mnt = vfs_mount_base(e->ofd->vmnt);
         ds->ino = e->ofd->ino;
-        wait_queue_init(&ds->left);
         flags = spin_lock_irqsave(&dshare_lock);
         ds->next = *dshare_bucket(ds->ino);
         *dshare_bucket(ds->ino) = ds;

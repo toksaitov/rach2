@@ -252,39 +252,6 @@ static void reap_rows(void)
     vm_free(&m);
 }
 
-/* A last put made while the bounded row's release sleeps. */
-static struct vm_file *reap_publish;
-
-/** Count the old release and publish a later last put in its place. */
-static void bounded_release(struct vm_file *f)
-{
-    count_release(f);
-    vm_file_put(reap_publish);
-}
-
-/** A fixed boundary passes later files at the head and added by releases. */
-static void bounded_reap_rows(void)
-{
-    struct vm_file one = {1, no_fill, NULL, bounded_release};
-    struct vm_file two = {1, no_fill, NULL, count_release};
-    struct vm_file three = {1, no_fill, NULL, count_release};
-    uint64_t gen;
-
-    released = 0;
-    reap_publish = &three;
-    vm_file_put(&one);
-    gen = vm_file_reap_start();
-    vm_file_put(&two);
-    vm_file_reap_until(gen);
-    CHECK(released == 1 && vm_file_dead());
-    CHECK(one.dead_gen <= gen && two.dead_gen > gen && three.dead_gen > gen);
-    vm_file_reap_until(gen);
-    CHECK(released == 1 && vm_file_dead());
-    vm_file_reap();
-    CHECK(released == 3 && !vm_file_dead());
-    reap_publish = NULL;
-}
-
 /** The list of files waiting for vm_file_reap says when it holds one
  * (`vm_file_dead`), as a fault that runs without the big lock asks before
  * it takes the lock to reap, and a reference taken and put back by the
@@ -306,7 +273,6 @@ static void dead_rows(void)
     vm_file_reap();
     CHECK(released == 1 && !vm_file_dead());
     vm_free(&m);
-    bounded_reap_rows();
 }
 
 /** Check the tree's ordering, parent links and AVL heights recursively. */
