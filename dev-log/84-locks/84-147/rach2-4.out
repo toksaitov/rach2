@@ -1,0 +1,198 @@
+booted rach2 /home/testing/rach2/build/worktrees/codex/build/runs/task4863/kernel-final
+== sleep 2  2.00 s
+[?2004h
+<7>[6.480000] virtio_gpu: worker: pid 59
+<6>[6.480000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=411 halt_exits=39 io_exits=105 mmio_exits=0 irq_exits=3 irq_window_exits=5 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=42 halt_successful_poll=0 halt_wakeup=36 req_event=61 unnamed=259
+   host eoi writes 2 2; tsc deadline writes 47 31 9 2 5
+== cat /sys/kernel/debug/exits  0.08 s
+[?2004h[?2004l
+in 0x3fd 1886 859 779 21 227
+out 0x3f8 1690 663 779 21 227
+eoipv 0x0 5881 3933 893 756 299
+wrmsr 0x6e0 1633 856 320 285 172
+wrmsr 0xc0000100 10291 5970 2012 1589 720
+wrmsr 0xc0000102 10241 5948 1998 1581 714
+rdmsr 0xc0000100 10245 5954 1998 1577 716
+rdmsr 0xc0000102 10254 5963 1998 1577 716
+hlt 0 5456 3662 806 715 273
+wrmsr 0x830 1531 1178 169 149 35
+out 0x3d4 80 36 28 4 12
+out 0x3d5 80 36 28 4 12
+vmcall 0xa 132 47 27 33 25
+eoiunset 0x30 49 49 0 0 0
+wrmsr 0x80b 132 101 14 12 5
+out 0xc024 7 4 0 0 3
+out 0xc014 7 4 0 0 3
+in 0xc03e 52 52 0 0 0
+out 0xc03e 27 27 0 0 0
+eoiunset 0x2b 25 25 0 0 0
+in 0xc03a 12 12 0 0 0
+in 0xc037 27 27 0 0 0
+out 0xc02c 6 4 0 0 2
+out 0xc01c 6 4 0 0 2
+out 0xc038 15 15 0 0 0
+in 0x3f8 169 169 0 0 0
+eoitaken 0x24 9 9 0 0 0
+out 0x3fa 2 1 0 1 0
+eoiunset 0x20 7 5 1 1 0
+eoiunset 0x24 1 1 0 0 0
+out 0xc028 6 3 0 0 3
+out 0xc018 6 3 0 0 3
+eoiunset 0xf0 41 12 13 11 5
+out 0xcf8 1700 1025 668 0 7
+in 0xcfc 1700 1025 668 0 7
+in 0xc058 7 4 1 2 0
+in 0xc062 7 4 1 2 0
+out 0xc020 6 1 0 0 5
+out 0xc010 6 1 0 0 5
+rdmsr 0x821 3 0 1 1 1
+wrmsr 0x832 3 0 1 1 1
+out 0x70 10 0 0 0 10
+in 0x71 1 0 0 0 1
+out 0x71 9 0 0 0 9
+ipi kick 1821 1286 229 220 86
+ipi tlb 1 1 0 0 0
+ipi kernel_tlb 12 3 0 3 6
+ipi barrier 0 0 0 0 0
+ipi space 5 4 1 0 0
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=8782 halt_exits=8 io_exits=3082 mmio_exits=0 irq_exits=25 irq_window_exits=11 request_irq_exits=0 nmi_window_exits=0 insn_emulation=5573 hypercalls=0 irq_injections=34 halt_successful_poll=0 halt_wakeup=8 req_event=93 unnamed=5656
+   host eoi writes 3 3; tsc deadline writes 29 26 3
+== tar cf - /opt/proton | cat > /dev/null  4.65 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=249124 halt_exits=51716 io_exits=276 mmio_exits=154764 irq_exits=4485 irq_window_exits=3089 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155055 hypercalls=0 irq_injections=55898 halt_successful_poll=41529 halt_wakeup=8617 req_event=88342 unnamed=34794
+   host eoi writes 560 417 140 2 1; tsc deadline writes 4449 2063 2321 59 6
+== cat /sys/kernel/debug/exits  0.08 s
+[?2004h[?2004l
+in 0x3fd 3447 2402 797 21 227
+out 0x3f8 3142 2097 797 21 227
+eoipv 0x0 61222 32993 26873 1045 311
+wrmsr 0x6e0 6114 2947 2645 344 178
+wrmsr 0xc0000100 115259 46661 65867 2007 724
+wrmsr 0xc0000102 115206 46638 65851 1999 718
+rdmsr 0xc0000100 115210 46646 65849 1995 720
+rdmsr 0xc0000102 115219 46655 65849 1995 720
+hlt 0 57182 29342 26553 1002 285
+wrmsr 0x830 29112 26293 2603 181 35
+out 0x3d4 224 174 34 4 12
+out 0x3d5 224 174 34 4 12
+vmcall 0xa 132 47 27 33 25
+eoiunset 0x30 332 332 0 0 0
+wrmsr 0x80b 694 520 154 14 6
+out 0xc024 7 4 0 0 3
+out 0xc014 7 4 0 0 3
+in 0xc03e 52 52 0 0 0
+out 0xc03e 27 27 0 0 0
+eoiunset 0x2b 25 25 0 0 0
+in 0xc03a 12 12 0 0 0
+in 0xc037 27 27 0 0 0
+out 0xc02c 6 4 0 0 2
+out 0xc01c 6 4 0 0 2
+out 0xc038 15 15 0 0 0
+in 0x3f8 268 268 0 0 0
+eoitaken 0x24 13 13 0 0 0
+out 0x3fa 2 1 0 1 0
+eoiunset 0x20 32 22 9 1 0
+eoiunset 0x24 1 1 0 0 0
+out 0xc028 6 3 0 0 3
+out 0xc018 6 3 0 0 3
+eoiunset 0xf0 287 124 144 13 6
+out 0xcf8 1700 1025 668 0 7
+in 0xcfc 1700 1025 668 0 7
+in 0xc058 10 7 1 2 0
+in 0xc062 10 7 1 2 0
+out 0xc020 6 1 0 0 5
+out 0xc010 6 1 0 0 5
+eoitaken 0x20 2 2 0 0 0
+eoitaken 0x30 1 1 0 0 0
+rdmsr 0x821 3 0 1 1 1
+wrmsr 0x832 3 0 1 1 1
+eoitaken 0xf0 1 0 1 0 0
+out 0x70 10 0 0 0 10
+in 0x71 1 0 0 0 1
+out 0x71 9 0 0 0 9
+ipi kick 29399 26398 2663 252 86
+ipi tlb 3 3 0 0 0
+ipi kernel_tlb 12 3 0 3 6
+ipi barrier 0 0 0 0 0
+ipi space 6 5 1 0 0
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=9436 halt_exits=27 io_exits=3330 mmio_exits=0 irq_exits=20 irq_window_exits=11 request_irq_exits=0 nmi_window_exits=0 insn_emulation=5930 hypercalls=0 irq_injections=50 halt_successful_poll=0 halt_wakeup=28 req_event=117 unnamed=6048
+   host eoi writes 2 2; tsc deadline writes 44 21 23
+== tar cf - /opt/proton | cat > /dev/null  0.59 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=13146 halt_exits=5705 io_exits=269 mmio_exits=50 irq_exits=615 irq_window_exits=70 request_irq_exits=0 nmi_window_exits=0 insn_emulation=310 hypercalls=0 irq_injections=5972 halt_successful_poll=5318 halt_wakeup=361 req_event=6392 unnamed=6437
+   host eoi writes 17 6 9 2; tsc deadline writes 402 194 203 5
+== cat /sys/kernel/debug/exits  0.08 s
+[?2004h[?2004l
+in 0x3fd 5131 2540 2343 21 227
+out 0x3f8 4717 2126 2343 21 227
+eoipv 0x0 67228 34806 31004 1106 312
+wrmsr 0x6e0 6571 3172 2872 349 178
+wrmsr 0xc0000100 126573 49917 73819 2113 724
+wrmsr 0xc0000102 126517 49893 73801 2105 718
+rdmsr 0xc0000100 126521 49901 73799 2101 720
+rdmsr 0xc0000102 126530 49910 73799 2101 720
+hlt 0 62919 31013 30558 1062 286
+wrmsr 0x830 34756 30266 4273 182 35
+out 0x3d4 374 184 174 4 12
+out 0x3d5 374 184 174 4 12
+vmcall 0xa 132 47 27 33 25
+eoiunset 0x30 332 332 0 0 0
+wrmsr 0x80b 713 528 163 16 6
+out 0xc024 7 4 0 0 3
+out 0xc014 7 4 0 0 3
+in 0xc03e 52 52 0 0 0
+out 0xc03e 27 27 0 0 0
+eoiunset 0x2b 25 25 0 0 0
+in 0xc03a 12 12 0 0 0
+in 0xc037 27 27 0 0 0
+out 0xc02c 6 4 0 0 2
+out 0xc01c 6 4 0 0 2
+out 0xc038 15 15 0 0 0
+in 0x3f8 367 367 0 0 0
+eoitaken 0x24 17 17 0 0 0
+out 0x3fa 2 1 0 1 0
+eoiunset 0x20 32 22 9 1 0
+eoiunset 0x24 1 1 0 0 0
+out 0xc028 6 3 0 0 3
+out 0xc018 6 3 0 0 3
+eoiunset 0xf0 302 128 153 15 6
+out 0xcf8 1700 1025 668 0 7
+in 0xcfc 1700 1025 668 0 7
+in 0xc058 10 7 1 2 0
+in 0xc062 10 7 1 2 0
+out 0xc020 6 1 0 0 5
+out 0xc010 6 1 0 0 5
+eoitaken 0x20 2 2 0 0 0
+eoitaken 0x30 1 1 0 0 0
+rdmsr 0x821 3 0 1 1 1
+wrmsr 0x832 3 0 1 1 1
+eoitaken 0xf0 1 0 1 0 0
+out 0x70 10 0 0 0 10
+in 0x71 1 0 0 0 1
+out 0x71 9 0 0 0 9
+ipi kick 35042 30371 4332 253 86
+ipi tlb 3 3 0 0 0
+ipi kernel_tlb 12 3 0 3 6
+ipi barrier 0 0 0 0 0
+ipi space 7 5 2 0 0
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=13185 halt_exits=25 io_exits=3371 mmio_exits=1828 irq_exits=16 irq_window_exits=9 request_irq_exits=0 nmi_window_exits=0 insn_emulation=9671 hypercalls=0 irq_injections=47 halt_successful_poll=0 halt_wakeup=24 req_event=101 unnamed=7936
+   host eoi writes 2 2; tsc deadline writes 37 16 21
