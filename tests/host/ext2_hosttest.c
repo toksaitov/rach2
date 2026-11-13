@@ -4408,9 +4408,9 @@ static void drain_victims_row(void)
     bcache_set_limit(0);
 }
 
-/* The description of the second file of `overlap_punch_row`, and 1 once
- * process B's truncate of it succeeded or -1 once it failed. */
-static void *overlap_handle;
+/* The description of the second file of `overlap_punch_row` and its node,
+ * and 1 once process B's truncate of it succeeded or -1 once it failed. */
+static void *overlap_handle, *overlap_node;
 static int overlap_done;
 
 /** At the first truncate's first disk request, its read of the indirect
@@ -4425,7 +4425,7 @@ static void overlap_turn(void)
  * under its lock. */
 static void overlap_second(void)
 {
-    void *y = overlap_handle;
+    void *y = overlap_node;
 
     OPS->lock_node(&mnt, y);
     overlap_done = OPS->truncate(&mnt, overlap_handle, 0) == 0 ? 1 : -1;
@@ -4501,6 +4501,7 @@ static void overlap_punch_row(void)
         (void)unmount_rw();
         return;
     }
+    overlap_node = y;
     overlap_done = 0;
     sleeps = 0;
     wlog_reset();
