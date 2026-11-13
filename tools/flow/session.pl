@@ -6,28 +6,40 @@
 #
 # The supervisor, this process, leaves the loop's process group first, so a
 # hangup that ends the loop reaches neither it nor the session. It forks the
-# session, puts it in a group of its own whose id is the session's pid, and
-# writes that id to RECORD. Only then, with the limit set, does it let the
-# session exec COMMAND: a session runs only once its group is recorded and
-# its limit is set, and when the record cannot be written, or the
-# supervisor dies first, the child exits without running COMMAND.
+# group's leader, the anchor: a child that leads a group of its own, whose id
+# is the anchor's pid, ignores HUP, INT and TERM, and exits once the
+# supervisor closes the pipe to it or dies. It then forks the session into
+# that group and writes the group's id to RECORD. Only then, with the limit
+# set, does it let the session exec COMMAND: a session runs only once its
+# group is recorded and its limit is set, and when the record cannot be
+# written, or the supervisor dies first, the child exits without running
+# COMMAND.
 #
-# A session still running after LIMIT seconds gets TERM, its whole group KILL
-# half a minute later if any of it is left, so that a child that outlives the
-# TERM, such as an emulator, does not outlive the session, and the supervisor
-# exits 124. A TERM or INT sent to the supervisor stops the session's group
-# the same way, and the supervisor exits 128 plus the signal's number only
-# once the group is gone, so that a stop of either group stops the session
-# before the loop can start another. A session that ends by itself gives its
-# status, as sh reports one, and the processes it left in its group are logged
-# to LOG and stopped the same way: a session should leave none, and one it
-# leaves, such as a `tests/run` that holds the clone's run lock, would keep
-# the next session's suite from running. The supervisor removes RECORD once
-# the group is gone. It exits 125 when it could not start the session.
+# Every signal to the group goes while the anchor is an unreaped child of
+# the supervisor, so the group's number is still the anchor's and has passed
+# to no other group: the supervisor reaps the anchor only once ps shows no
+# other process in the group, and signals the group no more after that. Its
+# handlers only record a signal; one loop, a turn each second, reaps the
+# session and sends every signal.
+#
+# A session still running after LIMIT seconds gets TERM, its whole group,
+# and KILL thirty turns later if any of it is left, so that a child that
+# outlives the TERM, such as an emulator, does not outlive the session, and
+# the supervisor exits 124. A TERM or INT sent to the supervisor stops the
+# session's group the same way, and the supervisor exits 128 plus the
+# signal's number only once the group is gone, so that a stop of either
+# group stops the session before the loop can start another. A session that
+# ends by itself gives its status, as sh reports one, and the processes it
+# left in its group are logged to LOG and stopped the same way: a session
+# should leave none, and one it leaves, such as a `tests/run` that holds the
+# clone's run lock, would keep the next session's suite from running. A
+# process that outlives the KILL keeps the supervisor, the anchor and RECORD
+# until it is gone, as LOG notes. The supervisor removes RECORD once the
+# group is gone. It exits 125 when it could not start the session.
 
 use strict;
 use warnings;
-use POSIX qw(strftime);
+use POSIX qw(strftime WNOHANG);
 
 my ($record, $log, $limit, @command) = @ARGV;
 
@@ -38,18 +50,6 @@ sub note
     open(my $f, '>>', $log) or return;
     print $f strftime('%F %T', gmtime), " $text\n";
     close($f);
-}
-
-# Wait up to SECONDS for the group GROUP to have no process left; return
-# whether it has none.
-sub drained
-{
-    my ($group, $seconds) = @_;
-    for (1 .. $seconds) {
-        return 1 unless kill 0, -$group;
-        sleep 1;
-    }
-    return !kill 0, -$group;
 }
 
 # Write GROUP to RECORD through a new file and a rename, so that a reader
@@ -63,88 +63,118 @@ sub save
     return rename("$record.new", $record);
 }
 
+my ($signal, $expired);
+for my $name ('TERM', 'INT') {
+    $SIG{$name} = sub { $signal //= $name };
+}
+$SIG{ALRM} = sub { $expired = 1 };
+
 setpgrp(0, 0) or die "session: setpgrp: $!\n";
+pipe(my $hold_r, my $hold_w) or die "session: pipe: $!\n";
+my $group = fork;
+defined $group or die "session: fork: $!\n";
+if ($group == 0) {
+    # The anchor: it leads the group and waits for the end of the pipe.
+    close($hold_w);
+    $SIG{$_} = 'IGNORE' for qw(HUP INT TERM ALRM);
+    setpgrp(0, 0);
+    while (1) {
+        my $n = sysread($hold_r, my $byte, 1);
+        last if defined $n ? $n == 0 : !$!{EINTR};
+    }
+    POSIX::_exit(0);
+}
+close($hold_r);
+
+# end STATUS: close the anchor's pipe, reap the anchor and exit with STATUS.
+sub end
+{
+    close($hold_w);
+    waitpid($group, 0);
+    exit shift;
+}
+
+if (!setpgrp($group, $group)) {
+    note("session group $group cannot be made: $!; not starting it");
+    end(125);
+}
 pipe(my $go_r, my $go_w) or die "session: pipe: $!\n";
 my $pid = fork;
-defined $pid or die "session: fork: $!\n";
+if (!defined $pid) {
+    note("session cannot fork: $!; not starting it");
+    end(125);
+}
 if ($pid == 0) {
     close($go_w);
-    setpgrp(0, 0);
+    close($hold_w);
+    $SIG{$_} = 'DEFAULT' for qw(TERM INT ALRM);
+    setpgrp(0, $group);
     sysread($go_r, my $go, 1) == 1 or POSIX::_exit(125);
     close($go_r);
     exec { $command[0] } @command or die "session: exec $command[0]: $!\n";
 }
 close($go_r);
-if (!setpgrp($pid, $pid) || !save($pid)) {
+if (!setpgrp($pid, $group) || !save($group)) {
     my $why = $!;
-    note("session group $pid cannot be recorded in $record: $why; " .
+    note("session group $group cannot be recorded in $record: $why; " .
         "not starting it");
     unlink("$record.new");
-    kill 'KILL', $pid;
+    # Without its go the session exits 125 and runs nothing.
+    close($go_w);
     waitpid($pid, 0);
-    exit 125;
+    end(125);
 }
 
-my $expired = 0;
-my $signal;
-my $deadline;
-
-# Send TERM to the session's group and arrange for KILL half a minute later;
-# a second call does nothing, since the first set the deadline.
-sub stop
+# members: return a reference to the list of `PID ARGS` of each process in
+# the group but the anchor, or nothing when ps cannot be read.
+sub members
 {
-    return if defined $deadline;
-    $deadline = time + 30;
-    kill 'TERM', -$pid;
-    alarm(30);
+    my @ps = `ps -A -o pgid= -o pid= -o args=`;
+    return if $? != 0;
+    return [map { /^\s*(\d+)\s+(\d+)\s+(.*)$/ && $1 == $group && $2 != $group ? "$2 $3" : () } @ps];
 }
 
-$SIG{ALRM} = sub {
-    if (defined $deadline) {
-        kill 'KILL', -$pid;
-    } else {
-        $expired = 1;
-        stop();
-    }
-};
-for my $name ('TERM', 'INT') {
-    $SIG{$name} = sub {
-        $signal = $name unless defined $signal;
-        stop();
-    };
-}
 alarm($limit);
 syswrite($go_w, 'x', 1);
 close($go_w);
-my $status;
+my ($status, $stopping, $left);
+my $turns = 0;
 while (1) {
-    my $ended = waitpid($pid, 0);
-    if ($ended == $pid) {
+    if (!defined $status && waitpid($pid, WNOHANG) == $pid) {
         $status = $?;
-        last;
+        alarm(0) unless $stopping || $expired;
     }
-    die "session: waitpid: $!\n" unless $!{EINTR};
-}
-alarm(0) unless defined $deadline;
-
-if (!defined $deadline && kill 0, -$pid) {
-    for (`ps -A -o pgid= -o pid= -o args=`) {
-        note("session group $pid left $2; stopping it")
-            if /^\s*(\d+)\s+(.*)$/ && $1 == $pid;
+    if (!$stopping && (defined $signal || $expired)) {
+        $stopping = 1;
+    } elsif (!$stopping && defined $status) {
+        $left = members();
+        last if $left && !@$left;
+        note("session group $group left $_; stopping it") for @{$left || []};
+        $stopping = 1;
     }
-    stop();
-}
-if (defined $deadline) {
-    if (!drained($pid, $deadline - time)) {
-        note("session group $pid outlived the TERM; killing it");
-        kill 'KILL', -$pid;
+    if ($stopping) {
+        # The anchor is an unreaped child, so -$group is still its group.
+        if ($turns == 0) {
+            kill('TERM', -$group);
+        } else {
+            $left = members();
+            last if $left && !@$left;
+        }
+        if ($turns == 30) {
+            note("session group $group outlived the TERM; killing it");
+            kill('KILL', -$group);
+        } elsif ($turns == 60) {
+            note("session group $group outlived its KILL; waiting for it to end");
+        }
+        $turns++;
     }
-    alarm(0);
+    select(undef, undef, undef, 1);
 }
+alarm(0);
 unlink($record);
 if (defined $signal) {
-    note("session group $pid stopped on SIG$signal");
-    exit(128 + ($signal eq 'TERM' ? POSIX::SIGTERM : POSIX::SIGINT));
+    note("session group $group stopped on SIG$signal");
+    end(128 + ($signal eq 'TERM' ? POSIX::SIGTERM : POSIX::SIGINT));
 }
-exit 124 if $expired;
-exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
+end(124) if $expired;
+end($status & 127 ? 128 + ($status & 127) : $status >> 8);
