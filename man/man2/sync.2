@@ -60,16 +60,20 @@ descriptor's type.
 It first writes the file's dirty shared-mapping pages, those of
 mappings whose release is still queued among them; it waits for no
 release.
-A page whose write fails stays dirty, and its file open, until a later
-sync, fsync, msync, unmap or the flusher writes it, or a truncation
-frees it; the next fsync of the file reports that error once, even if a
-retry succeeded.
-When the device has gone, or no mount namespace sees the mount, a failed
-write drops the dirty pages once no writable mapping is left, and an
-unmount whose mount only such pages hold writes them and drops what
-fails, as Linux evicts pages whose write-back failed.
-The write-back holds a description of its own, and its page range is
-bounded before it starts, so later mappings do not extend it.
+A page whose write fails stays dirty, and its file open on the file
+system, until a later sync, fsync, msync, unmap or the flusher writes it,
+or a truncation frees it; each write-back that fails records its error,
+and the next fsync of the file reports it once, even if a retry
+succeeded.
+The pages hold their file open on the file system itself and hold no
+mount, so a bind mount they were stored through may be unmounted while
+they are dirty, and they are written once the failure clears.
+When the device has gone, a failed write drops the dirty pages once no
+writable mapping is left, and the unmount of the file system, which
+comes once nothing holds it, writes them and drops what fails, as Linux
+evicts pages whose write-back failed.
+The write-back's page range is bounded before it starts, so later
+mappings do not extend it.
 For a descriptor on a mounted file system, it runs that file system's
 fsync operation, or writes the device's dirty buffers if the file
 system has no such operation.

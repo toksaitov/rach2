@@ -206,7 +206,9 @@ for writing is unmapped or its process ends, and before a
 .Xr read 2
 of the bytes they hold, and the bytes a
 .Xr write 2
-puts in the file are copied into them.
+puts in the file are copied into them from the same kernel copy of the
+caller's buffer that the file system writes, before the write returns,
+so that no later write-back can put older bytes over them.
 Only a page marked for a shared store goes back, whole up to the file's
 size.
 Writes through
@@ -230,12 +232,13 @@ A page whose write fails stays marked, and so does a page a device holds
 pinned, which each write-back writes again until the pin goes.
 A truncation clears the marks of the pages it frees.
 A page that cannot go back when its last mapping goes stays in memory
-with its file open until a later
+with its file open on the file system, holding no mount, until a later
 .Xr sync 2 ,
 .Xr fsync 2 ,
 .Fn msync ,
-unmap or the flusher writes it; when the device has gone, the mount was
-detached, or the file system is unmounted, it is dropped instead, as
+unmap or the flusher writes it, a bind mount it was stored through
+unmounted or not; when the device has gone, or the file system itself is
+unmounted, it is dropped instead, as
 .Xr sync 2
 says.
 The write-back waits for no release, and later mappings do not extend it.
