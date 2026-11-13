@@ -29,23 +29,12 @@
  * processor with a TSC ahead, a stop inside a hand-over or a hand-over a
  * minute late does not move, with a platform counter and without one.
  *
- * The rows of the timer between ticks (`hr_rows`) run the APIC timer at
- * 1 GHz, a count a nanosecond, with the clock the timer is programmed from
- * the model's own and no access taking time. They check that the first time
- * asked makes the periodic timer one-shot, its next tick where the periodic
- * count would have raised it, and counts to the time asked on its own
- * vector; that an interrupt before that time counts to it again and one at
- * it counts to the tick; that a time asked while one is armed replaces it
- * only when earlier; that a late tick moves the tick's time on by whole
- * ticks, keeping its phase; that an interrupt at the tick's vector before
- * the tick's time is not the tick; that the interrupt between ticks at a
- * tick's time counts at once to the tick, which then comes once; that a
- * tick late by most of a tick moves the next only past the clock, and an
- * interrupt a little before the tick's time is that tick; that a processor
- * far behind starts its tick a tick from the clock; that a tick raised and
- * not taken when the timer is made one-shot is counted once, as the tick
- * before the count's next; and that a stop between the clock's reading and
- * the count's read as it turns one-shot leaves the tick's phase.
+ * Timer rows use a 1 GHz APIC model, one count per nanosecond, on one
+ * shared vector. They check a common monotonic scheduler phase, pending
+ * periodic interrupts, late and early ticks, coincident tick and event
+ * expiry, nested request holds, idle transitions, coarse-clock lag and
+ * stable whole-tick deadlines. Clock readings bracket the pending bit or
+ * phase so a forced host stop cannot shift a later event by that stop.
  */
 
 #include "refclock.c"
@@ -250,12 +239,6 @@ void lapic_timer_oneshot(uint8_t vector, uint32_t initial)
 /* The processors' records, which the timer reads for the idle stop of the
  * tick; no row's processor waits idle, so no tick stops. */
 struct percpu cpu_table[NR_CPUS];
-
-/** Half a sample period of 4 s, as the watchdog's default gives. */
-uint32_t watchdog_idle_ticks(void)
-{
-    return 2u * TICK_HZ;
-}
 
 /** The host divides 64 bits itself. */
 uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
@@ -724,12 +707,13 @@ static void hr_tick_rows(void)
     now_ns = MS(11.99);
     timer_wake_at((int64_t)MS(11.995));
     now_ns = MS(12.01);
-    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->want == 0 && c->tick == (int64_t)MS(12) &&
-              apic_vector == APIC_TIMER_VECTOR && apic_initial == 1u,
-          "the interrupt between ticks at the tick's time counts to the tick at once");
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) == (APIC_HR_TICK | APIC_HR_EVENT) && c->want == 0 &&
+              c->tick == (int64_t)MS(13) && apic_vector == APIC_TIMER_VECTOR &&
+              apic_initial == 990001u,
+          "a shared-vector interrupt past both deadlines serves the event and tick once");
     now_ns = MS(12.011);
-    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(13),
-          "which comes once, the next at 13 ms");
+    CHECK(!(take_hr_event(APIC_TIMER_VECTOR) & APIC_HR_TICK) && c->tick == (int64_t)MS(13),
+          "a later stale interrupt cannot serve that tick again");
 
     now_ns = MS(13.95);
     CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(14) && apic_initial == 50001u,
@@ -1448,15 +1432,6 @@ int timer_idle_prepare(void)
         timer_wake_at(prepare_second);
     }
     return idle_allowed;
-}
-
-/** The host can divide a 64-bit count directly. */
-uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
-{
-    if (rem) {
-        *rem = n % d;
-    }
-    return n / d;
 }
 
 /** The model's TSC, without an access delay. */

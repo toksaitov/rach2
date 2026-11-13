@@ -54,16 +54,6 @@ void watchdog_init(void);
 void watchdog_tick(isr_params_t *params);
 
 /**
- * The most ticks an idle processor may let pass between two of its ticks
- * (apictimer.c): half a sample period, so that its watchdog timer still
- * runs every period or two and its buddy sees its count move, as Linux's
- * watchdog hrtimer ends a NO_HZ processor's idle each sample period
- * (kernel/watchdog.c:675-697); a second's worth while `watchdog_thresh` is
- * 0. Any context.
- */
-uint32_t watchdog_idle_ticks(void);
-
-/**
  * Keep the hard-lockup detector going through a wait with interrupts off,
  * which takes no ticks: a sample period of a wait for the big lock counts
  * as this processor's timer, and the buddy check runs every third period of

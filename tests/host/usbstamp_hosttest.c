@@ -199,6 +199,10 @@ int timer_idle_enter(void)
 void timer_idle_work(void)
 {}
 
+/** No published device service target waits in this model. */
+void timer_service_ipi(void)
+{}
+
 /** The recorder has no deferred timer hardware change. */
 int timer_idle_pending(void)
 {

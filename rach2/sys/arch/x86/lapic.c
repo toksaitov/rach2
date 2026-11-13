@@ -61,7 +61,6 @@
 #include "../../panic.h"
 #include "ioapic.h"
 #include "kcpu.h"
-#include "kvmsteal.h"
 #include "pic.h"
 #include "../../mm/paging.h"
 #include "../../proc/percpu.h"
@@ -660,8 +659,11 @@ void lapic_set_pv_eoi(int cpu, volatile uint32_t *word)
  * every one below it for good. */
 void lapic_eoi(void)
 {
-    if (ready && !kvm_guest_eoi()) {
-        apic_write(LAPIC_EOI, 0);
+    volatile uint32_t *w;
+    int c;
+
+    if (!ready) {
+        return;
     }
     c = arch_cpu_id();
     w = pv_eoi[c];
@@ -874,6 +876,12 @@ void lapic_timer_oneshot(uint8_t vector, uint32_t initial)
     apic_write(LAPIC_INITIAL, initial);
 }
 
+/** Select the TSC-deadline clock event; its deadline MSR arms it. */
+void lapic_timer_deadline(uint8_t vector)
+{
+    apic_write(LAPIC_TIMER, vector | (2u << 17));
+}
+
 /** The entry and the divide register stay as `lapic_timer_set` wrote
  * them; the write of the initial count starts the count. */
 void lapic_timer_count(uint32_t initial)
@@ -882,12 +890,6 @@ void lapic_timer_count(uint32_t initial)
         return;
     }
     apic_write(LAPIC_INITIAL, initial);
-}
-
-/** Select the TSC-deadline clock event; its deadline MSR arms it. */
-void lapic_timer_deadline(uint8_t vector)
-{
-    apic_write(LAPIC_TIMER, vector | (2u << 17));
 }
 
 void lapic_timer_stop(void)

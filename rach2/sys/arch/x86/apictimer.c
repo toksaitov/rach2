@@ -335,11 +335,9 @@ static void hr_program(struct hr_state *c, int64_t now, int idle_commit)
     span = hr_counts(delta, hr_tick_counts);
     counts = span >= 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)span;
     if (c->lvt != vector) {
-        lapic_timer_set(vector, 0, 0, counts);
-        c->lvt = vector;
-    } else if (c->lvt != vector) {
         lapic_timer_oneshot(vector, counts);
         c->lvt = vector;
+
     } else {
         lapic_timer_count(counts);
     }
@@ -512,56 +510,6 @@ void apic_hr_interrupt(isr_params_t *params)
     }
     timer_hr_pass();
     hr_program(&hr_cpu[arch_cpu_id()], rtc_monotonic_ns(), 0);
-}
-
-/**
- * Stop the tick of this processor, whose next tick `c->tick` an interrupt at
- * the tick has just set, when its idle task waits and may stop it
- * (`tick_may_stop`): the next tick comes `watchdog_idle_ticks` ticks later,
- * on the tick's phase, and the one skipped is kept in `resume`. A processor
- * that is not idle starts its tick again. Interrupts are off.
- */
-static void hr_idle_stop(struct hr_state *c)
-{
-    struct percpu *cpu = this_cpu();
-    uint32_t skip = watchdog_idle_ticks();
-
-    if (!cpu->idle_wait || !cpu->tick_may_stop || skip < 2u) {
-        c->stopped = 0;
-        return;
-    }
-    if (skip > HR_BEHIND_MAX / 2u) {
-        skip = HR_BEHIND_MAX / 2u;
-    }
-    c->resume = c->tick;
-    c->tick += (int64_t)(skip - 1u) * (int64_t)TICK_NS;
-    c->stopped = 1;
-}
-
-void timer_idle_exit(void)
-{
-    struct hr_state *c;
-    int64_t now;
-
-    if (hr_vector == 0) {
-        return;
-    }
-    c = &hr_cpu[arch_cpu_id()];
-    if (!c->stopped) {
-        return;
-    }
-    c->stopped = 0;
-    c->tick = c->resume;
-    now = rtc_monotonic_ns();
-    if (now + HR_SLACK_NS >= c->tick) {
-        hr_forward(c, now);
-    }
-    hr_program(c, now);
-}
-
-int timer_tick_stopped(int cpu)
-{
-    return hr_cpu[cpu].stopped;
 }
 
 int apic_hr_entry(uint32_t vector)

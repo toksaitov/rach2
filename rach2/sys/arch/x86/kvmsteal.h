@@ -14,9 +14,16 @@
  */
 void kvm_steal_cpu_setup(int cpu);
 
-/** Complete this processor's virtual interrupt through KVM's shared word.
- * Return one when handled, zero when the APIC EOI must be written.
- * Interrupts are off; zero before setup or without KVM_FEATURE_PV_EOI. */
-int kvm_guest_eoi(void);
+/**
+ * Send the fixed interrupt `vector` to each processor of the set `cpus`
+ * through KVM's KVM_HC_SEND_IPI, where KVM offers it
+ * (KVM_FEATURE_PV_SEND_IPI), as Linux's kvm_send_ipi_mask: one hypercall,
+ * one exit, for each span of 128 APIC ids on x86-64 or 64 on i686, where
+ * the APIC takes one write of the command register for each processor in
+ * xAPIC mode and for each cluster in x2APIC mode. 1 when sent; 0 when the
+ * hypercall is not offered or KVM refused it, and the caller sends the
+ * set itself. Any context.
+ */
+int kvm_send_ipi_many(uint64_t cpus, uint8_t vector);
 
 #endif
