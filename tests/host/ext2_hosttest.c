@@ -5936,18 +5936,44 @@ static void structural_alloc_row(const char *img)
     check(structural_kept(img, was), "and the table's block is as it was, its bit set again");
 }
 
+/* What `structural_policy_row` compares of group 0 on the disk: its inode
+ * bitmap block and its descriptor's free-inode and directory counts. */
+struct group_inodes {
+    unsigned char bitmap[4096];
+    unsigned char counts[4];
+};
+
+/** Read group 0's inode bitmap and inode counts from `img`, a volume of
+ * 4096-byte blocks, into `g`; whether both read whole. */
+static int group_inodes_read(const char *img, struct group_inodes *g)
+{
+    unsigned char desc[8];
+    long bitmap;
+
+    if (host_read(img, desc, sizeof(desc), 4096) != (long)sizeof(desc)) {
+        return 0;
+    }
+    bitmap = desc[4] | (desc[5] << 8) | (desc[6] << 16) | ((long)desc[7] << 24);
+    return host_read(img, g->bitmap, sizeof(g->bitmap), bitmap * 4096) == (long)sizeof(g->bitmap) &&
+           host_read(img, g->counts, sizeof(g->counts), 4096 + 14) == (long)sizeof(g->counts);
+}
+
 /**
  * The volume of `structural_alloc_row` under `errors=remount-ro`: the
  * refusal of the inode table's block makes the mount read-only, as Linux's
- * `ext2_error` sets SB_RDONLY, and the driver stops writing in the same
- * step, so the mkdir that met it writes nothing more and fails with EROFS
- * and names no directory. A remount writable after it must check the
+ * `ext2_error` sets SB_RDONLY, and stops every allocation, so the mkdir
+ * that met it fails with EROFS and names no directory. The mkdir had taken
+ * an inode and raised the directory count, and an operation under way
+ * still writes, as Linux's goes on under SB_RDONLY, so its rollback must
+ * free them: after a sync the inode bitmap and the counts on the disk are
+ * as they were before it. A remount writable after it must check the
  * volume again and open it, so that a mkdir then succeeds; the table's
  * block stays as it was and the error bit through the unmount.
  */
 static void structural_policy_row(const char *img)
 {
     static unsigned char was[4096];
+    static struct group_inodes before, after;
     uint64_t bytes = structural_image(img, was);
     int rc, err = 0;
 
@@ -5961,10 +5987,16 @@ static void structural_policy_row(const char *img)
     if (rc != 0) {
         return;
     }
+    check(OPS->sync(&mnt) == 0 && group_inodes_read(img, &before),
+          "and its group's inode bitmap and counts read after a sync");
     rc = OPS->mkdir(&mnt, mnt.root, "grown", 0755);
     check(rc == -EROFS && (mnt.flags & VFS_MS_RDONLY) != 0 && walk("/grown", &err) == 0 &&
               err == -ENOENT,
           "a mkdir that meets the block there stops at the read-only mount, EROFS, unnamed");
+    check(OPS->sync(&mnt) == 0 && group_inodes_read(img, &after) &&
+              memcmp(before.bitmap, after.bitmap, sizeof(before.bitmap)) == 0 &&
+              memcmp(before.counts, after.counts, sizeof(before.counts)) == 0,
+          "and its rollback frees its inode and lowers the directory count again on the disk");
     last_check[0] = 0;
     rc = OPS->remount(&mnt, rw_flags, NULL);
     check(rc == 0 && last_check[0] != 0, "and a remount writable after it checks the volume");
@@ -6116,6 +6148,8 @@ static void fault_remount_row(void);
 static void error_policy_rows(void);
 static void remount_policy_row(void);
 static void extra_isize_row(void);
+static void pending_damage_row(void);
+static void runtime_damage_rows(void);
 
 /**
  * Mount a clean volume read-only, read a file and a deep path on it, sync
@@ -6183,6 +6217,8 @@ static void readonly_rows(void)
     error_policy_rows();
     remount_policy_row();
     extra_isize_row();
+    pending_damage_row();
+    runtime_damage_rows();
 }
 
 /* The result of process B's sync in `sync_remount_row`. */
@@ -6449,6 +6485,223 @@ static void extra_isize_row(void)
               disk_state(img) == 2,
           "and reports it: the error bit on the disk and the mount read-only by name");
     check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+}
+
+/**
+ * A write left pending in the batch, behind an open description, then a
+ * write into /dir/big.bin past its direct blocks, whose single indirect
+ * pointer names the descriptor table, as only damage writes it, on a
+ * mount under `errors=remount-ro`: the second write must fail with EIO and
+ * the driver's record and make the mount read-only by name, but record no
+ * write failure, since no device write failed, so that the flusher still
+ * drains the first write, as Linux's flusher writes back past an inode's
+ * `ext2_error`, and a remount writable, which the VFS refuses after a
+ * write failure, checks the volume and opens it; the first write must then
+ * read back and the error bit stay through the unmount.
+ */
+static void pending_damage_row(void)
+{
+    const char *img = fix_path("pending.ext2");
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    static unsigned char block[4096];
+    static const unsigned char want[] = "HELlo\n";
+    void *hello, *big, *h1 = 0, *h2 = 0;
+    int32_t got = 0;
+    int rc, err = 0;
+
+    if (!debugfs_script(img, "sif /dir/big.bin block[IND] 1\n")) {
+        check(0, "debugfs points /dir/big.bin's single indirect at the descriptor table");
+        return;
+    }
+    use_image(img, bytes);
+    rc = mount_options(rw_flags, "errors=remount-ro");
+    hello = rc == 0 ? walk("/hello.txt", &err) : 0;
+    big = rc == 0 ? walk("/dir/big.bin", &err) : 0;
+    check(hello && big && OPS->open(&mnt, hello, 1, &h1) == 0 &&
+              OPS->open(&mnt, big, 1, &h2) == 0 && OPS->write(&mnt, h1, "HEL", 3, 0) == 3,
+          "a write to /hello.txt is accepted into the batch behind an open description");
+    if (h1 && h2) {
+        last_warn[0] = 0;
+        got = OPS->write(&mnt, h2, block, sizeof(block), 12 * 4096);
+    }
+    check(
+        got == -EIO && strstr(last_warn, "is out of range") != 0 &&
+            (mnt.flags & VFS_MS_RDONLY) != 0 && streq(last_log, "error: remounting read-only"),
+        "a write behind the damaged pointer fails with EIO and makes the mount read-only by name");
+    check(mnt.write_error == 0, "and records no write failure");
+    check(OPS->writeback(&mnt, ~(uint64_t)0) == 1, "and the flusher drains the pending write");
+    if (h1) {
+        OPS->release(&mnt, h1);
+    }
+    if (h2) {
+        OPS->release(&mnt, h2);
+    }
+    if (hello) {
+        OPS->put(&mnt, hello);
+    }
+    if (big) {
+        OPS->put(&mnt, big);
+    }
+    if (rc != 0) {
+        return;
+    }
+    last_check[0] = 0;
+    rc = OPS->remount(&mnt, rw_flags, NULL);
+    check(rc == 0 && last_check[0] != 0 && mnt.write_error == 0,
+          "and a remount writable, which no write failure refuses, checks the volume");
+    mnt.flags = rw_flags;
+    check(file_is("/hello.txt", want, 6), "and the pending write reads back");
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+}
+
+/**
+ * Make the tree volume `img`, damage it by the debugfs `script` and, when
+ * `dir` is set, by `zz` over the name of `..` in the first block of that
+ * directory, and mount it writable under `errors=remount-ro`. Returns 1, or
+ * 0 with a failed row named by `what`.
+ */
+static int damage_mount(const char *img, const char *script, const char *dir, const char *what)
+{
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    char request[64];
+    long blk;
+
+    if (script && !debugfs_script(img, script)) {
+        check(0, what);
+        return 0;
+    }
+    if (dir) {
+        snprintf(request, sizeof(request), "blocks %s", dir);
+        blk = debugfs_number(img, request, "");
+        if (blk <= 0) {
+            check(0, what);
+            return 0;
+        }
+        poke(img, blk * 4096 + 20, (const unsigned char *)"zz", 2);
+    }
+    use_image(img, bytes);
+    if (mount_options(rw_flags, "errors=remount-ro") != 0 || (mnt.flags & VFS_MS_RDONLY)) {
+        check(0, what);
+        return 0;
+    }
+    last_warn[0] = 0;
+    last_log[0] = 0;
+    return 1;
+}
+
+/** Require of the damage row named `what` that the step it ran returned
+ * `rc`, `want`, with the driver's record `warn`, and reported the fault:
+ * the error bit on the disk and the mount read-only by name; then that the
+ * unmount keeps the bit. */
+static void damage_reported(const char *img, int rc, int want, const char *warn, const char *what)
+{
+    check(rc == want && strstr(last_warn, warn) != 0 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+              streq(last_log, "error: remounting read-only") && disk_state(img) == 2,
+          what);
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+}
+
+/** The lookup of `path` in a damage row: its error, or 0 when it found a
+ * node, which is put. */
+static int damage_lookup(const char *path)
+{
+    int err = 0;
+    void *n = walk(path, &err);
+
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    return err;
+}
+
+/**
+ * Faults Linux's `ext2_error` reports at run time that a mount under
+ * `errors=remount-ro` must report to its policy too, each by its record,
+ * the error bit on the disk and the mount read-only:
+ *
+ * - a truncation of /dir/big.bin whose single indirect pointer names the
+ *   descriptor table succeeds, the pointer dropped unread, as Linux's
+ *   `ext2_free_branches` drops it and `ext2_free_blocks` refuses the block;
+ * - the unlink of /dir/sub/deep.txt, whose data block names the descriptor
+ *   table, frees the inode all the same, the block refused;
+ * - a fast link whose size is 70 bytes answers EIO;
+ * - a move of /many into /dir, whose `..` is gone, answers EIO;
+ * - a lookup of an inode with no links, a mode and no deletion time, of a
+ *   freed inode a name still references, and of an inode whose attribute
+ *   block is out of range answers EIO, as Linux's `ext2_iget` and
+ *   `ext2_lookup` refuse them.
+ */
+static void runtime_damage_rows(void)
+{
+    const char *img = fix_path("damage.ext2");
+    struct vfs_statfs st;
+    uint64_t ffree = 0;
+    void *n, *h, *dir;
+    char buf[128];
+    int rc, err = 0;
+
+    if (damage_mount(img, "sif /dir/big.bin block[IND] 1\n", 0, "the truncate damage mounts")) {
+        rc = -1;
+        n = walk("/dir/big.bin", &err);
+        if (n && OPS->open(&mnt, n, 1, &h) == 0) {
+            rc = OPS->truncate(&mnt, h, 0);
+            OPS->release(&mnt, h);
+        }
+        if (n) {
+            OPS->put(&mnt, n);
+        }
+        damage_reported(img, rc, 0, "pointer block 1 is out of range",
+                        "a truncate past a pointer block out of range drops it and reports it");
+    }
+    if (damage_mount(img, "sif /dir/sub/deep.txt block[0] 1\n", 0, "the unlink damage mounts")) {
+        n = walk("/dir/sub", &err);
+        rc = -1;
+        if (n && OPS->statfs(&mnt, &st) == 0) {
+            ffree = st.ffree;
+            rc = OPS->unlink(&mnt, n, "deep.txt");
+        }
+        check(rc == 0 && OPS->statfs(&mnt, &st) == 0 && st.ffree == ffree + 1,
+              "the unlink of a file whose block is out of range frees its inode");
+        if (n) {
+            OPS->put(&mnt, n);
+        }
+        damage_reported(img, rc, 0, "free of block 1, which is out of range",
+                        "and reports the block it refuses to free");
+    }
+    if (damage_mount(img, "sif /fast size 70\n", 0, "the fast link damage mounts")) {
+        rc = -1;
+        n = walk("/fast", &err);
+        if (n) {
+            rc = OPS->readlink(&mnt, n, buf, sizeof(buf));
+            OPS->put(&mnt, n);
+        }
+        damage_reported(img, rc, -EIO, "symbolic link", "a fast link of 70 bytes answers EIO");
+    }
+    if (damage_mount(img, 0, "/dir", "the missing '..' damage mounts")) {
+        rc = -1;
+        dir = walk("/dir", &err);
+        if (dir) {
+            rc = OPS->rename(&mnt, mnt.root, "many", dir, "many");
+            OPS->put(&mnt, dir);
+        }
+        damage_reported(img, rc, -EIO, "it has no '..'",
+                        "a move into a directory without '..' answers EIO");
+    }
+    if (damage_mount(img, "sif /dir/sub/deep.txt links_count 0\n", 0, "the linkless mounts")) {
+        damage_reported(img, damage_lookup("/dir/sub/deep.txt"), -EIO, "has no links, mode 0",
+                        "a lookup of a live inode with no links answers EIO");
+    }
+    if (damage_mount(img, "sif /dir/sub/deep.txt links_count 0\nsif /dir/sub/deep.txt dtime 1\n", 0,
+                     "the freed inode mounts")) {
+        damage_reported(img, damage_lookup("/dir/sub/deep.txt"), -EIO,
+                        "a name references it, freed",
+                        "a lookup of a freed inode a name references answers EIO");
+    }
+    if (damage_mount(img, "sif /dir/sub/deep.txt file_acl 1\n", 0, "the attribute damage mounts")) {
+        damage_reported(img, damage_lookup("/dir/sub/deep.txt"), -EIO,
+                        "attribute block 1 is out of range",
+                        "a lookup of an inode whose attribute block is out of range answers EIO");
+    }
 }
 
 /* The result of process B's lookup in `fault_remount_row`. */
