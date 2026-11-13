@@ -51,7 +51,9 @@ static struct ext2_writeback batch;
 static struct ext2_node file, other;
 static struct vfs_mount mount;
 static block_device_t device;
-static uint8_t descriptors[32], payload[8192], result[8192];
+/* The one group's descriptor, then its byte that marks its block bitmap
+ * checked (`bitmap_check`), set so that the rows' reads are the plans'. */
+static uint8_t descriptors[33], payload[8192], result[8192];
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static int failures, writes;
@@ -634,6 +636,7 @@ static void reset(uint32_t available)
     k_memset(&mount, 0, sizeof(mount));
     k_memset(&batch, 0, sizeof(batch));
     k_memset(descriptors, 0, sizeof(descriptors));
+    descriptors[32] = 1;
     for (i = 0; i < TEST_BLOCKS; i++) {
         buffers[i].data = disk[i];
         buffers[i].bytes = 4096;
@@ -646,7 +649,7 @@ static void reset(uint32_t available)
     LE32_PUT(descriptors + 4, 3);
     LE32_PUT(descriptors + 8, 4);
     LE16_PUT(descriptors + 12, available);
-    k_memcpy(disk[1], descriptors, sizeof(descriptors));
+    k_memcpy(disk[1], descriptors, 32);
     volume.dev = &device;
     volume.mnt = &mount;
     volume.block_size = 4096;
@@ -659,7 +662,7 @@ static void reset(uint32_t available)
     volume.gd = descriptors;
     volume.free_blocks = available;
     volume.r_blocks = 8;
-    volume.writable = 1;
+    volume.mode = EXT2_MODE_RW;
     volume.ro_compat = EXT2_RO_LARGE_FILE;
     volume.wb = &batch;
     for (i = 0; i < EXT2_WB_DATA + EXT2_WB_META; i++) {
@@ -998,9 +1001,10 @@ static void overlap_punch_row(void)
 }
 
 /* The descriptors of `inode_rows`' volume: group 128's, the first with a free
- * inode, is in the second block of the table. */
+ * inode, is in the second block of the table. After them, a byte a group,
+ * each set as `descriptors` sets its own. */
 #define WIDE_GROUPS 129u
-static uint8_t wide_descriptors[WIDE_GROUPS * 32];
+static uint8_t wide_descriptors[WIDE_GROUPS * 33];
 
 /**
  * Point the volume at `WIDE_GROUPS` groups of 32 inodes, of which only group
@@ -1011,6 +1015,7 @@ static void wide_volume(void)
 {
     reset(20);
     k_memset(wide_descriptors, 0, sizeof(wide_descriptors));
+    k_memset(wide_descriptors + WIDE_GROUPS * 32, 1, WIDE_GROUPS);
     LE32_PUT(wide_descriptors + 128 * 32 + 4, 6);
     LE32_PUT(wide_descriptors + 128 * 32 + 8, 7);
     LE16_PUT(wide_descriptors + 128 * 32 + 14, 5);
