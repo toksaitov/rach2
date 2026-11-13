@@ -117,11 +117,24 @@ sed 's/rach2.root=MBRID=1acef00d,3/rach2.root=MBRID=1acef00d,4/g' "$work/grub.cf
 mcopy -o -i "$work/wrong-partition.disk.new@@1048576" "$work/wrong.cfg" ::/boot/grub/grub.cfg
 
 # The root with huge_file, a read-only-compatible feature the driver does
-# not know, so that it mounts the root read-only.
+# not know, so that it mounts the root read-only. The volume goes where the
+# third entry of the table puts the root, which mkdisk_grub.sh's sizes decide.
 cp "$work/candidate.disk.new" "$work/readonly.disk.new"
 cp "$volume" "$work/readonly.ext2"
 debugfs -w -R 'feature huge_file' "$work/readonly.ext2" > "$work/readonly.debugfs" 2>&1
-dd if="$work/readonly.ext2" of="$work/readonly.disk.new" bs=1048576 seek=26 conv=notrunc 2>/dev/null
+python3 - "$work/readonly.disk.new" "$work/readonly.ext2" <<'PY'
+import struct
+import sys
+
+volume = open(sys.argv[2], 'rb').read()
+with open(sys.argv[1], 'r+b') as disk:
+    disk.seek(446 + 2 * 16)
+    entry = disk.read(16)
+    first, count = struct.unpack_from('<II', entry, 8)
+    assert entry[4] == 0x83 and len(volume) <= count * 512, 'the third entry holds no ext2 root'
+    disk.seek(first * 512)
+    disk.write(volume)
+PY
 
 # GRUB's saved entry changed to the fallback slot.
 cp "$work/candidate.disk.new" "$work/fallback.disk.new"
