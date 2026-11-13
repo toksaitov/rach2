@@ -1522,6 +1522,22 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
     return 0;
 }
 
+/** The fsync report of an msync whose write failed, which no row makes. */
+int vfs_fsync_error(struct vfs_mount *mnt, uint32_t *seen)
+{
+    (void)mnt;
+    (void)seen;
+    return 0;
+}
+
+/** The record of a failed write-back of a shared mapping, which no row
+ * makes. */
+void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
+{
+    (void)mnt;
+    (void)rc;
+}
+
 /** The fdatasync of a file, which no row makes. */
 int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {

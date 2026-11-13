@@ -96,9 +96,13 @@ On ext2, fsync first drains all pending inodes on the mount in dependency order.
 A retry can finish an unmount, but the volume remains marked invalid.
 .Pp
 A failed write on a mounted file system's device, whoever made it, the
-background flusher and an eviction included, and a failed flush are
-recorded on the file system, as Linux records them in its error
+background flusher and an eviction included, a failed flush, a flush
+the file system makes inside an operation among them, a failed write of
+a shared mapping's pages, and a failed write of a page of a KRFFS boot
+root are recorded on the file system, as Linux records them in its error
 sequences.
+A failure is recorded once on a file system, however many bind mounts
+show it.
 Each open file description keeps its own place in that record, taken
 at the open.
 Its next

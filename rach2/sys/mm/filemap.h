@@ -161,12 +161,17 @@ int filemap_sync_file(const struct open_file *ofd);
 void filemap_forget_mount(const struct vfs_mount *mnt);
 
 /** For sync, write back the pages in memory of every file a shared mapping
- * maps; a failure is not reported. */
+ * maps; a failure is not answered here but recorded for each description's
+ * fsync and syncfs (`vfs_wb_err_set`) and kept for the file's next fsync. */
 void filemap_sync_all(void);
 
 /** msync of the mapping `f` of a region: its file's pages written back
  * when it maps a disk file's, and with `flush`, for MS_SYNC, the file
- * system's fsync of the file after them; 0 or the first failure. */
+ * system's fsync after them through `f`'s own description, whose cursor
+ * into the write-back errors moves past what it answers, as Linux's msync
+ * syncs the region's file (mm/msync.c:87); 0 or the first failure. A failed
+ * page write is recorded for every description, and without `flush` kept
+ * for the file's next fsync as well. */
 int filemap_msync(struct vm_file *f, int flush);
 
 /**
