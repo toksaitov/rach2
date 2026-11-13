@@ -635,24 +635,11 @@ struct process {
     /* The next sharer of its descriptor table (`fd_table_t.sharers`). The
      * map, this link and `fd_holding` change under the table's lock. */
     struct process *fd_sharer_next;
-    /* While the thread sleeps in `poll_wait` (io/poll.c), the queues it has
-     * records on and the records, `poll_n` of each, which a close by
-     * another thread may take off their queues (`close_fd`); NULL and 0 at
-     * any other time. */
-    struct wait_queue **poll_wqs;
-    struct wq_waiter *poll_recs;
-    uint32_t poll_n;
-    /* Under `poll_lock` (io/poll.c): `poll_quiet` is set from the end of
-     * the scan before a sleep until the thread takes its records back, so
-     * that a close may take them and the thread's holds then; `poll_drop`
-     * asks a thread not quiet to give back its holds of descriptors being
-     * closed (`poll_let_go`), and its wait clears it. */
-    int poll_quiet;
-    int poll_drop;
-    /* Set while the thread waits in epoll_wait on the set at descriptor
-     * `epoll_wait_fd`. */
-    int epoll_waiting;
-    int epoll_wait_fd;
+    /* Set by a wake of a queue a `poll_wait` of the thread has a record
+     * on, and cleared by the wait before each scan, as Linux's
+     * `poll_wqueues.triggered` (fs/select.c:208-258): a wait whose scan
+     * found nothing sleeps only while it is clear. */
+    volatile int poll_woken;
     /* The system call filters seccomp(2) installed, newest first, which the
      * thread shares with the threads and children that inherit them, and
      * the mode, SECCOMP_MODE_ (seccomp.h); a fork passes both on and an

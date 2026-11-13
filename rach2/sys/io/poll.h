@@ -68,31 +68,26 @@ struct poll_deadline {
 
 /**
  * Wait until `scan` finds something ready, a signal arrives, or the deadline
- * `d` passes when it is set. `scan` runs with interrupts off, with `ctx` and
- * an array of `n` queues, the most it may name. Returns the ready count, 0
- * at the deadline, -EINTR or -ENOMEM. A deadline moved to a later tick stays
- * moved in `d`, so a caller that waits again with it keeps the same end.
- * `wchan` is the sleep's name for /proc/PID/wchan, a static string.
- * Sleeps, so it is for system call context.
+ * `d` passes when it is set. `scan` runs with interrupts on, with `ctx` and
+ * an array of `n` queues, into which it puts the wait queue of each object
+ * it looked at, by the object's place, NULL for none. Returns the ready
+ * count, 0 at the deadline, -EINTR or -ENOMEM. A deadline moved to a later
+ * tick stays moved in `d`. `wchan` is the sleep's name for /proc/PID/wchan,
+ * a static string. Sleeps, so it is for system call context.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan);
 
 /**
- * Take thread `t`, quiet in `poll_wait` (its last scan before the sleep
- * done), off every queue it sleeps on, and set each queue in its array to
- * NULL, so that a close by another thread may free what the wait sleeps
- * on and clear the wait's hold on the descriptor; the wait scans again
- * once woken, which the caller does. Returns 1 then. A thread not quiet
- * may be reading what the close would free: it is asked instead to give
- * back its holds of the descriptors being closed before it sleeps, and the
- * call returns 0 (`poll_drop_take`).
+ * Wait on the one queue `wq` until `ready(ctx)` is true, a signal arrives,
+ * or the deadline `d` passes when it is set, for epoll_wait, as Linux's
+ * `ep_poll` sleeps on the set's own queue (fs/eventpoll.c:2161-2283).
+ * `ready` runs with interrupts on and the thread's record on `wq`, which is
+ * exclusive: a wake of `wq` wakes one sleeping waiter of the exclusive
+ * ones, as Linux's `__add_wait_queue_exclusive` there. Returns 1 once
+ * `ready` is true, 0 at the deadline, or -EINTR. Sleeps.
  */
-int poll_let_go(struct process *t);
-
-/** Whether a close has asked the current thread's epoll wait to give back
- * its holds of descriptors being closed since it last asked; clears the
- * request. */
-int poll_drop_take(void);
+int poll_wait_queue(struct wait_queue *wq, int (*ready)(void *ctx), void *ctx,
+                    struct poll_deadline *d, const char *wchan);
 
 /** In `d`, the deadline of a timeout of `timeout_ms` milliseconds: the first
  * tick at or after its end, and its end by time since boot. A negative
