@@ -1219,10 +1219,11 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
 void vfs_wb_err_set(struct vfs_mount *mnt, int rc);
 
 /** Record the failure `rc` of a write-back of a shared mapping's pages for
- * syncfs alone, in `sb_wb_err` of `mnt`'s base: the page stays dirty, and
- * the fsync of its own file writes it again and answers that write's errno,
- * as Linux's fsync reports a write-back's error only to the inode's files.
- * A positive `rc` or one past the errno bits records EIO. */
+ * syncfs, in `sb_wb_err` of `mnt`'s base, and not for the fsync of every
+ * file: the page stays dirty, and the descriptions of its own file report
+ * it (`fd_ofd_map_err_set`), as Linux's fsync reports a write-back's error
+ * only to the inode's files. A positive `rc` or one past the errno bits
+ * records EIO. */
 void vfs_sb_err_set(struct vfs_mount *mnt, int rc);
 
 /**

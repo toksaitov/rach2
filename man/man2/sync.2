@@ -69,9 +69,19 @@ drops a removed inode's pages at its last close.
 The fsync of the file returns the error of its own write of the pages,
 with its errno, and the fsync of another file of the file system does not
 hear of it, as Linux reports a write-back's error only to the files of
-its inode; each write-back that fails records its error for
+its inode.
+Each write-back of the pages that fails, whoever made it, an unmap, the
+flusher, sync or an msync among them, records its error for
 .Fn syncfs
-alone.
+and on every open file description of the file, whose next
+.Fn fsync ,
+.Fn fdatasync
+or
+.Xr msync 2
+with
+.Dv MS_SYNC
+reports it once, even when a later write-back has written the page,
+as Linux keeps a write-back's error on the inode for each of its files.
 Pages that are dropped unwritten record
 .Er EIO
 for the fsync of every description on the file system as well.
@@ -229,7 +239,8 @@ For
 .Fn fsync
 and
 .Fn fdatasync
-the write of the file's shared-mapping pages failed: its own error, such
+the write of the file's shared-mapping pages failed, now or in a
+write-back since the description last reported one: its own error, such
 as
 .Er ENOSPC ,
 is returned, and

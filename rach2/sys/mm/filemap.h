@@ -182,14 +182,17 @@ void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t 
  * the errno of this write-back's first failure, which the caller returns, as
  * Linux's fsync returns its own write-back's error. A page whose write fails
  * stays dirty for the next write-back, and the failure is recorded for
- * syncfs alone (`vfs_sb_err_set`), so that the fsync of another file of the
- * file system does not report it. Under the big lock; this may sleep. */
+ * syncfs (`vfs_sb_err_set`) and on each description of the file
+ * (`fd_ofd_map_err_set`), `ofd` among them, which the caller then takes
+ * (`fd_ofd_map_err_take`), so that the fsync of another file of the file
+ * system does not report it. Under the big lock; this may sleep. */
 int filemap_sync_file(const struct open_file *ofd);
 
 /** For sync, the flusher and the shutdown, write back the dirty pages of
  * every file a shared mapping maps or left dirty pages of. A failure is not
- * answered here but recorded for syncfs (`vfs_sb_err_set`), and the page
- * stays dirty for a later write-back. Under the big lock; this may sleep. */
+ * answered here but recorded for syncfs (`vfs_sb_err_set`) and on each
+ * description of its file (`fd_ofd_map_err_set`), and the page stays dirty
+ * for a later write-back. Under the big lock; this may sleep. */
 void filemap_sync_all(void);
 
 /** For a remount of `mnt`, a base mount, read-only, once new writers are
@@ -223,8 +226,10 @@ void filemap_unmount(struct vfs_mount *mnt);
  * write-back that succeeds, the file system's fsync through `f`'s own
  * description, as Linux's msync syncs the region's file (mm/msync.c:87); 0
  * or the first failure. A failed page write is the answer and is recorded
- * for syncfs alone, as `filemap_sync_file` records it. Under the big lock;
- * this may sleep. */
+ * as `filemap_sync_file` records it, and taken from `f`'s description,
+ * whose answer it is; with `flush`, a failure an earlier write-back left on
+ * that description (`fd_ofd_map_err_take`) is the answer when nothing else
+ * failed. Under the big lock; this may sleep. */
 int filemap_msync(struct vm_file *f, int flush);
 
 /**

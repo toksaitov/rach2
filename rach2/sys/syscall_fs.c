@@ -6236,15 +6236,18 @@ long sys_close(isr_params_t *params)
  * mount through its type, with the pages shared mappings of the file hold
  * written back first, and anything else by writing back the whole cache.
  * The pages are written back under the big lock, taken when the caller
- * lacks it. Returns 0, -EIO, the type's error, or a write-back error of the
+ * lacks it. Returns 0, -EIO, the type's error, a write-back error of the
  * file system recorded since the description's last sync looked, which
- * `sync_op` reports once to each description (`vfs_fsync`).
+ * `sync_op` reports once to each description (`vfs_fsync`), or the failure
+ * of an earlier write-back of the file's mapped pages left on the
+ * description (`fd_ofd_map_err_take`), which is taken whatever the answer,
+ * since a later pass that wrote the pages does not erase it.
  */
 static long sync_entry(fd_entry_t *e,
                        int (*sync_op)(struct vfs_mount *mnt, void *handle, uint32_t *seen))
 {
     if (e->ofd && e->ofd->vmnt) {
-        int32_t mapped = 0, rc;
+        int32_t mapped = 0, rc, kept;
 
         if (filemap_disk_mapped(e->ofd->vmnt, e->ofd->ino)) {
             int big = big_take();
@@ -6253,8 +6256,11 @@ static long sync_entry(fd_entry_t *e,
             big_give(big);
         }
         rc = sync_op(e->ofd->vmnt, e->ofd->fhandle, &e->ofd->wb_seen);
-
-        return mapped != 0 ? mapped : rc;
+        kept = fd_ofd_map_err_take(e->ofd);
+        if (mapped == 0) {
+            mapped = rc != 0 ? rc : kept;
+        }
+        return mapped;
     }
     return pc_sync() != 0 ? -EIO : 0;
 }

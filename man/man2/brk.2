@@ -244,7 +244,10 @@ says.
 The write-back waits for no release, and later mappings do not extend it.
 The next
 .Xr fsync 2
-of the file reports the writeback error once, even if a retry succeeded.
+through each open file description of the file at the failure reports
+the write-back error once, even if a retry succeeded, as
+.Xr sync 2
+says.
 A shared mapping of a tmpfs or ext2 file through a descriptor open for
 writing is refused with
 .Er EBUSY
@@ -651,12 +654,16 @@ which reports a write-back error recorded since that description last
 looked and moves its place past it, as
 .Xr sync 2
 describes;
-a failed page write is recorded for every description and is the answer,
-with
+a failed page write is recorded for every description of the file and is
+the answer, with
 .Dv MS_ASYNC
 or
 .Dv MS_SYNC ,
 and the mapping's description is not told it again;
+with
+.Dv MS_SYNC ,
+a failed write-back of the file's pages since that description last
+reported one is the answer when nothing else fails;
 a shared mapping of a file in memory maps the file's pages themselves,
 and a private mapping has nothing to write.
 It checks its arguments and the range first.

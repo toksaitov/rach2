@@ -489,6 +489,28 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
     return held;
 }
 
+void fd_ofd_map_err_set(const struct vfs_mount *mnt, uint64_t ino, int rc)
+{
+    const struct vfs_mount *base = vfs_mount_base(mnt);
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
+    struct ofd_rec *rec;
+
+    if (rc >= 0 || rc < -4095) {
+        rc = -EIO;
+    }
+    for (rec = ofds; rec; rec = rec->next) {
+        if (rec->ofd.vmnt && vfs_mount_base(rec->ofd.vmnt) == base && rec->ofd.ino == ino) {
+            (void)arch_atomic_xchg((volatile unsigned int *)&rec->ofd.map_err, (unsigned int)-rc);
+        }
+    }
+    spin_unlock_irqrestore(&ofd_lock, flags);
+}
+
+int fd_ofd_map_err_take(struct open_file *ofd)
+{
+    return -(int)arch_atomic_xchg((volatile unsigned int *)&ofd->map_err, 0u);
+}
+
 /**
  * The root's adapter, `vfs_krffs_type`, uses the node as the handle of an
  * open too, so the handle moves with the node; a mounted KRFFS volume's
