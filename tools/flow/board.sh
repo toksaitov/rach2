@@ -114,7 +114,17 @@
 #
 # `done` sets Done on every closed issue whose Status is not, assigns every
 # closed issue that has no assignee to the account that closed it, and fails
-# when the listing of the board fails.
+# when the listing of the board or any of these changes fails.
+#
+# `done`, `check` and `archive` with no M read the board's open cards and the
+# closed issues updated in the last three days, which is cheap, except on a
+# whole pass, which reads every card on the board and the closed issues
+# updated since the last whole pass began, so that a closed card that went
+# wrong before the three days is still found after a stop or failed repairs
+# lasting longer. A command makes a whole pass when its last whole pass that
+# ended without a failure began a day or more ago, or when there is none; the
+# beginning of that pass is kept in build/flow/board/NAME of the main working
+# tree, and every pass is whole when that cannot be found.
 #
 # `finish N COMMENT` is how a worker closes a subtask or a task: it assigns N
 # to this account, closes N with COMMENT and sets it Done. It refuses, naming
@@ -152,12 +162,11 @@
 # `archive [M]` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
 # it once it has closed M. With no M it archives those of every closed
-# milestone and of no milestone updated in the last three days; status.sh and
-# stop.sh run it so on every look, so that a card closed after its own release
-# leaves the board at once.
-# An open issue keeps its card. A card that
-# cannot be archived is reported on stderr and the rest go on, and the exit
-# status is then 1.
+# milestone and of no milestone on the board, the closed ones read as `done`
+# says; status.sh and stop.sh run it so on every look, so that a card closed
+# after its own release leaves the board at once. An open issue keeps its
+# card. A card that cannot be archived is reported on stderr and the rest go
+# on, and the exit status is then 1.
 #
 # `milestones` prints each open milestone, lowest number first, as a line
 # `milestone M: TITLE`, the line `  branch: NAME`, or `  branch: none`, the
@@ -348,19 +357,21 @@ issue_cards()
                                         name } } } } } } } }'
 }
 
-# items [all|open|recent]: print the issues on the board in the board's order,
-# one a line, as twelve fields separated by tabs: the item's id, the Status or
-# nothing, the number, the state, the labels joined by commas, the assignees'
-# logins joined by commas, the number of open blockers, the parent's number or
-# nothing, the milestone's number, its state and the branch it names, each or
-# nothing, and the title. GitHub's list of the board's items can lack an item
-# that the issue's own `projectItems` gives, so the repository's open issues,
-# and with `all` or `recent` the closed ones updated in the last three days, are
-# read as well, and an issue whose item the list lacks follows the others, in
-# the order the issues were opened. With `open` or `recent` the board's list
-# holds only its open issues' items, since the closed ones outnumber them many
-# times, at two GraphQL points for each page of a hundred, and every loop's poll
-# reads the list. Fail when any page of either answer is lost.
+# items [all|open|recent] [SINCE]: print the issues on the board in the
+# board's order, one a line, as twelve fields separated by tabs: the item's id,
+# the Status or nothing, the number, the state, the labels joined by commas,
+# the assignees' logins joined by commas, the number of open blockers, the
+# parent's number or nothing, the milestone's number, its state and the branch
+# it names, each or nothing, and the title. GitHub's list of the board's items
+# can lack an item that the issue's own `projectItems` gives, so the
+# repository's open issues, and with `all` or `recent` the closed ones updated
+# since SINCE, are read as well; SINCE is three days ago when it is not given,
+# and an empty SINCE reads every closed issue. An issue whose item the list
+# lacks follows the others, in the order the issues were opened. With `open`
+# or `recent` the board's list holds only its open issues' items, since the
+# closed ones outnumber them many times, at two GraphQL points for each page of
+# a hundred, and every loop's poll reads the list. Fail when any page of
+# either answer is lost.
 items()
 {
     # The issues are read while the board's list is, from a file.
@@ -369,8 +380,8 @@ items()
     items_tmp=$(mktemp "$items_dir/board-items.XXXXXX") || return 1
     {
         issue_cards OPEN || exit 1
-        [ "$1" != all ] && [ "$1" != recent ] || issue_cards CLOSED "$(date -u -v-3d +%Y-%m-%dT%H:%M:%SZ 2> /dev/null ||
-            date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)" || exit 1
+        [ "$1" != all ] && [ "$1" != recent ] || issue_cards CLOSED "${2-$(date -u -v-3d +%Y-%m-%dT%H:%M:%SZ 2> /dev/null ||
+            date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)}" || exit 1
     } > "$items_tmp" &
     items_pid=$!
     case $1 in open|recent) items_only='query: "is:open", ' ;; *) items_only= ;; esac
@@ -394,14 +405,53 @@ items()
     printf '%s\n' "$listed" "$found" | awk -F '\t' 'NF > 0 && !seen[$1]++'
 }
 
-# read_board [all|open|recent]: read the board into `board`, as `items`
-# prints it, or say that it cannot and exit 1.
+# read_board [all|open|recent] [SINCE]: read the board into `board`, as
+# `items` prints it, or say that it cannot and exit 1.
 read_board()
 {
-    board=$(items "$1") || {
+    board=$(items "$@") || {
         echo "board: cannot read the board" >&2
         exit 1
     }
+}
+
+# stamps is the directory of the whole passes' stamps, as the header says, or
+# nothing when this is not a clone.
+stamps=$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null) &&
+    stamps=$stamps/../build/flow/board || stamps=
+
+# pass NAME: read the board into `board` for a pass of NAME, `done`, `check`
+# or `archive`, whole or recent as the header says, and set `pass_whole` to 1
+# when the pass is whole. A stamp holds the time the pass began, in seconds,
+# and an hour before it in the form GitHub takes, which leaves room for the
+# skew of the two clocks.
+pass()
+{
+    pass_name=$1
+    pass_began=$(date +%s)
+    pass_from=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2> /dev/null ||
+        date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
+    last='' since=''
+    [ -z "$stamps" ] || read -r last since 2> /dev/null < "$stamps/$1" || last=
+    case $last in ''|*[!0-9]*) last='' since='' ;; esac
+    case $since in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*Z) ;; *) since='' ;; esac
+    if [ -n "$last" ] && [ $((pass_began - last)) -lt 86400 ]; then
+        pass_whole=
+        read_board recent
+    else
+        pass_whole=1
+        read_board all "$since"
+    fi
+}
+
+# passed: record the whole pass that `pass` began as ended without a failure.
+# A stamp that cannot be written leaves the next pass whole, which is safe.
+passed()
+{
+    [ -n "$pass_whole" ] && [ -n "$stamps" ] || return 0
+    mkdir -p "$stamps" 2> /dev/null &&
+        printf '%s %s\n' "$pass_began" "$pass_from" 2> /dev/null > "$stamps/$pass_name.$$" &&
+        mv "$stamps/$pass_name.$$" "$stamps/$pass_name" 2> /dev/null || true
 }
 
 # login: set `me` to this account's login, or say that it cannot and exit 1.
@@ -687,19 +737,33 @@ ready()
 
 done_()
 {
-    read_board recent
+    pass 'done'
+    rc=0
     closed=$(printf '%s\n' "$board" | awk -F '\t' '
         $4 == "CLOSED" && $2 != "Done" { print $3 }')
     for n in $closed; do
-        set_status "$n" Done
-        printf '%s ' "$n"
+        if set_status "$n" Done; then
+            printf '%s ' "$n"
+        else
+            echo "board: #$n: cannot set it Done" >&2
+            rc=1
+        fi
     done
     alone=$(printf '%s\n' "$board" | awk -F '\t' '$4 == "CLOSED" && $6 == "" { print $3 }')
     for n in $alone; do
-        who=$(gh api "repos/$REPO/issues/$n" --jq '.closed_by.login // ""') || continue
-        [ -z "$who" ] || assign "$n" "$who" || echo "board: #$n: cannot assign it to $who" >&2
+        who=$(gh api "repos/$REPO/issues/$n" --jq '.closed_by.login // ""') || {
+            echo "board: #$n: cannot read who closed it" >&2
+            rc=1
+            continue
+        }
+        [ -z "$who" ] || assign "$n" "$who" || {
+            echo "board: #$n: cannot assign it to $who" >&2
+            rc=1
+        }
     done
     echo
+    [ "$rc" -ne 0 ] || passed
+    return $rc
 }
 
 finish()
@@ -786,7 +850,7 @@ settled()
 
 check()
 {
-    read_board recent
+    pass check
     # The rules on a card's state, Status and assignees are judged on a
     # second reading of each card the first reading finds wrong. The last
     # field says whether the card is a task, which has no parent.
@@ -828,11 +892,12 @@ check()
             s=$(gh api "repos/$REPO/compare/$b...task/$n" --jq .status 2> /dev/null) || continue
             case $s in identical|behind) echo "board: #$n is open but $b contains task/$n" ;; esac
         done
+    passed
 }
 
 archive()
 {
-    if [ -n "$1" ]; then read_board all; else read_board recent; fi
+    if [ -n "$1" ]; then read_board all; pass_whole=; else pass archive; fi
     cards=$(printf '%s\n' "$board" | awk -F '\t' -v m="$1" '
         { id[NR] = $1; n[NR] = $3; closed[NR] = $4 == "CLOSED"; parent[NR] = $8
           if (m != "" ? $9 == m : $9 == "" || $10 == "CLOSED") task[$3] = 1 }
@@ -853,6 +918,7 @@ archive()
             fi
         done
         echo
+        [ "$status" -ne 0 ] || passed
         exit "$status"
     }
 }
