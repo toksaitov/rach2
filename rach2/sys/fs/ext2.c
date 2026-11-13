@@ -1228,15 +1228,16 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
 static int sb_note(struct ext2_mount *em);
 
 /**
- * Free the dying node `n` and its inode, on a writable mount; a read-only
- * mount frees no inode, so one a failure left there is an orphan for
- * e2fsck, and so is one whose free fails, which sets the error bit with the
- * record `ext2: inode N: not freed at its last put`. The caller holds no
- * file lock. Ends the count `node_final` took.
+ * Free the dying node `n` and its inode, on a mount that writes
+ * (`ext2_writes`), a stopped one among them, as Linux's `ext2_evict_inode`
+ * frees under SB_RDONLY; a read-only or failed mount frees no inode, so one
+ * left there is an orphan for e2fsck, and so is one whose free fails, which
+ * sets the error bit with the record `ext2: inode N: not freed at its last
+ * put`. The caller holds no file lock. Ends the count `node_final` took.
  */
 static void node_free(struct ext2_mount *em, struct ext2_node *n)
 {
-    if (em->writable && !(em->mnt->flags & VFS_MS_RDONLY)) {
+    if (ext2_writes(em)) {
         int rc;
 
         ext2_node_lock(n);
@@ -1661,11 +1662,13 @@ int ext2_em_write_out(struct vfs_mount *mnt)
  * recorded as the batch's error and for the descriptions' syncs to report
  * (`ext2_writeback_error`).
  *
- * A sync is outside admission, so a remount read-only can finish while it
- * sleeps on block 0; `writable` is read again under `em->super`, under
- * which that remount ends it, as Linux orders `sync_filesystem` and a
- * remount by `s_umount`. A mount made read-only meanwhile keeps its
- * superblock as the remount wrote it, and no write is refused.
+ * The superblock is noted only on a mount that keeps its state
+ * (`ext2_keeps_state`). A sync is outside admission, so a remount read-only
+ * can finish while it sleeps on block 0; the mode is asked again under
+ * `em->super`, under which that remount ends it, as Linux orders
+ * `sync_filesystem` and a remount by `s_umount`. A mount made read-only or
+ * stopped meanwhile keeps its superblock as it was written, and no write is
+ * refused.
  */
 static int ext2_sync(struct vfs_mount *mnt)
 {
@@ -1674,10 +1677,10 @@ static int ext2_sync(struct vfs_mount *mnt)
 
     rc = ext2_writeback_drain(em);
     em_reap(em);
-    if (rc == 0 && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
+    if (rc == 0 && ext2_keeps_state(em)) {
         ext2_volume_fetch(em, 0);
         ext2_super_lock(em);
-        if (em->writable) {
+        if (ext2_keeps_state(em)) {
             rc = sb_note(em);
         }
         ext2_super_unlock(em);
@@ -1694,18 +1697,19 @@ static int ext2_sync(struct vfs_mount *mnt)
  * its copies (`bcache_reserve`), and the cache's write-back of the rest is
  * the flusher's. A mount that a fault made read-only (`ext2_mark_error`)
  * drains the writes it accepted before, as Linux's flusher writes the dirty
- * pages of a file system made read-only; one whose write failed waits for a
- * sync, which tries the device again. The batch's age and the mount's
- * `write_error` are read without their locks, a look that the next turn
- * corrects. 1 after a drain, 0 when there was nothing old enough, or the
- * drain's -errno, recorded as the batch's error.
+ * pages of a file system made read-only; one that does not write
+ * (`ext2_writes`), a failed one among them, waits for a sync, which tries
+ * the device again. The batch's age and the mount's mode are read without
+ * their locks, a look that the next turn corrects. 1 after a drain, 0 when
+ * there was nothing old enough, or the drain's -errno, recorded as the
+ * batch's error.
  */
 static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     int rc;
 
-    if (mnt->write_error || !ext2_batch_pending(em) || em->wb->born > before) {
+    if (!ext2_writes(em) || !ext2_batch_pending(em) || em->wb->born > before) {
         return 0;
     }
     rc = ext2_writeback_drain(em);
@@ -1715,24 +1719,26 @@ static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
 /**
  * The end of a writable mount's writes, for an unmount and, with `readonly`
  * set, a remount read-only: `ext2_sync`, which leaves no final put undone,
- * and then, on a writable mount none of whose writes failed, the
- * superblock's valid bit set again when this mount cleared it, the error
- * bit is clear and no check was left owed (`em->check_owed`), and the state
- * written to the medium under `em->super`. With `readonly`, `writable` is
- * cleared under the same hold of `em->super`, so that a sync sees the
- * mount writable before the write of the state or read-only after it
- * (`ext2_sync`). 0, or -errno; a failed write of the state clears the valid
- * bit again and is recorded as the batch's error.
+ * and then, on a mount that keeps its superblock's state
+ * (`ext2_keeps_state`), the valid bit set again when this mount cleared it,
+ * the error bit is clear and no check was left owed (`em->check_owed`), and
+ * the state written to the medium under `em->super`. With `readonly`, the
+ * mode goes from EXT2_MODE_RW to EXT2_MODE_RO under the same hold of
+ * `em->super`, so that a sync sees the mount writable before the write of
+ * the state or read-only after it (`ext2_sync`); a mount a fault stopped
+ * meanwhile stays stopped, so that only a remount writable ends the stop.
+ * 0, or -errno; a failed write of the state clears the valid bit again and
+ * is recorded as the batch's error.
  *
  * A fault a reader meets while the state is on its way to the disk sets
  * the error bit under `em->count_lock` before it waits for `em->super`
  * (`ext2_mark_error`), and must reach the disk, as Linux's `ext2_error`
  * writes the bit while a remount syncs, before SB_RDONLY is set. So the
  * state is written again, without the valid bit, while it changed during
- * the write before, and `writable` is cleared in the same step under
- * `em->count_lock` as the look that found it unchanged: a bit set before
- * that step is on the disk, and one set after it was met on a mount that
- * no longer writes.
+ * the write before, and the mode becomes EXT2_MODE_RO in the same step
+ * under `em->count_lock` as the look that found it unchanged: a bit set
+ * before that step is on the disk, and one set after it was met on a mount
+ * that no longer writes.
  */
 static int finish_writes(struct vfs_mount *mnt, int readonly)
 {
@@ -1741,11 +1747,11 @@ static int finish_writes(struct vfs_mount *mnt, int readonly)
     uint32_t state, flags;
     int again;
 
-    if (rc != 0 || !em->writable) {
+    if (rc != 0 || em->mode != EXT2_MODE_RW) {
         return rc;
     }
     ext2_super_lock(em);
-    if (!(mnt->flags & VFS_MS_RDONLY) && !mnt->write_error) {
+    if (ext2_keeps_state(em)) {
         if (em->valid_cleared && !(em->state & EXT2_ERROR_FS) && !em->check_owed) {
             (void)ext2_state_change(em, EXT2_VALID_FS, 0);
         }
@@ -1762,7 +1768,7 @@ static int finish_writes(struct vfs_mount *mnt, int readonly)
             if (again) {
                 em->state &= ~EXT2_VALID_FS;
             } else if (readonly) {
-                em->writable = 0;
+                em->mode = EXT2_MODE_RO;
             }
             spin_unlock_irqrestore(&em->count_lock, flags);
         } while (again);
@@ -1773,9 +1779,9 @@ static int finish_writes(struct vfs_mount *mnt, int readonly)
             em->valid_cleared = 0;
         }
     }
-    if (rc == 0 && readonly) {
+    if (rc == 0 && readonly && em->mode == EXT2_MODE_RW) {
         flags = spin_lock_irqsave(&em->count_lock);
-        em->writable = 0;
+        em->mode = EXT2_MODE_RO;
         spin_unlock_irqrestore(&em->count_lock, flags);
     }
     ext2_super_unlock(em);
@@ -1790,40 +1796,34 @@ static int ext2_prepare_unmount(struct vfs_mount *mnt)
 }
 
 /**
- * The `abort_unmount` of `vfs_ops`: on a writable mount that no fault made
- * read-only (`em->stopped`), the valid bit that `ext2_prepare_unmount` set
- * is cleared again in the superblock and the device synced and flushed,
- * since the unmount is not happening. A failure
- * is recorded as the batch's error. The state is written under
- * `em->super`, and the sync and the flush run with no lock held.
+ * The `abort_unmount` of `vfs_ops`: on a mount that keeps its superblock's
+ * state (`ext2_keeps_state`), the only one whose valid bit
+ * `ext2_prepare_unmount` set, that bit is cleared again in the superblock,
+ * through the write funnel (`ext2_write_bytes`), and the device synced and
+ * flushed, since the unmount is not happening. A failure is recorded as the
+ * batch's error. The state is written under `em->super`, and the sync and
+ * the flush run with no lock held.
  */
 static void ext2_abort_unmount(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
-    struct bbuf *b;
-    uint32_t state;
-    int rc = -EIO;
+    uint8_t raw[2];
+    int rc;
 
-    if (!em->writable) {
+    if (!ext2_keeps_state(em)) {
         return;
     }
     ext2_volume_fetch(em, 0);
     ext2_super_lock(em);
-    state = ext2_state_change(em, 0, EXT2_VALID_FS);
+    LE16_PUT(raw, ext2_state_change(em, 0, EXT2_VALID_FS));
     em->valid_cleared = 1;
-    b = bcache_get(em->dev, 0);
-    if (b) {
-        b->data[1024 + 58] = (uint8_t)state;
-        b->data[1024 + 59] = (uint8_t)(state >> 8);
-        bcache_dirty(b);
-        bcache_release(b);
-    }
+    rc = ext2_write_bytes(em, 1024 + 58, raw, 2, 0);
     ext2_super_unlock(em);
-    if (b) {
+    if (rc == 0) {
         rc = bcache_sync(em->dev);
-        if (rc == 0) {
-            rc = block_flush(em->dev);
-        }
+    }
+    if (rc == 0) {
+        rc = block_flush(em->dev);
     }
     if (rc != 0) {
         (void)ext2_writeback_error(em, rc);
@@ -1902,27 +1902,28 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
 }
 
 /**
- * Make a read-only mount writable, or one a fault made read-only
- * (`em->stopped`), whose operations under way `em_close` waited for: the
- * writes the batch accepted before the fault (`ext2_mark_error`) drained,
+ * Make a read-only mount writable, or one a fault stopped
+ * (EXT2_MODE_STOPPED), whose operations under way `em_close` waited for:
+ * the only way a stop ends. The writes the batch accepted before the fault
+ * (`ext2_mark_error`) are drained,
  * so that the check reads the volume they leave, a volume whose valid bit
  * is clear or whose error bit is set checked as a writable mount checks it,
- * the batch set up when the mount has none, and the valid bit cleared on
- * the medium.
+ * the batch set up when the mount has none, the valid bit cleared on the
+ * medium, and the mode set EXT2_MODE_RW under `em->super`.
  * 0, -EROFS for a volume whose features keep it read-only
- * (`em->readonly_why`), -ENOMEM for a batch the heap cannot give, the
- * drain's -errno, or -errno.
+ * (`em->readonly_why`) or a failed mount (`ext2_failed`), -ENOMEM for a
+ * batch the heap cannot give, the drain's -errno, or -errno.
  *
  * The check holds no lock: admission is closed (`em_close`) and the mount
- * is read-only, so no writer, allocation or free of an inode changes what
- * it reads. The batch is set up under `em->batch`, and the state written
- * under `em->super`.
+ * admits no change and allocates nothing, so no writer, allocation or free
+ * of an inode changes what it reads. The batch is set up under
+ * `em->batch`, and the state written under `em->super`.
  */
 static int remount_writable(struct ext2_mount *em)
 {
     int rc = 0;
 
-    if (em->readonly_why) {
+    if (em->readonly_why || ext2_failed(em)) {
         return -EROFS;
     }
     rc = ext2_writeback_drain(em);
@@ -1942,7 +1943,9 @@ static int remount_writable(struct ext2_mount *em)
     }
     if (rc == 0) {
         em->valid_cleared = 1;
-        em->writable = 1;
+        ext2_super_lock(em);
+        em->mode = EXT2_MODE_RW;
+        ext2_super_unlock(em);
     }
     em->opening = 0;
     ext2_batch_unlock(em);
@@ -1963,8 +1966,14 @@ static int remount_writable(struct ext2_mount *em)
  * `s_umount` (fs/ext2/super.c:1336). A failed write, or a fault under
  * EXT2_ERRORS_RO, that makes the mount read-only is no remount: it sets the
  * flags at once and waits for nobody (`ext2_writeback_error`,
- * `ext2_mark_error`), and the fault's sets `stopped` too, so that a
- * remount writable after it is one (`remount_writable`).
+ * `ext2_mark_error`).
+ *
+ * The change goes by the mode. Toward read-only, only EXT2_MODE_RW does
+ * work (`remount_readonly`); a mount read-only, stopped or failed takes the
+ * options and nothing else, as Linux's `ext2_remount` returns early for a
+ * file system already SB_RDONLY (fs/ext2/super.c:1352), so a stopped mount
+ * stays stopped. Toward writable, EXT2_MODE_RO and EXT2_MODE_STOPPED both
+ * go through `remount_writable` and its check, the one exit from a stop.
  */
 static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
@@ -1976,8 +1985,14 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
         return rc;
     }
     em_close(em);
-    if (((flags & VFS_MS_RDONLY) != 0) != !em->writable) {
-        rc = (flags & VFS_MS_RDONLY) ? remount_readonly(mnt, em) : remount_writable(em);
+    if (flags & VFS_MS_RDONLY) {
+        if (em->mode == EXT2_MODE_RW && !ext2_failed(em)) {
+            rc = remount_readonly(mnt, em);
+        }
+    } else if (em->mode != EXT2_MODE_RW) {
+        rc = remount_writable(em);
+    } else if (ext2_failed(em)) {
+        rc = -EROFS;
     }
     if (rc == 0 && errors != 0) {
         em->errors = errors;
@@ -2013,7 +2028,7 @@ static int ext2_shutdown(struct vfs_mount *mnt, uint64_t deadline)
         return -EBUSY;
     }
     for (n = em->nodes; n; n = n->next) {
-        if (n->unlinked && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
+        if (n->unlinked && ext2_writes(em)) {
             klog(KLOG_WARN, "ext2", "shutdown: inode %d removed but open; the volume stays unclean",
                  (int)n->ino);
             rc = ext2_sync(mnt);
@@ -2305,10 +2320,11 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
  * batch holds it to list an image and the drain to copy one over the
  * block, so a reader that holds the buffer or copies under the batch's
  * spinlock sees each write whole; the cache's write lock keeps the marks
- * and writes (bcache.h), so the caller needs no big lock. A mount that is
- * not writable, outside the check and the opening of a writable mount or
- * remount (`em->opening`), writes nothing: -EROFS, logged as
- * `ext2: write refused: the mount is read-only: block B`. 0, or -errno.
+ * and writes (bcache.h), so the caller needs no big lock. This is the
+ * write funnel: a mount that does not write (`ext2_writes`), read-only
+ * outside the check and the opening of a writable mount or remount, or
+ * failed, writes nothing: -EROFS, logged as `ext2: write refused: the mount
+ * is read-only: block B`. 0, or -errno.
  */
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync)
@@ -2317,7 +2333,7 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
     int level = sync / WRITE_LEVEL(1);
     int rc = 0;
 
-    if (!em->writable && !em->opening) {
+    if (!ext2_writes(em)) {
         klog(KLOG_WARN, "ext2", "write refused: the mount is read-only: block %d",
              (int)(off >> em->block_shift));
         return -EROFS;
@@ -2380,10 +2396,58 @@ int ext2_write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint3
 }
 
 /**
+ * Whether the mount's write of a device failed: its `write_error`, which
+ * `vfs_device_failed` and `ext2_writeback_error` set without calling the
+ * mode's transitions, or its device's mark of a failed or removed write.
+ * Such a mount is FAILED whatever its mode: it admits nothing, allocates
+ * nothing and writes nothing more until it is unmounted.
+ */
+int ext2_failed(const struct ext2_mount *em)
+{
+    return em->mnt->write_error || (em->dev->flags & (BLOCK_GONE | BLOCK_WRITE_FAILED));
+}
+
+/** Whether the mount admits a new change of the volume: EXT2_MODE_RW and
+ * not failed, as Linux's VFS admits one only without SB_RDONLY. */
+int ext2_admits(const struct ext2_mount *em)
+{
+    return em->mode == EXT2_MODE_RW && !ext2_failed(em);
+}
+
+/** Whether the mount gives out blocks and inodes: as `ext2_admits`, so that
+ * an operation under way on a stopped mount that needs one gives up and
+ * rolls back as at ENOSPC. */
+int ext2_allocates(const struct ext2_mount *em)
+{
+    return em->mode == EXT2_MODE_RW && !ext2_failed(em);
+}
+
+/** Whether the mount writes, to finish, roll back, reclaim or drain what is
+ * under way: EXT2_MODE_RW and EXT2_MODE_STOPPED, as Linux's ext2 writes
+ * under SB_RDONLY (fs/ext2/inode.c:71-111), and EXT2_MODE_RO only while it
+ * opens (`em->opening`); never once failed. */
+int ext2_writes(const struct ext2_mount *em)
+{
+    if (ext2_failed(em)) {
+        return 0;
+    }
+    return em->mode != EXT2_MODE_RO || em->opening;
+}
+
+/** Whether the mount writes its superblock's state, the valid bit and the
+ * counts: EXT2_MODE_RW and not failed, as Linux's `ext2_sync_super` and
+ * `ext2_error` write it only without SB_RDONLY (fs/ext2/super.c:57, 155). */
+int ext2_keeps_state(const struct ext2_mount *em)
+{
+    return em->mode == EXT2_MODE_RW && !ext2_failed(em);
+}
+
+/**
  * Whether a change of attributes or of the namespace may be made: 0, -EROFS
- * on a read-only mount, or the drain's -errno. A strict mount drains the
- * batch first, so that the change's writes through reach the medium after
- * the file data and pointers an inode it stores names. A mount that writes
+ * on a mount that admits none (`ext2_admits`), or the drain's -errno. A
+ * strict mount drains the batch first, so that the change's writes through
+ * reach the medium after the file data and pointers an inode it stores
+ * names. A mount that writes
  * back does not: `ext2_write_bytes` keeps the batch's images current, and
  * `ext2_punch` drains a batch that holds the file it frees. The caller holds
  * the node lock the change needs.
@@ -2395,7 +2459,8 @@ int ext2_assert_writable(struct vfs_mount *mnt, struct ext2_mount *em)
     if (ext2_em_strict(em)) {
         rc = ext2_writeback_drain(em);
     }
-    if (rc == 0 && (!em->writable || (mnt->flags & VFS_MS_RDONLY))) {
+    (void)mnt;
+    if (rc == 0 && !ext2_admits(em)) {
         rc = -EROFS;
     }
     return rc;
@@ -2596,38 +2661,38 @@ int ext2_inode_times_later(struct ext2_mount *em, struct ext2_node *d)
  * the medium under `em->super`; a remount read-only that is writing the
  * state meanwhile writes it again with the bit before it lets the mount
  * stop writing (`finish_writes`), as Linux's bit, set under `s_lock`,
- * reaches the disk while a remount syncs. Then the mount's policy
- * (`em->errors`): EXT2_ERRORS_CONTINUE goes on; EXT2_ERRORS_RO makes a
- * writable mount read-only at once, waiting for nobody, as Linux sets
- * SB_RDONLY: `stopped` is set under the same hold of `em->super`, so that
- * no new operation changes the volume and no block or inode is allocated
- * (`ext2_alloc_stopped`), while the operations under way, the caller's
- * among them, write what finishes or rolls back their changes, as Linux's
- * ext2 does under SB_RDONLY, and only a remount writable, which waits for
- * them and checks the volume, opens it again (`remount_writable`); the
- * batch's writes accepted before are drained by the flusher, a sync or
- * that remount; and EXT2_ERRORS_PANIC stops the kernel, on any mount. A
- * read-only mount keeps the bit in memory alone, which a remount writable
- * writes. A reader without the big lock takes it, for the mount's flags.
- * The caller holds no buffer.
+ * reaches the disk while a remount syncs; a mount that does not keep its
+ * state (`ext2_keeps_state`) keeps the bit in memory alone, which a remount
+ * writable writes. Then the mount's policy (`em->errors`):
+ * EXT2_ERRORS_CONTINUE goes on; EXT2_ERRORS_RO moves EXT2_MODE_RW to
+ * EXT2_MODE_STOPPED and sets the VFS's read-only flag in the same hold of
+ * `em->super`, waiting for nobody, as Linux sets SB_RDONLY: no new operation
+ * is admitted and no block or inode is allocated, while the operations under
+ * way, the caller's among them, write what finishes or rolls back their
+ * changes (`ext2_writes`), and only a remount writable, which waits for them
+ * and checks the volume, ends the stop (`remount_writable`); the batch's
+ * writes accepted before are drained by the flusher, a sync or that
+ * remount; and EXT2_ERRORS_PANIC stops the kernel, on any mount. A reader
+ * without the big lock takes it, for the mount's flags. The caller holds no
+ * buffer.
  */
 void ext2_mark_error(struct ext2_mount *em)
 {
     int big = !bkl_held();
-    int writable, stop;
+    int stop;
 
     if (big) {
         bkl_enter();
     }
     (void)ext2_state_change(em, EXT2_ERROR_FS, 0);
     ext2_super_lock(em);
-    writable = em->writable && !(em->mnt->flags & VFS_MS_RDONLY);
-    if (writable) {
+    if (ext2_keeps_state(em)) {
         (void)ext2_sb_store(em);
     }
-    stop = writable && em->errors == EXT2_ERRORS_RO;
+    stop = em->mode == EXT2_MODE_RW && em->errors == EXT2_ERRORS_RO;
     if (stop) {
-        em->stopped = 1;
+        em->mode = EXT2_MODE_STOPPED;
+        em->mnt->flags |= VFS_MS_RDONLY;
     }
     ext2_super_unlock(em);
     if (em->errors == EXT2_ERRORS_PANIC) {
@@ -2635,7 +2700,6 @@ void ext2_mark_error(struct ext2_mount *em)
     }
     if (stop) {
         klog(KLOG_CRIT, "ext2", "error: remounting read-only");
-        em->mnt->flags |= VFS_MS_RDONLY;
     }
     if (big) {
         bkl_exit();
@@ -3005,14 +3069,14 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
             return rc;
         }
     }
-    em->writable = readonly_why == 0 && !(flags & VFS_MS_RDONLY);
+    em->mode = readonly_why == 0 && !(flags & VFS_MS_RDONLY) ? EXT2_MODE_RW : EXT2_MODE_RO;
     em->readonly_why = readonly_why;
     if (readonly_why) {
         klog(KLOG_WARN, "ext2", "mounted read-only: %s", readonly_why);
         mnt->flags |= VFS_MS_RDONLY;
     }
     em->alloc_hint = em->first_data;
-    if (em->writable) {
+    if (em->mode == EXT2_MODE_RW) {
         rc = ext2_writeback_init(em);
         if (rc != 0) {
             node_drop(em, root);
@@ -3023,7 +3087,8 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     mnt->priv = em;
     mnt->root = root;
     klog(KLOG_INFO, "ext2", "mounted: %d blocks of %d, %d inodes, %d groups%s", (int)em->blocks,
-         (int)em->block_size, (int)em->inodes, (int)em->groups, em->writable ? "" : ", read-only");
+         (int)em->block_size, (int)em->inodes, (int)em->groups,
+         em->mode == EXT2_MODE_RW ? "" : ", read-only");
     return 0;
 }
 
