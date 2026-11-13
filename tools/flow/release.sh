@@ -1217,6 +1217,24 @@ held_gone()
     esac
 }
 
+# lost_runs: print a line `DIR STATE` for each run directory that STATE/run,
+# STATE/windows.run or the Mac's run file names whose holder ended without
+# its end, or whose state cannot be read: what such a run held may still
+# run, so no run starts beside it and nothing of it is removed until a
+# person has stopped what stop.sh lists and created DIR/end, or hold.pl has
+# proved it ended.
+lost_runs()
+{
+    for lr_file in "$state/run" "$state/windows.run" "$macdir/run"; do
+        lr_dir=$(cut -d ' ' -f 1 "$lr_file" 2> /dev/null)
+        [ -n "$lr_dir" ] || continue
+        lr_state=$(perl "$repo/tools/flow/hold.pl" state "$lr_dir")
+        case $lr_state in
+            lost | unknown*) echo "$lr_dir $lr_state" ;;
+        esac
+    done
+}
+
 # mac_start: start the run of the release tests on the Mac, detached, as
 # `release.sh -m ID M SHA`, after stopping a run of an earlier record.
 mac_start()
@@ -1322,31 +1340,37 @@ job_dir()
 # held DIR COMMAND...: run COMMAND, a function of this script or a program,
 # as a job that hold.pl holds in its run directory DIR, from job_dir; run as
 # `held DIR COMMAND... &`, and keep `$! DIR` as the job. The subshell that
-# `&` makes forks the job, which opens the FIFO DIR/go for reading and runs
-# COMMAND only once it reads `go` there, and then execs hold.pl in its own
-# place with the FIFO's write end on descriptor 6, so that the job is
-# hold.pl's unreaped child and only hold.pl signals it: the job cannot end
-# before hold.pl holds it, as it could if a shell that reaps in its SIGCHLD
-# handler, as bash does, reaped it before the exec. hold.pl reads DIR/stop
-# before it writes `go`, and a stop, or an exec of hold.pl that fails, ends
-# the FIFO, and the job exits 143 having run nothing. hold.pl stops the job
-# once DIR/stop exists or this shell has gone, TERM and KILL HOLD_KILL
-# seconds later. A program runs in the job's place, a function in the job.
+# `&` makes opens the FIFO DIR/go for reading and writing on descriptor 6 and
+# forks the job, which opens DIR/go for reading on descriptor 5, closes its
+# 6 and runs COMMAND only once it reads `go` there; the subshell then execs
+# hold.pl in its own place with descriptor 6, so that the job is hold.pl's
+# unreaped child and only hold.pl signals it: the job cannot end before
+# hold.pl holds it, as it could if a shell that reaps in its SIGCHLD handler,
+# as bash does, reaped it before the exec. The job's open cannot block, since
+# its own descriptor 6 writes to the FIFO, and the FIFO, with what hold.pl
+# writes to it, lasts while either end is open, so that a `go` written before
+# the job opens its reader is not lost. hold.pl reads DIR/stop before it
+# writes `go`, and a stop, or an exec of hold.pl that fails, ends the FIFO,
+# and the job exits 143 having run nothing. hold.pl stops the job once
+# DIR/stop exists or this shell has gone, TERM and KILL HOLD_KILL seconds
+# later. A program runs in the job's place, a function in the job.
 held()
 {
     hd_dir=$1
     shift
     mkfifo "$hd_dir/go" || exit 127
+    exec 6<> "$hd_dir/go"
     {
         {
-            IFS= read -r hd_go < "$hd_dir/go" && [ "$hd_go" = go ] || exit 143
+            exec 5< "$hd_dir/go" 6<&-
+            IFS= read -r hd_go <&5 && [ "$hd_go" = go ] || exit 143
+            exec 5<&-
             case $(command -v "$1") in
                 /*) exec "$@" ;;
                 *) "$@" ;;
             esac
         } <&4 4<&- &
     } 4<&0
-    exec 6<> "$hd_dir/go"
     exec perl "$repo/tools/flow/hold.pl" run -P -k "${HOLD_KILL:-3600}" "$hd_dir" -p "$!" < /dev/null
 }
 
@@ -1364,7 +1388,8 @@ job_ask()
 # its lock tells, and the wait goes on; hold.pl's KILL bounds it, and a
 # holder that has not taken its lock in half a minute ends it. A holder
 # that ended without DIR/end, killed or never started, gives 127, and DIR
-# stays.
+# stays and is added to `jlost`: what it held may still run, and nothing
+# that the job's part made is cleaned up while `jlost` names a directory.
 job_wait()
 {
     jw_pid=${1%% *} jw_dir=${1#* }
@@ -1387,7 +1412,10 @@ job_wait()
         "ended "*)
             jw_rc=${jw_state#ended }
             rm -rf "$jw_dir" ;;
-        *) jw_rc=127 ;;
+        *)
+            jw_rc=127
+            jlost="$jlost $jw_dir"
+            say "the holder of the job in $jw_dir ended without its end, so what it held may still run: $jw_state" ;;
     esac
     return "$jw_rc"
 }
@@ -1619,7 +1647,9 @@ windows_settings()
 # runs on Windows and removes its scratch there, so that the whole host's
 # claim lasts until the cases have stopped; when windows_clean cannot confirm
 # that, the claim stays until ID.alive, which the cases append to while they
-# run, has not grown for ten minutes.
+# run, has not grown for ten minutes. While `jlost` names the directory of a
+# job whose holder ended without its end, which may still run, nothing is
+# cleaned up, on Windows or here, and the claim stays the same way.
 windows_stop()
 {
     wstopped='' wleft=''
@@ -1641,6 +1671,11 @@ windows_stop()
     [ -z "$wholding" ] || wstopped=1
     # A run that a stop ended counts as none of the three.
     [ -z "$wstopped" ] || [ -z "$wid" ] || note "windows stopped $wid"
+    if [ -n "$jlost" ]; then
+        wholding=
+        say "windows: a job of the run ${wid:-} may still run, from$jlost; nothing of it is cleaned up, and its claim and files stay"
+        return
+    fi
     if [ -n "$wstopped" ] && [ -n "$wid" ] && ! windows_clean "$wid"; then
         wleft=1
         say "windows: $(unstopped "$wid")"
@@ -2058,6 +2093,8 @@ windows()
         say "windows: waiting for the preparation of $wid"
         job_wait "$wprep"
         wprep='' id=$wid
+        [ -z "$jlost" ] ||
+            fail windows "the holder of the preparation of $id ended without its end, so it may still run; a person checks it"
         grep -q '^claim refused: ' "$state/$id.prepare" 2> /dev/null &&
             fail windows "WSL's admission did not give the preparation's claim: $(sed -n 's/^claim refused: //p' "$state/$id.prepare")"
         rc=$(tr -d '\r' < "$state/$id.prepare" 2> /dev/null | sed -n 's/^status //p' | tail -n 1)
@@ -2121,6 +2158,8 @@ windows()
         wobs=
         job_stop "$wbeat"
         wbeat=
+        [ -z "$jlost" ] ||
+            fail windows "the holder of a job of the run $id ended without its end, so it may still run; a person checks it"
         rc=$(tr -d '\r' < "$state/$id.log" | sed -n 's/^status //p' | tail -n 1)
         if [ -z "$rc" ] && ! windows_clean "$id"; then
             wholding=
@@ -2169,15 +2208,19 @@ windows_detached()
     [ -n "$(windows_runner)" ]
 }
 
-# windows_wait: wait for the Windows run that -a started to end, and start
-# Windows' run here when its process ended without recording a result.
+# windows_wait: wait for the Windows run that -a started to end, as the lock
+# of its hold.pl, not the record, says, since the run records its result
+# before its traps have run, and start Windows' run here when its process
+# ended without recording a result. A holder that ended without its end
+# fails the release, since what it held may still run.
 windows_wait()
 {
-    while windows_detached; do
+    while [ -n "$(windows_runner)" ]; do
         say "windows: the run $(sed -n 's/^windows started //p' "$state/record" | tail -n 1) of -a runs"
         sleep 60
     done
-    windows_forget
+    windows_forget ||
+        fail windows "the holder of the run of -a in $wf_dir ended without its end, so what it held may still run; a person checks what stop.sh lists"
     if ! done_ windows && ! failed_ windows; then
         say "windows: the run of -a ended without a result; starting another"
         windows
@@ -2197,17 +2240,20 @@ windows_halt()
             later "the Windows run of -a in $wh_dir did not stop: $wh_state"
         say "windows: stopped the run of -a in $wh_dir"
     fi
-    windows_forget
+    windows_forget || later "the Windows run of -a in $wf_dir is not confirmed ended"
 }
 
-# windows_forget: remove STATE/windows.run, and the run directory it names
-# once that run's hold.pl has ended; say so when the holder ended without its
-# status, since what it held may then still run, as stop.sh lists it.
+# windows_forget: remove the run directory that STATE/windows.run names, and
+# then STATE/windows.run, once that run's hold.pl has ended. While it runs,
+# or when the holder ended without its end, since what it held may then
+# still run, as stop.sh lists it, both stay, and it says so and fails.
 windows_forget()
 {
     wf_dir=$(cat "$state/windows.run" 2> /dev/null)
-    [ -z "$wf_dir" ] || held_gone "$wf_dir" ||
-        say "windows: the holder of the run of -a in $wf_dir ended without its status; what it held may still run"
+    if [ -n "$wf_dir" ] && ! held_gone "$wf_dir"; then
+        say "windows: the run of -a in $wf_dir has not ended, or its holder ended without its end; $state/windows.run stays"
+        return 1
+    fi
     rm -f "$state/windows.run"
 }
 
@@ -2360,13 +2406,17 @@ prepare_wsl()
 # stopped through its directory's stop, five minutes at most. Then procs.pl,
 # whose scan fails rather than read part of /proc, lists and stops through a
 # pidfd each other process whose directory is in the copy, as the sync lock's
-# shell of a lost connection may be, and waits a minute for them to end.
-# Once something was stopped, etude status recovers the admission ledger, a
-# minute at most, which drops a dead owner, and each process that procs.pl
-# stopped is looked up there by its number and its start, as the ledger
-# keeps them. The copy is removed only when every run there has ended, the
-# scan succeeded and nothing is left in the copy; a line says what stays.
-# The whole is bounded at fifteen minutes.
+# shell of a lost connection may be, and waits a minute for them to end. A
+# run whose holder was killed, which lost what it held to init, is taken as
+# ended only by that scan finding nothing left in the copy and the ledger's
+# check below, which is as far as Linux shows without a cgroup. Then etude
+# status recovers the admission ledger, a minute at most, which drops a dead
+# owner, and the ledger is read: each `owner PID START KNOWN` there must name
+# a process that runs, with that start when KNOWN is 1, and none that
+# procs.pl stopped. The copy is removed only when every run there has ended
+# or is so confirmed, the scan succeeded, nothing is left in the copy, the
+# recovery succeeded and the ledger was read and holds no such owner; a line
+# says what stays. The whole is bounded at fifteen minutes.
 prepare_host()
 {
     {
@@ -2382,18 +2432,20 @@ prepare_host()
         cat << 'END'
 ledger=/var/lib/rach2-etude/ledger
 [ -d "$copy" ] || exit 0
-left='' stopped=''
+left='' lost=''
 for h in "$copy"/build/held/*; do
     [ -d "$h" ] || continue
     case $(hold state "$h") in "ended "*) continue ;; esac
-    stopped=1
-    s=$(hold stop "$h" 300) || { echo "the run in $h is not confirmed stopped: $s"; left=1; }
+    s=$(hold stop "$h" 300) && continue
+    case $s in
+        lost) lost="$lost ${h##*/}" ;;
+        *) echo "the run in $h is not confirmed stopped: $s"; left=1 ;;
+    esac
 done
 if ! out=$(procs -k -d "$copy"); then
     echo "the processes in $copy could not be read"
     left=1
 elif [ -n "$out" ]; then
-    stopped=1
     i=0
     while now=$(procs -d "$copy") && [ -n "$now" ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 2; done
     if ! now=$(procs -d "$copy") || [ -n "$now" ]; then
@@ -2401,15 +2453,29 @@ elif [ -n "$out" ]; then
         left=1
     fi
 fi
-if [ -n "$stopped" ]; then
-    timeout 60 /usr/local/libexec/rach2/etude status "$ledger" > /dev/null 2>&1 ||
-        echo "etude status did not recover $ledger/claims"
-    printf '%s\n' "$out" | while read -r p st rest; do
+if ! timeout 60 /usr/local/libexec/rach2/etude status "$ledger" > /dev/null 2>&1; then
+    echo "etude status did not recover $ledger/claims"
+    left=1
+elif [ -e "$ledger/claims" ] && ! owners=$(grep '^owner ' "$ledger/claims"; [ $? -le 1 ]); then
+    echo "$ledger/claims cannot be read"
+    left=1
+else
+    while read -r _ p st known _; do
         [ -n "$p" ] || continue
-        ! grep -Eq "^owner $p ($st |[0-9]+ 0\$)" "$ledger/claims" 2> /dev/null ||
+        now=$(sed 's/.*) //' "/proc/$p/stat" 2> /dev/null | cut -d ' ' -f 20)
+        if [ -z "$now" ] || { [ "$known" = 1 ] && [ "$now" != "$st" ]; }; then
+            echo "$ledger/claims names the owner $p, which is gone; a person checks it and removes it"
+            left=1
+        elif printf '%s\n' "$out" | grep -q "^$p $([ "$known" = 1 ] && echo "$st ")"; then
             echo "the stopped process $p keeps a claim in $ledger/claims; a person checks it and removes it"
-    done
+            left=1
+        fi
+    done << OWNERS
+${owners:-}
+OWNERS
 fi
+[ -z "$lost" ] || [ -n "$left" ] ||
+    echo "the runs$lost, whose holders were killed, are taken as ended: nothing is left in $copy"
 if [ -n "$left" ]; then
     echo "the copy $copy stays"
     exit 1
@@ -2445,7 +2511,9 @@ prepare_windows_clean()
 
 # prepare_stop: stop each part of -p that still runs, check that none keeps a
 # claim, and remove what the parts made. The EXIT trap of -p, which a signal
-# reaches too.
+# reaches too. While `jlost` names the directory of a job whose holder ended
+# without its end, its part may still run: nothing of the WSL or Windows part
+# is cleaned up then, and their copy, worktree, claims and files stay.
 prepare_stop()
 {
     for px_job in "$pwsl" "$pwin"; do
@@ -2458,6 +2526,10 @@ prepare_stop()
     if [ -n "$pwin" ]; then
         job_wait "$pwin"
         pwin=
+    fi
+    if [ -n "$jlost" ] && { [ -n "$pwid" ] || [ -n "$pclean" ]; }; then
+        say "prepare: a job may still run, from$jlost; the copy $PREPARE_COPY, $pdir/wt and Windows' ${pwid:-run} stay"
+        pwid='' pclean=''
     fi
     if [ -n "$pmid" ]; then
         # The hold.pl that leads the group sends it TERM, KILL half an hour
@@ -2512,6 +2584,9 @@ prepare_all()
     if [ -f "$macdir/run" ] && mac_live "$(cut -d ' ' -f 1 "$macdir/run")"; then
         later "a release's run on the Mac, $(cut -d ' ' -f 2 "$macdir/run"), still runs"
     fi
+    pa_lost=$(lost_runs)
+    [ -z "$pa_lost" ] ||
+        later "the holder of a run ended without its end, so what it held may still run: $pa_lost"
     # -a starts runs on the machines that -p prepares, in the same copies.
     exec 8>> "$state/again.lock"
     perl -MFcntl=:flock -e 'open(L, ">&=8") && flock(L, LOCK_EX | LOCK_NB) or exit 1' ||
@@ -2720,6 +2795,14 @@ restart()
         refuse "$at does not contain $sha, the release's commit"
     why=$(unfailed "$m")
     [ -z "$why" ] || refuse "$m: $why"
+    rs_lost=$(lost_runs)
+    [ -z "$rs_lost" ] ||
+        refuse "the holder of a run ended without its end, so what it held may still run; a person checks what stop.sh lists: $rs_lost"
+    if [ "$m" = windows ]; then
+        rs_dir=$(cat "$state/windows.run" 2> /dev/null)
+        [ -z "$rs_dir" ] || held_gone "$rs_dir" || refuse "the Windows run of -a in $rs_dir still runs"
+        rm -f "$state/windows.run"
+    fi
     if [ "$m" = mac ]; then
         [ -d "$tree" ] && [ -f "$site/etude-site" ] ||
             refuse "the Mac has no copy at $tree or no admission site at $site"
@@ -2892,7 +2975,7 @@ main()
         restart "$restart"
         exit 0
     fi
-    wprep='' wobs='' wholding='' wbeat='' wgiven=''
+    wprep='' wobs='' wholding='' wbeat='' wgiven='' jlost=''
     if [ -n "$detached" ]; then
         branch=$(sed -n 's/^branch //p' "$state/record")
         wgiven=$detached wid=$detached
@@ -2910,6 +2993,9 @@ main()
         # hold.pl sends it TERM once that directory's stop exists, as stop.sh
         # -r asks, and KILL an hour later. Both keep the lock on descriptor 9.
         # The run directories of runs and jobs that have ended go first.
+        rl_lost=$(lost_runs)
+        [ -z "$rl_lost" ] ||
+            later "the holder of a run ended without its end, so what it held may still run; a person checks what stop.sh lists: $rl_lost"
         perl "$repo/tools/flow/hold.pl" sweep "$state/held"
         perl "$repo/tools/flow/hold.pl" sweep "$state/jobs"
         rl_dir=$state/held/release-$(stamp)
