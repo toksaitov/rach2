@@ -368,7 +368,8 @@ struct ext2_mount {
     /* Whether the mount writes. A remount read-only clears it under
      * `em->super`, where a sync reads it again before it notes the
      * superblock (`ext2_sync`), and under `count_lock` in one step with its
-     * last look at `state` (`finish_writes`). */
+     * last look at `state` (`finish_writes`); a fault under EXT2_ERRORS_RO
+     * clears it under `em->super` (`ext2_mark_error`). */
     int writable;
     /* Set while a writable mount or remount checks and opens the volume,
      * before `writable` is: the only time a mount that is not writable may
@@ -548,6 +549,7 @@ int ext2_data_block_ok(const struct ext2_mount *em, uint32_t b);
 int ext2_extra_has(const struct ext2_node *n, uint32_t end);
 int ext2_fast_link(const struct ext2_mount *em, const struct ext2_node *n);
 int ext2_inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n);
+int ext2_inode_check_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n);
 struct ext2_node *ext2_node_for(struct ext2_mount *em, uint32_t ino, int *rc);
 void ext2_put(struct vfs_mount *mnt, void *node);
 int ext2_block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t index, uint32_t *out);

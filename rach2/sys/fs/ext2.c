@@ -951,11 +951,14 @@ int ext2_fast_link(const struct ext2_mount *em, const struct ext2_node *n)
  * table found through its group's descriptor. The first 128 bytes of the
  * slot are read, and of a larger slot the extra fields up to EXT2_LARGE;
  * the owner and group have their high halves at bytes 120 and 122, and a
- * regular file's size has its high word at byte 108. An `i_extra_isize`
- * that is not a multiple of 4 or passes the slot is -EIO, as on Linux's
- * ext4. 0, or -EIO.
+ * regular file's size has its high word at byte 108. A number past the
+ * count, which only a damaged entry names, and an `i_extra_isize` that is
+ * not a multiple of 4 or passes the slot are logged and -EIO, as Linux's
+ * `ext2_get_inode` and ext4's `__ext4_iget` refuse them, and with `report`
+ * set are reported to the mount's policy (`ext2_mark_error`), as they report
+ * them to `ext2_error`. 0, the read's -errno, or -EIO.
  */
-int ext2_inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
+static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, int report)
 {
     uint8_t raw[EXT2_LARGE];
     uint32_t g, index, table;
@@ -964,7 +967,7 @@ int ext2_inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
 
     if (ino == 0 || ino > em->inodes) {
         klog(KLOG_WARN, "ext2", "inode %d is past the count %d", (int)ino, (int)em->inodes);
-        return -EIO;
+        goto damaged;
     }
     g = (ino - 1) / em->ipg;
     index = (ino - 1) % em->ipg;
@@ -981,7 +984,7 @@ int ext2_inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
         if ((n->extra_isize & 3u) || EXT2_GOOD_OLD + n->extra_isize > em->inode_size) {
             klog(KLOG_WARN, "ext2", "inode %d: extra size %d does not fit its %d bytes", (int)ino,
                  (int)n->extra_isize, (int)em->inode_size);
-            return -EIO;
+            goto damaged;
         }
     }
     n->mode = ext2_le16(raw + 0);
@@ -1009,6 +1012,26 @@ int ext2_inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
         n->size |= (uint64_t)ext2_le32(raw + 108) << 32;
     }
     return 0;
+damaged:
+    if (report) {
+        ext2_mark_error(em);
+    }
+    return -EIO;
+}
+
+/** `inode_load` of a file the mount meets at run time, its damage reported
+ * to the mount's policy. The caller holds no buffer. 0, or -errno. */
+int ext2_inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
+{
+    return inode_load(em, ino, n, 1);
+}
+
+/** `inode_load` for the check of a writable mount or remount
+ * (`ext2_check_volume`), which judges the volume itself, its damage not
+ * reported. 0, or -errno. */
+int ext2_inode_check_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
+{
+    return inode_load(em, ino, n, 0);
 }
 
 /* ---- the nodes in memory ---- */
@@ -1600,23 +1623,26 @@ static int ext2_sync(struct vfs_mount *mnt)
 }
 
 /**
- * The `writeback` of `vfs_ops`: on a writable mount, the file-write batch
- * drained into the cache once its first byte is as old as `before`, as
+ * The `writeback` of `vfs_ops`: the file-write batch drained into the cache
+ * once its first byte is as old as `before`, as
  * Linux's flusher writes an inode's pages back once the inode has been
  * dirty for `dirty_expire_centisecs` (`wb_check_old_data_flush`,
  * fs/fs-writeback.c). The drain writes only what the cache must free for
  * its copies (`bcache_reserve`), and the cache's write-back of the rest is
- * the flusher's. The batch's age is read without its lock, a look that the
- * next turn corrects. 1 after a drain, 0 when there was nothing old enough,
- * or the drain's -errno, recorded as the batch's error.
+ * the flusher's. A mount that a fault made read-only (`ext2_mark_error`)
+ * drains the writes it accepted before, as Linux's flusher writes the dirty
+ * pages of a file system made read-only; one whose write failed waits for a
+ * sync, which tries the device again. The batch's age and the mount's
+ * `write_error` are read without their locks, a look that the next turn
+ * corrects. 1 after a drain, 0 when there was nothing old enough, or the
+ * drain's -errno, recorded as the batch's error.
  */
 static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     int rc;
 
-    if (!em->writable || (mnt->flags & VFS_MS_RDONLY) || !ext2_batch_pending(em) ||
-        em->wb->born > before) {
+    if (mnt->write_error || !ext2_batch_pending(em) || em->wb->born > before) {
         return 0;
     }
     rc = ext2_writeback_drain(em);
@@ -1812,11 +1838,14 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
 }
 
 /**
- * Make a read-only mount writable: a volume whose valid bit is clear or
- * whose error bit is set is checked as a writable mount checks it, the batch
- * is set up when the mount has none, and the valid bit is cleared on the
- * medium. 0, -EROFS for a volume whose features keep it read-only
- * (`em->readonly_why`), -ENOMEM for a batch the heap cannot give, or -errno.
+ * Make a read-only mount writable: the writes the batch accepted before a
+ * fault made the mount read-only (`ext2_mark_error`) drained, so that the
+ * check reads the volume they leave, a volume whose valid bit is clear or
+ * whose error bit is set checked as a writable mount checks it, the batch
+ * set up when the mount has none, and the valid bit cleared on the medium.
+ * 0, -EROFS for a volume whose features keep it read-only
+ * (`em->readonly_why`), -ENOMEM for a batch the heap cannot give, the
+ * drain's -errno, or -errno.
  *
  * The check holds no lock: admission is closed (`em_close`) and the mount
  * is read-only, so no writer, allocation or free of an inode changes what
@@ -1829,6 +1858,10 @@ static int remount_writable(struct ext2_mount *em)
 
     if (em->readonly_why) {
         return -EROFS;
+    }
+    rc = ext2_writeback_drain(em);
+    if (rc != 0) {
+        return rc;
     }
     em->opening = 1;
     if (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS)) {
@@ -1858,14 +1891,19 @@ static int remount_writable(struct ext2_mount *em)
  * changes only the policy, and other options are ignored. -EINVAL for a
  * bad `errors=`, before anything changes. Admission is closed first, so
  * that no writer is inside while the mount changes and new ones wait
- * (`em_close`). A failed write, or a fault under EXT2_ERRORS_RO, that makes
- * the mount read-only is no remount: it sets the flags at once and waits
- * for nobody (`ext2_writeback_error`, `ext2_mark_error`).
+ * (`em_close`), and so is a second remount, which then reads the policy
+ * this one left: a remount without `errors=` keeps the policy in force
+ * when it ends, as Linux's `ext2_remount` starts from the options under
+ * `s_umount` (fs/ext2/super.c:1336). A failed write, or a fault under
+ * EXT2_ERRORS_RO, that makes the mount read-only is no remount: it sets the
+ * flags at once and waits for nobody (`ext2_writeback_error`,
+ * `ext2_mark_error`), and the fault's clears `writable` too, so that a
+ * remount writable after it is one (`remount_writable`).
  */
 static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
-    int errors = em->errors;
+    int errors = 0;
     int rc = errors_option(options, &errors);
 
     if (rc != 0) {
@@ -1875,7 +1913,7 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
     if (((flags & VFS_MS_RDONLY) != 0) != !em->writable) {
         rc = (flags & VFS_MS_RDONLY) ? remount_readonly(mnt, em) : remount_writable(em);
     }
-    if (rc == 0) {
+    if (rc == 0 && errors != 0) {
         em->errors = errors;
     }
     em_open(em);
@@ -2493,8 +2531,12 @@ int ext2_inode_times_later(struct ext2_mount *em, struct ext2_node *d)
  * reaches the disk while a remount syncs. Then the mount's policy
  * (`em->errors`): EXT2_ERRORS_CONTINUE goes on; EXT2_ERRORS_RO makes a
  * writable mount read-only at once, waiting for nobody, as Linux sets
- * SB_RDONLY, the batch's pending writes still drained at the next sync;
- * and EXT2_ERRORS_PANIC stops the kernel, on any mount. A read-only mount
+ * SB_RDONLY: `writable` is cleared under the same hold of `em->super`, so
+ * that no later step of an operation under way writes the volume
+ * (`ext2_write_owned`) and only a remount writable, which checks the
+ * volume, opens it again (`remount_writable`), and the batch's writes
+ * accepted before are drained by the flusher, a sync or that remount; and
+ * EXT2_ERRORS_PANIC stops the kernel, on any mount. A read-only mount
  * keeps the bit in memory alone, which a remount writable writes. A reader
  * without the big lock takes it, for the mount's flags. The caller holds
  * no buffer.
@@ -2502,7 +2544,7 @@ int ext2_inode_times_later(struct ext2_mount *em, struct ext2_node *d)
 void ext2_mark_error(struct ext2_mount *em)
 {
     int big = !bkl_held();
-    int writable;
+    int writable, stop;
 
     if (big) {
         bkl_enter();
@@ -2513,11 +2555,15 @@ void ext2_mark_error(struct ext2_mount *em)
     if (writable) {
         (void)ext2_sb_store(em);
     }
+    stop = writable && em->errors == EXT2_ERRORS_RO;
+    if (stop) {
+        em->writable = 0;
+    }
     ext2_super_unlock(em);
     if (em->errors == EXT2_ERRORS_PANIC) {
         k_panic("ext2: panic from previous error");
     }
-    if (writable && em->errors == EXT2_ERRORS_RO) {
+    if (stop) {
         klog(KLOG_CRIT, "ext2", "error: remounting read-only");
         em->mnt->flags |= VFS_MS_RDONLY;
     }

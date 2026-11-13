@@ -415,7 +415,7 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_
         return check_limit(c, ino, "a directory deeper than the check walks");
     }
     n = &c->node[depth];
-    rc = ext2_inode_load(em, ino, n);
+    rc = ext2_inode_check_load(em, ino, n);
     if (rc != 0) {
         return rc;
     }
@@ -581,7 +581,7 @@ static int check_bitmaps(struct ext2_check *c)
             if (seen_test(c, ino) || ino < em->first_ino) {
                 continue;
             }
-            rc = ext2_inode_load(em, ino, &c->node[0]);
+            rc = ext2_inode_check_load(em, ino, &c->node[0]);
             if (rc != 0) {
                 return rc;
             }
@@ -755,14 +755,14 @@ static int check_volume(struct ext2_mount *em)
         if (ino == EXT2_ROOT_INO) {
             continue;
         }
-        rc = ext2_inode_load(em, ino, &c->node[0]);
+        rc = ext2_inode_check_load(em, ino, &c->node[0]);
         if (rc == 0 && c->node[0].blocks != 0) {
             rc = check_blocks(c, &c->node[0], 1);
         }
     }
     if (rc == 0) {
         seen_set(c, EXT2_ROOT_INO); /* not below first_ino on every volume */
-        rc = ext2_inode_load(em, EXT2_ROOT_INO, &c->node[0]);
+        rc = ext2_inode_check_load(em, EXT2_ROOT_INO, &c->node[0]);
     }
     if (rc == 0) {
         rc = check_dir(c, EXT2_ROOT_INO, EXT2_ROOT_INO, 0);
