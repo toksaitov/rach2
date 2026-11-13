@@ -27,6 +27,14 @@ extern char **environ;
 #define FUTEX_WAIT_PRIVATE 128
 #define PERIOD_NS          5000000L
 
+/* The futex call that reads this libc's struct timespec: on i386 musl's
+ * time_t is 64 bits, which futex (240) would read as old 32-bit fields. */
+#ifdef SYS_futex_time64
+#define SYS_FUTEX_WAIT SYS_futex_time64
+#else
+#define SYS_FUTEX_WAIT SYS_futex
+#endif
+
 struct worker {
     pthread_t thread;
     int cpu;
@@ -283,7 +291,7 @@ static int wait_once(int method, long long due)
             return -1;
         return expirations == 1 ? 0 : -1;
     case 5:
-        rc = (int)syscall(SYS_futex, &word, FUTEX_WAIT_PRIVATE, 0, &relative, NULL, 0);
+        rc = (int)syscall(SYS_FUTEX_WAIT, &word, FUTEX_WAIT_PRIVATE, 0, &relative, NULL, 0);
         return rc == -1 && errno == ETIMEDOUT ? 0 : -1;
     default:
         errno = EINVAL;
