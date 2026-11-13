@@ -284,6 +284,15 @@ The disk must have a first partition that
 .Xr bootctl 8
 can read as a boot partition and an installed root containing
 .Pa /etc/rach2 .
+Both are proved by reads alone, with every partition mounted read-only,
+before any partition of the disk is mounted writable, since a writable
+mount of a FAT volume left dirty repairs it.
+A boot partition that a stop in its conversion or in a slot's growth left
+as
+.Xr bootctl 8
+refuses it is accepted as described below, and a root that does not read
+is accepted when the recovery partition holds the recovery kernel and a
+whole archive of the configuration.
 .Pp
 The optional
 .Fl -console Cm term
@@ -445,7 +454,9 @@ gives the partition the EFI system partition's type, 0xEF.
 A stop while the file system is made again leaves a boot partition the
 BIOS core reads no menu from; it then starts the recovery system from
 partition 2, and the update run again there finds the copy marked whole,
-makes the file system again from it and goes on.
+which holds both slots, the environment block and the menu, and so shows
+the disk is this system's, makes the file system again from it and goes
+on.
 The kernels in the disk's slots must be of this version or later for
 .Ql bootctl commit
 to work after the conversion, since an older kernel publishes no
@@ -570,14 +581,17 @@ so that a stop leaves no part of a kernel under the slot's name.
 Both names are 8.3 names, so the rename rewrites one directory entry in
 place.
 .Ql bootctl status
-refuses a boot partition that lacks a slot, so nothing is changed on such
-a disk until reads alone, with every partition mounted read-only, show it
-is this system's: the boot partition holds the other slot, the environment
-block and a menu with entries for both slots, and a root carries
+refuses a boot partition that lacks a slot, and one where a stop while a
+copy was padded left both slots and a copy whose cluster chain is longer
+than its size, which a writable mount trims.
+So nothing is changed on such a disk until reads alone, with every
+partition mounted read-only, show it is this system's: the boot partition
+holds the environment block, a menu with entries for both slots, and one
+slot, or both with a copy of a slot's move beside them, and a root carries
 .Pa /etc/rach2
 or the recovery partition holds the recovery kernel and a whole archive of
 the configuration.
-An update that finds a slot missing makes it again in the same way before
+An update that finds such a partition finishes it in the same way before
 it goes on.
 It finds the saved default at
 .Ql recovery

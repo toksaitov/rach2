@@ -348,13 +348,17 @@ mounted_elsewhere() { # mounted_elsewhere DEVICE
 # machine's configuration behind it. A volume that was mounted to look and
 # will not unmount ends the run too, since the raw writer fails on a disk
 # with a mount on it. Status 0 when the disk has a recovery partition and 1
-# when it has none.
-find_recovery() { # find_recovery DISKNUMBER
+# when it has none. With ro, every volume is mounted read-only, so that a
+# disk not yet proved this system's is looked at without a write: a writable
+# mount of a FAT volume left dirty repairs it.
+find_recovery() { # find_recovery DISKNUMBER [ro]
     recovery_found=""
+    recovery_options=umask=077
+    [ "${2:-}" != ro ] || recovery_options=ro,umask=077
     for p in 1 2 3 4; do
         [ -e "/dev/disk${1}p${p}" ] || continue
         mkdir -p "$RECOVERY_MNT" 2>/dev/null
-        if ! mount -t vfat -o umask=077 "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null; then
+        if ! mount -t vfat -o "$recovery_options" "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null; then
             if where=$(mounted_elsewhere "/dev/disk${1}p${p}"); then
                 die "/dev/disk${1}p${p} is mounted at $where, so it cannot be looked at for the recovery partition; unmount it and run this again"
             fi
@@ -819,36 +823,78 @@ finish_slots() { # finish_slots BOOT
     mounted_boot=""
 }
 
-# Status 0 when DISK, a whole disk, is one this system installed and its
-# boot partition, partition 1, lacks one of its two kernel slots, as a stop
-# in `grow_slots` or `finish_slots` may leave it; status 1 otherwise. It
-# stands in for `bootctl status`, which refuses a volume without both slots,
-# before `finish_slots` changes a file, and so it only reads, with every
-# partition mounted read-only. Two things say the disk is this system's
-# together: the boot partition has one slot, the 1024-byte environment block
-# and a menu with entries for both slots' kernels, which only this system
-# writes; and a root of the disk carries /etc/rach2, or, when none does, the
-# recovery partition carries the recovery kernel and a whole archive of the
-# configuration, which an update takes in the root's place.
-slots_owned() { # slots_owned DISK
-    mkdir -p "$BOOT_MNT" "$TARGET_MNT" "$RECOVERY_MNT" 2>/dev/null
-    mount -t vfat -o ro "${1}p1" "$BOOT_MNT" 2>/dev/null || return 1
-    mounted_boot=$BOOT_MNT
+# Status 0 when DIR, the files of a boot partition, carry what only this
+# system writes beside its kernel slots: the 1024-byte environment block and
+# a menu with entries for both slots' kernels. It sets slot_count to the
+# number of the two slots, /boot/kernel and /boot/fallback, that are files,
+# and slot_moving to 1 when a copy that only `grow_slots` or `finish_slots`
+# writes, kernel.new, fallback.new, kernel.tmp or fallback.tmp, is there,
+# and to 0 when none is.
+boot_marked() { # boot_marked DIR
     slot_count=0
     for slot in kernel fallback; do
-        [ ! -f "$BOOT_MNT/boot/$slot" ] || slot_count=$((slot_count + 1))
+        [ ! -f "$1/boot/$slot" ] || slot_count=$((slot_count + 1))
     done
-    slot_menu="$BOOT_MNT/boot/grub/grub.cfg"
+    slot_moving=0
+    for slot in kernel.new fallback.new kernel.tmp fallback.tmp; do
+        [ ! -e "$1/boot/$slot" ] || slot_moving=1
+    done
+    [ -f "$1/boot/grub/grubenv" ] &&
+        [ "$(wc -c < "$1/boot/grub/grubenv")" -eq 1024 ] &&
+        grep -q 'rach2\.slot=candidate' "$1/boot/grub/grub.cfg" 2>/dev/null &&
+        grep -q 'rach2\.slot=fallback' "$1/boot/grub/grub.cfg" 2>/dev/null
+}
+
+# Status 0 when the boot partition of DISK, a whole disk, is this system's
+# and a stop in `grow_slots` or `finish_slots` left it as `bootctl status`
+# refuses it: boot_marked, with one of its two slots, or with both and a
+# copy of a slot's move beside them. A stop while a grown copy was padded
+# leaves both slots and a copy whose chain FAT extended before it wrote the
+# larger size, which bootctl refuses until a writable mount trims it. Status
+# 1 otherwise. The partition is mounted read-only.
+slots_marked() { # slots_marked DISK
+    mkdir -p "$BOOT_MNT" 2>/dev/null
+    mount -t vfat -o ro "${1}p1" "$BOOT_MNT" 2>/dev/null || return 1
+    mounted_boot=$BOOT_MNT
     slot_ours=1
-    if [ "$slot_count" -eq 1 ] && [ -f "$BOOT_MNT/boot/grub/grubenv" ] &&
-        [ "$(wc -c < "$BOOT_MNT/boot/grub/grubenv")" -eq 1024 ] &&
-        grep -q 'rach2\.slot=candidate' "$slot_menu" 2>/dev/null &&
-        grep -q 'rach2\.slot=fallback' "$slot_menu" 2>/dev/null; then
-        slot_ours=0
+    if boot_marked "$BOOT_MNT"; then
+        if [ "$slot_count" -eq 1 ] || { [ "$slot_count" -eq 2 ] && [ "$slot_moving" -eq 1 ]; }; then
+            slot_ours=0
+        fi
     fi
     umount "$BOOT_MNT" || die "${1}p1 would not unmount"
     mounted_boot=""
-    [ "$slot_ours" -eq 0 ] || return 1
+    return "$slot_ours"
+}
+
+# Status 0 when the recovery partition of DISK, a whole disk, holds the
+# files of its boot partition marked whole, as `remake_boot_partition` keeps
+# them before it makes the file system again, and they are a boot partition
+# of this system with both slots: a stop there leaves a boot partition that
+# neither bootctl nor `slots_marked` reads, and only this copy says whose it
+# was. Status 1 otherwise. Every partition is mounted read-only.
+boot_kept() { # boot_kept DISK
+    find_recovery "${1#/dev/disk}" ro || return 1
+    mounted_recovery=$RECOVERY_MNT
+    slot_ours=1
+    slot_keep="$RECOVERY_MNT/rach2-boot-keep"
+    if [ -f "$slot_keep/complete" ] && [ -f "$slot_keep/sector" ] &&
+        [ "$(wc -c < "$slot_keep/sector")" -eq 512 ] &&
+        boot_marked "$slot_keep/files" && [ "$slot_count" -eq 2 ]; then
+        slot_ours=0
+    fi
+    umount "$RECOVERY_MNT" || die "the recovery partition of $1 would not unmount"
+    mounted_recovery=""
+    return "$slot_ours"
+}
+
+# Status 0 when DISK, a whole disk, carries a root of this system, an ext2
+# partition with /etc/passwd and /etc/rach2, which no other system writes,
+# or, when none reads, a recovery partition with the recovery kernel and a
+# whole archive of the configuration, which an update takes in the root's
+# place. Status 1 otherwise. Every partition is mounted read-only.
+root_owned() { # root_owned DISK
+    mkdir -p "$TARGET_MNT" "$RECOVERY_MNT" 2>/dev/null
     for slot_part in 2 3 4; do
         [ -e "${1}p${slot_part}" ] || continue
         mount -t ext2 -o ro "${1}p${slot_part}" "$TARGET_MNT" 2>/dev/null || continue
@@ -881,6 +927,14 @@ slots_owned() { # slots_owned DISK
     return 1
 }
 
+# Status 0 when DISK, a whole disk, is one this system installed and its
+# boot partition is as `slots_marked` says a stop in a slot's move leaves
+# it; status 1 otherwise. It stands in for `bootctl status`, which refuses
+# such a volume, before `finish_slots` changes a file, and so it only reads.
+slots_owned() { # slots_owned DISK
+    slots_marked "$1" && root_owned "$1"
+}
+
 # Grow each kernel slot of the boot partition BOOT, /boot/kernel and then
 # /boot/fallback, that is smaller than the slots of this version's disks,
 # whose size `bootctl status` prints: `bootctl kernel` refuses a smaller one,
@@ -893,8 +947,9 @@ slots_owned() { # slots_owned DISK
 # which a stop then starts, and `finish_slots`, run first here, completes or
 # undoes what the stop left. Status 1, with the slot kept as it was, when the
 # volume has no room for a copy. Its variables, and those of `finish_slots`
-# and `slots_owned`, are the script's globals, so their names begin with slot: the update that
-# calls it compares the root's readback with its own $want afterwards.
+# and of the checks that prove a disk this system's before it, are the
+# script's globals, so their names begin with slot: the update that calls it
+# compares the root's readback with its own $want afterwards.
 grow_slots() { # grow_slots BOOT
     finish_slots "$1"
     slot_want=$(bootctl --target "$1" status | sed -n 's/^bootctl: slot size: \([0-9][0-9]*\) bytes$/\1/p')
@@ -1301,27 +1356,6 @@ if [ -n "$update_image" ]; then
     esac
     [ -e "$update_disk" ] || die "$update_disk is not there"
     target=${update_disk#/dev/disk}
-    resume_boot_partition "${update_disk}p1"
-
-    # The disk must be one this system installed, and not another system's that
-    # happens to have an ext2 partition with an `/etc/passwd` in it: the write
-    # below replaces a whole partition, and a disk that was never installed
-    # from here has no partition this may claim. Two things say so together:
-    # the boot partition is one `bootctl` can read, which is this system's own
-    # menu and slots, and the root carries `/etc/rach2`, which no other system
-    # writes. A stop while a slot grew may leave the partition without one of
-    # its slots, which `bootctl` refuses: `slots_owned` then says, reading
-    # only, whether the disk is this system's, and only then does
-    # `finish_slots`, as `--slots` would, make the slot whole. Copies left
-    # beside two whole slots wait for `grow_slots`, which finishes them first.
-    if ! bootctl --target "${update_disk}p1" status > /dev/null 2>&1; then
-        slots_owned "$update_disk" ||
-            die "${update_disk}p1 is not a boot partition this system wrote; \
-$update_disk was not installed from here"
-        finish_slots "${update_disk}p1"
-        bootctl --target "${update_disk}p1" status > /dev/null ||
-            die "${update_disk}p1, its missing slot made again, is not a boot partition bootctl reads"
-    fi
 
     # The copy of what the old root keeps, the home directories among it, goes
     # in /dev/shm, the tmpfs of half the machine's memory, where there is one,
@@ -1340,6 +1374,42 @@ $update_disk was not installed from here"
 only copy of its homes; update $kept_disk again before $update_disk"
     fi
 
+    # The disk must be one this system installed, and not another system's that
+    # happens to have an ext2 partition with an `/etc/passwd` in it: the write
+    # below replaces a whole partition, and a disk that was never installed
+    # from here has no partition this may claim. It is proved before anything
+    # of it is mounted writable, since a writable mount of a FAT volume left
+    # dirty repairs it, and so by reads alone. Two things say so together.
+    # The boot partition is this system's: `bootctl` reads it, which is this
+    # system's own menu and slots; or a stop in a slot's move left it as
+    # `slots_marked` reads it; or a stop in its conversion left it unreadable
+    # and its files kept whole on the recovery partition, as `boot_kept`
+    # reads them. And the disk carries a root of this system, or an archive
+    # of its configuration (`root_owned`), or an update of this boot wrote
+    # its root and stopped.
+    if bootctl --target "${update_disk}p1" status > /dev/null 2>&1 ||
+        slots_marked "$update_disk" || boot_kept "$update_disk"; then
+        [ -n "$kept_entry" ] || root_owned "$update_disk" ||
+            die "$update_disk carries no root of this system and no archive of its configuration; \
+it was not installed from here"
+    else
+        die "${update_disk}p1 is not a boot partition this system wrote; \
+$update_disk was not installed from here"
+    fi
+
+    # A stopped conversion is finished first. A stop while a slot grew may
+    # leave the partition without one of its slots, or with a copy whose
+    # chain is longer than its size, which `bootctl` refuses: `finish_slots`
+    # then makes the slots whole, as `--slots` would. Copies left beside two
+    # whole slots that bootctl reads wait for `grow_slots`, which finishes
+    # them first.
+    resume_boot_partition "${update_disk}p1"
+    if ! bootctl --target "${update_disk}p1" status > /dev/null 2>&1; then
+        finish_slots "${update_disk}p1"
+        bootctl --target "${update_disk}p1" status > /dev/null ||
+            die "${update_disk}p1, its kernel slots made whole, is not a boot partition bootctl reads"
+    fi
+
     root_entry=""
     if [ -n "$kept_entry" ]; then
         root_entry=$kept_entry
@@ -1348,7 +1418,7 @@ only copy of its homes; update $kept_disk again before $update_disk"
         for p in 4 3 2 1; do
             [ -e "${update_disk}p${p}" ] || continue
             mkdir -p "$TARGET_MNT" 2>/dev/null
-            mount -t ext2 "${update_disk}p${p}" "$TARGET_MNT" 2>/dev/null || continue
+            mount -t ext2 -o ro "${update_disk}p${p}" "$TARGET_MNT" 2>/dev/null || continue
             mounted_root=$TARGET_MNT
             if [ -f "$TARGET_MNT/etc/passwd" ] && [ -d "$TARGET_MNT/etc/rach2" ]; then
                 root_entry=$p
