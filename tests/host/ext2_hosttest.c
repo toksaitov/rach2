@@ -8300,6 +8300,18 @@ static int retry_fail(int64_t table, int attempts, void **dst)
     return failed;
 }
 
+/* What a stop of `retry_row`'s rename at twelve full blocks may leave e2fsck
+   besides `growth_findings`: the store before the retry's growth (`dir_settle`)
+   puts the failed attempt's single indirect block on the disk empty, so the
+   growth's pointer in it and the inode's new size and `i_blocks` are two
+   writes, and a stop between them leaves the size and the block count behind
+   the pointer. The entry follows the inode, so no name is lost. */
+static const char *const retry_findings[] = {
+    "Free inodes count wrong",  "Free blocks count wrong",  "Directories count wrong",
+    "Block bitmap differences", "Inode bitmap differences", "Inode # ref count is",
+    "Inode #, i_size is",       "Inode #, i_blocks is",
+};
+
 /**
  * A rename into a directory whose growth failed to store its inode, retried
  * with /dst held, puts its new name on the device only once the inode that
@@ -8310,9 +8322,9 @@ static int retry_fail(int64_t table, int attempts, void **dst)
  * second at the store of the size. Each must fail. The rename is then
  * retried with the reads whole, once to its end and synced, which must
  * grow /dst by one block and leave the volume clean, and once stopped after
- * each of its writes and judged after a crash as `growth_row` judges.
- * Returns the stops walked, or -1 when a volume would not mount or take its
- * files.
+ * each of its writes and judged after a crash as `growth_row` judges, with
+ * `retry_findings` at twelve blocks. Returns the stops walked, or -1 when
+ * a volume would not mount or take its files.
  */
 static int retry_row(int blocks, int attempts)
 {
@@ -8367,7 +8379,10 @@ static int retry_row(int blocks, int attempts)
                  "to repair",
                  blocks, attempts, k, n);
         ok = fsck_judged(wimg) >= 0 &&
-             findings_among(growth_findings, sizeof(growth_findings) / sizeof(growth_findings[0]));
+             (blocks > 1 ? findings_among(retry_findings,
+                                          sizeof(retry_findings) / sizeof(retry_findings[0]))
+                         : findings_among(growth_findings,
+                                          sizeof(growth_findings) / sizeof(growth_findings[0])));
         check(ok, what);
         if (!ok) {
             ext2_fixture_head(fix_path("fsck.out"), 30);
