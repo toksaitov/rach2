@@ -775,25 +775,25 @@ finish_slots() { # finish_slots BOOT
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to look at its kernel slots"
     mounted_boot=$BOOT_MNT
     for slot in kernel fallback; do
-        file="$BOOT_MNT/boot/$slot"
-        [ -e "$file.new" ] || continue
-        if [ -e "$file" ]; then
-            { rm -f "$file.new" && sync; } ||
+        slot_file="$BOOT_MNT/boot/$slot"
+        [ -e "$slot_file.new" ] || continue
+        if [ -e "$slot_file" ]; then
+            { rm -f "$slot_file.new" && sync; } ||
                 die "the unfinished copy of the $slot slot of $1 could not be removed"
             say "removed an unfinished copy of the $slot slot of $1, which a stop left"
         else
-            { mv "$file.new" "$file" && sync; } ||
+            { mv "$slot_file.new" "$slot_file" && sync; } ||
                 die "the grown $slot slot of $1 could not take its name"
             say "the grown $slot slot of $1, which a stop left under another name, takes its name"
         fi
     done
     for slot in kernel fallback; do
-        file="$BOOT_MNT/boot/$slot"
-        [ ! -e "$file" ] || continue
-        other="$BOOT_MNT/boot/fallback"
-        [ "$slot" = kernel ] || other="$BOOT_MNT/boot/kernel"
-        [ -e "$other" ] || die "$1 has neither kernel slot; run $ME --update to write it again"
-        { cp "$other" "$file" && sync; } || die "the missing $slot slot of $1 could not be made again"
+        slot_file="$BOOT_MNT/boot/$slot"
+        [ ! -e "$slot_file" ] || continue
+        slot_other="$BOOT_MNT/boot/fallback"
+        [ "$slot" = kernel ] || slot_other="$BOOT_MNT/boot/kernel"
+        [ -e "$slot_other" ] || die "$1 has neither kernel slot; run $ME --update to write it again"
+        { cp "$slot_other" "$slot_file" && sync; } || die "the missing $slot slot of $1 could not be made again"
         say "$1 had no $slot slot; it is made again as a copy of the other"
     done
     umount "$BOOT_MNT" || die "$1 would not unmount"
@@ -811,40 +811,42 @@ finish_slots() { # finish_slots BOOT
 # whole throughout. The caller has saved the machine to its recovery system,
 # which a stop then starts, and `finish_slots`, run first here, completes or
 # undoes what the stop left. Status 1, with the slot kept as it was, when the
-# volume has no room for a copy.
+# volume has no room for a copy. Its variables, and those of `finish_slots`,
+# are the script's globals, so their names begin with slot: the update that
+# calls it compares the root's readback with its own $want afterwards.
 grow_slots() { # grow_slots BOOT
     finish_slots "$1"
-    want=$(bootctl --target "$1" status | sed -n 's/^bootctl: slot size: \([0-9][0-9]*\) bytes$/\1/p')
-    [ -n "$want" ] || die "$1 is not a boot partition bootctl reads, so its slots cannot be grown"
-    short=0
+    slot_want=$(bootctl --target "$1" status | sed -n 's/^bootctl: slot size: \([0-9][0-9]*\) bytes$/\1/p')
+    [ -n "$slot_want" ] || die "$1 is not a boot partition bootctl reads, so its slots cannot be grown"
+    slots_short=0
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to grow its kernel slots"
     mounted_boot=$BOOT_MNT
     for slot in kernel fallback; do
-        file="$BOOT_MNT/boot/$slot"
-        size=$(wc -c < "$file") || die "$file could not be read"
-        [ "$size" -lt "$want" ] || continue
-        pad=$(((want - size) / 512))
-        if ! { cp "$file" "$file.new" &&
-            dd if=/dev/zero bs=512 count="$pad" 2>/dev/null >> "$file.new" &&
-            [ "$(wc -c < "$file.new")" -eq "$want" ] && sync &&
-            { cat "$file" && dd if=/dev/zero bs=512 count="$pad" 2>/dev/null; } |
-            cmp -s - "$file.new"; }; then
-            rm -f "$file.new"
+        slot_file="$BOOT_MNT/boot/$slot"
+        slot_size=$(wc -c < "$slot_file") || die "$slot_file could not be read"
+        [ "$slot_size" -lt "$slot_want" ] || continue
+        slot_pad=$(((slot_want - slot_size) / 512))
+        if ! { cp "$slot_file" "$slot_file.new" &&
+            dd if=/dev/zero bs=512 count="$slot_pad" 2>/dev/null >> "$slot_file.new" &&
+            [ "$(wc -c < "$slot_file.new")" -eq "$slot_want" ] && sync &&
+            { cat "$slot_file" && dd if=/dev/zero bs=512 count="$slot_pad" 2>/dev/null; } |
+            cmp -s - "$slot_file.new"; }; then
+            rm -f "$slot_file.new"
             sync
-            say "$1 has no room to grow its $slot slot to $want bytes; it keeps $size"
-            short=1
+            say "$1 has no room to grow its $slot slot to $slot_want bytes; it keeps $slot_size"
+            slots_short=1
             continue
         fi
-        { rm -f "$file" && sync && mv "$file.new" "$file" && sync; } ||
+        { rm -f "$slot_file" && sync && mv "$slot_file.new" "$slot_file" && sync; } ||
             die "the grown $slot slot of $1 did not take the place of the old one; run $ME --slots ${1%p1} from the recovery system to finish it"
-        say "grew the $slot slot of $1 from $size to $want bytes"
+        say "grew the $slot slot of $1 from $slot_size to $slot_want bytes"
     done
     umount "$BOOT_MNT" || die "$1 would not unmount"
     mounted_boot=""
     bootctl --target "$1" status > /dev/null ||
         die "$1, its slots grown, is not a boot partition bootctl reads"
-    return "$short"
+    return "$slots_short"
 }
 
 # Give the installed root's boot lines one rach2.console=term token when
