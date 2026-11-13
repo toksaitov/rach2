@@ -54,7 +54,7 @@ A volume's region is the whole device, so an image on a partition larger than it
 
 ### The dirty flag
 
-The flag says that a check is owed, not what is wrong. A writable volume's mount sets it on the medium as its last step. Its unmount (`kv_prepare_unmount`) writes the dirty buffers and flushes the device, then clears the flag with a write and a flush of its own; if the clear fails, the mount becomes read-only and the unmount answers `EIO`. A mount that went read-only before its unmount keeps the flag. An unmount abandoned after the clear sets it again (`kv_abort_unmount`), or, if that fails, makes the mount read-only.
+The flag says that a check is owed, not what is wrong. A writable volume's mount sets it on the medium as its last step. Its unmount (`kv_prepare_unmount`) writes the dirty buffers and flushes the device, then clears the flag with a write and a flush of its own; if the clear fails, the mount becomes read-only and the unmount completes all the same, logged, as every unmount after a failed write does ([vfs.Readme.md](vfs.Readme.md#mount-binds-and-umount2)). A mount that went read-only before its unmount keeps the flag. A writeback or flush of the VFS that fails after the clear sets it again (`kv_abort_unmount`), or, if that fails, makes the mount read-only.
 
 A disk root (`init_krffs_disk` in `kernel.c`) logs a flag it finds set, sets the flag and writes it through, failing the mount if that does not reach the disk, and then frees the orphans. Only `kernel_shutdown` clears it, when the debug shell's `halt`, `poweroff` or `reboot`, or `reboot(2)`, stops the machine, and only after the page cache has written everything back. A root in memory keeps no flag.
 

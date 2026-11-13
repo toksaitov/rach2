@@ -2563,8 +2563,8 @@ out:
 /**
  * The `prepare_unmount` operation, the clean unmount: every dirty buffer
  * written and flushed, FSInfo with an exact count, then the dirty flag
- * cleared in both places. A failure sets the flag again and leaves the
- * mount where it was.
+ * cleared in both places. A failure sets the flag again, so the volume stays
+ * marked for the unmount that goes on.
  *
  * A mount that went read-only after a failed write is unmounted with the
  * volume as it is, marked dirty for the next mount's check, and no

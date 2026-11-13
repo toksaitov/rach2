@@ -804,8 +804,8 @@ int vfs_mount_view_new(struct vfs_mount *m);
 void vfs_mount_view_free(struct vfs_mount *m);
 
 /** Unmount the active mount `m` as umount2(2) without flags does, with
- * nothing left to check, for the end of a mount namespace: 0, or the
- * error that leaves `m` mounted (vfs.c). */
+ * nothing left to check, for the end of a mount namespace: 0, or -EBUSY
+ * for a mount something still holds, which stays (vfs.c). */
 int vfs_unmount_record(struct vfs_mount *m);
 
 /** Entry zero, the root of the mount table, read under the table's lock,

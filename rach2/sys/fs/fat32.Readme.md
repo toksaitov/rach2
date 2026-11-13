@@ -58,7 +58,7 @@ A write that fails after joining its run ends the old tail again and frees the r
 
 ### The dirty flag, FSInfo and allocation
 
-The first metadata write of a mount sets the dirty flag: bit 27 of FAT entry 1 cleared, in each FAT the driver writes, then bit 0 of byte 65 of the boot sector set. A volume is dirty when either says so. Only a clean unmount clears the flag, after the device is synced and FSInfo written; a failure there sets it again and leaves the mount in place. For a mount that has gone read-only, `fat_prepare_unmount` writes nothing and leaves the volume marked.
+The first metadata write of a mount sets the dirty flag: bit 27 of FAT entry 1 cleared, in each FAT the driver writes, then bit 0 of byte 65 of the boot sector set. A volume is dirty when either says so. Only a clean unmount clears the flag, after the device is synced and FSInfo written; a failure there sets it again, and the unmount completes with the volume marked ([vfs.Readme.md](vfs.Readme.md#mount-binds-and-umount2)). For a mount that has gone read-only, `fat_prepare_unmount` writes nothing and leaves the volume marked.
 
 FSInfo gets the driver's free count and hint at `sync` while the flag is set, at every writable unmount, and after the dirty-volume check. Allocation is first-fit from the hint, wrapping once; the hint moves past each cluster taken and down to a lower one freed. `ENOSPC` is decided before any FAT entry is written, and a run that cannot be finished is freed.
 

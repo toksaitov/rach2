@@ -1979,8 +1979,8 @@ static int msc_block_submit(block_device_t *device, struct block_request *reques
  * own cache on the medium (`msc_take`).
  *
  * A stick with nothing to flush answers `ILLEGAL REQUEST`, which is a stick
- * with no cache and not a failure; anything else is one, and the caller's
- * sync or unmount fails with it.
+ * with no cache and not a failure; anything else is one, which the caller's
+ * sync returns and an unmount logs.
  */
 static int msc_block_flush(block_device_t *device, struct block_request *request)
 {
