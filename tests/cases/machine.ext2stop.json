@@ -276,7 +276,7 @@
         },
         {
           "assertion_id": "check-check",
-          "checks": "the kernel's check of it says ext2: check: L lost blocks, M orphan inodes, kept for e2fsck, with M at least 4: the held inodes, whose blocks count among the lost, and the files a writer removed whose free the stop kept from the disk after their entries, and no fault",
+          "checks": "the kernel's check of it says ext2: check: L lost blocks, M orphan inodes, kept for e2fsck, with M at least 4: the held inodes, whose blocks count among the lost, and the files a writer removed whose free the stop kept from the disk after their entries; before it, at most ext2: check: J blocks named by files were free, marked used and ext2: check: F files with a size or i_blocks that does not match their blocks, kept for e2fsck, which a pointer block written before the bitmap and the inode leaves; and no fault",
           "source": "scenario"
         },
         {
@@ -321,12 +321,12 @@
         },
         {
           "assertion_id": "stopped-e2fsck",
-          "checks": "e2fsck -fn on the copy taken before any mount exits 0, or 4 with nothing but its passes, a removed inode's zero deletion time, an unattached inode that is not a held one, block bitmap differences that are each a block marked used that nothing names, inode bitmap differences that are each an inode marked used that nothing uses, the free counts, its answers of no and its summary, and with as many unattached and freed inodes as the kernel's check counted orphans",
+          "checks": "e2fsck -fn on the copy taken before any mount exits 0, or 4 with nothing but its passes, a removed inode's zero deletion time, an unattached inode that is not a held one, block bitmap differences that are each a block marked used that nothing names, block bitmap differences that are each a block marked free that a file names, inode bitmap differences that are each an inode marked used that nothing uses, a file's i_size or i_blocks below what its pointers need, the free counts, its answers of no and its summary, and with as many unattached and freed inodes as the kernel's check counted orphans, as many such files as it kept and as many blocks marked free as bits it set",
           "source": "scenario"
         },
         {
           "assertion_id": "checked-e2fsck",
-          "checks": "e2fsck -fn on the stopped volume after Rach2's mount, write and unmount finds the same and nothing else",
+          "checks": "e2fsck -fn on the stopped volume after Rach2's mount, write and unmount finds the same and nothing else, but no block marked free that a file names",
           "source": "scenario"
         },
         {
