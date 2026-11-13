@@ -1464,6 +1464,7 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
     ext2_node_ref((struct ext2_node *)node, 1);
 }
 static int sb_note(struct ext2_mount *em);
+static int sb_write(struct ext2_mount *em, int sync);
 
 /**
  * End the dying node `n` on a mount that writes (`ext2_writes`), a stopped
@@ -3236,7 +3237,11 @@ int ext2_inode_times_later(struct ext2_mount *em, struct ext2_node *d)
  * it, as Linux's `ext2_error` does (fs/ext2/super.c:49-80), each time it is
  * met, whatever the state was before. The error bit is set in memory under
  * `em->count_lock`, then, on a writable mount, the superblock written to
- * the medium under `em->super`; a remount read-only that is writing the
+ * the medium under `em->super`. A failed read of the superblock's block in
+ * that write is logged here, keeps the bit in memory for the next store and
+ * is reported to no policy (READ_QUIET), so that the report never calls
+ * itself again, as Linux's `ext2_sync_super` writes the buffer it keeps and
+ * reads nothing. A remount read-only that is writing the
  * state meanwhile writes it again with the bit before it lets the mount
  * stop writing (`finish_writes`), as Linux's bit, set under `s_lock`,
  * reaches the disk while a remount syncs; a mount that does not keep its
@@ -3264,8 +3269,8 @@ void ext2_mark_error(struct ext2_mount *em)
     }
     (void)ext2_state_change(em, EXT2_ERROR_FS, 0);
     ext2_super_lock(em);
-    if (ext2_keeps_state(em)) {
-        (void)ext2_sb_store(em);
+    if (ext2_keeps_state(em) && sb_write(em, WRITE_DURABLE | WRITE_KIND(READ_QUIET)) != 0) {
+        klog(KLOG_WARN, "ext2", "superblock cannot be stored: the error stays in memory");
     }
     stop = em->mode == EXT2_MODE_RW && em->errors == EXT2_ERRORS_RO;
     if (stop) {
@@ -3285,9 +3290,9 @@ void ext2_mark_error(struct ext2_mount *em)
 }
 
 /** Write the superblock's free counts and its state as `ext2_write_bytes` does
- * with `sync`, under `em->super`, read in one step under `em->count_lock`
- * after it is taken, so that the last write carries the latest values; 0, or
- * -errno. */
+ * with `sync`, whose `WRITE_KIND` names the rule of a failed read of the
+ * block, under `em->super`, read in one step under `em->count_lock` after it
+ * is taken, so that the last write carries the latest values; 0, or -errno. */
 static int sb_write(struct ext2_mount *em, int sync)
 {
     uint8_t raw[8], state[2];
@@ -3300,9 +3305,9 @@ static int sb_write(struct ext2_mount *em, int sync)
     LE32_PUT(raw + 4, (uint32_t)em->free_inodes);
     LE16_PUT(state, em->state);
     spin_unlock_irqrestore(&em->count_lock, flags);
-    rc = ext2_write_bytes(em, 1024 + 12, raw, 8, sync | WRITE_KIND(READ_SUPER));
+    rc = ext2_write_bytes(em, 1024 + 12, raw, 8, sync);
     if (rc == 0) {
-        rc = ext2_write_bytes(em, 1024 + 58, state, 2, sync | WRITE_KIND(READ_SUPER));
+        rc = ext2_write_bytes(em, 1024 + 58, state, 2, sync);
     }
     ext2_super_unlock(em);
     return rc;
@@ -3312,14 +3317,14 @@ static int sb_write(struct ext2_mount *em, int sync)
  * mount; 0, or -errno. */
 int ext2_sb_store(struct ext2_mount *em)
 {
-    return sb_write(em, WRITE_DURABLE);
+    return sb_write(em, WRITE_DURABLE | WRITE_KIND(READ_SUPER));
 }
 
 /** Leave the superblock's free counts and its state dirty in the cache, for
  * the sync that follows; 0, or -errno. */
 static int sb_note(struct ext2_mount *em)
 {
-    return sb_write(em, 0);
+    return sb_write(em, WRITE_KIND(READ_SUPER));
 }
 
 /** The pointer blocks data index `index` can need at most: none for a

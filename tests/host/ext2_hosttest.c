@@ -118,12 +118,17 @@ static char last_check[160];
 /* Every record of the mount's check since a row last emptied it, each line
    ended by a newline, as many as fit. */
 static char check_log[1024];
+/* The records of a stop by the error policy, and those that name the
+   superblock, since a row last set them to 0. */
+static int stop_records, super_records;
 extern int vsnprintf(char *s, unsigned long n, const char *fmt, __builtin_va_list ap);
 
 /**
  * Keep the record in `last_log`; a record at warning level (4) also in
- * `last_warn`, and a record of the mount's check, which begins "check: ",
- * also in `last_check` and at the end of `check_log`.
+ * `last_warn`; count a stop by the error policy in `stop_records` and a
+ * record that names the superblock in `super_records`; and a record of the
+ * mount's check, which begins "check: ", also in `last_check` and at the
+ * end of `check_log`.
  */
 void klog(int level, const char *sys, const char *fmt, ...)
 {
@@ -136,6 +141,8 @@ void klog(int level, const char *sys, const char *fmt, ...)
     if (level == 4) {
         __builtin_memcpy(last_warn, last_log, sizeof(last_warn));
     }
+    stop_records += strcmp(last_log, "error: remounting read-only") == 0;
+    super_records += strstr(last_log, "superblock") != 0;
     if (memcmp(last_log, "check: ", 7) == 0) {
         unsigned long used = strlen(check_log), len = strlen(last_log);
 
@@ -6745,6 +6752,7 @@ static void pending_damage_row(void);
 static void runtime_damage_rows(void);
 static void policy_mode_rows(void);
 static void policy_kind_rows(void);
+static void policy_super_row(void);
 
 /**
  * Mount a clean volume read-only, read a file and a deep path on it, sync
@@ -6815,6 +6823,7 @@ static void readonly_rows(void)
     runtime_damage_rows();
     policy_mode_rows();
     policy_kind_rows();
+    policy_super_row();
 }
 
 /* The result of process B's sync in `sync_remount_row`. */

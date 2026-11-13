@@ -2,7 +2,8 @@
  * ext2_policy_rows.h: the rows of ext2's error policy by its two matrices,
  * included by ext2_hosttest.c: the mount's mode and its transitions, and a
  * fault of each kind of block the read primitive reads, each met by the
- * operation that reads it, on mounts under `errors=remount-ro`.
+ * operation that reads it, the superblock's by the report's own write too,
+ * on mounts under `errors=remount-ro`.
  */
 
 #ifndef EXT2_POLICY_ROWS_H_
@@ -235,6 +236,46 @@ static void policy_kind_rows(void)
         check(hits > 0, "a write meets its inode's table block unread");
         damage_reported(img, rc, -EIO, "table block", "and is EIO, reported as a load's is");
     }
+}
+
+/** Sync the mount, the step of `policy_super_row`. */
+static int policy_sync(void)
+{
+    return OPS->sync(&mnt);
+}
+
+/**
+ * A sync whose write of the superblock's counts fails at the read of its
+ * block reports the fault once: the report's own write of the error bit
+ * meets the same failed read, which it logs and does not report again, as
+ * Linux's `ext2_error` writes the superblock it keeps and reads nothing.
+ * The mount under `errors=remount-ro` ends read-only, stopped by one record,
+ * with the bit in memory alone and the volume left not valid on the disk,
+ * for the check of its next mount. Before the error mark wrote quietly, each
+ * report's write read the block again and reported its failure, without end.
+ */
+static void policy_super_row(void)
+{
+    const char *img = fix_path("super.ext2");
+    int rc = 0, hits;
+
+    if (!damage_mount(img, 0, 0, "the unread superblock's volume mounts")) {
+        return;
+    }
+    stop_records = super_records = 0;
+    hits = policy_unread(0, policy_sync, &rc);
+    check(hits > 0 && rc == -EIO, "a sync meets the superblock's block unread and fails with EIO");
+    check(stop_records == 1 && super_records == 2 &&
+              streq(last_warn, "superblock cannot be stored: the error stays in memory") &&
+              (mnt.flags & VFS_MS_RDONLY) != 0,
+          "and reports the fault once, the mount read-only, the error bit not stored");
+    if (stop_records != 1 || super_records != 2) {
+        printf("  stops %d, superblock records %d, last warning '%s'\n", stop_records,
+               super_records, last_warn);
+    }
+    unmount_image();
+    check(disk_state(img) >= 0 && (disk_state(img) & 1) == 0,
+          "and the volume stays not valid on the disk");
 }
 
 #endif
