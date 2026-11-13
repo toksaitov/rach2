@@ -37,6 +37,10 @@ struct ready_queue {
     unsigned int rt_count; /* queued threads with an effective RT priority */
 };
 static struct ready_queue run_queues[NR_CPUS];
+/* The queued threads with an effective RT priority on every queue, the sum
+ * of the queues' `rt_count`, for the yield that takes no lock
+ * (`sched_yield_alone`). */
+static unsigned int rt_queued;
 static uint32_t pick_count, pick_steps; /* selection attempts and entries examined, modulo 2^32 */
 
 /** Nonzero when the next selection may prefer a wait-queue wake. */
@@ -125,6 +129,7 @@ static void sched_remove(process_t *p)
     }
     q->count--;
     q->rt_count -= p->ready_rt;
+    rt_queued -= p->ready_rt;
     p->ready_rt = 0;
     p->ready_prev = p->ready_next = NULL;
     p->ready_linked = 0;
@@ -171,6 +176,7 @@ static void sched_append(process_t *p)
     q->count++;
     p->ready_rt = sched_priority(p) != 0;
     q->rt_count += p->ready_rt;
+    rt_queued += p->ready_rt;
     p->ready_linked = 1;
 }
 
@@ -1131,6 +1137,36 @@ void sched_slice_rearm(void)
             timer_wake_at((int64_t)at);
         }
     }
+}
+
+/**
+ * Whether a yield by the current thread would select it again, so that
+ * sched_yield may return without `schedule`: the scheduler is on, the
+ * thread is no idle task, has no request to switch (`need_resched`), may
+ * still run here and is not held by a suspend to idle, its processor's
+ * queue is empty and no real-time thread is queued anywhere, which
+ * selection could take from another queue (`sched_find_rt`). Read without
+ * the run queues' lock, as Linux's yield takes only its own processor's
+ * queue's lock (do_sched_yield, kernel/sched/syscalls.c:1410-1425) and
+ * returns at once from a queue that holds the yielder alone
+ * (yield_task_fair, kernel/sched/fair.c:9109-9110), whose schedule then
+ * picks it again: a thread queued here just after the look waits for the
+ * next selection, as one queued just after a yield's selection does. Every
+ * yield taking the one lock of every queue, as Wine's spin calls it, kept
+ * that lock's line moving between the spinning processor and those whose
+ * threads block and wake.
+ */
+int sched_yield_alone(void)
+{
+    uint32_t flags = kirq_save();
+    int me = (int)arch_cpu_id();
+    process_t *p = cpu_table[me].current;
+    int alone = _sched_enabled && p && p != cpu_table[me].idle && !p->need_resched &&
+                run_queues[me].count == 0 && rt_queued == 0 && ((p->affinity >> me) & 1u) &&
+                suspend_lets_run(p);
+
+    kirq_restore(flags);
+    return alone;
 }
 
 /**

@@ -88,6 +88,11 @@ void schedule(void);
  */
 void sched_make_ready(process_t *p);
 
+/** Whether the current thread's yield would select it again, read without
+ * the run queues' lock, so that sched_yield returns at once. Any context
+ * with a current thread; the answer may be stale by the return. */
+int sched_yield_alone(void);
+
 /**
  * Make `p` ready as `sched_make_ready` does, and mark it woken, if it is
  * blocked; a thread in any other state is left as it is. This is a wait
