@@ -6941,19 +6941,20 @@ static const char *const growth_findings[] = {
 
 /**
  * Make /dst with its first `blocks` blocks full, so that the next name
- * takes block `blocks`: entries of 256 bytes, names of 248 linked to /many,
- * sixteen to a block, but in the first, after `.` and `..`, fifteen of them
- * and one name of 224 bytes, whose 232-byte entry takes the room left.
+ * takes block `blocks`: entries of 256 bytes, names of 248 linked to /hub,
+ * a name the fixture's root lacks, sixteen to a block, but in the first,
+ * after `.` and `..`, fifteen of them and one name of 224 bytes, whose
+ * 232-byte entry takes the room left.
  * Returns 0, or the first error.
  */
 static int growth_fill(int blocks)
 {
     char name[256];
-    void *many, *dst = 0;
+    void *hub, *dst = 0;
     int i, len, rc;
 
-    many = make_file(mnt.root, "many", &rc);
-    if (many) {
+    hub = make_file(mnt.root, "hub", &rc);
+    if (hub) {
         rc = OPS->mkdir(&mnt, mnt.root, "dst", 0755);
     }
     if (rc == 0) {
@@ -6963,13 +6964,13 @@ static int growth_fill(int blocks)
         len = i == 15 ? 224 : 248;
         memset(name, i == 15 ? 'b' : 'a', (unsigned long)len);
         snprintf(name + len - 4, 5, "%04d", i);
-        rc = OPS->link(&mnt, dst, name, many);
+        rc = OPS->link(&mnt, dst, name, hub);
     }
     if (dst) {
         OPS->put(&mnt, dst);
     }
-    if (many) {
-        OPS->put(&mnt, many);
+    if (hub) {
+        OPS->put(&mnt, hub);
     }
     return rc;
 }
