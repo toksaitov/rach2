@@ -9,10 +9,16 @@ Usage: trip.py OUT N. The counters of each run go to OUT/trip-gl-I.loop.txt
 and its summary to the output.
 
 Rach2's debugfs is root's alone, so the user that runs the loop asks a reader
-of root's, trip.py --reader DIR, which trip.sh starts, for each snapshot of
-bkl/calls, bkl/profile and bkl/tick, and reads only those copies: it names a
-request in DIR/ask, a directory of its own, and the reader copies the three
-files into DIR/snap/NAME, which the user may read but not write.
+of root's for each snapshot of bkl/calls, bkl/profile and bkl/tick, and reads
+only those copies. trip.sh makes the reader's workspace with
+trip.py --prepare UID, which prints its path DIR, and starts the reader with
+trip.py --reader DIR. The user appends each request's name, a line, to
+DIR/ask, a file of its own, and the reader copies the three files into
+DIR/snap/NAME, which the user may read but not write. Every directory there
+is root's and writable by root alone, and the reader writes only relative to
+directories it holds open, creating each entry with its final mode and
+following no symbolic link, so that the user can redirect none of root's
+writes.
 """
 import collections
 import itertools
@@ -21,6 +27,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import sys
 import tempfile
 import threading
@@ -50,29 +57,117 @@ READER_PID = os.environ.get("TRIP_BKL_PID", "")
 requests = itertools.count(1)
 
 
-def serve(base):
-    """As root, answer each request named in BASE/ask, digits only, once: copy
-    the files of BKL_FILES that read into BASE/snap/NAME.tmp, mode 0644, and
-    rename it to BASE/snap/NAME. Polls every millisecond and returns when
-    its parent, trip.sh, has gone."""
-    ask, snap = base / "ask", base / "snap"
-    parent, done = os.getppid(), set()
+# The reader's workspace's parent, root's and sticky or writable by root
+# alone, where a user can rename and remove none of root's entries; never
+# TMPDIR, which the caller chooses.
+WORKSPACE_PARENT = "/tmp"
+
+# Open flags of a directory the reader writes in: a symbolic link in its
+# place fails with ELOOP.
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+# Open flags of a file the reader makes: an entry of any kind already there,
+# a symbolic link among them, fails with EEXIST.
+NEW_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def protected(st, what):
+    """Refuse the directory whose status is ST unless root owns it and no
+    group or other may write it; WHAT names it in the error."""
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+        raise SystemExit("trip: %s is not a directory of root's that root alone may write"
+                         % what)
+
+
+def check_parent():
+    """Refuse WORKSPACE_PARENT unless it is a directory, not a link, of
+    root's that is sticky or writable by root alone."""
+    st = os.lstat(WORKSPACE_PARENT)
+    if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0
+            or (st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX)):
+        raise SystemExit("trip: %s is not root's, or others may rename its entries"
+                         % WORKSPACE_PARENT)
+
+
+def prepare(uid):
+    """As root, make the reader's workspace in WORKSPACE_PARENT and return its
+    path: the directory, made 0700 by mkdtemp, with snap, 0755, and ask, an
+    empty file of UID's, 0600, made in it through its descriptor while no
+    one else may enter it; then the directory made 0755. Removes the
+    workspace if any step fails."""
+    check_parent()
+    os.umask(0o022)
+    path = tempfile.mkdtemp(prefix="trip-bkl.", dir=WORKSPACE_PARENT)
+    try:
+        base = os.open(path, DIR_FLAGS)
+        try:
+            os.mkdir("snap", 0o755, dir_fd=base)
+            fd = os.open("ask", NEW_FLAGS, 0o600, dir_fd=base)
+            try:
+                os.fchown(fd, uid, -1)
+            finally:
+                os.close(fd)
+            os.fchmod(base, 0o755)
+        finally:
+            os.close(base)
+    except BaseException:
+        shutil.rmtree(path, ignore_errors=True)
+        raise
+    return path
+
+
+def copy(snap, name):
+    """Copy the files of BKL_FILES that read into snap/NAME.tmp, a new
+    directory 0755, as files 0644 made through its descriptor, and rename it
+    to snap/NAME. SNAP is the descriptor of the snapshots' directory."""
+    tmp = name + ".tmp"
+    os.mkdir(tmp, 0o755, dir_fd=snap)
+    fd = os.open(tmp, DIR_FLAGS, dir_fd=snap)
+    try:
+        for f in BKL_FILES:
+            try:
+                text = (BKL / f).read_bytes()
+            except OSError:
+                continue
+            out = os.open(f, NEW_FLAGS, 0o644, dir_fd=fd)
+            try:
+                while text:
+                    text = text[os.write(out, text):]
+            finally:
+                os.close(out)
+    finally:
+        os.close(fd)
+    os.rename(tmp, name, src_dir_fd=snap, dst_dir_fd=snap)
+
+
+def serve(path):
+    """As root, answer each request named in PATH/ask, a line of at most 16
+    digits, once, with a copy of BKL_FILES in PATH/snap/NAME (copy). Opens
+    the workspace and snap once, refusing either unless it is a directory of
+    root's that root alone may write, and polls ask every millisecond;
+    returns when its parent, trip.sh, has gone."""
+    check_parent()
+    os.umask(0o022)
+    base = os.open(path, DIR_FLAGS)
+    protected(os.fstat(base), path)
+    snap = os.open("snap", DIR_FLAGS, dir_fd=base)
+    protected(os.fstat(snap), path + "/snap")
+    ask = os.open("ask", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=base)
+    if not stat.S_ISREG(os.fstat(ask).st_mode):
+        raise SystemExit("trip: %s/ask is not a file" % path)
+    parent, done, pending = os.getppid(), set(), b""
     while os.getppid() == parent:
-        for name in os.listdir(ask):
-            if name in done or not name.isdigit():
+        pending += os.read(ask, 4096)
+        lines = pending.split(b"\n")
+        pending = lines.pop()
+        if len(pending) > 16:
+            pending = b""
+        for line in lines:
+            name = line.decode("ascii", "replace")
+            if name in done or not name.isdigit() or len(name) > 16:
                 continue
             done.add(name)
-            tmp = snap / (name + ".tmp")
-            tmp.mkdir()
-            tmp.chmod(0o755)
-            for f in BKL_FILES:
-                try:
-                    text = (BKL / f).read_text()
-                except OSError:
-                    continue
-                (tmp / f).write_text(text)
-                (tmp / f).chmod(0o644)
-            tmp.rename(snap / name)
+            copy(snap, name)
         time.sleep(0.001)
 
 
@@ -92,7 +187,11 @@ def bkl_snapshot():
     if not READER_DIR:
         return {}
     base, name = Path(READER_DIR), str(next(requests))
-    (base / "ask" / name).touch()
+    fd = os.open(base / "ask", os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+    try:
+        os.write(fd, (name + "\n").encode())
+    finally:
+        os.close(fd)
     path = base / "snap" / name
     while not path.exists():
         if not reader_alive(int(READER_PID)):
@@ -317,12 +416,16 @@ def ioctls(path):
 
 def main():
     """Run the round trips in OUT, N times plain and once under each tracer;
-    or, with --reader DIR, serve the snapshots of debugfs as root."""
+    or, as root, with --prepare UID make the reader's workspace and print
+    its path, and with --reader DIR serve the snapshots of debugfs."""
+    if len(sys.argv) == 3 and sys.argv[1] == "--prepare":
+        print(prepare(int(sys.argv[2])), flush=True)
+        return 0
     if len(sys.argv) == 3 and sys.argv[1] == "--reader":
-        serve(Path(sys.argv[2]))
+        serve(sys.argv[2])
         return 0
     if len(sys.argv) != 3:
-        raise SystemExit("usage: trip.py OUT N | trip.py --reader DIR")
+        raise SystemExit("usage: trip.py OUT N | trip.py --prepare UID | trip.py --reader DIR")
     out, count = Path(sys.argv[1]).resolve(), int(sys.argv[2])
     if count < 1:
         raise SystemExit("trip: runs must be positive")
@@ -367,8 +470,8 @@ def main():
 if __name__ == "__main__":
     # run.py's handlers, which its own guard installs only when it is the
     # program: they stop the children and unwind through main's cleanup.
-    # The reader has neither and ends at its signal.
-    if sys.argv[1:2] != ["--reader"]:
+    # The reader and --prepare have neither and end at their signal.
+    if sys.argv[1:2] not in (["--reader"], ["--prepare"]):
         for stop_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
             signal.signal(stop_signal, run.interrupted)
     sys.exit(main())
