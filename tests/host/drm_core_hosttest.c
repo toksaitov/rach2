@@ -521,8 +521,23 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
 static int epoll_tfd;
 static const struct open_file *epoll_file;
 
+/* The holds KCMP_EPOLL_TFD takes on a set's descriptor and has not given
+ * back, the lookups that took one, the copy the newest hold fills, and the
+ * calls of epoll_target made without a hold on the entry they read. */
+static int epoll_holds;
+static int epoll_lookups;
+static const struct fd_entry *epoll_held;
+static int epoll_unheld;
+
+/** The target of a registration in the model's set. The entry `e` must be
+ * the copy a live hold fills, as the kernel's lookup reads only a set it
+ * holds; a call without one is counted and fails with -EIO. */
 int32_t epoll_target(const fd_entry_t *e, int tfd, uint32_t toff, const struct open_file **ofd)
 {
+    if (epoll_holds <= 0 || e != epoll_held) {
+        epoll_unheld++;
+        return -EIO;
+    }
     if (e->type != FD_TYPE_ANON) {
         return -EINVAL;
     }
@@ -533,10 +548,6 @@ int32_t epoll_target(const fd_entry_t *e, int tfd, uint32_t toff, const struct o
     return 0;
 }
 
-/* The holds KCMP_EPOLL_TFD takes on a set's descriptor and has not given
- * back. */
-static int epoll_holds;
-
 /** A copy of descriptor `fd` with a hold, as syscall_fs.c's, counted. */
 int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out)
 {
@@ -544,13 +555,17 @@ int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out)
         return -EBADF;
     }
     epoll_holds++;
+    epoll_lookups++;
+    epoll_held = out;
     return 0;
 }
 
 /** Give back the hold `fd_peek_hold` took. */
 void fd_peek_drop(struct fd_entry *copy)
 {
-    (void)copy;
+    if (copy == epoll_held) {
+        epoll_held = NULL;
+    }
     epoll_holds--;
 }
 
@@ -1927,6 +1942,7 @@ static void test_kcmp(void)
     CHECK("a set that is not one", KCMP(200, 201, KCMP_EPOLL_TFD, 4, (uintptr_t)&slot) == -EINVAL);
     slot.efd = 6;
     CHECK("a set not open", KCMP(200, 201, KCMP_EPOLL_TFD, 4, (uintptr_t)&slot) == -EBADF);
+    CHECK("each lookup of an open set holds it", epoll_lookups == 4 && epoll_unheld == 0);
     CHECK("every lookup gives back the set it held", epoll_holds == 0);
 done:
     CHECK("a slot that faults", KCMP(200, 201, KCMP_EPOLL_TFD, 4, 16) == -EFAULT);
