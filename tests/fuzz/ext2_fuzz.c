@@ -91,6 +91,15 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     (void)rc;
 }
 
+/** The put of an unlinked file a shared mapping's record holds: nothing,
+ * since no input maps a file. */
+void filemap_evict_unlinked(struct vfs_mount *mnt, uint64_t ino, void *node)
+{
+    (void)mnt;
+    (void)ino;
+    (void)node;
+}
+
 /** Take `lock` with interrupts off: one thread, so nothing waits. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
