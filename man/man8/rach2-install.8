@@ -431,6 +431,8 @@ hashed again from the disk; only when that SHA-256 is the one written does
 .Pa keep.sha256
 go beside it, and the archive names the partition and the hash in its file
 .Pa update-keep .
+A copy that does not read whole, either time, stops the update before
+anything is destroyed.
 An update with no room for the file on either volume stops before anything
 is destroyed.
 The copies are removed when the update finishes.
@@ -543,9 +545,9 @@ the old homes were retained.
 The image is checked before anything is written.
 Its length must be a whole number of sectors and fit the partition.
 It must begin with an ext2 file system.
-If
+It must read whole, and if
 .Pa IMAGE.sha256
-exists, the image's SHA-256 must match it.
+exists, its SHA-256 must match it.
 .Pp
 An update requires the disk's recovery partition, and proves before
 anything is destroyed that the recovery system there would start: its
@@ -553,9 +555,13 @@ kernel
 .Pa boot/recovery
 carries a Multiboot2 header and reads whole, its RAM image
 .Pa boot/recovery.krffs
-is not empty and reads whole, its own menu
+reads whole and begins with the root node of a KRFFS image, which the
+kernel mounts, its own menu
 .Pa boot/grub/recovery.cfg
-loads both, and the boot partition's entry
+loads both, the partition carries the FAT label
+.Ql RACH2RECOV
+in its boot sector and its root directory, by which GRUB finds that menu
+when the boot partition does not read, and the boot partition's entry
 .Ql recovery
 loads both from the volume with the recovery partition's FAT serial.
 A disk that fails any of these is not updated.
