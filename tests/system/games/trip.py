@@ -124,8 +124,16 @@ def snapshot():
                 base = "/proc/%s/task/%s/" % (pid, tid)
                 text.append("== %s %s\n%s%s" % (pid, tid, Path(base + "stat").read_text(),
                                                    Path(base + "status").read_text()))
+                text.append("schedstat " + Path(base + "schedstat").read_text())
         except OSError:
             pass
+    # The lines of the thread bkl/calls counts alone, which trip.sh -t
+    # chooses: its switches away by the thread switched to, and its sleeps.
+    try:
+        text += ["filter " + line + "\n" for line in CALLS.read_text().splitlines()
+                 if line.startswith(("thread ", "switch ", "block "))]
+    except OSError:
+        pass
     return "".join(text)
 
 
@@ -151,6 +159,10 @@ def parse(text):
             holds[f[0] + " " + f[1]] = (int(f[4]), int(f[5]))
         elif tid is None and len(f) == 2 and f[1].isdigit():
             stat[f[0]] = int(f[1])
+        elif tid is not None and line.startswith("schedstat "):
+            threads[tid]["run_ns"], threads[tid]["delay_ns"] = int(f[1]), int(f[2])
+        elif line.startswith("filter "):
+            continue
         elif tid is not None and re.match(r"\d+ \(", line):
             rest = line[line.rindex(")") + 2:].split()
             threads[tid]["utime"], threads[tid]["stime"] = int(rest[11]), int(rest[12])
@@ -211,6 +223,38 @@ def summary(start, end):
         lines.append("thread %s %s: utime %d stime %d voluntary %d involuntary %d" % (
             tid, y.get("Name", "?"), change("utime"), change("stime"),
             change("voluntary_ctxt_switches"), change("nonvoluntary_ctxt_switches")))
+        if "run_ns" in y:
+            lines.append("thread %s %s: ran %.1f ms, waited ready %.1f ms" % (
+                tid, y.get("Name", "?"), change("run_ns") / 1e6, change("delay_ns") / 1e6))
+    lines += filtered(start, end)
+    return lines
+
+
+def filtered(start, end):
+    """Lines that give the changes of the chosen thread's switches away, by
+    the thread switched to, and of its sleeps, by call and ioctl request."""
+    def counts(text):
+        found, name = {}, None
+        for line in text.splitlines():
+            f = line.split()
+            if line.startswith("filter thread "):
+                name = f[2]
+            elif line.startswith("filter switch ") and len(f) >= 5:
+                found["switch to %s %s" % (f[2], " ".join(f[5:]))] = (int(f[3]), int(f[4]))
+            elif line.startswith("filter block ") and len(f) == 5:
+                found["sleep in %s %s" % (f[2], f[3])] = (int(f[4]), 0)
+        return name, found
+    name, a = counts(start)
+    _, b = counts(end)
+    if name is None:
+        return []
+    lines = ["filter thread %s" % name]
+    for key in sorted(b, key=lambda k: -sum(b[k]) + sum(a.get(k, (0, 0)))):
+        x, y = a.get(key, (0, 0)), b[key]
+        if key.startswith("switch") and y != x:
+            lines.append("filter %s: %d yields, %d preemptions" % (key, y[0] - x[0], y[1] - x[1]))
+        elif y[0] != x[0]:
+            lines.append("filter %s: %d" % (key, y[0] - x[0]))
     return lines
 
 

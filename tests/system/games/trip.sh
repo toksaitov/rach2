@@ -3,24 +3,28 @@
 # on the machine itself: on Rach2's trial root with the root's rach2-game, or
 # on Linux with this directory's copy and a Proton that -p names, as gpu.sh
 # runs the gpu row. Usage: trip.sh [-u USER] [-r RENDERER] [-p PROTON]
-# [-n RUNS] OUT. OUT receives trip.py's results and the machine's identity.
+# [-n RUNS] [-t THREAD] OUT. OUT receives trip.py's results and the
+# machine's identity. -t has Rach2's bkl/calls count the thread THREAD
+# alone, by ID or name, as wined3d_cs, for the runs (debugfs(5)).
 set -eu
 
 user='test'
 renderer='HD Graphics 4400'
 proton=
 runs=3
-while getopts u:r:p:n: opt; do
+thread=
+while getopts u:r:p:n:t: opt; do
     case $opt in
         u) user=$OPTARG ;;
         r) renderer=$OPTARG ;;
         p) proton=$OPTARG ;;
         n) runs=$OPTARG ;;
-        *) echo 'usage: trip.sh [-u USER] [-r RENDERER] [-p PROTON] [-n RUNS] OUT' >&2; exit 2 ;;
+        t) thread=$OPTARG ;;
+        *) echo 'usage: trip.sh [-u USER] [-r RENDERER] [-p PROTON] [-n RUNS] [-t THREAD] OUT' >&2; exit 2 ;;
     esac
 done
 shift $((OPTIND - 1))
-[ $# -eq 1 ] || { echo 'usage: trip.sh [-u USER] [-r RENDERER] [-p PROTON] [-n RUNS] OUT' >&2; exit 2; }
+[ $# -eq 1 ] || { echo 'usage: trip.sh [-u USER] [-r RENDERER] [-p PROTON] [-n RUNS] [-t THREAD] OUT' >&2; exit 2; }
 [ "$(id -u)" -eq 0 ] || { echo 'trip: run as root' >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 out=$1
@@ -34,10 +38,12 @@ made=
 home=
 reader=
 bkl=
+chosen=
 trap '[ -z "$made" ] || rm -f /opt/proton
       [ -z "$home" ] || rm -rf "$home"
       [ -z "$reader" ] || { kill "$reader" 2> /dev/null; wait "$reader" 2> /dev/null || true; }
-      [ -z "$bkl" ] || rm -rf "$bkl"' EXIT
+      [ -z "$bkl" ] || rm -rf "$bkl"
+      [ -z "$chosen" ] || echo all > "$chosen"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -63,6 +69,12 @@ if [ -d /sys/kernel/debug/bkl ]; then
 fi
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
+fi
+if [ -n "$thread" ]; then
+    calls=/sys/kernel/debug/bkl/calls
+    [ -w "$calls" ] || { echo "trip: -t: no $calls to write" >&2; exit 2; }
+    echo "thread $thread" > "$calls"
+    chosen=$calls
 fi
 launcher=rach2-game
 if [ -n "$proton" ]; then
