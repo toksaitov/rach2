@@ -980,13 +980,14 @@ static void check_readonly(const struct ext2_mount *em, int limit)
  * End a check that met its first fault or one of its own limits, `c->fault`:
  * the free counts put back to `free_blocks` and `free_inodes` and the
  * descriptors read again, since the recount may have stopped part way, and
- * nothing the check found written but, for a fault of the volume, the error
- * bit in the superblock; the fault logged, then that the volume stays
+ * nothing written but, for a fault of the volume, the superblock's state
+ * with the error bit set; the fault logged, then that the volume stays
  * read-only (`check_readonly`). 1, or the -errno of a read or write.
  */
 static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t free_inodes)
 {
     struct ext2_mount *em = c->em;
+    uint8_t state[2];
     int rc;
 
     em->free_blocks = free_blocks;
@@ -1002,8 +1003,10 @@ static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t fr
         klog(KLOG_WARN, "ext2", "check: %s", c->fault);
     }
     if (!c->limit) {
-        (void)ext2_state_change(em, EXT2_ERROR_FS, 0);
-        rc = ext2_sb_store(em);
+        ext2_super_lock(em);
+        LE16_PUT(state, ext2_state_change(em, EXT2_ERROR_FS, 0));
+        rc = ext2_write_bytes(em, 1024 + 58, state, 2, WRITE_DURABLE | WRITE_KIND(READ_SUPER));
+        ext2_super_unlock(em);
         if (rc != 0) {
             return rc;
         }
