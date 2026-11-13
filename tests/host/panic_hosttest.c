@@ -532,8 +532,9 @@ static void edges(void)
 
     restart();
     panic_timeout = -1;
+    panic_reason = "no process"; /* the first panic's, reading the process */
     reading_process = 1;
-    stop("no process");
+    stop("fault: in the read");
     CHECK(restarted && waited_us == 0 && strstr(wire, "rebooting in") == 0,
           "panic=-1 resets at once, with no countdown");
     CHECK(report_reads(bare) && strstr(shown, "pid") == 0,
