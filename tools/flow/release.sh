@@ -1621,8 +1621,9 @@ claim_ssh()
 # claim.pl's holder, which holds the claim while OUT/DONE is missing, no
 # tombstone exists and OUT/ID.alive grew in the last ten minutes, which the
 # part's script on Windows and beat make it do. The caller has stopped every
-# earlier attempt. Return once the runner has started the launcher, or after
-# half a minute; fail when the copy could not be made.
+# earlier attempt. Return once the runner has started the launcher or decided
+# to start nothing, or after half a minute; fail when the copy could not be
+# made.
 claim_start()
 {
     c=$wlock/$1.$2.$3
@@ -1632,7 +1633,7 @@ claim_start()
         echo "END_OF_CLAIM"
         echo "cd /tmp && setsid nohup perl $c.pl run $wlock $wheld $1 $2 $3 env $4 \\"
         echo "    perl $c.pl hold $wlock $wheld $1 $2 $3 $5 > $c.out 2>&1 < /dev/null &"
-        echo "i=0; until [ -e $c.go ] || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done"
+        echo "i=0; until [ -e $c.go ] || [ -e $c.none ] || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done"
     } | claim_ssh 120
 }
 
