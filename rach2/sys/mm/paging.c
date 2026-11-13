@@ -83,10 +83,15 @@ static uint32_t _framefail_left;
 static int _framefail_on = -1; /* -1 until the boot line is read */
 
 /** Whether this allocation is the one armed to fail: one made in a system
- * call that brings the armed count to 0. */
+ * call, a fault its copies take among them, that brings the armed count to
+ * 0. A fault from user mode (`in_fault`) marks itself as in a call too, so
+ * that it may sleep (`fault_resolve`), and is not counted: a count a fork
+ * did not spend would otherwise end the parent or the child at its first
+ * write. */
 static int framefail_now(void)
 {
-    if (_framefail_left == 0 || !current_proc || !current_proc->in_syscall) {
+    if (_framefail_left == 0 || !current_proc || !current_proc->in_syscall ||
+        current_proc->in_fault) {
         return 0;
     }
     if (--_framefail_left != 0) {

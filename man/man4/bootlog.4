@@ -73,7 +73,8 @@ The setting controls kernel screen output while init owns the console.
 .Pa /dev/framefail
 is a test device for allocation-failure probes.
 A write beginning with a decimal count arms a failure on that numbered
-frame allocation during a system call.
+frame allocation during a system call, a fault the call's copies take
+among them; a fault a program takes in user mode is not counted.
 The failure occurs once; a count of zero disarms it.
 Bytes after the initial decimal digits are ignored, and a successful
 write returns its full byte count.
