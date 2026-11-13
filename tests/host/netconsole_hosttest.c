@@ -73,7 +73,9 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
     if (*want == '\0') {
         if (klog_refusals + 1 < sizeof(klog_refused)) {
-            klog_refused[klog_refusals] = f[2] == '\0' ? 'b' : 'v';
+            /* a bare key's record is "refused: %s", a value's "%s=%s" */
+            klog_refused[klog_refusals] =
+                f[0] == ' ' && f[1] == '%' && f[2] == 's' && f[3] == '\0' ? 'b' : 'v';
             klog_refused[klog_refusals + 1] = '\0';
         }
         klog_refusals++;
@@ -403,6 +405,7 @@ static void nc_reset(void)
     nc_line_start = 0;
     nc_skip = 0;
     nc_settle_ticks = 0;
+    nc_settled = 0;
     nc_carrier_ticks = (uint64_t)NC_CARRIER_TIMEOUT * TICK_HZ;
     nc_tick_next = 0;
     nc_frames_start.begun = 0;
@@ -805,8 +808,10 @@ static void setup_gap_row(void)
           "a record setup logs keeps the runs counted before it for the new target");
     the_iface.ip = 0x0A000002u;
     put_string("y\n");
+    /* The 511 lines, "x", setup's records of its target, its start and the
+       settle that sent what the start held, and "y". */
     CHECK(nc_targets && nc_targets->gap == 2 && nc_targets->lost == 0 &&
-              nc_targets->datagrams == 511 + 1 + 2 + 1,
+              nc_targets->datagrams == 511 + 1 + 3 + 1,
           "and the target counts both runs as it passes them");
     CHECK(lock_depth == 0 && !lock_ever_negative, "the setup row released every lock");
 }
