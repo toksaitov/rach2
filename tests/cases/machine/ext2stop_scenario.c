@@ -696,28 +696,10 @@ static int size_line(const char *text, struct tally *t)
 }
 
 /**
- * Say whether the line `line`, `len` bytes of e2fsck's output, is one the
- * documented state of an unclean stop allows, given the inodes `held`: a
- * pass's heading, a removed inode's zero deletion time, a block the bitmap
- * marks used and nothing points to, an inode the bitmap marks used and
- * nothing uses, an inode in use that no name reaches (`Unattached inode N`,
- * after `Unattached zero-length inode N` when it has no blocks) other than
- * a held one, the free counts, a question e2fsck asks and is told no, or
- * its summary; and a regular file's size or i_blocks behind its pointers,
- * which the kernel's check keeps. On the volume as the stop left it,
- * `stopped`, a block the bitmap calls free that a file names is allowed
- * too, the bit the check sets; after the check, not. The inodes no name
- * reaches, the files kept and the blocks named free are counted in `*t`.
- *
- * Beyond the held inodes, those are the files a writer removed: the removal
- * writes the entry to the disk at once, so that no name there names a freed
- * inode, and leaves the inode's free to write back, its cleared pointers
- * first, then its zeroed slot and its bits. A stop before all of it is on
- * the disk leaves the inode unattached, or deleted with a zero deletion
- * time, or zeroed with its bit set.
+ * `allowed` of the line `text`, a string the caller owns, which loses its
+ * trailing spaces and carriage return here.
  */
-static int allowed(const char *line, size_t len, const long held[HELD], int stopped,
-                   struct tally *t)
+static int allowed_text(char *text, const long held[HELD], int stopped, struct tally *t)
 {
     static const char *const fixed[] = {"Pass ",
                                         "Free blocks count wrong",
@@ -732,13 +714,11 @@ static int allowed(const char *line, size_t len, const long held[HELD], int stop
                       empty[] = "Unattached zero-length inode ",
                       blocks[] = "Block bitmap differences:",
                       inodes[] = "Inode bitmap differences:";
-    char text[512], *end;
-    size_t i;
+    size_t i, len = strlen(text);
+    char *end;
     long ino;
     int ok;
 
-    snprintf(text, sizeof(text), "%.*s", (int)len, line);
-    len = strlen(text);
     while (len > 0 && (text[len - 1] == '\r' || text[len - 1] == ' '))
         text[--len] = '\0';
     for (i = 0; fixed[i] != NULL; i++)
@@ -766,6 +746,46 @@ static int allowed(const char *line, size_t len, const long held[HELD], int stop
     if (strncmp(text, inodes, strlen(inodes)) == 0)
         return only_freed(text + strlen(inodes), &t->freed, NULL);
     return 0;
+}
+
+/**
+ * Say whether the line `line`, `len` bytes of e2fsck's output, is one the
+ * documented state of an unclean stop allows, given the inodes `held`: a
+ * pass's heading, a removed inode's zero deletion time, a block the bitmap
+ * marks used and nothing points to, an inode the bitmap marks used and
+ * nothing uses, an inode in use that no name reaches (`Unattached inode N`,
+ * after `Unattached zero-length inode N` when it has no blocks) other than
+ * a held one, the free counts, a question e2fsck asks and is told no, or
+ * its summary; and a regular file's size or i_blocks behind its pointers,
+ * which the kernel's check keeps. On the volume as the stop left it,
+ * `stopped`, a block the bitmap calls free that a file names is allowed
+ * too, the bit the check sets; after the check, not. The inodes no name
+ * reaches, the files kept and the blocks named free are counted in `*t`.
+ *
+ * Beyond the held inodes, those are the files a writer removed: the removal
+ * writes the entry to the disk at once, so that no name there names a freed
+ * inode, and leaves the inode's free to write back, its cleared pointers
+ * first, then its zeroed slot and its bits. A stop before all of it is on
+ * the disk leaves the inode unattached, or deleted with a zero deletion
+ * time, or zeroed with its bit set.
+ *
+ * The line is judged whole, however long: e2fsck writes all its bitmap
+ * differences on one line, and a `+N` past any fixed length would pass
+ * unread. A line that cannot be copied is not allowed.
+ */
+static int allowed(const char *line, size_t len, const long held[HELD], int stopped,
+                   struct tally *t)
+{
+    char *text = malloc(len + 1);
+    int ok;
+
+    if (text == NULL)
+        return 0;
+    memcpy(text, line, len);
+    text[len] = '\0';
+    ok = allowed_text(text, held, stopped, t);
+    free(text);
+    return ok;
 }
 
 /**
