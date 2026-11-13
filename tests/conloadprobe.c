@@ -52,7 +52,7 @@
 #define SIGTTOU     22
 #define TIOCSPGRP   0x5410
 #define SIG_BLOCK   0
-#define SIG_SETMASK 2
+#define SIG_UNBLOCK 1
 #define POLLIN      0x001
 
 struct pollfd {
@@ -506,7 +506,7 @@ static void require(int good, int count, const char *stage)
  * kills and reaps the child before it exits. */
 static void interrupt_child(void)
 {
-    unsigned ttou[2], old[2];
+    unsigned ttou[2];
     int child, status, pgid;
 
     child = syscall1(SYS_FORK, 0);
@@ -535,13 +535,13 @@ static void interrupt_child(void)
     pgid = syscall1(SYS_GETPID, 0);
     ttou[0] = 1u << (SIGTTOU - 1);
     ttou[1] = 0;
-    if (syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)ttou, (long)old, 8) != 0) {
+    if (syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)ttou, 0, 8) != 0) {
         fail("blocking SIGTTOU");
     }
     if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (long)&pgid) != 0) {
         fail("the terminal back to the parent");
     }
-    syscall4(SYS_RT_SIGPROCMASK, SIG_SETMASK, (long)old, 0, 8);
+    syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)ttou, 0, 8);
 }
 
 void probe_main(unsigned long *sp);
