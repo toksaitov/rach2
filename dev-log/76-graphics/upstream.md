@@ -133,3 +133,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing; ruling 2 matches Linux's measured behaviour, and Chromium's early-sandbox trace waits on the owner's choice.
 * Status: unreported. The libgallium frames had no symbols, so the queue is matched by its calls, not by name.
 * Next: confirm the queue with Mesa's debug symbols, then decide whether Chromium's GPU policy or Mesa's queue threads take the report, or both.
+
+## Linux's ext2 skips a link count change when a directory's write fails after its entry changed
+
+* Project: Linux 6.12.115, Debian's `linux_6.12.115.orig.tar.xz`, unpacked in `build/research/linux-6.12.115-full`; the tarball's SHA-256 is missing.
+* Fails: `ext2_add_link`, `ext2_set_link` and `ext2_delete_entry` change the entry in the folio, commit it, and then return the error of `ext2_handle_dirsync`, which writes the directory's pages and inode (`fs/ext2/dir.c:440-447`, called at 470, 557 and 611), and their callers in `fs/ext2/namei.c` take that error as a change not made. `ext2_unlink` returns before `inode_dec_link_count` (289-295), so the inode keeps a count for a name that is gone; `ext2_rmdir` skips both its drops through it (306-311); `ext2_rename` over a name skips the replaced inode's drop (367-374), and into a new name returns before the new parent's count is raised and the old entry removed (376-380, 390), so the file has two names and one count, and a later unlink of either frees an inode the other still names. The write fails on an I/O error of the directory's block or a failed read of its inode's table block.
+* Found: 2026-11-13, in the design of task 84-154 of milestone 76, by reading the source beside Rach2's ext2 driver, which had the same shape in its unlink; read again on the testing host when the task closed.
+* Reproduction: not run. It needs a write of a directory's block to fail on a writable ext2 mount, as dm-flakey or dm-error over that block gives, then an unlink in that directory and `e2fsck -fn`, which should report the inode's count as too high.
+* Evidence: the design in task 84-154 (GitHub issue 4876 of `toksaitov/rach2`), "Same class, not yet reported", item 5; the lines above.
+* Rach2: its unlink, rmdir, link and renames change the counts in memory once the entry change is on the device, and leave a failed store of a count or of times to the node's mark, which a later store, the last put or a sync writes (commit 09caa470c).
+* Status: unreported.
+* Next: reproduce under dm-flakey on a current kernel, check whether ext2 still returns before the count change, and search the linux-ext4 list.
