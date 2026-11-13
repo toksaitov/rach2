@@ -1906,6 +1906,9 @@ static void itimer_read(int32_t which, struct kernel_itimerval *out)
         left = g->cpu_left[which - 1];
         interval = g->cpu_interval[which - 1];
         spin_unlock(&g->cpu_lock);
+        if (left != 0 && left < 1000u) {
+            left = 1000u; /* armed: never reported as disarmed */
+        }
         itimer_put_ns(left, &out->value_sec, &out->value_usec);
         itimer_put_ns(interval, &out->interval_sec, &out->interval_usec);
     }

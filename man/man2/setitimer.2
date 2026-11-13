@@ -178,10 +178,13 @@ On x86-64 the numbers are 38, 36 and 37, with the same arguments in RDI,
 RSI and RDX.
 The kernel's itimerval is four signed fields, of 32 bits on i386 and 64 on
 x86-64: the interval's seconds and microseconds, then the value's.
-A real-time value saturates at the signed nanosecond limit, about 292
-years, as Linux's ktime does.
-A CPU-time value is limited to 2^40 seconds, about 34800 years, and rounds
-up to an accounting tick.
+Every value and interval is kept in nanoseconds and saturates at the
+signed nanosecond limit, about 292 years, as Linux's ktime does.
+Processor time is charged by the accounting tick, so a CPU-time timer
+expires at the first tick that reaches it, and its next expiry is the
+interval less the part of that tick past it.
+An armed CPU-time timer with less than a microsecond left reads as one
+microsecond.
 A time that does not fit the structure is reported as the largest
 .Vt long
 of seconds and 999999 microseconds.
