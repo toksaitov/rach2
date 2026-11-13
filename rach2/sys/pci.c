@@ -995,6 +995,9 @@ static void msi_disable_locked(const pci_device_t *dev)
     }
 }
 
+/** Disable MSI-X and drop every entry's message record, with msi_lock held. */
+static void msix_disable_locked(const pci_device_t *dev);
+
 /**
  * The order is the one the PCI specification requires and no other: the
  * enable bit is cleared first, in case firmware left it set, and the count
@@ -1016,8 +1019,7 @@ static void msi_disable_locked(const pci_device_t *dev)
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
     uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
-    uint8_t msix = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
-    struct msi_record *r, *rx;
+    struct msi_record *r;
     uint16_t control;
     uint32_t address, data, flags;
     unsigned int last;
@@ -1057,19 +1059,7 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     }
     control = (uint16_t)(control & ~(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_ENABLE));
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2), control);
-    if (msix != 0) {
-        uint16_t mxc = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2));
-
-        rx = msi_record_find(dev, MSI_KIND_MSIX);
-        if (rx != NULL) {
-            msi_record_drop(rx);
-        }
-        if ((mxc & PCI_MSIX_ENABLE) != 0) {
-            /* MSI beside an enabled MSI-X is undefined by the specification. */
-            pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2),
-                               (uint16_t)(mxc & ~PCI_MSIX_ENABLE));
-        }
-    }
+    msix_disable_locked(dev);
     pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 4), address);
     if ((control & PCI_MSI_64BIT) != 0) {
         pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8), 0);
@@ -1281,18 +1271,16 @@ void pci_msix_unmask(const pci_device_t *dev)
 
 /** The function mask goes on before the entries are rewritten, so that the
  * device sends nothing between its last remapped message and the end. */
-void pci_msix_disable(const pci_device_t *dev)
+static void msix_disable_locked(const pci_device_t *dev)
 {
     uint8_t cap = pci_msix_capability(dev);
     struct msi_record *r;
     uint16_t control;
-    uint32_t flags;
     int i;
 
     if (cap == 0) {
         return;
     }
-    flags = spin_lock_irqsave(&msi_lock);
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)(control | PCI_MSIX_MASK_ALL));
@@ -1305,6 +1293,14 @@ void pci_msix_disable(const pci_device_t *dev)
     }
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)((control | PCI_MSIX_MASK_ALL) & ~PCI_MSIX_ENABLE));
+}
+
+/** Mask a function's MSI-X messages and release every recorded entry. */
+void pci_msix_disable(const pci_device_t *dev)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+
+    msix_disable_locked(dev);
     spin_unlock_irqrestore(&msi_lock, flags);
 }
 
