@@ -38,11 +38,13 @@
 # into its partition. The machine is saved to its recovery system for the whole
 # of the write and the new root is armed for one trial boot, so an update cut
 # off by a power cut, or one that does not come up, costs a reboot into recovery
-# and not a visit to the machine. Kernel slots smaller than the size of this
-# version's slots, which `bootctl status` prints, are grown to it. An MBR
-# disk is converted on the way to boot by
-# UEFI as well, when GRUB's EFI image is beside IMAGE: it keeps its MBR, and its
-# boot partition becomes the EFI system partition.
+# and not a visit to the machine: the update requires a recovery system on
+# the disk that would start, and a copy of the old root on a volume that
+# outlives the cut, before it destroys anything. Kernel slots smaller than
+# the size of this version's slots, which `bootctl status` prints, are grown
+# to it. An MBR disk is converted on the way to boot by UEFI as well, when
+# GRUB's EFI image is beside IMAGE: it keeps its MBR, and its boot partition
+# becomes the EFI system partition.
 #
 # `--console term` gives the installed root's candidate, fallback and text
 # entries one rach2.console=term token, and `--i915` one rach2.i915 token,
@@ -57,8 +59,9 @@
 # the disk the data partition, entry 6, an ext2 volume labelled `Rach2 data`
 # for what the machine keeps across updates of its root: games, the disks of
 # virtual machines, caches and the trial roots `bootctl rootimage` boots. An
-# update writes the root's partition and nothing else, so it never touches
-# the data partition.
+# update writes the root's partition, and of the data partition only the
+# directory rach2-update-keep, where it keeps a copy of the old root until
+# it finishes.
 #
 # `--data DISK SIZE` makes room for the data partition on a disk installed
 # without one, from the recovery system: it checks the root, shrinks its file
@@ -88,6 +91,10 @@ MNT=/mnt/install-source
 TARGET_MNT=/mnt/install-root
 RECOVERY_MNT=/mnt/install-recovery
 BOOT_MNT=/mnt/install-boot
+DATA_MNT=/mnt/install-data
+# The directory at the top of the volume that holds an update's copy of the
+# root's homes and configuration, `keep.tar`, while the root is written.
+KEEP_STORE=rach2-update-keep
 # The machine's own files an update keeps and the archive holds: the accounts,
 # the SSH policy, the console's keymap, the networks wifi(1) has saved, the
 # machine's identifiers and the levels init keeps across a reboot.
@@ -131,10 +138,16 @@ mounted_source=""
 mounted_root=""
 mounted_recovery=""
 mounted_boot=""
+mounted_data=""
 console_new=""
 key_dir=""
 echo_off=""
 screen_level=""
+# The archive recover_archive found, and what write_archive records beside
+# the configuration; see there.
+archive=""
+archive_root=""
+archive_keep=""
 # The screen is shared with the kernel's own record, and a routine note from a
 # disk or a file system arriving in the middle of a question reads, to the
 # person answering it, as something having gone wrong. The records are still
@@ -152,13 +165,14 @@ quiet_screen() {
 }
 # Puts back what the run changed and has not yet put back: the screen's
 # level, the terminal's echo, which a run that ends inside a password question
-# leaves off, the four mounts and the directory of the recovery key's copy.
+# leaves off, the five mounts and the directory of the recovery key's copy.
 # The traps call it; it returns 0.
 cleanup() {
     [ -n "$screen_level" ] && echo "$screen_level" > /dev/screenlog 2>/dev/null
     [ -n "$echo_off" ] && stty echo 2>/dev/null
     [ -n "$mounted_root" ] && umount "$mounted_root" 2>/dev/null
     [ -n "$mounted_recovery" ] && umount "$mounted_recovery" 2>/dev/null
+    [ -n "$mounted_data" ] && umount "$mounted_data" 2>/dev/null
     [ -n "$console_new" ] && rm -f "$console_new"
     [ -n "$mounted_boot" ] && umount "$mounted_boot" 2>/dev/null
     [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
@@ -459,8 +473,12 @@ public_keys_readable() { # public_keys_readable DIR
 # not have is left out, except the account files, without which the run ends.
 # With MARK, the slot has a file update-in-progress that holds it, the name
 # and length of the image being written, so a retry after a stop takes the
-# archive and not the root, which is the image's by then. The slot written is
-# left in next_archive; any failure ends the run.
+# archive and not the root, which is the image's by then. The file `root`
+# holds archive_root, `ENTRY START`, the root partition's entry and first
+# sector, and `update-keep` holds archive_keep, `ENTRY SHA256`, the partition
+# whose rach2-update-keep/keep.tar is an update's copy of the root and that
+# file's hash; each is left out when its variable is empty. The slot written
+# is left in next_archive; any failure ends the run.
 write_archive() { # write_archive ROOTDIR [MARK]
     recover_archive
     for f in $ARCHIVE_NEEDS; do
@@ -490,6 +508,14 @@ write_archive() { # write_archive ROOTDIR [MARK]
             die "OpenSSH's host keys could not be archived"
     fi
     archive_account_keys "$1" || die "the account keys could not be archived"
+    if [ -n "$archive_root" ]; then
+        echo "$archive_root" > "$next_archive/root" ||
+            die "the root partition's place could not be archived"
+    fi
+    if [ -n "$archive_keep" ]; then
+        echo "$archive_keep" > "$next_archive/update-keep" ||
+            die "the place of the update's copy could not be archived"
+    fi
     if [ -n "${2:-}" ]; then
         echo "$2" > "$next_archive/update-in-progress" ||
             die "the update's mark could not be written to the archive"
@@ -1692,11 +1718,213 @@ fi
 # accounts log in with are copied off the root first. The image goes into the
 # root's own partition, and no partition moves. Besides the root, the update
 # writes the boot partition's environment block, the root's entry, which
-# growroot grows up to the data partition when the disk has one, and the
-# archive on the recovery partition; the data partition is not written, and
-# its entry is kept as every other is. The conversion
+# growroot grows up to the data partition when the disk has one, the
+# archive on the recovery partition, and a copy of the old root, homes and
+# all, in rach2-update-keep on the data partition or else the recovery
+# partition, which outlives a power cut in the write and is removed when the
+# update finishes; the data partition's entry is kept as every other is. The conversion
 # of an MBR disk for UEFI also writes the boot partition's type, its loader
 # and, when it has too few clusters, its file system.
+
+# Prints `ENTRY START`, entry ENTRY of disk N and its first sector, which
+# names the partition however its length changes; status 1 when the table
+# has no such entry.
+root_place() { # root_place N ENTRY
+    awk -v d="$1" -v e="$2" '
+        $1 == "part" && $2 == d && $3 == e { print $3, $4; found = 1; exit }
+        END { exit !found }' /proc/disk
+}
+
+# Sets root_entry to the root partition the archive at `archive` names in its
+# file `root`, when the table's entry of that number still begins at the
+# sector recorded; dies when it does not, since the partition at that number
+# is then another. Status 1 when the archive names no root, as one written
+# before the archive recorded it does not.
+archived_root() { # archived_root N
+    [ -f "$archive/root" ] || return 1
+    read -r named_entry named_start < "$archive/root" || named_entry=""
+    case "$named_entry" in [1-9]) ;; *) die "$archive/root names no partition of the disk" ;; esac
+    [ "$(root_place "$1" "$named_entry" 2>/dev/null)" = "$named_entry $named_start" ] ||
+        die "the archive says the root is entry $named_entry, which begins at sector \
+$named_start, and the table has no such entry; nothing was written"
+    root_entry=$named_entry
+}
+
+# Sets root_entry, for an archive that names no root, from the table: entry 3
+# of a GUID table, where this system puts the root, or the one MBR entry of
+# type 83, Linux's. An MBR disk with more than one is refused, since the
+# update would replace whichever it chose.
+table_root() { # table_root N
+    if [ "$(disk_field "$1" 6)" = gpt ]; then
+        root_entry=$(root_place "$1" 3 | cut -d' ' -f1)
+    else
+        root_entry=$(awk -v d="$1" '$1 == "part" && $2 == d && $6 == "mbr:83" { printf "%s%s", s, $3; s = " " }' /proc/disk)
+        case "$root_entry" in
+            *" "*) die "/dev/disk$1 has more than one Linux partition, entries $root_entry, and \
+its archive does not say which is the root; nothing was written" ;;
+        esac
+    fi
+    [ -n "$root_entry" ] || die "/dev/disk$1 has no ext2 partition in its table"
+}
+
+# Dies, saying what is missing, unless the recovery system on disk N would
+# start a machine whose root is gone: the recovery partition is mounted at
+# RECOVERY_MNT, its kernel carries a Multiboot2 header and reads whole, its
+# RAM image is not empty and reads whole, its own menu, which the core image
+# loads when the boot partition does not read, loads both, and the boot
+# partition's entry `recovery` loads both from the partition with this
+# partition's serial. The boot partition is mounted read-only to look.
+require_recovery() { # require_recovery N
+    [ -n "$mounted_recovery" ] ||
+        die "/dev/disk$1 has no recovery partition, so a stopped write would leave it \
+nothing to start; $unwritten"
+    rk="$RECOVERY_MNT/boot/recovery"
+    ri="$RECOVERY_MNT/boot/recovery.krffs"
+    rc="$RECOVERY_MNT/boot/grub/recovery.cfg"
+    # 0xe85250d6 is Multiboot2's header magic, on a 4-byte boundary.
+    dd if="$rk" bs=32768 count=1 2>/dev/null | od -An -tx4 -v | grep -qw e85250d6 ||
+        die "the recovery kernel on /dev/disk$1p$recovery_entry has no Multiboot2 header; $unwritten"
+    { [ -s "$ri" ] && cat "$rk" "$ri" > /dev/null; } ||
+        die "the recovery kernel or its RAM image on /dev/disk$1p$recovery_entry does not read; $unwritten"
+    { grep -q '/boot/recovery ' "$rc" && grep -q '/boot/recovery\.krffs' "$rc"; } 2>/dev/null ||
+        die "the recovery partition's own menu, boot/grub/recovery.cfg, does not load its kernel and \
+RAM image; $unwritten"
+    # FAT32 keeps the volume's serial at byte 67 of its boot sector, low byte
+    # first; GRUB names the volume by it as XXXX-XXXX.
+    rs=$(dd if="/dev/disk$1p$recovery_entry" bs=1 skip=67 count=4 2>/dev/null | od -An -tx1 |
+        awk '{ printf "%s%s-%s%s", $4, $3, $2, $1 }' | tr 'a-f' 'A-F')
+    mkdir -p "$BOOT_MNT" 2>/dev/null
+    mount -t vfat -o ro "/dev/disk$1p1" "$BOOT_MNT" ||
+        die "/dev/disk$1p1 would not mount to look at its recovery entry; $unwritten"
+    mounted_boot=$BOOT_MNT
+    rm_entry=$(awk '/^menuentry .*--id recovery /, /^}/' "$BOOT_MNT/boot/grub/grub.cfg" 2>/dev/null)
+    umount "$BOOT_MNT" || die "/dev/disk$1p1 would not unmount"
+    mounted_boot=""
+    case "$rm_entry" in *"--set=root $rs"*) ;; *)
+        die "the boot menu's entry recovery does not look for the recovery partition, serial $rs; \
+$unwritten" ;;
+    esac
+    case "$rm_entry" in *"/boot/recovery "*"/boot/recovery.krffs"*) ;; *)
+        die "the boot menu's entry recovery does not load the recovery kernel and its RAM image; \
+$unwritten" ;;
+    esac
+}
+
+# Mounts the volume that keeps an update's copy of the root, entry E of disk
+# N, and sets keep_dir to its rach2-update-keep: the recovery partition,
+# mounted already, or the data partition, mounted at DATA_MNT. A data
+# partition is entry 6 of a GUID table with an ext2 volume labelled `Rach2
+# data`, as `--data` and the install make it, so that no other system's
+# volume is written; status 1 for any other entry.
+mount_store() { # mount_store N E
+    if [ "$2" = "$recovery_entry" ]; then
+        keep_dir="$RECOVERY_MNT/$KEEP_STORE"
+        return 0
+    fi
+    [ "$2" = 6 ] && [ "$(disk_field "$1" 6)" = gpt ] || return 1
+    # ext2 keeps its volume's label, 16 bytes, at byte 1144 of the partition.
+    [ "$(dd if="/dev/disk$1p6" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')" = "Rach2 data" ] ||
+        return 1
+    mkdir -p "$DATA_MNT" 2>/dev/null
+    mount -t ext2 "/dev/disk$1p$2" "$DATA_MNT" 2>/dev/null || return 1
+    mounted_data=$DATA_MNT
+    keep_dir="$DATA_MNT/$KEEP_STORE"
+}
+
+# Unmounts the data partition when mount_store mounted it.
+unmount_store() {
+    [ -n "$mounted_data" ] || return 0
+    umount "$DATA_MNT" || die "the data partition would not unmount"
+    mounted_data=""
+}
+
+# Status 0 when keep_dir holds keep.tar with keep.sha256 beside it, the hash
+# of the whole file, written once the file was synced and read back, and the
+# file hashes to SUM now.
+keep_whole() { # keep_whole SUM
+    [ -f "$keep_dir/keep.sha256" ] && [ "$(cat "$keep_dir/keep.sha256")" = "$1" ] &&
+        [ "$(sha256sum < "$keep_dir/keep.tar" | cut -d' ' -f1)" = "$1" ]
+}
+
+# Writes the copy at KEEP, the root's configuration, keys and homes as the
+# update keeps them, to a volume that outlives a power cut, and sets
+# archive_keep to where it went: the data partition, entry 6, when it mounts,
+# or else the recovery partition when the copy fits there. It is one tar file,
+# which keeps owners, modes and links on FAT as well; it is synced, the
+# volume is unmounted and mounted again so that the file is read from the
+# disk, and only when the hash read then is the hash written does keep.sha256
+# go beside it. Dies when neither volume has room.
+save_keep() { # save_keep N KEEP
+    need=$(du -sk "$2" | cut -f1)
+    need=$((need + need / 50 + 1024))
+    store=""
+    for candidate in 6 "$recovery_entry"; do
+        [ -e "/dev/disk$1p$candidate" ] || continue
+        mount_store "$1" "$candidate" || continue
+        rm -rf "$keep_dir" || die "an old copy in $keep_dir could not be removed"
+        sync
+        free=$(df -Pk "${keep_dir%/*}" | awk 'NR == 2 { print $4 }')
+        # FAT32 holds no file of 4 GiB or more.
+        if [ -n "$free" ] && [ "$free" -gt "$need" ] &&
+            { [ "$candidate" != "$recovery_entry" ] || [ "$need" -lt 4194000 ]; }; then
+            store=$candidate
+            break
+        fi
+        unmount_store
+    done
+    [ -n "$store" ] || die "neither the data partition nor the recovery partition of /dev/disk$1 \
+has the $need KiB a copy of the root's homes takes; make room, or give the disk a data \
+partition with $ME --data, and run this again; $unwritten"
+    say "keeping a copy of the root's homes and configuration in /dev/disk$1p$store, $KEEP_STORE"
+    { mkdir -p "$keep_dir" && chmod 700 "$keep_dir"; } ||
+        die "$keep_dir could not be made"
+    (cd "$2" && tar -cf - --exclude=./root-written .) > "$keep_dir/keep.tar" ||
+        die "the copy of the root could not be written to /dev/disk$1p$store"
+    sync
+    written=$(sha256sum < "$keep_dir/keep.tar" | cut -d' ' -f1)
+    if [ "$store" = "$recovery_entry" ]; then
+        umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+        mount -t vfat -o umask=077 "/dev/disk$1p$store" "$RECOVERY_MNT" ||
+            die "the recovery partition would not mount again"
+    else
+        unmount_store
+        mount_store "$1" "$store" || die "the data partition would not mount again"
+    fi
+    [ "$(sha256sum < "$keep_dir/keep.tar" | cut -d' ' -f1)" = "$written" ] ||
+        die "the copy of the root on /dev/disk$1p$store does not read back as it was written; $unwritten"
+    echo "$written" > "$keep_dir/keep.sha256" || die "the copy's hash could not be written"
+    sync
+    unmount_store
+    archive_keep="$store $written"
+}
+
+# Status 0 when the archive at `archive` names a copy of the root in its
+# update-keep and that copy is whole; archive_keep is then set, and the volume
+# that holds it mounted, with keep_dir naming the copy's directory.
+found_keep() { # found_keep N
+    [ -f "$archive/update-keep" ] || return 1
+    read -r kept_store kept_sum < "$archive/update-keep" || return 1
+    case "$kept_store" in [1-9]) ;; *) return 1 ;; esac
+    mount_store "$1" "$kept_store" || return 1
+    if ! keep_whole "$kept_sum"; then
+        unmount_store
+        return 1
+    fi
+    archive_keep="$kept_store $kept_sum"
+}
+
+# Takes the copy the archive's update-keep names back into KEEP. It dies when
+# that copy does not mount or is not whole, since the root it was taken from
+# is overwritten and the copy is all that is left of its homes.
+load_keep() { # load_keep N KEEP
+    found_keep "$1" ||
+        die "the copy of the old root that $archive/update-keep names does not mount or is not \
+whole, and the root it was taken from is overwritten; nothing more was written"
+    { rm -rf "$2" && mkdir -p "$2" && chmod 700 "$2" &&
+        tar -xf "$keep_dir/keep.tar" --numeric-owner -C "$2"; } ||
+        die "the copy of the old root on /dev/disk$1p${archive_keep%% *} could not be taken back"
+    unmount_store
+}
 
 if [ -n "$update_image" ]; then
     [ -f "$update_image" ] || die "$update_image is not a file"
@@ -1783,6 +2011,35 @@ $update_disk was not installed from here"
     recovery_entry=$recovery_found
     [ -n "$recovery_entry" ] && mounted_recovery=$RECOVERY_MNT
     [ -z "$recovery_entry" ] || recover_archive
+    # A write that began in an earlier boot and stopped leaves the archive
+    # marked, and naming the copy of the old root it kept on a volume that
+    # outlived the stop, homes and all. That copy is taken back as this boot's
+    # own, and the update goes on as one of this boot would.
+    if [ -z "$kept_entry" ] && [ -n "$archive" ] && [ -f "$archive/update-in-progress" ] &&
+        [ -f "$archive/update-keep" ]; then
+        if [ -n "$mounted_root" ]; then
+            umount "$TARGET_MNT" || die "${update_disk}p${root_entry} would not unmount"
+            mounted_root=""
+        fi
+        archived_root "$target" || table_root "$target"
+        load_keep "$target" "$keep"
+        echo "$update_disk $root_entry" > "$keep/root-written" ||
+            die "the copy of the configuration could not be marked"
+        kept_entry=$root_entry
+        say "an update stopped after it began to write ${update_disk}p${root_entry}; taking the copy of the \
+old root kept on ${update_disk}p${archive_keep%% *}"
+    fi
+    # The archive names the partition its root was taken from. Another
+    # partition that reads as a root of this system may be a copy, and the
+    # update writes neither while the two disagree.
+    if [ -z "$kept_entry" ] && [ -n "$archive" ] && [ -n "$root_entry" ]; then
+        found_entry=$root_entry
+        if archived_root "$target" && [ "$root_entry" != "$found_entry" ]; then
+            die "the archive names ${update_disk}p${root_entry} as the root and ${update_disk}p${found_entry} \
+reads as one; nothing was written"
+        fi
+        root_entry=$found_entry
+    fi
     from_archive=""
     if [ -n "$kept_entry" ]; then
         :
@@ -1795,21 +2052,13 @@ $update_disk was not installed from here"
         from_archive="the root does not read"
     fi
     if [ -n "$from_archive" ]; then
-        # The archive is the configuration; when no mount found the root,
-        # the table says which entry is the root's.
+        # The archive is the configuration, and names the root's partition;
+        # an archive written before it named one leaves it to the root that
+        # reads, or to the table.
         { [ -n "$recovery_entry" ] && [ -n "$archive" ] && archive_complete; } ||
             die "$update_disk carries no root of this system whose accounts can be taken and no \
 whole configuration archived on its recovery partition; its accounts are not there to be kept"
-        if [ -z "$root_entry" ]; then
-            # A GUID table's entries have no type in /proc/disk, and a disk
-            # this system installs keeps its root in entry 3.
-            if [ "$(disk_field "$target" 6)" = gpt ]; then
-                root_entry=$(grep "^part $target 3 " /proc/disk | cut -d' ' -f3)
-            else
-                root_entry=$(grep "^part $target " /proc/disk | awk '$6 == "mbr:83" { print $3 }' | tail -1)
-            fi
-            [ -n "$root_entry" ] || die "$update_disk has no ext2 partition in its table"
-        fi
+        archived_root "$target" || [ -n "$root_entry" ] || table_root "$target"
         say "$from_archive; taking the configuration saved on the recovery partition"
         for f in $CONFIG_FILES; do
             if [ -e "$archive/$f" ]; then
@@ -1898,27 +2147,6 @@ whole configuration archived on its recovery partition; its accounts are not the
         mounted_root=""
     fi
 
-    # The archive is written now, from what is kept, and marked as an
-    # update in progress: a stop between the root's write and the accounts'
-    # return then leaves the machine's own configuration on the recovery
-    # partition for the retry, and not the image's on the root. Nothing of
-    # the disk may be mounted while its root is written, since the raw writer
-    # refuses a disk with a mount on it; the archive is mounted again for its
-    # refresh once the new root has been written and unmounted. The marked
-    # archive goes into slot B, written a second time when the first went
-    # into A, so that the unmarked refresh goes into A and a finished update
-    # leaves A current.
-    if [ -n "$mounted_recovery" ]; then
-        update_mark="$(basename "$update_image") $(stat -c %s "$update_image")"
-        write_archive "$keep" "$update_mark"
-        if [ "$next_archive" = "$RECOVERY_MNT/rach2-config-a" ]; then
-            write_archive "$keep" "$update_mark"
-        fi
-        umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
-        mounted_recovery=""
-        say "the configuration is archived on ${update_disk}p${recovery_entry} before the root is written"
-    fi
-
     # Where the root partition is, from the table the machine has now: an
     # update writes that range and nothing else.
     start=$(grep "^part $target $root_entry " /proc/disk | head -1 | cut -d' ' -f4)
@@ -1948,6 +2176,58 @@ whole configuration archived on its recovery partition; its accounts are not the
     [ "$magic" = "53ef" ] ||
         die "$update_image does not begin with an ext2 file system"
 
+    update_mark="$(basename "$update_image") $bytes"
+    begun=""
+    [ -z "$kept_entry" ] && [ -z "$from_archive" ] || begun=1
+    unwritten="nothing was written"
+    [ -z "$begun" ] || unwritten="nothing more was written"
+
+    # Nothing is destroyed until the recovery system would start the machine
+    # whatever this leaves, and holds what the retry that follows needs.
+    require_recovery "$target"
+
+    # The copy at keep is the only one of the old root's homes once the write
+    # begins, and RAM does not outlive a power cut, so it goes whole to a
+    # volume that does, and is proved there, before anything is destroyed. A
+    # write that began already and has a whole copy keeps that copy, which is
+    # this keep's own: making another would remove it first.
+    if [ -n "$kept_entry" ] && [ -z "$archive_keep" ] && [ -n "$archive" ] &&
+        [ -f "$archive/update-in-progress" ] && found_keep "$target"; then
+        unmount_store
+    fi
+    [ -n "$archive_keep" ] || save_keep "$target" "$keep"
+
+    # The archive is written now, from what is kept, with the root's place and
+    # the copy's. It is marked as an update in progress only once the write
+    # begins, below, so that a run stopped before then leaves an archive that
+    # sends the retry to the root, which is still whole. A write that began
+    # already, and a root that does not read or holds the image's accounts,
+    # whose configuration came from the archive, keep the mark. Nothing of
+    # the disk may be mounted while its root is written, since the raw writer
+    # refuses a disk with a mount on it. The archive goes into slot B,
+    # written a second time when the first went into A, so that the refresh
+    # after the write goes into A and a finished update leaves A current.
+    archive_root=$(root_place "$target" "$root_entry") ||
+        die "the root partition's place could not be read"
+    if [ -n "$begun" ]; then
+        write_archive "$keep" "$update_mark"
+        if [ "$next_archive" = "$RECOVERY_MNT/rach2-config-a" ]; then
+            write_archive "$keep" "$update_mark"
+        fi
+    else
+        write_archive "$keep"
+        if [ "$next_archive" = "$RECOVERY_MNT/rach2-config-a" ]; then
+            write_archive "$keep"
+        fi
+    fi
+    recover_archive
+    { [ "$archive" = "$next_archive" ] && archive_complete &&
+        [ "$(cat "$archive/update-keep" 2>/dev/null)" = "$archive_keep" ]; } ||
+        die "the archive just written on ${update_disk}p${recovery_entry} does not read back whole; $unwritten"
+    umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+    mounted_recovery=""
+    say "the configuration is archived on ${update_disk}p${recovery_entry} before the root is written"
+
     # The machine is put where it can come back from before its root is
     # replaced, and that is the recovery system, not the fallback entry: both
     # kernel entries boot this root, so a write cut off by a power cut would
@@ -1975,6 +2255,21 @@ whole configuration archived on its recovery partition; its accounts are not the
     grow_slots "${update_disk}p1" ||
         say "bootctl kernel refuses the smaller slots of ${update_disk}p1 until they grow; free room there and run $ME --slots $update_disk"
 
+    # The write begins: the archive is marked, which sends a retry after a
+    # stop to the archive and the copy it names and not to the root, and keep
+    # is marked for a retry in this boot.
+    if [ -z "$begun" ]; then
+        find_recovery "$target"
+        [ -n "$recovery_found" ] && mounted_recovery=$RECOVERY_MNT
+        [ "$recovery_found" = "$recovery_entry" ] ||
+            die "the recovery partition ${update_disk}p${recovery_entry} was not found again; nothing was written"
+        recover_archive
+        { [ "$(cat "$archive/update-keep" 2>/dev/null)" = "$archive_keep" ] &&
+            echo "$update_mark" > "$archive/update-in-progress" && sync; } ||
+            die "the archive could not be marked; the root was not written"
+        umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+        mounted_recovery=""
+    fi
     echo "$update_disk $root_entry" > "$keep/root-written" ||
         die "the copy of the configuration could not be marked; the root was not written"
     say "writing $bytes bytes into ${update_disk}p${root_entry}, at $at"
@@ -2084,9 +2379,20 @@ whole configuration archived on its recovery partition; its accounts are not the
         [ "$again" = "$recovery_entry" ] ||
             die "the recovery partition ${update_disk}p${recovery_entry} was not found again; the \
 root is written and its archive still says an update is in progress; run the update once more"
+        archive_keep=""
         write_archive "$keep"
+        # The copy of the old root is not needed once the archive no longer
+        # names it.
+        rm -rf "${RECOVERY_MNT:?}/$KEEP_STORE" ||
+            die "the copy of the old root on the recovery partition could not be removed"
+        sync
         umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
         mounted_recovery=""
+        if mount_store "$target" 6; then
+            rm -rf "$keep_dir" || die "the copy of the old root on the data partition could not be removed"
+            sync
+            unmount_store
+        fi
         say "the configuration is archived on ${update_disk}p${recovery_entry}"
     fi
     rm -rf "$keep"
@@ -2680,6 +2986,8 @@ find_recovery "$target"
 recovery_entry=$recovery_found
 if [ -n "$recovery_entry" ]; then
     mounted_recovery=$RECOVERY_MNT
+    archive_root=$(root_place "$target" "$root_entry") ||
+        die "the root partition's place could not be read"
     write_archive "$root_dir"
     if [ -n "$recovery_keys" ]; then
         cp "$key_copy" "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||

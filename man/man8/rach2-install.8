@@ -312,8 +312,10 @@ With
 writes a root file system image into an installed machine's root partition.
 The partition table is changed only to grow that partition into the
 free space after it.
-The data partition is neither written nor moved, and the files on it are
-kept.
+The data partition is not moved, and the files on it are kept; the
+update writes only its directory
+.Pa rach2-update-keep ,
+as below.
 The disk must have a first partition that holds this system's boot files
 and an installed root containing
 .Pa /etc/rach2 .
@@ -380,12 +382,31 @@ which is kept as the link; it keeps them in
 .Pa /dev/shm ,
 the recovery system's tmpfs of half the machine's memory; an update whose
 homes do not fit there stops before the root is written.
-The copy is removed when the update finishes.
-An update that stops after it began to write the root leaves the copy,
-and an update of the same disk run again in the same boot takes it in place
-of the root and the archive, so that the homes are kept; an update of
-another disk is refused while the copy is there.
-A reboot loses the copy.
+Since a power cut loses that copy, the whole of it also goes, as one tar
+file
+.Pa rach2-update-keep/keep.tar ,
+to a volume that outlives one: the data partition, entry 6 of a GUID table
+with an ext2 volume labelled
+.Ql Rach2 data ,
+or, when it is not there or has no room, the recovery partition, when the
+file fits there and is under 4 GiB.
+The file is synced, its volume unmounted and mounted again, and it is
+hashed again from the disk; only when that SHA-256 is the one written does
+.Pa keep.sha256
+go beside it, and the archive names the partition and the hash in its file
+.Pa update-keep .
+An update with no room for the file on either volume stops before anything
+is destroyed.
+The copies are removed when the update finishes.
+An update that stops after it began to write the root leaves them, and an
+update of the same disk run again takes the copy in
+.Pa /dev/shm
+in the same boot, or after a reboot the file the marked archive names, once
+its hash is proved, in place of the root and the archive, so that the homes
+are kept; one whose file does not prove whole stops.
+An update of another disk is refused while the copy in
+.Pa /dev/shm
+is there.
 These are restored after the write, in place of the image's, preserving
 passwords changed since installation, the console's keymap and the logins
 kept in the homes, and the image's system accounts the restored files lack are
@@ -393,13 +414,33 @@ appended to them, as for an install.
 The absence of account keys is preserved too.
 If the root cannot be read, the account files, policy and keys are taken
 from the recovery partition's archive and the root partition is replaced:
-entry 3 of a GUID table, or the last ext2 entry of an MBR.
+the partition the archive names in its file
+.Pa root ,
+.Ql ENTRY START ,
+the entry and its first sector, which the update refuses when the table's
+entry of that number begins elsewhere.
+For an archive written before it named the root, the partition is entry 3
+of a GUID table, or the one entry of type 0x83 of an MBR; an MBR with more
+than one is refused.
+An update also stops when the archive names one partition and another
+reads as the root.
 When the root and archive can both be read but differ, each differing
 configuration file is reported and the root's copy is kept.
 .Pp
-Before the root is written, and when a recovery partition is there, the
-archive is refreshed from the retained configuration and marked as an
-update in progress.
+Before anything is destroyed the archive is refreshed from the retained
+configuration, with
+.Pa root
+and
+.Pa update-keep ,
+and read back whole.
+It is marked as an update in progress, by a file
+.Pa update-in-progress
+in the current slot, only once the boot partition is ready and just before
+the raw write of the root begins, so that an update stopped by a failed
+check or a power cut before then leaves an archive that sends the next
+update to the root, which is still whole.
+An update whose root already holds the image's accounts, or does not read,
+or whose write began, writes the archive marked.
 The archive has two slots,
 .Pa rach2-config-a
 and
@@ -422,8 +463,8 @@ It removes the destination's generation file, syncs, removes the destination,
 writes its contents, syncs, writes the next generation, and syncs again.
 Only then does it remove all three legacy names, which it never writes.
 An install leaves A at generation 1.
-Before writing an updated root, the installer writes B with the update mark,
-first writing A with the mark if needed.
+Before writing an updated root, the installer writes B, first writing A
+if needed.
 After restoring the accounts it writes A without the mark, so A is the
 resting slot after a complete run.
 A counter at 2147483647 stops further archive writes.
@@ -431,8 +472,9 @@ An update interrupted after writing the image and before restoring the
 accounts leaves the image's accounts on the root.
 The next update, when the copy in
 .Pa /dev/shm
-is gone, uses the marked archive, preserving the server's identity
-and the accounts' keys.
+is gone, uses the file the marked archive names; when an archive marked by
+an earlier version names none, it uses the marked archive, preserving the
+server's identity and the accounts' keys and not the other home files.
 Restored key directories receive mode 700 and key files mode 600, and a
 symbolic link keeps its own mode.
 The server's host keys receive owner 0:0.
@@ -446,12 +488,25 @@ The recovery partition is mounted so that only root can read the archive.
 The image's home directories and their keys are removed whether or not
 the old homes were retained.
 .Pp
-The image is checked before the old root is overwritten.
+The image is checked before anything is written.
 Its length must be a whole number of sectors and fit the partition.
 It must begin with an ext2 file system.
 If
 .Pa IMAGE.sha256
 exists, the image's SHA-256 must match it.
+.Pp
+An update requires the disk's recovery partition, and proves before
+anything is destroyed that the recovery system there would start: its
+kernel
+.Pa boot/recovery
+carries a Multiboot2 header and reads whole, its RAM image
+.Pa boot/recovery.krffs
+is not empty and reads whole, its own menu
+.Pa boot/grub/recovery.cfg
+loads both, and the boot partition's entry
+.Ql recovery
+loads both from the volume with the recovery partition's FAT serial.
+A disk that fails any of these is not updated.
 .Pp
 Before writing, the installer sets the saved boot entry to
 .Ql recovery
