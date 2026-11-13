@@ -7754,6 +7754,429 @@ static int retry_row(int blocks, int attempts)
     return n + 1;
 }
 
+/* ---- the mark of a node whose change is not stored ---- */
+
+/** Whether the read the device is asked for covers volume block `b`. */
+static int read_covers(int64_t b)
+{
+    return b >= 0 && (uint64_t)b >= request_block && (uint64_t)b < request_block + request_blocks;
+}
+
+/** Fail every read of /dst's table block `table` from now on, as
+ * `retry_fail` does, or with `table` -1 no more. */
+static void mark_fail_table(int64_t table)
+{
+    fail_read_block = table;
+    read_pause = table >= 0 ? fail_block_reads : 0;
+    read_fails = 0;
+}
+
+/** Whether `img`'s /dst holds what the failed rename of `mark_store_row` left
+ * it in memory: at one full block the grown size, at twelve the single
+ * indirect block. */
+static int mark_grown(const char *img, int blocks)
+{
+    return blocks == 1 ? debugfs_says(img, "stat /dst", "Size: 8192")
+                       : debugfs_says(img, "stat /dst", "(IND):");
+}
+
+/* What a store that a last put could not make leaves e2fsck to repair: the
+   block the failed growth took, which no inode on the disk names. */
+static const char *const mark_lost_findings[] = {
+    "Block bitmap differences",
+    "Free blocks count wrong",
+};
+
+/**
+ * A directory whose grown inode could not be stored keeps its mark until a
+ * store succeeds, with no retry of the operation: at its last put
+ * (`node_free`), or, while held, at a sync, before the valid bit. /dst has
+ * its first `blocks` blocks full, and one rename into it fails while every
+ * read of its table block fails (`retry_fail`): at one full block at the
+ * store of the grown size, the new direct block's pointer in memory, and at
+ * twelve at the store of the new single indirect pointer. With `how` 0 the
+ * reads are whole again and /dst is put; with 1 it is put while they still
+ * fail, which must report the store not made; with 2 it stays held, a sync
+ * while the reads fail must fail, and one after them must succeed. After the
+ * unmount, for 0 and 2, the valid bit must be on the disk, e2fsck must ask
+ * nothing, and /dst must hold what memory had; for 1, only the block that no
+ * inode on the disk names is left to repair, beside the error bit.
+ */
+static void mark_store_row(int blocks, int how)
+{
+    static const char *const ways[] = {"put", "put while its table block cannot be read",
+                                       "held over a sync"};
+    char what[300];
+    int64_t table = -1;
+    void *dst;
+    int failed, rc, ok;
+
+    if (retry_mount(blocks, &table) != 0) {
+        check(0, "the mark row's volume mounts and takes its files");
+        return;
+    }
+    failed = retry_fail(table, 1, &dst);
+    if (failed < 0) {
+        unmount_image();
+        check(0, "the mark row's directory is held and its cache emptied");
+        return;
+    }
+    snprintf(what, sizeof what,
+             "on a mount that writes back, a rename into a directory of %d full blocks whose "
+             "table block cannot be read fails, and the directory is %s",
+             blocks, ways[how]);
+    check(failed == 1 && fail_read_hits > 0, what);
+    if (how == 2) {
+        mark_fail_table(table);
+        rc = OPS->sync(&mnt);
+        mark_fail_table(-1);
+        check(rc != 0, "and a sync while the held directory cannot be stored fails");
+        check(OPS->sync(&mnt) == 0, "and a sync with the reads whole stores it");
+    } else if (how == 1) {
+        last_warn[0] = 0;
+        mark_fail_table(table);
+    }
+    OPS->put(&mnt, dst);
+    mark_fail_table(-1);
+    if (how == 1) {
+        check(strstr(last_warn, "not stored at its last put") != 0,
+              "and its last put reports the store it could not make");
+        if (!strstr(last_warn, "not stored at its last put")) {
+            printf("  last warning '%s'\n", last_warn);
+        }
+    }
+    rc = unmount_rw();
+    fflush(image);
+    if (how == 1) {
+        ok = rc == 0 && (disk_state(wimg) & 2) != 0 && fsck_judged(wimg) >= 0 &&
+             findings_among(mark_lost_findings,
+                            sizeof(mark_lost_findings) / sizeof(mark_lost_findings[0]));
+        check(ok, "and the unmount leaves the error bit and only the block the growth took to "
+                  "repair");
+    } else {
+        ok = rc == 0 && (disk_state(wimg) & 1) != 0 && fsck_judged(wimg) >= 0 &&
+             findings_among(0, 0) && mark_grown(wimg, blocks);
+        check(ok, "and the unmount writes the valid bit over a volume e2fsck finds whole, the "
+                  "directory as memory had it");
+    }
+    if (!ok) {
+        printf("  rc %d, state %d\n", rc, disk_state(wimg));
+    }
+}
+
+/**
+ * A shrink that fails puts the old size back, so that the same truncate
+ * retried shrinks again: on a mount that writes back, /t of three blocks of
+ * the pattern is cut to 100 bytes while every read of its table block
+ * fails, which must fail at the store of the smaller size; the reads whole,
+ * the cut again must succeed, and a growth back to three blocks must read
+ * the 100 bytes and zeros after them, never the old bytes.
+ */
+static void truncate_retry_row(void)
+{
+    struct vfs_stat st;
+    int64_t table;
+    void *n, *h = 0;
+    int i, rc, first, again, grow, got, zero = 1;
+
+    fill_pattern();
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    n = mount_flags(0) == 0 ? make_file(mnt.root, "t", &rc) : 0;
+    if (!n || write_at(n, pattern, 3 * 4096, 0) != 0 || OPS->open(&mnt, n, 2, &h) != 0 ||
+        OPS->sync(&mnt) != 0) {
+        check(0, "the truncate row's file of three blocks reaches the disk");
+        if (n) {
+            OPS->put(&mnt, n);
+        }
+        unmount_image();
+        return;
+    }
+    fflush(image);
+    table = inode_block_of(wimg, "/t");
+    rc = table > 0 ? bcache_invalidate(&dev) : -1;
+    fail_read_hits = 0;
+    mark_fail_table(table);
+    OPS->lock_node(&mnt, n);
+    first = rc == 0 ? OPS->truncate(&mnt, h, 100) : 0;
+    mark_fail_table(-1);
+    again = OPS->truncate(&mnt, h, 100);
+    grow = OPS->truncate(&mnt, h, 3 * 4096);
+    OPS->unlock_node(&mnt, n);
+    OPS->release(&mnt, h);
+    check(rc == 0 && first != 0 && fail_read_hits > 0,
+          "a truncate whose store of the smaller size cannot read the table block fails");
+    check(again == 0 && grow == 0 && OPS->getattr(&mnt, n, &st) == 0 && st.size == 3 * 4096,
+          "and the truncate retried with the reads whole, and a growth after it, succeed");
+    got = read_at(n, abuf, 3 * 4096, 0);
+    for (i = 100; i < got; i++) {
+        zero &= abuf[i] == 0;
+    }
+    check(got == 3 * 4096 && memcmp(abuf, pattern, 100) == 0 && zero,
+          "and the file reads its first 100 bytes and zeros after them");
+    if (first == 0 || again != 0 || grow != 0 || got != 3 * 4096 || !zero) {
+        printf("  table %ld, first %d, again %d, growth %d, read %d\n", (long)table, first, again,
+               grow, got);
+    }
+    OPS->put(&mnt, n);
+    check(unmount_rw() == 0 && fsck_judged(wimg) >= 0 && findings_among(0, 0) &&
+              debugfs_says(wimg, "stat /t", "Size: 12288"),
+          "and e2fsck finds the volume whole");
+}
+
+/* The read of /dst's second block from which `abandon_turn` fails every
+   read, 0 for none, and the reads of it counted. */
+static int64_t abandon_block = -1;
+static int abandon_from, abandon_reads;
+
+/** The read hook of `abandon_row`: a turn for the reclaim, then the count
+ * of /dst's second block and, from the `abandon_from`th read of it on, every
+ * read failed. */
+static void abandon_turn(void)
+{
+    pass_turn();
+    if (read_covers(abandon_block)) {
+        abandon_reads++;
+    }
+    if (abandon_from > 0 && abandon_reads >= abandon_from) {
+        fail_read_hits++;
+        read_fails = 1;
+    }
+}
+
+/**
+ * Create /dst/new on a fresh volume whose /dst has two full blocks, under
+ * reclaim at every read, with every read failed from the `from`th read of
+ * /dst's second block on (none for 0); the reads of it in `*reads`, and the
+ * create's result returned, or 1 when the volume would not come to it. The
+ * volume is left mounted, with the new node given back.
+ */
+static int abandon_run(int from, int *reads)
+{
+    void *dst, *n;
+    int rc;
+
+    *reads = 0;
+    if (growth_mount(2) != 0) {
+        return 1;
+    }
+    fflush(image);
+    abandon_block = debugfs_number(wimg, "bmap /dst 1", "");
+    dst = walk("/dst", &rc);
+    if (!dst || abandon_block <= 0 || OPS->sync(&mnt) != 0 || bcache_invalidate(&dev) != 0) {
+        if (dst) {
+            OPS->put(&mnt, dst);
+        }
+        unmount_image();
+        return 1;
+    }
+    abandon_reads = 0;
+    abandon_from = from;
+    fail_read_hits = 0;
+    last_warn[0] = 0;
+    reuse_done = 0;
+    read_pause = abandon_turn;
+    start_turns(reuse_reclaim);
+    n = make_file(dst, "new", &rc);
+    read_pause = 0;
+    abandon_from = 0;
+    read_fails = 0;
+    reuse_done = 1;
+    finish_turns();
+    *reads = abandon_reads;
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    OPS->put(&mnt, dst);
+    return rc;
+}
+
+/* What a free of a new inode that failed leaves e2fsck to repair: the inode,
+   whose slot the create wrote, with a link count and no name. */
+static const char *const abandon_findings[] = {
+    "Unattached zero-length inode #",
+    "Unattached inode #",
+    "Inode # ref count is",
+};
+
+/**
+ * A new inode that a create could not name is freed at its last put, whose
+ * failure is reported. /dst/new is created once whole under reclaim at every
+ * read, counting the reads of /dst's second block, and then on a fresh
+ * volume with every read failed from the last of them on, which is the
+ * search for room after the inode is made: the create must fail, the free
+ * of the inode must fail and say so (`node_free`), and the mount must stay
+ * writable; after the unmount the error bit must be on the disk and e2fsck
+ * must find only the inode without a name.
+ */
+static void abandon_row(void)
+{
+    int rc, n, got;
+
+    rc = abandon_run(0, &n);
+    check(rc == 0 && n > 0, "a create in a directory of two full blocks runs whole under "
+                            "reclaim at every read");
+    if (rc != 0 || n == 0) {
+        printf("  rc %d, reads of the directory's second block %d\n", rc, n);
+        unmount_image();
+        return;
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+    rc = abandon_run(n, &got);
+    check(rc < 0 && fail_read_hits > 1 && strstr(last_warn, "not freed at its last put") &&
+              (mnt.flags & VFS_MS_RDONLY) == 0,
+          "a create whose search for room fails after its inode is made fails, and the free "
+          "of the inode, which cannot read, is reported, the mount writable");
+    if (rc >= 0 || fail_read_hits < 2 || !strstr(last_warn, "not freed at its last put")) {
+        printf("  rc %d, failed reads %d, last warning '%s'\n", rc, fail_read_hits, last_warn);
+    }
+    rc = unmount_rw();
+    fflush(image);
+    check(rc == 0 && (disk_state(wimg) & 2) != 0 && fsck_judged(wimg) >= 0 &&
+              findings_among(abandon_findings,
+                             sizeof(abandon_findings) / sizeof(abandon_findings[0])),
+          "and the unmount leaves the error bit and only the inode without a name to repair");
+}
+
+/* The single indirect block of /dst, the reads of it counted, and the read
+   from which `map_turn` fails each read of it, 0 for none. */
+static int64_t map_ind = -1;
+static int map_reads, map_fail_from;
+
+/** The read hook of `map_row`: a turn for the reclaim, then the count of
+ * /dst's indirect block and, from the `map_fail_from`th read of it on, its
+ * read failed. */
+static void map_turn(void)
+{
+    pass_turn();
+    if (read_covers(map_ind)) {
+        map_reads++;
+        if (map_fail_from > 0 && map_reads >= map_fail_from) {
+            fail_read_hits++;
+            read_fails = 1;
+        }
+    }
+}
+
+/**
+ * Link /hub as /dst/extra on a fresh volume whose /dst has thirteen full
+ * blocks, the thirteenth behind the single indirect block, so that /dst
+ * grows into the indirect block's second slot (`ext2_map_alloc`), under
+ * reclaim at every read, with each read of the indirect block from the
+ * `from`th on failed (none for 0); the reads of it in `*reads`, and the
+ * link's result returned, or 1 when the volume would not come to it. The
+ * volume is left mounted.
+ */
+static int map_run(int from, int *reads)
+{
+    void *dst, *hub;
+    int rc;
+
+    *reads = 0;
+    if (growth_mount(13) != 0) {
+        return 1;
+    }
+    fflush(image);
+    map_ind = debugfs_number(wimg, "stat /dst", "(IND):");
+    dst = walk("/dst", &rc);
+    hub = dst ? walk("/hub", &rc) : 0;
+    if (!hub || map_ind <= 0 || OPS->sync(&mnt) != 0 || bcache_invalidate(&dev) != 0) {
+        if (hub) {
+            OPS->put(&mnt, hub);
+        }
+        if (dst) {
+            OPS->put(&mnt, dst);
+        }
+        unmount_image();
+        return 1;
+    }
+    map_reads = 0;
+    map_fail_from = from;
+    fail_read_hits = 0;
+    reuse_done = 0;
+    read_pause = map_turn;
+    start_turns(reuse_reclaim);
+    rc = OPS->link(&mnt, dst, "extra", hub);
+    read_pause = 0;
+    map_fail_from = 0;
+    read_fails = 0;
+    reuse_done = 1;
+    finish_turns();
+    *reads = map_reads;
+    OPS->put(&mnt, hub);
+    OPS->put(&mnt, dst);
+    return rc;
+}
+
+/**
+ * A failed read of a pointer block while a directory grows leaves no block
+ * taken that nothing names, and `i_blocks` as the pointers on the disk count
+ * (`map_branch`, `ext2_block_unwind`). The link of `map_run` runs once whole,
+ * counting the reads of /dst's indirect block, which the reclaim at every
+ * read makes come again after the new block is taken, and then once on a
+ * fresh volume for each k with every read of it from the kth on failed: the
+ * link must fail, and after the unmount e2fsck must ask nothing.
+ */
+static void map_row(void)
+{
+    char what[200];
+    int k, n, got, rc, ok;
+
+    rc = map_run(0, &n);
+    check(rc == 0 && n > 0, "a link that grows a directory behind its single indirect block "
+                            "runs whole under reclaim at every read");
+    if (rc != 0 || n == 0) {
+        printf("  rc %d, reads of the indirect block %d\n", rc, n);
+        unmount_image();
+        return;
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+    for (k = 1; k <= n; k++) {
+        rc = map_run(k, &got);
+        if (rc > 0) {
+            check(0, "the volume of the pointer-block rows mounts and takes its files");
+            return;
+        }
+        ok = rc < 0 && fail_read_hits > 0;
+        ok = unmount_rw() == 0 && ok;
+        fflush(image);
+        ok = ok && fsck_judged(wimg) >= 0 && findings_among(0, 0);
+        snprintf(what, sizeof what,
+                 "a link that grows a directory, its indirect block unreadable from read %d of "
+                 "%d on, fails and leaves no block lost",
+                 k, n);
+        check(ok, what);
+        if (!ok) {
+            printf("  rc %d, failed reads %d\n", rc, fail_read_hits);
+            ext2_fixture_head(fix_path("fsck.out"), 20);
+        }
+    }
+}
+
+/**
+ * The rows of the mark a node keeps from a change until a store of it
+ * succeeds: a directory whose grown inode could not be stored, at one full
+ * block and at twelve, put, put while the store still fails, and held over a
+ * sync (`mark_store_row`); a truncate retried after a failed shrink
+ * (`truncate_retry_row`); a new inode whose free failed after its create did
+ * (`abandon_row`); and a pointer block that cannot be read while a directory
+ * grows (`map_row`).
+ */
+static void mark_rows(void)
+{
+    int blocks, how;
+
+    for (blocks = 1; blocks <= 12; blocks += 11) {
+        for (how = 0; how < 3; how++) {
+            mark_store_row(blocks, how);
+        }
+    }
+    truncate_retry_row();
+    abandon_row();
+    map_row();
+}
+
 /**
  * The rows of what a change of names puts on the device before its next
  * step on a mount that writes back: a rename into a directory that grows,
@@ -7836,21 +8259,21 @@ static const struct {
     {"--ftype-only", ftype_rows},
     {"--removal-only", removal_rows},
     {"--dir-commit-only", dir_commit_rows},
+    {"--mark-only", mark_rows},
 };
 
 /**
- * Make the native fixture tree using the prepared independent tools,
- * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
- * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
- * types of replaced entries, the removals stopped on a mount that writes
- * back, the directory's inode and a reused block before the next step, the
- * order rows, the writer's failures, the dirty volumes, the
- * read-only volumes, the matrix and the batch rows, the node rows, the
- * fsync rows, the group rows, the rows of one file's writes and the rows of
- * operations on names, both without the big lock. An option
- * of `only_rows` runs its rows alone; `--capture-only` checks independent
- * tool output capture alone. Returns 0, and calls `fix_passed`, when every
- * row passed.
+ * Make the native fixture tree using the prepared independent tools, and run
+ * the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes and at 2
+ * KiB, the 1 KiB levels, the failures, the write sequences, the types of
+ * replaced entries, the removals stopped on a mount that writes back, the
+ * directory's inode and a reused block before the next step, the marks of nodes
+ * whose change is not stored, the order rows, the writer's failures, the dirty
+ * volumes, the read-only volumes, the matrix and the batch rows, the node rows,
+ * the fsync rows, the group rows, the rows of one file's writes and the rows of
+ * operations on names, both without the big lock. An option of `only_rows` runs
+ * its rows alone; `--capture-only` checks independent tool output capture
+ * alone. Returns 0, and calls `fix_passed`, when every row passed.
  */
 int main(int argc, char **argv)
 {
@@ -7891,6 +8314,7 @@ int main(int argc, char **argv)
     ftype_rows();
     removal_rows();
     dir_commit_rows();
+    mark_rows();
     time_rows();
     order_row();
     refusal_write_rows();
