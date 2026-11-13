@@ -387,6 +387,9 @@ struct svm_vcpu {
     uint64_t nmi_ss_rflags; /* the guest's RFLAGS before that */
     int tf_set;             /* the entry set RFLAGS.TF for KVM_GUESTDBG_SINGLESTEP */
     int guest_dr;           /* DR0 to DR3 were loaded for the run */
+    /* TR's attributes as the last exit's VMSAVE stored them, before
+     * `after_run` reported the TSS busy; 0 before the first exit. */
+    uint16_t tr_attrib;
     struct svm_exit ex;
 };
 
@@ -701,6 +704,7 @@ static void vmcb_build(struct kvm_vcpu *v)
     s->want_vintr = 0;
     s->awaiting_iret = 0;
     s->nmi_ss = 0;
+    s->tr_attrib = 0;
     v->dirty = KVM_PART_ALL;
 }
 
@@ -723,6 +727,13 @@ static void load_dirty(struct kvm_vcpu *v)
         seg_write(&g->gs, &v->sregs.gs);
         seg_write(&g->ldtr, &v->sregs.ldt);
         seg_write(&g->tr, &v->sregs.tr);
+        /* A TR the record holds as the last exit reported it keeps the
+         * attributes VMSAVE stored, since Linux writes the VMCB's TR only
+         * when svm_set_segment is given one. QEMU's TCG aborts an
+         * interrupt from CPL 3 through a TR whose cached type is busy. */
+        if (s->tr_attrib != 0 && g->tr.attrib == (uint16_t)(s->tr_attrib | 2u)) {
+            g->tr.attrib = s->tr_attrib;
+        }
         g->gdtr.base = v->sregs.gdt.base;
         g->gdtr.limit = v->sregs.gdt.limit;
         g->idtr.base = v->sregs.idt.base;
@@ -975,6 +986,7 @@ static void after_run(struct kvm_vcpu *v)
     seg_read(&g->gs, &v->sregs.gs);
     seg_read(&g->ldtr, &v->sregs.ldt);
     seg_read(&g->tr, &v->sregs.tr);
+    s->tr_attrib = g->tr.attrib;
     /* TR is busy and a usable data segment accessed in the processor's
      * cache whatever the descriptor says, an unusable SS has no B bit, and
      * SS's DPL is the CPL, as Linux's svm_get_segment reports them. */
