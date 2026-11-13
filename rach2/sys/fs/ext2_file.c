@@ -658,10 +658,8 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
         if (rc != 0) {
             return rc;
         }
-    } else {
-        ext2_node_dirty(w->n);
     }
-    *slot = 0;
+    ext2_node_slot_set(w->n, slot, slot_at, 0);
     *emptied = 1;
     return 0;
 }
@@ -674,9 +672,10 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
  * dirtied `first`, or for 0 in the inode in memory, which the caller stores;
  * a pointer block whose children are all gone goes the same way. No bit
  * changes here. `*emptied` says whether the pointer is now 0, and
- * `n->blocks` is kept current, the node marked (`ext2_node_dirty`) for the
- * change. A slot's read may sleep, so a service point
- * before it asks nothing more of the walk: every removal so far is whole,
+ * `n->blocks` is kept current, each change marking the node
+ * (`ext2_node_slot_set`, `ext2_node_blocks_sub`). A slot's read may sleep,
+ * so a service point before it asks nothing more of the walk: every removal
+ * so far is whole,
  * and the listed blocks stay taken until the round frees them. A pointer
  * block is read by the reclaim reader (`ext2_read_reclaim`), and one out of
  * range or that cannot be read, which it reports, is abandoned
@@ -764,12 +763,9 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
             return rc;
         }
     }
-    ext2_node_dirty(n);
-    *slot = 0;
+    ext2_node_slot_set(n, slot, slot_at, 0);
     list->blocks[list->count++] = b;
-    if (n->blocks >= sectors) {
-        n->blocks -= sectors;
-    }
+    ext2_node_blocks_sub(n, sectors);
     *emptied = 1;
     return 0;
 }
@@ -974,8 +970,10 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
  * set. A failure before anything names the block takes `n->blocks` back and
  * frees it (`ext2_block_unwind`); a failed store of the inode leaves the
  * pointer in memory, where the mark has the next store write it, as it
- * names a block that is taken and zeroed. The caller has marked `n` and
- * holds its lock. 0, or -errno.
+ * names a block that is taken and zeroed. Each change of `n` marks it, its
+ * rollback too (`ext2_node_blocks_add`, `ext2_node_slot_set`), so that a
+ * store that cleared the mark leaves no later change unmarked. The caller
+ * holds `n`'s lock. 0, or -errno.
  */
 static int map_branch(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot, uint64_t slot_at,
                       int level, uint32_t hint)
@@ -993,23 +991,17 @@ static int map_branch(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot
         ext2_block_unwind(em, b);
         return rc;
     }
-    n->blocks += em->block_size / 512;
+    ext2_node_blocks_add(n, em->block_size / 512);
     if (slot_at != 0) {
         rc = map_point(em, owner, slot_at, b, level + 1);
         if (rc != 0) {
-            n->blocks -= em->block_size / 512;
+            ext2_node_blocks_sub(n, em->block_size / 512);
             ext2_block_unwind(em, b);
             return rc;
         }
-    } else {
-        *slot = b;
-        rc = ext2_inode_store(em, n);
-        if (rc != 0) {
-            return rc;
-        }
     }
-    *slot = b;
-    return 0;
+    ext2_node_slot_set(n, slot, slot_at, b);
+    return slot_at != 0 ? 0 : ext2_inode_store(em, n);
 }
 
 /**
@@ -1024,8 +1016,10 @@ static int map_branch(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot
  * block's zeros. Each pointer block is marked at its level (`WRITE_LEVEL`),
  * so that a mount that writes back keeps that order too. A directory's
  * blocks are shared, as its entries are, and a regular file's are its own.
- * `n->blocks` and the inode's own pointers change in memory, the node
- * marked first (`ext2_node_dirty`); the caller stores the inode with them,
+ * `n->blocks` and the inode's own pointers change in memory, each change
+ * marking the node, after a store of a new indirect pointer that cleared the
+ * mark too (`ext2_node_blocks_add`, `ext2_node_slot_set`); the caller
+ * stores the inode with them,
  * and holds `n`'s lock and not `em->batch`. A block taken that a failure
  * leaves unnamed is freed again and `n->blocks` lowered, in memory and with
  * no store (`map_branch`). 0,
@@ -1045,7 +1039,6 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
     int level, rc;
 
     *fresh = 0;
-    ext2_node_dirty(n);
     if (index < EXT2_NDIR) {
         slot = &n->block[index];
     } else {
@@ -1099,19 +1092,19 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
             return rc;
         }
         ext2_node_share_group(em, n, (b - em->first_data) / em->bpg, 0);
-        n->blocks += sectors;
+        ext2_node_blocks_add(n, sectors);
         if (slot_at != 0) {
             rc = map_zero(em, owner, b, 0);
             if (rc == 0) {
                 rc = map_point(em, owner, slot_at, b, 1);
             }
             if (rc != 0) {
-                n->blocks -= sectors;
+                ext2_node_blocks_sub(n, sectors);
                 ext2_block_unwind(em, b);
                 return rc;
             }
         }
-        *slot = b;
+        ext2_node_slot_set(n, slot, slot_at, b);
         *fresh = 1;
     } else if (ext2_zone_check(em, n->ino, "block", *slot) != 0) {
         return -EIO;
@@ -1141,24 +1134,27 @@ int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_s
         ext2_node_unlock(n);
         return rc;
     }
-    ext2_node_dirty(n);
     if (what & VFS_SET_MODE) {
-        n->mode = (n->mode & S_IFMT_) | (st->mode & 07777u);
+        EXT2_NODE_SET(n, mode, (n->mode & S_IFMT_) | (st->mode & 07777u));
     }
     if (what & VFS_SET_UID) {
-        n->uid = st->uid;
+        EXT2_NODE_SET(n, uid, st->uid);
     }
     if (what & VFS_SET_GID) {
-        n->gid = st->gid;
+        EXT2_NODE_SET(n, gid, st->gid);
     }
     if (what & VFS_SET_ATIME) {
-        n->atime = ext2_time_fit(n, EXT2_ATIME_EXTRA + 4, st->atime_sec, st->atime_nsec);
+        EXT2_NODE_SET(n, atime,
+                      ext2_time_fit(n, EXT2_ATIME_EXTRA + 4, st->atime_sec, st->atime_nsec));
     }
     if (what & VFS_SET_MTIME) {
-        n->mtime = ext2_time_fit(n, EXT2_MTIME_EXTRA + 4, st->mtime_sec, st->mtime_nsec);
+        EXT2_NODE_SET(n, mtime,
+                      ext2_time_fit(n, EXT2_MTIME_EXTRA + 4, st->mtime_sec, st->mtime_nsec));
     }
     if (what & VFS_SET_FLAGS) {
-        n->flags = (n->flags & ~EXT2_FL_USER_MODIFIABLE) | (st->flags & EXT2_FL_USER_MODIFIABLE);
+        EXT2_NODE_SET(n, flags,
+                      (n->flags & ~EXT2_FL_USER_MODIFIABLE) |
+                          (st->flags & EXT2_FL_USER_MODIFIABLE));
     }
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_store(em, n);
