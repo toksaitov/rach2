@@ -222,7 +222,7 @@ static uint64_t scan_dwell(const struct wlan_scan *scan, const struct wlan_chann
 {
     int active = scan->request.n_ssids && !(channel->flags & WLAN_CHANNEL_PASSIVE);
 
-    return MS_TO_TICKS(active ? WLAN_SCAN_ACTIVE_DWELL_MS : WLAN_SCAN_PASSIVE_DWELL_MS);
+    return active ? WLAN_SCAN_ACTIVE_TICKS : WLAN_SCAN_PASSIVE_TICKS;
 }
 
 /** Give a departure up: a stay at home, or the end of the scan once
@@ -234,7 +234,7 @@ static void scan_stay(struct wlan_scan *scan)
         scan_finish(scan, 1);
         return;
     }
-    scan_queue_step(scan, MS_TO_TICKS(WLAN_SCAN_HOME_MS));
+    scan_queue_step(scan, WLAN_SCAN_HOME_TICKS);
 }
 
 /**
@@ -259,7 +259,7 @@ static int scan_leave(struct wlan_scan *scan)
         }
         (void)scan_ask(scan, WLAN_SCAN_ASK_STOP);
         scan->away = WLAN_SCAN_STOPPING;
-        scan->flush_by = now + MS_TO_TICKS(WLAN_SCAN_FLUSH_MS);
+        scan->flush_by = now + WLAN_SCAN_FLUSH_TICKS;
     }
     if (scan->away == WLAN_SCAN_STOPPING) {
         if (!scan_ask(scan, WLAN_SCAN_ASK_IDLE)) {
@@ -272,7 +272,7 @@ static int scan_leave(struct wlan_scan *scan)
         }
         (void)scan_ask(scan, WLAN_SCAN_ASK_SLEEP);
         scan->away = WLAN_SCAN_TELLING;
-        scan->flush_by = now + MS_TO_TICKS(WLAN_SCAN_FLUSH_MS);
+        scan->flush_by = now + WLAN_SCAN_FLUSH_TICKS;
     }
     told = scan_ask(scan, WLAN_SCAN_ASK_TOLD);
     if (told < 0) {
@@ -295,14 +295,14 @@ static int scan_leave(struct wlan_scan *scan)
 
 /** Decide, for an associated station, whether the scan may go on to
  * `channel` now, as ieee80211_scan_state_decision does: a trip ends when
- * frames wait or the next channel would take it past WLAN_SCAN_AWAY_MS.
+ * frames wait or the next channel would take it past WLAN_SCAN_AWAY_TICKS.
  * The home channel, reached from home, is scanned there with the queue
  * running and the AP not told, as mac80211 scans its operating channel
  * alone: the radio's receive filter changes and its channel does not.
  * Returns 1 to tune, and otherwise 0 with the next step arranged. */
 static int scan_may_tune(struct wlan_scan *scan, const struct wlan_channel *channel)
 {
-    uint64_t limit = scan->left + MS_TO_TICKS(WLAN_SCAN_AWAY_MS);
+    uint64_t limit = scan->left + WLAN_SCAN_AWAY_TICKS;
 
     if (!scan_ask(scan, WLAN_SCAN_ASK_JOINED)) {
         return 1;
@@ -315,7 +315,7 @@ static int scan_may_tune(struct wlan_scan *scan, const struct wlan_channel *chan
     }
     if (scan_ask(scan, WLAN_SCAN_ASK_WAITING) || tick_count() + scan_dwell(scan, channel) > limit) {
         (void)scan_return(scan);
-        scan_queue_step(scan, MS_TO_TICKS(WLAN_SCAN_HOME_MS));
+        scan_queue_step(scan, WLAN_SCAN_HOME_TICKS);
         return 0;
     }
     return 1;

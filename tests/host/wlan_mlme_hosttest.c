@@ -1,5 +1,6 @@
 /* Drive the station's MLME against a scripted AP, a clock and a work queue.
  * host-deps: rach2/sys/network/wireless/mlme.c
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/network/wireless/elems.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DTICK_HZ=1000
@@ -836,14 +837,14 @@ static void vanishing_ap(void)
         CHECK(ap_beacon(ap_a, IEEE80211_STYPE_BEACON) == 0);
     }
     CHECK(n_sent == 0 && queued() == 1);
-    wait_ms(1739);
+    wait_ms(1740);
     CHECK(n_sent == 0);
     wait_ms(1);
     CHECK(n_sent == 1 && sent_is(&sent[0], IEEE80211_STYPE_PROBE_REQ, ap_a));
     CHECK(sent[0].f[HDR] == WLAN_EID_SSID && sent[0].f[HDR + 1] == 3);
     CHECK(mlme.missed_beacons == 1);
     CHECK(ap_beacon(ap_a, IEEE80211_STYPE_PROBE_RESP) == 0 && mlme.probes == 0);
-    wait_ms(1739);
+    wait_ms(1740);
     CHECK(n_sent == 1);
     wait_ms(1);
     CHECK(n_sent == 2);
@@ -912,15 +913,15 @@ static void polled_answered(void)
     wlan_mlme_tx_status(&mlme, poll_cookie, 0);
     CHECK(n_polls == 3 && mlme.state == WLAN_STA_ASSOCIATED);
 
-    /* Seventeen intervals without a beacon, 1740 ms: a poll, and one
-     * beacon loss. */
-    wait_ms(1739);
+    /* Seventeen intervals without a beacon, 1740.8 ms and so 1741 ticks:
+     * a poll, and one beacon loss. */
+    wait_ms(1740);
     CHECK(n_polls == 3);
     wait_ms(1);
     CHECK(n_polls == 4 && mlme.missed_beacons == 1 && losses == 1);
     wlan_mlme_tx_status(&mlme, poll_cookie, 1);
     CHECK(mlme.probes == 0);
-    wait_ms(1739);
+    wait_ms(1740);
     CHECK(n_polls == 4);
     wait_ms(1);
     CHECK(n_polls == 5 && mlme.missed_beacons == 2 && losses == 2);
@@ -946,7 +947,7 @@ static void polled_lost(void)
     /* Three polls whose status never comes end it too, 500 ms each. */
     connect_a(0);
     CHECK(mlme.missed_beacons == 0 && mlme.probes == 0);
-    wait_ms(1740);
+    wait_ms(1741);
     CHECK(n_polls == 8 && mlme.missed_beacons == 1);
     wait_ms(WLAN_MLME_PROBE_TIMEOUT);
     CHECK(n_polls == 9 && mlme.state == WLAN_STA_ASSOCIATED);
@@ -1469,7 +1470,7 @@ static void channel_switch_timed(void)
     CHECK(n_sent == 0 && mlme.state == WLAN_STA_ASSOCIATED && moves == 3);
     wait_ms(1);
     CHECK(followed(2412) && moves == 4);
-    wait_ms(2740);
+    wait_ms(2741);
     CHECK(n_sent == 3 && mlme.state == WLAN_STA_ASSOCIATED);
     wait_ms(499);
     CHECK(mlme.state == WLAN_STA_ASSOCIATED);
@@ -1504,15 +1505,15 @@ static void channel_switch(void)
     CHECK(configured == 2412 && moves == 0);
     wait_ms(102);
     CHECK(ap_beacon_with(ap_a, WLAN_EID_CHANNEL_SWITCH, csa6_4, 3) == 0);
-    CHECK(holds == 1 && mlme.csa_at == now + 409);
-    wait_ms(408);
+    CHECK(holds == 1 && mlme.csa_at == now + 410);
+    wait_ms(409);
     CHECK(moves == 0 && held && configured == 2412);
     wait_ms(1);
     CHECK(followed(2437) && moves == 1 && holds == 2 && !mlme.csa_channel);
     /* The AP heard on channel 6 keeps the association; its loss leaves. */
     wait_ms(700);
     CHECK(ap_beacon_with(ap_a, 0, 0, 0) == 0 && n_sent == 0);
-    wait_ms(1740);
+    wait_ms(1741);
     CHECK(n_sent == 1 && sent_is(&sent[0], IEEE80211_STYPE_PROBE_REQ, ap_a));
     CHECK(ap_beacon(ap_a, IEEE80211_STYPE_PROBE_RESP) == 0 && mlme.probes == 0);
     n_sent = 0;
@@ -1665,10 +1666,10 @@ static void ds_nothing_there(void)
     wait_ms(0);
     polls_fail();
     CHECK(followed(2437) && moves == 1);
-    wait_ms(1740);
+    wait_ms(1741);
     wait_ms(1500);
     CHECK(followed(2412) && moves == 2 && mlme.state == WLAN_STA_ASSOCIATED);
-    wait_ms(1740);
+    wait_ms(1741);
     wait_ms(1500);
     CHECK(mlme.state == WLAN_STA_NONE && moves == 2 && !mlme.ds_home && !mlme.ds_channel);
 }

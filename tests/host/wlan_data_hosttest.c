@@ -10,6 +10,7 @@
  * host-deps: rach2/sys/network/wireless/rate.c
  * host-deps: rach2/sys/network/wireless/elems.c
  * host-deps: rach2/sys/network/wireless/mlme.c
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/network/wireless/crypto/aes.c
  * host-deps: rach2/sys/network/wireless/crypto/ccmp.c
  * host-deps: rach2/sys/network/wireless/crypto/bip.c

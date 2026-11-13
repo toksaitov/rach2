@@ -639,20 +639,23 @@ int wlan_mlme_associate(struct wlan_mlme *m, const struct wlan_mlme_assoc *req)
     return err;
 }
 
-/** The milliseconds of n of the AP's beacon intervals, 100 TU when the
- * AP gave none. */
-static unsigned beacons_ms(const struct wlan_mlme *m, unsigned n)
+/** The ticks of n of the AP's beacon intervals, 100 TU when the AP gave
+ * none, a partial tick counted as one, as mac80211's TU_TO_JIFFIES takes
+ * the microseconds to usecs_to_jiffies. */
+static uint64_t beacons_ticks(const struct wlan_mlme *m, unsigned n)
 {
-    uint32_t tu;
+    uint64_t us;
+    uint32_t rem;
 
-    tu = (uint32_t)n * (m->bss->beacon_interval ? m->bss->beacon_interval : 100);
-    return (unsigned)(tu / 125u * 128u + tu % 125u * 128u / 125u);
+    us = (uint64_t)n * (m->bss->beacon_interval ? m->bss->beacon_interval : 100) * 1024u;
+    us = tick_div(us, TICK_US, &rem);
+    return rem ? us + 1u : us;
 }
 
-/** The milliseconds of WLAN_MLME_BEACON_LOSS of the AP's beacon intervals. */
-static unsigned loss_ms(const struct wlan_mlme *m)
+/** The ticks of WLAN_MLME_BEACON_LOSS of the AP's beacon intervals. */
+static uint64_t loss_ticks(const struct wlan_mlme *m)
 {
-    return beacons_ms(m, WLAN_MLME_BEACON_LOSS);
+    return beacons_ticks(m, WLAN_MLME_BEACON_LOSS);
 }
 
 /** Take the association response's fields into the station's state and
@@ -676,7 +679,7 @@ static int assoc_success(struct wlan_mlme *m, const uint8_t *f, const struct iee
     m->ds_number = 0;
     m->ds_channel = 0;
     m->ds_home = 0;
-    arm(m, m->last_beacon + MS_TO_TICKS(loss_ms(m)));
+    arm(m, m->last_beacon + loss_ticks(m));
     return 0;
 }
 
@@ -825,7 +828,7 @@ static uint64_t csa_next(const struct wlan_mlme *m)
  * and so does the renewal under way, whose question goes at its time. */
 static uint64_t monitor_due(const struct wlan_mlme *m)
 {
-    uint64_t loss = m->last_beacon + MS_TO_TICKS(loss_ms(m)), idle = m->polled, heard, due;
+    uint64_t loss = m->last_beacon + loss_ticks(m), idle = m->polled, heard, due;
     uint64_t renewal = renewal_next(m);
 
     if (renewal && renewal < loss)
@@ -983,7 +986,7 @@ static void csa_note(struct wlan_mlme *m, unsigned mode, unsigned number, unsign
     if (!ch)
         return;
     m->csa_channel = ch;
-    m->csa_at = tick_count() + (count > 1 ? MS_TO_TICKS(beacons_ms(m, count)) : 0);
+    m->csa_at = tick_count() + (count > 1 ? beacons_ticks(m, count) : 0);
     if (mode == 1 && !m->csa_hold) {
         m->csa_hold = 1;
         m->ops->hold(m->wlan, 1);
@@ -1107,7 +1110,7 @@ static void monitor_timeout(struct wlan_mlme *m)
             arm(m, due);
             return;
         }
-        if (now >= m->last_beacon + MS_TO_TICKS(loss_ms(m))) {
+        if (now >= m->last_beacon + loss_ticks(m)) {
             m->missed_beacons++;
             if (m->beacon_losses)
                 ++*m->beacon_losses;

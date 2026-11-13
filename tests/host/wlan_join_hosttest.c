@@ -86,6 +86,13 @@ static unsigned ap_channel = 6; /* and its number */
 
 /* ---- the machine around the code ---- */
 
+/* Linux's msecs_to_jiffies and usecs_to_jiffies at TICK_HZ: whole ticks,
+ * rounded up. */
+#define JIFFIES(ms)       (((uint64_t)(ms) * TICK_HZ + 999u) / 1000u)
+#define USECS_JIFFIES(us) (((uint64_t)(us) + TICK_US - 1u) / TICK_US)
+/* Seventeen beacon intervals of 100 TU, the station's beacon loss. */
+#define LOSS_TICKS        USECS_JIFFIES(17u * 102400u)
+
 static uint64_t now = 1000;
 static uint32_t irq_flag = 1;
 static int lock_depth;
@@ -759,7 +766,7 @@ static void row_scan(void)
     CHECK(hear(f, probe_resp(f)) > 0);
     run_worker();
     CHECK(wlan->bss_table.count == 1);
-    now += WLAN_SCAN_ACTIVE_DWELL_MS + 1;
+    now += WLAN_SCAN_ACTIVE_TICKS + 1;
     run_worker();
     CHECK(find_event(GROUP_SCAN, NL80211_CMD_NEW_SCAN_RESULTS) != 0);
     CHECK(!wlan_scan_running(&wlan->scan));
@@ -904,7 +911,7 @@ static unsigned beacons_for(unsigned ms)
     unsigned sent = 0;
 
     for (; ms >= 100; ms -= 100) {
-        now += 100;
+        now += JIFFIES(100);
         CHECK(hear(f, beacon(f)) > 0);
         run_worker();
         sent += drain();
@@ -924,7 +931,7 @@ static void check_null(const uint8_t *f, unsigned len)
 
 /** Idle: thirty seconds after the AP was last heard the station polls it
  * with a null frame, whose ACK ends the poll, as mac80211 does on a radio
- * that reports ACKs; beacons that stop for seventeen intervals, 1740 ms,
+ * that reports ACKs; beacons that stop for seventeen intervals, 1740.8 ms,
  * bring another, and so does the AP that answers it but sends no beacon.
  * The station dump's counters count the frames and the beacon losses. */
 static void row_idle(void)
@@ -935,7 +942,7 @@ static void row_idle(void)
     unsigned len;
 
     CHECK(beacons_for(29900) == 0);
-    now += 100;
+    now += JIFFIES(100);
     run_worker();
     len = take(f);
     check_null(f, len);
@@ -943,7 +950,7 @@ static void row_idle(void)
     CHECK(drain() == 0 && wlan->state == WLAN_STA_AUTHORIZED);
     CHECK(beacons_for(20000) == 0);
 
-    now += 1739;
+    now += LOSS_TICKS - 1;
     run_worker();
     CHECK(drain() == 0);
     now += 1;
@@ -954,7 +961,7 @@ static void row_idle(void)
     CHECK(drain() == 0 && wlan->state == WLAN_STA_AUTHORIZED);
     CHECK(c->tx_packets == packets + 2 && c->tx_failed == 0 && c->missed_beacons == 1);
 
-    now += 1740;
+    now += LOSS_TICKS;
     run_worker();
     len = take(f);
     check_null(f, len);
@@ -999,7 +1006,7 @@ static void row_switch(void)
     CHECK(iface->ops->tx(iface->dev, e, (uint16_t)ether(e, host, sta_mac, 0x0800)) == NETDEV_TX_OK);
     run_worker();
     CHECK(drain() == 0);
-    now += 306; /* three beacons are 307 ms */
+    now += USECS_JIFFIES(3u * 102400u) - 1; /* three beacons, 307.2 ms */
     run_worker();
     CHECK(drain() == 0 && wlan->frequency == FREQ);
     now += 1;

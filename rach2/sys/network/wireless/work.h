@@ -3,20 +3,24 @@
 #define _WLAN_WORK_H_
 
 #include "wireless.h"
+#include "../../timer.h"
 
-/* How long a scan stays on a channel, in milliseconds, as Linux's mac80211
- * does: long enough for probe responses on an active channel, and for one
- * beacon at the usual interval of 102.4 ms on a passive one. */
-#define WLAN_SCAN_ACTIVE_DWELL_MS  30
-#define WLAN_SCAN_PASSIVE_DWELL_MS 110
-/* While associated, as mac80211 does: a trip off the channel keeps within
- * WLAN_SCAN_AWAY_MS and is followed by WLAN_SCAN_HOME_MS at home. A departure
- * waits WLAN_SCAN_FLUSH_MS for the radio to finish what it accepted, and
- * after WLAN_SCAN_TRIES failures in a row the scan is aborted. */
-#define WLAN_SCAN_AWAY_MS          125
-#define WLAN_SCAN_HOME_MS          200
-#define WLAN_SCAN_FLUSH_MS         100
-#define WLAN_SCAN_TRIES            5
+/* How long a scan stays on a channel, in ticks, as mac80211's
+ * IEEE80211_CHANNEL_TIME and IEEE80211_PASSIVE_CHANNEL_TIME count them: some
+ * 30 ms for probe responses on an active channel, and some 111 ms, one
+ * beacon at the usual interval of 102.4 ms, on a passive one. Like Linux's
+ * HZ / 33 and HZ / 9, they round down: 7 and 27 ticks at 250 Hz. */
+#define WLAN_SCAN_ACTIVE_TICKS  (TICK_HZ / 33)
+#define WLAN_SCAN_PASSIVE_TICKS (TICK_HZ / 9)
+/* While associated, as mac80211 does, in ticks: a trip off the channel
+ * keeps within WLAN_SCAN_AWAY_TICKS, 125 ms or the ticks below it, and is
+ * followed by WLAN_SCAN_HOME_TICKS at home. A departure waits
+ * WLAN_SCAN_FLUSH_TICKS for the radio to finish what it accepted, and after
+ * WLAN_SCAN_TRIES failures in a row the scan is aborted. */
+#define WLAN_SCAN_AWAY_TICKS    (TICK_HZ / 8)
+#define WLAN_SCAN_HOME_TICKS    (TICK_HZ / 5)
+#define WLAN_SCAN_FLUSH_TICKS   (TICK_HZ / 10)
+#define WLAN_SCAN_TRIES         5
 
 /* A BSS not heard from for this long leaves the table unless it is held,
  * cfg80211's IEEE80211_SCAN_RESULT_EXPIRE. */
