@@ -1,6 +1,7 @@
 #!/bin/sh
 # run.sh: 84-163's QEMU proof on the testing host, from the copy that holds
 # 84-58's root: the root and the bundle on an ext2 partition, qemu.py's boot.
+set -eu
 # QEMU proof of 84-163's trial head (84-157's) through the Lenovo's root path: 84-58's
 # trial root (d4d1da30...) as an image on an ext2 partition, booted through
 # rach2.rootimage= on a loop device, with this head's bundle and Mac kernel.
