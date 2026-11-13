@@ -321,7 +321,7 @@ winclean()
     {
         sh "$here/winjob.sh" "$(machine out)"
         cat "$here/winclean.sh"
-    } | perl -e 'alarm shift; exec @ARGV' 1200 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+    } | perl "$here/bound.pl" 1200 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         "C:/msys64/usr/bin/bash.exe -l -s $wc_mode $(machine tree) $(machine out) $*"
 }
 

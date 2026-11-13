@@ -89,7 +89,7 @@ outputs()
                 paste -s -d ' ' -
             echo "stale 14 $b/runs/*"
         done
-    } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+    } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s' 2>&1 | tr -d '\000\r' | sed "s/^/$TESTING: /"
     {
         printf '%s\n' "$stale"
@@ -164,7 +164,7 @@ END
             echo "stale 0 \$b/release/milestone$m-*-windows-* \$b/release/etude-milestone$m-*-windows-*" \
                 "\$b/tmp/milestone$m-*-windows-*"
         done
-    } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+    } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'bash -s' 2>&1 | tr -d '\000\r' | sed 's/^/windows: /'
     eval "$stale"
     stale 14 "$repo"/build/tests/* 2>&1 | sed "s/^/$(hostname -s): /"
@@ -185,7 +185,7 @@ clones()
             cat "$(dirname "$0")/lib.sh"
             # shellcheck disable=SC2016 # the dollar is the remote shell's
             printf '%s\n' 'log() { echo "$*"; }' 'cd rach2 && git fetch -q origin && tidy'
-        } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
+        } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
             sh -s 2>&1 | sed "s/^/$name: /"
     done
 }
@@ -215,7 +215,7 @@ main()
     for h in $HOMES; do
         dirs="$dirs -d $h/rach2/build/tmp"
     done
-    perl -e 'alarm shift; exec @ARGV' 600 \
+    perl "$(dirname "$0")/bound.pl" 600 \
         ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - $dirs $age $stems" \
         < "$(dirname "$0")/scratch.pl" 2>&1 | sed "s/^/$TESTING: /"
