@@ -1826,7 +1826,7 @@ winclean()
         sh "$repo/tools/flow/winjob.sh" "$wout"
         cat "$repo/tools/flow/winclean.sh"
     } | perl "$repo/tools/flow/bound.pl" 1200 ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
-        -o ServerAliveCountMax=4 testing "C:/msys64/usr/bin/bash.exe -l -s $wc_mode $wtree $wout $*"
+        -o ServerAliveCountMax=4 testing "C:/msys64/usr/bin/bash.exe -l -s -- $wc_mode $wtree $wout $*"
 }
 
 # claim_pl ARG...: print the lines of a WSL script that run tools/flow/claim.pl
@@ -2568,7 +2568,9 @@ elif [ -n "$out" ]; then
         left=1
     fi
 fi
-if ! timeout 60 /usr/local/libexec/rach2/etude status "$ledger" > /dev/null 2>&1; then
+etude=/usr/local/libexec/rach2/etude
+[ -x "$etude" ] || etude=$(sed -n 's/^etude //p' /etc/rach2/etude-site 2> /dev/null)
+if ! timeout 60 "${etude:-/usr/local/libexec/rach2/etude}" status "$ledger" > /dev/null 2>&1; then
     echo "etude status did not recover $ledger/claims"
     left=1
 elif [ -e "$ledger/claims" ] && ! owners=$(grep '^owner ' "$ledger/claims"; [ $? -le 1 ]); then

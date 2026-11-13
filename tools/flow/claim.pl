@@ -77,7 +77,9 @@
 #
 # Nothing reads a clock: each wait counts turns of a sleep, which a suspended
 # host stretches and never shortens. RACH2_CLAIM_LEDGER and RACH2_CLAIM_ETUDE
-# name another ledger and etude, which the host case uses.
+# name another ledger and etude, which the host case uses. Otherwise etude is
+# /usr/local/libexec/rach2/etude when that runs, or the program that the
+# `etude` line of /etc/rach2/etude-site names, as the site installs it.
 
 use strict;
 use warnings;
@@ -87,7 +89,20 @@ use File::Path qw(make_path);
 use POSIX qw(WNOHANG);
 
 my $ledger = $ENV{RACH2_CLAIM_LEDGER} // '/var/lib/rach2-etude/ledger';
-my $etude = $ENV{RACH2_CLAIM_ETUDE} // '/usr/local/libexec/rach2/etude';
+my $etude = $ENV{RACH2_CLAIM_ETUDE} // site_etude();
+
+# site_etude: return /usr/local/libexec/rach2/etude when it runs, else the
+# program the site file's `etude` line names, else the former.
+sub site_etude
+{
+    my $fixed = '/usr/local/libexec/rach2/etude';
+    return $fixed if -x $fixed;
+    open(my $site, '<', '/etc/rach2/etude-site') or return $fixed;
+    while (my $line = <$site>) {
+        return $1 if $line =~ /^etude (\S+)$/;
+    }
+    return $fixed;
+}
 
 # touch FILE: create FILE, empty, unless it exists; succeed once it exists.
 sub touch

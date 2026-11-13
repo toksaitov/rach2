@@ -368,7 +368,7 @@ winclean()
         sh "$here/winjob.sh" "$(machine out)"
         cat "$here/winclean.sh"
     } | perl "$here/bound.pl" 1200 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
-        "C:/msys64/usr/bin/bash.exe -l -s $wc_mode $(machine tree) $(machine out) $*"
+        "C:/msys64/usr/bin/bash.exe -l -s -- $wc_mode $(machine tree) $(machine out) $*"
 }
 
 # stragglers: stop what `running` lists, but a release that may stay. On
