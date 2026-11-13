@@ -35,7 +35,8 @@
  * the GT's parks and unparks, the interrupt's unmasks, the shadow's pages
  * and the heap's blocks of such calls each waited for (84-157); and the
  * retire worker's pass that only tries the GEM lock, with the call
- * retiring its own engine (84-164).
+ * retiring its own engine (84-164); and timeout expiry serialized with
+ * the submission that can retire its wait records (84-164a).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -48,7 +49,10 @@
 #include "dmabuf/sync_file.c"
 #include "drm/i915/i915_gem_context.c"
 #include "drm/i915/i915_getparam.c"
+static void request_wake(wait_queue_t *wq);
+#define wq_wake_all request_wake
 #include "drm/i915/i915_request.c"
+#undef wq_wake_all
 #include "drm/i915/i915_hangcheck.c"
 #include "drm/i915/i915_reset.c"
 #include "drm/i915/i915_gpu_error.c"
@@ -180,6 +184,10 @@ static void ring_release(int i);
 /* The engine whose held ring the next delay lets run, as the chip that
  * finishes a request during a wait's spin; -1 for none. */
 static int release_in_delay = -1;
+
+/* The engine whose next tail write releases its held ring, so an older
+ * request completes during submission, after request creation. */
+static int release_on_submit = -1;
 
 void i915_delay_us(struct i915_hw *hw, uint32_t us)
 {
@@ -435,7 +443,14 @@ static void ring_write(struct chip *c, uint32_t reg, uint32_t value)
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         struct i915_engine *e = &dev_a->gt.engine[i];
 
-        if (reg != RING_TAIL(e->mmio_base) || ring_hung[i] || !e->ring_size) {
+        if (reg != RING_TAIL(e->mmio_base) || !e->ring_size) {
+            continue;
+        }
+        if (release_on_submit == i) {
+            release_on_submit = -1;
+            ring_hung[i] = 0;
+        }
+        if (ring_hung[i]) {
             continue;
         }
         start = c->regs[RING_START(e->mmio_base) / 4];
@@ -1875,6 +1890,87 @@ static void park_per_call(void)
  * tells from the test's own. */
 static char other_thread;
 
+/* A row's simulated submission on another processor, attempted when the
+ * timeout worker makes its request runnable, before its walk ends. */
+static void (*timeout_wake)(void);
+static int timeout_attempts, timeout_blocked;
+
+/** Wake the worker and attempt the interleaving armed by the timeout row. */
+static void request_wake(wait_queue_t *wq)
+{
+    void (*fn)(void) = timeout_wake;
+
+    wq_wake_all(wq);
+    if (fn) {
+        timeout_wake = 0;
+        fn();
+    }
+}
+
+/** Try the submitter's GEM take while the scan still uses the wait record.
+ * A blocked submitter runs after the scan in `timeout_retirement`. */
+static void timeout_submit_try(void)
+{
+    timeout_attempts++;
+    timeout_blocked = !mutex_trylock(&dev_a->gem.lock);
+    if (!timeout_blocked) {
+        mutex_unlock(&dev_a->gem.lock);
+    }
+}
+
+/**
+ * 84-164a: timeout expiry skips a busy GEM lock and retries next tick.
+ * Once it expires the wait, a submitter on another processor cannot take
+ * the lock until the scan stops reading the wait record; its next call
+ * then submits and retires that request, freeing the record.
+ */
+static void timeout_retirement(void)
+{
+    uint32_t b = batch_end();
+    struct i915_engine *e = &dev_a->gt.engine[I915_RCS0];
+    struct drm_i915_gem_exec_object2 o;
+    struct drm_i915_gem_execbuffer2 a;
+    struct dma_fence *f = test_fence(), *out;
+    struct i915_request *first;
+    uint64_t now;
+    int32_t in_fd = sync_file_create(f, "timeout"), out_fd;
+
+    idle();
+    entry_init(&o, b);
+    args_init(&a, &o, 1, I915_EXEC_RENDER | I915_EXEC_FENCE_IN | I915_EXEC_FENCE_OUT);
+    a.rsvd2 = (uint32_t)in_fd;
+    CHECK(execbuf(&a) == 0, "timeout: the request waits for an external fence");
+    out_fd = (int32_t)(a.rsvd2 >> 32);
+    out = sync_fence(out_fd);
+    first = e->queued;
+    CHECK(first && first->await_list && first->awaits == 1,
+          "timeout: a queued request holds its wait record");
+    now_ns += (int64_t)I915_FENCE_TIMEOUT_MS * 1000000ll;
+    now = rtc_ticks_now();
+    dev_a->gem.lock.owner = (uintptr_t)&other_thread;
+    awaits_expire(now);
+    CHECK(first && e->queued == first && first->awaits == 1 && first->await_list->deadline &&
+              await_deadline() == now + 1u,
+          "timeout: a held GEM lock leaves the queue and waits alone and schedules a retry");
+    dev_a->gem.lock.owner = 0;
+    timeout_attempts = timeout_blocked = 0;
+    timeout_wake = timeout_submit_try;
+    awaits_expire(now + 1u);
+    timeout_wake = 0;
+    CHECK(timeout_attempts == 1 && timeout_blocked && first && !first->awaits &&
+              first->await_list && !first->await_list->deadline,
+          "timeout: the runnable request's submitter waits until the scan gives the GEM lock back");
+    args_init(&a, &o, 1, I915_EXEC_RENDER);
+    CHECK(execbuf(&a) == 0 && out && dma_fence_is_signaled(out) && out->error == -ETIMEDOUT &&
+              e->requests && e->requests != first && e->requests == e->requests_tail,
+          "timeout: submission after the scan retires the expired request and its wait record");
+    idle();
+    (void)fd_free(self.fds, out_fd);
+    (void)fd_free(self.fds, in_fd);
+    dma_fence_put(f);
+    close_handle(&file_a, b);
+}
+
 /**
  * 84-164: the retire worker, woken by a request that signalled to its
  * listener, only tries the GEM lock and leaves the engine to the holder,
@@ -1920,7 +2016,7 @@ static void retire_in_caller(void)
     interrupts();
     CHECK(ok && first && dma_fence_is_signaled(&first->fence.base) && e->requests == first,
           "retire: the call's request signalled to its listener and waits for retirement");
-    dev_a->gem.lock.owner = &other_thread;
+    dev_a->gem.lock.owner = (uintptr_t)&other_thread;
     kick();
     CHECK(e->requests == first, "retire: the worker's pass leaves the engine while another thread "
                                 "holds the GEM lock");
@@ -1935,6 +2031,17 @@ static void retire_in_caller(void)
     interrupts();
     kick();
     CHECK(ok && !e->requests, "retire: with the lock free the worker's pass retires at once");
+    ring_hold(I915_RCS0);
+    CHECK(execbuf(&a) == 0, "retire: another request is held on the ring");
+    first = e->requests_tail;
+    CHECK(first && !i915_request_completed(first),
+          "retire: the older request is incomplete before the next call's creation");
+    release_on_submit = I915_RCS0;
+    ok = execbuf(&a) == 0;
+    CHECK(ok && release_on_submit == -1 && e->requests && e->requests != first &&
+              e->requests == e->requests_tail && i915_request_completed(e->requests),
+          "retire: a breadcrumb written during submission is retired before the call returns");
+    idle();
     close_handle(&file_a, t);
     close_handle(&file_a, b);
 }
@@ -1974,6 +2081,7 @@ int main(void)
     heap_per_call();
     park_per_call();
     retire_in_caller();
+    timeout_retirement();
     idle();
     /* The pool keeps its shadows past the rows until the GT parks. */
     i915_gem_pool_trim(dev_a, I915_POOL_ALL);
