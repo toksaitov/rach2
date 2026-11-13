@@ -1035,6 +1035,29 @@ static void eb_signal_fences(struct eb *eb, struct i915_request *rq)
  */
 
 /**
+ * Make `rq` wait for the writer of `r`, and for a write its readers too,
+ * as Linux's i915_request_await_object walks the reservation's fences
+ * (i915_request.c:1602-1618): each fence in place, under the reservation's
+ * lock, which the caller holds, with nothing merged or copied.
+ *
+ * @return 0 or -ENOMEM.
+ */
+static int32_t eb_await_resv(struct i915_request *rq, struct dma_resv *r, int write)
+{
+    uint32_t i;
+    int32_t err = 0;
+
+    lockdep_assert_held(&r->lock);
+    if (r->write) {
+        err = i915_request_await_fence(rq, r->write, 0);
+    }
+    for (i = 0; write && err == 0 && i < r->nreads; i++) {
+        err = i915_request_await_fence(rq, r->reads[i], 0);
+    }
+    return err;
+}
+
+/**
  * Move every object to the request, last first, as Linux's eb_move_to_gpu:
  * what the processor wrote flushed for the GPU; unless EXEC_OBJECT_ASYNC,
  * the request held until the object's writer, and for a write its readers
@@ -1047,7 +1070,6 @@ static void eb_signal_fences(struct eb *eb, struct i915_request *rq)
  */
 static int32_t eb_move_to_gpu(struct eb *eb, struct i915_request *rq)
 {
-    struct dma_fence *f;
     uint32_t i = eb->count;
     int32_t err;
 
@@ -1062,9 +1084,7 @@ static int32_t eb_move_to_gpu(struct eb *eb, struct i915_request *rq)
         err = 0;
         dma_resv_lock(obj->base.resv);
         if (!(ev->flags & EXEC_OBJECT_ASYNC)) {
-            f = dma_resv_snapshot_locked(obj->base.resv, write);
-            err = f ? i915_request_await_fence(rq, f, 0) : -ENOMEM;
-            dma_fence_put(f);
+            err = eb_await_resv(rq, obj->base.resv, write);
         }
         if (err == 0) {
             err = dma_resv_add_fence_locked(obj->base.resv, &rq->fence.base, write);
