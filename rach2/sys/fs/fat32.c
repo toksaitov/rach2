@@ -644,7 +644,7 @@ static int sync_disk(struct fat_mount *fm)
 {
     int rc = bcache_sync(fm->dev);
 
-    return rc != 0 ? rc : block_flush(fm->dev);
+    return rc != 0 ? rc : bcache_flush(fm->dev);
 }
 
 /** The owner of a dirty data block of the file whose first cluster is `first`:
@@ -669,7 +669,7 @@ static int sync_file(struct fat_mount *fm, uint32_t first)
     if (rc == 0) {
         rc = bcache_sync_owned(fm->dev, FAT_OWNER_SHARED);
     }
-    return rc != 0 ? rc : block_flush(fm->dev);
+    return rc != 0 ? rc : bcache_flush(fm->dev);
 }
 
 /**
@@ -1048,7 +1048,7 @@ static int free_chain(struct fat_mount *fm, uint32_t first)
     uint32_t steps = 0;
     int rc;
 
-    rc = block_flush(fm->dev);
+    rc = bcache_flush(fm->dev);
     if (rc != 0) {
         return rc;
     }
@@ -1825,7 +1825,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
             joined = rc == 0;
         }
         if (rc == 0) {
-            rc = block_flush(fm->dev);
+            rc = bcache_flush(fm->dev);
         }
         if (rc != 0) {
             goto undo;
@@ -1871,7 +1871,7 @@ static int join_run(struct fat_mount *fm, struct fat_node *n, uint32_t have, uin
         rc = fat_set(fm, tail, run_first);
     }
     if (rc == 0) {
-        rc = block_flush(fm->dev);
+        rc = bcache_flush(fm->dev);
         if (rc != 0) {
             (void)fat_set(fm, tail, FAT_EOC_MIN);
         }
@@ -1972,7 +1972,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         stamp_mtime(n);
         rc = write_node_entry(fm, n);
         if (rc == 0) {
-            rc = block_flush(fm->dev);
+            rc = bcache_flush(fm->dev);
         }
         if (rc != 0) {
             goto out;
@@ -2358,7 +2358,7 @@ static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
         rc = free_name_entries(fm, d->first, &sc);
     }
     if (rc == 0) {
-        rc = block_flush(fm->dev);
+        rc = bcache_flush(fm->dev);
     }
     if (rc != 0) {
         return rc;
@@ -2518,7 +2518,7 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     }
     rc = free_name_entries(fm, od->first, &src);
     if (rc == 0) {
-        rc = block_flush(fm->dev);
+        rc = bcache_flush(fm->dev);
     }
     if (rc != 0) {
         goto out;
@@ -2534,7 +2534,7 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             rc = fat_put_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32, FAT_THROUGH);
         }
         if (rc == 0) {
-            rc = block_flush(fm->dev);
+            rc = bcache_flush(fm->dev);
         }
         if (rc != 0) {
             goto out;

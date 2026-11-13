@@ -305,6 +305,13 @@ int block_flush(block_device_t *dev)
     return 0;
 }
 
+/** The cache's flush, which records a failure against the mounts: here the
+ * device's flush alone, since no row reads the record. */
+int bcache_flush(block_device_t *dev)
+{
+    return block_flush(dev);
+}
+
 /**
  * Format a 64 KiB volume of a root and one free node, mount it through the
  * block backend of krffsmount.c, make a descriptor table, and clear the

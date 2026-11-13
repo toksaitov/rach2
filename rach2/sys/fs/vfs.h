@@ -1214,6 +1214,16 @@ void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs);
 int vfs_syncfs_error(struct vfs_mount *mnt, uint32_t *seen);
 
 /**
+ * The fsync report alone for a description of a file of `mnt` whose cursor
+ * is `*seen`: the errno of a write-back error recorded in the file system's
+ * `wb_err` since the cursor last looked, with the cursor moved past it, else
+ * 0, as Linux's `file_check_and_advance_wb_err` (mm/filemap.c:726). For a
+ * sync that failed before the file system's fsync could run, whose failure
+ * it has recorded and answered. Serialised with every other report.
+ */
+int vfs_fsync_error(struct vfs_mount *mnt, uint32_t *seen);
+
+/**
  * How many holds the mounts on `dev` account for: one for each mount, and
  * one for each of its references (`refs`) and operations in flight. An
  * unmount waits out the operations and answers EBUSY while anything else

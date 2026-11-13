@@ -189,7 +189,7 @@ static int volume_sync(void *ctx)
     if (bcache_sync(vol->dev) != 0) {
         return -1;
     }
-    return block_flush(vol->dev) == 0 ? 0 : -1;
+    return bcache_flush(vol->dev) == 0 ? 0 : -1;
 }
 
 /**
@@ -1175,7 +1175,7 @@ static void kv_abort_unmount(struct vfs_mount *mnt)
         return;
     }
     if (krffs_set_dirty(&vol->fs, 1) != 0 || bcache_sync(vol->dev) != 0 ||
-        block_flush(vol->dev) != 0) {
+        bcache_flush(vol->dev) != 0) {
         klog(KLOG_WARN, "krffs",
              "unmount: the volume would not take its dirty flag back: read-only");
         mnt->flags |= VFS_MS_RDONLY;
@@ -1198,7 +1198,7 @@ static int kv_prepare_unmount(struct vfs_mount *mnt)
     if (rc != 0 || !vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return rc;
     }
-    if (block_flush(vol->dev) != 0) {
+    if (bcache_flush(vol->dev) != 0) {
         return -EIO;
     }
     if (krffs_set_dirty(&vol->fs, 0) != 0) {

@@ -2680,6 +2680,20 @@ int bcache_sync(block_device_t *dev)
     return sync_device(dev, 1, 0);
 }
 
+int bcache_flush(block_device_t *dev)
+{
+    int rc = block_flush(dev);
+
+    if (rc != 0) {
+        klog(KLOG_WARN, "bcache", "flush: failed (%d)", rc);
+        wb_take();
+        write_failed_mark(dev, 0);
+        wb_give();
+        device_failed(dev, 0, rc);
+    }
+    return rc;
+}
+
 /* Set under both locks, since a release reads `last` under `cache_spin`
  * (`write_barred`) and the walks of the dirty lists under `wb_lock`, so
  * that no walk still runs the callbacks once the caller has cleared them. */
@@ -2739,14 +2753,7 @@ static int sync_device(block_device_t *dev, int durable, uint64_t since)
     if (!through || !durable) {
         return rc;
     }
-    flushed = block_flush(dev);
-    if (flushed != 0) {
-        klog(KLOG_WARN, "bcache", "sync: flush failed (%d)", flushed);
-        wb_take();
-        write_failed_mark(dev, 0);
-        wb_give();
-        device_failed(dev, 0, flushed);
-    }
+    flushed = bcache_flush(dev);
     return rc != 0 ? rc : flushed;
 }
 

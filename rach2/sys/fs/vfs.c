@@ -3195,22 +3195,30 @@ int vfs_syncfs_error(struct vfs_mount *mnt, uint32_t *seen)
     return rc;
 }
 
+int vfs_fsync_error(struct vfs_mount *mnt, uint32_t *seen)
+{
+    uint32_t flags = spin_lock_irqsave(&wb_err_lock);
+    int rc = wb_err_check(&mount_base(mnt)->wb_err, seen);
+
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+    return rc;
+}
+
 /** The body of `vfs_fsync` and `vfs_fdatasync`: the type's operation `op`, or
- * the device's sync for a type with neither, then the device's flush. A
- * flush that fails is reported to the mounts on the device
- * (`vfs_device_failed`) under the big lock, which is taken when the caller,
- * a sync of a type that sets `writes_unlocked`, lacks it. Then the
- * description's cursor `seen` moves past what the file system's `wb_err`
- * holds, whose error is the answer when the sync's own is 0: a write the
- * flusher or an eviction made and that failed is recorded only there, and a
- * later write of the same block that succeeds would hide it, as Linux's
- * fsync reports a mapping's recorded error once to each file
- * (`file_check_and_advance_wb_err`, mm/filemap.c:726). */
+ * the device's sync for a type with neither, then the device's flush
+ * (`bcache_flush`, which records a failure in the file system's `wb_err`, as
+ * the cache and the types record theirs). Then the description's cursor
+ * `seen` moves past what `wb_err` holds, whose error is the answer when the
+ * sync's own is 0: a write the flusher or an eviction made and that failed
+ * is recorded only there, and a later write of the same block that succeeds
+ * would hide it, as Linux's fsync reports a mapping's recorded error once to
+ * each file (`file_check_and_advance_wb_err`, mm/filemap.c:726). The cursor
+ * moves past the sync's own failure too, which was recorded before it
+ * returned, so the description is not told it twice. */
 static int sync_handle(struct vfs_mount *mnt, void *handle,
                        int (*op)(struct vfs_mount *mnt, void *handle), uint32_t *seen)
 {
-    uint32_t flags;
-    int rc, big, kept;
+    int rc, kept;
 
     if (!op) {
         rc = mnt->dev ? bcache_sync(mnt->dev) : 0;
@@ -3218,21 +3226,9 @@ static int sync_handle(struct vfs_mount *mnt, void *handle,
         rc = op(mount_base(mnt), handle);
     }
     if (rc == 0 && mnt->dev) {
-        rc = block_flush(mnt->dev);
-        if (rc != 0) {
-            big = !bkl_held();
-            if (big) {
-                bkl_enter();
-            }
-            vfs_device_failed(mnt->dev, 0, rc);
-            if (big) {
-                bkl_exit();
-            }
-        }
+        rc = bcache_flush(mnt->dev);
     }
-    flags = spin_lock_irqsave(&wb_err_lock);
-    kept = wb_err_check(&mount_base(mnt)->wb_err, seen);
-    spin_unlock_irqrestore(&wb_err_lock, flags);
+    kept = vfs_fsync_error(mnt, seen);
     return rc != 0 ? rc : kept;
 }
 
@@ -3301,11 +3297,7 @@ int vfs_sync_all(void)
             m->type->ops->sync(m);
         }
         if (bcache_sync(m->dev) == 0) {
-            int rc = block_flush(m->dev);
-
-            if (rc != 0) {
-                vfs_device_failed(m->dev, 0, rc);
-            }
+            (void)bcache_flush(m->dev);
         }
         vfs_leave(m);
     }
@@ -6563,9 +6555,8 @@ static int unmount_mount(struct vfs_mount *m)
         return -EIO;
     }
     /* A disk's own write cache reaches the medium only at a flush. */
-    rc = gone || !m->dev ? 0 : block_flush(m->dev);
+    rc = gone || !m->dev ? 0 : bcache_flush(m->dev);
     if (rc != 0) {
-        vfs_device_failed(m->dev, 0, rc);
         unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;
