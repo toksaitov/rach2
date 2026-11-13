@@ -824,14 +824,24 @@ static void request_release(struct i915_request *rq)
 }
 
 /** Park the GT, which is awake, and count the ticks it was awake, as
- * Linux's __gt_park adds to its awake time. The pool's idle shadows go,
- * since no retire pass runs to age them while the GT sleeps. */
+ * Linux's __gt_park adds to its awake time. Each engine's user interrupt,
+ * armed since its first request of the GT's wake, is let go, as Linux's
+ * engine park disarms its breadcrumbs (gt/intel_engine_pm.c:263,
+ * gt/intel_breadcrumbs.c:316-323). The pool's idle shadows go, since no
+ * retire pass runs to age them while the GT sleeps. */
 static void gt_park(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
+    int i;
 
     gt->awake = 0;
     gt->awake_ticks += rtc_ticks_now() - gt->unpark_ticks;
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        if (gt->engine[i].irq_armed) {
+            gt->engine[i].irq_armed = 0;
+            i915_engine_irq_put(i915, &gt->engine[i]);
+        }
+    }
     i915_gt_park(i915);
     i915_gem_pool_trim(i915, I915_POOL_IDLE);
 }
@@ -839,8 +849,8 @@ static void gt_park(struct drm_i915_private *i915)
 /**
  * Take from `e`'s list each request whose breadcrumb is written, or every
  * one for a cancel (`all`), oldest first, its fence signalled, its
- * waitboost let go, and release it; the user interrupt is let go once the
- * list is empty. Each finished request moves the ring's head to its end,
+ * waitboost let go, and release it; the user interrupt stays armed until
+ * the GT parks. Each finished request moves the ring's head to its end,
  * as Linux's i915_request_retire, so that the room it took is free again;
  * a cancel leaves the head to the ring's restart. Every request taken off
  * is signalled under `request_signal_locked`'s rule, a breadcrumb the chip
@@ -886,9 +896,6 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
         e->requests_tail = 0;
     }
     spin_unlock_irqrestore(&e->lock, flags);
-    if (done && !e->requests) {
-        i915_engine_irq_put(i915, e);
-    }
     while ((rq = done) != 0) {
         done = rq->next;
         rq->next = 0;
@@ -897,9 +904,13 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
     }
 }
 
-/* Under the GEM lock, since a request's release lets go of its objects
- * and their bindings. */
-void i915_retire_requests(struct drm_i915_private *i915)
+/**
+ * Retire each engine's completed requests and, when `park` is set and no
+ * engine has a request on its list, one being built or one Linux would not
+ * yet have retired, park the GT. Under the GEM lock, since a request's
+ * release lets go of its objects and their bindings.
+ */
+static void retire_pass(struct drm_i915_private *i915, int park)
 {
     struct i915_gt *gt = &i915->gt;
     int i, held = 0, taken = i915_gem_lock(i915);
@@ -908,10 +919,15 @@ void i915_retire_requests(struct drm_i915_private *i915)
         engine_retire(i915, &gt->engine[i], 0);
         held |= gt->engine[i].requests != 0 || gt->engine[i].unretired || gt->engine[i].building;
     }
-    if (gt->awake && !held) {
+    if (park && gt->awake && !held) {
         gt_park(i915);
     }
     i915_gem_unlock(i915, taken);
+}
+
+void i915_retire_requests(struct drm_i915_private *i915)
+{
+    retire_pass(i915, 0);
 }
 
 void i915_gt_retire_requests(struct drm_i915_private *i915)
@@ -931,19 +947,23 @@ void i915_gt_retire_requests(struct drm_i915_private *i915)
         }
         spin_unlock_irqrestore(&e->lock, flags);
     }
-    i915_retire_requests(i915);
+    retire_pass(i915, 1);
     i915_gem_pool_trim(i915, I915_POOL_STALE);
 }
 
 /**
  * The retire worker, Linux's retire_work_handler and engine_retire: on
  * each device whose GT is awake, the pass of every engine at
- * `retire_deadline`, and the requests of an engine whose last request
- * signalled to a listener at once. Until then the GT stays awake between
- * a client's requests, as on Linux, where each request holds its engine,
- * and the engine the GT, until it retires; RC6 and RPS's down interrupts
- * lower its power meanwhile. In the worker, or a host test's call of
- * `i915_submit_work`.
+ * `retire_deadline`, which parks an idle GT, and the requests of an engine
+ * whose last request signalled to a listener at once, which does not.
+ * Linux parks an engine only after a switch to its kernel context has run
+ * and retired (gt/intel_engine_pm.c:150-230, 255-288), and on the Lenovo
+ * its GT stayed awake from one call of WineD3D's round trip to the next:
+ * 1,013 of the GPU's interrupts for 1,003 calls, where a park after each
+ * would add the switch's own (dev-log/84-locks/84-157.md). So the GT
+ * stays awake between a client's requests, and RC6 and RPS's down
+ * interrupts lower its power meanwhile. In the worker, or a host test's
+ * call of `i915_submit_work`.
  */
 static void retire_work(void)
 {
@@ -1357,8 +1377,12 @@ int32_t i915_request_add(struct i915_request *rq)
     rq->tail = e->tail;
     rq->added_ns = dma_fence_now();
     /* The interrupt is unmasked before the chip can reach the breadcrumb,
-     * and stays so while the engine has requests. */
-    if (!e->requests) {
+     * and stays so until the GT parks, as Linux arms the breadcrumbs' and
+     * disarms them only when the engine parks or an interrupt finds no
+     * listener (gt/intel_breadcrumbs.c:229-262); here every breadcrumb
+     * interrupts. */
+    if (!e->irq_armed) {
+        e->irq_armed = 1;
         i915_engine_irq_get(i915, e);
     }
     (void)dma_fence_get(&rq->fence.base);

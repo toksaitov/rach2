@@ -272,7 +272,9 @@ struct i915_irq {
  * Breadcrumbs. `seqno` is the last sequence number emitted, and the
  * status page's dword I915_GEM_HWS_SEQNO the last the chip has written.
  * `wq` holds the processes that wait for one, woken from the user
- * interrupt, which is unmasked while `irq_refs` is above 0. `irq_seen`
+ * interrupt, which is unmasked while `irq_refs` is above 0. `irq_armed`
+ * says the requests hold one of them, taken with the engine's first
+ * request since the GT unparked and let go when it parks. `irq_seen`
  * counts the user interrupts taken. `running` is set once the ring has
  * started.
  *
@@ -290,7 +292,8 @@ struct i915_irq {
  * would have retired every request of the engine, which on Haswell's ring
  * submission, one timeline an engine, is when the last request signals to
  * a listener or when the retire worker, once a second, finds it complete;
- * the GT parks only when no engine has it set (i915_request.c).
+ * the GT parks only at the worker's pass or a wait for its idle, when no
+ * engine has it set (i915_request.c).
  * `building` is set from a request's creation to its publication on
  * `requests`, as Linux holds the timeline's mutex from i915_request_create
  * to i915_request_add: while it is set the engine's last request is not
@@ -341,6 +344,7 @@ struct i915_engine {
     uint32_t tail;
     uint32_t seqno;
     uint32_t irq_refs;
+    uint8_t irq_armed;
     uint32_t irq_seen;
     wait_queue_t wq;
     uint8_t running;
@@ -4042,15 +4046,15 @@ struct i915_request *i915_request_throttle_target(struct intel_context *ce, int6
 int i915_submit_work(void);
 
 /** Retire every request whose breadcrumb the chip has written, oldest
- * first on each engine, and park the GT once no engine has a request on
- * its list, one being built, or one Linux would not yet have retired
- * (`unretired`). */
+ * first on each engine. The GT stays awake: only `i915_gt_retire_requests`
+ * parks it. */
 void i915_retire_requests(struct drm_i915_private *i915);
 
 /** Retire every completed request as Linux's intel_gt_retire_requests
  * does, all of an engine's once its last request is complete, and park the
- * GT when that leaves every engine idle: the retire worker's pass, and
- * what a wait for the GT's idle and debugfs's DROP_RETIRE do. */
+ * GT when no engine has a request on its list, one being built, or one
+ * Linux would not yet have retired (`unretired`): the retire worker's
+ * pass, and what a wait for the GT's idle and debugfs's DROP_RETIRE do. */
 void i915_gt_retire_requests(struct drm_i915_private *i915);
 
 /** The device is unplugged: every request not completed fails with -EIO,

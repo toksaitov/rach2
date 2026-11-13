@@ -1481,8 +1481,8 @@ static void row_requests(void)
               rcs->ring[rq->postfix / 4 + 2] == rcs->hws_ggtt + I915_GEM_HWS_SEQNO_ADDR &&
               rcs->ring[rq->postfix / 4 + 4] == MI_USER_INTERRUPT && rr->ctx.pipe_controls >= 3);
     i915_retire_requests(i915);
-    CHECK("requests: retired and the interrupt let go, the GT kept awake, since no one waited",
-          !rcs->requests && !rcs->requests_tail && rcs->irq_refs == 0 && i915->gt.awake &&
+    CHECK("requests: retired, the interrupt kept armed until the GT parks, the GT awake",
+          !rcs->requests && !rcs->requests_tail && rcs->irq_refs == 1 && i915->gt.awake &&
               parks == 1);
     i915_request_put(rq);
 
@@ -1644,9 +1644,34 @@ static void row_park_unwatched(void)
     done(&m);
 }
 
-/** 80-47: a wait or a fence callback on an engine's last request parks the
- * GT once it signals; on an earlier request, or with another engine's
- * request unwatched, the GT stays awake until the wait for idle. */
+/** 80-47: a wait for an engine's last request lets the engine go once it
+ * signals, and the retire worker's pass parks the GT (84-157). */
+static void row_park_waited(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *rq;
+    int p;
+
+    rq = submit(r, 0, 0);
+    p = parks;
+    CHECK("park: a wait for the engine's last request lets the engine go when it signals",
+          rq && wait_running(rr, rq, 100000000) == 0 && rq->waiters == 0 && !rcs->unretired &&
+              !rcs->requests && i915->gt.awake && parks == p);
+    i915_gt_retire_requests(i915);
+    CHECK("park: and the retire worker's pass parks the GT", !i915->gt.awake && parks == p + 1);
+    i915_request_put(rq);
+    intel_context_put(r);
+    done(&m);
+}
+
+/** 80-47: a fence callback on an engine's last request lets the engine go
+ * once it signals, and the retire worker's pass parks the GT (84-157); on
+ * an earlier request, or with another engine's request unwatched, the
+ * engine is held until the pass or the wait for idle. */
 static void row_park_watched(void)
 {
     struct i915_model m;
@@ -1659,12 +1684,6 @@ static void row_park_watched(void)
     struct dma_fence_cb cb, cb2;
     int p;
 
-    rq = submit(r, 0, 0);
-    p = parks;
-    CHECK("park: a wait for the engine's last request parks the GT when it signals",
-          rq && wait_running(rr, rq, 100000000) == 0 && rq->waiters == 0 && !i915->gt.awake &&
-              parks == p + 1);
-    i915_request_put(rq);
     p = parks;
     rq = submit(r, 0, 0);
     rq2 = submit(r, 0, 0);
@@ -1680,8 +1699,10 @@ static void row_park_watched(void)
     run_ms(1);
     CHECK("park: its signal lets the engine go", !rcs->unretired && i915->gt.awake);
     (void)i915_submit_work();
-    CHECK("park: and the worker retires it at once and parks the GT",
-          !i915->gt.awake && !rcs->requests && parks == p + 1);
+    CHECK("park: and the worker retires it at once, the GT awake",
+          i915->gt.awake && !rcs->requests && parks == p);
+    i915_gt_retire_requests(i915);
+    CHECK("park: until the worker's pass parks it", !i915->gt.awake && parks == p + 1);
     i915_request_put(rq);
     i915_request_put(rq2);
     i915_request_put(rq3);
@@ -1794,9 +1815,11 @@ static void row_park_building(void)
     run_ms(2001);
     (void)i915_submit_work();
     CHECK("park: holds the GT awake past the worker's pass", i915->gt.awake && parks == p);
-    CHECK("park: and once added and waited for, parks it",
+    CHECK("park: and once added and waited for, lets it go",
           rq && i915_request_add(rq) == 0 && wait_running(rr, rq, 100000000) == 0 &&
-              !i915->gt.awake && parks == p + 1);
+              !rcs->unretired && i915->gt.awake && parks == p);
+    i915_gt_retire_requests(i915);
+    CHECK("park: for the worker's pass to park", !i915->gt.awake && parks == p + 1);
     i915_request_put(rq);
     intel_context_put(r);
     done(&m);
@@ -1865,8 +1888,8 @@ static int notice_taken(void)
 /**
  * 80-50: a last request that signals to a listener just after the retire
  * worker has taken and cleared its notice kicks the next pass, which
- * retires the engine at once and parks the GT, as Linux's
- * intel_engine_add_retire queues the work again after its xchg.
+ * retires the engine at once, as Linux's intel_engine_add_retire queues
+ * the work again after its xchg; the pass at its second parks the GT.
  */
 static void row_park_kick_after_notice(void)
 {
@@ -1891,8 +1914,10 @@ static void row_park_kick_after_notice(void)
           unlock_fired == 1 && rq && rq->fence.base.signaled && !rcs->unretired && rcs->requests &&
               i915->gt.awake && parks == p);
     (void)i915_submit_work();
-    CHECK("kick: and the next pass retires the engine at once and parks the GT",
-          !rcs->requests && !i915->gt.awake && parks == p + 1);
+    CHECK("kick: and the next pass retires the engine at once",
+          !rcs->requests && i915->gt.awake && parks == p);
+    i915_gt_retire_requests(i915);
+    CHECK("kick: and the pass at its second parks the GT", !i915->gt.awake && parks == p + 1);
     i915_request_put(rq);
     intel_context_put(r);
     done(&m);
@@ -1942,9 +1967,9 @@ static void row_park_signal_adding(void)
 /**
  * 80-50: a wait that timed out, a wait a signal interrupted and a callback
  * taken back, each on the engine's last request before it signalled, still
- * let the engine go when it signals, and the worker parks the GT at once,
- * as Linux keeps a request's signalling enabled once a callback or a wait
- * has enabled it.
+ * let the engine go when it signals, and the worker retires it at once, as
+ * Linux keeps a request's signalling enabled once a callback or a wait has
+ * enabled it; the worker's pass at its second parks the GT.
  */
 static void row_park_listener_left(void)
 {
@@ -1967,7 +1992,9 @@ static void row_park_listener_left(void)
     CHECK("left: its signal after the timeout lets the engine go",
           rq && rq->fence.base.signaled && !rcs->unretired);
     (void)i915_submit_work();
-    CHECK("left: and the worker parks the GT", !i915->gt.awake && parks == p + 1);
+    CHECK("left: the worker retires it, the GT awake", !rcs->requests && i915->gt.awake);
+    i915_gt_retire_requests(i915);
+    CHECK("left: and the worker's pass parks the GT", !i915->gt.awake && parks == p + 1);
     i915_request_put(rq);
 
     rr->stuck = 1;
@@ -1981,7 +2008,9 @@ static void row_park_listener_left(void)
     CHECK("left: its signal after the interruption lets the engine go",
           rq && rq->fence.base.signaled && !rcs->unretired);
     (void)i915_submit_work();
-    CHECK("left: and the worker parks the GT again", !i915->gt.awake && parks == p + 1);
+    CHECK("left: the worker retires it, the GT awake", !rcs->requests && i915->gt.awake);
+    i915_gt_retire_requests(i915);
+    CHECK("left: and the worker's pass parks the GT again", !i915->gt.awake && parks == p + 1);
     i915_request_put(rq);
 
     rr->stuck = 1;
@@ -1995,7 +2024,10 @@ static void row_park_listener_left(void)
     CHECK("left: its signal after the removal lets the engine go",
           rq && rq->fence.base.signaled && !rcs->unretired);
     (void)i915_submit_work();
-    CHECK("left: and the worker parks the GT a third time", !i915->gt.awake && parks == p + 1);
+    CHECK("left: the worker retires it, the GT awake", !rcs->requests && i915->gt.awake);
+    i915_gt_retire_requests(i915);
+    CHECK("left: and the worker's pass parks the GT a third time",
+          !i915->gt.awake && parks == p + 1);
     i915_request_put(rq);
     CHECK("left: no sleep reached its bound", stuck_sleeps == 0);
     intel_context_put(r);
@@ -2007,8 +2039,8 @@ static void row_park_listener_left(void)
  * taken. A callback asked for then finds it signalled, as Linux's
  * i915_fence_signaled and i915_fence_enable_signaling answer
  * (i915_request.c:88-96), and does not count it listened for, so its
- * retirement leaves the GT awake to the worker's pass. One asked for while
- * it ran lets the engine go at the first retirement, before the
+ * retirement leaves the engine held to the worker's pass. One asked for
+ * while it ran lets the engine go at the first retirement, before the
  * interrupt, though a query signalled its fence first, as Linux's
  * signal_irq_work goes by I915_FENCE_FLAG_SIGNAL.
  */
@@ -2045,8 +2077,10 @@ static void row_park_before_interrupt(void)
     CHECK("early: a query once its breadcrumb is written signals it, the engine still held",
           rq && dma_fence_is_signaled(&rq->fence.base) && rcs->unretired && i915->gt.awake);
     i915_retire_requests(i915);
-    CHECK("early: the retirement before the interrupt lets the engine go and parks the GT",
-          !rcs->requests && !rcs->unretired && !i915->gt.awake && parks == p + 1);
+    CHECK("early: the retirement before the interrupt lets the engine go",
+          !rcs->requests && !rcs->unretired && i915->gt.awake && parks == p);
+    i915_gt_retire_requests(i915);
+    CHECK("early: and the worker's pass parks the GT", !i915->gt.awake && parks == p + 1);
     irq_on = 1;
     i915_request_put(rq);
     intel_context_put(r);
@@ -2072,9 +2106,9 @@ static int ring_runs_now(void)
  * 80-61: the engine's last request, listened for, whose breadcrumb the
  * chip writes after the retirement's signalling pass and before its
  * removal, with no interrupt taken: the removal signals it under the same
- * rule, letting the engine go and parking the GT, as Linux's retirement
- * drops the request's hold on its context in every path (i915_request.c:
- * 409).
+ * rule, letting the engine go, as Linux's retirement drops the request's
+ * hold on its context in every path (i915_request.c:409), for the worker's
+ * pass to park the GT.
  */
 static void row_park_between_passes(void)
 {
@@ -2098,8 +2132,10 @@ static void row_park_between_passes(void)
     i915_retire_requests(i915);
     CHECK("between: the breadcrumb written after the signalling pass, the interrupt not taken",
           unlock_fired == 1 && rq && rq->fence.base.signaled && !rq->signaling);
-    CHECK("between: the removal lets the engine go and parks the GT",
-          !rcs->requests && !rcs->unretired && !i915->gt.awake && parks == p + 1);
+    CHECK("between: the removal lets the engine go",
+          !rcs->requests && !rcs->unretired && i915->gt.awake && parks == p);
+    i915_gt_retire_requests(i915);
+    CHECK("between: and the worker's pass parks the GT", !i915->gt.awake && parks == p + 1);
     irq_on = 1;
     i915_request_put(rq);
     intel_context_put(r);
@@ -2515,6 +2551,7 @@ int main(void)
     row_engines_raced();
     row_requests();
     row_park_unwatched();
+    row_park_waited();
     row_park_watched();
     row_park_building();
     row_park_spin();
