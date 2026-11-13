@@ -58,8 +58,8 @@
 #   Windows' preparation and cases, and once winclean.sh has confirmed that
 #   nothing of them runs, ends both claims, a claim that still waits for
 #   admission included, as claim_stop says; a claim of a run that is not
-#   confirmed stopped stays, and ends ten minutes after the run's last touch
-#   of its ID.alive. Each run, on the Mac and in each Windows part, has a
+#   confirmed stopped stays, and ends once the run's ID.alive has not grown
+#   for ten minutes. Each run, on the Mac and in each Windows part, has a
 #   directory of its own, build/tmp/ID in its copy,
 #   ID ending in the time and a random suffix, which ETUDE_RUN_DIR names and
 #   which holds its TMPDIR and etude's scratch. A failure first writes ID/KEPT,
@@ -1320,8 +1320,9 @@ lost()
 # no Job Object, which makes the job Global\rach2-ID.PART, joins it, reads
 # the token and, while it still holds the nonce, starts the script in bash,
 # so that everything the part starts is born in the job and ends with it, as
-# winclean.sh says. The bash writes its output to OUT/ID.PART.out, touches
-# OUT/ID.alive each minute while it runs, which keeps WSL's claims for ID,
+# winclean.sh says. The bash writes its output to OUT/ID.PART.out, appends a
+# byte to OUT/ID.alive each minute while it runs, which keeps WSL's claims
+# for ID,
 # and once the script has ended with a line `status N`, writes N to
 # OUT/ID.PART.rc, so that no line of the output that begins `status ` reads
 # as the part's end. A TERM while the start runs ends the start's ssh before
@@ -1333,8 +1334,9 @@ lost()
 # comes only after the job's end. A poll that ssh ends with any
 # status but 0, or where Windows cannot say, is never read, since its reply
 # may lack its end: FILE notes it, as a lost link when the status is 255,
-# with ssh's own lines, and the next poll connects again; after an hour
-# without a whole answer the run is given up, and windows_clean stops it
+# with ssh's own lines, and the next poll connects again; after sixty polls
+# in a row without a whole answer, an hour or more, the run is given up, as
+# FILE says, and windows_clean stops it
 # once the host answers. FILE gets the output, with each of its lines that
 # begins `status ` marked `output: `, and ends with `status N` from
 # OUT/ID.PART.rc, or, when the process ended without one, did not start or
@@ -1366,7 +1368,7 @@ rm -f "$b.out" "$b.rc"
 END
         echo "cat > $wd_base.sh << 'END_OF_RUN'"
         echo "exec > $wd_base.out 2>&1 < /dev/null"
-        echo "while kill -0 \$\$ 2> /dev/null; do touch $wout/$1.alive; sleep 60; done &"
+        echo "while kill -0 \$\$ 2> /dev/null; do printf . >> $wout/$1.alive; sleep 60; done &"
         echo "("
         cat <&3
         echo ")"
@@ -1413,7 +1415,8 @@ END
         rm -f "$wd_err.start"
         return
     fi
-    wd_seen=$(date +%s)
+    # Polls in a row without a whole answer, each a minute's sleep apart.
+    wd_lost=0
     while :; do
         sleep 60 9>&- &
         wd_sleep=$!
@@ -1449,13 +1452,14 @@ END
             else
                 echo "release: $(date -u '+%FT%TZ'): the poll ended with status $wd_rc: $(tr -d '\r' < "$wd_err" | tr '\n' ' ')" >> "$wd_file"
             fi
-            if [ $(($(date +%s) - wd_seen)) -ge 3600 ]; then
-                echo "lost: the testing host has not answered for an hour; the run may still run there" >> "$wd_file"
+            wd_lost=$((wd_lost + 1))
+            if [ "$wd_lost" -ge 60 ]; then
+                echo "lost: the testing host has not answered sixty polls in a row, an hour or more; the run may still run there" >> "$wd_file"
                 break
             fi
             continue
         fi
-        wd_seen=$(date +%s)
+        wd_lost=0
         case $wd_state in
             done)
                 tr -d '\r' < "$wd_poll" | sed 1d >> "$wd_file"
@@ -1493,8 +1497,8 @@ windows_settings()
 # its cases. When it stopped a part, it first stops what of the run still
 # runs on Windows and removes its scratch there, so that the whole host's
 # claim lasts until the cases have stopped; when windows_clean cannot confirm
-# that, the claim stays until ten minutes after the cases' last touch of
-# ID.alive, which they make while they run.
+# that, the claim stays until ID.alive, which the cases append to while they
+# run, has not grown for ten minutes.
 windows_stop()
 {
     wstopped='' wleft=''
@@ -1585,358 +1589,81 @@ winclean()
         -o ServerAliveCountMax=4 testing "C:/msys64/usr/bin/bash.exe -l -s $wc_mode $wtree $wout $*"
 }
 
-# claim_runner: print the perl program that runs an attempt of a claim of
-# WSL's admission, as claim_start says. Its arguments are the claim's lock
-# and token files, the attempt's nonce, the base of the attempt's files and
-# the launcher's command. RACH2_CLAIM_LEDGER and RACH2_CLAIM_ETUDE name
-# another ledger and etude, which the host case uses; claim_stop reads them
-# too.
-claim_runner()
+# claim_pl ARG...: print the lines of a WSL script that run tools/flow/claim.pl
+# with ARG..., the program read from the script itself.
+claim_pl()
 {
-    cat << 'END'
-use strict;
-use warnings;
-use Fcntl qw(:flock F_GETFD F_SETFD FD_CLOEXEC);
-use POSIX qw(WNOHANG);
+    echo "perl - $* << 'END_OF_CLAIM'"
+    cat "$repo/tools/flow/claim.pl"
+    echo "END_OF_CLAIM"
+}
 
-my ($lock, $token, $nonce, $base, @command) = @ARGV;
-my $ledger = $ENV{RACH2_CLAIM_LEDGER} // '/var/lib/rach2-etude/ledger';
-my $etude = $ENV{RACH2_CLAIM_ETUDE} // '/usr/local/libexec/rach2/etude';
-
-# mine: succeed while the token holds this attempt's nonce.
-sub mine
+# claim_ssh SECONDS: run standard input as a script in WSL on the testing
+# host, as bound.pl bounds it, so that a trap that waits for a claim's ssh
+# waits no longer than SECONDS, though a live sshd's wsl.exe hangs.
+claim_ssh()
 {
-    open(my $t, '<', $token) or return 0;
-    my $s = <$t>;
-    return defined $s && $s =~ /^\Q$nonce\E\r?\n?\z/;
+    perl "$repo/tools/flow/bound.pl" "$1" ssh -o BatchMode=yes -o ConnectTimeout=10 \
+        -o ServerAliveInterval=15 -o ServerAliveCountMax=4 testing "$WSL"
 }
 
-# put FILE TEXT: write TEXT to FILE whole; succeed once it is in place.
-sub put
-{
-    my ($file, $text) = @_;
-    open(my $f, '>', "$file.part") or return 0;
-    print $f $text;
-    return close($f) && rename("$file.part", $file);
-}
-
-# start PID: field 22 of proc(5)'s stat of process PID, the start that the
-# ledger keeps beside its owner's number, or nothing where there is no proc.
-sub start
-{
-    my ($p) = @_;
-    open(my $s, '<', "/proc/$p/stat") or return '';
-    my $line = <$s> // '';
-    $line =~ s/.*\) //s;
-    return (split(' ', $line))[19] // '';
-}
-
-# claim_start makes the lock with the token; a lock that is gone was removed
-# by claim_stop, which leaves nothing for a late attempt to start.
-open(my $l, '<', $lock) or exit 0;
-flock($l, LOCK_SH) or die "claim: cannot lock $lock: $!\n";
-exit 0 unless mine();
-# The launcher and what it starts hold the lock too.
-fcntl($l, F_SETFD, fcntl($l, F_GETFD, 0) & ~FD_CLOEXEC) or die "claim: fcntl: $!\n";
-put("$base.started", '');
-my $parent = $$;
-my $pid = fork();
-defined $pid or die "claim: cannot fork: $!\n";
-if ($pid == 0) {
-    # prctl(PR_SET_PDEATHSIG, SIGTERM) on x86-64 Linux: a runner that dies
-    # first sends the launcher TERM, on which admission withdraws its request.
-    syscall(157, 1, 15) if $^O eq 'linux' && (POSIX::uname())[4] eq 'x86_64';
-    exit 1 if getppid() != $parent;
-    # The ledger names the launcher by this number and start, which exec
-    # keeps; claim_stop looks them up there before it confirms the end, so
-    # they are on disk before anything can enter the ledger.
-    put("$base.owner", "$$ " . start($$) . "\n") or exit 1;
-    exec { $command[0] } @command or exit 127;
-}
-# The child is not reaped before its start is read.
-my $start = start($pid);
-my ($sent, $killed, $status) = (0, 0, 0);
-while (1) {
-    if (waitpid($pid, WNOHANG) == $pid) {
-        $status = $?;
-        # claim_state calls no claim granted once its launcher has ended.
-        put("$base.reaped", '');
-        last;
-    }
-    # TERM, then KILL, go only to this unreaped child.
-    if (!$sent && !mine()) {
-        kill('TERM', $pid);
-        $sent = time;
-    } elsif ($sent && !$killed && time - $sent >= 30) {
-        kill('KILL', $pid);
-        $killed = 1;
-    }
-    sleep 1;
-}
-# etude status drops a dead owner's claim or request from the ledger; the
-# owner is this child, by number and start.
-my $held = 1;
-for (1 .. 12) {
-    # Half a minute at most, by an alarm that exec keeps.
-    my $e = fork();
-    if (defined $e && $e == 0) {
-        open(STDOUT, '>', '/dev/null');
-        open(STDERR, '>&', \*STDOUT);
-        alarm 30;
-        exec { $etude } $etude, 'status', $ledger or exit 127;
-    }
-    waitpid($e, 0) if $e;
-    $held = 0;
-    if (open(my $c, '<', "$ledger/claims")) {
-        while (<$c>) {
-            $held = 1 if /^owner $pid (\Q$start\E |\d+ 0$)/;
-        }
-    }
-    last unless $held;
-    sleep 5;
-}
-put("$base.held", "process $pid keeps a claim or request in $ledger/claims; a person checks it and removes it\n")
-    if $held;
-put("$base.rc", ($status & 127 ? 128 + ($status & 127) : $status >> 8) . "\n");
-exit 0;
-END
-}
-
-# claim_publisher: print the perl program that runs a publication of
-# claim_start. Its arguments are LIMIT, LOCK and the publication's command.
-# It takes LOCK exclusively, a minute at most, clears close-on-exec so that
-# the command and all it starts hold the lock too, and runs the command in a
-# process group of its own; once the command has ended, LIMIT seconds have
-# passed or the program takes HUP, INT, PIPE or TERM, it kills that group,
-# so that a process the command left, or one that stalls, closes its
-# descriptor of the lock, and exits with the command's status, or 1 when it
-# killed the command or could not take the lock.
-claim_publisher()
-{
-    cat << 'END'
-use strict;
-use warnings;
-use Fcntl qw(:flock F_GETFD F_SETFD FD_CLOEXEC);
-use POSIX qw(WNOHANG);
-my ($limit, $lock, @command) = @ARGV;
-open(my $l, '>>', $lock) or die "publish: cannot open $lock: $!\n";
-my $got = 0;
-for (1 .. 60) {
-    if (flock($l, LOCK_EX | LOCK_NB)) {
-        $got = 1;
-        last;
-    }
-    sleep 1;
-}
-$got or die "publish: a stop or another publication still holds $lock after a minute\n";
-fcntl($l, F_SETFD, fcntl($l, F_GETFD, 0) & ~FD_CLOEXEC) or die "publish: fcntl: $!\n";
-my $why = '';
-$SIG{$_} = sub { $why ||= "it took $_[0]" } for qw(HUP INT PIPE TERM);
-my $pid = fork();
-defined $pid or die "publish: cannot fork: $!\n";
-if ($pid == 0) {
-    setpgrp(0, 0);
-    open(STDIN, '<', '/dev/null');
-    exec { $command[0] } @command or exit 127;
-}
-# Both sides set the group, so that it exists before a kill names it.
-setpgrp($pid, $pid);
-my $end = time + $limit;
-my $status;
-while (1) {
-    if (waitpid($pid, WNOHANG) == $pid) {
-        $status = $?;
-        last;
-    }
-    $why ||= "it did not end within $limit seconds" if time >= $end;
-    last if $why;
-    select(undef, undef, undef, 0.1);
-}
-kill('KILL', -$pid);
-waitpid($pid, 0) unless defined $status;
-for (1 .. 50) {
-    last unless kill(0, -$pid);
-    select(undef, undef, undef, 0.1);
-}
-if ($why) {
-    print STDERR "publish: killed the publication: $why\n";
-    exit 1;
-}
-exit($status & 127 ? 1 : $status >> 8);
-END
-}
-
-# claim_start ID KIND N LAUNCH GOT DONE: start attempt N of a claim of WSL's
-# admission for Windows' run ID apart from any ssh session: the launcher
-# LAUNCH runs a shell that touches OUT/GOT and OUT/ID.alive once admitted and
-# holds the claim while OUT/DONE is missing, OUT/ID.alive is under ten
-# minutes old, which the part's script on Windows and beat keep fresh, and
-# the claim's token holds the attempt's nonce. The claim's lock, grant lock
-# and token, LOCKS/ID.KIND.lock, LOCKS/ID.KIND.grant and LOCKS/ID.KIND.token,
-# LOCKS being build/flow/claims of the owner's clone in WSL, are on ext4,
-# where flock holds; OUT is not.
-#
-# Permission comes first, in an ssh of its own: holding LOCKS/publish.lock,
-# it links a file holding `go N` to the token, which fails when a token
-# exists, as a stop or another attempt leaves it, and only then makes the
-# locks and removes GOT and the attempt's files. Nothing else is sent unless
-# it succeeded, so that an attempt's runner only ever starts after its
-# permission was confirmed, and a publication that a lost link delays
-# creates a token for an attempt that has no runner, and nothing at all once
-# a later attempt has its own. claim_stop writes its token under the same
-# lock, so that a publication is whole before a stop or after it, and a
-# delayed one never removes the GOT of an attempt that came after the stop.
-# The publication runs under the perl program that claim_publisher prints,
-# which waits a minute at most for that lock, which is never removed, and
-# then gives the publication RACH2_CLAIM_PUBLISH seconds, 30 unless WSL's
-# environment sets it, before it kills the publication's process group,
-# every process of which inherits the lock; so a stalled publication holds
-# the lock for less than the minute that claim_stop waits for it. Each ssh
-# ends after a deadline too, two and a half minutes for the publication and
-# two for the runner's start, so that a stop's TERM, which the caller's trap
-# takes only once its foreground command has ended, waits no longer.
-#
-# The attempt runs under the perl program that claim_runner prints, written
-# to OUT/ID.KIND.N.pl and run in a session of its own, since WSL ends what a
-# session started when wsl.exe ends. It opens the lock, which it never
-# creates, takes it shared, starts nothing unless the token holds `go N`,
-# touches OUT/ID.KIND.N.started, and starts the launcher, which inherits the
-# lock and first writes its number and start to OUT/ID.KIND.N.owner. Once
-# admitted, the launcher's command, a perl parent of the holding shell,
-# takes the lock shared too, which the shell inherits, and the grant lock
-# shared, which only that parent holds, so that the grant lock is free once
-# the shell has ended and before admission is released. When the token
-# changes the runner sends TERM to the launcher, its own unreaped child, and
-# KILL half a minute later. Once the launcher has ended it touches
-# OUT/ID.KIND.N.reaped and, once etude status reads that the launcher has
-# left the ledger, it writes OUT/ID.KIND.N.held when it has not, and then the
-# launcher's status to OUT/ID.KIND.N.rc. The output goes to OUT/ID.KIND.N.
-# The caller has stopped every earlier attempt. Return once the attempt has
-# started, or after half a minute; fail when its permission was not
-# confirmed.
+# claim_start ID KIND N LAUNCH DONE: start attempt N of a claim of WSL's
+# admission for Windows' run ID apart from any ssh session, in one ssh that
+# lasts two minutes at most. The claim's files are LOCKS/ID.KIND.N.* and its
+# tombstones LOCKS/ID.KIND.stop and LOCKS/ID.KIND.N.stop, LOCKS being
+# build/flow/claims of the owner's clone in WSL, which is ext4, where flock
+# holds; claim.pl's header says what each is. The ssh creates
+# LOCKS/ID.KIND.N.pl, a copy of claim.pl, failing when it exists, and runs
+# it as the runner in a session of its own, since WSL ends what a session
+# started when wsl.exe ends, with its output in LOCKS/ID.KIND.N.out. The
+# runner starts the launcher LAUNCH unless a tombstone exists or
+# OUT/windows.current names another run; once admitted, the launcher runs
+# claim.pl's holder, which holds the claim while OUT/DONE is missing, no
+# tombstone exists and OUT/ID.alive grew in the last ten minutes, which the
+# part's script on Windows and beat make it do. The caller has stopped every
+# earlier attempt. Return once the runner has started the launcher, or after
+# half a minute; fail when the copy could not be made.
 claim_start()
 {
-    c=$wheld/$1.$2.$3 k=$wlock/$1.$2
+    c=$wlock/$1.$2.$3
     {
-        echo "mkdir -p $wlock || exit 1"
-        echo "perl - \"\${RACH2_CLAIM_PUBLISH:-30}\" $wlock/publish.lock sh -c \"echo 'go $3' > $k.token.$3 && ln $k.token.$3 $k.token || { rm -f $k.token.$3; exit 1; }; rm -f $k.token.$3 $c.rc $c.held $c.started $c.owner $c.reaped $wheld/$5 && : >> $k.lock && : >> $k.grant\" << 'END_OF_PUBLICATION' || exit 1"
-        claim_publisher
-        echo "END_OF_PUBLICATION"
-    } | perl "$repo/tools/flow/bound.pl" 150 ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
-        -o ServerAliveCountMax=4 testing "$WSL" || return 1
-    {
-        echo "cat > $c.pl << 'END_OF_CLAIM'"
-        claim_runner
+        echo "mkdir -p $wlock && (set -C && cat > $c.pl) << 'END_OF_CLAIM' || exit 1"
+        cat "$repo/tools/flow/claim.pl"
         echo "END_OF_CLAIM"
-        echo "cd /tmp && setsid nohup perl $c.pl $k.lock $k.token 'go $3' $c env $4 \\"
-        echo "    perl -MFcntl=:flock,F_SETFD -e 'open(L, \"<\", shift) && flock(L, LOCK_SH) && fcntl(L, F_SETFD, 0) && open(G, \"<\", shift) && flock(G, LOCK_SH) || exit 1; defined(my \$p = fork()) || exit 1; \$p || exec(@ARGV) || exit 127; waitpid(\$p, 0); exit(\$? & 127 ? 128 + (\$? & 127) : \$? >> 8)' $k.lock $k.grant \\"
-        echo "    sh -c 'touch $wheld/$5 $wheld/$1.alive"
-        echo "    while [ ! -e $wheld/$6 ] && [ \"\$(cat $k.token 2> /dev/null)\" = \"go $3\" ] &&"
-        echo "        find $wheld/$1.alive -mmin -10 2> /dev/null | grep -q .; do sleep 5; done' > $c 2>&1 < /dev/null &"
-        echo "i=0; until [ -e $c.started ] || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done"
-    } | perl "$repo/tools/flow/bound.pl" 120 ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
-        -o ServerAliveCountMax=4 testing "$WSL"
+        echo "cd /tmp && setsid nohup perl $c.pl run $wlock $wheld $1 $2 $3 env $4 \\"
+        echo "    perl $c.pl hold $wlock $wheld $1 $2 $3 $5 > $c.out 2>&1 < /dev/null &"
+        echo "i=0; until [ -e $c.go ] || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done"
+    } | claim_ssh 120
 }
 
-# claim_state ID KIND N GOT: print `granted` while OUT/GOT exists, the
-# claim's grant lock is held and attempt N's launcher has not ended,
-# `refused` when the claim's lock is free and the launcher ended without
-# GOT, `unstarted` when the lock is free and the attempt never started, as a
-# link lost while claim_start ran or a token not its own leaves it, `dead`
-# when the lock is free and the attempt started but has no status, as a
-# restart of WSL leaves it, or holds GOT, since its holder has ended, and
+# claim_state ID KIND N: print the state of attempt N of the claim ID.KIND
+# as claim.pl's state gives it: `granted`, `refused`, `unstarted`, `dead`, or
 # nothing while it waits, while its runner cleans up after its launcher, when
-# a lock cannot be read or the link is lost. The lock alone cannot say
-# `granted`, since the runner holds it after the launcher has released its
-# admission. On `unstarted` or `dead` the caller ends the claim with
-# claim_stop and starts another attempt, three in all.
+# a lock cannot be probed or the host does not answer within two minutes. On
+# `unstarted` or `dead` the caller retires the attempt with claim_stop and
+# starts another, three in all.
 claim_state()
 {
-    c=$wheld/$1.$2.$3 k=$wlock/$1.$2
-    {
-        # A lock that no attempt made is free, and so not held.
-        echo "free() { [ -e \"\$1\" ] || return 0; perl -MFcntl=:flock -e 'open(L, \"<\", shift) or exit 2; exit(flock(L, LOCK_EX | LOCK_NB) ? 0 : 1)' \"\$1\"; }"
-        echo "free $k.lock; f=\$?; free $k.grant; g=\$?"
-        echo "if [ -e $wheld/$4 ] && [ \$g = 1 ] && [ ! -e $c.reaped ]; then echo granted"
-        echo "elif [ \$f = 0 ]; then"
-        echo "    if [ -e $wheld/$4 ]; then echo dead"
-        echo "    elif [ -e $c.rc ]; then echo refused"
-        echo "    elif [ ! -e $c.started ]; then echo unstarted"
-        echo "    else echo dead; fi"
-        echo "fi"
-    } | tssh "$WSL" 2> /dev/null | tr -d '\r'
+    claim_pl state "$wlock" "$1" "$2" "$3" | claim_ssh 120 2> /dev/null | tr -d '\r'
 }
 
-# claim_stop ID KIND: end every attempt of the claim ID.KIND that claim_start
-# began, granted, waiting for admission or not yet started, and confirm that
-# each has left WSL's ledger. It takes LOCKS/publish.lock, which each
-# publication of claim_start holds while it runs, half a minute at most as
-# claim_publisher bounds it, waiting a minute at most for it, and holds it
-# only while it replaces the claim's token with `stop`, on which each
-# attempt's runner and holding shell end and a late one starts nothing, and
-# then waits, two and a half minutes at most, for an exclusive lock of the
-# claim's lock file, which it gets only once no process of any attempt holds
-# the shared lock. A free lock does not prove the ledger clean: a restart of
-# WSL, or a runner killed before it wrote its held file, leaves no lock and no
-# marker, and etude's keeper and bridge close the descriptor that carries the
-# lock. So it then has etude status recover the ledger, which drops the claim
-# of an owner that has ended, and looks up the owner that each attempt's
-# launcher wrote; only when recovery succeeded, the ledger could be read and
-# names none of them, and no attempt wrote a held file, does it remove the
-# locks and the token. It prints a line for what stays and fails when a
-# publication or an attempt keeps its lock, recovery fails, an attempt's
-# launcher stays in the ledger, or the host does not answer within five
-# minutes, so that the caller keeps the claim's files.
+# claim_stop ID KIND [N]: end the claim ID.KIND, every attempt that
+# claim_start began, granted, waiting for admission or not yet started, or
+# with N its attempt N alone, and confirm that each has left WSL's ledger, as
+# claim.pl's stop does: it creates the tombstone, on which each runner sends
+# its launcher TERM, each holder ends and a late runner or holder starts
+# nothing, waits two and a half minutes at most for each attempt's liveness
+# and grant locks to be free, and then has etude status recover the ledger
+# and looks up each attempt's launcher there. A free lock does not prove the
+# ledger clean, since a restart of WSL leaves no lock and etude's keeper and
+# bridge close the descriptor that carries it. Print a line for what stays,
+# and fail when an attempt keeps a lock, recovery fails, a launcher stays in
+# the ledger, or the host does not answer within five minutes. A stop
+# removes nothing, so a confirmed stop is final.
 claim_stop()
 {
-    {
-        echo "k=$wlock/$1.$2 c=$wheld/$1.$2"
-        # shellcheck disable=SC2016 # the remote shell expands these
-        cat << 'END'
-ledger=${RACH2_CLAIM_LEDGER:-/var/lib/rach2-etude/ledger}
-etude=${RACH2_CLAIM_ETUDE:-/usr/local/libexec/rach2/etude}
-{ mkdir -p "${k%/*}" && exec 9>> "${k%/*}/publish.lock"; } || { echo "cannot open ${k%/*}/publish.lock"; exit 1; }
-perl -MFcntl=:flock -e '
-    open(L, ">&=9") or exit 2;
-    for (1 .. 60) { exit 0 if flock(L, LOCK_EX | LOCK_NB); sleep 1 }
-    exit 1'
-case $? in
-0) ;;
-1) echo "a start of a claim still holds ${k%/*}/publish.lock after a minute"; exit 1 ;;
-*) echo "cannot lock ${k%/*}/publish.lock"; exit 1 ;;
-esac
-{ echo stop > "$k.token.$$" && mv -f "$k.token.$$" "$k.token"; } || { echo "cannot write $k.token"; exit 1; }
-exec 9>&-
-perl -MFcntl=:flock -e '
-    open(L, ">>", shift) or exit 2;
-    for (1 .. 150) { exit 0 if flock(L, LOCK_EX | LOCK_NB); sleep 1 }
-    exit 1' "$k.lock"
-case $? in
-0) ;;
-1) echo "an attempt of the claim still holds $k.lock after two and a half minutes"; exit 1 ;;
-*) echo "cannot open $k.lock"; exit 1 ;;
-esac
-perl -e 'alarm shift; exec @ARGV' 60 "$etude" status "$ledger" > /dev/null 2>&1 ||
-    { echo "etude status could not recover $ledger, so the end of the claim is not confirmed"; exit 1; }
-for o in "$c".[0-9]*.owner; do
-    [ -e "$o" ] || continue
-    pid='' start=''
-    read -r pid start < "$o"
-    case $pid in '' | *[!0-9]*) echo "cannot read $o"; exit 1 ;; esac
-    [ -e "$ledger/claims" ] || continue
-    grep -E -q "^owner $pid (${start:-x} |[0-9]+ 0\$)" "$ledger/claims"
-    case $? in
-    0) echo "process $pid keeps a claim or request in $ledger/claims; a person checks it and removes it"; exit 1 ;;
-    1) ;;
-    *) echo "cannot read $ledger/claims"; exit 1 ;;
-    esac
-done
-held=$(cat "$c".[0-9]*.held 2> /dev/null)
-[ -z "$held" ] || { printf '%s\n' "$held"; exit 1; }
-rm -f "$k.lock" "$k.grant" "$k.token"
-END
-    } | perl "$repo/tools/flow/bound.pl" 300 ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
-        -o ServerAliveCountMax=4 testing "$WSL" > "$state/$1.$2.stop" 2>&1
+    # shellcheck disable=SC2086 # N is a word or none
+    claim_pl stop "$wlock" "$1" "$2" ${3-} | claim_ssh 300 > "$state/$1.$2.stop" 2>&1
     cs_rc=$?
     tr -d '\r' < "$state/$1.$2.stop"
     rm -f "$state/$1.$2.stop"
@@ -1947,17 +1674,17 @@ END
     return "$cs_rc"
 }
 
-# beat ID: touch ID.alive in WSL once a minute while the release runs, the
-# minute passing in WSL. A hold in WSL's admission ends when that file is ten
-# minutes old, so that it lasts as long as the step it holds for and ends soon
-# after a release that is gone. Run in the background, and kill it when the
-# step ends.
+# beat ID: append a byte to ID.alive in WSL once a minute while the release
+# runs, the minute passing in WSL. A claim's holder in WSL's admission ends
+# once that file has not grown in ten minutes of its looks, so that it lasts
+# as long as the step it holds for and ends soon after a release that is
+# gone. Run in the background, and kill it when the step ends.
 beat()
 {
     # G12: the release's number with its start, which no other process has.
     bt_start=$(lstart $$)
     while [ -n "$bt_start" ] && [ "$(lstart $$)" = "$bt_start" ]; do
-        wsl "touch $wheld/$1.alive; sleep 60" > /dev/null 2>&1 || sleep 60
+        wsl "printf . >> $wheld/$1.alive; sleep 60" > /dev/null 2>&1 || sleep 60
     done
 }
 
@@ -2022,7 +1749,8 @@ windows_ended()
 # ends the claim with claim_stop, whether it was granted or still waits, so
 # that WSL admits other work only once Windows has stopped. When windows_clean
 # cannot confirm that, OUT/ID.prepared stays missing and the claim lasts
-# until ten minutes after the preparation's last touch of OUT/ID.alive.
+# until OUT/ID.alive, which the preparation appends to, has not grown for ten
+# minutes.
 # STATE/ID.claim gets the claim's output. Run in the background.
 windows_prepare()
 {
@@ -2038,24 +1766,24 @@ windows_prepare()
         exit 143' TERM
     tries=1
     claim_start "$id" claim "$tries" "JOBS=$wjobs /usr/local/libexec/rach2/etude-launch build env" \
-        "$id.claimed" "$id.prepared" > "$state/$id.claim" 2>&1
+        "$id.prepared" > "$state/$id.claim" 2>&1
     while :; do
-        case $(claim_state "$id" claim "$tries" "$id.claimed") in
+        case $(claim_state "$id" claim "$tries") in
             granted) break ;;
             refused)
-                wsl "cat $wheld/$id.claim.$tries" >> "$state/$id.claim" 2>&1
+                wsl "cat $wlock/$id.claim.$tries.out" >> "$state/$id.claim" 2>&1
                 echo "claim refused: $(tail -n 3 "$state/$id.claim" | tr '\n' ' ')" > "$state/$id.prepare"
                 return 1 ;;
             unstarted | dead)
-                # The claim's token changes and its lock is free before
-                # another attempt starts.
-                if ! claim_stop "$id" claim >> "$state/$id.claim" 2>&1 || [ "$tries" -ge 3 ]; then
+                # The attempt's tombstone exists and its locks are free
+                # before another attempt starts.
+                if ! claim_stop "$id" claim "$tries" >> "$state/$id.claim" 2>&1 || [ "$tries" -ge 3 ]; then
                     echo "claim refused: its script did not start or hold in WSL in $tries tries" > "$state/$id.prepare"
                     return 1
                 fi
                 tries=$((tries + 1))
                 claim_start "$id" claim "$tries" "JOBS=$wjobs /usr/local/libexec/rach2/etude-launch build env" \
-                    "$id.claimed" "$id.prepared" >> "$state/$id.claim" 2>&1
+                    "$id.prepared" >> "$state/$id.claim" 2>&1
                 continue ;;
         esac
         sleep 30 &
@@ -2096,11 +1824,11 @@ windows_prepare()
     fi
     wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
     i=0
-    until wsl "test -e $wheld/$id.claim.$tries.rc" 2> /dev/null || [ "$i" -ge 12 ]; do
+    until wsl "test -e $wlock/$id.claim.$tries.rc" 2> /dev/null || [ "$i" -ge 12 ]; do
         i=$((i + 1))
         sleep 5
     done
-    wsl "cat $wheld/$id.claim.$tries" >> "$state/$id.claim" 2>&1
+    wsl "cat $wlock/$id.claim.$tries.out" >> "$state/$id.claim" 2>&1
     [ "$i" -lt 12 ] ||
         echo "release: the claim had not ended a minute after the preparation" >> "$state/$id.claim"
     claim_stop "$id" claim >> "$state/$id.claim" 2>&1
@@ -2110,7 +1838,7 @@ windows_prepare()
 # its claims in WSL stay until they end by themselves.
 unstopped()
 {
-    echo "the run $1 is not confirmed stopped on Windows; its claims in WSL stay until ten minutes after its last touch of $1.alive"
+    echo "the run $1 is not confirmed stopped on Windows; its claims in WSL stay until its $1.alive has not grown for ten minutes"
 }
 
 # windows_gate ID: let Windows' run ID alone start in Windows' copy, and say
@@ -2223,23 +1951,23 @@ windows()
         fi
         wholding=1
         tries=1
-        claim_start "$id" hold "$tries" "/usr/local/libexec/rach2/etude-launch alone" "$id.held" \
-            "$id.end" > "$state/$id.hold" 2>&1
+        claim_start "$id" hold "$tries" "/usr/local/libexec/rach2/etude-launch alone" "$id.end" \
+            > "$state/$id.hold" 2>&1
         while :; do
-            case $(claim_state "$id" hold "$tries" "$id.held") in
+            case $(claim_state "$id" hold "$tries") in
                 granted) break ;;
                 refused)
-                    wsl "cat $wheld/$id.hold.$tries" >> "$state/$id.hold" 2>&1
+                    wsl "cat $wlock/$id.hold.$tries.out" >> "$state/$id.hold" 2>&1
                     fail windows "WSL's admission did not give the whole host: $(tail -n 3 "$state/$id.hold" | tr '\n' ' ')" ;;
                 unstarted | dead)
                     # As windows_prepare's.
-                    claim_stop "$id" hold >> "$state/$id.hold" 2>&1 ||
+                    claim_stop "$id" hold "$tries" >> "$state/$id.hold" 2>&1 ||
                         fail windows "the whole host's claim did not start or hold in WSL, and its end is not confirmed"
                     [ "$tries" -lt 3 ] ||
                         fail windows "the whole host's claim did not start or hold in WSL in three tries"
                     tries=$((tries + 1))
                     claim_start "$id" hold "$tries" "/usr/local/libexec/rach2/etude-launch alone" \
-                        "$id.held" "$id.end" >> "$state/$id.hold" 2>&1
+                        "$id.end" >> "$state/$id.hold" 2>&1
                     continue ;;
             esac
             say "windows: prepared; waiting for WSL's tests to end"
@@ -2297,11 +2025,11 @@ windows_unhold()
 {
     wsl "touch $wheld/$1.end" > /dev/null 2>&1
     i=0
-    until wsl "test -e $wheld/$1.hold.$2.rc" 2> /dev/null || [ "$i" -ge 12 ]; do
+    until wsl "test -e $wlock/$1.hold.$2.rc" 2> /dev/null || [ "$i" -ge 12 ]; do
         i=$((i + 1))
         sleep 5
     done
-    wsl "cat $wheld/$1.hold.$2" >> "$state/$1.hold" 2>&1
+    wsl "cat $wlock/$1.hold.$2.out" >> "$state/$1.hold" 2>&1
     [ "$i" -lt 12 ] || say "windows: the whole host's claim had not ended a minute after the cases"
     claim_stop "$1" hold | while read -r line; do say "windows: $line"; done
     wholding=
