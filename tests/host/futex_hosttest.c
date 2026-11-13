@@ -9,6 +9,7 @@
  * host-deps: rach2/sys/tick.c
  * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
+ * host-cflags: -DTICK_HZ=1000
  *
  * The source is included whole, to reach its lists of waiters. User memory
  * is a byte array, and a user address is an offset into it. A copy out to
@@ -831,14 +832,14 @@ static int32_t rt_wait(uint32_t now, int32_t at)
  * its tick at, for the tick's wake. A step back of a second during the wait
  * counts the tick again and sleeps on to it, a second later; a step forward
  * past the time ends it with ETIMEDOUT without a second sleep. A step during
- * the word's read, between the deadline and the queueing of the waiter, is
- * counted before the sleep: back, from a time already past, the wait sleeps
- * to the time; forward, past the time, it ends without a sleep. A wait on
- * real time that a signal cut short files the time, and its restart counts
- * the tick from the clock as set then, not from the tick it was first given.
- * A wait whose tick comes while the clock read then is still short of the
- * time counts again and sleeps on, since Linux's hrtimer never expires
- * before its clock reaches its time.
+ * the fault that brings the word's page in, between the deadline and the
+ * queueing of the waiter, is counted before the sleep: back, from a time
+ * already past, the wait sleeps to the time; forward, past the time, it
+ * ends without a sleep. A wait on real time that a signal cut short files
+ * the time, and its restart counts the tick from the clock as set then, not
+ * from the tick it was first given. A wait whose tick comes while the clock
+ * read then is still short of the time counts again and sleeps on, since
+ * Linux's hrtimer never expires before its clock reaches its time.
  */
 static void realtime_steps(void)
 {
@@ -856,10 +857,12 @@ static void realtime_steps(void)
           "a step forward past the time ends a wait on real time");
     rt_sec = 100;
     step_at = 600;
+    absent_at = 600;
     step_in_fault = -2;
     CHECK(rt_wait(2000, 99) == -ETIMEDOUT && waits == 1 && armed == 2001u + TICK_HZ,
           "a step back before the waiter is queued puts a time past ahead again");
     rt_sec = 100;
+    absent_at = 600;
     step_in_fault = 2;
     CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 0,
           "a step forward before the waiter is queued ends the wait without a sleep");
