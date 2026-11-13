@@ -613,7 +613,12 @@ int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, ui
 
 /* `punch_level`'s answer when the list is full: the walk stops, the blocks
  * listed are freed, and it starts again from the end. */
-#define PUNCH_FULL 1
+#define PUNCH_FULL  1
+/* `punch_level`'s and `punch_refused`'s answer when the slot at `slot_at`
+ * could not be cleared, since its pointer block could not be read again:
+ * the level above detaches the branch that holds it (`punch_refused`). It
+ * never leaves `punch_from`, since a slot in the inode is cleared in memory. */
+#define PUNCH_STUCK 2
 
 /* One walk of `punch_level`: the file `n` of `em` cut from data index `keep`
  * on, its blocks going into `list`. */
@@ -625,39 +630,45 @@ struct punch_walk {
     uint32_t visits; /* slots read since the last service point */
 };
 
+/** Clear the pointer at byte `slot_at` of a pointer block of inode `ino`,
+ * dirtied `first`: 0, PUNCH_STUCK when the block cannot be read again for the
+ * clear on a mount that has not failed, which the write funnel reported
+ * (READ_RECLAIM), or -errno. */
+static int punch_clear(struct ext2_mount *em, uint32_t ino, uint64_t slot_at)
+{
+    uint8_t zero[4] = {0, 0, 0, 0};
+    int rc = ext2_write_owned(em, ino, slot_at, zero, 4, WRITE_FIRST | WRITE_KIND(READ_RECLAIM));
+
+    return rc == -EIO && !ext2_failed(em) ? PUNCH_STUCK : rc;
+}
+
 /**
  * Abandon the pointer block at `*slot` of walk `w`, which lies outside the
  * data zone or cannot be read, as the reclaim reader reported
- * (`ext2_read_reclaim`). When the walk frees all it covers (`whole`), its
- * pointer is cleared at `slot_at`, dirtied `first`, or for 0 in the inode in
- * memory, with the block and what is below it not yet freed left taken, as
- * Linux's `ext2_free_branches` clears the slot and goes on
- * (fs/ext2/inode.c:1146-1156), so that the rest of the file and its inode
- * can still be freed, and `*emptied` is set; a block whose range the walk
- * keeps in part stays, -EIO, and so does one whose slot's own block cannot
- * be read again for the clear, reported (READ_RECLAIM), with 0 and
- * `*emptied` clear. 0, or -errno.
+ * (`ext2_read_reclaim`), or below which a slot could not be cleared
+ * (PUNCH_STUCK). When the walk frees all it covers (`whole`), its pointer is
+ * cleared at `slot_at`, dirtied `first`, or for 0 in the inode in memory,
+ * with the block and what is below it not yet freed left taken, as Linux's
+ * `ext2_free_branches` clears the slot before it reads the branch and goes on
+ * (fs/ext2/inode.c:1145-1156), so that the rest of the file and its inode
+ * can still be freed, and `*emptied` is set. A branch detached so may leave a
+ * block taken, never a pointer. A block whose range the walk keeps in part
+ * stays, -EIO, since the truncate cannot answer 0 over a pointer past `keep`.
+ * A slot whose own block cannot be read again for the clear, reported
+ * (READ_RECLAIM), is PUNCH_STUCK, for the level above to detach. 0,
+ * PUNCH_STUCK, or -errno.
  */
 static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int whole,
                          int *emptied)
 {
-    struct ext2_mount *em = w->em;
     int rc;
 
     if (!whole) {
         return -EIO;
     }
-    if (slot_at != 0) {
-        uint8_t zero[4] = {0, 0, 0, 0};
-
-        rc = ext2_write_owned(em, w->n->ino, slot_at, zero, 4,
-                              WRITE_FIRST | WRITE_KIND(READ_RECLAIM));
-        if (rc == -EIO && !ext2_failed(em)) {
-            return 0;
-        }
-        if (rc != 0) {
-            return rc;
-        }
+    rc = slot_at != 0 ? punch_clear(w->em, w->n->ino, slot_at) : 0;
+    if (rc != 0) {
+        return rc;
     }
     ext2_node_slot_set(w->n, slot, slot_at, 0);
     *emptied = 1;
@@ -681,9 +692,13 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
  * range or that cannot be read, which it reports, is abandoned
  * (`punch_refused`) and the walk goes on. A pointer block that cannot be
  * read again to clear a slot in it, which the write funnel reports
- * (READ_RECLAIM), keeps that slot: its block and what is below it stay
- * taken, and `*emptied` clear, so that the rest is still freed. 0,
- * PUNCH_FULL when the list has no room for the next block, or -errno.
+ * (READ_RECLAIM), cannot lose that slot, so the walk detaches the block
+ * itself one level up: the child's PUNCH_STUCK has this level abandon its
+ * own block (`punch_refused`), which climbs until a clear succeeds, at the
+ * inode at the latest, whose slots are cleared in memory. So a truncate
+ * answers 0 only when no pointer at or past `keep` is reachable from the
+ * inode. 0, PUNCH_FULL when the list has no room for the next block,
+ * PUNCH_STUCK, or -errno.
  */
 static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int level,
                        uint32_t base, int *emptied)
@@ -737,6 +752,9 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
                 continue;
             }
             rc = punch_level(w, &child, at, level - 1, child_base, &gone);
+            if (rc == PUNCH_STUCK) {
+                return punch_refused(w, slot, slot_at, base >= keep, emptied);
+            }
             if (rc != 0) {
                 return rc;
             }
@@ -752,16 +770,9 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
     if (list->count == list->cap) {
         return PUNCH_FULL;
     }
-    if (slot_at != 0) {
-        uint8_t zero[4] = {0, 0, 0, 0};
-
-        rc = ext2_write_owned(em, n->ino, slot_at, zero, 4, WRITE_FIRST | WRITE_KIND(READ_RECLAIM));
-        if (rc == -EIO && !ext2_failed(em)) {
-            return 0;
-        }
-        if (rc != 0) {
-            return rc;
-        }
+    rc = slot_at != 0 ? punch_clear(em, n->ino, slot_at) : 0;
+    if (rc != 0) {
+        return rc;
     }
     ext2_node_slot_set(n, slot, slot_at, 0);
     list->blocks[list->count++] = b;
