@@ -8,6 +8,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/audio/resample.c
+ * host-cflags: -DTICK_HZ=1000
  */
 #include "audio/hda.c"
 #include "audio/audio_proc.c"
