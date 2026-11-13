@@ -3229,10 +3229,13 @@ static uint32_t inject_lapic(struct kvm_vcpu *v)
 
 /**
  * Choose the event the next entry injects, as Linux's
- * kvm_check_and_inject_events orders them: an exception, then an NMI, then
- * an interrupt, the one the run was delivering first; with the local APIC
- * in the kernel the vector it gives when the guest can take it. An NMI or
- * an interrupt the guest cannot take now arms the processor's window exit.
+ * kvm_check_and_inject_events orders them: an exception, NMI or interrupt
+ * the run was delivering, then a new NMI, then with the local APIC in the
+ * kernel the vector it gives when the guest can take it. A new NMI waits
+ * for its window behind an event delivered again, whose record the next
+ * exit's `complete_events` would otherwise clear, losing an interrupt
+ * already in ISR. An NMI or an interrupt the guest cannot take now arms
+ * the processor's window exit.
  */
 static void vmx_inject(struct kvm_vcpu *v)
 {
@@ -3256,18 +3259,19 @@ static void vmx_inject(struct kvm_vcpu *v)
         info = inject_exception(v, len);
     } else if (v->events.nmi.injected) {
         info = NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID;
-    } else if (v->nmi_queued && nmi_open(v) && !block) {
-        /* The delivery blocks NMIs, which the exit's interruptibility
-         * then shows; blocking set before the entry would fail it. */
-        v->nmi_queued--;
-        v->events.nmi.injected = 1;
-        info = NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID;
     } else if (v->events.interrupt.injected) {
         info = v->events.interrupt.nr | INTR_VALID;
         if (v->events.interrupt.soft) {
             info |= TYPE_SOFT_INTR << 8;
             x->inj_len = len ? len : 2u;
         }
+    }
+    if (!info && v->nmi_queued && nmi_open(v) && !block) {
+        /* The delivery blocks NMIs, which the exit's interruptibility
+         * then shows; blocking set before the entry would fail it. */
+        v->nmi_queued--;
+        v->events.nmi.injected = 1;
+        info = NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID;
     }
     if (v->nmi_queued && (info || !nmi_open(v))) {
         x->proc_want |= PROC_NMI_WINDOW;

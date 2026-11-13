@@ -2657,11 +2657,13 @@ static void nmi_window(struct kvm_vcpu *v)
 
 /**
  * Choose the event the next entry injects, as Linux's
- * kvm_check_and_inject_events orders them: an exception, then an NMI, then
- * an interrupt, the one the run was delivering first; with the local APIC
- * in the kernel the vector it gives when the guest can take it. An NMI
- * blocks NMIs until its handler's IRET; an NMI or an interrupt the guest
- * cannot take now opens its window.
+ * kvm_check_and_inject_events orders them: an exception, NMI or interrupt
+ * the run was delivering, then a new NMI, then with the local APIC in the
+ * kernel the vector it gives when the guest can take it. A new NMI waits
+ * for its window behind an event delivered again, whose record the next
+ * exit's `complete_events` would otherwise clear, losing an interrupt
+ * already in ISR. An NMI blocks NMIs until its handler's IRET; an NMI or an
+ * interrupt the guest cannot take now opens its window.
  */
 static void svm_inject(struct kvm_vcpu *v)
 {
@@ -2684,10 +2686,6 @@ static void svm_inject(struct kvm_vcpu *v)
         /* the exception */
     } else if (v->events.nmi.injected) {
         info = NMI_VECTOR | (EV_NMI << 8) | EV_VALID;
-    } else if (v->nmi_queued && nmi_open(v) && !block) {
-        v->nmi_queued--;
-        v->events.nmi.injected = 1;
-        info = NMI_VECTOR | (EV_NMI << 8) | EV_VALID;
     } else if (v->events.interrupt.injected) {
         if (!v->events.interrupt.soft) {
             info = v->events.interrupt.nr | (EV_INTR << 8) | EV_VALID;
@@ -2696,6 +2694,11 @@ static void svm_inject(struct kvm_vcpu *v)
         } else {
             v->events.interrupt.injected = 0;
         }
+    }
+    if (!info && v->nmi_queued && nmi_open(v) && !block) {
+        v->nmi_queued--;
+        v->events.nmi.injected = 1;
+        info = NMI_VECTOR | (EV_NMI << 8) | EV_VALID;
     }
     if (EV_TYPE(info) == EV_NMI && info) {
         /* The delivery blocks NMIs until the handler's IRET, which the

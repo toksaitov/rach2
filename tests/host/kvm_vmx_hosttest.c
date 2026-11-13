@@ -94,6 +94,7 @@
 extern int printf(const char *format, ...);
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern void *malloc(unsigned long n);
+extern void *calloc(unsigned long n, unsigned long size);
 extern void *aligned_alloc(unsigned long align, unsigned long n);
 extern void free(void *p);
 
@@ -5476,6 +5477,42 @@ static void block_rows(void)
 }
 
 /**
+ * An interrupt an exit took back from its delivery goes in again at the
+ * next entry ahead of a new NMI, which waits for its window, as Linux's
+ * kvm_check_and_inject_events; the NMI goes in at the entry after the
+ * interrupt's delivery. Taken the other way, the next exit's
+ * `complete_events` would clear the interrupt's record and lose a vector
+ * already in ISR. On a bare vCPU record, since neither step reaches the
+ * VMCS.
+ */
+static void reinject_rows(void)
+{
+    struct kvm_vcpu *v = calloc(1, sizeof(*v));
+    struct vmx_vcpu *x = calloc(1, sizeof(*x));
+    struct kvm_vm vm;
+
+    k_memset(&vm, 0, sizeof(vm));
+    vm.irqchip = KVM_IRQCHIP_NONE;
+    v->vm = &vm;
+    v->backend = x;
+    v->cpu = -1;
+    v->events.interrupt.injected = 1;
+    v->events.interrupt.nr = 34;
+    v->nmi_queued = 1;
+    vmx_inject(v);
+    CHECK(x->inj_info == (34u | INTR_VALID) && v->nmi_queued == 1 && !v->events.nmi.injected &&
+              (x->proc_want & PROC_NMI_WINDOW),
+          "an interrupt taken back from its delivery goes in before a new NMI, which waits "
+          "for its window");
+    complete_events(v);
+    vmx_inject(v);
+    CHECK(x->inj_info == (NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID) && v->nmi_queued == 0,
+          "and the NMI at the entry after the interrupt's delivery");
+    free(x);
+    free(v);
+}
+
+/**
  * The exit path's fast path, `vmx_fast`, on a VM with the local APIC in the
  * kernel: a WRMSR of the TSC deadline and the preemption timer's expiry
  * enter the guest again with the run loop not run, each delivering the
@@ -5710,6 +5747,7 @@ int main(void)
     first_entry_rows(vm);
     tpr_rows();
     block_rows();
+    reinject_rows();
     fast_rows();
     exitstat_rows();
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,

@@ -19,8 +19,9 @@
  * Beside them, the MSR filter's half in SVM: the permission map's bits
  * and the exits of the guest's filtered RDMSR and WRMSR; the backend's
  * `fast`, which takes a WRMSR of the TSC deadline with NextRIP and the
- * local APIC in the kernel, and no other exit; and the backend's `xsaves`,
- * which follows `kcpu_xsaves_usable`.
+ * local APIC in the kernel, and no other exit; the order of the events an
+ * entry injects, an interrupt taken back from its delivery before a new
+ * NMI; and the backend's `xsaves`, which follows `kcpu_xsaves_usable`.
  */
 #include "kvm/svm.c"
 
@@ -555,6 +556,42 @@ static void fine_timer_row(void)
     CHECK(host_timer_target == 1234500, "SVM entry publishes the fine guest expiry");
 }
 
+/**
+ * An interrupt an exit took back from its delivery goes in again at the
+ * next entry ahead of a new NMI, which waits for its window, as Linux's
+ * kvm_check_and_inject_events; the NMI goes in at the entry after the
+ * interrupt's delivery. Taken the other way, the next exit's
+ * `complete_events` would clear the interrupt's record and lose a vector
+ * already in ISR.
+ */
+static void reinject_rows(struct kvm_vcpu *v)
+{
+    struct svm_vcpu *s = sv(v);
+    struct kvm_vm vm;
+
+    k_memset(&vm, 0, sizeof(vm));
+    vm.irqchip = KVM_IRQCHIP_NONE;
+    v->vm = &vm;
+    s->built = 1;
+    k_memset(&v->events, 0, sizeof(v->events));
+    v->events.interrupt.injected = 1;
+    v->events.interrupt.nr = 34;
+    v->nmi_queued = 1;
+    svm_inject(v);
+    CHECK(s->inj == (34u | (EV_INTR << 8) | EV_VALID) && v->nmi_queued == 1 &&
+              !v->events.nmi.injected,
+          "an interrupt taken back from its delivery goes in before a new NMI");
+    s->ex.int_info = 0;
+    complete_events(v);
+    svm_inject(v);
+    CHECK(s->inj == (NMI_VECTOR | (EV_NMI << 8) | EV_VALID) && v->nmi_queued == 0,
+          "and the NMI at the entry after the interrupt's delivery");
+    k_memset(&v->events, 0, sizeof(v->events));
+    s->nmi_ss = 0;
+    s->built = 0;
+    v->vm = NULL;
+}
+
 /** Run the requested SVM rows, or the fine timer alone. */
 int main(int argc, char **argv)
 {
@@ -575,6 +612,7 @@ int main(int argc, char **argv)
     report_rows(v);
     filter_rows(v, msrpm);
     fast_rows(v);
+    reinject_rows(v);
     xsaves_rows();
     free(msrpm);
     free(s);
