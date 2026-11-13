@@ -10,13 +10,16 @@
  * The source is included whole, to reach `mq_deadline` and `mq_sleep`. User
  * memory is a byte array, and a user address is an offset into it. The
  * model's wait returns at once when its condition holds, as the kernel's
- * does; otherwise it notes the tick and the step count it was armed with,
- * may set the clock as another processor would, and returns as the timer's
- * wake at that tick would, with nothing on the queue changed. A setting of
+ * does; otherwise it notes the tick, the time of the monotonic clock and
+ * the step count it was armed with, may set the clock as another processor
+ * would, and returns as the timer's wake at that tick would, or with
+ * `fine_wakes` at that time, with nothing on the queue changed. A setting of
  * the clock wakes the sleep at the next tick, which the model takes as now;
  * a condition that does not see the setting sends the sleep on to the tick
  * it was armed for. Setting the clock moves its time and its step count
- * (`rtc_step_count`); otherwise real time goes on with the tick. A wait
+ * (`rtc_step_count`); otherwise real time goes on with the monotonic clock,
+ * which is the tick count in TICK_NS steps and a place within the tick. A
+ * wait
  * called a hundred times fails its row and ends with EINTR, so that a sleep
  * that never ends cannot hang the test.
  */
@@ -31,8 +34,9 @@ volatile uint64_t kernel_ticks;
 static uint8_t user[256];
 static int failures, waits;
 static int calls; /* the calls of the wait since the row began */
-/* The tick and the step count the last wait was armed with. */
+/* The tick, the time and the step count the last wait was armed with. */
 static uint64_t armed;
+static int64_t armed_ns;
 static uint32_t armed_steps;
 /* The real-time clock's time in seconds at tick 2000 and its step count,
  * the seconds a setting moves it by in the next wait, 0 for none, and how
@@ -41,6 +45,10 @@ static int64_t rt_sec = 100;
 static uint32_t rt_steps = 1u;
 static int64_t step_in_wait;
 static int64_t rt_lag_ns;
+/* The monotonic clock's place within the tick, and whether the interrupt
+ * between ticks ends a wait at its time (`wakeup_ns`), not at its tick. */
+static uint32_t mono_phase_ns;
+static int fine_wakes;
 
 /** Count and print a failure when `c` is false. */
 #define CHECK(c, detail)                               \
@@ -63,16 +71,30 @@ uint32_t rtc_step_count(void)
     return rt_steps;
 }
 
-/** The real time: `rt_sec` at tick 2000, where each row starts, and on
- * with the tick from there, `rt_lag_ns` behind it once the tick has moved,
- * as the clock read between ticks can be behind the tick count. */
-void get_current_time(int64_t *seconds, int64_t *nanoseconds)
+/** The monotonic clock in nanoseconds: the tick count in TICK_NS steps and
+ * the place within the tick, `rt_lag_ns` behind once the tick has passed
+ * 2000, as a clock read between ticks can be behind the tick count. */
+static int64_t model_mono_ns(void)
 {
-    int64_t ns = ((int64_t)kernel_ticks - 2000) * TICK_NS;
+    int64_t ns = (int64_t)kernel_ticks * TICK_NS + mono_phase_ns;
 
-    if (ns > 0) {
+    if (ns > 2000LL * TICK_NS) {
         ns -= rt_lag_ns;
     }
+    return ns;
+}
+
+/** `rtc_monotonic` as nanoseconds since boot: the model's clock. */
+int64_t rtc_monotonic_ns(void)
+{
+    return model_mono_ns();
+}
+
+/** The real time: `rt_sec` at tick 2000, where each row starts, and on
+ * with the monotonic clock from there. */
+void get_current_time(int64_t *seconds, int64_t *nanoseconds)
+{
+    int64_t ns = model_mono_ns() - 2000LL * TICK_NS;
 
     *seconds = rt_sec + ns / 1000000000;
     *nanoseconds = ns % 1000000000;
@@ -80,6 +102,30 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
         *nanoseconds += 1000000000;
         (*seconds)--;
     }
+}
+
+/** The monotonic time at which the model's real time reaches `sec` and
+ * `nsec`: the monotonic clock now, on by the time from real time now. */
+void rtc_mono_of_real(int64_t sec, int32_t nsec, int64_t *mono_sec, int32_t *mono_nsec)
+{
+    int64_t now, now_ns, ns;
+
+    get_current_time(&now, &now_ns);
+    ns = model_mono_ns() + (sec - now) * 1000000000 + (nsec - now_ns);
+    *mono_sec = ns / 1000000000;
+    *mono_nsec = (int32_t)(ns % 1000000000);
+    if (*mono_nsec < 0) {
+        *mono_nsec += 1000000000;
+        (*mono_sec)--;
+    }
+}
+
+/** Move the clocks on until the monotonic clock reads `ns`. */
+static void model_reach(int64_t ns)
+{
+    ns += rt_lag_ns;
+    kernel_ticks = (uint64_t)(ns / TICK_NS);
+    mono_phase_ns = (uint32_t)(ns % TICK_NS);
 }
 
 /** A setting of the real-time clock `sec` seconds on from where it is, as
@@ -154,6 +200,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     }
     waits++;
     armed = current_proc->wakeup_tick;
+    armed_ns = current_proc->wakeup_ns;
     armed_steps = current_proc->rt_steps;
     if (step_in_wait != 0) {
         model_step(step_in_wait);
@@ -161,6 +208,8 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         if (!cond(arg)) {
             kernel_ticks = armed;
         }
+    } else if (fine_wakes && armed_ns != 0) {
+        model_reach(armed_ns);
     } else {
         kernel_ticks = armed;
     }
@@ -270,9 +319,11 @@ static void deadline(struct mq_wait *w, int64_t at)
     ts[1] = 0;
     k_memcpy(user + 16, ts, sizeof(ts));
     kernel_ticks = 2000;
+    mono_phase_ns = 0;
     waits = 0;
     calls = 0;
     armed = 0;
+    armed_ns = 0;
     armed_steps = 0;
     k_memset(w, 0, sizeof(*w));
     CHECK(mq_deadline((const void __user *)16, 1, w) == 0 && w->timed, "the deadline is read");
@@ -280,16 +331,18 @@ static void deadline(struct mq_wait *w, int64_t at)
 
 /**
  * From real time 100 s at tick 2000, a wait until 101 s. A step back of a
- * second during the wait counts the tick again and sleeps on to tick 4000,
- * two seconds on; a step forward past the time ends it with ETIMEDOUT without a
- * second sleep. The wait keeps the step count it counted its tick at, for
- * the tick's wake. A step between the reading of the deadline and the
- * sleep is counted before the sleep: back, the wait sleeps to the time as
- * set; forward past it, it ends without a sleep. Each is Linux's hrtimer of
- * CLOCK_REALTIME, which clock_was_set moves (ipc/mqueue.c:728-729,
- * kernel/time/hrtimer.c:951-987). A wait whose tick comes while the clock
- * read then is still short of the time counts again and sleeps on, since
- * Linux's hrtimer never expires before its clock reaches its time.
+ * second during the wait counts the tick again and sleeps on to the tick two
+ * seconds on; a step forward past the time ends it with ETIMEDOUT without a
+ * second sleep. The wait keeps the step count it counted its tick at, for the
+ * tick's wake. A step between the reading of the deadline and the sleep is
+ * counted before the sleep: back, the wait sleeps to the time as set; forward
+ * past it, it ends without a sleep. Each is Linux's hrtimer of CLOCK_REALTIME,
+ * which clock_was_set moves (ipc/mqueue.c:728-729,
+ * kernel/time/hrtimer.c:951-987). A wait whose tick comes while the clock read
+ * then is still short of the time counts again and sleeps on, since Linux's
+ * hrtimer never expires before its clock reaches its time; where the interrupt
+ * between ticks comes, it ends the wait in one sleep, when the monotonic clock
+ * reaches the time real time reaches it at, a second after the call.
  */
 static void realtime_steps(void)
 {
@@ -326,15 +379,27 @@ static void realtime_steps(void)
     model_step(2);
     CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 0,
           "a step forward past the time before the sleep ends it without one");
-    CHECK(self.wakeup_tick == 0 && self.rt_steps == 0, "the wait leaves no deadline behind");
+    CHECK(self.wakeup_tick == 0 && self.wakeup_ns == 0 && self.rt_steps == 0,
+          "the wait leaves no deadline behind");
 
     rt_sec = 100;
-    rt_lag_ns = 1500000;
+    rt_lag_ns = 3 * TICK_NS / 2;
     deadline(&w, 101);
     w.q = &q;
-    CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 2 && armed == 3002u,
+    CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 2 && armed == 2002u + TICK_HZ,
           "a wait whose tick comes before the clock reaches its time sleeps on to it");
+
+    rt_sec = 100;
+    fine_wakes = 1;
+    deadline(&w, 101);
+    w.q = &q;
+    CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 1 &&
+              armed_ns == 2000LL * TICK_NS + 1000000000 &&
+              model_mono_ns() == 2000LL * TICK_NS + 1000000000,
+          "the interrupt between ticks ends it once the clock reaches its time");
+    fine_wakes = 0;
     rt_lag_ns = 0;
+    mono_phase_ns = 0;
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */

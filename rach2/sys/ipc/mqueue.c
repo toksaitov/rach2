@@ -557,25 +557,31 @@ long sys_mq_unlink(struct isr_params *params)
 
 /* What a sender or a receiver sleeps for: a change of the queue, or the
  * deadline. `from` is the queue's `gen` when the sleep began; with `timed`,
- * the deadline is the time `sec` and `nsec` of real time, and `target` its
- * tick, counted at the clock's step count `steps` (`mq_count`). */
+ * the deadline is the time `sec` and `nsec` of real time, `target` its
+ * tick and `ns` the time of the monotonic clock real time reaches it at, in
+ * nanoseconds since boot, 0 for one past what those hold, all counted at
+ * the clock's step count `steps` (`mq_count`). */
 struct mq_wait {
     const struct mqueue *q;
     uint32_t from;
     int timed;
     uint64_t target;
+    int64_t ns;
     uint32_t steps;
     int64_t sec;
     int64_t nsec;
 };
 
 /** Count the tick of `w`'s deadline from the real-time clock now, which
- * goes on as the ticks do, after the clock's step count, which is read
- * first so that a setting between the two readings leaves it behind; a
- * time already past is the tick now. */
+ * goes on as the ticks do, and its time of the monotonic clock, real time
+ * less the offset, as Linux's hrtimer subtracts its base's offset
+ * (kernel/time/hrtimer.c:922), after the clock's step count, which is read
+ * first so that a setting between the readings leaves it behind; a time
+ * already past is the tick now, and a time before boot 1 ns. */
 static void mq_count(struct mq_wait *w)
 {
-    int64_t now, now_ns, dsec, dns;
+    int64_t now, now_ns, dsec, dns, mono_sec;
+    int32_t mono_nsec;
 
     w->steps = rtc_step_count();
     get_current_time(&now, &now_ns);
@@ -589,15 +595,31 @@ static void mq_count(struct mq_wait *w)
     if (dsec >= 0) {
         w->target += tick_span(dsec, (uint32_t)dns);
     }
+    rtc_mono_of_real(w->sec, (int32_t)w->nsec, &mono_sec, &mono_nsec);
+    if (mono_sec < 0) {
+        w->ns = 1;
+    } else if (mono_sec >= 9223372036ll) {
+        w->ns = 0;
+    } else {
+        w->ns = mono_sec * 1000000000ll + mono_nsec > 0 ? mono_sec * 1000000000ll + mono_nsec : 1;
+    }
+}
+
+/** Whether the monotonic clock has reached the time `w` ends at, `ns`;
+ * never for a deadline without one. */
+static int mq_time_come(const struct mq_wait *w)
+{
+    return w->timed && w->ns != 0 && rtc_monotonic_ns() >= w->ns;
 }
 
 /** The wait condition of the `struct mq_wait` at `arg`: a change, the
- * deadline's tick, or a setting of the clock since it was counted. */
+ * deadline's tick or time (`mq_time_come`), or a setting of the clock
+ * since it was counted. */
 static int mq_wait_done(void *arg)
 {
     const struct mq_wait *w = arg;
 
-    return w->q->gen != w->from ||
+    return w->q->gen != w->from || mq_time_come(w) ||
            (w->timed && (tick_count() >= w->target || w->steps != rtc_step_count()));
 }
 
@@ -610,7 +632,10 @@ static int mq_wait_done(void *arg)
  * hrtimer of CLOCK_REALTIME that clock_was_set moves (ipc/mqueue.c:728-729,
  * kernel/time/hrtimer.c:951-987); so does the deadline's tick when the
  * clock, read within the tick, has not reached the time by it, since
- * Linux's hrtimer never expires before its clock reaches its time.
+ * Linux's hrtimer never expires before its clock reaches its time. The
+ * sleep ends with -ETIMEDOUT when the monotonic clock reaches the time
+ * `ns`, by the interrupt between ticks, as that hrtimer ends it, and not
+ * at the tick.
  */
 static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 {
@@ -622,9 +647,11 @@ static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
             mq_count(w);
         }
         current_proc->wakeup_tick = w->timed ? (w->target != 0 ? w->target : 1u) : 0;
+        current_proc->wakeup_ns = w->timed ? w->ns : 0;
         current_proc->rt_steps = w->timed ? w->steps : 0;
         rc = wq_wait_event(&q->wq, mq_wait_done, w);
         current_proc->wakeup_tick = 0;
+        current_proc->wakeup_ns = 0;
         current_proc->rt_steps = 0;
         if (q->gen != w->from) {
             return 0;
@@ -633,6 +660,9 @@ static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
             return -EINTR;
         }
         if (w->steps == rtc_step_count()) {
+            if (mq_time_come(w)) {
+                return -ETIMEDOUT;
+            }
             mq_count(w);
             if (tick_count() >= w->target) {
                 return -ETIMEDOUT;
