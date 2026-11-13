@@ -559,14 +559,56 @@ static void event_owner_rows(void)
           "a remote processor can still expire the sleep once its time comes");
 }
 
+/** Fine alarms expire and retain their grid without advancing a coarse tick. */
+static void fine_alarm_rows(void)
+{
+    uint64_t interval;
+
+    runner.state = PROC_RUNNING;
+    sleeper.state = PROC_RUNNING;
+    clock_ns = 10000000;
+    proc_alarm_set_ns(&runner, 500000, 500000);
+    CHECK(runner.alarm_fine && wake_ns == 10500000, "a fine alarm arms its own event");
+    clock_ns = 10200000;
+    CHECK(proc_alarm_read_ns(&runner, &interval) == 300000 && interval == 500000,
+          "a fine alarm reports sub-tick time and interval");
+    clock_ns = 10499999;
+    proc_wake_due();
+    CHECK(!runner.alarm_due && runner_posts == 0, "a fine alarm never expires early");
+    clock_ns = 10500000;
+    proc_wake_due();
+    CHECK(runner.alarm_due && kernel_ticks == 0, "its expiry needs no coarse tick");
+    proc_tick_signals_post();
+    CHECK(runner_posts == 1 && runner.alarm_tick == 0 && runner.alarm_interval == 500000,
+          "posting stops a fine periodic alarm until its signal is taken");
+    clock_ns = 12200000;
+    proc_alarm_taken(&runner);
+    CHECK(runner.alarm_tick == 12500000 && wake_ns == 12500000,
+          "late signal consumption preserves the half-millisecond grid");
+    proc_alarm_take(&sleeper, &runner);
+    CHECK(sleeper.alarm_fine && sleeper.alarm_tick == runner.alarm_tick &&
+              sleeper.alarm_interval == runner.alarm_interval,
+          "exec transfers a fine timer with its units");
+    proc_alarm_set(&runner, 0, 0);
+    proc_alarm_set(&sleeper, 0, 0);
+    runner_posts = 0;
+    clock_ns = 0;
+}
+
 /** Run every check; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
+    if (argc == 2 && __builtin_strcmp(argv[1], "--fine-alarm") == 0) {
+        fine_alarm_rows();
+        printf("process-timer-test: fine alarm: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     if (argc == 2 && __builtin_strcmp(argv[1], "--event-owner") == 0) {
         event_owner_rows();
         printf("process-timer-test: event owner: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
+    fine_alarm_rows();
     alarm_rows();
     alarm_take_rows();
     own_rows();
