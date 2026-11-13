@@ -73,15 +73,21 @@ its inode.
 Each write-back of the pages that fails, whoever made it, an unmap, the
 flusher, sync or an msync among them, records its error for
 .Fn syncfs
-and on every open file description of the file, whose next
+and in an error record of the file's own, in which each open file
+description of the file keeps its own place, taken at the open as on the
+file system's record below; its next
 .Fn fsync ,
 .Fn fdatasync
 or
 .Xr msync 2
 with
 .Dv MS_SYNC
-reports it once, even when a later write-back has written the page,
-as Linux keeps a write-back's error on the inode for each of its files.
+reports the error once, even when a later write-back has written the
+page, and so does a description opened after the failure while no
+description has reported it, as Linux keeps a write-back's error in the
+inode's mapping and samples it at each open.
+The file's record lasts until its inode is freed or its file system is
+unmounted.
 Pages that are dropped unwritten record
 .Er EIO
 for the fsync of every description on the file system as well.

@@ -244,8 +244,9 @@ says.
 The write-back waits for no release, and later mappings do not extend it.
 The next
 .Xr fsync 2
-through each open file description of the file at the failure reports
-the write-back error once, even if a retry succeeded, as
+through each open file description of the file opened before the
+failure was first reported reports the write-back error once, even if a
+retry succeeded, as
 .Xr sync 2
 says.
 A shared mapping of a tmpfs or ext2 file through a descriptor open for
@@ -654,8 +655,8 @@ which reports a write-back error recorded since that description last
 looked and moves its place past it, as
 .Xr sync 2
 describes;
-a failed page write is recorded for every description of the file and is
-the answer, with
+a failed page write is recorded in the file's own error record for every
+description of the file and is the answer, with
 .Dv MS_ASYNC
 or
 .Dv MS_SYNC ,
