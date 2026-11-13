@@ -3,8 +3,8 @@
 # hold.pl: run a job as this process's child in a run directory of its own,
 # and be the only process that signals it.
 #
-# Usage: perl hold.pl run [-g] [-k SECONDS] DIR COMMAND...
-#        perl hold.pl run [-k SECONDS] DIR -p PID
+# Usage: perl hold.pl run [-g] [-P] [-k SECONDS] DIR COMMAND...
+#        perl hold.pl run [-P] [-k SECONDS] DIR -p PID
 #        perl hold.pl state DIR
 #        perl hold.pl stop DIR SECONDS
 #
@@ -42,7 +42,8 @@
 # gate, is refused with 127, and nothing is signalled.
 #
 # Once the job runs, one loop, a look each tenth of a second, reaps the job
-# and, once DIR/stop exists or the holder has taken HUP, INT or TERM, sends
+# and, once DIR/stop exists, the holder has taken HUP, INT or TERM, or with
+# -P the process that started the holder has gone, as getppid shows, sends
 # TERM, and KILL SECONDS later, 300 unless -k gives another: to the job, its
 # unreaped child, whose number stays its own until this loop reaps it, as a
 # zombie's does; with -g to the whole group, which the holder leads. With -g
@@ -81,7 +82,7 @@ use Errno qw(ENOENT EWOULDBLOCK EINTR ECHILD EEXIST);
 use Fcntl qw(:flock O_CREAT O_EXCL O_RDWR O_WRONLY);
 use POSIX qw(WNOHANG);
 
-my $usage = "usage: hold.pl run [-g] [-k SECONDS] DIR COMMAND... | run [-k SECONDS] DIR -p PID | " .
+my $usage = "usage: hold.pl run [-g] [-P] [-k SECONDS] DIR COMMAND... | run [-P] [-k SECONDS] DIR -p PID | " .
     "state DIR | stop DIR SECONDS\n";
 
 # create FILE TEXT: create FILE holding TEXT whole, by a link that fails when
@@ -141,11 +142,13 @@ if ($mode eq 'stop') {
 }
 $mode eq 'run' or die $usage;
 
-my ($group, $bound) = ('', 300);
-while (@ARGV && $ARGV[0] =~ /^-[gk]$/) {
+my ($group, $bound, $orphan) = ('', 300, '');
+while (@ARGV && $ARGV[0] =~ /^-[gkP]$/) {
     my $o = shift;
     if ($o eq '-g') {
         $group = 1;
+    } elsif ($o eq '-P') {
+        $orphan = getppid();
     } else {
         $bound = shift // '';
         $bound =~ /^\d+$/ or die $usage;
@@ -184,7 +187,7 @@ sub end
 my $asked;
 my %start = map { ($_ => $SIG{$_} // 'DEFAULT') } qw(HUP INT TERM);
 $SIG{$_} = sub { $asked = 1 } for qw(HUP INT TERM);
-sub stopped { return $asked || -e "$dir/stop" }
+sub stopped { return $asked || -e "$dir/stop" || ($orphan && getppid() != $orphan) }
 
 # PR_SET_CHILD_SUBREAPER, by prctl's number on each architecture the testing
 # host may run.
