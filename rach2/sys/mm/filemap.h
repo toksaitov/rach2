@@ -177,36 +177,54 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
  * pin relies to find the page still the file's (`filemap_pin_dirty`). */
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size);
 
-/** Write the dirty shared pages of `ofd`'s file, including queued
- * releases. Return 0 or the first errno. A failed page stays dirty for a
- * later pass, and its error is recorded for syncfs alone. Under the big
- * lock; may sleep. */
+/** For fsync of the file `ofd` is open on, write the file's dirty pages
+ * back, those of mappings whose release is still queued among them; 0, or
+ * the errno of this write-back's first failure, which the caller returns, as
+ * Linux's fsync returns its own write-back's error. A page whose write fails
+ * stays dirty for the next write-back, and the failure is recorded for
+ * syncfs alone (`vfs_sb_err_set`), so that the fsync of another file of the
+ * file system does not report it. Under the big lock; this may sleep. */
 int filemap_sync_file(const struct open_file *ofd);
 
-/** Write every shared file's dirty pages for sync, the flusher and
- * shutdown. Failures are recorded for syncfs; dirty pages are retained. */
+/** For sync, the flusher and the shutdown, write back the dirty pages of
+ * every file a shared mapping maps or left dirty pages of. A failure is not
+ * answered here but recorded for syncfs (`vfs_sb_err_set`), and the page
+ * stays dirty for a later write-back. Under the big lock; this may sleep. */
 void filemap_sync_all(void);
 
-/** Write the shared pages of the base `mnt` before a read-only remount or
- * an unmount's fallible steps. Admission is the caller's. Return the first
- * errno and retain dirty pages on failure. Under the big lock; may sleep. */
+/** For a remount of `mnt`, a base mount, read-only, once new writers are
+ * refused (`fd_mount_readonly_begin`): write back the dirty pages of every
+ * file of it, as Linux's remount syncs the file system first
+ * (fs/ext2/super.c:1334). 0, or the errno of the first failure, with the
+ * pages that failed still dirty. The caller keeps the mount from going.
+ * Under the big lock; this may sleep. */
 int filemap_sync_mount(struct vfs_mount *mnt);
 
-/** Discard an unlinked file's pages when only the record's node and handle
- * and the caller's final hold remain. No mapping or pass may use them.
- * Called under the big lock before the caller drops that hold; may sleep. */
+/** For the put of the node `node`, inode `ino` of the base mount `mnt`, of a
+ * file with no name left, that leaves only the two holds of its record's
+ * writer (`wr_handle`): drop the record's dirty pages and let the writer go,
+ * as Linux's evict drops an unlinked inode's pages (truncate_inode_pages_final,
+ * fs/inode.c:724), since nothing can read them any more and the writer would
+ * keep the file's blocks until the unmount. Nothing is done while a mapping
+ * of the file lives or a pass writes it. Under the big lock, before the
+ * caller drops its hold; this may sleep. */
 void filemap_evict_unlinked(struct vfs_mount *mnt, uint64_t ino, void *node);
 
-/** End a drained base mount's records after every fallible unmount step.
- * Drop pages a removed device could not write and release the writers.
- * No failure may restore this mount afterwards. Under the big lock; may
- * sleep. */
+/** For the unmount of `mnt`, a mount that is no bind and that nothing
+ * holds, once its operations have drained and before its file system is
+ * written: write the pages in memory of its files, drop what cannot be
+ * written, and let the files' handles go, so that no record outlives the
+ * mount. No later step of the unmount can fail. Under the big lock; this
+ * may sleep. */
 void filemap_unmount(struct vfs_mount *mnt);
 
-/** Write the shared pages of mapping `f` and return the first errno.
- * With `flush`, run fsync through its description after a successful pass.
- * Retryable page errors are recorded for syncfs alone. Under the big lock;
- * may sleep. */
+/** msync of the mapping `f` of a region: its file's pages written back
+ * when it maps a disk file's, and with `flush`, for MS_SYNC, after a
+ * write-back that succeeds, the file system's fsync through `f`'s own
+ * description, as Linux's msync syncs the region's file (mm/msync.c:87); 0
+ * or the first failure. A failed page write is the answer and is recorded
+ * for syncfs alone, as `filemap_sync_file` records it. Under the big lock;
+ * this may sleep. */
 int filemap_msync(struct vm_file *f, int flush);
 
 /**

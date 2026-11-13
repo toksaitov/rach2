@@ -104,17 +104,28 @@ changes between the two at once; every other type refuses a change
 between them with
 .Er EINVAL
 and takes one of the other flags.
-A mount is not made read-only while a descriptor is open on it for
-writing, or on ext2 while a file removed from it is open,
+A mount is not made read-only while a description is open on it for
+writing, one a shared mapping alone holds among them, or on ext2 while a
+file removed from it is open,
 .Er EBUSY ,
-and is not made writable on a device that refuses writes or has failed
+and an open for writing during the change is
+.Er EROFS ,
+as on Linux.
+Before the change the pages that shared mappings stored into are written
+to the files, as Linux syncs the file system first; a write that fails is
+the call's error, and the mount stays writable with the pages kept for a
+later write.
+A mount is not made writable on a device that refuses writes or has failed
 one, or on ext2 when the volume has a feature the driver reads but does
 not write, which mounted it read-only,
 .Er EROFS .
 With
 .Dv MS_BIND
 as well, the change is to that mount alone, as Linux changes a bind
-mount's flags, and its file system is not remounted; a mount whose file
+mount's flags, and its file system is not remounted: only descriptions
+opened through that mount make it
+.Er EBUSY ;
+a mount whose file
 system is read-only is not made writable this way,
 .Er EROFS .
 Without it, a change made through a bind mount is a change of the file
@@ -610,8 +621,9 @@ An ancestor directory denies search permission.
 .It Bq Er EBUSY
 The target is covered, reserved, or in a mount undergoing a transition;
 the source overlaps a claimed range or an open raw writer;
-the source device is already mounted; or an unmount is prevented by
-references.
+the source device is already mounted; an unmount is prevented by
+references; or a remount read-only finds a description open for writing
+or another such remount of the mount under way.
 Unmounting a permanent mount without
 .Dv MNT_DETACH
 also returns this error.

@@ -63,9 +63,18 @@ mappings whose release is still queued among them; it waits for no
 release.
 A page whose write fails stays dirty, and its file open on the file
 system, until a later sync, fsync, msync, unmap or the flusher writes it,
-or a truncation frees it; each write-back that fails records its error,
-and the next fsync of the file reports it once, even if a retry
-succeeded.
+a truncation frees it, or the file, removed from every directory, is
+closed by its last holder, which drops the pages unwritten, as Linux
+drops a removed inode's pages at its last close.
+The fsync of the file returns the error of its own write of the pages,
+with its errno, and the fsync of another file of the file system does not
+hear of it, as Linux reports a write-back's error only to the files of
+its inode; each write-back that fails records its error for
+.Fn syncfs
+alone.
+Pages that are dropped unwritten record
+.Er EIO
+for the fsync of every description on the file system as well.
 The pages hold their file open on the file system itself and hold no
 mount, so a bind mount they were stored through may be unmounted while
 they are dirty, and they are written once the failure clears.
@@ -107,8 +116,8 @@ remains marked invalid.
 .Pp
 A failed write on a mounted file system's device, whoever made it, the
 background flusher and an eviction included, a failed flush, a flush
-the file system makes inside an operation among them, a failed write of
-a shared mapping's pages, and a failed write of a page of a KRFFS boot
+the file system makes inside an operation among them, a shared mapping's
+pages dropped unwritten, and a failed write of a page of a KRFFS boot
 root, the boot's own writes of the root before it is mounted included,
 are recorded on the file system, as Linux records them in its error
 sequences.
@@ -216,6 +225,16 @@ For all three, a write on the file system failed since the description
 last reported one; the failed write's own error is returned when it is
 not
 .Er EIO .
+For
+.Fn fsync
+and
+.Fn fdatasync
+the write of the file's shared-mapping pages failed: its own error, such
+as
+.Er ENOSPC ,
+is returned, and
+.Fn syncfs
+returns the same error from a failed write of any file's pages.
 .It Bq Er ESRCH
 There is no current process.
 .El

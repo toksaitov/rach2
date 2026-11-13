@@ -36,8 +36,12 @@ keyboard reboot is not implemented.
 Other commands are rejected.
 The three stop commands perform the kernel shutdown procedure and do
 not return.
-It writes out each writable file system on a disk, the newest mount first
-and the root last, and marks it unmounted cleanly, as an unmount does;
+It first writes to their files the pages that shared mappings stored
+into, as
+.Xr sync 2
+writes them; a page whose write fails is lost.
+It then writes out each writable file system on a disk, the newest mount
+first and the root last, and marks it unmounted cleanly, as an unmount does;
 Linux's
 .Fn reboot
 writes nothing, and its callers sync and unmount first.

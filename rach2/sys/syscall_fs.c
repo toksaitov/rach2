@@ -4811,9 +4811,7 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
         vfs_ref_release(&ref);
         return -EPERM;
     }
-    if (rc == 0) {
-        rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data);
-    }
+    rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data);
     vfs_ref_release(&ref);
     return rc;
 }

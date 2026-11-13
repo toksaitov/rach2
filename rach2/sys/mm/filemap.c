@@ -53,11 +53,16 @@
  * to make the leaf. A fault looks a page up under the file's lock, as
  * Linux's filemap_fault finds the folio and locks it (mm/filemap.c:3326-3370).
  *
- * A failed pass records its errno for syncfs (`vfs_sb_err_set`); fsync
- * and msync of this file run the pass and return that errno directly.
- * Other files' fsyncs hear no retryable page error. A lost store records
- * an error for descriptions too (`dshare_drop`, `vfs_wb_err_set`). A page
- * whose write fails keeps its dirty bit and its writer for the next pass.
+ * A failed write of a record's pages keeps the page's dirty bit for the
+ * next pass, and the pass records its failure for syncfs alone
+ * (`vfs_sb_err_set`): the fsync, fdatasync and msync of the file run the
+ * pass themselves and answer its errno, and the fsync of another file of
+ * the file system hears nothing of it, as Linux reports a write-back's error
+ * only to the inode's files (mapping_set_error, include/linux/pagemap.h).
+ * Stores that are dropped unwritten (`dshare_drop`) are recorded for every
+ * description of the file system as well (`vfs_wb_err_set`), since no later
+ * pass will answer them. The record keeps no error of its own, and goes only
+ * once it has no mapping and no dirty page, as Linux frees no dirty folio.
  *
  * The record writes its pages through a handle of its own on the file
  * system that holds the file (`wr_handle`), opened on its base mount at its
@@ -606,12 +611,13 @@ static void dshare_settle(struct dshare *ds)
 }
 
 /** Clear every dirty bit of `ds`, whose pages cannot be written any more:
- * its device has gone, or its base mount is being unmounted. Lost stores
- * record -EIO for fsync as well as syncfs. As Linux leaves a page clean after
- * its write-back fails (fs/buffer.c:1959-1996) and evicts a file system's pages
- * at its last unmount (fs/super.c:466-471), the stores are then lost, and
- * the record can go with its last mapping. The record has its writer, whose
- * node names the file. Under the big lock. */
+ * its device has gone, or its base mount is being unmounted. Lost stores are
+ * recorded as EIO for each description's fsync and syncfs (`vfs_wb_err_set`).
+ * As Linux leaves a page clean after its write-back fails
+ * (fs/buffer.c:1959-1996) and evicts a file system's pages at its last
+ * unmount (fs/super.c:466-471), the stores are then lost, and the record can
+ * go with its last mapping. The record has its writer, whose node names the
+ * file. Under the big lock. */
 static void dshare_drop(struct dshare *ds)
 {
     struct vfs_ref file;
@@ -858,9 +864,9 @@ static int dshare_write_word(struct dshare *ds, uint32_t from, uint32_t end, uin
  * writable mapping lives. `passes` keeps the writer while the pass sleeps.
  * A page whose write fails keeps its bit for a later pass, as Rach2 retries
  * a failed write where Linux drops the folio's dirty bit
- * (fs/buffer.c:1959-1996), and a failed pass records its first failure
- * for syncfs alone (`vfs_sb_err_set`). The file's fsync returns the pass's
- * own errno. A lost store also records an error for fsync. What was written
+ * (fs/buffer.c:1959-1996), and a failed pass records its first failure for
+ * syncfs alone (`vfs_sb_err_set`), every time, since the file's own fsync and
+ * msync answer the errno of the pass they run. What was written
  * may have been dirty since `clean`, which the file's mount keeps for the
  * flusher (`vfs_writeback_aged`), and a write of every page that succeeds
  * moves `clean` to its own start. A failed pass with no writable mapping
@@ -919,8 +925,9 @@ static int dshare_pass(struct dshare *ds, uint32_t first, uint32_t end)
  * (`dshare_settle`).
  *
  * A failed page write is the answer, with or without `flush`, and is
- * recorded for syncfs alone. No fsync cursor moves past an unrelated
- * error. Under the big lock. Returns 0 or the first failure.
+ * recorded for syncfs alone (`dshare_pass`), so `own`'s cursor into the
+ * file system's errors does not move for it. Under the big lock. Returns 0
+ * or the first failure.
  */
 static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, struct filemap *own,
                        int flush)
@@ -1774,20 +1781,20 @@ int filemap_sync_mount(struct vfs_mount *mnt)
     return rc;
 }
 
+/* The file's lock is not taken: the caller may hold another file's, and
+ * nothing else can reach the marks. A fault, a pin's release and the last
+ * release need a mapping, a truncation a description or a name, and a pass
+ * counts in `passes`; the big lock is held from the test to the clear. */
 void filemap_evict_unlinked(struct vfs_mount *mnt, uint64_t ino, void *node)
 {
     struct dshare *ds = dshare_of(mnt, ino);
-    struct vfs_ref file;
 
+    bkl_assert_held();
     if (!ds || ds->wr_node != node || ds->sh.maps != 0 || ds->passes != 0) {
         return;
     }
     ds->users++;
-    file.mnt = mnt;
-    file.node = node;
-    vfs_node_lock(&file);
-    dshare_unmark_from(ds, 0);
-    vfs_node_unlock(&file);
+    (void)dshare_unmark_from(ds, 0);
     dshare_settle(ds);
     dshare_put(ds);
 }
@@ -1811,11 +1818,19 @@ void filemap_sync_all(void)
 }
 
 /**
- * End the records of `mnt`, a drained base mount that nothing holds,
- * after every fallible unmount step. The earlier `filemap_sync_mount`
- * wrote its pages; a removed device's unwritten pages are dropped here.
- * No failure may return the mount to active after this call. Under the
- * big lock; releasing the writer may sleep.
+ * End the records of the files of `mnt`, a base mount that nothing holds
+ * any more, at its unmount: each is written in one pass, a page whose write
+ * fails is dropped (`dshare_drop`), and the record lets its writer go and
+ * is freed, as Linux writes a file system's dirty pages at the shutdown of
+ * its last active reference and evicts what failed (generic_shutdown_super,
+ * fs/super.c:466-471, 618, 624). No mapping can be left, since each holds a
+ * description, which holds the base, and no other pass can run, since the
+ * flusher's and sync(2)'s enter the mount first (`filemap_sync_all`) and the
+ * unmount has drained those. Called by the unmount after its operations
+ * drained and before the file system is written; no step of the unmount
+ * after this one can fail and return the mount to active (`unmount_mount`),
+ * so the dropped stores never belong to a live mount. Under the big lock,
+ * and this may sleep.
  */
 void filemap_unmount(struct vfs_mount *mnt)
 {
@@ -1829,6 +1844,7 @@ again:
                 continue;
             }
             ds->users++;
+            (void)dshare_pass(ds, 0, ds->sh.npages);
             if (dshare_dirty(ds) != 0) {
                 dshare_drop(ds);
             }

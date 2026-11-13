@@ -1597,7 +1597,7 @@ void ext2_put(struct vfs_mount *mnt, void *node)
         bkl_enter();
         big = 1;
     }
-    /* The record holds the node and its open handle holds it once more. */
+    /* Only a shared mapping's writer (its hold and its handle's) and this. */
     if (n->unlinked && n->refs == 3) {
         filemap_evict_unlinked(mnt, n->ino, n);
     }

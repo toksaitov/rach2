@@ -609,22 +609,29 @@ struct open_file *fd_ofd_new(void);
 
 struct vfs_ref;
 /** Reserve `ref` for writing (1) or execution (2) in `ofd`, in place of
- * any reservation `ofd` held: 0, or -ETXTBSY for an opposite reservation on
- * the same file, found from a count of each file's reservations as Linux's
- * i_writecount, which leaves `ofd`'s own as it was. Needs no memory, since
- * the description brought the count's record when it was made, and does
+ * any reservation `ofd` held: 0, -EROFS for writing through a mount that
+ * is read-only, or that a remount is making so (`readonly_pending`), or
+ * -ETXTBSY for an opposite reservation on the same file, found from a
+ * count of each file's reservations as Linux's i_writecount, which leaves
+ * `ofd`'s own as it was. Needs no memory, since the description brought the
+ * count's record when it was made, and does
  * not sleep; the caller holds the node, and transfers that hold to the
  * description or releases the description before the node. The big kernel
  * lock is required. */
 int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
 
-/** Begin a read-only remount of `mnt`: -EBUSY while a writable description
- * lives, including one held only by a mapping, else refuse new writers
- * until `fd_mount_readonly_end`. A bind checks only its own descriptions;
- * a base checks all its binds. Under the description-list lock. */
+/** Begin a remount of `mnt` read-only: -EBUSY while a description holds a
+ * write reservation through it, one only a mapping holds among them, or
+ * another such remount of it is under way; else 0, and new reservations
+ * for writing through it are refused with EROFS (`readonly_pending`) until
+ * `fd_mount_readonly_end`. A bind counts the descriptions opened through
+ * it, a base those opened through it or any bind of it, as Linux counts a
+ * mount's writers or every mount of the superblock's. Takes the lock of the
+ * descriptions; nothing here sleeps. */
 int fd_mount_readonly_begin(struct vfs_mount *mnt);
 
-/** End a read-only remount's refusal of new writer reservations. */
+/** End the refusal `fd_mount_readonly_begin` began on `mnt`, once its
+ * flags say whether it is read-only. */
 void fd_mount_readonly_end(struct vfs_mount *mnt);
 
 /** Give back the reservation `ofd` holds, if any. The big kernel lock is

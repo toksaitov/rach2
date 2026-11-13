@@ -496,8 +496,11 @@ struct vfs_mount {
      * keeps the mount read-only for the rest of its life, which a remount
      * read-write refuses. A sync reports errors through `wb_err`. */
     int write_error;
-    /* Refuse new writer reservations during a read-only remount, under
-     * fd.c's description-list lock. */
+    /* Set while a remount makes this mount read-only, from the check for
+     * writers on (`fd_mount_readonly_begin`) to the flag's change: an open
+     * for writing is refused with EROFS meanwhile (`fd_ofd_access`), as
+     * Linux's s_readonly_remount makes mnt_is_readonly true. Under fd.c's
+     * lock of the descriptions. */
     int readonly_pending;
     /* The write-back errors of the file system, on the base mount, as
      * Linux's errseq_t (lib/errseq.c): the last error's errno in the low
@@ -1169,8 +1172,10 @@ int vfs_do_bind(const char *source, const char *target, int rec);
  * mount(2) with MS_REMOUNT and MS_BIND: the flags of the mount `m` alone
  * become `flags`, as Linux changes a bind mount's; its file system is not
  * remounted. 0, -EINVAL for a flag not listed above, -EBUSY for a mount
- * that is not active, or -EROFS for a writable flag set over a read-only
- * base.
+ * that is not active or, made read-only, through which a description is
+ * open for writing (`fd_mount_readonly_begin`), as Linux's
+ * mnt_make_readonly answers (fs/namespace.c), or -EROFS for a writable flag
+ * set over a read-only base.
  */
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
 
@@ -1182,8 +1187,14 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
  * EROFS. The options of `options`, mount(2)'s data or NULL, go to the
  * type's `remount` too, and a type without one ignores them. EINVAL for a
  * flag not listed above, EBUSY for a mount that is not active, EIO for one
- * whose device has gone, or the type's error. The caller has checked that
- * no descriptor writes to a mount it makes read-only.
+ * whose device has gone, or the type's error. A change to read-only first
+ * refuses new writers and is EBUSY while a description open for writing on
+ * the file system lives, a writable shared mapping's among them
+ * (`fd_mount_readonly_begin`), as Linux's sb_prepare_remount_readonly
+ * (fs/namespace.c:665); then the dirty pages of its files' shared mappings
+ * are written (`filemap_sync_mount`), whose failure is the answer, with the
+ * mount still writable, as Linux syncs the file system before the change
+ * (fs/ext2/super.c:1334).
  */
 int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options);
 
@@ -1207,8 +1218,11 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
  */
 void vfs_wb_err_set(struct vfs_mount *mnt, int rc);
 
-/** Record a retryable shared-page write failure for syncfs alone. Its
- * file's fsync runs the pass and returns its errno directly. */
+/** Record the failure `rc` of a write-back of a shared mapping's pages for
+ * syncfs alone, in `sb_wb_err` of `mnt`'s base: the page stays dirty, and
+ * the fsync of its own file writes it again and answers that write's errno,
+ * as Linux's fsync reports a write-back's error only to the inode's files.
+ * A positive `rc` or one past the errno bits records EIO. */
 void vfs_sb_err_set(struct vfs_mount *mnt, int rc);
 
 /**

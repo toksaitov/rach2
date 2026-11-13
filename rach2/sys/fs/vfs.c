@@ -6138,6 +6138,7 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
 {
     int closing = (flags & VFS_MS_RDONLY) && !(m->flags & VFS_MS_RDONLY);
     int rc;
+
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
@@ -6664,13 +6665,8 @@ static int unmount_mount(struct vfs_mount *m)
     if (m->bind_of) {
         return unmount_bind(m);
     }
-    if (!vfs_mount_gone(m)) {
-        rc = filemap_sync_mount(m);
-        if (rc != 0) {
-            m->state = VFS_ACTIVE;
-            return rc;
-        }
-    }
+    /* The pages in memory of its files are written, or dropped. */
+    filemap_unmount(m);
     dcache_forget_mount(m);
     vfs_ns_lock(m);
     rc = vfs_mount_gone(m) ? 0 : unmount_write(m, &what);
@@ -6683,8 +6679,6 @@ static int unmount_mount(struct vfs_mount *m)
     } else if (dropped > 0) {
         klog(KLOG_WARN, "vfs", "unmount: %s: %d dirty buffers dropped", m->covered_path, dropped);
     }
-    /* No step after the pages are dropped can abandon the unmount. */
-    filemap_unmount(m);
     klog(KLOG_INFO, "vfs", "unmounted %s: %d opens, %d releases", m->covered_path, (int)m->opens,
          (int)m->releases);
     if (m->type->ops->put) {

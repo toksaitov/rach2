@@ -2509,8 +2509,11 @@ static int shutdown_never(void *arg)
  * The first caller goes on, and a second one sleeps for good
  * (`shutdown_started`).
  *
- * Each writable file system on a disk but the root is written out and marked
- * clean first, newest mount first (`shutdown_others`), as Linux's inits unmount
+ * The dirty pages of the files that shared mappings map are written back
+ * first (`filemap_sync_all`), as sync(2) writes them, since the file systems'
+ * shutdown below writes only what they hold and marks them clean. Each
+ * writable file system on a disk but the root is then written out and marked
+ * clean, newest mount first (`shutdown_others`), as Linux's inits unmount
  * every file system before they call reboot(2): a volume left marked in use
  * would be checked at its next mount. A root of a type other than KRFFS is
  * unmounted after them: its buffers written and its valid bit set, so that the
