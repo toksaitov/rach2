@@ -224,10 +224,6 @@ struct open_file {
     /* The selected regular-file entry, shared by fork and descriptor exec.
      * Its parent and mount stay held until the description's last unref. */
     struct vfs_name *name;
-    /* The count of descriptions made when this one was, which tells it
-     * from a new description the heap gives the same address after its
-     * last close (`fd_ofd_live`). */
-    uint32_t serial;
     /* The epoll registrations made of this description, under epoll.c's
      * lock of them, which the release of its last descriptor removes
      * (`epoll_release_file`), as Linux's `file->f_ep`. */
@@ -558,16 +554,6 @@ int fd_held_elsewhere(fd_table_t *table, int fd);
 int fd_close_claim(fd_table_t *table, int fd);
 
 /**
- * Take over the release of descriptor `fd` of `table`, which a close marked
- * closing (`fd_close_claim`) while another sharer's call held it, once that
- * hold is gone: 1, with the slot marked releasing, when it is closing, not
- * releasing and held by no other sharer's call, for the caller to release
- * it; 0 when a call still holds it, or another thread has begun or ended
- * its release. Taken under the table's lock.
- */
-int fd_close_finish(fd_table_t *table, int fd);
-
-/**
  * Take slot `fd` of `table` for dup2 under its lock: 0 when it was free,
  * now reserved and held by the call, for the caller to fill and publish
  * (`fd_install`); 1 when it is open and no other sharer's call holds it,
@@ -654,14 +640,6 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to);
  * a write or a truncation is for the length of its call: what an attachment
  * of the file asks before it takes the file. */
 int fd_node_busy(struct vfs_mount *mnt, void *node);
-
-/**
- * Whether the description at `ofd`, made with `serial`, is open still: some
- * descriptor or other holder has a reference to it. Only the list of live
- * descriptions is read, so `ofd` may be the address of one freed since, or
- * of a later one at that address, whose serial is another.
- */
-int fd_ofd_live(const struct open_file *ofd, uint32_t serial);
 
 /** How many descriptions of (`mnt`, `node`) there are, `going` counted only
  * when it keeps a reference besides the one its release drops: the holders
