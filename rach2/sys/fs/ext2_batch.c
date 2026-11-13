@@ -1162,9 +1162,17 @@ int ext2_writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t of
     return 0;
 }
 
-/** Put one piece of a write into the batch, after a drain when its bytes
- * would overflow the batch's room, and a drain and a second try when the
- * batch's tables are full: `writeback_piece`'s answer or the drain's error. */
+/**
+ * Put one piece of a write into the batch, after a drain when its bytes
+ * would overflow the batch's room, and after a drain again each time the
+ * batch's bytes or tables are full. The drain lets `em->batch` go before the
+ * next try, so other writers may fill the batch again in between; the piece
+ * waits for room as many drains as that takes, as Linux's writer waits in
+ * `balance_dirty_pages` (mm/page-writeback.c) and is never refused for
+ * dirty memory. An empty batch takes any one piece, so -ENOMEM comes back
+ * only from a batch the drain left empty. `writeback_piece`'s answer or the
+ * drain's error.
+ */
 int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t at, const uint8_t *in,
                        uint32_t take)
 {
@@ -1178,7 +1186,7 @@ int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t at, 
         }
     }
     rc = writeback_piece(em, n, at, in, take);
-    if (rc == -ENOMEM && wb->count) {
+    while (rc == -ENOMEM && ext2_batch_pending(em)) {
         rc = ext2_writeback_drain(em);
         if (rc == 0) {
             rc = writeback_piece(em, n, at, in, take);
