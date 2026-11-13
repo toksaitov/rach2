@@ -876,6 +876,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "kvmguest",
+          "checks": "tests/host/kvmguest_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "lag",
           "checks": "tests/host/lag_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1063,6 +1068,11 @@
         {
           "assertion_id": "ntp",
           "checks": "tests/host/ntp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ntp250",
+          "checks": "tests/host/ntp250_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
