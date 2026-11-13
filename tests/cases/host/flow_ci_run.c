@@ -550,7 +550,8 @@ static int both_rows(struct run_fixture *r)
     r->suites = "";
     ok = row(r, &c) && ok;
     ok = words(r, path("calls"),
-               "tests/run style host default shutdown tcp fpu tests/run bigmem tests/run all") &&
+               "tests/run style host default shutdown tcp fpu tests/run bigmem tests/run default "
+               "tcp") &&
          words(r, path("calls.arch"), "i686 x86_64 x86_64 i686 under ia32") &&
          words(r, path("calls.make"), "clean i686 clean x86_64 build i686 build x86_64") && ok;
     ok = words(r, output_path(r, "full-i686/failed"), "") &&
@@ -606,8 +607,7 @@ static int both_chosen_rows(struct run_fixture *r)
     r->suites = "i686:default";
     ok = row(r, &c) && ok;
     ok = words(r, path("calls"), "tests/run i686:default") &&
-         words(r, path("calls.arch"), "i686") &&
-         words(r, path("calls.make"), "clean i686 build i686") &&
+         words(r, path("calls.arch"), "i686") && words(r, path("calls.make"), "build i686") &&
          fx_exists(output_path(r, "full-x86_64/skipped")) &&
          fx_exists(output_path(r, "full-ia32/skipped")) &&
          !fx_exists(output_path(r, "full-i686/skipped")) && ok;
@@ -620,10 +620,11 @@ static int both_chosen_rows(struct run_fixture *r)
 static int ia32_rows(struct run_fixture *r)
 {
     static const struct run_case rows[] = {
-        {"ia32: failed suite", "all", "ia32:default", 1, 0, NULL,
+        {"ia32: failed suite", "default", "ia32:default", 1, 0, NULL,
          "run: default: FAIL in 3s\nrun: result: failed: default\n", NULL},
-        {"ia32: runner", "all", "ia32:runner", 1, 0, NULL, "run: result: failed: runner\n", NULL},
-        {"ia32: no suite named", "all", "ia32:all", 1, 0, NULL,
+        {"ia32: runner", "default", "ia32:runner", 1, 0, NULL, "run: result: failed: runner\n",
+         NULL},
+        {"ia32: no suite named", "default", "ia32:all", 1, 0, NULL,
          "run: result: failed: nothing-such\n", NULL}};
     struct run_case c = {"ia32: chosen suites", "none", "", 0, 0, NULL, NULL, NULL};
     unsigned i;
@@ -645,7 +646,7 @@ static int ia32_rows(struct run_fixture *r)
     r->keep = "";
     ok = words(r, path("calls"), "tests/run default tcp") &&
          words(r, path("calls.arch"), "i686 under ia32") &&
-         words(r, path("calls.make"), "clean i686 clean x86_64 build i686 build x86_64") &&
+         words(r, path("calls.make"), "build i686 build x86_64") &&
          fx_exists(output_path(r, "full-i686/skipped")) &&
          fx_exists(output_path(r, "full-x86_64/skipped")) &&
          !fx_exists(output_path(r, "full-ia32/skipped")) &&
@@ -676,6 +677,9 @@ static int prepare(struct fixture *f)
     if (!flow_copy(f, "tools/ci/run.sh", "tree/tools/ci/run.sh") || !fx_mock(f, "git") ||
         !fx_mock(f, "make") || !fx_mock(f, "ci-run-watch") ||
         !fx_copy(f->self, path("tree/tests/run")))
+        return 0;
+    if (!flow_put(f, "tree/tools/ci/ia32-suites", "# the suites\ndefault\nshutdown\ntcp\n") ||
+        !flow_put(f, "tree/tools/ci/ia32-deferred", "shutdown\n"))
         return 0;
     return flow_put(f, "tree/tests/registry",
                     "style|-|full\nhost|-|full\ndefault|qemu|core\nshutdown|qemu|core\ntcp|qemu|"
