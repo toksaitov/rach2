@@ -30,7 +30,8 @@
 # waits for its helpers however long they run, which print mode does not do
 # unless CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS is 0, and cannot schedule a wakeup
 # or start a Monitor, since print mode keeps a finished session open until a
-# pending wakeup fires or a monitor's command ends. STATE, `build/flow/AGENT` of
+# pending wakeup fires or a monitor's command ends; nor can it start a subagent,
+# which the rules keep from workers. STATE, `build/flow/AGENT` of
 # the clone's main working tree unless given, holds the issue file, the log
 # `loop.log`, each session's output as `s-TIME.jsonl` and `s-TIME.err`, the
 # process group of the session that is running in `session`, the clone's path in
@@ -164,7 +165,7 @@ session()
                 CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 \
                 claude ${model:+--model "$model"} \
                 -p "$prompt" --permission-mode bypassPermissions \
-                --disallowedTools ScheduleWakeup,Monitor \
+                --disallowedTools ScheduleWakeup,Monitor,Agent \
                 --output-format stream-json --verbose ;;
         codex)
             run_session "$state/s-$t.jsonl" "$state/s-$t.err" "$DEADLINE" \
