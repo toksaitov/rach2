@@ -55,7 +55,8 @@
  * GETPARAM and I915_QUERY row
  * by row; GET_RESET_STATS; 78-5c's THROTTLE, which IGT calls at each open;
  * and 78-11a.2's REG_READ of the render ring's timestamp, which the model
- * counts on at each read of a half.
+ * counts on at each read of a half, with 84-156's teardown started between
+ * the halves.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -2484,8 +2485,28 @@ static void row_throttle(void)
 static uint64_t timestamp;
 static int timestamp_unwoken;
 
+/* An unbind's teardown, `i915_uncore_fini`, that another processor starts
+ * at the first read of a half once `teardown_armed` is set: at once when
+ * the register lock is free, and otherwise at the lock's release, since
+ * the teardown spins for it. `teardown_ran` counts the teardowns run and
+ * `teardown_waited` those that found the lock held. */
+static int teardown_armed, teardown_ran, teardown_waited;
+
+/** The teardown that waited for the register lock, run at the first
+ * release after which the lock is free; never an interrupt to take. */
+static int teardown_at_unlock(void)
+{
+    if (dev.uncore.lock.locked) {
+        return 0;
+    }
+    unlock_when = 0;
+    i915_uncore_fini(&dev);
+    teardown_ran++;
+    return 0;
+}
+
 /** The model's answer for the timestamp's halves: the counter's, after it
- * moves on. */
+ * moves on; the first read starts the armed teardown. */
 static uint32_t timestamp_read(struct i915_model *m, uint32_t reg, uint32_t value)
 {
     if (reg != RING_TIMESTAMP(RENDER_RING_BASE) && reg != RING_TIMESTAMP_UDW(RENDER_RING_BASE)) {
@@ -2493,6 +2514,16 @@ static uint32_t timestamp_read(struct i915_model *m, uint32_t reg, uint32_t valu
     }
     if (!(i915_model_peek(m, FORCEWAKE_ACK_HSW) & FORCEWAKE_KERNEL)) {
         timestamp_unwoken++;
+    }
+    if (teardown_armed) {
+        teardown_armed = 0;
+        if (dev.uncore.lock.locked) {
+            teardown_waited++;
+            unlock_when = teardown_at_unlock;
+        } else {
+            i915_uncore_fini(&dev);
+            teardown_ran++;
+        }
     }
     timestamp++;
     return reg == RING_TIMESTAMP(RENDER_RING_BASE) ? (uint32_t)timestamp
@@ -2541,6 +2572,46 @@ static void row_reg_read(void)
     done(&m);
 }
 
+/**
+ * 84-156: an unbind's teardown started on another processor between
+ * REG_READ's halves waits for the read, as Linux's intel_uncore_read64_2x32
+ * holds uncore->lock across both: each half is read under forcewake and the
+ * value is whole, the teardown runs once the read lets the register lock
+ * go, and the next REG_READ is refused with ENODEV. A read that keeps
+ * forcewake by its reference alone, outside the lock, lets the teardown
+ * revoke it after the first half and reads the second unwoken.
+ */
+static void row_reg_read_teardown(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct drm_i915_reg_read r;
+    int32_t err;
+
+    m.on_read = timestamp_read;
+    timestamp = 0x1fffffffeull;
+    timestamp_unwoken = teardown_ran = teardown_waited = 0;
+    teardown_armed = 1;
+    memset(&r, 0, sizeof(r));
+    r.offset = 0x2358u | I915_REG_READ_8B_WA;
+    err = i915_reg_read_ioctl(&dev.drm, &r, &file_a);
+    CHECK("reg read teardown: the teardown started between the halves",
+          teardown_armed == 0 && teardown_ran == 1);
+    CHECK("reg read teardown: it waited for the register lock", teardown_waited == 1);
+    CHECK("reg read teardown: both halves under forcewake", timestamp_unwoken == 0);
+    CHECK("reg read teardown: the read whole across the carry",
+          err == 0 && r.val == 0x200000002ull);
+    CHECK("reg read teardown: the device gone after", i915->uncore.gone == 1);
+    timestamp = 0x1fffffffeull;
+    timestamp_unwoken = 0;
+    r.offset = 0x2358u;
+    CHECK("reg read teardown: a read after it ENODEV",
+          i915_reg_read_ioctl(&dev.drm, &r, &file_a) == -ENODEV && timestamp_unwoken == 0);
+    unlock_when = 0;
+    m.on_read = 0;
+    done(&m);
+}
+
 /** Nothing: one thread has no one to give way to. */
 void sched_give_way(void)
 {}
@@ -2572,6 +2643,7 @@ int main(void)
     row_reset_stats();
     row_throttle();
     row_reg_read();
+    row_reg_read_teardown();
     CHECK("the heap: every record freed", heap_live == 0);
     if (fails) {
         printf("i915-ctx-test: %d failures\n", fails);
