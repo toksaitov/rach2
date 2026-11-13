@@ -141,6 +141,6 @@ Faults this milestone found in another project's code, one section each, in the 
 * Found: 2026-11-13, in the design of task 84-154 of milestone 76, by reading the source beside Rach2's ext2 driver, which had the same shape in its unlink; read again on the testing host when the task closed.
 * Reproduction: not run. It needs a write of a directory's block to fail on a writable ext2 mount, as dm-flakey or dm-error over that block gives, then an unlink in that directory and `e2fsck -fn`, which should report the inode's count as too high.
 * Evidence: the design in task 84-154 (GitHub issue 4876 of `toksaitov/rach2`), "Same class, not yet reported", item 5; the lines above.
-* Rach2: its unlink, rmdir, link and renames change the counts in memory once the entry change is on the device, and leave a failed store of a count or of times to the node's mark, which a later store, the last put or a sync writes (commit 09caa470c).
+* Rach2: its unlink, rmdir, link and renames change the counts in memory once the entry change is on the device, and leave a failed store of a count or of times to the node's mark, which a later store, the last put or a sync writes (commit c03c7eda0).
 * Status: unreported.
 * Next: reproduce under dm-flakey on a current kernel, check whether ext2 still returns before the count change, and search the linux-ext4 list.
