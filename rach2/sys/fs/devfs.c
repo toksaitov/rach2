@@ -31,7 +31,6 @@
 #include "../block/disk.h"
 #include "../serial.h"
 #include "../rtc.h"
-#include "../lib/kirq.h"
 #include "../lib/spinlock.h"
 #include "../irq.h"
 #include "../proc/suspend.h"
@@ -576,6 +575,9 @@ struct devfs_owned {
 };
 
 static struct devfs_owned owned[DEVFS_OWNED_MAX];
+/* Protects the writes of `owned` and the reads that take more than one
+ * field; it is taken last, inside every other lock. */
+static struct spinlock owned_lock = SPINLOCK_INIT_NAMED("devfs_owned_lock");
 
 /** The record of `dev`, or NULL for a device that has none. A reader that
  * races a chmod or chown sees the bits before it or after it. */
@@ -594,7 +596,7 @@ static const struct devfs_owned *owned_of(const struct devfs_entry *dev)
 /** Drop the record of `dev`, which a node registered anew does not keep. */
 static void owned_drop(const struct devfs_entry *dev)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&owned_lock);
     int i;
 
     for (i = 0; i < DEVFS_OWNED_MAX; i++) {
@@ -602,7 +604,7 @@ static void owned_drop(const struct devfs_entry *dev)
             owned[i].dev = NULL;
         }
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&owned_lock, flags);
 }
 
 /** The permission bits of `dev`: its record's, else its entry's. */
@@ -2949,12 +2951,12 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
 /** The owner and group of `dev` into `*uid` and `*gid`. */
 static void dev_owner(const struct devfs_entry *dev, uint32_t *uid, uint32_t *gid)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&owned_lock);
     const struct devfs_owned *o = owned_of(dev);
 
     *uid = o ? o->uid : 0;
     *gid = o ? o->gid : 0;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&owned_lock, flags);
 }
 
 int devfs_owner(const char *name, uint32_t *uid, uint32_t *gid)
@@ -2992,7 +2994,7 @@ int32_t devfs_setattr(const char *name, uint32_t mode, uint32_t uid, uint32_t gi
     if (!dev) {
         return -ENOENT;
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&owned_lock);
     for (i = 0; i < DEVFS_OWNED_MAX && !o; i++) {
         if (owned[i].dev == dev) {
             o = &owned[i];
@@ -3018,7 +3020,7 @@ int32_t devfs_setattr(const char *name, uint32_t mode, uint32_t uid, uint32_t gi
             o->gid = gid;
         }
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&owned_lock, flags);
     return o ? 0 : -ENOSPC;
 }
 
