@@ -132,7 +132,7 @@ int in_interrupt(void)
 
 /* The halts the idle waits made, and the windows of one instruction with
  * interrupts on that they opened instead (`idle_kicked_window`). */
-static unsigned int idle_halts, irq_windows;
+static unsigned int irq_windows;
 
 /** Count a halt; the interrupt that would end it is not modeled. */
 void arch_idle_masked(void)
@@ -416,6 +416,7 @@ void smp_kick(int cpu)
     if (cpu != (int)host_cpu && cpu_table[cpu].idle_poll == CPU_POLL_ON) {
         cpu_table[cpu].idle_poll = CPU_POLL_KICKED;
     }
+    cpu_kicks[cpu]++;
     if (cpu == 1) {
         affinity_kicks++;
     }
@@ -1727,6 +1728,85 @@ static void nohz_absorbed_service(void)
     poll_rate = 0;
 }
 
+/**
+ * An idle task kicked while awake, after an interrupt ended its halt and
+ * before its next selection (`sched_idle_awake`), ends its wait with no
+ * halt and lets a pending interrupt in first, with the processor still
+ * marked idle, as a kicked poll does: a tick pending there would otherwise
+ * be taken after the switch and charged to the incoming thread. With no
+ * kick the wait halts.
+ */
+static void idle_kicked(void)
+{
+    setup();
+    cpu_table[0].idle = current_proc;
+    irq_flags = 0;
+    idle_halts = irq_windows = 0;
+    sched_idle_awake();
+    CHECK(cpu_table[0].idle_poll == CPU_POLL_ON,
+          "an interrupt that ends the halt marks the idle task awake");
+    cpu_table[0].idle_poll = CPU_POLL_KICKED; /* a remote wake's `smp_kick` */
+    idle_wait_irq_off();
+    CHECK(irq_windows == 1 && idle_halts == 0 && !irq_flags && !cpu_table[0].idle_wait &&
+              cpu_table[0].idle_poll == CPU_POLL_NONE,
+          "a kick while awake ends the wait through the interrupt window, with no halt");
+    sched_idle_awake();
+    idle_wait_irq_off();
+    CHECK(irq_windows == 1 && idle_halts == 1 && !irq_flags &&
+              cpu_table[0].idle_poll == CPU_POLL_NONE,
+          "an idle task awake with no kick halts");
+    cpu_table[0].idle = NULL;
+    irq_flags = 0x200;
+}
+
+/**
+ * Two busy processors whose ticks choose one idle processor with a stopped
+ * tick, before that processor's selection, kick it once: the first claims
+ * its idle task's request (`need_resched`), and the second finds it set, as
+ * a wake's kick finds it (`sched_preempt_cpu`). Processors 0 and 1 each
+ * queue a thread that processor 2, idle, may take.
+ */
+static void balance_once(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+        procs[i].state = PROC_BLOCKED;
+    }
+    cpu_table[1].online = 1;
+    cpu_table[1].current = &procs[1];
+    procs[1].state = PROC_RUNNING;
+    procs[1].cpu = procs[3].cpu = 1;
+    procs[2].cpu = 0;
+    sched_make_ready(&procs[2]);
+    sched_make_ready(&procs[3]);
+    CHECK(run_queues[0].count == 1 && run_queues[1].count == 1,
+          "each busy processor queues a thread");
+    cpu_table[2].online = 1;
+    cpu_table[2].current = cpu_table[2].idle = &procs[6];
+    procs[6].state = PROC_RUNNING;
+    procs[6].cpu = 2;
+    procs[6].need_resched = 0;
+    cpu_table[2].tick_stopped = 1;
+    k_memset(cpu_kicks, 0, sizeof(cpu_kicks));
+    irq_flags = 0;
+    sched_idle_balance();
+    host_cpu = 1;
+    sched_idle_balance();
+    host_cpu = 0;
+    CHECK(cpu_kicks[2] == 1 && procs[6].need_resched,
+          "two balancers that choose one idle processor kick it once");
+    CHECK(run_queues[0].count == 1 && run_queues[1].count == 1,
+          "the balancers leave the threads for the idle processor to take");
+    cpu_table[2].tick_stopped = 0;
+    cpu_table[2].online = 0;
+    cpu_table[1].online = 0;
+    init_sched();
+    irq_flags = 0x200;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -1773,6 +1853,8 @@ int main(int argc, char **argv)
     nohz_poll_tick();
     nohz_dirty_poll();
     nohz_absorbed_service();
+    idle_kicked();
+    balance_once();
     if (failures) {
         return 1;
     }

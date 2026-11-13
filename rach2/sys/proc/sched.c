@@ -1123,7 +1123,9 @@ void sched_idle_balance(void)
     }
     flags = spin_lock_irqsave(&sched_lock);
     for (c = 0; c < NR_CPUS && kick < 0; c++) {
-        if (c != me && cpu_table[c].tick_stopped && sched_cpu_idle(c) && sched_find(me, c, 0)) {
+        if (c != me && cpu_table[c].tick_stopped && sched_cpu_idle(c) &&
+            !cpu_table[c].current->need_resched && sched_find(me, c, 0)) {
+            cpu_table[c].current->need_resched = 1;
             kick = c;
         }
     }
@@ -1770,6 +1772,14 @@ static int idle_sleep(int stop_tick, uint32_t per_us)
     return 1;
 }
 
+/** Let a pending interrupt in for one instruction, with the processor
+ * still marked idle: `sti` takes effect after the return that follows it. */
+static void idle_kicked_window(void)
+{
+    arch_irq_enable();
+    arch_irq_disable();
+}
+
 /**
  * Wait with the big lock let go. The scheduler idle task polls with its
  * existing tick and interrupts on: the interrupt routers mark the poll kicked,
@@ -1796,7 +1806,7 @@ static int idle_sleep(int stop_tick, uint32_t per_us)
  * while the processor is still marked idle: held to the poll's end, a disk's
  * completion made each of its random reads some 90 us longer, and a tick held
  * past a kick was charged to the thread the processor switched to. A kicked
- * poll likewise lets interrupts in for one instruction before it returns, so
+ * wait likewise lets interrupts in for one instruction before it returns, so
  * that one pending then, seen or not, is taken while the processor is still
  * marked idle, not after its caller waited for the big lock or switched
  * threads.
@@ -1825,6 +1835,7 @@ static void idle_halt(int stop_tick)
     polling = per_us != 0 && arch_idle_poll() && !cpu->tick_stopped && !timer_idle_pending();
     if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
         timer_service_ipi();
+        idle_kicked_window();
         return;
     }
     start = polling ? arch_cycles() : 0;
@@ -1856,8 +1867,7 @@ static void idle_halt(int stop_tick)
         }
         if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
             timer_service_ipi();
-            arch_irq_enable(); /* `sti` lets a pending interrupt in after the return */
-            arch_irq_disable();
+            idle_kicked_window();
             return;
         }
     }
