@@ -549,16 +549,19 @@ under_home() { # under_home ROOT PATH
 
 # keep_root_directory PATH COPY: copies the directory PATH of the root at
 # TARGET_MNT to COPY, PATH read inside that root by root_path, as a home is.
-# A PATH that is a symbolic link leading under /home is copied as the link,
-# since /home is kept whole and the link leads to the same tree after the
-# write; any other PATH is copied as the tree it leads to, which may not be on
-# the new root. A PATH that leads to the root itself or to no directory is not
-# copied. Status 1 when PATH leads through too many links or the copy fails.
+# A PATH that is a symbolic link leading under /home is kept as a link straight
+# to the directory it leads to, since /home is kept whole and that directory
+# is there after the write; a link through other links, such as /root to
+# /srv/root and /srv/root to /home/root, would lead through directories that
+# neither the copy nor the new root may have. Any other PATH is copied as the
+# tree it leads to, which may not be on the new root. A PATH that leads to the
+# root itself or to no directory is not copied. Status 1 when PATH leads
+# through too many links or the copy fails.
 keep_root_directory() { # keep_root_directory PATH COPY
     kept_dir=$(root_path "$TARGET_MNT" "$1") || return 1
     [ "$kept_dir" != "$TARGET_MNT" ] && [ -d "$kept_dir" ] || return 0
     if [ -L "$TARGET_MNT$1" ] && under_home "$TARGET_MNT" "$kept_dir"; then
-        cp -a "$TARGET_MNT$1" "$2"
+        ln -s "${kept_dir#"$TARGET_MNT"}" "$2"
     else
         cp -a "$kept_dir" "$2"
     fi
