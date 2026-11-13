@@ -129,11 +129,8 @@ def snapshot():
             pass
     # The lines of the thread bkl/calls counts alone, which trip.sh -t
     # chooses: its switches away by the thread switched to, and its sleeps.
-    try:
-        text += ["filter " + line + "\n" for line in CALLS.read_text().splitlines()
-                 if line.startswith(("thread ", "switch ", "block "))]
-    except OSError:
-        pass
+    text += ["filter " + line + "\n" for line in bkl.get("calls", "").splitlines()
+             if line.startswith(("thread ", "switch ", "block "))]
     return "".join(text)
 
 
