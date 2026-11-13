@@ -216,7 +216,7 @@ static void if_defaults(struct nd6_if *ni)
     ni->hlim = 0;
     ni->mtu = 0;
     ni->reachable_ms = 0;
-    ni->retrans = RETRANS_TIMER_MS * TICK_HZ / 1000u;
+    ni->retrans = MS_TO_TICKS(RETRANS_TIMER_MS);
     draw_reachable(ni);
 }
 
@@ -1620,7 +1620,7 @@ void nd6_tick(void)
     if (!due(nd6_next)) {
         return;
     }
-    nd6_next = NOW + (TICK_HZ / 10 ? TICK_HZ / 10 : 1);
+    nd6_next = NOW + MS_TO_TICKS(100);
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *nd = netdev_at(i);
         struct nd6_if *ni = if_of(nd);

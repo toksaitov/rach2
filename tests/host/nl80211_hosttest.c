@@ -7,6 +7,8 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/park_host.c
+ * host-cflags: -DTICK_HZ=1000
+ * host-deps: rach2/sys/tick.c
  */
 /* nl80211's cancellations go through cancel_hook below, which stands in for
  * the worker's wait for a callback that is running. */

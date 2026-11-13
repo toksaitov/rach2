@@ -1018,6 +1018,7 @@ void schedule(void)
     if (!next) {
         if (old == cpu->idle || old->state == PROC_RUNNING || !cpu->idle) {
             waketime_state(old, old->state == PROC_RUNNING ? 2 : 3, me);
+            old->slice_ns = sched_clock_ns();
             spin_unlock_irqrestore(&sched_lock, saved_flags);
             return;
         }
@@ -1034,6 +1035,7 @@ void schedule(void)
     next->woken = 0;
     if (next == old) {
         next->state = PROC_RUNNING;
+        next->slice_ns = sched_clock_ns();
         spin_unlock_irqrestore(&sched_lock, saved_flags);
         return;
     }
@@ -1091,26 +1093,43 @@ void schedule(void)
     kirq_restore(saved_flags);
 }
 
-/** Arm the current thread's slice expiry when another local thread waits.
- * Interrupts are off and no scheduler lock is held. A device interrupt may
- * replace it with an earlier wake; the expiry pass rearms the slice. */
+/** Arm a slice only when selection could take a queued competitor.
+ * Equal RT priority competes with RR, lower priority never does. Expiry
+ * requests selection once instead of rearming an event in the past.
+ * Interrupts are off and no scheduler lock is held. */
 void sched_slice_rearm(void)
 {
     struct percpu *cpu = this_cpu();
-    process_t *p = cpu->current;
+    process_t *p = cpu->current, *q;
     uint32_t flags;
-    int queued;
-    uint64_t at;
+    int c, me = (int)arch_cpu_id(), queued = 0;
+    uint64_t at, now;
 
     if (!p || p == cpu->idle || p->need_resched || p->sched_policy == SCHED_FIFO) {
         return;
     }
     flags = spin_lock_irqsave(&sched_lock);
-    queued = run_queues[arch_cpu_id()].count > 0;
+    for (c = 0; c < NR_CPUS && !queued; c++) {
+        if (c != me && run_queues[c].rt_count == 0) {
+            continue;
+        }
+        for (q = run_queues[c].head; q; q = q->ready_next) {
+            if (sched_may_run(q, me) && (c == me || sched_priority(q) != 0) && !sched_keeps(p, q)) {
+                queued = 1;
+                break;
+            }
+        }
+    }
     spin_unlock_irqrestore(&sched_lock, flags);
     if (queued) {
         at = p->slice_ns + SCHED_INTERVAL_NS;
-        timer_wake_at((int64_t)(at > sched_clock_ns() ? at : sched_clock_ns() + 1u));
+        now = sched_clock_ns();
+        if (at <= now) {
+            p->need_resched = 1;
+            proc_work_set(p, WORK_RESCHED);
+        } else {
+            timer_wake_at((int64_t)at);
+        }
     }
 }
 

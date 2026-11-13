@@ -73,6 +73,16 @@ uint64_t tick_clock(uint64_t ticks)
     return seconds * USER_HZ + rem * USER_HZ / TICK_HZ;
 }
 
+/** Convert whole kernel ticks to milliseconds without overflowing the
+ * intermediate product. The result must fit in 64 bits. */
+uint64_t tick_msecs(uint64_t ticks)
+{
+    uint32_t rem;
+    uint64_t seconds = tick_div(ticks, TICK_HZ, &rem);
+
+    return seconds * 1000u + rem * 1000u / TICK_HZ;
+}
+
 uint64_t tick_centisecs(uint32_t hundredths)
 {
     return tick_div((uint64_t)hundredths * TICK_HZ + 99u, 100u, (uint32_t *)0);

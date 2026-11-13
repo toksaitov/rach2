@@ -146,7 +146,7 @@ static void arm(struct wlan_mlme *m, uint64_t due)
 /** Arm the deadline ms milliseconds from now. */
 static void arm_in(struct wlan_mlme *m, unsigned ms)
 {
-    arm(m, tick_count() + ms);
+    arm(m, tick_count() + MS_TO_TICKS(ms));
 }
 
 /** Move to state s through the interface, which asks the radio first; a
@@ -643,10 +643,10 @@ int wlan_mlme_associate(struct wlan_mlme *m, const struct wlan_mlme_assoc *req)
  * AP gave none. */
 static unsigned beacons_ms(const struct wlan_mlme *m, unsigned n)
 {
-    unsigned tu;
+    uint32_t tu;
 
-    tu = m->bss->beacon_interval ? m->bss->beacon_interval : 100;
-    return (unsigned)((uint32_t)n * tu * 1024u / 1000u);
+    tu = (uint32_t)n * (m->bss->beacon_interval ? m->bss->beacon_interval : 100);
+    return (unsigned)(tu / 125u * 128u + tu % 125u * 128u / 125u);
 }
 
 /** The milliseconds of WLAN_MLME_BEACON_LOSS of the AP's beacon intervals. */
@@ -676,7 +676,7 @@ static int assoc_success(struct wlan_mlme *m, const uint8_t *f, const struct iee
     m->ds_number = 0;
     m->ds_channel = 0;
     m->ds_home = 0;
-    arm(m, m->last_beacon + loss_ms(m));
+    arm(m, m->last_beacon + MS_TO_TICKS(loss_ms(m)));
     return 0;
 }
 
@@ -761,8 +761,8 @@ static uint64_t renewal_next(const struct wlan_mlme *m)
     if (m->renew_again >= due)
         return m->renew_again;
     if (m->renew_asked >= due)
-        return m->renew_asked + WLAN_MLME_ASK_WAIT;
-    return m->renew_silent == due ? due + WLAN_MLME_KEY_WAIT : due;
+        return m->renew_asked + MS_TO_TICKS(WLAN_MLME_ASK_WAIT);
+    return m->renew_silent == due ? due + MS_TO_TICKS(WLAN_MLME_KEY_WAIT) : due;
 }
 
 /**
@@ -778,13 +778,13 @@ static uint64_t renewal_next(const struct wlan_mlme *m)
 static int renewal_lapsed(struct wlan_mlme *m, uint64_t now)
 {
     uint64_t due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
-    uint64_t again = now + WLAN_MLME_ASK_AGAIN;
-    int asked, over = now >= due + WLAN_MLME_KEY_WAIT;
+    uint64_t again = now + MS_TO_TICKS(WLAN_MLME_ASK_AGAIN);
+    int asked, over = now >= due + MS_TO_TICKS(WLAN_MLME_KEY_WAIT);
 
     if (!due || now < m->renew_again)
         return 0;
     if (m->renew_asked >= due) {
-        if (now < m->renew_asked + WLAN_MLME_ASK_WAIT)
+        if (now < m->renew_asked + MS_TO_TICKS(WLAN_MLME_ASK_WAIT))
             return 0;
         if (over)
             return 1;
@@ -792,8 +792,8 @@ static int renewal_lapsed(struct wlan_mlme *m, uint64_t now)
         return 0;
     }
     m->renew_again = 0;
-    if (again > due + WLAN_MLME_KEY_WAIT)
-        again = due + WLAN_MLME_KEY_WAIT;
+    if (again > due + MS_TO_TICKS(WLAN_MLME_KEY_WAIT))
+        again = due + MS_TO_TICKS(WLAN_MLME_KEY_WAIT);
     asked = m->ops->ask ? m->ops->ask(m->wlan) : 0;
     if (asked == 1)
         m->renew_asked = now;
@@ -809,7 +809,7 @@ static int renewal_lapsed(struct wlan_mlme *m, uint64_t now)
  * sets the timer again. */
 static uint64_t csa_next(const struct wlan_mlme *m)
 {
-    uint64_t soon = tick_count() + WLAN_MLME_CSA_LOOK;
+    uint64_t soon = tick_count() + MS_TO_TICKS(WLAN_MLME_CSA_LOOK);
     uint64_t due = renewal_next(m);
 
     if (due && due < soon)
@@ -825,7 +825,7 @@ static uint64_t csa_next(const struct wlan_mlme *m)
  * and so does the renewal under way, whose question goes at its time. */
 static uint64_t monitor_due(const struct wlan_mlme *m)
 {
-    uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard, due;
+    uint64_t loss = m->last_beacon + MS_TO_TICKS(loss_ms(m)), idle = m->polled, heard, due;
     uint64_t renewal = renewal_next(m);
 
     if (renewal && renewal < loss)
@@ -835,12 +835,12 @@ static uint64_t monitor_due(const struct wlan_mlme *m)
     heard = m->ops->heard ? m->ops->heard(m->wlan) : 0;
     if (heard > idle)
         idle = heard;
-    idle += WLAN_MLME_IDLE_POLL;
+    idle += MS_TO_TICKS(WLAN_MLME_IDLE_POLL);
     due = idle < loss ? idle : loss;
     if (m->ds_channel && m->ds_ask < due)
         due = m->ds_ask;
-    if (m->ds_home && m->ds_moved + WLAN_MLME_DS_PROOF < due)
-        due = m->ds_moved + WLAN_MLME_DS_PROOF;
+    if (m->ds_home && m->ds_moved + MS_TO_TICKS(WLAN_MLME_DS_PROOF) < due)
+        due = m->ds_moved + MS_TO_TICKS(WLAN_MLME_DS_PROOF);
     return due;
 }
 
@@ -868,7 +868,7 @@ static int ds_settle(struct wlan_mlme *m)
     if (m->ops->sealed(m->wlan) > m->ds_moved)
         return 1;
     m->ds_number = home->number;
-    m->ds_ask = tick_count() + WLAN_MLME_DS_RETRY;
+    m->ds_ask = tick_count() + MS_TO_TICKS(WLAN_MLME_DS_RETRY);
     m->csa_channel = home;
     csa_switch(m);
     return 0;
@@ -912,7 +912,7 @@ static void monitor_answered(struct wlan_mlme *m)
     m->probes = 0;
     m->poll_cookie = 0;
     m->last_beacon = m->polled = tick_count();
-    m->ds_ask = m->last_beacon + WLAN_MLME_DS_RETRY;
+    m->ds_ask = m->last_beacon + MS_TO_TICKS(WLAN_MLME_DS_RETRY);
     arm(m, m->csa_channel ? csa_next(m) : monitor_due(m));
 }
 
@@ -983,7 +983,7 @@ static void csa_note(struct wlan_mlme *m, unsigned mode, unsigned number, unsign
     if (!ch)
         return;
     m->csa_channel = ch;
-    m->csa_at = tick_count() + (count > 1 ? beacons_ms(m, count) : 0);
+    m->csa_at = tick_count() + (count > 1 ? MS_TO_TICKS(beacons_ms(m, count)) : 0);
     if (mode == 1 && !m->csa_hold) {
         m->csa_hold = 1;
         m->ops->hold(m->wlan, 1);
@@ -1099,7 +1099,7 @@ static void monitor_timeout(struct wlan_mlme *m)
         arm_in(m, WLAN_MLME_PROBE_TIMEOUT);
         return;
     }
-    if (m->ds_home && now >= m->ds_moved + WLAN_MLME_DS_PROOF && !ds_settle(m))
+    if (m->ds_home && now >= m->ds_moved + MS_TO_TICKS(WLAN_MLME_DS_PROOF) && !ds_settle(m))
         return;
     if (!m->probes) {
         due = monitor_due(m);
@@ -1107,7 +1107,7 @@ static void monitor_timeout(struct wlan_mlme *m)
             arm(m, due);
             return;
         }
-        if (now >= m->last_beacon + loss_ms(m)) {
+        if (now >= m->last_beacon + MS_TO_TICKS(loss_ms(m))) {
             m->missed_beacons++;
             if (m->beacon_losses)
                 ++*m->beacon_losses;

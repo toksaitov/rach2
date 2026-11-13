@@ -27,6 +27,7 @@
  * key of SipHash's own test vectors, and the addresses and ports make the
  * twelve bytes 00 to 0b, so the hash of every connection here is a constant
  * the test states.
+ * host-deps: rach2/sys/tick.c
  */
 
 extern int printf(const char *fmt, ...);

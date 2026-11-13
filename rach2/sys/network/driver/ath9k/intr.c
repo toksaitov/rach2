@@ -25,8 +25,8 @@
 
 /* Messages in a row that found no cause, or messages between two ticks,
  * before the card is served by the tick alone, as Linux's
- * spurious-interrupt check gives up on a line; a tick is a millisecond,
- * and a card hearing beacons sends a few messages in it. */
+ * spurious-interrupt check gives up on a line; a card hearing beacons
+ * sends a few messages in a kernel tick. */
 #define EMPTY_MAX 1000
 #define BURST_MAX 1000
 

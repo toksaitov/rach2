@@ -54,7 +54,7 @@ The card keeps its calibration in an EEPROM or in OTP as compressed blocks laid 
 
 `ath9k_phy_channel_change` retunes a running chip without a reset when no queue holds a frame: it takes the radio bus, retunes, sets the power, delta slope and spurs, gives the bus back, and loads and restarts the noise floor. A change that fails leaves the channel and its calibration data as they were, and the caller resets the chip.
 
-A reset of `hw.c` calls these parts in ath9k's order, which its section gives, and `pci.c` calls `ath9k_cal_start` once the chip runs.
+A reset of `hw.c` calls these parts in ath9k's order, which its section gives, and `pci.c` calls `ath9k_cal_start` once the chip runs. Calibration stamps, receive-recovery windows and queued rfkill and recovery work use kernel ticks; their millisecond periods convert at the comparison or queue boundary, and receive checks per second divide elapsed ticks by the kernel rate.
 
 ### Calibration (`calib.c`)
 

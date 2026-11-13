@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/network/wireless/elems.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-cflags: -DTICK_HZ=1000
  */
 #include "../../rach2/sys/network/wireless/work.h"
 #include "../../rach2/sys/lib/kerrno.h"

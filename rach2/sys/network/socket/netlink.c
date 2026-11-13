@@ -1561,7 +1561,7 @@ void netlink_tick(void)
     if ((int32_t)((uint32_t)kernel_ticks - watch_next) < 0) {
         return;
     }
-    watch_next = (uint32_t)kernel_ticks + (TICK_HZ / 10 ? TICK_HZ / 10 : 1);
+    watch_next = (uint32_t)kernel_ticks + MS_TO_TICKS(100);
     watch_run();
 }
 

@@ -18,6 +18,7 @@
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-cflags: -DTICK_HZ=1000
  */
 #include "network/wireless/data.h"
 #include "network/wireless/mlme.h"
@@ -1202,7 +1203,7 @@ static void check_ba_idle(void)
     setup(1);
     d->privacy = 0;
     len = addba_req(f, 0, 8, 100);
-    f[29] = 100; /* 102 ms */
+    f[29] = 100; /* 102.4 ms, rounded up to 103 ticks */
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].timeout == 100);
     CHECK(sent[0].frame[31] == 100); /* echoed */
     now += 60;
@@ -1212,7 +1213,7 @@ static void check_ba_idle(void)
     run_work();
     CHECK(d->ba[0].active);
     n_sent = 0;
-    now += 102;
+    now += 103;
     run_work();
     CHECK(!d->ba[0].active && n_sent == 1 && sent_delba(0, 0x0000, 39));
 
@@ -1233,7 +1234,7 @@ static void check_ba_idle(void)
     f[29] = 100;
     f[30] = 0;
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].timeout == 100);
-    now += 102;
+    now += 103;
     run_work();
     CHECK(!d->ba[0].active && d->ba[1].active && d->ba[2].active);
 
@@ -1260,7 +1261,7 @@ static void check_ba_stale(void)
     setup(1);
     d->privacy = 0;
     len = addba_req(f, 0, 8, 100);
-    f[29] = 100; /* 102 ms */
+    f[29] = 100; /* 102.4 ms, rounded up to 103 ticks */
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
     for (i = 100; i < 120; ++i)
         CHECK(rx_sn(i) == 0);
@@ -1271,7 +1272,7 @@ static void check_ba_stale(void)
         run_work();
         CHECK(rx_sn(115) == -EALREADY && d->ba[0].active);
     }
-    now += 12;
+    now += 13;
     run_work();
     CHECK(!d->ba[0].active && n_sent == 1 && sent_delba(0, 0x0000, 39));
 

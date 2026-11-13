@@ -104,7 +104,7 @@ static uint32_t isn_key[4];
 static int isn_keyed;
 
 /* RFC 6528's timer counts 4-microsecond units, 250000 a second. */
-#define TCP_ISN_PER_TICK (250000u / TICK_HZ)
+#define TCP_ISN_HZ 250000u
 
 /* The low word of the tick count, which TCP's 32-bit stamps and deadlines
  * are differences against, each shorter than the word's cycle. */
@@ -245,7 +245,8 @@ static uint32_t tcp_isn_hash(const struct tcb *tcb)
  */
 static uint32_t tcp_isn(const struct tcb *tcb)
 {
-    return TCP_NOW() * TCP_ISN_PER_TICK + tcp_isn_hash(tcb);
+    return (uint32_t)tick_div64((uint64_t)TCP_NOW() * TCP_ISN_HZ, TICK_HZ, NULL) +
+           tcp_isn_hash(tcb);
 }
 
 void tcp_init(void)
@@ -1751,7 +1752,7 @@ static int tcp_tick_pump(struct tcb *tcb)
     }
     if (TCP_NOW() + 1 - tcb->refused_since > TCP_REFUSE_GIVEUP_TICKS) {
         klog(KLOG_WARN, "tcp", "gave up: the driver refused every transmit for %d ms",
-             (int)((TCP_NOW() + 1 - tcb->refused_since) * (1000u / TICK_HZ)));
+             (int)(tick_msecs((uint32_t)(TCP_NOW() + 1 - tcb->refused_since))));
         tcp_giveup(tcb);
         return 1;
     }

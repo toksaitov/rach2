@@ -329,7 +329,7 @@ static struct wlan_defrag *defrag_slot(struct wlan_data *d, uint64_t now)
 
     for (i = 0; i < WLAN_DATA_DEFRAG; ++i) {
         e = &d->defrag[i];
-        if (!e->len || now - e->started >= WLAN_DATA_FRAG_TIMEOUT)
+        if (!e->len || now - e->started >= MS_TO_TICKS(WLAN_DATA_FRAG_TIMEOUT))
             return e;
         if (e->started < best->started)
             best = e;
@@ -379,8 +379,8 @@ static int defrag(struct wlan_data *d, uint8_t **frame, unsigned *len, unsigned 
             e = &d->defrag[i];
     if (!e)
         return -EINVAL;
-    if (now - e->started >= WLAN_DATA_FRAG_TIMEOUT || frag != e->frag + 1u || gen != e->key_gen ||
-        h != e->hdrlen ||
+    if (now - e->started >= MS_TO_TICKS(WLAN_DATA_FRAG_TIMEOUT) || frag != e->frag + 1u ||
+        gen != e->key_gen || h != e->hdrlen ||
         (c->key && c->key->key.cipher == WLAN_CIPHER_SUITE_CCMP && c->pn != e->pn + 1) ||
         (c->key && c->pn <= e->pn) || e->len + *len - h > sizeof(e->frame)) {
         e->len = 0;

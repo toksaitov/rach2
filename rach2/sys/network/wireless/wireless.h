@@ -29,7 +29,7 @@ struct wlan_bss {
     uint16_t frequency;       /* MHz */
     int32_t signal;           /* mBm, as nl80211 reports */
     uint64_t tsf;             /* AP's beacon TSF, microseconds */
-    uint64_t seen;            /* local timer ticks, milliseconds */
+    uint64_t seen;            /* kernel timer ticks */
     uint16_t beacon_interval; /* units of 1024 microseconds */
     uint16_t capability;
     uint8_t ies[WLAN_MAX_BSS_IES];
@@ -134,7 +134,7 @@ struct wlan_work {
     /** Run on the wireless worker with the kernel lock, no net_lock.
      * May sleep; callback owns work again after it returns. */
     void (*run)(struct wlan_work *work);
-    uint64_t due;     /* absolute millisecond tick; 0 asks for the tick now */
+    uint64_t due;     /* absolute kernel tick; 0 asks for the tick now */
     unsigned pending; /* private to work.c */
 };
 

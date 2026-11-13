@@ -101,6 +101,10 @@ uint64_t tick_span(int64_t sec, uint32_t nsec);
  * product before division. Any context; no hardware or locks. */
 uint64_t tick_clock(uint64_t ticks);
 
+/** Convert kernel ticks to milliseconds, rounded down. The result must fit
+ * in 64 bits. Any context; no hardware is read. */
+uint64_t tick_msecs(uint64_t ticks);
+
 /** Convert hundredths of a second to ticks, rounded up. The argument is
  * 32 bits, so its scaled result fits in 64 bits. No locks or hardware. */
 uint64_t tick_centisecs(uint32_t hundredths);

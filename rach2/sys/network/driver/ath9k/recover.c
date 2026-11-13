@@ -216,12 +216,13 @@ int ath9k_hang_check(struct ath9k *ah)
     }
     now = tick_count();
     interval = now - ah->recover.window;
-    if (why == ATH9K_RESET_REASONS && interval >= RX_WINDOW_MS) {
+    if (why == ATH9K_RESET_REASONS && interval >= MS_TO_TICKS(RX_WINDOW_MS)) {
         uint32_t count = ah->recover.rx_active;
 
         ah->recover.window = now;
         ah->recover.rx_active = 0;
-        if (ah->mac.associated && interval <= 2 * RX_WINDOW_MS && count < (uint32_t)interval / 1000)
+        if (ah->mac.associated && interval <= MS_TO_TICKS(2u * RX_WINDOW_MS) &&
+            count < (uint32_t)interval / TICK_HZ)
             why = ATH9K_RESET_RX_STALL;
     }
     if (why == ATH9K_RESET_REASONS)
@@ -237,7 +238,7 @@ static void check_queue(struct ath9k *ah)
     struct ath9k_check_work *w = &ah->recover.work[ah->recover.next_work];
 
     ah->recover.next_work ^= 1;
-    (void)wlan_queue_work(&w->work, tick_count() + ATH9K_HANG_MS);
+    (void)wlan_queue_work(&w->work, tick_count() + MS_TO_TICKS(ATH9K_HANG_MS));
 }
 
 /**

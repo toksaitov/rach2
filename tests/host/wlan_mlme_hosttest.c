@@ -2,6 +2,7 @@
  * host-deps: rach2/sys/network/wireless/mlme.c
  * host-deps: rach2/sys/network/wireless/elems.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-cflags: -DTICK_HZ=1000
  */
 #include "../../rach2/sys/network/wireless/mlme.h"
 #include "../../rach2/sys/lib/kerrno.h"

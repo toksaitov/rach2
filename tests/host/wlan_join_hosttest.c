@@ -39,6 +39,8 @@
  * for the worker thread by running the due work itself, for the network
  * stack below the interface by keeping each frame the interface delivers,
  * and for the medium by reading and writing records of /dev/wsim.
+ * host-deps: rach2/sys/tick.c
+ * host-cflags: -DTICK_HZ=1000
  */
 #include "../../rach2/sys/network/wireless/nl80211.c"
 #include "../../rach2/sys/network/wireless/wsim.h"

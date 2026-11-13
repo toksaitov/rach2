@@ -1062,10 +1062,11 @@ static void cal_queue(struct ath9k_cal *cal, uint64_t due)
     (void)wlan_queue_work(&w->work, due);
 }
 
-/** Whether `period` milliseconds have passed from `since` to `now`. */
+/** Whether `period` milliseconds have passed between the kernel tick
+ * stamps `since` and `now`. */
 static int elapsed(uint64_t now, uint64_t since, uint64_t period)
 {
-    return now - since >= period;
+    return now - since >= MS_TO_TICKS(period);
 }
 
 /**
@@ -1093,7 +1094,7 @@ static void cal_run(struct wlan_work *work)
     /* A scan's channels say nothing of the home channel's. */
     if (!ah->mac.irq_on || ah->recover.resetting || ah->recover.pending ||
         (ah->rx.filters & WLAN_FILTER_OTHER_BSS)) {
-        cal_queue(cal, now + ATH9K_ANI_MS);
+        cal_queue(cal, now + MS_TO_TICKS(ATH9K_ANI_MS));
         return;
     }
     if (elapsed(now, cal->last_long,
@@ -1134,7 +1135,7 @@ static void cal_run(struct wlan_work *work)
         interval = ATH9K_ANI_MS;
     if (!cal->done && ATH9K_SHORT_CAL_MS < interval)
         interval = ATH9K_SHORT_CAL_MS;
-    cal_queue(cal, now + interval);
+    cal_queue(cal, now + MS_TO_TICKS(interval));
 }
 
 /** Start the periodic work from now, its short calibrations not done, as
@@ -1154,7 +1155,7 @@ void ath9k_cal_start(struct ath9k *ah)
     cal->last_long = cal->last_short = cal->last_ani = cal->last_full = now;
     cal->done = 0;
     cal->running = 1;
-    cal_queue(cal, now + ATH9K_ANI_MS);
+    cal_queue(cal, now + MS_TO_TICKS(ATH9K_ANI_MS));
 }
 
 /** Stop the periodic work, waiting for a run in progress. */

@@ -339,7 +339,7 @@ static void rfkill_run(struct wlan_work *work)
     struct ath9k *ah = work->wlan->radio->priv;
 
     ath9k_rfkill_poll(ah);
-    rfkill_queue(ah, tick_count() + RFKILL_POLL_MS);
+    rfkill_queue(ah, tick_count() + MS_TO_TICKS(RFKILL_POLL_MS));
 }
 
 /** Find the first card of a chip of the table, and its row. */
@@ -463,7 +463,7 @@ static int probe_card(struct ath9k *ah, const struct ath9k_chip *chip, const pci
     ah->bus.rfkill_work[0].wlan = ah->bus.rfkill_work[1].wlan = wlan;
     ah->bus.rfkill_work[0].run = ah->bus.rfkill_work[1].run = rfkill_run;
     ath9k_rfkill_poll(ah);
-    rfkill_queue(ah, tick_count() + RFKILL_POLL_MS);
+    rfkill_queue(ah, tick_count() + MS_TO_TICKS(RFKILL_POLL_MS));
     return 0;
 }
 

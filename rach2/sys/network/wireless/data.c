@@ -462,7 +462,7 @@ static void rekey_mark(struct wlan_data *d)
 
     if (d->rekey_due)
         return;
-    d->rekey_due = tick_count() + WLAN_DATA_REKEY_WAIT;
+    d->rekey_due = tick_count() + MS_TO_TICKS(WLAN_DATA_REKEY_WAIT);
     flags = spin_lock_irqsave(&d->txq_lock);
     d->txq_rekey = wlan_data_eapol_end(d);
     spin_unlock_irqrestore(&d->txq_lock, flags);

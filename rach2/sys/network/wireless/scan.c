@@ -96,7 +96,7 @@ static void scan_finish(struct wlan_scan *scan, int aborted)
     scan->state = WLAN_SCAN_IDLE;
     scan->start_pending = 0;
     scan->abort = 0;
-    wlan_bss_expire(scan->table, tick_count(), WLAN_BSS_EXPIRE_MS);
+    wlan_bss_expire(scan->table, tick_count(), MS_TO_TICKS(WLAN_BSS_EXPIRE_MS));
     scan_event(scan, aborted ? WLAN_EVENT_SCAN_ABORTED : WLAN_EVENT_SCAN_DONE);
 }
 

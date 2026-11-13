@@ -76,7 +76,7 @@ static void arm_timeout(struct wlan_data *d)
         for (i = 0; i < WLAN_BA_MAX_WINDOW; ++i) {
             if (!ba->slot[i])
                 continue;
-            t = ba->slot[i]->arrived + WLAN_BA_TIMEOUT;
+            t = ba->slot[i]->arrived + MS_TO_TICKS(WLAN_BA_TIMEOUT);
             if (!due || t < due)
                 due = t;
         }
@@ -173,7 +173,8 @@ int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
     if (sn_less(sn, ba->head)) {
         if (left_by_jump(ba, sn) ||
             (sn_less(sn, (ba->head - ba->window) & SN_MASK) &&
-             (++ba->stale >= ba->window || tick_count() - ba->taken >= WLAN_BA_STALE_WAIT))) {
+             (++ba->stale >= ba->window ||
+              tick_count() - ba->taken >= MS_TO_TICKS(WLAN_BA_STALE_WAIT)))) {
             (void)send_delba(d, tid, 0, WLAN_REASON_UNSPECIFIED);
             wlan_ba_rx_stop(d, tid, 1);
             return 1;
@@ -251,7 +252,7 @@ void wlan_ba_rx_timeout(struct wlan_work *work)
         last = 0;
         for (i = 1; i < ba->window; ++i) {
             f = ba->slot[(ba->head + i) % WLAN_BA_MAX_WINDOW];
-            if (f && now - f->arrived >= WLAN_BA_TIMEOUT)
+            if (f && now - f->arrived >= MS_TO_TICKS(WLAN_BA_TIMEOUT))
                 last = i;
         }
         if (last) {
@@ -266,7 +267,7 @@ void wlan_ba_rx_timeout(struct wlan_work *work)
  * of 1024 us, past its last frame. */
 static uint64_t idle_due(const struct wlan_ba_rx *ba)
 {
-    return ba->last_rx + (uint32_t)ba->timeout * 1024u / 1000u;
+    return ba->last_rx + ((uint32_t)ba->timeout * 1024u + TICK_US - 1u) / TICK_US;
 }
 
 /** Set the idle timer for the earliest receive session to go idle, in place
@@ -346,14 +347,14 @@ uint64_t wlan_ba_tx_waits(struct wlan_data *d, unsigned tid)
     if (tid >= 8 || d->ba_tx[tid].state != WLAN_BA_TX_REQUESTED)
         return 0;
     b = &d->ba_tx[tid];
-    if (now - b->since >= WLAN_BA_TX_RESPONSE) {
+    if (now - b->since >= MS_TO_TICKS(WLAN_BA_TX_RESPONSE)) {
         if (send_delba(d, tid, 1, WLAN_REASON_QSTA_NOT_USE) == -ENOBUFS &&
-            now - b->since < 2 * WLAN_BA_TX_RESPONSE)
-            return now + WLAN_BA_TX_AGAIN;
+            now - b->since < MS_TO_TICKS(2u * WLAN_BA_TX_RESPONSE))
+            return now + MS_TO_TICKS(WLAN_BA_TX_AGAIN);
         wlan_ba_tx_stop(d, tid, 0);
         return 0;
     }
-    return d->rekey_due ? 0 : b->since + WLAN_BA_TX_RESPONSE;
+    return d->rekey_due ? 0 : b->since + MS_TO_TICKS(WLAN_BA_TX_RESPONSE);
 }
 
 /** Send what wlan_ba_tx_waits held, once the TID's request has its answer.
@@ -397,7 +398,7 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol)
     p[7] = (uint8_t)(b->ssn << 4);
     p[8] = (uint8_t)(b->ssn >> 4);
     if (send_back(d, p, sizeof(p), d->mfp) != 0) {
-        b->retry_at = now + WLAN_BA_TX_RETRY;
+        b->retry_at = now + MS_TO_TICKS(WLAN_BA_TX_RETRY);
         return;
     }
     b->state = WLAN_BA_TX_REQUESTED;
@@ -453,7 +454,7 @@ void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba)
     if (delba)
         (void)send_delba(d, tid, 1, WLAN_REASON_QSTA_NOT_USE);
     b->state = WLAN_BA_TX_IDLE;
-    b->retry_at = tick_count() + WLAN_BA_TX_RETRY;
+    b->retry_at = tick_count() + MS_TO_TICKS(WLAN_BA_TX_RETRY);
     ba_tx_wake(d);
 }
 
@@ -465,7 +466,7 @@ int wlan_ba_rekey(struct wlan_data *d)
 
     d->ba_blocked = 1;
     if (!d->ba_stop_due)
-        d->ba_stop_due = tick_count() + WLAN_DATA_BA_WAIT;
+        d->ba_stop_due = tick_count() + MS_TO_TICKS(WLAN_DATA_BA_WAIT);
     late = tick_count() >= d->ba_stop_due;
     for (tid = 0; tid < 8; ++tid) {
         if (d->ba[tid].active) {
@@ -507,7 +508,7 @@ static void addba_resp_rx(struct wlan_data *d, unsigned token, unsigned status, 
     if (status != WLAN_STATUS_SUCCESS || !(params & 0x0002) || window == 0 ||
         !radio->ops->ampdu_action) {
         b->state = WLAN_BA_TX_IDLE;
-        b->retry_at = tick_count() + WLAN_BA_TX_RETRY;
+        b->retry_at = tick_count() + MS_TO_TICKS(WLAN_BA_TX_RETRY);
         ba_tx_wake(d);
         return;
     }

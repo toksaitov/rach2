@@ -27,6 +27,7 @@
  * looks for, then check that a reset brought back the queues, the filter,
  * the receive buffers, the interrupts and the keys. It exits with the
  * count of failed checks, at most 255.
+ * host-cflags: -DTICK_HZ=1000
  */
 #include "ath9k_model.h"
 #include "irq.h"

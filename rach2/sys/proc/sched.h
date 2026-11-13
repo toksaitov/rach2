@@ -265,8 +265,8 @@ void sched_tick(void);
 /* The independent slice interval, in nanoseconds. */
 #define SCHED_INTERVAL_NS 1000000u
 
-/** Arm a slice expiry for a competing local thread. Interrupts are off,
- * and the caller holds no scheduler lock. */
+/** Arm a slice for an eligible queued competitor, or request selection
+ * once its time has passed. Interrupts are off; no scheduler lock is held. */
 void sched_slice_rearm(void);
 
 /** Take the switch an interrupt asked for (`need_resched`), if one did;
