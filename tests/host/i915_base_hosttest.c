@@ -4,6 +4,7 @@
  * memory (i915_stolen.c) and the global GTT (i915_gtt.c), against the
  * host model of the Lenovo's HD 4400.
  *
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
  * host-deps: rach2/sys/drm/i915/i915_stolen.c rach2/sys/drm/i915/i915_gtt.c
  * host-deps: rach2/sys/drm/i915/i915_hw.c tests/host/i915_model.c
@@ -276,7 +277,8 @@ static void fw_tick(struct drm_i915_private *i915)
 /** The ticks until the release timer runs, 0 when it is not armed. */
 static uint32_t fw_left(const struct drm_i915_private *i915)
 {
-    return i915->uncore.timer_armed ? i915->uncore.timer_due - (uint32_t)kernel_ticks : 0;
+    return i915->uncore.timer_armed ? (uint32_t)(i915->uncore.timer_due / 1000000u - kernel_ticks)
+                                    : 0;
 }
 
 /** The load: the firmware's errors cleared, every request released. */
@@ -439,12 +441,12 @@ static void row_forcewake_idle(void)
           i915_uncore_idle_ticks(i915) == TICK_HZ && i915_model_forcewake(&m)->req == 0);
     CHECK("idle: armed, the query gives its two ticks",
           i915_forcewake_get(i915) == 0 && (i915_forcewake_put(i915), fw_left(i915) == 2) &&
-              i915_uncore_idle_ticks(i915) == 2);
+              i915_uncore_idle_ticks(i915) == 1);
     i915_uncore_tick(i915);
     i915_uncore_tick(i915);
     i915_uncore_tick(i915);
     CHECK("idle: tick work run again within one tick changes nothing",
-          fw_left(i915) == 2 && i915_uncore_idle_ticks(i915) == 2 &&
+          fw_left(i915) == 2 && i915_uncore_idle_ticks(i915) == 1 &&
               i915_model_forcewake(&m)->req == 1u);
     m.nlog = 0;
     kernel_ticks += 50;
@@ -457,7 +459,8 @@ static void row_forcewake_idle(void)
     kernel_ticks = 0xffffffffu;
     CHECK("idle: armed across the counter's wrap",
           i915_forcewake_get(i915) == 0 && (i915_forcewake_put(i915), fw_left(i915) == 2) &&
-              i915->uncore.timer_due == 1u && i915_uncore_idle_ticks(i915) == 2);
+              i915->uncore.timer_due == ((uint64_t)0xffffffffu + 2u) * 1000000u &&
+              i915_uncore_idle_ticks(i915) == 1);
     fw_tick(i915);
     CHECK("idle: one tick after, kept", fw_left(i915) == 1 && i915_model_forcewake(&m)->req == 1u);
     fw_tick(i915);
@@ -1196,8 +1199,42 @@ int mutex_held(const struct mutex *m)
 }
 
 /** Run every row; 0 when all pass. */
-int main(void)
+extern int64_t host_i915_deadline;
+
+/** The release clock stays in milliseconds while the scheduler uses 4 ms. */
+static void row_forcewake_fine(void)
 {
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    uint64_t start = kernel_ticks;
+
+    i915_uncore_init(i915);
+    CHECK("fine: arm two milliseconds", i915_forcewake_get(i915) == 0);
+    i915_forcewake_put(i915);
+    CHECK("fine: published after the device lock",
+          host_i915_deadline == (int64_t)i915->uncore.timer_due);
+    CHECK("fine: deadline independent of HZ", i915->uncore.timer_due == (start + 2u) * 1000000u);
+    i915_uncore_tick(i915);
+    CHECK("fine: service before the deadline keeps forcewake", i915_model_forcewake(&m)->req == 1);
+    kernel_ticks++;
+    i915_uncore_tick(i915);
+    CHECK("fine: one millisecond is early", i915_model_forcewake(&m)->req == 1);
+    CHECK("fine: separate millisecond polling", i915_uncore_idle_ticks(i915) == 1);
+    kernel_ticks++;
+    i915_uncore_tick(i915);
+    CHECK("fine: two milliseconds release before a four-ms tick",
+          i915_model_forcewake(&m)->req == 0 && !i915->uncore.timer_armed);
+    done(&m);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 2 && !__builtin_strcmp(argv[1], "--fine-forcewake")) {
+        row_forcewake_fine();
+        printf("i915 fine forcewake: %s\n", fails ? "FAIL" : "OK");
+        return fails != 0;
+    }
+    row_forcewake_fine();
     row_uncore_init();
     row_forcewake();
     row_forcewake_timer();

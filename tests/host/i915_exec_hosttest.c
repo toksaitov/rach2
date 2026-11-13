@@ -7,6 +7,7 @@
  * MI_STORE_DATA_IMM, so that a row sees where a relocated address points.
  * The user interrupt is taken when a row asks for it.
  *
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c

@@ -502,6 +502,65 @@ static volatile uint32_t idle_boot_until;
 static volatile uint32_t idle_poll_us;   /* raw microsecond poll deadline, zero for none */
 static volatile uint32_t service_kicked; /* an earlier target awaits CPU0's IPI */
 
+static struct spinlock service_fine_lock = SPINLOCK_INIT_NAMED("service_fine");
+static int64_t service_fine_at; /* monotonic deadline under service_fine_lock */
+static volatile uint32_t service_fine_pending;
+
+/** Read the published fine deadline, with no clock read under its lock. */
+static int64_t timer_service_fine_get(void)
+{
+    uint32_t flags = spin_lock_irqsave(&service_fine_lock);
+    int64_t at = service_fine_at;
+
+    spin_unlock_irqrestore(&service_fine_lock, flags);
+    return at;
+}
+
+/** Consume a due published service before its callback. IRQs are off. */
+static int timer_service_fine_take(void)
+{
+    int64_t now;
+    uint32_t flags;
+    int due;
+
+    if (!service_fine_pending) {
+        return 0;
+    }
+    now = rtc_monotonic_ns();
+    flags = spin_lock_irqsave(&service_fine_lock);
+    due = service_fine_at != 0 && service_fine_at <= now;
+    if (due) {
+        service_fine_at = 0;
+        service_fine_pending = 0;
+    }
+    spin_unlock_irqrestore(&service_fine_lock, flags);
+    return due;
+}
+
+void timer_service_wake_at(int64_t ns)
+{
+    uint32_t flags;
+    int changed = 0;
+
+    if (ns <= 0) {
+        return;
+    }
+    flags = spin_lock_irqsave(&service_fine_lock);
+    if (!service_fine_at || ns < service_fine_at) {
+        service_fine_at = ns;
+        service_fine_pending = 1;
+        changed = 1;
+    }
+    spin_unlock_irqrestore(&service_fine_lock, flags);
+    if (changed) {
+        if (arch_cpu_id() == 0) {
+            timer_wake_at(ns);
+        } else {
+            smp_kick(0);
+        }
+    }
+}
+
 static void timer_service_install(void);
 
 /** Keep millisecond polling independent of the scheduler tick. The caller
@@ -566,7 +625,7 @@ static void timer_service_event(void)
     if (arch_cpu_id() != 0) {
         return;
     }
-    if ((int32_t)((uint32_t)kernel_ticks - idle_boot_until) < 0 &&
+    if (!timer_service_fine_take() && (int32_t)((uint32_t)kernel_ticks - idle_boot_until) < 0 &&
         (idle_poll_us == 0 || (int32_t)(timer_now_us() - idle_poll_us) < 0)) {
         timer_service_install();
         return;
@@ -593,6 +652,9 @@ static void timer_service_install(void)
     if (arch_cpu_id() != 0) {
         return;
     }
+    if (service_fine_pending) {
+        timer_wake_at(timer_service_fine_get());
+    }
     poll = idle_poll_us;
     if (poll != 0) {
         left = (int32_t)(poll - timer_now_us());
@@ -612,10 +674,15 @@ static void timer_service_install(void)
  * service timer alone. Interrupts are off and no lock is held. */
 void timer_service_ipi(void)
 {
-    if (arch_cpu_id() != 0 || !service_kicked || arch_atomic_xchg(&service_kicked, 0u) == 0) {
+    if (arch_cpu_id() != 0) {
         return;
     }
-    timer_service_install();
+    if (service_kicked && arch_atomic_xchg(&service_kicked, 0u) != 0) {
+        timer_service_install();
+    }
+    if (service_fine_pending) {
+        timer_wake_at(timer_service_fine_get());
+    }
 }
 
 /** Whether the idle task must return to selection, with interrupts off.

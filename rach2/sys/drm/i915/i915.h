@@ -113,8 +113,7 @@ struct i915_uncore {
     uint32_t fifo_timeouts;
     uint32_t thread_timeouts;
     uint32_t timer_armed; /* the release timer is armed */
-    uint32_t timer_due;   /* the low word of kernel_ticks at which the armed
-                           * release timer runs */
+    uint64_t timer_due;   /* monotonic nanoseconds at which release runs */
     uint32_t active;      /* a reference was taken or dropped since the timer
                            * was armed, so that it runs once more before it
                            * lets go */
@@ -913,8 +912,8 @@ struct intel_pps_readout {
  * intel_pps. The delays the sequencer is programmed with, the larger of
  * the firmware's registers and the VBT's, in 100 us units as written
  * (`power_up` to `power_cycle`), and the same in milliseconds for the
- * driver's own waits. The times, in milliseconds of rtc_ticks_now, of the
- * panel's last power off, its last power on and the backlight's last
+ * driver's own waits. The times are milliseconds converted from rtc_ticks_now:
+ * the panel's last power off, its last power on and the backlight's last
  * off. `want_vdd` says a caller holds the panel's VDD forced on;
  * `vdd_off_due` is when VDD that no caller wants goes off, 0 when it is
  * not pending. `sleep` is the queue the driver sleeps on in its waits.
@@ -1615,11 +1614,11 @@ void i915_uncore_init(struct drm_i915_private *i915);
 int32_t i915_forcewake_get(struct drm_i915_private *i915);
 
 /** Drop a reference `i915_forcewake_get` gave. The last arms the release
- * timer, which withdraws the request one to two ticks of the boot
- * processor later unless a reference is taken meanwhile, as Linux's
- * intel_uncore_forcewake_put arms fw_domain_arm_timer for 1 ms, so that
- * the GT does not sleep and wake between accesses close together. A put
- * with no reference held is logged and changes nothing. */
+ * timer, which withdraws the request two milliseconds later unless a
+ * reference is taken meanwhile, as Linux's intel_uncore_forcewake_put arms
+ * fw_domain_arm_timer for 1 ms with 1 ms slack. This keeps the GT awake
+ * between accesses close together. A put with no reference held is logged
+ * and changes nothing. */
 void i915_forcewake_put(struct drm_i915_private *i915);
 
 /**
@@ -1631,16 +1630,16 @@ void i915_forcewake_put(struct drm_i915_private *i915);
  */
 uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg);
 
-/** Run the release timer once its tick has come: arm it again for a tick
+/** Run the release timer once due, rearming for one millisecond
  * if a reference was taken or dropped since it was armed, and otherwise
  * withdraw the request unless a reference is held, as Linux's
- * intel_uncore_fw_release_timer. Before its tick, and with the timer not
+ * intel_uncore_fw_release_timer. Before its time, and with the timer not
  * armed, nothing. From the boot processor's tick or its service event,
  * through `i915_tick`, with interrupts off; takes the register lock. */
 void i915_uncore_tick(struct drm_i915_private *i915);
 
-/** The boot processor's ticks until the release timer runs, from 1 to
- * TICK_HZ, which is the answer when it is not armed: the idle query's part
+/** Request millisecond service while the release timer is armed, or
+ * TICK_HZ otherwise: the idle query's part
  * for one device (`i915_idle_ticks`). With interrupts off; takes the
  * register lock and changes nothing. */
 uint32_t i915_uncore_idle_ticks(struct drm_i915_private *i915);

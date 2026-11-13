@@ -3,6 +3,7 @@
  * 4400 to another driver and its bring-up again from a reset, the path of
  * the Lenovo's step of 82-4b, run whole against the host model of the chip.
  *
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_pci.c rach2/sys/drm/i915/i915_handoff.c
  * host-deps: rach2/sys/drm/i915/i915_reset.c rach2/sys/drm/i915/i915_irq.c
  * host-deps: tests/host/i915_model.c rach2/sys/display/backlight.c

@@ -251,6 +251,12 @@ int timer_idle_prepare(void);
  * Interrupts are off; no lock is held. Other processors do nothing. */
 void timer_service_ipi(void);
 
+/** Publish an earlier boot-processor service event without the big lock.
+ * Call after releasing the timer's state lock. No service query or
+ * callback runs here. The timestamp is monotonic nanoseconds; an expired
+ * request runs on the next event. Any CPU. */
+void timer_service_wake_at(int64_t ns);
+
 /** Compare service deadlines with the boot processor's event and
  * kick it when an earlier one was added. The caller holds the big lock
  * with interrupts off and no other lock. */

@@ -5,6 +5,7 @@
  * requests' commands from memory and whose render ring saves and restores
  * context images.
  *
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_gem_context.c
  * host-deps: rach2/sys/drm/i915/i915_user_extensions.c
  * host-deps: rach2/sys/drm/i915/i915_request.c

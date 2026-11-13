@@ -8,6 +8,7 @@
 #include "i915_reg.h"
 
 #include "../../idle_timer.h"
+#include "../../rtc.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 
@@ -18,13 +19,10 @@
 #define I915_FW_THREAD_US 5000u
 #define I915_GT_FIFO_US   10000u
 
-/* The release timer's period in the boot processor's ticks: armed between
- * two ticks, it runs one to two milliseconds later at TICK_HZ 1000, as
- * Linux's hrtimer of NSEC_PER_MSEC with as much slack. The timer is a
- * deadline in kernel_ticks, so that a boot processor whose idle tick is
- * stopped runs it at its time (`i915_idle_ticks`), and one that runs the
- * tick work several times in a tick or late runs it once, at or after. */
-#define I915_FW_TIMER_TICKS 2u
+/* Linux's one-millisecond forcewake timer allows a millisecond of slack.
+ * Its two-millisecond deadline is served by the boot processor's separate
+ * millisecond service event, independently of the scheduler tick. */
+#define I915_FW_TIMER_NS 2000000u
 
 /* The GT's registers lie below 0x40000, the one range of Linux's
  * __gen6_fw_ranges, and need forcewake to read. A write waits for room in
@@ -107,19 +105,19 @@ static int i915_fw_held(const struct i915_uncore *u)
     return u->wake_count != 0 || u->timer_armed;
 }
 
-/** Arm the release timer `ticks` ticks from now. Under the register lock. */
-static void i915_fw_timer_at(struct i915_uncore *u, uint32_t ticks)
+/** Arm the release timer `ns` nanoseconds from now. Under the register lock. */
+static void i915_fw_timer_at(struct i915_uncore *u, uint32_t ns)
 {
-    u->timer_due = (uint32_t)kernel_ticks + ticks;
+    u->timer_due = (uint64_t)rtc_monotonic_ns() + ns;
     u->timer_armed = 1;
 }
 
-/** Arm the release timer, which withdraws the request one to two ticks
+/** Arm the release timer, which withdraws the request two milliseconds
  * later unless a reference is held then (`i915_uncore_tick`), as Linux's
  * fw_domain_arm_timer. Under the register lock, with forcewake held. */
 static void i915_fw_arm_timer(struct i915_uncore *u)
 {
-    i915_fw_timer_at(u, I915_FW_TIMER_TICKS);
+    i915_fw_timer_at(u, I915_FW_TIMER_NS);
     u->active = 0;
 }
 
@@ -152,6 +150,7 @@ int32_t i915_forcewake_get(struct drm_i915_private *i915)
 
 void i915_forcewake_put(struct drm_i915_private *i915)
 {
+    int64_t release;
     struct i915_uncore *u = &i915->uncore;
     uint32_t flags = spin_lock_irqsave(&u->lock);
 
@@ -171,11 +170,14 @@ void i915_forcewake_put(struct drm_i915_private *i915)
             i915_fw_arm_timer(u);
         }
     }
+    release = u->timer_armed ? (int64_t)u->timer_due : 0;
     spin_unlock_irqrestore(&u->lock, flags);
+    timer_service_wake_at(release);
 }
 
 uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg)
 {
+    int64_t release;
     struct i915_uncore *u = &i915->uncore;
     uint32_t flags, value = 0xffffffffu;
 
@@ -189,25 +191,30 @@ uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg)
         }
         value = i915_read(&i915->hw, reg);
     }
+    release = u->timer_armed ? (int64_t)u->timer_due : 0;
     spin_unlock_irqrestore(&u->lock, flags);
+    timer_service_wake_at(release);
     return value;
 }
 
 void i915_uncore_tick(struct drm_i915_private *i915)
 {
+    int64_t release;
     struct i915_uncore *u = &i915->uncore;
     uint32_t flags = spin_lock_irqsave(&u->lock);
 
-    if (u->timer_armed && (int32_t)((uint32_t)kernel_ticks - u->timer_due) >= 0) {
+    if (u->timer_armed && (uint64_t)rtc_monotonic_ns() >= u->timer_due) {
         u->timer_armed = 0;
         if (u->active) {
             u->active = 0;
-            i915_fw_timer_at(u, 1);
+            i915_fw_timer_at(u, 1000000u);
         } else if (u->wake_count == 0) {
             i915_fw_release(i915);
         }
     }
+    release = u->timer_armed ? (int64_t)u->timer_due : 0;
     spin_unlock_irqrestore(&u->lock, flags);
+    timer_service_wake_at(release);
 }
 
 uint32_t i915_uncore_idle_ticks(struct drm_i915_private *i915)
@@ -216,7 +223,7 @@ uint32_t i915_uncore_idle_ticks(struct drm_i915_private *i915)
     uint32_t wait = TICK_HZ, flags = spin_lock_irqsave(&u->lock);
 
     if (u->timer_armed) {
-        IDLE_TIMER_MIN(wait, u->timer_due, (uint32_t)kernel_ticks);
+        wait = 1;
     }
     spin_unlock_irqrestore(&u->lock, flags);
     return wait;

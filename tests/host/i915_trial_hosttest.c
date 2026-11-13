@@ -7,6 +7,7 @@
  * rach2.i915.disable_display, which leaves the display and the firmware's
  * framebuffer device alone.
  *
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_hw.c tests/host/i915_model.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
  * host-deps: rach2/sys/drm/i915/i915_stolen.c rach2/sys/drm/i915/i915_gtt.c

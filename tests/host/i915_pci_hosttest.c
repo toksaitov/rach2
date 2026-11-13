@@ -3,6 +3,7 @@
  * rach2/sys/drm/i915/i915_pci.c, and its hardware boundary, i915_hw.c,
  * against the host model of the Lenovo's HD 4400.
  *
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_hw.c tests/host/i915_model.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
  * host-deps: rach2/sys/drm/i915/i915_stolen.c rach2/sys/drm/i915/i915_gtt.c
