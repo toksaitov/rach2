@@ -3,6 +3,7 @@
 # when the supervisor is stopped.
 #
 # Usage: perl session.pl RECORD LOG LIMIT COMMAND...
+#        perl session.pl -q RECORD
 #
 # The supervisor, this process, first takes RECORD.live, a lock that it holds
 # exclusively for its whole life and that no child keeps, so that a looker
@@ -52,18 +53,36 @@
 # keeps the supervisor, the anchor and RECORD until it is gone, as LOG notes.
 # The supervisor removes RECORD once the group is gone. It exits 125 when it
 # could not start the session.
+#
+# -q: the one decider of whether the session that RECORD records may still
+# run; whatever would change the loop's clone, or remove what a session left,
+# asks it first. It takes RECORD.live, as a supervisor would, and prints
+# `running` when a supervisor holds it; holding it, `ended` when there is no
+# RECORD, or when the group RECORD names is proved gone, as above, which it
+# then removes; and otherwise `lost GROUP`, the group RECORD names, which may
+# still run. A lock that cannot be probed prints `unknown: WHY`. Exit 0 on
+# `ended` and 1 otherwise. A RECORD.live that it makes is given to the owner
+# of its directory, so that run as root, as sweep.sh runs it on a loop's
+# STATE that another account owns, it leaves no lock that the loop's own
+# supervisor cannot open.
 
 use strict;
 use warnings;
+use Errno qw(ENOENT EWOULDBLOCK);
 use Fcntl qw(:flock O_CREAT O_RDWR);
 use POSIX qw(strftime WNOHANG);
 
+my $query = @ARGV && $ARGV[0] eq '-q' ? shift : '';
 my ($record, $log, $limit, @command) = @ARGV;
+defined $record && ($query ? !defined $log : @command) or
+    die "usage: session.pl RECORD LOG LIMIT COMMAND... | -q RECORD\n";
 
-# Append TEXT to LOG with the time in UTC, as the loop's `log` does.
+# Append TEXT to LOG with the time in UTC, as the loop's `log` does; with
+# -q there is no LOG.
 sub note
 {
     my $text = shift;
+    defined $log or return;
     open(my $f, '>>', $log) or return;
     print $f strftime('%F %T', gmtime), " $text\n";
     close($f);
@@ -108,6 +127,50 @@ sub gone
     return !grep { /^\s*(\d+)\s*$/ && $1 == $group } @ps;
 }
 
+# settle REMOVE: return `ended` when there is no RECORD, or when the group
+# that the RECORD a killed supervisor left names is proved gone, and then,
+# with REMOVE, remove RECORD, noting it; return `lost GROUP` while the group
+# may still run, or when RECORD cannot be removed. Called with RECORD.live
+# held, or with REMOVE false.
+sub settle
+{
+    my $remove = shift;
+    return 'ended' unless -e $record;
+    my ($group, $then);
+    if (open(my $f, '<', $record)) {
+        ($group, $then) = split(' ', <$f> // '');
+    }
+    $group //= '?';
+    return "lost $group" unless gone($group, $then);
+    return 'ended' unless $remove;
+    note("the group $group that $record names is gone; removing it");
+    if (!unlink($record)) {
+        note("$record cannot be removed: $!");
+        return "lost $group";
+    }
+    return 'ended';
+}
+
+if ($query) {
+    my $l;
+    if (!open($l, '<', "$record.live")) {
+        my ($missing, $why) = ($! == ENOENT, "$!");
+        my @dir = stat($record =~ m{^(.*)/[^/]*$} ? $1 : '.');
+        if (!$missing || !sysopen($l, "$record.live", O_RDWR | O_CREAT, 0644) ||
+            ($> == 0 && @dir && !chown($dir[4], $dir[5], "$record.live"))) {
+            print "unknown: $record.live: " . ($missing ? $! : $why) . "\n";
+            exit 1;
+        }
+    }
+    if (!flock($l, LOCK_EX | LOCK_NB)) {
+        print $! == EWOULDBLOCK ? "running\n" : "unknown: $record.live: $!\n";
+        exit 1;
+    }
+    my $s = settle(1);
+    print "$s\n";
+    exit($s eq 'ended' ? 0 : 1);
+}
+
 my ($signal, $expired);
 for my $name ('HUP', 'TERM', 'INT') {
     $SIG{$name} = sub { $signal //= $name };
@@ -123,21 +186,11 @@ if (!sysopen($live, "$record.live", O_RDWR | O_CREAT, 0644) || !flock($live, LOC
 }
 
 # A record that a killed supervisor left.
-if (-e $record) {
-    my ($group, $then);
-    if (open(my $f, '<', $record)) {
-        ($group, $then) = split(' ', <$f> // '');
-    }
-    if (!gone($group, $then)) {
-        note("$record names group " . ($group // '?') . " of a supervisor that was killed, which " .
-            "may still run; not starting the session");
-        exit 125;
-    }
-    note("the group " . ($group // '?') . " that $record names is gone; removing it");
-    if (!unlink($record)) {
-        note("$record cannot be removed: $!; not starting the session");
-        exit 125;
-    }
+my $was = settle(1);
+if ($was ne 'ended') {
+    note("$record names group " . substr($was, 5) . " of a supervisor that was killed, which " .
+        "may still run; not starting the session");
+    exit 125;
 }
 
 setpgrp(0, 0) or die "session: setpgrp: $!\n";
