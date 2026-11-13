@@ -16,9 +16,13 @@
 # excluded and `hyperv_connections`, `la57`, `pcid-disabled` and `x2apic`
 # fail, as under Linux 6.12 as the host of the same machine
 # (dev-log/81-kvm/81-25.md). Under another hypervisor, as under the Mac's
-# TCG, `access` is excluded and `debug` fails, as under Linux there. A test
-# is expected to fail only where Linux as the host of the same machine fails
-# it, and its row names how.
+# TCG, `access` is excluded and `debug`, `eventinj`, `emulator`, `la57`,
+# `msr`, `msr64` and `xsave` fail, as under Linux there; the last five
+# follow QEMU's TCG on paths that neither KVM intercepts, so Linux's result
+# was read from the two codes, not run (dev-log/84-locks/84-239.md).
+# `hyperv_connections` fails under any hypervisor. A test is expected to
+# fail only where Linux as the host of the same machine fails it, and its
+# row names how.
 #
 # NAME EXPECT LINUX REASON
 access outer_kvm?pass:hypervisor?excluded:pass pass not run under another hypervisor, as under the Mac's TCG, where each of the 4,915,200 permutations of a level that set a reserved bit fails with QEMU TCG's error code 8 for 9, the P bit of a reserved-bit fault's left out, under Linux 6.12 as the host too, each failure some 223 bytes at two serial exits a byte, and neither host ends: on one processor Linux printed about 23 failures a second and Rach2 16, some 2.5 days a level at Linux's rate (dev-log/84-locks/84-88.md)
@@ -28,13 +32,13 @@ asyncpf excluded pass asynchronous page faults, deferred by the owner's decision
 cet skip skip No CET features supported
 cmpxchg8b excluded skip i386: built only for i386, and the staged tests are x86-64's
 debug outer_kvm?excluded:hypervisor?fail:pass fail Linux: unhandled #PF at ffff0ff0 and 404fb8; not run inside a machine of KVM, where Linux 6.12 as the host did not finish it in 900 s, after its MOVSS-blocking single step (dev-log/81-kvm/81-25.md); under another hypervisor, as under the Mac's TCG, fails MOV SS + watchpoint + ICEBP, 24 of 25 passing, as under Linux 6.12 as the host there
-emulator pass pass
+emulator outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, fails non-canonical rsp-based access and rbp-based access, should #SS(0), got #GP(0): TCG raises #GP for every non-canonical address, never #SS for one through RSP or RBP, and neither Linux's KVM nor Rach2's intercepts the access (dev-log/84-locks/84-239.md)
 ept excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 ept-mbec excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 eventinj outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the testing PC's and the Mac's TCG, fails NP exception, NP PF exceptions and int 33 with shadowed stack, 10 of 13 passing, as under Debian's Linux 6.12 as the host there
 hypercall pass pass
 hyperv_clock pass pass
-hyperv_connections outer_kvm?fail:pass fail Linux: 7 tests, 1 unexpected failures; inside a machine of KVM fails receive pending message: 0/2, as under Linux 6.12 as the host of the same machine (dev-log/84-locks/84-33.md)
+hyperv_connections hypervisor?fail:pass fail Linux: 7 tests, 1 unexpected failures; under a hypervisor fails receive pending message: 0/2, as Linux 6.18 does under the testing PC's Hyper-V and Linux 6.12 as the host inside a machine of KVM (dev-log/84-locks/84-33.md), and as Rach2 does under the Mac's TCG (dev-log/84-locks/84-239.md)
 hyperv_stimer pass pass
 hyperv_stimer_direct pass pass
 hyperv_synic pass pass
@@ -42,11 +46,11 @@ idt_test pass pass
 intel_iommu pass pass
 ioapic pass pass
 kvmclock_test pass pass
-la57 outer_kvm?fail:pass fail Linux: la57.c:230: assert failed: write_cr4_safe(read_cr4() | X86_CR4_PCIDE) == 0, as under Linux 6.12 as the host inside a machine of KVM
+la57 hypervisor?fail:pass fail Linux: la57.c:230: assert failed: write_cr4_safe(read_cr4() | X86_CR4_PCIDE) == 0, as under Linux 6.12 as the host inside a machine of KVM; under another hypervisor, as under the Mac's TCG, the canonical test without forced emulation finds no #GP for a non-canonical base loaded by LGDT, LIDT, LTR, LLDT or WRMSR, none of which TCG checks or Linux's KVM or Rach2's intercepts, and the test ends without its SUMMARY after the write of GS_BASE (dev-log/84-locks/84-239.md)
 lam pass pass
 memory pass pass
-msr pass pass
-msr64 pass pass
+msr outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, WRMSR of a non-canonical FS_BASE gives no #GP and the test ends without its SUMMARY after the same write of GS_BASE: TCG checks neither, and Linux's KVM passes both MSRs through to its guest as Rach2's does (dev-log/84-locks/84-239.md)
+msr64 outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, fails as msr does (dev-log/84-locks/84-239.md)
 pcid-asymmetric pass pass
 pcid-disabled outer_kvm?fail:pass fail Linux: FAIL: Test on INVPCID when disabled, as under Linux 6.12 as the host inside a machine of KVM
 pcid-enabled pass pass
@@ -106,5 +110,5 @@ vmx_posted_intr_test excluded skip nested virtualization, excluded by the owner'
 vmx_sipi_signal_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 vmx_vmcs_shadow_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x2apic outer_kvm?fail:pass|fail~TMCCT_should_not_be_reset_to_TMICT_value timeout Linux: timeout; duration=30; inside a machine of KVM nmi-after-sti fails, as under Linux 6.12 as the host there; elsewhere the clock decides TMCCT should not be reset to TMICT value, the only subtest that may fail there, which reads the periodic count twice with a report line between and passes only when the line takes less than the count left or more than that and half a period: under the testing PC's TCG, with a period of 10.07 ms, the line took 11.3 ms on the milestone's head and passed, and 9.0 ms once exits were cheaper and failed
-xapic outer_kvm?excluded:pass timeout Linux: timeout; duration=60; not run inside a machine of KVM, where Linux 6.12 as the host did not finish it in 900 s, after nmi-after-sti (dev-log/81-kvm/81-25.md)
-xsave pass pass
+xapic outer_kvm?excluded:pass|fail~TMCCT_should_not_be_reset_to_TMICT_value timeout Linux: timeout; duration=60; not run inside a machine of KVM, where Linux 6.12 as the host did not finish it in 900 s, after nmi-after-sti (dev-log/81-kvm/81-25.md); elsewhere the clock decides TMCCT should not be reset to TMICT value, as for x2apic, which failed under the Mac's TCG (dev-log/84-locks/84-239.md)
+xsave outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, fails Write XCR0=(FP|SSE) without XSAVE support - expect #UD: TCG takes XSETBV's intercept before CR4.OSXSAVE's #UD, and Linux's KVM, which leaves that #UD to the processor, then sets XCR0 as Rach2's does (dev-log/84-locks/84-239.md)

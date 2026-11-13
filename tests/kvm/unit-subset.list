@@ -15,11 +15,11 @@ access outer_kvm?pass:hypervisor?excluded:pass pass not run under another hyperv
 access-reduced-maxphyaddr skip skip /sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y
 access_fep skip skip Forced emulation prefix (FEP) not available
 cet skip skip No CET features supported
-emulator pass pass
+emulator outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, fails non-canonical rsp-based access and rbp-based access, should #SS(0), got #GP(0): TCG raises #GP for every non-canonical address, never #SS for one through RSP or RBP, and neither Linux's KVM nor Rach2's intercepts the access (dev-log/84-locks/84-239.md)
 eventinj pass pass
 hypercall pass pass
 hyperv_clock pass pass
-hyperv_connections outer_kvm?fail:pass fail Linux: receive pending message: 0/2, as Rach2
+hyperv_connections hypervisor?fail:pass fail Linux: receive pending message: 0/2, as Rach2
 hyperv_stimer pass pass
 hyperv_stimer_direct pass pass
 hyperv_synic pass pass
@@ -27,11 +27,11 @@ idt_test pass pass
 intel_iommu pass pass
 ioapic pass pass
 kvmclock_test pass pass
-la57 outer_kvm?fail:pass fail Linux: la57.c:230: assert failed: write_cr4_safe(read_cr4() | X86_CR4_PCIDE) == 0, as Rach2
+la57 hypervisor?fail:pass fail Linux: la57.c:230: assert failed: write_cr4_safe(read_cr4() | X86_CR4_PCIDE) == 0, as Rach2
 lam pass pass
 memory pass pass
-msr pass pass
-msr64 pass pass
+msr outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, WRMSR of a non-canonical FS_BASE gives no #GP and the test ends without its SUMMARY after the same write of GS_BASE: TCG checks neither, and Linux's KVM passes both MSRs through to its guest as Rach2's does (dev-log/84-locks/84-239.md)
+msr64 outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, fails as msr does (dev-log/84-locks/84-239.md)
 pcid-asymmetric pass pass
 pcid-disabled outer_kvm?fail:pass fail Linux: FAIL: Test on INVPCID when disabled, as Rach2
 pcid-enabled pass pass
@@ -68,4 +68,4 @@ vmexit_tscdeadline_immed pass pass
 vmexit_vmcall pass pass
 vmware_backdoors skip skip /sys/module/kvm/parameters/enable_vmware_backdoor not equal to Y
 x2apic outer_kvm?fail:pass fail Linux: nmi-after-sti fails, as under Rach2; TMCCT should not be reset to TMICT value passed in each of the 3 Linux runs kept and in 1 of 4 Rach2 runs, as a report line between its two reads spans several timer periods there; the test takes 640 to 849 s
-xsave pass pass
+xsave outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, fails Write XCR0=(FP|SSE) without XSAVE support - expect #UD: TCG takes XSETBV's intercept before CR4.OSXSAVE's #UD, and Linux's KVM, which leaves that #UD to the processor, then sets XCR0 as Rach2's does (dev-log/84-locks/84-239.md)

@@ -20,8 +20,11 @@
 # cases run, FLAG `outer_kvm` holds: there x86_64/apic_bus_clock_test and
 # x86_64/hyperv_clock are excluded and memslot_perf_test and
 # x86_64/fix_hypercall_test fail, as under Linux 6.12 as the host of the same
-# machine. A test is expected to fail only where Linux as the host of the
-# same machine fails it, and its row names how.
+# machine. Under another hypervisor, as under the Mac's TCG, which etude gives
+# one processor, rseq_test skips and x86_64/debug_regs fails, as Linux does
+# there by the two codes (dev-log/84-locks/84-239.md). A test is expected to
+# fail only where Linux as the host of the same machine fails it, and its
+# row names how.
 #
 # NAME EXPECT LINUX REASON
 access_tracking_perf_test skip skip CONFIG_IDLE_PAGE_TRACKING is not enabled
@@ -39,7 +42,7 @@ max_guest_memory_test,-m,4 pass pass built with vendor/gnu/kvm/max-guest-memory-
 memslot_modification_stress_test,-b,64M pass pass
 memslot_perf_test outer_kvm?fail:pass pass inside a machine of KVM, its RW case's first write of each page is a nested exit, so that a pass outlasts host_perform_sync's alarm(10) (memslot_perf_test.c:418-426), as under Linux 6.12 as the host of the same machine (dev-log/84-locks/84-33.md)
 pre_fault_memory_test pass pass
-rseq_test pass pass
+rseq_test outer_kvm?pass:hypervisor?skip:pass pass under another hypervisor, as under the Mac's TCG, where etude gives the machine one processor, skips for want of CPU_COUNT(&possible_mask) >= 2, as Linux does on one processor (dev-log/84-locks/84-239.md)
 set_memory_region_test pass fail Linux: Unexpected exit mmio address = 0x180000
 steal_time pass pass
 system_counter_offset_test pass pass
@@ -47,7 +50,7 @@ x86_64/amx_test skip skip Required XSAVE feature 'XFEATURE_MASK_XTILE_DATA' not 
 x86_64/apic_bus_clock_test outer_kvm?excluded:pass pass not run inside a machine of KVM, where the outer host's scheduling decides it: it compares the guest's TSC with KVM's clock across exits, and with the testing PC loaded Linux 6.12 as the KVM host of the same machine failed it 2 times in 280 runs of it and hyperv_clock, and Rach2 5 (dev-log/84-locks/84-33.md)
 x86_64/cpuid_test pass pass
 x86_64/cr4_cpuid_sync_test pass pass
-x86_64/debug_regs pass pass
+x86_64/debug_regs outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the Mac's TCG, fails at sw_bp, where the guest takes its own #BP: TCG checks INT3 against the INTn intercept and not against the #BP intercept that KVM_GUESTDBG_USE_SW_BP sets, under Linux's KVM as under Rach2's (dev-log/84-locks/84-239.md)
 x86_64/dirty_log_page_splitting_test skip skip HUGETLB is not enabled in /proc/sys/vm/nr_hugepages
 x86_64/exit_on_emulation_failure_test pass pass
 x86_64/fix_hypercall_test outer_kvm?fail:pass pass under Linux's KVM beneath, that KVM takes the nested guest's #UD itself and writes VMMCALL over its VMCALL (Linux arch/x86/kvm/svm/nested.c:1540-1545, x86.c:9729-9738), so that disable_quirk's hypercall succeeds at fix_hypercall_test.c:75, as under Linux at the same depth
