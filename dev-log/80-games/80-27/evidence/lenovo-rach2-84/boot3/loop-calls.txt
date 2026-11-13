@@ -1,0 +1,72 @@
+# trip-gl-0 of the third boot, rach2.cycleaccount, with 428e5e668's forcewake release timer: each
+# system call's and ioctl request's calls and wall time over the loop, most time first (bkl/calls)
+syscall 202: 1546 calls, 672909 us, 435.3 us each
+syscall 232: 83 calls, 627583 us, 7561.2 us each
+syscall 230: 448 calls, 623356 us, 1391.4 us each
+syscall 449: 14 calls, 558663 us, 39904.5 us each
+syscall 441: 628 calls, 324632 us, 516.9 us each
+syscall 16: 12102 calls, 206136 us, 17.0 us each
+syscall 0: 3388 calls, 131204 us, 38.7 us each
+syscall 98: 366587 calls, 119417 us, 0.3 us each
+ioctl 0xc02864c3: 2976 calls, 117894 us, 39.6 us each
+syscall 24: 183233 calls, 107845 us, 0.6 us each
+ioctl 0x40406469: 1003 calls, 66835 us, 66.6 us each
+syscall 257: 824 calls, 23581 us, 28.6 us each
+syscall 7: 987 calls, 15194 us, 15.4 us each
+syscall 10: 187 calls, 12969 us, 69.4 us each
+ioctl 0x400c645f: 2 calls, 10050 us, 5025.0 us each
+syscall 217: 152 calls, 9208 us, 60.6 us each
+
+# bkl/profile, whole-kernel mode, over the loop: samples at 1000 Hz a processor by entry,
+# and the paths of the busiest entries, innermost first; a sample at kirq_restore was due
+# while interrupts were off, in the function under it
+syscall 98             141
+kernel 0               64
+syscall 24             62
+ioctl 0x40406469       55
+syscall 441            34
+syscall 257            23
+syscall 230            18
+ioctl 0xc02864c3       15
+syscall 0              11
+vector 14              8
+syscall 217            8
+ioctl 0xc0086457       7
+
+syscall 98 141
+    47 _syscall_handler < isr_syscall < syscall_entry
+    20 tick_div < _syscall_handler < isr_syscall
+    11 sys_getrusage < _syscall_handler < isr_syscall
+    10 arch_user_copy_bytes < copy_to_user < rusage_put
+    10 kirq_restore < _syscall_handler < isr_syscall
+     7 arch_fill_words < sys_getrusage < _syscall_handler
+     7 arch_user_copy_words < copy_to_user < rusage_put
+     6 user_copy < copy_to_user < rusage_put
+
+kernel 0 64
+    19 kirq_restore < isr_leave < syscall_entry
+    18 kirq_restore < schedule < wq_wait
+     3 kirq_restore < i915_submit_work < submit_thread_main
+     2 kirq_restore < i915_hangcheck < submit_thread_main
+     2 kirq_restore < sched_give_way < cut_pages
+     2 kirq_restore < wq_wait_event_idle < submit_thread_main
+     2 user_copy < copy_to_user < rseq_update
+     1 kirq_restore < engine_retire < i915_retire_requests
+
+syscall 24 62
+    44 kirq_restore < schedule.part.0 < schedule
+    14 _syscall_handler < isr_syscall < syscall_entry
+     1 spin_unlock_irqrestore < schedule.part.0 < schedule
+     1 spin_unlock_irqrestore < schedule < sys_sched_yield
+     1 sys_sched_yield < _syscall_handler < isr_syscall
+     1 schedule.part.0 < schedule < sys_sched_yield
+
+ioctl 0x40406469 55
+     5 i915_cmd_parser < i915_gem_execbuffer2_ioctl < drm_ioctl
+     5 i915_gem_execbuffer2_ioctl < drm_ioctl < drm_node_ioctl
+     4 kirq_restore < i915_uncore_read < i915_engine_irq_get
+     4 kirq_restore < kmalloc.part.0 < kzalloc
+     3 kirq_restore < request_new < i915_request_create
+     2 kzalloc < dma_fence_merge < dma_resv_snapshot_locked
+     2 kirq_restore < i915_uncore_write < i915_engine_irq_get
+     2 kirq_restore < engine_submit < i915_request_add
