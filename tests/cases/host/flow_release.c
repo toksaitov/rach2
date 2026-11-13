@@ -2341,7 +2341,8 @@ static int claim_rows(struct release *r)
  * stands between the fork and hold.pl, so that a job that could end at once
  * would have ended before its holder ran. The `lost` scenario's holder is
  * killed by the perl whose unreaped child it is, and so is `lostgroup`'s,
- * a -g holder whose job then runs in its group. `groupkill` stops a -g job
+ * a -g holder whose job then runs in its group, beside a process that left
+ * the group by setsid. `groupkill` stops a -g job
  * that ignores TERM; `adopt` runs a job whose child, which ignores TERM, has
  * a child that ignores it too. The `jobfast` and `jobstop` scenarios run
  * release.sh's own job_dir, held, job_wait and job_stop, the first with a
@@ -2377,7 +2378,8 @@ static const char hold_driver[] =
     "        exit 1' /bin/sh \"$0\" \"$@\" ;;\n"
     "esac\n"
     "rm -rf \"$d\" \"$H/ran\" \"$H/ready\" \"$H/state\" \"$H/bin\" \"$H/left\" \"$H/copy\" "
-    "\"$H/ledger\" \"$H/survived\" \"$H/git\" \"$H/origin.git\" \"$H/wt\" \"$H/mac\" \"$H/f\"\n"
+    "\"$H/ledger\" \"$H/survived\" \"$H/git\" \"$H/origin.git\" \"$H/wt\" \"$H/mac\" \"$H/f\" "
+    "\"$H/escaped\"\n"
     "mkdir \"$d\" || exit 1\n"
     "look() { perl \"$P\" state \"$d\"; }\n"
     "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
@@ -2439,19 +2441,31 @@ static const char hold_driver[] =
     "    look ;;\n"
     "lostgroup)\n"
     "    # A -g holder killed outright reads lost while its job runs in its group,\n"
-    "    # and ended once the group is empty.\n"
+    "    # and stays lost once the group is empty, both while a process that left\n"
+    "    # the group by setsid runs and after; a DIR/boot of another boot ends it.\n"
+    "    printf '%s\\n' 'POSIX::setsid() or exit 1; open(R, \">\", \"$ARGV[0].part\") or exit 1;' "
+    "'print R $$; close(R); rename(\"$ARGV[0].part\", $ARGV[0]); sleep 60;' > \"$H/left\"\n"
     "    perl -e 'my $c = fork(); defined $c or exit 1; if (!$c) { exec @ARGV or exit 127 }\n"
     "        for (1 .. 150) { last if -s \"$ENV{RUN}/../ready\"; select(undef, undef, undef, 0.1) "
     "}\n"
-    "        kill(\"KILL\", $c); waitpid($c, 0)' perl \"$P\" run -g \"$d\" sh -c 'echo $$ > "
-    "\"$1/ready.part\"\n"
-    "        mv \"$1/ready.part\" \"$1/ready\"; exec sleep 60' sh \"$H\"\n"
+    "        kill(\"KILL\", $c); waitpid($c, 0)' perl \"$P\" run -g \"$d\" sh -c 'perl -MPOSIX "
+    "\"$1/left\" \"$1/escaped\" > /dev/null 2>&1 &\n"
+    "        until [ -s \"$1/escaped\" ]; do perl -e \"select(undef, undef, undef, 0.05)\"; done\n"
+    "        echo $$ > \"$1/ready.part\"; mv \"$1/ready.part\" \"$1/ready\"; exec sleep 60' sh "
+    "\"$H\"\n"
     "    look\n"
     "    g=$(cat \"$d/group\")\n"
     "    kill -KILL \"$(cat \"$H/ready\")\"\n"
     "    i=0\n"
     "    while ps -A -o pgid= | grep -qx \" *$g\" && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; "
     "done\n"
+    "    look\n"
+    "    e=$(cat \"$H/escaped\")\n"
+    "    kill -KILL \"$e\"\n"
+    "    i=0\n"
+    "    while kill -0 \"$e\" 2> /dev/null && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; done\n"
+    "    look\n"
+    "    echo another-boot > \"$d/boot\"\n"
     "    look ;;\n"
     "jobwriter)\n"
     "    # held's job opens its reader a second late, after hold.pl has written\n"
@@ -2516,8 +2530,8 @@ static const char hold_driver[] =
     "    . \"$flowbin/lib.sh\"\n"
     "    state=$H/state\n"
     "    mkdir \"$state\" || exit 1\n"
-    "    # A group that no process can be in, beyond every system's pid_max.\n"
-    "    echo '99999999 -' > \"$state/session\"\n"
+    "    # A record of another boot.\n"
+    "    echo '99999999 another-boot' > \"$state/session\"\n"
     "    wait_session\n"
     "    echo \"wait $?\"\n"
     "    [ -e \"$state/session\" ] || echo 'record removed'\n"
@@ -2533,7 +2547,7 @@ static const char hold_driver[] =
     "    # A session whose supervisor is killed while its group runs keeps its\n"
     "    # record, and session.pl -q says lost: wait_session waits until\n"
     "    # STATE/stop, refresh changes nothing in the clone, and no other session\n"
-    "    # starts, until the group is gone.\n"
+    "    # starts, until its record names another boot.\n"
     "    flowbin=$repo/tools/flow\n"
     "    . \"$flowbin/lib.sh\"\n"
     "    state=$H/state S=$flowbin/session.pl\n"
@@ -2574,6 +2588,16 @@ static const char hold_driver[] =
     "    i=0\n"
     "    while ps -A -o pgid= | grep -qx \" *$g\" && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; "
     "done\n"
+    "    # An empty group proves nothing, since a process may have left it; a\n"
+    "    # record of another boot is the one proof.\n"
+    "    if [ \"$how\" = lostrefresh ]; then\n"
+    "        refresh\n"
+    "        echo \"refresh $?\"\n"
+    "        git symbolic-ref --short HEAD\n"
+    "    else\n"
+    "        session_state | cut -d ' ' -f 1\n"
+    "    fi\n"
+    "    echo \"$g another-boot\" > \"$state/session\"\n"
     "    if [ \"$how\" = lostrefresh ]; then\n"
     "        refresh\n"
     "        echo \"refresh $?\"\n"
@@ -2687,16 +2711,19 @@ static int hold_saw(struct release *r, const char *scenario, const char *want)
  * (medium 3), and with -g so does the group's, which the holder outlives to
  * write the end (j154 2); a second holder of the same directory is refused
  * and its `end` stays the first one's (j141 3); a holder killed outright
- * reads lost, and a -g one reads ended once its group is empty (j154 1); on
+ * reads lost, and a -g one stays lost once its group is empty, while a
+ * process that left the group runs and after, until its boot is another
+ * (j154 1, j168 5); on
  * Linux a drain KILLs a child it adopts after the KILL's turn (j154 4).
  * release.sh's own jobs do the same through held, job_wait and job_stop,
  * and a job that opens its reader after hold.pl has written its go still
  * reads it (j154 3); a Mac run is live, and its directory stays, until what
  * its job left in its group has ended, so that no new run starts beside it;
- * a STATE/session whose group is proved gone goes, and one whose supervisor
- * was killed while its group runs stays: session.pl -q says lost,
- * wait_session waits, refresh leaves the clone's HEAD where it was, and
- * session.pl starts no session, until the group is gone (j154 1, j163 1); a
+ * a STATE/session of another boot goes, and one whose supervisor was killed
+ * while its group runs stays: session.pl -q says lost, wait_session waits,
+ * refresh leaves the clone's HEAD where it was, and session.pl starts no
+ * session, still once the group is empty, until the record names another
+ * boot (j154 1, j163 1, j168 5); a
  * worktree stays while a job of an earlier release is lost under its run's
  * directory, and job_wait and discard keep a lost job's directory and its
  * part's files (j163 2, 3); and -p's check of its copy fails when the scan
@@ -2730,9 +2757,10 @@ static int hold_rows(struct release *r)
                "to write the end") &&
          ok;
     ok = check(r, hold_saw(r, "lost", "lost\n"), "a holder killed outright reads lost") && ok;
-    ok = check(r, hold_saw(r, "lostgroup", "lost\nended 137\n"),
-               "a -g holder killed outright reads lost while its group runs, and ended once "
-               "the group is empty") &&
+    ok = check(r, hold_saw(r, "lostgroup", "lost\nlost\nlost\nended 137\n"),
+               "a -g holder killed outright reads lost while its group runs, and stays lost "
+               "once the group is empty, while a process that left it runs and after, until "
+               "its boot is another (j168 5)") &&
          ok;
 #ifdef __linux__
     ok = check(r, hold_saw(r, "adopt", "status 0\nended 0\n"),
@@ -2756,20 +2784,23 @@ static int hold_rows(struct release *r)
                "left runs in its group, and held_gone keeps its directory until the run ends") &&
          ok;
     ok = check(r, hold_saw(r, "session", "wait 0\nrecord removed\nrunning\nended\n"),
-               "wait_session removes a STATE/session whose group is proved gone, and "
+               "wait_session removes a STATE/session of another boot, and "
                "session_state reads a session as running while a process holds its lock") &&
          ok;
     ok = check(r,
                hold_saw(r, "lostsession",
-                        "wait 1\nkept\nlost\nstatus 125\nran nothing\nstatus 0\n"
+                        "wait 1\nkept\nlost\nstatus 125\nran nothing\nlost\nstatus 0\n"
                         "ran; record removed\n"),
                "a session whose supervisor was killed keeps its record, which session_state "
                "reads as lost, wait_session waits until STATE/stop, and session.pl starts no "
-               "other until its group is gone, and then removes the record") &&
+               "other, still once its group is empty, until the record names another boot, "
+               "and then removes the record (j168 5)") &&
          ok;
-    ok = check(r, hold_saw(r, "lostrefresh", "refresh 1\ntask\nrefresh 0\nmaster\n"),
+    ok = check(r,
+               hold_saw(r, "lostrefresh", "refresh 1\ntask\nrefresh 1\ntask\nrefresh 0\nmaster\n"),
                "refresh leaves HEAD where it was while a session whose supervisor was killed "
-               "may still run, and moves the clone to master once its group is gone (j163 1)") &&
+               "may still run, still once its group is empty, and moves the clone to master "
+               "once its record names another boot (j163 1, j168 5)") &&
          ok;
     ok = check(r, hold_saw(r, "wtlost", "wt_new 1\nkept\nwt_new 0\nreplaced\n"),
                "wt_new leaves a worktree while a job of an earlier release is lost under its "
@@ -3412,12 +3443,11 @@ static int stop_loop_rows(struct release *r, const char *release, pid_t held)
     chmod(path, 0);
     unreadable = access(path, R_OK) != 0;
     flow_put(f, "tree/tools/flow/build/flow/w2/loop.log", "");
-    /* w2's names this process's group, which runs; w3's a group that no
-     * process can be in, beyond every system's pid_max. */
+    /* w2's names this process's group, which runs; w3's another boot. */
     snprintf(text, sizeof(text), "%ld -\n", (long)getpgrp());
     flow_put(f, "tree/tools/flow/build/flow/w2/session", text);
     flow_put(f, "tree/tools/flow/build/flow/w3/loop.log", "");
-    flow_put(f, "tree/tools/flow/build/flow/w3/session", "99999999 -\n");
+    flow_put(f, "tree/tools/flow/build/flow/w3/session", "99999999 another-boot\n");
     loose = stop_perl("$| = 1; $0 = 'qemu-system-i386 stoprow'; print qq(\\n); sleep 600", 1);
     stop_run(r, NULL);
     snprintf(text, sizeof(text), "stop: left: mac: %ld qemu-system-i386 stoprow\n", (long)loose);
@@ -3435,7 +3465,8 @@ static int stop_loop_rows(struct release *r, const char *release, pid_t held)
     stopped = stopped && fx_exists(path);
     snprintf(text, sizeof(text),
              "/build/flow/w2/session names process group %ld, whose session.pl was killed, and "
-             "the group is not proved gone; a person checks it\n",
+             "its session is not proved ended; a person stops what is left of it and removes "
+             "the record\n",
              (long)getpgrp());
     snprintf(path, sizeof(path), "%s/session", w3);
     ok = check(r,
@@ -3447,7 +3478,7 @@ static int stop_loop_rows(struct release *r, const char *release, pid_t held)
                    !fx_exists(path),
                "halt asks each loop and session to stop by its files, counts a lock it cannot "
                "probe as held, reports a STATE/session whose supervisor is gone while its "
-               "group runs, and removes one whose group is gone") &&
+               "group runs, and removes one of another boot") &&
          ok;
     snprintf(path, sizeof(path), "%s/session.live", w1);
     chmod(path, 0600);

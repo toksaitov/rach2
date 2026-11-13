@@ -21,7 +21,7 @@
 #   before its job can run: /proc/sys/kernel/random/boot_id on Linux, `sysctl
 #   -n kern.bootsessionuuid` on the Mac.
 # * DIR/group, with -g, the number of the job's process group, which the
-#   holder writes before its job can run.
+#   holder writes before its job can run, for a person who checks a lost run.
 # * DIR/stop, the tombstone, empty: a stopper creates it, and the holder reads
 #   it before the job starts and on every turn after.
 # * DIR/end, the job's status as sh reports one, written to a file of its own
@@ -96,13 +96,15 @@
 # was killed outright: what it held may still run, and nothing here signals
 # it; `absent` when there is no DIR. Exit 0, or 1 with `unknown: WHY` when
 # the lock cannot be probed. A lost run whose end is proved is ended: state
-# then creates DIR/end with 137, as the holder would, and reads it. The proof
-# is DIR/boot naming another boot than this one, or, for a run with
-# DIR/group, a ps that succeeds and shows no process in that group, whose
-# number no other group can take while a member remains. Anything else stays
-# lost, for a person to confirm. The state covers the run's jobs: a run that
-# has ended reads `ended CODE` only once each directory under DIR/jobs reads
-# ended too, and otherwise reads the first of `running`, `starting`,
+# then creates DIR/end with 137, as the holder would, and reads it. The one
+# proof is DIR/boot naming another boot than this one. A group that ps shows
+# empty is no proof: a process of the job may have left the group, by setsid
+# or setpgid, and once the holder is gone nothing holds it, since Linux hands
+# a dead subreaper's orphans to the next one above or to init. Anything else
+# stays lost until a person has stopped what is left and created DIR/end
+# with 137. The state covers the run's jobs: a run that has ended reads
+# `ended CODE` only once each directory under DIR/jobs reads ended too, and
+# otherwise reads the first of `running`, `starting`,
 # `unknown: WHY` and `lost` that one of them reads, so that a holder killed
 # at its bound, whose jobs' holders still run, reads running, and one whose
 # job's holder was killed reads lost.
@@ -197,16 +199,12 @@ sub ended
 }
 
 # proved DIR: return whether nothing of the lost run in DIR can still run, by
-# the proofs that the header's `state` gives.
+# the one proof that the header's `state` gives, the boot.
 sub proved
 {
     my $dir = shift;
     my ($then, $now) = (line("$dir/boot"), boot());
-    return 1 if defined $then && defined $now && $then ne $now;
-    my $group = line("$dir/group");
-    return 0 unless defined $group && $group =~ /^\d+$/;
-    my $n = members($group);
-    return defined $n && $n == 0;
+    return defined $then && defined $now && $then ne $now;
 }
 
 # own DIR: return the state of the run in DIR alone, its jobs aside.

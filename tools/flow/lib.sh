@@ -175,7 +175,8 @@ session_state()
 # STATE/session.live until the session's group is gone, and a STATE/session
 # that stays once the lock is free was left by a supervisor that was killed,
 # whose session may still run. Neither lets the loop go on; the second waits
-# until session.pl has proved the group gone, or a person has stopped it.
+# until session.pl proves the session ended by its boot, or a person has
+# stopped what is left of it and removed the record.
 wait_session()
 {
     ws_told=
@@ -183,7 +184,7 @@ wait_session()
         if [ "$ws_now" != "$ws_told" ]; then
             case $ws_now in
                 running) log "the session of an earlier loop still runs; waiting for its supervisor" ;;
-                *) log "the session that $state/session records may still run, $ws_now; nothing changes the clone until it is proved gone" ;;
+                *) log "the session that $state/session records may still run, $ws_now; nothing changes the clone until it is proved ended" ;;
             esac
             ws_told=$ws_now
         fi

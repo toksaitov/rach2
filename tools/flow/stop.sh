@@ -14,7 +14,7 @@
 # locks that each holds for its life, STATE/loop.live and STATE/session.live.
 # A STATE/session whose supervisor is gone names a group that is not signalled,
 # since its number may now be another's; unless `session.pl -q`, the one decider
-# of it, proves the group gone and removes the record, it is a line `stop: left:
+# of it, proves it ended by its boot and removes it, it is a line `stop: left:
 # STATE: ...`, as is a supervisor or a loop that has not ended in ninety seconds
 # and a loop whose host did not answer, and each counts in the final count and
 # status. Every ssh is bounded by bound.pl. It then stops what the sessions left
@@ -94,8 +94,8 @@ WHAT='qemu-system|/worker\.sh|board\.sh watch|tests/run|/etude |/rach2-etude'
 # STATE/stop exists and its session has ended, within five seconds of a wait.
 # The wait counts ninety seconds, which covers the TERM, thirty turns, the
 # KILL and the loop's end. A STATE/session whose supervisor is gone names a
-# group that may still run: session.pl -q removes it once it proves the group
-# gone, and otherwise a person checks it.
+# session that may still run: session.pl -q removes it once its boot is not
+# this one, and otherwise a person stops what is left and removes it.
 halt='
 st=$1
 case $st in "~"*) st=$HOME${st#"~"} ;; esac
@@ -117,7 +117,7 @@ if held "$st/session.live"; then
     echo "stop: left: $st: its session.pl has not ended in ninety seconds"
 elif s=$(query "$st/session"); [ "$s" != ended ]; then
     case $s in
-        "lost "*) echo "stop: left: $st: $st/session names process group ${s#lost }, whose session.pl was killed, and the group is not proved gone; a person checks it" ;;
+        "lost "*) echo "stop: left: $st: $st/session names process group ${s#lost }, whose session.pl was killed, and its session is not proved ended; a person stops what is left of it and removes the record" ;;
         *) echo "stop: left: $st: its session reads $s" ;;
     esac
 elif held "$st/loop.live"; then

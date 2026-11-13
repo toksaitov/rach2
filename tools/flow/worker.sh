@@ -69,8 +69,9 @@
 # waits until `session.pl -q` says that no session of it may still run, as
 # `wait_session` in lib.sh says: a session of the loop before it that still
 # runs, as one does after that loop's tmux session is killed, or one whose
-# supervisor was killed, until session.pl has proved its group gone; and
-# `refresh` changes nothing in the clone until then, whoever calls it.
+# supervisor was killed, until its boot has passed or a person has removed
+# its record; and `refresh` changes nothing in the clone until then, whoever
+# calls it.
 #
 # While it holds no task, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its

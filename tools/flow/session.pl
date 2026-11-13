@@ -6,27 +6,29 @@
 #        perl session.pl -q RECORD
 #
 # The supervisor, this process, first takes RECORD.live, a lock that it holds
-# exclusively for its whole life and that no child keeps, so that a looker
-# tells a live supervisor from a RECORD that a killed one left by probing the
-# lock, never by a number; a supervisor that cannot take it, since another
-# holds it, exits 125 having started nothing. A RECORD that exists once it
-# holds the lock was left by a supervisor that was killed, whose session may
-# still run: it removes RECORD only once the boot RECORD names is not this
-# one, or a ps that succeeds shows no process in the group RECORD names, and
-# otherwise exits 125 having started nothing, as the loop's short-session
-# wait then tries again. It then leaves the loop's process group, so a hangup
-# that ends the loop reaches neither it nor the session. It forks the group's
-# leader, the anchor: a child that leads a group of its own, whose id is the
-# anchor's pid, ignores HUP, INT and TERM, and exits once the supervisor
-# closes the pipe to it or dies. It then forks the session into that group
-# and writes `GROUP BOOT` to RECORD, the group's id and the ID of this boot,
-# /proc/sys/kernel/random/boot_id on Linux and `sysctl -n
+# exclusively for its whole life and that no child keeps, so that a looker tells
+# a live supervisor from a RECORD that a killed one left by probing the lock,
+# never by a number; a supervisor that cannot take it, since another holds it,
+# exits 125 having started nothing. A RECORD that exists once it holds the lock
+# was left by a supervisor that was killed, whose session may still run: it
+# removes RECORD only once the boot RECORD names is not this one, and otherwise
+# exits 125 having started nothing, as the loop's short-session wait then tries
+# again. A group that ps shows empty is no proof: a process of the session may
+# have left the group, by setsid or setpgid, and nothing holds it once the
+# supervisor is gone. Until the boot changes, a person stops what is left of the
+# session and removes RECORD. With no RECORD left, the supervisor leaves the
+# loop's process group, so a hangup that ends the loop reaches neither it nor
+# the session. It forks the group's leader, the anchor: a child that leads a
+# group of its own, whose id is the anchor's pid, ignores HUP, INT and TERM, and
+# exits once the supervisor closes the pipe to it or dies. It then forks the
+# session into that group and writes `GROUP BOOT` to RECORD, the group's id and
+# the ID of this boot, /proc/sys/kernel/random/boot_id on Linux and `sysctl -n
 # kern.bootsessionuuid` on the Mac, or `-` when it cannot be read. Only then,
-# with the limit set, does it let the session exec COMMAND: a session runs
-# only once its group is recorded and its limit is set, and when the record
-# cannot be written, or the supervisor dies first, the child exits without
-# running COMMAND, as it does when a HUP, INT, TERM or RECORD.stop came
-# before its go; the supervisor then exits as for a stop, below.
+# with the limit set, does it let the session exec COMMAND: a session runs only
+# once its group is recorded and its limit is set, and when the record cannot be
+# written, or the supervisor dies first, the child exits without running
+# COMMAND, as it does when a HUP, INT, TERM or RECORD.stop came before its go;
+# the supervisor then exits as for a stop, below.
 #
 # Every signal to the group goes while the anchor is an unreaped child of
 # the supervisor, so the group's number is still the anchor's and has passed
@@ -51,20 +53,21 @@
 # it leaves, such as a `tests/run` that holds the clone's run lock, would keep
 # the next session's suite from running. A process that outlives the KILL
 # keeps the supervisor, the anchor and RECORD until it is gone, as LOG notes.
-# The supervisor removes RECORD once the group is gone. It exits 125 when it
+# The supervisor removes RECORD once the group is gone; a process that left
+# the group escapes it, since it is no subreaper. It exits 125 when it
 # could not start the session.
 #
-# -q: the one decider of whether the session that RECORD records may still
-# run; whatever would change the loop's clone, or remove what a session left,
-# asks it first. It takes RECORD.live, as a supervisor would, and prints
-# `running` when a supervisor holds it; holding it, `ended` when there is no
-# RECORD, or when the group RECORD names is proved gone, as above, which it
-# then removes; and otherwise `lost GROUP`, the group RECORD names, which may
-# still run. A lock that cannot be probed prints `unknown: WHY`. Exit 0 on
-# `ended` and 1 otherwise. A RECORD.live that it makes is given to the owner
-# of its directory, so that run as root, as sweep.sh runs it on a loop's
-# STATE that another account owns, it leaves no lock that the loop's own
-# supervisor cannot open.
+# -q: the one decider of whether the session that RECORD records may still run;
+# whatever would change the loop's clone, or remove what a session left, asks it
+# first. It takes RECORD.live, as a supervisor would, and prints `running` when
+# a supervisor holds it; holding it, `ended` when there is no RECORD, or when
+# the boot RECORD names is not this one, as above, and it then removes RECORD;
+# and otherwise `lost GROUP`, the group RECORD names, whose session may still
+# run. A lock that cannot be probed prints `unknown: WHY`. Exit 0 on `ended` and
+# 1 otherwise. A RECORD.live that it makes is given to the owner of its
+# directory, so that run as root, as sweep.sh runs it on a loop's STATE that
+# another account owns, it leaves no lock that the loop's own supervisor cannot
+# open.
 
 use strict;
 use warnings;
@@ -114,24 +117,21 @@ sub save
     return rename("$record.new", $record);
 }
 
-# gone GROUP BOOT: return whether nothing of the session that a killed
-# supervisor recorded as GROUP BOOT can still run, as the header says.
+# gone BOOT: return whether nothing of the session that a killed supervisor
+# recorded in the boot BOOT can still run: whether this is another boot, the
+# one proof, as the header says.
 sub gone
 {
-    my ($group, $then) = @_;
+    my $then = shift;
     my $now = boot();
-    return 1 if defined $then && $then ne '-' && $now ne '-' && $then ne $now;
-    return 0 unless defined $group && $group =~ /^\d+$/;
-    my @ps = `ps -A -o pgid=`;
-    return 0 if $? != 0;
-    return !grep { /^\s*(\d+)\s*$/ && $1 == $group } @ps;
+    return defined $then && $then ne '-' && $now ne '-' && $then ne $now;
 }
 
-# settle REMOVE: return `ended` when there is no RECORD, or when the group
-# that the RECORD a killed supervisor left names is proved gone, and then,
-# with REMOVE, remove RECORD, noting it; return `lost GROUP` while the group
-# may still run, or when RECORD cannot be removed. Called with RECORD.live
-# held, or with REMOVE false.
+# settle REMOVE: return `ended` when there is no RECORD, or when the RECORD
+# a killed supervisor left names another boot, and then, with REMOVE, remove
+# RECORD, noting it; return `lost GROUP` while the session may still run, or
+# when RECORD cannot be removed. Called with RECORD.live held, or with
+# REMOVE false.
 sub settle
 {
     my $remove = shift;
@@ -141,9 +141,9 @@ sub settle
         ($group, $then) = split(' ', <$f> // '');
     }
     $group //= '?';
-    return "lost $group" unless gone($group, $then);
+    return "lost $group" unless gone($then);
     return 'ended' unless $remove;
-    note("the group $group that $record names is gone; removing it");
+    note("the group $group that $record names ran in another boot; removing it");
     if (!unlink($record)) {
         note("$record cannot be removed: $!");
         return "lost $group";
