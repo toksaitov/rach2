@@ -21,8 +21,8 @@
  * the reads of a read section that follows cannot pass the write; the
  * grace-period thread reads it. It goes up by 2 at each quiescent state and
  * by 1 as an idle wait begins and again as it ends, so it is odd while the
- * processor is idle, as Linux's `dynticks` counter is even in an extended
- * quiescent state (kernel/rcu/tree.c, `rcu_dynticks_in_eqs`).
+ * processor is idle, as Linux's count of a processor's extended quiescent
+ * states marks one (`rcu_watching_snap_in_eqs`, kernel/rcu/tree.c:306).
  */
 union rcu_count {
     volatile unsigned int seq;
@@ -139,7 +139,7 @@ void call_rcu(struct rcu_head *head, void (*func)(struct rcu_head *head))
  * before its `call_rcu`, the unlinking of what the callback frees among
  * them, are seen by every read below; the barrier keeps the counts' reads
  * after them, as Linux orders the start of a grace period after the
- * callbacks it covers (`rcu_gp_init`).
+ * callbacks it covers (`rcu_gp_init`, kernel/rcu/tree.c:1800).
  */
 int rcu_gp_begin(void)
 {
@@ -172,10 +172,11 @@ int rcu_gp_begin(void)
  * A processor has passed a quiescent state once its count has moved from
  * the grace period's first reading, or when that reading was odd, made in
  * an idle wait, in which it can be in no read section; one that has gone
- * offline is waited for no more, as Linux's `rcu_report_dead` takes a
- * processor out of the grace periods. The exchange that moved the count is
- * a full barrier on that processor, so its read sections before it have
- * ended for every reader of the count.
+ * offline is waited for no more, as Linux's `rcutree_report_cpu_dead`
+ * takes a processor out of the grace periods (kernel/rcu/tree.c:5207).
+ * The exchange that moved the count is a full barrier on that processor,
+ * so its read sections before it have ended for every reader of the
+ * count.
  */
 int rcu_gp_ended(void)
 {
@@ -199,7 +200,8 @@ int rcu_gp_ended(void)
 /**
  * Every processor's list is run, an offline processor's too, so a callback
  * queued on a processor that went offline is not lost, as Linux moves such
- * a processor's callbacks to a live one (`rcutree_migrate_callbacks`). The
+ * a processor's callbacks to a live one (`rcutree_migrate_callbacks`,
+ * kernel/rcu/tree.c:5248). The
  * barrier orders the frees after the counts' reads that ended the grace
  * period.
  */
@@ -264,10 +266,11 @@ static int gp_tick_due(void *arg)
 }
 
 /**
- * The grace-period thread, Linux's rcu_gp_kthread: sleep until a callback
- * is queued, begin a grace period, look at each tick whether it has ended,
- * and run its callbacks. It gives up the big lock it starts with, since no
- * step needs it. Its own sleeps are its processor's quiescent states.
+ * The grace-period thread, Linux's `rcu_gp_kthread`
+ * (kernel/rcu/tree.c:2229): sleep until a callback is queued, begin a grace
+ * period, look at each tick whether it has ended, and run its callbacks. It
+ * gives up the big lock it starts with, since no step needs it. Its own
+ * sleeps are its processor's quiescent states.
  */
 static void gp_main(void)
 {
