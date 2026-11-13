@@ -15,25 +15,12 @@
 #define KEY_ROOT_NAME "key-root.ext2"
 
 /* The assertions of the case, in the order the rows report them. */
-static const char *const assertions[] = {"keys-recorded",
-                                         "payload",
-                                         "key-collision",
-                                         "half-slot-ignored",
-                                         "outside-home-keys",
-                                         "outside-home-empty",
-                                         "archived",
-                                         "legacy-planted",
-                                         "legacy-archive",
-                                         "slot-planted",
-                                         "stopped-update",
-                                         "restored-keys",
-                                         "restored-login",
-                                         "finished",
-                                         "key-hashes",
-                                         "retry-finished",
-                                         "retry-stopped",
-                                         "retry-restored",
-                                         NULL};
+static const char *const assertions[] = {
+    "keys-recorded",     "payload",           "key-names",          "home-inside-root",
+    "half-slot-ignored", "outside-home-keys", "outside-home-empty", "archived",
+    "legacy-planted",    "legacy-archive",    "slot-planted",       "stopped-update",
+    "restored-keys",     "restored-login",    "finished",           "key-hashes",
+    "retry-finished",    "retry-stopped",     "retry-restored",     NULL};
 
 /* What the rows share: the attempt's files and what earlier rows found. */
 struct resume {
@@ -257,17 +244,63 @@ static void payload(struct resume *r)
 }
 
 /**
- * Archive the machine's configuration by an update, after one refused for
- * two key names that differ only in case, over a half-written slot A that
- * the update must pass by.
+ * Put key names in /srv/alice/.ssh of the machine's root that FAT32 would
+ * fold to one case or match to a short alias, and a symbolic link among them,
+ * and an account whose home is `/../../tmp/escape`, with a .ssh of the same
+ * path in the recovery system's own /tmp for the update to leave alone.
+ */
+static void plant_key_names(struct drive *d)
+{
+    drive_send(d, "%s",
+               "mkdir -p /r /tmp/escape/.ssh; echo outside > /tmp/escape/.ssh/marker; mount -t "
+               "ext2 /dev/disk0p3 /r && cd /r/srv/alice/.ssh && cp -p authorized_keys "
+               "AUTHORIZED_KEYS && echo long > ABCDEFGHI && echo alias > 'ABCDEF~1' && ln -s "
+               "authorized_keys link; cd /");
+    drive_send(d, "%s",
+               "echo escape:x:2006:2006::/../../tmp/escape:/bin/sh >> /r/etc/passwd; umount /r; "
+               "echo NAMES\"\"PLANTED");
+    drive_expect(d, "NAMESPLANTED");
+}
+
+/**
+ * Print NAMESKEPT=, NAMESSTORED= and ESCAPEKEPT=, each 0 when the names and the
+ * link that plant_key_names put in /srv/alice/.ssh are on the root, are in the
+ * archive's keys/2004.tar, and the recovery system's /tmp/escape/.ssh is
+ * still there.
+ */
+static void check_key_names(struct drive *d)
+{
+    drive_send(d, "%s",
+               "mount -t ext2 /dev/disk0p3 /r && cd /r/srv/alice/.ssh && cmp -s authorized_keys "
+               "AUTHORIZED_KEYS && grep -qx long ABCDEFGHI && grep -qx alias 'ABCDEF~1' && test "
+               "\"$(readlink link)\" = authorized_keys; echo NAMES\"\"KEPT=$?; cd /; umount /r");
+    drive_send(d, "%s",
+               "mkdir -p /a /tmp/stored && mount -t vfat /dev/disk0p2 /a && tar -xf "
+               "/a/rach2-config-a/keys/2004.tar -C /tmp/stored && cd /tmp/stored && cmp -s "
+               "authorized_keys AUTHORIZED_KEYS && grep -qx long ABCDEFGHI && grep -qx alias "
+               "'ABCDEF~1' && test \"$(readlink link)\" = authorized_keys; echo "
+               "NAMES\"\"STORED=$?; cd /; umount /a");
+    drive_send(d, "%s",
+               "test -f /tmp/escape/.ssh/marker; echo ESCAPE\"\"KEPT=$?; echo STORE\"\"DONE");
+    drive_expect(d, "STOREDONE");
+}
+
+/**
+ * Archive the machine's configuration by an update over a half-written slot A
+ * that the update must pass by. A home outside /home holds key names that
+ * FAT32 would fold or match to a short alias and a symbolic link, which the
+ * root and the archive's tar file must both keep, and an account's home of
+ * `/../../tmp/escape` must be read inside the root and not reach the
+ * recovery system's /tmp.
  */
 static void archive_keys(struct resume *r)
 {
-    char status[32] = "", same[32] = "", update[32] = "", alice[32] = "", empty[32] = "";
+    char update[32] = "", alice[32] = "", empty[32] = "", names[32] = "", stored[32] = "";
+    char escape[32] = "";
     char line[64];
     char *text = NULL;
     struct drive d;
-    int collision, half, outside, none;
+    int kept, inside, half, outside, none;
 
     repair_recovery(&d, r->c, "recovery");
     drive_send(&d, "%s",
@@ -287,20 +320,7 @@ static void archive_keys(struct resume *r)
                "echo stopped > /a/rach2-config-a/update-in-progress && umount /a && umount /r && "
                "echo HALF\"\"PLANTED");
     drive_expect(&d, "HALFPLANTED");
-    drive_send(&d, "%s",
-               "mkdir -p /r; mount -t ext2 /dev/disk0p3 /r; cp /r/srv/alice/.ssh/authorized_keys "
-               "/r/srv/alice/.ssh/AUTHORIZED_KEYS; umount /r");
-    drive_send(&d,
-               "sha256sum /dev/disk0p3 > /tmp/root.before; rach2-install --update /m/%s "
-               "/dev/disk0; echo COLLISION\"\"_STATUS=$?",
-               KEY_ROOT_NAME);
-    drive_expect(&d, "COLLISION_STATUS=");
-    drive_send(&d, "%s",
-               "sha256sum /dev/disk0p3 > /tmp/root.after; cmp -s /tmp/root.before "
-               "/tmp/root.after; echo ROOT\"\"SAME=$?");
-    drive_expect(&d, "ROOTSAME=");
-    drive_send(&d, "%s",
-               "mount -t ext2 /dev/disk0p3 /r; rm /r/srv/alice/.ssh/AUTHORIZED_KEYS; umount /r");
+    plant_key_names(&d);
     drive_send(&d, "rach2-install --update /m/%s /dev/disk0; echo UPDATE\"\"STATUS=$?",
                KEY_ROOT_NAME);
     drive_expect(&d, "UPDATESTATUS=");
@@ -312,6 +332,7 @@ static void archive_keys(struct resume *r)
                "/r/srv/empty/.ssh; echo EMPTY\"\"SSH=$?; umount /r; echo CHECKS\"\"DONE",
                r->keys[0]);
     drive_expect(&d, "CHECKSDONE");
+    check_key_names(&d);
     drive_send(&d, "%s", "umount /m; echo KEYS\"\"ARCHIVED");
     drive_expect(&d, "KEYSARCHIVED");
     text = console_of(&d);
@@ -320,16 +341,14 @@ static void archive_keys(struct resume *r)
         free(text);
         return;
     }
-    repair_last_field(text, "COLLISION_STATUS=", status, sizeof(status));
-    repair_last_field(text, "ROOTSAME=", same, sizeof(same));
     repair_last_field(text, "UPDATESTATUS=", update, sizeof(update));
+    repair_last_field(text, "NAMESKEPT=", names, sizeof(names));
+    repair_last_field(text, "NAMESSTORED=", stored, sizeof(stored));
+    repair_last_field(text, "ESCAPEKEPT=", escape, sizeof(escape));
     repair_last_field(text, "ALICEKEY=", alice, sizeof(alice));
     repair_last_field(text, "EMPTYSSH=", empty, sizeof(empty));
-    collision = !d.failed && strcmp(status, "1") == 0 &&
-                repair_line_has(text, (const char *const[]){"ssh key names collide on FAT32: ",
-                                                            "AUTHORIZED_KEYS and ",
-                                                            "authorized_keys", NULL}) &&
-                strcmp(same, "0") == 0;
+    kept = !d.failed && strcmp(names, "0") == 0 && strcmp(stored, "0") == 0;
+    inside = !d.failed && strcmp(escape, "0") == 0;
     half = !d.failed && strcmp(update, "0") == 0 && text != NULL &&
            strstr(text, "copying this machine's accounts") != NULL &&
            strstr(text, "taking the configuration saved") == NULL;
@@ -337,10 +356,13 @@ static void archive_keys(struct resume *r)
               text_field(text, "STAT=2004:2004:640", 1, line, sizeof(line)) == 0 &&
               strcmp(alice, "0") == 0;
     none = !d.failed && strcmp(empty, "1") == 0;
-    repair_assert(r->c, "key-collision", collision,
+    repair_assert(r->c, "key-names", kept,
                   d.failed ? d.why
-                           : "two key names that differ only in case were not refused before "
-                             "the root was written");
+                           : "key names that differ in case or match a short alias, or a link, "
+                             "were not kept on the root and in the archive's tar file");
+    repair_assert(r->c, "home-inside-root", inside,
+                  d.failed ? d.why
+                           : "a home of /../../tmp/escape reached the recovery system's /tmp");
     repair_assert(r->c, "half-slot-ignored", half,
                   d.failed ? d.why : "the update took a half-written slot or did not finish");
     repair_assert(r->c, "outside-home-keys", outside,
@@ -349,7 +371,7 @@ static void archive_keys(struct resume *r)
                   d.failed ? d.why : "an image key survived in a home outside /home");
     if (d.failed)
         snprintf(r->why, sizeof(r->why), "the normal update's boot did not finish: %s", d.why);
-    else if (!collision || !half || !outside || !none)
+    else if (!kept || !inside || !half || !outside || !none)
         snprintf(r->why, sizeof(r->why),
                  "archiving the machine's configuration before the interrupted update");
     repair_assert(r->c, "archived", r->why[0] == '\0', r->why);
@@ -733,7 +755,7 @@ int etude_scenario(struct etude_case *c)
         return 1;
     repair_assert(c, "payload", r.why[0] == '\0', r.why);
     if (r.why[0] != '\0') {
-        rest(&r, "key-collision");
+        rest(&r, "key-names");
         goto done;
     }
 

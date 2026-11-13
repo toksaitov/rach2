@@ -215,7 +215,8 @@
       "assertions": [
         {"assertion_id": "keys-recorded", "checks": "the installed machine takes keys for root, the test account and three accounts, two homes outside /home and its host keys, and prints at least six key digests", "source": "scenario"},
         {"assertion_id": "payload", "checks": "the root image has the image's key in /srv/alice and /srv/empty, and is the one file of the stick's volume", "source": "scenario"},
-        {"assertion_id": "key-collision", "checks": "two key names that differ only in case stop the update with status 1, naming both, before the root is written", "source": "scenario"},
+        {"assertion_id": "key-names", "checks": "key names of a home outside /home that differ only in case or match a FAT32 short alias, and a symbolic link among them, are kept on the root and in the archive's keys/UID.tar", "source": "scenario"},
+        {"assertion_id": "home-inside-root", "checks": "an account whose home is /../../tmp/escape has it read inside the root, and the update leaves the recovery system's /tmp/escape/.ssh alone", "source": "scenario"},
         {"assertion_id": "half-slot-ignored", "checks": "a half-written slot A is passed by, and the update takes the root's configuration and finishes", "source": "scenario"},
         {"assertion_id": "outside-home-keys", "checks": "the keys of a home outside /home are kept with their owner and modes, 2004:2004 at 750 and 640, and the machine's key", "source": "scenario"},
         {"assertion_id": "outside-home-empty", "checks": "the image's key is removed from a home outside /home whose account had none", "source": "scenario"},
