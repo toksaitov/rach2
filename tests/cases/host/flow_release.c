@@ -3779,6 +3779,9 @@ static int stop_unknown_rows(struct release *r)
          ok;
     return ok;
 }
+/** The Windows run's rows, its claims, holds, observer, winclean and stop.sh
+ * among them, and a release whose full run and Windows run both fail, which
+ * collects the failures of every run before it ends. */
 static int windows_rows(struct release *r)
 {
     struct fixture *f = r->f;
