@@ -375,26 +375,43 @@ void wait_queue_init(wait_queue_t *wq)
  * finds its request running past its spin; NULL for none. */
 static struct i915_model_ring *unstick;
 
-/** A sleep: the model's clock moves a millisecond at a time until `cond`
- * holds; one that never would ends after a minute of the model's clock.
- * The ring `unstick` names runs again first. */
+/* The queue the sleep waits on, and whether a wake reached it. */
+static wait_queue_t *sleep_wq;
+static int sleep_woken;
+
+/** A sleep: `cond` is tested at its start and again only when a wake
+ * reaches `wq` or the caller's timer (`wakeup_tick`) falls due, as a
+ * sleeper's is, while the model's clock moves a millisecond at a time;
+ * one that never would end ends after a minute of the model's clock. The
+ * ring `unstick` names runs again first. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     int steps = 0;
 
-    (void)wq;
     sleeps++;
     if (unstick) {
         unstick->stuck = 0;
         unstick = 0;
     }
-    while (!cond(arg)) {
+    if (cond(arg)) {
+        return 0;
+    }
+    sleep_wq = wq;
+    sleep_woken = 0;
+    for (;;) {
         if (++steps > 60000) {
             stuck_sleeps++;
-            return 0;
+            break;
         }
         i915_delay_us(&dev.hw, 1000);
+        if (sleep_woken || (caller.wakeup_tick != 0 && rtc_ticks_now() >= caller.wakeup_tick)) {
+            sleep_woken = 0;
+            if (cond(arg)) {
+                break;
+            }
+        }
     }
+    sleep_wq = 0;
     return 0;
 }
 
@@ -411,9 +428,12 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return wq_wait_event_nointr(wq, cond, arg);
 }
 
+/** Wake the sleep when it waits on `wq`. */
 void wq_wake_all(wait_queue_t *wq)
 {
-    (void)wq;
+    if (wq == sleep_wq) {
+        sleep_woken = 1;
+    }
 }
 
 /* The GT's park and unpark, RC6's and RPS's, counted. */
@@ -721,6 +741,19 @@ static struct i915_request *submit(struct intel_context *ce, uint32_t reg, uint3
         return 0;
     }
     return rq;
+}
+
+/** Run one request on `ce` to its end, so that the GT records its
+ * contexts' default state, which the first request does on the render
+ * ring, before a row holds that ring stuck. */
+static void warm(struct intel_context *ce)
+{
+    struct i915_request *rq = submit(ce, 0, 0);
+
+    if (rq) {
+        (void)i915_request_wait(rq, 0, -1);
+        i915_request_put(rq);
+    }
 }
 
 /** Wait `timeout_ns` for `rq` on the ring `rr` as for a request still
@@ -1232,31 +1265,31 @@ static int32_t set_map(uint32_t id, uint32_t n)
 /* The context another thread works on while a SETPARAM's copy sleeps. */
 static uint32_t raced_id;
 
+/* Whether file_a's context lock was held when the copy slept, so that
+ * another thread's call on the context waited for the SETPARAM to end. */
+static int copy_held;
+
+/** Note at the copy whether file_a's context lock is held. */
+static void note_held(void)
+{
+    copy_held = mutex_held(&((struct i915_file *)file_a.driver_priv)->lock);
+}
+
 /** Another thread's CONTEXT_DESTROY of `raced_id`. */
-static void destroy_raced(void)
+static int32_t destroy_raced(void)
 {
     struct drm_i915_gem_context_destroy d = {0, 0};
 
     d.ctx_id = raced_id;
-    (void)i915_gem_context_destroy_ioctl(&dev.drm, &d, &file_a);
-}
-
-/** Another thread's first use of `raced_id`, which finalizes it. */
-static void use_raced(void)
-{
-    intel_context_put(engine_of(&file_a, raced_id, 0));
-}
-
-/** Another thread's ENGINES of one slot on `raced_id`. */
-static void map_raced(void)
-{
-    (void)set_map(raced_id, 1);
+    return i915_gem_context_destroy_ioctl(&dev.drm, &d, &file_a);
 }
 
 /**
  * ENGINES whose copy sleeps while another thread destroys the context,
- * uses it or gives it a map: the context held across the copy, and no map
- * stored on a context that went, was finalized without one or has one.
+ * uses it or gives it a map: the copy runs under the file's context lock,
+ * as Linux's set_proto_ctx_param runs under proto_context_lock, so the
+ * other thread's call waits and runs after the map is stored. One thread
+ * runs that call when the SETPARAM returns.
  */
 static void row_engines_raced(void)
 {
@@ -1269,24 +1302,28 @@ static void row_engines_raced(void)
     map.engines[1].engine_class = I915_ENGINE_CLASS_COPY;
 
     raced_id = make_context(&file_a);
-    copy_sleep = destroy_raced;
-    CHECK("engines: destroyed while the copy sleeps: ENOENT, the context freed after",
-          set_map(raced_id, 2) == -ENOENT &&
+    copy_held = 0;
+    copy_sleep = note_held;
+    CHECK("engines: a destroy while the copy sleeps waits, then frees the context",
+          set_map(raced_id, 2) == 0 && copy_held && destroy_raced() == 0 &&
               i915_gem_context_lookup(&file_a, raced_id, &ctx) == -ENOENT);
     raced_id = make_context(&file_a);
-    copy_sleep = use_raced;
-    CHECK("engines: finalized while the copy sleeps: EINVAL, the default engines kept",
-          set_map(raced_id, 2) == -EINVAL &&
-              i915_gem_context_lookup(&file_a, raced_id, &ctx) == 0 && ctx->nmap == -1 &&
-              ctx->nce == I915_NUM_ENGINES);
+    copy_held = 0;
+    copy_sleep = note_held;
+    CHECK("engines: a first use while the copy sleeps waits, then finalizes with the map",
+          set_map(raced_id, 2) == 0 && copy_held);
+    intel_context_put(engine_of(&file_a, raced_id, 0));
+    CHECK("engines: the finalized context has the map's two engines",
+          i915_gem_context_lookup(&file_a, raced_id, &ctx) == 0 && ctx->nmap == 2 && ctx->nce == 2);
     i915_gem_context_put(ctx);
     ctx = 0;
     raced_id = make_context(&file_a);
-    copy_sleep = map_raced;
-    CHECK("engines: given a map while the copy sleeps: EINVAL, the first map kept",
-          set_map(raced_id, 2) == -EINVAL &&
-              i915_gem_context_lookup(&file_a, raced_id, &ctx) == 0 && ctx->nmap == 1 &&
-              ctx->nce == 1);
+    copy_held = 0;
+    copy_sleep = note_held;
+    CHECK("engines: a second map while the copy sleeps waits, then is EINVAL",
+          set_map(raced_id, 2) == 0 && copy_held && set_map(raced_id, 1) == -EINVAL &&
+              i915_gem_context_lookup(&file_a, raced_id, &ctx) == 0 && ctx->nmap == 2 &&
+              ctx->nce == 2);
     i915_gem_context_put(ctx);
     done(&m);
 }
@@ -1524,9 +1561,9 @@ static void row_requests(void)
     CHECK("requests: a wait of 0 on a request not done is ETIME",
           rq && i915_request_wait(rq, 0, 0) == -ETIME);
     t0 = m.now_us;
-    CHECK("requests: a wait of 5 ms on a stuck ring is ETIME after 5 ms",
+    CHECK("requests: a wait of 5 ms on a stuck ring is ETIME after 5 ms, within two ticks more",
           rq && i915_request_wait(rq, 1, 5000000) == -ETIME && m.now_us - t0 >= 5000u &&
-              m.now_us - t0 < 7000u);
+              m.now_us - t0 <= 5000u + 2u * TICK_US);
     rr->stuck = 0;
     CHECK("requests: once the ring runs, a wait for ever completes",
           rq && i915_request_wait(rq, 1, -1) == 0);
@@ -1691,8 +1728,8 @@ static void row_park_watched(void)
     struct dma_fence_cb cb, cb2;
     int p;
 
-    p = parks;
     rq = submit(r, 0, 0);
+    p = parks;
     rq2 = submit(r, 0, 0);
     CHECK("park: a callback on a request that is not the engine's last",
           rq && rq2 && dma_fence_add_callback(&rq->fence.base, &cb, park_listener) == 0);
@@ -1883,13 +1920,19 @@ static void row_park_signal_creating(void)
 }
 
 /* The releases of the submission's lock left before the one that ends the
- * retire worker's taking of its notice, in i915_submit_work. */
+ * retire worker's taking of its notice, in i915_submit_work, and the ring
+ * held stuck until then. */
 static int unlocks_left;
+static struct i915_model_ring *notice_ring;
 
-/** The release `unlocks_left` counts down to. */
+/** At the release `unlocks_left` counts down to, let `notice_ring` run. */
 static int notice_taken(void)
 {
-    return --unlocks_left == 0;
+    if (--unlocks_left != 0) {
+        return 0;
+    }
+    notice_ring->stuck = 0;
+    return 1;
 }
 
 /**
@@ -1912,9 +1955,14 @@ static void row_park_kick_after_notice(void)
     CHECK("kick: a callback on the engine's last request",
           rq && dma_fence_add_callback(&rq->fence.base, &cb, park_listener) == 0);
     p = parks;
-    /* One release for each engine's submission notice, then the retire
-     * worker's. */
-    unlocks_left = I915_NUM_ENGINES + 1;
+    /* The ring runs the request only once the worker has its notice, and
+     * a pass first takes the notice the default state's request left. One
+     * release for the deadline of the waits for other drivers' fences, one
+     * for each engine's submission notice, then the retire worker's. */
+    notice_ring = i915_model_ring_state(&m, 0);
+    notice_ring->stuck = 1;
+    (void)i915_submit_work();
+    unlocks_left = 1 + I915_NUM_ENGINES + 1;
     unlock_when = notice_taken;
     (void)i915_submit_work();
     CHECK("kick: its signal just after the worker took its notice leaves this pass alone",
@@ -1989,6 +2037,7 @@ static void row_park_listener_left(void)
     struct dma_fence_cb cb;
     int p;
 
+    warm(r);
     rr->stuck = 1;
     rq = submit(r, 0, 0);
     p = parks;
@@ -2128,6 +2177,7 @@ static void row_park_between_passes(void)
     struct dma_fence_cb cb;
     int p;
 
+    warm(r);
     rr->stuck = 1;
     rq = submit(r, 0, 0);
     CHECK("between: a callback on the engine's last request, which the ring holds",
