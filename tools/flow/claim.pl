@@ -21,7 +21,7 @@
 # * ID.KIND.N.live, a lock that the runner holds exclusively from before it
 #   reads the tombstones until it exits, and that its launcher inherits.
 # * ID.KIND.N.go: the runner read no tombstone and OUT/windows.current named
-#   ID, and starts the launcher.
+#   ID, and starts the launcher; ID.KIND.N.none: it starts nothing.
 # * ID.KIND.N.owner: the launcher's number and its start, from proc(5)'s
 #   stat, which the ledger keeps beside its owner; written before its exec,
 #   so before it can enter the ledger.
@@ -41,8 +41,9 @@
 #
 # run: the runner, which claim_start starts in a session of its own. It
 # creates and locks ID.KIND.N.live, a few tries a second apart; reads both
-# tombstones and OUT/windows.current, and starts nothing after a tombstone or
-# when the file names another run; creates ID.KIND.N.go; clears
+# tombstones and OUT/windows.current, and starts nothing after a tombstone,
+# when the file names another run or when the lock was not got, creating
+# ID.KIND.N.none then; creates ID.KIND.N.go; clears
 # close-on-exec on the lock and forks COMMAND, the launcher, with
 # PR_SET_PDEATHSIG of TERM on x86-64 Linux, so that a runner that dies first
 # withdraws the launcher's request. While the launcher runs it reads the
@@ -197,8 +198,14 @@ sub claim_run
     my ($locks, $out, $id, $kind, $n, @command) = @_;
     my $claim = "$locks/$id.$kind";
     my $base = "$claim.$n";
-    my $live = take("$base.live") or die "claim: cannot lock $base.live\n";
+    my $live = take("$base.live");
+    if (!$live) {
+        touch("$base.none");
+        print "claim: attempt $n starts nothing: $base.live cannot be locked\n";
+        return 1;
+    }
     if (stopped($claim, $n)) {
+        touch("$base.none");
         print "claim: attempt $n starts nothing: the claim or the attempt is stopped\n";
         return 0;
     }
@@ -208,6 +215,7 @@ sub claim_run
         $current =~ s/\r?\n\z//;
     }
     if ($current ne $id) {
+        touch("$base.none");
         print "claim: attempt $n starts nothing: the current run is not $id\n";
         return 0;
     }
