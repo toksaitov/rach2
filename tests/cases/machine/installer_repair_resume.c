@@ -161,6 +161,10 @@ static void record(struct resume *r)
     drive_send(&d, "echo '%s' > /home/Alice/.ssh/authorized_keys", r->keys[1]);
     drive_send(&d, "echo '%s' > /home/alice/.ssh/authorized_keys", r->keys[2]);
     drive_send(&d, "%s",
+               "for a in work:2001 Alice:2002 alice:2003; do h=/home/${a%:*}; "
+               "chown -R ${a#*:}:${a#*:} $h; chmod 700 $h $h/.ssh; "
+               "chmod 600 $h/.ssh/authorized_keys; done");
+    drive_send(&d, "%s",
                "echo service:x:2004:2004::/srv/alice:/bin/sh >> /etc/passwd; echo "
                "empty:x:2005:2005::/srv/empty:/bin/sh >> /etc/passwd");
     drive_send(&d, "mkdir -p /srv/alice/.ssh; echo '%s' > /srv/alice/.ssh/authorized_keys",
@@ -569,7 +573,7 @@ static void stopped_boot(struct resume *r)
                "stat -c %u:%g:%a /home/alice /home/alice/.ssh /home/alice/.ssh/authorized_keys");
     expect_all(&d, (const char *const[]){"2003:2003:700", "2003:2003:700", "2003:2003:600", NULL});
     drive_send(&d, "%s", "stat -c %u:%g:%a /srv/alice/.ssh /srv/alice/.ssh/authorized_keys");
-    expect_all(&d, (const char *const[]){"2004:2004:700", "2004:2004:600", NULL});
+    expect_all(&d, (const char *const[]){"2004:2004:750", "2004:2004:640", NULL});
     drive_send(&d, "%s",
                "test ! -e /srv/empty/.ssh && ! grep -q image-key /srv/alice/.ssh/authorized_keys "
                "&& echo SERVICE\"\"SAFE");
