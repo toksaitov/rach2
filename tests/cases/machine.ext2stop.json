@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.ext2stop.writes",
-      "behavior": "An ext2 volume that QEMU's quit stops under two writers and a loop of syncs, with sentinel files synced and four removed files held open, mounts writable at the next boot with its check clean or keeping only orphan inodes for e2fsck, keeps its sentinels and takes a write; e2fsck -fn finds in it, before and after that mount, only the held inodes with zero deletion time, their bitmap bits and the free counts; and the same volume powered off as a user stops the machine, the control, is clean and needs no check",
+      "behavior": "An ext2 volume that QEMU's quit stops under two writers and a loop of syncs, with sentinel files synced and four removed files held open, mounts writable at the next boot with its check keeping only lost blocks and orphan inodes for e2fsck, the held inodes and any file a writer removed whose free the stop kept from the disk, keeps its sentinels and takes a write; e2fsck -fn finds in it, before and after that mount, only those inodes, as many as the check counted, their bits and blocks and the free counts; and the same volume powered off as a user stops the machine, the control, is clean and needs no check",
       "units": [
         "ext2",
         "rach2/sys/fs/ext2.c",
@@ -276,7 +276,7 @@
         },
         {
           "assertion_id": "check-check",
-          "checks": "the kernel's check of it says ext2: check: L lost blocks, 4 orphan inodes, kept for e2fsck: the held inodes, whose blocks count among the lost, and no fault",
+          "checks": "the kernel's check of it says ext2: check: L lost blocks, M orphan inodes, kept for e2fsck, with M at least 4: the held inodes, whose blocks count among the lost, and the files a writer removed whose free the stop kept from the disk after their entries, and no fault",
           "source": "scenario"
         },
         {
@@ -321,7 +321,7 @@
         },
         {
           "assertion_id": "stopped-e2fsck",
-          "checks": "e2fsck -fn on the copy taken before any mount exits 0, or 4 with nothing but its passes, a held inode's zero deletion time, block bitmap differences that are each a block marked used that nothing names, inode bitmap differences that are each a held inode, the free counts, its answers of no and its summary",
+          "checks": "e2fsck -fn on the copy taken before any mount exits 0, or 4 with nothing but its passes, a removed inode's zero deletion time, an unattached inode that is not a held one, block bitmap differences that are each a block marked used that nothing names, inode bitmap differences that are each an inode marked used that nothing uses, the free counts, its answers of no and its summary, and with as many unattached and freed inodes as the kernel's check counted orphans",
           "source": "scenario"
         },
         {

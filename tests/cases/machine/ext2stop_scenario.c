@@ -31,9 +31,12 @@ static char features[] = "sparse_super,large_file,filetype,^dir_index,resize_ino
 static char extended[] = "offset=" OFFSET_TEXT ",hash_seed=52616368-3200-4578-7432-000000000015";
 static char uuid[] = "52616368-3200-4578-7432-000000000015";
 
-/* What the kernel's check of the stopped volume says: lost blocks, which
- * include the held inodes' own, and the HELD orphans, those inodes. */
-static const char held_record[] = " lost blocks, 4 orphan inodes, kept for e2fsck";
+/* What e2fsck -fn says of the inodes of a stopped volume that no name
+ * reaches, each of which the kernel's check counts as an orphan. */
+struct tally {
+    long unattached; /* in use with links: `Unattached inode N` */
+    long freed;      /* bit set, inode unused: in `Inode bitmap differences` */
+};
 
 /* The mount of the volume, which a boot types after `mount -t ext2 DEV`. */
 static const char mount_tail[] = " /mnt/s; grep ' /mnt/s ' /proc/mounts; echo MOUNT\"\"END\r";
@@ -476,13 +479,34 @@ static int check_record(const char *w, char *out, size_t size)
 }
 
 /**
+ * The orphans the kernel's record of a check `record` counts, the M of
+ * `ext2: check: L lost blocks, M orphan inodes, kept for e2fsck`. @return
+ * M, or -1 for a record of another form.
+ */
+static long orphans_of(const char *record)
+{
+    long lost, orphans;
+    int end = -1;
+
+    if (sscanf(record, "ext2: check: %ld lost blocks, %ld orphan inodes, kept for e2fsck%n", &lost,
+               &orphans, &end) != 2 ||
+        end < 0 || record[end] != '\0')
+        return -1;
+    return orphans;
+}
+
+/**
  * Mount the volume on `dev` at the check boot `b`, judge the record of its
  * check against `checked`, a check expected or not, and run the checks of
- * the boot after a stop. Assertions PREFIX-writable, PREFIX-check,
+ * the boot after a stop. A checked volume must keep the HELD inodes as
+ * orphans, and may keep more: the files a writer removed whose inode or bit
+ * the stop kept from the disk, after the entry that named them, which the
+ * removal writes at once. Their count goes in `*orphans`, -1 when there is
+ * no record of that form. Assertions PREFIX-writable, PREFIX-check,
  * PREFIX-same, PREFIX-wrote and PREFIX-umount.
  */
 static void mount_after(struct lc *l, struct boot *b, const char *dev, const char *prefix,
-                        int checked)
+                        int checked, long *orphans)
 {
     char line[160], id[48], want[64], record[160], why[240];
     char *w;
@@ -502,8 +526,9 @@ static void mount_after(struct lc *l, struct boot *b, const char *dev, const cha
         snprintf(why, sizeof(why), "the clean volume was checked: %s", have ? record : "");
         lc_assert(l, id, !have, why);
     } else {
+        *orphans = have ? orphans_of(record) : -1;
         snprintf(why, sizeof(why), "the check said %s", have ? record : "nothing");
-        lc_assert(l, id, have && strstr(record, held_record) != NULL, why);
+        lc_assert(l, id, *orphans >= HELD, why);
     }
     free(w);
     snprintf(id, sizeof(id), "%s-same", prefix);
@@ -517,16 +542,19 @@ static void mount_after(struct lc *l, struct boot *b, const char *dev, const cha
 /**
  * The boot after the stop: the stopped volume mounted first, the control
  * after, each checked as `mount_after` says, and the machine powered off.
+ * The orphans the check of the stopped volume counts go in `*orphans`, -1
+ * when it did not run.
  */
-static void check(struct lc *l)
+static void check(struct lc *l, long *orphans)
 {
     static const char *const disks[] = {"stop", "control", NULL};
     struct boot b;
 
+    *orphans = -1;
     if (!lc_step(l, "check") || !start(l, "check", disks, &b))
         return;
-    mount_after(l, &b, "/dev/disk0p1", "check", 1);
-    mount_after(l, &b, "/dev/disk1p1", "again", 0);
+    mount_after(l, &b, "/dev/disk0p1", "check", 1, orphans);
+    mount_after(l, &b, "/dev/disk1p1", "again", 0, NULL);
     free(run(l, &b, "poweroff\r", "Goodbye"));
     lc_quit(l, b.m, NULL);
 }
@@ -545,14 +573,14 @@ static int is_held(long ino, const long held[HELD])
 /**
  * Say whether `list`, what follows `Block bitmap differences:` or `Inode
  * bitmap differences:` in e2fsck's output, names only numbers the bitmap
- * marks used and e2fsck found free, each `-N` or `-(N--M)`: lost blocks, or
- * for `held` not NULL, held inodes. A `+`, a number the bitmap calls free
- * that a file uses, is a fault.
+ * marks used and e2fsck found free, each `-N` or `-(N--M)`: lost blocks,
+ * or inodes, which `*inodes`, when not NULL, counts. A `+`, a number the
+ * bitmap calls free that a file uses, is a fault.
  */
-static int only_freed(const char *list, const long held[HELD])
+static int only_freed(const char *list, long *inodes)
 {
     const char *p = list;
-    long from, to, n;
+    long from, to;
     char *end;
 
     while (*p != '\0') {
@@ -574,9 +602,8 @@ static int only_freed(const char *list, const long held[HELD])
         }
         if (end == p || from > to)
             return 0;
-        for (n = from; held != NULL && n <= to; n++)
-            if (!is_held(n, held))
-                return 0;
+        if (inodes != NULL)
+            *inodes += to - from + 1;
         p = end;
     }
     return 1;
@@ -585,24 +612,36 @@ static int only_freed(const char *list, const long held[HELD])
 /**
  * Say whether the line `line`, `len` bytes of e2fsck's output, is one the
  * documented state of an unclean stop allows, given the inodes `held`: a
- * pass's heading, a held inode's zero deletion time, a block the bitmap
- * marks used and nothing points to, a held inode's bit, the free counts, a
- * question e2fsck asks and is told no, or its summary.
+ * pass's heading, a removed inode's zero deletion time, a block the bitmap
+ * marks used and nothing points to, an inode the bitmap marks used and
+ * nothing uses, an inode in use that no name reaches (`Unattached inode N`)
+ * other than a held one, the free counts, a question e2fsck asks and is
+ * told no, or its summary. The inodes no name reaches are counted in `*t`.
+ *
+ * Beyond the held inodes, those are the files a writer removed: the removal
+ * writes the entry to the disk at once, so that no name there names a freed
+ * inode, and leaves the inode's free to write back, its cleared pointers
+ * first, then its zeroed slot and its bits. A stop before all of it is on
+ * the disk leaves the inode unattached, or deleted with a zero deletion
+ * time, or zeroed with its bit set.
  */
-static int allowed(const char *line, size_t len, const long held[HELD])
+static int allowed(const char *line, size_t len, const long held[HELD], struct tally *t)
 {
     static const char *const fixed[] = {"Pass ",
                                         "Free blocks count wrong",
                                         "Free inodes count wrong",
                                         "Fix? no",
+                                        "Connect to /lost+found? no",
                                         "stop: ",
                                         "e2fsck ",
                                         "",
                                         NULL};
-    static const char deleted[] = "Deleted inode ", blocks[] = "Block bitmap differences:",
+    static const char deleted[] = "Deleted inode ", unattached[] = "Unattached inode ",
+                      blocks[] = "Block bitmap differences:",
                       inodes[] = "Inode bitmap differences:";
-    char text[512];
+    char text[512], *end;
     size_t i;
+    long ino;
 
     snprintf(text, sizeof(text), "%.*s", (int)len, line);
     len = strlen(text);
@@ -611,30 +650,42 @@ static int allowed(const char *line, size_t len, const long held[HELD])
     for (i = 0; fixed[i] != NULL; i++)
         if (fixed[i][0] == '\0' ? len == 0 : strncmp(text, fixed[i], strlen(fixed[i])) == 0)
             return 1;
-    if (strncmp(text, deleted, strlen(deleted)) == 0)
-        return strstr(text, " has zero dtime.  Fix? no") != NULL &&
-               is_held(strtol(text + strlen(deleted), NULL, 10), held);
+    if (strncmp(text, deleted, strlen(deleted)) == 0) {
+        ino = strtol(text + strlen(deleted), &end, 10);
+        return ino > 10 && strcmp(end, " has zero dtime.  Fix? no") == 0;
+    }
+    if (strncmp(text, unattached, strlen(unattached)) == 0) {
+        ino = strtol(text + strlen(unattached), &end, 10);
+        if (ino <= 10 || *end != '\0' || is_held(ino, held))
+            return 0;
+        t->unattached++;
+        return 1;
+    }
     if (strncmp(text, blocks, strlen(blocks)) == 0)
         return only_freed(text + strlen(blocks), NULL);
     if (strncmp(text, inodes, strlen(inodes)) == 0)
-        return only_freed(text + strlen(inodes), held);
+        return only_freed(text + strlen(inodes), &t->freed);
     return 0;
 }
 
 /**
  * Run e2fsck -fn on the volume of disk `disk`, keeping its output as
- * evidence `output`, and report assertion `id`: it exits 0, or 4 with only
- * what `allowed` passes, when `stopped` is set; and 0 otherwise. Its first
- * line that is not allowed is the reason.
+ * evidence `output`, and report assertion `id`: for a stopped volume, whose
+ * inodes `held` are not NULL, it exits 0, or 4 with only what `allowed`
+ * passes; for a clean one, `held` NULL, it exits 0. Its first line that is
+ * not allowed is the reason. When `orphans` is not -1, the inodes no name
+ * reaches, unattached or freed, must be as many as the kernel's check
+ * counted: the check and e2fsck must agree on each.
  */
-static void judge(struct lc *l, const char *disk, const char *output, const char *id, int stopped,
-                  const long held[HELD])
+static void judge(struct lc *l, const char *disk, const char *output, const char *id,
+                  const long *held, long orphans)
 {
     char vol[1100], why[400];
     char *argv[] = {"e2fsck", "-fn", vol, NULL};
     char *text, *p;
+    struct tally t = {0, 0};
     size_t n;
-    int status, ok;
+    int status, ok, stopped = held != NULL;
 
     if (!disk_path(l, disk, AT_PART, vol, sizeof(vol)) || (status = tool(l, argv, output)) == -2)
         return;
@@ -643,11 +694,18 @@ static void judge(struct lc *l, const char *disk, const char *output, const char
     ok = text != NULL && (status == 0 || (stopped && status == 4));
     for (p = text; ok && p != NULL && *p != '\0'; p += n + (p[n] == '\n')) {
         n = strcspn(p, "\n");
-        if (stopped && !allowed(p, n, held)) {
+        if (stopped && !allowed(p, n, held, &t)) {
             snprintf(why, sizeof(why), "e2fsck -fn exits %d and says: %.*s", status,
                      (int)(n < 300 ? n : 300), p);
             ok = 0;
         }
+    }
+    if (ok && stopped && orphans != -1 && t.unattached + t.freed != orphans) {
+        snprintf(why, sizeof(why),
+                 "e2fsck -fn finds %ld unattached and %ld freed inodes, the kernel's check %ld "
+                 "orphans",
+                 t.unattached, t.freed, orphans);
+        ok = 0;
     }
     lc_assert(l, id, ok, why);
     free(text);
@@ -664,17 +722,17 @@ int etude_scenario(struct etude_case *c)
                                       "again-writable", "again-check",     "again-same",
                                       "again-wrote",    "again-umount",    "stopped-e2fsck",
                                       "checked-e2fsck", "control-e2fsck",  NULL};
-    long kept[HELD], held[HELD];
+    long kept[HELD], held[HELD], orphans;
     struct lc l;
 
     lc_begin(&l, c, ids);
     control(&l, kept);
     stop(&l, held);
-    check(&l);
+    check(&l, &orphans);
     if (lc_step(&l, "judge")) {
-        judge(&l, "stopped", "stopped.e2fsck", "stopped-e2fsck", 1, held);
-        judge(&l, "stop", "checked.e2fsck", "checked-e2fsck", 1, held);
-        judge(&l, "control", "control.e2fsck", "control-e2fsck", 0, kept);
+        judge(&l, "stopped", "stopped.e2fsck", "stopped-e2fsck", held, orphans);
+        judge(&l, "stop", "checked.e2fsck", "checked-e2fsck", held, orphans);
+        judge(&l, "control", "control.e2fsck", "control-e2fsck", NULL, -1);
     }
     return lc_finish(&l);
 }
