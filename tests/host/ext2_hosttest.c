@@ -6029,6 +6029,9 @@ static void structural_policy_row(const char *img)
     check(structural_kept(img, was), "and the table's block is as it was, its bit set again");
 }
 
+/** A volume whose valid bit is clear: checked at a writable mount, mounted
+ * unchecked by name when memory is short, and marked valid again only by
+ * an unmount that follows a clean check. */
 static void dirty_rows(void)
 {
     const char *img = fix_path("dirty.ext2");
