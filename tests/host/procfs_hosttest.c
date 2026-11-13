@@ -20,6 +20,10 @@
  * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
+ * host-cflags: -DTICK_HZ=1000
+ *
+ * The rows of times and the uptime count whole hundredths of a second in
+ * ticks, so the kernel's sources are built at 1000 ticks a second.
  *
  * The test includes the source whole, with its exports declared static
  * first, so that the compiler drops those no row reaches and their calls
@@ -323,12 +327,13 @@ int netdev_seen_count(void)
 /** The fixed attributes used by these rows, as synthfs.c numbers them. */
 const char *sysfs_attr(int node, int n)
 {
-    int count = node == SYSFS_THP            ? 6
-                : node == SYSFS_NODE         ? 5
-                : node == SYSFS_NODE0        ? 3
-                : node == SYSFS_CLOCKSOURCE0 ? 2
-                : node == SYSFS_DMI_ID       ? 23
-                                             : 0;
+    int count = node == SYSFS_THP               ? 6
+                : node == SYSFS_CPU_CACHE_INDEX ? 10
+                : node == SYSFS_NODE            ? 5
+                : node == SYSFS_NODE0           ? 3
+                : node == SYSFS_CLOCKSOURCE0    ? 2
+                : node == SYSFS_DMI_ID          ? 23
+                                                : 0;
 
     if (n >= 0 && n < count) {
         return "attribute";
@@ -393,7 +398,7 @@ static process_t process, thread, stranger;
 static struct tgroup group, other_group;
 /* The directory the reader runs in, which is not the reaped process's. */
 static page_dir_t reader_dir;
-struct percpu cpu_table[NR_CPUS] = {{.current = &process, .space = &reader_dir}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &process, .space = &reader_dir, .online = 1}};
 static fd_table_t table;
 static fd_entry_t entries[1];
 static int refuse, allocations, failures;
