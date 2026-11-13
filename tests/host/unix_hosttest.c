@@ -8,6 +8,10 @@
  * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/fs/sleeplock.c tests/host/compat/spin_none.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-cflags: -DTICK_HZ=1000
+ *
+ * The time limit rows count their waits in ticks of a millisecond, so the
+ * kernel's sources are built at 1000 ticks a second.
  *
  * `ipc/unix.c`, `ipc/pipe.c`, the mutex and the checked user copy are the
  * kernel's, included whole to reach their static state. The descriptor table
@@ -177,6 +181,9 @@ struct sockfile {
 };
 
 static process_t self;
+/* The sibling: another thread of `self`'s process, the current thread while
+ * its call runs, so that a lock records which of the two holds it. */
+static process_t sibling;
 /* The address space of `self`, which the copies ask for and never read. */
 static struct mm model_mm;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
@@ -360,7 +367,9 @@ static void run_sibling(void (**slot)(void))
         return;
     }
     ran++;
+    cpu_table[0].current = &sibling;
     parked = !park_run(call);
+    cpu_table[0].current = &self;
 }
 
 /**
@@ -374,8 +383,28 @@ static int wake_sibling(void)
     if (!parked || parked_wakes == 0) {
         return 0;
     }
+    cpu_table[0].current = &sibling;
     parked = !park_resume();
+    cpu_table[0].current = &self;
     return !parked;
+}
+
+/** Take `m` as the sibling, which then holds it while the row's call runs. */
+static void sibling_lock(struct mutex *m)
+{
+    cpu_table[0].current = &sibling;
+    mutex_lock(m);
+    cpu_table[0].current = &self;
+}
+
+/** Give back `m`, which the sibling holds (`sibling_lock`). */
+static void sibling_unlock(struct mutex *m)
+{
+    process_t *was = current_proc;
+
+    cpu_table[0].current = &sibling;
+    mutex_unlock(m);
+    cpu_table[0].current = was;
 }
 
 /** Park the sibling in its wait on `wq`, until a row resumes it. */
@@ -748,7 +777,7 @@ int signal_pending(void)
     if (ignore_signal) {
         ignore_signal = 0;
         if (signal_unlock) {
-            mutex_unlock(signal_unlock);
+            sibling_unlock(signal_unlock);
             signal_unlock = NULL;
         }
         return 0;
@@ -969,8 +998,10 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
 /**
  * Release what a descriptor holds, as `fd_release_objects` does for the
  * kinds the rows make: a file is freed by the release of its last holder,
- * which counts the holders and frees it under the root's lock, and a socket
- * or a pipe end is closed with its description's last descriptor.
+ * which counts the holders and frees it under the root's lock, a socket or
+ * a pipe end is closed with its description's last descriptor, and the
+ * descriptor's reference to its description goes. The caller clears the
+ * slot without dropping the description again.
  */
 void fd_release_backing(fd_entry_t *e)
 {
@@ -990,6 +1021,7 @@ void fd_release_backing(fd_entry_t *e)
     if (e->ops && e->ops->close && e->ofd && e->ofd->refcount == 1) {
         e->ops->close(e);
     }
+    fd_ofd_unref(e->ofd);
 }
 
 /** The next socket inode number, from 1. */
@@ -1178,7 +1210,7 @@ static int32_t do_close(int fd)
     }
     e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
     fd_release_backing(e);
-    fd_free(&shared, fd);
+    k_memset(e, 0, sizeof(*e));
     return 0;
 }
 
@@ -1326,9 +1358,16 @@ static void setup(void)
  */
 static void finish_sibling(const char *name)
 {
-    if (park_waiting() && !park_resume()) {
-        dprintf(2, "unix-hosttest: fail: the %s row leaves a sibling asleep\n", name);
-        exit(1);
+    int ended;
+
+    if (park_waiting()) {
+        cpu_table[0].current = &sibling;
+        ended = park_resume();
+        cpu_table[0].current = &self;
+        if (!ended) {
+            dprintf(2, "unix-hosttest: fail: the %s row leaves a sibling asleep\n", name);
+            exit(1);
+        }
     }
     parked = 0;
 }
@@ -1800,14 +1839,16 @@ static void transit_row(void)
     f[0] = open_orphan(1);
     f[1] = open_orphan(2);
     check(f[0] == 2 && f[1] == 3 && send_rights(0, f, 2) == 1, "transit: two descriptors sent");
-    check(do_close(2) == 0 && freed[1] == 0,
+    check(do_close(3) == 0 && freed[2] == 0,
           "a file whose descriptor is queued in flight outlives the close of its last descriptor");
-    reserved[0] = 3;
+    /* The receive closes the descriptors it has no room for from the last,
+     * so the second file's release sleeps while the first is in flight. */
+    reserved[0] = 2;
     release_sibling = close_and_look;
     rc = recv_rights(1, 0, 0);
-    check(ran == 1 && seen[1] == 1,
+    check(ran == 1 && seen[2] == 1,
           "the release of a descriptor in flight that is its file's last holder frees the file");
-    check(ran == 1 && sibling_rc[0] == 0 && seen[2] == 0,
+    check(ran == 1 && sibling_rc[0] == 0 && seen[1] == 0,
           "a file is not freed by the close of its last descriptor while a receive closes its "
           "descriptor in flight with another");
     check(rc == 1 && (recv_flags() & MSG_CTRUNC) && freed[1] == 1 && freed[2] == 1,
@@ -2098,17 +2139,17 @@ static void mutex_signal_row(void)
 
     setup();
     mutex_init(&m, "signal row");
-    mutex_lock(&m);
+    sibling_lock(&m);
     check_signal_context = 1;
     check(mutex_lock_interruptible(&m) == -EINTR && signal_checks == 1 && signal_without_big == 0 &&
               model_big == 0,
           "mutex signal: a pending signal is judged under the big lock");
-    mutex_unlock(&m);
+    sibling_unlock(&m);
     end_row("mutex signal");
 
     setup();
     mutex_init(&m, "ignored row");
-    mutex_lock(&m);
+    sibling_lock(&m);
     check_signal_context = ignore_signal = 1;
     signal_unlock = &m;
     check(mutex_lock_interruptible(&m) == 0 && signal_checks == 1 && signal_without_big == 0 &&
@@ -2241,12 +2282,12 @@ static void timeo_signal_row(void)
     setup();
     check(unix_socket(SOCK_STREAM, 0, 0) == 0, "timeo: a stream socket");
     s = sock_at(0);
-    mutex_lock(&s->bindlock);
+    sibling_lock(&s->bindlock);
     len = path_at(AT(1, 0), "/tmp/held");
     rc = unix_bind(fd_at(0), AT(1, 0), len);
     check(rc == -EINTR && current_proc->restart_kind == RESTART_NONE,
           "a signal in the wait for the bind lock is EINTR, never restarted");
-    mutex_unlock(&s->bindlock);
+    sibling_unlock(&s->bindlock);
     end_row("timeo bind lock");
 }
 
@@ -2375,6 +2416,7 @@ int main(int argc, char **argv)
     self.tgid = 100;
     self.ruid = self.euid = self.suid = 1000;
     self.rgid = self.egid = self.sgid = 1000;
+    sibling = self;
     if (argc == 2 && same(argv[1], "vector-write")) {
         vector_write_row();
         dprintf(1, "unix-hosttest: result: vector-write: %d failures\n", failures);
