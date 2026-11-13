@@ -266,7 +266,8 @@ static void plant_key_names(struct drive *d)
  * Print NAMESKEPT=, NAMESSTORED= and ESCAPEKEPT=, each 0 when the names and the
  * link that plant_key_names put in /srv/alice/.ssh are on the root, are in the
  * archive's keys/2004.tar, and the recovery system's /tmp/escape/.ssh is
- * still there.
+ * still there. The archive is unpacked in the tmpfs at /dev/shm, as
+ * rach2-install restores it, since the recovery root takes no links.
  */
 static void check_key_names(struct drive *d)
 {
@@ -275,8 +276,8 @@ static void check_key_names(struct drive *d)
                "AUTHORIZED_KEYS && grep -qx long ABCDEFGHI && grep -qx alias 'ABCDEF~1' && test "
                "\"$(readlink link)\" = authorized_keys; echo NAMES\"\"KEPT=$?; cd /; umount /r");
     drive_send(d, "%s",
-               "mkdir -p /a /tmp/stored && mount -t vfat /dev/disk0p2 /a && tar -xf "
-               "/a/rach2-config-a/keys/2004.tar -C /tmp/stored && cd /tmp/stored && cmp -s "
+               "mkdir -p /a /dev/shm/stored && mount -t vfat /dev/disk0p2 /a && tar -xf "
+               "/a/rach2-config-a/keys/2004.tar -C /dev/shm/stored && cd /dev/shm/stored && cmp -s "
                "authorized_keys AUTHORIZED_KEYS && grep -qx long ABCDEFGHI && grep -qx alias "
                "'ABCDEF~1' && test \"$(readlink link)\" = authorized_keys; echo "
                "NAMES\"\"STORED=$?; cd /; umount /a");
