@@ -229,6 +229,17 @@ int bcache_write_unflushed(struct bbuf *b);
 int bcache_sync(block_device_t *dev);
 
 /**
+ * Flush `dev`'s own cache to the medium (`block_flush`), and record a
+ * failure as a failed write is: the device marked failed, and its mounts made
+ * read-only with the error recorded once for each file system's syncs to
+ * report (`vfs_device_failed`), as Linux's `mapping_set_error` records a
+ * failed write-back. Every flush a file system makes goes through it, so
+ * that a failure its own operation meets reaches the descriptions that did
+ * not make it. The caller holds no buffer of the device. 0 or -errno.
+ */
+int bcache_flush(block_device_t *dev);
+
+/**
  * Name the blocks of `dev` that point at others, such as ext2's inode
  * tables, which a sync writes after every other: `last(arg, blk)` is 1 for
  * such a block, and NULL names none. `names(arg, blk, owner)` is 1 when that

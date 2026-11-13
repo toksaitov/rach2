@@ -1820,7 +1820,7 @@ static int sync_disk(struct ex_mount *em)
 {
     int rc = bcache_sync(em->dev);
 
-    return rc != 0 ? rc : block_flush(em->dev);
+    return rc != 0 ? rc : bcache_flush(em->dev);
 }
 
 /** The owner of a dirty data block of the file whose first cluster is `first`:
@@ -1846,7 +1846,7 @@ static int sync_file(struct ex_mount *em, uint32_t first)
     if (rc == 0) {
         rc = bcache_sync_owned(em->dev, FAT_OWNER_SHARED);
     }
-    return rc != 0 ? rc : block_flush(em->dev);
+    return rc != 0 ? rc : bcache_flush(em->dev);
 }
 
 /**
@@ -2006,7 +2006,7 @@ static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t l
     uint64_t have = nofat ? clusters_of(em, length) : 0;
     int rc;
 
-    rc = block_flush(em->dev);
+    rc = bcache_flush(em->dev);
     if (rc != 0) {
         return rc;
     }
@@ -2265,7 +2265,7 @@ static int set_store(struct ex_mount *em, struct ex_node *d, uint32_t index, uin
         }
     }
     if (spilled) {
-        rc = block_flush(em->dev);
+        rc = bcache_flush(em->dev);
         if (rc != 0) {
             return rc;
         }
@@ -2704,7 +2704,7 @@ static int set_retire(struct ex_mount *em, struct ex_node *d, uint32_t index, ui
         return rc;
     }
     if ((index + count - 1) / per_sector != index / per_sector) {
-        rc = block_flush(em->dev);
+        rc = bcache_flush(em->dev);
         if (rc != 0) {
             return rc;
         }
@@ -3251,7 +3251,7 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
     }
     rc = set_retire(em, od, src.index, src.entries);
     if (rc == 0) {
-        rc = block_flush(em->dev);
+        rc = bcache_flush(em->dev);
     }
     if (rc != 0) {
         goto out;
@@ -3478,7 +3478,7 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
             joined = rc == 0;
         }
         if (rc == 0) {
-            rc = block_flush(em->dev);
+            rc = bcache_flush(em->dev);
         }
         if (rc != 0) {
             goto undo;
@@ -3584,7 +3584,7 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                     rc = fat_set(em, tail, run_first, 1);
                 }
                 if (rc == 0) {
-                    rc = block_flush(em->dev);
+                    rc = bcache_flush(em->dev);
                     if (rc != 0) {
                         (void)fat_set(em, tail, EX_EOC, 1);
                     }
@@ -3632,7 +3632,7 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         stamp_mtime(n);
         rc = node_publish(em, n);
         if (rc == 0) {
-            rc = block_flush(em->dev);
+            rc = bcache_flush(em->dev);
         }
         if (rc != 0) {
             goto out;
