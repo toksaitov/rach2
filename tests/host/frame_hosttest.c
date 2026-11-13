@@ -537,9 +537,9 @@ static void uefi(void)
 /**
  * The bound FRAME_MAP_RANGES is sized for: a map of BOOT_MMAP_MAX disjoint
  * usable entries keeps every one, and the reservations that split a range,
- * one for each of BOOT_MODULE_MAX modules, one for the GPU's stolen memory
- * and one for the frame table, all fit; one split more is refused and
- * leaves the map as it was.
+ * one for each of BOOT_MODULE_MAX modules, one for the GPU's stolen memory,
+ * one for ramoops's region and one for the frame table, all fit; one split
+ * more is refused and leaves the map as it was.
  */
 static void ranges_bound(void)
 {
@@ -554,7 +554,7 @@ static void ranges_bound(void)
     }
     CHECK(frame_map_build(&m, map, n, 0, REACH_X86_64) == 0);
     CHECK(m.count == BOOT_MMAP_MAX);
-    for (i = 0; i < BOOT_MODULE_MAX + 2; i++) {
+    for (i = 0; i < BOOT_MODULE_MAX + 3; i++) {
         CHECK(frame_map_reserve(&m, MIB(1 + 4 * i) + KIB(512), MIB(2 + 4 * i)) == 0);
     }
     CHECK(m.count == FRAME_MAP_RANGES);
