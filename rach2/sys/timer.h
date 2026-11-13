@@ -8,7 +8,9 @@
 #include "lib/kint.h"
 
 /* The kernel's tick rate, in ticks a second, and the tick's length. */
+#ifndef TICK_HZ
 #define TICK_HZ 250
+#endif
 #define TICK_NS (1000000000u / TICK_HZ)
 #define TICK_US (1000000u / TICK_HZ)
 
@@ -18,7 +20,8 @@
 #define USER_HZ 100
 
 /* Milliseconds as whole ticks, rounded up without overflowing the product. */
-#define MS_TO_TICKS(ms) ((uint32_t)(ms) / 4u + ((uint32_t)(ms) % 4u != 0))
+#define MS_TO_TICKS(ms) \
+    ((uint32_t)(ms) / 1000u * TICK_HZ + ((uint32_t)(ms) % 1000u * TICK_HZ + 999u) / 1000u)
 
 /* The ticks of the monotonic clock since the timer started, counted by the
  * boot processor's timer handler (kernel.c): the raw ticks each interrupt

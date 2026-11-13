@@ -4,7 +4,7 @@
  * host-deps: rach2/sys/arch/x86/cmos.c rach2/sys/clock.c
  * host-deps: rach2/sys/arch/x86/pit.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/ntp.c rach2/sys/tick.c
- * host-cflags: -DRTC_HOST_TEST -DRACH2_HOST_CPU
+ * host-cflags: -DRTC_HOST_TEST -DRACH2_HOST_CPU -DTICK_HZ=1000
  *
  * `rtc_decode`, `rtc_snapshots_agree` and `rtc_time_from_anchor` are the whole
  * of the clock's arithmetic and they touch no hardware, so they run natively

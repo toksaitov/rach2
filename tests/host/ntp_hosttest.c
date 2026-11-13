@@ -3,6 +3,7 @@
  * seconds.
  *
  * host-deps: rach2/sys/ntp.c rach2/sys/tick.c
+ * host-cflags: -DTICK_HZ=1000
  * host-deps: tests/host/compat/spinlock_host.c
  *
  * The test includes clock.c whole, so that each row starts its clocks from
@@ -52,7 +53,7 @@
 
 #include "clock.c"
 
-#if TICK_HZ != 1000
+#if TICK_HZ != 1000 && !defined(NTP250_MODEL)
 #error "the literal answers are for TICK_HZ 1000"
 #endif
 
@@ -191,9 +192,10 @@ static void pass(int n)
         m = mono_now();
         r = real_now();
         leap = rtc_step_count() != steps ? r - m - (last_real - last_mono) : 0;
-        if (m - last_mono < 968000 || m - last_mono > 1032000 ||
+        if (m - last_mono < TICK_NS * 968u / 1000u || m - last_mono > TICK_NS * 1032u / 1000u ||
             r - last_real - leap != m - last_mono) {
-            CHECK(m - last_mono >= 968000 && m - last_mono <= 1032000);
+            CHECK(m - last_mono >= TICK_NS * 968u / 1000u &&
+                  m - last_mono <= TICK_NS * 1032u / 1000u);
             CHECK(r - last_real - leap == m - last_mono);
             printf("  at %lld ns: the clock moved %lld ns, real time %lld ns\n", (long long)m,
                    (long long)(m - last_mono), (long long)(r - last_real));
@@ -210,7 +212,7 @@ static void pass(int n)
 static int64_t restart(int64_t sec)
 {
     rtc_forget_floors();
-    kernel_ticks = 100000;
+    kernel_ticks = 100u * TICK_HZ;
     kernel_uptime_seconds = 100;
     kernel_second_ticks = 0;
     rtc_part = 0;
