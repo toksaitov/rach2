@@ -238,12 +238,13 @@ static void node_final(struct ext2_mount *em, struct ext2_node *n);
  * cache (`n->unstored`) on a mount that writes, go through `node_final`,
  * whose free frees or stores the inode before the node goes, as Linux's
  * `iput_final` writes a dirty inode before it evicts it (fs/inode.c:1861);
- * any other node is dropped at once. A node whose load failed, or a new
- * inode's that was never made, is not live, and its mark names nothing.
+ * any other node is dropped at once, a fenced one (`n->fenced`) among them,
+ * which no store may write. A node whose load failed, or a new inode's that
+ * was never made, is not live, and its mark names nothing.
  */
 static void node_last(struct ext2_mount *em, struct ext2_node *n)
 {
-    if (n->unlinked || (n->unstored && n->state == N_LIVE && ext2_writes(em))) {
+    if (n->unlinked || (n->unstored && !n->fenced && n->state == N_LIVE && ext2_writes(em))) {
         node_final(em, n);
     } else {
         node_drop(em, n);
@@ -1897,6 +1898,14 @@ int ext2_em_write_out(struct vfs_mount *mnt)
 
 static void em_finish_node(struct ext2_mount *em, struct ext2_node *n);
 
+/** Whether node `n` owes a store: it has its mark (`n->unstored`), or it is
+ * fenced (`n->fenced`), whose store is refused, so that a sync, the valid bit
+ * and a remount's check count it as one that failed. */
+static int node_owes(const struct ext2_node *n)
+{
+    return n->unstored || n->fenced;
+}
+
 /**
  * Store node `n`, which the caller holds, when it has its mark
  * (`n->unstored`) and the mount still writes, under the node's lock and
@@ -1913,11 +1922,11 @@ int ext2_node_write_marked(struct ext2_mount *em, struct ext2_node *n)
 {
     int rc = 0;
 
-    if (!n->unstored) {
+    if (!node_owes(n)) {
         return 0;
     }
     em_enter_node(em, n);
-    if (n->unstored && ext2_writes(em)) {
+    if (node_owes(n) && ext2_writes(em)) {
         rc = ext2_inode_store(em, n);
     }
     em_finish_node(em, n);
@@ -1935,14 +1944,14 @@ int ext2_node_write_marked(struct ext2_mount *em, struct ext2_node *n)
  */
 static int node_store_owned(struct ext2_mount *em, struct ext2_node *n)
 {
-    return n->unstored ? ext2_inode_store(em, n) : 0;
+    return node_owes(n) ? ext2_inode_store(em, n) : 0;
 }
 
-/** The first node on the mount's list from `n` on that is live and marked
- * (`n->unstored`), or NULL. Under the big lock. */
+/** The first node on the mount's list from `n` on that is live and owes a
+ * store (`node_owes`), or NULL. Under the big lock. */
 static struct ext2_node *marked_from(struct ext2_node *n)
 {
-    while (n && (n->state != N_LIVE || !n->unstored)) {
+    while (n && (n->state != N_LIVE || !node_owes(n))) {
         n = n->next;
     }
     return n;
@@ -2273,7 +2282,7 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
 
 /**
  * Refuse a check of the volume while a node of the mount, live or held back,
- * keeps its mark (`n->unstored`): the check reads the disk, which lacks the
+ * owes a store (`node_owes`): the check reads the disk, which lacks the
  * node's change, and would count the blocks it names lost. Logged as `ext2:
  * remount: inode N: not stored before the check`. 0, or -EIO. The big lock is
  * taken for the walk.
@@ -2283,7 +2292,7 @@ static int nodes_unstored(struct ext2_mount *em)
     int big = ext2_big_enter();
     struct ext2_node *n = em->nodes;
 
-    while (n && !n->unstored) {
+    while (n && !node_owes(n)) {
         n = n->next;
     }
     if (n) {
@@ -3098,9 +3107,13 @@ static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, in
  * to come, which owes it, clears it, and the next settle stores the node
  * again after a failed one. A slot whose fields but the times and the
  * deletion time would change on a node that had no mark, and that the batch
- * does not hold, is a change made without `ext2_node_dirty`, and panics, as
- * `ext2_assert_node_locked` does for a change outside the lock, so that any
- * test that runs the operation finds the missed site.
+ * does not hold, is a change made without `ext2_node_dirty`: it is logged as
+ * `ext2: inode N: changed but not marked`, reported to the mount's policy
+ * (`ext2_mark_error`) and -EIO before anything is written, and the node is
+ * fenced (`n->fenced`): every later store of it is -EIO, a write to it is
+ * refused, and it counts as one that failed for a sync, the valid bit and a
+ * remount's check, until its last put drops it. The mark is not set again, so
+ * that no retry writes what memory holds. A fenced node is -EIO at once.
  */
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how)
 {
@@ -3122,8 +3135,12 @@ static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, in
     uint8_t raw[256], was[EXT2_LARGE];
     uint64_t at;
     uint32_t len = em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD;
-    int rc = ext2_slot_at(em, READ_SLOT, n->ino, &at), changed = fresh;
+    int rc, changed = fresh;
 
+    if (n->fenced) {
+        return -EIO;
+    }
+    rc = ext2_slot_at(em, READ_SLOT, n->ino, &at);
     if (rc != 0) {
         return rc;
     }
@@ -3141,7 +3158,9 @@ static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, in
         if (changed && !marked && !ext2_writeback_holds(em, n) &&
             inode_field_changed(was, raw, len)) {
             klog(KLOG_CRIT, "ext2", "inode %d: changed but not marked", (int)n->ino);
-            k_panic("ext2: a change of an inode without its mark");
+            n->fenced = 1;
+            ext2_mark_error(em);
+            return -EIO;
         }
     }
     if ((n->mode & S_IFMT_) == S_IFREG_ && n->size >= 0x80000000u &&
