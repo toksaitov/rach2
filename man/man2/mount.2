@@ -117,7 +117,7 @@ the call's error, and the mount stays writable with the pages kept for a
 later write.
 A mount is not made writable on a device that refuses writes or has failed
 one, or on ext2 when the volume has a feature the driver reads but does
-not write, which mounted it read-only,
+not write, which mounted it read-only, or when the volume's check stops,
 .Er EROFS .
 With
 .Dv MS_BIND
@@ -486,12 +486,18 @@ before repair writes begin.
 A read-only mount skips repair.
 .Pp
 An ext2 volume with its valid bit clear or error bit set is checked
-before a writable mount or remount, which goes on writable whatever the
-check finds, as on Linux.
-A structural fault sets the error bit, and a check stopped at a limit of
-its own leaves the volume's state as it was; either way the kernel logs
-that running e2fsck is recommended, and the unmount does not mark the
-volume valid.
+before a writable mount or remount.
+A check that ends repairs the bits of blocks and inodes files still name,
+keeps what only e2fsck can repair, and leaves the mount writable.
+A check that stops, at a structural fault, which sets the error bit, or at
+a limit of its own, which leaves the volume's state as it was, leaves the
+mount read-only and logs
+.Ql ext2: SOURCE: read-only with errors, run e2fsck
+or
+.Ql ext2: SOURCE: read-only unchecked, run e2fsck ;
+a remount writable checks the volume again and is
+.Er EROFS
+while the check still stops.
 A fault an ext2 mount meets later sets the error bit on a writable
 mount and then, as Linux's
 .Ql errors=
