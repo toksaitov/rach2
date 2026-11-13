@@ -171,6 +171,10 @@
 #define EXT2_MODE_RW      1
 #define EXT2_MODE_STOPPED 2
 
+/* The bitmaps of a group, by the byte of its descriptor that names each. */
+#define EXT2_BLOCK_BITMAP 0
+#define EXT2_INODE_BITMAP 4
+
 /* A time of an inode: seconds, and nanoseconds where the inode keeps them. */
 struct ext2_time {
     int64_t sec;
@@ -406,8 +410,11 @@ struct ext2_mount {
     const char *readonly_why;
     /* The file-write batch, set up when the mount becomes writable. */
     struct ext2_writeback *wb;
-    uint32_t alloc_hint;     /* the block after the last one given out */
-    uint8_t *gd;             /* the group descriptors, `groups * 32` bytes, from the heap */
+    uint32_t alloc_hint; /* the block after the last one given out */
+    /* The group descriptors, `groups * 32` bytes from the heap, and after
+     * them a byte per group, set once its block bitmap has been checked
+     * (`bitmap_check` in ext2_alloc.c). */
+    uint8_t *gd;
     struct ext2_node *nodes; /* the nodes in memory, from the heap, linked both ways */
     /* The same nodes by inode number: `node_buckets` chains, a power of
      * two, in `node_first` until the nodes outnumber them and in a table
@@ -637,10 +644,10 @@ int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const
 
 /* ext2_alloc.c */
 int ext2_gd_store(struct ext2_mount *em, uint32_t g);
-int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
+int ext2_bit_first_clear(struct ext2_mount *em, uint32_t g, int which, uint32_t from,
                          uint32_t count, uint32_t *out);
 int ext2_may_use_reserved(void);
-int ext2_block_refused(struct ext2_mount *em, uint32_t bitmap, uint32_t bit, uint32_t b);
+int ext2_block_refused(struct ext2_mount *em, uint32_t g, uint32_t bit);
 int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n);
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir);
 int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b);

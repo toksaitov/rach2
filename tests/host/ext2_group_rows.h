@@ -315,7 +315,8 @@ static void group_free_row(void)
     bitmap = ext2_le32(em->gd + GROUP_MEET * 32);
     base = em->first_data + GROUP_MEET * em->bpg;
     check(OPS->mkdir(&mnt, mnt.root, "gb", 0755) == 0 &&
-              ext2_bit_first_clear(em, bitmap, 0, em->bpg, &first) == 0 && first < em->bpg,
+              ext2_bit_first_clear(em, GROUP_MEET, EXT2_BLOCK_BITMAP, 0, em->bpg, &first) == 0 &&
+              first < em->bpg,
           "a directory for process B, and the next group's first free block");
     /* The file's last block is bit first + k - 1, the pending piece's
      * first + k and B's first + k + 1: the first and the last in one byte. */
