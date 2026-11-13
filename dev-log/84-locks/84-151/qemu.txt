@@ -1,0 +1,192 @@
+## linux-.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.273 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.276 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.274 us a call
+wakemusl: sched_yield, sibling idle: 0.342 us a call
+wakemusl: sched_yield, sibling spins: 0.343 us a call
+wakemusl: sched_yield, sibling yields: 0.352 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.910 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.964 us, median 6.122, p90 8.136, p99 16.381; waker's call 4.432 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 7.245 us, median 6.452, p90 8.627, p99 17.513; waker's call 4.756 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 7.394 us, median 6.502, p90 8.766, p99 17.102; waker's call 4.859 us
+wakemusl: futex hand-off and back after 50 us: 13.227 us a round
+WAKEMUSL OK
+## linuxnm-.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.091 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.092 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.092 us a call
+wakemusl: sched_yield, sibling idle: 0.080 us a call
+wakemusl: sched_yield, sibling spins: 0.080 us a call
+wakemusl: sched_yield, sibling yields: 0.080 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.264 us a call
+wakemusl: futex wake after 50 us: wake to run mean 5.998 us, median 5.150, p90 7.073, p99 15.028; waker's call 4.153 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.212 us, median 5.300, p90 7.544, p99 15.720; waker's call 4.318 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.348 us, median 5.370, p90 9.248, p99 17.664; waker's call 4.425 us
+wakemusl: futex hand-off and back after 50 us: 11.498 us a round
+WAKEMUSL OK
+## rach2-.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.068 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.068 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.069 us a call
+wakemusl: sched_yield, sibling idle: 0.071 us a call
+wakemusl: sched_yield, sibling spins: 0.071 us a call
+wakemusl: sched_yield, sibling yields: 0.148 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.206 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.321 us, median 5.581, p90 7.665, p99 16.040; waker's call 4.626 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.339 us, median 5.640, p90 8.035, p99 16.471; waker's call 4.742 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.427 us, median 5.650, p90 8.015, p99 16.090; waker's call 4.772 us
+wakemusl: futex hand-off and back after 50 us: 11.996 us a round
+WAKEMUSL OK
+## linux-load.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds, under load
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.256 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.261 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.257 us a call
+wakemusl: sched_yield, sibling idle: 0.330 us a call
+wakemusl: sched_yield, sibling spins: 0.330 us a call
+wakemusl: sched_yield, sibling yields: 0.324 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.870 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.607 us, median 5.872, p90 7.765, p99 15.410; waker's call 4.123 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 7.067 us, median 6.312, p90 8.276, p99 15.590; waker's call 4.549 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.918 us, median 6.252, p90 8.386, p99 15.119; waker's call 4.570 us
+wakemusl: futex hand-off and back after 50 us: 12.693 us a round
+wakemusl: load: 1067769 hand-offs, 4.929 us each
+WAKEMUSL OK
+## linuxnm-load.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds, under load
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.087 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.087 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.089 us a call
+wakemusl: sched_yield, sibling idle: 0.076 us a call
+wakemusl: sched_yield, sibling spins: 0.076 us a call
+wakemusl: sched_yield, sibling yields: 0.078 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.255 us a call
+wakemusl: futex wake after 50 us: wake to run mean 5.658 us, median 4.979, p90 6.743, p99 14.297; waker's call 3.999 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 5.764 us, median 5.090, p90 6.953, p99 14.317; waker's call 4.080 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 5.941 us, median 5.130, p90 7.284, p99 14.257; waker's call 4.133 us
+wakemusl: futex hand-off and back after 50 us: 10.799 us a round
+wakemusl: load: 771758 hand-offs, 6.182 us each
+WAKEMUSL OK
+## rach2y-.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.065 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.065 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.065 us a call
+wakemusl: sched_yield, sibling idle: 0.039 us a call
+wakemusl: sched_yield, sibling spins: 0.038 us a call
+wakemusl: sched_yield, sibling yields: 0.039 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.172 us a call
+wakemusl: futex wake after 50 us: wake to run mean 5.892 us, median 5.220, p90 7.144, p99 13.706; waker's call 4.161 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 5.925 us, median 5.220, p90 7.484, p99 13.495; waker's call 4.231 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 5.826 us, median 5.210, p90 7.444, p99 13.996; waker's call 4.220 us
+wakemusl: futex hand-off and back after 50 us: 11.625 us a round
+WAKEMUSL OK
+## rach2y-load.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds, under load
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.066 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.068 us a call
+wakemusl: sched_yield, sibling idle: 0.042 us a call
+wakemusl: sched_yield, sibling spins: 0.043 us a call
+wakemusl: sched_yield, sibling yields: 0.043 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.182 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.111 us, median 5.370, p90 7.384, p99 14.317; waker's call 4.310 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.326 us, median 5.500, p90 7.775, p99 15.790; waker's call 4.542 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.334 us, median 5.541, p90 7.935, p99 17.463; waker's call 4.530 us
+wakemusl: futex hand-off and back after 50 us: 11.949 us a round
+wakemusl: load: 4925847 hand-offs, 0.981 us each
+WAKEMUSL OK
+## rach2c.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 5000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.068 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.067 us a call
+wakemusl: sched_yield, sibling idle: 0.040 us a call
+wakemusl: sched_yield, sibling spins: 0.040 us a call
+wakemusl: sched_yield, sibling yields: 0.040 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.181 us a call
+wakemusl: futex wake after 50 us: wake to run mean 7.040 us, median 5.721, p90 8.015, p99 15.860; waker's call 5.078 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.401 us, median 5.581, p90 7.905, p99 17.563; waker's call 4.428 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 7.109 us, median 5.741, p90 8.506, p99 17.543; waker's call 5.351 us
+wakemusl: futex hand-off and back after 50 us: 11.500 us a round
+calls: kind number calls wall_us holds held_us wait_us
+calls: syscall 0 10000 0 5000 413 318
+calls: syscall 14 4 0 0 0 0
+calls: syscall 20 0 0 1 14 0
+calls: syscall 60 0 0 4 29 0
+calls: syscall 157 4 0 0 0 0
+calls: syscall 202 15002 0 0 0 0
+calls: syscall 441 10000 0 0 0 0
+calls: vector 14 8 0 0 0 0
+calls: vector 32 6 0 0 0 0
+calls: slept 60 0 0 1 1 0
+calls: kthread 0 0 0 1 1 0 idle
+calls: ioctl_lost 0
+calls: thread wakewaiter
+calls: switch_lost 0
+calls: block syscall 60 5
+calls: block syscall 202 9998
+calls: block syscall 441 9998
+WAKEMUSL OK
+## rach2e-.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.068 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.068 us a call
+wakemusl: sched_yield, sibling idle: 0.040 us a call
+wakemusl: sched_yield, sibling spins: 0.040 us a call
+wakemusl: sched_yield, sibling yields: 0.040 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.189 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.397 us, median 5.671, p90 8.095, p99 15.790; waker's call 5.190 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.397 us, median 5.671, p90 8.316, p99 15.469; waker's call 5.184 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.356 us, median 5.721, p90 8.436, p99 15.720; waker's call 5.309 us
+wakemusl: futex hand-off and back after 50 us: 11.625 us a round
+WAKEMUSL OK
+## rach2e-load.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds, under load
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.069 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.069 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.069 us a call
+wakemusl: sched_yield, sibling idle: 0.042 us a call
+wakemusl: sched_yield, sibling spins: 0.042 us a call
+wakemusl: sched_yield, sibling yields: 0.042 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.181 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.323 us, median 5.590, p90 7.544, p99 15.189; waker's call 4.436 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.267 us, median 5.630, p90 7.805, p99 15.399; waker's call 4.542 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.333 us, median 5.671, p90 7.935, p99 15.640; waker's call 4.606 us
+wakemusl: futex hand-off and back after 50 us: 12.134 us a round
+wakemusl: load: 4739657 hand-offs, 1.021 us each
+WAKEMUSL OK
+## rach2ec.out
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 5000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.067 us a call
+wakemusl: sched_yield, sibling idle: 0.040 us a call
+wakemusl: sched_yield, sibling spins: 0.040 us a call
+wakemusl: sched_yield, sibling yields: 0.041 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.182 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.542 us, median 5.320, p90 7.374, p99 14.448; waker's call 4.298 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.563 us, median 5.370, p90 7.595, p99 13.636; waker's call 4.211 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.766 us, median 5.571, p90 7.905, p99 16.732; waker's call 4.582 us
+wakemusl: futex hand-off and back after 50 us: 11.739 us a round
+calls: kind number calls wall_us holds held_us wait_us
+calls: syscall 0 10000 0 0 0 0
+calls: syscall 14 4 0 0 0 0
+calls: syscall 20 0 0 1 16 0
+calls: syscall 60 0 0 4 27 0
+calls: syscall 157 4 0 0 0 0
+calls: syscall 202 15002 0 0 0 0
+calls: syscall 441 10000 0 0 0 0
+calls: vector 14 8 0 0 0 0
+calls: vector 32 13 0 1 0 0
+calls: ioctl_lost 0
+calls: thread wakewaiter
+calls: switch_lost 0
+calls: block syscall 60 4
+calls: block syscall 202 9998
+calls: block syscall 441 9998
+WAKEMUSL OK
