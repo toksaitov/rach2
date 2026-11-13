@@ -362,13 +362,13 @@ leftovers()
         keep="$keep -k $c"
     done
     out=$({ cat "$here/leftovers.pl"; echo __END__; printf '%s\n' "$text"; } |
-        perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+        perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - ${1:-} -l -m $master$keep ${age:-86400} $HOMES" 2>&1)
     rc=$?
     printf '%s\n' "$out" | sed "s/^/$TESTING: /"
     [ "$rc" -eq 0 ] || echo "$TESTING: leftovers: failed with status $rc"
     out=$({ cat "$here/leftovers.pl"; echo __END__; printf '%s\n' "$text"; } |
-        perl -e 'alarm shift; exec @ARGV' 600 perl - ${1:+"$1"} -m "$master" \
+        perl "$(dirname "$0")/bound.pl" 600 perl - ${1:+"$1"} -m "$master" \
         -r "$(git rev-parse --absolute-git-dir)" "${age:-86400}" "$HOME/Desktop" 2>&1)
     rc=$?
     printf '%s\n' "$out" | sed "s/^/$(hostname -s): /"
@@ -397,7 +397,7 @@ store_expire()
     script=$(sh tools/etude/provision_version.sh -r origin/master -s) ||
         { echo "$TESTING: store: etude's build script cannot be made"; return 1; }
     nonce=$(printf '%s\n' "$script" | sed -n 's/^ETUDE_NONCE=//p')
-    out=$(printf '%s\n' "$script" | perl -e 'alarm shift; exec @ARGV' 600 \
+    out=$(printf '%s\n' "$script" | perl "$(dirname "$0")/bound.pl" 600 \
         ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         "MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s" 2>&1)
     dir=$(printf '%s\n' "$out" | sed -n "s/^@etude-version $nonce [a-z]* [0-9a-f]* //p")
@@ -407,7 +407,7 @@ store_expire()
             echo "$TESTING: store: etude was not built: $(printf '%s\n' "$out" | tail -n 1)"
             return 1 ;;
     esac
-    perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+    perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         "MSYS_NO_PATHCONV=1 wsl.exe -u root -- $dir/bin/etude build -s $STORE -e ${1:-$STORE_DAYS}" \
         < /dev/null 2>&1 | sed "s/^/$TESTING: /"
 }

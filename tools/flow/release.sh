@@ -1287,7 +1287,7 @@ reap()
 
 tssh()
 {
-    ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 testing "$@"
+    ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 testing "$@"
 }
 
 # wsl COMMAND: run COMMAND in Ubuntu in WSL on the testing host.
@@ -1581,7 +1581,7 @@ winclean()
     {
         sh "$repo/tools/flow/winjob.sh" "$wout"
         cat "$repo/tools/flow/winclean.sh"
-    } | perl -e 'alarm shift; exec @ARGV' 1200 ssh -o BatchMode=yes -o ServerAliveInterval=15 \
+    } | perl "$repo/tools/flow/bound.pl" 1200 ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
         -o ServerAliveCountMax=4 testing "C:/msys64/usr/bin/bash.exe -l -s $wc_mode $wtree $wout $*"
 }
 
@@ -1822,7 +1822,7 @@ claim_start()
         echo "perl - \"\${RACH2_CLAIM_PUBLISH:-30}\" $wlock/publish.lock sh -c \"echo 'go $3' > $k.token.$3 && ln $k.token.$3 $k.token || { rm -f $k.token.$3; exit 1; }; rm -f $k.token.$3 $c.rc $c.held $c.started $c.owner $c.reaped $wheld/$5 && : >> $k.lock && : >> $k.grant\" << 'END_OF_PUBLICATION' || exit 1"
         claim_publisher
         echo "END_OF_PUBLICATION"
-    } | perl -e 'alarm shift; exec @ARGV' 150 ssh -o BatchMode=yes -o ServerAliveInterval=15 \
+    } | perl "$repo/tools/flow/bound.pl" 150 ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
         -o ServerAliveCountMax=4 testing "$WSL" || return 1
     {
         echo "cat > $c.pl << 'END_OF_CLAIM'"
@@ -1834,7 +1834,7 @@ claim_start()
         echo "    while [ ! -e $wheld/$6 ] && [ \"\$(cat $k.token 2> /dev/null)\" = \"go $3\" ] &&"
         echo "        find $wheld/$1.alive -mmin -10 2> /dev/null | grep -q .; do sleep 5; done' > $c 2>&1 < /dev/null &"
         echo "i=0; until [ -e $c.started ] || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done"
-    } | perl -e 'alarm shift; exec @ARGV' 120 ssh -o BatchMode=yes -o ServerAliveInterval=15 \
+    } | perl "$repo/tools/flow/bound.pl" 120 ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
         -o ServerAliveCountMax=4 testing "$WSL"
 }
 
@@ -1935,7 +1935,7 @@ held=$(cat "$c".[0-9]*.held 2> /dev/null)
 [ -z "$held" ] || { printf '%s\n' "$held"; exit 1; }
 rm -f "$k.lock" "$k.grant" "$k.token"
 END
-    } | perl -e 'alarm shift; exec @ARGV' 300 ssh -o BatchMode=yes -o ServerAliveInterval=15 \
+    } | perl "$repo/tools/flow/bound.pl" 300 ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
         -o ServerAliveCountMax=4 testing "$WSL" > "$state/$1.$2.stop" 2>&1
     cs_rc=$?
     tr -d '\r' < "$state/$1.$2.stop"
