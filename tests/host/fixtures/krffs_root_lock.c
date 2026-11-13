@@ -15,7 +15,7 @@
  * the old place.
  *
  * The first rows count every access a body makes to the image: through the
- * core's backend for a read, a write and a truncate, at `pc_sync` for an
+ * core's backend for a read, a write and a truncate, at `pc_sync_wait` for an
  * fsync, and at each step of the walk for a readdir. At every one of them the
  * caller must hold the mount's lock, and when the operation returns the lock
  * must be free again.
@@ -39,7 +39,7 @@ extern void open_thread_start(void (*fn)(void));
 extern void open_thread_wait(void);
 extern void open_thread_finish(void);
 
-int pc_sync(void);
+int pc_sync_wait(void);
 
 #define IMAGE_BYTES 65536u
 
@@ -127,7 +127,7 @@ static int watched_sync(void *ctx)
 static const krffs_backend_t watched_backend = {watched_read, watched_write, watched_sync};
 
 /** The page cache's flush, where an fsync of the root waits for the disk. */
-int pc_sync(void)
+int pc_sync_wait(void)
 {
     at_image();
     return 0;

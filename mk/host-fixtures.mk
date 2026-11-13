@@ -101,7 +101,7 @@ endif
 
 $(HOST_FIXTURE_PREFIX)/pagecache-sources/syscall_sync.inc: rach2/sys/syscall_fs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c sys_sync
+	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c pc_sync_wait sys_sync
 
 $(HOST_FIXTURE_PREFIX)/pagecache: tests/host/pagecache_hosttest.c $(HOST_FIXTURE_PREFIX)/pagecache-sources/syscall_sync.inc $(HOST_EXTRACT) rach2/sys/syscall_fs.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_FIXTURE_PREFIX)/pagecache-sources

@@ -6266,7 +6266,7 @@ static long sync_entry(fd_entry_t *e,
         }
         return mapped;
     }
-    return pc_sync() != 0 ? -EIO : 0;
+    return pc_sync_wait() != 0 ? -EIO : 0;
 }
 
 /**
@@ -6276,7 +6276,7 @@ static long sync_entry(fd_entry_t *e,
  * descriptor of a file or directory of a mount, the KRFFS root among them,
  * writes back the pages shared mappings of the file hold
  * (`filemap_sync_file`) and goes to the type by `sync_op`. Any other writes
- * back every dirty page of the disk-backed window (`pc_sync`):
+ * back every dirty page of the disk-backed window (`pc_sync_wait`):
  * the whole cache and not one file's pages, which does more than the call
  * asks. When KRFFS is the RAM module the cache is empty, so that flush does
  * nothing and the call only checks the descriptor. Returns 0, -EBADF for a
@@ -6320,37 +6320,44 @@ long sys_fdatasync(isr_params_t *params)
     return sync_fd(params, vfs_fdatasync);
 }
 
-/**
- * Flush all buffered file-system writes to stable storage (sync(2)).
- *
- * Takes no argument. The pages shared mappings hold are written back
- * (`filemap_sync_all`), every active mount's `sync` runs and the buffer
- * cache writes its dirty buffers (`vfs_sync_all`), then every dirty page of
- * the disk-backed window goes back via `pc_sync` (which does nothing when
- * KRFFS is the RAM module). Like Linux's sync(2), it returns 0 even if a
- * write-back failed; what failed stays dirty for a later call, and a mount
- * whose device failed a write is read-only from then on. Busy slots are
- * retried after a yield and a wait with interrupts enabled, so a write in
- * flight can finish and a page dirtied during that write can be flushed.
- * The retries stop after 30 seconds of ticks if slots remain busy, so a
- * stuck writer cannot hold this call forever. A write failure alone causes
- * no wait.
- */
-long sys_sync(isr_params_t *params)
+/* Busy slots are retried after a yield and a wait with interrupts enabled,
+ * so a write in flight can finish and a page dirtied during that write can
+ * be flushed. The retries stop after 30 seconds of ticks if slots remain
+ * busy, so a stuck writer cannot hold the caller forever. A write failure
+ * alone causes no wait. */
+int pc_sync_wait(void)
 {
-    uint32_t start;
+    uint32_t start = (uint32_t)kernel_ticks;
+    int rc;
 
-    (void)params;
-    filemap_sync_all();
-    vfs_sync_all();
-    start = (uint32_t)kernel_ticks;
-    while (pc_sync() & PC_SYNC_BUSY) {
+    while ((rc = pc_sync()) & PC_SYNC_BUSY) {
         if ((uint32_t)kernel_ticks - start >= MS_TO_TICKS(30000)) {
             break;
         }
         schedule();
         idle_wait_irq_on();
     }
+    return rc;
+}
+
+/**
+ * Flush all buffered file-system writes to stable storage (sync(2)).
+ *
+ * Takes no argument. The pages shared mappings hold are written back
+ * (`filemap_sync_all`), every active mount's `sync` runs and the buffer
+ * cache writes its dirty buffers (`vfs_sync_all`), then every dirty page of
+ * the disk-backed window goes back via `pc_sync_wait`, which waits for the
+ * writes in flight (and does nothing when KRFFS is the RAM module). Like
+ * Linux's sync(2), it returns 0 even if a write-back failed; what failed
+ * stays dirty for a later call, and a mount whose device failed a write is
+ * read-only from then on.
+ */
+long sys_sync(isr_params_t *params)
+{
+    (void)params;
+    filemap_sync_all();
+    vfs_sync_all();
+    (void)pc_sync_wait();
     return 0;
 }
 

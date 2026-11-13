@@ -109,6 +109,23 @@ int pc_fault(uintptr_t fault_address, int write);
  */
 int pc_sync(void);
 
+/**
+ * Write the dirty resident pages back as `pc_sync` does, and wait for the
+ * writes in flight on pinned slots, by a yield and a wait for an interrupt
+ * between passes, until a pass meets none or 30 seconds of ticks have gone.
+ * Returns 0, or what the last `pc_sync` answered: PC_SYNC_FAILED for a write
+ * that failed, and PC_SYNC_BUSY when slots stayed pinned for the whole wait.
+ *
+ * A pinned slot is another caller's write, the flusher's or reclaim's, which
+ * sleeps in the disk driver, or a fill: a sync that must say the pages are on
+ * the disk, fsync above all, waits for it, as Linux's fsync waits for the
+ * pages under write-back (`filemap_write_and_wait_range`) and fails only on a
+ * write that failed. The caller may sleep. It is defined beside sync(2) in
+ * syscall_fs.c, which uses it too, since this file builds for the host tests
+ * without a scheduler.
+ */
+int pc_sync_wait(void);
+
 /** The window's span in bytes, which its page tables cover. */
 uint32_t pc_window_size(void);
 

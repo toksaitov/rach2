@@ -108,7 +108,8 @@ For a KRFFS boot-root file, or a descriptor without a mount, it flushes
 the entire page cache.
 That flush does nothing on a direct RAM root.
 An in-flight page write keeps its slot and frame reserved.
-A competing page-cache flush skips that page and reports an error for retry.
+A competing page-cache flush waits for that write, for at most 30 seconds,
+and then writes the page again if a store dirtied it meanwhile.
 Failed writes and stores made during a write remain dirty for a later flush.
 On a mounted KRFFS volume it writes only the named file: the blocks its
 writes and truncations left dirty, which follow it when it moves, and
@@ -236,7 +237,8 @@ For
 and
 .Fn fdatasync ,
 a write-back or device flush failed, or the mounted device was removed,
-or a KRFFS boot-root page write was already in flight.
+or a KRFFS boot-root page write already in flight did not finish within
+30 seconds.
 For all three, a write on the file system failed since the description
 last reported one; the failed write's own error is returned when it is
 not

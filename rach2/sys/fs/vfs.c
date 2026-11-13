@@ -4068,13 +4068,14 @@ static void kfs_page_failed(int rc)
     spin_unlock_irqrestore(&mount_table_lock, flags);
 }
 
-/** The `sync` of the KRFFS root: write the dirty pages of the page cache
- * (`pc_sync`), a failure of which is recorded as it happens
- * (`kfs_page_failed`); 0, or -EIO when a page failed or was busy. */
+/** The `sync` of the KRFFS root: write the dirty pages of the page cache and
+ * wait for the writes in flight (`pc_sync_wait`), a failure of which is
+ * recorded as it happens (`kfs_page_failed`); 0, or -EIO when a page failed
+ * or stayed busy for the whole wait. */
 static int kfs_sync(struct vfs_mount *mnt)
 {
     (void)mnt;
-    return pc_sync() == 0 ? 0 : -EIO;
+    return pc_sync_wait() == 0 ? 0 : -EIO;
 }
 
 /** Read `count` bytes at `offset` of the file whose node is `handle`, with
@@ -4140,13 +4141,14 @@ static int kfs_truncate_locked(struct vfs_mount *mnt, void *handle, uint64_t siz
 }
 
 /** The `fsync` of the KRFFS root, with the mount's lock held: the page cache
- * has no write of one file, so every dirty page is written, as `kfs_sync`
- * writes them; 0, or -EIO. */
+ * has no write of one file, so every dirty page is written, and the writes
+ * the flusher or reclaim has in flight are waited for, as `kfs_sync` does,
+ * since a page another writer holds pinned is not a failure; 0, or -EIO. */
 static int kfs_fsync_locked(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
     (void)handle;
-    return pc_sync() == 0 ? 0 : -EIO;
+    return pc_sync_wait() == 0 ? 0 : -EIO;
 }
 
 /**
