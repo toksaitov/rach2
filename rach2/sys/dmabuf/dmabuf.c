@@ -47,15 +47,16 @@ void dma_resv_fini(struct dma_resv *r)
 
 /** Whether `f` takes the place of `old` in a reservation, as Linux's
  * dma_resv_add_fence replaces a fence that has signalled, or one of the
- * same context that `f` is as late as or later than (dma-resv.c:306-317):
- * a single fence, not an array or a chain's point, whose leaves may be of
- * other contexts. */
+ * same context that `f` is or comes after by its producer's ordering,
+ * dma_fence_is_later_or_same (dma-resv.c:306-317), so that a 32-bit
+ * timeline's wrap never drops a pending point: a single fence, not an
+ * array or a chain's point, whose leaves may be of other contexts. */
 static int resv_replaces(struct dma_fence *old, struct dma_fence *f)
 {
     if (dma_fence_is_signaled(old))
         return 1;
     return old->context == f->context && !dma_fence_is_container(old) &&
-           !dma_fence_is_container(f) && (int64_t)(f->seqno - old->seqno) >= 0;
+           !dma_fence_is_container(f) && dma_fence_is_later_or_same(f, old);
 }
 
 /**

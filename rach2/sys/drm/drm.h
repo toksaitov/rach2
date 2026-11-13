@@ -315,6 +315,9 @@ struct drm_driver {
  * enabling anything, and returns 1 when the fence may be signalled now.
  * `wait` replaces the default sleep of `dma_fence_wait_until`, after
  * signalling is enabled, with the same deadline and results.
+ * `use_64bit_seqno` says the producer's seqnos never wrap and order as
+ * 64-bit numbers; when it is 0, as for a fence with no ops, they order by
+ * their low 32 bits, which wrap, as Linux's member of that name.
  */
 struct dma_fence_ops {
     const char *(*get_driver_name)(struct dma_fence *fence);
@@ -323,6 +326,7 @@ struct dma_fence_ops {
     void (*release)(struct dma_fence *fence);
     int (*signaled)(struct dma_fence *fence);
     int32_t (*wait)(struct dma_fence *fence, int intr, int64_t deadline_ns);
+    int use_64bit_seqno;
 };
 
 /* A callback run once when its fence signals, in the signaller's context,
@@ -372,6 +376,20 @@ uint64_t dma_fence_context_alloc(uint32_t num);
  * reference, the caller's. */
 void dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops, uint64_t context,
                     uint64_t seqno);
+/** Whether seqno `f1` comes after `f2` on a timeline whose producer has
+ * `ops`, which may be NULL, as Linux's __dma_fence_is_later: a 64-bit
+ * comparison for a producer with `use_64bit_seqno`, else the signed
+ * difference of the low 32 bits, so that a 32-bit timeline orders across
+ * its wrap. Any context. */
+int dma_fence_seqno_is_later(uint64_t f1, uint64_t f2, const struct dma_fence_ops *ops);
+/** Whether `f1` comes after `f2`, two fences of one context, by the
+ * ordering of `f1`'s producer, as Linux's dma_fence_is_later; 0 for
+ * fences of different contexts. Any context. */
+int dma_fence_is_later(struct dma_fence *f1, struct dma_fence *f2);
+/** Whether `f1` is `f2` or comes after it, as Linux's
+ * dma_fence_is_later_or_same: another fence with the same seqno is not.
+ * Any context. */
+int dma_fence_is_later_or_same(struct dma_fence *f1, struct dma_fence *f2);
 /** Take a reference; NULL is allowed and returned. */
 struct dma_fence *dma_fence_get(struct dma_fence *fence);
 /** Drop a reference, releasing the fence with the last; NULL is allowed. */
