@@ -788,6 +788,15 @@ static void drain_mark(struct bbuf *b, const struct ext2_image *im)
     }
 }
 
+/** Whether the calling thread has SIGKILL pending in its own set, where a
+ * signal that ends its process puts one for every thread (`sig_group_end`):
+ * Linux's `fatal_signal_pending`, which the core file's writer reads too
+ * (`core_file_put`). 0 for a caller with no process. */
+static int write_killed(void)
+{
+    return current_proc && (current_proc->sig_pending & KSIG_BIT(SIGKILL)) != 0;
+}
+
 /** Whether another process holds in the cache a block the drain will copy
  * into, a changed image at or past the drain's stage, as a sync or an
  * fsync does while it writes the block; the first such block goes in
@@ -812,17 +821,28 @@ static int drain_busy(struct ext2_mount *em, uint32_t *blk)
  * Take `em->batch` for a drain once no other process holds a block it will
  * copy into, waiting for each such block with the lock let go, PLAN_TRIES
  * times before the drain waits under it; a strict mount takes it at once.
- * Returns with the lock held, the batch emptied by another meanwhile or not.
+ * A `killable` caller, a writer waiting for room, gives up at SIGKILL
+ * pending (`write_killed`) before and after each take of the lock, so after
+ * every wait, `bcache_reserve`'s writes included, since neither the lock's
+ * line nor a buffer's wait ends at a signal. 0 with the lock held, the
+ * batch emptied by another meanwhile or not, or -EINTR without it.
  */
-static void drain_lock(struct ext2_mount *em)
+static int drain_lock(struct ext2_mount *em, int killable)
 {
     uint32_t busy;
     int tries;
 
     for (tries = 0;; tries++) {
+        if (killable && write_killed()) {
+            return -EINTR;
+        }
         ext2_batch_lock(em);
+        if (killable && write_killed()) {
+            ext2_batch_unlock(em);
+            return -EINTR;
+        }
         if (!em->wb->count || ext2_em_strict(em) || tries >= PLAN_TRIES || !drain_busy(em, &busy)) {
-            return;
+            return 0;
         }
         ext2_batch_unlock(em);
         bcache_wait_unheld(em->dev, busy);
@@ -975,10 +995,10 @@ static void drain_release(struct ext2_mount *em, struct ext2_node **held, int co
  * fails at once, recorded (`ext2_writeback_error`); on a mount that writes
  * back the cache first writes dirty victims with no lock taken until it can
  * give a buffer for each copy without a write (`bcache_reserve`); and the
- * lock is taken as `drain_lock` says. 0 with the lock held, or -EIO without
- * it.
+ * lock is taken as `drain_lock` says, `killable` or not. 0 with the lock
+ * held, or -EIO or -EINTR without it.
  */
-static int drain_enter(struct ext2_mount *em)
+static int drain_enter(struct ext2_mount *em, int killable)
 {
     if (em->dev->flags & BLOCK_GONE) {
         return ext2_writeback_error(em, -EIO);
@@ -986,8 +1006,7 @@ static int drain_enter(struct ext2_mount *em)
     if (!ext2_em_strict(em)) {
         (void)bcache_reserve(em->dev, writeback_dirty(em->wb));
     }
-    drain_lock(em);
-    return 0;
+    return drain_lock(em, killable);
 }
 
 /**
@@ -1005,7 +1024,7 @@ int ext2_writeback_drain(struct ext2_mount *em)
     if (!(em->dev->flags & BLOCK_GONE) && !ext2_batch_pending(em)) {
         return 0;
     }
-    rc = drain_enter(em);
+    rc = drain_enter(em, 0);
     if (rc != 0) {
         return rc;
     }
@@ -1160,26 +1179,18 @@ int ext2_writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t of
     return 0;
 }
 
-/** Whether the calling thread has SIGKILL pending in its own set, where a
- * signal that ends its process puts one for every thread (`sig_group_end`):
- * Linux's `fatal_signal_pending`, which the core file's writer reads too
- * (`core_file_put`). 0 for a caller with no process. */
-static int write_killed(void)
-{
-    return current_proc && (current_proc->sig_pending & KSIG_BIT(SIGKILL)) != 0;
-}
-
 /**
  * Accept one piece of a write, `len` bytes from `src` at `offset` of `n`
  * within one block: planned, its data image prepared, and committed. No
  * image readers see changes until every read and reservation has
  * succeeded, and a piece that fails gives back the images it took. A
  * removed device or one that failed a write is -EIO, and a mount made
- * read-only, by a failed write or a fault, -EROFS, and a caller with
- * SIGKILL pending -EINTR before anything is tried. `src` may be a user
- * buffer: the check that its pages are present runs in the step of the
- * commit, which copies it, and a page that is not is -EFAULT with nothing
- * committed.
+ * read-only, by a failed write or a fault, -EROFS. A caller with SIGKILL
+ * pending is -EINTR, with nothing committed, when the signal is seen before
+ * anything is tried, after each take of `em->batch` or before the piece is
+ * tried after a drain. `src` may be a user buffer: the check that its pages
+ * are present runs in the step of the commit, which copies it, and a page
+ * that is not is -EFAULT with nothing committed.
  *
  * What the plan reads is fetched first with `em->batch` let go
  * (`writeback_fetch`). Under its locks the plan reads only what the cache
@@ -1195,9 +1206,15 @@ static int write_killed(void)
  * batch between them: the piece then goes into a batch that is empty, which
  * takes any one piece, and is never refused for room. So a writer that finds
  * the batch full progresses after one drain however many others write, and
- * -ENOMEM, which only a full batch gives, never comes back. The caller holds
- * `n`'s lock and not `em->batch`. 0, or -errno: `writeback_try`'s or the
- * drain's.
+ * -ENOMEM, which only a full batch gives, never comes back. The wait ends at
+ * SIGKILL, as Linux's sleep there is TASK_KILLABLE and
+ * `generic_perform_write` checks `fatal_signal_pending` after it: after each
+ * of the drain's waits, for a buffer or for the lock (`drain_lock`), the
+ * drain left to another writer, and after the drain, before the piece is
+ * tried, so that a killed writer lets its node's lock go without committing
+ * the waiting piece. A drain under way runs to its end, since one stopped
+ * midway would be a failure the mount records. The caller holds `n`'s lock
+ * and not `em->batch`. 0, or -errno: `writeback_try`'s or the drain's.
  */
 int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
                        const uint8_t *src, uint32_t len)
@@ -1212,6 +1229,10 @@ int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t offs
     writeback_fetch(em, n, offset, len);
     for (tries = 0;; tries++) {
         ext2_batch_lock(em);
+        if (write_killed()) {
+            ext2_batch_unlock(em);
+            return -EINTR;
+        }
         ext2_plan_begin(em, tries);
         rc = writeback_try(em, n, offset, src, len);
         missed = ext2_plan_end(em);
@@ -1224,12 +1245,14 @@ int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t offs
         }
         ext2_volume_fetch(em, missed);
     }
-    rc = drain_enter(em);
+    rc = drain_enter(em, 1);
     if (rc != 0) {
         return rc;
     }
     rc = drain_stages(em, held, &count);
-    if (rc == 0) {
+    if (rc == 0 && write_killed()) {
+        rc = -EINTR;
+    } else if (rc == 0) {
         ext2_plan_begin(em, PLAN_TRIES);
         rc = writeback_try(em, n, offset, src, len);
         (void)ext2_plan_end(em);
