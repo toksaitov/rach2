@@ -1542,19 +1542,19 @@ static void claim_deadline_rows(void)
     logged_why = NULL;
     in_call = 1;
     ticks_now = 1000;
-    sleep_ticks = 10000;
+    sleep_ticks = 10u * TICK_HZ;
     sleep_reclaims = 1;
     CHECK("a sleeper the port is claimed from again and again gives up at its deadline",
           ahci_run_command(d, ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == -EIO &&
               claim_sleeps == 4 &&
-              slept_due == 1000 + AHCI_CMD_STEPS * AHCI_CMD_POLL_US / 1000 + 1 && logged_why &&
-              same_text(logged_why, "another polled command held the port"));
+              slept_due == 1000 + AHCI_CMD_STEPS * AHCI_CMD_POLL_US / AHCI_TICK_US + 1 &&
+              logged_why && same_text(logged_why, "another polled command held the port"));
     CHECK("and leaves the other claim, the port and its own timer alone",
           d->polling && issued_locked == 0 && issued_unlocked == 0 && !d->lock.locked &&
               caller_proc.wakeup_tick == 7);
     sleep_reclaims = 0;
     ticks_now = 1000;
-    sleep_ticks = 29500;
+    sleep_ticks = 29500u * TICK_HZ / 1000u;
     claim_sleeps = 0;
     complete_after = 60000;
     logged_why = NULL;
