@@ -1566,6 +1566,10 @@ static void heap_backing_release(struct virtio_dev *d, struct shmem *sh)
 
 static const struct virtio_ops heap_ops = {.name = "heap", .backing_release = heap_backing_release};
 
+/* The model's PCI transport, whose operations the test's virtio_* stand in
+ * for; as virtio-pci's, it has no backing of its own to give back. */
+static const struct virtio_ops pci_ops = {.name = "virtio-pci"};
+
 int virtio_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
 {
     (void)d;
@@ -1662,6 +1666,9 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
     CHECK(id == VIRTIO_ID_GPU, "the probe looks for a GPU");
     if (nth > 0) {
         return -ENODEV;
+    }
+    if (!gpu.dev.ops) {
+        gpu.dev.ops = &pci_ops; /* a row may have set the heap's */
     }
     gpu.dev.id = id;
     gpu.dev.name = "virtio0";
@@ -2559,7 +2566,7 @@ static void row_reset_heap(void)
     CHECK(a && b, "two buffers over the heap");
     if (!a || !b) {
         unbind();
-        gpu.dev.ops = NULL;
+        gpu.dev.ops = &pci_ops;
         return;
     }
     pa = shmem_resident(&a->shmem.pages, 0);
@@ -2579,7 +2586,7 @@ static void row_reset_heap(void)
     drm_gem_object_put(&a->shmem.base);
     drm_gem_object_put(&b->shmem.base);
     CHECK(backing_releases == 2, "the exported object's frames go back when it is freed");
-    gpu.dev.ops = NULL;
+    gpu.dev.ops = &pci_ops;
 }
 
 /** Map `bo` from the transport's pages, as `blob_pages_map` does once the
@@ -2716,7 +2723,7 @@ static void row_revoke_no_unref(void)
     CHECK(a != NULL, "a blob whose UNREF fails");
     if (!a) {
         unbind();
-        gpu.dev.ops = NULL;
+        gpu.dev.ops = &pci_ops;
         return;
     }
     map_give = 1;
@@ -2735,7 +2742,7 @@ static void row_revoke_no_unref(void)
     CHECK(frees == before + 1 && backing_releases == 1, "the blob is freed once");
     map_give = 0;
     unbind();
-    gpu.dev.ops = NULL;
+    gpu.dev.ops = &pci_ops;
 }
 
 int main(void)
