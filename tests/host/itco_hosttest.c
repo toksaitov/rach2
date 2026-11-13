@@ -651,6 +651,29 @@ static void elapsed_rows(void)
     CHECK(itco_idle_ticks() == 1);
 }
 
+/** Check the attach's refusals: an absent block, a locked NO_REBOOT and a
+ * timeout that does not stick; and a running timer whose halt does not
+ * stick, which is attached and left counting, and whose stop fails. */
+static void attach_rows(void)
+{
+    setup();
+    model.absent = 1;
+    CHECK(itco_attach(&watchdog, 30) == -EIO && model.writes == 0);
+    setup();
+    model.locked = 1;
+    CHECK(itco_attach(&watchdog, 30) == -ENODEV);
+    CHECK(model.writes == 1 && model.regs[0] == 0x3410);
+    CHECK(model.words[TCO1_CNT / 2] & TCO_HALT);
+    setup();
+    model.stuck_timer = 1;
+    CHECK(itco_attach(&watchdog, 30) == -EIO);
+    setup();
+    model.stuck_halt = 1;
+    model.words[TCO1_CNT / 2] &= (uint16_t)~TCO_HALT;
+    CHECK(itco_attach(&watchdog, 30) == 0 && watchdog.hw_running);
+    CHECK(itco_stop(&watchdog) == -EIO && !watchdog.hw_running && (model.gcs & TCO_NO_REBOOT));
+}
+
 /** Check actual writes, expiry, failures, exclusive open and the ioctl ABI. */
 int main(int argc, char **argv)
 {
@@ -734,21 +757,7 @@ int main(int argc, char **argv)
     options();
     parser();
     line();
-    setup();
-    model.absent = 1;
-    CHECK(itco_attach(&watchdog, 30) == -EIO && model.writes == 0);
-    setup();
-    model.locked = 1;
-    CHECK(itco_attach(&watchdog, 30) == -ENODEV);
-    CHECK(model.writes == 1 && model.regs[0] == 0x3410);
-    CHECK(model.words[TCO1_CNT / 2] & TCO_HALT);
-    setup();
-    model.stuck_timer = 1;
-    CHECK(itco_attach(&watchdog, 30) == -EIO);
-    setup();
-    model.stuck_halt = 1;
-    model.words[TCO1_CNT / 2] &= (uint16_t)~TCO_HALT;
-    CHECK(itco_attach(&watchdog, 30) == -EIO);
+    attach_rows();
     elapsed_rows();
     printf("itco_hosttest: %s\n", failures ? "failed" : "ok");
     return failures != 0;
