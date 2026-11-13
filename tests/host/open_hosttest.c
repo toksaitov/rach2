@@ -1690,6 +1690,22 @@ NO_PROC_INO(procfs_ino_acpicall)
 NO_PROC_INO(procfs_ino_fsdir)
 NO_PROC_INO(procfs_ino_lockwait)
 
+/** No message interrupt is present in the open model. */
+int procfs_irq_exists(int vector)
+{
+    (void)vector;
+    return 0;
+}
+
+/** Fail the row: no row stats an interrupt affinity file. */
+uint32_t procfs_ino_irq(int vector, int attr)
+{
+    (void)vector;
+    (void)attr;
+    check(0, "unexpected stat of an interrupt affinity file");
+    return 0;
+}
+
 /** No kind is a system-wide file of /proc here, so the opens and stats
  * that ask fall through to ENOENT. */
 uint32_t procfs_ino_global(int kind)

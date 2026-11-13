@@ -313,6 +313,12 @@ void kfree(void *p)
     }
 }
 
+/** The kernel's memset, as the host's. */
+void *k_memset(void *dest, int value, size_t n)
+{
+    return memset(dest, value, n);
+}
+
 /** The kernel's memcpy, as the host's. */
 void *k_memcpy(void *dest, const void *src, size_t n)
 {
