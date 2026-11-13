@@ -41,6 +41,10 @@ static void pc_platform_unmap(uintptr_t va)
     (void)va;
 }
 
+/** Wake nothing: the host test's `pc_wait_release` sleeps on no queue. */
+static void pc_platform_released(void)
+{}
+
 #else
 
 #include "paging.h"
@@ -48,6 +52,7 @@ static void pc_platform_unmap(uintptr_t va)
 #include "../klog.h"
 #include "../panic.h"
 #include "../pci.h"
+#include "../proc/wait_queue.h"
 
 #define PC_PAGE_SIZE  PAGE_SIZE
 
@@ -68,6 +73,16 @@ static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
 static void pc_platform_unmap(uintptr_t va)
 {
     unmap_kernel_frame(va);
+}
+
+/* The syncs that sleep until a pin they passed is let go (`pc_wait_release`).
+ * A zeroed queue needs no init. */
+static wait_queue_t pc_release_wq;
+
+/** Wake the syncs that wait for a pin to go (`pc_release_wq`). */
+static void pc_platform_released(void)
+{
+    wq_wake_all(&pc_release_wq);
 }
 
 #endif
@@ -92,6 +107,7 @@ struct pc_entry {
     uint8_t dirty;    /* written since its last writeback */
     uint8_t accessed; /* touched since the clock hand last passed */
     uint8_t pinned;   /* a fill or a writeback is in flight */
+    uint8_t waited;   /* a sync passed it pinned and waits for its release */
 };
 
 static struct pc_entry pc_slots[PC_SLOTS];
@@ -115,6 +131,9 @@ static uint32_t pc_reads;
 static uint32_t pc_evicts;
 static uint32_t pc_writebacks;
 static uint32_t pc_resident_frames; /* slots holding a frame */
+/* The releases of pins a sync passed (`waited`), which `pc_sync_wait` waits
+ * on; it wraps. */
+static volatile uint32_t pc_waited_releases;
 
 /* Whether a slot has a frame: on the host every slot has its buffer from
  * the start and `phys` is never set. */
@@ -274,6 +293,21 @@ static void pc_hash_remove(uint32_t disk_off)
 }
 
 /**
+ * Let go of the pin of `e`. When a sync passed the slot while it was pinned,
+ * the release is counted and the syncs that wait for it are woken
+ * (`pc_wait_release`); other releases wake nobody.
+ */
+static void pc_unpin(struct pc_entry *e)
+{
+    e->pinned = 0;
+    if (e->waited) {
+        e->waited = 0;
+        ++pc_waited_releases;
+        pc_platform_released();
+    }
+}
+
+/**
  * Write the resident page of `e` back if it is dirty, with the slot pinned
  * meanwhile: 0 when it is clean or written, -1 when the slot is pinned or
  * the write fails, which leaves the page dirty.
@@ -314,7 +348,7 @@ static int pc_writeback(struct pc_entry *e)
     } else {
         ++pc_writebacks;
     }
-    e->pinned = 0;
+    pc_unpin(e);
     return rc != 0 ? -1 : 0;
 }
 
@@ -424,7 +458,7 @@ int pc_fault(uintptr_t fault_address, int write)
     e->pinned = 1;
     e->disk_off = disk_off;
     if (pc_read(disk_off, e->page) != 0) {
-        e->pinned = 0;
+        pc_unpin(e);
         return 0;
     }
     e->valid = 1;
@@ -432,7 +466,7 @@ int pc_fault(uintptr_t fault_address, int write)
     e->accessed = 1;
     pc_hash_insert(disk_off, (uint32_t)slot);
     pc_platform_map(page_va, e->phys, write ? 1 : 0);
-    e->pinned = 0;
+    pc_unpin(e);
     ++pc_reads;
 
     return 1;
@@ -473,10 +507,32 @@ uint32_t pc_resident(void)
     return pc_resident_frames;
 }
 
+uint32_t pc_releases(void)
+{
+    return pc_waited_releases;
+}
+
+#ifndef PAGECACHE_HOSTTEST
+/** The condition of `pc_wait_release`: a release has been counted since the
+ * count `*arg` was read. */
+static int pc_released_since(void *arg)
+{
+    return pc_waited_releases != *(const uint32_t *)arg;
+}
+
+/** A release is counted before its wake, and the waiter is on the queue
+ * and blocked before it reads the count, so no wake is lost. */
+void pc_wait_release(uint32_t seen)
+{
+    (void)wq_wait_event_nointr(&pc_release_wq, pc_released_since, &seen);
+}
+#endif
+
 /**
  * Busy slots and failed writes are reported apart, so that a competing sync
  * can wait for the writes in flight without trying a failed write again for
- * ever. A failure does not stop the walk over the other slots.
+ * ever. A failure does not stop the walk over the other slots. A busy slot
+ * is marked `waited`, so that its release wakes the caller's wait.
  */
 int pc_sync(void)
 {
@@ -489,6 +545,7 @@ int pc_sync(void)
             continue;
         }
         if (e->pinned) {
+            e->waited = 1;
             result |= PC_SYNC_BUSY;
         } else if (pc_writeback(e) != 0) {
             result |= PC_SYNC_FAILED;
@@ -596,6 +653,7 @@ void init_pagecache(void)
         pc_slots[i].dirty = 0;
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
+        pc_slots[i].waited = 0;
     }
     pc_capacity = PC_SLOTS;
     pc_clock = 0;
@@ -686,6 +744,7 @@ void init_pagecache(void)
         pc_slots[i].dirty = 0;
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
+        pc_slots[i].waited = 0;
     }
     pc_capacity =
         mem_cache_target() / 2u > PC_SLOTS ? PC_SLOTS : (uint32_t)(mem_cache_target() / 2u);

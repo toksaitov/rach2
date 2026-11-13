@@ -104,27 +104,44 @@ int pc_fault(uintptr_t fault_address, int write);
  * meanwhile marks it dirty again for a later write. Returns 0, or the OR of
  * PC_SYNC_BUSY for pinned slots passed and PC_SYNC_FAILED for failed
  * writes, whose pages stay dirty. Both bits can be set, so a failure cannot
- * hide a busy slot from a caller that waits for the writes in flight. The
- * backing's writes may sleep.
+ * hide a busy slot from a caller that waits for the writes in flight. A
+ * pinned slot passed is marked, so that its release is counted
+ * (`pc_releases`) and wakes the syncs that wait for it. The backing's
+ * writes may sleep.
  */
 int pc_sync(void);
 
 /**
  * Write the dirty resident pages back as `pc_sync` does, and wait for the
- * writes in flight on pinned slots, by a yield and a wait for an interrupt
- * between passes, until a pass meets none or 30 seconds of ticks have gone.
- * Returns 0, or what the last `pc_sync` answered: PC_SYNC_FAILED for a write
- * that failed, and PC_SYNC_BUSY when slots stayed pinned for the whole wait.
+ * writes in flight on pinned slots, until a pass meets none: each pass that
+ * meets one sleeps until a pin a sync passed is let go (`pc_wait_release`).
+ * Returns 0, or PC_SYNC_FAILED when a write failed in any pass, even when a
+ * later pass wrote the page, so that a caller with no error cursor of its
+ * own, such as the fsync of a descriptor with no mount, reports it.
  *
  * A pinned slot is another caller's write, the flusher's or reclaim's, which
  * sleeps in the disk driver, or a fill: a sync that must say the pages are on
- * the disk, fsync above all, waits for it, as Linux's fsync waits for the
- * pages under write-back (`filemap_write_and_wait_range`) and fails only on a
- * write that failed. The caller may sleep. It is defined beside sync(2) in
- * syscall_fs.c, which uses it too, since this file builds for the host tests
- * without a scheduler.
+ * the disk, fsync above all, waits for it with no deadline, as Linux's fsync
+ * waits for the pages under write-back (`filemap_write_and_wait_range`,
+ * mm/filemap.c:667 in 6.12) and fails only on a write that failed. The
+ * caller is a process and holds the big lock; it may sleep. It is defined
+ * beside sync(2) in syscall_fs.c, which uses it too, since this file builds
+ * for the host tests without a scheduler.
  */
 int pc_sync_wait(void);
+
+/** The count of releases of pins that `pc_sync` passed, which wraps: the
+ * value `pc_wait_release` waits to see move. */
+uint32_t pc_releases(void);
+
+/**
+ * Sleep until `pc_releases` differs from `seen`, read before the pass of
+ * `pc_sync` that met a pinned slot, so that a release during that pass ends
+ * the wait at once. The sleep is uninterruptible, as Linux's wait for a page
+ * under write-back (`folio_wait_writeback`), and has no deadline; the
+ * caller is a process. The host tests that reach it supply their own.
+ */
+void pc_wait_release(uint32_t seen);
 
 /** The window's span in bytes, which its page tables cover. */
 uint32_t pc_window_size(void);

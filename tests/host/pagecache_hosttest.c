@@ -15,10 +15,10 @@
  * once at its installation, and dropped by a new backing.
  *
  * Compiled with PAGECACHE_SYNC_HOSTTEST as well, as mk/host-fixtures.mk
- * compiles it, the test also runs `sys_sync`, which that file's rule
- * extracts from rach2/sys/syscall_fs.c into syscall_sync.inc, with the clock
- * tick and the scheduler replaced, for the rows of its bounded wait and its
- * failures.
+ * compiles it, the test also runs `pc_sync_wait` and `sys_sync`, which that
+ * file's rule extracts from rach2/sys/syscall_fs.c into syscall_sync.inc,
+ * with the sleep on a pin's release replaced, for the rows of the wait and
+ * its failures.
  */
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u
@@ -305,13 +305,11 @@ static void test_sleeping_writeback(void)
 
 #ifdef PAGECACHE_SYNC_HOSTTEST
 #include "isr.h"
-#include "timer.h"
 
-volatile uint64_t kernel_ticks;
-static uint32_t sync_waits;
-static uint32_t sync_yields;
 static uint32_t sync_mounts;
-static uint32_t sync_release; /* the wait that ends the competing write */
+static uint32_t sync_blocks; /* waits that slept until the pin was let go */
+static uint32_t sync_quick;  /* waits a release during the pass ended */
+static int sync_heal;        /* a blocked wait also lets page 1's writes pass */
 
 /** No file is mapped shared here, so the mapped pages have nothing to give
  *  the cache. */
@@ -324,86 +322,115 @@ static void vfs_sync_all(void)
     ++sync_mounts;
 }
 
-/** Count a yield to the scheduler. */
-void schedule(void)
+/**
+ * The kernel's wait for the release of a pin a sync passed. When the count
+ * has moved since `seen` it returns at once, as the kernel's condition is
+ * then true before the sleep. Otherwise it stands for the sleep: only then
+ * does the competing write of page 0 end, redirtying the page and letting
+ * its pin go, as on one processor a flusher runs only once the caller
+ * blocks. A release that the count does not see would leave the kernel's
+ * caller asleep for ever, so it stops the test.
+ */
+void pc_wait_release(uint32_t seen)
 {
-    ++sync_yields;
+    if (pc_releases() != seen) {
+        ++sync_quick;
+        return;
+    }
+    ++sync_blocks;
+    CHECK(pc_slots[0].pinned && pc_slots[0].waited);
+    touch(0, 1, 0xE2u);
+    pc_unpin(&pc_slots[0]);
+    CHECK(!pc_slots[0].waited);
+    if (sync_heal) {
+        fake_write_fail = FAKE_NO_FAIL;
+    }
+    if (pc_releases() == seen) {
+        failed_check("pc_releases() != seen");
+        __builtin_trap();
+    }
 }
 
-/** Wait a tick; at wait number `sync_release` complete the competing write,
- *  redirtying page 0 and unpinning its slot, so it ends only after the
- *  caller has waited. */
-void idle_wait_irq_on(void)
+/** End the competing write of page 0 while the sync's write of page 1
+ *  sleeps, after the sync has passed page 0's pin. */
+static void release_during_pass(uint32_t disk_off, const void *page)
 {
-    ++kernel_ticks;
-    ++sync_waits;
-    if (sync_waits == sync_release) {
-        touch(0, 1, 0xE2u);
-        pc_slots[0].pinned = 0;
-    }
+    (void)page;
+    CHECK(disk_off == PC_PAGE_SIZE);
+    CHECK(pc_slots[0].pinned && pc_slots[0].waited);
+    touch(0, 1, 0xE2u);
+    pc_unpin(&pc_slots[0]);
 }
 
 #include "syscall_sync.inc"
 
 /**
- * Run the kernel's `sys_sync` with a busy page, a failed write, or both,
- * and with a busy page that is never released.
+ * Run the kernel's `pc_sync_wait` and `sys_sync` with a page pinned by a
+ * competing write, a failed write, or both.
  *
- * A busy page starts clean, as it does during writeback, then becomes dirty
- * before the writer releases it, and the sync must write it. A stuck slot
- * must stop the wait at its bound of 30 seconds of ticks, the low word of
- * the tick count wrapping on the way. A failure alone must return without
- * waiting, and a later sync writes the failed page.
+ * Row 0, a busy page alone: the wait sleeps once, and the sync then writes
+ * the page the competing write redirtied. Row 1, a failure alone: no wait,
+ * and the failure is answered. Row 2, a busy page beside a write that fails
+ * in every pass: the failing write marks no pin of its own, so the wait
+ * still sleeps once instead of passing again and again while the competing
+ * write cannot run, and the failure is answered. Row 3, a write that fails
+ * in the first pass and succeeds in the second: the failure is kept across
+ * the passes. Row 4, a pin let go while the pass sleeps in a later write:
+ * the wait ends at once, with no sleep, since the release came after the
+ * count was read. `sys_sync` answers 0 whatever failed, and a later sync
+ * writes a page whose writes failed.
  */
 static void test_sync_wait(void)
 {
     int row;
 
-    for (row = 0; row < 4; ++row) {
+    for (row = 0; row < 5; ++row) {
         int busy = row != 1;
-        int failed = row == 1 || row == 2;
+        int failed = row == 1 || row == 2 || row == 3;
 
         init_pagecache();
         pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
         fake_disk[0][0] = 0;
-        fake_attempts[0] = 0;
-        fake_attempts[1] = 0;
-        fake_writes[0] = 0;
-        sync_waits = sync_yields = sync_mounts = 0;
-        sync_release = row == 3 ? 0u : 3u;
-        kernel_ticks = 0xFFFFFFFEu;
+        fake_disk[1][0] = 1;
+        fake_attempts[0] = fake_attempts[1] = 0;
+        fake_writes[0] = fake_writes[1] = 0;
+        sync_blocks = sync_quick = sync_mounts = 0;
+        sync_heal = row == 3;
         touch(0, 0, 0);
         pc_slots[0].pinned = (uint8_t)busy;
-        if (failed) {
+        if (failed || row == 4) {
             touch(1, 1, 0xE1u);
+        }
+        if (failed) {
             fake_write_fail = 1;
         }
-        CHECK(pc_sync() == ((busy ? PC_SYNC_BUSY : 0) | (failed ? PC_SYNC_FAILED : 0)));
-        fake_attempts[1] = 0;
-        CHECK(sys_sync(0) == 0);
-        CHECK(sync_mounts == 1);
-        CHECK(sync_yields == sync_waits);
-        if (busy && row != 3) {
-            CHECK(sync_waits == 3);
+        if (row == 4) {
+            fake_write_pause = release_during_pass;
+        }
+        CHECK(pc_sync_wait() == (failed ? PC_SYNC_FAILED : 0));
+        CHECK(!pc_slots[0].pinned && !pc_slots[0].waited);
+        CHECK(sync_blocks == (row == 0 || row == 2 || row == 3 ? 1u : 0u));
+        CHECK(sync_quick == (row == 4 ? 1u : 0u));
+        if (busy) {
             CHECK(fake_disk[0][0] == 0xE2u);
             CHECK(fake_writes[0] == 1);
-            CHECK(!pc_slots[0].dirty && !pc_slots[0].pinned);
-        } else if (row == 3) {
-            CHECK(sync_waits == MS_TO_TICKS(30000));
-            CHECK(pc_slots[0].pinned);
-            CHECK(fake_attempts[0] == 0);
+            CHECK(!pc_slots[0].dirty);
         } else {
-            CHECK(sync_waits == 0);
-            CHECK(fake_attempts[1] == 1);
+            CHECK(fake_attempts[0] == 0);
         }
+        CHECK(fake_attempts[1] == (row == 1                 ? 1u
+                                   : (row == 2 || row == 3) ? 2u
+                                   : row == 4               ? 1u
+                                                            : 0u));
+        CHECK(pc_slots[1].dirty == (row == 1 || row == 2));
+        CHECK(sys_sync(0) == 0);
+        CHECK(sync_mounts == 1);
         if (failed) {
-            CHECK(pc_slots[1].dirty);
             fake_write_fail = FAKE_NO_FAIL;
             CHECK(sys_sync(0) == 0);
             CHECK(!pc_slots[1].dirty);
             CHECK(fake_disk[1][0] == 0xE1u);
         }
-        pc_slots[0].pinned = 0;
     }
 }
 #endif

@@ -4070,8 +4070,8 @@ static void kfs_page_failed(int rc)
 
 /** The `sync` of the KRFFS root: write the dirty pages of the page cache and
  * wait for the writes in flight (`pc_sync_wait`), a failure of which is
- * recorded as it happens (`kfs_page_failed`); 0, or -EIO when a page failed
- * or stayed busy for the whole wait. */
+ * recorded as it happens (`kfs_page_failed`); 0, or -EIO when a page's write
+ * failed during the wait. */
 static int kfs_sync(struct vfs_mount *mnt)
 {
     (void)mnt;

@@ -6320,24 +6320,24 @@ long sys_fdatasync(isr_params_t *params)
     return sync_fd(params, vfs_fdatasync);
 }
 
-/* Busy slots are retried after a yield and a wait with interrupts enabled,
- * so a write in flight can finish and a page dirtied during that write can
- * be flushed. The retries stop after 30 seconds of ticks if slots remain
- * busy, so a stuck writer cannot hold the caller forever. A write failure
- * alone causes no wait. */
+/* The release count is read before each pass, so that a pin let go while
+ * the pass slept in a write ends the wait at once; the pass's own writes
+ * count no release, since it marks no pin of its own. A failed write is kept
+ * across the passes, since a later pass may write the page and answer 0. */
 int pc_sync_wait(void)
 {
-    uint32_t start = (uint32_t)kernel_ticks;
-    int rc;
+    int rc, failed = 0;
+    uint32_t seen;
 
-    while ((rc = pc_sync()) & PC_SYNC_BUSY) {
-        if ((uint32_t)kernel_ticks - start >= MS_TO_TICKS(30000)) {
-            break;
+    for (;;) {
+        seen = pc_releases();
+        rc = pc_sync();
+        failed |= rc & PC_SYNC_FAILED;
+        if (!(rc & PC_SYNC_BUSY)) {
+            return failed;
         }
-        schedule();
-        idle_wait_irq_on();
+        pc_wait_release(seen);
     }
-    return rc;
 }
 
 /**
