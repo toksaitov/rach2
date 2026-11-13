@@ -3995,7 +3995,7 @@ int32_t i915_request_create(struct intel_context *ce, struct i915_request **out)
  * `rq + 1`, in the request's own block and freed with it: where
  * EXECBUFFER2 keeps its hold, so that a call takes one block for both, as
  * Linux's request comes from its slab and its vmas' activity from nodes it
- * keeps for each timeline (i915_active.c:270-330).
+ * keeps for each timeline (i915_active.c:288-341).
  */
 int32_t i915_request_create_room(struct intel_context *ce, size_t room, struct i915_request **out);
 

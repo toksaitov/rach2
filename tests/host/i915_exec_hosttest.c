@@ -1803,9 +1803,9 @@ static void listen_cb(struct dma_fence *f, struct dma_fence_cb *cb)
  * the GT awake from one call to the next: its Lenovo loop of 1,003 calls
  * took 1,013 of the GPU's interrupts, where a park after each would add the
  * switch to the kernel context and its interrupt (gt/intel_engine_pm.c:
- * 150-230); it keeps the user interrupt armed while the engine is awake
- * (gt/intel_breadcrumbs.c:229-262) and a shadow in its pool until it has
- * been idle a second (gt/intel_gt_buffer_pool.c:87-122).
+ * 151-288); it keeps the user interrupt armed while the engine is awake
+ * (gt/intel_breadcrumbs.c:182-207, 266-272) and a shadow in its pool until
+ * it has been idle a second (gt/intel_gt_buffer_pool.c:87-122).
  */
 static void park_per_call(void)
 {
