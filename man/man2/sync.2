@@ -28,7 +28,8 @@ The page-cache flush does nothing when KRFFS is a direct RAM module.
 .Pp
 .Fn sync
 ignores write-back errors.
-Buffers whose writes fail remain dirty for a later attempt.
+Buffers whose writes fail remain dirty for a later attempt, until the
+unmount drops them unwritten.
 A failed buffer write makes mounts on that device read-only for the
 rest of their lifetime.
 .Pp
@@ -99,7 +100,10 @@ A failed retry is returned to the caller; the device is flushed only
 after writeback succeeds.
 .Pp
 On ext2, fsync first drains all pending inodes on the mount in dependency order.
-A retry can finish an unmount, but the volume remains marked invalid.
+An fsync or sync that comes while another store of the inode is under
+way waits for that store, and stores the inode again only if it failed.
+An unmount completes after a failed write, as on Linux, and the volume
+remains marked invalid.
 .Pp
 A failed write on a mounted file system's device, whoever made it, the
 background flusher and an eviction included, a failed flush, a flush

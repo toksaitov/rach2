@@ -541,16 +541,23 @@ program a process runs, or child mount in any process then makes it busy.
 A loop device attached to a file on the mount also prevents unmounting.
 .Pp
 The file system syncs and prepares to unmount; the kernel writes dirty
-cache buffers, flushes the device, and invalidates its cached buffers.
+cache buffers, flushes the device, and drops its cached buffers.
 A tmpfs has no device and writes nothing; its unmount frees its files.
 For a writable KRFFS volume, preparation flushes earlier writes to the
 medium before clearing and separately flushing the dirty flag.
-If clearing or flushing that flag fails, unmount returns
-.Er EIO
-and the mount becomes read-only.
 A KRFFS volume made read-only before preparation keeps that flag set.
 Only then does it release the file system, covered directory, and claim.
-Failure before release restores the mount to active state.
+.Pp
+A write that fails does not keep the mount, as on Linux:
+.Fn umount2
+completes and returns 0, and the kernel logs the failure.
+After the file system's sync fails, or on a device whose earlier write
+failed, the volume is not prepared and no cached buffer is written;
+the device is flushed and the buffers still dirty are dropped.
+A writeback or flush that fails after preparation puts back what
+preparation wrote.
+Either way the volume stays marked for a check: an ext2 volume keeps its
+valid bit clear, and a KRFFS, FAT32 or exFAT volume its dirty flag.
 .Pp
 A FAT32 or exFAT mount made read-only by a failed write can be unmounted
 once its references are released.
@@ -604,7 +611,7 @@ An ancestor directory denies search permission.
 The target is covered, reserved, or in a mount undergoing a transition;
 the source overlaps a claimed range or an open raw writer;
 the source device is already mounted; or an unmount is prevented by
-references or cache buffers still held or dirty.
+references.
 Unmounting a permanent mount without
 .Dv MNT_DETACH
 also returns this error.
@@ -624,8 +631,7 @@ the root of the mount table.
 A constructor also returns this error for invalid options or volume
 structure it cannot accept.
 .It Bq Er EIO
-Path lookup or file-system I/O failed, the backing device was removed,
-or unmount writeback or device flushing failed.
+Path lookup or file-system I/O failed, or the backing device was removed.
 .It Bq Er ELOOP
 Target resolution would follow more than 40 symbolic links.
 .It Bq Er ENAMETOOLONG
