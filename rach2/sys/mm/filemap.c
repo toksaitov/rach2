@@ -81,15 +81,23 @@ struct dshare {
     uint64_t clean;
     wait_queue_t left;
     struct shmem sh;
-    /* The pages a shared mapping may have stored into, a bit each, in
-     * leaves of SHMEM_LEAF bits made at a page's first write fault
-     * (`filemap_mkwrite_disk`), as Linux marks a folio dirty at
-     * page_mkwrite: only these are written back, so that a page read from a
-     * hole and never stored to leaves the hole a hole. A bit stays once
-     * set, and a truncation clears the bits of the pages it frees. Under
-     * the file's lock. */
+    /* The pages a shared mapping may have stored into and the file may
+     * lack, a dirty bit each, in leaves of SHMEM_LEAF bits made at a page's
+     * first write fault (`filemap_mkwrite_disk`), as Linux marks a folio
+     * dirty at page_mkwrite: only these are written back, so that a page
+     * read from a hole and never stored to leaves the hole a hole. A
+     * successful write of the page clears its bit while no writable mapping
+     * lives (`writers`), and a truncation clears the bits of the pages it
+     * frees. Under the file's lock. */
     uint32_t **stored;
     uint32_t nstored; /* the leaves `stored` reaches */
+    uint32_t ndirty;  /* the bits set in `stored`, under the file's lock */
+    /* The shared mappings through a description open for writing whose
+     * release has not begun: while one lives, a page it maps writable takes
+     * stores with no fault, so no write of the page may clear its bit. A
+     * store reaches a page only through `mkwrite` once none lives. Changed
+     * under the big lock. */
+    uint32_t writers;
 };
 
 /* The words of a leaf of `stored`. */
@@ -348,33 +356,62 @@ static int dshare_mark(struct dshare *ds, uint32_t i)
             return -ENOMEM;
         }
     }
-    ds->stored[leaf][bit / 32u] |= 1u << (bit % 32u);
+    if (!(ds->stored[leaf][bit / 32u] & (1u << (bit % 32u)))) {
+        ds->stored[leaf][bit / 32u] |= 1u << (bit % 32u);
+        ds->ndirty++;
+    }
     return 0;
+}
+
+/** The bits set in `w`. */
+static uint32_t dshare_bits(uint32_t w)
+{
+    uint32_t n = 0;
+
+    for (; w != 0; w &= w - 1u) {
+        n++;
+    }
+    return n;
+}
+
+/** Clear the dirty bit of page `i` of `ds`, which is set, after a write of
+ * the page that succeeded. Under the file's lock. */
+static void dshare_clear(struct dshare *ds, uint32_t i)
+{
+    uint32_t bit = i % SHMEM_LEAF;
+
+    ds->stored[i / SHMEM_LEAF][bit / 32u] &= ~(1u << (bit % 32u));
+    ds->ndirty--;
 }
 
 /** Clear the marks of `ds` (`stored`) from page `first` on, the pages a
  * truncation freed, so that a page read again after the file grows back is
- * clean. Under the file's lock. */
+ * clean, and take them off `ndirty`. Under the file's lock. */
 static void dshare_unmark_from(struct dshare *ds, uint32_t first)
 {
-    uint32_t leaf, w;
+    uint32_t leaf, w, keep;
 
     for (leaf = first / SHMEM_LEAF; leaf < ds->nstored; leaf++) {
         if (!ds->stored[leaf]) {
             continue;
         }
+        w = 0;
+        if (leaf == first / SHMEM_LEAF && first % SHMEM_LEAF != 0) {
+            w = (first % SHMEM_LEAF) / 32u;
+            if (first % 32u) {
+                keep = (1u << (first % 32u)) - 1u;
+                ds->ndirty -= dshare_bits(ds->stored[leaf][w] & ~keep);
+                ds->stored[leaf][w] &= keep;
+                w++;
+            }
+        }
+        for (; w < DSHARE_STORED_WORDS; w++) {
+            ds->ndirty -= dshare_bits(ds->stored[leaf][w]);
+            ds->stored[leaf][w] = 0;
+        }
         if (leaf > first / SHMEM_LEAF || first % SHMEM_LEAF == 0) {
             kfree(ds->stored[leaf]);
             ds->stored[leaf] = NULL;
-            continue;
-        }
-        w = (first % SHMEM_LEAF) / 32u;
-        if (first % 32u) {
-            ds->stored[leaf][w] &= (1u << (first % 32u)) - 1u;
-            w++;
-        }
-        for (; w < DSHARE_STORED_WORDS; w++) {
-            ds->stored[leaf][w] = 0;
         }
     }
 }
@@ -441,14 +478,22 @@ static int dshare_write_bytes(struct filemap *m, uintptr_t phys, uint32_t len, u
  * the end of the write, so a truncation, which takes it too, runs wholly
  * before or after: the write never reaches past the size it leaves, and the
  * page, looked up after the size is read and copied with nothing between that
- * sleeps, is one a truncation has not freed. A page no store has reached
+ * sleeps, is one a truncation has not freed. A page whose dirty bit is clear
  * (`dshare_stored`) is not written, as Linux's write-back passes a clean
  * folio by (`write_cache_pages`, mm/page-writeback.c): it equals the file,
  * and writing a page read from a hole would allocate the hole's blocks. A
  * partial page's tail is zeroed before writing, as Linux's mpage_writepage
  * zeros bytes beyond EOF. A file a loop device stands on is not written, as
- * write(2) does not write it. 1 after a write, 0 when there was nothing to
- * write, -EBUSY, or the write's error.
+ * write(2) does not write it.
+ *
+ * A write that succeeds clears the page's bit in the same hold of the lock
+ * when no writable mapping lived as the copy began (`writers`): a store
+ * after the copy then needs `mkwrite`, which waits for the lock and sets the
+ * bit again, as Linux clears a folio's dirty bit for write-back with its
+ * mappings made read-only (folio_clear_dirty_for_io,
+ * mm/page-writeback.c:2987-3040). A bit on a page past the end or not in
+ * memory has nothing to write and is cleared. 1 after a write, 0 when there
+ * was nothing to write, -EBUSY, or the write's error, which leaves the bit.
  */
 static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i)
 {
@@ -459,7 +504,7 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i)
     uintptr_t phys;
     uint8_t *page;
     uint32_t len;
-    int rc = 0;
+    int rc = 0, clean;
 
     file.mnt = mnt;
     file.node = m->entry.ofd->vnode;
@@ -470,7 +515,10 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i)
         rc = -EBUSY;
     } else if (vfs_getattr(mnt, m->entry.ofd->vnode, &st) != 0) {
         rc = -EIO;
-    } else if (at < st.size && (phys = shmem_resident(&ds->sh, i)) != 0) {
+    } else if (at >= st.size || (phys = shmem_resident(&ds->sh, i)) == 0) {
+        dshare_clear(ds, i);
+    } else {
+        clean = *(volatile uint32_t *)&ds->writers == 0;
         page = kmap_temp(phys);
         if (!page) {
             rc = -EIO;
@@ -479,6 +527,9 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i)
             k_memset(page + len, 0, PAGE_SIZE - len);
             kunmap_temp(page);
             rc = dshare_write_bytes(m, phys, len, at);
+            if (rc == 0 && clean) {
+                dshare_clear(ds, i);
+            }
             rc = rc == 0 ? 1 : rc;
         }
     }
@@ -1054,6 +1105,10 @@ static void filemap_release(struct vm_file *f)
     if (m->ds && m->shared && (m->entry.flags & FD_FLAG_WRITE) && m->retained != 2) {
         int rc;
 
+        if (m->retained == 0) {
+            m->ds->writers--;
+        }
+
         m->writing = 1;
         rc = dshare_write_back(m->ds, m, 0, m->ds->sh.npages);
         m->writing = 0;
@@ -1220,6 +1275,9 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
         ds->clean = tick_count(); /* no store is older than its first mapping */
     }
     ds->sh.maps++;
+    if (shared && (e->flags & FD_FLAG_WRITE)) {
+        ds->writers++;
+    }
     if (shared && (e->flags & FD_FLAG_WRITE) && !ds->stores) {
         flags = spin_lock_irqsave(&dshare_lock);
         ds->stores = 1;
