@@ -802,7 +802,8 @@ static void state_changes(void)
  * A blocking reader or writer that holds the pipe across its resolve
  * neither waits nor finds the ring changed: the reader takes its bytes, and
  * the writer its room, before the peer that waited for the lock writes or
- * reads; each page a write copies wakes the readers.
+ * reads; each write wakes the readers once, after it gives the lock back,
+ * however many pages it copies.
  */
 static void readiness_changes(void)
 {
@@ -824,7 +825,7 @@ static void readiness_changes(void)
     CHECK(pipe_write(&writer, user_at(0), 3) == 3, "a blocking writer keeps its room");
     CHECK(waits == 0 && peer_result == PIPE_BUF_SIZE - 3 && pipe_available(&ring) == PIPE_BUF_SIZE,
           "a blocking writer waits for nothing, and the peer after it fills the rest");
-    CHECK(read_wakes == PIPE_BUF_SIZE / PAGE_SIZE + 1, "each page a write copies wakes reader");
+    CHECK(read_wakes == 2, "each write wakes the readers once, whatever pages it copies");
 
     setup(0);
     pipe_ring_put(&ring, memory, 2);
