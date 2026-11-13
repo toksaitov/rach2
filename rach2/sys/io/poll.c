@@ -2,21 +2,22 @@
  * poll.c: the poll core, and poll, ppoll, select, _newselect and pselect6
  * on it, as poll.h describes them.
  *
- * A wait scans the descriptors with interrupts off and, when none is ready
- * and the deadline has not passed, puts the process on the wait queue of
- * each (`wq_poll_add`) before interrupts are on again, so that no wake
- * falls between the scan and the sleep; every wake brings a new scan. A
- * descriptor answers through its poll operation (pipes, terminals, devices,
- * /proc files, the anonymous descriptors) or, for the console and sockets,
- * through a check of its type here. select translates its fd_sets to an
- * array of pollfd and back (poll_select.c) around the same core.
+ * A wait scans the descriptors with interrupts on and, when none is ready
+ * and the deadline has not passed, puts a record on the wait queue of each
+ * (`wq_poll_add`), scans once more, and sleeps unless a wake came since the
+ * scan began; the records stay on their queues until the wait ends, and
+ * every wake brings one new scan, as Linux's `do_poll` (fs/select.c:
+ * 884-968). A descriptor answers through its poll operation (pipes,
+ * terminals, devices, /proc files, the anonymous descriptors) or, for the
+ * console and sockets, through a check of its type here. select translates
+ * its fd_sets to an array of pollfd and back (poll_select.c) around the
+ * same core.
  */
 
 #include "../lib/kirq.h"
 #include "../lib/spinlock.h"
 #include "poll.h"
 #include "poll_select.h"
-#include "epoll.h"
 #include "../irq.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
@@ -31,6 +32,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
+#include "../arch/arch.h"
 #include "../network/socket/socket.h"
 
 /* The timespec of longs ppoll and pselect6 take, 32 bits each on i686 and
@@ -115,71 +117,30 @@ short poll_fd_held(fd_entry_t *e, short events, struct wait_queue **wq)
     return poll_locked(e, events, wq);
 }
 
-/* A poll's or a select's descriptors, for the scan of `poll_wait`: the
- * queues it has records for, and the queues the last scan found, when they
- * were more with nothing ready, for the wait to begin again with. */
+/* A poll's or a select's descriptors, for the scan of `poll_wait`. */
 struct pollfd_scan {
     struct kernel_pollfd *fds;
     uint32_t nfds;
     int sel; /* nonzero for select's rule of readiness (`poll_scan`) */
-    uint32_t room;
-    uint32_t grow;
 };
 
 /**
- * The readiness of `e` and its wait queues, into `wqs` from `*used` on as
- * far as `room` goes, `*used` counting them all: one queue, or for an epoll
- * set the set's own and those of what it watches, so that a change in any
- * of them wakes a poll of the set (`epoll_poll_set`).
- */
-static short poll_one(fd_entry_t *e, short events, struct wait_queue **wqs, uint32_t room,
-                      uint32_t *used)
-{
-    struct wait_queue *wq;
-    short revents;
-
-    if (epoll_is_set(e)) {
-        uint32_t n = 0;
-        int big = file_ops_lock(e);
-
-        revents = epoll_poll_set(e, events, *used < room ? wqs + *used : NULL,
-                                 *used < room ? room - *used : 0, &n);
-        file_ops_unlock(big);
-        *used += n;
-        return revents;
-    }
-    revents = poll_fd(e, events, &wq);
-    if (wq) {
-        if (*used < room) {
-            wqs[*used] = wq;
-        }
-        (*used)++;
-    }
-    return revents;
-}
-
-/**
  * One scan of the descriptors of `p`: each entry's revents filled, the wait
- * queues put in `wqs` as far as `p->room` goes, and the count of entries
- * ready returned. A negative descriptor is skipped with no events, as POSIX
- * has it, and one that is not open or was opened with O_PATH is POLLNVAL,
- * ready, and not waited on. Called with interrupts off (`poll_wait`).
+ * queue of each descriptor put in `wqs`, one for each entry, NULL for an
+ * entry with none, and the count of entries ready returned. A negative
+ * descriptor is skipped with no events, as POSIX has it, and one that is
+ * not open or was opened with O_PATH is POLLNVAL, ready, and not waited
+ * on. Called with interrupts on (`poll_wait`).
  *
  * `p->sel` selects select's rule over poll's: poll counts an entry with any
  * revents, while select counts one only for an event that projects onto a
  * direction it was selected in (`pollfd_select_ready`), so a descriptor
  * selected for writing or exceptions that reports only POLLHUP is not ready,
  * as the projection onto the fd_sets says, and the wait does not spin.
- *
- * An epoll set has a queue for each descriptor it watches, so the queues
- * can be more than the records the wait has; with nothing ready, the scan
- * says so in `p->grow` and returns 1 to end the wait, which begins again
- * with a record for each.
  */
 static int poll_scan(struct pollfd_scan *p, struct wait_queue **wqs)
 {
     struct kernel_pollfd *fds = p->fds;
-    uint32_t used = 0;
     uint32_t i;
     int ready = 0;
 
@@ -197,16 +158,12 @@ static int poll_scan(struct pollfd_scan *p, struct wait_queue **wqs)
             ready++;
             continue;
         }
-        revents = poll_one(e, (short)(fds[i].events | POLLERR | POLLHUP), wqs, p->room, &used);
+        revents = poll_fd(e, (short)(fds[i].events | POLLERR | POLLHUP), &wqs[i]);
         revents &= (short)(fds[i].events | POLLERR | POLLHUP | POLLNVAL);
         fds[i].revents = revents;
         if (p->sel ? pollfd_select_ready(fds[i].events, revents) : (revents != 0)) {
             ready++;
         }
-    }
-    if (ready == 0 && used > p->room) {
-        p->grow = used;
-        return 1;
     }
     return ready;
 }
@@ -249,95 +206,73 @@ static int deadline_passed(struct poll_deadline *d)
     return 0;
 }
 
-/* The lock over each process's published poll arrays (`poll_wqs`,
- * `poll_recs`, `poll_n`) and its `poll_quiet` and `poll_drop`: a sleeper
- * publishes and takes back its arrays under it and marks itself quiet
- * under it before it sleeps, and `poll_let_go` takes another thread's
- * records off their queues under it. It comes before each queue's own
- * lock. */
-static struct spinlock poll_lock = SPINLOCK_INIT_NAMED("poll_lock");
-
-/** Put the current process's records on the `n` queues of `wqs` and
- * publish the arrays; interrupts are off. */
-static void poll_file(struct wait_queue **wqs, struct wq_waiter *recs, uint32_t n)
+/**
+ * The function of a wait's record on a queue (`wq_poll_add`): the thread
+ * that owns it is marked woken, so that a wait whose scan raced with the
+ * wake does not sleep, and is made ready if it sleeps, as Linux's
+ * `pollwake` sets `triggered` before `default_wake_function` (fs/select.c:
+ * 208-216). The record stays on its queue. Returns whether the thread was
+ * asleep, which ends the turn of an exclusive record.
+ */
+static int poll_rec_wake(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus)
 {
-    uint32_t i;
-
-    spin_lock(&poll_lock);
-    for (i = 0; i < n; i++) {
-        recs[i].proc = current_proc;
-        recs[i].next = NULL;
-        wq_poll_add(wqs[i], &recs[i]);
+    (void)nest;
+    if (kinds & WQ_FREE) {
+        return 0;
     }
-    current_proc->poll_wqs = wqs;
-    current_proc->poll_recs = recs;
-    current_proc->poll_n = n;
-    spin_unlock(&poll_lock);
+    w->proc->poll_woken = 1;
+    return wq_ready_deferred(w->proc, cpus);
 }
 
-/** Take the current process's records off their queues, the queues a
- * `poll_let_go` left, and withdraw the arrays; interrupts are off. */
-static void poll_unfile(struct wait_queue **wqs, struct wq_waiter *recs, uint32_t n)
+/** Make `rec` the current thread's record, for a queue, with the flags
+ * `flags`. */
+static void poll_rec_init(struct wq_waiter *rec, uint32_t flags)
 {
+    rec->proc = current_proc;
+    rec->next = NULL;
+    rec->func = poll_rec_wake;
+    rec->wq = NULL;
+    rec->flags = flags;
+}
+
+/** Put the current thread's records `recs` on the `n` queues of `wqs`,
+ * those not NULL. */
+static void poll_file(struct wait_queue **wqs, struct wq_waiter *recs, uint32_t n)
+{
+    uint32_t flags = irq_save();
     uint32_t i;
 
-    spin_lock(&poll_lock);
+    for (i = 0; i < n; i++) {
+        poll_rec_init(&recs[i], 0);
+        wq_poll_add(wqs[i], &recs[i]);
+    }
+    irq_restore(flags);
+}
+
+/** Take the current thread's records `recs` off the `n` queues of `wqs`. */
+static void poll_unfile(struct wait_queue **wqs, struct wq_waiter *recs, uint32_t n)
+{
+    uint32_t flags = irq_save();
+    uint32_t i;
+
     for (i = 0; i < n; i++) {
         wq_poll_remove(wqs[i], &recs[i]);
     }
-    current_proc->poll_wqs = NULL;
-    current_proc->poll_recs = NULL;
-    current_proc->poll_n = 0;
-    current_proc->poll_quiet = 0;
-    spin_unlock(&poll_lock);
+    irq_restore(flags);
 }
 
-int poll_let_go(process_t *t)
+/** Clear the current thread's woken mark before a scan, with a full
+ * barrier after the store, as Linux's `smp_store_mb(pwq->triggered, 0)`
+ * (fs/select.c:255): a waker that changes what the scan reads and then
+ * marks the thread woken either is seen by the scan or leaves the mark
+ * set. */
+static void poll_woken_clear(void)
 {
-    uint32_t flags = spin_lock_irqsave(&poll_lock);
-    uint32_t i;
-    int quiet = t->poll_quiet && t->poll_wqs;
-
-    if (quiet) {
-        for (i = 0; i < t->poll_n; i++) {
-            wq_poll_remove(t->poll_wqs[i], &t->poll_recs[i]);
-            t->poll_wqs[i] = NULL;
-        }
-    } else {
-        t->poll_drop = 1;
-    }
-    spin_unlock_irqrestore(&poll_lock, flags);
-    return quiet;
-}
-
-int poll_drop_take(void)
-{
-    uint32_t flags = spin_lock_irqsave(&poll_lock);
-    int drop = current_proc->poll_drop;
-
-    current_proc->poll_drop = 0;
-    spin_unlock_irqrestore(&poll_lock, flags);
-    return drop;
-}
-
-/** Mark the current process quiet for `poll_let_go`, unless a close has
- * asked its epoll wait to give back its holds meanwhile: 1 when marked, 0
- * when the wait is to scan again, which ends it (`poll_drop_take`). A
- * request left from an epoll wait that has ended does not stop another
- * wait. Interrupts are off. */
-static int poll_quiet(void)
-{
-    int quiet;
-
-    spin_lock(&poll_lock);
-    quiet = !current_proc->poll_drop || !current_proc->epoll_waiting;
-    current_proc->poll_quiet = quiet;
-    spin_unlock(&poll_lock);
-    return quiet;
+    (void)arch_atomic_xchg((volatile unsigned int *)&current_proc->poll_woken, 0);
 }
 
 /**
- * Whether a signal ends the wait, with interrupts off: 0 without the big lock
+ * Whether a signal ends the wait: 0 without the big lock
  * while the thread's signal-work flag (`sig_woken`) is clear, as Linux's
  * signal_pending tests TIF_SIGPENDING alone (include/linux/sched/signal.h:
  * 379-382, 404-416), and otherwise `signal_pending` under the big lock, which
@@ -371,43 +306,59 @@ static int poll_expired(struct poll_deadline *d)
 }
 
 /**
- * The scan runs first with the process RUNNING. When it finds nothing ready,
- * the process is marked BLOCKED, goes on every queue it named, and the
- * scan runs again, as Linux's poll adds its entry to each queue before it
- * reads that file's mask (fs/select.c, `__pollwait`): a change of readiness
- * after the second scan's look wakes the process from one of the queues,
- * and `schedule` then keeps it running; one before it, the second scan
- * sees. BLOCKED precedes enrollment, since even a wake for an unrequested
- * kind removes the record; it must then mark the thread ready, so it cannot
- * sleep with that record gone. When the second scan names other queues,
- * the process leaves them and scans again. Interrupts are off from the
- * first scan to `schedule`.
- * A finite timeout also sets the timer wake, `wakeup_tick`, which
- * `proc_wake_sleepers` acts on at the deadline: with another process
- * runnable, schedule() does not return here on its own, and a wait on no
- * queue or on objects that never fire would otherwise sleep past its
- * deadline. A computed tick of 0 is stored as 1, since 0 means not
- * sleeping. A process still blocked when schedule() returns, which nothing
- * woke and nothing else could run, idles until the next interrupt, still on
- * every queue so a waker can find it, and leaves the queues after. On
- * return the process is on no queue and its timer wake is cleared.
- *
- * While it sleeps, the process's record names the queues and its records
- * on them (`poll_wqs`), so that a close by another thread can take it off
- * them all, with each queue set to NULL, before it frees what an epoll
- * wait sleeps on (`poll_let_go`); the process publishes and takes back the
- * arrays under the lock that call takes. It marks itself quiet under that
- * lock once its last scan before the sleep is done (`poll_quiet`), so
- * that a close never takes what a scan is reading, and a close that came
- * while it was not quiet has it scan again, which ends an epoll wait for
- * its holds to go back (`poll_drop_take`).
+ * Sleep until a wake of a queue the thread has a record on, its deadline
+ * `d` when set, or a signal, unless a wake came since its mark was cleared
+ * (`poll_woken`), as Linux's `poll_schedule_timeout` (fs/select.c:234-258).
+ * The thread is marked BLOCKED, with the barrier `sched_set_current_state`
+ * makes, before it reads its mark: a wake after that read finds it blocked
+ * and makes it ready, so `schedule` keeps it running or returns. A finite
+ * timeout sets the timer wake, `wakeup_tick`, which `proc_wake_sleepers`
+ * acts on at the deadline: with another process runnable, schedule() does
+ * not return here on its own. A computed tick of 0 is stored as 1, since 0
+ * means not sleeping. A thread still blocked when schedule() returns,
+ * which nothing woke and nothing else could run, idles until the next
+ * interrupt, still on every queue so a waker can find it.
+ */
+static void poll_sleep(struct poll_deadline *d, const char *wchan)
+{
+    uint32_t flags;
+
+    if (d->set) {
+        current_proc->wakeup_tick = d->tick ? d->tick : 1;
+    }
+    current_proc->wchan = wchan;
+    sched_set_current_state(PROC_BLOCKED);
+    if (!current_proc->poll_woken) {
+        schedule();
+        flags = irq_save();
+        if (current_proc->state == PROC_BLOCKED) {
+            idle_wait_irq_off();
+        }
+        irq_restore(flags);
+    }
+    current_proc->state = PROC_RUNNING;
+}
+
+/**
+ * The scan runs with interrupts on and the thread RUNNING, its woken mark
+ * cleared first (`poll_woken_clear`). When it finds nothing ready, the
+ * thread puts a record on every queue it named, which stay there until the
+ * wait ends, and scans again, as Linux's first scan queues each entry
+ * before it reads that file's mask (fs/select.c, `__pollwait`): a change
+ * of readiness before that scan's look is seen by it, and one after wakes
+ * a record and marks the thread woken. After that, a scan that finds
+ * nothing ready is followed by a sleep (`poll_sleep`), and each wake by
+ * one scan. A scan that names other queues than the records are on, as a
+ * descriptor another thread replaced would, moves the records to them and
+ * scans again. On return the thread is on no queue and its timer wake is
+ * cleared.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
     struct wait_queue **wqs, **again;
     struct wq_waiter *recs;
-    uint32_t flags, m = n ? n : 1;
-    int rc;
+    uint32_t m = n ? n : 1;
+    int rc, filed = 0;
     uint32_t i;
 
     wqs = kzalloc(sizeof(*wqs) * 2u * m);
@@ -418,14 +369,14 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
         return -ENOMEM;
     }
     again = wqs + m;
-    flags = irq_save();
     for (;;) {
         int ready, changed = 0;
 
+        poll_woken_clear();
         for (i = 0; i < n; i++) {
-            wqs[i] = NULL;
+            again[i] = NULL;
         }
-        ready = scan(ctx, wqs);
+        ready = scan(ctx, again);
         if (ready > 0) {
             rc = ready;
             break;
@@ -438,47 +389,70 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
             rc = 0;
             break;
         }
-
-        if (d->set) {
-            current_proc->wakeup_tick = d->tick ? d->tick : 1;
-        }
-        current_proc->wchan = wchan;
-        sched_set_current_state(PROC_BLOCKED);
-        poll_file(wqs, recs, n);
-        for (i = 0; i < n; i++) {
-            again[i] = NULL;
-        }
-        ready = scan(ctx, again);
         for (i = 0; i < n; i++) {
             changed |= again[i] != wqs[i];
         }
-        if (ready > 0 || poll_signal_pending() || poll_expired(d) || changed ||
-            current_proc->state != PROC_BLOCKED || !poll_quiet()) {
-            poll_unfile(wqs, recs, n);
-            current_proc->state = PROC_RUNNING;
-            if (ready > 0) {
-                rc = ready;
-                break;
+        if (!filed || changed) {
+            if (filed) {
+                poll_unfile(wqs, recs, n);
             }
+            for (i = 0; i < n; i++) {
+                wqs[i] = again[i];
+            }
+            poll_file(wqs, recs, n);
+            filed = 1;
             continue;
         }
-        irq_restore(flags);
-
-        schedule();
-
-        flags = irq_save();
-        if (current_proc->state == PROC_BLOCKED) {
-            idle_wait_irq_off();
-        }
-        poll_unfile(wqs, recs, n);
-        current_proc->state = PROC_RUNNING;
+        poll_sleep(d, wchan);
     }
-
+    if (filed) {
+        poll_unfile(wqs, recs, n);
+    }
     current_proc->wakeup_tick = 0;
     current_proc->state = PROC_RUNNING;
-    irq_restore(flags);
     kfree(wqs);
     kfree(recs);
+    return rc;
+}
+
+int poll_wait_queue(struct wait_queue *wq, int (*ready)(void *ctx), void *ctx,
+                    struct poll_deadline *d, const char *wchan)
+{
+    struct wq_waiter rec;
+    int rc;
+
+    poll_rec_init(&rec, WQ_EXCLUSIVE);
+    {
+        uint32_t flags = irq_save();
+
+        wq_poll_add(wq, &rec);
+        irq_restore(flags);
+    }
+    poll_woken_clear();
+    for (;;) {
+        if (ready(ctx)) {
+            rc = 1;
+            break;
+        }
+        if (poll_signal_pending()) {
+            rc = -EINTR;
+            break;
+        }
+        if (poll_expired(d)) {
+            rc = 0;
+            break;
+        }
+        poll_sleep(d, wchan);
+        poll_woken_clear();
+    }
+    {
+        uint32_t flags = irq_save();
+
+        wq_poll_remove(wq, &rec);
+        irq_restore(flags);
+    }
+    current_proc->wakeup_tick = 0;
+    current_proc->state = PROC_RUNNING;
     return rc;
 }
 
@@ -489,24 +463,16 @@ static int scan_pollfds(void *ctx, struct wait_queue **wqs)
 }
 
 /** The poll core over the `nfds` entries of `fds`, with select's rule of
- * readiness when `sel` (`poll_scan`); returns as `poll_wait` does. A wait
- * whose scan found more queues than it had records for begins again with a
- * record for each. */
+ * readiness when `sel` (`poll_scan`); returns as `poll_wait` does, with a
+ * record for each entry. */
 static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, struct poll_deadline *d, int sel)
 {
     struct pollfd_scan p;
-    int rc;
 
     p.fds = fds;
     p.nfds = nfds;
     p.sel = sel;
-    p.grow = nfds;
-    do {
-        p.room = p.grow;
-        p.grow = 0;
-        rc = poll_wait(scan_pollfds, &p, p.room, d, sel ? "do_select" : "do_sys_poll");
-    } while (rc > 0 && p.grow != 0);
-    return rc;
+    return poll_wait(scan_pollfds, &p, nfds, d, sel ? "do_select" : "do_sys_poll");
 }
 
 /* The largest second a deadline holds, at which Linux's

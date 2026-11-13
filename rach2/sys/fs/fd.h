@@ -170,6 +170,8 @@ struct file_ra_state {
  * no other kind of descriptor reads or writes; `offset` is the position of
  * every other kind.
  */
+struct epitem;
+
 struct open_file {
     /* References: descriptors and the holders above. Changed only by an
      * atomic step (`fd_ofd_ref`, `fd_ofd_unref`), since descriptors of one
@@ -224,8 +226,12 @@ struct open_file {
     struct vfs_name *name;
     /* The count of descriptions made when this one was, which tells it
      * from a new description the heap gives the same address after its
-     * last close; an epoll registration keeps both. */
+     * last close (`fd_ofd_live`). */
     uint32_t serial;
+    /* The epoll registrations made of this description, under epoll.c's
+     * lock of them, which the release of its last descriptor removes
+     * (`epoll_release_file`), as Linux's `file->f_ep`. */
+    struct epitem *epolls;
     /* For a device opened through a device node of tmpfs or ext2, the only
      * types that make one, that node and its mount, held as an O_PATH
      * description holds its own: what an open of /proc/PID/fd/N checks and
@@ -580,16 +586,6 @@ int fd_dup_target(fd_table_t *table, int fd);
  * ends (`fd_holds_release`).
  */
 int fd_holds_claim(int from);
-
-/**
- * `fd_holds_claim` for the holds of descriptors being closed alone, but
- * `keep`'s: each such hold of the calling thread from `from` up is let
- * go, and the first descriptor no other sharer holds is returned, marked
- * releasing for the caller to release, or -1 once none is left. The other
- * holds stay. An epoll wait that a close asked to give back its holds
- * (`poll_let_go`) calls it, keeping its set's descriptor.
- */
-int fd_holds_claim_closing(int from, int keep);
 
 /**
  * Add or drop a reference to an open file description, each in one atomic

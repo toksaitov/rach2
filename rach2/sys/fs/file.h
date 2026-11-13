@@ -134,10 +134,4 @@ int fd_call_lock(int fd);
 /** Give back the big lock `file_ops_lock` took when `taken` says so. */
 void file_ops_unlock(int taken);
 
-/** Let go of the calling thread's holds of descriptors being closed, but
- * `keep`'s, and release each that no other call holds, as a call's end
- * does (`fd_holds_claim_closing`): for an epoll wait that a close asked to
- * give them back (`poll_let_go`). May sleep. */
-void fd_holds_release_closing(int keep);
-
 #endif /* _FILE_H_ */
