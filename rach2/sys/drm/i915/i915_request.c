@@ -155,19 +155,38 @@ static void await_done(struct i915_request *rq, int32_t err)
 }
 
 /* The earliest tick at which a request's wait for another driver's fence
- * ends, or 0 for none; the worker wakes for it. */
+ * ends, or 0 for none; the worker wakes for it. Under `submit_lock`. */
 static uint64_t await_next;
 
+/** Publish the next timeout or retry tick, `at`, if it is earlier. */
+static void await_schedule(uint64_t at)
+{
+    uint32_t flags = spin_lock_irqsave(&submit_lock);
+
+    if (at && (!await_next || at < await_next)) {
+        await_next = at;
+    }
+    spin_unlock_irqrestore(&submit_lock, flags);
+}
+
+/** Read the timeout tick under its lock, also on a 32-bit processor. */
+static uint64_t await_deadline(void)
+{
+    uint32_t flags = spin_lock_irqsave(&submit_lock);
+    uint64_t at = await_next;
+
+    spin_unlock_irqrestore(&submit_lock, flags);
+    return at;
+}
+
 /** Fold the deadlines of `rq`'s waits for other drivers' fences into
- * `await_next`. */
+ * `await_next`. The caller holds its GEM lock. */
 static void await_deadlines(const struct i915_request *rq)
 {
     const struct i915_await *w;
 
     for (w = rq->await_list; w; w = w->next) {
-        if (w->deadline && (await_next == 0 || w->deadline < await_next)) {
-            await_next = w->deadline;
-        }
+        await_schedule(w->deadline);
     }
 }
 
@@ -175,7 +194,8 @@ static void await_deadlines(const struct i915_request *rq)
  * End each of `rq`'s waits for another driver's fence whose deadline `now`
  * has passed, as Linux's timer_i915_sw_fence_wake: the callback taken off,
  * the request's error -ETIMEDOUT, which still lets it run, and the wait
- * counted done.
+ * counted done. The caller holds the GEM lock until the walk ends, since
+ * making a request runnable lets a submitter run and retire it.
  */
 static void request_expire(struct i915_request *rq, uint64_t now)
 {
@@ -183,6 +203,7 @@ static void request_expire(struct i915_request *rq, uint64_t now)
     uint32_t flags;
     int removed;
 
+    lockdep_assert_held(&rq->i915->gem.lock);
     for (w = rq->await_list; w; w = w->next) {
         if (!w->deadline || w->deadline > now) {
             continue;
@@ -200,21 +221,31 @@ static void request_expire(struct i915_request *rq, uint64_t now)
 
 /** End the waits for other drivers' fences of every queued request whose
  * deadline `now` has passed, then set `await_next` from the waits left.
- * Under the big kernel lock. */
+ * Under the big kernel lock, which keeps the device list. Each device's
+ * GEM lock protects its queue and wait records against caller retirement;
+ * a held lock leaves that device for a retry on the next tick. */
 static void awaits_expire(uint64_t now)
 {
     struct drm_i915_private *i915;
     struct i915_request *rq;
-    int i;
+    uint32_t flags;
+    int i, taken;
 
+    flags = spin_lock_irqsave(&submit_lock);
     await_next = 0;
+    spin_unlock_irqrestore(&submit_lock, flags);
     for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
+        if (!i915_gem_trylock(i915, &taken)) {
+            await_schedule(now + 1u);
+            continue;
+        }
         for (i = 0; i < I915_NUM_ENGINES; i++) {
             for (rq = i915->gt.engine[i].queued; rq; rq = rq->next) {
                 request_expire(rq, now);
                 await_deadlines(rq);
             }
         }
+        i915_gem_unlock(i915, taken);
     }
 }
 
@@ -304,11 +335,12 @@ static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
 int i915_submit_work(void)
 {
     struct drm_i915_private *i915;
+    uint64_t at = await_deadline();
     uint32_t flags;
     int i, kicked, n = 0;
 
     submit_kicked = 0;
-    if (await_next != 0 && rtc_ticks_now() >= await_next) {
+    if (at != 0 && rtc_ticks_now() >= at) {
         awaits_expire(rtc_ticks_now());
     }
     for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
@@ -346,7 +378,7 @@ static volatile int hangcheck_kicked;
 static uint64_t hangcheck_deadline(void)
 {
     struct drm_i915_private *i915;
-    uint64_t at = 0;
+    uint64_t at = 0, await = await_deadline();
 
     for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
         if (i915->gt.awake && !i915->gt.wedged && i915->gt.hc_next != 0 &&
@@ -357,8 +389,8 @@ static uint64_t hangcheck_deadline(void)
             at = i915->gt.retire_next;
         }
     }
-    if (await_next != 0 && (at == 0 || await_next < at)) {
-        at = await_next;
+    if (await != 0 && (at == 0 || await < at)) {
+        at = await;
     }
     return at;
 }
@@ -614,13 +646,15 @@ int32_t i915_request_await_fence(struct i915_request *rq, struct dma_fence *fenc
  * Take back what `rq` still waits for, which then never comes: the fences'
  * callbacks removed and the requests it waited to see submitted told to
  * forget it; then free every record. For a request that leaves without
- * running, and for one that retired, whose records are all spent.
+ * running, and for one that retired, whose records are all spent. The
+ * caller holds the GEM lock, also held by the timeout walk.
  */
 static void awaits_release(struct i915_request *rq)
 {
     struct i915_await *w, **link;
     uint32_t flags;
 
+    lockdep_assert_held(&rq->i915->gem.lock);
     while ((w = rq->await_list) != 0) {
         rq->await_list = w->next;
         if (w->fence) {
