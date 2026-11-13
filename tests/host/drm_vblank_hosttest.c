@@ -4,6 +4,7 @@
  * worker, against a fake driver whose CRTCs count vblanks from a timer;
  * drm_vblank64_hosttest.c runs the same rows with x86-64's structures.
  *
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -151,15 +152,6 @@ process_t *get_process(uint32_t pid)
 {
     (void)pid;
     return NULL;
-}
-
-/** Host arithmetic for the kernel's division helper. */
-uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
-{
-    if (rem) {
-        *rem = (uint32_t)(n % d);
-    }
-    return n / d;
 }
 
 /* ---- the fake driver ---- */
@@ -1020,7 +1012,7 @@ static void plane_wait_timeout(int signal_first)
     struct plane_wait_case c;
 
     plane_wait_begin(&c, 10000);
-    model_now_ns = (int64_t)c.deadline * 1000000ll;
+    model_now_ns = (int64_t)c.deadline * TICK_NS;
     if (signal_first) {
         plane_fence_signal(&c.f[0]);
     }
@@ -1053,7 +1045,7 @@ static void plane_wait_next(uint32_t timeout_ms, int delayed_worker)
               works->deadline == (timeout_ms ? rtc_ticks_now() + MS_TO_TICKS(timeout_ms) + 1u : 0),
           "planes: the second pending fence gets its callback, boost and full timeout");
     if (timeout_ms && !delayed_worker) {
-        model_now_ns = (int64_t)c.deadline * 1000000ll;
+        model_now_ns = (int64_t)c.deadline * TICK_NS;
         CHECK(drm_atomic_commit_work() == 0 && nshown == c.shown,
               "planes: the first wait's deadline does not end the second wait");
     }

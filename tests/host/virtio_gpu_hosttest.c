@@ -5,6 +5,7 @@
  * and the 2D commands over resources whose backing is host memory;
  * virtio_gpu64_hosttest.c runs the same rows with x86-64's structures.
  *
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstd.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
@@ -217,16 +218,7 @@ void rtc_monotonic(int64_t *sec, int64_t *nsec)
 /** Ticks of a millisecond. */
 uint64_t rtc_ticks_now(void)
 {
-    return (uint64_t)(now_ns / 1000000);
-}
-
-/** Host arithmetic for the kernel's division helper. */
-uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
-{
-    if (rem) {
-        *rem = (uint32_t)(n % d);
-    }
-    return n / d;
+    return (uint64_t)(now_ns / TICK_NS);
 }
 
 /** A busy wait: the clock advances and nothing else runs. */

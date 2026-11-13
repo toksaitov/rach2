@@ -2,6 +2,7 @@
  * software timeline and syncobj code; syncobj64_hosttest.c runs the same
  * rows with x86-64's structures. Descriptors, eventfds, handle tables and
  * the scheduler are models, and a sleep runs the producer step a row arms.
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
@@ -53,14 +54,7 @@ void rtc_monotonic(int64_t *sec, int64_t *ns)
 /** Milliseconds of the model's clock. */
 uint64_t rtc_ticks_now(void)
 {
-    return (uint64_t)(now_ns / 1000000);
-}
-/** Host arithmetic for the kernel's division helper. */
-uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
-{
-    if (rem)
-        *rem = (uint32_t)(n % d);
-    return n / d;
+    return (uint64_t)(now_ns / TICK_NS);
 }
 /** Initialize a model queue. */
 void wait_queue_init(wait_queue_t *wq)
@@ -93,7 +87,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     if (step)
         step();
     else
-        now_ns = (int64_t)current_proc->wakeup_tick * 1000000;
+        now_ns = (int64_t)current_proc->wakeup_tick * TICK_NS;
     CHECK(cond(arg), "wait condition after the scheduled event");
     return 0;
 }

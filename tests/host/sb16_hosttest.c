@@ -2,6 +2,7 @@
  * SB16 PCM frames, stream negotiation and progress, failed setup, callback
  * playback and the shell's scale against port stubs and a DMA position model.
  *
+ * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
 #include "audio/sb16.c"
@@ -685,7 +686,7 @@ static void row_scale(void)
     CHECK(scale_length >= at, "device plays the whole scale");
     run_scale(1);
     CHECK(scale_done == 0 && scale_stalled == 1, "stopped device makes scale report a stall");
-    CHECK(kernel_ticks >= 4 * (5 * (17640 + 1536) / (44100 / TICK_HZ)) + TICK_HZ,
+    CHECK(kernel_ticks >= (4u * 5u * (17640u + 1536u) * TICK_HZ) / 44100u + TICK_HZ,
           "stall is reported after four lengths and a second");
 }
 

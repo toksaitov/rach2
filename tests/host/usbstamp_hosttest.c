@@ -203,6 +203,12 @@ void timer_idle_work(void)
 void timer_service_ipi(void)
 {}
 
+/** The recorder programs no event hardware. */
+void timer_wake_at(int64_t ns)
+{
+    (void)ns;
+}
+
 /** The recorder has no deferred timer hardware change. */
 int timer_idle_pending(void)
 {
@@ -213,7 +219,7 @@ int timer_idle_pending(void)
 void timer_idle_retain(void)
 {}
 
-/** The model's periodic scheduler uses millisecond units. */
+/** The model counts one four-millisecond scheduler tick. */
 uint32_t timer_tick_period(void)
 {
     return 1;
