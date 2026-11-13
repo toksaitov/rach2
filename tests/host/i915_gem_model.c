@@ -649,12 +649,15 @@ void unpin(struct pin *pin)
     }
 }
 
+/* The heap's blocks held, and the calls that asked for one. */
 static int allocations;
+static int kmalloc_calls;
 
 void *kmalloc(size_t size)
 {
     void *p = calloc(1, size);
 
+    kmalloc_calls++;
     if (p) {
         allocations++;
     }
