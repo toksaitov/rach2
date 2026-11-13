@@ -1,0 +1,4 @@
+0
+drwx------ 7 root root 0 Jan  1  1970 /sys/kernel/debug
+1
+vol 1:1
