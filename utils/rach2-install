@@ -2180,28 +2180,63 @@ its archive does not say which is the root; nothing was written" ;;
     [ -n "$root_entry" ] || die "/dev/disk$1 has no ext2 partition in its table"
 }
 
-# Status 0 when FILE begins as the kernel's init_krffs requires of its RAM
-# image: it holds at least a node header, 357 bytes, and its first node is
-# the root, with the magic 0x4b52 (`RK`, low byte first) and the type 0, and
-# a size, the eight bytes at 325, of at least a header that FILE holds. The
-# rest of the chain the kernel walks is not read here.
+# Status 0 when FILE is a KRFFS image the kernel's init_krffs would mount
+# as its RAM root: the node chain passes krffs_chain_is_valid. Each node
+# header is 357 bytes: the magic 0x4b52 (`RK`, low byte first) at 0, the type
+# at 2, the name at 11, which a reserved node ends within its 256 bytes, and
+# from 325 the eight-byte size, backward link and data length. The first node
+# is the root, type 0; each node has a type of 0 to 2, a size of at least a
+# header that FILE still holds, a data length that fits its size unless it is
+# free, type 1, and a link that is the size of the node before; the sizes
+# tile FILE exactly, in no more steps than FILE holds headers, and the root's
+# link is the last node's size. The mount of a volume checks no links when
+# it is read-only, so this walks the headers itself, one od at each node.
 krffs_image() { # krffs_image FILE
     krffs_bytes=$(stat -c %s "$1") || return 1
-    [ "$krffs_bytes" -ge 357 ] || return 1
-    dd if="$1" bs=357 count=1 2>/dev/null | od -An -tu1 -v | awk -v bytes="$krffs_bytes" '
-        { for (i = 1; i <= NF; i++) b[n++] = $i }
-        END {
-            if (n != 357 || b[0] != 82 || b[1] != 75 || b[2] != 0) exit 1
-            size = 0
-            for (i = 332; i >= 325; i--) size = size * 256 + b[i]
-            exit !(size >= 357 && size <= bytes)
+    [ "$krffs_bytes" -ge 357 ] && [ "$krffs_bytes" -le 4294967295 ] || return 1
+    krffs_file=$1 awk -v bytes="$krffs_bytes" '
+        function field(at, n,   v, i) {
+            v = 0
+            for (i = at + n - 1; i >= at; i--) v = v * 256 + b[i]
+            return v
+        }
+        BEGIN {
+            bound = int(bytes / 357) + 1
+            at = 0
+            for (count = 1; ; count++) {
+                if (count > bound || bytes - at < 357) exit 1
+                cmd = "od -An -tu1 -v -j " at " -N 357 \"$krffs_file\""
+                n = 0
+                while ((cmd | getline line) > 0) {
+                    k = split(line, f)
+                    for (i = 1; i <= k; i++) b[n++] = f[i] + 0
+                }
+                close(cmd)
+                if (n != 357 || field(0, 2) != 19282) exit 1
+                type = b[2]
+                if (type > 2 || (count == 1 && type != 0)) exit 1
+                size = field(325, 8)
+                if (size < 357 || size > bytes - at) exit 1
+                if (type != 1 && field(341, 8) > size - 357) exit 1
+                if (count == 1) root_link = field(333, 8)
+                else if (field(333, 8) != previous) exit 1
+                if (type == 2) {
+                    i = 11
+                    while (i < 267 && b[i] != 0) i++
+                    if (i == 267) exit 1
+                }
+                previous = size
+                at += size
+                if (at == bytes) break
+            }
+            exit !(root_link == previous)
         }'
 }
 
 # Dies, saying what is missing, unless the recovery system on disk N would
 # start a machine whose root is gone: the recovery partition is mounted at
 # RECOVERY_MNT, its kernel carries a Multiboot2 header and reads whole, its
-# RAM image reads whole and begins as the kernel requires (`krffs_image`),
+# RAM image reads whole and is one the kernel mounts (`krffs_image`),
 # its own menu, which the core image loads when the boot partition does not
 # read, loads both, the partition carries the label RACH2RECOV by which
 # GRUB's embedded configurations find that menu, and the boot partition's

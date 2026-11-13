@@ -555,8 +555,8 @@ kernel
 .Pa boot/recovery
 carries a Multiboot2 header and reads whole, its RAM image
 .Pa boot/recovery.krffs
-reads whole and begins with the root node of a KRFFS image, which the
-kernel mounts, its own menu
+reads whole and is a KRFFS image whose whole node chain passes the check
+by which the kernel mounts its RAM root, its own menu
 .Pa boot/grub/recovery.cfg
 loads both, the partition carries the FAT label
 .Ql RACH2RECOV
