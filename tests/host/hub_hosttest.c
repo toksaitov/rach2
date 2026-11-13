@@ -1918,23 +1918,13 @@ int main(void)
     pump(2000);
     kbd = slot_of_kind(KIND_KBD);
     CHECK("the keyboard is running", kbd != 0 && running_count() == 2);
-    {
-        int i;
-        int hub_index = -1;
-
-        for (i = 0; i < USB_MAX_DEVICES; i++) {
-            if (dev_at(i)->state == ST_RUNNING && dev_at(i)->interface.kind == USB_KIND_HUB) {
-                hub_index = i;
-            }
-        }
-        model.port_kind[1] = KIND_NONE;
-        usb_core_hub_port(hub_index, 1, 0);
-        pump(1000);
-        CHECK("a disconnection reported by the hub closes the device below",
-              hid_gone_count == 1 && hid_gone_slot[0] == kbd && closes == 1 &&
-                  close_order[0] == kbd);
-        CHECK("and the hub stays", running_count() == 1);
-    }
+    model.port_kind[1] = KIND_NONE;
+    model.port_change[1] |= 1u; /* a connection change: it left */
+    model_change(2);
+    pump(1000);
+    CHECK("a disconnection reported by the hub closes the device below",
+          hid_gone_count == 1 && hid_gone_slot[0] == kbd && closes == 1 && close_order[0] == kbd);
+    CHECK("and the hub stays", running_count() == 1);
 
     halted_pulled();
 
