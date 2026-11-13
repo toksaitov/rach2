@@ -961,9 +961,13 @@ static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *hea
 }
 
 /**
- * Clear the hashed-index flag of directory `d`, whose entries are about to
- * change, and store its inode with WRITE_THROUGH before they do, on a mount
- * that writes back to the device (`inode_commit`). 0, or -errno.
+ * Make the stored inode of directory `d`, whose entries are about to
+ * change, true of them before they do: when it is marked indexed, clear
+ * `EXT2_INDEX_FL`, and when its size grew in memory past what reached the
+ * device (`store_pending`), keep it; then store the inode with
+ * WRITE_THROUGH and, on a mount that writes back, write it to the device
+ * (`inode_commit`). Every change of a directory's entries comes here
+ * first. 0, or -errno, with the entries untouched.
  *
  * This driver keeps the linear entries only, which an index leaves readable
  * as they are: the index root lies in the slack of `..`, and each index
@@ -973,22 +977,34 @@ static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *hea
  * e2fsck -D builds the index again. Storing the inode first means that no
  * stop leaves a changed directory marked indexed.
  *
+ * A growth whose store failed (`dir_grow`) leaves the larger size, its new
+ * pointer and `i_blocks` in memory, and the empty block it covers would
+ * take the next name with no store of its own: a rename retried after the
+ * failure would then put its new name in a block the inode on the device
+ * does not reach and remove the old one, and a stop before the next store
+ * of the inode would leave the file neither. So the mark stays until a
+ * store and its write succeed, and the next change makes them first, as
+ * Linux writes the directory's inode after each added entry
+ * (`ext2_handle_dirsync`, fs/ext2/dir.c:440-447 and 557) before rename
+ * removes the old one (namei.c:390).
+ *
  * A failed store, such as a failed read of the inode table before any write, or
- * a failed write of it, puts the flag back in memory, so that the next change
- * stores the cleared flag again before it touches an entry; a flag left cleared
- * in memory would let that change skip the store and write over the index root
- * in the slack of `..` while the disk still marks it indexed. Linux's ext2 has
- * no such store to fail: it clears i_flags in memory as it changes the entries,
- * and writeback copies the flags to the disk later (fs/ext2/dir.c:468 and
- * fs/ext2/inode.c:1567 in Linux 6.12.115). Should the failed store have reached
- * the disk, the entries are unchanged, and the next store of the inode marks it
- * indexed again, which is still true.
+ * a failed write of it, puts the flag back in memory and keeps the mark, so
+ * that the next change stores the inode again before it touches an entry; a
+ * flag left cleared in memory would let that change skip the store and write
+ * over the index root in the slack of `..` while the disk still marks it
+ * indexed. Linux's ext2 has no such store to fail: it clears i_flags in memory
+ * as it changes the entries, and writeback copies the flags to the disk later
+ * (fs/ext2/dir.c:468 and fs/ext2/inode.c:1567 in Linux 6.12.115). Should the
+ * failed store have reached the disk, the entries are unchanged, and the next
+ * store of the inode marks it indexed again, which is still true.
  */
-static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
+static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
 {
+    int indexed = (d->flags & EXT2_INDEX_FL) != 0;
     int rc;
 
-    if (!(d->flags & EXT2_INDEX_FL)) {
+    if (!indexed && !d->store_pending) {
         return 0;
     }
     d->flags &= ~EXT2_INDEX_FL;
@@ -997,9 +1013,13 @@ static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
         rc = inode_commit(em, d);
     }
     if (rc != 0) {
-        d->flags |= EXT2_INDEX_FL;
+        if (indexed) {
+            d->flags |= EXT2_INDEX_FL;
+        }
+        return rc;
     }
-    return rc;
+    d->store_pending = 0;
+    return 0;
 }
 
 /**
@@ -1008,11 +1028,17 @@ static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
  * the block allocated and written with one empty entry spanning it
  * (`shared_block_new`), chained with `i_blocks` and covered by the size in one
  * store of the inode, and the entry written last. On a mount that writes back
- * the inode reaches the device before the entry is written (`inode_commit`), so
+ * the inode reaches the device before the entry is written (`dir_settle`), so
  * that a name the caller's next step depends on, such as a rename's new one
  * before the old goes, is reachable on the device when it is; a failure there
  * leaves an empty block and no name, so that a caller that frees the inode it
- * would have named frees one with no name. Linux writes the inode after the
+ * would have named frees one with no name, and leaves the directory marked
+ * (`store_pending`), so that the next change of its entries, which may put a
+ * name in that block, stores and writes the inode first. A failure before the
+ * size, of the block's write or of `ext2_map_alloc`'s store of a new indirect
+ * block, leaves the pointer in memory past the size, where no entry is looked
+ * for, and the next growth maps the same block and writes it again. Linux
+ * writes the inode after the
  * entry (`ext2_handle_dirsync`), which puts both on the device before the next
  * step too. 0, -EFBIG for a directory that would pass 4 GiB less a block,
  * -ENOSPC, decided before any block is taken for the block and the pointer
@@ -1050,10 +1076,8 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
     }
     ext2_node_size_set(d, d->size + em->block_size);
     ext2_stamp(d, T_MTIME | T_CTIME);
-    rc = ext2_inode_store(em, d);
-    if (rc == 0) {
-        rc = inode_commit(em, d);
-    }
+    d->store_pending = 1;
+    rc = dir_settle(em, d);
     if (rc != 0) {
         return rc;
     }
@@ -1095,7 +1119,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     if (name_len == 0 || name_len > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
     }
-    rc = dir_unindex(em, d);
+    rc = dir_settle(em, d);
     if (rc != 0) {
         return rc;
     }
@@ -1152,7 +1176,7 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
                          const struct ext2_scan *sc)
 {
     uint64_t off;
-    int rc = dir_unindex(em, d);
+    int rc = dir_settle(em, d);
 
     if (rc != 0) {
         return rc;
@@ -1229,7 +1253,7 @@ static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t p
         if (sc.ino != 0 && names_equal(sc.name, "..")) {
             rc = dir_block_at(em, d, here, &off);
             if (rc == 0) {
-                rc = dir_unindex(em, d);
+                rc = dir_settle(em, d);
             }
             if (rc != 0) {
                 return rc;
@@ -1726,9 +1750,9 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         d->nlink++;
         ext2_stamp(d, T_MTIME | T_CTIME);
         rc = ext2_inode_store(em, d);
-    }
-    if (rc == 0) {
-        rc = dir_add(em, d, name, n->ino, 2);
+        if (rc == 0) {
+            rc = dir_add(em, d, name, n->ino, 2);
+        }
         if (rc != 0) {
             d->nlink--;
             (void)ext2_inode_store(em, d);
@@ -2140,7 +2164,7 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
 
         rc = dir_block_at(em, nd, nat, &off);
         if (rc == 0) {
-            rc = dir_unindex(em, nd);
+            rc = dir_settle(em, nd);
         }
         if (rc == 0) {
             dir_changed(nd);

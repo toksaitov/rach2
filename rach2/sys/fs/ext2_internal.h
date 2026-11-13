@@ -213,6 +213,11 @@ struct ext2_node {
     uint32_t lookup_from;
     /* Entry changes, under the directory lock; not stored on disk. */
     uint64_t dir_version;
+    /* A directory whose size grew in memory and whose inode has not reached
+     * the device since, under its lock: set by `dir_grow` and cleared only
+     * by a store and commit that succeeded (`dir_settle`), which every
+     * change of its entries makes first. */
+    int store_pending;
     int unlinked;                /* no name left; the inode and its blocks go at the last put */
     int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
     int load_error;              /* the -errno of a load that failed */
