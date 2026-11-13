@@ -365,8 +365,8 @@ uint64_t proc_alarm_due_tick(const process_t *p)
     return tick;
 }
 
-/** The tick a periodic real-time timer due at `due` is due at next: the
- * first `due` plus a whole number of `interval`s after the tick `now`, so
+/** The next expiry after `now` of a periodic alarm due at `due`, with
+ * all three in ticks or monotonic nanoseconds: `due` plus whole intervals, so
  * that a SIGALRM taken late does not move the timer off its grid, as
  * Linux's `hrtimer_forward` steps from the old expiry
  * (kernel/time/hrtimer.c:1046-1078, from kernel/signal.c:654-662). The
@@ -394,7 +394,7 @@ static uint64_t alarm_next(uint64_t due, uint64_t interval, uint64_t now)
 /** Stop `p`'s real-time timer once the SIGALRM the tick marked is posted,
  * as Linux's `it_real_fn` sends SIGALRM and leaves the timer stopped
  * (kernel/time/itimer.c:156-166): a periodic one keeps its interval and
- * the tick it was due at, from which `proc_alarm_taken` runs it again.
+ * the time it was due at, from which `proc_alarm_taken` runs it again.
  * The caller holds the big lock and no spinlock. */
 static void alarm_stop(process_t *p)
 {

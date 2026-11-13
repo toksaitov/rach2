@@ -1294,5 +1294,8 @@ read 0.
 The TSC's rate is scaled only where the processor scales it.
 Of KVM's paravirtual features there are no asynchronous page faults,
 paravirtual EOI or TLB flush, and without a measured TSC rate no kvmclock.
-The APIC and PIT timers are checked at each entry, and the host's tick of 1 ms
-makes the guest exit, so an expiry reaches the guest within a tick.
+The APIC, PIT and Hyper-V timers keep nanosecond deadlines.
+A halted vCPU waits on a fine host event.
+SVM arms the host event timer before entering a running vCPU; VMX bounds
+its entry with the preemption timer.
+The periodic 4 ms scheduler tick is a fallback where fine events are unavailable.

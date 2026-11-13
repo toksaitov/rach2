@@ -16,6 +16,7 @@
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 #include "../timer.h"
+#include "../rtc.h"
 
 /* The registers, by their offsets in the page. */
 #define APIC_ID       0x020u
@@ -634,13 +635,11 @@ static uint64_t timer_next_ns(const struct lapic *l)
 
 uint64_t kvm_lapic_run_bound(struct kvm_vcpu *v, uint64_t max)
 {
-    struct lapic *l = apic_of(v);
-    uint64_t next, now, khz;
+    uint64_t next = kvm_lapic_next_ns(v), now, khz;
 
-    if (!l || (l->timer_mode == TIMER_DEADLINE ? l->tscdeadline == 0 : l->expire_ns == 0)) {
+    if (!next) {
         return max;
     }
-    next = timer_next_ns(l);
     now = kvm_host_ns();
     if (next <= now) {
         return 0;
@@ -1666,8 +1665,40 @@ static int wake_cond(void *arg)
     return l->wake_tick && tick_count() >= l->wake_tick;
 }
 
+/** Convert a raw guest-timer expiry to this wait's monotonic deadline.
+ * Pair raw reads around the monotonic sample so a host stop between reads
+ * cannot add its whole duration to the wait. No spinlock or big lock is
+ * held; a deadline beyond signed nanoseconds keeps its coarse fallback. */
+int64_t kvm_timer_deadline(uint64_t next)
+{
+    uint64_t before, after, gap, best = ~(uint64_t)0, middle = 0, span;
+    int64_t mono = 0, sample;
+    int i;
+
+    if (!next) {
+        return 0;
+    }
+    for (i = 0; i < 16 && (i == 0 || best > 50000u); i++) {
+        before = kvm_host_ns();
+        sample = rtc_monotonic_ns();
+        after = kvm_host_ns();
+        gap = after - before;
+        if (gap < best) {
+            best = gap;
+            middle = before + gap / 2u;
+            mono = sample;
+        }
+    }
+    span = next > middle ? rtc_slewed(next - middle, rtc_mono_rate()) : 1u;
+    if (span > (uint64_t)0x7FFFFFFFFFFFFFFFull - (uint64_t)mono) {
+        return 0;
+    }
+    return mono + (int64_t)span;
+}
+
 /** Wait, interruptibly, until the vCPU `v` has an event or its timer's
- * tick comes: 0, or -EINTR when the thread's signal-work flag is set. The
+ * fine deadline or fallback tick comes: 0, or -EINTR when the thread's
+ * signal-work flag is set. The
  * caller holds no big lock, so the wait reads the flag alone, as Linux's
  * kvm_vcpu_check_block (virt/kvm/kvm_main.c:3729-3747). On -EINTR the
  * caller ends KVM_RUN with KVM_EXIT_INTR, as Linux's vcpu_run takes the
@@ -1687,8 +1718,10 @@ static int32_t block(struct kvm_vcpu *v)
         l->wake_tick = tick_count() + (next > now ? (next - now + TICK_NS - 1u) / TICK_NS : 0) + 1u;
     }
     current_proc->wakeup_tick = l->wake_tick;
+    current_proc->wakeup_ns = kvm_timer_deadline(next);
     r = wq_wait_event_sigflag(&l->wq, wake_cond, v, "kvm_vcpu_block");
     current_proc->wakeup_tick = 0;
+    current_proc->wakeup_ns = 0;
     l->wake_tick = 0;
     return r;
 }

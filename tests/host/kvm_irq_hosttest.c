@@ -229,6 +229,25 @@ uint64_t kvm_host_ns(void)
     return mono_ns;
 }
 
+/** The fine wait uses the same clock with no NTP slew in this model. */
+int64_t rtc_monotonic_ns(void)
+{
+    return (int64_t)mono_ns;
+}
+
+/** The model's raw and monotonic clocks advance at the same rate. */
+int64_t rtc_mono_rate(void)
+{
+    return 0;
+}
+
+/** Leave the model's unslewed interval unchanged. */
+uint64_t rtc_slewed(uint64_t ns, int64_t rate)
+{
+    (void)rate;
+    return ns;
+}
+
 uint64_t arch_cycles(void)
 {
     return tsc_base + mono_ns * 2u;
@@ -287,10 +306,12 @@ void kvm_hv_stimers(struct kvm_vcpu *v)
     (void)v;
 }
 
+static uint64_t hv_timer_next;
+
 uint64_t kvm_hv_stimer_next(const struct kvm_vcpu *v)
 {
     (void)v;
-    return 0;
+    return hv_timer_next;
 }
 
 /* The dirty ring, which kvm_hosttest checks: full while a row sets
@@ -314,6 +335,8 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
  * a halted vCPU's is counted in `waits`, with `sleep_to_tick` sleeps to
  * its tick first, and is counted in `endless` when nothing would end it. */
 static int waits, sleep_to_tick, wakes_done, endless;
+static int sleep_to_fine;
+static int64_t fine_target;
 
 /** An eventfd's wait: its condition, or a signal. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
@@ -336,6 +359,13 @@ int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const ch
     waits++;
     if (cond(arg)) {
         return 0;
+    }
+    if (sleep_to_fine && current_proc->wakeup_ns) {
+        fine_target = current_proc->wakeup_ns;
+        mono_ns = (uint64_t)fine_target;
+        if (cond(arg)) {
+            return 0;
+        }
     }
     if (sleep_to_tick && current_proc->wakeup_tick) {
         mono_ns = current_proc->wakeup_tick * TICK_NS;
@@ -2146,6 +2176,40 @@ static void full_irqchip_rows(void)
     vm_end();
 }
 
+/** A halted vCPU's half-millisecond timer uses a fine owner deadline. */
+static void fine_timer_row(void)
+{
+    struct kvm_vcpu *v;
+    uint64_t due;
+
+    vm_make(0);
+    v = vcpu[3];
+    wr(v, APIC_SPIV, 0x1FF);
+    v->requests = 0;
+    v->if_flag = 1;
+    caller.sig_woken = 0;
+    CHECK(kvm_lapic_halt(v) == 0, "halt before the fine timer");
+    wr(v, APIC_LVTT, 0x400E8);
+    due = mono_ns + 500000u;
+    msr_wr(v, MSR_IA32_TSC_DEADLINE, arch_cycles() + v->tsc_offset + 1000000u);
+    CHECK(kvm_lapic_run_bound(v, 10000000u) == 1000000u,
+          "the hardware run bound uses the half-millisecond APIC expiry");
+    sleep_to_fine = 1;
+    CHECK(kvm_lapic_prepare(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE,
+          "the fine timer wakes its halted vCPU");
+    CHECK(fine_target == (int64_t)due && mono_ns == due,
+          "the wait ends at half a millisecond, before a coarse tick");
+    CHECK(caller.wakeup_tick == 0 && caller.wakeup_ns == 0, "both wait deadlines are cleared");
+    sleep_to_fine = 0;
+    msr_wr(v, MSR_IA32_TSC_DEADLINE, 0);
+    hv_timer_next = mono_ns + 250000u;
+    CHECK(kvm_lapic_run_bound(v, 10000000u) == 500000u,
+          "the hardware run bound also includes a synthetic timer");
+    hv_timer_next = 0;
+    vm_end();
+}
+
+/** Run the requested controller rows, or only the new fine-timer row. */
 int main(int argc, char **argv)
 {
     int start = live;
@@ -2153,10 +2217,17 @@ int main(int argc, char **argv)
     fake.name = "fake";
     fake.complete = fake_complete;
     kvm_backend = &fake;
+    if (argc == 2 && strcmp(argv[1], "--fine-timer") == 0) {
+        fine_timer_row();
+        CHECK(live == start, "the fine-timer row returns every allocation");
+        printf("kvm-irq fine timer: %s\n", failures ? "FAIL" : "OK");
+        return failures != 0;
+    }
     if (argc != 1 && (argc != 2 || strcmp(argv[1], "--irqchip-only") != 0)) {
         return 2;
     }
     if (argc == 1) {
+        fine_timer_row();
         vm_make(0);
         reset_rows();
         priority_rows();

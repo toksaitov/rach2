@@ -13,6 +13,7 @@
 #include "../fpu.h"
 #include "../klog.h"
 #include "../proc/smp.h"
+#include "../timer.h"
 
 #ifndef RACH2_HOSTTEST
 #include "../arch/x86_64/percpu.h"
@@ -1103,6 +1104,16 @@ static void svm_put(struct kvm_vcpu *v, int fpu)
 #endif
 }
 
+/** Arm the earliest guest timer on the host event timer before VMRUN.
+ * SVM has no VMX preemption timer. The run loop has interrupts off and
+ * holds no big lock; an empty timer set adds no physical interrupt. */
+static void svm_timer_arm(const struct kvm_vcpu *v)
+{
+    if (v->timer_ns) {
+        timer_wake_at(kvm_timer_deadline(v->timer_ns));
+    }
+}
+
 /**
  * Run the guest until its next exit, with interrupts off and without the big
  * lock: EFER.SVME and the host save area set on this processor at its first
@@ -1132,6 +1143,7 @@ static int svm_enter(struct kvm_vcpu *v)
     if (cpu >= NR_CPUS || !hsave[cpu]) {
         return -EIO;
     }
+    svm_timer_arm(v);
     tlb = kvm_vcpu_test_clear(v, KVM_REQ_TLB_FLUSH);
 #ifndef RACH2_HOSTTEST
     if (!svm_live[cpu]) {
@@ -2701,9 +2713,9 @@ static void svm_inject(struct kvm_vcpu *v)
  * the next RIP, since no instruction is decoded with interrupts off. A
  * deadline already passed is delivered and injected at once, as `vmx_fast`
  * does. Linux's SVM sends this write down its slow path, for want of the
- * preemption timer its fast path arms (kvm_can_use_hv_timer); here no
- * timer is armed for the deadline on either path, which the host's tick
- * bounds. Every other exit, and this one under the caller's single step,
+ * preemption timer its fast path arms (kvm_can_use_hv_timer). Here the
+ * host event timer is armed before the next VMRUN, independently of the
+ * scheduler tick. Every other exit, and this one under a single step,
  * an NMI window's step, an event under delivery or the MSR filter's
  * denial, is `exit`'s.
  */

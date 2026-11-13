@@ -527,13 +527,51 @@ static void xsaves_rows(void)
     xsaves_usable = 1;
 }
 
-int main(void)
+static int64_t host_timer_target;
+
+/** The raw and monotonic clocks have one rate in the entry model. */
+int64_t kvm_timer_deadline(uint64_t next)
+{
+    return (int64_t)next;
+}
+
+/** Keep the software deadline the entry would install. */
+void timer_wake_at(int64_t ns)
+{
+    host_timer_target = ns;
+}
+
+/** Entry arms a guest timer independently of the coarse scheduler tick. */
+static void fine_timer_row(void)
+{
+    struct kvm_vcpu v;
+
+    k_memset(&v, 0, sizeof(v));
+    host_timer_target = 0;
+    svm_timer_arm(&v);
+    CHECK(host_timer_target == 0, "an empty guest timer set adds no event");
+    v.timer_ns = 1234500;
+    svm_timer_arm(&v);
+    CHECK(host_timer_target == 1234500, "SVM entry publishes the fine guest expiry");
+}
+
+/** Run the requested SVM rows, or the fine timer alone. */
+int main(int argc, char **argv)
 {
     struct kvm_vcpu *v = calloc(1, sizeof(*v));
     struct svm_vcpu *s = calloc(1, sizeof(*s));
     uint8_t *msrpm = calloc(1, 8192);
 
     v->backend = s;
+    if (argc == 2 && !__builtin_strcmp(argv[1], "--fine-timer")) {
+        fine_timer_row();
+        free(msrpm);
+        free(s);
+        free(v);
+        printf("kvm-svm fine timer: %s\n", failures ? "FAIL" : "OK");
+        return failures != 0;
+    }
+    fine_timer_row();
     report_rows(v);
     filter_rows(v, msrpm);
     fast_rows(v);

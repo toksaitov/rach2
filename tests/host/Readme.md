@@ -522,3 +522,5 @@ The virtual channel rows of `dsp_hosttest.c` also cover two readers receiving th
 `process_timer_hosttest --fine-alarm` runs its fine-alarm rows alone: expiry and posting without a coarse tick, nanosecond readback, phase after late signal consumption and units preserved by exec. The ordinary run includes these rows.
 
 `timercal_hosttest --hz250` runs only its physical/guest common-phase row at the production rate, with a fine event and a stopped idle span. Its other event rows express positions in logical tick units and counts at the model's actual device rate.
+
+`kvm_irq_hosttest --fine-timer` runs only the half-millisecond halted-vCPU deadline and hardware-bound rows, including a synthetic timer with no APIC timer armed. `kvm_svm_hosttest --fine-timer` runs only the software-event arming row. Their ordinary runs include these new rows.
