@@ -2780,9 +2780,11 @@ static void stream_consume(struct unix_sock *s, struct unix_msg *m, uint32_t chu
  * across messages, up to and including one that has descriptors, and not
  * past a change of credentials when they are asked for; the bytes read, or
  * `unix_recvfrom`'s errors before any. The receive lock is held throughout
- * but for the wait for data. SO_RCVTIMEO is read once, before the receive
- * lock, and each wait for data has what the waits before it left, as in
- * Linux's unix_stream_read_generic (af_unix.c:2785, 2841-2848).
+ * but for a wait for data; a receive that may not wait keeps it then too.
+ * Each consumption wakes the writers. SO_RCVTIMEO is read
+ * once, before the receive lock, and each wait for data has what the waits
+ * before it left, as in Linux's unix_stream_read_generic (af_unix.c:2785,
+ * 2834-2837, 2841-2848).
  */
 static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                            uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
@@ -2816,9 +2818,14 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
             if (copied >= want || (copied > 0 && (peek || nonblock))) {
                 break;
             }
-            recv_unlock(s);
-            rc = wait_data(s, &timeo);
-            recv_lock(s);
+            if (timeo == UNIX_TIMEO_NOW) {
+                /* no wait, so the lock stays held (af_unix.c:2834-2837) */
+                rc = wait_data(s, &timeo);
+            } else {
+                recv_unlock(s);
+                rc = wait_data(s, &timeo);
+                recv_lock(s);
+            }
             if (rc == 0) {
                 continue;
             }
@@ -2854,9 +2861,6 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
         }
     }
     recv_unlock(s);
-    if (!peek) {
-        wake_writers(s);
-    }
     return copied ? (int32_t)copied : rc;
 }
 
