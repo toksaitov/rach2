@@ -38,7 +38,7 @@ The counters are the kernel's `/proc/stat` records, described in [vfio](../../ra
 
 ## Local changes
 
-The outer QEMU needs `qemu-vtd-cfi.patch`. QEMU 10.2.1 does not acknowledge GCMD.CFI in GSTS.CFIS and forwards compatibility-format MSIs even when CFI is clear. The patch adds the status update and fault reason 0x25, preserving delivery when CFI is set or interrupt remapping is off. The patch changes the test host's emulator, not QEMU in the GNU guest.
+The outer QEMU needs `qemu-vtd-cfi.patch`. QEMU 10.2.1 does not acknowledge GCMD.CFI in GSTS.CFIS and forwards compatibility-format MSIs even when CFI is clear. The patch adds the status update and fault reason 0x25, preserving delivery when CFI is set or interrupt remapping is off. The patch changes the test host's emulator, not QEMU in the GNU guest. On an emulator without it the kernel logs that the unit's status does not follow GCMD.CFI ([VT-d](../../rach2/sys/arch/x86/iommu/Readme.md#design)), and the `compat` case fails at once with `assign: result: fail: the outer QEMU delivers the compatibility format: it lacks qemu-vtd-cfi.patch`, since the forged message would be delivered and no fault ever counted.
 
 ## Building
 

@@ -71,9 +71,15 @@ case $mode in
         grep -q 'ahci' /proc/disk || fail 'AHCI disk absent'
         grep -q 'virtio' /proc/interrupts || fail 'virtio-gpu interrupt absent'
         grep -q 'nvme' /proc/interrupts || fail 'NVMe interrupt absent'
-        dmesg | grep -q 'interrupt remapping: on, compatibility format refused' || fail 'interrupt remapping is off'
+        dmesg | grep -q -E 'interrupt remapping: on, (xapic|x2apic) format, compatibility format refused' ||
+            fail 'interrupt remapping is off'
         ;;
     dma|index|compat)
+        # A unit whose status ignores GCMD.CFI delivers the forged message,
+        # and no fault would ever be counted.
+        if [ "$mode" = compat ] && dmesg | grep -q 'GSTS.CFIS does not follow GCMD.CFI'; then
+            fail 'the outer QEMU delivers the compatibility format: it lacks qemu-vtd-cfi.patch'
+        fi
         ./edu "$edu" "$mode" || fail "$mode injection failed"
         ;;
     nic-tcg|nic-kvm|kill|reassign)
