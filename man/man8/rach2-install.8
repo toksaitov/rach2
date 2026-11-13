@@ -561,7 +561,15 @@ A stop part way leaves a machine that starts the recovery system.
 The command run again there finishes what the stop left: a copy with no
 slot beside it, cut off before its rename, takes the slot's name; a copy
 beside its slot is unfinished and is removed; and a slot missing with no
-copy is made again from the other slot.
+copy is made again from the other slot, copied as
+.Pa kernel.copy
+or
+.Pa fallback.copy ,
+compared with the other slot and synced before it takes the slot's name,
+so that a stop leaves no part of a kernel under the slot's name.
+An update finishes a stopped growth in the same way before it checks the
+boot partition with
+.Ql bootctl status .
 It finds the saved default at
 .Ql recovery
 and leaves it there, saying which command sets it.

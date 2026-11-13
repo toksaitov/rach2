@@ -769,11 +769,21 @@ resume_boot_partition() { # resume_boot_partition BOOT
 # and a copy beside its slot is unfinished and is removed. A slot with no
 # copy and no file, which no stop of `grow_slots` leaves, is made again from
 # the other slot, with a note, since a bootable kernel in it is better than
-# a disk bootctl cannot read.
+# a disk bootctl cannot read. That copy is written as kernel.copy or
+# fallback.copy, which a stop leaves partial and the next run removes first,
+# compared with the other slot and synced, and only then renamed, so the
+# slot's name never holds part of a kernel.
 finish_slots() { # finish_slots BOOT
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to look at its kernel slots"
     mounted_boot=$BOOT_MNT
+    for slot in kernel fallback; do
+        slot_copy="$BOOT_MNT/boot/$slot.copy"
+        [ -e "$slot_copy" ] || continue
+        { rm -f "$slot_copy" && sync; } ||
+            die "the unfinished copy $slot_copy of $1 could not be removed"
+        say "removed an unfinished copy of the $slot slot of $1, which a stop left"
+    done
     for slot in kernel fallback; do
         slot_file="$BOOT_MNT/boot/$slot"
         [ -e "$slot_file.new" ] || continue
@@ -793,11 +803,36 @@ finish_slots() { # finish_slots BOOT
         slot_other="$BOOT_MNT/boot/fallback"
         [ "$slot" = kernel ] || slot_other="$BOOT_MNT/boot/kernel"
         [ -e "$slot_other" ] || die "$1 has neither kernel slot; run $ME --update to write it again"
-        { cp "$slot_other" "$slot_file" && sync; } || die "the missing $slot slot of $1 could not be made again"
+        slot_copy="$slot_file.copy"
+        if ! { cp "$slot_other" "$slot_copy" && sync && cmp -s "$slot_other" "$slot_copy"; }; then
+            rm -f "$slot_copy"
+            sync
+            die "the missing $slot slot of $1 could not be made again"
+        fi
+        { mv "$slot_copy" "$slot_file" && sync; } ||
+            die "the copy of the missing $slot slot of $1 could not take its name"
         say "$1 had no $slot slot; it is made again as a copy of the other"
     done
     umount "$BOOT_MNT" || die "$1 would not unmount"
     mounted_boot=""
+}
+
+# Status 0 when the boot partition BOOT carries a copy that only
+# `grow_slots` or `finish_slots` writes, kernel.new, fallback.new,
+# kernel.copy or fallback.copy: a stop there may have left the volume
+# without one of its slots, which bootctl refuses until `finish_slots` runs.
+# Status 1 when it has none, or does not mount as FAT; nothing is written.
+slots_moving() { # slots_moving BOOT
+    mkdir -p "$BOOT_MNT" 2>/dev/null
+    mount -t vfat "$1" "$BOOT_MNT" 2>/dev/null || return 1
+    mounted_boot=$BOOT_MNT
+    slot_found=1
+    for slot in kernel.new fallback.new kernel.copy fallback.copy; do
+        [ ! -e "$BOOT_MNT/boot/$slot" ] || slot_found=0
+    done
+    umount "$BOOT_MNT" || die "$1 would not unmount"
+    mounted_boot=""
+    return "$slot_found"
 }
 
 # Grow each kernel slot of the boot partition BOOT, /boot/kernel and then
@@ -1223,7 +1258,12 @@ if [ -n "$update_image" ]; then
     # from here has no partition this may claim. Two things say so together:
     # the boot partition is one `bootctl` can read, which is this system's own
     # menu and slots, and the root carries `/etc/rach2`, which no other system
-    # writes.
+    # writes. A stop while a slot grew, which may leave the partition without
+    # one of its slots, is finished first, as `--slots` would; a partition
+    # without the copies of a slot's move is left as it is.
+    if slots_moving "${update_disk}p1"; then
+        finish_slots "${update_disk}p1"
+    fi
     bootctl --target "${update_disk}p1" status > /dev/null 2>&1 ||
         die "${update_disk}p1 is not a boot partition this system wrote; \
 $update_disk was not installed from here"
