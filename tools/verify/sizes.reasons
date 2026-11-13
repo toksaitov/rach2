@@ -431,7 +431,7 @@ tests/host/kd_hosttest.c:translating lines 102 a test's rows, each a case, read 
 
 tests/host/kheap_hosttest.c:main lines 115 a test's rows, each a case, read as one table
 
-tests/host/klog_hosttest.c:main lines 266 a test's rows, each a case, read as one table
+tests/host/klog_hosttest.c:main lines 267 a test's rows, each a case, read as one table
 
 tests/host/krffs_hosttest.c:every_stop_file_is_whole nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, each a case, read as one table

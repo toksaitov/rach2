@@ -53,7 +53,8 @@ static int fails;
 
 /* ---- what the destinations do here ---- */
 
-#define CAP 65536
+/* A destination's capture, or the ring's, holds the whole ring and a NUL. */
+#define CAP (KLOG_RING_SIZE + 1)
 
 static char screen[CAP];
 static unsigned screen_len;
@@ -428,13 +429,17 @@ static int has(const char *hay, const char *needle)
     return 0;
 }
 
-/** Write into `out` the filler record `n` of the eviction row as the logger
+/* The filler records of the eviction rows: each takes more than 32 bytes,
+ * so these overflow the ring. */
+#define FILL_RECORDS (KLOG_RING_SIZE / 32)
+
+/** Write into `out` the filler record `n` of the eviction rows as the logger
  * renders it, so that the ring's contents can be predicted rather than
  * described; its length. `cap` is not read: a record fits 128 bytes. */
 static unsigned render_fill(char *out, unsigned cap, int n)
 {
     const char *head = "<7>[0.000000] fill: record: ";
-    const char *tail = " of two thousand\n";
+    const char *tail = " of the fill\n";
     char digits[12];
     unsigned len = 0, i;
     int d = 0;
@@ -941,6 +946,7 @@ static void panic_append_rows(void)
     char text[CAP];
     struct ring_state *st;
     const char *part = "<6>[0.000000] torn: never committed\n";
+    char last[128];
     unsigned i;
 
     /* Stopped after the eviction, part way through the bytes. */
@@ -963,9 +969,10 @@ static void panic_append_rows(void)
 
     /* A full ring, stopped inside the eviction's bytes. */
     reset();
-    for (i = 0; i < 400; i++) {
-        klog(KLOG_DEBUG, "fill", "record: %d of two thousand", (int)i);
+    for (i = 0; i < FILL_RECORDS; i++) {
+        klog(KLOG_DEBUG, "fill", "record: %d of the fill", (int)i);
     }
+    last[render_fill(last, sizeof(last), FILL_RECORDS - 1)] = '\0';
     st = ring_next();
     ring_evict(st, 200);
     ring_commit();
@@ -978,8 +985,8 @@ static void panic_append_rows(void)
     klog(KLOG_CRIT, "panic", "stopped: inside an append to a full ring");
     ring_text(text, sizeof(text));
     CHECK("a full ring stopped part way still begins and ends at a record",
-          text[0] == '<' && !has(text, "x") &&
-              has(text, "record: 399 of two thousand\n"
+          text[0] == '<' && !has(text, "x") && has(text, last) &&
+              has(text, "of the fill\n"
                         "<2>[0.000000] panic: stopped: inside an append to a full ring\n"));
 
     /* A collector stopped after the ring and the queue took a kept record. */
@@ -1064,9 +1071,9 @@ void smp_service(void)
  * what it cannot send yet and sends it when a device arrives, and the records
  * worth having on the wire are the early ones.
  *
- * The ring's contents after 2000 records are rebuilt from the records
- * themselves, since a ring that cleared itself on overflow, or dropped one
- * record too many, holds whole lines too and would pass the other eviction
+ * The ring's contents after more records than it holds are rebuilt from the
+ * records themselves, since a ring that cleared itself on overflow, or dropped
+ * one record too many, holds whole lines too and would pass the other eviction
  * checks. A ring that dropped bytes rather than records would leave a line
  * beginning in the middle of a number.
  *
@@ -1089,7 +1096,7 @@ int main(void)
 
     /* A record: priority, uptime, subsystem, text and one newline. */
     reset();
-    kernel_ticks = 1234u * (TICK_HZ / 100u);
+    kernel_ticks = 1234u * TICK_HZ / 100u;
     klog(KLOG_ERR, "ahci", "command: timed out on port %d", 0);
     ring_text(text, sizeof(text));
     CHECK("the record is the whole line",
@@ -1116,10 +1123,10 @@ int main(void)
 
     /* Microseconds are six digits, so a reader takes them as Linux's. */
     reset();
-    kernel_ticks = 205u * (TICK_HZ / 100u);
+    kernel_ticks = 2048u * TICK_HZ / 1000u; /* whole ticks at 250 and 1000 Hz */
     klog(KLOG_INFO, "t", "x: y");
     ring_text(text, sizeof(text));
-    CHECK("the fraction keeps its leading zero", has(text, "[2.050000] "));
+    CHECK("the fraction keeps its leading zero", has(text, "[2.048000] "));
 
     /* One newline, however the format ended. */
     reset();
@@ -1216,8 +1223,8 @@ int main(void)
 
     /* Eviction: the ring drops whole records, so it never begins mid-line. */
     reset();
-    for (i = 0; i < 2000; i++) {
-        klog(KLOG_DEBUG, "fill", "record: %d of two thousand", (int)i);
+    for (i = 0; i < FILL_RECORDS; i++) {
+        klog(KLOG_DEBUG, "fill", "record: %d of the fill", (int)i);
     }
     CHECK("the ring holds no more than its size", klog_len() <= KLOG_RING_SIZE);
     CHECK("and no less than it can, within one record", klog_len() > KLOG_RING_SIZE - 64);
@@ -1225,13 +1232,15 @@ int main(void)
     CHECK("what it holds begins at a record", text[0] == '<');
     CHECK("and ends at one", text[klog_len() - 1] == '\n');
     CHECK("the oldest records were dropped", !has(text, "record: 0 of"));
-    CHECK("the newest was kept", has(text, "record: 1999 of"));
     {
         /* The ring holds the newest records and only those. */
         char want[KLOG_RING_SIZE + 1];
         char line[128];
         unsigned wlen = 0;
-        int oldest = 1999;
+        int oldest = FILL_RECORDS - 1;
+
+        line[render_fill(line, sizeof(line), oldest)] = '\0';
+        CHECK("the newest was kept", has(text, line));
 
         while (oldest >= 0) {
             unsigned n = render_fill(line, sizeof(line), oldest);
@@ -1243,7 +1252,7 @@ int main(void)
             oldest--;
         }
         wlen = 0;
-        for (i = (unsigned)(oldest + 1); i < 2000; i++) {
+        for (i = (unsigned)(oldest + 1); i < FILL_RECORDS; i++) {
             unsigned n = render_fill(line, sizeof(line), (int)i);
             unsigned j;
 
