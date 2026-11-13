@@ -4155,6 +4155,20 @@ static void mapping_reclaims(void)
 }
 
 /** A mount is its own base here: no row makes a bind mount. */
+/** No model device goes. */
+int vfs_mount_gone(const struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return 0;
+}
+
+/** Every model mount is seen. */
+int vfs_mount_unseen(const struct vfs_mount *m)
+{
+    (void)m;
+    return 0;
+}
+
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;

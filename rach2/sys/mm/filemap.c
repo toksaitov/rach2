@@ -447,21 +447,51 @@ static void dshare_put(struct dshare *ds)
     kfree(ds);
 }
 
-/** Let `ds` go of its writer (`wr`) once no page is dirty and no writable
- * mapping lives, when it has one. The caller holds `ds` besides; this may
- * sleep, in the description's release. Under the big lock. */
-static void dshare_settle(struct dshare *ds)
+/** Let `ds` go of its writer (`wr`), which it has, and of the writer's hold.
+ * The caller holds `ds` besides and has seen that no page is dirty or that a
+ * writable mapping lives, whose release then writes. This may sleep, in the
+ * description's release. Under the big lock. */
+static void dshare_let_writer(struct dshare *ds)
 {
-    fd_entry_t wr;
+    fd_entry_t wr = ds->wr;
 
-    if (!ds->wr.ofd || *(volatile uint32_t *)&ds->ndirty != 0 || ds->writers != 0) {
-        return;
-    }
-    wr = ds->wr;
     ds->wr.ofd = NULL;
     wr.node = fd_root_node(&wr);
     fd_release_backing(&wr);
     dshare_put(ds);
+}
+
+/** Let `ds` go of its writer (`wr`) once no page is dirty and no writable
+ * mapping lives, when it has one (`dshare_let_writer`). Under the big lock;
+ * this may sleep. */
+static void dshare_settle(struct dshare *ds)
+{
+    if (ds->wr.ofd && *(volatile uint32_t *)&ds->ndirty == 0 && ds->writers == 0) {
+        dshare_let_writer(ds);
+    }
+}
+
+/** Clear every dirty bit of `ds`, whose pages cannot be written through
+ * `via` any more: the device has gone, or no namespace sees the mount or it
+ * is being unmounted and nothing else holds it. A pass has recorded the
+ * failure already. As Linux leaves a page clean after its write-back fails
+ * (fs/buffer.c:1959-1996), the stores are then lost, and the record can go
+ * with its last mapping. Under the big lock. */
+static void dshare_drop(struct dshare *ds, fd_entry_t *via)
+{
+    struct vfs_ref file;
+    uint32_t lost;
+
+    file.mnt = via->ofd->vmnt;
+    file.node = via->ofd->vnode;
+    vfs_node_lock(&file);
+    lost = ds->ndirty;
+    dshare_unmark_from(ds, 0);
+    vfs_node_unlock(&file);
+    if (lost != 0) {
+        klog(KLOG_WARN, "mm", "shared mapping: inode %u on %s: %u dirty pages lost",
+             (unsigned)ds->ino, file.mnt->covered_path, (unsigned)lost);
+    }
 }
 
 /**
@@ -571,9 +601,12 @@ static int dshare_write_page(struct dshare *ds, fd_entry_t *via, uint32_t i)
  * batch and the device record the failures they see themselves. What was
  * written may have been dirty since `clean`, which the file's mount keeps
  * for the flusher (`vfs_writeback_aged`), and a write of every page that
- * succeeds moves `clean` to its own start. Returns 0, also when `via` has
- * no description, or the first failure. Under the big lock; no allocation
- * is needed.
+ * succeeds moves `clean` to its own start. A failed pass with no writable
+ * mapping left drops the dirty bits (`dshare_drop`) when the device has gone
+ * or no namespace sees the mount, so that a record never written keeps
+ * neither its pages nor, through its writer, the mount. Returns 0, also when
+ * `via` has no description, or the first failure. Under the big lock; no
+ * allocation is needed.
  */
 static int dshare_pass(struct dshare *ds, fd_entry_t *via, uint32_t first, uint32_t end)
 {
@@ -604,6 +637,10 @@ static int dshare_pass(struct dshare *ds, fd_entry_t *via, uint32_t first, uint3
     }
     if (rc != 0 && vfs_wb_err_sets(mnt) == sets) {
         vfs_wb_err_set(mnt, rc);
+    }
+    if (rc != 0 && ds->writers == 0 &&
+        (vfs_mount_gone(vfs_mount_base(mnt)) || vfs_mount_unseen(mnt))) {
+        dshare_drop(ds, via);
     }
     return rc;
 }
@@ -1511,6 +1548,67 @@ void filemap_sync_all(void)
             (void)dshare_sync(ds, 0, 0xFFFFFFFFu, NULL, 0);
             next = ds->next;
             dshare_put(ds);
+        }
+    }
+}
+
+/** Whether `ds` holds a writer (`wr`) on `mnt` whose description nothing
+ * else holds, so that the description's reference to `mnt` is the record's
+ * alone. */
+static int dshare_holds_only(const struct dshare *ds, const struct vfs_mount *mnt)
+{
+    return ds->wr.ofd && ds->wr.ofd->vmnt == mnt &&
+           *(volatile uint32_t *)&ds->wr.ofd->refcount == 1;
+}
+
+/**
+ * End the records whose writers (`wr`) hold `mnt`, when nothing else holds
+ * it: each is written in one pass, a page whose write fails is dropped
+ * (`dshare_drop`), and the record lets its writer go, so that the unmount
+ * finds no reference left of theirs. As Linux writes a file system's dirty
+ * pages at its unmount and evicts what failed (generic_shutdown_super,
+ * fs/super.c), a page that cannot be written does not keep the mount. With
+ * anything else holding `mnt` nothing is done, and the unmount fails with
+ * EBUSY with every page still dirty. A record whose writable mapping lives
+ * through another mount of the file lets its writer go, since that
+ * mapping's release writes. Called by the unmount once the mount's
+ * operations have drained, when no description can be opened on it; under
+ * the big lock, and this may sleep.
+ */
+void filemap_unmount(struct vfs_mount *mnt)
+{
+    struct dshare *ds;
+    fd_entry_t via;
+    uint32_t i;
+    int held = 0;
+
+    for (i = 0; i < DSHARE_BUCKETS; i++) {
+        for (ds = dshares[i]; ds; ds = ds->next) {
+            held += dshare_holds_only(ds, mnt);
+        }
+    }
+    if (held == 0 || *(volatile uint32_t *)&mnt->refs != (uint32_t)held) {
+        return;
+    }
+again:
+    for (i = 0; i < DSHARE_BUCKETS; i++) {
+        for (ds = dshares[i]; ds; ds = ds->next) {
+            if (!ds->wr.ofd || ds->wr.ofd->vmnt != mnt) {
+                continue;
+            }
+            ds->users++;
+            via = ds->wr;
+            fd_ofd_ref(via.ofd);
+            (void)dshare_pass(ds, &via, 0, ds->sh.npages);
+            if (ds->writers == 0 && *(volatile uint32_t *)&ds->ndirty != 0) {
+                dshare_drop(ds, &via);
+            }
+            if (ds->wr.ofd == via.ofd) {
+                dshare_let_writer(ds);
+            }
+            fd_ofd_unref(via.ofd);
+            dshare_put(ds);
+            goto again;
         }
     }
 }
