@@ -241,7 +241,7 @@
           "step_id": "panic",
           "stage": "execute",
           "machine": "card",
-          "does": "type `fault` at the shell and wait for the console's `panic: stopped`"
+          "does": "type `fault` at the shell and wait for the console's `panic: stopped` and then the panic's first report record, `panic: report: build`, which the panic writes once the stopped record's delivery has sent the held records to the card"
         },
         {
           "step_id": "capture",

@@ -146,8 +146,15 @@ static void stop_case(struct net_case *u, struct net_boot *b)
                "a line printed after the card was silenced is on the wire");
 }
 
-/** The `udp` case: panic the kernel from the shell, end the machine, and read
- * the datagrams. */
+/** The `udp` case: panic the kernel from the shell, wait for the panic's
+ * first report record, end the machine, and read the datagrams.
+ *
+ * A record reaches the serial port before netconsole, and a panic within the
+ * link's settle sends every record held since the boot only once the panic's
+ * own record reaches netconsole, so `panic: stopped` on the console comes
+ * before any datagram. The panic writes its report records after that
+ * delivery has sent them to the card, so the report's `build` line on the
+ * console means the datagrams are in the capture. */
 static void udp_case(struct net_case *u, struct net_boot *b)
 {
     static const char *const contract[] = {NULL};
@@ -166,6 +173,7 @@ static void udp_case(struct net_case *u, struct net_boot *b)
     net_wait(b, "panic: stopped");
     if (net_ok(u) && etude_fault(b->m, ETUDE_END_PANIC) != ETUDE_OK)
         net_fail(u, "the console has no record of the kernel's panic");
+    net_wait(b, "] panic: report: build");
     net_step(u, "capture");
     if (net_ok(u) && etude_qmp(b->m, "quit", NULL, &reply) == ETUDE_FAILED)
         net_fail(u, "QEMU refused to quit");
