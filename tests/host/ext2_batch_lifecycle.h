@@ -118,9 +118,11 @@ static void lifecycle_setattr_row(void)
 
 /**
  * A last close of a description whose drain fails records `EIO` on the
- * mount and writes nothing. After a reopen, an fsync retries the bytes and
- * reports the error, a second fsync reports it again with nothing to
- * write, and every byte the write took reads back.
+ * mount, for the VFS's syncs to report (`vfs_wb_err_set`), and writes
+ * nothing. After a reopen, an fsync retries the bytes and answers for
+ * itself alone, as the type's fsync does since the VFS reports the
+ * recorded error once to each description; a second fsync has nothing to
+ * write; and every byte the write took reads back.
  */
 static void lifecycle_failed_close_row(void)
 {
@@ -155,8 +157,10 @@ static void lifecycle_failed_close_row(void)
           "the closing description accepts pending bytes");
     before = writes_made;
     stop_after = before;
+    wb_err_sets = wb_err_last = 0;
     fd_free(&table, fd);
-    check(mnt.write_error == -EIO && writes_made == before,
+    check(mnt.write_error == -EIO && wb_err_sets > 0 && wb_err_last == -EIO &&
+              writes_made == before,
           "failed final-description release records its error");
     fd_table_free(&table);
     stop_after = -1;
@@ -166,11 +170,11 @@ static void lifecycle_failed_close_row(void)
     if (!node || !handle) {
         return;
     }
-    check(OPS->fsync(&mnt, handle) == -EIO && writes_made > before,
-          "reopened fsync retries bytes and reports the close error");
+    check(OPS->fsync(&mnt, handle) == 0 && writes_made > before && mnt.write_error == -EIO,
+          "reopened fsync retries bytes and answers for itself, the close error kept");
     before = writes_made;
-    check(OPS->fsync(&mnt, handle) == -EIO && writes_made == before,
-          "a second reopened fsync keeps the close error after completion");
+    check(OPS->fsync(&mnt, handle) == 0 && writes_made == before,
+          "a second reopened fsync has nothing to write");
     check(OPS->read(&mnt, handle, abuf, sizeof(data), 0) == sizeof(data) &&
               memcmp(abuf, data, sizeof(data)) == 0,
           "failed close preserves every accepted byte");
@@ -354,8 +358,9 @@ static void lifecycle_replay(const unsigned char *before, const struct vfs_stat 
 /**
  * Append two blocks from block `first` to each of the two files of
  * `lifecycle_pair` and fsync. With `stop` of 0 or more, the write numbered
- * `stop` of the drain fails: the fsync is `EIO`, a retry keeps the error,
- * every byte reads back, and the volume ends consistent. With `stop` -1,
+ * `stop` of the drain fails: the fsync is `EIO`, recorded for the VFS, a
+ * retry answers 0 for itself with the mount's error kept, every byte reads
+ * back, and the volume ends consistent. With `stop` -1,
  * the drain is captured and replayed by `lifecycle_replay`. Returns the
  * count of writes the fsync made.
  */
@@ -398,14 +403,15 @@ static int lifecycle_interrupt_one(uint32_t first, int stop)
     if (stop >= 0) {
         stop_after = before + stop;
     }
+    wb_err_sets = wb_err_last = 0;
     rc = OPS->fsync(&mnt, handles[0]);
     count = writes_made - before;
     check(stop < 0 ? rc == 0 : rc == -EIO && count == stop,
           "the selected generation write stops fsync");
     stop_after = -1;
     if (stop >= 0) {
-        check(OPS->fsync(&mnt, handles[0]) == -EIO,
-              "the interrupted generation retries with its delayed error retained");
+        check(OPS->fsync(&mnt, handles[0]) == 0 && mnt.write_error == -EIO && wb_err_last == -EIO,
+              "the interrupted generation retries, answering for itself, its error recorded");
     }
     for (i = 0; i < 2; i++) {
         check(OPS->read(&mnt, handles[i], abuf, sizeof(data), (uint64_t)first * 4096) ==
