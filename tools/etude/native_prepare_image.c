@@ -288,9 +288,11 @@ static int ext2_owners(struct np_context *c, const char *out, const char *nodes)
  * Make the private root `out` of `kind`, krffs, ext2 or ext2-dir, from the
  * stager manifest `text`, with `mib` mebibytes free beyond its files.
  *
- * A KRFFS root is staged into a fresh volume and padded so that its free
- * extent starts on a block; an ext2 root is staged as a tree, formatted
- * over it, given the manifest's owners and modes, and checked by e2fsck.
+ * A KRFFS root is staged into a fresh volume of `mib` plus 10 MiB, made
+ * again once, larger by the shortfall, when its files leave less than `mib`
+ * free, and padded so that its free extent starts on a block; an ext2 root
+ * is staged as a tree, formatted over it, given the manifest's owners and
+ * modes, and checked by e2fsck.
  *
  * @return 0, or -1 after a diagnostic.
  */
@@ -303,13 +305,20 @@ int np_root_image(struct np_context *c, const char *out, const char *kind, long 
     if (work_path(c, manifest, "root.manifest") || write_text(manifest, text))
         return -1;
     if (!strcmp(kind, "krffs")) {
-        uint64_t free_bytes;
+        uint64_t free_bytes = 0, want = (uint64_t)mib * 1048576;
         char *mkfs[] = {c->tools[NP_MKFS], (char *)out, NULL};
         char *stage[] = {c->tools[NP_STAGE], manifest, (char *)out, NULL};
-        if (np_blank(out, mib + 10) || np_run(c, mkfs, NULL) || np_run(c, stage, NULL) ||
-            align_root(c, out, &free_bytes))
-            return -1;
-        if (free_bytes < (uint64_t)mib * 1048576) {
+        long size = mib + 10;
+        for (int pass = 0; pass < 2 && free_bytes < want; pass++) {
+            /* A second pass grows the volume by what the files took beyond
+             * the first pass's 10 MiB allowance. */
+            if (pass)
+                size += (long)((want - free_bytes + 1048575) / 1048576) + 1;
+            if (np_blank(out, size) || np_run(c, mkfs, NULL) || np_run(c, stage, NULL) ||
+                align_root(c, out, &free_bytes))
+                return -1;
+        }
+        if (free_bytes < want) {
             fprintf(stderr, "etude prepare native: root %s has insufficient free space: %llu\n",
                     out, (unsigned long long)free_bytes);
             return -1;

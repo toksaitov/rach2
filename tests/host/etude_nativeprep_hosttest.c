@@ -256,8 +256,10 @@ static void check_refusals(struct np_context *c, const char *image, const char *
     write_bytes(payload, 10 * 1048576 - 3 * NP_KRFFS_HEADER);
     fix_format(text, sizeof(text),
                "dir 0750:51000:52000 /owned\nfile 04755:51000:52000 /program %s\n", payload);
-    CHECK(root(c, image, text, said, sizeof(said)) != 0 && strstr(said, "insufficient free space"),
-          "a root with too little free space is refused");
+    uint64_t used = 0, free_bytes = 0;
+    CHECK(root(c, image, text, said, sizeof(said)) == 0 &&
+              np_krffs_free_tail(image, 0, &used, &free_bytes) == 0 && free_bytes >= 1048576,
+          "a root whose files outgrow the first volume is made again with the space asked");
 }
 
 /* Check that an output reached through a symbolic link that leaves the build
