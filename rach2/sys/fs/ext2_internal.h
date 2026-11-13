@@ -622,6 +622,7 @@ int ext2_writes(const struct ext2_mount *em);
 int ext2_keeps_state(const struct ext2_mount *em);
 int ext2_assert_writable(struct vfs_mount *mnt, struct ext2_mount *em);
 uint64_t ext2_inode_offset(const struct ext2_mount *em, uint32_t ino);
+int ext2_slot_at(struct ext2_mount *em, int kind, uint32_t ino, uint64_t *at);
 void ext2_node_meta_dirty(struct ext2_mount *em, struct ext2_node *n);
 int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, uint32_t len);
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how);

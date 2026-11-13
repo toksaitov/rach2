@@ -1045,20 +1045,60 @@ int ext2_fast_link(const struct ext2_mount *em, const struct ext2_node *n)
 }
 
 /**
- * Load inode `ino` into `n`: its number checked against the count, its
- * table found through its group's descriptor. The first 128 bytes of the
+ * The inode slot getter: the byte offset of inode `ino`'s slot into `*at`,
+ * once its number passes Linux's check for a slot of kind `kind`
+ * (fs/ext2/inode.c:1322). A READ_SLOT, the slot of a file met at run time,
+ * must be the root's or at least `s_first_ino`, and within the count; a
+ * number below that names a reserved inode no entry may name, and is
+ * logged as `ext2: inode N: bad inode number`, reported to the mount's
+ * policy (`ext2_mark_error`) and -EIO, as Linux's `ext2_get_inode` reports
+ * it. READ_QUIET, the check's, which reads the reserved inodes too, asks
+ * only that the number be within the count, and reports nothing. Every
+ * read of a slot, a load's, a store's and the batch's image of its table
+ * block, comes through here. 0, or -EIO.
+ */
+int ext2_slot_at(struct ext2_mount *em, int kind, uint32_t ino, uint64_t *at)
+{
+    if (ino == 0 || ino > em->inodes) {
+        klog(KLOG_WARN, "ext2", "inode %d is past the count %d", (int)ino, (int)em->inodes);
+    } else if (kind != READ_QUIET && ino != EXT2_ROOT_INO && ino < em->first_ino) {
+        klog(KLOG_WARN, "ext2", "inode %d: bad inode number", (int)ino);
+    } else {
+        *at = ext2_inode_offset(em, ino);
+        return 0;
+    }
+    if (kind != READ_QUIET) {
+        ext2_mark_error(em);
+    }
+    return -EIO;
+}
+
+/** Copy the first `len` bytes of inode `ino`'s slot into `raw`, read as a
+ * slot of kind `kind`, READ_SLOT or READ_QUIET (`ext2_slot_at`). 0, or the
+ * errors of the getter and the read primitive. */
+static int slot_read(struct ext2_mount *em, int kind, uint32_t ino, uint8_t *raw, uint32_t len)
+{
+    uint64_t at;
+    int rc = ext2_slot_at(em, kind, ino, &at);
+
+    return rc != 0 ? rc : ext2_read_bytes(em, kind, ino, at, raw, len);
+}
+
+/**
+ * Load inode `ino` into `n`, its slot read through the getter
+ * (`ext2_slot_at`), as a READ_SLOT with `report` set and a READ_QUIET
+ * otherwise. The first 128 bytes of the
  * slot are read, and of a larger slot the extra fields up to EXT2_LARGE;
  * the owner and group have their high halves at bytes 120 and 122, and a
- * regular file's size has its high word at byte 108. A number past the
- * count, which only a damaged entry names, and an `i_extra_isize` that is
- * not a multiple of 4 or passes the slot are logged and -EIO, as Linux's
- * `ext2_get_inode` and ext4's `__ext4_iget` refuse them, and with `report`
- * set are reported to the mount's policy (`ext2_mark_error`), as they report
- * them to `ext2_error`. With `report` set, the loader of a file met at run
- * time, three more are refused as Linux's `ext2_get_inode` and `ext2_iget`
- * refuse them (fs/ext2/inode.c:1348, 1436, 1455): a table block that cannot
- * be read, a live inode with no links, a mode and no deletion time, and an
- * attribute block outside the data zone, each logged, reported and -EIO;
+ * regular file's size has its high word at byte 108. An `i_extra_isize`
+ * that is not a multiple of 4 or passes the slot is logged and -EIO, as
+ * Linux's ext4 `__ext4_iget` refuses it, and with `report` set is reported
+ * to the mount's policy (`ext2_mark_error`). With `report` set, the loader
+ * of a file met at run time, three more are refused as Linux's
+ * `ext2_get_inode` and `ext2_iget` refuse them (fs/ext2/inode.c:1348, 1436,
+ * 1455): a table block that cannot be read, a live inode with no links, a
+ * mode and no deletion time, and an attribute block outside the data zone,
+ * each logged, reported and -EIO;
  * and a freed inode, one with no links and no mode or a deletion time, is
  * -ESTALE with no report, since a walk without its directory's lock may
  * meet one that was freed after it read the number, and the caller that
@@ -1068,20 +1108,10 @@ int ext2_fast_link(const struct ext2_mount *em, const struct ext2_node *n)
 static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, int report)
 {
     uint8_t raw[EXT2_LARGE];
-    uint32_t g, index, table;
-    uint64_t at;
     int i, rc;
 
-    if (ino == 0 || ino > em->inodes) {
-        klog(KLOG_WARN, "ext2", "inode %d is past the count %d", (int)ino, (int)em->inodes);
-        goto damaged;
-    }
-    g = (ino - 1) / em->ipg;
-    index = (ino - 1) % em->ipg;
-    table = ext2_le32(em->gd + g * 32 + 8);
-    at = (uint64_t)table * em->block_size + (uint64_t)index * em->inode_size;
-    rc = ext2_read_bytes(em, report ? READ_SLOT : READ_QUIET, ino, at, raw,
-                         em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
+    rc = slot_read(em, report ? READ_SLOT : READ_QUIET, ino, raw,
+                   em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
     if (rc != 0) {
         return rc;
     }
@@ -2671,10 +2701,13 @@ int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, 
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how)
 {
     uint8_t raw[256];
-    uint64_t at = ext2_inode_offset(em, n->ino);
+    uint64_t at;
     uint32_t len = em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD;
-    int rc, changed = fresh;
+    int rc = ext2_slot_at(em, READ_SLOT, n->ino, &at), changed = fresh;
 
+    if (rc != 0) {
+        return rc;
+    }
     if (fresh) {
         len = em->inode_size;
         k_memset(raw, 0, len);
