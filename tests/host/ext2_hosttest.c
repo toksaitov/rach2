@@ -325,11 +325,47 @@ void vfs_wb_err_set(struct vfs_mount *m, int rc)
     wb_err_last = rc;
 }
 
-/** Do nothing: no row records a file's own write-back error. */
+/* The inode numbers whose files have a write-back error no description has
+ * reported, as the VFS keeps each file's own sequence (`vfs_ino_err_set`):
+ * `reused_ino_row` records one, and the free of the inode forgets it. */
+static uint64_t ino_errs[4];
+static int ino_err_n;
+
+/** Record an unreported write-back error of the file `ino`, once. */
+static void ino_err_note(uint64_t ino)
+{
+    int i;
+
+    for (i = 0; i < ino_err_n && ino_errs[i] != ino; i++) {
+    }
+    if (i == ino_err_n && ino_err_n < (int)(sizeof(ino_errs) / sizeof(ino_errs[0]))) {
+        ino_errs[ino_err_n++] = ino;
+    }
+}
+
+/** Whether the file `ino` has an error a new description's fsync would
+ * report, as one sampled before any report starts before it. */
+static int ino_err_pending(uint64_t ino)
+{
+    int i;
+
+    for (i = 0; i < ino_err_n && ino_errs[i] != ino; i++) {
+    }
+    return i < ino_err_n;
+}
+
+/** Forget the error sequence of the file `ino`, as vfs.c does. */
 void vfs_ino_err_forget(struct vfs_mount *mnt, uint64_t ino)
 {
+    int i;
+
     (void)mnt;
-    (void)ino;
+    for (i = 0; i < ino_err_n; i++) {
+        if (ino_errs[i] == ino) {
+            ino_errs[i] = ino_errs[--ino_err_n];
+            return;
+        }
+    }
 }
 
 /* The node and the handle of a shared mapping's record that holds an
@@ -3641,6 +3677,56 @@ static void remount_row(void)
 }
 
 /**
+ * A file whose mapped pages failed to go back, unreported, is removed, and
+ * a new file takes its inode number: the free of the inode forgets the
+ * file's error sequence before its bit goes (`ext2_release_inode`), so the
+ * new file's fsync reports nothing, as Linux's new inode starts its
+ * sequence empty (fs/inode.c:209). Once with the file held at its unlink
+ * and freed at its last put (`node_free`), and once with nothing holding
+ * it, freed by the unlink itself (`child_unlinked`); both clear `unlinked`
+ * before the bit is freed.
+ */
+static void reused_ino_row(void)
+{
+    int held, rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    ino_err_n = 0;
+    check(mount_rw() == 0, "the reused inode volume mounts");
+    for (held = 1; held >= 0; held--) {
+        void *f = make_file(mnt.root, "failed", &rc), *g, *h = 0;
+        uint64_t ino = f ? held_ino(&mnt, f) : 0;
+
+        ino_err_note(ino);
+        if (f && !held) {
+            OPS->put(&mnt, f);
+            f = 0;
+        }
+        check(ino != 0 && OPS->unlink(&mnt, mnt.root, "failed") == 0,
+              held ? "a held file with an unreported write-back error is removed"
+                   : "a file with an unreported write-back error and no holder is removed");
+        if (f) {
+            OPS->put(&mnt, f);
+        }
+        g = make_file(mnt.root, "reused", &rc);
+        check(g && held_ino(&mnt, g) == ino, "and a new file takes its inode number");
+        check(g && OPS->open(&mnt, g, 2, &h) == 0 && OPS->fsync(&mnt, h) == 0 &&
+                  !ino_err_pending(ino),
+              held ? "and its fsync succeeds, the error forgotten at the last put"
+                   : "and its fsync succeeds, the error forgotten at the unlink");
+        if (h) {
+            OPS->release(&mnt, h);
+        }
+        if (g) {
+            OPS->put(&mnt, g);
+        }
+        check(OPS->unlink(&mnt, mnt.root, "reused") == 0, "and the new file is removed");
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume unmounts clean");
+}
+
+/**
  * Run `order_row_under` twice from block 1035: with the cache cut to
  * sixteen buffers, so the write's blocks are evicted as it runs in the
  * order it touched them; and with room for them all, so they go to the
@@ -4537,6 +4623,7 @@ static void batch_rows(void)
     dir_index_row();
     dir_index_failed_store_row();
     remount_row();
+    reused_ino_row();
     remount_nomem_row();
     batch_error_row();
     for (barrier = 1; barrier <= 5; barrier++) {
