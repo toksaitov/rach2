@@ -5907,6 +5907,98 @@ static void fault_row(const char *img, const char *script, const char *fault, co
 }
 
 /**
+ * Require the dirty volume `img` to mount writable with `log` among the
+ * check's records, the file /gone that a stop left named with its inode
+ * unused to have no name, and the unmount to leave the volume valid and
+ * clean or, with `orphan`, its unused inode's bit still set, to leave it
+ * with the error bit for `e2fsck -p`, which must repair it.
+ */
+static void entry_cleared_on(const char *img, uint64_t bytes, int orphan, const char *what)
+{
+    void *n;
+    int err, rc;
+
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check_log[0] = 0;
+    rc = mount_rw();
+    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 || !strstr(check_log, "check: test: inode ") ||
+        !strstr(check_log, ": unused, its entry in directory 2 cleared\n") ||
+        (orphan && !strstr(last_check, "0 lost blocks, 1 orphan inodes"))) {
+        printf("  mount %d, flags 0x%x, check: %s", rc, (unsigned)mnt.flags, check_log);
+        check(0, what);
+    } else {
+        check(1, what);
+    }
+    if (rc != 0) {
+        return;
+    }
+    n = walk("/gone", &err);
+    check(n == 0 && err == -ENOENT, "and the name is gone");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    if (!orphan) {
+        check(unmount_rw() == 0 && disk_state(img) == 1 && e2fsck_clean(img),
+              "and the unmount leaves the volume valid and clean");
+        return;
+    }
+    check(unmount_rw() == 0 && disk_state(img) == 2 &&
+              ext2_fixture_fsck(img, "-fp", fix_path("repair.out")) == 1 && e2fsck_clean(img),
+          "and the unmount leaves the inode's bit to e2fsck -p, which repairs it");
+}
+
+/**
+ * Mount dirty volumes whose entries a stopped create leaves, which the
+ * check repairs as `e2fsck -p` does in its pass 2:
+ *
+ * - /gone, an empty file whose inode is zeroed and its bit clear, as a
+ *   stop leaves a name that reached the disk before its inode, must lose
+ *   its entry, which named a regular file, and leave a clean volume;
+ * - /gone with no link, a deletion time and its bit set must lose its
+ *   entry, the inode counted with the orphans for `e2fsck -p`;
+ * - /td/t, an empty file whose entry's type byte says a symbolic link,
+ *   must have the type of a regular file written into its entry.
+ */
+static void entry_rows(void)
+{
+    const char *img = fix_path("entry.ext2");
+    unsigned char ft = 7;
+    uint64_t bytes;
+    long td;
+
+    bytes = dirty_image(img, "write /dev/null gone\nclri /gone\nfreei /gone\n");
+    entry_cleared_on(img, bytes, 0,
+                     "an entry naming a zeroed free inode is cleared and the volume writable");
+    bytes = dirty_image(img, "write /dev/null gone\nsif /gone links_count 0\n"
+                             "sif /gone dtime 1700000000\n");
+    entry_cleared_on(img, bytes, 1,
+                     "an entry naming a deleted inode is cleared and the volume writable");
+
+    bytes = dirty_image(img, "mkdir /td\ncd /td\nwrite /dev/null t\ncd /\n");
+    td = debugfs_number(img, "blocks /td", "");
+    if (td <= 0) {
+        check(0, "the directory of the entry-type row is made");
+        return;
+    }
+    poke(img, td * 4096 + 24 + 7, &ft, 1);
+    use_image(img, bytes);
+    check_log[0] = 0;
+    if (mount_rw() != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 ||
+        !strstr(check_log, "check: test: inode ") ||
+        !strstr(check_log, " of another type, type set\n") || strstr(check_log, "check: clean")) {
+        printf("  flags 0x%x, check: %s", (unsigned)mnt.flags, check_log);
+        check(0, "an entry of another type than its inode has the type set, the volume writable");
+    } else {
+        check(1, "an entry of another type than its inode has the type set, the volume writable");
+    }
+    if (mnt.root) {
+        check(unmount_rw() == 0 && disk_state(img) == 1 && e2fsck_clean(img),
+              "and the unmount leaves the volume valid and clean");
+    }
+}
+
+/**
  * Mount volumes whose valid bit is clear, and require the check to do
  * what each needs:
  *
@@ -5932,6 +6024,9 @@ static void fault_row(const char *img, const char *script, const char *fault, co
  * - a live orphan whose bit is clear has its bit set, an orphan
  *   directory's entries count as names, and its `..` must name the root
  *   or another orphan directory (`orphan_rows`);
+ * - an entry naming an unused inode is cleared and an entry of another
+ *   type than its inode has the type set, as `e2fsck -p` repairs both, and
+ *   the volume mounts writable (`entry_rows`);
  * - a read-only mount runs no check and writes nothing.
  */
 static int lost_block_reported(void)
@@ -6572,6 +6667,7 @@ static void dirty_rows(void)
     fault_row(img, "freei /dir/big.bin\n", "a reached inode the bitmap calls free",
               "a reached inode whose bit is clear mounts read-only");
     orphan_rows();
+    entry_rows();
     fault_row(img, "sif /dir/big.bin links_count 3\n", "a link count that does not match its names",
               "a link count above its names mounts read-only");
     fault_row(img, "sif /dir/big.bin links_count 0\n", "a link count that does not match its names",
@@ -9135,6 +9231,7 @@ static const struct {
     {"--dirty-only", dirty_rows},
     {"--stopped-only", stopped_rows},
     {"--orphans-only", orphan_rows},
+    {"--entries-only", entry_rows},
     {"--readonly-only", readonly_rows},
     {"--ftype-only", ftype_rows},
     {"--removal-only", removal_rows},
