@@ -417,10 +417,11 @@ static int timer_lock_take(int boot)
  * the cycle count `t`, each charged to its row: the HDA tick, which asks
  * khda for a stream whose interrupts do not arrive under the stream lock,
  * the lag device's answers under its lock, the block requests' deadlines
- * under the pool's lock, and the end of a speaker's tone under the
- * speaker's lock, as Linux runs a driver's timer under the driver's own
- * lock (`timer_list` callbacks, kernel/time/timer.c). No lock is held and
- * interrupts are off. Returns the cycle count at its end.
+ * under the pool's lock, the end of a speaker's tone under the speaker's
+ * lock, and the i915's release of forcewake under its register lock, as
+ * Linux runs a driver's timer under the driver's own lock (`timer_list`
+ * and hrtimer callbacks, kernel/time/timer.c, kernel/time/hrtimer.c). No
+ * lock is held and interrupts are off. Returns the cycle count at its end.
  */
 static uint64_t timer_own_work(uint64_t t)
 {
@@ -431,7 +432,9 @@ static uint64_t timer_own_work(uint64_t t)
     block_request_tick();
     t = bkl_tick_charge(BKL_TICK_BLOCK_REQUEST, t);
     speaker_tick();
-    return bkl_tick_charge(BKL_TICK_SPEAKER, t);
+    t = bkl_tick_charge(BKL_TICK_SPEAKER, t);
+    i915_tick();
+    return bkl_tick_charge(BKL_TICK_I915, t);
 }
 
 /**

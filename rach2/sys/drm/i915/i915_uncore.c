@@ -17,6 +17,11 @@
 #define I915_FW_THREAD_US 5000u
 #define I915_GT_FIFO_US   10000u
 
+/* The release timer's period in the boot processor's ticks: armed between
+ * two ticks, it runs one to two milliseconds later at TICK_HZ 1000, as
+ * Linux's hrtimer of NSEC_PER_MSEC with as much slack. */
+#define I915_FW_TIMER_TICKS 2u
+
 /* The GT's registers lie below 0x40000, the one range of Linux's
  * __gen6_fw_ranges, and need forcewake to read. A write waits for room in
  * the GT FIFO below 0x40000 and from 0x116000, Linux's NEEDS_FORCE_WAKE,
@@ -54,6 +59,8 @@ void i915_uncore_init(struct drm_i915_private *i915)
     /* WaRsClearFWBitsAtReset: every request bit, the firmware's too. */
     i915_write(hw, FORCEWAKE_MT, I915_MASKED_DISABLE(0xffffu));
     i915->uncore.wake_count = 0;
+    i915->uncore.timer_ticks = 0;
+    i915->uncore.active = 0;
     i915->uncore.fifo_count = i915_read(hw, GTFIFOCTL) & GT_FIFO_FREE_ENTRIES_MASK;
 }
 
@@ -88,14 +95,39 @@ static int32_t i915_fw_wake(struct drm_i915_private *i915)
     return 0;
 }
 
+/** Whether forcewake is held on the chip: a reference is held or the
+ * release timer is armed. Under the register lock. */
+static int i915_fw_held(const struct i915_uncore *u)
+{
+    return u->wake_count != 0 || u->timer_ticks != 0;
+}
+
+/** Arm the release timer, which withdraws the request one to two ticks
+ * later unless a reference is held then (`i915_uncore_tick`), as Linux's
+ * fw_domain_arm_timer. Under the register lock, with forcewake held. */
+static void i915_fw_arm_timer(struct i915_uncore *u)
+{
+    u->timer_ticks = I915_FW_TIMER_TICKS;
+    u->active = 0;
+}
+
+/** Withdraw the kernel's request. Under the register lock, once nothing
+ * holds forcewake. */
+static void i915_fw_release(struct drm_i915_private *i915)
+{
+    i915_write(&i915->hw, FORCEWAKE_MT, I915_MASKED_DISABLE(FORCEWAKE_KERNEL));
+}
+
 int32_t i915_forcewake_get(struct drm_i915_private *i915)
 {
     struct i915_uncore *u = &i915->uncore;
     uint32_t flags = spin_lock_irqsave(&u->lock);
     int32_t err = 0;
 
-    if (u->wake_count == 0) {
+    if (!i915_fw_held(u)) {
         err = i915_fw_wake(i915);
+    } else if (u->timer_ticks != 0) {
+        u->active = 1;
     }
     if (err == 0) {
         u->wake_count++;
@@ -115,24 +147,63 @@ void i915_forcewake_put(struct drm_i915_private *i915)
         return;
     }
     if (--u->wake_count == 0) {
-        i915_write(&i915->hw, FORCEWAKE_MT, I915_MASKED_DISABLE(FORCEWAKE_KERNEL));
+        if (u->timer_ticks != 0) {
+            u->active = 1;
+        } else {
+            i915_fw_arm_timer(u);
+        }
     }
     spin_unlock_irqrestore(&u->lock, flags);
 }
 
 uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg)
 {
-    uint32_t value;
+    struct i915_uncore *u = &i915->uncore;
+    uint32_t flags, value = 0xffffffffu;
 
     if (!i915_gt_reg(reg)) {
         return i915_read(&i915->hw, reg);
     }
-    if (i915_forcewake_get(i915) < 0) {
-        return 0xffffffffu;
+    flags = spin_lock_irqsave(&u->lock);
+    if (i915_fw_held(u) || i915_fw_wake(i915) == 0) {
+        if (!i915_fw_held(u)) {
+            i915_fw_arm_timer(u);
+        }
+        value = i915_read(&i915->hw, reg);
     }
-    value = i915_read(&i915->hw, reg);
-    i915_forcewake_put(i915);
+    spin_unlock_irqrestore(&u->lock, flags);
     return value;
+}
+
+void i915_uncore_tick(struct drm_i915_private *i915)
+{
+    struct i915_uncore *u = &i915->uncore;
+    uint32_t flags = spin_lock_irqsave(&u->lock);
+
+    if (u->timer_ticks != 0 && --u->timer_ticks == 0) {
+        if (u->active) {
+            u->active = 0;
+            u->timer_ticks = 1;
+        } else if (u->wake_count == 0) {
+            i915_fw_release(i915);
+        }
+    }
+    spin_unlock_irqrestore(&u->lock, flags);
+}
+
+void i915_uncore_fini(struct drm_i915_private *i915)
+{
+    struct i915_uncore *u = &i915->uncore;
+    uint32_t flags = spin_lock_irqsave(&u->lock);
+
+    if (u->timer_ticks != 0) {
+        u->timer_ticks = 0;
+        u->active = 0;
+        if (u->wake_count == 0) {
+            i915_fw_release(i915);
+        }
+    }
+    spin_unlock_irqrestore(&u->lock, flags);
 }
 
 /** The wait's condition: more free entries in the GT FIFO than its
