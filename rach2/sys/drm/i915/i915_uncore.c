@@ -7,6 +7,7 @@
 #include "i915.h"
 #include "i915_reg.h"
 
+#include "../../idle_timer.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 
@@ -19,7 +20,10 @@
 
 /* The release timer's period in the boot processor's ticks: armed between
  * two ticks, it runs one to two milliseconds later at TICK_HZ 1000, as
- * Linux's hrtimer of NSEC_PER_MSEC with as much slack. */
+ * Linux's hrtimer of NSEC_PER_MSEC with as much slack. The timer is a
+ * deadline in kernel_ticks, so that a boot processor whose idle tick is
+ * stopped runs it at its time (`i915_idle_ticks`), and one that runs the
+ * tick work several times in a tick or late runs it once, at or after. */
 #define I915_FW_TIMER_TICKS 2u
 
 /* The GT's registers lie below 0x40000, the one range of Linux's
@@ -59,7 +63,7 @@ void i915_uncore_init(struct drm_i915_private *i915)
     /* WaRsClearFWBitsAtReset: every request bit, the firmware's too. */
     i915_write(hw, FORCEWAKE_MT, I915_MASKED_DISABLE(0xffffu));
     i915->uncore.wake_count = 0;
-    i915->uncore.timer_ticks = 0;
+    i915->uncore.timer_armed = 0;
     i915->uncore.active = 0;
     i915->uncore.gone = 0;
     i915->uncore.fifo_count = i915_read(hw, GTFIFOCTL) & GT_FIFO_FREE_ENTRIES_MASK;
@@ -100,7 +104,14 @@ static int32_t i915_fw_wake(struct drm_i915_private *i915)
  * release timer is armed. Under the register lock. */
 static int i915_fw_held(const struct i915_uncore *u)
 {
-    return u->wake_count != 0 || u->timer_ticks != 0;
+    return u->wake_count != 0 || u->timer_armed;
+}
+
+/** Arm the release timer `ticks` ticks from now. Under the register lock. */
+static void i915_fw_timer_at(struct i915_uncore *u, uint32_t ticks)
+{
+    u->timer_due = (uint32_t)kernel_ticks + ticks;
+    u->timer_armed = 1;
 }
 
 /** Arm the release timer, which withdraws the request one to two ticks
@@ -108,7 +119,7 @@ static int i915_fw_held(const struct i915_uncore *u)
  * fw_domain_arm_timer. Under the register lock, with forcewake held. */
 static void i915_fw_arm_timer(struct i915_uncore *u)
 {
-    u->timer_ticks = I915_FW_TIMER_TICKS;
+    i915_fw_timer_at(u, I915_FW_TIMER_TICKS);
     u->active = 0;
 }
 
@@ -129,7 +140,7 @@ int32_t i915_forcewake_get(struct drm_i915_private *i915)
         err = -ENODEV;
     } else if (!i915_fw_held(u)) {
         err = i915_fw_wake(i915);
-    } else if (u->timer_ticks != 0) {
+    } else if (u->timer_armed) {
         u->active = 1;
     }
     if (err == 0) {
@@ -154,7 +165,7 @@ void i915_forcewake_put(struct drm_i915_private *i915)
         return;
     }
     if (--u->wake_count == 0) {
-        if (u->timer_ticks != 0) {
+        if (u->timer_armed) {
             u->active = 1;
         } else {
             i915_fw_arm_timer(u);
@@ -187,15 +198,28 @@ void i915_uncore_tick(struct drm_i915_private *i915)
     struct i915_uncore *u = &i915->uncore;
     uint32_t flags = spin_lock_irqsave(&u->lock);
 
-    if (u->timer_ticks != 0 && --u->timer_ticks == 0) {
+    if (u->timer_armed && (int32_t)((uint32_t)kernel_ticks - u->timer_due) >= 0) {
+        u->timer_armed = 0;
         if (u->active) {
             u->active = 0;
-            u->timer_ticks = 1;
+            i915_fw_timer_at(u, 1);
         } else if (u->wake_count == 0) {
             i915_fw_release(i915);
         }
     }
     spin_unlock_irqrestore(&u->lock, flags);
+}
+
+uint32_t i915_uncore_idle_ticks(struct drm_i915_private *i915)
+{
+    struct i915_uncore *u = &i915->uncore;
+    uint32_t wait = TICK_HZ, flags = spin_lock_irqsave(&u->lock);
+
+    if (u->timer_armed) {
+        IDLE_TIMER_MIN(wait, u->timer_due, (uint32_t)kernel_ticks);
+    }
+    spin_unlock_irqrestore(&u->lock, flags);
+    return wait;
 }
 
 void i915_uncore_fini(struct drm_i915_private *i915)
@@ -207,7 +231,7 @@ void i915_uncore_fini(struct drm_i915_private *i915)
         i915_fw_release(i915);
     }
     u->wake_count = 0;
-    u->timer_ticks = 0;
+    u->timer_armed = 0;
     u->active = 0;
     u->gone = 1;
     spin_unlock_irqrestore(&u->lock, flags);

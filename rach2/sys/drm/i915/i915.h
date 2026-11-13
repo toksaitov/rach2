@@ -112,8 +112,9 @@ struct i915_uncore {
     uint32_t fifo_count;
     uint32_t fifo_timeouts;
     uint32_t thread_timeouts;
-    uint32_t timer_ticks; /* the boot processor's ticks until the release timer
-                           * runs, 0 when it is not armed */
+    uint32_t timer_armed; /* the release timer is armed */
+    uint32_t timer_due;   /* the low word of kernel_ticks at which the armed
+                           * release timer runs */
     uint32_t active;      /* a reference was taken or dropped since the timer
                            * was armed, so that it runs once more before it
                            * lets go */
@@ -1630,12 +1631,19 @@ void i915_forcewake_put(struct drm_i915_private *i915);
  */
 uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg);
 
-/** Run the release timer once a tick: when its ticks run out, arm it again
- * for a tick if a reference was taken or dropped since it was armed, and
- * otherwise withdraw the request unless a reference is held, as Linux's
- * intel_uncore_fw_release_timer. From the boot processor's tick, through
- * `i915_tick`, with interrupts off; takes the register lock. */
+/** Run the release timer once its tick has come: arm it again for a tick
+ * if a reference was taken or dropped since it was armed, and otherwise
+ * withdraw the request unless a reference is held, as Linux's
+ * intel_uncore_fw_release_timer. Before its tick, and with the timer not
+ * armed, nothing. From the boot processor's tick or its service event,
+ * through `i915_tick`, with interrupts off; takes the register lock. */
 void i915_uncore_tick(struct drm_i915_private *i915);
+
+/** The boot processor's ticks until the release timer runs, from 1 to
+ * TICK_HZ, which is the answer when it is not armed: the idle query's part
+ * for one device (`i915_idle_ticks`). With interrupts off; takes the
+ * register lock and changes nothing. */
+uint32_t i915_uncore_idle_ticks(struct drm_i915_private *i915);
 
 /** Withdraw the kernel's request at once and revoke every reference,
  * the timer's and any a holder such as debugfs's i915_forcewake_user still

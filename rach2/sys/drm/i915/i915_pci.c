@@ -7,6 +7,7 @@
 #include "i915_reg.h"
 
 #include "../../cmdline.h"
+#include "../../idle_timer.h"
 #include "../../irq.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
@@ -114,6 +115,25 @@ void i915_tick(void)
         }
     }
     spin_unlock_irqrestore(&i915_devices_lock, flags);
+}
+
+/** Return the next service deadline for the stopped idle tick: the
+ * earliest of the devices' forcewake release timers. */
+uint32_t i915_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ, next, flags = spin_lock_irqsave(&i915_devices_lock);
+    unsigned i;
+
+    for (i = 0; i < sizeof(i915_devices) / sizeof(i915_devices[0]); i++) {
+        if (i915_devices[i]) {
+            next = i915_uncore_idle_ticks(i915_devices[i]);
+            if (next < wait) {
+                wait = next;
+            }
+        }
+    }
+    spin_unlock_irqrestore(&i915_devices_lock, flags);
+    return wait;
 }
 
 void i915_irq_sync(struct drm_i915_private *i915)
