@@ -1504,22 +1504,6 @@ static int inode_make(struct ext2_mount *em, const struct ext2_node *dir, uint32
     return 0;
 }
 
-/**
- * Undo the inode `n` an operation on names made and could not name: its
- * link count 0 and the inode freed (`ext2_release_inode`). A free that fails
- * leaves an orphan for e2fsck, logged as `ext2: inode N: not freed after its
- * operation failed`; the reader reported the fault it met, and a failed
- * write is recorded as one, so nothing is reported again. The caller holds
- * `n`'s lock.
- */
-static void inode_undo(struct ext2_mount *em, struct ext2_node *n)
-{
-    nlink_set(n, 0);
-    if (ext2_release_inode(em, n) != 0) {
-        klog(KLOG_WARN, "ext2", "inode %d: not freed after its operation failed", (int)n->ino);
-    }
-}
-
 /** `inode_make` under the big lock, taken for an operation on names, which
  * runs without it. */
 static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
@@ -1563,6 +1547,24 @@ static void child_give(struct ext2_mount *em, struct ext2_node *c)
 }
 
 /**
+ * Give up the new inode `n` an operation on names made and could not name,
+ * before any entry names it: its link count 0 and `unlinked` set in memory,
+ * which no store needs, since nothing names it, and its lock and the
+ * caller's hold, the only one, given back (`child_give`). Its last put then
+ * frees it (`node_free`), at once or, under the caller's file locks, at the
+ * end of the operation, as Linux's `out_fail` drops the count and lets
+ * `iput` free the inode (fs/ext2/namei.c:157-266). A free that fails is
+ * logged there and leaves an orphan for e2fsck; the reader reported the
+ * fault it met, and a failed write is recorded as one.
+ */
+static void inode_abandon(struct ext2_mount *em, struct ext2_node *n)
+{
+    nlink_set(n, 0);
+    n->unlinked = 1;
+    child_give(em, n);
+}
+
+/**
  * Mark node `c`, whose lock the caller holds and whose link count is 0,
  * as having no name, with its change time set: freed at once when the
  * caller's is its only hold, since nothing else can reach it, and
@@ -1588,7 +1590,7 @@ static int child_unlinked(struct ext2_mount *em, struct ext2_node *c)
  * The `create` of `vfs_ops`: a new regular file `name` in `dir`, the root for
  * NULL, with the permission bits of `mode`: the inode allocated and written
  * whole, then the entry that names it, then the directory's times into the
- * cache. A failure to add the entry frees the inode (`inode_undo`); a
+ * cache. A failure to add the entry frees the inode (`inode_abandon`); a
  * failure to store the times is not the call's, since the entry is there,
  * and is not reported again: a failed read of the table block was reported
  * as it was met (READ_SLOT).
@@ -1633,9 +1635,7 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
     sleep_lock_subclass(0);
     rc = dir_add(em, d, name, n->ino, 1);
     if (rc != 0) {
-        inode_undo(em, n);
-        ext2_node_unlock(n);
-        ext2_node_unhold(em, n);
+        inode_abandon(em, n);
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
@@ -1710,9 +1710,7 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode));
     }
     if (rc != 0) {
-        inode_undo(em, n);
-        ext2_node_unlock(n);
-        ext2_node_unhold(em, n);
+        inode_abandon(em, n);
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
@@ -1865,9 +1863,7 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         }
     }
     if (rc != 0) {
-        inode_undo(em, n);
-        ext2_node_unlock(n);
-        ext2_node_unhold(em, n);
+        inode_abandon(em, n);
         return rc;
     }
     ext2_node_unlock(n);
@@ -2090,9 +2086,7 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
         rc = dir_add(em, d, name, n->ino, 7);
     }
     if (rc != 0) {
-        inode_undo(em, n);
-        ext2_node_unlock(n);
-        ext2_node_unhold(em, n);
+        inode_abandon(em, n);
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);

@@ -220,14 +220,35 @@ static void node_drop(struct ext2_mount *em, struct ext2_node *n)
     wq_wake_all(&em->node_wq);
 }
 
+static void node_final(struct ext2_mount *em, struct ext2_node *n);
+
+/**
+ * The end of node `n`, whose last hold has gone, under the big lock: an
+ * unlinked inode, and a live one with a change no store has put in the
+ * cache (`n->unstored`) on a mount that writes, go through `node_final`,
+ * whose free frees or stores the inode before the node goes, as Linux's
+ * `iput_final` writes a dirty inode before it evicts it (fs/inode.c:1861);
+ * any other node is dropped at once. A node whose load failed, or a new
+ * inode's that was never made, is not live, and its mark names nothing.
+ */
+static void node_last(struct ext2_mount *em, struct ext2_node *n)
+{
+    if (n->unlinked || (n->unstored && n->state == N_LIVE && ext2_writes(em))) {
+        node_final(em, n);
+    } else {
+        node_drop(em, n);
+    }
+}
+
 /** Drop a hold on `n` that no other holder's unlinked inode depends on, and
- * free the node with the last: a load that failed, or a new inode's. */
+ * end the node with the last (`node_last`): a load that failed, a new
+ * inode's, or a hold an operation on names took. */
 void ext2_node_unhold(struct ext2_mount *em, struct ext2_node *n)
 {
     int big = ext2_big_enter();
 
     if (ext2_node_ref(n, -1) == 0) {
-        node_drop(em, n);
+        node_last(em, n);
     }
     ext2_big_exit(big);
 }
@@ -1259,6 +1280,30 @@ static int node_outlive(struct ext2_mount *em, struct ext2_node *n)
     return 0;
 }
 
+/**
+ * Take the dying node `n`, which its last put left on `em->reap` to be
+ * stored (`node_last`) and which no thread is ending yet, back for a caller
+ * that asks for its inode again: off the list, N_LIVE with its mark, which
+ * the next last put settles, and no longer counted as a writer. The inode is
+ * linked, so it is the same file still, and a caller under a file lock, which
+ * could not reap it, has it at once. Under the big lock, which keeps the
+ * list.
+ */
+static void node_revive(struct ext2_mount *em, struct ext2_node *n)
+{
+    struct ext2_node **link;
+
+    for (link = &em->reap; *link; link = &(*link)->reap_next) {
+        if (*link == n) {
+            *link = n->reap_next;
+            break;
+        }
+    }
+    n->queued = 0;
+    n->state = N_LIVE;
+    em_leave(em);
+}
+
 /** The wait condition of `node_join`: the node `arg` is no longer loading. */
 static int node_settled(void *arg)
 {
@@ -1293,6 +1338,9 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
     *rc = 0;
     for (;;) {
         n = ext2_node_find(em, ino);
+        if (n && n->state == N_DYING && n->queued && !n->unlinked) {
+            node_revive(em, n);
+        }
         if (n && n->state == N_DYING) {
             *rc = node_outlive(em, n);
             if (*rc != 0) {
@@ -1329,8 +1377,10 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
  * its directory's lock (`ext2_stale`), or the load's -errno. The record is
  * published N_LOADING before the load, which sleeps in the cache, so that a
  * second lookup meanwhile waits for it and does not make another; a dying
- * node is waited for, and the inode then looked up anew. The caller may hold
- * node locks: the load holds none, and a node that dies holds none it needs.
+ * node is waited for, and the inode then looked up anew, but for a linked
+ * one left on `em->reap` to be stored, which is taken back (`node_revive`).
+ * The caller may hold node locks: the load holds none, and a node that dies
+ * holds none it needs.
  * A caller without the big lock, an operation on names, has it taken for the
  * search and the hold, since the node table is the big lock's.
  */
@@ -1354,26 +1404,36 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
 static int sb_note(struct ext2_mount *em);
 
 /**
- * Free the dying node `n` and its inode, on a mount that writes
- * (`ext2_writes`), a stopped one among them, as Linux's `ext2_evict_inode`
- * frees under SB_RDONLY; a read-only or failed mount frees no inode, so one
- * left there is an orphan for e2fsck, and so is one whose free fails,
- * logged as `ext2: inode N: not freed at its last put` and not reported
- * again, as Linux's `ext2_evict_inode` ignores a failure there
- * (fs/ext2/inode.c:86-110): the reclaim reader reported the damage it met,
- * and a failed write is recorded as one. The caller holds no file lock.
- * Ends the count `node_final` took.
+ * End the dying node `n` on a mount that writes (`ext2_writes`), a stopped
+ * one among them: an unlinked inode is freed, as Linux's `ext2_evict_inode`
+ * frees under SB_RDONLY, and a linked one with its mark (`n->unstored`)
+ * stored, as Linux's `iput_final` writes a dirty inode (fs/inode.c:1861);
+ * then the node is dropped. A read-only or failed mount writes nothing, so
+ * an inode left there is an orphan for e2fsck, and so is one whose free
+ * fails, logged as `ext2: inode N: not freed at its last put`; a store that
+ * fails is logged as `ext2: inode N: not stored at its last put`. Neither is
+ * reported again, as Linux's `ext2_evict_inode` ignores a failure there
+ * (fs/ext2/inode.c:86-110): the reader reported the damage it met, as the
+ * store does a table block it cannot write (`ext2_inode_write`), and a
+ * failed write is recorded as one, so the mount's error bit or its failure
+ * keeps the valid bit off the volume. The caller holds no file lock. Ends
+ * the count `node_final` took.
  */
 static void node_free(struct ext2_mount *em, struct ext2_node *n)
 {
     if (ext2_writes(em)) {
-        int rc;
+        int rc = 0, freed = n->unlinked;
 
         ext2_node_lock(n);
-        rc = ext2_release_inode(em, n);
+        if (freed) {
+            rc = ext2_release_inode(em, n);
+        } else if (n->unstored) {
+            rc = ext2_inode_store(em, n);
+        }
         ext2_node_unlock(n);
         if (rc != 0) {
-            klog(KLOG_WARN, "ext2", "inode %d: not freed at its last put", (int)n->ino);
+            klog(KLOG_WARN, "ext2", "inode %d: not %s at its last put", (int)n->ino,
+                 freed ? "freed" : "stored");
         }
     }
     node_drop(em, n);
@@ -1381,11 +1441,12 @@ static void node_free(struct ext2_mount *em, struct ext2_node *n)
 }
 
 /**
- * The end of an unlinked inode, whose last hold has gone: N_DYING, counted
- * as a writer without waiting, since a remount that is closing the mount
- * must see it and the caller may be a writer it waits for. A caller with no
- * file lock frees it now; any other leaves it on `em->reap`, since the free
- * takes node locks and a group's lock out of order and waits on the disk.
+ * The end of an unlinked inode, or of a marked one (`node_last`), whose last
+ * hold has gone: N_DYING, counted as a writer without waiting, since a
+ * remount that is closing the mount must see it and the caller may be a
+ * writer it waits for. A caller with no file lock frees or stores it now;
+ * any other leaves it on `em->reap`, since the free takes node locks and a
+ * group's lock out of order and both wait on the disk.
  */
 static void node_final(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -1448,7 +1509,9 @@ static void em_reap(struct ext2_mount *em)
  * what makes an open unlinked file work, and a put of one by a caller with
  * no file lock drains the batch first, so no block is freed while an older
  * write is pending. Its last put marks it N_DYING and frees it on a writable
- * mount (`node_final`); a crash before this leaves an orphan for e2fsck.
+ * mount (`node_final`); a crash before this leaves an orphan for e2fsck. The
+ * last put of a linked inode with a change not yet stored stores it the
+ * same way before the node goes (`node_last`).
  */
 static int ext2_put_unless_last(struct vfs_mount *mnt, void *node);
 
@@ -1470,11 +1533,7 @@ void ext2_put(struct vfs_mount *mnt, void *node)
         (void)ext2_writeback_drain(em);
     }
     if (n->refs == 0 || ext2_node_ref(n, -1) == 0) {
-        if (n->unlinked) {
-            node_final(em, n);
-        } else {
-            node_drop(em, n);
-        }
+        node_last(em, n);
     }
     em_reap(em);
     if (big) {
