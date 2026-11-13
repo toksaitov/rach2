@@ -1773,8 +1773,11 @@ static int idle_sleep(int stop_tick, uint32_t per_us)
     return 1;
 }
 
-/** Let a pending interrupt in for one instruction, with the processor
- * still marked idle: `sti` takes effect after the return that follows it. */
+/** Let a pending interrupt in for one instruction: `sti` takes effect after
+ * the return that follows it. A wait that a kick, a declined sleep or ready
+ * work found after the marker ends opens this while the processor is still
+ * marked idle; a loopback drain, and ready work found before the marker,
+ * open it before the marker is set. Either returns with interrupts off. */
 static void idle_kicked_window(void)
 {
     arch_irq_enable();
@@ -1910,6 +1913,9 @@ static void idle_halt(int stop_tick)
  * across the caller's next check, its selection or the incoming thread's
  * wait for the big lock, as Linux's `call_cpuidle` enables interrupts when
  * a reschedule request cancels the idle entry (kernel/sched/idle.c:144).
+ * The drain's window, and that of ready work found before the marker, open
+ * before the marker is set; that of ready work found once it is set opens
+ * while the processor is still marked idle.
  * The drain needs the big lock: a caller without it, the idle task, tries
  * the lock, and when another processor holds it leaves the ring to that
  * holder, whose call's exit drains it, or to the next tick that has the
