@@ -613,7 +613,7 @@
     },
     {
       "case_id": "machine.i915fake.memory",
-      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and 320 MiB of buffer objects written through GTT maps past the 256 MiB aperture read back whole after eviction, a GTT map's fault in an aperture full of the bindings of batches held behind a sw_sync point sleeps until they retire and then binds, a userptr object over the probe's memory is pinned and refused once that memory is unmapped, and buffers given pages until memory gives out end in ENOMEM, a DONTNEED buffer purged on the way",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and 320 MiB of buffer objects written through GTT maps past the 256 MiB aperture read back whole after eviction, a GTT map's fault in an aperture full of the bindings of batches held behind a sw_sync point sleeps interruptibly until they retire and then binds, a userptr object over the probe's memory is pinned and refused once that memory is unmapped, and buffers given pages until memory gives out end in ENOMEM, a DONTNEED buffer purged on the way",
       "units": [
         "rach2/sys/drm/i915/i915_gem_evict.c",
         "rach2/sys/drm/i915/i915_gem_execbuffer.c",
@@ -675,7 +675,7 @@
         },
         {
           "assertion_id": "in-flight",
-          "checks": "17 objects of 16 MiB, each written by a render batch held behind one sw_sync point, are busy; a GTT map's first touch of a new 16 MiB object sleeps uninterruptibly, as /proc reads it, until a child signals the point, then binds and reads back what was written, and the batches are retired",
+          "checks": "17 objects of 16 MiB, each written by a render batch held behind one sw_sync point, are busy; a GTT map's first touch of a new 16 MiB object sleeps interruptibly, as /proc reads it, a child's SIGSTOP ends the sleep and stops the probe, and after its SIGCONT the touch sleeps again until the child signals the point, then binds and reads back what was written, and the batches are retired",
           "source": "program"
         },
         {

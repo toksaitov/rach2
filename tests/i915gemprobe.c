@@ -28,6 +28,9 @@
  * MI_BATCH_BUFFER_END, which the fake does not read but a chip would. */
 #define IF_OBJECTS 17u
 #define BATCH_END  0x05000000u
+/* Linux's x86 numbers of the signals that stop and continue the probe. */
+#define IF_SIGCONT 18
+#define IF_SIGSTOP 19
 
 static int gpu_fd = -1;
 static uint32_t bo_handle;
@@ -433,9 +436,12 @@ static uint32_t busy(uint32_t handle)
  * 272 MiB of objects, each written by a batch on the render ring that
  * waits for one point of a sw_sync timeline, fill the 256 MiB aperture with
  * bindings the GPU may still use. A GTT map's fault then finds no idle
- * binding to evict, sleeps uninterruptibly until the GPU is idle, as
- * Linux's eviction does, and binds once a child, seeing the probe asleep,
- * signals the point and the batches retire.
+ * binding to evict and sleeps until the GPU is idle, interruptibly, as
+ * Linux's ggtt_flush waits (i915_gem_evict.c). A child, seeing the probe
+ * asleep in 'S', stops it with SIGSTOP, which ends the wait and stops the
+ * probe on its way back to the access, and continues it with SIGCONT, after
+ * which the access faults and sleeps again; the child then signals the
+ * point, the batches retire and the fault binds.
  */
 static void in_flight_row(void)
 {
@@ -481,17 +487,30 @@ static void in_flight_row(void)
     child = syscall0(SYS_FORK);
     require(child >= 0, "in-flight: fork");
     if (child == 0) {
+        int slept, stopped;
+
         while ((state = proc_state(parent)) == 'R') {
             syscall0(SYS_SCHED_YIELD);
         }
+        slept = state == 'S';
+        syscall2(SYS_KILL, parent, IF_SIGSTOP);
+        while ((state = proc_state(parent)) == 'S' || state == 'R') {
+            syscall0(SYS_SCHED_YIELD);
+        }
+        stopped = state == 'T';
+        syscall2(SYS_KILL, parent, IF_SIGCONT);
+        while ((state = proc_state(parent)) == 'T' || state == 'R') {
+            syscall0(SYS_SCHED_YIELD);
+        }
         syscall3(SYS_IOCTL, tl, SW_SYNC_IOC_INC, (long)&step);
-        syscall1(SYS_EXIT, state == 'D' ? 0 : 1);
+        syscall1(SYS_EXIT, slept && stopped && state == 'S' ? 0 : 1);
     }
     m = (volatile uint32_t *)ws_maps[0];
     m[0] = stamp(IF_OBJECTS, 0);
     require(m[0] == stamp(IF_OBJECTS, 0), "in-flight: the fault bound the object");
     require(syscall4(SYS_WAIT4, child, (long)&status, 0, 0) == child && status == 0,
-            "in-flight: the fault slept, uninterruptibly, until the point signalled");
+            "in-flight: the fault slept interruptibly, stopped and slept again, until the point "
+            "signalled");
     require(fence_status((int)pt.fence) == 1 && busy(data) == 0 && busy(handles[0]) == 0,
             "in-flight: the batches retired");
     syscall2(SYS_MUNMAP, (long)ws_maps[0], WS_BYTES);
