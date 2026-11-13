@@ -1141,18 +1141,27 @@ static void expect_n(const uint8_t *b, int n)
     }
 }
 
-/** Expect what precedes alps_init, the reset and the defaults, and its
- * start: the defaults again, the trial identification, the CS19 check,
- * the reset and the identification kept. */
+/* The bytes of psmouse's ThinkingMouse probe, which comes first. */
+#define THINKING 23
+
+/** Expect what precedes alps_init, the reset, the defaults and psmouse's
+ * ThinkingMouse probe, and its start: the defaults again, the trial
+ * identification, the CS19 check, the reset and the identification kept. */
 static void expect_probe(void)
 {
-    static const uint8_t start[3] = {0xFF, 0xF6, 0xF6};
+    static const uint8_t start[2] = {0xFF, 0xF6};
+    static const uint8_t thinking[THINKING] = {0xF3, 0x0A, 0xE8, 0x00, 0xF3, 20, 0xF3, 60,
+                                               0xF3, 40,   0xF3, 20,   0xF3, 20, 0xF3, 60,
+                                               0xF3, 40,   0xF3, 20,   0xF3, 20, 0xF2};
+    static const uint8_t defaults[1] = {0xF6};
     static const uint8_t ident[19] = {0xE8, 0x00, 0xE6, 0xE6, 0xE6, 0xE9, 0xE8, 0x00, 0xE7, 0xE7,
                                       0xE7, 0xE9, 0xE8, 0x00, 0xEC, 0xEC, 0xEC, 0xE9, 0xEA};
     static const uint8_t cs19_reset[2] = {0xE1, 0xFF};
 
     n_want = 0;
-    expect_n(start, 3);
+    expect_n(start, 2);
+    expect_n(thinking, THINKING);
+    expect_n(defaults, 1);
     expect_n(ident, 19);
     expect_n(cs19_reset, 2);
     expect_n(ident, 19);
@@ -1658,10 +1667,8 @@ static void left_alone_rows(void)
     close_node(&n_bare);
 }
 
-/* The bytes of psmouse's ThinkingMouse probe, which comes first, and of a
- * plain mouse's probes up to its knock. */
-#define THINKING 23
-#define TRIAL    53
+/* The bytes of a plain mouse's probes up to its knock. */
+#define TRIAL 53
 
 /** A plain mouse, a Synaptics pad, a pad whose set-up fails, and a pad
  * that answers the reports with a rate of 10. */
