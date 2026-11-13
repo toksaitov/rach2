@@ -395,12 +395,12 @@ struct process {
     uint32_t core_parked;
     /* The real-time interval timer: with alarm_fine, its fields count
      * monotonic nanoseconds; otherwise they count ticks. The time its
-     * SIGALRM is due at, 0 when it is not running, and the ticks between one
+     * SIGALRM is due at, 0 when it is not running, and the units between one
      * SIGALRM and the next, 0 for a single one, as Linux's `real_timer` and
      * `it_real_incr`. A periodic timer stops once its SIGALRM is posted,
      * keeping its interval, and runs again when a SIGALRM is taken
      * (`proc_alarm_taken`), at the first point of its grid after then,
-     * counted from `alarm_last`, the tick it was last due at. A fork starts
+     * counted from `alarm_last`, the time it was last due at. A fork starts
      * with all zero, since the child inherits no timer; an exec keeps them. */
     uint64_t alarm_tick;
     unsigned int alarm_cpu; /* processor which owns the real alarm's event */

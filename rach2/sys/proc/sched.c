@@ -1202,8 +1202,8 @@ void sched_preempt(void)
 
 /* The least a thread runs once switched onto a processor before an
  * interrupt gives the processor to another thread of its queue that no wake
- * marked: a chosen value, under the 1 ms tick, so that a thread switched in
- * at a tick still gives way at the next one. Linux's base slice is 0.70 ms
+ * marked. A separate one-millisecond event ends its slice when another
+ * local thread waits. Linux's base slice is 0.70 ms
  * times 1 + ilog2(min(online processors, 8)), 2.1 ms with four
  * (kernel/sched/fair.c:76, 191-220). */
 #define SCHED_SLICE_NS 750000u

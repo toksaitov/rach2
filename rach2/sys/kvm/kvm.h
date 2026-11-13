@@ -846,6 +846,11 @@ char *kvm_decimal(char *p, uint32_t n);
  * raw clock's rate (arch/x86/kvm/x86.c). */
 uint64_t kvm_host_ns(void);
 
+/** Convert a raw timer expiry to a monotonic owner event, pairing clock
+ * samples and applying their current rate. Zero means no finite event.
+ * No spinlock or big lock is held. */
+int64_t kvm_timer_deadline(uint64_t next);
+
 /* vcpu.c */
 
 /** KVM_CREATE_VCPU: a vCPU of `vm` with the id `id` and a descriptor of

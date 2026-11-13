@@ -325,7 +325,7 @@ static void timer_wake_pass(void)
  * base lock (kernel/time/hrtimer.c:1849, 1860). The signals of the POSIX
  * timers it expired are posted under the big lock, taken by a try, as the
  * tick takes it (`timer_lock_take`): when another processor holds it, they
- * wait for the next tick on any processor that takes it (`ptimer_post_due`),
+ * retry on a one-millisecond event (`ptimer_post_due`),
  * so that a holder elsewhere delays no wake and no tick here. Interrupts
  * are off and no lock is held.
  */
