@@ -490,7 +490,7 @@
           "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}
         }
       },
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2147483648, "disk_bytes": 21474836480,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2147483648, "disk_bytes": 38654705664,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
         {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
@@ -571,7 +571,7 @@
           "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}
         }
       },
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2147483648, "disk_bytes": 21474836480,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2147483648, "disk_bytes": 38654705664,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
         {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},

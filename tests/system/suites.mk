@@ -1344,10 +1344,12 @@ endif
 # that holds it, because every row that installs reads and hashes the whole
 # image and the emulator hashes at a megabyte or two a second. Its 16384-block
 # groups fill the first 64 MiB group, as growset requires, and it has one inode
-# for each 32 KiB, 2048, twice the nodes it holds, so that the uefi suite's grow
-# to 4 TiB writes 16 GiB of inode tables and not the 128 GiB mke2fs's ratio for
-# a small volume would make it. Its prerequisites are the sealed root's, since
-# the manifest is the same.
+# for each 32 KiB, 2048 to a group, so that the uefi suite's grow to 4 TiB
+# zeroes 65535 new inode tables of 512 KiB, 32 GiB, and not the 256 GiB that
+# mke2fs's ratio for a small volume would make it. QEMU on Linux turns those
+# zeros into holes of the sparse disk; QEMU on macOS has no hole for a write of
+# zeros and writes them, which the wide cases' disk reservation counts. Its
+# prerequisites are the sealed root's, since the manifest is the same.
 INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
 $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest \
                    $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) \
