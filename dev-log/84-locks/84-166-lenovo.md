@@ -1,6 +1,6 @@
 # 84-166's Lenovo step
 
-One trial boot of 84-157's trial head with this task's kernel commit, and one plain loop of WineD3D's GL round trip, `tests/system/games/trip.sh -n 1 -t wined3d_cs`, as 84-157's step ran it. It reads wined3d_cs's ready wait over the loop beside 84-157's 44.5 ms, the threads that preempted it beside 84-157's 43 of 61 by ki915, the main thread's involuntary switches beside 84-157's 107 and Linux's 7, and the round trip beside 84-157's 281.6 ms and Linux's 224 to 251. No Linux run: Linux's run delay for wined3d_cs is 84-163's.
+One trial boot of 84-157's trial head with this task's two kernel commits, 84-166's and its review fix 84-166a's (#4914), and one plain loop of WineD3D's GL round trip, `tests/system/games/trip.sh -n 1 -t wined3d_cs`, as 84-157's step ran it. It reads wined3d_cs's ready wait over the loop beside 84-157's 44.5 ms, the threads that preempted it beside 84-157's 43 of 61 by ki915, the main thread's involuntary switches beside 84-157's 107 and Linux's 7, and the round trip beside 84-157's 281.6 ms and Linux's 224 to 251. No Linux run: Linux's run delay for wined3d_cs is 84-163's.
 
 The step takes the screen with the boots' text, as 84-157's does; it plays nothing. Post the machine skill's notice on #4892 ten minutes before the first reboot.
 
@@ -9,26 +9,27 @@ The step takes the screen with the boots' text, as 84-157's does; it plays nothi
 The commit is scheduler software alone. It adds no register access, no DMA, no mapping and no wait on the hardware:
 
 * Placement reads only the run queues and the processors' current threads, under `sched_lock`, and picks among the processors a thread's affinity already allows; every choice it can make is one the old code could make too, a started processor of the affinity.
-* The cache peers come from `cpuid` leaf 4 on Intel, read once by each application processor as it starts (`cpuinfo_llc_shared`), the leaf `/proc/cpuinfo` and `/sys/devices/system/cpu/cpuN/cache` already read on the Lenovo. A processor that describes no cache shares its package's.
-* The new request to switch is `need_resched` and `WORK_RESCHED` on a running ordinary thread and the kick `smp_kick` already sends to idle processors and to threads a real-time wake outranks; the interrupt switches only a thread in user mode, and a thread inside a call switches at its exit, as the tick's request does. A kernel thread, ki915 among them, is sent no kick and switches only at its next sleep or service point, where it switched already whenever its queue held a thread.
+* The cache peers come from `cpuid` leaf 4 on Intel, read once by each application processor as it starts (`cpuinfo_llc_shared`), the leaf `/proc/cpuinfo` and `/sys/devices/system/cpu/cpuN/cache` already read on the Lenovo. A processor that describes no cache shares its package's. The core peers, the SMT siblings that 84-166a's placement prefers a whole idle core over, come from the APIC IDs and the topology widths (`cpuinfo_siblings`), which `/proc/cpuinfo`'s `core id` and `/sys/devices/system/cpu/cpuN/topology` already read there.
+* The new request to switch is `need_resched` and `WORK_RESCHED` on a running ordinary thread, after a wake or, with 84-166a, after an affinity change moved a ready thread to that processor's queue, and the kick `smp_kick` already sends to idle processors and to threads a real-time wake outranks; the interrupt switches only a thread in user mode, and a thread inside a call switches at its exit, as the tick's request does. A kernel thread, ki915 among them, is sent no kick and switches only at its next sleep or service point, where it switched already whenever its queue held a thread.
 * A wake asks at most once: a thread already asked is not asked again, and the idle task's request marks a processor that has a wake on its way.
 
 In QEMU under KVM with four processors the commit ran `wakemusl 2000 50 busy` and the idle rows to the end on its first try ([84-166.md](84-166.md)), and it builds for x86-64 on da42c81c0, the trial head's base, where the pick conflicts only in `rach2/sys/proc/Readme.md`.
 
 ## The head
 
-84-157's trial head: b3363a531 with `git cherry-pick 3bf804bc9 02b1c5490`, then this task's kernel commit from `milestone/76-display`, whose message begins "Count a processor idle for a wake" and ends "(84-166)"; the comment on #4892 that hands the step over names its hash. Its pick conflicts in `rach2/sys/proc/Readme.md` alone, which the kernel does not build from: take the head's side. The probe commit, `tests/musl/wakemusl.c`, is not needed.
+84-157's trial head: b3363a531 with `git cherry-pick 3bf804bc9 02b1c5490`, then this task's two kernel commits from `milestone/76-display`, in order: 84-166's, whose message begins "Count a processor idle for a wake" and ends "(84-166)", and 84-166a's, whose message begins "Place a wake on a core whose SMT siblings are all idle" and ends "(84-166a: j151 findings 1, 2 and 5)"; the comment on #4892 that hands the step over names their hashes. The first pick conflicts in `rach2/sys/proc/Readme.md` alone, which the kernel does not build from: take the head's side. The second conflicts in `rach2/sys/proc/Readme.md` and in `sched_make_ready`'s comment in `rach2/sys/proc/sched.h`, neither of which changes code: take the head's side of the Readme and the pick's side of the header. The probe commit, `tests/musl/wakemusl.c`, its fix and the host test's rows are not needed.
 
 ```
 T=build/worktrees/t4892; R=build/runs/t4892; mkdir -p $R
 git fetch origin && git worktree add --detach $T b3363a531
 (cd $T && git cherry-pick 3bf804bc9 02b1c5490)   # the test file's conflict, as 84-157's step: git checkout --ours tests/host/i915_exec_hosttest.c && git add it && git cherry-pick --continue
 (cd $T && git cherry-pick KERNEL_COMMIT)          # git checkout --ours rach2/sys/proc/Readme.md && git add it && git cherry-pick --continue
+(cd $T && git cherry-pick FIX_COMMIT)             # git checkout --ours rach2/sys/proc/Readme.md && git checkout --theirs rach2/sys/proc/sched.h && git add both && git cherry-pick --continue
 make -C $T ARCH=x86_64 rach2 utils
 ls -l $T/build/x86_64/rach2/kernel; shasum -a 256 $T/build/x86_64/rach2/kernel
 ```
 
-Passes: the kernel is under 4,194,304 bytes, the candidate slot's size in 84-157's `bootctl status`. Keep `$T/build/x86_64/rach2/kernel.debug` for the profile's names.
+Passes: the kernel is under 4,194,304 bytes, the candidate slot's size in 84-157's `bootctl status`. Built so on the Mac on 2026-11-13, it was 3,621,120 bytes, SHA-256 `4c0f14c645ce7200add914fbfae2ac5bf57e7b14d60204fb9d2bb27c6d00095b`; a build on another machine may differ in its SHA-256. Keep `$T/build/x86_64/rach2/kernel.debug` for the profile's names.
 
 The trial root and the bundle are 84-157's, which were 84-151's: 84-58's x86-64 `gnu-test.ext2` (`d4d1da30b4f6cb50...`, checked whole) and 84-151's bundle (`b945408e2c017b4c...`), whose `trip.sh` has `-t`. This task changes no program the root holds and no script of the bundle. Use them where 84-151's record names them and they are still kept; otherwise build them as 84-151's step on #4871 says.
 
