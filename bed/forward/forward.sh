@@ -58,9 +58,10 @@
 #
 # The runner waits for the guest's SSH server, copies FILES in, runs
 # `scene.sh PROFILE` as gfx, copies its output out and powers the guest off.
-# It waits as long as the guest's console or the scene's output grows; QEMU's
-# end, or SECONDS without a byte from either, 600 by default, fails it. That
-# bound is on silence, never on the run's length. It prints the scene's
+# It waits as long as QEMU runs, and QEMU's end fails it; a hung guest is
+# left to the caller's bound. With -w, SECONDS without a byte on the guest's
+# console or in the scene's output fails it too, a bound on silence, never
+# on the run's length. It prints the scene's
 # lines, each `bed-forward: NAME: VALUE`, and last the scene's result,
 #
 #   bed-forward: result: pass: PROFILE: DETAIL
@@ -68,7 +69,7 @@
 # or `bed-forward: result: fail: REASON` of its own. It exits 0 on a pass, 1
 # on a failure and 2 on a usage error.
 
-accel=kvm cpus=4 mib=4096 port=2222 silence=600 out=. format=raw ref='' disk='' key='' files=''
+accel=kvm cpus=4 mib=4096 port=2222 silence='' out=. format=raw ref='' disk='' key='' files=''
 measure='' seconds=''
 usage()
 {
@@ -99,7 +100,7 @@ shift $((OPTIND - 1))
 [ $# -eq 1 ] && [ -n "$disk" ] && [ -n "$key" ] && [ -n "$files" ] || usage
 profile=$1
 case $silence in
-    '' | *[!0-9]*) usage ;;
+    *[!0-9]*) usage ;;
 esac
 case $format in
     raw | qcow2) ;;
@@ -166,8 +167,9 @@ TMPDIR=$out MESA_SHADER_CACHE_DIR=$out/shader-cache "$qemu" -nodefaults -no-rebo
     -serial "file:$out/console.log" -monitor none > "$out/qemu.log" 2>&1 < /dev/null &
 pid=$!
 
-# quiet WHAT: fail when QEMU has ended, or when SECONDS have passed without a
-# new byte on the console or in the scene's output; else wait a second.
+# quiet WHAT: fail when QEMU has ended, or with -w when SECONDS have passed
+# without a new byte on the console or in the scene's output; else wait a
+# second.
 size='' mark=$(date +%s)
 quiet()
 {
@@ -177,7 +179,7 @@ quiet()
     if [ "$now" != "$size" ]; then
         size=$now mark=$(date +%s)
     fi
-    [ $(($(date +%s) - mark)) -lt "$silence" ] ||
+    [ -z "$silence" ] || [ $(($(date +%s) - mark)) -lt "$silence" ] ||
         fail "nothing from the guest for $silence s while $1: $(tail -n 1 "$out/console.log")"
     sleep 1
 }
