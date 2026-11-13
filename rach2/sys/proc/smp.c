@@ -201,6 +201,15 @@ struct bkl_tally {
 #define BKL_TALLIES (BKL_ENTRY_KEYS + BKL_IOCTL_SLOTS)
 static struct bkl_tally bkl_tally_boot[BKL_TALLIES];
 static struct bkl_tally *bkl_tally[NR_CPUS] = {bkl_tally_boot};
+/* The tallies' generation, which a write of bkl/calls moves on once it has
+ * chosen the thread (`smp_calls_store`), and the one each processor's rows
+ * count in. A read adds only the rows of the current generation, and a
+ * processor whose rows are behind zeroes them before its next count, so no
+ * processor writes another's rows, and a count that tested the filter in
+ * the old generation lands in rows that no read adds, as `bkl_tick_gen`
+ * does for bkl/tick. */
+static volatile uint32_t bkl_tally_gen;
+static volatile uint32_t bkl_tally_gens[NR_CPUS];
 
 /* The ioctl requests by request number, open addressed; a slot once taken
  * keeps its request until boot, so a charge to it is never misplaced. */
@@ -555,13 +564,28 @@ uint64_t bkl_tick_charge(int row, uint64_t start)
     return now;
 }
 
-/** This processor's tally for `key`, an entry's key or BKL_ENTRY_KEYS plus
- * an ioctl slot, or NULL when it has none. Interrupts are off. */
-static struct bkl_tally *tally_of(int key)
+/** This processor's tallies of the current generation, zeroed when they
+ * were of an older one, when bkl/calls counts thread `p` (`filter_wants`);
+ * NULL when it does not or the processor has none. The generation is read
+ * before the filter, which `smp_calls_store` sets before it moves the
+ * generation on, so a test of the old filter counts in the old generation.
+ * Interrupts are off. */
+static struct bkl_tally *tallies_for(const struct process *p)
 {
-    struct bkl_tally *t = bkl_tally[arch_cpu_id()];
+    int c = arch_cpu_id();
+    struct bkl_tally *t = bkl_tally[c];
+    uint32_t gen = bkl_tally_gen;
 
-    return t ? &t[key] : NULL;
+    k_barrier();
+    if (!t || !filter_wants(p)) {
+        return NULL;
+    }
+    if (bkl_tally_gens[c] != gen) {
+        k_memset(t, 0, sizeof(struct bkl_tally) * BKL_TALLIES);
+        k_barrier();
+        bkl_tally_gens[c] = gen;
+    }
+    return t;
 }
 
 void bkl_note_entry(uint32_t vector, int32_t nr, int locked)
@@ -576,11 +600,9 @@ void bkl_note_entry(uint32_t vector, int32_t nr, int locked)
             cpu->bkl_ioctl = 0;
         }
     }
-    if (nr < 0 && filter_wants(cpu->current)) {
-        t = tally_of(BKL_ENTRY_SYSCALLS + (int)(vector & 0xffu));
-        if (t) {
-            t->calls++;
-        }
+    t = nr < 0 ? tallies_for(cpu->current) : NULL;
+    if (t) {
+        t[BKL_ENTRY_SYSCALLS + (int)(vector & 0xffu)].calls++;
     }
 }
 
@@ -763,19 +785,17 @@ int bkl_note_ioctl(uint32_t cmd)
 void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
 {
     uint64_t wall = start != 0 ? arch_cycles() - start : 0;
-    struct bkl_tally *t = tally_of(nr < BKL_ENTRY_SYSCALLS ? (int)nr : BKL_KEY_BIGCALL);
+    struct bkl_tally *t = tallies_for(current_proc);
+    int key = nr < BKL_ENTRY_SYSCALLS ? (int)nr : BKL_KEY_BIGCALL;
 
-    if (!filter_wants(current_proc)) {
+    if (!t) {
         return;
     }
-    if (t) {
-        t->calls++;
-        t->wall += wall;
-    }
-    t = ioctl > 0 ? tally_of(BKL_ENTRY_KEYS + ioctl - 1) : NULL;
-    if (t) {
-        t->calls++;
-        t->wall += wall;
+    t[key].calls++;
+    t[key].wall += wall;
+    if (ioctl > 0) {
+        t[BKL_ENTRY_KEYS + ioctl - 1].calls++;
+        t[BKL_ENTRY_KEYS + ioctl - 1].wall += wall;
     }
 }
 
@@ -1040,7 +1060,7 @@ static void text_count(struct bkl_text *t, const char *kind, uint64_t number, in
     int cpu;
 
     for (cpu = 0; cpu < NR_CPUS; cpu++) {
-        if (bkl_tally[cpu]) {
+        if (bkl_tally[cpu] && bkl_tally_gens[cpu] == bkl_tally_gen) {
             sum.calls += bkl_tally[cpu][tally].calls;
             sum.wall += bkl_tally[cpu][tally].wall;
         }
@@ -1180,16 +1200,15 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
         if (n == sizeof(thread) || n - sizeof(thread) >= sizeof(filter_comm)) {
             return -EINVAL;
         }
-        for (i = sizeof(thread); i < n; i++) {
-            if (word[i] < '0' || word[i] > '9') {
-                digits = 0;
-            } else if (digits) {
-                digit = (uint32_t)(word[i] - '0');
-                if (tid > (0x7fffffffu - digit) / 10u) {
-                    return -EINVAL;
-                }
-                tid = tid * 10u + digit;
+        for (i = sizeof(thread); digits && i < n; i++) {
+            digits = word[i] >= '0' && word[i] <= '9';
+        }
+        for (i = sizeof(thread); digits && i < n; i++) {
+            digit = (uint32_t)(word[i] - '0');
+            if (tid > (0x7fffffffu - digit) / 10u) {
+                return -EINVAL;
             }
+            tid = tid * 10u + digit;
         }
         if (digits) {
             kind = FILTER_TID;
@@ -1204,11 +1223,6 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
         k_memset(&bkl_ioctls[i].count, 0, sizeof(bkl_ioctls[i].count));
         bkl_ioctls[i].blocks = 0;
     }
-    for (i = 0; i < NR_CPUS; i++) {
-        if (bkl_tally[i]) {
-            k_memset(bkl_tally[i], 0, sizeof(struct bkl_tally) * BKL_TALLIES);
-        }
-    }
     bkl_ioctls_lost = 0;
     k_memset(switches, 0, sizeof(switches));
     switches_lost = 0;
@@ -1219,6 +1233,9 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
     }
     filter_tid = tid;
     filter_kind = kind;
+    k_barrier();
+    bkl_tally_gen++;
+    this_cpu()->bkl_unfiltered = 1; /* this hold began before the zeroing */
     sched_lock_give(flags);
     return (int32_t)len;
 }
