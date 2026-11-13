@@ -2001,12 +2001,11 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
     return -EIO;
 }
 
-/** No row sleeps in epoll_wait, so a close finds no poller to let go of:
- * 1, as for a quiet one. */
-int poll_let_go(process_t *t)
+/** No row puts a file in an epoll set, so a last close has no
+ * registration to take. */
+void epoll_release_file(struct open_file *ofd)
 {
-    (void)t;
-    return 1;
+    (void)ofd;
 }
 
 /** No other processor claims the model's big lock. */
@@ -2016,12 +2015,6 @@ void bkl_yield(void)
 /** One processor: nothing to wait for. */
 void arch_relax(void)
 {}
-
-/** No row sleeps in epoll_wait, so nothing is woken for a closed hold. */
-void wq_wake_proc(process_t *p)
-{
-    (void)p;
-}
 
 /** Count a wake of the queue a parked call waits on. */
 void wq_wake_all(wait_queue_t *wq)
