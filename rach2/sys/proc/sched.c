@@ -1041,6 +1041,29 @@ void schedule(void)
     kirq_restore(saved_flags);
 }
 
+/** Arm the current thread's slice expiry when another local thread waits.
+ * Interrupts are off and no scheduler lock is held. A device interrupt may
+ * replace it with an earlier wake; the expiry pass rearms the slice. */
+void sched_slice_rearm(void)
+{
+    struct percpu *cpu = this_cpu();
+    process_t *p = cpu->current;
+    uint32_t flags;
+    int queued;
+    uint64_t at;
+
+    if (!p || p == cpu->idle || p->need_resched || p->sched_policy == SCHED_FIFO) {
+        return;
+    }
+    flags = spin_lock_irqsave(&sched_lock);
+    queued = run_queues[arch_cpu_id()].count > 0;
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (queued) {
+        at = p->slice_ns + SCHED_INTERVAL_NS;
+        timer_wake_at((int64_t)(at > sched_clock_ns() ? at : sched_clock_ns() + 1u));
+    }
+}
+
 /**
  * The outgoing thread's registers are saved once `switch_context` returns
  * here, so its pending moves complete (`affinity_complete`) and its `on_cpu`
@@ -1061,6 +1084,7 @@ void schedule_tail(void)
         affinity_complete(prev);
         (void)arch_atomic_xchg(&prev->on_cpu, 0u);
     }
+    sched_slice_rearm();
     if (self->bkl_depth > 0 && cpu->bkl_depth == 0) {
         bkl_take_as(self->bkl_depth, BKL_KEY_SWITCH);
     }
@@ -1240,6 +1264,7 @@ void sched_tick(void)
         }
         spin_unlock_irqrestore(&sched_lock, flags);
         if (!due) {
+            sched_slice_rearm();
             return;
         }
     }
@@ -1767,7 +1792,7 @@ static int idle_sleep(int stop_tick, uint32_t per_us)
     }
     arch_idle_masked();
     if (stop_tick && per_us != 0) {
-        cpu->idle_short = timer_tick_period() > 1u && timer_tick_due() == tick &&
+        cpu->idle_short = timer_wakes_between() && timer_tick_due() == tick &&
                           arch_cycles() - begin < (uint64_t)timer_tick_period() * TICK_US * per_us;
     }
     return 1;

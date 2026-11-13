@@ -393,18 +393,20 @@ struct process {
     /* It waits, with its registers and floating-point state saved, for the
      * core another thread of its process writes (`core_park`). */
     uint32_t core_parked;
-    /* The real-time interval timer, `setitimer(ITIMER_REAL)`: the tick its
+    /* The real-time interval timer: with alarm_fine, its fields count
+     * monotonic nanoseconds; otherwise they count ticks. The time its
      * SIGALRM is due at, 0 when it is not running, and the ticks between one
      * SIGALRM and the next, 0 for a single one, as Linux's `real_timer` and
      * `it_real_incr`. A periodic timer stops once its SIGALRM is posted,
      * keeping its interval, and runs again when a SIGALRM is taken
-     * (`proc_alarm_taken`), at the first tick of its grid after then,
+     * (`proc_alarm_taken`), at the first point of its grid after then,
      * counted from `alarm_last`, the tick it was last due at. A fork starts
      * with all zero, since the child inherits no timer; an exec keeps them. */
     uint64_t alarm_tick;
     unsigned int alarm_cpu; /* processor which owns the real alarm's event */
     uint64_t alarm_interval;
     uint64_t alarm_last;
+    int alarm_fine; /* alarm_tick, interval and last are monotonic ns, not ticks */
     /* The signals of the tick, as bits `1u << signo` of SIGALRM, SIGVTALRM
      * and SIGPROF, that a tick found due without the big lock and left for a
      * holder of it to post (`proc_tick_signal`), and the link of the list of
@@ -949,6 +951,14 @@ void proc_timer_update(process_t *p);
  * stays pending. The caller holds the big lock and no spinlock.
  */
 void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval);
+
+/** Set a real alarm after `ns` nanoseconds, zero to disarm, with an
+ * interval in nanoseconds. The caller holds the big lock, no spinlock. */
+void proc_alarm_set_ns(process_t *p, uint64_t ns, uint64_t interval);
+
+/** Read the real alarm's remaining and interval nanoseconds under its
+ * timer lock. A posted or disarmed alarm has no time left. */
+uint64_t proc_alarm_read_ns(const process_t *p, uint64_t *interval);
 
 /**
  * Give `to` the real-time timer of `from`, as it stands, at an exec that

@@ -1330,7 +1330,7 @@ static int32_t drop_caches_show(void *data, char *buf, uint32_t cap)
  * waited for, uninterruptibly, until the time runs out. */
 static int idle_within(struct drm_i915_private *i915, uint32_t ms)
 {
-    uint64_t end = rtc_ticks_now() + tick_div((uint64_t)ms * TICK_HZ, 1000u, (uint32_t *)0);
+    uint64_t end = rtc_ticks_now() + MS_TO_TICKS(ms);
 
     for (;;) {
         struct i915_request *rq = 0;

@@ -504,8 +504,7 @@ static void vgpu_sleep(int (*cond)(void *arg), void *arg, int64_t until)
     w.arg = arg;
     w.until = until;
     left = until - dma_fence_now();
-    delta = tick_div((uint64_t)(left > 0 ? left : 0), 1000, NULL);
-    delta = tick_div(delta + 999, 1000, NULL);
+    delta = tick_div64((uint64_t)(left > 0 ? left : 0) + TICK_NS - 1u, TICK_NS, NULL);
     saved = current_proc->wakeup_tick;
     current_proc->wakeup_tick = rtc_ticks_now() + delta + 1;
     (void)wq_wait_event_nointr(&vgpu_wake, vgpu_sleep_ready, &w);

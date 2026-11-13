@@ -442,7 +442,7 @@ static void tcp_mss_clamp(struct tcb *tcb)
  * milliseconds too large for TCP_MS's product. */
 static uint32_t tcp_ms_ticks(uint32_t ms)
 {
-    return ms / 1000u * TICK_HZ + (ms % 1000u * TICK_HZ + 999u) / 1000u;
+    return MS_TO_TICKS(ms);
 }
 
 /**

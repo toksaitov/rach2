@@ -8,17 +8,17 @@
 #include "lib/kint.h"
 
 /* The kernel's tick rate, in ticks a second, and the tick's length. */
-#define TICK_HZ 1000
+#define TICK_HZ 250
 #define TICK_NS (1000000000u / TICK_HZ)
 #define TICK_US (1000000u / TICK_HZ)
 
 /* The rate of the `clock_t` a program sees, Linux's USER_HZ: `times`, the
  * /proc stat files and AT_CLKTCK count in it, whatever TICK_HZ is. TICK_HZ
- * is a multiple of it. */
+ * need not be a multiple of it. */
 #define USER_HZ 100
 
-/* Milliseconds as whole ticks, rounded up, for a constant under 2^22 ms. */
-#define MS_TO_TICKS(ms) (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
+/* Milliseconds as whole ticks, rounded up without overflowing the product. */
+#define MS_TO_TICKS(ms) ((uint32_t)(ms) / 4u + ((uint32_t)(ms) % 4u != 0))
 
 /* The ticks of the monotonic clock since the timer started, counted by the
  * boot processor's timer handler (kernel.c): the raw ticks each interrupt
@@ -92,7 +92,15 @@ uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem);
 uint64_t tick_span(int64_t sec, uint32_t nsec);
 
 /** Ticks as the `clock_t` of USER_HZ that a program sees. */
-#define TICKS_TO_CLOCK(t) tick_div((t), TICK_HZ / USER_HZ, (uint32_t *)0)
+#define TICKS_TO_CLOCK(t) tick_clock(t)
+
+/** Convert ticks to USER_HZ units, rounded down, without overflowing the
+ * product before division. Any context; no hardware or locks. */
+uint64_t tick_clock(uint64_t ticks);
+
+/** Convert hundredths of a second to ticks, rounded up. The argument is
+ * 32 bits, so its scaled result fits in 64 bits. No locks or hardware. */
+uint64_t tick_centisecs(uint32_t hundredths);
 
 /** `kernel_ticks` whole, on any processor and in any context, with
  * interrupts off while it reads. A deadline of ticks is compared with it. */
@@ -290,8 +298,7 @@ uint32_t timer_calibrate(void);
  * This conversion reads no hardware and is safe with interrupts off. */
 uint64_t timer_cycles_us(uint64_t cycles);
 
-/** The current scheduler period in millisecond clock units. One for the
- * legacy timer and native APIC, four for a guest's one-shot APIC. Any
+/** The current scheduler period in kernel tick units, one at 250 Hz. Any
  * context; this reads no hardware. */
 uint32_t timer_tick_period(void);
 

@@ -1865,33 +1865,6 @@ static uint64_t itimer_ticks(long sec, long usec)
     return tick_span(sec, (uint32_t)usec * 1000u);
 }
 
-/**
- * The ticks left before the current process's timer is due, 0 when it is
- * disarmed, the tick has marked its SIGALRM, or its post has stopped it
- * until a SIGALRM is taken (`proc_alarm_due_tick`), as Linux's
- * `itimer_get_remtime` reports 0 for a timer that has sent its signal
- * (kernel/time/itimer.c:29-45, 156-166), and so alarm returns 0
- * (`alarm_setitimer`, :263-280). Part of the tick in progress has passed,
- * so the time left lies between the whole ticks to the due tick less one
- * and that number; the lower end is what is reported, and a timer due
- * within a tick reads as one tick left, since zero means disarmed. So a
- * value read in the timer's last tick and passed straight back to setitimer
- * comes due a tick later: the read reports one tick where less than one is
- * left, and the set adds a tick for the tick in progress. Interrupts are
- * off: the tick marks the timer.
- */
-static uint64_t itimer_left(void)
-{
-    uint64_t due = proc_alarm_due_tick(current_proc->tg->leader);
-    uint64_t now;
-
-    if (due == 0) {
-        return 0;
-    }
-    now = tick_count();
-    return due > now + 1u ? due - now - 1u : 1u;
-}
-
 /** `ticks` as the seconds and microseconds of an itimerval, cut to the
  * longest time a long holds: the longest timer of the i686, 2^31 - 1 s and
  * 999999 us, rounds up to 2^31 s of ticks. */
@@ -1909,6 +1882,34 @@ static void itimer_put(uint64_t ticks, long *sec, long *usec)
     *usec = (long)(rest * TICK_US);
 }
 
+/** Convert a validated timeval to nanoseconds, saturating at ktime's
+ * signed limit, as Linux's timeval_to_ktime does. */
+static uint64_t itimer_ns(long sec, long usec)
+{
+    uint64_t top = (uint64_t)0x7FFFFFFFFFFFFFFFull;
+    uint64_t sub = (uint64_t)usec * 1000u;
+
+    if ((uint64_t)sec > tick_div64(top - sub, 1000000000u, NULL)) {
+        return top;
+    }
+    return (uint64_t)sec * 1000000000u + sub;
+}
+
+/** Store a nanosecond span as a timeval, rounded up to one microsecond. */
+static void itimer_put_ns(uint64_t ns, long *sec, long *usec)
+{
+    uint64_t rem;
+    uint64_t seconds = tick_div64(ns + 999u, 1000000000u, &rem);
+
+    if (seconds > (uint64_t)(~0UL >> 1)) {
+        *sec = (long)(~0UL >> 1);
+        *usec = 999999;
+    } else {
+        *sec = (long)seconds;
+        *usec = (long)tick_div64(rem, 1000u, NULL);
+    }
+}
+
 /** What the current process's timer `which` is set to, as setitimer and
  * getitimer report it. Interrupts are off. */
 static void itimer_read(int32_t which, struct kernel_itimerval *out)
@@ -1916,8 +1917,11 @@ static void itimer_read(int32_t which, struct kernel_itimerval *out)
     const struct tgroup *tg = current_proc->tg;
 
     if (which == ITIMER_REAL) {
-        itimer_put(itimer_left(), &out->value_sec, &out->value_usec);
-        itimer_put(tg->leader->alarm_interval, &out->interval_sec, &out->interval_usec);
+        uint64_t interval;
+        uint64_t left = proc_alarm_read_ns(tg->leader, &interval);
+
+        itimer_put_ns(left, &out->value_sec, &out->value_usec);
+        itimer_put_ns(interval, &out->interval_sec, &out->interval_usec);
     } else {
         struct tgroup *g = current_proc->tg;
         uint64_t left, interval;
@@ -1933,10 +1937,9 @@ static void itimer_read(int32_t which, struct kernel_itimerval *out)
 
 /**
  * Arm or disarm the current process's timer `which`: the first signal
- * `value` ticks from now and then every `interval`, or disarmed for a value
- * of 0. A timer of real time does not count the tick in progress, so the
- * first SIGALRM never comes before the time asked for; the later ones are
- * rearmed at a tick and come every `interval`. A timer of processor time
+ * `value` units from now and then every `interval`, or disarmed for a value
+ * of 0. Real time uses nanoseconds and its own event. Processor time uses
+ * accounting ticks. A timer of processor time
  * counts the ticks the tick handler charges to the process's threads.
  * Interrupts are off.
  */
@@ -1952,7 +1955,7 @@ static void itimer_set(int32_t which, uint64_t value, uint64_t interval)
         spin_unlock(&tg->cpu_lock);
         return;
     }
-    proc_alarm_set(p, value != 0 ? proc_alarm_at(tick_count(), value + 1u) : 0, interval);
+    proc_alarm_set_ns(p, value, interval);
 }
 
 /**
@@ -1964,8 +1967,8 @@ static void itimer_set(int32_t which, uint64_t value, uint64_t interval)
  * and ITIMER_PROF its time in both modes and posts SIGPROF, which glibc's
  * profil and gprof's sampling use. Another `which` is EINVAL, as is a negative
  * time or microseconds past a second. A value of zero disarms the timer;
- * otherwise the first signal is due that long from now, rounded up to whole
- * ticks, then every interval, or only once for an interval of zero. `old`
+ * otherwise the first signal is due that long from now, then every interval,
+ * or only once for an interval of zero. CPU time rounds up to ticks. `old`
  * receives the timer's setting before the call.
  */
 long sys_setitimer(isr_params_t *params)
@@ -1989,8 +1992,11 @@ long sys_setitimer(isr_params_t *params)
     }
     flags = kirq_save();
     itimer_read(which, &was);
-    itimer_set(which, itimer_ticks(set.value_sec, set.value_usec),
-               itimer_ticks(set.interval_sec, set.interval_usec));
+    itimer_set(which,
+               which == ITIMER_REAL ? itimer_ns(set.value_sec, set.value_usec)
+                                    : itimer_ticks(set.value_sec, set.value_usec),
+               which == ITIMER_REAL ? itimer_ns(set.interval_sec, set.interval_usec)
+                                    : itimer_ticks(set.interval_sec, set.interval_usec));
     kirq_restore(flags);
     if (uold && copy_to_user(uold, &was, sizeof(was)) != 0) {
         return -EFAULT;
@@ -2034,11 +2040,12 @@ long sys_getitimer(isr_params_t *params)
 long sys_alarm(isr_params_t *params)
 {
     uint32_t flags = kirq_save();
-    uint32_t rest;
-    uint32_t seconds = (uint32_t)tick_div(itimer_left(), TICK_HZ, &rest);
-    uint32_t usec = rest * TICK_US;
+    uint64_t rest, interval;
+    uint64_t left = proc_alarm_read_ns(current_proc->tg->leader, &interval);
+    uint32_t seconds = (uint32_t)tick_div64(left, 1000000000u, &rest);
+    uint32_t usec = (uint32_t)rest / 1000u;
 
-    itimer_set(ITIMER_REAL, tick_span((uint32_t)SC_ARG(params, 0), 0), 0);
+    itimer_set(ITIMER_REAL, (uint64_t)(uint32_t)SC_ARG(params, 0) * 1000000000u, 0);
     kirq_restore(flags);
     if ((seconds == 0 && usec != 0) || usec >= 500000u) {
         seconds++;

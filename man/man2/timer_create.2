@@ -82,7 +82,7 @@ keeps them: to the nanosecond, when the clock reaches the time, never
 early.
 A timer expires between ticks when it is set and while its last
 expiration set its signal pending or that signal has been taken since;
-an expiration while its signal is pending leaves the timer to the 1 ms
+an expiration while its signal is pending leaves the timer to the 4 ms
 ticks until the signal is taken, as Linux rearms such a timer only at the
 signal's delivery, so that a short interval cannot raise interrupt after
 interrupt.

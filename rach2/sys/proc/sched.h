@@ -262,6 +262,11 @@ void sched_preempt(void);
  * processor's queue. Called with interrupts off. */
 void sched_tick(void);
 
+/** Arm a slice expiry for a competing local thread. Interrupts are off,
+ * and the caller holds no scheduler lock. */
+#define SCHED_INTERVAL_NS 1000000u
+void sched_slice_rearm(void);
+
 /** Take the switch an interrupt asked for (`need_resched`), if one did;
  * `schedule` clears the request at its selection. Called with interrupts
  * off, at a call's exit, a fault's end and from `sched_service_point`. */

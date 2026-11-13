@@ -204,7 +204,11 @@ static void timer_update_locked(process_t *p)
         }
     }
     if (p->alarm_tick != 0 && !p->alarm_due && p->alarm_cpu == arch_cpu_id()) {
-        timer_wake_tick(p->alarm_tick);
+        if (p->alarm_fine) {
+            timer_wake_at((int64_t)p->alarm_tick);
+        } else {
+            timer_wake_tick(p->alarm_tick);
+        }
     }
     active =
         p->state != PROC_UNUSED && (p->alarm_tick || (p->state == PROC_BLOCKED && p->wakeup_tick));
@@ -290,12 +294,13 @@ int proc_tick_signals_due(void)
  * the tick had marked a SIGALRM of the old setting that no holder of the big
  * lock has posted yet, which this takes off the list of the tick's signals.
  * The caller holds the big lock and no spinlock. */
-static int alarm_set(process_t *p, uint64_t tick, uint64_t interval)
+static int alarm_set(process_t *p, uint64_t tick, uint64_t interval, int fine)
 {
     uint32_t flags = spin_lock_irqsave(&timer_list_lock);
     int marked = p->alarm_due;
 
     p->alarm_tick = tick;
+    p->alarm_fine = fine;
     p->alarm_cpu = arch_cpu_id();
     p->alarm_interval = tick != 0 ? interval : 0;
     if (marked) {
@@ -314,9 +319,35 @@ static int alarm_set(process_t *p, uint64_t tick, uint64_t interval)
 
 void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
 {
-    if (alarm_set(p, tick, interval)) {
+    if (alarm_set(p, tick, interval, 0)) {
         signal_post(p, SIGALRM);
     }
+}
+
+void proc_alarm_set_ns(process_t *p, uint64_t ns, uint64_t interval)
+{
+    uint64_t now = (uint64_t)rtc_monotonic_ns();
+    uint64_t top = (uint64_t)0x7FFFFFFFu << 32 | 0xFFFFFFFFu;
+    uint64_t due = ns == 0 ? 0 : ns > top - now ? top : now + ns;
+
+    if (alarm_set(p, due, interval, 1)) {
+        signal_post(p, SIGALRM);
+    }
+}
+
+uint64_t proc_alarm_read_ns(const process_t *p, uint64_t *interval)
+{
+    uint32_t flags = spin_lock_irqsave(&timer_list_lock);
+    uint64_t now = p->alarm_fine ? (uint64_t)rtc_monotonic_ns() : tick_count();
+    uint64_t left = !p->alarm_due && p->alarm_tick > now ? p->alarm_tick - now : 0;
+
+    *interval = p->alarm_interval;
+    if (!p->alarm_fine) {
+        left *= TICK_NS;
+        *interval *= TICK_NS;
+    }
+    spin_unlock_irqrestore(&timer_list_lock, flags);
+    return left;
 }
 
 uint64_t proc_alarm_due_tick(const process_t *p)
@@ -378,6 +409,7 @@ void proc_alarm_take(process_t *to, const process_t *from)
     to->alarm_cpu = from->alarm_cpu;
     to->alarm_interval = from->alarm_interval;
     to->alarm_last = from->alarm_last;
+    to->alarm_fine = from->alarm_fine;
     timer_update_locked(to);
     spin_unlock_irqrestore(&timer_list_lock, flags);
 }
@@ -387,7 +419,11 @@ void proc_alarm_taken(process_t *p)
     uint32_t flags = spin_lock_irqsave(&timer_list_lock);
 
     if (p->alarm_tick == 0 && p->alarm_interval != 0) {
-        p->alarm_tick = alarm_next(p->alarm_last, p->alarm_interval, tick_count());
+        p->alarm_tick = alarm_next(p->alarm_last, p->alarm_interval,
+                                   p->alarm_fine ? (uint64_t)rtc_monotonic_ns() : tick_count());
+        if (p->alarm_fine && p->alarm_tick > (uint64_t)0x7FFFFFFFFFFFFFFFull) {
+            p->alarm_tick = (uint64_t)0x7FFFFFFFFFFFFFFFull;
+        }
         p->alarm_cpu = arch_cpu_id();
         timer_update_locked(p);
     }
@@ -822,6 +858,27 @@ static int timer_wake(process_t *p, int why, uint64_t now, uint32_t steps, int64
     return sched_wake_time_locked(p);
 }
 
+/** Expire or rearm an alarm under the timer-list lock, comparing fine
+ * alarms with the monotonic clock and coarse ones with the tick count. */
+static void alarm_pass(process_t *p, uint64_t now, int64_t clock)
+{
+    uint64_t alarm_now = p->alarm_fine ? (uint64_t)clock : now;
+
+    if (p->alarm_tick == 0 || p->alarm_due) {
+        return;
+    }
+    if (alarm_now >= p->alarm_tick) {
+        p->alarm_due = 1;
+        proc_tick_signal(p, SIGALRM);
+    } else if (p->alarm_cpu == arch_cpu_id()) {
+        if (p->alarm_fine) {
+            timer_wake_at((int64_t)p->alarm_tick);
+        } else {
+            timer_wake_tick(p->alarm_tick);
+        }
+    }
+}
+
 /**
  * A pass over the timer list for the reasons `why`, at the tick `now`. It
  * runs without the big lock, in three steps under the run queues' lock, as
@@ -874,14 +931,7 @@ static void timer_pass(int why, uint64_t now)
                     timer_wake_tick(p->wakeup_tick);
                 }
             }
-            if (p->alarm_tick != 0 && !p->alarm_due && now < p->alarm_tick &&
-                p->alarm_cpu == arch_cpu_id()) {
-                timer_wake_tick(p->alarm_tick);
-            }
-            if ((why & PASS_TICK) && p->alarm_tick != 0 && now >= p->alarm_tick && !p->alarm_due) {
-                p->alarm_due = 1;
-                proc_tick_signal(p, SIGALRM);
-            }
+            alarm_pass(p, now, clock);
         }
         spin_unlock(&timer_list_lock);
         for (i = 0; i < n; i++) {

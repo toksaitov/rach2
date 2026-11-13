@@ -38,8 +38,8 @@
  * leaves behind. */
 #define LAG_QUEUE 48
 
-/* The ticks in the unit of the options' times, a hundredth of a second. */
-#define LAG_UNIT (TICK_HZ / 100u)
+/* Convert the options' hundredths only after multiplying by the rate. */
+#define LAG_TICKS(n) ((uint32_t)tick_centisecs(n))
 
 struct lag_entry {
     struct block_request *request;
@@ -196,7 +196,7 @@ static void lag_deliver(struct lag_entry *e)
         return;
     }
     e->delivered = 1;
-    e->due = lag_clock() + 2u * LAG_UNIT;
+    e->due = lag_clock() + LAG_TICKS(2u);
     lag_completions++;
     if (e->flush) {
         klog(KLOG_INFO, "block", "lag: flush answered");
@@ -342,7 +342,7 @@ static int lag_knob(const char *name, uint32_t *out)
 block_device_t *block_lag_wrap(block_device_t *backing)
 {
     char value[16];
-    uint32_t n;
+    uint32_t n, delay;
 
     if (lag_backing) {
         return backing == lag_backing ? &lag_device : backing;
@@ -351,7 +351,8 @@ block_device_t *block_lag_wrap(block_device_t *backing)
         return backing;
     }
     lag_backing = backing;
-    lag_delay = n * LAG_UNIT;
+    delay = n;
+    lag_delay = LAG_TICKS(n);
     if (lag_knob("rach2.blockfail", &fail_write_at)) {
         klog(KLOG_INFO, "block", "lag: write %u fails", (unsigned)fail_write_at);
     }
@@ -375,10 +376,10 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     lag_device.flags = backing->flags & BLOCK_READ_ONLY;
     lag_device.max_sectors = 0; /* a page, the staging it copies through */
     lag_device.deadline_ticks =
-        500u * LAG_UNIT;           /* five seconds, the lag its rows are set against */
+        LAG_TICKS(500u);           /* five seconds, the lag its rows are set against */
     lag_device.deadline_limit = 1; /* one period: its rows test a device that never answers */
     if (lag_knob("rach2.lagdeadline", &n)) {
-        lag_device.deadline_ticks = n * LAG_UNIT;
+        lag_device.deadline_ticks = LAG_TICKS(n);
     }
     if (lag_knob("rach2.lagperiods", &n)) {
         lag_device.deadline_limit = n;
@@ -394,8 +395,7 @@ block_device_t *block_lag_wrap(block_device_t *backing)
         dead_device.drvdata = &dead_device;
     }
     lag_device.drvdata = &lag_device;
-    klog(KLOG_INFO, "block", "lag: %d hundredths of a second behind the boot disk",
-         (int)(lag_delay / LAG_UNIT));
+    klog(KLOG_INFO, "block", "lag: %d hundredths of a second behind the boot disk", (int)delay);
     return &lag_device;
 }
 

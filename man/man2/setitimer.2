@@ -50,11 +50,11 @@ the time between each later one, or zero for a single one.
 A zero
 .Va it_value
 disarms the timer.
-Times are rounded up to whole 1 ms ticks.
-.Dv ITIMER_REAL
-does not count the tick in progress, so the first
+The real-time timer keeps its time and interval in nanoseconds and arms
+an independent local APIC event, as Linux's high-resolution timer does.
+Its first
 .Dv SIGALRM
-never comes before the time asked for, up to the limit below.
+never comes before the time asked for.
 The timers of processor time count each tick the timer interrupt charges
 to a thread of the process, in the mode it interrupted, as
 .Xr times 2
@@ -153,9 +153,9 @@ keeps the timers and the pending signals, so a
 posted and not yet delivered, while blocked, comes to the new program
 when it unblocks the signal.
 .Ss Differences from Linux
-The timers count 1 ms ticks, so the signal is posted at a tick, and
-.Fn getitimer
-reports whole ticks where Linux reports microseconds.
+The CPU-time timers count 4 ms accounting ticks.
+The real-time timer reports microseconds; on a machine without a local
+APIC timer and reference clock, it expires at the following tick.
 The raw call refuses a null
 .Fa new
 with

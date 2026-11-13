@@ -64,3 +64,16 @@ uint64_t tick_span(int64_t sec, uint32_t nsec)
     }
     return (uint64_t)sec * TICK_HZ + (nsec + (TICK_NS - 1u)) / TICK_NS;
 }
+
+uint64_t tick_clock(uint64_t ticks)
+{
+    uint32_t rem;
+    uint64_t seconds = tick_div(ticks, TICK_HZ, &rem);
+
+    return seconds * USER_HZ + rem * USER_HZ / TICK_HZ;
+}
+
+uint64_t tick_centisecs(uint32_t hundredths)
+{
+    return tick_div((uint64_t)hundredths * TICK_HZ + 99u, 100u, (uint32_t *)0);
+}

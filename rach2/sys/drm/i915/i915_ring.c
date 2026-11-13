@@ -651,7 +651,8 @@ int32_t i915_engine_wait(struct drm_i915_private *i915, struct i915_engine *e, u
     if (current_proc && i915->msi_vector >= 0) {
         /* A whole tick more than the timeout, so that a wait begun late
          * in a tick is never short. */
-        w.deadline = rtc_ticks_now() + (timeout_us + 999u) / 1000u + 1u;
+        w.deadline =
+            rtc_ticks_now() + tick_div64((uint64_t)timeout_us + TICK_US - 1u, TICK_US, NULL) + 1u;
         saved = current_proc->wakeup_tick;
         current_proc->wakeup_tick = w.deadline;
         (void)wq_wait_event_nointr(&e->wq, i915_waiter_done, &w);

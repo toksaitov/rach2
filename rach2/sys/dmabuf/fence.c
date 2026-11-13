@@ -308,8 +308,7 @@ int32_t dma_fence_default_wait(struct dma_fence *f, int intr, int64_t deadline_n
     saved = current_proc->wakeup_tick;
     if (deadline_ns >= 0) {
         left = deadline_ns - dma_fence_now();
-        delta = tick_div((uint64_t)(left > 0 ? left : 0), 1000, NULL);
-        delta = tick_div(delta + 999, 1000, NULL);
+        delta = tick_div64((uint64_t)(left > 0 ? left : 0) + TICK_NS - 1u, TICK_NS, NULL);
         current_proc->wakeup_tick = rtc_ticks_now() + delta + 1;
     } else
         current_proc->wakeup_tick = 0;

@@ -51,7 +51,7 @@ highest base or inherited priority.
 threads keep the processor against equal-priority peers until a yield or
 block; equal-priority
 .Dv SCHED_RR
-threads rotate each tick.
+threads rotate at their one-millisecond slice events.
 A PI futex waiter donates its effective priority through its blocked owners
 until unlock, timeout or interruption removes the donation.
 .Dv SCHED_OTHER ,
@@ -268,7 +268,7 @@ and 0 to 0 for
 and
 .Dv SCHED_EXT .
 .Fn sched_rr_get_interval
-stores the round-robin time slice, one 1 ms tick, and 0 for a
+stores the round-robin time slice, one millisecond, and 0 for a
 .Dv SCHED_FIFO
 or
 .Dv SCHED_DEADLINE

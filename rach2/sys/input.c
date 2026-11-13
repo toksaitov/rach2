@@ -22,9 +22,7 @@
 #include "lib/spinlock.h"
 #include "kbd.h"
 #include "timer.h"
-
-/* The boot processor's tick, TICK_HZ a second, in milliseconds. */
-#define TICK_MS (1000u / TICK_HZ)
+#include "rtc.h"
 
 /* Linux's key codes of the modifiers and locks, which do not repeat. */
 #define KEY_LEFTCTRL   29
@@ -72,7 +70,7 @@ static int mouse_present;
 /** The tick's count in milliseconds, which wraps after 49 days. */
 static uint32_t now_ms(void)
 {
-    return (uint32_t)kernel_ticks * TICK_MS;
+    return (uint32_t)tick_div64((uint64_t)rtc_monotonic_ns(), 1000000u, NULL);
 }
 
 /** The evdev LED bits, 1 << LED_*, of `mask`, LED_* of kd.h. */
