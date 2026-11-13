@@ -71,11 +71,14 @@ int filemap_in_memory(const struct vm_file *f);
  * write access from every entry that maps the page, so that the next store
  * faults and sets the bit again, and each write-back writes only the pages
  * stored since their last write; a failed write keeps the bit, and so does
- * a write of a page a device holds. The pages go once the file has no
- * mapping and no dirty page: until then the last such mapping's descriptor
- * stays the pages' own, and every later write-back writes through it. A
- * device that has gone, a mount no namespace sees and an unmount drop what
- * cannot be written (`filemap_unmount`). NULL when the heap has no room.
+ * a write of a page a device holds. Every write-back writes through a
+ * handle of the pages' own, opened on the file system that holds the file
+ * at the first such mapping, which holds no mount, so that a bind the
+ * mapping was made through may go while pages are dirty. The pages and the
+ * handle go once the file has no mapping and no dirty page. A device that
+ * has gone, and the unmount of the file system itself, drop what cannot be
+ * written (`filemap_unmount`). NULL when the heap has no room or the handle
+ * cannot be opened.
  */
 struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 
@@ -118,15 +121,21 @@ int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino);
  */
 int filemap_memory_shared_writable(const struct vfs_mount *mnt, void *node);
 
-/** After a disk write, copy the `len` bytes at `off` from kernel buffer
- * `buf` into the resident clean pages of the file `ino` on `mnt`. The
- * caller holds the file's lock. Does not sleep or allocate. */
+/** After a write of the file `ino` on `mnt` that the file system accepted,
+ * copy the `len` bytes at `off` from the kernel buffer `buf` the write was
+ * made from into the file's pages in memory, clean or dirty, setting no
+ * dirty bit, since the file has the bytes: every byte a write puts in the
+ * file is in the pages before the file's lock goes, so that no write-back
+ * puts older bytes over it. The caller holds the file's lock and the big
+ * lock, and made the write from `buf` under the same hold of the file's
+ * lock. Does not sleep or allocate. */
 void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
                           uint32_t len);
 
 /*
- * The system calls on a file's descriptors call the five functions below,
- * so that the file and its resident mapped pages agree.
+ * The system calls on a file's descriptors call the four functions below,
+ * with `filemap_disk_written` above, so that the file and its resident
+ * mapped pages agree.
  * Each does nothing when the file has no resident-page owner, and each but
  * `filemap_file_truncated` may sleep.
  */
@@ -146,11 +155,6 @@ void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t of
  */
 int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_t off,
                               char __user *dst, uint32_t count);
-
-/** After a write of `len` bytes at `off` through `e`, put the bytes, read
- * back from the file, into the pages in memory the write covers, so that
- * every mapping sees them. */
-void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len);
 
 /** After a truncation of the file `ino` of `mnt` to `size`, free the pages
  * in memory past the new end, which are first taken out of every mapping
@@ -172,11 +176,11 @@ int filemap_sync_file(const struct open_file *ofd);
  * (`vfs_wb_err_set`). */
 void filemap_sync_all(void);
 
-/** For the unmount of `mnt`, once its operations have drained: when the
- * only references left to it are those of descriptions only a file's
- * pages in memory hold, write those pages, drop what cannot be written, and
- * let the descriptions go, so that the unmount can proceed. Otherwise do
- * nothing. Under the big lock; this may sleep. */
+/** For the unmount of `mnt`, a mount that is no bind and that nothing
+ * holds, once its operations have drained and before its file system is
+ * written: write the pages in memory of its files, drop what cannot be
+ * written, and let the files' handles go, so that no record outlives the
+ * mount. Under the big lock; this may sleep. */
 void filemap_unmount(struct vfs_mount *mnt);
 
 /** msync of the mapping `f` of a region: its file's pages written back
