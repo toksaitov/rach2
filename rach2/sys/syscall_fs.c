@@ -6934,6 +6934,18 @@ static int dir_seek_size(fd_entry_t *entry, long long off, int whence, long long
 }
 
 /**
+ * Mark the call's result `value`, a /proc/PID/mem position, as a result when
+ * it equals -EINTR, so that the dispatcher returns it and restarts nothing,
+ * as Linux, whose -EINTR is never a restart code, returns it.
+ */
+static void mem_result(long long value)
+{
+    if (value == -EINTR) {
+        current_proc->restart_kind = RESTART_NONE;
+    }
+}
+
+/**
  * lseek(2) and _llseek(2) on /proc/PID/mem, whose offset is an address:
  * SEEK_SET takes any offset and SEEK_CUR adds to it modulo 2^64, as Linux's
  * mem_lseek stores either in its unsigned f_pos (fs/proc/base.c), and a read
@@ -6941,12 +6953,16 @@ static int dir_seek_size(fd_entry_t *entry, long long off, int whence, long long
  * `whence` is -EINVAL. The offset is stored under the description's lock
  * and returned in `*out`. A call whose result is 64 bits, `limit` 2^63-1,
  * returns any position, as Linux's mem_lseek forces its result to count as
- * a success; past a smaller `limit`, i686's lseek, the position is stored
- * and the call is -EOVERFLOW, as Linux's ksys_lseek answers after the seek.
+ * a success; a smaller `limit`, i686's lseek, returns a position whose
+ * signed value fits in 32 bits, negative ones too, and for any other the
+ * position is stored and the call is -EOVERFLOW, as Linux's ksys_lseek
+ * answers after the seek. A position equal to -EINTR is a result, which the
+ * dispatcher must not restart (`mem_result`).
  */
 static int seek_mem(fd_entry_t *entry, long long off, int whence, uint64_t limit, long long *out)
 {
     uint64_t at;
+    long long pos;
     int rc = 0;
 
     if (!entry->ofd) {
@@ -6958,10 +6974,12 @@ static int seek_mem(fd_entry_t *entry, long long off, int whence, uint64_t limit
     fd_ofd_lock(entry->ofd);
     at = (uint64_t)off + (whence == 1 ? entry->ofd->offset : 0);
     entry->ofd->offset = at;
-    if (limit < 0x7FFFFFFFFFFFFFFFull && at > limit) {
+    pos = (long long)at;
+    if (limit < 0x7FFFFFFFFFFFFFFFull && (pos > (long long)limit || pos < -(long long)limit - 1)) {
         rc = -EOVERFLOW;
     } else {
-        *out = (long long)at;
+        *out = pos;
+        mem_result(pos);
     }
     fd_ofd_unlock(entry->ofd);
     return rc;
@@ -14102,7 +14120,9 @@ static int32_t llseek_bootlog(fd_entry_t *entry, long long off, int whence,
 /**
  * `_llseek` on a directory or a /proc file, by `seek_listing`'s rules, with
  * the new offset written to the caller's `result`, which must not be NULL.
- * Returns 0 or a negative errno.
+ * Returns 0 or a negative errno. A negative offset, which only /proc/PID/mem
+ * takes, is stored and returned as an int with `result` unwritten, as Linux's
+ * llseek returns it.
  */
 static int32_t llseek_listing(fd_entry_t *entry, long long off, int whence,
                               long long __user *result)
@@ -14114,6 +14134,10 @@ static int32_t llseek_listing(fd_entry_t *entry, long long off, int whence,
         return -EFAULT;
     }
     rc = seek_listing(entry, off, whence, 0x7FFFFFFFFFFFFFFFull, &at);
+    if (rc == 0 && at < 0) {
+        mem_result((int32_t)at);
+        return (int32_t)at;
+    }
     if (rc == 0 && copy_to_user(result, &at, sizeof(at)) != 0) {
         rc = -EFAULT;
     }
