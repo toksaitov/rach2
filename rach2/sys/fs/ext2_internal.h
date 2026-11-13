@@ -642,6 +642,7 @@ void ext2_node_meta_dirty(struct ext2_mount *em, struct ext2_node *n);
 int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, uint32_t len);
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how);
 int ext2_inode_store(struct ext2_mount *em, struct ext2_node *n);
+int ext2_node_write_marked(struct ext2_mount *em, struct ext2_node *n);
 int ext2_inode_times_later(struct ext2_mount *em, struct ext2_node *d);
 void ext2_mark_error(struct ext2_mount *em);
 int ext2_sb_store(struct ext2_mount *em);
