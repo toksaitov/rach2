@@ -25,8 +25,10 @@ struct eventfd;
  * `eventfd_put`. A hook on the counter (`eventfd_hook_add`) is told of
  * each rise, by a program's write or the kernel's `eventfd_signal`, and of
  * the last close of the descriptor. The counter and the hooks have a
- * spinlock, so `eventfd_signal` may be called from an interrupt handler;
- * the rest is called under the big lock.
+ * spinlock, so `eventfd_signal` may be called from an interrupt handler,
+ * and so do the references, which `eventfd_get` and `eventfd_put` take and
+ * drop with or without the big lock; adding and removing a hook is done
+ * under it.
  */
 struct eventfd_hook {
     /* The counter rose: called with the counter's lock held and
@@ -35,8 +37,9 @@ struct eventfd_hook {
      * counter, as a read would, Linux's eventfd_ctx_do_read in irqfd's
      * wakeup, or 0 to leave it. */
     int (*signal)(struct eventfd_hook *h);
-    /* The last descriptor closed: called once, under the big lock, after
-     * the hook has left the counter's list; NULL for none. It may sleep. */
+    /* The last descriptor closed: called once, under the big lock, which
+     * the close takes for it, after the hook has left the counter's list;
+     * NULL for none. It may sleep. */
     void (*hangup)(struct eventfd_hook *h);
     struct eventfd_hook *next; /* the counter's list */
 };
