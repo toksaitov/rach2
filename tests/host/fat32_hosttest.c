@@ -30,9 +30,10 @@
  * malformed volumes fail the mount or fail at the file they damage, under
  * AddressSanitizer. A create, a mkdir and a rename on a second volume, each
  * with the same operation on the first inside one of its writes, must each
- * write the name it was given. The test includes no hosted header: the kernel
- * headers define the fixed-width types, and the C library calls it makes are
- * declared below.
+ * write the name it was given. A join that fails in the active FAT or the
+ * mirror leaves no chain that reaches a free cluster. The test includes no
+ * hosted header: the kernel headers define the fixed-width types, and the C
+ * library calls it makes are declared below.
  */
 
 #include "../../rach2/sys/fs/fat32.h"
@@ -128,12 +129,67 @@ static unsigned char snaps[DEVMODEL_KEEP_MOST + 2][IMG_BYTES];
 static struct devmodel model;
 static int reads_made;
 
-/** Read `count` sectors at `lba` from the model, counting the read. */
+/* The faults `join_rows` arms. `join_faults` writes that carry a join, an
+   entry of FAT copy `join_copy` that is an end of chain on the device made
+   a cluster's number, fail with -5 (EIO); with `join_mirror_read` set, the
+   join to the active FAT lands and the next read of the mirror's block of
+   the same entry fails instead. `faults_fired` counts what failed. */
+static int join_faults;
+static int join_copy;
+static int join_mirror_read;
+static int64_t fault_read_lba = -1;
+static int faults_fired;
+
+/** Read `count` sectors at `lba` from the model, counting the read; a read
+ * of the sector `fault_read_lba` fails once with -5 (EIO). */
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
     reads_made++;
+    if (fault_read_lba >= 0 && (uint64_t)fault_read_lba >= lba &&
+        (uint64_t)fault_read_lba < lba + count) {
+        fault_read_lba = -1;
+        faults_fired++;
+        return -5;
+    }
     return devmodel_read(&model, lba, count, buf);
+}
+
+/** The little-endian word at `p`. */
+static uint32_t get32(const unsigned char *p)
+{
+    return p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/**
+ * The byte offset in the image of the entry of FAT copy `copy` that a
+ * write of `count` sectors at `lba`, from `buf`, makes a join: an end of
+ * chain in the image, which is what the device holds, given a cluster's
+ * number. 0 when the write makes none.
+ */
+static uint64_t join_in(int copy, uint64_t lba, uint32_t count, const unsigned char *buf)
+{
+    uint64_t bps = image[11] | ((uint32_t)image[12] << 8);
+    uint64_t fat =
+        (image[14] | ((uint32_t)image[15] << 8)) * bps + (uint64_t)copy * get32(image + 36) * bps;
+    uint64_t fat_end = fat + get32(image + 36) * bps;
+    uint64_t at = lba * 512, end = (lba + count) * 512;
+
+    if (at < fat) {
+        at = fat;
+    }
+    if (end > fat_end) {
+        end = fat_end;
+    }
+    for (at = fat + (at - fat + 3) / 4 * 4; at + 4 <= end; at += 4) {
+        uint32_t was = get32(image + at) & 0x0fffffffu;
+        uint32_t now = get32(buf + (at - lba * 512)) & 0x0fffffffu;
+
+        if (was >= 0x0ffffff8u && now >= 2 && now < 0x0ffffff7u) {
+            return at;
+        }
+    }
+    return 0;
 }
 
 /* Writes go to the model, pending until the driver's next barrier.
@@ -154,6 +210,22 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     (void)d;
     int rc;
 
+    if (join_faults > 0 && join_in(join_copy, lba, count, buf) != 0) {
+        join_faults--;
+        faults_fired++;
+        return -5;
+    }
+    if (join_mirror_read) {
+        uint64_t at = join_in(0, lba, count, buf);
+
+        if (at != 0) {
+            join_mirror_read = 0;
+            uint64_t bps = image[11] | ((uint32_t)image[12] << 8);
+
+            fault_read_lba = (int64_t)((at + get32(image + 36) * bps) / BCACHE_BLOCK_BYTES *
+                                       BCACHE_BLOCK_SECTORS);
+        }
+    }
     if (stop_after >= 0 && writes_made >= stop_after) {
         return -5;
     }
@@ -2491,6 +2563,143 @@ static void durability_rows(void)
     durability_row(2, "a file is written and the volume unmounted");
 }
 
+/**
+ * Grow, by one cluster, the file `n` (`how` 0, a write; 1, a truncate) or
+ * the directory `n` (2, by creating files in it until it takes a cluster or
+ * a create fails). Returns 0, or the first error.
+ */
+static int join_grow(void *n, int how)
+{
+    void *h, *f;
+    int rc, i;
+
+    if (how == 0) {
+        return write_at(n, pattern, 512, 512);
+    }
+    if (how == 1) {
+        if (OPS->open(&mnt, n, 0, &h) != 0) {
+            return -1;
+        }
+        rc = OPS->truncate(&mnt, h, 1024);
+        OPS->release(&mnt, h);
+        return rc;
+    }
+    for (i = 0; i < 40; i++) {
+        char name[16];
+
+        snprintf(name, sizeof(name), "G%02d", i);
+        rc = OPS->create(&mnt, n, name, 0644, &f);
+        if (rc != 0) {
+            return rc;
+        }
+        OPS->put(&mnt, f);
+    }
+    return 0;
+}
+
+/**
+ * A join of a new run to a chain that fails part way frees the run only
+ * once the old tail is ended again in every FAT that may hold the join.
+ * For a write, a growing truncate and a directory's growth, the write that
+ * carries the join to the active FAT fails, or the active FAT takes it and
+ * the mirror's write fails; the failed write marks the device failed, so
+ * the tail cannot be ended and the run must stay allocated. A sync then
+ * tries the dirty blocks again, as the device works once more, and the
+ * volume must have no chain that reaches a free cluster. Last, the active
+ * FAT takes the join of a write and the read of the mirror's block fails;
+ * the tail is then ended in both and the run freed, the volume consistent
+ * with no lost cluster and the file as it was.
+ */
+static void join_rows(void)
+{
+    static const char *const paths[] = {"a write", "a growing truncate", "a directory's growth"};
+    static unsigned char filler[1100 * 512];
+    struct vfs_statfs sf, sf2;
+    char what[160];
+    void *n, *h;
+    int copy, how, rc, err;
+
+    fill_pattern();
+    for (copy = 0; copy < 2; copy++) {
+        for (how = 0; how < 3; how++) {
+            load("--junk");
+            if (mount_rw("") != 0) {
+                check(0, "the join rows' volume mounts");
+                return;
+            }
+            n = 0;
+            if (how < 2) {
+                n = make_file(mnt.root, "J.TXT");
+                if (n && write_at(n, pattern, 512, 0) != 0) {
+                    OPS->put(&mnt, n);
+                    n = 0;
+                }
+            } else if (OPS->mkdir(&mnt, mnt.root, "JD", 0755) == 0) {
+                n = walk("/JD", &err);
+            }
+            check(n != 0, "the file or directory a join row grows");
+            faults_fired = 0;
+            join_copy = copy;
+            join_faults = 1;
+            rc = n ? join_grow(n, how) : -1;
+            join_faults = 0;
+            snprintf(what, sizeof(what), "%s whose join to the %s FAT fails fails", paths[how],
+                     copy ? "mirror" : "active");
+            check(rc != 0 && faults_fired == 1, what);
+            if (n) {
+                OPS->put(&mnt, n);
+            }
+            bcache_sync(&dev);
+            OPS->put(&mnt, mnt.root);
+            OPS->unmount(&mnt);
+            settle();
+            check(mkfatfixture_check(image, IMG_BYTES, 0, check_out, sizeof(check_out)) <= 1,
+                  "the independent checker completed");
+            check(findings_allowed(check_out),
+                  "and leaves no chain that reaches a free cluster once a sync writes its blocks");
+            if (!findings_allowed(check_out)) {
+                printf("fat32_hosttest: %s, %s FAT: the check said:\n%s", paths[how],
+                       copy ? "mirror" : "active", check_out);
+            }
+        }
+    }
+
+    load("--junk");
+    if (mount_rw("") != 0) {
+        check(0, "the join rows' volume mounts");
+        return;
+    }
+    n = make_file(mnt.root, "J.TXT");
+    h = make_file(mnt.root, "FILLER.BIN");
+    check(n && h && write_at(n, pattern, 512, 0) == 0 &&
+              write_at(h, filler, sizeof(filler), 0) == 0,
+          "a file of one cluster, and a filler that puts the next run a FAT block away");
+    if (h) {
+        OPS->put(&mnt, h);
+    }
+    bcache_sync(&dev);
+    settle();
+    check(bcache_invalidate(&dev) == 0, "the cache empties, so the mirror's block is read");
+    check(OPS->statfs(&mnt, &sf) == 0, "the free count before the join");
+    faults_fired = 0;
+    join_mirror_read = 1;
+    rc = n ? write_at(n, pattern, 512, 512) : -1;
+    join_mirror_read = 0;
+    fault_read_lba = -1;
+    check(rc != 0 && faults_fired == 1,
+          "a write whose join reaches the active FAT and not the mirror fails");
+    check(OPS->statfs(&mnt, &sf2) == 0 && sf2.bfree == sf.bfree,
+          "and frees its run, the tail ended in both FATs");
+    check(n && read_all(n, back, sizeof(back)) == 512 && __builtin_memcmp(back, pattern, 512) == 0,
+          "and the file reads what it held before");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check_consistent("and the volume has no lost cluster and no chain into a free one", 1);
+    OPS->put(&mnt, mnt.root);
+    OPS->unmount(&mnt);
+}
+
 /* The neighbour of `neighbour_rows`: a file of this many cache blocks. */
 #define NEIGHBOUR_BLOCKS 64u
 
@@ -2788,6 +2997,7 @@ int main(void)
     matrix_rows();
     durability_rows();
     neighbour_rows();
+    join_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
         fix_passed();

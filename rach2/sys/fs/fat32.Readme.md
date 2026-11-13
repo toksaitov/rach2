@@ -54,7 +54,7 @@ The order keeps one rule: a crash may leak clusters, but never leaves two chains
 * Rename: in one directory, with nothing under the new name and as many long entries as before, the entries are rewritten in place, long ones first. Otherwise the new name, its alias and its room are decided first, with the destination still there, so that `ENOSPC` destroys nothing; an existing destination is freed as an unlink frees it; the source's entries are freed and flushed; a moved directory's `..` is rewritten and flushed; the new entries are written last. A crash after the source is freed and before the new entries are written leaves a chain no name reaches.
 * `free_chain` begins with a flush, so that what detached the chain (a smaller size, a freed entry or an ended tail) is on the medium before any of its clusters is free.
 
-A write or a growing truncate that fails after joining its run ends the old tail again and frees the run, or leaves the run as lost clusters when that fails too. A failed write makes every mount on the device read-only ([vfs.Readme.md](vfs.Readme.md)).
+A write, a growing truncate or a directory growth that fails once it has tried to join its run, the failure of the join's own write in either FAT included, ends the old tail again in every FAT and frees the run only when those ends are written; when they are not, the run stays allocated, as lost clusters. A failed write makes every mount on the device read-only ([vfs.Readme.md](vfs.Readme.md)).
 
 ### The dirty flag, FSInfo and allocation
 

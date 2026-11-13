@@ -1076,6 +1076,22 @@ static int free_chain(struct fat_mount *fm, uint32_t first)
     return fat_batch_flush(fm, &batch);
 }
 
+/**
+ * Undo an attempted join of the run from `run_first` to the cluster `tail`:
+ * end the tail again in every FAT copy, written through, and free the run
+ * only once every end is written. A join whose write failed may be in the
+ * active FAT on the disk with the mirror unwritten, or in the cache, dirty,
+ * and reach the medium at a later flush; so a tail that cannot be ended in
+ * every copy keeps the run allocated, lost clusters a check frees, rather
+ * than leave a chain that runs into free clusters.
+ */
+static void unjoin_run(struct fat_mount *fm, uint32_t tail, uint32_t run_first)
+{
+    if (fat_set(fm, tail, FAT_EOC_MIN) == 0) {
+        free_chain(fm, run_first);
+    }
+}
+
 /** Set the modification date and time of `n` to now; the hundredths that
  * `fat_now` also gives belong to the creation time and are dropped. */
 static void stamp_mtime(struct fat_node *n)
@@ -1209,11 +1225,13 @@ static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first
             return rc;
         }
         rc = sync_disk(fm);
-        if (rc == 0) {
-            rc = fat_set(fm, tail, newc);
-        }
         if (rc != 0) {
             free_chain(fm, newc);
+            return rc;
+        }
+        rc = fat_set(fm, tail, newc);
+        if (rc != 0) {
+            unjoin_run(fm, tail, newc);
             return rc;
         }
         if (dir) {
@@ -1742,12 +1760,13 @@ static int zero_gap(struct fat_mount *fm, struct fat_node *n, uint32_t file, uin
  * data reaches the disk, the run is joined to the old tail and the join
  * flushed, and the entry is written last with the size.
  *
- * A failure before the join frees the run. A join that cannot be ended
- * again keeps its run, as lost clusters a check frees, rather than leave a
- * chain that runs into free clusters. A failure of the entry write leaves
- * the run beyond the size: a surplus tail when it was joined, lost
- * clusters when it was to be the first. A file is at most 4 GiB less a
- * byte; a write past it is -EFBIG.
+ * A failure before the join frees the run. A join whose write, in either
+ * FAT, or whose flush fails is undone by `unjoin_run`, which keeps the run
+ * when the tail cannot be ended again in every copy, as lost clusters a
+ * check frees, rather than leave a chain that runs into free clusters. A
+ * failure of the entry write leaves the run beyond the size: a surplus tail
+ * when it was joined, lost clusters when it was to be the first. A file is
+ * at most 4 GiB less a byte; a write past it is -EFBIG.
  */
 static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                          uint64_t offset)
@@ -1821,8 +1840,8 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     if (run_first != 0 && have > 0) {
         rc = chain_at(fm, n, n->first, have - 1, &tail);
         if (rc == 0) {
+            joined = 1;
             rc = fat_set(fm, tail, run_first);
-            joined = rc == 0;
         }
         if (rc == 0) {
             rc = bcache_flush(fm->dev);
@@ -1848,10 +1867,9 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     vfs_ns_unlock(mnt);
     return (int32_t)count;
 undo:
-    if (joined && fat_set(fm, tail, FAT_EOC_MIN) != 0) {
-        goto out;
-    }
-    if (run_first != 0) {
+    if (joined) {
+        unjoin_run(fm, tail, run_first);
+    } else if (run_first != 0) {
         free_chain(fm, run_first);
     }
 out:
@@ -1861,11 +1879,13 @@ out:
 
 /**
  * Join the run from `run_first` to the tail of `n`'s `have` clusters and
- * flush the join. On a failure the run is freed, after the tail is ended
- * again when the join was written; when that write fails too, as every
- * write through does on a device whose flush failed (`bcache_write`), the
- * join may be on the medium, and the run stays allocated, a surplus tail,
- * as a failed `fat_write` leaves it. 0 or -errno.
+ * flush the join. When the tail cannot be found the run is freed. When the
+ * join's write fails in either FAT, or its flush fails, the join may be on
+ * the medium in part, and `unjoin_run` frees the run only once the tail is
+ * ended again in every copy; when that write fails too, as every write
+ * through does on a device whose flush failed (`bcache_write`), the run
+ * stays allocated, a surplus tail, as a failed `fat_write` leaves it. 0 or
+ * -errno.
  */
 static int join_run(struct fat_mount *fm, struct fat_node *n, uint32_t have, uint32_t run_first)
 {
@@ -1873,17 +1893,16 @@ static int join_run(struct fat_mount *fm, struct fat_node *n, uint32_t have, uin
     int rc;
 
     rc = chain_at(fm, n, n->first, have - 1, &tail);
-    if (rc == 0) {
-        rc = fat_set(fm, tail, run_first);
-        if (rc == 0) {
-            rc = bcache_flush(fm->dev);
-            if (rc != 0 && fat_set(fm, tail, FAT_EOC_MIN) != 0) {
-                return rc;
-            }
-        }
-    }
     if (rc != 0) {
         free_chain(fm, run_first);
+        return rc;
+    }
+    rc = fat_set(fm, tail, run_first);
+    if (rc == 0) {
+        rc = bcache_flush(fm->dev);
+    }
+    if (rc != 0) {
+        unjoin_run(fm, tail, run_first);
     }
     return rc;
 }
