@@ -1782,11 +1782,12 @@ int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
  * On a mount that writes back the block and the inode reach the device before
  * the parent's entry names them (`shared_block_new`, `inode_commit`), as
  * Linux's `ext2_make_empty` writes both (fs/ext2/dir.c:650 in Linux 6.12.115).
- * A failure frees the new inode, and lowers the parent's count again when the
- * entry was not written. The batch is drained first. The caller holds the
- * parent's lock, and the new directory's is held until it is named. 0, -ENOENT
- * for a removed parent, -EEXIST, -EMLINK at 65000 links, -ENAMETOOLONG, -EROFS,
- * -ENOSPC, -ENOMEM, or -errno.
+ * A failure frees the new inode (`inode_abandon`), and lowers the parent's
+ * count again in memory when the entry was not written, which the parent's
+ * mark has its next store write. The batch is drained first. The caller
+ * holds the parent's lock, and the new directory's is held until it is
+ * named. 0, -ENOENT for a removed parent, -EEXIST, -EMLINK at 65000 links,
+ * -ENAMETOOLONG, -EROFS, -ENOSPC, -ENOMEM, or -errno.
  */
 int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
@@ -1859,7 +1860,6 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         }
         if (rc != 0) {
             nlink_set(d, d->nlink - 1);
-            (void)ext2_inode_store(em, d);
         }
     }
     if (rc != 0) {
@@ -1967,7 +1967,6 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
     rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode));
     if (rc != 0) {
         nlink_set(n, n->nlink - 1);
-        ext2_inode_store(em, n);
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
@@ -1978,7 +1977,8 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
  * The `link` of `vfs_ops`: a new name `name` in `dir` for the file `node`:
  * the count raised first, then the name written, so that a stop between
  * leaves a count one too high, which is a count repair; then the
- * directory's times. A failure to write the name lowers the count again.
+ * directory's times. A failure to write the name lowers the count again in
+ * memory, which the file's mark has its next store write.
  * The batch is drained first. The caller holds the directory's lock and
  * the file's, which this takes again. 0, -EPERM for a directory, -ENOENT
  * for a removed directory or a file with no name left, -EMLINK at 65000
@@ -2291,7 +2291,6 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
         rc = dir_add(em, nd, r->newname, n->ino, ext2_ftype_of(n->mode));
         if (rc != 0) {
             nlink_set(n, n->nlink - 1);
-            (void)ext2_inode_store(em, n);
             return rc;
         }
     }

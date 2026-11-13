@@ -636,6 +636,36 @@ void ext2_group_fetch(struct ext2_mount *em, uint32_t hint)
 }
 
 /**
+ * Give back block `b`, which the caller's operation took and nothing names,
+ * as the rollback of that operation in memory, as Linux's `ext2_alloc_branch`
+ * frees the blocks of a branch it could not splice (fs/ext2/inode.c:549-555):
+ * the group's bitmap and descriptor block fetched with no lock held, then
+ * the block freed under the group's lock (`block_free`). A free that fails,
+ * or that a mount that writes nothing cannot make, leaves a lost block for
+ * e2fsck, logged as `ext2: block B: not freed after its operation failed`.
+ * The bitmap's reader reports a fault it meets, and a failed write is
+ * recorded as one; an -EIO of a mount whose device has not failed is the
+ * write funnel's, which could not read again the block it writes in part,
+ * and which no reader met, so it is reported here (`ext2_mark_error`). The
+ * caller holds no group's lock.
+ */
+void ext2_block_unwind(struct ext2_mount *em, uint32_t b)
+{
+    int rc = -EROFS;
+
+    if (ext2_writes(em)) {
+        ext2_group_fetch(em, b);
+        rc = block_free(em, b);
+    }
+    if (rc != 0) {
+        klog(KLOG_WARN, "ext2", "block %d: not freed after its operation failed", (int)b);
+        if (rc == -EIO && !ext2_failed(em)) {
+            ext2_mark_error(em);
+        }
+    }
+}
+
+/**
  * Allocate one block from `hint` into `*out` by `block_alloc`, whose groups'
  * locks wait on the disk only for a block evicted again since its fetch.
  * The hint's group is fetched first with no lock held, and a search that
