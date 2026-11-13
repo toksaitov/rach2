@@ -32,10 +32,12 @@ case $proton in
 esac
 made=
 home=
-debugmode=
+reader=
+bkl=
 trap '[ -z "$made" ] || rm -f /opt/proton
       [ -z "$home" ] || rm -rf "$home"
-      [ -z "$debugmode" ] || debugfs_mode "$debugmode"' EXIT
+      [ -z "$reader" ] || { kill "$reader" 2> /dev/null; wait "$reader" 2> /dev/null || true; }
+      [ -z "$bkl" ] || rm -rf "$bkl"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -44,28 +46,20 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd)
 chown "$user" "$out"
 
-# Set the mode of debugfs's root, which every mount of it shares, through the
-# mode= option of a mount of its own that is unmounted at once, since Rach2's
-# debugfs has no chmod.
-debugfs_mode() {
-    mkdir "$out/debugfs" &&
-        mount -t debugfs -o "mode=$1" debugfs "$out/debugfs" &&
-        umount "$out/debugfs"
-    rmdir "$out/debugfs"
-}
-
-# trip.py reads Rach2's bkl/calls as USER for the holds by entry and the takes
-# after a switch by the call they slept in, but debugfs's root is root's alone
-# (0700) by default: open it for the run and put its mode back on exit.
-calls=/sys/kernel/debug/bkl/calls
-if [ -e "$calls" ] && ! su -s /bin/sh "$user" -c "test -r $calls"; then
-    was=$(stat -c %a /sys/kernel/debug)
-    if debugfs_mode 755 && su -s /bin/sh "$user" -c "test -r $calls"; then
-        debugmode=$was
-    else
-        debugfs_mode "$was" || true
-        echo "trip: $calls: not readable by $user; holds by entry from /proc/stat alone" >&2
-    fi
+# trip.py, as USER, takes Rach2's bkl/calls, bkl/profile and bkl/tick at the
+# loop's start and end, but debugfs is root's alone (0700) and stays so: a
+# reader of root's (trip.py --reader) copies those three files, and nothing
+# else, into BKL/snap, which USER may read but not write, for each request
+# USER names in BKL/ask. BKL is outside OUT, which USER owns, so that USER
+# cannot put another file in place of BKL/snap.
+if [ -d /sys/kernel/debug/bkl ]; then
+    bkl=$(mktemp -d "${TMPDIR:-/tmp}/trip-bkl.XXXXXX")
+    chmod 755 "$bkl"
+    mkdir -m 755 "$bkl/snap"
+    mkdir -m 700 "$bkl/ask"
+    chown "$user" "$bkl/ask"
+    PYTHONPATH="$here" python3 "$here/trip.py" --reader "$bkl" &
+    reader=$!
 fi
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
@@ -92,10 +86,17 @@ mkdir -p "$home"
 chown "$user" "$home"
 status=0
 su -s /bin/sh "$user" -c "cd '$out' && HOME='$out/home' TMPDIR='$out' GAMES_RENDERER='$renderer' \
-    GAMES_LAUNCHER='$launcher' PYTHONPATH='$here' python3 '$here/trip.py' '$out/trip' '$runs'" \
-    || status=$?
+    GAMES_LAUNCHER='$launcher' TRIP_BKL='$bkl' TRIP_BKL_PID='$reader' PYTHONPATH='$here' \
+    python3 '$here/trip.py' '$out/trip' '$runs'" || status=$?
 rm -rf "$home"
 home=
+if [ -n "$reader" ]; then
+    kill "$reader" 2> /dev/null || true
+    wait "$reader" 2> /dev/null || true
+    reader=
+fi
+[ -z "$bkl" ] || rm -rf "$bkl"
+bkl=
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
 fi

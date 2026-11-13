@@ -7,8 +7,15 @@ ioctls traced, where strace is installed, and once under perf stat where perf
 is.
 Usage: trip.py OUT N. The counters of each run go to OUT/trip-gl-I.loop.txt
 and its summary to the output.
+
+Rach2's debugfs is root's alone, so the user that runs the loop asks a reader
+of root's, trip.py --reader DIR, which trip.sh starts, for each snapshot of
+bkl/calls, bkl/profile and bkl/tick, and reads only those copies: it names a
+request in DIR/ask, a directory of its own, and the reader copies the three
+files into DIR/snap/NAME, which the user may read but not write.
 """
 import collections
+import itertools
 import os
 from pathlib import Path
 import re
@@ -25,34 +32,88 @@ import run
 # summary lists; Linux has only ctxt of them.
 STAT_KEYS = ("ctxt", "bkl_wait_us", "scheduler_picks", "tlb_shootdown_ipis")
 
-# debugfs's complete holds by entry and takes after a switch, by the system
-# call the thread slept in, and each call's and ioctl request's time with
-# rach2.cycleaccount (debugfs(5)); Linux has no such file.
-CALLS = Path("/sys/kernel/debug/bkl/calls")
+# debugfs's files of the big lock, Rach2's alone (debugfs(5)), which the
+# reader copies and nothing else: calls, the complete holds by entry and the
+# takes after a switch, by the system call the thread slept in, and each
+# call's and ioctl request's time with rach2.cycleaccount; profile, whose
+# samples by entry over the loop the summary gives, and whose whole-kernel
+# mode, which root chooses by writing "kernel" to it before the run, samples
+# every tick in kernel mode, the lock held or not; and tick, the time of the
+# timer tick's parts.
+BKL = Path("/sys/kernel/debug/bkl")
+BKL_FILES = ("calls", "profile", "tick")
 
-# debugfs's profile, whose samples by entry over the loop the summary gives;
-# its whole-kernel mode, which root chooses by writing "kernel" to it before
-# the run, samples every tick in kernel mode, the lock held or not.
-PROFILE = Path("/sys/kernel/debug/bkl/profile")
+# The reader's directory and process ID, which trip.sh passes; empty where
+# there is no bkl directory, as on Linux.
+READER_DIR = os.environ.get("TRIP_BKL", "")
+READER_PID = os.environ.get("TRIP_BKL_PID", "")
+requests = itertools.count(1)
+
+
+def serve(base):
+    """As root, answer each request named in BASE/ask, digits only, once: copy
+    the files of BKL_FILES that read into BASE/snap/NAME.tmp, mode 0644, and
+    rename it to BASE/snap/NAME. Polls every millisecond and returns when
+    its parent, trip.sh, has gone."""
+    ask, snap = base / "ask", base / "snap"
+    parent, done = os.getppid(), set()
+    while os.getppid() == parent:
+        for name in os.listdir(ask):
+            if name in done or not name.isdigit():
+                continue
+            done.add(name)
+            tmp = snap / (name + ".tmp")
+            tmp.mkdir()
+            tmp.chmod(0o755)
+            for f in BKL_FILES:
+                try:
+                    text = (BKL / f).read_text()
+                except OSError:
+                    continue
+                (tmp / f).write_text(text)
+                (tmp / f).chmod(0o644)
+            tmp.rename(snap / name)
+        time.sleep(0.001)
+
+
+def reader_alive(pid):
+    """Whether process PID runs and is not a zombie; a reader that has gone
+    stays a zombie until trip.sh, waiting for the loop, reaps it."""
+    try:
+        stat = Path("/proc/%d/stat" % pid).read_text()
+    except OSError:
+        return False
+    return stat[stat.rindex(")") + 2:].split()[0] not in ("Z", "X")
+
+
+def bkl_snapshot():
+    """The reader's copies of BKL_FILES, by name, taken now; none without a
+    reader. Waits for the copy as long as the reader runs."""
+    if not READER_DIR:
+        return {}
+    base, name = Path(READER_DIR), str(next(requests))
+    (base / "ask" / name).touch()
+    path = base / "snap" / name
+    while not path.exists():
+        if not reader_alive(int(READER_PID)):
+            raise RuntimeError("trip: the reader of debugfs has gone")
+        time.sleep(0.001)
+    return {f: (path / f).read_text() for f in BKL_FILES if (path / f).exists()}
 
 
 def snapshot():
-    """/proc/stat, all entry, slept and ioctl lines of debugfs's bkl/calls and
-    its profile's lines, each after "profile ", where read, and each
-    tripprobe thread's stat and status, with the monotonic time, as one
-    text."""
+    """/proc/stat, all entry, slept and ioctl lines of debugfs's bkl/calls,
+    its profile's lines, each after "profile ", and bkl/tick's, each after
+    "tick ", where the reader read them, and each tripprobe thread's stat
+    and status, with the monotonic time, as one text."""
     text = ["time %.6f\n" % time.monotonic(), Path("/proc/stat").read_text()]
-    try:
-        calls = CALLS.read_text()
+    bkl = bkl_snapshot()
+    if "calls" in bkl:
         text += ["bkl_calls_complete\n"]
-        text += [line + "\n" for line in calls.splitlines()
+        text += [line + "\n" for line in bkl["calls"].splitlines()
                  if line.startswith(("syscall ", "vector ", "take ", "slept ", "ioctl "))]
-    except OSError:
-        pass
-    try:
-        text += ["profile " + line + "\n" for line in PROFILE.read_text().splitlines()]
-    except OSError:
-        pass
+    text += ["profile " + line + "\n" for line in bkl.get("profile", "").splitlines()]
+    text += ["tick " + line + "\n" for line in bkl.get("tick", "").splitlines()]
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
@@ -214,9 +275,13 @@ def ioctls(path):
 
 
 def main():
-    """Run the round trips in OUT, N times plain and once under each tracer."""
+    """Run the round trips in OUT, N times plain and once under each tracer;
+    or, with --reader DIR, serve the snapshots of debugfs as root."""
+    if len(sys.argv) == 3 and sys.argv[1] == "--reader":
+        serve(Path(sys.argv[2]))
+        return 0
     if len(sys.argv) != 3:
-        raise SystemExit("usage: trip.py OUT N")
+        raise SystemExit("usage: trip.py OUT N | trip.py --reader DIR")
     out, count = Path(sys.argv[1]).resolve(), int(sys.argv[2])
     if count < 1:
         raise SystemExit("trip: runs must be positive")
@@ -261,6 +326,8 @@ def main():
 if __name__ == "__main__":
     # run.py's handlers, which its own guard installs only when it is the
     # program: they stop the children and unwind through main's cleanup.
-    for stop_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
-        signal.signal(stop_signal, run.interrupted)
+    # The reader has neither and ends at its signal.
+    if sys.argv[1:2] != ["--reader"]:
+        for stop_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            signal.signal(stop_signal, run.interrupted)
     sys.exit(main())
