@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -403,8 +404,8 @@ static int testing_mock(const char *command)
         return windows_mock(command);
     if (strstr(command, "wsl.exe -- bash -s"))
         return wsl_mock();
-    /* stop.sh's script for WSL, run here on RELEASE_TEST_PS's processes. */
-    if (strstr(command, "wsl.exe -u root -- sh -s") && *ev("RELEASE_TEST_PS")) {
+    /* stop.sh's script for WSL, run here while RELEASE_TEST_WSL is set. */
+    if (strstr(command, "wsl.exe -u root -- sh -s") && *ev("RELEASE_TEST_WSL")) {
         execl("/bin/sh", "sh", "-s", (char *)NULL);
         return 127;
     }
@@ -674,15 +675,19 @@ static int git_mock(int argc, char **argv)
  * Stop the release while a Windows part runs, as RELEASE_TEST_HOLD says:
  * `stop` and `stuck` while the preparation runs, `stuck-cases` while the
  * cases run. The first sleep of the part's poll that windows_detach waits for
- * sends TERM to the release, the leader of the process group that the
- * fixture starts, and lasts until the release has ended, so that the part is
- * still running when the release stops it.
+ * asks the release's hold.pl, the leader of the process group that the
+ * fixture starts, to send the release TERM, as stop.sh -r does, by creating
+ * STATE/held/release/stop, STATE being the directory `state` beside the
+ * calls, and lasts until the release has ended, so that the part is still
+ * running when the release stops it.
  */
 static void stop_release(void)
 {
-    const char *hold = ev("RELEASE_TEST_HOLD");
+    const char *hold = ev("RELEASE_TEST_HOLD"), *calls = ev("RELEASE_TEST_CALLS");
+    const char *slash = strrchr(calls, '/');
     struct timespec pause = {0, 20000000};
     pid_t release = getpgrp();
+    char stop[4200];
     int i;
     if (strcmp(hold, "stop") && strcmp(hold, "stuck") && strcmp(hold, "stuck-cases"))
         return;
@@ -691,7 +696,9 @@ static void stop_release(void)
         fx_has(ev("RELEASE_TEST_CALLS"), "\nrelease stopped\n"))
         return;
     append(ev("RELEASE_TEST_CALLS"), "release stopped\n");
-    kill(release, SIGTERM);
+    snprintf(stop, sizeof(stop), "%.*s/state/held/release/stop", slash ? (int)(slash - calls) : 1,
+             slash ? calls : ".");
+    fx_text(stop, "");
     for (i = 0; i < 6000 && kill(release, 0) == 0; i++) {
         /* interval: poll for the release's end every 20 ms */
         nanosleep(&pause, NULL);
@@ -759,21 +766,6 @@ static int rm_mock(int argc, char **argv)
     return 127;
 }
 /**
- * Answer ps: WSL's `ps -eo pid=,sid=,user=,args=` of stop.sh prints
- * RELEASE_TEST_PS while that is set; any other ps is the system's.
- */
-static int ps_mock(int argc, char **argv)
-{
-    if (*ev("RELEASE_TEST_PS") && argc == 3 && !strcmp(argv[1], "-eo")) {
-        fputs(ev("RELEASE_TEST_PS"), stdout);
-        return 0;
-    }
-    argv[0] = "ps";
-    execv("/bin/ps", argv);
-    execv("/usr/bin/ps", argv);
-    return 127;
-}
-/**
  * Answer sleep at once, recording it: the release's wait of 30 seconds ends
  * the release under RELEASE_TEST_HOLD `wait`, and a wait of 60 stops it as
  * stop_release does.
@@ -827,8 +819,6 @@ int flow_release_mock(int argc, char **argv)
     }
     if (!strcmp(name, "sleep"))
         return sleep_mock(argc, argv);
-    if (!strcmp(name, "ps"))
-        return ps_mock(argc, argv);
     if (!strcmp(name, "winjob"))
         return winjob_mock(argc, argv);
     if (!strcmp(name, "rm"))
@@ -852,9 +842,10 @@ struct release_row {
 static int setup(struct release *r, struct fixture *f)
 {
     char path[4096], source[200];
-    const char *windows[] = {"winclean.sh", "winjob.sh", "winjob.c", "bound.pl", "claim.pl"};
+    const char *windows[] = {"winclean.sh", "winjob.sh", "winjob.c", "bound.pl",
+                             "claim.pl",    "hold.pl",   "procs.pl"};
     unsigned i;
-    const char *mock[] = {"sh", "gh", "ssh", "git", "make", "sleep", "scp", "winjob", "rm", "ps"};
+    const char *mock[] = {"sh", "gh", "ssh", "git", "make", "sleep", "scp", "winjob", "rm"};
     memset(r, 0, sizeof(*r));
     r->f = f;
     snprintf(r->tree, sizeof(r->tree), "%s/tree", f->work);
@@ -866,7 +857,8 @@ static int setup(struct release *r, struct fixture *f)
         return 0;
     /* windows_clean feeds the tree's winclean.sh to Windows' shell, after
      * the lines of winjob.sh, which hold winjob.c; the claims feed claim.pl
-     * to WSL's; bound.pl bounds each. */
+     * to WSL's; bound.pl bounds each; hold.pl holds the release and its
+     * jobs; prepare_host feeds procs.pl to WSL's shell. */
     for (i = 0; i < sizeof(windows) / sizeof(windows[0]); i++) {
         snprintf(path, sizeof(path), "%s/tools/flow/%s", r->tree, windows[i]);
         snprintf(source, sizeof(source), "tools/flow/%s", windows[i]);
@@ -2313,7 +2305,8 @@ static int claim_rows(struct release *r)
     return ok;
 }
 /*
- * The driver of observer_rows: it runs release.sh's windows_detach, with the
+ * The driver of observer_rows: it runs release.sh's windows_detach, with its
+ * jobs under DIR/tools/flow/hold.pl, the
  * start read as started and each poll run here by sh, or sweep.sh's outputs,
  * with ssh running Windows' script here on DIR/build, and the jobs that
  * winjob from DIR/bin reads in DIR/jobs, and prints what SCENARIO saw. Usage:
@@ -2328,7 +2321,8 @@ static const char observer_driver[] =
     "mkdir -p \"$W/out\" \"$W/state\" \"$W/jobs\"\n"
     "case $how in\n"
     "poll)\n"
-    "    eval \"$(sed -n '/^# windows_detach ID PART FILE CONSOLE:/,/^}$/p' \"$R\")\"\n"
+    "    eval \"$(sed -n '/^# job_dir NAME:/,/^# tssh ARG/p; "
+    "/^# windows_detach ID PART FILE CONSOLE:/,/^}$/p' \"$R\")\"\n"
     "    wout=$W/out state=$W/state repo=$W\n"
     "    # The start reads as started; each poll runs here.\n"
     "    tssh() {\n"
@@ -2465,7 +2459,8 @@ static int observer_rows(struct release *r)
                   strlen(observer_winjob_sh), 0700) ||
         !fx_write(flow_path(f, "observer/tools/flow/winjob.sh"), observer_winjob_sh,
                   strlen(observer_winjob_sh), 0700) ||
-        !fx_copy(flow_source(f, "tools/flow/bound.pl"), flow_path(f, "observer/bound.pl")))
+        !fx_copy(flow_source(f, "tools/flow/bound.pl"), flow_path(f, "observer/bound.pl")) ||
+        !fx_copy(flow_source(f, "tools/flow/hold.pl"), flow_path(f, "observer/tools/flow/hold.pl")))
         return check(r, 0, "the observer rows' files are written");
     ok = check(
         r, observer_saw(r, "poll", "waits\nwaits\nbuilding\noutput: status 0\nstatus 0\npolls 3\n"),
@@ -2805,6 +2800,7 @@ static unsigned count_text(const char *text, const char *word)
     return n;
 }
 static int stop_unknown_rows(struct release *r);
+static int stop_wsl_rows(struct release *r);
 /**
  * Run stop.sh -n, which changes nothing, from the work tree, whose
  * build/flow/release holds the release's records.
@@ -2821,11 +2817,10 @@ static void stop_list(struct release *r)
     fx_run(f, a, f->work, NULL, NULL);
 }
 /**
- * stop.sh's selection, G12 and G15 of dev-log/84-locks/84-111-lifecycle.md:
- * a command line that holds tools/flow/release.sh is never one of the
+ * stop.sh's selection, G12 of dev-log/84-locks/84-111-lifecycle.md: a
+ * command line that holds tools/flow/release.sh is never one of the
  * processes it stops, and is a release only while STATE/pid names it with
- * its start (F2); and in WSL the sessions of several claims are each spared
- * (F3), as is a command line that holds release.sh.
+ * its start (F2); and in WSL as stop_wsl_rows says.
  */
 static int stop_rows(struct release *r)
 {
@@ -2834,7 +2829,7 @@ static int stop_rows(struct release *r)
     int fd[2], ok;
     pid_t c;
     const char *files[] = {"stop.sh",   "lib.sh",   "machines", "winclean.sh",
-                           "winjob.sh", "winjob.c", "bound.pl"};
+                           "winjob.sh", "winjob.c", "bound.pl", "procs.pl"};
     unsigned i;
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         snprintf(path, sizeof(path), "%s/tools/flow/%s", r->tree, files[i]);
@@ -2887,25 +2882,105 @@ static int stop_rows(struct release *r)
         waitpid(c, NULL, 0);
     }
     fx_remove(flow_path(f, "tree/tools/flow/build"));
-    fx_env("RELEASE_TEST_PS",
-           "101 101 testing perl /mnt/d/rach2/build/release/m7.claim.1.pl /h/m7.claim.lock\n"
-           "111 101 root /usr/local/libexec/rach2/etude launch build env\n"
-           "202 202 testing perl /mnt/d/rach2/build/release/m7.hold.1.pl /h/m7.hold.lock\n"
-           "222 202 root /usr/local/libexec/rach2/etude launch alone\n"
-           "303 909 testing perl /x/m7.claim.1.pl /h/m7.claim.lock\n"
-           "333 303 root qemu-system-x86_64 -x /etude z\n"
-           "444 404 root sh /x/tools/flow/release.sh /etude y\n");
+    return stop_wsl_rows(r) && stop_unknown_rows(r) && ok;
+}
+#ifdef __linux__
+/**
+ * Start perl with CODE, which prints a line in each process it makes once
+ * that process is ready, wait for LINES lines and return its process, or -1.
+ */
+static pid_t stop_perl(const char *code, int lines)
+{
+    int fd[2];
+    pid_t c;
+    char ch;
+    if (pipe(fd))
+        return -1;
+    c = fork();
+    if (c == 0) {
+        dup2(fd[1], 1);
+        close(fd[0]);
+        close(fd[1]);
+        execlp("perl", "perl", "-e", code, (char *)NULL);
+        _exit(127);
+    }
+    close(fd[1]);
+    while (c > 0 && lines > 0 && read(fd[0], &ch, 1) == 1)
+        if (ch == '\n')
+            lines--;
+    close(fd[0]);
+    return c > 0 && !lines ? c : -1;
+}
+/** Succeed when a line of OUT that begins `stop: left: wsl: ` holds TEXT. */
+static int wsl_line(const char *out, const char *text)
+{
+    const char *p, *e;
+    for (p = out; p && *p; p = *e ? e + 1 : e) {
+        e = strchr(p, '\n');
+        if (!e)
+            e = p + strlen(p);
+        if (!strncmp(p, "stop: left: wsl: ", 17)) {
+            const char *t = strstr(p, text);
+            if (t && t < e)
+                return 1;
+        }
+    }
+    return 0;
+}
+#endif
+/**
+ * stop.sh's selection in WSL, G15 and G19 of
+ * dev-log/84-locks/84-111-lifecycle.md, which procs.pl makes from /proc
+ * through pidfds, here on this machine's own processes: a QEMU is one of
+ * them, a claim's session, by its runner as leader, is spared (F3), and so
+ * is a command line that holds release.sh. Linux alone has pidfds; elsewhere
+ * the row passes unchecked.
+ */
+static int stop_wsl_rows(struct release *r)
+{
+#ifdef __linux__
+    struct fixture *f = r->f;
+    struct passwd *pw = getpwuid(getuid());
+    char text[400];
+    int ok;
+    pid_t claim, qemu, release;
+    claim = stop_perl("use POSIX; POSIX::setsid(); $| = 1; "
+                      "$0 = 'perl /x/build/flow/claims/m7.claim.1.pl run'; "
+                      "if (!fork) { $0 = '/usr/local/libexec/rach2/etude launch build env'; "
+                      "print qq(\\n); sleep 600; exit } print qq(\\n); sleep 600",
+                      2);
+    qemu = stop_perl("$| = 1; $0 = 'qemu-system-x86_64 -x /etude z'; print qq(\\n); sleep 600", 1);
+    release = stop_perl("$| = 1; $0 = 'sh /x/tools/flow/release.sh /etude y'; print qq(\\n); "
+                        "sleep 600",
+                        1);
+    fx_env("RELEASE_TEST_WSL", "1");
     stop_list(r);
-    fx_env("RELEASE_TEST_PS", NULL);
+    fx_env("RELEASE_TEST_WSL", NULL);
+    snprintf(text, sizeof(text), "stop: left: wsl: %ld %s qemu-system-x86_64 -x /etude z\n",
+             (long)qemu, pw ? pw->pw_name : "?");
     ok = check(r,
-               f->out &&
-                   strstr(f->out, "stop: left: wsl: 333 root qemu-system-x86_64 -x /etude z\n") &&
-                   !strstr(f->out, "wsl: 111 ") && !strstr(f->out, "wsl: 222 ") &&
-                   !strstr(f->out, "wsl: 444 ") && !strstr(f->out, "unknown"),
-               "stop.sh spares in WSL the sessions of two claims, by their runners as leaders, "
-               "and a command line that holds release.sh") &&
-         ok;
-    return stop_unknown_rows(r) && ok;
+               claim > 0 && qemu > 0 && release > 0 && pw && f->out && strstr(f->out, text) &&
+                   !wsl_line(f->out, "etude launch build env") &&
+                   !wsl_line(f->out, "release.sh /etude y") && !strstr(f->out, "unknown"),
+               "stop.sh takes a QEMU in WSL, by a pidfd, and spares a claim's session, by its "
+               "runner as leader, and a command line that holds release.sh");
+    if (claim > 0) {
+        kill(-claim, SIGKILL);
+        waitpid(claim, NULL, 0);
+    }
+    if (qemu > 0) {
+        kill(qemu, SIGKILL);
+        waitpid(qemu, NULL, 0);
+    }
+    if (release > 0) {
+        kill(release, SIGKILL);
+        waitpid(release, NULL, 0);
+    }
+    return ok;
+#else
+    (void)r;
+    return 1;
+#endif
 }
 /**
  * stop.sh counts as left what it cannot read: a testing host that does not
