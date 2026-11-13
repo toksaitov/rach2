@@ -576,7 +576,11 @@ static void fine_alarm_rows(void)
     proc_wake_due();
     CHECK(!runner.alarm_due && runner_posts == 0, "a fine alarm never expires early");
     clock_ns = 10500000;
+    CHECK(proc_alarm_read_ns(&runner, &interval) == 1000,
+          "a callback still pending reports one microsecond as Linux does");
     proc_wake_due();
+    CHECK(proc_alarm_read_ns(&runner, &interval) == 0,
+          "an expiry already collected reports zero time left");
     CHECK(runner.alarm_due && kernel_ticks == 0, "its expiry needs no coarse tick");
     proc_tick_signals_post();
     CHECK(runner_posts == 1 && runner.alarm_tick == 0 && runner.alarm_interval == 500000,

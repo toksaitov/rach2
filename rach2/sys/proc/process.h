@@ -957,7 +957,8 @@ void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval);
 void proc_alarm_set_ns(process_t *p, uint64_t ns, uint64_t interval);
 
 /** Read the real alarm's remaining and interval nanoseconds under its
- * timer lock. A posted or disarmed alarm has no time left. */
+ * timer lock. A collected, posted or disarmed alarm has no time left; a
+ * due callback not yet collected reports one microsecond, as Linux does. */
 uint64_t proc_alarm_read_ns(const process_t *p, uint64_t *interval);
 
 /**
@@ -971,8 +972,8 @@ void proc_alarm_take(process_t *to, const process_t *from);
 
 /**
  * Run `p`'s real-time timer again as a SIGALRM of its process is taken,
- * when the timer is stopped and periodic, at the first tick of its grid
- * after the tick now, as Linux 6.12.115's `dequeue_signal` restarts the
+ * when the timer is stopped and periodic, at the first point of its grid
+ * after the time now, as Linux 6.12.115's `dequeue_signal` restarts the
  * timer that `it_real_fn` left stopped (kernel/signal.c:654-662,
  * kernel/time/itimer.c:156-166). `p` is the leader, whose record holds the
  * timer. The caller holds the big lock and no spinlock.
@@ -980,7 +981,8 @@ void proc_alarm_take(process_t *to, const process_t *from);
 void proc_alarm_taken(process_t *p);
 
 /**
- * The tick `p`'s real-time timer is due at, or 0 when it is disarmed or
+ * The tick `p`'s real-time timer is due at, a fine alarm rounded up to a
+ * whole tick, or 0 when it is disarmed or
  * stopped, or the tick has marked its SIGALRM, which no holder of the big
  * lock has posted yet: Linux's timer is inactive once `it_real_fn` has sent
  * the signal (kernel/time/itimer.c:156-166) until the signal is taken, so

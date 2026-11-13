@@ -70,8 +70,8 @@ of the process is taken, by a handler, the default action,
 .Xr sigtimedwait 2
 or a
 .Xr signalfd 2
-read, at the first tick after then that is a whole number of intervals
-after the tick it ran out, so a late signal does not move the timer's
+read, at the first time after then that is a whole number of intervals
+after its previous expiry, so a late signal does not move the timer's
 period, as Linux's
 .Fn dequeue_signal
 restarts it with
@@ -86,9 +86,9 @@ is null, it receives the timer's setting before the call, as
 .Fn getitimer
 reports it.
 .Pp
-The timer tick finds a timer run out and leaves its signal for the next
-holder of the big lock: a later tick that takes the lock, or the return to
-user mode of the thread it is left on, which may come some ticks later.
+A timer event or accounting tick finds a timer run out and leaves its
+signal for the next holder of the big lock, trying it at that event and
+retrying a failed try after one millisecond, or at a return to user mode.
 Each signal is posted once however many times its timer ran out before
 the post, as Linux queues no second of a legacy signal that is pending.
 A
@@ -123,12 +123,10 @@ reports the time left before the next signal, zero when the timer is
 disarmed or stopped, and the interval.
 For
 .Dv ITIMER_REAL
-the time left is the whole ticks to the due tick less the tick in
-progress, and one tick at least while the timer is armed, since zero
-means disarmed.
-So a value read in the timer's last tick and passed straight back to
-.Fn setitimer
-moves the timer a tick later.
+the time left is measured from its monotonic deadline and rounded up to a
+microsecond.
+A due callback not yet collected reports one microsecond;
+a collected expiry waiting to post its signal reports zero, as on Linux.
 .Pp
 .Fn alarm
 arms a single
@@ -180,9 +178,10 @@ On x86-64 the numbers are 38, 36 and 37, with the same arguments in RDI,
 RSI and RDX.
 The kernel's itimerval is four signed fields, of 32 bits on i386 and 64 on
 x86-64: the interval's seconds and microseconds, then the value's.
-The kernel limits each seconds field to 2^40, about 34800 years, as
-.Xr nanosleep 2
-does, keeps its microseconds and rounds each time up to whole ticks.
+A real-time value saturates at the signed nanosecond limit, about 292
+years, as Linux's ktime does.
+A CPU-time value is limited to 2^40 seconds, about 34800 years, and rounds
+up to an accounting tick.
 A time that does not fit the structure is reported as the largest
 .Vt long
 of seconds and 999999 microseconds.
