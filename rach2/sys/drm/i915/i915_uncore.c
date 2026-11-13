@@ -175,6 +175,31 @@ void i915_forcewake_put(struct drm_i915_private *i915)
     timer_service_wake_at(release);
 }
 
+/**
+ * Have forcewake held for an access that follows under the same hold of
+ * the register lock, as Linux's __force_wake_auto: when it is not held,
+ * wake the GT and arm the release timer, which lets it go. Under the
+ * register lock. 0; -ENODEV once `i915_uncore_fini` has run; the error of
+ * `i915_fw_wake`.
+ */
+static int32_t i915_fw_auto(struct drm_i915_private *i915)
+{
+    struct i915_uncore *u = &i915->uncore;
+    int32_t err;
+
+    if (u->gone) {
+        return -ENODEV;
+    }
+    if (i915_fw_held(u)) {
+        return 0;
+    }
+    err = i915_fw_wake(i915);
+    if (err == 0) {
+        i915_fw_arm_timer(u);
+    }
+    return err;
+}
+
 uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg)
 {
     int64_t release;
@@ -185,16 +210,33 @@ uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg)
         return i915_read(&i915->hw, reg);
     }
     flags = spin_lock_irqsave(&u->lock);
-    if (!u->gone && (i915_fw_held(u) || i915_fw_wake(i915) == 0)) {
-        if (!i915_fw_held(u)) {
-            i915_fw_arm_timer(u);
-        }
+    if (i915_fw_auto(i915) == 0) {
         value = i915_read(&i915->hw, reg);
     }
     release = u->timer_armed ? (int64_t)u->timer_due : 0;
     spin_unlock_irqrestore(&u->lock, flags);
     timer_service_wake_at(release);
     return value;
+}
+
+int32_t i915_uncore_read64(struct drm_i915_private *i915, uint32_t lo, uint32_t hi, int whole,
+                           uint64_t *val)
+{
+    int64_t release;
+    struct i915_uncore *u = &i915->uncore;
+    uint32_t flags = spin_lock_irqsave(&u->lock);
+    int32_t err = i915_fw_auto(i915);
+
+    if (err == 0 && whole) {
+        *val = i915_read64_2x32(&i915->hw, lo, hi);
+    } else if (err == 0) {
+        *val = i915_read(&i915->hw, lo);
+        *val |= (uint64_t)i915_read(&i915->hw, hi) << 32;
+    }
+    release = u->timer_armed ? (int64_t)u->timer_due : 0;
+    spin_unlock_irqrestore(&u->lock, flags);
+    timer_service_wake_at(release);
+    return err;
 }
 
 void i915_uncore_tick(struct drm_i915_private *i915)

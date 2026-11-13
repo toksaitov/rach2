@@ -815,19 +815,21 @@ static int32_t state_open(fd_entry_t *e, int fresh)
     int32_t rc = 0;
     int taken;
 
-    if (fresh && gone(i915)) {
-        return -ENODEV;
-    }
     t = (struct state_text *)kzalloc(sizeof(*t));
     if (!t) {
         return -ENOMEM;
     }
     t->i915 = i915;
     if (fresh) {
+        /* The unplug takes the GEM lock after it marks the device, so a
+         * look under the lock keeps the capture off a device torn down. */
         taken = i915_gem_lock(i915);
-        err = i915_gpu_coredump(i915, (1u << I915_NUM_ENGINES) - 1u, 0);
+        rc = gone(i915);
+        err = rc == 0 ? i915_gpu_coredump(i915, (1u << I915_NUM_ENGINES) - 1u, 0) : 0;
         i915_gem_unlock(i915, taken);
-        rc = err ? state_text_make(t, err) : -ENOMEM;
+        if (rc == 0) {
+            rc = err ? state_text_make(t, err) : -ENOMEM;
+        }
         kfree(err);
     } else if (err) {
         rc = state_text_make(t, err);
@@ -1296,19 +1298,21 @@ static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
     if (rc < 0) {
         return rc;
     }
-    if (gone(i915)) {
-        return -ENODEV;
-    }
     e.buf = msg;
     e.cap = sizeof(msg);
     e.len = 0;
     emitf(&e, "Manually reset engine mask to %Lx", val);
     (void)emit_end(&e);
     msg[sizeof(msg) - 1u] = '\0';
+    /* Looked at under the GEM lock, which the unplug takes after it marks
+     * the device, so that no reset reaches a device torn down. */
     taken = i915_gem_lock(i915);
-    i915_handle_error(i915, engines_by_index(i915, val), msg);
+    rc = gone(i915);
+    if (rc == 0) {
+        i915_handle_error(i915, engines_by_index(i915, val), msg);
+    }
     i915_gem_unlock(i915, taken);
-    return (int32_t)len;
+    return rc < 0 ? rc : (int32_t)len;
 }
 
 /** i915_gem_drop_caches, Linux's i915_drop_caches_get: the DROP_ bits it
@@ -1384,12 +1388,14 @@ static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t le
     if (rc < 0) {
         return rc;
     }
-    if (gone(i915)) {
-        return -ENODEV;
-    }
-    /* Under the GEM lock, which each wait lets go meanwhile. */
+    /* Under the GEM lock, which each wait lets go meanwhile, looked at
+     * under it as `wedged_store` does; a reset after a wait finds the
+     * unplug's terminal wedge. */
     taken = i915_gem_lock(i915);
-    rc = drop_caches(i915, val);
+    rc = gone(i915);
+    if (rc == 0) {
+        rc = drop_caches(i915, val);
+    }
     i915_gem_unlock(i915, taken);
     return rc < 0 ? rc : (int32_t)len;
 }
