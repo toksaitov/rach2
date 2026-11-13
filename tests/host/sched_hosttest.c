@@ -1528,6 +1528,14 @@ void bkl_take_as(int depth, int key)
     }
 }
 
+/** No thread is counted alone in `bkl/calls` here: nothing to note. */
+void bkl_note_switch(const struct process *old, const struct process *next, int yielded)
+{
+    (void)old;
+    (void)next;
+    (void)yielded;
+}
+
 /** Check idle projection, steal subtraction, catch-up and the first
  * busy tick. */
 static void nohz_accounting(void)

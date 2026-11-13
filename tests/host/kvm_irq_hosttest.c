@@ -116,6 +116,14 @@ void kfree(void *p)
     }
 }
 
+/** The model's one thread finds the big lock free: nothing to take. */
+void bkl_enter(void)
+{}
+
+/** Give back what `bkl_enter` took: nothing here. */
+void bkl_exit(void)
+{}
+
 /** kalloc_pages over the host's allocator, counted as kmalloc counts: the
  * APIC's register page. A host address is its own physical address. */
 void *kalloc_pages(uint32_t count, uintptr_t *phys)

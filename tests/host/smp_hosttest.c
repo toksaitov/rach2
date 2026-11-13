@@ -159,6 +159,19 @@ int k_panicking(void)
     return 0;
 }
 
+/** The run queues' lock, which the filter's write takes: the rows run on
+ * one thread at a time, so there is nothing to take; flags 0. */
+uint32_t sched_lock_take(void)
+{
+    return 0;
+}
+
+/** Give back what `sched_lock_take` took: nothing here. */
+void sched_lock_give(uint32_t flags)
+{
+    (void)flags;
+}
+
 /** No performance counter here: a stopped processor has none to stop. */
 void platform_pmu_disable(void)
 {}
