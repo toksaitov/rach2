@@ -1101,21 +1101,37 @@ static uint64_t empty_size(const struct etude_case *c, const char *name)
 }
 
 /**
+ * Give the status of a failure to give artifact `name`: ETUDE_REFUSED when
+ * the case has no such artifact, and ETUDE_FAILED when its object did not
+ * check or could not be read.
+ */
+static enum etude_status artifact_status(struct etude_case *c, const char *name)
+{
+    return find_artifact(c, name) == NULL ? ETUDE_REFUSED : ETUDE_FAILED;
+}
+
+/**
  * Give the path of the empty disk `name` of `size` bytes, a sparse file in
  * `copies/` of the scratch, made at its first use and given again after.
+ *
+ * @return the path, or NULL with `*st` ETUDE_REFUSED for a name that is an
+ *         artifact's or no file's, or ETUDE_FAILED for an error of the system.
  */
-static const char *empty_disk(struct etude_case *c, const char *name, uint64_t size)
+static const char *empty_disk(struct etude_case *c, const char *name, uint64_t size,
+                              enum etude_status *st)
 {
     struct blank *b;
     char path[4096];
     int fd;
 
+    *st = ETUDE_FAILED;
     for (b = c->blanks; b != NULL; b = b->next)
         if (strcmp(b->name, name) == 0)
             return b->path;
     if (find_artifact(c, name) != NULL || !file_name(name)) {
         diag("disk %s: an empty disk is no artifact, and its name is a file's", name);
         c->faults++;
+        *st = ETUDE_REFUSED;
         return NULL;
     }
     if (scratch_path(c, "copies", name, path, sizeof(path)) != 0 ||
@@ -1162,22 +1178,30 @@ static int find_overlay(const struct etude_case *c, const char *name, struct dis
  * Give the path of overlay `d`, an empty qcow2 file in `copies/` of the
  * scratch whose backing file is its base's object, made at its first use and
  * given again after.
+ *
+ * @return the path, or NULL with `*st` as empty_disk gives it, or as
+ *         artifact_status gives it for a base that cannot be given.
  */
-static const char *overlay_disk(struct etude_case *c, const struct disk_decl *d)
+static const char *overlay_disk(struct etude_case *c, const struct disk_decl *d,
+                                enum etude_status *st)
 {
     struct blank *b;
     char path[4096];
 
+    *st = ETUDE_FAILED;
     for (b = c->blanks; b != NULL; b = b->next)
         if (strcmp(b->name, d->name) == 0)
             return b->path;
     if (find_artifact(c, d->name) != NULL || !file_name(d->name)) {
         diag("disk %s: an overlay is no artifact, and its name is a file's", d->name);
         c->faults++;
+        *st = ETUDE_REFUSED;
         return NULL;
     }
-    if (etude_artifact(c, d->base) == NULL)
+    if (etude_artifact(c, d->base) == NULL) {
+        *st = artifact_status(c, d->base);
         return NULL;
+    }
     if (scratch_path(c, "copies", d->name, path, sizeof(path)) != 0 ||
         etude_store_overlay(c->store, find_artifact(c, d->base)->digest, (uint32_t)d->cluster,
                             path) != 0) {
@@ -1198,7 +1222,15 @@ static const char *overlay_disk(struct etude_case *c, const struct disk_decl *d)
     return b->path;
 }
 
-const char *etude_private_copy(struct etude_case *c, const char *name)
+/**
+ * Give the path that etude_private_copy gives for `name`.
+ *
+ * @return the path, or NULL with `*st` ETUDE_REFUSED for a name that the
+ *         manifest does not declare as a disk of the case's, or ETUDE_FAILED
+ *         for an object that did not check or a copy the system did not make,
+ *         as when the host's disk is full.
+ */
+static const char *private_copy(struct etude_case *c, const char *name, enum etude_status *st)
 {
     struct artifact *a = find_artifact(c, name);
     uint64_t size = name != NULL ? empty_size(c, name) : 0;
@@ -1206,14 +1238,16 @@ const char *etude_private_copy(struct etude_case *c, const char *name)
     char path[4096];
 
     if (name != NULL && find_overlay(c, name, &d) == 0)
-        return overlay_disk(c, &d);
+        return overlay_disk(c, &d, st);
     if (size != 0)
-        return empty_disk(c, name, size);
+        return empty_disk(c, name, size, st);
+    *st = ETUDE_REFUSED;
     if (a == NULL || !disk_fixture(c, name)) {
         diag("artifact %s is not a disk of the case's isolation", name != NULL ? name : "(null)");
         c->faults++;
         return NULL;
     }
+    *st = ETUDE_FAILED;
     if (a->copy != NULL)
         return a->copy;
     if (etude_artifact(c, name) == NULL)
@@ -1227,6 +1261,13 @@ const char *etude_private_copy(struct etude_case *c, const char *name)
     made(c, path, 0);
     a->copy = dup_text(path);
     return a->copy;
+}
+
+const char *etude_private_copy(struct etude_case *c, const char *name)
+{
+    enum etude_status st;
+
+    return private_copy(c, name, &st);
 }
 
 /** Give an executable copy of artifact `name`, or NULL. */
@@ -1949,6 +1990,10 @@ refused:
  * Give boot `m` the disks `disks`, names of its profile's own disks, or all
  * of them for NULL, ending the list with a NULL path. A CD's medium is the
  * artifact's object in the store; any other disk is the attempt's own file.
+ *
+ * @return ETUDE_OK; ETUDE_REFUSED for a disk the profile does not declare as
+ *         the launcher takes it, or one another machine's boot still uses;
+ *         or ETUDE_FAILED for a file that could not be checked or made.
  */
 static enum etude_status make_disks(struct etude_case_machine *m, const char *const disks[])
 {
@@ -1956,6 +2001,7 @@ static enum etude_status make_disks(struct etude_case_machine *m, const char *co
     const struct eh_json *qp = m->decl->qemu, *v = eh_json_get(qp, "disks");
     const char *name;
     struct disk_decl d;
+    enum etude_status st;
     size_t i;
 
     v = v != NULL && v->type == 'a' ? v->child : NULL;
@@ -1972,9 +2018,16 @@ static enum etude_status make_disks(struct etude_case_machine *m, const char *co
             return ETUDE_REFUSED;
         }
         m->disks[i].path = bound_disk(c, m->decl, name);
+        st = ETUDE_REFUSED;
+        if (m->disks[i].path == NULL && d.cdrom) {
+            m->disks[i].path = etude_artifact(c, name);
+            st = artifact_status(c, name);
+        } else if (m->disks[i].path == NULL) {
+            m->disks[i].path = private_copy(c, name, &st);
+        }
         if (m->disks[i].path == NULL)
-            m->disks[i].path = d.cdrom ? etude_artifact(c, name) : etude_private_copy(c, name);
-        if (m->disks[i].path == NULL || (!d.cdrom && disk_active(c, m->disks[i].path)))
+            return st;
+        if (!d.cdrom && disk_active(c, m->disks[i].path))
             return ETUDE_REFUSED;
         m->disks[i].bus = d.bus;
         m->disks[i].cdrom = d.cdrom;
@@ -1990,8 +2043,31 @@ static enum etude_status make_disks(struct etude_case_machine *m, const char *co
 }
 
 /**
+ * Give the status of a profile `qp` whose kernel, RAM image, ACPI table or
+ * audio input could not be given: ETUDE_REFUSED when it names no kernel or
+ * names a file that is no artifact of the case's, and ETUDE_FAILED when each
+ * is the case's and one did not check.
+ */
+static enum etude_status profile_artifacts(struct etude_case *c, const struct eh_json *qp)
+{
+    static const char *const keys[] = {"kernel", "initrd", "acpi_table", "audio_input"};
+    size_t i;
+
+    if (jtext(qp, "kernel") == NULL)
+        return ETUDE_REFUSED;
+    for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+        if (jtext(qp, keys[i]) != NULL && find_artifact(c, jtext(qp, keys[i])) == NULL)
+            return ETUDE_REFUSED;
+    return ETUDE_FAILED;
+}
+
+/**
  * Make the launcher's profile of boot `m` with the disks `disks`, as
  * make_disks takes them.
+ *
+ * @return ETUDE_OK, ETUDE_REFUSED for a profile the launcher does not take,
+ *         or ETUDE_FAILED for a file of the boot that could not be checked or
+ *         made.
  */
 static enum etude_status make_profile(struct etude_case_machine *m, const char *const disks[])
 {
@@ -1999,6 +2075,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     const struct eh_json *qp = m->decl->qemu;
     const char *firmware = jtext(qp, "firmware");
     struct etude_qemu_profile *p = &m->profile;
+    enum etude_status st;
 
     if (devices_of(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX, m->properties,
                    PROPERTIES_MAX) != 0 ||
@@ -2007,9 +2084,11 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
              m->decl->id);
         return ETUDE_REFUSED;
     }
-    if (make_networks(m, eh_json_get(qp, "devices")) != ETUDE_OK ||
-        make_disks(m, disks) != ETUDE_OK)
+    if (make_networks(m, eh_json_get(qp, "devices")) != ETUDE_OK)
         return ETUDE_REFUSED;
+    st = make_disks(m, disks);
+    if (st != ETUDE_OK)
+        return st;
     p->architecture = machine_architecture(c, m->decl);
     p->kernel = jtext(qp, "kernel") != NULL ? etude_artifact(c, jtext(qp, "kernel")) : NULL;
     p->initrd = jtext(qp, "initrd") != NULL ? etude_artifact(c, jtext(qp, "initrd")) : NULL;
@@ -2037,7 +2116,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
         diag("machine %s: its kernel, RAM image, ACPI table or audio input is not an artifact "
              "that checks",
              m->decl->id);
-        return ETUDE_REFUSED;
+        return profile_artifacts(c, qp);
     }
     return ETUDE_OK;
 }

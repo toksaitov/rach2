@@ -137,7 +137,10 @@ enum etude_status etude_bind_disk(struct etude_case *c, const char *machine, con
  * with the end ETUDE_END_ACCEL_FAILED in `end`, and is not retried with
  * another. A boot of a case whose `resources.memory_bytes` does not cover
  * every machine the manifest declares returns ETUDE_REFUSED before QEMU
- * starts.
+ * starts, as does a disk or file its profile names that the manifest does
+ * not declare. A disk or artifact that is the case's but cannot be checked or
+ * made, as when the host's disk is full, returns ETUDE_FAILED, and the case's
+ * stderr has the system's error.
  */
 enum etude_status etude_boot(struct etude_case *c, const char *machine, const char *const disks[],
                              struct etude_case_machine **m, struct etude_termination *end);
