@@ -555,12 +555,15 @@ static void check_adopt(struct ext2_check *c, struct ext2_link *link)
 /**
  * Judge the entry at `c->at` of directory `dir`, which names inode `n`,
  * with type byte `ft`, before the inode is walked. An unused inode the walk
- * has not reached (`check_unused`) has its entry cleared, and a type byte,
- * where the volume keeps one, that does not name a live inode's kind is set
- * to it, since `ext2_readdir` reports the type from it (`check_fix_add`);
- * a mode of no kind is a fault. 1 when the entry is cleared and the inode
- * not to be walked, 0 when it is to be walked, or -EIO with the fault or a
- * limit recorded or for a failed read.
+ * has not reached (`check_unused`) has its entry cleared. Any other inode
+ * whose mode is of no kind is a fault, whatever the entry's type byte and
+ * with or without the volume's FILETYPE, since it is live, not unused, and
+ * is no kind of file whose blocks the check could judge. A type byte, where
+ * the volume keeps one, that does not name the live inode's kind is set to
+ * it, since `ext2_readdir` reports the type from it (`check_fix_add`). 1
+ * when the entry is cleared and the inode not to be walked, 0 when it is to
+ * be walked, or -EIO with the fault or a limit recorded or for a failed
+ * read.
  */
 static int check_entry(struct ext2_check *c, const struct ext2_node *n, uint32_t dir, uint32_t ft)
 {
@@ -578,11 +581,11 @@ static int check_entry(struct ext2_check *c, const struct ext2_node *n, uint32_t
             return rc != 0 ? rc : 1;
         }
     }
-    if (!(em->incompat & EXT2_INCOMPAT_FILETYPE) || ft == 0 || ft == want) {
-        return 0;
-    }
     if (want == 0) {
         return check_fault(c, n->ino, "an entry naming an inode of no kind");
+    }
+    if (!(em->incompat & EXT2_INCOMPAT_FILETYPE) || ft == 0 || ft == want) {
+        return 0;
     }
     return check_fix_add(c, c->at, n->ino, dir, want);
 }
