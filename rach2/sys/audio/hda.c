@@ -3380,7 +3380,7 @@ static void hda_check_dma(int stream)
  * take jack_lock with a try (hda_jacks_held), set pins only when nothing
  * holds them, so that the two never set a pin in turn.
  */
-#define HDA_JACK_TICKS (TICK_HZ / 4 > 0 ? TICK_HZ / 4 : 1)
+#define HDA_JACK_TICKS MS_TO_TICKS(250u)
 
 static struct spinlock jack_lock = SPINLOCK_INIT_NAMED("jack_lock");
 static int jack_holds = 0;          /* regions outside the services that program

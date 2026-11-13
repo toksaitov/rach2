@@ -20,7 +20,7 @@
  * the counter's measured rate; the boot processor has already seen the
  * other alive. The wait reads the counter, not the 8254, which the two
  * would otherwise latch at once. */
-#define SYNC_MEET_TICKS 100u
+#define SYNC_MEET_TICKS MS_TO_TICKS(100u)
 
 uint64_t tsc_ordered(void)
 {
@@ -499,7 +499,7 @@ void tsc_sync_open(int cpu)
 
 int tsc_sync_source(int cpu, uint64_t *behind)
 {
-    uint64_t window = 2u * (uint64_t)tsc_counts_per_tick();
+    uint64_t window = tick_div64((uint64_t)tsc_counts_per_tick() * 2000u, TICK_US, NULL);
     int done, verdict;
 
     *behind = 0;
@@ -530,7 +530,7 @@ int tsc_sync_source(int cpu, uint64_t *behind)
 
 void tsc_sync_target(int cpu)
 {
-    uint64_t window = 2u * (uint64_t)tsc_counts_per_tick();
+    uint64_t window = tick_div64((uint64_t)tsc_counts_per_tick() * 2000u, TICK_US, NULL);
 
     if (window == 0 || !sync_mark(cpu, SYNC_TARGET) || !sync_wait(cpu, SYNC_SOURCE)) {
         return;
