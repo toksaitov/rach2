@@ -36,8 +36,9 @@
  * with EFAULT and leaves the message for the next receive. A descriptor of a
  * KRFFS file in /tmp, sent before a write moves the file and received after
  * the sender's close and the unlink, has the file's size and reads its bytes.
- * A receive under SO_RCVTIMEO whose waking signal a sibling thread takes
- * still times out with EAGAIN, and a MSG_WAITALL receive under it ends at
+ * A receive under SO_RCVTIMEO that a signal to the process wakes ends with
+ * EINTR or EAGAIN, whichever thread takes the signal, and with EAGAIN at its
+ * deadline when it went back to sleep; a MSG_WAITALL receive under it ends at
  * its limit with part of its bytes when they come slowly. SO_PEERCRED of a
  * socket with no peer gives pid 0 and ids -1 inside a user namespace with no
  * maps.
@@ -1381,8 +1382,9 @@ static int short_control(void)
     return 0;
 }
 
-/* The rounds `timed_after_signals` tries for one whose waking signal the
- * sibling takes, and the time limit in microseconds of each receive. */
+/* The rounds `timed_after_signals` tries for one whose receive the
+ * sibling's signal leaves asleep, and the time limit in microseconds of each
+ * receive. */
 #define SIBLING_ROUNDS 50
 #define SIBLING_TIMEO  100000
 
@@ -1411,10 +1413,12 @@ static void took_usr1(int signo)
  * The sibling of `timed_after_signals`: in each round, once the leader,
  * `*arg`, is asleep in the round's receive, send SIGUSR1 to the process
  * while this thread blocks it, so that its wake goes to the leader, and at
- * once unblock it, which most often makes this thread take it before the
- * leader looks. It then sends nothing and stays runnable, yielding, until
- * the receive ends, so a signal it took is that receive's only wake, and no
- * idle processor stands in for a lost deadline.
+ * once unblock it, so that this thread may take it before the leader looks.
+ * Which thread takes it is a race, on Linux as here; under QEMU on the Mac
+ * the leader took it in all 50 rounds. This thread then sends nothing and
+ * stays runnable, yielding, until the receive ends, so a signal it took is
+ * that receive's only wake, and no idle processor stands in for a lost
+ * deadline.
  *
  * A round counts as taken only when, after this thread took the signal,
  * the leader is found asleep again before its receive has ended: only the
@@ -1468,14 +1472,23 @@ static void *sibling_signals(void *arg)
 }
 
 /**
- * Check that a receive under SO_RCVTIMEO still ends with EAGAIN when the
- * signal that wakes it is taken by a sibling thread: its wait then goes on,
- * and must keep its deadline, as Linux's does (unix_stream_data_wait,
- * net/unix/af_unix.c:2558-2590 in Linux 6.12).
- * Each round is one receive and one signal; the leader takes some of them,
- * which end its receive with EINTR, and the first round whose signal the
- * sibling took is judged. Nothing else wakes that receive, so a wait that
- * lost its deadline sleeps for ever, and the case's watchdog ends it.
+ * Check that a receive under SO_RCVTIMEO that a signal to the process wakes
+ * ends with EINTR or EAGAIN whichever thread takes the signal, and with
+ * EAGAIN when its wait went back to sleep.
+ * The sibling blocks the signal when it sends it, so the leader is the
+ * thread woken, as Linux 6.12's complete_signal chooses it
+ * (kernel/signal.c:1003-1029). A leader that takes the signal ends with
+ * EINTR. When the sibling takes it first, Linux's leader keeps the
+ * TIF_SIGPENDING its wake set, which only the thread itself clears
+ * (recalc_sigpending, kernel/signal.c:157-178), and ends with EINTR too;
+ * Rach2's leader finds no signal and sleeps again, and that wait must keep
+ * its deadline, as a wait of Linux's unix_stream_data_wait that a wake
+ * leaves asleep keeps the time left (net/unix/af_unix.c:2558-2590).
+ * Each round is one receive and one signal, and the rounds end at the
+ * first whose receive was found asleep again after the sibling took the
+ * signal. Nothing else wakes that receive, so a wait that lost its
+ * deadline sleeps for ever, and the case's watchdog ends it. No round need
+ * be one, since the race may go to the leader in all of them.
  * Returns 0, or 1 after the failure is printed.
  */
 static int timed_after_signals(void)
@@ -1521,12 +1534,10 @@ static int timed_after_signals(void)
     if (n != -1 || (err != EINTR && err != EAGAIN)) {
         return fail("a timed receive under signals ended other than EINTR or EAGAIN");
     }
-    if (!took) {
-        return fail("in no round did the sibling thread take the signal that woke the receive");
-    }
     row_held();
-    if (err != EAGAIN) {
-        return fail("a timed receive whose waking signal the sibling took did not end with EAGAIN");
+    if (took && err != EAGAIN) {
+        return fail("a timed receive that slept again after the sibling took its signal did not "
+                    "end with EAGAIN");
     }
     row_held();
     close(sv[0]);
