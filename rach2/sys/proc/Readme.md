@@ -328,5 +328,5 @@ Other suites ([the suites](../../../tests/system/suites.md)):
 * `tests/run exitline` checks that the plain process-exit line is printed under the debug shell and nowhere else.
 * `tests/run memory` includes the overrun of a kernel stack ([the architectures' Readme](../arch/Readme.md)).
 
-`tests/run host` runs the host tests ([the host tests](../../../tests/host/Readme.md)) of this directory: `sched_hosttest.c`, `wait_queue_hosttest.c`, `smp_hosttest.c`, `process_timer_hosttest.c`, `exit_hosttest.c`, `elf_hosttest.c`, `uimage_hosttest.c`, `coredump_hosttest.c` and `corefile_hosttest.c`, in `tests/host/`.
+`tests/run host` runs the host tests ([the host tests](../../../tests/host/Readme.md)) of this directory: `sched_hosttest.c`, `wait_queue_hosttest.c`, `smp_hosttest.c`, `process_timer_hosttest.c`, `exit_hosttest.c`, `elf_hosttest.c`, `uimage_hosttest.c`, `coredump_hosttest.c`, `corefile_hosttest.c` and `mutex_hosttest.c`, in `tests/host/`. `mutex_hosttest.c` counts the sleeps of a short hold with the mutex's spin and without it, and checks the handoff to a sleeper a spinner took the mutex from and the queue of spinners, a spinner in the middle leaving among them.
 

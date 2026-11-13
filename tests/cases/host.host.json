@@ -981,6 +981,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "mutex",
+          "checks": "tests/host/mutex_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "n_tty",
           "checks": "tests/host/n_tty_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
