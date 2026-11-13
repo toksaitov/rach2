@@ -278,7 +278,9 @@ static void refusal(const char *b)
  * - state LOCKS ID KIND N` names the claim, prints `granted`, `refused` or,
  * while the claim waits, as the whole host's always does in `wait` mode,
  * nothing; `cat` of a claim attempt's output, LOCKS/ID.KIND.N.out, prints
- * the launcher's refusal when the claim is refused. Any other script, which
+ * the launcher's refusal when the claim is refused. A beat's minute,
+ * `printf . >> ID.alive; sleep 60`, passes as a second, so that the beat's
+ * loop leaves the processor to the run it beats for. Any other script, which
  * starts or stops a claim, touches a file or tests that a claim has ended,
  * succeeds.
  */
@@ -286,11 +288,12 @@ static int wsl_mock(void)
 {
     char line[20000], b[4096], locks[4096], id[4096], kind[64], start[9000], end[4200],
         probe[4096] = "";
-    int alone, body = 0, named = 0;
+    int alone, body = 0, named = 0, beat = 0;
     while (fgets(b, sizeof(b), stdin)) {
         if (body && strcmp(b, "END_OF_CLAIM\n"))
             continue;
         body = !body && strstr(b, "<< 'END_OF_CLAIM'") != NULL;
+        beat |= strstr(b, ".alive; sleep 60") != NULL;
         snprintf(line, sizeof(line), "wsl %s", b);
         append(ev("RELEASE_TEST_CALLS"), line);
         if (!named && sscanf(b, "perl - state %4095s %4095s %63s", locks, id, kind) == 3) {
@@ -298,6 +301,11 @@ static int wsl_mock(void)
             snprintf(probe, sizeof(probe), "%s", b);
         }
         refusal(b);
+    }
+    if (beat) {
+        struct timespec minute = {1, 0};
+        /* a beat's minute passes as a second */
+        nanosleep(&minute, NULL);
     }
     if (!named)
         return 0;

@@ -4167,7 +4167,14 @@
           "per_architecture": false
         }
       ],
-      "timing": [],
+      "timing": [
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/flow_release.c:308",
+          "assumes": "A beat's minute in the mock wsl passes as a second, so that release.sh's beat loop leaves the processor to the run it beats for. The assertions read the calls and records, not elapsed time.",
+          "uncertainty_us": null
+        }
+      ],
       "native": {
         "plan": "none",
         "class": "system",
