@@ -94,6 +94,7 @@ static long sys_fsync(isr_params_t *params);
 static long sys_fdatasync(isr_params_t *params);
 static long sys_sync(isr_params_t *params);
 static long sys_syncfs(isr_params_t *params);
+static int pc_sync_wait(void);
 static long sys_lseek(isr_params_t *params);
 static int sock_is_query(const struct socket *sock);
 static long sys_read(isr_params_t *params);
@@ -1611,6 +1612,17 @@ int pc_sync(void)
 {
     return 0;
 }
+
+/* The tick count `pc_sync_wait` reads, which no row advances. */
+volatile uint64_t kernel_ticks;
+
+/** The yield of `pc_sync_wait` while a slot is busy, which none is here. */
+void schedule(void)
+{}
+
+/** The wait of `pc_sync_wait` while a slot is busy, which none is here. */
+void idle_wait_irq_on(void)
+{}
 
 /** The truncation of an open with O_TRUNC, which no row asks for: -EROFS. */
 int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
