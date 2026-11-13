@@ -3218,6 +3218,8 @@ static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
     return rc != 0 ? rc : devfs_open(name, flags);
 }
 
+static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_t *src, int flags);
+
 /**
  * open(2) of /proc/PID/fd/N, which /dev/fd/N, /dev/stdin, /dev/stdout and
  * /dev/stderr are for the caller, following the link to what the descriptor
@@ -3232,8 +3234,6 @@ static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
  * the new descriptor, or a negative errno: an error of `proc_fd_entry`,
  * -EACCES, -ENOTDIR, or the open's.
  */
-static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_t *src, int flags);
-
 static int32_t proc_fd_open(const struct vpath *vp, int flags)
 {
     process_t *p;
@@ -12835,6 +12835,8 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
     return what;
 }
 
+static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
+
 /**
  * chown of the /dev or /proc node `vp`, for the path forms and for a
  * descriptor opened with O_PATH on one. A pty slave keeps its owner and group
@@ -12844,8 +12846,6 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
  * for 0 or -1 in each field succeeds and changes nothing, and any other is
  * -EPERM.
  */
-static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
-
 static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 {
     if (vp->kind == VNODE_PROC_FD_LINK) {
