@@ -365,6 +365,19 @@ int bcache_sync_unflushed(block_device_t *dev);
 int bcache_invalidate(block_device_t *dev);
 
 /**
+ * Drop every buffer of `dev` at the end of an unmount, whatever its state,
+ * and clear the device's failed-write mark: a dirty one's write is given up,
+ * a held one is dropped at its release, and the rest at once, as Linux's
+ * `kill_block_super` goes on past a failed `sync_blockdev` and
+ * `invalidate_bdev` passes over a busy page (fs/super.c:1722). The count of
+ * dirty buffers given up. The device is not marked failed or gone, so it
+ * can be mounted again. The caller has stopped every use of `dev` and
+ * written what could be written; a buffer still dirty is one whose write
+ * failed, or one held back behind it by the cache's order.
+ */
+int bcache_drop(block_device_t *dev);
+
+/**
  * The device has gone: record it as failed, which takes its mounts
  * read-only, mark it gone, and deal with every buffer that names it.
  *

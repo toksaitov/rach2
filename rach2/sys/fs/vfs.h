@@ -257,10 +257,10 @@ struct vfs_ops {
      * repeated or abandoned; the second frees the private state and is not
      * undone. The buffer cache is written between them.
      *
-     * `abort_unmount` runs when an unmount that got past `prepare_unmount`
-     * fails at the writeback, the flush or the cache's drop of the device:
-     * the mount stays, and the type puts back what it wrote for the
-     * unmount. NULL for a type with nothing to put back. */
+     * `abort_unmount` runs when the writeback or the flush fails after
+     * `prepare_unmount` succeeded: the type puts back what it wrote for the
+     * unmount, so the volume stays marked in use, and the unmount then goes
+     * on. NULL for a type with nothing to put back. */
     int (*prepare_unmount)(struct vfs_mount *mnt);
     void (*abort_unmount)(struct vfs_mount *mnt);
     void (*unmount)(struct vfs_mount *mnt);
@@ -1070,12 +1070,19 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
  * must then reach one.
  *
  * The mount goes to VFS_UNMOUNTING, which no new operation enters; the
- * operations in progress drain; the reference count is checked; the type's
- * `sync` and `prepare_unmount` run, the cache writes the device's dirty
- * buffers, the device flushes its own cache, and the cache drops the
- * device's buffers, a failure in any of these returning the mount to
- * VFS_ACTIVE; then the type's `unmount` runs, and the covered node, the
- * parent's reference, the claim and the slot are released. A bind is put
+ * operations in progress drain; the reference count is checked, and a
+ * mount something holds returns to VFS_ACTIVE; the type's `sync` and
+ * `prepare_unmount` run, the cache writes the device's dirty buffers, the
+ * device flushes its own cache, and the cache drops the device's buffers;
+ * then the type's `unmount` runs, and the covered node, the parent's
+ * reference, the claim and the slot are released. A failed write does not
+ * keep the mount, as Linux's `generic_shutdown_super` ignores the result of
+ * its sync (fs/super.c:618): after a failed `sync`, or on a device whose
+ * earlier write failed, the preparation and the writeback are skipped; a
+ * writeback or a flush that fails after the preparation has the type's
+ * `abort_unmount` put back the volume's in-use mark; buffers still dirty or
+ * held are dropped (`bcache_drop`); and the failure is logged as `vfs:
+ * unmount: PATH: STEP failed (ERR): N dirty buffers dropped`. A bind is put
  * back with nothing written. On a device that has gone the sync, the
  * preparation, the writeback and the flush are skipped. A mount another
  * live mount namespace sees is only hidden from the caller's, and stays
@@ -1088,10 +1095,10 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
  *
  * Returns 0 or a negative errno: the resolver's errors; ENOTDIR for a
  * target named as a directory that reached something else; EINVAL for a
- * node that is no mount's root; EBUSY for a permanent mount, a mount that
- * is not active or one something still refers to, or when a buffer of the
- * device is still held or dirty; EIO when the writeback or the flush fails;
- * and the error of the type's `sync` or `prepare_unmount`.
+ * node that is no mount's root; and EBUSY for a permanent mount, a mount
+ * that is not active or one something still refers to. A failed write is
+ * not returned, as Linux's umount returns none: it is logged, and the
+ * volume, left marked in use, has the next mount check it.
  */
 int vfs_do_umount(const char *target, int dir);
 

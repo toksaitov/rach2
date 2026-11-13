@@ -6538,22 +6538,78 @@ static int unmount_bind(struct vfs_mount *m)
 }
 
 /**
+ * The writes of the unmount of `m`, whose device has not gone, under its
+ * namespace lock: the type's `sync`, then, unless it failed or the device's
+ * earlier write did (BLOCK_WRITE_FAILED), the type's `prepare_unmount` and
+ * the cache's writeback of the device, and the device's flush in any case,
+ * since a disk's own write cache reaches the medium only at a flush. A
+ * writeback or a flush that fails after the preparation has the type put
+ * the preparation back (`unmount_abandoned`). 0, or the first failure's
+ * -errno, with `*what` naming its step.
+ */
+static int unmount_write(struct vfs_mount *m, const char **what)
+{
+    block_device_t *dev = m->dev;
+    int rc = 0, prepared = 0;
+
+    *what = "sync";
+    if (m->type->ops->sync) {
+        rc = m->type->ops->sync(m);
+    }
+    if (rc == 0 && dev && (dev->flags & BLOCK_WRITE_FAILED)) {
+        rc = -EIO;
+        *what = "earlier write";
+    }
+    if (rc == 0 && m->type->ops->prepare_unmount) {
+        rc = m->type->ops->prepare_unmount(m);
+        *what = "preparation";
+        prepared = rc == 0;
+    }
+    if (rc == 0 && dev) {
+        rc = bcache_sync(dev);
+        *what = "writeback";
+    }
+    if (dev) {
+        int flushed = bcache_flush(dev);
+
+        if (rc == 0 && flushed != 0) {
+            rc = flushed;
+            *what = "flush";
+        }
+    }
+    if (rc != 0 && prepared) {
+        unmount_abandoned(m);
+    }
+    return rc;
+}
+
+/**
  * Unmount `m`, an active mount no other mount namespace sees, as
- * `vfs_do_umount` describes. 0, or the error that left it mounted.
+ * `vfs_do_umount` describes. 0, or -EBUSY for a mount something still
+ * holds, which stays.
  *
  * A device that has gone takes nothing, so the sync, the preparation, the
  * writeback and the flush are skipped for it: each would fail, and an
  * unmount that failed on a stick that is no longer there would keep the
- * mount for good. Nothing irreversible happens before the cache drops the
- * device's buffers, so a failure up to there returns the mount to
- * VFS_ACTIVE, with the type's `abort_unmount` (`unmount_abandoned`) once
- * `prepare_unmount` has run.
+ * mount for good. Past the count of holds the unmount always completes, as
+ * Linux's `generic_shutdown_super` ignores what `sync_filesystem` returns
+ * and goes on to `put_super` (fs/super.c:618 and 638): a mount kept for a
+ * write that keeps failing could never be unmounted. Once the type's sync
+ * has failed, or on a device whose earlier write failed
+ * (BLOCK_WRITE_FAILED), nothing more is asked of the device but its flush:
+ * the preparation, which would mark the volume clean, and the writeback,
+ * which would write blocks whose dependencies may not have landed, are
+ * skipped. A writeback or a flush that fails after the preparation has the
+ * type put back what the preparation wrote (`unmount_abandoned`), so the
+ * volume stays marked in use. The cache then drops the device's buffers,
+ * dirty and held ones too (`bcache_drop`), and one line logs a failure and
+ * what was given up.
  */
 static int unmount_mount(struct vfs_mount *m)
 {
-    int gone;
+    int rc, dropped = 0;
+    const char *what = "sync";
     struct vfs_ref cov;
-    int rc;
     block_device_t *dev = m->dev;
 
     arch_atomic_xchg((volatile unsigned int *)(void *)&m->state, (unsigned int)VFS_UNMOUNTING);
@@ -6572,42 +6628,15 @@ static int unmount_mount(struct vfs_mount *m)
     filemap_unmount(m);
     dcache_forget_mount(m);
     vfs_ns_lock(m);
-    gone = vfs_mount_gone(m);
-    if (!gone && m->type->ops->sync) {
-        rc = m->type->ops->sync(m);
-        if (rc != 0) {
-            vfs_ns_unlock(m);
-            m->state = VFS_ACTIVE;
-            return rc;
-        }
+    rc = vfs_mount_gone(m) ? 0 : unmount_write(m, &what);
+    if (dev) {
+        dropped = bcache_drop(dev);
     }
-    if (!gone && m->type->ops->prepare_unmount) {
-        rc = m->type->ops->prepare_unmount(m);
-        if (rc != 0) {
-            vfs_ns_unlock(m);
-            m->state = VFS_ACTIVE;
-            return rc;
-        }
-    }
-    if (!gone && m->dev && bcache_sync(m->dev) != 0) {
-        unmount_abandoned(m);
-        vfs_ns_unlock(m);
-        m->state = VFS_ACTIVE;
-        return -EIO;
-    }
-    /* A disk's own write cache reaches the medium only at a flush. */
-    rc = gone || !m->dev ? 0 : bcache_flush(m->dev);
     if (rc != 0) {
-        unmount_abandoned(m);
-        vfs_ns_unlock(m);
-        m->state = VFS_ACTIVE;
-        return -EIO;
-    }
-    if (m->dev && bcache_invalidate(m->dev) != 0) {
-        unmount_abandoned(m);
-        vfs_ns_unlock(m);
-        m->state = VFS_ACTIVE;
-        return -EBUSY;
+        klog(KLOG_WARN, "vfs", "unmount: %s: %s failed (%d): %d dirty buffers dropped",
+             m->covered_path, what, rc, dropped);
+    } else if (dropped > 0) {
+        klog(KLOG_WARN, "vfs", "unmount: %s: %d dirty buffers dropped", m->covered_path, dropped);
     }
     klog(KLOG_INFO, "vfs", "unmounted %s: %d opens, %d releases", m->covered_path, (int)m->opens,
          (int)m->releases);

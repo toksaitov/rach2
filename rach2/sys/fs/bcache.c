@@ -3132,6 +3132,41 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
     return ready;
 }
 
+/* The walk of `bcache_device_gone` without the device's loss: it lets
+ * `cache_spin` go every WALK_BATCH buffers (`bufs_next`), and `wb_lock`,
+ * held throughout, keeps every dirty mark, so a mark a holder makes waits
+ * for the walk's end and the buffer is then dropped at its release. The
+ * failed-write mark is cleared under `cache_spin`, as `bcache_invalidate`
+ * clears it. */
+int bcache_drop(block_device_t *dev)
+{
+    struct bbuf *b;
+    uint32_t flags, n = 0;
+    int dropped = 0;
+
+    wb_take();
+    flags = cache_lock();
+    for (b = bufs; b; b = bufs_next(b, &n, &flags)) {
+        stat_visits++;
+        if (b->dev != dev) {
+            continue;
+        }
+        if (b->dirty) {
+            dropped++;
+            set_clean(b);
+        }
+        if (b->holder != -1) {
+            b->discard = 1;
+            continue;
+        }
+        make_empty(b);
+    }
+    dev->flags &= ~BLOCK_WRITE_FAILED;
+    cache_unlock(flags);
+    wb_give();
+    return dropped;
+}
+
 /* Two walks of every buffer, the first to find one held or dirty and the
  * second to drop them, each letting `cache_spin` go every WALK_BATCH
  * buffers (`bufs_next`), as Linux's invalidate goes a batch at a time with
