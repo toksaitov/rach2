@@ -120,9 +120,16 @@ struct unix_name {
 };
 
 /* Descriptors in flight, under flight_lock from acquisition to installation
- * or close, including sends and receives whose user copies may sleep. */
+ * or close, including sends and receives whose user copies may sleep. A
+ * flight is on the registry, `flights`, from the hold of flight_lock that
+ * first gives it descriptors (`flight_list`) until they are moved away or
+ * its owner ends it, so that a call or a message that never has any
+ * touches nothing shared. */
 struct unix_flight {
     struct unix_flight *next;
+    struct unix_flight **pprev; /* the link that names it, NULL off the
+                                   registry; only its owner makes it NULL
+                                   or not, under flight_lock */
     uint32_t nfds;
     fd_entry_t *fds;
 };
@@ -312,27 +319,49 @@ static struct unix_sock *peer_get(struct unix_sock *s)
     return p;
 }
 
-/** Track descriptors while their owner's call, message or copy can sleep. */
-static void flight_enter(struct unix_flight *f)
+/** Put `f` on the registry, where `unix_inflight_holds` finds it, unless it
+ * is there; the caller holds flight_lock and gives `f` descriptors in the
+ * same hold. */
+static void flight_list(struct unix_flight *f)
 {
-    uint32_t flags = spin_lock_irqsave(&flight_lock);
-
+    if (f->pprev) {
+        return;
+    }
     f->next = flights;
+    if (flights) {
+        flights->pprev = &f->next;
+    }
     flights = f;
-    spin_unlock_irqrestore(&flight_lock, flags);
+    f->pprev = &flights;
 }
 
-/** Stop tracking an empty flight before its owner leaves or is freed. */
-static void flight_leave(struct unix_flight *f)
+/** Take `f` off the registry if it is there; the caller holds flight_lock
+ * and `f` holds no descriptor it still owns. */
+static void flight_unlist(struct unix_flight *f)
 {
-    struct unix_flight **link;
-    uint32_t flags = spin_lock_irqsave(&flight_lock);
+    if (!f->pprev) {
+        return;
+    }
+    *f->pprev = f->next;
+    if (f->next) {
+        f->next->pprev = f->pprev;
+    }
+    f->next = NULL;
+    f->pprev = NULL;
+}
 
-    for (link = &flights; *link && *link != f; link = &(*link)->next) {
+/** Take `f` off the registry before its owner leaves or is freed. One that
+ * never held descriptors is not there, and its owner, who alone lists it,
+ * reads that without the lock. */
+static void flight_end(struct unix_flight *f)
+{
+    uint32_t flags;
+
+    if (!f->pprev) {
+        return;
     }
-    if (*link) {
-        *link = f->next;
-    }
+    flags = spin_lock_irqsave(&flight_lock);
+    flight_unlist(f);
     spin_unlock_irqrestore(&flight_lock, flags);
 }
 
@@ -579,18 +608,14 @@ static void flight_drop(fd_entry_t *slot, uint32_t *count)
     file_ops_unlock(big);
 }
 
-/** Track a receive before it takes descriptors from a message, until its
- * installation or close ends. The flight registry also tracks outgoing
- * sends, queued messages and messages on the reap list. */
-static void transit_enter(struct unix_in *in)
-{
-    flight_enter(&in->flight);
-}
-
-/** Stop tracking a receive whose descriptors are installed or closed. */
+/** Stop tracking a receive whose descriptors are installed or closed. A
+ * receive is tracked from the hold in which it takes descriptors from a
+ * message (`take_fds`); the registry also tracks sends from their first
+ * descriptor (`get_rights`), and messages that have descriptors, on a
+ * queue or on the reap list. */
 static void transit_leave(struct unix_in *in)
 {
-    flight_leave(&in->flight);
+    flight_end(&in->flight);
 }
 
 /** A message of `len` bytes, its data after the record and nothing else
@@ -605,7 +630,6 @@ static struct unix_msg *msg_alloc(uint32_t len)
     k_memset(m, 0, sizeof(*m));
     m->len = len;
     m->data = (uint8_t *)(m + 1);
-    flight_enter(&m->flight);
     return m;
 }
 
@@ -622,11 +646,18 @@ static struct unix_msg *msg_alloc(uint32_t len)
  * message meanwhile only adds it to the list, for the call at work to
  * close. A message stays on the list, and its descriptors not yet closed
  * stay where `unix_inflight_holds` finds them, until the last is closed.
+ * A message off the registry never had descriptors, or a receive took
+ * them, and is freed at once.
  */
 static void msg_free(struct unix_msg *m)
 {
-    uint32_t flags = spin_lock_irqsave(&flight_lock);
+    uint32_t flags;
 
+    if (!m->flight.pprev) {
+        kfree(m);
+        return;
+    }
+    flags = spin_lock_irqsave(&flight_lock);
     m->next = NULL;
     if (reap_tail) {
         reap_tail->next = m;
@@ -656,8 +687,8 @@ static void msg_free(struct unix_msg *m)
         if (!reap_head) {
             reap_tail = NULL;
         }
+        flight_unlist(&m->flight);
         spin_unlock_irqrestore(&flight_lock, flags);
-        flight_leave(&m->flight);
         kfree(m->flight.fds);
         kfree(m);
         flags = spin_lock_irqsave(&flight_lock);
@@ -2164,6 +2195,7 @@ static int32_t get_rights(uintptr_t data, uint32_t n, struct unix_out *out)
         k_memcpy(grown, old, sizeof(fd_entry_t) * out->flight.nfds);
     }
     out->flight.fds = grown;
+    flight_list(&out->flight);
     spin_unlock_irqrestore(&flight_lock, flags);
     kfree(old);
     for (i = 0; i < n; i++) {
@@ -2273,12 +2305,16 @@ static int32_t get_control(uintptr_t control, uint32_t controllen, struct unix_o
     return 0;
 }
 
-/** Close the descriptors in flight `out` has and forget them. */
+/** Close the descriptors in flight `out` has and forget them; a send that
+ * took none is off the registry and has nothing to do. */
 static void release_out(struct unix_out *out)
 {
     fd_entry_t *fds = out->flight.fds;
     uint32_t flags;
 
+    if (!out->flight.pprev) {
+        return;
+    }
     while (out->flight.nfds) {
         flight_drop(&fds[out->flight.nfds - 1], &out->flight.nfds);
     }
@@ -2301,7 +2337,6 @@ static struct unix_msg *build(struct unix_sock *s, const struct kernel_iovec *io
         return NULL;
     }
     if (iov_copy(iov, iovlen, skip, m->data, len, 0) != 0) {
-        flight_leave(&m->flight);
         kfree(m);
         *err = -EFAULT;
         return NULL;
@@ -2327,15 +2362,22 @@ static struct unix_msg *build(struct unix_sock *s, const struct kernel_iovec *io
     return m;
 }
 
-/** Move the descriptors in flight `out` has into `m`. */
+/** Move the descriptors in flight `out` has into `m`, and with them its
+ * place on the registry; a send that took none has nothing to move. */
 static void attach(struct unix_msg *m, struct unix_out *out)
 {
-    uint32_t flags = spin_lock_irqsave(&flight_lock);
+    uint32_t flags;
 
+    if (!out->flight.pprev) {
+        return;
+    }
+    flags = spin_lock_irqsave(&flight_lock);
     m->flight.nfds = out->flight.nfds;
     m->flight.fds = out->flight.fds;
     out->flight.nfds = 0;
     out->flight.fds = NULL;
+    flight_list(&m->flight);
+    flight_unlist(&out->flight);
     spin_unlock_irqrestore(&flight_lock, flags);
 }
 
@@ -2664,6 +2706,21 @@ static int has_data(void *arg)
     return ready;
 }
 
+/** Why a receive that finds no message stops, under the state lock: the
+ * socket's pending error, which it clears, 1 at the end of input, or
+ * -EAGAIN, in POSIX's order (af_unix.c:2840-2850). */
+static int32_t data_end(struct unix_sock *s)
+{
+    int32_t rc;
+
+    if (s->err) {
+        rc = -s->err;
+        s->err = 0;
+        return rc;
+    }
+    return (s->shut & SHUT_RCV) ? 1 : -EAGAIN;
+}
+
 /** Wait for a message within the time left to the receive, `*timeo`, which
  * `unix_wait` leaves reduced by the time it slept: 0 with one at the head
  * of the queue, 1 at the end of input, or the socket's pending error,
@@ -2676,16 +2733,7 @@ static int32_t wait_data(struct unix_sock *s, uint64_t *timeo)
     for (;;) {
         flags = spin_lock_irqsave(&s->state_lock);
         spin_lock(&s->queue_lock);
-        if (s->rq_head) {
-            rc = 0;
-        } else if (s->err) {
-            rc = -s->err;
-            s->err = 0;
-        } else if (s->shut & SHUT_RCV) {
-            rc = 1;
-        } else {
-            rc = -EAGAIN;
-        }
+        rc = s->rq_head ? 0 : data_end(s);
         spin_unlock(&s->queue_lock);
         spin_unlock_irqrestore(&s->state_lock, flags);
         if (rc != -EAGAIN) {
@@ -2699,7 +2747,8 @@ static int32_t wait_data(struct unix_sock *s, uint64_t *timeo)
 }
 
 /** Move a message's descriptors into `in`, or with `peek` copies of them;
- * whether it had any. */
+ * whether it had any. `in` goes on the registry in the hold that gives it
+ * them, and a message they leave goes off it. */
 static int take_fds(struct unix_msg *m, struct unix_in *in, int peek)
 {
     uint32_t i, flags;
@@ -2714,6 +2763,8 @@ static int take_fds(struct unix_msg *m, struct unix_in *in, int peek)
         in->flight.nfds = m->flight.nfds;
         m->flight.fds = NULL;
         m->flight.nfds = 0;
+        flight_list(&in->flight);
+        flight_unlist(&m->flight);
         spin_unlock_irqrestore(&flight_lock, flags);
         return 1;
     }
@@ -2726,6 +2777,7 @@ static int take_fds(struct unix_msg *m, struct unix_in *in, int peek)
         flags = spin_lock_irqsave(&flight_lock);
         in->flight.fds = fds;
         in->flight.nfds = m->flight.nfds;
+        flight_list(&in->flight);
         spin_unlock_irqrestore(&flight_lock, flags);
     }
     return 1;
@@ -2775,84 +2827,124 @@ static void stream_consume(struct unix_sock *s, struct unix_msg *m, uint32_t chu
     }
 }
 
+/* What a stream receive carries from one look at its socket to the next
+ * (`stream_look`). */
+struct stream_look {
+    int first;      /* no look yet: check the state and read the limit */
+    int nonblock;   /* the call may not wait */
+    int peek;       /* MSG_PEEK */
+    uint32_t want;  /* the bytes that end the receive at an empty queue */
+    uint64_t timeo; /* SO_RCVTIMEO as the first look read it, less waits */
+    uint32_t off;   /* where to read the message found */
+    int passcred;   /* SO_PASSCRED at the look */
+};
+
+/**
+ * One hold of `s`'s state lock for a stream receive that has read `copied`
+ * bytes: the message to read next, with its offset and SO_PASSCRED in `l`,
+ * or NULL with `*rc` 0 when the receive has enough, -EINVAL at the first
+ * look of a socket not connected, or else `data_end`'s. The queue, and with
+ * none queued the pending error and the shutdown, are read in the one
+ * hold, as Linux's unix_stream_read_generic reads them under its iolock
+ * (af_unix.c:2785-2860), so a receive that finds nothing takes the state
+ * lock once. The first look also checks the state and reads SO_RCVTIMEO.
+ */
+static struct unix_msg *stream_look(struct unix_sock *s, struct stream_look *l, uint32_t copied,
+                                    int32_t *rc)
+{
+    struct unix_msg *m;
+    uint32_t saved = spin_lock_irqsave(&s->state_lock);
+
+    *rc = 0;
+    if (l->first) {
+        l->first = 0;
+        if (s->state != US_CONNECTED) {
+            spin_unlock_irqrestore(&s->state_lock, saved);
+            *rc = -EINVAL;
+            return NULL;
+        }
+        l->timeo = timeo_of(s->rcvtimeo, l->nonblock);
+    }
+    l->passcred = s->passcred;
+    spin_lock(&s->queue_lock);
+    m = stream_at(s, copied, l->peek, &l->off);
+    spin_unlock(&s->queue_lock);
+    if (!m && copied < l->want && (copied == 0 || !(l->peek || l->nonblock))) {
+        *rc = data_end(s);
+    }
+    spin_unlock_irqrestore(&s->state_lock, saved);
+    return m;
+}
+
 /**
  * A receive of up to `total` bytes into `iov` on a stream socket: bytes
  * across messages, up to and including one that has descriptors, and not
  * past a change of credentials when they are asked for; the bytes read, or
  * `unix_recvfrom`'s errors before any. The receive lock is held throughout
  * but for a wait for data; a receive that may not wait keeps it then too.
- * Each consumption wakes the writers. SO_RCVTIMEO is read
- * once, before the receive lock, and each wait for data has what the waits
- * before it left, as in Linux's unix_stream_read_generic (af_unix.c:2785,
- * 2834-2837, 2841-2848).
+ * Each consumption wakes the writers. Each turn looks at the socket once
+ * (`stream_look`). The message found stays after the look, since only a
+ * holder of the receive lock takes the head off while a call holds the
+ * socket. SO_RCVTIMEO is read once, at the first look, and each wait for
+ * data has what the waits before it left (af_unix.c:2841-2848).
  */
 static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                            uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
 {
+    struct stream_look l;
     uint32_t copied = 0, saved;
-    uint32_t want = (flags & MSG_WAITALL) ? total : 1u;
-    int peek = (flags & MSG_PEEK) != 0;
-    uint64_t timeo;
     int32_t rc = 0;
 
-    saved = spin_lock_irqsave(&s->state_lock);
-    rc = s->state == US_CONNECTED ? 0 : -EINVAL;
-    timeo = timeo_of(s->rcvtimeo, nonblock);
-    spin_unlock_irqrestore(&s->state_lock, saved);
-    if (rc || total == 0) {
+    if (total == 0) {
+        saved = spin_lock_irqsave(&s->state_lock);
+        rc = s->state == US_CONNECTED ? 0 : -EINVAL;
+        spin_unlock_irqrestore(&s->state_lock, saved);
         return rc;
     }
+    l.first = 1;
+    l.nonblock = nonblock;
+    l.peek = (flags & MSG_PEEK) != 0;
+    l.want = (flags & MSG_WAITALL) ? total : 1u;
+    l.timeo = 0;
     recv_lock(s);
     for (;;) {
-        uint32_t off, chunk;
-        struct unix_msg *m;
-        int had_fds, passcred;
+        uint32_t chunk;
+        struct unix_msg *m = stream_look(s, &l, copied, &rc);
+        int had_fds;
 
-        saved = spin_lock_irqsave(&s->state_lock);
-        passcred = s->passcred;
-        spin_lock(&s->queue_lock);
-        m = stream_at(s, copied, peek, &off);
-        spin_unlock(&s->queue_lock);
-        spin_unlock_irqrestore(&s->state_lock, saved);
         if (!m) {
-            if (copied >= want || (copied > 0 && (peek || nonblock))) {
-                break;
-            }
-            if (timeo == UNIX_TIMEO_NOW) {
-                /* no wait, so the lock stays held (af_unix.c:2834-2837) */
-                rc = wait_data(s, &timeo);
-            } else {
+            if (rc == -EAGAIN && l.timeo != UNIX_TIMEO_NOW) {
                 recv_unlock(s);
-                rc = wait_data(s, &timeo);
+                rc = wait_data(s, &l.timeo);
                 recv_lock(s);
-            }
-            if (rc == 0) {
-                continue;
+                if (rc == 0) {
+                    continue;
+                }
             }
             if (rc == 1 || copied > 0) {
                 rc = 0;
             }
             break;
         }
-        if (passcred && copied > 0 && !same_cred(&in->cred, &m->cred)) {
+        if (l.passcred && copied > 0 && !same_cred(&in->cred, &m->cred)) {
             break;
         }
-        chunk = m->len - off;
+        chunk = m->len - l.off;
         if (chunk > total - copied) {
             chunk = total - copied;
         }
-        if (iov_copy(iov, iovlen, copied, m->data + off, chunk, 1) != 0) {
+        if (iov_copy(iov, iovlen, copied, m->data + l.off, chunk, 1) != 0) {
             rc = -EFAULT;
             break;
         }
         if (copied == 0) {
             in->from = m->from;
             in->cred = m->cred;
-            in->has_cred = passcred;
+            in->has_cred = l.passcred;
         }
         copied += chunk;
-        had_fds = take_fds(m, in, peek);
-        if (!peek) {
+        had_fds = take_fds(m, in, l.peek);
+        if (!l.peek) {
             stream_consume(s, m, chunk);
             wake_writers(s);
         }
@@ -2946,12 +3038,16 @@ static int32_t recv_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t
     return recv_msg(s, nonblock, iov, iovlen, total, flags, in);
 }
 
-/** Close the descriptors `in` received and forget them. */
+/** Close the descriptors `in` received and forget them; a receive that
+ * took none is off the registry and has nothing to do. */
 static void release_in(struct unix_in *in)
 {
     fd_entry_t *fds = in->flight.fds;
     uint32_t flags;
 
+    if (!in->flight.pprev) {
+        return;
+    }
     while (in->flight.nfds) {
         flight_drop(&fds[in->flight.nfds - 1], &in->flight.nfds);
     }
@@ -3114,9 +3210,8 @@ int32_t unix_sendto(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintp
     iov.iov_base = buf;
     iov.iov_len = len;
     k_memset(&out, 0, sizeof(out));
-    flight_enter(&out.flight);
     rc = send_core(e, &iov, 1, len, addr ? &to : NULL, &out, flags);
-    flight_leave(&out.flight);
+    flight_end(&out.flight);
     return rc;
 }
 
@@ -3139,7 +3234,6 @@ int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uin
     iov.iov_base = buf;
     iov.iov_len = len;
     k_memset(&in, 0, sizeof(in));
-    transit_enter(&in);
     rc = recv_core(e, &iov, 1, len, flags, &in);
     release_in(&in);
     transit_leave(&in);
@@ -3163,7 +3257,6 @@ int32_t unix_readv(fd_entry_t *e, const struct kernel_iovec *iov, int count, uin
     kirq_restore(saved);
 
     k_memset(&in, 0, sizeof(in));
-    transit_enter(&in);
     rc = recv_core(e, iov, (uint32_t)count, total, 0, &in);
     release_in(&in);
     transit_leave(&in);
@@ -3187,9 +3280,8 @@ int32_t unix_writev(fd_entry_t *e, const struct kernel_iovec *iov, int count, ui
 
     kirq_restore(saved);
     k_memset(&out, 0, sizeof(out));
-    flight_enter(&out.flight);
     rc = send_core(e, iov, (uint32_t)count, total, NULL, &out, 0);
-    flight_leave(&out.flight);
+    flight_end(&out.flight);
     saved = kirq_save();
     bkl_take(depth);
     kirq_restore(saved);
@@ -3247,7 +3339,6 @@ int32_t unix_sendmsg(fd_entry_t *e, uintptr_t msg, int flags)
         }
     }
     k_memset(&out, 0, sizeof(out));
-    flight_enter(&out.flight);
     rc = get_iov(hdr.msg_iov, hdr.msg_iovlen, &iov, &total);
     if (rc == 0 && hdr.msg_control && hdr.msg_controllen) {
         rc = get_control(hdr.msg_control, USER_LEN32(hdr.msg_controllen), &out);
@@ -3257,7 +3348,7 @@ int32_t unix_sendmsg(fd_entry_t *e, uintptr_t msg, int flags)
     } else {
         release_out(&out);
     }
-    flight_leave(&out.flight);
+    flight_end(&out.flight);
     kfree(iov);
     return rc;
 }
@@ -3285,7 +3376,6 @@ int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
         return rc;
     }
     k_memset(&in, 0, sizeof(in));
-    transit_enter(&in);
     rc = recv_core(e, iov, (uint32_t)hdr.msg_iovlen, total, flags, &in);
     kfree(iov);
     if (rc < 0) {
