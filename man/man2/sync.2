@@ -99,7 +99,8 @@ A failed write on a mounted file system's device, whoever made it, the
 background flusher and an eviction included, a failed flush, a flush
 the file system makes inside an operation among them, a failed write of
 a shared mapping's pages, and a failed write of a page of a KRFFS boot
-root are recorded on the file system, as Linux records them in its error
+root, the boot's own writes of the root before it is mounted included,
+are recorded on the file system, as Linux records them in its error
 sequences.
 A failure is recorded once on a file system, however many bind mounts
 show it.

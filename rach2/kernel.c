@@ -2919,6 +2919,9 @@ static int init_krffs_disk(void)
  * then finishes. It runs whatever the bit said before the mount: a clean
  * halt closes no descriptors, so a cleanly unmounted image can have an orphan
  * too, and one left for later would remain once fsck.krffs cleared the bit.
+ * A repair write that fails leaves the mount up with its pages dirty, and the
+ * page cache holds the failure until `vfs_init` installs the root's hook
+ * (`pc_on_failure`), which records it for the root's syncs to report.
  *
  * The boot partition was judged and published before any root was chosen
  * (`discover_boot_devices`), so a machine that mounts nothing still has it.

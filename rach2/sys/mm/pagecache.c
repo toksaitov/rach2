@@ -106,6 +106,10 @@ static uint32_t pc_fs_size;             /* backed size; 0 means no backing */
 static pc_read_fn pc_read;
 static pc_write_fn pc_write;
 static void (*pc_failed)(int rc); /* told of each failed write, or NULL */
+/* The last failed write's answer while `pc_failed` is NULL, 0 for none,
+ * given to the hook when it is installed: the boot writes the root before
+ * the file system that records it exists (`pc_on_failure`). */
+static int pc_unclaimed;
 
 static uint32_t pc_reads;
 static uint32_t pc_evicts;
@@ -304,6 +308,8 @@ static int pc_writeback(struct pc_entry *e)
         e->dirty = 1;
         if (pc_failed) {
             pc_failed(rc);
+        } else {
+            pc_unclaimed = rc;
         }
     } else {
         ++pc_writebacks;
@@ -495,6 +501,10 @@ int pc_sync(void)
 void pc_on_failure(void (*failed)(int rc))
 {
     pc_failed = failed;
+    if (failed && pc_unclaimed != 0) {
+        failed(pc_unclaimed);
+        pc_unclaimed = 0;
+    }
 }
 
 /** The size is clamped to the window before it is rounded up to a page, so
@@ -518,6 +528,7 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
 
     pc_read = read;
     pc_write = write;
+    pc_unclaimed = 0;
     if (fs_size > pc_window_span) {
         fs_size = pc_window_span;
     }
