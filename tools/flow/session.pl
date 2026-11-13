@@ -22,20 +22,23 @@
 # handlers only record a signal; one loop, a turn each second, reaps the
 # session and sends every signal.
 #
-# A session still running after LIMIT seconds gets TERM, its whole group,
-# and KILL thirty turns later if any of it is left, so that a child that
-# outlives the TERM, such as an emulator, does not outlive the session, and
-# the supervisor exits 124. A TERM or INT sent to the supervisor stops the
-# session's group the same way, and the supervisor exits 128 plus the
-# signal's number only once the group is gone, so that a stop of either
-# group stops the session before the loop can start another. A session that
-# ends by itself gives its status, as sh reports one, and the processes it
-# left in its group are logged to LOG and stopped the same way: a session
-# should leave none, and one it leaves, such as a `tests/run` that holds the
-# clone's run lock, would keep the next session's suite from running. A
-# process that outlives the KILL keeps the supervisor, the anchor and RECORD
-# until it is gone, as LOG notes. The supervisor removes RECORD once the
-# group is gone. It exits 125 when it could not start the session.
+# A session still running after LIMIT seconds gets TERM, its whole group, and
+# KILL thirty turns later if any of it is left, so that a child that outlives
+# the TERM, such as an emulator, does not outlive the session, and the
+# supervisor exits 124. A TERM or INT sent to the supervisor stops the session's
+# group the same way, and the supervisor exits 128 plus the signal's number only
+# once the group is gone, so that a stop of either group stops the session
+# before the loop can start another. So does RECORD.stop, which stop.sh leaves
+# so that no signal of its own goes to the supervisor, whose number only the
+# loop holds; the supervisor then exits 143, and the loop removes the file
+# before it starts the next session. A session that ends by itself gives its
+# status, as sh reports one, and the processes it left in its group are logged
+# to LOG and stopped the same way: a session should leave none, and one it
+# leaves, such as a `tests/run` that holds the clone's run lock, would keep the
+# next session's suite from running. A process that outlives the KILL keeps the
+# supervisor, the anchor and RECORD until it is gone, as LOG notes. The
+# supervisor removes RECORD once the group is gone. It exits 125 when it could
+# not start the session.
 
 use strict;
 use warnings;
@@ -137,14 +140,15 @@ sub members
 alarm($limit);
 syswrite($go_w, 'x', 1);
 close($go_w);
-my ($status, $stopping, $left);
+my ($status, $stopping, $left, $asked);
 my $turns = 0;
 while (1) {
     if (!defined $status && waitpid($pid, WNOHANG) == $pid) {
         $status = $?;
         alarm(0) unless $stopping || $expired;
     }
-    if (!$stopping && (defined $signal || $expired)) {
+    $asked = 1 if !$stopping && -e "$record.stop";
+    if (!$stopping && (defined $signal || $expired || $asked)) {
         $stopping = 1;
     } elsif (!$stopping && defined $status) {
         $left = members();
@@ -177,4 +181,8 @@ if (defined $signal) {
     end(128 + ($signal eq 'TERM' ? POSIX::SIGTERM : POSIX::SIGINT));
 }
 end(124) if $expired;
+if ($asked) {
+    note("session group $group stopped on $record.stop");
+    end(128 + POSIX::SIGTERM);
+}
 end($status & 127 ? 128 + ($status & 127) : $status >> 8);

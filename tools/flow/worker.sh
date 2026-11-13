@@ -36,8 +36,10 @@
 # process group of the session that is running in `session`, the clone's path in
 # `repo`, and in `copy` the copy on the testing host that RACH2_TESTING_COPY
 # names for testing.sh, if any; `touch STATE/stop` ends the loop after the
-# session that is running, and before it takes or starts a task;
-# tools/flow/stop.sh stops the session as well.
+# session that is running, and before it takes or starts a task, within five
+# seconds of any wait; tools/flow/stop.sh also leaves STATE/session.stop, on
+# which session.pl stops the session, and which the loop removes before each
+# session.
 # Sessions run with RACH2_MIN_FREE_GIB at 40 unless the environment gives
 # another, so that a build they start stops before it fills the disk, and
 # with RACH2_WORKER_STATE set to STATE, so that `board.sh release` of the
@@ -170,6 +172,16 @@ session()
     last=$state/s-$t
 }
 
+# nap SECONDS: wait SECONDS, in steps of five, or until STATE/stop exists.
+nap()
+{
+    np_left=$1
+    while [ "$np_left" -gt 0 ] && [ ! -e "$state/stop" ]; do
+        sleep 5
+        np_left=$((np_left - 5))
+    done
+}
+
 main()
 {
     agent=claude state='' repo=
@@ -211,7 +223,7 @@ main()
     while [ ! -e "$state/stop" ]; do
         if ! refresh; then
             log "fetch failed"
-            sleep 60
+            nap 60
             continue
         fi
         update worker.sh 2>> "$state/loop.log"
@@ -221,14 +233,14 @@ main()
                 exec sh "$state/run/worker.sh" -a "$agent" -s "$state" -r "$repo" ;;
             2)
                 log "update failed"
-                sleep 60
+                nap 60
                 continue ;;
         esac
         issue=$(cat "$state/issue" 2> /dev/null)
         if [ -n "$issue" ]; then
             if ! held=$(sh "$state/run/board.sh" mine "$issue"); then
                 log "board unreachable"
-                sleep 60
+                nap 60
                 continue
             fi
             if [ "$held" != yes ]; then
@@ -240,36 +252,37 @@ main()
         if [ -z "$issue" ]; then
             until=$(cat "$state/limit" 2> /dev/null)
             if [ "$(date +%s)" -lt "${until:-0}" ]; then
-                sleep 300
+                nap 300
                 continue
             fi
             tidy
             prune_logs 's-*'
             [ -e "$state/stop" ] && break
             if ! claim; then
-                sleep 60
+                nap 60
                 continue
             fi
             issue=$(cat "$state/issue" 2> /dev/null)
         fi
         if [ -z "$issue" ]; then
             log idle
-            sleep 300
+            nap 300
             continue
         fi
         branch=$(sh "$state/run/board.sh" branch "$issue" 2>> "$state/loop.log")
         case $branch in
             ''|*[!A-Za-z0-9._/-]*)
                 log "#$issue: no usable milestone branch"
-                sleep 300
+                nap 300
                 continue ;;
         esac
+        rm -f "$state/session.stop"
         [ -e "$state/stop" ] && break
         session "$issue" "$branch"
         if why=$(limited "$last.jsonl" "$last.err"); then
             log "limit: $why"
             limit_end "$why" > "$state/limit"
-            sleep 900
+            nap 900
             continue
         fi
         rm -f "$state/limit"
@@ -284,11 +297,11 @@ main()
             done
             [ "$wait" -le 1800 ] || wait=1800
             log "short session; waiting ${wait}s"
-            sleep "$wait"
+            nap "$wait"
             continue
         fi
         fails=0
-        sleep 20
+        nap 20
     done
     log stopped
     exit 0
