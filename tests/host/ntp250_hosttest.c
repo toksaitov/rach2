@@ -29,6 +29,6 @@ int main(void)
     CHECK(real_now() - base == NS);
     pass(1);
     CHECK(real_now() - base == NS + 4125000);
-    printf("ntp250: %s: 4 ms ticks, raw time, frequency and PLL\n", failures ? "fail" : "pass");
-    return failures != 0;
+    printf("ntp250: %s: 4 ms ticks, raw time, frequency and PLL\n", fails ? "fail" : "pass");
+    return fails != 0;
 }
