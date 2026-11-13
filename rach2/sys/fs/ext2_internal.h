@@ -468,6 +468,29 @@ struct ext2_mount {
  * lacks and start again; the next reads it under its locks. */
 #define PLAN_TRIES 8
 
+/*
+ * The kinds of block the read primitive reads (`ext2_read_bytes`,
+ * `ext2_block_get`), each with its rules in `read_rules` in ext2.c: what is
+ * checked before the read and whether a failed read is reported. QUIET is
+ * the check's and the mount's, and a hint's that may not report; DATA a
+ * file's data or a directory's entries; SLOT an inode's slot in its table;
+ * BITMAP a block or inode bitmap; DESC a block of the group descriptors;
+ * SUPER the superblock; MAP a pointer block a lookup or a map walks;
+ * RECLAIM one a free walks; ATTR an attribute block read or replaced; and
+ * ATTR_FREE one whose reference an inode's free drops.
+ */
+#define READ_QUIET     0
+#define READ_DATA      1
+#define READ_SLOT      2
+#define READ_BITMAP    3
+#define READ_DESC      4
+#define READ_SUPER     5
+#define READ_MAP       6
+#define READ_RECLAIM   7
+#define READ_ATTR      8
+#define READ_ATTR_FREE 9
+#define READ_KINDS     10
+
 /* ---- the writer ---- */
 
 /*
@@ -556,10 +579,12 @@ uint32_t ext2_state_change(struct ext2_mount *em, uint32_t set, uint32_t clear);
 uint32_t ext2_feature_add(struct ext2_mount *em, uint32_t *word, uint32_t bits);
 void ext2_plan_begin(struct ext2_mount *em, int tries);
 uint32_t ext2_plan_end(struct ext2_mount *em);
-struct bbuf *ext2_volume_get(struct ext2_mount *em, uint64_t blk, int *rc);
+int ext2_zone_check(struct ext2_mount *em, uint32_t ino, const char *what, uint32_t b);
+struct bbuf *ext2_block_get(struct ext2_mount *em, int kind, uint32_t ino, uint64_t blk, int *rc);
 int ext2_plan_has(struct ext2_mount *em, uint32_t blk);
 void ext2_volume_fetch(struct ext2_mount *em, uint64_t blk);
-int ext2_read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t len);
+int ext2_read_bytes(struct ext2_mount *em, int kind, uint32_t ino, uint64_t off, void *dst,
+                    uint32_t len);
 int ext2_has_super(const struct ext2_mount *em, uint32_t g);
 uint32_t ext2_gd_blocks(const struct ext2_mount *em);
 uint32_t ext2_inode_table_blocks(const struct ext2_mount *em);

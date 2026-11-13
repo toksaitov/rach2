@@ -707,7 +707,7 @@ struct process {
     /* The ext2 mount whose allocator this thread plans for, or NULL: a read
      * of a block the cache lacks then answers -EAGAIN and leaves the block
      * in `fs_missed`, for the thread to fetch with its locks let go
-     * (fs/ext2.c's `ext2_volume_get`). Kept by the thread, so that plans in
+     * (fs/ext2.c's `volume_get`). Kept by the thread, so that plans in
      * two groups of one mount run at once. */
     void *fs_plan;
     uint32_t fs_missed;

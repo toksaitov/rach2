@@ -200,7 +200,7 @@ static int check_level(struct ext2_check *c, uint32_t ino, uint32_t b, int level
         uint8_t raw[4];
         uint32_t p;
 
-        rc = ext2_read_bytes(em, (uint64_t)b * em->block_size + j * 4, raw, 4);
+        rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)b * em->block_size + j * 4, raw, 4);
         if (rc != 0) {
             return rc;
         }
@@ -244,7 +244,7 @@ static int check_attr(struct ext2_check *c, const struct ext2_node *n)
     if (b < em->first_data || b >= em->blocks) {
         return check_fault(c, n->ino, "a block out of range");
     }
-    rc = ext2_read_bytes(em, (uint64_t)b * em->block_size, raw, sizeof(raw));
+    rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)b * em->block_size, raw, sizeof(raw));
     if (rc != 0) {
         return rc;
     }
@@ -490,7 +490,7 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
             uint64_t at = (uint64_t)b * em->block_size + off;
             uint32_t eino, rec, nlen;
 
-            rc = ext2_read_bytes(em, at, raw, 8);
+            rc = ext2_read_bytes(em, READ_QUIET, 0, at, raw, 8);
             if (rc != 0) {
                 return rc;
             }
@@ -501,7 +501,7 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
                 return check_fault(c, ino, "an entry of the wrong form");
             }
             if (entry < 2) {
-                rc = ext2_read_bytes(em, at + 8, raw + 8, nlen < 2 ? nlen : 2);
+                rc = ext2_read_bytes(em, READ_QUIET, 0, at + 8, raw + 8, nlen < 2 ? nlen : 2);
                 if (rc != 0) {
                     return rc;
                 }
@@ -559,8 +559,8 @@ static int check_bitmaps(struct ext2_check *c)
         uint8_t *gd = em->gd + g * 32;
         uint32_t free = 0;
 
-        rc = ext2_read_bytes(em, (uint64_t)ext2_le32(gd + 4) * em->block_size, c->bitmap,
-                             em->block_size);
+        rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)ext2_le32(gd + 4) * em->block_size,
+                             c->bitmap, em->block_size);
         if (rc != 0) {
             return rc;
         }
@@ -602,8 +602,8 @@ static int check_bitmaps(struct ext2_check *c)
         uint32_t lo = em->first_data + g * em->bpg;
         uint32_t free = 0;
 
-        rc = ext2_read_bytes(em, (uint64_t)ext2_le32(gd + 0) * em->block_size, c->bitmap,
-                             em->block_size);
+        rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)ext2_le32(gd + 0) * em->block_size,
+                             c->bitmap, em->block_size);
         if (rc != 0) {
             return rc;
         }
@@ -671,7 +671,7 @@ static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t fr
 
     em->free_blocks = free_blocks;
     em->free_inodes = free_inodes;
-    rc = ext2_read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
+    rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
                          em->groups * 32);
     if (rc != 0) {
         return rc;

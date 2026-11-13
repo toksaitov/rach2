@@ -125,7 +125,6 @@ rach2/sys/fs/ext2_dir.c:dirent_write params 7 the parameters are one level's cur
 rach2/sys/fs/ext2.c:ext2_mount_on complexity 73 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_mount_on lines 184 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2_dir.c:ext2_rename complexity 63 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/ext2_file.c:ext2_map_alloc lines 105 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2_file.c:ext2_map_alloc nesting 5 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/fat32.c:fat_check_volume lines 104 one file system operation over the on-disk format, each step a rule of the format
