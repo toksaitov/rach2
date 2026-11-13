@@ -1160,6 +1160,8 @@ mac_run()
     (
         eval "$(environment mac)"
         unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN
+        # The Mac's disk works down to 5 GiB, as AGENTS.md says; 40 is WSL's.
+        export RACH2_MIN_FREE_GIB="${RACH2_MIN_FREE_GIB:-10}"
         export ETUDE_RUN_DIR="$rdir" TMPDIR="$rdir/tmp"
         cd "$tree" && git checkout -q -f --detach "$sha" && mkdir -p "$TMPDIR" &&
             make build/tools/etude/etude build/tools/etude/etude-volume &&
