@@ -521,7 +521,7 @@ static volatile int pair_last[2];  /* each sleeper's processor last round */
 static volatile int pair_stop;
 static uint64_t *pair_run[2];           /* each round's wake-to-run, by sleeper */
 static int *pair_cpu[2];                /* each round's processor, by sleeper */
-static volatile int hot[4];             /* the futex a spinner sleeps on while 0 */
+static volatile int hot[4];             /* a spinner sleeps on it while 0; -1 ends it */
 static volatile int hot_running[4];     /* set by a spinner that runs */
 static int hot_index[4] = {0, 1, 2, 3}; /* each spinner's argument */
 
@@ -706,6 +706,8 @@ static void pair_row(void)
     }
     pair_stop = 1;
     for (c = 1; c < 4; c++) {
+        /* A spinner that read the old stop flag then waits on 0 and fails. */
+        __atomic_store_n(&hot[c], -1, __ATOMIC_SEQ_CST);
         futex(&hot[c], FUTEX_WAKE_PRIVATE, 1);
         pthread_join(spinners[c - 1], NULL);
     }
