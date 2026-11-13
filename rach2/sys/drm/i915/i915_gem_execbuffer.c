@@ -1510,6 +1510,9 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
     if (err == 0) {
         err = err2;
     }
+    /* The caller retires its own engine, so that the worker's pass, which
+     * only tries the GEM lock, need not. */
+    i915_request_retire_engine(rq);
     eb_signal_fences(eb, rq);
     i915_request_put(rq);
     return err;

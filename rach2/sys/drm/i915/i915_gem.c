@@ -1688,6 +1688,19 @@ int i915_gem_lock(struct drm_i915_private *i915)
     return 1;
 }
 
+int i915_gem_trylock(struct drm_i915_private *i915, int *taken)
+{
+    *taken = 0;
+    if (mutex_held(&i915->gem.lock)) {
+        return 1;
+    }
+    if (!mutex_trylock(&i915->gem.lock)) {
+        return 0;
+    }
+    *taken = 1;
+    return 1;
+}
+
 /**
  * Let go of the GEM lock, which the caller holds, after the invalidations
  * that found it held, and look once more after: an invalidation that came
