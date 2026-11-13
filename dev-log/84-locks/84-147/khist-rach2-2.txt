@@ -1,0 +1,86 @@
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) && comm ~ "T63*" [active]
+#
+
+{ common_pid:      14969, ecx:       1760 } hitcount:         34
+{ common_pid:      14969, ecx:       2059 } hitcount:          4
+{ common_pid:      14970, ecx:       1760 } hitcount:         10
+{ common_pid:      14971, ecx:       1760 } hitcount:          2
+{ common_pid:      14972, ecx:       1760 } hitcount:          2
+
+Totals:
+    Hits: 52
+    Entries: 5
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) && comm ~ "T63*" [active]
+#
+
+{ common_pid:      14969, ecx:       2059 } hitcount:          2
+{ common_pid:      14969, ecx:       1760 } hitcount:         22
+{ common_pid:      14970, ecx:       1760 } hitcount:          2
+
+Totals:
+    Hits: 26
+    Entries: 3
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) && comm ~ "T63*" [active]
+#
+
+{ common_pid:      14969, ecx:       2059 } hitcount:        436
+{ common_pid:      14969, ecx:       1760 } hitcount:       2136
+{ common_pid:      14970, ecx:       1760 } hitcount:       2330
+{ common_pid:      14970, ecx:       2059 } hitcount:        117
+{ common_pid:      14971, ecx:       1760 } hitcount:         57
+{ common_pid:      14972, ecx:       1760 } hitcount:         11
+
+Totals:
+    Hits: 5087
+    Entries: 6
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) && comm ~ "T63*" [active]
+#
+
+{ common_pid:      14969, ecx:       2059 } hitcount:          2
+{ common_pid:      14969, ecx:       1760 } hitcount:         32
+{ common_pid:      14970, ecx:       1760 } hitcount:         21
+
+Totals:
+    Hits: 55
+    Entries: 3
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) && comm ~ "T63*" [active]
+#
+
+{ common_pid:      14969, ecx:       2059 } hitcount:          9
+{ common_pid:      14969, ecx:       1760 } hitcount:        177
+{ common_pid:      14970, ecx:       1760 } hitcount:        180
+{ common_pid:      14970, ecx:       2059 } hitcount:          7
+{ common_pid:      14971, ecx:       2059 } hitcount:          1
+{ common_pid:      14971, ecx:       1760 } hitcount:         37
+
+Totals:
+    Hits: 411
+    Entries: 6
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) && comm ~ "T63*" [active]
+#
+
+{ common_pid:      14969, ecx:       2059 } hitcount:          2
+{ common_pid:      14969, ecx:       1760 } hitcount:         34
+{ common_pid:      14970, ecx:       1760 } hitcount:          4
+
+Totals:
+    Hits: 40
+    Entries: 3
+    Dropped: 0

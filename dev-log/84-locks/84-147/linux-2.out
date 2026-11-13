@@ -1,0 +1,155 @@
+mounted
+
+booted linux none
+== sleep 2  2.14 s
+__END__0
+   exits=2591 halt_exits=468 io_exits=0 mmio_exits=726 irq_exits=60 irq_window_exits=45 request_irq_exits=0 nmi_window_exits=0 insn_emulation=750 hypercalls=0 irq_injections=532 halt_successful_poll=61 halt_wakeup=403 req_event=737 unnamed=1292
+   host eoi writes 17 2 4 11; tsc deadline writes 400 98 108 61 133
+== cat /proc/interrupts  0.13 s
+CPU0       CPU1       CPU2       CPU3       
+  0:         37          0          0          0   IO-APIC   2-edge      timer
+  1:          0          0          0          9   IO-APIC   1-edge      i8042
+  4:          0        365          0          0   IO-APIC   4-edge      ttyS0
+  8:          1          0          0          0   IO-APIC   8-edge      rtc0
+  9:          0          0          0          0   IO-APIC   9-fasteoi   acpi
+ 12:          0          0         15          0   IO-APIC  12-edge      i8042
+ 16:          0          0          0          0   IO-APIC  16-fasteoi   i801_smbus
+ 24:          0          0          0          0  PCI-MSIX-0000:00:01.0   0-edge      virtio0-config
+ 25:        656          0          0          0  PCI-MSIX-0000:00:01.0   1-edge      virtio0-req.0
+ 26:          0        381          0          0  PCI-MSIX-0000:00:01.0   2-edge      virtio0-req.1
+ 27:          0          0        956          0  PCI-MSIX-0000:00:01.0   3-edge      virtio0-req.2
+ 28:          0          0          0        867  PCI-MSIX-0000:00:01.0   4-edge      virtio0-req.3
+ 29:          0          0          0          0  PCI-MSIX-0000:00:04.0   0-edge      virtio3-config
+ 30:          0         85          0          0  PCI-MSIX-0000:00:04.0   1-edge      virtio3-input.0
+ 31:          0          0         97          0  PCI-MSIX-0000:00:04.0   2-edge      virtio3-output.0
+ 32:          0          0          0        485  PCI-MSI-0000:00:1f.2   0-edge      ahci[0000:00:1f.2]
+ 33:          0          0          0          0  PCI-MSIX-0000:00:03.0   0-edge      virtio2-config
+ 34:          0          6          0          0  PCI-MSIX-0000:00:03.0   1-edge      virtio2-input
+ 35:          0          0          0          0  PCI-MSIX-0000:00:02.0   0-edge      virtio1-config
+ 36:          0          0          0         84  PCI-MSIX-0000:00:02.0   1-edge      virtio1-control
+ 37:          0          0          0          0  PCI-MSIX-0000:00:02.0   2-edge      virtio1-cursor
+NMI:          0          0          0          0   Non-maskable interrupts
+LOC:       1252       1249       1224       1365   Local timer interrupts
+SPU:          0          0          0          0   Spurious interrupts
+PMI:          0          0          0          0   Performance monitoring interrupts
+IWI:          0          0          1          1   IRQ work interrupts
+RTR:          0          0          0          0   APIC ICR read retries
+RES:        367        238        222        263   Rescheduling interrupts
+CAL:       7390       6324       9590       8691   Function call interrupts
+TLB:          2         11          6          6   TLB shootdowns
+TRM:          0          0          0          0   Thermal event interrupts
+THR:          0          0          0          0   Threshold APIC interrupts
+DFR:          0          0          0          0   Deferred Error APIC interrupts
+MCE:          0          0          0          0   Machine check exceptions
+MCP:          1          1          1          1   Machine check polls
+HYP:          1          1          1          1   Hypervisor callback interrupts
+ERR:          0
+MIS:          0
+PIN:          0          0          0          0   Posted-interrupt notification event
+NPI:          0          0          0          0   Nested posted-interrupt event
+PIW:          0          0          0          0   Posted-interrupt wakeup event
+__END__0
+   exits=1512 halt_exits=333 io_exits=0 mmio_exits=25 irq_exits=39 irq_window_exits=19 request_irq_exits=0 nmi_window_exits=0 insn_emulation=41 hypercalls=0 irq_injections=370 halt_successful_poll=14 halt_wakeup=317 req_event=439 unnamed=1096
+   host eoi writes 9 6 3; tsc deadline writes 126 33 25 28 40
+== tar cf - /opt/proton | cat > /dev/null  5.71 s
+tar: Removing leading `/' from member names
+__END__0
+   exits=322039 halt_exits=74158 io_exits=1 mmio_exits=181231 irq_exits=3019 irq_window_exits=3162 request_irq_exits=0 nmi_window_exits=0 insn_emulation=181252 hypercalls=1 irq_injections=78226 halt_successful_poll=49039 halt_wakeup=22434 req_event=125517 unnamed=60467
+   host eoi writes 904 214 75 260 355; tsc deadline writes 5973 2535 657 2336 445
+== cat /proc/interrupts  0.13 s
+CPU0       CPU1       CPU2       CPU3       
+  0:         37          0          0          0   IO-APIC   2-edge      timer
+  1:          0          0          0          9   IO-APIC   1-edge      i8042
+  4:          0        365          0          0   IO-APIC   4-edge      ttyS0
+  8:          1          0          0          0   IO-APIC   8-edge      rtc0
+  9:          0          0          0          0   IO-APIC   9-fasteoi   acpi
+ 12:          0          0         15          0   IO-APIC  12-edge      i8042
+ 16:          0          0          0          0   IO-APIC  16-fasteoi   i801_smbus
+ 24:          0          0          0          0  PCI-MSIX-0000:00:01.0   0-edge      virtio0-config
+ 25:        656          0          0          0  PCI-MSIX-0000:00:01.0   1-edge      virtio0-req.0
+ 26:          0        381          0          0  PCI-MSIX-0000:00:01.0   2-edge      virtio0-req.1
+ 27:          0          0        956          0  PCI-MSIX-0000:00:01.0   3-edge      virtio0-req.2
+ 28:          0          0          0        871  PCI-MSIX-0000:00:01.0   4-edge      virtio0-req.3
+ 29:          0          0          0          0  PCI-MSIX-0000:00:04.0   0-edge      virtio3-config
+ 30:          0        128          0          0  PCI-MSIX-0000:00:04.0   1-edge      virtio3-input.0
+ 31:          0          0        133          0  PCI-MSIX-0000:00:04.0   2-edge      virtio3-output.0
+ 32:          0          0          0      26829  PCI-MSI-0000:00:1f.2   0-edge      ahci[0000:00:1f.2]
+ 33:          0          0          0          0  PCI-MSIX-0000:00:03.0   0-edge      virtio2-config
+ 34:          0          8          0          0  PCI-MSIX-0000:00:03.0   1-edge      virtio2-input
+ 35:          0          0          0          0  PCI-MSIX-0000:00:02.0   0-edge      virtio1-config
+ 36:          0          0          0        115  PCI-MSIX-0000:00:02.0   1-edge      virtio1-control
+ 37:          0          0          0          0  PCI-MSIX-0000:00:02.0   2-edge      virtio1-cursor
+NMI:          0          0          0          0   Non-maskable interrupts
+LOC:       2670       1718       2432       1661   Local timer interrupts
+SPU:          0          0          0          0   Spurious interrupts
+PMI:          0          0          0          0   Performance monitoring interrupts
+IWI:          0          0          1          1   IRQ work interrupts
+RTR:          0          0          0          0   APIC ICR read retries
+RES:        374        248        230        270   Rescheduling interrupts
+CAL:      30452      11762      29013       9470   Function call interrupts
+TLB:          2         13          6          7   TLB shootdowns
+TRM:          0          0          0          0   Thermal event interrupts
+THR:          0          0          0          0   Threshold APIC interrupts
+DFR:          0          0          0          0   Deferred Error APIC interrupts
+MCE:          0          0          0          0   Machine check exceptions
+MCP:          1          1          1          1   Machine check polls
+HYP:          1          1          1          1   Hypervisor callback interrupts
+ERR:          0
+MIS:          0
+PIN:          0          0          0          0   Posted-interrupt notification event
+NPI:          0          0          0          0   Nested posted-interrupt event
+PIW:          0          0          0          0   Posted-interrupt wakeup event
+__END__0
+   exits=1508 halt_exits=337 io_exits=0 mmio_exits=2 irq_exits=42 irq_window_exits=21 request_irq_exits=0 nmi_window_exits=0 insn_emulation=18 hypercalls=0 irq_injections=376 halt_successful_poll=23 halt_wakeup=313 req_event=445 unnamed=1106
+   host eoi writes 5 3 2; tsc deadline writes 115 22 27 30 36
+== tar cf - /opt/proton | cat > /dev/null  0.86 s
+tar: Removing leading `/' from member names
+__END__0
+   exits=110736 halt_exits=54054 io_exits=0 mmio_exits=12 irq_exits=841 irq_window_exits=238 request_irq_exits=0 nmi_window_exits=0 insn_emulation=29 hypercalls=0 irq_injections=54475 halt_successful_poll=47364 halt_wakeup=509 req_event=55279 unnamed=55591
+   host eoi writes 286 10 19 230 27; tsc deadline writes 649 226 112 221 90
+== cat /proc/interrupts  0.13 s
+CPU0       CPU1       CPU2       CPU3       
+  0:         37          0          0          0   IO-APIC   2-edge      timer
+  1:          0          0          0          9   IO-APIC   1-edge      i8042
+  4:          0        365          0          0   IO-APIC   4-edge      ttyS0
+  8:          1          0          0          0   IO-APIC   8-edge      rtc0
+  9:          0          0          0          0   IO-APIC   9-fasteoi   acpi
+ 12:          0          0         15          0   IO-APIC  12-edge      i8042
+ 16:          0          0          0          0   IO-APIC  16-fasteoi   i801_smbus
+ 24:          0          0          0          0  PCI-MSIX-0000:00:01.0   0-edge      virtio0-config
+ 25:        656          0          0          0  PCI-MSIX-0000:00:01.0   1-edge      virtio0-req.0
+ 26:          0        381          0          0  PCI-MSIX-0000:00:01.0   2-edge      virtio0-req.1
+ 27:          0          0        956          0  PCI-MSIX-0000:00:01.0   3-edge      virtio0-req.2
+ 28:          0          0          0        871  PCI-MSIX-0000:00:01.0   4-edge      virtio0-req.3
+ 29:          0          0          0          0  PCI-MSIX-0000:00:04.0   0-edge      virtio3-config
+ 30:          0        175          0          0  PCI-MSIX-0000:00:04.0   1-edge      virtio3-input.0
+ 31:          0          0        173          0  PCI-MSIX-0000:00:04.0   2-edge      virtio3-output.0
+ 32:          0          0          0      26830  PCI-MSI-0000:00:1f.2   0-edge      ahci[0000:00:1f.2]
+ 33:          0          0          0          0  PCI-MSIX-0000:00:03.0   0-edge      virtio2-config
+ 34:          0          8          0          0  PCI-MSIX-0000:00:03.0   1-edge      virtio2-input
+ 35:          0          0          0          0  PCI-MSIX-0000:00:02.0   0-edge      virtio1-config
+ 36:          0          0          0        122  PCI-MSIX-0000:00:02.0   1-edge      virtio1-control
+ 37:          0          0          0          0  PCI-MSIX-0000:00:02.0   2-edge      virtio1-cursor
+NMI:          0          0          0          0   Non-maskable interrupts
+LOC:       2943       1864       2681       1774   Local timer interrupts
+SPU:          0          0          0          0   Spurious interrupts
+PMI:          0          0          0          0   Performance monitoring interrupts
+IWI:          0          0          1          1   IRQ work interrupts
+RTR:          0          0          0          0   APIC ICR read retries
+RES:        380        254        239        280   Rescheduling interrupts
+CAL:      30808      11943      73189      18709   Function call interrupts
+TLB:          2         13          7          7   TLB shootdowns
+TRM:          0          0          0          0   Thermal event interrupts
+THR:          0          0          0          0   Threshold APIC interrupts
+DFR:          0          0          0          0   Deferred Error APIC interrupts
+MCE:          0          0          0          0   Machine check exceptions
+MCP:          1          1          1          1   Machine check polls
+HYP:          1          1          1          1   Hypervisor callback interrupts
+ERR:          0
+MIS:          0
+PIN:          0          0          0          0   Posted-interrupt notification event
+NPI:          0          0          0          0   Nested posted-interrupt event
+PIW:          0          0          0          0   Posted-interrupt wakeup event
+__END__0
+   exits=1468 halt_exits=321 io_exits=0 mmio_exits=2 irq_exits=44 irq_window_exits=19 request_irq_exits=0 nmi_window_exits=0 insn_emulation=18 hypercalls=0 irq_injections=356 halt_successful_poll=24 halt_wakeup=291 req_event=419 unnamed=1082
+   host eoi writes 3 1 1 1; tsc deadline writes 132 39 29 31 33
