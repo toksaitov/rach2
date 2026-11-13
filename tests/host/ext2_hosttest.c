@@ -5838,6 +5838,54 @@ static void deep_row(const char *img)
           "and its unmount leaves the valid bit clear for the next mount to check");
 }
 
+/* The inode table's block that `structural_image` freed, and the block
+ * bitmap of its group. */
+static long structural_last, structural_bitmap;
+
+/**
+ * Make the dirty tree volume `img` with the bit of the inode table's last
+ * block clear, as a damaged bitmap has it, that block's bytes into `was`.
+ * Returns the image's size, or 0 with a failed row.
+ */
+static uint64_t structural_image(const char *img, unsigned char *was)
+{
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    unsigned char b[12];
+    char script[64];
+    long table, per, last, bitmap;
+
+    per = debugfs_number(img, "stats", "Inode blocks per group:");
+    if (host_read(img, b, 12, 4096) != 12 || per <= 0) {
+        check(0, "the descriptor and the table's size for the structural-block row");
+        return 0;
+    }
+    bitmap = b[0] | (b[1] << 8) | (b[2] << 16) | ((long)b[3] << 24);
+    table = b[8] | (b[9] << 8) | (b[10] << 16) | ((long)b[11] << 24);
+    last = table + per - 1;
+    snprintf(script, sizeof(script), "freeb %ld\n", last);
+    bytes = dirty_image(img, script);
+    if (host_read(img, was, 4096, last * 4096) != 4096 ||
+        (image_byte(img, bitmap * 4096 + last / 8) >> (last % 8) & 1) != 0) {
+        check(0, "the inode table's last block reads with its bit clear");
+        return 0;
+    }
+    structural_last = last;
+    structural_bitmap = bitmap;
+    return bytes;
+}
+
+/** Whether the inode table's block that `structural_image` freed is as it
+ * was in `was` on `img`, its bit set again. */
+static int structural_kept(const char *img, const unsigned char *was)
+{
+    static unsigned char now[4096];
+    long last = structural_last;
+    int bit = (int)image_byte(img, structural_bitmap * 4096 + last / 8);
+
+    return host_read(img, now, sizeof(now), last * 4096) == (long)sizeof(now) &&
+           memcmp(was, now, sizeof(now)) == 0 && (bit >> (last % 8) & 1) == 1;
+}
+
 /**
  * Clear the bit of the inode table's last block on a dirty volume, as a
  * damaged bitmap has it: the check names the fault and the volume mounts
@@ -5850,26 +5898,11 @@ static void deep_row(const char *img)
  */
 static void structural_alloc_row(const char *img)
 {
-    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    static unsigned char was[4096], now[4096];
-    unsigned char b[12];
-    char script[64];
-    long table, bitmap, per, last;
-    int rc, bit;
+    static unsigned char was[4096];
+    uint64_t bytes = structural_image(img, was);
+    int rc;
 
-    per = debugfs_number(img, "stats", "Inode blocks per group:");
-    if (host_read(img, b, 12, 4096) != 12 || per <= 0) {
-        check(0, "the descriptor and the table's size for the structural-block row");
-        return;
-    }
-    bitmap = b[0] | (b[1] << 8) | (b[2] << 16) | ((long)b[3] << 24);
-    table = b[8] | (b[9] << 8) | (b[10] << 16) | ((long)b[11] << 24);
-    last = table + per - 1;
-    snprintf(script, sizeof(script), "freeb %ld\n", last);
-    bytes = dirty_image(img, script);
-    if (host_read(img, was, sizeof(was), last * 4096) != (long)sizeof(was) ||
-        (image_byte(img, bitmap * 4096 + last / 8) >> (last % 8) & 1) != 0) {
-        check(0, "the inode table's last block reads with its bit clear");
+    if (bytes == 0) {
         return;
     }
     use_image(img, bytes);
@@ -5886,10 +5919,46 @@ static void structural_alloc_row(const char *img)
     check(rc == 0 && strstr(last_warn, "is free in its bitmap but holds the volume's tables") != 0,
           "a mkdir there refuses the inode table's block by name and takes another");
     check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
-    bit = (int)image_byte(img, bitmap * 4096 + last / 8);
-    check(host_read(img, now, sizeof(now), last * 4096) == (long)sizeof(now) &&
-              memcmp(was, now, sizeof(now)) == 0 && (bit >> (last % 8) & 1) == 1,
-          "and the table's block is as it was, its bit set again");
+    check(structural_kept(img, was), "and the table's block is as it was, its bit set again");
+}
+
+/**
+ * The volume of `structural_alloc_row` under `errors=remount-ro`: the
+ * refusal of the inode table's block makes the mount read-only, as Linux's
+ * `ext2_error` sets SB_RDONLY, and the driver stops writing in the same
+ * step, so the mkdir that met it writes nothing more and fails with EROFS
+ * and names no directory. A remount writable after it must check the
+ * volume again and open it, so that a mkdir then succeeds; the table's
+ * block stays as it was and the error bit through the unmount.
+ */
+static void structural_policy_row(const char *img)
+{
+    static unsigned char was[4096];
+    uint64_t bytes = structural_image(img, was);
+    int rc, err = 0;
+
+    if (bytes == 0) {
+        return;
+    }
+    use_image(img, bytes);
+    rc = mount_options(rw_flags, "errors=remount-ro");
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0,
+          "the volume with a free inode-table block mounts writable under errors=remount-ro");
+    if (rc != 0) {
+        return;
+    }
+    rc = OPS->mkdir(&mnt, mnt.root, "grown", 0755);
+    check(rc == -EROFS && (mnt.flags & VFS_MS_RDONLY) != 0 && walk("/grown", &err) == 0 &&
+              err == -ENOENT,
+          "a mkdir that meets the block there stops at the read-only mount, EROFS, unnamed");
+    last_check[0] = 0;
+    rc = OPS->remount(&mnt, rw_flags, NULL);
+    check(rc == 0 && last_check[0] != 0, "and a remount writable after it checks the volume");
+    mnt.flags = rw_flags;
+    check(rc == 0 && OPS->mkdir(&mnt, mnt.root, "grown", 0755) == 0,
+          "and makes the mount write again");
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+    check(structural_kept(img, was), "and the table's block is as it was, its bit set again");
 }
 
 static void dirty_rows(void)
@@ -6016,6 +6085,7 @@ static void dirty_rows(void)
         check(0, "the root's block for the entry-form row");
     }
     structural_alloc_row(img);
+    structural_policy_row(img);
 
     bytes = dirty_image(img, "setb 4000\n");
     snapshot(img, bytes);
@@ -6030,6 +6100,8 @@ static void dirty_rows(void)
 static void sync_remount_row(void);
 static void fault_remount_row(void);
 static void error_policy_rows(void);
+static void remount_policy_row(void);
+static void extra_isize_row(void);
 
 /**
  * Mount a clean volume read-only, read a file and a deep path on it, sync
@@ -6095,6 +6167,8 @@ static void readonly_rows(void)
     sync_remount_row();
     fault_remount_row();
     error_policy_rows();
+    remount_policy_row();
+    extra_isize_row();
 }
 
 /* The result of process B's sync in `sync_remount_row`. */
@@ -6274,6 +6348,93 @@ static void error_policy_rows(void)
     if (rc == 0) {
         unmount_rw();
     }
+}
+
+/* The result of process B's remount in `remount_policy_row`. */
+static int race_remount_rc;
+
+/** Process B of `remount_policy_row`: a remount read-only with no
+ * `errors=`. */
+static void race_remount(void)
+{
+    race_remount_rc = OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY, NULL);
+}
+
+/**
+ * Two remounts read-only, as Linux orders them by `s_umount`: the first,
+ * with `errors=remount-ro` on a volume of s_errors 1, continue, gives the
+ * turn at its write of the superblock to a second without `errors=`, which
+ * must wait at the closed gate and leave the policy the first set, as
+ * Linux's `ext2_remount` starts from the options in force. After a remount
+ * writable, a fault must make the mount read-only by name.
+ */
+static void remount_policy_row(void)
+{
+    const char *img = fix_path("policy.ext2");
+    uint64_t bytes = policy_image(img, 1);
+    int rc;
+
+    if (bytes == 0) {
+        return;
+    }
+    use_image(img, bytes);
+    rc = mount_rw();
+    check(rc == 0, "the policy volume mounts writable for two remounts");
+    if (rc != 0) {
+        return;
+    }
+    race_remount_rc = -1;
+    write_pause = race_super_turn;
+    start_turns(race_remount);
+    rc = OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY, "errors=remount-ro");
+    finish_turns();
+    write_pause = 0;
+    check(rc == 0 && race_remount_rc == 0 && second_wait && streq(second_wait, "ext2 node state"),
+          "a remount without errors= beside one with errors=remount-ro waits at its gate");
+    mnt.flags = rw_flags | VFS_MS_RDONLY;
+    rc = OPS->remount(&mnt, rw_flags, NULL);
+    mnt.flags = rw_flags;
+    check(rc == 0 && policy_fault() && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+              streq(last_log, "error: remounting read-only"),
+          "and keeps errors=remount-ro: a fault after a remount writable makes the mount "
+          "read-only by name");
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+}
+
+/**
+ * A file whose inode, of 256 bytes, has an `i_extra_isize` of 6, not a
+ * multiple of 4, as only damage writes it, on a mount under
+ * `errors=remount-ro`: its lookup must fail with EIO and the driver's record
+ * of the inode, and report the fault as Linux's `ext2_get_inode` and ext4's
+ * `__ext4_iget` report one to `ext2_error`, so that the error bit is on the
+ * disk at once, the mount read-only by name, and the bit kept by the
+ * unmount.
+ */
+static void extra_isize_row(void)
+{
+    const char *img = fix_path("isize.ext2");
+    uint64_t bytes = build_image(img, 4096, 256, PROFILE, 16, "tree");
+    int rc, err = 0;
+
+    if (!debugfs_script(img, "sif /hello.txt extra_isize 6\n")) {
+        check(0, "debugfs gives /hello.txt an extra size of 6");
+        return;
+    }
+    use_image(img, bytes);
+    rc = mount_options(rw_flags, "errors=remount-ro");
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0,
+          "a volume with a damaged extra size mounts writable");
+    if (rc != 0) {
+        return;
+    }
+    last_warn[0] = 0;
+    check(walk("/hello.txt", &err) == 0 && err == -EIO &&
+              strstr(last_warn, ": extra size 6 does not fit its 256 bytes") != 0,
+          "a lookup of the damaged inode fails with EIO and the driver's record");
+    check((mnt.flags & VFS_MS_RDONLY) != 0 && streq(last_log, "error: remounting read-only") &&
+              disk_state(img) == 2,
+          "and reports it: the error bit on the disk and the mount read-only by name");
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
 }
 
 /* The result of process B's lookup in `fault_remount_row`. */
