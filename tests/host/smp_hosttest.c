@@ -936,6 +936,10 @@ int main(void)
     }
     check(!cpu_table[1].online && cpu_table[1].admit == CPU_REFUSED && cpus_online == 1,
           "and one that comes after the wait stops, neither online nor counted");
+    /* The big lock's tallies the boot gave processor 1, which the kernel
+     * keeps for good; the rows below set their own in its place. */
+    kfree(bkl_tally[1]);
+    bkl_tally[1] = NULL;
 
     row_sample_stack();
     row_bkl_counts();
