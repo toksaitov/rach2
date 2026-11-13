@@ -1,0 +1,333 @@
+booted rach2 ./kernel-diag
+vcpu threads [(4172321, 0), (4172322, 1), (4172323, 2), (4172324, 3)]
+== sleep 2  2.00 s
+[?2004h
+<7>[6.266000] virtio_gpu: worker: pid 59
+<6>[6.267000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4807 halt_exits=2219 io_exits=106 mmio_exits=0 irq_exits=8 irq_window_exits=5 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2226 halt_successful_poll=0 halt_wakeup=2220 req_event=4460 unnamed=2469
+   host eoi writes 0 0 0 0 0; tsc deadline writes 0 0 0 0 0
+== cat /sys/kernel/debug/exits  0.15 s
+[?2004h[?2004l
+in 0x3fd 1223 842 55 243 83
+out 0x3f8 1024 643 55 243 83
+eoipv 0x0 14008 11639 1159 643 567
+wrmsr 0xc0000100 9786 5517 2183 1173 913
+wrmsr 0xc0000102 9736 5493 2165 1166 912
+rdmsr 0xc0000100 9740 5505 2159 1167 909
+rdmsr 0xc0000102 9749 5511 2161 1167 910
+hlt 0 13076 11081 1072 578 345
+rdmsr 0x821 271 185 42 30 14
+rdmsr 0x811 267 184 41 29 13
+rdmsr 0x822 267 184 41 29 13
+rdmsr 0x812 267 184 41 29 13
+rdmsr 0x823 267 184 41 29 13
+rdmsr 0x813 267 184 41 29 13
+rdmsr 0x824 267 184 41 29 13
+rdmsr 0x814 267 184 41 29 13
+rdmsr 0x825 267 184 41 29 13
+rdmsr 0x815 267 184 41 29 13
+rdmsr 0x826 267 184 41 29 13
+rdmsr 0x816 267 184 41 29 13
+rdmsr 0x827 267 184 41 29 13
+rdmsr 0x817 267 184 41 29 13
+eoiwait 0x2031 37 37 0 0 0
+eoiunset 0x31 74 74 0 0 0
+wrmsr 0x80b 275 192 41 29 13
+wrmsr 0x830 1486 1102 213 143 28
+eoiwait 0x31 14 14 0 0 0
+out 0x3d4 80 36 26 18 0
+out 0x3d5 80 36 26 18 0
+out 0xc028 7 4 3 0 0
+out 0xc018 7 4 3 0 0
+eoiwait 0x2002b 10 10 0 0 0
+in 0xc03e 58 58 0 0 0
+out 0xc03e 30 30 0 0 0
+eoiunset 0x2b 28 28 0 0 0
+rdmsr 0x839 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 37 13 16 7 1
+wrmsr 0x838 9655 8620 406 292 337
+vmcall 0xa 125 54 25 25 21
+eoiwait 0x22031 16 16 0 0 0
+out 0xc02c 7 5 2 0 0
+out 0xc01c 7 5 2 0 0
+in 0xc03a 14 14 0 0 0
+in 0xc037 31 31 0 0 0
+out 0xc020 6 5 1 0 0
+out 0xc010 6 5 1 0 0
+out 0xc038 17 17 0 0 0
+out 0xc024 6 5 1 0 0
+out 0xc014 6 5 1 0 0
+in 0x3f8 169 169 0 0 0
+eoitaken 0x24 4 4 0 0 0
+eoiwait 0xf031 1 1 0 0 0
+eoiwait 0x3120 9 9 0 0 0
+eoiunset 0x20 73 68 3 1 1
+eoiwait 0x20f0 73 3 33 26 11
+eoiunset 0xf0 86 8 38 28 12
+eoiwait 0x31f0 3 3 0 0 0
+eoiwait 0x2b 16 16 0 0 0
+eoiwait 0x24f0 1 1 0 0 0
+eoiwait 0x2024 2 2 0 0 0
+eoiunset 0x24 6 6 0 0 0
+eoiwait 0x22431 1 1 0 0 0
+eoiwait 0x22024 4 4 0 0 0
+eoiwait 0x23120 1 1 0 0 0
+eoitaken 0x31 3 3 0 0 0
+eoiwait 0x202b 1 1 0 0 0
+eoiwait 0x10031 2 2 0 0 0
+eoiwait 0x20 52 52 0 0 0
+in 0xc058 7 4 2 1 0
+in 0xc062 7 4 2 1 0
+eoiwait 0x12031 2 2 0 0 0
+eoiwait 0x20031 1 1 0 0 0
+out 0xcf8 1700 1281 0 402 17
+in 0xcfc 1700 1281 0 402 17
+eoiwait 0xf0 7 1 4 1 1
+eoiwait 0x20020 5 5 0 0 0
+eoiwait 0x1002b 1 1 0 0 0
+eoiwait 0x10020 1 1 0 0 0
+eoitaken 0x20 1 1 0 0 0
+out 0x3fa 2 0 2 0 0
+eoiwait 0xf020 5 0 3 1 1
+eoiwait 0x30f0 1 0 1 0 0
+out 0x70 10 0 10 0 0
+in 0x71 1 0 1 0 0
+out 0x71 9 0 9 0 0
+eoiwait 0xf0f0 1 0 0 1 0
+ipi kick 1754 1218 267 197 72
+ipi tlb 0 0 0 0 0
+ipi kernel_tlb 12 6 3 3 0
+ipi barrier 0 0 0 0 0
+ipi space 8 5 1 1 1
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=17075 halt_exits=270 io_exits=5655 mmio_exits=0 irq_exits=154 irq_window_exits=57 request_irq_exits=0 nmi_window_exits=0 insn_emulation=10124 hypercalls=0 irq_injections=423 halt_successful_poll=0 halt_wakeup=271 req_event=928 unnamed=10939
+   host eoi writes 0 0 0 0 0; tsc deadline writes 0 0 0 0 0
+== tar cf - /opt/proton | cat > /dev/null  4.43 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+<6>[14.523000] block: request pool: waiting for a slot: the device holds its share
+__END__0
+   exits=348983 halt_exits=75526 io_exits=443 mmio_exits=154764 irq_exits=9651 irq_window_exits=8503 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155055 hypercalls=0 irq_injections=85792 halt_successful_poll=62631 halt_wakeup=8294 req_event=135918 unnamed=100096
+   host eoi writes 0 0 0 0 0; tsc deadline writes 0 0 0 0 0
+== cat /sys/kernel/debug/exits  0.19 s
+[?2004h[?2004l
+in 0x3fd 4067 3686 55 243 83
+out 0x3f8 3757 3376 55 243 83
+eoipv 0x0 97748 47557 46094 3433 664
+wrmsr 0xc0000100 154006 47110 98918 6820 1158
+wrmsr 0xc0000102 153953 47085 98898 6813 1157
+rdmsr 0xc0000100 153957 47099 98890 6814 1154
+rdmsr 0xc0000102 153966 47105 98892 6814 1155
+hlt 0 88805 39822 45233 3309 441
+rdmsr 0x821 2530 1579 837 99 15
+rdmsr 0x811 2526 1578 836 98 14
+rdmsr 0x822 2526 1578 836 98 14
+rdmsr 0x812 2526 1578 836 98 14
+rdmsr 0x823 2526 1578 836 98 14
+rdmsr 0x813 2526 1578 836 98 14
+rdmsr 0x824 2526 1578 836 98 14
+rdmsr 0x814 2526 1578 836 98 14
+rdmsr 0x825 2526 1578 836 98 14
+rdmsr 0x815 2526 1578 836 98 14
+rdmsr 0x826 2526 1578 836 98 14
+rdmsr 0x816 2526 1578 836 98 14
+rdmsr 0x827 2526 1578 836 98 14
+rdmsr 0x817 2526 1578 836 98 14
+eoiwait 0x2031 366 366 0 0 0
+eoiunset 0x31 847 847 0 0 0
+wrmsr 0x80b 2556 1605 839 98 14
+wrmsr 0x830 52215 44291 6834 1037 53
+eoiwait 0x31 136 136 0 0 0
+out 0x3d4 318 274 26 18 0
+out 0x3d5 318 274 26 18 0
+out 0xc028 7 4 3 0 0
+out 0xc018 7 4 3 0 0
+eoiwait 0x2002b 10 10 0 0 0
+in 0xc03e 58 58 0 0 0
+out 0xc03e 30 30 0 0 0
+eoiunset 0x2b 28 28 0 0 0
+rdmsr 0x839 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 418 15 395 7 1
+wrmsr 0x838 22731 13603 7938 827 363
+vmcall 0xa 125 54 25 25 21
+eoiwait 0x22031 258 258 0 0 0
+out 0xc02c 7 5 2 0 0
+out 0xc01c 7 5 2 0 0
+in 0xc03a 14 14 0 0 0
+in 0xc037 31 31 0 0 0
+out 0xc020 6 5 1 0 0
+out 0xc010 6 5 1 0 0
+out 0xc038 17 17 0 0 0
+out 0xc024 6 5 1 0 0
+out 0xc014 6 5 1 0 0
+in 0x3f8 268 268 0 0 0
+eoitaken 0x24 5 5 0 0 0
+eoiwait 0xf031 68 68 0 0 0
+eoiwait 0x3120 58 58 0 0 0
+eoiunset 0x20 241 168 68 4 1
+eoiwait 0x20f0 789 83 620 75 11
+eoiunset 0xf0 1401 526 768 94 13
+eoiwait 0x31f0 342 342 0 0 0
+eoiwait 0x2b 16 16 0 0 0
+eoiwait 0x24f0 1 1 0 0 0
+eoiwait 0x2024 3 3 0 0 0
+eoiunset 0x24 9 9 0 0 0
+eoiwait 0x22431 1 1 0 0 0
+eoiwait 0x22024 6 6 0 0 0
+eoiwait 0x23120 24 24 0 0 0
+eoitaken 0x31 10 10 0 0 0
+eoiwait 0x202b 1 1 0 0 0
+eoiwait 0x10031 2 2 0 0 0
+eoiwait 0x20 59 59 0 0 0
+in 0xc058 10 7 2 1 0
+in 0xc062 10 7 2 1 0
+eoiwait 0x12031 3 3 0 0 0
+eoiwait 0x20031 12 12 0 0 0
+out 0xcf8 1700 1281 0 402 17
+in 0xcfc 1700 1281 0 402 17
+eoiwait 0xf0 252 87 146 17 2
+eoiwait 0x20020 19 19 0 0 0
+eoiwait 0x1002b 1 1 0 0 0
+eoiwait 0x10020 1 1 0 0 0
+eoitaken 0x20 12 10 2 0 0
+eoiwait 0x220f0 10 10 0 0 0
+eoiwait 0xf020 79 6 68 4 1
+eoiwait 0x30f0 2 1 1 0 0
+eoiwait 0x3031 1 1 0 0 0
+eoiwait 0x231f0 1 1 0 0 0
+eoitaken 0xf0 3 2 1 0 0
+eoiwait 0x13120 1 1 0 0 0
+eoiwait 0xf0f0 4 1 1 2 0
+out 0x3fa 2 0 2 0 0
+out 0x70 10 0 10 0 0
+in 0x71 1 0 1 0 0
+out 0x71 9 0 9 0 0
+ipi kick 52480 44404 6888 1091 97
+ipi tlb 1 1 0 0 0
+ipi kernel_tlb 12 6 3 3 0
+ipi barrier 0 0 0 0 0
+ipi space 10 7 1 1 1
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=22125 halt_exits=242 io_exits=6223 mmio_exits=1920 irq_exits=283 irq_window_exits=81 request_irq_exits=0 nmi_window_exits=0 insn_emulation=14624 hypercalls=0 irq_injections=408 halt_successful_poll=1 halt_wakeup=231 req_event=924 unnamed=13376
+   host eoi writes 0 0 0 0 0; tsc deadline writes 0 0 0 0 0
+== tar cf - /opt/proton | cat > /dev/null  1.01 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=163928 halt_exits=72477 io_exits=271 mmio_exits=0 irq_exits=2626 irq_window_exits=1251 request_irq_exits=0 nmi_window_exits=0 insn_emulation=291 hypercalls=0 irq_injections=74309 halt_successful_poll=66697 halt_wakeup=2181 req_event=79352 unnamed=87303
+   host eoi writes 0 0 0 0 0; tsc deadline writes 0 0 0 0 0
+== cat /sys/kernel/debug/exits  0.19 s
+[?2004h[?2004l
+in 0x3fd 7097 3882 2889 243 83
+out 0x3f8 6676 3461 2889 243 83
+eoipv 0x0 171645 77426 77281 14718 2220
+wrmsr 0xc0000100 300362 105604 161497 29017 4244
+wrmsr 0xc0000102 300306 105577 161476 29010 4243
+rdmsr 0xc0000100 300310 105592 161467 29011 4240
+rdmsr 0xc0000102 300319 105598 161469 29011 4241
+hlt 0 161519 69257 75846 14431 1985
+rdmsr 0x821 3318 1960 1078 238 42
+rdmsr 0x811 3314 1959 1077 237 41
+rdmsr 0x822 3314 1959 1077 237 41
+rdmsr 0x812 3314 1959 1077 237 41
+rdmsr 0x823 3314 1959 1077 237 41
+rdmsr 0x813 3314 1959 1077 237 41
+rdmsr 0x824 3314 1959 1077 237 41
+rdmsr 0x814 3314 1959 1077 237 41
+rdmsr 0x825 3314 1959 1077 237 41
+rdmsr 0x815 3314 1959 1077 237 41
+rdmsr 0x826 3314 1959 1077 237 41
+rdmsr 0x816 3314 1959 1077 237 41
+rdmsr 0x827 3314 1959 1077 237 41
+rdmsr 0x817 3314 1959 1077 237 41
+eoiwait 0x2031 366 366 0 0 0
+eoiunset 0x31 847 847 0 0 0
+wrmsr 0x80b 3350 1991 1081 237 41
+wrmsr 0x830 123897 74773 32359 14367 2398
+eoiwait 0x31 136 136 0 0 0
+out 0x3d4 568 296 254 18 0
+out 0x3d5 568 296 254 18 0
+out 0xc028 7 4 3 0 0
+out 0xc018 7 4 3 0 0
+eoiwait 0x2002b 10 10 0 0 0
+in 0xc03e 58 58 0 0 0
+out 0xc03e 30 30 0 0 0
+eoiunset 0x2b 28 28 0 0 0
+rdmsr 0x839 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 418 15 395 7 1
+wrmsr 0x838 26464 15014 9428 1544 478
+vmcall 0xa 125 54 25 25 21
+eoiwait 0x22031 258 258 0 0 0
+out 0xc02c 7 5 2 0 0
+out 0xc01c 7 5 2 0 0
+in 0xc03a 14 14 0 0 0
+in 0xc037 31 31 0 0 0
+out 0xc020 6 5 1 0 0
+out 0xc010 6 5 1 0 0
+out 0xc038 17 17 0 0 0
+out 0xc024 6 5 1 0 0
+out 0xc014 6 5 1 0 0
+in 0x3f8 367 367 0 0 0
+eoitaken 0x24 7 7 0 0 0
+eoiwait 0xf031 68 68 0 0 0
+eoiwait 0x3120 58 58 0 0 0
+eoiunset 0x20 276 197 72 4 3
+eoiwait 0x20f0 1257 291 786 157 23
+eoiunset 0xf0 2152 876 1005 233 38
+eoiwait 0x31f0 342 342 0 0 0
+eoiwait 0x2b 16 16 0 0 0
+eoiwait 0x24f0 1 1 0 0 0
+eoiwait 0x2024 3 3 0 0 0
+eoiunset 0x24 11 11 0 0 0
+eoiwait 0x22431 1 1 0 0 0
+eoiwait 0x22024 8 8 0 0 0
+eoiwait 0x23120 24 24 0 0 0
+eoitaken 0x31 10 10 0 0 0
+eoiwait 0x202b 1 1 0 0 0
+eoiwait 0x10031 2 2 0 0 0
+eoiwait 0x20 74 73 0 0 1
+in 0xc058 10 7 2 1 0
+in 0xc062 10 7 2 1 0
+eoiwait 0x12031 3 3 0 0 0
+eoiwait 0x20031 12 12 0 0 0
+out 0xcf8 1700 1281 0 402 17
+in 0xcfc 1700 1281 0 402 17
+eoiwait 0xf0 535 229 217 74 15
+eoiwait 0x20020 27 26 0 0 1
+eoiwait 0x1002b 1 1 0 0 0
+eoiwait 0x10020 2 2 0 0 0
+eoitaken 0x20 13 11 2 0 0
+eoiwait 0x220f0 10 10 0 0 0
+eoiwait 0xf020 90 13 72 4 1
+eoiwait 0x30f0 2 1 1 0 0
+eoiwait 0x3031 1 1 0 0 0
+eoiwait 0x231f0 1 1 0 0 0
+eoitaken 0xf0 6 4 2 0 0
+eoiwait 0x13120 1 1 0 0 0
+eoiwait 0xf0f0 4 1 1 2 0
+out 0x3fa 2 0 2 0 0
+out 0x70 10 0 10 0 0
+in 0x71 1 0 1 0 0
+out 0x71 9 0 9 0 0
+ipi kick 124159 74883 32413 14421 2442
+ipi tlb 2 2 0 0 0
+ipi kernel_tlb 12 6 3 3 0
+ipi barrier 0 0 0 0 0
+ipi space 12 9 1 1 1
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=21862 halt_exits=190 io_exits=6370 mmio_exits=1920 irq_exits=118 irq_window_exits=70 request_irq_exits=0 nmi_window_exits=0 insn_emulation=14699 hypercalls=0 irq_injections=361 halt_successful_poll=0 halt_wakeup=191 req_event=817 unnamed=13194
+   host eoi writes 0 0 0 0 0; tsc deadline writes 0 0 0 0 0

@@ -1,0 +1,6 @@
+tar cf - /opt/proton > /dev/null
+tar cf - /opt/proton | cat > /dev/null
+tar cf - /opt/proton | /t/rcat
+tar cf - /opt/proton | cat > /dev/null
+tar cf - /opt/proton | /t/rcat
+strace -f -e trace=read,splice,copy_file_range,sendfile -o /tmp/st.txt cat /opt/proton/version < /opt/proton/version > /dev/null; head -5 /tmp/st.txt; which cat; cat --version | head -1

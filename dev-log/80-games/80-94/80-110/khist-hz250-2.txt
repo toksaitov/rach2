@@ -1,0 +1,71 @@
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      27579, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      27579, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      27579, ecx:       2059 } hitcount:        582
+{ common_pid:      27580, ecx:       2059 } hitcount:        272
+{ common_pid:      27581, ecx:       2059 } hitcount:         11
+
+Totals:
+    Hits: 865
+    Entries: 3
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      27579, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      27579, ecx:       2059 } hitcount:        130
+{ common_pid:      27580, ecx:       2059 } hitcount:         99
+{ common_pid:      27581, ecx:       2059 } hitcount:         25
+{ common_pid:      27582, ecx:       2059 } hitcount:          4
+
+Totals:
+    Hits: 258
+    Entries: 4
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      27579, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0

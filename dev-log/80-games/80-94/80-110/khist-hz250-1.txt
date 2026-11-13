@@ -1,0 +1,72 @@
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      25169, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      25169, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      25169, ecx:       2059 } hitcount:        596
+{ common_pid:      25170, ecx:       2059 } hitcount:        326
+{ common_pid:      25171, ecx:       2059 } hitcount:         11
+{ common_pid:      25172, ecx:       2059 } hitcount:          1
+
+Totals:
+    Hits: 934
+    Entries: 4
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      25169, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      25169, ecx:       2059 } hitcount:        141
+{ common_pid:      25170, ecx:       2059 } hitcount:        126
+{ common_pid:      25171, ecx:       2059 } hitcount:         41
+{ common_pid:      25172, ecx:       2059 } hitcount:         11
+
+Totals:
+    Hits: 319
+    Entries: 4
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      25169, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0
