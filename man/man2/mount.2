@@ -488,6 +488,10 @@ A read-only mount skips repair.
 An ext2 volume with its valid bit clear or error bit set is checked
 before a writable mount or remount.
 A check that ends repairs the bits of blocks and inodes files still name,
+clears an entry naming an unused inode and sets an entry's type to its
+inode's, as
+.Ql e2fsck -p
+does after a create a power cut stopped,
 keeps what only e2fsck can repair, and leaves the mount writable.
 A check that stops, at a structural fault, which sets the error bit, or at
 a limit of its own, which leaves the volume's state as it was, leaves the
