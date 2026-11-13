@@ -75,6 +75,7 @@ static void cache_unlock(uint32_t flags)
  * holds and a buffer's hold, and before `cache_spin` (proc/Readme.md,
  * Locking): nothing is waited for while it is held. */
 static struct mutex wb_lock = {0,
+                               -1,
                                0,
                                {0}
 #ifdef RACH2_LOCKDEP

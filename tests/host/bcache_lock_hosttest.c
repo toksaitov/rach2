@@ -125,15 +125,15 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
  * already fails the test, as the kernel's would never wake. */
 void mutex_lock(struct mutex *m)
 {
-    const void *none = 0;
+    uintptr_t none = 0;
 
     if (no_wb) {
         return;
     }
-    if (__atomic_load_n(&m->owner, __ATOMIC_ACQUIRE) == thread_proc) {
+    if (__atomic_load_n(&m->owner, __ATOMIC_ACQUIRE) == (uintptr_t)thread_proc) {
         k_panic("mutex: taken again by its holder");
     }
-    while (!__atomic_compare_exchange_n(&m->owner, &none, (const void *)thread_proc, 0,
+    while (!__atomic_compare_exchange_n(&m->owner, &none, (uintptr_t)thread_proc, 0,
                                         __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
         none = 0;
         sched_yield();
@@ -146,16 +146,16 @@ void mutex_unlock(struct mutex *m)
     if (no_wb) {
         return;
     }
-    if (__atomic_load_n(&m->owner, __ATOMIC_ACQUIRE) != thread_proc) {
+    if (__atomic_load_n(&m->owner, __ATOMIC_ACQUIRE) != (uintptr_t)thread_proc) {
         k_panic("mutex: an unlock by a thread that does not hold it");
     }
-    __atomic_store_n(&m->owner, (const void *)0, __ATOMIC_RELEASE);
+    __atomic_store_n(&m->owner, (uintptr_t)0, __ATOMIC_RELEASE);
 }
 
 /** Whether the calling thread holds `m`. */
 int mutex_held(const struct mutex *m)
 {
-    return !no_wb && __atomic_load_n(&m->owner, __ATOMIC_ACQUIRE) == thread_proc;
+    return !no_wb && __atomic_load_n(&m->owner, __ATOMIC_ACQUIRE) == (uintptr_t)thread_proc;
 }
 
 /** Clear a wait queue. */

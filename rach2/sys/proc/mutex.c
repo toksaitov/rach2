@@ -3,6 +3,7 @@
 #include "mutex.h"
 
 #include "process.h"
+#include "sched.h"
 #include "tgroup.h"
 #include "smp.h"
 #include "../lib/kerrno.h"
@@ -28,6 +29,14 @@ static const void *mutex_me(void)
     return current_proc ? (const void *)current_proc : (const void *)this_cpu();
 }
 
+/** `mutex_me` as a mutex's word holds it. */
+static uintptr_t mutex_me_word(void)
+{
+    const void *me = mutex_me();
+
+    return (uintptr_t)me;
+}
+
 /**
  * Wake the sleepers on `wq` of a lock just let go, if it has any, as Linux's
  * __up_read and __mutex_unlock_slowpath wake only with a waiter recorded
@@ -45,33 +54,271 @@ static void wake_waiters(wait_queue_t *wq)
     }
 }
 
+/* The holder's record in a mutex's word, without the flag. */
+#define MUTEX_OWNER(word) ((word) & ~(uintptr_t)MUTEX_HANDOFF)
+
+/*
+ * A spinner's place in a mutex's queue (`osq_lock`), one for each processor,
+ * since a processor spins for one mutex at a time and its thread does not
+ * leave it while it spins (`sched_spin_pinned`). `next` and `prev` name
+ * processors as their index + 1, 0 for none, as Linux encodes its tail
+ * (kernel/locking/osq_lock.c:22-36), so that 32-bit exchanges serve on both
+ * architectures. The places outlive every queue, so a spinner may write the
+ * one ahead after that one has left.
+ */
+struct osq_node {
+    volatile unsigned int next;   /* the spinner behind, + 1 */
+    volatile unsigned int prev;   /* the spinner ahead, + 1 */
+    volatile unsigned int locked; /* 1 once the one ahead hands over the head */
+};
+
+static struct osq_node osq_nodes[NR_CPUS];
+
 void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
 {
-    m->locked = 0;
     m->owner = 0;
+    m->owner_cpu = -1;
+    m->osq = 0;
     wait_queue_init(&m->wq);
     lockdep_init_map(&m->dep, name, key);
     (void)name;
     (void)key;
 }
 
-/** The wait condition of `mutex_lock`: `arg`, a mutex, is free. */
-static int mutex_free(void *arg)
-{
-    const struct mutex *m = arg;
-
-    return m->locked == 0;
-}
-
-/** Take `m` if it is free: 1 when taken, else 0. The exchange is the
- * take's one atomic operation; the holder then records itself. */
+/** Take `m` if it is free: 1 when taken, else 0. The compare-and-exchange
+ * records the holder with the take; the hint of its processor follows. */
 static int mutex_take(struct mutex *m)
 {
-    if (m->locked != 0 || arch_atomic_cmpxchg(&m->locked, 0, 1) != 0) {
+    uintptr_t me = mutex_me_word();
+
+    if (m->owner != 0 || arch_atomic_cmpxchg_ptr(&m->owner, 0, me) != 0) {
         return 0;
     }
-    m->owner = mutex_me();
+    m->owner_cpu = (int)arch_cpu_id();
     return 1;
+}
+
+/** Whether the caller holds `m`, by its own take or by a release that
+ * handed it over (`mutex_grant`); when it does, its processor is noted. */
+static int mutex_mine(struct mutex *m)
+{
+    if (MUTEX_OWNER(m->owner) != mutex_me_word()) {
+        return 0;
+    }
+    m->owner_cpu = (int)arch_cpu_id();
+    return 1;
+}
+
+/**
+ * Whether the holder whose word is `word` runs on another processor, for a
+ * spinner to pause once and look again (`sched_spin_on`). A word of 0 is a
+ * free mutex, which the spinner may try, and then only its own state
+ * counts. The holder's processor is checked first as its note gives it; a
+ * note not yet written by a holder that has just taken the mutex, or left
+ * behind by one that slept and woke elsewhere, is corrected by a look at
+ * every processor (`sched_running_cpu`).
+ */
+static int mutex_owner_runs(const struct mutex *m, uintptr_t word)
+{
+    const process_t *owner = (const process_t *)MUTEX_OWNER(word);
+    int cpu = m->owner_cpu, now;
+
+    if (word == 0) {
+        return sched_spin_on(0, -1);
+    }
+    if (sched_spin_on(owner, cpu)) {
+        return 1;
+    }
+    now = sched_running_cpu(owner);
+    return now >= 0 && now != cpu && sched_spin_on(owner, now);
+}
+
+/** Wait until the processor ahead (`osq_lock`) or the queue's last place
+ * hands over, or take the queue back to `old` when `node` is the last:
+ * the processor behind, + 1, or 0 when `node` was the last, as Linux's
+ * osq_wait_next (osq_lock.c:44-80). */
+static unsigned int osq_wait_next(volatile unsigned int *tail, struct osq_node *node,
+                                  unsigned int old)
+{
+    unsigned int curr = (unsigned int)arch_cpu_id() + 1u;
+    unsigned int next;
+
+    for (;;) {
+        if (*tail == curr && arch_atomic_cmpxchg(tail, curr, old) == curr) {
+            return 0;
+        }
+        if (node->next != 0) {
+            next = arch_atomic_xchg(&node->next, 0);
+            if (next != 0) {
+                return next;
+            }
+        }
+        arch_relax();
+    }
+}
+
+/**
+ * Take the head of `m`'s queue of spinners: 1 once the caller is the one
+ * spinner that tries the lock word, or 0 when it should sleep instead,
+ * having left the queue, as Linux's osq_lock (osq_lock.c:91-210). A queued
+ * spinner waits on its own place, so the spinners behind the head touch no
+ * shared line, and leaves when the holder stops running, the processor
+ * ahead is preempted by its hypervisor or the caller must give way
+ * (`mutex_owner_runs`); the place ahead is then unlinked in Linux's three
+ * steps: take back its pointer to this one, wait for the one behind or
+ * become the last, and link the two.
+ */
+static int osq_lock(struct mutex *m)
+{
+    unsigned int curr = (unsigned int)arch_cpu_id() + 1u;
+    struct osq_node *node = &osq_nodes[curr - 1u];
+    unsigned int prev, next;
+
+    node->locked = 0;
+    node->next = 0;
+    prev = arch_atomic_xchg(&m->osq, curr);
+    if (prev == 0) {
+        return 1;
+    }
+    node->prev = prev;
+    osq_nodes[prev - 1u].next = curr;
+    while (!node->locked) {
+        if (arch_cpu_preempted((int)node->prev - 1) || !mutex_owner_runs(m, m->owner)) {
+            break;
+        }
+    }
+    if (node->locked) {
+        return 1;
+    }
+    for (;;) {
+        if (osq_nodes[prev - 1u].next == curr &&
+            arch_atomic_cmpxchg(&osq_nodes[prev - 1u].next, curr, 0) == curr) {
+            break;
+        }
+        if (node->locked) {
+            return 1;
+        }
+        arch_relax();
+        prev = node->prev;
+    }
+    next = osq_wait_next(&m->osq, node, prev);
+    if (next == 0) {
+        return 0;
+    }
+    osq_nodes[next - 1u].prev = prev;
+    osq_nodes[prev - 1u].next = next;
+    return 0;
+}
+
+/** Give the head of `m`'s queue to the spinner behind, if any, as Linux's
+ * osq_unlock (osq_lock.c:212-236). */
+static void osq_unlock(struct mutex *m)
+{
+    unsigned int curr = (unsigned int)arch_cpu_id() + 1u;
+    struct osq_node *node = &osq_nodes[curr - 1u];
+    unsigned int next;
+
+    if (arch_atomic_cmpxchg(&m->osq, curr, 0) == curr) {
+        return;
+    }
+    next = arch_atomic_xchg(&node->next, 0);
+    if (next == 0) {
+        next = osq_wait_next(&m->osq, node, 0);
+    }
+    if (next != 0) {
+        osq_nodes[next - 1u].locked = 1;
+    }
+}
+
+/**
+ * Spin for `m` while its holder runs on another processor: 1 once taken, or
+ * 0 for the caller to sleep, as Linux's mutex_optimistic_spin
+ * (kernel/locking/mutex.c:441-510). A hold is often shorter than a sleep and
+ * a wake, which for a halted processor costs an interprocessor interrupt.
+ * The spinner tries the word whenever it changes, and gives up when the
+ * holder sleeps, is preempted by its hypervisor or waits for the big lock
+ * the spinner holds, or when the spinner must give way (`sched_spin_on`).
+ * Only a thread that no interrupt switches spins, since its queue's place
+ * is its processor's (`sched_spin_pinned`).
+ */
+static int mutex_spin(struct mutex *m)
+{
+    uintptr_t word;
+
+    if (!sched_spin_pinned() || !mutex_owner_runs(m, m->owner) || !osq_lock(m)) {
+        return 0;
+    }
+    while (!mutex_take(m)) {
+        word = m->owner;
+        while (word != 0 && m->owner == word) {
+            if (!mutex_owner_runs(m, word)) {
+                osq_unlock(m);
+                return 0;
+            }
+        }
+    }
+    osq_unlock(m);
+    return 1;
+}
+
+/** A sleeper's wait for `m` (`mutex_wait_cond`). */
+struct mutex_wait {
+    struct mutex *m;
+    int tests;    /* the condition's tests so far: past the first, it slept */
+    int killable; /* SIGKILL ends the wait */
+};
+
+/** Whether the calling thread has SIGKILL pending, its own or its
+ * process's. */
+static int mutex_killed(void)
+{
+    return ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
+}
+
+/** Set MUTEX_HANDOFF in `m`'s word while a holder has it, so that its
+ * release hands it to the oldest sleeper (`mutex_unlock`). */
+static void mutex_ask_handoff(struct mutex *m)
+{
+    uintptr_t word = m->owner;
+
+    while (word != 0 && (word & MUTEX_HANDOFF) == 0) {
+        uintptr_t was = arch_atomic_cmpxchg_ptr(&m->owner, word, word | MUTEX_HANDOFF);
+
+        if (was == word) {
+            break;
+        }
+        word = was;
+    }
+}
+
+/**
+ * The condition of a sleeper's wait, `arg` a `struct mutex_wait`: the
+ * caller has `m`, by its own take or handed over, or is killed in a
+ * killable wait. A test after the first follows a sleep, and one that then
+ * finds `m` held asks for the handoff, as Linux's first waiter sets
+ * MUTEX_FLAG_HANDOFF when it wakes to a mutex taken again
+ * (kernel/locking/mutex.c:654-662). The sleeper is on the queue, so a
+ * release after the test wakes it.
+ */
+static int mutex_wait_cond(void *arg)
+{
+    struct mutex_wait *w = arg;
+
+    if (mutex_take(w->m) || mutex_mine(w->m)) {
+        return 1;
+    }
+    if (w->tests++ > 0) {
+        mutex_ask_handoff(w->m);
+    }
+    return w->killable && mutex_killed();
+}
+
+/** Ready `w` for a sleeper's wait for `m`. */
+static void mutex_wait_init(struct mutex_wait *w, struct mutex *m, int killable)
+{
+    w->m = m;
+    w->tests = 0;
+    w->killable = killable;
 }
 
 /** A trylock that succeeds is noted as a take, which adds its order. */
@@ -84,26 +331,61 @@ int mutex_trylock(struct mutex *m)
     return 1;
 }
 
+/** Before the first thread nothing sleeps and no other processor runs, so
+ * the take is tried in place. */
 void mutex_lock(struct mutex *m)
 {
+    struct mutex_wait w;
+
     DEP_ACQUIRE(&m->dep);
-    while (!mutex_take(m)) {
-        wq_wait_event_nointr(&m->wq, mutex_free, m);
+    if (mutex_take(m) || mutex_spin(m)) {
+        return;
     }
+    if (!current_proc) {
+        while (!mutex_take(m)) {
+            arch_relax();
+        }
+        return;
+    }
+    mutex_wait_init(&w, m, 0);
+    (void)wq_wait_event_nointr(&m->wq, mutex_wait_cond, &w);
 }
 
-/** The owner is cleared before the lock word, so that a taker that has
- * the mutex at once does not lose its record to this release; the
- * exchange that frees it is the full barrier `wake_waiters` needs. */
+/**
+ * Hand `m` to the oldest sleeper `first`, or free it when none sleeps, under
+ * the queue's lock (`wq_wake_first`), as Linux's __mutex_handoff gives the
+ * first waiter the word (kernel/locking/mutex.c:197-221). The word goes from
+ * holder to sleeper in one exchange, so no spinner takes it between them;
+ * the sleeper's processor is not known until it runs.
+ */
+static void mutex_grant(struct process *first, void *arg)
+{
+    struct mutex *m = arg;
+
+    m->owner_cpu = -1;
+    (void)arch_atomic_xchg_ptr(&m->owner, (uintptr_t)first);
+}
+
+/** A release with no flag set is one compare-and-exchange; one that finds
+ * MUTEX_HANDOFF hands `m` over and wakes its new holder alone. The exchange
+ * that frees `m` is the full barrier `wake_waiters` needs. */
 void mutex_unlock(struct mutex *m)
 {
-    if (!m->locked || m->owner != mutex_me()) {
+    uintptr_t word = m->owner, was;
+
+    if (word == 0 || MUTEX_OWNER(word) != mutex_me_word()) {
         k_panic("mutex: an unlock by a thread that does not hold it");
     }
-    m->owner = 0;
-    (void)arch_atomic_xchg(&m->locked, 0);
     DEP_RELEASE(&m->dep);
-    wake_waiters(&m->wq);
+    while ((word & MUTEX_HANDOFF) == 0) {
+        was = arch_atomic_cmpxchg_ptr(&m->owner, word, 0);
+        if (was == word) {
+            wake_waiters(&m->wq);
+            return;
+        }
+        word = was;
+    }
+    wq_wake_first(&m->wq, mutex_grant, m);
 }
 
 /** Judge a signal-work flag with no mutex held, under the big lock that
@@ -123,50 +405,52 @@ static int mutex_signal_pending(void)
     return pending;
 }
 
+/** A wait the signal-work flag ends may have been handed `m` before it left
+ * the queue, and then holds it whatever the signal. */
 int mutex_lock_interruptible(struct mutex *m)
 {
+    struct mutex_wait w;
+
+    DEP_ACQUIRE(&m->dep);
+    if (mutex_take(m) || mutex_spin(m)) {
+        return 0;
+    }
+    mutex_wait_init(&w, m, 0);
     for (;;) {
-        DEP_ACQUIRE(&m->dep);
-        if (mutex_take(m)) {
+        if (wq_wait_event_sigflag(&m->wq, mutex_wait_cond, &w, "mutex_lock_interruptible") == 0 ||
+            mutex_mine(m)) {
             return 0;
         }
         DEP_RELEASE(&m->dep);
-        if (wq_wait_event_sigflag(&m->wq, mutex_free, m, "mutex_lock_interruptible") != 0 &&
-            mutex_signal_pending()) {
+        if (mutex_signal_pending()) {
             return -EINTR;
         }
+        DEP_ACQUIRE(&m->dep);
     }
 }
 
-/** Whether the calling thread has SIGKILL pending, its own or its
- * process's. */
-static int mutex_killed(void)
-{
-    return ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
-}
-
-/** The killable waiter's condition: `m` free, or the waiter killed. */
-static int mutex_free_or_killed(void *arg)
-{
-    return mutex_free(arg) || mutex_killed();
-}
-
+/** The wait's condition is true at SIGKILL as well; the caller holds `m`
+ * if it was handed over first. */
 int mutex_lock_killable(struct mutex *m)
 {
+    struct mutex_wait w;
+
     DEP_ACQUIRE(&m->dep);
-    while (!mutex_take(m)) {
-        if (mutex_killed()) {
-            DEP_RELEASE(&m->dep);
-            return -EINTR;
-        }
-        (void)wq_wait_event_killable(&m->wq, mutex_free_or_killed, m, "__mutex_lock");
+    if (mutex_take(m) || mutex_spin(m)) {
+        return 0;
     }
-    return 0;
+    mutex_wait_init(&w, m, 1);
+    (void)wq_wait_event_killable(&m->wq, mutex_wait_cond, &w, "__mutex_lock");
+    if (mutex_mine(m)) {
+        return 0;
+    }
+    DEP_RELEASE(&m->dep);
+    return -EINTR;
 }
 
 int mutex_held(const struct mutex *m)
 {
-    return m->owner == mutex_me();
+    return MUTEX_OWNER(m->owner) == mutex_me_word();
 }
 
 void rwsem_init_key(struct rwsem *s, const char *name, const struct lockdep_key *key)

@@ -1727,6 +1727,30 @@ int sched_spin_on(const process_t *owner, int cpu)
     return 1;
 }
 
+int sched_running_cpu(const process_t *owner)
+{
+    const volatile struct percpu *c;
+    int i;
+
+    if (!owner) {
+        return -1;
+    }
+    for (i = 0; i < NR_CPUS; i++) {
+        c = &cpu_table[i];
+        if (c->online && c->current == owner && !c->idle_wait) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int sched_spin_pinned(void)
+{
+    const process_t *p = current_proc;
+
+    return p && (p->no_tick_switch || p->in_syscall || p->in_fault);
+}
+
 /**
  * Count a tick of `p`'s processor time against its process's timer `k`
  * when `counts`, and when the timer runs out arm it again for its interval
