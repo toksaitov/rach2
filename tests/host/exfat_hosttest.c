@@ -183,6 +183,44 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 static int writes_made;
 static int stop_after = -1;
 
+/* The join fault: while `join_fail_armed`, the first write that turns an
+   entry of the active FAT, bytes `join_fat_at` to `join_fat_end` of the
+   image, from the chain's end into a cluster number fails with -5 (EIO),
+   once, and is counted in `join_failed`. */
+static int join_fail_armed;
+static int join_failed;
+static uint64_t join_fat_at, join_fat_end;
+static uint32_t join_clusters;
+
+/** Read the little-endian 32-bit word at `p`. */
+static uint32_t rd32(const unsigned char *p)
+{
+    return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/** Whether the write of `count` sectors of `buf` at `lba` joins a chain:
+ *  an entry of the active FAT the device answers as the end becomes a
+ *  cluster of the heap. */
+static int joins_chain(uint64_t lba, uint32_t count, const unsigned char *buf)
+{
+    uint64_t from = lba * 512, to = from + (uint64_t)count * 512, o;
+
+    if (to <= join_fat_at || from >= join_fat_end) {
+        return 0;
+    }
+    o = from > join_fat_at ? from : join_fat_at;
+    o += (join_fat_at - o) & 3;
+    for (; o + 4 <= to && o + 4 <= join_fat_end; o += 4) {
+        uint32_t was = rd32(image + o), now = rd32(buf + (o - from));
+
+        if ((o - join_fat_at) / 4 >= 2 && was == 0xFFFFFFFFu && now >= 2 &&
+            now < join_clusters + 2) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** The device's write: to the model, pending until the driver's next
  *  barrier. `stop_after` is the interruption matrix's crash: the writes
  *  after that many fail with -5 (EIO), and what the crash leaves is the
@@ -196,6 +234,11 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     int rc;
 
     if (stop_after >= 0 && writes_made >= stop_after) {
+        return -5;
+    }
+    if (join_fail_armed && joins_chain(lba, count, buf)) {
+        join_fail_armed = 0;
+        join_failed++;
         return -5;
     }
     writes_made++;
@@ -1823,6 +1866,110 @@ static uint32_t used_clusters(const unsigned char *img)
     return used;
 }
 
+/** Arm the join fault over the loaded volume's active FAT, with what the
+ *  cache holds put on the device first. */
+static void join_fail_arm(void)
+{
+    uint32_t fat = rd32(image + 80), length = rd32(image + 84);
+
+    bcache_sync(&dev);
+    settle();
+    join_fat_at = ((uint64_t)fat + (image[106] & 1 ? length : 0)) * 512;
+    join_fat_end = join_fat_at + (uint64_t)length * 512;
+    join_clusters = rd32(image + 92);
+    join_failed = 0;
+    join_fail_armed = 1;
+}
+
+/** Judge what a failed join of `what` left: the join's write failed once,
+ *  the call failed, and after the unmount drains the cache the walk finds
+ *  only what a stop may leave and the run still allocated, `used` being the
+ *  clusters in use before the call. */
+static void join_fail_judge(int rc, uint32_t used, const char *what)
+{
+    char line[160];
+
+    join_fail_armed = 0;
+    snprintf(line, sizeof(line), "%s: the join's write failed and so did the call", what);
+    check(join_failed == 1 && rc != 0, line);
+    unmount_image();
+    bcache_sync(&dev);
+    snprintf(line, sizeof(line), "%s: the volume holds no chain into free clusters", what);
+    check_consistent(line, 1);
+    snprintf(line, sizeof(line), "%s: and the run stays allocated", what);
+    check(used_clusters(image) > used, line);
+}
+
+/**
+ * A join whose write fails. A failed write through leaves its buffer dirty
+ * in the cache, the join in it, and a later sync that succeeds writes it,
+ * so the run joined must stay allocated unless the tail's end is written
+ * again; here every write through after the failure is refused, as on a
+ * device whose write failed, so the end is not. Each of the three joins
+ * is failed in turn: a write that grows a file, a truncate that grows one,
+ * and a create that grows a directory. Each must fail, and leave a volume
+ * whose walk finds at worst a surplus tail or lost clusters, never a chain
+ * that reaches a free cluster, with more clusters in use than before.
+ */
+static void join_fail_rows(void)
+{
+    uint32_t used, i;
+    void *n, *h;
+    int err, rc;
+
+    fill_pattern();
+    load("--junk");
+    check(mount_rw() == 0, "a writable mount for the failed join of a write");
+    n = make_file(mnt.root, "join w.bin");
+    check(n && write_at(n, pattern, 10, 0) == 0, "a file of one cluster to grow");
+    join_fail_arm();
+    used = used_clusters(image);
+    rc = n ? write_at(n, pattern, 3000, 6000) : -1;
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    join_fail_judge(rc, used, "a write that grows a file");
+
+    load("--junk");
+    check(mount_rw() == 0, "a writable mount for the failed join of a truncate");
+    n = make_file(mnt.root, "join t.bin");
+    check(n && write_at(n, pattern, 10, 0) == 0, "a file of one cluster to grow");
+    join_fail_arm();
+    used = used_clusters(image);
+    rc = -1;
+    if (n && OPS->open(&mnt, n, 0, &h) == 0) {
+        rc = OPS->truncate(&mnt, h, 9000);
+        OPS->release(&mnt, h);
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    join_fail_judge(rc, used, "a truncate that grows a file");
+
+    load("--junk");
+    check(mount_rw() == 0 && OPS->mkdir(&mnt, mnt.root, "join d", 0755) == 0,
+          "a writable mount and a directory for the failed join of its growth");
+    n = walk("/join d", &err);
+    check(n != 0, "the directory to grow");
+    join_fail_arm();
+    used = used_clusters(image);
+    rc = 0;
+    for (i = 0; n && rc == 0 && join_failed == 0 && i < 1000; i++) {
+        char name[24];
+        void *f = 0;
+
+        snprintf(name, sizeof(name), "entry %04u.txt", (unsigned)i);
+        rc = OPS->create(&mnt, n, name, 0644, &f);
+        if (rc == 0) {
+            OPS->put(&mnt, f);
+        }
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    join_fail_judge(rc, used, "a create that grows a directory");
+}
+
 /**
  * What an unlink promises of the clusters it frees. exfat.Readme.md has a
  * freed chain's bitmap bits and FAT entries reach the disk at the sync that
@@ -2614,6 +2761,7 @@ int main(void)
     damaged_rows();
     external_rows();
     write_rows();
+    join_fail_rows();
     full_set_rows();
     scan_cost_rows();
     durability_rows();
