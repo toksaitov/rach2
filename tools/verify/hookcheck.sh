@@ -349,14 +349,20 @@ judge() {
     quick -p
 }
 
-# base_of REMOTE TIP: print where the milestone branch stands, or where TIP
-# left master when the branch is new or its head is not here.
+# base_of REMOTE TIP REF: print where the milestone branch REF stands; when
+# its head is not here, where TIP left the branch as last fetched, since the
+# push is then refused as not a fast-forward and its files are those of the
+# work alone; and where TIP left master when the branch is new.
 base_of() {
     case $1 in
         *[!0]*)
             if git cat-file -e "$1^{commit}" 2>/dev/null; then
                 echo "$1"
                 return 0
+            fi
+            if git cat-file -e "refs/remotes/origin/${3#refs/heads/}^{commit}" 2>/dev/null; then
+                git merge-base "refs/remotes/origin/${3#refs/heads/}" "$2"
+                return
             fi
             ;;
     esac
@@ -392,7 +398,7 @@ case $MODE in
                 *[!0]*) ;;
                 *) continue ;;
             esac
-            _base=$(base_of "$_remote" "$_tip") || unready "no base for $_ref"
+            _base=$(base_of "$_remote" "$_tip" "$_ref") || unready "no base for $_ref"
             judge "$_base" "$_tip"
         done
         ;;
