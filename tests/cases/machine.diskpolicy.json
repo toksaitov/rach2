@@ -76,7 +76,7 @@
         },
         "gap": {
           "floor_us": 100000,
-          "initial_us": 60000000,
+          "initial_us": 120000000,
           "ceiling_us": 300000000
         },
         "stages": {
