@@ -225,6 +225,40 @@ A loop device takes it around each operation of the file system its
 backing file is on, as a descriptor's call does, except a read of a file
 system that reads without it.
 A write of anything zeroes the counts.
+A write of
+.Ql thread TID ,
+or of
+.Ql thread NAME
+with a name of up to 15 bytes that is not all digits, also has the file
+count from then on only what the thread with that ID, or each thread of
+that name, does: its calls, its interrupts and exceptions, and the holds
+it takes; any other write counts every thread again.
+While a thread is chosen the file ends with its lines:
+.Bd -literal -offset indent
+thread wined3d_cs
+switch 518 0 31 trip64.exe
+switch_lost 0
+block syscall 202 1100
+block syscall 16 70
+block ioctl 0xc02864c3 70
+.Ed
+.Pp
+A
+.Ql switch
+line gives, for each thread switched to while the chosen one could
+still run, its ID, the switches made in a
+.Xr sched_yield 2
+and the others, those of the tick, an interrupt or a call's exit, and its
+name; the threads after the first 32 count in
+.Ql switch_lost .
+A
+.Ql block
+line counts the chosen thread's sleeps by the system call it slept in,
+numbered as the
+.Ql syscall
+lines are, and, for a sleep in an
+.Xr ioctl 2 ,
+by its request as well.
 .It Pa bkl/profile
 Mode 0644.
 A profile of the kernel under the big lock, a Rach2 file: each processor's

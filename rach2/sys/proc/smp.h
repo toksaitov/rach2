@@ -272,8 +272,26 @@ void bkl_profile_sample(uintptr_t pc, uintptr_t fp);
  * thread's name. The caller holds the big lock. */
 int32_t smp_calls_show(void *data, char *buf, uint32_t cap);
 
-/** Zero the call counts, keeping the requests in their slots; `len`. */
+/**
+ * Zero the call counts, keeping the requests in their slots, and choose
+ * the thread they count from now on: the thread whose ID is TID for a
+ * write of `thread TID`, each thread named NAME for `thread NAME`, a name
+ * of up to 15 bytes that is not all digits, and every thread for any other
+ * write. `len`, or -EINVAL for a `thread` write with no name or one too
+ * long. Takes the run queues' lock, under which switches are noted.
+ */
 int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len);
+
+/**
+ * Note a switch from `old`, this processor's current thread, to `next` for
+ * bkl/calls when `old` is the thread it counts alone (`smp_calls_store`):
+ * one that leaves `old` ready under the thread switched to, as a yield's
+ * for `yielded` and as a preemption's otherwise, and a sleep under the
+ * system call `old` sleeps in, and its ioctl request. Called by `schedule`
+ * with the run queues' lock held and interrupts off, before `next` is made
+ * current; nothing while no thread is chosen.
+ */
+void bkl_note_switch(const struct process *old, const struct process *next, int yielded);
 
 /** Write debugfs's bkl/long, the latest interrupt sample of each of the
  * last 32 holds sampled at 16 ms or older. `buf` and `cap` are as for

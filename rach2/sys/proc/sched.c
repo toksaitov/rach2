@@ -924,6 +924,7 @@ void schedule(void)
     uint32_t saved_flags;
     int me;
     int kick = -1;
+    int yielded;
 
     if (!_sched_enabled || !current_proc) {
         return;
@@ -937,6 +938,7 @@ void schedule(void)
     pick_count++;
     watchdog_sched();
     kick = sched_prepare_old(old, cpu, me);
+    yielded = old->sched_yielded;
     next = sched_select(me, old);
     old->need_resched = 0;
 
@@ -973,6 +975,7 @@ void schedule(void)
         } else {
             old->nvcsw++;
         }
+        bkl_note_switch(old, next, yielded);
         if (old->sched_out) {
             old->sched_out(old->sched_out_arg, old->state == PROC_READY);
         }
