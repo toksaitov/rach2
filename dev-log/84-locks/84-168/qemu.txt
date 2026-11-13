@@ -145,3 +145,11 @@ wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 5.916 us, med
 wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 6.067 us, median 5.191, p90 7.175, p99 16.202; waker's call 4.115 us
 wakemusl: futex hand-off and back after 50 us: 11.162 us a round
 WAKEMUSL OK
+## rebased-1.out (after, rebased onto the milestone at ad9513c38, kernel 122573048cab7b33...)
+wakemusl: epoll_wait, 500 idle and 1 ready: 0.136 us a call
+wakemusl: poll, 500 idle and 1 ready: 6.590 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.060 us, median 5.631, p90 7.414, p99 13.656; waker's call 4.393 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.056 us, median 5.470, p90 7.685, p99 13.756; waker's call 4.269 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.550 us, median 5.941, p90 8.836, p99 16.872; waker's call 5.204 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 6.476 us, median 5.921, p90 8.636, p99 14.958; waker's call 5.181 us
+WAKEMUSL OK
