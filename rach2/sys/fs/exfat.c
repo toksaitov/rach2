@@ -3512,6 +3512,34 @@ out:
 }
 
 /**
+ * Join the run from `run_first` to the tail of `n`'s `have` clusters and
+ * flush the join. On a failure the run is freed, after the tail is ended
+ * again when the join was written; when that write fails too, as every
+ * write through does on a device whose flush failed (`bcache_write`), the
+ * join may be on the medium, and the run stays allocated, a surplus tail,
+ * as a failed `ex_write` leaves it. 0 or -errno.
+ */
+static int join_run(struct ex_mount *em, struct ex_node *n, uint64_t have, uint32_t run_first)
+{
+    uint32_t tail;
+    int rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
+
+    if (rc == 0) {
+        rc = fat_set(em, tail, run_first, 1);
+        if (rc == 0) {
+            rc = bcache_flush(em->dev);
+            if (rc != 0 && fat_set(em, tail, EX_EOC, 1) != 0) {
+                return rc;
+            }
+        }
+    }
+    if (rc != 0) {
+        free_chain(em, run_first, 0, 0);
+    }
+    return rc;
+}
+
+/**
  * The `truncate` of `vfs_ops`: the file's length made `size`, under the
  * mount's namespace lock, which this takes; both directions set the
  * modification time.
@@ -3520,11 +3548,11 @@ out:
  * ValidDataLength stays where it was and the new range reads as zeros;
  * syncs the run's bits and FAT entries; joins the run to the chain with a
  * flush before the length that counts on it, so a crash cannot leave a
- * chain shorter than its length; and publishes the length. A shrink
- * publishes the shorter lengths, ValidDataLength lowered to `size` when it
- * was past it, and flushes, so that a drive that keeps writes pending cannot
- * free the tail under lengths that still cover it; then it ends the kept
- * chain and frees the rest.
+ * chain shorter than its length (`join_run`); and publishes the length. A
+ * shrink publishes the shorter lengths, ValidDataLength lowered to `size`
+ * when it was past it, and flushes, so that a drive that keeps writes
+ * pending cannot free the tail under lengths that still cover it; then it
+ * ends the kept chain and frees the rest.
  *
  * Returns 0, -EISDIR, -EFBIG past 2^63 - 1 bytes, -EROFS, -ENOSPC, or
  * -errno.
@@ -3577,20 +3605,8 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                 goto out;
             }
             if (have > 0) {
-                uint32_t tail;
-
-                rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
-                if (rc == 0) {
-                    rc = fat_set(em, tail, run_first, 1);
-                }
-                if (rc == 0) {
-                    rc = bcache_flush(em->dev);
-                    if (rc != 0) {
-                        (void)fat_set(em, tail, EX_EOC, 1);
-                    }
-                }
+                rc = join_run(em, n, have, run_first);
                 if (rc != 0) {
-                    free_chain(em, run_first, 0, 0);
                     goto out;
                 }
             } else {
