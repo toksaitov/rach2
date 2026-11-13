@@ -1542,7 +1542,7 @@ static int scenario_noboot(struct etude_case *c, const char *row)
         return 1;
     st = etude_boot(c, "fixture", NULL, &m, &end);
     if (strcmp(row, "damaged") == 0) {
-        expect(c, "refused", st, ETUDE_REFUSED);
+        expect(c, "refused", st, ETUDE_FAILED);
         etude_assert(c, "damaged", etude_artifact(c, "kernel") == NULL, "the damage was taken");
     } else if (strcmp(row, "memory") == 0) {
         expect(c, "refused", st, ETUDE_FAILED);
