@@ -20,8 +20,10 @@
 # `intel`, where /proc/cpuinfo's vendor_id is GenuineIntel. A result A|B
 # takes either, for a test whose result the clock decides. A result
 # fail~SUBTEST, for a kvm-unit-test, takes a failure only when the test ran
-# to its SUMMARY line and every FAIL line of its log is the subtest SUBTEST,
-# whose message is SUBTEST with each `_` a space. Each test whose
+# to its SUMMARY line, the runner's FAIL line gives that summary as its
+# reason, as it does when QEMU ends with the test's own failure and not on a
+# signal or a timeout, and every FAIL line of its log is the subtest
+# SUBTEST, whose message is SUBTEST with each `_` a space. Each test whose
 # EXPECT is not `excluded` runs, in the order of the list:
 #
 # * `unit`: kvm-unit-tests' run_tests.sh, once a test, from a copy of
@@ -49,21 +51,24 @@
 # NAME...`, and the exit status 0 on a pass, 1 on a failure and 2 on a usage
 # error. A program's own output goes to standard error.
 
-# only_fails LOG MESSAGE: whether the kvm-unit-test log LOG ran to its
-# SUMMARY line and has FAIL lines, each of which ends in MESSAGE after the
-# subtest's prefixes.
+# only_fails LOG MESSAGE WHY: whether the kvm-unit-test log LOG ran to its
+# SUMMARY line, WHY, what the runner's FAIL line has after the test's name,
+# is that line's text in parentheses, and LOG has FAIL lines, each of which
+# ends in MESSAGE after the subtest's prefixes. The runner gives the summary
+# for a test that QEMU ended with its failure and a reason in its place for
+# a signal or a timeout (scripts/runtime.bash in kvm-unit-tests).
 only_fails()
 {
     sed "s/$(printf '\033')\\[[0-9;]*m//g; s/$(printf '\r')\$//" "$1" |
-        awk -v m="$2" '
-            /^SUMMARY: / { summary = 1 }
+        awk -v m="$2" -v why="$3" '
+            /^SUMMARY: / { summary = "(" substr($0, 10) ")" }
             /^FAIL: / {
                 n++
                 if (length($0) < length(m) || substr($0, length($0) - length(m) + 1) != m ||
                     substr($0, length($0) - length(m) - 1, 2) != ": ")
                     other = 1
             }
-            END { exit !(summary && n > 0 && !other) }'
+            END { exit !(summary != "" && summary == why && n > 0 && !other) }'
 }
 
 usage()
@@ -182,6 +187,9 @@ if [ "$kind" = unit ]; then
     sed "s/$(printf '\033')\\[[0-9;]*m//g" "$work/out" | tee "$work/plain" >&2
     awk '$1 == "PASS" { print $2, "pass" } $1 == "SKIP" { print $2, "skip" }
          $1 == "FAIL" { print $2, "fail" }' "$work/plain" > "$work/got"
+    # What each FAIL line has after the name: the summary, or the reason.
+    awk '$1 == "FAIL" { r = $0; sub(/^FAIL +[^ ]+ */, "", r); print $2, r }' \
+        "$work/plain" > "$work/why"
 else
     while read -r name _; do
         mkdir "$work/t"
@@ -223,7 +231,9 @@ while read -r name expect; do
         for e in $(echo "$expect" | tr '|' ' '); do
             case $e in
                 fail~?*)
-                    ! only_fails "$log" "$(echo "${e#fail~}" | tr _ ' ')" || ok=1
+                    why=$(awk -v n="$name" '$1 == n { sub(/^[^ ]+ /, ""); print; exit }' \
+                        "$work/why")
+                    ! only_fails "$log" "$(echo "${e#fail~}" | tr _ ' ')" "$why" || ok=1
                     ;;
             esac
         done
