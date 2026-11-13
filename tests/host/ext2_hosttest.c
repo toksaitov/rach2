@@ -5789,7 +5789,8 @@ static int debugfs_script(const char *img, const char *script)
     }
 }
 
-/** The number right after `key` in debugfs's answer to `request`, or -1. */
+/** The number after `key`, and any blanks, in debugfs's answer to `request`,
+ * or -1. */
 static long debugfs_number(const char *img, const char *request, const char *key)
 {
     char line[512];
@@ -5805,8 +5806,14 @@ static long debugfs_number(const char *img, const char *request, const char *key
     while (fgets(line, sizeof(line), f)) {
         char *at = strstr(line, key);
 
-        if (at && at[strlen(key)] >= '0' && at[strlen(key)] <= '9') {
-            v = atol(at + strlen(key));
+        if (at) {
+            at += strlen(key);
+            while (*at == ' ') {
+                at++;
+            }
+        }
+        if (at && *at >= '0' && *at <= '9') {
+            v = atol(at);
             break;
         }
     }
