@@ -9,11 +9,28 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/audio/resample.c
  * host-cflags: -DTICK_HZ=1000
+ *
+ * The rows count ticks at 1000 Hz here and at the shipped 250 Hz in
+ * hda250_hosttest.c, which includes this file.
  */
 #include "audio/hda.c"
 #include "audio/audio_proc.c"
 #include "audio/vchan.c"
 #include "arch/x86/speaker.c"
+
+/* The ticks a KDMKTONE of 100 ms sounds for, Linux's msecs_to_jiffies(100);
+ * and the tick after the output stream's interrupt from which `hda_irq_late`
+ * takes the next one of a 23.3 ms period as late: past a period and a half,
+ * 35 ms, by the tick the interrupt came in, 36 ms at 1000 Hz and 40 at 250. */
+#if TICK_HZ == 1000
+#define TONE_TICKS      100
+#define PLAY_LATE_TICKS 36
+#elif TICK_HZ == 250
+#define TONE_TICKS      25
+#define PLAY_LATE_TICKS 10
+#else
+#error "hda_hosttest: the rows count ticks at 1000 Hz or 250 Hz"
+#endif
 
 extern int printf(const char *format, ...);
 extern char *strstr(const char *text, const char *needle);
@@ -1250,7 +1267,9 @@ static void row_play_gate(void)
     model_play(24000);
     tick();
     check(hw_fill_count == 1, "the tick leaves a period played to the interrupt that is due");
-    kernel_ticks += 36; /* a period and a half of 23.3 ms, and a tick more */
+    kernel_ticks = play_irq_tick + PLAY_LATE_TICKS - 2;
+    tick();
+    check(hw_fill_count == 1, "nor at the tick before the interrupt is late");
     tick();
     check(hw_fill_count == 2, "the tick fills the period itself once the interrupt is late");
     hda_stop();
@@ -2704,7 +2723,7 @@ static void beep_threaded(void)
     run_khda();
     check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && r->beep_path && !beep_queued,
           "once they are not, the tick asks again and khda turns the pin on and sends it");
-    beep_ticks(99);
+    beep_ticks(TONE_TICKS - 1);
     speaker_get_counters(&c);
     check(beep_ctl[18] == (0x100 | 16) && beep_queued && c.ends == c0.ends + 1 &&
               c.beep_retries == c0.beep_retries && c.beep_divider == 0,
@@ -2724,7 +2743,7 @@ static void beep_threaded(void)
 
     speaker_get_counters(&c0);
     speaker_tone(SPEAKER_CLOCK / 750, 100);
-    beep_ticks(99);
+    beep_ticks(TONE_TICKS - 1);
     beep_verb_ticks = 1;
     run_khda();
     speaker_get_counters(&c);
@@ -2752,7 +2771,7 @@ static void beep_during_playback(void)
     check(beep_ctl[18] == (0x100 | 12), "a tone of 1000 Hz during playback sends divider 12");
     hda_stop();
     check(pin_ctl[23] == 0x40 && r->beep_path, "a stop during the tone leaves the pin on");
-    beep_ticks(100);
+    beep_ticks(TONE_TICKS);
     check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40, "the tick ends the tone");
     kernel_ticks += HDA_BEEP_IDLE_TICKS - 1;
     beep_ticks(1);
@@ -2792,7 +2811,7 @@ static void beep_other_codecs(void)
     speaker_tone(SPEAKER_CLOCK / 750, 100);
     check(verbs == before && pit_count == SPEAKER_CLOCK / 750 && (port61 & 3) == 3,
           "a tone sounds the PIT alone");
-    for (i = 0; i < 100; i++)
+    for (i = 0; i < TONE_TICKS; i++)
         beep_ticks(1);
     check((port61 & 3) == 0 && verbs == before, "and the tick ends it without a verb");
 }
@@ -2837,8 +2856,9 @@ static void row_beep(void)
     check(pin_ctl[23] == 0x40 && r->primary_enabled && r->beep_path,
           "with nothing playing the speaker's pin is turned on");
     check(c.beeps == 1 && c.beep_divider == 16 && r->beeps == 1, "the counters name the beep");
-    beep_ticks(99);
-    check(beep_ctl[18] == (0x100 | 16) && (port61 & 3) == 3, "the tone sounds for 99 ticks");
+    beep_ticks(TONE_TICKS - 1);
+    check(beep_ctl[18] == (0x100 | 16) && (port61 & 3) == 3,
+          "the tone sounds for all but the last of its ticks");
     mmio[HDA_ICS] = HDA_ICS_ICB;
     beep_ticks(1);
     speaker_get_counters(&c);

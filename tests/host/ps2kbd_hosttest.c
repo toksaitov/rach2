@@ -20,6 +20,9 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DTICK_HZ=1000
+ *
+ * The rows count ticks at 1000 Hz here and at the shipped 250 Hz in
+ * ps2kbd250_hosttest.c, which includes this file.
  */
 
 #include "arch/x86/i8042.c"
@@ -190,8 +193,22 @@ static int answer_at(uint32_t ticks, uint8_t code)
     return n_data_writes - before;
 }
 
-/* The tick 10 ms * `n` after the boot, the unit the LED rows count in. */
-#define T(n) ((uint32_t)(n) * (TICK_HZ / 100u))
+/* The tick 10 ms * `n` after the boot, the unit the LED rows count in,
+ * rounded up as Linux's msecs_to_jiffies rounds: 10 ms is 2.5 ticks at
+ * 250 Hz. */
+#define T(n) (((uint32_t)(n) * 10u * TICK_HZ + 999u) / 1000u)
+
+/* The ticks of the gap between two commands and of the wait for an answer,
+ * Linux's msecs_to_jiffies(50) and msecs_to_jiffies(100). */
+#if TICK_HZ == 1000
+#define GAP  50u
+#define WAIT 100u
+#elif TICK_HZ == 250
+#define GAP  13u
+#define WAIT 25u
+#else
+#error "ps2kbd_hosttest: the rows count ticks at 1000 Hz or 250 Hz"
+#endif
 
 /** The LED command's rows, after the handler's. */
 static void leds_rows(void)
@@ -221,8 +238,8 @@ static void leds_rows(void)
     CHECK("a key while the LED byte is out is a key", answer_at(T(203), 0x1E) == 0 && keys == 1);
     CHECK("the ACK still ends the command", answer_at(T(203), 0xFA) == 0 && keys == 1);
     wanted_leds = 0x01;
-    CHECK("no command within 50 ms of the last", tick_at(T(207)) == 0);
-    CHECK("the next 50 ms after", tick_at(T(208)) == 1 && last_write() == 0xED);
+    CHECK("no command within 50 ms of the last", tick_at(T(203) + GAP - 1) == 0);
+    CHECK("the next 50 ms after", tick_at(T(203) + GAP) == 1 && last_write() == 0xED);
 
     /* RESEND writes the byte again. */
     CHECK("RESEND of 0xED writes it again", answer_at(T(209), 0xFE) == 1 && last_write() == 0xED);
@@ -235,10 +252,12 @@ static void leds_rows(void)
     /* No answer: written again after 100 ms, given up after three writes. */
     wanted_leds = 0x07;
     CHECK("a command with no answer", tick_at(T(300)) == 1 && last_write() == 0xED);
-    CHECK("not written again within 100 ms", tick_at(T(309)) == 0);
-    CHECK("written again at 100 ms", tick_at(T(310)) == 1 && last_write() == 0xED);
-    CHECK("and a third time", tick_at(T(320)) == 1 && last_write() == 0xED);
-    CHECK("then given up, with a warning", tick_at(T(330)) == 0 && warnings == 1);
+    CHECK("not written again within 100 ms", tick_at(T(300) + WAIT - 1) == 0);
+    CHECK("written again at 100 ms", tick_at(T(300) + WAIT) == 1 && last_write() == 0xED);
+    CHECK("not a third time within 100 ms", tick_at(T(300) + 2 * WAIT - 1) == 0);
+    CHECK("and a third time", tick_at(T(300) + 2 * WAIT) == 1 && last_write() == 0xED);
+    CHECK("not given up within 100 ms", tick_at(T(300) + 3 * WAIT - 1) == 0 && warnings == 0);
+    CHECK("then given up, with a warning", tick_at(T(300) + 3 * WAIT) == 0 && warnings == 1);
     CHECK("not tried again for the same LEDs", tick_at(T(400)) == 0);
 
     /* A full input buffer: nothing written until it empties. */
