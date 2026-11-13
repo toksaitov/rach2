@@ -55,7 +55,10 @@ struct ofd_rec {
  * The list of live descriptions, its count, and the access
  * counts are under `ofd_lock`, a spinlock taken with interrupts off below a
  * table's lock; a description's own fields are its holders'. The scans of
- * the list read only what their callers' locks keep still. The list is
+ * the list read only what their callers' locks keep still, and a
+ * description's mount and node, which its end withdraws under this lock
+ * before it gives them back (`fd_ofd_unref`), so that a scan reads either
+ * none or a mount still held, whatever lock the end holds. The list is
  * doubly linked, so that a description leaves it in constant time.
  */
 static struct spinlock ofd_lock = SPINLOCK_INIT;
@@ -489,28 +492,6 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
     return held;
 }
 
-void fd_ofd_map_err_set(const struct vfs_mount *mnt, uint64_t ino, int rc)
-{
-    const struct vfs_mount *base = vfs_mount_base(mnt);
-    uint32_t flags = spin_lock_irqsave(&ofd_lock);
-    struct ofd_rec *rec;
-
-    if (rc >= 0 || rc < -4095) {
-        rc = -EIO;
-    }
-    for (rec = ofds; rec; rec = rec->next) {
-        if (rec->ofd.vmnt && vfs_mount_base(rec->ofd.vmnt) == base && rec->ofd.ino == ino) {
-            (void)arch_atomic_xchg((volatile unsigned int *)&rec->ofd.map_err, (unsigned int)-rc);
-        }
-    }
-    spin_unlock_irqrestore(&ofd_lock, flags);
-}
-
-int fd_ofd_map_err_take(struct open_file *ofd)
-{
-    return -(int)arch_atomic_xchg((volatile unsigned int *)&ofd->map_err, 0u);
-}
-
 /**
  * The root's adapter, `vfs_krffs_type`, uses the node as the handle of an
  * open too, so the handle moves with the node; a mounted KRFFS volume's
@@ -614,8 +595,10 @@ void fd_ofd_unref(struct open_file *ofd)
                 void *handle = ofd->fhandle;
                 void *pin = ofd->pin;
 
+                flags = spin_lock_irqsave(&ofd_lock);
                 ofd->vmnt = NULL;
                 ofd->vnode = NULL;
+                spin_unlock_irqrestore(&ofd_lock, flags);
                 ofd->fhandle = NULL;
                 ofd->pin = NULL;
                 if (pin) {

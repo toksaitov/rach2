@@ -54,18 +54,19 @@
  * Linux's filemap_fault finds the folio and locks it (mm/filemap.c:3326-3370).
  *
  * A failed write of a record's pages keeps the page's dirty bit for the
- * next pass, and the pass records its failure for syncfs (`vfs_sb_err_set`)
- * and on every description of the file then open (`fd_ofd_map_err_set`),
- * whose next fsync, fdatasync or MS_SYNC reports it once even when a later
- * pass has written the page, as Linux keeps a write-back's error in the
- * inode's `wb_err` and reports it once to each of the inode's files
- * (mapping_set_error, include/linux/pagemap.h; mm/filemap.c:726); the fsync
- * of another file of the file system hears nothing of it. Stores that are
+ * next pass, and the pass records its failure in the file's own error
+ * sequence and for syncfs (`vfs_ino_err_set`), which each description of
+ * the file, whenever it was opened, reports once through its next fsync,
+ * fdatasync or MS_SYNC even when a later pass has written the page, as
+ * Linux keeps a write-back's error in the mapping's `wb_err` and reports it
+ * once to each of the inode's files (mapping_set_error,
+ * include/linux/pagemap.h; mm/filemap.c:726); the fsync of another file of
+ * the file system hears nothing of it. Stores that are
  * dropped unwritten (`dshare_drop`) are recorded for every description of
  * the file system as well (`vfs_wb_err_set`), since no later pass will
  * answer them. The record goes only once it has no mapping and no dirty
- * page, as Linux frees no dirty folio, and the descriptions keep its
- * errors.
+ * page, as Linux frees no dirty folio, and the file's error sequence,
+ * which is the mount's, outlives it.
  *
  * The record writes its pages through a handle of its own on the file
  * system that holds the file (`wr_handle`), opened on its base mount at its
@@ -868,16 +869,17 @@ static int dshare_write_word(struct dshare *ds, uint32_t from, uint32_t end, uin
  * A page whose write fails keeps its bit for a later pass, as Rach2 retries
  * a failed write where Linux drops the folio's dirty bit
  * (fs/buffer.c:1959-1996), and a failed pass records its first failure, every
- * time, for syncfs (`vfs_sb_err_set`) and on each description of the file
- * now open (`fd_ofd_map_err_set`), whose next fsync or MS_SYNC reports it
- * once whatever later passes do, as Linux's inode keeps it in `wb_err`
- * (mm/filemap.c:726). What was written
+ * time, in the file's own error sequence and for syncfs (`vfs_ino_err_set`),
+ * which each description of the file reports once through its next fsync,
+ * fdatasync or MS_SYNC whatever later passes do, as Linux's inode keeps it
+ * in its mapping's `wb_err` (mm/filemap.c:726). What was written
  * may have been dirty since `clean`, which the file's mount keeps for the
  * flusher (`vfs_writeback_aged`), and a write of every page that succeeds
  * moves `clean` to its own start. A failed pass with no writable mapping
  * left drops the dirty bits (`dshare_drop`) when the device has gone.
  * Returns 0, also when the record has no writer, which leaves no page dirty,
- * or the first failure. Under the big lock; no allocation is needed.
+ * or the first failure. Under the big lock; nothing but the record of a
+ * failure allocates, and a refusal of that is answered (`vfs_ino_err_set`).
  */
 static int dshare_pass(struct dshare *ds, uint32_t first, uint32_t end)
 {
@@ -906,8 +908,7 @@ static int dshare_pass(struct dshare *ds, uint32_t first, uint32_t end)
         ds->clean = start;
     }
     if (rc != 0) {
-        vfs_sb_err_set(ds->mnt, rc);
-        fd_ofd_map_err_set(ds->mnt, ds->ino, rc);
+        vfs_ino_err_set(ds->mnt, ds->ino, rc);
     }
     if (rc != 0 && ds->writers == 0 && vfs_mount_gone(ds->mnt)) {
         dshare_drop(ds);
@@ -931,13 +932,14 @@ static int dshare_pass(struct dshare *ds, uint32_t first, uint32_t end)
  * (`dshare_settle`).
  *
  * A failed page write is the answer, with or without `flush`, and is
- * recorded for syncfs and on each description of the file (`dshare_pass`),
- * so `own`'s cursor into the file system's errors does not move for it.
- * With `flush`, `own`'s description reports a failure an earlier pass left
- * on it (`fd_ofd_map_err_take`) when nothing else failed, as Linux's fsync
- * of the region's file checks and advances the file's cursor; it takes
- * that record whenever the pass failed too, since the answer reports it.
- * Under the big lock. Returns 0 or the first failure.
+ * recorded in the file's own error sequence (`dshare_pass`), so `own`'s
+ * cursor into the file system's errors does not move for it. With `flush`,
+ * `own`'s description reports a failure recorded in the file's sequence
+ * since it last looked (`vfs_ino_err_check`) when nothing else failed, as
+ * Linux's fsync of the region's file checks and advances the file's cursor;
+ * its cursor moves past this pass's failure too, since the answer reports
+ * it, so that the description is not told it twice. Under the big lock.
+ * Returns 0 or the first failure.
  */
 static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, struct filemap *own,
                        int flush)
@@ -957,7 +959,7 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, struct f
         rc = vfs_fsync(mine->vmnt, mine->fhandle, &mine->wb_seen);
     }
     if (mine && (flush || wrote != 0)) {
-        int kept = fd_ofd_map_err_take(mine);
+        int kept = vfs_ino_err_check(mine->vmnt, mine->ino, &mine->ino_seen);
 
         rc = rc != 0 ? rc : kept;
     }

@@ -4111,6 +4111,7 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     vfs_wb_err_sample(mnt, &e->ofd->wb_seen, &e->ofd->sb_seen);
     e->ofd->vnode = ref->node;
     e->ofd->ino = ino;
+    e->ofd->ino_seen = vfs_ino_err_sample(mnt, ino);
     vfs_desc_open(mnt);
     vfs_walk_unlock(mnt);
     vfs_leave(mnt);
@@ -4482,6 +4483,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     }
     entry->ofd->vmnt = ref->mnt;
     vfs_wb_err_sample(ref->mnt, &entry->ofd->wb_seen, &entry->ofd->sb_seen);
+    entry->ofd->ino_seen = vfs_ino_err_sample(ref->mnt, entry->ofd->ino);
     entry->ofd->vnode = node;
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
@@ -5353,6 +5355,7 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     }
     e->ofd->vmnt = ref->mnt;
     vfs_wb_err_sample(ref->mnt, &e->ofd->wb_seen, &e->ofd->sb_seen);
+    e->ofd->ino_seen = vfs_ino_err_sample(ref->mnt, e->ofd->ino);
     e->ofd->vnode = ref->node;
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
@@ -6238,10 +6241,11 @@ long sys_close(isr_params_t *params)
  * The pages are written back under the big lock, taken when the caller
  * lacks it. Returns 0, -EIO, the type's error, a write-back error of the
  * file system recorded since the description's last sync looked, which
- * `sync_op` reports once to each description (`vfs_fsync`), or the failure
- * of an earlier write-back of the file's mapped pages left on the
- * description (`fd_ofd_map_err_take`), which is taken whatever the answer,
- * since a later pass that wrote the pages does not erase it.
+ * `sync_op` reports once to each description (`vfs_fsync`), or a failed
+ * write-back of the file's mapped pages recorded in the file's own error
+ * sequence since the description last looked (`vfs_ino_err_check`), whose
+ * cursor moves past it whatever the answer, so that a later pass that wrote
+ * the pages does not erase it and the description is not told it twice.
  */
 static long sync_entry(fd_entry_t *e,
                        int (*sync_op)(struct vfs_mount *mnt, void *handle, uint32_t *seen))
@@ -6256,7 +6260,7 @@ static long sync_entry(fd_entry_t *e,
             big_give(big);
         }
         rc = sync_op(e->ofd->vmnt, e->ofd->fhandle, &e->ofd->wb_seen);
-        kept = fd_ofd_map_err_take(e->ofd);
+        kept = vfs_ino_err_check(e->ofd->vmnt, e->ofd->ino, &e->ofd->ino_seen);
         if (mapped == 0) {
             mapped = rc != 0 ? rc : kept;
         }
@@ -16411,6 +16415,7 @@ static long memfd_open(struct vfs_mount *mnt, void *node, int cloexec)
     vfs_wb_err_sample(mnt, &e->ofd->wb_seen, &e->ofd->sb_seen);
     e->ofd->vnode = node;
     e->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
+    e->ofd->ino_seen = vfs_ino_err_sample(mnt, e->ofd->ino);
     vfs_desc_open(mnt);
     fd_install(current_proc->fds, fd);
     return fd;

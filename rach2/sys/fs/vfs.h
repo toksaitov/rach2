@@ -110,6 +110,7 @@ struct vfs_xattr {
 };
 
 struct vfs_mount;
+struct vfs_ino_err;
 struct vfs_name;
 struct block_frames_done;
 
@@ -512,6 +513,11 @@ struct vfs_mount {
      * Under `wb_err_lock` (vfs.c). */
     uint32_t wb_err;
     uint32_t sb_wb_err;
+    /* On the base mount, the error sequences of the files whose mapped
+     * pages failed a write-back, each kept as `wb_err` is, which fsync,
+     * fdatasync and MS_SYNC report to the file's descriptions alone
+     * (`vfs_ino_err_set`). Under `wb_err_lock` (vfs.c). */
+    struct vfs_ino_err *ino_errs;
     /* The tick since which what a write-back of shared mappings' pages put
      * in the file system may have been dirty, the oldest kept, on the base
      * mount; 0 for none (`vfs_writeback_aged`). Under the big lock. */
@@ -1218,13 +1224,47 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
  */
 void vfs_wb_err_set(struct vfs_mount *mnt, int rc);
 
-/** Record the failure `rc` of a write-back of a shared mapping's pages for
- * syncfs, in `sb_wb_err` of `mnt`'s base, and not for the fsync of every
- * file: the page stays dirty, and the descriptions of its own file report
- * it (`fd_ofd_map_err_set`), as Linux's fsync reports a write-back's error
- * only to the inode's files. A positive `rc` or one past the errno bits
- * records EIO. */
-void vfs_sb_err_set(struct vfs_mount *mnt, int rc);
+/**
+ * Record the failure `rc` of a write-back of the shared mappings' pages of
+ * the file `ino` of the file system `mnt` shows in the file's own error
+ * sequence, which each description of the file reports once through its
+ * fsync, fdatasync or MS_SYNC (`vfs_ino_err_check`), and for syncfs in
+ * `sb_wb_err`, as Linux's mapping_set_error records it in the inode's
+ * mapping and the superblock (include/linux/pagemap.h:43); the fsync of
+ * another file of the file system hears nothing of it. When the heap has
+ * no room for the file's sequence, the file system's `wb_err` takes the
+ * error instead. A positive `rc` or one past the errno bits records EIO.
+ * Not for interrupt context, since it may allocate the file's sequence.
+ */
+void vfs_ino_err_set(struct vfs_mount *mnt, uint64_t ino, int rc);
+
+/**
+ * The cursor a new description of the file `ino` of `mnt` starts with into
+ * the file's error sequence: at the error last reported, or before an
+ * error no sync has reported yet, or before any error at all, so that the
+ * first sync through the description after a failure nobody has reported
+ * sees it, as Linux's open samples the mapping's `wb_err` with
+ * errseq_sample (fs/open.c:911, lib/errseq.c:122).
+ */
+uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino);
+
+/**
+ * The report of the file `ino` of `mnt`'s own error sequence to the
+ * description whose cursor is `*seen` (`vfs_ino_err_sample`): the errno of
+ * a failure recorded since the cursor last looked, with the sequence marked
+ * reported and the cursor moved past it, else 0, as Linux's
+ * `file_check_and_advance_wb_err` (mm/filemap.c:726). Serialised with
+ * every other report, so that two syncs of one description report an error
+ * once.
+ */
+int vfs_ino_err_check(struct vfs_mount *mnt, uint64_t ino, uint32_t *seen);
+
+/**
+ * Free the error sequence of the file `ino` of `mnt`, when it has one, as
+ * its inode number is freed and may name another file: at the free of an
+ * unlinked inode, once no description of it is left.
+ */
+void vfs_ino_err_forget(struct vfs_mount *mnt, uint64_t ino);
 
 /**
  * The cursors a new description of a file of `mnt` starts with: `*file`

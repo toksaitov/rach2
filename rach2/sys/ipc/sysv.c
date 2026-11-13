@@ -557,6 +557,7 @@ static struct shm_seg *shm_new(size_t size)
         return NULL;
     }
     s->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
+    s->ofd->ino_seen = vfs_ino_err_sample(mnt, s->ofd->ino);
     s->size = size;
     s->cpid = (int32_t)current_proc->tgid;
     s->ctime = sysv_now();

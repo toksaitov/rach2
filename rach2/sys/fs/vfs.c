@@ -149,6 +149,8 @@ static int mount_new_slot(void)
     }
 }
 
+static void ino_errs_free(struct vfs_mount *m);
+
 /** Free the record `m` of a mount placed by mount(2), and empty its slot; a
  * record outside those slots is marked VFS_FREE instead. */
 static void mount_release(struct vfs_mount *m)
@@ -157,6 +159,7 @@ static void mount_release(struct vfs_mount *m)
     int i;
 
     vfs_mount_view_free(m);
+    ino_errs_free(m);
     for (i = VFS_PERMANENT; i < mount_slots; i++) {
         if (mounts[i] == m) {
             flags = spin_lock_irqsave(&mount_table_lock);
@@ -3128,10 +3131,11 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
 #define WB_ERR_SEEN 0x1000u
 #define WB_ERR_STEP 0x2000u
 
-/* Guards every mount's `wb_err` and `sb_wb_err` and every description's
- * cursors into them, so that two syncs of one description at once report
- * an error once, as Linux's `file_check_and_advance_wb_err` takes the
- * file's `f_lock`. A leaf, taken with interrupts off. */
+/* Guards every mount's `wb_err`, `sb_wb_err` and files' sequences
+ * (`ino_errs`) and every description's cursors into them, so that two
+ * syncs of one description at once report an error once, as Linux's
+ * `file_check_and_advance_wb_err` takes the file's `f_lock`. A leaf, taken
+ * with interrupts off. */
 static struct spinlock wb_err_lock = SPINLOCK_INIT_NAMED("wb_err_lock");
 
 /** Record `rc` in the sequence `seq`, as Linux's errseq_set: the errno
@@ -3176,16 +3180,117 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     spin_unlock_irqrestore(&wb_err_lock, flags);
 }
 
-void vfs_sb_err_set(struct vfs_mount *mnt, int rc)
+/* The write-back error sequence of one file, as Linux keeps one in the
+ * file's mapping (`wb_err`, include/linux/fs.h), on its base mount's list
+ * (`ino_errs`): made at the first failed write-back of the file's mapped
+ * pages (`vfs_ino_err_set`), and freed only with its inode number, at the
+ * free of the unlinked inode (`vfs_ino_err_forget`) or with the mount
+ * (`ino_errs_free`), so that a description opened at any time before then
+ * samples it. Under `wb_err_lock`. */
+struct vfs_ino_err {
+    struct vfs_ino_err *next;
+    uint64_t ino;
+    uint32_t seq; /* as `wb_err` */
+};
+
+/** The sequence of the file `ino` of the base mount `base`, or NULL. The
+ * caller holds `wb_err_lock`. */
+static struct vfs_ino_err *ino_err_find(const struct vfs_mount *base, uint64_t ino)
 {
+    struct vfs_ino_err *e;
+
+    for (e = base->ino_errs; e && e->ino != ino; e = e->next) {
+    }
+    return e;
+}
+
+/* The record is made before the lock is taken, since the heap may sleep,
+ * and given back when another caller made one meanwhile. With no room for
+ * one the error goes in the file system's `wb_err`, which every
+ * description of the file system then reports: more descriptions hear of
+ * it than should, and none that should does not. */
+void vfs_ino_err_set(struct vfs_mount *mnt, uint64_t ino, int rc)
+{
+    struct vfs_mount *base = mount_base(mnt);
+    struct vfs_ino_err *spare = NULL, *e;
     uint32_t flags;
 
     if (rc >= 0 || -rc > (int)WB_ERR_MASK) {
         rc = -EIO;
     }
     flags = spin_lock_irqsave(&wb_err_lock);
-    wb_err_record(&mount_base(mnt)->sb_wb_err, rc);
+    e = ino_err_find(base, ino);
     spin_unlock_irqrestore(&wb_err_lock, flags);
+    if (!e) {
+        spare = kzalloc(sizeof(*spare));
+    }
+    flags = spin_lock_irqsave(&wb_err_lock);
+    e = ino_err_find(base, ino);
+    if (!e && spare) {
+        spare->ino = ino;
+        spare->next = base->ino_errs;
+        base->ino_errs = spare;
+        e = spare;
+        spare = NULL;
+    }
+    wb_err_record(e ? &e->seq : &base->wb_err, rc);
+    wb_err_record(&base->sb_wb_err, rc);
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+    kfree(spare);
+}
+
+uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)
+{
+    uint32_t flags = spin_lock_irqsave(&wb_err_lock);
+    struct vfs_ino_err *e = ino_err_find(mount_base(mnt), ino);
+    uint32_t seq = e && (e->seq & WB_ERR_SEEN) ? e->seq : 0u;
+
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+    return seq;
+}
+
+int vfs_ino_err_check(struct vfs_mount *mnt, uint64_t ino, uint32_t *seen)
+{
+    uint32_t flags = spin_lock_irqsave(&wb_err_lock);
+    struct vfs_ino_err *e = ino_err_find(mount_base(mnt), ino);
+    int rc = e ? wb_err_check(&e->seq, seen) : 0;
+
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+    return rc;
+}
+
+void vfs_ino_err_forget(struct vfs_mount *mnt, uint64_t ino)
+{
+    struct vfs_mount *base = mount_base(mnt);
+    struct vfs_ino_err **pp, *gone = NULL;
+    uint32_t flags = spin_lock_irqsave(&wb_err_lock);
+
+    for (pp = &base->ino_errs; *pp; pp = &(*pp)->next) {
+        if ((*pp)->ino == ino) {
+            gone = *pp;
+            *pp = gone->next;
+            break;
+        }
+    }
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+    kfree(gone);
+}
+
+/** Free the files' error sequences of `m` at the release of its record,
+ * when no description of it is left (`mount_release`). */
+static void ino_errs_free(struct vfs_mount *m)
+{
+    uint32_t flags = spin_lock_irqsave(&wb_err_lock);
+    struct vfs_ino_err *e = m->ino_errs;
+
+    m->ino_errs = NULL;
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+    while (e) {
+        struct vfs_ino_err *next = e->next;
+
+        kfree(e);
+        e = next;
+    }
 }
 
 void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)

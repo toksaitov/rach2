@@ -1417,6 +1417,7 @@ static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const st
     vfs_wb_err_sample(ref->mnt, &ofd->wb_seen, &ofd->sb_seen);
     ofd->vnode = ref->node;
     ofd->ino = root ? krffs_node_ino(node) : vst->ino;
+    ofd->ino_seen = vfs_ino_err_sample(ref->mnt, ofd->ino);
     vfs_desc_open(ref->mnt);
     k_memset(&e, 0, sizeof(e));
     e.type = FD_TYPE_FILE;

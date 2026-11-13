@@ -198,14 +198,12 @@ struct open_file {
      * lock of the errors (vfs.c). */
     uint32_t wb_seen;
     uint32_t sb_seen;
-    /* With `vmnt`, the errno of the last failed write-back of the file's
-     * pages a shared mapping stored into, set on every description of the
-     * file at the failure (`fd_ofd_map_err_set`) and taken by the next
-     * fsync, fdatasync or MS_SYNC through this description, so that it
-     * reports the failure once however a later pass ends, as Linux reports
-     * the inode's `wb_err` through each file's `f_wb_err`
-     * (mm/filemap.c:726); 0 for none. Changed by one atomic step. */
-    uint32_t map_err;
+    /* With `vmnt`, the description's cursor into its file's own error
+     * sequence (`vfs_ino_err_set`), which fsync, fdatasync and MS_SYNC
+     * report from, Linux's `f_wb_err` into the mapping's `wb_err`: sampled
+     * at the open once `ino` is set (`vfs_ino_err_sample`) and moved only
+     * under the lock of the errors (vfs.c). */
+    uint32_t ino_seen;
     /* The held mount of a synthetic node opened by path, for NO_XDEV when
      * /proc/PID/fd follows this description; NULL on anonymous objects. */
     struct vfs_mount *synth_mnt;
@@ -670,18 +668,6 @@ int fd_node_busy(struct vfs_mount *mnt, void *node);
  * of a KRFFS root node that no descriptor's `node` names, a FIFO's ends
  * among them, wherever their descriptors are. */
 int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going);
-
-/** Record the failure `rc`, a negative errno, of a write-back of the pages
- * of the file `ino` of the file system `mnt` shows, which shared mappings
- * stored into, on every description of the file now open (`map_err`), for
- * each to report once; a positive `rc` or one past the errnos records EIO.
- * Any context; takes a spinlock with interrupts off. */
-void fd_ofd_map_err_set(const struct vfs_mount *mnt, uint64_t ino, int rc);
-
-/** Take the failure `fd_ofd_map_err_set` left on `ofd` that it has not
- * reported: its negative errno, with the record cleared in the same step,
- * or 0 for none. */
-int fd_ofd_map_err_take(struct open_file *ofd);
 
 /** 1 if `fd` is open and not closing, 0 otherwise. */
 int fd_is_valid(fd_table_t *table, int fd);

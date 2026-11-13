@@ -1477,8 +1477,10 @@ static int sb_note(struct ext2_mount *em);
  * (fs/ext2/inode.c:86-110): the reader reported the damage it met, as the
  * store does a table block it cannot write (`ext2_inode_write`), and a
  * failed write is recorded as one, so the mount's error bit or its failure
- * keeps the valid bit off the volume. The caller holds no file lock. Ends
- * the count `node_final` took.
+ * keeps the valid bit off the volume. An unlinked inode's write-back error
+ * sequence goes with it (`vfs_ino_err_forget`), since its number may name
+ * the next file made. The caller holds no file lock. Ends the count
+ * `node_final` took.
  */
 static void node_free(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -1496,6 +1498,9 @@ static void node_free(struct ext2_mount *em, struct ext2_node *n)
             klog(KLOG_WARN, "ext2", "inode %d: not %s at its last put", (int)n->ino,
                  freed ? "freed" : "stored");
         }
+    }
+    if (n->unlinked) {
+        vfs_ino_err_forget(em->mnt, n->ino);
     }
     node_drop(em, n);
     em_leave(em);
