@@ -5929,8 +5929,9 @@ static void fault_row(const char *img, const char *script, const char *fault, co
  *   does not match its pointers, an entry of the wrong form, a block of the
  *   volume's tables marked free) is named and mounts read-only with the
  *   error bit set, so that nothing is allocated or freed before e2fsck;
- * - a live orphan whose bit is clear has its bit set, and an orphan
- *   directory's entries count as names (`orphan_rows`);
+ * - a live orphan whose bit is clear has its bit set, an orphan
+ *   directory's entries count as names, and its `..` must name a
+ *   directory (`orphan_rows`);
  * - a read-only mount runs no check and writes nothing.
  */
 static int lost_block_reported(void)
@@ -6320,6 +6321,7 @@ static void stopped_memory_row(const char *img, long blk)
 }
 
 static void orphan_clear_row(const char *img, long ino);
+static void orphan_parent_row(const char *img, long ino, long links);
 static void orphan_named_row(const char *img, long blk, long ino, long links);
 
 /**
@@ -6333,6 +6335,9 @@ static void orphan_named_row(const char *img, long blk, long ino, long links);
  *   /dir/big.bin, which has one link, must stop the check at the second
  *   name, so that an unlink of /dir/big.bin cannot free the inode while
  *   the orphan directory names it;
+ * - an orphan directory of two links, its name gone from the root, whose
+ *   `..` names /dir/big.bin, must stop the check, so that an unlink of the
+ *   file cannot free an inode the kept directory names;
  * - an orphan directory whose entry is /dir/big.bin's only name, with the
  *   file's inode bit and a block's bit clear, must have both bits set and
  *   the file named, the directory the one orphan, so that filling the
@@ -6358,7 +6363,32 @@ static void orphan_rows(void)
              "mkdir /od\nln /dir/big.bin /od/alias\nunlink /od\nsif / links_count %ld\n", links);
     fault_row(img, script, "named twice with one link",
               "an orphan directory naming a file of one link mounts read-only");
+    orphan_parent_row(img, ino, links);
     orphan_named_row(img, blk, ino, links);
+}
+
+/** The third row of `orphan_rows`: the orphan directory /od, its `..`
+ * written over with inode `ino`, /dir/big.bin's; `links` is the root's link
+ * count without /od. */
+static void orphan_parent_row(const char *img, long ino, long links)
+{
+    char script[128];
+    unsigned char b[4];
+    uint64_t bytes = dirty_image(img, "mkdir /od\n");
+    long od = debugfs_number(img, "blocks /od", "");
+
+    snprintf(script, sizeof(script), "unlink /od\nsif / links_count %ld\n", links);
+    if (od <= 0 || !debugfs_script(img, script)) {
+        check(0, "the orphan directory of the .. row is made");
+        return;
+    }
+    b[0] = (unsigned char)ino;
+    b[1] = (unsigned char)(ino >> 8);
+    b[2] = (unsigned char)(ino >> 16);
+    b[3] = (unsigned char)(ino >> 24);
+    poke(img, od * 4096 + 12, b, 4);
+    fault_on(img, bytes, "an orphan directory whose .. names no directory",
+             "an orphan directory whose .. names a file mounts read-only");
 }
 
 /** The first row of `orphan_rows`: /dir/big.bin, inode `ino`, with its

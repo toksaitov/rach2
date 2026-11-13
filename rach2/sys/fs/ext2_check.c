@@ -38,14 +38,16 @@
  * out of range, an inode not a regular file whose pointers do not match its
  * size or its `i_blocks`, an attribute block of the wrong form or named by
  * more inodes than its count, a directory with two parents or without its
- * parent, an entry of the wrong form, a link count that does not match the
+ * parent, an orphan directory whose `..` names no directory the check
+ * walked, an entry of the wrong form, a link count that does not match the
  * entries of the live directories, a block of the volume's tables or a
  * reached inode the bitmap calls free. So does one of the check's own
  * limits, below. A check that stops has not compared the bitmaps with the
  * blocks files name, and the faults it stops at are the ones under which a
  * free could take a block or an inode something else still names: a block
  * claimed twice, an attribute block's count below its sharers, a link
- * count below the names. So the volume mounts read-only, and nothing is
+ * count below the names, an orphan directory's `..` naming an inode nothing
+ * holds. So the volume mounts read-only, and nothing is
  * allocated, freed or reclaimed on it before `e2fsck` has run or a later
  * writable remount's check ends; a fault sets the error bit on the disk, as
  * Linux's `ext2_error` writes it before it makes a mount read-only.
@@ -547,8 +549,9 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_
  * Check entry `entry`, 0 or 1, of directory `ino`, read into `raw` with the
  * first two bytes of its name: `.` naming the directory, and `..` naming
  * `parent`, or any inode when `parent` is 0, an orphan directory's, whose
- * `..` is kept in its record for `check_child`. 0, or -EIO with the fault
- * recorded.
+ * `..` is kept in its record and judged once every directory is walked, by
+ * `check_child` when an entry names the directory and by
+ * `check_orphan_parents` otherwise. 0, or -EIO with the fault recorded.
  */
 static int check_dots(struct ext2_check *c, uint32_t ino, uint32_t parent, uint32_t entry,
                       const uint8_t *raw)
@@ -576,8 +579,8 @@ static int check_dots(struct ext2_check *c, uint32_t ino, uint32_t parent, uint3
  * Walk directory `ino`, loaded at `c->node[depth]`, whose parent is
  * `parent`: its blocks, every entry's form, `.` and `..` in their places,
  * each other entry's inode, and its link count against two plus its
- * subdirectories. A `parent` of 0 is an orphan directory's, whose `..`
- * may name any inode and is kept in its record for `check_child`. 0, or
+ * subdirectories. A `parent` of 0 is an orphan directory's, whose `..` is
+ * kept in its record and judged later (`check_dots`). 0, or
  * -EIO with the fault recorded or for a failed read.
  */
 static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int depth)
@@ -851,6 +854,49 @@ static int check_orphan_dirs(struct ext2_check *c)
 }
 
 /**
+ * Require the `..` of each orphan directory no entry names, which
+ * `check_dots` kept in its record unjudged, to name a directory the check
+ * walked: the root, or a directory at or past `s_first_ino` in the set of
+ * reached inodes, every one of which was walked from the root or as an
+ * orphan. Anything else, a file above all, is a fault: the volume would
+ * mount writable while `..` names an inode whose free nothing holds back,
+ * and an unlink of that file would free an inode and blocks the kept
+ * directory still names. An orphan directory an entry named had its `..`
+ * judged by `check_dir` or `check_child`. 0, or -EIO with the fault
+ * recorded or for a failed read.
+ */
+static int check_orphan_parents(struct ext2_check *c)
+{
+    struct ext2_mount *em = c->em;
+    struct ext2_link *link;
+    uint32_t i, up;
+    int rc;
+
+    for (i = 0; i < EXT2_CHECK_LINK_BUCKETS; i++) {
+        for (link = c->link[i]; link; link = link->next) {
+            if (!link->dir || !link->orphan) {
+                continue;
+            }
+            up = link->parent;
+            if (up == EXT2_ROOT_INO) {
+                continue;
+            }
+            if (up < em->first_ino || up > em->inodes || !seen_test(c, up)) {
+                return check_fault(c, link->ino, "an orphan directory whose .. names no directory");
+            }
+            rc = ext2_inode_check_load(em, up, &c->node[0]);
+            if (rc != 0) {
+                return rc;
+            }
+            if ((c->node[0].mode & S_IFMT_) != S_IFDIR_) {
+                return check_fault(c, link->ino, "an orphan directory whose .. names no directory");
+            }
+        }
+    }
+    return 0;
+}
+
+/**
  * Set the bit of each live orphan the inode bitmap calls free
  * (`check_orphan`), counted in `c->iset`; the free counts already count it
  * used. 0, or the -errno of a failed read or write.
@@ -893,7 +939,8 @@ static int check_inode_bits(struct ext2_check *c)
 
 /**
  * The orphans and the bitmap compare: the inode scan (`check_inodes`), the
- * orphan directories' entries (`check_orphan_dirs`) and the link counts of
+ * orphan directories' entries (`check_orphan_dirs`) and the `..` of those
+ * no entry names (`check_orphan_parents`), and the link counts of
  * every name found; then the block bitmaps compared twice
  * (`check_block_bitmaps`), first for a fault and then to set the bits of
  * blocks a file names and recount, and the bits of live orphans set. 0, or
@@ -906,6 +953,9 @@ static int check_bitmaps(struct ext2_check *c)
 
     if (rc == 0) {
         rc = check_orphan_dirs(c);
+    }
+    if (rc == 0) {
+        rc = check_orphan_parents(c);
     }
     if (rc == 0) {
         rc = check_link_counts(c);
