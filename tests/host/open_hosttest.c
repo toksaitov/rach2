@@ -478,6 +478,15 @@ static void check(int ok, const char *what)
     }
 }
 
+/** Make `t` one more sharer of the rows' table, as a clone with CLONE_FILES
+ * makes it. */
+static void share_files(process_t *t)
+{
+    if (fd_table_share(&files, t) != 0) {
+        check(0, "a thread shares the rows' table");
+    }
+}
+
 /** Run the call queued to run while a row's call waits: a caller that
  * holds the mount's lock, or a thread the scheduler runs in a sleep. */
 static void run_waiting(void)
@@ -2705,6 +2714,7 @@ static void row_begin(void)
     proc.fds = &files;
     check(fd_table_init(proc.fds) == 0, "initialize descriptor table");
     files.refs = 1;
+    fd_table_join(&files, &proc);
     proc.euid = 1;
     opens = releases = refs = leaves = dropped = truncates = attrs = relocate = 0;
     open_error = truncate_error = getattr_error = 0;
@@ -3009,6 +3019,7 @@ static void orphan_locks(void)
         e->ofd->vnode = &victim;
         orphan_ofd = e->ofd;
         ofd_gone = 0;
+        fd_install(proc.fds, fd);
         check(close_fd(fd) == 0 && removals == 1, "the last close of an orphan frees it");
         orphan_ofd = 0;
         root_row_end();
@@ -3279,7 +3290,9 @@ static int model_open(void)
     ref.node = &node;
     int fd = fd_alloc(proc.fds);
 
-    return fd < 0 ? fd : open_install(&ref, fd, "target", 2);
+    fd = fd < 0 ? fd : open_install(&ref, fd, "target", 2);
+    fd_holds_release();
+    return fd;
 }
 
 /**
@@ -3442,8 +3455,7 @@ static void open_last_slot(void)
     proc.euid = 0;
     proc.rlim[RLIM_NOFILE].cur = 4;
     other.rlim[RLIM_NOFILE].cur = 4;
-    files.refs = 2;
-    other.fds = &files;
+    share_files(&other);
     for (fd = 0; fd < 3; fd++) {
         check(fd_alloc(proc.fds) == fd, "the table is full but for its last slot");
         fd_slot(proc.fds, fd)->type = FD_TYPE_FILE;
@@ -3520,12 +3532,11 @@ static void deferred_release(void)
     int fd;
 
     row_begin();
-    files.refs = 3;
+    share_files(&other);
+    share_files(&third);
     proc_list = &proc;
     proc.next = &other;
     other.next = &third;
-    other.fds = &files;
-    third.fds = &files;
     fd = model_open();
     check(fd >= 0, "open a descriptor two calls hold");
     if (fd >= 0) {
@@ -3568,10 +3579,9 @@ static void dup2_source_closed(void)
     int target;
 
     row_begin();
-    files.refs = 2;
+    share_files(&other);
     proc_list = &proc;
     proc.next = &other;
-    other.fds = &files;
     dup_source = model_open();
     target = model_open();
     check(dup_source >= 0 && target >= 0, "open a source and a target");
@@ -3850,6 +3860,7 @@ static void offset_seek_waits(void)
         e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
         e->ofd->offset = 0x1000;
         log_len = 0x2000;
+        fd_install(proc.fds, 0);
         sharer_files.refs = 1;
         (*fd_slot(&sharer_files, 0)) = *e;
         e->ofd->refcount++;
@@ -3899,6 +3910,7 @@ static void log_seek_range(void)
     e->type = FD_TYPE_DEVICE;
     e->ops = &log_ops;
     e->flags = FD_FLAG_READ;
+    fd_install(proc.fds, 0);
     log_len = 0x2000;
     e->ofd->offset = 0x7FFFFFF0u;
     k_memset(&params, 0, sizeof(params));
@@ -4027,6 +4039,7 @@ static void device_reopen_closed(void)
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
     e->ofd->dev_mnt = &dev_mount;
     e->ofd->dev_node = &dev_inode;
+    fd_install(proc.fds, 0);
     dev_holds = 1;
     refs++;
     in_dev_open = dev_desc_close;
@@ -4078,6 +4091,7 @@ static int orphan_desc(int fifo)
     orphan_ofd = e->ofd;
     ofd_gone = 0;
     removals_locked = 0;
+    fd_install(proc.fds, fd);
     return fd;
 }
 
@@ -4164,8 +4178,7 @@ static void orphan_reclaims(void)
     for (i = 0; i < 5; i++) {
         root_row_begin();
         if (paths[i] == orphan_held_close) {
-            files.refs = 2;
-            other.fds = &files;
+            share_files(&other);
             proc.next = &other;
         }
         orphan_fd = orphan_desc(i == 4);
