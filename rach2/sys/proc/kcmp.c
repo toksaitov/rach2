@@ -20,6 +20,7 @@
 #include "../lib/krandom.h"
 #include "../mm/mm.h"
 #include "../mm/usercopy.h"
+#include "../syscall.h"
 
 /* The kinds of object, Linux's enum kcmp_type. */
 #define KCMP_FILE      0
@@ -95,7 +96,10 @@ static const struct open_file *file_of(const process_t *t, uintptr_t idx)
 }
 
 /** KCMP_EPOLL_TFD: the file of `t1`'s descriptor `idx1` against the target
- * of the registration `uslot` names in an epoll set of `t2`. */
+ * of the registration `uslot` names in an epoll set of `t2`. The set's
+ * descriptor is held through the lookup (`fd_peek_hold`), as Linux's
+ * get_epoll_tfd_slot holds the file it finds, since `t2` may close its last
+ * descriptor meanwhile, without the big lock, and free the set. */
 static long kcmp_epoll_target(const process_t *t1, const process_t *t2, uintptr_t idx1,
                               const void __user *uslot)
 {
@@ -111,10 +115,11 @@ static long kcmp_epoll_target(const process_t *t1, const process_t *t2, uintptr_
     if (!f1) {
         return -EBADF;
     }
-    if (slot.efd > 0x7FFFFFFFu || fd_peek(t2->fds, (int)slot.efd, &ep, 0) != 0) {
+    if (slot.efd > 0x7FFFFFFFu || fd_peek_hold(t2->fds, (int)slot.efd, &ep) != 0) {
         return -EBADF;
     }
     rc = epoll_target(&ep, (int)slot.tfd, slot.toff, &target);
+    fd_peek_drop(&ep);
     if (rc != 0) {
         return rc;
     }
