@@ -267,11 +267,15 @@ void i915_irq_unregister(struct drm_i915_private *i915, int bank, uint32_t bits)
     }
 }
 
+/* The unmasks of a ring's user interrupt, which park_per_call counts. */
+static int unmasks;
+
 void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits)
 {
     (void)i915;
     (void)bank;
     (void)bits;
+    unmasks++;
 }
 
 void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits)
@@ -1597,8 +1601,8 @@ static void wait_before_interrupt(void)
  * 80-72.1: the unbind wait asks for the signal of a running batch before
  * it spins, as Linux's i915_active_wait enables its fences
  * (i915_active.c:559-571, 589-620), so a last request the chip finishes
- * during the spin lets its engine go and the GT parks
- * (gt/intel_breadcrumbs.c:220-235).
+ * during the spin lets its engine go (gt/intel_breadcrumbs.c:220-235), and
+ * the retire worker's pass parks the GT (84-157).
  */
 static void unbind_wait_spin(void)
 {
@@ -1621,9 +1625,11 @@ static void unbind_wait_spin(void)
     release_in_delay = I915_RCS0;
     CHECK(f && !f->signaled && i915_gem_object_wait_idle(obj, 1) == 0 && release_in_delay < 0,
           "unbind: the wait returns once the chip finishes the batch during its spin");
-    CHECK(f && f->listened && f->signaled && !rcs->requests && !rcs->unretired &&
-              !dev_a->gt.awake && parks == p + 1,
-          "unbind: its signal asked for first, the engine let go and the GT parked");
+    CHECK(f && f->listened && f->signaled && !rcs->requests && !rcs->unretired && dev_a->gt.awake &&
+              parks == p,
+          "unbind: its signal asked for first, the engine let go and the GT awake");
+    i915_gt_retire_requests(dev_a);
+    CHECK(!dev_a->gt.awake && parks == p + 1, "unbind: the retire worker's pass parks the GT");
     release_in_delay = -1;
     dma_fence_put(f);
     close_handle(&file_a, b);
@@ -1776,6 +1782,84 @@ static void heap_per_call(void)
     close_handle(&file_a, b);
 }
 
+/** A fence callback that does nothing: a listener, as a sleeper in
+ * SYNCOBJ_WAIT is. */
+static void listen_cb(struct dma_fence *f, struct dma_fence_cb *cb)
+{
+    (void)f;
+    (void)cb;
+}
+
+/**
+ * 84-157: what a Crocus call followed by a wait on its syncobj, as
+ * WineD3D's GL round trip makes them on the Lenovo, costs on the path
+ * besides the call's own records: the GT's unparks and parks, the user
+ * interrupt's unmasks, and new shadows of the parser. Each call's request
+ * signals to its listener, the interrupt is taken and the retire worker
+ * runs, as on the machine between one call and the next. Linux 6.12 keeps
+ * the GT awake from one call to the next: its Lenovo loop of 1,003 calls
+ * took 1,013 of the GPU's interrupts, where a park after each would add the
+ * switch to the kernel context and its interrupt (gt/intel_engine_pm.c:
+ * 150-230); it keeps the user interrupt armed while the engine is awake
+ * (gt/intel_breadcrumbs.c:229-262) and a shadow in its pool until it has
+ * been idle a second (gt/intel_gt_buffer_pool.c:87-122).
+ */
+static void park_per_call(void)
+{
+    uint32_t b = batch_end(), t = create(&file_a, 8192), so = syncobj_new();
+    struct drm_i915_gem_exec_object2 o[2];
+    struct drm_i915_gem_exec_fence f;
+    struct drm_i915_gem_execbuffer2 a;
+    struct dma_fence_cb cb;
+    struct dma_fence *sf;
+    int i, n = 0, p = 0, u = 0, m = 0, fr = 0, ok = 1;
+
+    entry_init(&o[0], b);
+    entry_init(&o[1], t);
+    o[1].flags = EXEC_OBJECT_WRITE;
+    k_memset(&f, 0, sizeof(f));
+    f.handle = so;
+    f.flags = I915_EXEC_FENCE_SIGNAL;
+    args_init(&a, o, 2,
+              I915_EXEC_RENDER | I915_EXEC_NO_RELOC | I915_EXEC_HANDLE_LUT | I915_EXEC_BATCH_FIRST |
+                  I915_EXEC_FENCE_ARRAY);
+    a.batch_len = 8;
+    a.cliprects_ptr = (uintptr_t)&f;
+    a.num_cliprects = 1;
+    /* The earlier rows' engines retired and the GT parked; the first call
+     * unparks it and the second call is the first measured. */
+    idle();
+    i915_gt_retire_requests(dev_a);
+    CHECK(execbuf(&a) == 0, "per call: the first call");
+    idle();
+    kick();
+    for (i = 0; i < 9; i++) {
+        if (i == 1) {
+            fr = frames_made;
+            n = kmalloc_calls;
+            p = parks;
+            u = unparks;
+            m = unmasks;
+        }
+        ring_hold(I915_RCS0);
+        ok &= execbuf(&a) == 0;
+        sf = syncobj_fence(so);
+        ok &= sf && dma_fence_add_callback(sf, &cb, listen_cb) == 0;
+        ring_release(I915_RCS0);
+        idle();
+        kick();
+    }
+    CHECK(ok, "per call: nine calls, each waited for");
+    printf("%s: per call: of 8 calls, %d unparks, %d parks, %d interrupt unmasks, %d shadow pages "
+           "taken, "
+           "%d heap blocks\n",
+           MODEL_TEST, unparks - u, parks - p, unmasks - m, frames_made - fr, kmalloc_calls - n);
+    CHECK(unparks == u && parks == p && unmasks == m && frames_made == fr,
+          "per call: the GT stays awake, its interrupt armed, and the shadow is reused");
+    close_handle(&file_a, t);
+    close_handle(&file_a, b);
+}
+
 int main(void)
 {
     uint32_t tl;
@@ -1809,6 +1893,7 @@ int main(void)
     sol_and_faults();
     lifetime();
     heap_per_call();
+    park_per_call();
     idle();
     /* The pool keeps its shadows past the rows until the GT parks. */
     i915_gem_pool_trim(dev_a, I915_POOL_ALL);

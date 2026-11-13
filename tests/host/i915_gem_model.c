@@ -480,7 +480,8 @@ void kunmap_temp(void *va)
     (void)va;
 }
 
-static int frames_live, pins_live;
+/* The frames held now, the pins held now, and the frames ever taken. */
+static int frames_live, pins_live, frames_made;
 
 /*
  * Memory with a limit. With `frame_limit` above 0, a frame is refused once
@@ -588,6 +589,7 @@ int shmem_allocate(struct shmem *sh, uint64_t off, uint64_t len)
         sh->leaves[0][page] = (uintptr_t)p;
         sh->held++;
         frames_live++;
+        frames_made++;
     }
     return 0;
 }
