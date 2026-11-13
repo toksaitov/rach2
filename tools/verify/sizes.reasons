@@ -606,7 +606,6 @@ tests/host/xhci_hosttest.c:model_w32 lines 125 a test's rows, each a case, read 
 tests/idreport.c:match nesting 5 a probe, one sequence of steps in the order the log records them
 tests/idreport.c:match params 7 a probe, one sequence of steps in the order the log records them
 
-tests/intrprobe.c:count_for_named complexity 30 a probe, one sequence of steps in the order the log records them
 tests/intrprobe.c:count_for_named nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/jobprobe.c:_start lines 151 a probe, one sequence of steps in the order the log records them

@@ -4254,6 +4254,7 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
 static void start_processors(void)
 {
     smp_start();
+    pci_msi_rebalance();
     watchdog_init();
     writeback_init();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||

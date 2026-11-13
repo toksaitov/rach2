@@ -89,6 +89,10 @@ void isr_free_vector(int vector);
  * outside `ISR_DEVICE_FIRST` to `ISR_DEVICE_LAST`. */
 uint32_t isr_vector_count(int vector);
 
+/** The interrupts taken on `vector` by logical processor `cpu`, or 0
+ * outside the device-vector and processor ranges. */
+uint32_t isr_vector_cpu_count(int vector, int cpu);
+
 /** Return the free message vectors under the big lock. */
 int isr_free_vector_count(void);
 
@@ -102,6 +106,11 @@ uint32_t isr_interrupt_total(void);
 /** Whether a device may be given a vector for its messages: the
  * architecture's message controller is up (on a PC, the local APIC). */
 int isr_msi_ready(void);
+
+/** Forward messages pending in this processor's controller to the
+ * destination published by pci_msi_shutdown, before stopping. With no
+ * normal shutdown prepared this is a no-op, including panic's stop. */
+void isr_cpu_offline(void);
 
 /** Whether the platform line `line` has raised an interrupt not yet taken. */
 int isr_line_pending(int line);

@@ -365,14 +365,34 @@ static void interrupt_rows(void)
     text = command("interrupts-status", "cat /proc/interrupts");
     found = 0;
     for (p = text; p != NULL && *p != '\0'; p = strchr(p, '\n'), p = p == NULL ? NULL : p + 1) {
-        if (sscanf(p, "%lu: %lu", &a, &b) == 2) {
-            total += b;
+        char *q, *end;
+
+        if (*p < '0' || *p > '9') {
+            continue;
         }
-        if (sscanf(p, "%lu: %lu %31s %31s", &a, &b, path, name) == 4) {
-            if (a == 32 && strcmp(path, "LAPIC") == 0 && strcmp(name, "timer") == 0) {
-                timer = b;
-                found = 1;
+        a = strtoul(p, &q, 10);
+        if (*q++ != ':') {
+            continue;
+        }
+        b = 0;
+        for (;;) {
+            unsigned long count;
+
+            while (*q == ' ' || *q == '\t') {
+                q++;
             }
+            if (*q < '0' || *q > '9') {
+                break;
+            }
+            count = strtoul(q, &end, 10);
+            b += count;
+            q = end;
+        }
+        total += b;
+        if (sscanf(q, "%31s %31s", path, name) == 2 && a == 32 && strcmp(path, "LAPIC") == 0 &&
+            strcmp(name, "timer") == 0) {
+            timer = b;
+            found = 1;
         }
     }
     check("timer", found && timer > 0, "vector 32 has no counted LAPIC timer");

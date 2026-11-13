@@ -2845,6 +2845,12 @@ static void proc_file_target(struct procfs_text *t, const fd_entry_t *e)
         ap_str(t, synth_net_name(pf->origin_file));
         return;
     }
+    if (pf->origin_file == SYNTH_PROC_IRQ_AFFINITY) {
+        ap_str(t, "/proc/irq/");
+        ap_u32(t, (uint32_t)pf->origin_pid);
+        ap_str(t, pf->origin_task ? "/effective_affinity" : "/smp_affinity");
+        return;
+    }
     if (pf->origin_file == SYNTH_SYS_UEVENT) {
         char where[64];
         int node = pf->origin_task >> 8;
@@ -3191,6 +3197,23 @@ uint32_t procfs_ino_sysvipc(int origin)
     return PROCFS_INO_SYSVIPC + 1u + (uint32_t)(origin - SYNTH_PROC_SYSVIPC);
 }
 
+uint32_t procfs_ino_irq(int vector, int attr)
+{
+    return vector < 0 ? 0x20000u : 0x20001u + (uint32_t)vector * 3u + (uint32_t)attr;
+}
+
+uint32_t procfs_ino_irqdir(void)
+{
+    return procfs_ino_irq(-1, 0);
+}
+
+int procfs_irq_exists(int vector)
+{
+    uint64_t requested, effective;
+
+    return pci_irq_affinity(vector, &requested, &effective) == 0;
+}
+
 uint32_t procfs_ino_acpidir(void)
 {
     return PROCFS_INO_ACPI;
@@ -3232,6 +3255,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_SYS_UEVENT) {
         return sysfs_ino(pf->origin_task >> 8, pf->origin_pid, 1 + (pf->origin_task & 255));
+    }
+    if (pf->origin_file == SYNTH_PROC_IRQ_AFFINITY) {
+        return procfs_ino_irq(pf->origin_pid, pf->origin_task + 1);
     }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
@@ -4649,7 +4675,7 @@ static int procfs_gen_console(struct procfs_text *t)
 
 /**
  * Render /proc/interrupts: a line for each vector that has taken an
- * interrupt, with the vector, its count, where it comes from and the names
+ * interrupt, with the vector, its counts by processor, its source and the names
  * of the devices on it, separated by commas, or "none"; then the count of
  * the APIC's spurious vector, SPU, and FBK, the times the timer's drain of
  * the USB controllers found work with no USB interrupt pending
@@ -4658,8 +4684,18 @@ static int procfs_gen_console(struct procfs_text *t)
  */
 static int procfs_gen_interrupts(struct procfs_text *t)
 {
-    int v;
+    int v, c;
 
+    ap_str(t, "        ");
+    for (c = 0; c < NR_CPUS; c++) {
+        if (!cpu_table[c].online) {
+            continue;
+        }
+        ap_str(t, "CPU");
+        ap_u32(t, (uint32_t)c);
+        ap_ch(t, '\t');
+    }
+    ap_ch(t, '\n');
     for (v = ISR_DEVICE_FIRST; v <= ISR_DEVICE_LAST; v++) {
         uint32_t n = isr_vector_count(v);
         int slot;
@@ -4670,8 +4706,13 @@ static int procfs_gen_interrupts(struct procfs_text *t)
         }
         ap_u32(t, (uint32_t)v);
         ap_str(t, ":\t");
-        ap_u32(t, n);
-        ap_str(t, "\t");
+        for (c = 0; c < NR_CPUS; c++) {
+            if (!cpu_table[c].online) {
+                continue;
+            }
+            ap_u32(t, isr_vector_cpu_count(v, c));
+            ap_ch(t, '\t');
+        }
         ap_str(t, isr_vector_source(v));
         ap_str(t, "\t");
         for (slot = 0; slot < ISR_MAX_VECTOR_HANDLERS; slot++) {
@@ -8142,6 +8183,9 @@ int procfs_fd_writable(struct fd_entry *e)
         }
         return sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255) ? 0644 : 0;
     }
+    if (f->origin_file == SYNTH_PROC_IRQ_AFFINITY) {
+        return f->origin_task == 0 ? 0644 : 0444;
+    }
     if (f->origin_file == SYNTH_PROC_ACPI_CALL) {
         return 0600;
     }
@@ -9454,6 +9498,141 @@ static int procfs_open_acpicall(int flags)
     return fd;
 }
 
+/** Read the affinity mask afresh, in Linux's comma-separated 32-bit
+ * hexadecimal words, from the description's byte offset. */
+static int32_t procfs_irq_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = e->priv;
+    uint64_t requested, effective, mask;
+    char text[19];
+    unsigned int high, low, digit;
+    uint32_t n = 0, off, take;
+    int shift, rc, started = 0;
+
+    rc = pci_irq_affinity(f->origin_pid, &requested, &effective);
+    if (rc) {
+        return rc;
+    }
+    mask = f->origin_task ? effective : requested;
+    high = (uint32_t)(mask >> 32);
+    low = (uint32_t)mask;
+    for (shift = high ? 60 : 28; shift >= 0; shift -= 4) {
+        if (shift == 28 && high) {
+            text[n++] = ',';
+        }
+        digit = shift >= 32 ? (high >> (shift - 32)) & 15u : (low >> shift) & 15u;
+        if (digit || started || shift == 0) {
+            text[n++] = "0123456789abcdef"[digit];
+            started = 1;
+        }
+    }
+    text[n++] = '\n';
+    off = e->ofd->offset > n ? n : (uint32_t)e->ofd->offset;
+    take = count < n - off ? count : n - off;
+    if (copy_to_user(buf, text + off, take)) {
+        return -EFAULT;
+    }
+    e->ofd->offset += take;
+    return (int32_t)take;
+}
+
+/** Parse one or two hexadecimal mask words and migrate the interrupt.
+ * effective_affinity is read-only, as on Linux. */
+static int32_t procfs_irq_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = e->priv;
+    char text[32];
+    uint64_t mask = 0, high = 0;
+    uint32_t i, digit, digits = 0, words = 0;
+    int rc;
+
+    if (f->origin_task) {
+        return -EACCES;
+    }
+    if (!count || count >= sizeof(text)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(text, buf, count)) {
+        return -EFAULT;
+    }
+    for (i = 0; i < count && oom_space(text[i]); i++) {
+    }
+    for (; i < count && !oom_space(text[i]); i++) {
+        if (text[i] == ',') {
+            if (!digits || digits > 8 || words++) {
+                return -EINVAL;
+            }
+            high = mask;
+            mask = 0;
+            digits = 0;
+            continue;
+        }
+        digit = oom_digit(text[i]);
+        if (digit > 15 || ++digits > (words ? 8u : 16u)) {
+            return -EINVAL;
+        }
+        mask = (mask << 4) | digit;
+    }
+    if (!digits) {
+        return -EINVAL;
+    }
+    for (; i < count; i++) {
+        if (!oom_space(text[i])) {
+            return -EINVAL;
+        }
+    }
+    if (words) {
+        mask |= high << 32;
+    }
+    rc = pci_irq_set_affinity(f->origin_pid, mask ? mask : ~(uint64_t)0);
+    return rc ? rc : (int32_t)count;
+}
+
+static const struct file_ops procfs_irq_ops = {
+    procfs_irq_read, procfs_irq_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
+
+/** Open a live message's affinity file. Writes require the initial user
+ * namespace's root privileges; effective_affinity accepts reads only. */
+static int procfs_open_irq(const struct vpath *vp, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int fd, acc = flags & 3;
+
+    if (!procfs_irq_exists(vp->pid)) {
+        return -ENOENT;
+    }
+    if (acc == 3 || (acc && (vp->procfile || !proc_privileged(current_proc)))) {
+        return -EACCES;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_file = SYNTH_PROC_IRQ_AFFINITY;
+    f->origin_pid = vp->pid;
+    f->origin_task = vp->procfile;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = fd_slot(current_proc->fds, fd);
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_irq_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : FD_FLAG_READ | FD_FLAG_WRITE;
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
+    fd_install(current_proc->fds, fd);
+    return fd;
+}
+
 /**
  * Open a writable /proc/sys file for writing, or for reading and writing, which
  * needs a privileged caller, as the file's mode, 0644 and owned by root, says;
@@ -9716,17 +9895,18 @@ static int procfs_gen_lockdep(struct procfs_text *t, int classes)
 static int procfs_needs_pid(int kind)
 {
     static const int global[] = {
-        VNODE_PROC_CMDLINE,     VNODE_PROC_DISK,        VNODE_PROC_NET_DEV,
-        VNODE_PROC_UPTIME,      VNODE_PROC_STAT_SYS,    VNODE_PROC_MEMINFO,
-        VNODE_PROC_CPUINFO,     VNODE_PROC_LOADAVG,     VNODE_PROC_DISKSTATS,
-        VNODE_PROC_VERSION,     VNODE_PROC_PARTITIONS,  VNODE_PROC_VMSTAT,
-        VNODE_PROC_SLABINFO,    VNODE_PROC_SWAPS,       VNODE_PROC_LOCKS,
-        VNODE_PROC_SYS_FILE,    VNODE_PROC_MOUNTS,      VNODE_PROC_USB,
-        VNODE_PROC_AUDIO,       VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,
-        VNODE_PROC_INTERRUPTS,  VNODE_PROC_CONSOLE,     VNODE_PROC_NET_ROUTE,
-        VNODE_PROC_NET_ARP,     VNODE_PROC_NET_TCP,     VNODE_PROC_NET_FILE,
-        VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC,     VNODE_PROC_ACPI_CALL,
-        VNODE_PROC_FS_LOCKWAIT, VNODE_PROC_LOCKDEP,     VNODE_PROC_LOCKDEP_STATS};
+        VNODE_PROC_CMDLINE,      VNODE_PROC_DISK,        VNODE_PROC_NET_DEV,
+        VNODE_PROC_UPTIME,       VNODE_PROC_STAT_SYS,    VNODE_PROC_MEMINFO,
+        VNODE_PROC_CPUINFO,      VNODE_PROC_LOADAVG,     VNODE_PROC_DISKSTATS,
+        VNODE_PROC_VERSION,      VNODE_PROC_PARTITIONS,  VNODE_PROC_VMSTAT,
+        VNODE_PROC_SLABINFO,     VNODE_PROC_SWAPS,       VNODE_PROC_LOCKS,
+        VNODE_PROC_SYS_FILE,     VNODE_PROC_MOUNTS,      VNODE_PROC_USB,
+        VNODE_PROC_AUDIO,        VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,
+        VNODE_PROC_INTERRUPTS,   VNODE_PROC_CONSOLE,     VNODE_PROC_NET_ROUTE,
+        VNODE_PROC_NET_ARP,      VNODE_PROC_NET_TCP,     VNODE_PROC_NET_FILE,
+        VNODE_PROC_IRQ_FILE,     VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC,
+        VNODE_PROC_ACPI_CALL,    VNODE_PROC_FS_LOCKWAIT, VNODE_PROC_LOCKDEP,
+        VNODE_PROC_LOCKDEP_STATS};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -9865,7 +10045,9 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
 {
     int acc = flags & 3;
 
-    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
+    if (vp->kind == VNODE_PROC_IRQ_FILE) {
+        *fd = procfs_open_irq(vp, flags);
+    } else if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
         *fd = procfs_open_oom(vp, pid, flags);
     } else if (vp->kind == VNODE_PROC_FILE &&
                (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM) && acc != 0) {

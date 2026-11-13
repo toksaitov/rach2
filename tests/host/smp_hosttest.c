@@ -159,6 +159,10 @@ int k_panicking(void)
     return 0;
 }
 
+/** No device message is pending in this stop model. */
+void isr_cpu_offline(void)
+{}
+
 /** No performance counter here: a stopped processor has none to stop. */
 void platform_pmu_disable(void)
 {}

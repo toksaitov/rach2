@@ -78,9 +78,11 @@ enum vnode_kind {
     VNODE_PROC_FS_LOCKWAIT,   /* /proc/fs/lockwait: each kind of lock's longest disk wait */
     VNODE_PROC_LOCKDEP,       /* /proc/lockdep: the lock-order checker's classes */
     VNODE_PROC_LOCKDEP_STATS, /* /proc/lockdep_stats: its pools and reports */
-    VNODE_DEV_MADE, /* a directory or link root made under /dev, by `syskey` (devtree.h) */
-    VNODE_ENOENT,   /* under a synthetic mount, but no such entry */
-    VNODE_ENOTDIR   /* under a synthetic mount, a non-dir used as a directory */
+    VNODE_DEV_MADE,      /* a directory or link root made under /dev, by `syskey` (devtree.h) */
+    VNODE_PROC_IRQ_DIR,  /* /proc/irq, pid = -1, or /proc/irq/N, pid = N */
+    VNODE_PROC_IRQ_FILE, /* pid = vector; procfile = requested (0), effective (1) */
+    VNODE_ENOENT,        /* under a synthetic mount, but no such entry */
+    VNODE_ENOTDIR        /* under a synthetic mount, a non-dir used as a directory */
 };
 
 /** The name of /proc/<pid>/ns's link of the namespace kind `kind`, NULL
@@ -180,6 +182,7 @@ const char *synth_ns_name(int kind);
  * alone (lib/lockdep.h). */
 #define SYNTH_PROC_LOCKDEP       71
 #define SYNTH_PROC_LOCKDEP_STATS 72
+#define SYNTH_PROC_IRQ_AFFINITY  73
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */

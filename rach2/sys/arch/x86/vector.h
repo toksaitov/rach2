@@ -29,7 +29,7 @@ extern char isr_msi_stubs_end[];
  * Take the lowest free vector of the pool that is a multiple of `align`, a
  * power of two from 1 to 32, for a device that writes its message number
  * into the data's low bits; another `align` is taken as 1. The vector, or
- * -1 when none is free. Called under the big lock.
+ * -1 when none is free. Serialized by the pool's spinlock.
  */
 int vector_take(int align);
 

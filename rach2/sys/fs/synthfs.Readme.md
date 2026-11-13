@@ -4,6 +4,8 @@ The kernel makes `/dev`, `/proc` and `/sys` from its own tables each time a prog
 
 A dma-buf descriptor's `/proc/PID/fdinfo/N` includes its `name:` once `DMA_BUF_SET_NAME` has supplied one; [dma-buf(7)](../../../man/man7/dma-buf.7) gives the request's contract.
 
+`/proc/interrupts` has one count column per online processor. `/proc/irq/N` exposes each enabled PCI message's requested and effective affinity masks, with the Linux hexadecimal format and a privileged write of `smp_affinity` to move the interrupt. `effective_affinity` is read-only. [proc(5)](../../../man/man5/proc.5) gives the masks, errors and default-mask behavior.
+
 ## Interfaces
 
 On x86-64, `/proc/stat` also reports KVM's live VM, vCPU, slot, guest-physical table-page and run-page mapping-object counts, which [the KVM Readme](../kvm/Readme.md) gives.
