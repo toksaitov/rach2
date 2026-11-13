@@ -7375,6 +7375,7 @@ static void fail_block_reads(void)
 }
 
 #include "ext2_policy_rows.h"
+#include "ext2_fence_rows.h"
 
 /**
  * A symlink whose name is on the device keeps its inode when the store of
@@ -8619,6 +8620,7 @@ static const struct {
     {"--dir-commit-only", dir_commit_rows},
     {"--mark-only", mark_rows},
     {"--stop-only", stop_rows},
+    {"--fence-only", fence_rows},
 };
 
 /**
@@ -8694,6 +8696,7 @@ int main(int argc, char **argv)
     group_rows();
     write_lock_rows();
     names_rows();
+    fence_rows();
 
 finish:
     if (image) {
