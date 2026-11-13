@@ -626,14 +626,15 @@ struct punch_walk {
 };
 
 /**
- * Refuse the pointer block at `*slot` of walk `w`, which lies outside the
- * data zone and was logged and reported (`ext2_zone_check`). When the walk
- * frees all it covers (`whole`), its pointer is cleared at `slot_at`,
- * dirtied `first`, or for 0 in the inode in memory, with nothing below it
- * read or freed, as Linux's `ext2_free_branches` clears the pointer and its
- * `ext2_free_blocks` refuses the block (fs/ext2/balloc.c:498), so that the
- * rest of the file and its inode can still be freed, and `*emptied` is set;
- * a block whose range the walk keeps in part stays, -EIO. 0, or -errno.
+ * Abandon the pointer block at `*slot` of walk `w`, which lies outside the
+ * data zone or cannot be read, as the reclaim reader reported
+ * (`ext2_read_reclaim`). When the walk frees all it covers (`whole`), its
+ * pointer is cleared at `slot_at`, dirtied `first`, or for 0 in the inode in
+ * memory, with the block and what is below it not yet freed left taken, as
+ * Linux's `ext2_free_branches` clears the slot and goes on
+ * (fs/ext2/inode.c:1146-1156), so that the rest of the file and its inode
+ * can still be freed, and `*emptied` is set; a block whose range the walk
+ * keeps in part stays, -EIO. 0, or -errno.
  */
 static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int whole,
                          int *emptied)
@@ -668,11 +669,10 @@ static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at,
  * `n->blocks` is kept current. A slot's read may sleep, so a service point
  * before it asks nothing more of the walk: every removal so far is whole,
  * and the listed blocks stay taken until the round frees them. A pointer
- * block out of range is refused (`punch_refused`), and a pointer
- * block that cannot be read is logged and reported to the mount's policy,
- * as Linux's `ext2_free_branches` reports it (fs/ext2/inode.c:1153), and
- * ends the walk. 0, PUNCH_FULL when the list has no room for the next
- * block, or -errno.
+ * block is read by the reclaim reader (`ext2_read_reclaim`), and one out of
+ * range or that cannot be read, which it reports, is abandoned
+ * (`punch_refused`) and the walk goes on. 0, PUNCH_FULL when the list has
+ * no room for the next block, or -errno.
  */
 static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int level,
                        uint32_t base, int *emptied)
@@ -699,9 +699,6 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
         int all_gone = 1;
         uint32_t k;
 
-        if (ext2_zone_check(em, n->ino, "pointer block", b) != 0) {
-            return punch_refused(w, slot, slot_at, base >= keep, emptied);
-        }
         for (k = per; k > 0; k--) {
             uint32_t child_base = base + (k - 1) * (span / per);
             uint8_t ptr[4];
@@ -717,7 +714,10 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
                 w->visits = 0;
                 sched_service_point();
             }
-            rc = ext2_read_bytes(em, READ_RECLAIM, n->ino, at, ptr, 4);
+            rc = ext2_read_reclaim(em, READ_RECLAIM, n->ino, at, ptr, 4);
+            if (rc == 1) {
+                return punch_refused(w, slot, slot_at, base >= keep, emptied);
+            }
             if (rc != 0) {
                 return rc;
             }

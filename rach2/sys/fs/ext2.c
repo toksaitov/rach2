@@ -941,6 +941,24 @@ int ext2_read_bytes(struct ext2_mount *em, int kind, uint32_t ino, uint64_t off,
     return 0;
 }
 
+/**
+ * The reclaim reader: `ext2_read_bytes` of a block a free walks, of kind
+ * READ_RECLAIM, READ_ATTR_FREE or READ_BITMAP, each of which reports a block
+ * it refuses and a failed read. 0; 1 for a block refused or unread, already
+ * reported, which the caller abandons, and goes on past, as Linux's
+ * `ext2_free_branches` and `ext2_xattr_delete_inode` go on past one
+ * (fs/ext2/inode.c:1146-1156, xattr.c:832-853), so that the rest of the
+ * file and its inode are still freed; or -EAGAIN under a plan. A reclaimer
+ * never sees a read error.
+ */
+int ext2_read_reclaim(struct ext2_mount *em, int kind, uint32_t ino, uint64_t off, void *dst,
+                      uint32_t len)
+{
+    int rc = ext2_read_bytes(em, kind, ino, off, dst, len);
+
+    return rc == -EIO ? 1 : rc;
+}
+
 /* ---- the structural blocks ---- */
 
 /** Whether `g`, which is not 0, is a power of `base`, 1 included. */
@@ -2897,7 +2915,10 @@ static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
  * its extended-attribute block (`ext2_attr_release`), then its bit and counts,
  * these two under their groups' locks with the blocks they read fetched
  * first, so that a lock waits on the disk only for a block evicted again.
- * The node's `unlinked` mark is cleared. 0, or -errno.
+ * The node's `unlinked` mark is cleared. Each step reads through the
+ * reclaim reader (`ext2_read_reclaim`), which reports a damaged or unread
+ * block and leaves what it holds taken, so a step returns only a failed
+ * write, after which nothing further would land. 0, or -errno.
  */
 int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
 {
