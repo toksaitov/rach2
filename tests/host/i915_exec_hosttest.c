@@ -29,7 +29,8 @@
  * the object is busy (78-5c); a batch whose breadcrumb is written before
  * its interrupt is taken, idle to WAIT and BUSY with the GT left awake
  * (80-61); the unbind wait's signal asked for before its spin (80-72.1); a
- * ring that refuses the commands.
+ * ring that refuses the commands; the heap's blocks a call shaped as
+ * Crocus makes it takes on an idle ring and on a busy one (84-146).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -50,6 +51,13 @@
 #include "drm/i915/i915_ppgtt.c"
 #include "drm/i915/i915_gem_execbuffer.c"
 #include "drm/i915/i915_cmd_parser.c"
+
+/* The heap's blocks a Crocus call takes at most, on an idle ring and on a
+ * busy one: the call's objects, its fence array, its hold and its request,
+ * and on a busy ring a new shadow, whose pool's are all in use. Before
+ * 84-146 the reservations' merges and copies made them 21 and 23. */
+#define HEAP_IDLE_CALL 4
+#define HEAP_BUSY_CALL 7
 
 /* The batch's commands the chip runs: a store to a GTT address. */
 #define MI_STORE_DATA_IMM_GTT (MI_INSTR(0x20, 2) | (1u << 22))
@@ -1426,6 +1434,9 @@ static void parser_pool(uint32_t b, struct drm_i915_gem_execbuffer2 *a)
     CHECK(kept && kept->pool_next == 0 && kept->base.refs == 1u &&
               (uint32_t)frames_live == frames + 1u,
           "parser: the shadow kept in the pool, idle, once the request retires");
+    /* The device the scan works on, which the bind's registration names;
+     * the model's frames call no shrinker, so none is registered. */
+    dev_a->gem.shrinker.i915 = dev_a;
     CHECK(i915_gem_shrinker_scan(&dev_a->gem.shrinker.base, 1u, 0) >= 1u &&
               dev_a->gt.pool[0] == 0 && (uint32_t)frames_live == frames,
           "parser: the shrinker frees an idle shadow");
@@ -1688,6 +1699,82 @@ void i915_rps_retire(struct i915_request *rq)
     (void)rq;
 }
 
+/**
+ * 84-146: the heap's blocks a call takes, shaped as Mesa's Crocus makes
+ * it on the Lenovo: NO_RELOC, HANDLE_LUT and BATCH_FIRST, a batch with a
+ * length to parse and a relocation, a buffer read and a target written,
+ * and a syncobj to signal, run again and again on one ring. The first
+ * call places the objects and, since they moved, copies the relocations
+ * in and applies them; the next ones read none. A buffer the ring keeps
+ * busy holds one fence of the ring as its writer and one as a reader, its
+ * newer point in the older one's place, as Linux's dma_resv_add_fence.
+ * Linux 6.12's path allocates the request, its sync points, the fence
+ * array's and the call's records; the counts here are of the same kind.
+ */
+static void heap_per_call(void)
+{
+    uint32_t b = batch_end(), s = create(&file_a, 4096), t = create(&file_a, 8192);
+    uint32_t so = syncobj_new();
+    struct drm_i915_gem_relocation_entry r;
+    struct drm_i915_gem_exec_object2 o[3];
+    struct drm_i915_gem_exec_fence f;
+    struct drm_i915_gem_execbuffer2 a;
+    struct dma_resv *rt = object(&file_a, t)->base.resv, *rs = object(&file_a, s)->base.resv;
+    struct dma_fence *w;
+    int i, n, idle_calls, busy_calls, ok = 1;
+
+    k_memset(&r, 0, sizeof(r));
+    r.target_handle = 2;
+    r.offset = 0x100;
+    r.read_domains = I915_GEM_DOMAIN_RENDER;
+    entry_init(&o[0], b);
+    o[0].relocation_count = 1;
+    o[0].relocs_ptr = (uintptr_t)&r;
+    entry_init(&o[1], s);
+    entry_init(&o[2], t);
+    o[2].flags = EXEC_OBJECT_WRITE;
+    k_memset(&f, 0, sizeof(f));
+    f.handle = so;
+    f.flags = I915_EXEC_FENCE_SIGNAL;
+    args_init(&a, o, 3,
+              I915_EXEC_RENDER | I915_EXEC_NO_RELOC | I915_EXEC_HANDLE_LUT | I915_EXEC_BATCH_FIRST |
+                  I915_EXEC_FENCE_ARRAY);
+    a.batch_len = 8;
+    a.cliprects_ptr = (uintptr_t)&f;
+    a.num_cliprects = 1;
+    CHECK(execbuf(&a) == 0 && o[2].offset == offset_of(t) && r.presumed_offset == offset_of(t) &&
+              dword_at(b, 0x100) == (uint32_t)offset_of(t),
+          "heap: the first call places the objects and applies the relocation");
+    idle();
+    n = kmalloc_calls;
+    for (i = 0; i < 4; i++) {
+        ok &= execbuf(&a) == 0;
+        idle();
+    }
+    idle_calls = (kmalloc_calls - n) / 4;
+    CHECK(ok, "heap: four calls on an idle ring pass");
+    ring_hold(I915_RCS0);
+    n = kmalloc_calls;
+    for (i = 0; i < 4; i++) {
+        ok &= execbuf(&a) == 0;
+    }
+    busy_calls = (kmalloc_calls - n) / 4;
+    w = rt->write;
+    CHECK(ok && w && w->ops == &i915_fence_ops && !dma_fence_is_signaled(w) && rs->nreads == 1 &&
+              rs->reads[0] == w && !rs->write,
+          "heap: four on a busy ring leave the target one writer and the buffer one reader, "
+          "the last request");
+    ring_release(I915_RCS0);
+    idle();
+    printf("%s: heap: %d blocks a call on an idle ring, %d on a busy one\n", MODEL_TEST, idle_calls,
+           busy_calls);
+    CHECK(idle_calls <= HEAP_IDLE_CALL && busy_calls <= HEAP_BUSY_CALL,
+          "heap: a call takes no more blocks than its records need");
+    close_handle(&file_a, t);
+    close_handle(&file_a, s);
+    close_handle(&file_a, b);
+}
+
 int main(void)
 {
     uint32_t tl;
@@ -1720,6 +1807,7 @@ int main(void)
     unbind_wait_spin();
     sol_and_faults();
     lifetime();
+    heap_per_call();
     idle();
     /* The pool keeps its shadows past the rows until the GT parks. */
     i915_gem_pool_trim(dev_a, I915_POOL_ALL);
