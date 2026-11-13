@@ -496,6 +496,9 @@ struct vfs_mount {
      * keeps the mount read-only for the rest of its life, which a remount
      * read-write refuses. A sync reports errors through `wb_err`. */
     int write_error;
+    /* Refuse new writer reservations during a read-only remount, under
+     * fd.c's description-list lock. */
+    int readonly_pending;
     /* The write-back errors of the file system, on the base mount, as
      * Linux's errseq_t (lib/errseq.c): the last error's errno in the low
      * twelve bits, a bit set once a sync has reported it, and above them a
@@ -1203,6 +1206,10 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
  * with interrupts off.
  */
 void vfs_wb_err_set(struct vfs_mount *mnt, int rc);
+
+/** Record a retryable shared-page write failure for syncfs alone. Its
+ * file's fsync runs the pass and returns its errno directly. */
+void vfs_sb_err_set(struct vfs_mount *mnt, int rc);
 
 /**
  * The cursors a new description of a file of `mnt` starts with: `*file`

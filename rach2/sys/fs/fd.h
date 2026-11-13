@@ -618,6 +618,15 @@ struct vfs_ref;
  * lock is required. */
 int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
 
+/** Begin a read-only remount of `mnt`: -EBUSY while a writable description
+ * lives, including one held only by a mapping, else refuse new writers
+ * until `fd_mount_readonly_end`. A bind checks only its own descriptions;
+ * a base checks all its binds. Under the description-list lock. */
+int fd_mount_readonly_begin(struct vfs_mount *mnt);
+
+/** End a read-only remount's refusal of new writer reservations. */
+void fd_mount_readonly_end(struct vfs_mount *mnt);
+
 /** Give back the reservation `ofd` holds, if any. The big kernel lock is
  * required. */
 void fd_ofd_access_drop(struct open_file *ofd);

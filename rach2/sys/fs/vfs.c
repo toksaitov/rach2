@@ -3176,6 +3176,18 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     spin_unlock_irqrestore(&wb_err_lock, flags);
 }
 
+void vfs_sb_err_set(struct vfs_mount *mnt, int rc)
+{
+    uint32_t flags;
+
+    if (rc >= 0 || -rc > (int)WB_ERR_MASK) {
+        rc = -EIO;
+    }
+    flags = spin_lock_irqsave(&wb_err_lock);
+    wb_err_record(&mount_base(mnt)->sb_wb_err, rc);
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+}
+
 void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)
 {
     struct vfs_mount *base = mount_base(mnt);
@@ -5397,7 +5409,7 @@ const struct vfs_type *vfs_type_at(int idx)
 int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
 {
     uint32_t changed = (flags ^ m->flags) & VFS_MS_RDONLY;
-    int rc;
+    int rc, closing = changed && (flags & VFS_MS_RDONLY);
 
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
@@ -5415,13 +5427,30 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
         ((m->dev && (m->dev->flags & BLOCK_READ_ONLY)) || m->write_error)) {
         return -EROFS;
     }
+    if (closing) {
+        rc = fd_mount_readonly_begin(m);
+        if (rc != 0) {
+            return rc;
+        }
+        rc = filemap_sync_mount(m);
+        if (rc != 0) {
+            fd_mount_readonly_end(m);
+            return rc;
+        }
+    }
     if (m->type->ops->remount && (changed || (options && *options))) {
         rc = m->type->ops->remount(m, flags, options);
         if (rc != 0) {
+            if (closing) {
+                fd_mount_readonly_end(m);
+            }
             return rc;
         }
     }
     m->flags = flags;
+    if (closing) {
+        fd_mount_readonly_end(m);
+    }
     klog(KLOG_INFO, "vfs", "remounted: %s (%s)", m->covered_path,
          (flags & VFS_MS_RDONLY) ? "read-only" : "writable");
     return 0;
@@ -6107,6 +6136,8 @@ int vfs_do_bind(const char *source, const char *target, int rec)
 
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
 {
+    int closing = (flags & VFS_MS_RDONLY) && !(m->flags & VFS_MS_RDONLY);
+    int rc;
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
@@ -6116,7 +6147,16 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
     if (!(flags & VFS_MS_RDONLY) && (mount_base(m)->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
+    if (closing) {
+        rc = fd_mount_readonly_begin(m);
+        if (rc != 0) {
+            return rc;
+        }
+    }
     m->flags = flags;
+    if (closing) {
+        fd_mount_readonly_end(m);
+    }
     klog(KLOG_INFO, "vfs", "remounted: %s (%s)", m->covered_path,
          (flags & VFS_MS_RDONLY) ? "read-only" : "writable");
     return 0;
@@ -6624,8 +6664,13 @@ static int unmount_mount(struct vfs_mount *m)
     if (m->bind_of) {
         return unmount_bind(m);
     }
-    /* The pages in memory of its files are written, or dropped. */
-    filemap_unmount(m);
+    if (!vfs_mount_gone(m)) {
+        rc = filemap_sync_mount(m);
+        if (rc != 0) {
+            m->state = VFS_ACTIVE;
+            return rc;
+        }
+    }
     dcache_forget_mount(m);
     vfs_ns_lock(m);
     rc = vfs_mount_gone(m) ? 0 : unmount_write(m, &what);
@@ -6638,6 +6683,8 @@ static int unmount_mount(struct vfs_mount *m)
     } else if (dropped > 0) {
         klog(KLOG_WARN, "vfs", "unmount: %s: %d dirty buffers dropped", m->covered_path, dropped);
     }
+    /* No step after the pages are dropped can abandon the unmount. */
+    filemap_unmount(m);
     klog(KLOG_INFO, "vfs", "unmounted %s: %d opens, %d releases", m->covered_path, (int)m->opens,
          (int)m->releases);
     if (m->type->ops->put) {

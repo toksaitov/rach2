@@ -4796,8 +4796,7 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
 {
     struct vfs_ref ref;
     struct vfs_mount *m;
-    process_t *pr;
-    int i, rc = vfs_resolve(0, path, 0, &ref, 0, 0);
+    int rc = vfs_resolve(0, path, 0, &ref, 0, 0);
 
     if (rc != 0) {
         return rc;
@@ -4811,26 +4810,6 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
         (!bind || vfs_mount_shared(m) || (m->flags & REMOUNT_LOCKED & ~flags))) {
         vfs_ref_release(&ref);
         return -EPERM;
-    }
-    if ((flags & VFS_MS_RDONLY) && !(m->flags & VFS_MS_RDONLY)) {
-        for (pr = proc_list; pr && rc == 0; pr = pr->next) {
-            uint32_t held;
-
-            if (!pr->fds) {
-                continue;
-            }
-            held = fd_table_lock(pr->fds);
-            for (i = 0; i < pr->fds->cap; i++) {
-                fd_entry_t *e = fd_slot(pr->fds, i);
-
-                if (e->type == FD_TYPE_FILE && (e->flags & FD_FLAG_WRITE) && e->ofd &&
-                    (bind ? e->ofd->vmnt == m : vfs_mount_base(e->ofd->vmnt) == m)) {
-                    rc = -EBUSY;
-                    break;
-                }
-            }
-            fd_table_unlock(pr->fds, held);
-        }
     }
     if (rc == 0) {
         rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data);
@@ -6277,7 +6256,7 @@ static long sync_entry(fd_entry_t *e,
         }
         rc = sync_op(e->ofd->vmnt, e->ofd->fhandle, &e->ofd->wb_seen);
 
-        return mapped != 0 ? -EIO : rc;
+        return mapped != 0 ? mapped : rc;
     }
     return pc_sync() != 0 ? -EIO : 0;
 }

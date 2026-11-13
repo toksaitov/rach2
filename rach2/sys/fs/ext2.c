@@ -6,6 +6,7 @@
 
 #include "ext2_internal.h"
 #include "../lib/kirq.h"
+#include "../mm/filemap.h"
 
 /* The kinds of ext2's locks, as `sleep_lock_records` lists them. */
 static struct sleep_lock_record node_record = SLEEP_LOCK_RECORD("ext2 node");
@@ -1595,6 +1596,10 @@ void ext2_put(struct vfs_mount *mnt, void *node)
         }
         bkl_enter();
         big = 1;
+    }
+    /* The record holds the node and its open handle holds it once more. */
+    if (n->unlinked && n->refs == 3) {
+        filemap_evict_unlinked(mnt, n->ino, n);
     }
     if (n->unlinked && !file_locks_held() && em->wb && em->wb->count) {
         (void)ext2_writeback_drain(em);

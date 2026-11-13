@@ -341,7 +341,11 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
     struct access_count *a = access_find(ref->mnt, ref->node);
     int rc = 0;
 
-    if (a && a->count[2 - access] > 0) {
+    if (access == 1 &&
+        (ref->mnt->readonly_pending || vfs_mount_base(ref->mnt)->readonly_pending ||
+         (ref->mnt->flags & VFS_MS_RDONLY) || (vfs_mount_base(ref->mnt)->flags & VFS_MS_RDONLY))) {
+        rc = -EROFS;
+    } else if (a && a->count[2 - access] > 0) {
         rc = -ETXTBSY;
     } else if (a && ofd->access == access && ofd->access_node == ref->node &&
                vfs_mount_base(ofd->access_mnt) == vfs_mount_base(ref->mnt)) {
@@ -358,6 +362,35 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
     }
     spin_unlock_irqrestore(&ofd_lock, flags);
     return rc;
+}
+
+int fd_mount_readonly_begin(struct vfs_mount *mnt)
+{
+    struct ofd_rec *rec;
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
+    int rc = mnt->readonly_pending ? -EBUSY : 0;
+
+    for (rec = ofds; rec && rc == 0; rec = rec->next) {
+        struct open_file *f = &rec->ofd;
+
+        if (f->access == 1 &&
+            (mnt->bind_of ? f->access_mnt == mnt : vfs_mount_base(f->access_mnt) == mnt)) {
+            rc = -EBUSY;
+        }
+    }
+    if (rc == 0) {
+        mnt->readonly_pending = 1;
+    }
+    spin_unlock_irqrestore(&ofd_lock, flags);
+    return rc;
+}
+
+void fd_mount_readonly_end(struct vfs_mount *mnt)
+{
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
+
+    mnt->readonly_pending = 0;
+    spin_unlock_irqrestore(&ofd_lock, flags);
 }
 
 void fd_ofd_ref(struct open_file *ofd)

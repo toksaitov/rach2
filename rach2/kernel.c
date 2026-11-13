@@ -26,6 +26,7 @@
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
 #include "sys/mm/filecache.h"
+#include "sys/mm/filemap.h"
 #include "sys/mm/modlayout.h"
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
@@ -2573,6 +2574,7 @@ void kernel_shutdown(int how)
     }
     shutdown_started = 1;
     power_prepare(how);
+    filemap_sync_all();
     shutdown_others();
     if (!_krffs_on_disk && vfs_root_mounted() && vfs_root_mount()->type != &vfs_krffs_type) {
         root = vfs_root_mount();
