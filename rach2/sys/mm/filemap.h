@@ -172,7 +172,9 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
 
 /** After a truncation of the file `ino` of `mnt` to `size`, free the pages
  * in memory past the new end, which are first taken out of every mapping
- * (`shmem_truncate`). */
+ * (`shmem_truncate`), and clear their dirty bits. The caller holds the
+ * file's lock and the big lock, on which the release of a device's write
+ * pin relies to find the page still the file's (`filemap_pin_dirty`). */
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size);
 
 /** For fsync of the file `ofd` is open on, write the file's dirty pages

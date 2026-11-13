@@ -106,12 +106,21 @@ struct dshare {
      * (`dshare_write_word`), and sets it again when the write fails or a
      * device holds the frame; a truncation clears the bits of the pages it
      * frees; and the release of a device's write pin sets the bit of each
-     * page it held (`filemap_pin_dirty`). Changed under the file's lock and
-     * the big lock, with nothing that sleeps between a read of a bit and its
-     * change, but for a pin's release, which holds the big lock alone. */
+     * page it held (`filemap_pin_dirty`). The file's lock orders these
+     * whole operations, but a write fault on ext2 holds it alone and a pin's
+     * release holds the big lock alone, so every read and write of
+     * `stored`, `nstored`, a leaf's pointer, a leaf's words and `ndirty` is
+     * made under `bits`, as Linux marks a folio dirty under the mapping's
+     * own spin lock (mm/page-writeback.c:2789-2802). */
     uint32_t **stored;
-    uint32_t nstored; /* the leaves `stored` reaches */
+    uint32_t nstored; /* the leaves `stored` reaches; only grows while the
+                         record has users */
     uint32_t ndirty;  /* the bits set in `stored`, as `stored` is changed */
+    /* The lock over `stored`, `nstored` and `ndirty`, taken with interrupts
+     * off after the file's lock and the big lock, and innermost: nothing is
+     * called under it, no allocation, free, log, walk or other lock. A
+     * reader uses a leaf or the directory within one hold of it. */
+    struct spinlock bits;
     /* The shared mappings through a description open for writing whose
      * release has not begun: the last to go writes the pages back
      * (`filemap_release`). Changed under the big lock. */
@@ -330,46 +339,102 @@ static int filemap_writes(const struct filemap *m)
 }
 
 /** Whether page `i` of `ds` may hold a store of a shared mapping
- * (`stored`). Under the file's lock. */
-static int dshare_stored(const struct dshare *ds, uint32_t i)
+ * (`stored`). Takes `bits`; the caller holds the file's lock for an
+ * answer that lasts. */
+static int dshare_stored(struct dshare *ds, uint32_t i)
 {
-    uint32_t leaf = i / SHMEM_LEAF, bit = i % SHMEM_LEAF;
+    uint32_t leaf = i / SHMEM_LEAF, bit = i % SHMEM_LEAF, flags;
+    int set;
 
-    return leaf < ds->nstored && ds->stored[leaf] &&
-           (ds->stored[leaf][bit / 32u] >> (bit % 32u) & 1u);
+    flags = spin_lock_irqsave(&ds->bits);
+    set =
+        leaf < ds->nstored && ds->stored[leaf] && (ds->stored[leaf][bit / 32u] >> (bit % 32u) & 1u);
+    spin_unlock_irqrestore(&ds->bits, flags);
+    return set;
 }
 
-/** Mark page `i` of `ds` as one a shared mapping may store into, making
- * the leaf and growing the directory as needed. Under the file's lock.
- * 0, or -ENOMEM with nothing changed. */
+/** The dirty pages of `ds` (`ndirty`) now. Takes `bits`. */
+static uint32_t dshare_dirty(struct dshare *ds)
+{
+    uint32_t n, flags;
+
+    flags = spin_lock_irqsave(&ds->bits);
+    n = ds->ndirty;
+    spin_unlock_irqrestore(&ds->bits, flags);
+    return n;
+}
+
+/** Set the dirty bit of page `i` of `ds`, whose leaf exists, and count it
+ * when it was clear. Under `bits`. */
+static void dshare_set_locked(struct dshare *ds, uint32_t i)
+{
+    uint32_t bit = i % SHMEM_LEAF, *w = &ds->stored[i / SHMEM_LEAF][bit / 32u];
+
+    if (!(*w & (1u << (bit % 32u)))) {
+        *w |= 1u << (bit % 32u);
+        ds->ndirty++;
+    }
+}
+
+/**
+ * Mark page `i` of `ds` as one a shared mapping may store into, making the
+ * leaf and growing the directory as needed. 0, or -ENOMEM with nothing
+ * changed.
+ *
+ * Both callers may run at once: a write fault on ext2 holds the file's lock
+ * alone and a pin's release the big lock alone (`filemap_pin_dirty`). So
+ * the leaf and the directory are allocated with no lock held, the new
+ * directory is published under `bits` with the old one's leaves, and the
+ * old one is freed only after `bits` is let go, when no reader can hold it.
+ * No retry is needed: `nstored` only grows while the record has users, so a
+ * directory needed under the second hold was allocated, larger than `leaf`,
+ * after the first. This does not sleep, since the heap does not.
+ */
 static int dshare_mark(struct dshare *ds, uint32_t i)
 {
-    uint32_t leaf = i / SHMEM_LEAF, bit = i % SHMEM_LEAF, n;
-    uint32_t **dir;
+    uint32_t leaf = i / SHMEM_LEAF, have, n = 0, flags;
+    uint32_t **dir = NULL, **old = NULL, *made = NULL;
+    int ready;
 
-    if (leaf >= ds->nstored) {
-        n = leaf + 1u > ds->nstored * 2u ? leaf + 1u : ds->nstored * 2u;
+    flags = spin_lock_irqsave(&ds->bits);
+    have = ds->nstored;
+    ready = leaf < have && ds->stored[leaf] != NULL;
+    if (ready) {
+        dshare_set_locked(ds, i);
+    }
+    spin_unlock_irqrestore(&ds->bits, flags);
+    if (ready) {
+        return 0;
+    }
+    if (leaf >= have) {
+        n = leaf + 1u > have * 2u ? leaf + 1u : have * 2u;
         dir = kzalloc((size_t)n * sizeof(*dir));
-        if (!dir) {
-            return -ENOMEM;
-        }
-        if (ds->stored) {
-            k_memcpy(dir, ds->stored, ds->nstored * sizeof(*dir));
-            kfree(ds->stored);
+    }
+    made = kzalloc(DSHARE_STORED_WORDS * sizeof(uint32_t));
+    if (!made || (leaf >= have && !dir)) {
+        kfree(made);
+        kfree(dir);
+        return -ENOMEM;
+    }
+    flags = spin_lock_irqsave(&ds->bits);
+    if (leaf >= ds->nstored) {
+        old = ds->stored;
+        if (old) {
+            k_memcpy(dir, old, ds->nstored * sizeof(*dir));
         }
         ds->stored = dir;
         ds->nstored = n;
+        dir = NULL;
     }
     if (!ds->stored[leaf]) {
-        ds->stored[leaf] = kzalloc(DSHARE_STORED_WORDS * sizeof(uint32_t));
-        if (!ds->stored[leaf]) {
-            return -ENOMEM;
-        }
+        ds->stored[leaf] = made;
+        made = NULL;
     }
-    if (!(ds->stored[leaf][bit / 32u] & (1u << (bit % 32u)))) {
-        ds->stored[leaf][bit / 32u] |= 1u << (bit % 32u);
-        ds->ndirty++;
-    }
+    dshare_set_locked(ds, i);
+    spin_unlock_irqrestore(&ds->bits, flags);
+    kfree(old);
+    kfree(dir);
+    kfree(made);
     return 0;
 }
 
@@ -385,47 +450,76 @@ static uint32_t dshare_bits(uint32_t w)
 }
 
 /** Clear the dirty bit of page `i` of `ds`, in a leaf that exists, before
- * a write of the page. Under the file's lock and the big lock. */
+ * a write of the page. Takes `bits`, under the file's lock and the big
+ * lock. */
 static void dshare_clear(struct dshare *ds, uint32_t i)
 {
-    uint32_t bit = i % SHMEM_LEAF, *w = &ds->stored[i / SHMEM_LEAF][bit / 32u];
+    uint32_t bit = i % SHMEM_LEAF, *w, flags;
 
+    flags = spin_lock_irqsave(&ds->bits);
+    w = &ds->stored[i / SHMEM_LEAF][bit / 32u];
     if (*w & (1u << (bit % 32u))) {
         *w &= ~(1u << (bit % 32u));
         ds->ndirty--;
     }
+    spin_unlock_irqrestore(&ds->bits, flags);
+}
+
+/** Clear the bits of leaf `leaf` of `ds` from page `first` on, take them
+ * off `ndirty` and add them to `*cleared`. Returns the leaf when it is now
+ * taken out of the directory whole, for the caller to free once `bits` is
+ * let go, else NULL. Under `bits`. */
+static uint32_t *dshare_cut_locked(struct dshare *ds, uint32_t leaf, uint32_t first,
+                                   uint32_t *cleared)
+{
+    uint32_t *words = ds->stored[leaf], w = 0, keep, n = 0;
+
+    if (!words) {
+        return NULL;
+    }
+    if (leaf == first / SHMEM_LEAF && first % SHMEM_LEAF != 0) {
+        w = (first % SHMEM_LEAF) / 32u;
+        if (first % 32u) {
+            keep = (1u << (first % 32u)) - 1u;
+            n += dshare_bits(words[w] & ~keep);
+            words[w] &= keep;
+            w++;
+        }
+    }
+    for (; w < DSHARE_STORED_WORDS; w++) {
+        n += dshare_bits(words[w]);
+        words[w] = 0;
+    }
+    ds->ndirty -= n;
+    *cleared += n;
+    if (leaf > first / SHMEM_LEAF || first % SHMEM_LEAF == 0) {
+        ds->stored[leaf] = NULL;
+        return words;
+    }
+    return NULL;
 }
 
 /** Clear the marks of `ds` (`stored`) from page `first` on, the pages a
  * truncation freed, so that a page read again after the file grows back is
- * clean, and take them off `ndirty`. Under the file's lock. */
-static void dshare_unmark_from(struct dshare *ds, uint32_t first)
+ * clean, and take them off `ndirty`. Takes `bits` for one leaf at a time
+ * and frees a leaf it empties whole after letting it go. Returns the bits
+ * cleared. Under the file's lock and the big lock, or with no user left. */
+static uint32_t dshare_unmark_from(struct dshare *ds, uint32_t first)
 {
-    uint32_t leaf, w, keep;
+    uint32_t leaf, cleared = 0, flags, *gone;
+    int more;
 
-    for (leaf = first / SHMEM_LEAF; leaf < ds->nstored; leaf++) {
-        if (!ds->stored[leaf]) {
-            continue;
-        }
-        w = 0;
-        if (leaf == first / SHMEM_LEAF && first % SHMEM_LEAF != 0) {
-            w = (first % SHMEM_LEAF) / 32u;
-            if (first % 32u) {
-                keep = (1u << (first % 32u)) - 1u;
-                ds->ndirty -= dshare_bits(ds->stored[leaf][w] & ~keep);
-                ds->stored[leaf][w] &= keep;
-                w++;
-            }
-        }
-        for (; w < DSHARE_STORED_WORDS; w++) {
-            ds->ndirty -= dshare_bits(ds->stored[leaf][w]);
-            ds->stored[leaf][w] = 0;
-        }
-        if (leaf > first / SHMEM_LEAF || first % SHMEM_LEAF == 0) {
-            kfree(ds->stored[leaf]);
-            ds->stored[leaf] = NULL;
+    for (leaf = first / SHMEM_LEAF;; leaf++) {
+        flags = spin_lock_irqsave(&ds->bits);
+        more = leaf < ds->nstored;
+        gone = more ? dshare_cut_locked(ds, leaf, first, &cleared) : NULL;
+        spin_unlock_irqrestore(&ds->bits, flags);
+        kfree(gone);
+        if (!more) {
+            break;
         }
     }
+    return cleared;
 }
 
 /** Let go of a hold on `ds`, a mapping's, a pass's or its own writer's
@@ -435,13 +529,20 @@ static void dshare_unmark_from(struct dshare *ds, uint32_t first)
  * (mm/vmscan.c:761, mm/truncate.c:293). Nothing here sleeps. */
 static void dshare_put(struct dshare *ds)
 {
-    if (--ds->users != 0 || *(volatile uint32_t *)&ds->ndirty != 0) {
+    uint32_t **dir, flags;
+
+    if (--ds->users != 0 || dshare_dirty(ds) != 0) {
         return;
     }
     dshare_unlink(ds);
     shmem_free(&ds->sh);
-    dshare_unmark_from(ds, 0);
-    kfree(ds->stored);
+    (void)dshare_unmark_from(ds, 0);
+    flags = spin_lock_irqsave(&ds->bits);
+    dir = ds->stored;
+    ds->stored = NULL;
+    ds->nstored = 0;
+    spin_unlock_irqrestore(&ds->bits, flags);
+    kfree(dir);
     kfree(ds);
 }
 
@@ -503,8 +604,7 @@ static void dshare_let_writer(struct dshare *ds)
  * (`dshare_let_writer`). Under the big lock; this may sleep. */
 static void dshare_settle(struct dshare *ds)
 {
-    if (ds->wr_handle && *(volatile uint32_t *)&ds->ndirty == 0 && ds->writers == 0 &&
-        ds->passes == 0) {
+    if (ds->wr_handle && dshare_dirty(ds) == 0 && ds->writers == 0 && ds->passes == 0) {
         dshare_let_writer(ds);
     }
 }
@@ -524,8 +624,7 @@ static void dshare_drop(struct dshare *ds)
     file.mnt = ds->mnt;
     file.node = ds->wr_node;
     vfs_node_lock(&file);
-    lost = ds->ndirty;
-    dshare_unmark_from(ds, 0);
+    lost = dshare_unmark_from(ds, 0);
     vfs_node_unlock(&file);
     if (lost != 0) {
         klog(KLOG_WARN, "mm", "shared mapping: inode %u on %s: %u dirty pages lost",
@@ -566,38 +665,42 @@ static int dshare_write_bytes(struct dshare *ds, uintptr_t phys, uint32_t len, u
 /** Set the dirty bit of page `i` of `ds` again, after a failed write of
  * the page or one a device may have stored into, in the leaf that held it,
  * which the file's lock has kept; a pin's release may have set it
- * meanwhile. Under the file's lock and the big lock. */
+ * meanwhile. Takes `bits`, under the file's lock and the big lock. */
 static void dshare_set(struct dshare *ds, uint32_t i)
 {
-    uint32_t bit = i % SHMEM_LEAF, *w = &ds->stored[i / SHMEM_LEAF][bit / 32u];
+    uint32_t flags;
 
-    if (!(*w & (1u << (bit % 32u)))) {
-        *w |= 1u << (bit % 32u);
-        ds->ndirty++;
-    }
+    flags = spin_lock_irqsave(&ds->bits);
+    dshare_set_locked(ds, i);
+    spin_unlock_irqrestore(&ds->bits, flags);
 }
 
 /** The first page of `ds` from `i` up to `end` whose dirty bit is set, or
- * `end` for none, passing a missing leaf and a clear word whole. Under the
- * file's lock. */
-static uint32_t dshare_next(const struct dshare *ds, uint32_t i, uint32_t end)
+ * `end` for none, passing a missing leaf and a clear word whole. Takes
+ * `bits` for each word it reads, under the file's lock. */
+static uint32_t dshare_next(struct dshare *ds, uint32_t i, uint32_t end)
 {
-    uint32_t leaf, bit, w, skip;
+    uint32_t leaf, bit, w, skip, flags;
+    int past, have;
 
     while (i < end) {
         leaf = i / SHMEM_LEAF;
         bit = i % SHMEM_LEAF;
-        if (leaf >= ds->nstored) {
+        flags = spin_lock_irqsave(&ds->bits);
+        past = leaf >= ds->nstored;
+        have = !past && ds->stored[leaf] != NULL;
+        w = have ? ds->stored[leaf][bit / 32u] >> (bit % 32u) : 0u;
+        spin_unlock_irqrestore(&ds->bits, flags);
+        if (past) {
             return end;
         }
-        w = ds->stored[leaf] ? ds->stored[leaf][bit / 32u] >> (bit % 32u) : 0u;
         if (w != 0) {
             for (; !(w & 1u); w >>= 1) {
                 i++;
             }
             return i < end ? i : end;
         }
-        skip = ds->stored[leaf] ? (i | 31u) + 1u : (leaf + 1u) * SHMEM_LEAF;
+        skip = have ? (i | 31u) + 1u : (leaf + 1u) * SHMEM_LEAF;
         if (skip <= i) {
             return end; /* past the last page a 32-bit index names */
         }
@@ -1417,6 +1520,7 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
         if (!ds) {
             return NULL;
         }
+        spin_lock_init(&ds->bits, "dshare.bits");
         ds->mnt = base;
         ds->ino = e->ofd->ino;
         ds->users = 1;            /* this call's, until the mapping has its own */
@@ -1633,11 +1737,13 @@ void filemap_pin_dirty(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size)
 {
-    struct dshare *ds = dshare_of(mnt, ino);
+    struct dshare *ds;
 
+    bkl_assert_held();
+    ds = dshare_of(mnt, ino);
     if (ds) {
         (void)shmem_truncate(&ds->sh, size);
-        dshare_unmark_from(ds, (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE));
+        (void)dshare_unmark_from(ds, (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE));
     }
 }
 
@@ -1699,7 +1805,7 @@ again:
             }
             ds->users++;
             (void)dshare_pass(ds, 0, ds->sh.npages);
-            if (*(volatile uint32_t *)&ds->ndirty != 0) {
+            if (dshare_dirty(ds) != 0) {
                 dshare_drop(ds);
             }
             dshare_settle(ds);
