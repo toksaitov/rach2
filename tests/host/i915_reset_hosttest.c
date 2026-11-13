@@ -313,7 +313,15 @@ int kcmdline_has(const char *flag)
 static struct drm_i915_private dev;
 static int sleeps, stuck_sleeps;
 
+/** The model's clock in the kernel's ticks, TICK_HZ a second, as the
+ * driver's deadlines and heartbeats count them. */
 uint64_t rtc_ticks_now(void)
+{
+    return bus ? bus->now_us / TICK_US : 0;
+}
+
+/** The model's clock in milliseconds, which the rows measure by. */
+static uint64_t now_ms(void)
 {
     return bus ? bus->now_us / 1000u : 0;
 }
@@ -914,9 +922,9 @@ static void row_hangcheck_first(void)
     uint64_t t0, beat;
 
     rr->stuck = 1;
-    t0 = rtc_ticks_now();
+    t0 = now_ms();
     rqa = submit(a, TEST_REG, 0xa);
-    while (rqa && !rcs->hc_armed && rtc_ticks_now() < t0 + 10000u) {
+    while (rqa && !rcs->hc_armed && now_ms() < t0 + 10000u) {
         run_ms(10);
         hung |= i915_hangcheck(&dev);
     }
@@ -924,24 +932,25 @@ static void row_hangcheck_first(void)
     CHECK("first beat: a beat armed the render engine, which keeps the GT awake",
           rqa && rcs->hc_armed && hung == 0 && i915->gt.awake);
     br->stuck = 1;
-    t0 = rtc_ticks_now();
+    t0 = now_ms();
     rqc = submit(blt, 0, 0);
     beat = i915->gt.hc_next;
     CHECK("first beat: the blitter goes busy with the next beat less than an interval away",
-          rqc && beat != 0 && beat < t0 + I915_HEARTBEAT_INTERVAL_MS && !bcs->hc_armed);
-    while (rqc && rtc_ticks_now() + 10u < t0 + I915_HEARTBEAT_INTERVAL_MS) {
+          rqc && beat != 0 && beat < rtc_ticks_now() + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS) &&
+              !bcs->hc_armed);
+    while (rqc && now_ms() + 10u < t0 + I915_HEARTBEAT_INTERVAL_MS) {
         run_ms(10);
         hung |= i915_hangcheck(&dev);
         early |= bcs->hc_armed;
     }
     CHECK("first beat: the beat within its first interval does not arm the blitter",
           i915->gt.hc_next != beat && !early && !(hung & 2u));
-    while (rqc && !(hung & 2u) && rtc_ticks_now() < t0 + 10000u) {
+    while (rqc && !(hung & 2u) && now_ms() < t0 + 10000u) {
         run_ms(10);
         hung |= i915_hangcheck(&dev);
     }
     CHECK("first beat: its stuck request is hung between Linux's 5 and 7.5 s",
-          (hung & 2u) && rtc_ticks_now() >= t0 + 5000u && rtc_ticks_now() <= t0 + 7510u &&
+          (hung & 2u) && now_ms() >= t0 + 5000u && now_ms() <= t0 + 7510u &&
               logged("reset: bcs0 for stopped heartbeat on bcs0"));
     run_ms(1);
     CHECK("first beat: the blitter's request failed with EIO", ended(rqc, -EIO));
