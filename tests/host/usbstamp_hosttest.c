@@ -295,6 +295,10 @@ void smp_kick_many(uint64_t cpus)
 void arch_irq_disable(void)
 {}
 
+/** Do nothing: no idle wait runs here, nor opens its interrupt window. */
+void arch_irq_enable(void)
+{}
+
 /** Do nothing: no process here arms a timer of processor time. */
 void signal_post(process_t *target, int signo)
 {
