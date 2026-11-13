@@ -27,8 +27,11 @@
  * answers ENOMEM, or the child exits as it would without it, or, for an exec
  * that met it after the old image was gone, the kernel ends the child. After
  * every attempt the parent's pages read as it wrote them and take a write,
- * and the free memory is within 64 KiB of what it was, so nothing leaked and
- * nothing that survived was changed.
+ * and the available memory is within 64 KiB of what it was, so nothing
+ * leaked and nothing that survived was changed. It is MemAvailable, which
+ * counts the runs the kernel heap keeps mapped for reuse (KReclaimable),
+ * and not MemFree, which falls as those fill with the lengths a failed
+ * fork or exec freed.
  *
  * `memprobe total` prints the MemTotal `/proc/meminfo` reports, in KiB, as
  * `MEMPROBE MemTotal N kB`, for a suite to judge against the machine's size.
@@ -210,6 +213,12 @@ static unsigned long mem_free_kib(void)
     return meminfo_kib("MemFree:");
 }
 
+/** MemAvailable, in KiB: the free memory and what reclaim gives back. */
+static unsigned long mem_available_kib(void)
+{
+    return meminfo_kib("MemAvailable:");
+}
+
 /** Fail unless the free memory has come back after the unmap of `pages`
  * pages to within 256 KiB of `before`, the mapping's page tables
  * (TABLE_KIB), which stay with the process, aside; given `machine=native`,
@@ -343,10 +352,10 @@ static void run_fail(void)
     if (framefail < 0) {
         fail("/dev/framefail did not open");
     }
-    baseline = mem_free_kib();
+    baseline = mem_available_kib();
     for (n = 1; n <= 32; n++) {
         int pid, status;
-        unsigned long free_now;
+        unsigned long avail;
 
         arm(n);
         pid = syscall1(SYS_FORK, 0);
@@ -361,8 +370,8 @@ static void run_fail(void)
             fail("a child that was forked did not run");
         }
         survivors(base, pages, round++);
-        free_now = mem_free_kib();
-        if (free_now + 64 < baseline || free_now > baseline + 64) {
+        avail = mem_available_kib();
+        if (avail + 64 < baseline || avail > baseline + 64) {
             fail("memory leaked or was freed twice around a fork");
         }
         pid = syscall1(SYS_FORK, 0);
@@ -390,12 +399,12 @@ static void run_fail(void)
             }
         }
         survivors(base, pages, round++);
-        free_now = mem_free_kib();
-        if (free_now + 64 < baseline || free_now > baseline + 64) {
+        avail = mem_available_kib();
+        if (avail + 64 < baseline || avail > baseline + 64) {
             print("MEMPROBE count ");
             print_num(n);
-            print(" free ");
-            print_num(free_now);
+            print(" available ");
+            print_num(avail);
             print(" baseline ");
             print_num(baseline);
             print(" status ");
