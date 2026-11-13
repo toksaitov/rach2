@@ -693,16 +693,26 @@ int i915_vma_is_active(const struct i915_vma *vma)
     return vma->obj->base.refs != 0 && i915_gem_object_is_active(vma->obj);
 }
 
-int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield)
+/** `i915_vma_unbind`, by a caller that holds the object's reservation when
+ * `held` is set, whose activity is then read without taking it again. */
+static int32_t vma_unbind(struct i915_vma *vma, int may_yield, int held)
 {
+    struct drm_i915_gem_object *obj = vma->obj;
+
     if (vma->pin_count) {
         return -EAGAIN;
     }
-    if (i915_vma_is_active(vma)) {
+    if (held ? obj->base.refs != 0 && i915_gem_object_is_active_locked(obj)
+             : i915_vma_is_active(vma)) {
         return -EBUSY;
     }
     vma_evict(vma, may_yield);
     return 0;
+}
+
+int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield)
+{
+    return vma_unbind(vma, may_yield, 0);
 }
 
 void i915_gem_object_force_unbind(struct drm_i915_gem_object *obj, int may_yield)
@@ -715,19 +725,32 @@ void i915_gem_object_force_unbind(struct drm_i915_gem_object *obj, int may_yield
     }
 }
 
-int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj, int may_yield)
+/** Undo every binding of `obj` with `vma_unbind`: 0, or -EAGAIN when one
+ * is kept. */
+static int32_t object_unbind(struct drm_i915_gem_object *obj, int may_yield, int held)
 {
     struct i915_vma *vma = obj->vmas, *next;
     int32_t err = 0;
 
     while (vma) {
         next = vma->obj_next;
-        if (i915_vma_unbind(vma, may_yield) != 0) {
+        if (vma_unbind(vma, may_yield, held) != 0) {
             err = -EAGAIN;
         }
         vma = next;
     }
     return err;
+}
+
+int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj, int may_yield)
+{
+    return object_unbind(obj, may_yield, 0);
+}
+
+int32_t i915_gem_object_unbind_locked(struct drm_i915_gem_object *obj, int may_yield)
+{
+    lockdep_assert_held(&obj->base.resv->lock);
+    return object_unbind(obj, may_yield, 1);
 }
 
 struct i915_vma *i915_vma_for_page(struct drm_i915_gem_object *obj, uint32_t pgoff)

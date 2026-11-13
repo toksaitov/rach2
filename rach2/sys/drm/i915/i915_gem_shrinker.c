@@ -93,7 +93,7 @@ uint32_t i915_gem_shrink_flags(struct drm_i915_private *i915, uint32_t want, uin
             continue;
         }
         if (purgeable(obj) && (flags & (obj->vmas ? I915_SHRINK_BOUND : I915_SHRINK_UNBOUND)) &&
-            i915_gem_object_unbind(obj, 0) == 0 && !obj->pages_pin_count) {
+            i915_gem_object_unbind_locked(obj, 0) == 0 && !obj->pages_pin_count) {
             got += i915_gem_object_truncate(obj);
             i915->gem.purged++;
         }

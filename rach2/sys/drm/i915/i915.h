@@ -2626,6 +2626,11 @@ int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield);
  * `may_yield`: 0, or -EAGAIN when one is pinned or the object is active. */
 int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj, int may_yield);
 
+/** `i915_gem_object_unbind` by a caller that holds the object's
+ * reservation, as the shrinker does, which the activity check then does
+ * not take again. */
+int32_t i915_gem_object_unbind_locked(struct drm_i915_gem_object *obj, int may_yield);
+
 /**
  * Undo every binding of `obj`, whose last reference is gone, whatever its
  * pins and its reservation hold, as Linux's force_unbind at the free
