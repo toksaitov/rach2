@@ -76,9 +76,11 @@
 # the run directory build/held/NAME of the copy, NAME being RACH2_TESTING_HELD
 # or one made of this machine's name, this script's number and a random part,
 # made new only once `hold.pl clear` has removed the directories of the runs
-# there that have ended and finds none that stays, which it lists on the
-# command's output: a run there that runs, or whose holder was killed, may
-# still work in the copy, and no command starts beside it. A run that this
+# there that have ended and finds none that stays. The same check runs first
+# under the sync lock, before anything is sent, for `sync` and `run` alike,
+# and a run directory that stays refuses the copy, as hold_copy says: a run
+# there that runs, or whose holder was killed, may still work in the copy,
+# and nothing is sent or started beside it. A run that this
 # script stops, or whose lock's connection ends, is stopped there
 # through that directory's stop, with everything it started, which that hold.pl,
 # a child subreaper, holds; and a caller that stops what works in the copy, as
@@ -167,20 +169,37 @@ need_rsync3()
 # then `held`, and keeps the lock until its input ends. A caller takes the
 # lock or reads the owner file under a short lock on that file, so that a
 # refused caller reads the record of the holder that refused it and not of the
-# one before. Bash reads a script from a pipe a byte at a time, and the call
-# to hold is the script's last line, so the read in hold finds no text of the
-# script left in its input.
+# one before. The copy's run registry, build/held, is read by this tree's
+# hold.pl, which the script carries in a here-document, since the copy's own
+# may be older than its `clear` or absent until the first sync. Bash reads a
+# script from a pipe a byte at a time, and the call to hold is the script's
+# last line, so the read in hold finds no text of the script left in its
+# input.
 hold_script()
 {
     printf "who='%s'\n" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+    echo '# clear_held ROOT: hold.pl clear ROOT, by the sender of this script.'
+    echo 'clear_held()'
+    echo '{'
+    echo "    perl - clear \"\$1\" <<'HOLD_PL'"
+    cat "$REPO/tools/flow/hold.pl"
+    echo 'HOLD_PL'
+    echo '}'
+    echo
     cat <<'EOF'
-# probe COPY: print what works in COPY: its run lock while its owner runs,
-# by the start that the owner record's identity gives and not by the number
-# alone, or the group the record names has a process left, as etude's lock
-# tree decides before it takes the lock over; and each process with its
-# working directory in it but a person's shell.
+# probe COPY: print what works in COPY: each run directory under its run
+# registry, build/held, that `hold.pl clear` does not read ended, which it
+# removes once ended, or that the registry cannot be read; its run lock while
+# its owner runs, by the start that the owner record's identity gives and not
+# by the number alone, or the group the record names has a process left, as
+# etude's lock tree decides before it takes the lock over; and each process
+# with its working directory in it but a person's shell.
 probe()
 {
+    if ! registry=$(clear_held "$1/build/held" 2>&1); then
+        printf '%s\n' "${registry:-hold.pl clear failed}" |
+            sed 's/^/the run registry, not proved ended: /'
+    fi
     lock=$1/build/.run.lock
     if [ -d "$lock" ]; then
         pid=$(sed -n 's/^pid //p' "$lock/owner" 2>/dev/null)
@@ -245,12 +264,15 @@ EOF
 # say why not and fail. A sync rewrites the sources under whatever works
 # there, and a build that reads half of the old tree and half of the new one
 # fails in ways that look like faults of the code. The copy is busy while a
-# run or a script holds its run lock and the holder lives, or while
-# any process other than a shell has its working directory in it: a make, a
-# compiler, QEMU, or a script between two runs. The owner file records WHAT,
-# `sync` or `run`, and this tree's path. The holder's input is its script
-# and then whatever reaches fd 3, which is nothing: closing fd 3 ends the
-# input, and the holder releases the lock.
+# run directory under its build/held is not proved ended, since a command
+# whose holder was killed may still run and reach the copy by absolute paths
+# from a working directory outside it, which no scan of working directories
+# finds; while a run or a script holds its run lock and the holder lives; or
+# while any process other than a shell has its working directory in it: a
+# make, a compiler, QEMU, or a script between two runs. The owner file records
+# WHAT, `sync` or `run`, and this tree's path. The holder's input is its
+# script and then whatever reaches fd 3, which is nothing: closing fd 3 ends
+# the input, and the holder releases the lock.
 hold_copy()
 {
     hold=$(mktemp -d "${TMPDIR:-/tmp}/rach2-testing.XXXXXX") || return 1
