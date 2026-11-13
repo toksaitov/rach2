@@ -63,20 +63,23 @@
 # starts its command only while the holder lives, and a command whose holder
 # ends first is stopped here and on the host, and the run fails and says so.
 #
-# Each process this script starts in the background, the lock's connection,
-# the command's and the feeder of the command's input, runs under
-# tools/flow/hold.pl in a run directory of its own under the temporary
-# directory, which alone signals it and whose lock says whether it runs, so
-# that no number is read or signalled here; each such hold.pl stops what it
-# holds once this script has gone. On the host the command runs under the
-# copy's own tools/flow/hold.pl, in the run directory build/held/NAME of the
-# copy, NAME being RACH2_TESTING_HELD or one made of this machine's name, this
-# script's number and a random part, made new once the directories of the runs
-# there that have ended are removed: a run that this script stops,
-# or whose lock's connection ends, is stopped there through that directory's
-# stop, with everything it started, which that hold.pl, a child subreaper,
-# holds; and a caller that stops what works in the copy, as release.sh -p
-# does, stops each run under build/held the same way.
+# Each process this script starts in the background, the lock's connection, the
+# command's and the feeder of the command's input, runs under tools/flow/hold.pl
+# in a run directory of its own under the temporary directory, which alone
+# signals it and whose lock says whether it runs, so that no number is read or
+# signalled here; each such hold.pl stops what it holds once this script has
+# gone. At its end this script closes the lock's connection and, unless it has
+# ended half a minute later, stops it through its hold.pl; it removes the
+# temporary directory only once each run there has ended, and otherwise keeps
+# it, says so and fails, since what a run whose holder was killed held may still
+# run. On the host the command runs under the copy's own tools/flow/hold.pl, in
+# the run directory build/held/NAME of the copy, NAME being RACH2_TESTING_HELD
+# or one made of this machine's name, this script's number and a random part,
+# made new once the directories of the runs there that have ended are removed: a
+# run that this script stops, or whose lock's connection ends, is stopped there
+# through that directory's stop, with everything it started, which that hold.pl,
+# a child subreaper, holds; and a caller that stops what works in the copy, as
+# release.sh -p does, stops each run under build/held the same way.
 #
 # `wait` watches a run started on the host as RUNS/NAME.sh, by any path to
 # it, such as `sh build/runs/NAME.sh` from the copy or `sh NAME.sh` in RUNS,
@@ -136,7 +139,7 @@ hold=
 holder=
 feeder=
 command=
-trap 'stop_command; stop_feeder; release_copy; [ -z "$hold" ] || rm -rf "$hold"' EXIT
+trap 'at_exit "$?"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -263,13 +266,56 @@ hold_copy()
 
 # release_copy: end the holder's input, which releases the sync lock, and
 # wait for its connection to close, so that the lock is free by the time
-# this script ends.
+# this script ends: thirty turns of a second, and then a stop of its
+# hold.pl, which sends TERM and KILL ten seconds later, half a minute at
+# most. A connection whose end is not confirmed is said, and fails.
 release_copy()
 {
     [ -n "$holder" ] || return 0
     exec 3>&- 4<&-
+    rc_i=0
+    while runs "$hold/holder" && [ "$rc_i" -lt 30 ]; do
+        sleep 1
+        rc_i=$((rc_i + 1))
+    done
+    if ! rc_state=$(perl "$REPO/tools/flow/hold.pl" stop "$hold/holder" 30); then
+        echo "testing: the connection that held the sync lock is not confirmed ended: $rc_state; $hold stays" >&2
+        holder=
+        return 1
+    fi
     wait "$holder" 2>/dev/null || :
     holder=
+}
+
+# at_exit STATUS: stop what this script started and release the copy, and
+# exit with STATUS, or 1 when an end is not confirmed.
+at_exit()
+{
+    ae_rc=$1
+    stop_command
+    stop_feeder
+    release_copy || ae_rc=1
+    forget_hold || ae_rc=1
+    exit "$ae_rc"
+}
+
+# forget_hold: remove the temporary directory of this script's holders once
+# each run there has ended, as hold.pl's lock says; otherwise say which has
+# not, keep it, and fail, since what that run held may still run.
+forget_hold()
+{
+    [ -n "$hold" ] || return 0
+    for fh_dir in "$hold/holder" "$hold/feeder" "$hold/cmd"; do
+        fh_state=$(perl "$REPO/tools/flow/hold.pl" state "$fh_dir")
+        case $fh_state in
+            "ended "* | absent) ;;
+            *)
+                echo "testing: the run in $fh_dir has not confirmed its end: $fh_state; $hold stays" >&2
+                return 1 ;;
+        esac
+    done
+    rm -rf "$hold"
+    hold=
 }
 
 # runs DIR: succeed while the hold.pl of the run directory DIR holds what it
@@ -381,6 +427,14 @@ run_held()
     done
     status=0
     wait "$command" || status=$?
+    case $(perl "$REPO/tools/flow/hold.pl" state "$hold/cmd") in
+        "ended "*) ;;
+        *)
+            # Its holder was killed, and its ssh may still run.
+            stop_command
+            echo "testing: the holder of the command's connection ended without its end; $hold stays" >&2
+            exit 1 ;;
+    esac
     command=
     stop_feeder
     return "$status"
