@@ -725,7 +725,7 @@ static void boundary_rows(void)
         check(ext2_write(&mount, &file, payload, sizeof(payload), offset) == sizeof(payload) &&
                   volume.free_blocks == 8 && file.blocks == rows[i].needed * 8,
               "boundary exact quota counts each missing pointer once");
-        check(ext2_read_data(&volume, &file, offset, result, sizeof(result)) == 0 &&
+        check(ext2_read_data(&volume, &file, offset, result, sizeof(result), 0) == 0 &&
                   memcmp(result, payload, sizeof(result)) == 0,
               "accepted boundary bytes read back");
         check(ext2_write(&mount, &file, payload, sizeof(payload), offset) == sizeof(payload),
@@ -786,7 +786,7 @@ static void reservation_rows(void)
               batch.metas == metas && batch.datas == datas && batch.count == 1 && writes == 0,
           "refused piece preserves the earlier pending piece");
     check(ext2_writeback_drain(&volume) == 0 &&
-              ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
+              ext2_read_data(&volume, &file, 0, result, 4096, 0) == 0 &&
               memcmp(result, payload, 4096) == 0,
           "earlier piece survives a refused reservation");
     ext2_batch_unlock(&volume);
@@ -827,7 +827,7 @@ static void miss_rows(void)
     check(batch.metas == 3 && batch.datas == 1 && batch.count == 1,
           "and keeps one image of each block it took");
     check(ext2_writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
-              ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
+              ext2_read_data(&volume, &file, 0, result, 4096, 0) == 0 &&
               memcmp(result, payload, 4096) == 0,
           "and the restarted piece drains and reads back");
 
@@ -837,7 +837,7 @@ static void miss_rows(void)
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && misses == PLAN_TRIES,
           "a bitmap the cache keeps losing is met PLAN_TRIES times");
     check(batch.metas == 3 && ext2_writeback_drain(&volume) == 0 &&
-              ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
+              ext2_read_data(&volume, &file, 0, result, 4096, 0) == 0 &&
               memcmp(result, payload, 4096) == 0,
           "and the last plan reads it under the lock");
 }
@@ -855,7 +855,7 @@ static void busy_rows(void)
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && busy_waits == 1 && busy_gets == 0,
           "a plan waits for a held bitmap with its locks let go");
     check(ext2_writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
-              ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
+              ext2_read_data(&volume, &file, 0, result, 4096, 0) == 0 &&
               memcmp(result, payload, 4096) == 0,
           "and the restarted piece drains and reads back");
 
