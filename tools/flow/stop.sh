@@ -7,8 +7,12 @@
 #
 # It stops each loop that `workers` lists and each other loop with a state
 # directory under build/flow of this clone's main working tree: it leaves
-# STATE/stop, sends TERM to the process group in STATE/session, then KILL half
-# a minute later, and ends the loop itself. It then stops what the sessions
+# STATE/stop, sends TERM to the session's supervisor, the session.pl whose
+# command line names STATE/session, which stops the session's group, TERM and
+# then KILL half a minute later, and exits once the group is gone, and ends
+# the loop itself. A group that STATE/session names and that has no
+# supervisor is not signalled, since its number may now be another's; it is
+# a line `stop: left: STATE: ...`. It then stops what the sessions
 # left running on the Mac, in WSL and on Windows: QEMU guests, test runs, the
 # worker scripts and the board's watches, selecting and signalling each in
 # one pass, so that no process number waits between the two. On Windows it
@@ -41,9 +45,10 @@
 # claims, and waits up to ten minutes for them to end before it stops the
 # rest; a release still running then stays, as without -r. `release.sh -r`
 # goes on from it later. The session of a claim of WSL's admission that a
-# Windows run holds, whose leader is the perl that runs OUT/ID.KIND.N.pl, is
-# never stopped here: it ends by itself ten minutes after the run's last
-# touch of ID.alive, so that WSL admits other work only once Windows has
+# Windows run holds, whose leader is the perl that runs LOCKS/ID.KIND.N.pl
+# with `run`, LOCKS being build/flow/claims of the owner's clone in WSL, is
+# never stopped here: it ends by itself once the run's ID.alive has not grown
+# for ten minutes, so that WSL admits other work only once Windows has
 # stopped. The two GitHub runners stay on, since
 # they are idle unless a release runs; -g stops them too and turns them off
 # at boot, which `systemctl enable --now` undoes.
@@ -59,21 +64,36 @@ RUNNERS='actions.runner.toksaitov-rach2.rach2-ci-1.service actions.runner.toksai
 # on a process's command line.
 WHAT='qemu-system|/worker\.sh|board\.sh watch|tests/run|/etude |/rach2-etude'
 
-# halt is the script that stops the loop whose state directory is its argument.
+# halt is the script that stops the loop whose state directory is its
+# argument, relative to the home directory or absolute. The session is
+# signalled only through its supervisor, which run_session in lib.sh starts as
+# `perl STATE/run/session.pl STATE/session ...`, STATE being absolute as the
+# loop makes it, and which stops the group it made, reaps its leader and
+# removes STATE/session once the group is gone; the wait counts ninety
+# seconds, which covers its TERM, its half minute and its KILL.
 halt='
 st=$1
 case $st in "~"*) st=$HOME${st#"~"} ;; esac
 [ -d "$st" ] || exit 0
+st=$(cd "$st" && pwd) || exit 0
 touch "$st/stop"
-group=$(cat "$st/session" 2> /dev/null)
-if [ -n "$group" ] && kill -TERM -"$group" 2> /dev/null; then
+supervisor="/session\.pl $st/session "
+if pkill -TERM -f "$supervisor" 2> /dev/null; then
     i=0
-    while kill -0 -"$group" 2> /dev/null && [ "$i" -lt 30 ]; do
+    while pgrep -f "$supervisor" > /dev/null 2>&1 && [ "$i" -lt 90 ]; do
         sleep 1
         i=$((i + 1))
     done
-    kill -KILL -"$group" 2> /dev/null
-    echo "stop: session group $group of $st ended"
+    if pgrep -f "$supervisor" > /dev/null 2>&1; then
+        echo "stop: left: $st: its session.pl has not ended in ninety seconds"
+    else
+        echo "stop: the session of $st ended"
+    fi
+else
+    group=$(cat "$st/session" 2> /dev/null)
+    if [ -n "$group" ] && kill -0 -"$group" 2> /dev/null; then
+        echo "stop: left: $st: process group $group, which $st/session names, has no session.pl; a person checks it"
+    fi
 fi
 pkill -f "$st/run/worker.sh" 2> /dev/null
 exit 0
@@ -237,10 +257,10 @@ mac_procs()
 # that WHAT names, and with `kill` signal it as it is read (G19). A command
 # line that merely holds release.sh is never one (G12). The session of a
 # claim of WSL's admission never counts: each session whose leader, in the
-# same reading of ps, is the perl that runs OUT/ID.KIND.N.pl, as release.sh's
-# claim_start starts it (G15). Without -r, while a release runs, the GitHub
-# runners' jobs and the copy of -p's preparation are its own and do not
-# count.
+# same reading of ps, is the perl that runs LOCKS/ID.KIND.N.pl with `run`, as
+# release.sh's claim_start starts it (G15). Without -r, while a release runs,
+# the GitHub runners' jobs and the copy of -p's preparation are its own and
+# do not count.
 wsl_procs()
 {
     {
@@ -249,7 +269,8 @@ wsl_procs()
         cat << 'END'
 p=$(ps -eo pid=,sid=,user=,args=) || exit 1
 claims=" $(printf '%s\n' "$p" |
-    awk '$1 == $2 && $4 == "perl" && $5 ~ /\.(claim|hold)\.[0-9]+\.pl$/ { print $2 }' | tr -s '\n' ' ') "
+    awk '$1 == $2 && $4 == "perl" && $6 == "run" &&
+        $5 ~ /\/build\/flow\/claims\/[^\/]+\.(claim|hold)\.[0-9]+\.pl$/ { print $2 }' | tr -s '\n' ' ') "
 printf '%s\n' "$p" | grep -E "$what" | grep -v -E 'grep|stop\.sh|release\.sh' |
     while read -r pid sid user args; do
         case $claims in *" $sid "*) continue ;; esac

@@ -32,7 +32,10 @@
 # directories in build/tmp unchanged for a day that hold no KEPT, whose parts'
 # jobs are absent and whose parts have ended; each release run,
 # with its files, its etude and its kept directory, of a milestone whose
-# release closed; and here the entries of `build/tests` unchanged for two weeks
+# release closed; in WSL the files of such a run's claims of WSL's admission
+# in build/flow/claims of the owner's clone, but those of the run that
+# Windows' windows.current names and those of a claim whose lock a process
+# holds; and here the entries of `build/tests` unchanged for two weeks
 # and the Mac's kept run directories of a milestone whose release closed. The
 # caches, the build copies of the release and of Windows, and the tooling work
 # disks stay. Each removal, and each step's total, is a line on stdout. Each
@@ -89,6 +92,34 @@ outputs()
                 paste -s -d ' ' -
             echo "stale 14 $b/runs/*"
         done
+        # The files of a closed milestone's claims of WSL's admission, which
+        # release.sh's claim_start and claim.pl make in LOCKS, but those of
+        # the run that OUT/windows.current names, which a late start reads,
+        # and those of a claim with an attempt whose lock is held; none while
+        # OUT/windows.current cannot be read.
+        echo "closed=' $(closed | tr '\n' ' ')' locks=/home/testing/rach2/build/flow/claims"
+        o=$(awk '$1 == "windows" && $2 == "out" { print $3; exit }' "$(dirname "$0")/machines")
+        echo "current=/mnt/$(echo "$o" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$o" | cut -c 3-)/windows.current"
+        cat << 'END'
+current=$(tr -d '\r' < "$current" 2> /dev/null) || closed=
+for m in $closed; do
+    for f in "$locks"/milestone"$m"-*-windows-*.*; do
+        [ -e "$f" ] || continue
+        n=${f##*/}
+        id=${n%%.*} kind=${n#*.}
+        kind=${kind%%.*}
+        [ "$id" != "$current" ] || continue
+        # Held while a process holds a lock of the claim; a lock that cannot
+        # be opened counts as held.
+        perl -MFcntl=:flock -e 'for (@ARGV) {
+                open(my $l, "<", $_) or ($!{ENOENT} ? next : exit 0);
+                flock($l, LOCK_SH | LOCK_NB) or exit 0;
+            }
+            exit 1' "$locks/$id.$kind".*.live "$locks/$id.$kind".*.granted && continue
+        rm -f "$f" && echo "sweep: removed $f"
+    done
+done
+END
     } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s' 2>&1 | tr -d '\000\r' | sed "s/^/$TESTING: /"
     {
