@@ -38,7 +38,6 @@
  * arithmetic divides a second by. */
 static uint32_t tick_hz = TICK_HZ;
 /* Scheduler periods are separate from the millisecond clock units. */
-static uint32_t hr_sched_ns = TICK_NS;
 
 /* The one-shot timer keeps the next scheduler tick and the earliest event
  * on one vector. Its entry serves both when they coincide. Tick phase moves
@@ -70,7 +69,7 @@ struct hr_state {
 /* The ticks a processor may fall behind and keep its tick's phase; past
  * them, as after a virtual machine stood still, its tick starts again a
  * common tick edge. */
-#define HR_BEHIND_MAX TICK_HZ * 4u
+#define HR_BEHIND_MAX (TICK_HZ * 4u)
 
 static struct hr_state hr_cpu[NR_CPUS];
 /* The vector of the timer's interrupts between ticks, 0 until
@@ -228,8 +227,8 @@ static int64_t hr_next_tick(int64_t now)
 {
     uint64_t rem;
 
-    (void)tick_div64((uint64_t)now, hr_sched_ns, &rem);
-    return now + hr_sched_ns - (int64_t)rem;
+    (void)tick_div64((uint64_t)now, TICK_NS, &rem);
+    return now + TICK_NS - (int64_t)rem;
 }
 
 /**
@@ -247,14 +246,14 @@ static void hr_forward(struct hr_state *c, int64_t now)
     int64_t gap = now - c->tick;
 
     if (gap < 0) {
-        c->tick += hr_sched_ns;
+        c->tick += TICK_NS;
         return;
     }
     if (gap >= (int64_t)HR_BEHIND_MAX * TICK_NS) {
         c->tick = hr_next_tick(now);
         return;
     }
-    c->tick += ((int64_t)((uint32_t)gap / hr_sched_ns) + 1) * hr_sched_ns;
+    c->tick += ((int64_t)((uint32_t)gap / TICK_NS) + 1) * TICK_NS;
 }
 
 /**
@@ -367,7 +366,7 @@ static int64_t hr_oneshot(struct hr_state *c)
     }
     c->tick = hr_next_tick(at);
     if (late) {
-        c->tick -= hr_sched_ns;
+        c->tick -= TICK_NS;
     }
     c->oneshot = 1;
     c->lvt = 0;
@@ -523,10 +522,7 @@ int apic_hr_entry(uint32_t vector)
     }
     c = &hr_cpu[arch_cpu_id()];
     if (!c->oneshot) {
-        if (hr_sched_ns == TICK_NS || !timer_wakes_between()) {
-            return APIC_HR_TICK;
-        }
-        (void)hr_oneshot(c);
+        return APIC_HR_TICK;
     }
     programmed = c->programmed;
     c->programmed = 0;
@@ -534,8 +530,8 @@ int apic_hr_entry(uint32_t vector)
     if (!c->idle && (now >= c->tick || (programmed == c->tick && now + HR_SLACK_NS >= c->tick))) {
         c->due = c->tick;
         hr_forward(c, now);
-        if (c->tick - (int64_t)hr_sched_ns > c->due) {
-            c->due = c->tick - (int64_t)hr_sched_ns;
+        if (c->tick - (int64_t)TICK_NS > c->due) {
+            c->due = c->tick - (int64_t)TICK_NS;
         }
         result = APIC_HR_TICK;
     }
@@ -555,9 +551,7 @@ int apic_hr_entry(uint32_t vector)
 /** Return the current scheduler period in kernel tick units. */
 uint32_t timer_tick_period(void)
 {
-    return hr_vector != 0 && timer_tick_shared() && hr_cpu[arch_cpu_id()].oneshot
-               ? hr_sched_ns / TICK_NS
-               : 1u;
+    return 1u;
 }
 
 int64_t timer_tick_due(void)
@@ -649,7 +643,6 @@ void apic_hr_init(uint32_t counts)
     }
     hr_tick_counts = counts;
     kcpu_id(1, &a, &b, &c, &d);
-    hr_sched_ns = TICK_NS;
     hr_deadline = (c & (1u << 24)) != 0 && timer_calibrate() != 0;
     hr_vector = APIC_TIMER_VECTOR;
     klog(KLOG_INFO, "lapic", "timer: vector %d for ticks and events", hr_vector);
