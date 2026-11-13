@@ -837,15 +837,7 @@ void rtc_monotonic(int64_t *sec, int64_t *ns)
 
 uint64_t rtc_ticks_now(void)
 {
-    return (uint64_t)(now_ns / 1000000);
-}
-
-uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
-{
-    if (rem) {
-        *rem = (uint32_t)(n % d);
-    }
-    return n / d;
+    return (uint64_t)(now_ns / TICK_NS);
 }
 
 void wait_queue_init(wait_queue_t *wq)
