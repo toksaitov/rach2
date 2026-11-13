@@ -253,8 +253,8 @@ static void run_sleep(void)
     puts("LAGPROBE OK");
 }
 
-/* The deadline's five seconds in the kernel's ticks, at 1000 Hz. */
-#define DEADLINE_TICKS 5000
+/* The deadline's five seconds in the kernel's ticks, at 250 Hz. */
+#define DEADLINE_TICKS 1250
 
 /**
  * The deadline row. The lag is seven seconds, the deadline five: each read must
