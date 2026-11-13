@@ -38,18 +38,18 @@ int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file 
 {
     struct drm_i915_reg_read *reg = (struct drm_i915_reg_read *)data;
     struct drm_i915_private *i915 = to_i915(dev);
-    uint32_t flags = (uint32_t)(reg->offset & 7u), i, n;
+    uint32_t flags = (uint32_t)(reg->offset & 7u), i, n, lo = 0, hi = 0;
 
     (void)file;
     n = sizeof(reg_read_allowed) / sizeof(reg_read_allowed[0]);
-    for (i = 0; i < n; i++) {
+    for (i = 0; i < n && hi == 0; i++) {
         if (reg_read_allowed[i].lo == (reg->offset & ~(uint64_t)7u)) {
-            break;
+            lo = reg_read_allowed[i].lo;
+            hi = reg_read_allowed[i].hi;
         }
     }
-    if (i == n || (flags != 0 && flags != I915_REG_READ_8B_WA)) {
+    if (hi == 0 || (flags != 0 && flags != I915_REG_READ_8B_WA)) {
         return -EINVAL;
     }
-    return i915_uncore_read64(i915, reg_read_allowed[i].lo, reg_read_allowed[i].hi,
-                              flags == I915_REG_READ_8B_WA, &reg->val);
+    return i915_uncore_read64(i915, lo, hi, flags == I915_REG_READ_8B_WA, &reg->val);
 }
