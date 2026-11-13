@@ -87,13 +87,15 @@ static unsigned long marks[MARKS_MAX];
 static int nmarks, marking;
 
 /* The devices: the PM timer's count at the clock's zero and whether it
- * counts; the 8254's latch and the byte of it the next read gives; the APIC
+ * counts; the 8254's latch, its latched status byte (-1 for none) and the
+ * byte of the count the next read gives; the APIC
  * timer's start, initial count, rate and whether it runs; and the TSC's
  * count at the clock's zero and its rate. */
 static uint32_t pm_base;
 static int pm_frozen;
 static uint32_t pm_frozen_value;
 static uint16_t pit_latch;
+static int pit_status = -1;
 static int pit_byte;
 static uint64_t apic_start_ns;
 static uint32_t apic_initial;
@@ -168,30 +170,50 @@ int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
     return 0;
 }
 
+/** The count channel 0 has fallen at the clock, twice the input clock's
+ * counts. */
+static uint64_t pit_fallen(void)
+{
+    return now_ns * (2u * 1193182u) / 1000000000u;
+}
+
 /** Channel 0's count at the clock: it falls by `pit_reload` in each sweep
  * and reloads at zero. */
 static uint16_t pit_live(void)
 {
-    uint64_t fallen = now_ns * (2u * 1193182u) / 1000000000u;
-
-    return (uint16_t)(pit_reload - (uint32_t)(fallen % pit_reload));
+    return (uint16_t)(pit_reload - (uint32_t)(pit_fallen() % pit_reload));
 }
 
-/** A port write: 0x00 to port 0x43 latches channel 0, and nothing else is
- * written. */
+/** A port write to port 0x43: 0x00 latches channel 0's count, and 0xC2,
+ * the read-back command, its status and count together, the status read
+ * first; nothing else is written. The status of mode 3, read and written
+ * low byte first, has OUT (bit 7) high through the first sweep of each
+ * period. */
 void outb(uint16_t port, uint8_t val)
 {
     elapse();
-    CHECK(port == 0x43 && val == 0x00, "the 8254 is only latched");
+    CHECK(port == 0x43 && (val == 0x00 || val == 0xC2), "the 8254 is only latched or read back");
     pit_latch = pit_live();
+    pit_status = -1;
+    if (val == 0xC2) {
+        pit_status = 0x36 | ((pit_fallen() / pit_reload) % 2u == 0 ? 0x80 : 0x00);
+    }
     pit_byte = 0;
 }
 
-/** A read of port 0x40: the latched count, low byte first. */
+/** A read of port 0x40: the latched status, when read back, and then the
+ * latched count, low byte first. */
 uint8_t inb(uint16_t port)
 {
+    uint8_t status;
+
     elapse();
     CHECK(port == 0x40, "only channel 0 is read");
+    if (pit_status >= 0) {
+        status = (uint8_t)pit_status;
+        pit_status = -1;
+        return status;
+    }
     return pit_byte++ == 0 ? (uint8_t)(pit_latch & 0xFFu) : (uint8_t)(pit_latch >> 8);
 }
 
@@ -961,12 +983,12 @@ static void kvm_catchup_rows(void)
     kvm_tsc_start();
     us0 = timer_now_us();
     ns0 = now_ns;
-    now_ns += EDGE(65000);
+    now_ns += EDGE(65.0 * TICK_HZ);
     kvm_stable_model = 0;
     kvm_changed = 1;
     CHECK(timer_tick_clock() == REF_DUE_MAX && ref_kind == REF_KVM,
           "a hand-over 65 s late counts the bound and waits");
-    CHECK(timer_tick_clock() == 5000u && ref_kind == REF_COUNTER,
+    CHECK(timer_tick_clock() == 5u * TICK_HZ && ref_kind == REF_COUNTER,
           "the next pass counts the other 5 s and hands the clock over");
     us1 = timer_now_us();
     ns1 = now_ns;
