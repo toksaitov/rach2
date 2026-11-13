@@ -36,7 +36,6 @@ tests/cases/machine/acpid_scenario.c: poll mixer's reading every second
 tests/lenovoacpi.c: poll the event device and the backlight every 10 ms
 tests/lenovoacpi.c: poll the backlight every 10 ms
 tests/cases/host/fixture.c: poll the fixture state every 20 ms
-tests/cases/host/flow_release.c: poll the Mac run's times file every 50 ms
 tests/cases/host/flow_release.c: poll the detached run's result every 50 ms
 tests/cases/host/flow_release.c: poll for the release's end every 20 ms
 tests/cases/host/host_suite_probe.c: poll the meeting directory every millisecond

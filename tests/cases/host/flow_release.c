@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -1087,7 +1088,7 @@ static int finished_rows(struct release *r)
                before(r, "push origin " H ":refs/heads/master\n",
                       "gh api -X PATCH repos/toksaitov/rach2/milestones/7 -f state=closed\n") &&
                before(r, "milestones/7 -f state=closed\n", "board archive 7\n") && fx_exists(sum) &&
-               called(r, "^git worktree remove --force .*/state/wt$") &&
+               called(r, "^git -C .* worktree remove --force .*/state/wt$") &&
                !called(r, "^(machine|ssh|gh run|gh workflow|gh issue|dispatch)") &&
                !fx_exists(record(r)) && ended_with(r, "release: passed " H);
         free(line);
@@ -1344,24 +1345,35 @@ static int machine_line(struct release *r, const char *prefix, char *rest, size_
 }
 /**
  * Find the Mac run that the record says started, copy its identity to `id`,
- * and wait up to ten seconds for its times file to record its end, since the
- * release starts the run detached.
+ * and wait for its end, since the release starts the run detached: until the
+ * hold.pl that the Mac's run file names for it has released DIR/live, which
+ * it holds while anything of the run's group runs. Succeed when the run's
+ * times file then records its end. The wait has no clock of its own, so that
+ * a slow machine's run is judged whole.
  */
 static int mac_ran(struct release *r, char *id, size_t size)
 {
-    char path[4200];
-    struct timespec pause = {0, 50000000};
-    unsigned i;
+    char path[4200], dir[4200] = "", live[4300], end[4300], *run;
+    int fd;
     if (!machine_line(r, "mac started ", id, size))
         return 0;
     snprintf(path, sizeof(path), "%s/tree/build/machines/mac/runs/%s.times", r->f->work, id);
-    for (i = 0; i < 200; i++) {
-        if (fx_exists(path) && fx_has(path, "\nend "))
-            return 1;
-        /* interval: poll the Mac run's times file every 50 ms */
-        nanosleep(&pause, NULL);
+    run = fx_read(flow_path(r->f, "tree/build/machines/mac/run"));
+    if (run && strchr(run, ' ') && !strncmp(strchr(run, ' ') + 1, id, strlen(id)))
+        snprintf(dir, sizeof(dir), "%.*s", (int)strcspn(run, " "), run);
+    free(run);
+    if (*dir) {
+        snprintf(live, sizeof(live), "%s/live", dir);
+        snprintf(end, sizeof(end), "%s/end", dir);
+        while (fx_exists(dir) && !fx_exists(live) && !fx_exists(end))
+            fx_pause();
+        fd = open(live, O_RDONLY);
+        if (fd >= 0) {
+            flock(fd, LOCK_SH);
+            close(fd);
+        }
     }
-    return 0;
+    return fx_exists(path) && fx_has(path, "\nend ");
 }
 /** Make the Mac's copy and admission site, with etude's build in the copy. */
 static int mac_tree(struct release *r)
@@ -2359,11 +2371,15 @@ static int claim_rows(struct release *r)
  * through an ssh that runs it with sh, `prepare` with an etude that recovers
  * the ledger, `recovery` with one that fails and a scan of the processes
  * that succeeds and finds nothing, and `keep` with both succeeding. Usage:
- * sh driver DIR HOLD SCENARIO RELEASE.
+ * sh driver DIR HOLD SCENARIO RELEASE, with HOLD_PATH the PATH of
+ * `lostrefresh` and `wtlost`.
  */
 static const char hold_driver[] =
     "H=$1 P=$2 how=$3 R=$4\n"
     "d=$H/run repo=${P%/tools/flow/hold.pl}\n"
+    "# lostrefresh and wtlost work in clones of their own, with git itself and\n"
+    "# not the release rows' mock, which HOLD_PATH leaves out.\n"
+    "case $how in lostrefresh | wtlost) PATH=$HOLD_PATH ;; esac\n"
     "# A scenario that orphans processes runs below a perl that adopts and reaps\n"
     "# them, as init does, since a runner above may adopt them and reap none.\n"
     "case $how in\n"
@@ -2690,13 +2706,22 @@ static int hold_saw(struct release *r, const char *scenario, const char *want)
 {
     struct fixture *f = r->f;
     const char *a[] = {"/bin/sh", NULL, NULL, NULL, scenario, NULL, NULL};
+    const char *at = getenv("PATH") ? getenv("PATH") : "";
+    size_t n = strlen(f->bin);
+    char path[8200];
     a[1] = flow_path(f, "hold/driver");
     a[2] = flow_path(f, "hold");
     a[3] = flow_source(f, "tools/flow/hold.pl");
     a[5] = flow_source(f, "tools/flow/release.sh");
+    /* HOLD_PATH is PATH without the mocks' directory, which leads it. */
+    if (!strncmp(at, f->bin, n) && at[n] == ':')
+        at += n + 1;
+    snprintf(path, sizeof(path), "%s", at);
+    fx_env("HOLD_PATH", path);
     fx_env("RUN", flow_path(f, "hold/run"));
     fx_run(f, a, f->work, NULL, NULL);
     fx_env("RUN", NULL);
+    fx_env("HOLD_PATH", NULL);
     if (f->out && !strcmp(f->out, want))
         return 1;
     fprintf(stderr, "hold: %s printed:\n%s", scenario, f->out ? f->out : "");
@@ -2837,7 +2862,7 @@ static int hold_rows(struct release *r)
 }
 /*
  * The driver of observer_rows: it runs release.sh's windows_detach, with its
- * jobs under DIR/tools/flow/hold.pl, the
+ * jobs under DIR/tools/flow/hold.pl in the run directory DIR/state/held, the
  * start read as started and each poll run here by sh, or sweep.sh's outputs,
  * with ssh running Windows' script here on DIR/build, and the jobs that
  * winjob from DIR/bin reads in DIR/jobs, and prints what SCENARIO saw. Usage:
@@ -2854,7 +2879,7 @@ static const char observer_driver[] =
     "poll)\n"
     "    eval \"$(sed -n '/^# job_dir NAME:/,/^# tssh ARG/p; "
     "/^# windows_detach ID PART FILE CONSOLE:/,/^}$/p' \"$R\")\"\n"
-    "    wout=$W/out state=$W/state repo=$W\n"
+    "    wout=$W/out state=$W/state repo=$W RACH2_HOLD_DIR=$W/state/held\n"
     "    # The start reads as started; each poll runs here.\n"
     "    tssh() {\n"
     "        s=$(cat)\n"
@@ -2862,8 +2887,10 @@ static const char observer_driver[] =
     ";; esac\n"
     "    }\n"
     "    # Each wait before a poll notes whether the observer has given its\n"
-    "    # result yet; the job ends before the third poll.\n"
+    "    # result yet; the job ends before the third poll. job_wait's own\n"
+    "    # waits of a second are no polls.\n"
     "    sleep() {\n"
+    "        [ \"$1\" = 60 ] || { command sleep \"$@\"; return; }\n"
     "        n=$(($(cat \"$W/polls\" 2> /dev/null || echo 0) + 1))\n"
     "        echo \"$n\" > \"$W/polls\"\n"
     "        if [ \"$n\" -ge 2 ]; then\n"
@@ -3856,7 +3883,8 @@ static int none_named(const char *dir, const char *text)
 }
 #define PREPARED "milestone7-111111111111-"
 /**
- * -p prepares each machine at once and removes what it made, writing no
+ * -p prepares each machine at once and removes what it made but the copy
+ * on the testing host, which keeps its build for the next -p, writing no
  * record and touching neither the full run nor the Lenovo; a failed part
  * is named with the lines that say why.
  */
@@ -3882,12 +3910,12 @@ static int prepare_rows(struct release *r)
                              ".*/mac/runs/" PREPARED "mac-prepare-[0-9a-f-]+ both ") &&
                    !called(r, "routine-(sequence|collect)|^dispatch|^machine |^gh ") &&
                    called(r, "^windows cd D:/o && rm -rf " PREPARED "windows-prepare-") &&
-                   called(r, "^wsl rm -rf \"\\$copy\"$") &&
-                   !fx_exists(flow_path(f, "state/record")) &&
+                   !called(r, "^wsl rm -rf ") && !fx_exists(flow_path(f, "state/record")) &&
                    !fx_exists(flow_path(f, "state/prepare/wt")) &&
                    !fx_exists(flow_path(f, "tree/build/machines/mac/run")) &&
                    none_named(flow_path(f, "tree/build/machines/mac/runs"), "prepare"),
-               "-p prepares each machine at once and removes what it made");
+               "-p prepares each machine at once and removes what it made but the host's "
+               "copy");
     run(r, &(struct release_row){.git = "yes", .preparing = 1});
     ok = check(r,
                f->status == 1 && strstr(f->out, "release: prepare: wsl: failed; ") &&
