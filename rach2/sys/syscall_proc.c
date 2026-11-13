@@ -3978,6 +3978,9 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
 
     self.proc = current_proc;
     self.next = NULL;
+    self.func = NULL;
+    self.wq = NULL;
+    self.flags = 0;
     for (;;) {
         int have_child = 0;
 

@@ -92,6 +92,17 @@ void mutex_lock(struct mutex *m)
     }
 }
 
+void mutex_lock_nested(struct mutex *m, unsigned int subclass)
+{
+#ifdef RACH2_LOCKDEP
+    lockdep_acquire(&m->dep, subclass, LOCKDEP_SLEEPING, DEP_CALLER);
+#endif
+    (void)subclass;
+    while (!mutex_take(m)) {
+        wq_wait_event_nointr(&m->wq, mutex_free, m);
+    }
+}
+
 /** The owner is cleared before the lock word, so that a taker that has
  * the mutex at once does not lose its record to this release; the
  * exchange that frees it is the full barrier `wake_waiters` needs. */

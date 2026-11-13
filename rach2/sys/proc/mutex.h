@@ -91,6 +91,12 @@ void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key 
  */
 void mutex_lock(struct mutex *m);
 
+/** Take `m` as `mutex_lock` does, as the `subclass`th of two or more
+ * mutexes of one class held at once, in an order the caller keeps, as
+ * Linux's `mutex_lock_nested`: an epoll set's lock under the lock of the
+ * set it is in, at the depth it is looked into. */
+void mutex_lock_nested(struct mutex *m, unsigned int subclass);
+
 /** Take `m` as `mutex_lock` does, but end the wait at a signal, as
  * Linux's `mutex_lock_interruptible`: 0 once held, or -EINTR with `m` not
  * taken. The wait tests the signal-work flag; with no mutex held it

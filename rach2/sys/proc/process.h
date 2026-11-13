@@ -121,13 +121,25 @@ struct vfs_mount;
 struct mm;
 struct tgroup;
 
-/* A sleeper's record on a wait queue: one is in every process record, for
- * the one queue a process sleeps on, and `poll` supplies one per watched
- * object from an array it took before it began, so entering a queue
- * allocates nothing. */
+/* A record on a wait queue: one is in every process record, for the one
+ * queue a process sleeps on, `poll` supplies one per watched object from an
+ * array it took before it began, so entering a queue allocates nothing, and
+ * an epoll registration has one on the queue of what it watches. A record
+ * with `func` stays on its queue through every wake, which calls `func`, as
+ * Linux's wait entry with a wake function (include/linux/wait.h:15-31);
+ * one without leaves the queue at the wake, which makes `proc` ready. */
 struct wq_waiter {
     struct process *proc;
     struct wq_waiter *next;
+    /* Called under the queue's lock with interrupts off for each wake of
+     * the kinds `kinds` (WQ_DATA and the rest, or WQ_FREE), with `nest` the
+     * subclass the queue's lock is held at and `cpus` the processors to
+     * interrupt once it is let go (wait_queue.h): nonzero when it woke a
+     * waiter, which ends a wake's turn of the WQ_EXCLUSIVE records. */
+    int (*func)(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus);
+    /* The queue a record with `func` is on, NULL once off it. */
+    struct wait_queue *wq;
+    uint32_t flags; /* WQ_EXCLUSIVE */
 };
 
 struct bbuf; /* the buffer cache's buffer, bcache.h */
