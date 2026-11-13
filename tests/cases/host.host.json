@@ -1301,6 +1301,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "rcu",
+          "checks": "tests/host/rcu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "rcvwnd",
           "checks": "tests/host/rcvwnd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
