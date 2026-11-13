@@ -1520,7 +1520,14 @@ int ext2_fdatasync(struct vfs_mount *mnt, void *handle)
  * looks at the user's page again, as it does after a drain that slept. A
  * write that fails after some of its bytes were accepted returns their
  * count; a failure of the batch's I/O stays recorded for `fsync`, after a
- * close and a retry too.
+ * close and a retry too. Only a write failure is recorded so: the drain's
+ * own (`ext2_writeback_drain`), a device's (`vfs_device_failed`), and here
+ * a device removed while the batch holds writes no drain can now put on
+ * it. Damage the write meets, which `ext2_mark_error` reports to the
+ * mount's policy, and the policy's refusal, EROFS, are no write failure:
+ * they leave the batch's earlier writes to the flusher and a remount
+ * writable to its check, as Linux's flusher goes on past an inode's
+ * `ext2_error`.
  *
  * A page of `buf` not present at a piece's commit is brought in with the
  * locks let go, and the rest of the write is decided again from there; when
@@ -1604,7 +1611,7 @@ again:
     }
     rc = 0;
 out:
-    if (rc == -EIO && em->wb && em->wb->count) {
+    if (rc == -EIO && em->wb && em->wb->count && (em->dev->flags & BLOCK_GONE)) {
         (void)ext2_writeback_error(em, rc);
     }
     return done ? (int32_t)done : rc;
