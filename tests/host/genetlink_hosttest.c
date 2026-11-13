@@ -1,5 +1,5 @@
 /* Exercise generic netlink, its real socket queue and userspace link policy.
- * host-deps: rach2/sys/network/socket/genetlink.c
+ * host-deps: rach2/sys/network/socket/genetlink.c rach2/sys/tick.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -113,14 +113,6 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 uint64_t tick_count(void)
 {
     return kernel_ticks;
-}
-/** Divide model ticks without the kernel's architecture helpers. */
-uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
-{
-    if (rem) {
-        *rem = (uint32_t)(n % d);
-    }
-    return n / d;
 }
 /** No IPv6 forwarding option is enabled in this model. */
 int nd6_conf_get(int which, int key, int32_t *value)
