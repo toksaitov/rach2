@@ -4,8 +4,12 @@
 # root's rach2-game, or on Linux with this directory's copy and a Proton
 # that -p names. Usage: gpu.sh [-u USER] [-r RENDERER] [-p PROTON] [-c LINUX]
 # OUT. OUT receives the row's results, the machine's identity and the kernel's
-# log lines of the run; LINUX is the results.json of the same row under Linux
-# on the same machine, against which the sums are judged.
+# log lines of the run, and goes to USER; LINUX is the results.json of the
+# same row under Linux on the same machine, against which the sums are
+# judged. trip.py --out makes OUT by descriptor and refuses it unless every
+# directory above it is root's and writable by root alone; root writes
+# nothing in OUT: USER writes the identity and the log and makes and removes
+# its home there.
 set -eu
 
 user='test'
@@ -38,15 +42,19 @@ case $proton in
 esac
 made=
 home=
-trap '[ -z "$made" ] || rm -f /opt/proton
-      [ -z "$home" ] || rm -rf "$home"' EXIT
+# The EXIT trap's cleanup, each step of which runs whether or not the one
+# before it failed.
+# shellcheck disable=SC2329 # the exit trap calls it
+cleanup() {
+    [ -z "$made" ] || rm -f /opt/proton || true
+    [ -z "$home" ] || su -s /bin/sh "$user" -c "rm -rf '$home'" || true
+}
+trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-mkdir -p "$out"
-out=$(cd "$out" && pwd)
-chown "$user" "$out"
+out=$(PYTHONPATH="$here" python3 "$here/trip.py" --out "$user" "$out")
 # HDA starts at 100 on Rach2; nothing here plays, but the level is kept low.
 # Linux has no mixer(1), and a machine without a sound card no /dev/mixer.
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
@@ -71,20 +79,23 @@ fi
     ls /usr/share/vulkan/icd.d
     readlink -f /opt/proton
     cat /opt/proton/version
-} > "$out/identity.txt" 2>&1
+} 2>&1 | su -s /bin/sh "$user" -c "cat > '$out/identity.txt'"
 home=$out/home
-mkdir -p "$home"
-chown "$user" "$home"
+su -s /bin/sh "$user" -c "mkdir -p '$home'"
 status=0
 su -s /bin/sh "$user" -c "cd '$out' && HOME='$out/home' TMPDIR='$out' GAMES_RENDERER='$renderer' \
     GAMES_COMPARE='$linux' GAMES_LAUNCHER='$launcher' python3 '$here/run.py' gpu '$out/gpu'" \
     || status=$?
+su -s /bin/sh "$user" -c "rm -rf '$home'" || true
+home=
 # The kernel's log: the GPU's resets and faults, and on Rach2 with
 # rach2.trace=enosys each call it lacks, once for each program that asked,
-# with the number of lines that named it.
-dmesg > "$out/dmesg.txt"
-grep -e 'i915: reset' -e 'wedged' -e 'vtd: fault' "$out/dmesg.txt" || true
-sed -n 's/.*syscall: \(.*not implemented.*\)/\1/p' "$out/dmesg.txt" | sort | uniq -c
+# with the number of lines that named it. Root reads it from dmesg, never
+# from USER's copy.
+log=$(dmesg)
+printf '%s\n' "$log" | su -s /bin/sh "$user" -c "cat > '$out/dmesg.txt'"
+printf '%s\n' "$log" | grep -e 'i915: reset' -e 'wedged' -e 'vtd: fault' || true
+printf '%s\n' "$log" | sed -n 's/.*syscall: \(.*not implemented.*\)/\1/p' | sort | uniq -c
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
 fi

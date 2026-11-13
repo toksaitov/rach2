@@ -1,0 +1,6 @@
+BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=off
+Linux lenovo-debian 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux
+libgl1-mesa-dri:amd64	25.0.7-2+deb13u1
+strace	6.13+ds-1
+weston	14.0.2-1
+xwayland	2:24.1.6-1

@@ -6568,6 +6568,8 @@ static int unmount_mount(struct vfs_mount *m)
     if (m->bind_of) {
         return unmount_bind(m);
     }
+    /* The pages in memory of its files are written, or dropped. */
+    filemap_unmount(m);
     dcache_forget_mount(m);
     vfs_ns_lock(m);
     gone = vfs_mount_gone(m);

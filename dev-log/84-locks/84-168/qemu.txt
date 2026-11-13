@@ -1,0 +1,155 @@
+220bf0185912374113bf8546f5a4e5750e8f1a65e1720de7217bb8a952f129ea  after: build/x86_64/rach2/kernel
+c4c94a1900b01f30ad346a1f39f9c29aab21743556a1b444b80b06afda4a8a1b  before: build/x86_64/rach2/kernel
+07d9df7ed28bc8a401c7601f261e1668bfaa77e93079facd5c57ce92586f00f2  after: build/x86_64/tests/musl/wakemusl
+## before-1.out
+> exec /musl/wakemusl 20000 50
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.068 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.067 us a call
+wakemusl: sched_yield, sibling idle: 0.041 us a call
+wakemusl: sched_yield, sibling spins: 0.041 us a call
+wakemusl: sched_yield, sibling yields: 0.041 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.179 us a call
+wakemusl: epoll_wait, 500 idle and 1 ready: 8.046 us a call
+wakemusl: poll, 500 idle and 1 ready: 6.869 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.161 us, median 5.581, p90 7.615, p99 15.730; waker's call 4.243 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.254 us, median 5.691, p90 7.855, p99 15.590; waker's call 4.311 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.260 us, median 5.681, p90 7.965, p99 15.349; waker's call 4.328 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 21.356 us, median 20.619, p90 22.873, p99 32.952; waker's call 4.340 us
+wakemusl: futex hand-off and back after 50 us: 12.222 us a round
+WAKEMUSL OK
+## before-2.out
+> exec /musl/wakemusl 20000 50
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.068 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.068 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.068 us a call
+wakemusl: sched_yield, sibling idle: 0.041 us a call
+wakemusl: sched_yield, sibling spins: 0.041 us a call
+wakemusl: sched_yield, sibling yields: 0.041 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.178 us a call
+wakemusl: epoll_wait, 500 idle and 1 ready: 8.031 us a call
+wakemusl: poll, 500 idle and 1 ready: 6.882 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.129 us, median 5.580, p90 7.594, p99 14.547; waker's call 4.227 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.417 us, median 5.671, p90 7.855, p99 15.519; waker's call 4.408 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.272 us, median 5.681, p90 7.975, p99 15.429; waker's call 4.385 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 21.268 us, median 20.489, p90 22.723, p99 33.563; waker's call 4.364 us
+wakemusl: futex hand-off and back after 50 us: 12.257 us a round
+WAKEMUSL OK
+## after-1.out
+> exec /musl/wakemusl 20000 50
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.068 us a call
+wakemusl: sched_yield, sibling idle: 0.041 us a call
+wakemusl: sched_yield, sibling spins: 0.041 us a call
+wakemusl: sched_yield, sibling yields: 0.041 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.180 us a call
+wakemusl: epoll_wait, 500 idle and 1 ready: 0.139 us a call
+wakemusl: poll, 500 idle and 1 ready: 6.690 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.100 us, median 5.550, p90 7.614, p99 15.259; waker's call 4.176 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.274 us, median 5.691, p90 8.055, p99 15.690; waker's call 4.338 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.247 us, median 5.691, p90 8.165, p99 15.048; waker's call 4.376 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 6.219 us, median 5.681, p90 8.045, p99 14.648; waker's call 4.330 us
+wakemusl: futex hand-off and back after 50 us: 12.295 us a round
+WAKEMUSL OK
+## after-2.out
+> exec /musl/wakemusl 20000 50
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.066 us a call
+wakemusl: sched_yield, sibling idle: 0.041 us a call
+wakemusl: sched_yield, sibling spins: 0.041 us a call
+wakemusl: sched_yield, sibling yields: 0.041 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.176 us a call
+wakemusl: epoll_wait, 500 idle and 1 ready: 0.137 us a call
+wakemusl: poll, 500 idle and 1 ready: 6.578 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.071 us, median 5.520, p90 7.544, p99 14.978; waker's call 4.187 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.223 us, median 5.621, p90 7.925, p99 15.670; waker's call 4.344 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.227 us, median 5.651, p90 8.025, p99 15.259; waker's call 4.379 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 6.217 us, median 5.641, p90 7.925, p99 14.798; waker's call 4.349 us
+wakemusl: futex hand-off and back after 50 us: 12.288 us a round
+WAKEMUSL OK
+## linux-1.out
+QRUN-START 6.12.107+deb13-cloud-amd64
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.267 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.267 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.267 us a call
+wakemusl: sched_yield, sibling idle: 0.335 us a call
+wakemusl: sched_yield, sibling spins: 0.335 us a call
+wakemusl: sched_yield, sibling yields: 0.333 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.883 us a call
+wakemusl: epoll_wait, 500 idle and 1 ready: 0.331 us a call
+wakemusl: poll, 500 idle and 1 ready: 8.893 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.541 us, median 5.962, p90 7.915, p99 15.961; waker's call 4.201 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 7.011 us, median 6.292, p90 8.326, p99 18.245; waker's call 4.486 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 7.184 us, median 6.403, p90 8.487, p99 19.027; waker's call 4.702 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 7.125 us, median 6.322, p90 8.416, p99 16.160; waker's call 4.492 us
+wakemusl: futex hand-off and back after 50 us: 12.951 us a round
+WAKEMUSL OK
+## linux-2.out
+QRUN-START 6.12.107+deb13-cloud-amd64
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.265 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.265 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.264 us a call
+wakemusl: sched_yield, sibling idle: 0.333 us a call
+wakemusl: sched_yield, sibling spins: 0.334 us a call
+wakemusl: sched_yield, sibling yields: 0.333 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.882 us a call
+wakemusl: epoll_wait, 500 idle and 1 ready: 0.325 us a call
+wakemusl: poll, 500 idle and 1 ready: 8.847 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.589 us, median 5.952, p90 7.915, p99 16.030; waker's call 4.232 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 7.093 us, median 6.342, p90 8.446, p99 16.451; waker's call 4.508 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 7.155 us, median 6.412, p90 8.627, p99 16.391; waker's call 4.659 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 7.550 us, median 6.442, p90 9.539, p99 18.676; waker's call 4.653 us
+wakemusl: futex hand-off and back after 50 us: 13.225 us a round
+WAKEMUSL OK
+## linuxnm-1.out
+QRUN-START 6.12.107+deb13-cloud-amd64
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.089 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.088 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.089 us a call
+wakemusl: sched_yield, sibling idle: 0.084 us a call
+wakemusl: sched_yield, sibling spins: 0.084 us a call
+wakemusl: sched_yield, sibling yields: 0.084 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.263 us a call
+wakemusl: epoll_wait, 500 idle and 1 ready: 0.096 us a call
+wakemusl: poll, 500 idle and 1 ready: 1.913 us a call
+wakemusl: futex wake after 50 us: wake to run mean 5.649 us, median 5.040, p90 6.913, p99 14.357; waker's call 3.939 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 5.934 us, median 5.210, p90 7.174, p99 15.399; waker's call 4.091 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 5.955 us, median 5.240, p90 7.584, p99 14.918; waker's call 4.190 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 6.088 us, median 5.200, p90 7.194, p99 15.780; waker's call 4.103 us
+wakemusl: futex hand-off and back after 50 us: 11.132 us a round
+WAKEMUSL OK
+## linuxnm-2.out
+QRUN-START 6.12.107+deb13-cloud-amd64
+wakemusl: 4 processors, 4191.8 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.093 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.092 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.092 us a call
+wakemusl: sched_yield, sibling idle: 0.081 us a call
+wakemusl: sched_yield, sibling spins: 0.079 us a call
+wakemusl: sched_yield, sibling yields: 0.079 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.259 us a call
+wakemusl: epoll_wait, 500 idle and 1 ready: 0.093 us a call
+wakemusl: poll, 500 idle and 1 ready: 1.917 us a call
+wakemusl: futex wake after 50 us: wake to run mean 5.767 us, median 5.100, p90 6.993, p99 15.109; waker's call 4.050 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 5.890 us, median 5.190, p90 7.164, p99 15.871; waker's call 4.110 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 5.916 us, median 5.251, p90 7.535, p99 15.310; waker's call 4.197 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 6.067 us, median 5.191, p90 7.175, p99 16.202; waker's call 4.115 us
+wakemusl: futex hand-off and back after 50 us: 11.162 us a round
+WAKEMUSL OK
+## rebased-1.out (after, rebased onto the milestone at ad9513c38, kernel 122573048cab7b33...)
+wakemusl: epoll_wait, 500 idle and 1 ready: 0.136 us a call
+wakemusl: poll, 500 idle and 1 ready: 6.590 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.060 us, median 5.631, p90 7.414, p99 13.656; waker's call 4.393 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.056 us, median 5.470, p90 7.685, p99 13.756; waker's call 4.269 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.550 us, median 5.941, p90 8.836, p99 16.872; waker's call 5.204 us
+wakemusl: eventfd write to epoll_pwait2 over 500 idle after 50 us: wake to run mean 6.476 us, median 5.921, p90 8.636, p99 14.958; waker's call 5.181 us
+WAKEMUSL OK

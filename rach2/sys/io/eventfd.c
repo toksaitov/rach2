@@ -24,7 +24,9 @@
 #define POLLOUT 0x004
 #define POLLERR 0x008
 
-/* The counter's largest value: a write that would pass it waits. */
+/* The counter's largest value: a write that would pass it waits. Only a
+ * kernel signal (`eventfd_signal`) carries the counter above it, to
+ * 0xFFFFFFFFFFFFFFFF, where every write waits until a read. */
 #define EFD_MAX 0xFFFFFFFFFFFFFFFEull
 
 /*
@@ -80,10 +82,15 @@ static int nonblocking(const fd_entry_t *e)
 }
 
 /** The wait condition of a read: the counter of the eventfd `arg` is not
- * zero. */
+ * zero, read under its lock, since a 64-bit word is two loads on i686. */
 static int readable(void *arg)
 {
-    return ((struct eventfd *)arg)->count != 0;
+    struct eventfd *ev = (struct eventfd *)arg;
+    uint32_t flags = spin_lock_irqsave(&ev->lock);
+    int r = ev->count != 0;
+
+    spin_unlock_irqrestore(&ev->lock, flags);
+    return r;
 }
 
 /* A write's addition, the argument of its wait condition `fits`. */
@@ -92,13 +99,24 @@ struct add {
     uint64_t value;
 };
 
-/** The wait condition of a write: the value of the addition `arg` keeps
- * the counter at EFD_MAX or below. */
+/** Whether the addition `a` keeps its counter, whose lock the caller
+ * holds, at EFD_MAX or below: never while the counter is above EFD_MAX, as
+ * Linux's eventfd_write tests ULLONG_MAX - ctx->count > ucnt. */
+static int fits_locked(const struct add *a)
+{
+    return a->ev->count <= EFD_MAX && a->value <= EFD_MAX - a->ev->count;
+}
+
+/** The wait condition of a write: `fits_locked` of the addition `arg`,
+ * under its counter's lock. */
 static int fits(void *arg)
 {
-    const struct add *a = (const struct add *)arg;
+    struct add *a = (struct add *)arg;
+    uint32_t flags = spin_lock_irqsave(&a->ev->lock);
+    int r = fits_locked(a);
 
-    return a->value <= EFD_MAX - a->ev->count;
+    spin_unlock_irqrestore(&a->ev->lock, flags);
+    return r;
 }
 
 /**
@@ -106,8 +124,10 @@ static int fits(void *arg)
  * the counter as it is read, and the writers woken, before the copy to the
  * caller, as Linux takes it. The copy can sleep in a page fault, and another
  * reader must not find the same value meanwhile; a copy that fails loses
- * the value, as in Linux. Returns 8, -EINVAL for a buffer under eight
- * bytes, -EAGAIN, -EINTR or -EFAULT.
+ * the value, as in Linux. The take, and the choice to wait or fail with
+ * EAGAIN on a counter it found zero, are made in one hold of the counter's
+ * lock, as Linux's eventfd_read makes them under ctx->wqh.lock. Returns
+ * 8, -EINVAL for a buffer under eight bytes, -EAGAIN, -EINTR or -EFAULT.
  */
 static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -118,20 +138,19 @@ static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (count < sizeof(value)) {
         return -EINVAL;
     }
-again:
-    while (ev->count == 0) {
+    for (;;) {
+        flags = spin_lock_irqsave(&ev->lock);
+        value = take_locked(ev);
+        spin_unlock_irqrestore(&ev->lock, flags);
+        if (value != 0) {
+            break;
+        }
         if (nonblocking(e)) {
             return -EAGAIN;
         }
         if (wq_wait_event(&ev->wq, readable, ev) < 0) {
             return -EINTR;
         }
-    }
-    flags = spin_lock_irqsave(&ev->lock);
-    value = take_locked(ev);
-    spin_unlock_irqrestore(&ev->lock, flags);
-    if (value == 0) {
-        goto again; /* a hook took it between the wait and the lock */
     }
     wq_wake(&ev->wq, WQ_ROOM);
     if (copy_to_user((void __user *)buf, &value, sizeof(value)) != 0) {
@@ -143,8 +162,10 @@ again:
 /**
  * write(2) of an eventfd: add the eight-byte value at `buf` to the counter,
  * waiting while the sum would pass EFD_MAX, and wake the readers when the
- * value is not zero. Returns 8, -EINVAL for a buffer under eight bytes or
- * the value 0xFFFFFFFFFFFFFFFF, -EFAULT, -EAGAIN or -EINTR.
+ * value is not zero. The test, the add, and the choice to wait or fail
+ * with EAGAIN are made under the counter's lock, as Linux's eventfd_write
+ * makes them under ctx->wqh.lock. Returns 8, -EINVAL for a buffer under
+ * eight bytes or the value 0xFFFFFFFFFFFFFFFF, -EFAULT, -EAGAIN or -EINTR.
  */
 static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -164,19 +185,17 @@ static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     }
     a.ev = ev;
     for (;;) {
-        while (!fits(&a)) {
-            if (nonblocking(e)) {
-                return -EAGAIN;
-            }
-            if (wq_wait_event(&ev->wq, fits, &a) < 0) {
-                return -EINTR;
-            }
-        }
         flags = spin_lock_irqsave(&ev->lock);
-        if (fits(&a)) {
-            break; /* else a kernel signal came between the wait and the lock */
+        if (fits_locked(&a)) {
+            break;
         }
         spin_unlock_irqrestore(&ev->lock, flags);
+        if (nonblocking(e)) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&ev->wq, fits, &a) < 0) {
+            return -EINTR;
+        }
     }
     ev->count += a.value;
     if (a.value != 0) {
@@ -189,8 +208,9 @@ static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     return (int32_t)sizeof(a.value);
 }
 
-/** poll of an eventfd: POLLIN while the counter is not zero and POLLOUT
- * while it is below EFD_MAX, among `events`, and its wait queue. It runs
+/** poll of an eventfd: POLLIN while the counter is not zero, POLLOUT
+ * while it is below EFD_MAX and POLLERR at 0xFFFFFFFFFFFFFFFF, which only
+ * a kernel signal reaches, among `events`, and its wait queue. It runs
  * without the big lock (FILE_OPS_POLL_UNLOCKED) and reads the counter under
  * the counter's lock, since a 64-bit word is two loads on i686, where
  * Linux's eventfd_poll reads it once after poll_wait (fs/eventfd.c:
@@ -214,38 +234,58 @@ static short eventfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (count < EFD_MAX) {
         mask |= POLLOUT;
     }
+    if (count == 0xFFFFFFFFFFFFFFFFull) {
+        mask |= POLLERR;
+    }
     return (short)(mask & events);
 }
 
-/** The last close of an eventfd, which runs without the big lock: each
- * hook leaves the list and is told, under the big lock, which a hangup
- * expects (`eventfd_hook`), and the description's reference goes. */
+/**
+ * The last close of an eventfd, which runs without the big lock: the
+ * counter is marked closed, which stops every add, and when hooks are on
+ * it, the big lock is taken and each leaves the list in its own hold of the
+ * counter's lock and is told (`eventfd_hook`), its hangup read while it is
+ * still on the list. A remover, under the big lock, so finds its hook on
+ * the list or finds it handed to its hangup, never one taken off and not
+ * yet told, even across a hangup that sleeps and lets the big lock go.
+ * Then the description's reference goes.
+ */
 static void eventfd_close(fd_entry_t *e)
 {
     struct eventfd *ev = (struct eventfd *)e->priv;
-    struct eventfd_hook *h, *next;
+    void (*hangup)(struct eventfd_hook *);
+    struct eventfd_hook *h;
     uint32_t flags;
+    int hooked;
 
     flags = spin_lock_irqsave(&ev->lock);
     ev->closed = 1;
-    h = ev->hooks;
-    ev->hooks = NULL;
+    hooked = ev->hooks != NULL;
     spin_unlock_irqrestore(&ev->lock, flags);
-    if (h) {
-        bkl_enter();
+    if (!hooked) {
+        e->priv = NULL;
+        eventfd_put(ev);
+        return;
     }
-    for (next = h; next;) {
-        struct eventfd_hook *cur = next;
-
-        next = cur->next;
-        cur->next = NULL;
-        if (cur->hangup) {
-            cur->hangup(cur);
+    bkl_enter();
+    for (;;) {
+        flags = spin_lock_irqsave(&ev->lock);
+        h = ev->hooks;
+        hangup = NULL;
+        if (h) {
+            ev->hooks = h->next;
+            h->next = NULL;
+            hangup = h->hangup;
+        }
+        spin_unlock_irqrestore(&ev->lock, flags);
+        if (!h) {
+            break;
+        }
+        if (hangup) {
+            hangup(h);
         }
     }
-    if (h) {
-        bkl_exit();
-    }
+    bkl_exit();
     e->priv = NULL;
     eventfd_put(ev);
 }

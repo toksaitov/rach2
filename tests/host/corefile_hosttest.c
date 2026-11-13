@@ -779,6 +779,13 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/** No row puts a file in an epoll set, so a last close has no
+ * registration to take. */
+void epoll_release_file(struct open_file *ofd)
+{
+    (void)ofd;
+}
+
 /** No row waits for a description; a call fails the row. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
@@ -1282,6 +1289,21 @@ uint32_t procfs_ino_dir(void)
     return 0;
 }
 
+/** No message interrupt is present in the core-file model: 0. */
+int procfs_irq_exists(int vector)
+{
+    (void)vector;
+    return 0;
+}
+
+/** The inode number of an interrupt affinity file, which no row reads: 0. */
+uint32_t procfs_ino_irq(int vector, int attr)
+{
+    (void)vector;
+    (void)attr;
+    return 0;
+}
+
 /** The inode number of /proc/cmdline, which no row reads: 0. */
 uint32_t procfs_ino_cmdline(void)
 {
@@ -1531,10 +1553,13 @@ uint32_t procfs_ino_sys(int entry)
 }
 
 /** A write to a file a shared mapping has, which no row makes. */
-void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
+void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
+                          uint32_t len)
 {
-    (void)e;
+    (void)mnt;
+    (void)ino;
     (void)off;
+    (void)buf;
     (void)len;
 }
 

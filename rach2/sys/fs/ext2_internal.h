@@ -231,14 +231,21 @@ struct ext2_node {
     /* Entry changes, under the directory lock; not stored on disk. */
     uint64_t dir_version;
     /* A field `inode_encode` writes changed in memory and no store of it
-     * has succeeded since, under the node lock: set by every change outside
-     * the batch (`ext2_node_dirty`) and cleared only by a store that
-     * succeeded (`ext2_inode_write`) or the inode's free
+     * has succeeded since, under the node lock: set by the primitive of every
+     * change outside the batch and the load (`ext2_node_dirty`) and cleared
+     * only by a store that succeeded (`ext2_inode_write`) or the inode's free
      * (`ext2_release_inode`). The last put, `sync`, `fsync` and a remount
      * writable store a marked node, and every change of a directory's
      * entries stores it first (`dir_settle`). The batch sets no mark: it
      * holds its nodes and its drain stores them. */
     int unstored;
+    /* Set when a store found a field changed in memory without the mark
+     * (`ext2_inode_write`), so that what the node holds cannot be trusted:
+     * no store of it is made again, a write to it is refused, and it counts
+     * as marked for a sync, the valid bit and a remount's check
+     * (`node_owes`) until it is dropped, at its last put without a store. No
+     * store clears it. */
+    int fenced;
     int unlinked;                /* no name left; the inode and its blocks go at the last put */
     int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
     int load_error;              /* the -errno of a load that failed */
@@ -446,7 +453,7 @@ struct ext2_mount {
      * functions beside it). A 32-bit one of them may be read alone as a
      * single word, which is current at some moment of the read. */
     struct spinlock count_lock;
-    /* Keeps `writers`, `closing`, `closed` and `holding`, which a writer
+    /* Keeps `writers`, `closing` and `holding`, which a writer
      * without the big lock changes or reads on its admission (`em_enter`). */
     struct spinlock admit_lock;
     /* Keeps what an `fsync` reads of the lists of shared blocks: each
@@ -475,9 +482,6 @@ struct ext2_mount {
     /* Nonzero while a remount checks the volume (`em_hold`): a final put
      * leaves its node on `reap`, which nobody reaps until `em_open`. */
     int holding;
-    /* Nonzero once `em_close` has waited out the writers, until `em_open`:
-     * no node changes then but a dying one (`em_quiet`). */
-    int closed;
     /* A node with shared blocks listed was freed, so the next `fsync` of
      * any file writes the whole device. */
     int shared_lost;
@@ -569,10 +573,20 @@ struct ext2_link {
     uint32_t expect, found;
 };
 
+/* Set field `f` of node `n` to `v` and mark the node (`ext2_node_dirty`) in
+ * the same step: the primitive for a field of the inode that has no setter of
+ * its own. The caller holds `n`'s lock or has the node alone. */
+#define EXT2_NODE_SET(n, f, v) \
+    do {                       \
+        ext2_node_dirty(n);    \
+        (n)->f = (v);          \
+    } while (0)
+
 /* ext2.c */
 struct ext2_node *ext2_node_find(struct ext2_mount *em, uint32_t ino);
 uint32_t ext2_node_ref(struct ext2_node *n, int delta);
 void ext2_node_size_set(struct ext2_node *n, uint64_t size);
+void ext2_node_size_batch(struct ext2_node *n, uint64_t size);
 struct ext2_node *ext2_node_make(void);
 void ext2_node_publish(struct ext2_mount *em, struct ext2_node *n, uint32_t ino);
 void ext2_node_unhold(struct ext2_mount *em, struct ext2_node *n);
@@ -630,6 +644,10 @@ int ext2_em_write_out(struct vfs_mount *mnt);
 struct ext2_time ext2_time_fit(const struct ext2_node *n, uint32_t extra_end, int64_t sec,
                                int64_t nsec);
 void ext2_node_dirty(struct ext2_node *n);
+void ext2_node_blocks_add(struct ext2_node *n, uint32_t sectors);
+void ext2_node_blocks_sub(struct ext2_node *n, uint32_t sectors);
+void ext2_node_slot_set(struct ext2_node *n, uint32_t *slot, uint64_t slot_at, uint32_t b);
+void ext2_node_nlink_set(struct ext2_node *n, uint32_t nlink);
 void ext2_stamp(struct ext2_node *n, int which);
 void ext2_stamp_batch(struct ext2_node *n, int which);
 int ext2_em_strict(const struct ext2_mount *em);

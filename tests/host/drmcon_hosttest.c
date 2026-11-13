@@ -656,7 +656,7 @@ void mutex_lock(struct mutex *m)
         (void)wq_wait_event_nointr(&m->wq, mutex_free_model, m);
     }
     CHECK(m->owner == 0, "the commit lock is not taken twice");
-    m->owner = m;
+    m->owner = (uintptr_t)m;
 }
 
 /** The same; no signal comes to the test. */
@@ -672,7 +672,7 @@ int mutex_trylock(struct mutex *m)
     if (!mutex_free_model(m)) {
         return 0;
     }
-    m->owner = m;
+    m->owner = (uintptr_t)m;
     return 1;
 }
 

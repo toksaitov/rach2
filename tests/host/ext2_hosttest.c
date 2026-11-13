@@ -7800,10 +7800,12 @@ static const char *const mark_lost_findings[] = {
  * twelve at the store of the new single indirect pointer. With `how` 0 the
  * reads are whole again and /dst is put; with 1 it is put while they still
  * fail, which must report the store not made; with 2 it stays held, a sync
- * while the reads fail must fail, and one after them must succeed. After the
- * unmount, for 0 and 2, the valid bit must be on the disk, e2fsck must ask
- * nothing, and /dst must hold what memory had; for 1, only the block that no
- * inode on the disk names is left to repair, beside the error bit.
+ * while the reads fail must leave it marked, and one after them must store
+ * it. After the unmount, for 0 and 2, the error bit the failed read reported
+ * must be on the disk and the valid bit clear, as `finish_writes` withholds it
+ * after a reported fault, e2fsck must ask nothing more, and /dst must hold
+ * what memory had; for 1, only the block that no inode on the disk names is
+ * left to repair, beside the error bit.
  */
 static void mark_store_row(int blocks, int how)
 {
@@ -7833,7 +7835,9 @@ static void mark_store_row(int blocks, int how)
         mark_fail_table(table);
         rc = OPS->sync(&mnt);
         mark_fail_table(-1);
-        check(rc != 0, "and a sync while the held directory cannot be stored fails");
+        check(rc == 0 && ((struct ext2_node *)dst)->unstored,
+              "and a sync while the held directory cannot be stored succeeds, the directory "
+              "still marked");
         check(OPS->sync(&mnt) == 0, "and a sync with the reads whole stores it");
     } else if (how == 1) {
         last_warn[0] = 0;
@@ -7857,10 +7861,10 @@ static void mark_store_row(int blocks, int how)
         check(ok, "and the unmount leaves the error bit and only the block the growth took to "
                   "repair");
     } else {
-        ok = rc == 0 && (disk_state(wimg) & 1) != 0 && fsck_judged(wimg) >= 0 &&
+        ok = rc == 0 && (disk_state(wimg) & 3) == 2 && fsck_judged(wimg) >= 0 &&
              findings_among(0, 0) && mark_grown(wimg, blocks);
-        check(ok, "and the unmount writes the valid bit over a volume e2fsck finds whole, the "
-                  "directory as memory had it");
+        check(ok, "and the unmount leaves the error bit, the valid bit clear, over a volume "
+                  "e2fsck finds whole, the directory as memory had it");
     }
     if (!ok) {
         printf("  rc %d, state %d\n", rc, disk_state(wimg));

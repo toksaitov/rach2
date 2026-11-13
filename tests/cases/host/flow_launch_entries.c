@@ -155,7 +155,12 @@ static int owner(struct launch_fixture *u)
     const char *a[] = {"sh", script, "run", command, NULL};
     int ok;
     strcpy(script, flow_path(f, "owner/tools/dev/testing.sh"));
-    if (!flow_copy(f, "tools/dev/testing.sh", "owner/tools/dev/testing.sh"))
+    /* testing.sh holds its processes with hold.pl, here and in the copy,
+     * which no sync reaches, and bounds its stops with bound.pl. */
+    if (!flow_copy(f, "tools/dev/testing.sh", "owner/tools/dev/testing.sh") ||
+        !flow_copy(f, "tools/flow/hold.pl", "owner/tools/flow/hold.pl") ||
+        !flow_copy(f, "tools/flow/bound.pl", "owner/tools/flow/bound.pl") ||
+        !flow_copy(f, "tools/flow/hold.pl", "checkout/tools/flow/hold.pl"))
         return 0;
     fx_env("FLOW_LAUNCH_MODE", "owner");
     fx_env("RACH2_TESTING_COPY", u->tree);

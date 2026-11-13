@@ -43,8 +43,9 @@
  * Five rows hold the temporary mappings to their contract on i686: a
  * released slot stays mapped and no caller is given it again until a sweep,
  * which comes only when no slot is free and unmaps every released slot with
- * one change of kernel mappings, so 1024 mappings make one change; a held
- * slot survives the sweeps; and a mapping fails when every slot is held.
+ * one change of kernel mappings, so the 960 mappings of the pools make one
+ * change; a held slot survives the sweeps; and a mapping fails when every
+ * slot is held.
  *
  * Seven more split the slots between processors, as Linux gives each its
  * own kmap_local slots, with `host_cpu` naming the processor that runs: two
@@ -55,7 +56,10 @@
  * free slot, which the owner is then not given; one processor may still hold
  * every slot; and three and 64 processors split the slots in whole words.
  * Every pool's lock is free after each call, and the host's spinlocks trap
- * on a lock taken twice.
+ * on a lock taken twice. A processor's own slot past the pools
+ * (`kmap_cpu`) maps a frame with interrupts off while every slot of the
+ * pools is held, drops its translation on that processor alone, and goes
+ * with interrupts restored, touching no pool's bits.
  *
  * Two rows drive the page fault handler with a supervisor write fault: at an
  * address in the guard page below the running thread's kernel stack, which
@@ -73,6 +77,14 @@
  * by the other's copy, made absent, or its table gone, each of which must
  * run the resolution again and not end in SIGSEGV; and a present read-only
  * page that is not copy-on-write, which stays refused.
+ *
+ * Three rows run a write-back's walk (`paging_wrprotect_where`) between a
+ * shared store's mark and its entry, through the real walk and both fault
+ * paths: a fault of an absent page installs nothing (`install_entry`), and
+ * one of a read-only page leaves it read-only (`shared_mkwrite`), each
+ * because the walk moved the space's count of zaps under the page-table
+ * lock; and a walk over two regions of a space takes write access from
+ * both with one flush of the span it changed, as paging.h says.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -287,7 +299,8 @@ int vm_device_whole(const struct vm_file *f)
     return 0;
 }
 
-/* The processes whose address spaces a device zap walks: none. */
+/* The processes whose address spaces a walk changes: none, but for the
+ * fault-race rows' one. */
 process_t *proc_list;
 
 /** The write-combining bits, which no row maps. */
@@ -372,11 +385,18 @@ void terminate_current_process(int32_t signo)
     (void)signo;
 }
 
-/** 0: no address is in a mapping. */
+/* The one region of the fault-race rows, in the space whose regions are
+ * `race_space`, or NULL for none. */
+static vma_t *race_vma;
+static vm_space_t *race_space;
+
+/** `race_vma` for an address within it in `race_space`; 0 for any other
+ * address, which no region holds. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
-    (void)vm;
-    (void)addr;
+    if (race_vma && vm == race_space && addr >= race_vma->start && addr < race_vma->end) {
+        return race_vma;
+    }
     return 0;
 }
 
@@ -438,12 +458,17 @@ void arch_space_load(uintptr_t root)
     space_loads++;
 }
 
-/** One processor: no other has a translation to drop. */
+/* The flushes of user translations, one each, and the span of the last. */
+static int shootdowns;
+static uintptr_t shot_start, shot_end;
+
+/** One processor: no other has a translation to drop. Counted. */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
     (void)dir;
-    (void)start;
-    (void)end;
+    shootdowns++;
+    shot_start = start;
+    shot_end = end;
 }
 
 /** Count a change of kernel mappings. */
@@ -504,16 +529,22 @@ void arch_tlb_flush_page(uintptr_t va)
     page_dropped = va;
 }
 
-/** 0: the host has no interrupt flag. */
+/* Whether the model's interrupts are off, which `kirq_save` turns off. */
+static uint32_t irqs_off;
+
+/** Turn the model's interrupts off; whether they were. */
 uint32_t kirq_save(void)
 {
-    return 0;
+    uint32_t was = irqs_off;
+
+    irqs_off = 1;
+    return was;
 }
 
-/** Nothing: the host has no interrupt flag. */
+/** Put the model's interrupts back as `flags`, from `kirq_save`, says. */
 void kirq_restore(uint32_t flags)
 {
-    (void)flags;
+    irqs_off = flags;
 }
 
 /* ---- the rows ---- */
@@ -618,6 +649,35 @@ static void window_rows(void)
 /* The entry of temporary slot `slot`. */
 #define TEMP_PTE(slot) (test_dir.logical_page_tables[TABLE_OF(KVA_TEMP)]->pages[slot])
 
+static int temp_unlocked(void);
+
+/**
+ * A processor's own slot (`kmap_cpu`), called while every slot of the pools
+ * is held: the slot past the pools of the processor's number, mapped at the
+ * frame's offset with interrupts off and its translation dropped on that
+ * processor alone, and unmapped with interrupts as they were and the
+ * translation dropped again; no pool's bits change.
+ */
+static void temp_own_rows(void)
+{
+    uint32_t flags, slots0 = _temp_slots[0], stale0 = _temp_stale[0];
+    uint8_t *va;
+
+    host_cpu = 5;
+    page_drops = 0;
+    irqs_off = 0;
+    va = kmap_cpu(0x5000123u, &flags);
+    check(va == (uint8_t *)KVA_TEMP + (TEMP_POOL_SLOTS + 5u) * PAGE_SIZE + 0x123 &&
+              TEMP_PTE(TEMP_POOL_SLOTS + 5u) == (0x5000000u | 0x3u) && irqs_off &&
+              page_drops == 1 && page_dropped == ((uintptr_t)va & ~(uintptr_t)0xFFFu),
+          "a processor's own slot maps a frame with every pool slot held, interrupts off");
+    kunmap_cpu(va, flags);
+    check(TEMP_PTE(TEMP_POOL_SLOTS + 5u) == 0 && !irqs_off && page_drops == 2 &&
+              _temp_slots[0] == slots0 && _temp_stale[0] == stale0 && temp_unlocked(),
+          "and goes with interrupts as they were, touching no pool");
+    host_cpu = 0;
+}
+
 /**
  * The temporary mappings: a released slot stays mapped and is not given
  * again before a sweep, which comes only when no slot is free and unmaps
@@ -626,7 +686,7 @@ static void window_rows(void)
  */
 static void temp_rows(void)
 {
-    static uint8_t *held[KVA_TEMP_SLOTS];
+    static uint8_t *held[TEMP_POOL_SLOTS];
     uint8_t *va;
     uint32_t i, mapped;
     int wrong = 0;
@@ -642,16 +702,17 @@ static void temp_rows(void)
     check(TEMP_PTE(0) == (0x5000000u | 0x3u) && kernel_changes == 0,
           "a released temporary slot stays mapped and changes no kernel mapping");
 
-    for (i = 1; i < KVA_TEMP_SLOTS; i++) {
+    for (i = 1; i < TEMP_POOL_SLOTS; i++) {
         va = kmap_temp(0x6000000u + i * PAGE_SIZE);
         wrong |= va != (uint8_t *)KVA_TEMP + i * PAGE_SIZE;
         kunmap_temp(va);
     }
     check(!wrong && kernel_changes == 0 && space_loads == 0,
-          "1024 temporary mappings take the 1024 slots in turn with no change of kernel mappings");
+          "960 temporary mappings take the pools' 960 slots in turn with no change of kernel "
+          "mappings");
 
     held[0] = kmap_temp(0x7000000u);
-    for (i = 1, mapped = 0; i < KVA_TEMP_SLOTS; i++) {
+    for (i = 1, mapped = 0; i < TEMP_POOL_SLOTS; i++) {
         mapped += TEMP_PTE(i) != 0;
     }
     check(held[0] == (uint8_t *)KVA_TEMP && mapped == 0 && kernel_changes == 1 && space_loads == 1,
@@ -659,7 +720,7 @@ static void temp_rows(void)
           "mappings and takes the first");
 
     kernel_changes = 0;
-    for (i = 0; i < 2 * KVA_TEMP_SLOTS; i++) {
+    for (i = 0; i < 2 * TEMP_POOL_SLOTS; i++) {
         va = kmap_temp(0x8000000u);
         wrong |= va == held[0];
         kunmap_temp(va);
@@ -667,13 +728,14 @@ static void temp_rows(void)
     check(!wrong && TEMP_PTE(0) == (0x7000000u | 0x3u) && kernel_changes == 2,
           "a held temporary slot is not given again and survives two sweeps");
 
-    for (i = 1; i < KVA_TEMP_SLOTS; i++) {
+    for (i = 1; i < TEMP_POOL_SLOTS; i++) {
         held[i] = kmap_temp(0x9000000u);
         wrong |= held[i] == 0;
     }
     check(!wrong && kmap_temp(0xA000000u) == 0,
           "with every temporary slot held, a mapping is refused");
-    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
+    temp_own_rows();
+    for (i = 0; i < TEMP_POOL_SLOTS; i++) {
         kunmap_temp(held[i]);
     }
 }
@@ -706,8 +768,8 @@ static int temp_unlocked(void)
 /** The kernel address of temporary slot `slot`. */
 #define TEMP_VA(slot) ((uint8_t *)KVA_TEMP + (slot) * PAGE_SIZE)
 
-/* The slots of the two halves of the region, for the rows of two pools. */
-#define TEMP_HALF (KVA_TEMP_SLOTS / 2)
+/* The slots of the two halves of the pools, for the rows of two pools. */
+#define TEMP_HALF (TEMP_POOL_SLOTS / 2)
 
 /**
  * Two processors' pools: each maps from its own, drops its own translation
@@ -721,7 +783,7 @@ static void temp_two_rows(void)
     temp_clear();
     paging_temp_split(2);
     check(_temp_pool_count == 2 && _temp_pools[0].first == 0 && _temp_pools[0].end == TEMP_HALF &&
-              _temp_pools[1].first == TEMP_HALF && _temp_pools[1].end == KVA_TEMP_SLOTS,
+              _temp_pools[1].first == TEMP_HALF && _temp_pools[1].end == TEMP_POOL_SLOTS,
           "two processors' pools are the two halves of the slots");
 
     page_drops = 0;
@@ -763,7 +825,7 @@ static void temp_sweep_rows(void)
         kunmap_temp(va);
     }
     va = kmap_temp(0x7000000u);
-    for (i = TEMP_HALF, mapped = 0; i < KVA_TEMP_SLOTS; i++) {
+    for (i = TEMP_HALF, mapped = 0; i < TEMP_POOL_SLOTS; i++) {
         mapped += TEMP_PTE(i) != 0;
     }
     check(!wrong && va == TEMP_VA(TEMP_HALF) && mapped == 1 && kernel_changes == 1 &&
@@ -808,22 +870,22 @@ static void temp_borrow_rows(void)
 /** One processor holds every slot of both pools, and is refused one more. */
 static void temp_all_rows(void)
 {
-    static uint8_t *held[KVA_TEMP_SLOTS];
+    static uint8_t *held[TEMP_POOL_SLOTS];
     uint32_t i;
     int wrong = 0, unlocked = 1;
 
     host_cpu = 0;
-    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
+    for (i = 0; i < TEMP_POOL_SLOTS; i++) {
         held[i] = kmap_temp(0xB000000u);
         wrong |= held[i] == 0;
         unlocked &= temp_unlocked();
     }
-    for (i = 0; i < KVA_TEMP_SLOTS / 32; i++) {
+    for (i = 0; i < TEMP_POOL_SLOTS / 32; i++) {
         wrong |= _temp_slots[i] != 0xFFFFFFFFu;
     }
     check(!wrong && unlocked && kmap_temp(0xC000000u) == 0 && temp_unlocked(),
           "one processor may hold every slot of both pools, and a mapping past them is refused");
-    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
+    for (i = 0; i < TEMP_POOL_SLOTS; i++) {
         kunmap_temp(held[i]);
     }
 }
@@ -836,16 +898,17 @@ static void temp_split_rows(void)
     paging_temp_split(3);
     check(_temp_pool_count == 3 && _temp_pool_size == 320 && _temp_pools[1].first == 320 &&
               _temp_pools[1].end == 640 && _temp_pools[2].first == 640 &&
-              _temp_pools[2].end == KVA_TEMP_SLOTS && temp_pool_of(1023) == &_temp_pools[2],
+              _temp_pools[2].end == TEMP_POOL_SLOTS &&
+              temp_pool_of(TEMP_POOL_SLOTS - 1u) == &_temp_pools[2],
           "three processors' pools are whole words, and the last has the rest");
 
     temp_clear();
     paging_temp_split(64);
     host_cpu = 33;
     va = kmap_temp(0xD000000u);
-    check(_temp_pool_count == 32 && _temp_pool_size == 32 && va == TEMP_VA(32) &&
-              temp_pool_of(32) == &_temp_pools[1],
-          "64 processors share 32 pools of a word each, processor 33 taking pool 1's slots");
+    check(_temp_pool_count == 30 && _temp_pool_size == 32 && va == TEMP_VA(96) &&
+              temp_pool_of(96) == &_temp_pools[3],
+          "64 processors share 30 pools of a word each, processor 33 taking pool 3's slots");
     kunmap_temp(va);
     host_cpu = 0;
 }
@@ -982,6 +1045,135 @@ static void cow_race_rows(void)
     free(dir);
 }
 
+/* ---- a write-back's walk between a shared fault's mark and its entry ---- */
+
+/* The page-table lock's hook, from mmap_lock_host.c. */
+extern void (*host_ptl_hook)(struct mm *mm);
+
+/* The file of the fault-race rows, the frame its page has, and the marks
+ * its `mkwrite` made. */
+static struct vm_file race_file;
+#define RACE_FRAME 0x7000000u
+static int race_marks;
+
+/** The page of `race_file`: `RACE_FRAME`, in memory, so 0. */
+static int race_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)f;
+    (void)pgoff;
+    *phys = RACE_FRAME;
+    return 0;
+}
+
+/** The `match` of the walk: the whole of a region that maps `race_file`. */
+static int race_match(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi)
+{
+    (void)arg;
+    if (r->file != &race_file) {
+        return 0;
+    }
+    *lo = r->start;
+    *hi = r->end;
+    return 1;
+}
+
+/** A write-back's walk of every space, as filemap.c's pass makes it after
+ * the mark, run from the page-table lock's hook. */
+static void race_walk(struct mm *mm)
+{
+    (void)mm;
+    paging_wrprotect_where(race_match, 0);
+}
+
+/** Count the mark and have the walk run before the fault's next take of
+ * the page-table lock, which comes after the fault's look at its region
+ * (`region_same`) and is the lock its recheck is made under. */
+static int race_mkwrite(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    (void)f;
+    (void)pgoff;
+    (void)phys;
+    race_marks++;
+    host_ptl_hook = race_walk;
+    return 0;
+}
+
+/**
+ * A write-back's walk (`paging_wrprotect_where`) that runs after a shared
+ * store's fault had its file's `mkwrite` mark the page, and after the fault
+ * found its region unchanged, but before the fault takes the page-table
+ * lock for its entry: the walk moves the space's count of zaps and the
+ * fault makes no entry writable, as the mark it made is the one the
+ * write-back cleared. A write fault of an absent page installs nothing
+ * (`install_entry`), and one of a present read-only page leaves it
+ * read-only (`shared_mkwrite`); each answers -1, so the store faults and
+ * marks again. Without the recheck under the lock, either would leave a
+ * writable entry whose stores no mark records. The real walk, the real
+ * fault paths and one address space on the process list.
+ */
+static void fault_race_rows(void)
+{
+    static process_t proc;
+    static struct mm mm;
+    static vma_t vma, other;
+    page_dir_t *dir = calloc(1, sizeof(*dir));
+    page_table_t *table = calloc(1, sizeof(*table));
+    uintptr_t addr = USER_ADDR_MIN + 0x400000u;
+    pte_t *e = &table->pages[MMU_INDEX(addr)];
+    pte_t *o = &table->pages[MMU_INDEX(addr + 8u * PAGE_SIZE)];
+    int rc;
+
+    dir->logical_page_tables[(uint32_t)addr / PAGE_SIZE / 1024u] = table;
+    mm.dir = dir;
+    vma.start = addr;
+    vma.end = addr + 4u * PAGE_SIZE;
+    vma.prot = VM_PROT_READ | VM_PROT_WRITE;
+    vma.type = VM_SHARED;
+    vma.file = &race_file;
+    other = vma;
+    other.start = addr + 8u * PAGE_SIZE;
+    other.end = other.start + PAGE_SIZE;
+    other.pgoff = 8;
+    vma.next = &other;
+    mm.vm.first = &vma;
+    mm.vm.last = &other;
+    race_file.share = race_share;
+    race_file.mkwrite = race_mkwrite;
+    race_vma = &vma;
+    race_space = &mm.vm;
+    proc.mm = &mm;
+    proc_list = &proc;
+
+    mmap_read_lock(&mm);
+    race_marks = 0;
+    rc = shared_fault(&mm, &vma, addr, 1);
+    check(rc == -1 && race_marks == 1 && *e == 0 && mm.zaps == 1 && !host_ptl_hook,
+          "a store's fault of an absent page that a write-back's walk passes between its mark "
+          "and its entry installs nothing and resolves again");
+    *e = (pte_t)RACE_FRAME | PTE_P | PTE_U;
+    rc = shared_mkwrite(&mm, &vma, addr);
+    check(rc == -1 && race_marks == 2 && *e == ((pte_t)RACE_FRAME | PTE_P | PTE_U) &&
+              mm.zaps == 2 && !host_ptl_hook,
+          "a store's fault of a read-only page that a write-back's walk passes between its "
+          "mark and its entry leaves it read-only and resolves again");
+    *e = (pte_t)RACE_FRAME | PTE_P | PTE_U | PTE_W;
+    *o = (pte_t)RACE_FRAME | PTE_P | PTE_U | PTE_W;
+    shootdowns = 0;
+    paging_wrprotect_where(race_match, 0);
+    check(*e == ((pte_t)RACE_FRAME | PTE_P | PTE_U) && *o == ((pte_t)RACE_FRAME | PTE_P | PTE_U) &&
+              mm.zaps == 3 && mm.changing == 0 && mm.changes == 3,
+          "the walk takes write access from both regions' entries, the space under way once");
+    check(shootdowns == 1 && shot_start == addr && shot_end == addr + 9u * PAGE_SIZE,
+          "with one flush for the space, over the span of the pages it changed");
+    mmap_unlock(&mm);
+
+    proc_list = 0;
+    race_vma = 0;
+    race_space = 0;
+    free(table);
+    free(dir);
+}
+
 /** The protection keys are off in the host test, as on a processor without
  * them. */
 int fpu_pkeys(void)
@@ -1037,6 +1229,7 @@ int main(void)
     fault_rows();
     recovered_rows();
     cow_race_rows();
+    fault_race_rows();
     give_way_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");
 

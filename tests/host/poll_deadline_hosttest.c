@@ -13,8 +13,9 @@
  * scripts that build this test use, the native compiler removes every path
  * but the conversions, comparisons and wait this test calls. The enrollment
  * row forces a wake after a record is linked and before the next scan: the
- * wake removes it, as wait_queue.c does, and marks only a blocked thread
- * ready. An unrelated wake must not leave a poll asleep without its record.
+ * wake calls the record's function, which leaves it on its queue, as
+ * wait_queue.c does, and marks the poll woken. An unrelated wake must not
+ * leave a poll asleep without its record.
  * The `enrollment` argument runs that row alone.
  *
  * A wait ends at the first tick at or after its end, measured from where in
@@ -55,6 +56,8 @@ static short poll_fd_held(struct fd_entry *e, short events, struct wait_queue **
 struct poll_deadline;
 static int poll_wait(int (*scan)(void *ctx, struct wait_queue **wqs), void *ctx, uint32_t n,
                      struct poll_deadline *d, const char *wchan);
+static int poll_wait_queue(struct wait_queue *wq, int (*ready)(void *ctx), void *ctx,
+                           struct poll_deadline *d, const char *wchan);
 static int32_t poll_mask_set(uintptr_t umask, uint32_t size);
 static int32_t poll_mask_done(int32_t ret);
 #include "io/poll.c"
@@ -283,21 +286,31 @@ int signal_pending(void)
     return 0;
 }
 
-/** File a record, then force one other processor's unrelated wake. */
+/** Make `p` ready if it is blocked, as wait_queue.c does: 1 when it was. */
+int wq_ready_deferred(process_t *p, uint64_t *cpus)
+{
+    (void)cpus;
+    if (p->state != PROC_BLOCKED) {
+        return 0;
+    }
+    p->state = PROC_READY;
+    return 1;
+}
+
+/** File a record, then force one other processor's unrelated wake, which
+ * calls the record's function and leaves it filed. */
 void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w)
 {
+    uint64_t cpus = 0;
+
     w->next = wq->head;
     wq->head = w;
     if (filing_wake) {
         filing_wake = 0;
-        wq->head = NULL;
-        w->next = NULL;
         if (filing_kind & WQ_ROOM) {
             wq->wakes[1]++;
         }
-        if (w->proc->state == PROC_BLOCKED) {
-            w->proc->state = PROC_READY;
-        }
+        (void)w->func(w, filing_kind, 0, &cpus);
     }
 }
 
@@ -358,8 +371,7 @@ static void enrollment(void)
         CHECK(poll_wait(enrollment_scan, NULL, 1, &d, "enrollment") == 1,
               "a data arrival after an unrelated filing wake completes the wait");
         CHECK(!invalid_sleeps, "no sleep after an unrelated wake removed the record");
-        CHECK(!watched.head && !waiter.poll_wqs && !waiter.poll_recs && !waiter.poll_n,
-              "the completed wait withdraws its queue records and arrays");
+        CHECK(!watched.head, "the completed wait withdraws its queue records");
         CHECK(waiter.state == PROC_RUNNING && !waiter.wakeup_tick,
               "the completed wait is running with no timer wake");
     }

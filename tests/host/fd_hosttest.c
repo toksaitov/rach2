@@ -376,6 +376,13 @@ void wq_wake_all(wait_queue_t *wq)
     check(!reader || !reader->busy, "wake follows description release");
 }
 
+/** No row files a record with a wake function on a thread group's queue,
+ * so a freed group has none to tell. */
+void wq_wake_free(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
 /**
  * Take the namespace lock, counted in `depth`. A move of the node that is
  * pending is completed first with `fd_ofd_repoint`, as another writer that
@@ -403,23 +410,12 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     depth--;
 }
 
-/* The description a row has its file system close, with its serial, and
- * whether `fd_ofd_live` called it open meanwhile. */
-static const struct open_file *closing;
-static uint32_t closing_serial;
-static int closing_live = -1;
-
-/** A file system's close, which has nothing to release. For the
- *  description `closing` names, it records in `closing_live` whether
- *  `fd_ofd_live` finds it open meanwhile. */
+/** A file system's close, which has nothing to release. */
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
     (void)mnt;
     (void)node;
     (void)handle;
-    if (closing) {
-        closing_live = fd_ofd_live(closing, closing_serial);
-    }
 }
 
 /** An operation of the root's adapter, which takes `handle` by value and
@@ -714,62 +710,6 @@ static void shared_closes(void)
 }
 
 /**
- * A close that left a descriptor to another sharer's call takes its release
- * over once that hold goes without the call's end, as a close does after it
- * lets an epoll_wait asleep go of the descriptor: never while the hold
- * stays, and once alone.
- */
-static void close_finish(void)
-{
-    process_t *first = alloc_process();
-    process_t *second = alloc_process();
-    struct open_file *ofd;
-    int i, fd;
-
-    check(first && second, "two processes for the finished close");
-    if (!first || !second) {
-        return;
-    }
-    for (i = FD_STDIN; i <= FD_STDERR; i++) {
-        fd_free(second->fds, i);
-    }
-    fd_table_delete(second->fds);
-    second->fds = 0;
-    check(fd_table_share(first->fds, second) == 0, "the table is shared for the finished close");
-    current_proc = second;
-    fd = fd_alloc(second->fds);
-    check(fd == 3, "the second sharer holds descriptor 3");
-    if (fd != 3) {
-        return;
-    }
-    fd_slot(second->fds, fd)->type = FD_TYPE_CONSOLE;
-    ofd = fd_slot(second->fds, fd)->ofd;
-    fd_install(second->fds, fd);
-    current_proc = first;
-    check(fd_close_finish(first->fds, fd) == 0, "an open descriptor has no close to finish");
-    check(fd_close_claim(first->fds, fd) == 0 && fd_close_finish(first->fds, fd) == 0,
-          "a close does not finish while another sharer's call holds the descriptor");
-    second->fd_held[0] &= ~(1u << fd);
-    check(fd_close_finish(first->fds, fd) == 1 &&
-              (fd_slot(first->fds, fd)->flags & FD_FLAG_RELEASING),
-          "once the hold goes, the close takes the release over");
-    check(fd_close_finish(first->fds, fd) == 0, "and takes it once");
-    current_proc = second;
-    check(fd_holds_claim(0) == -1 && second->fd_holding == 0,
-          "the end of the call that lost its hold releases nothing");
-    current_proc = first;
-    check(ofd->refcount == 1 && fd_ofd_unref_unless_last(ofd) == 0,
-          "the close holds the description's last reference");
-    fd_ofd_unref(ofd);
-    fd_free_after(first->fds, fd);
-    current_proc = 0;
-    check(!first->fds->lock.locked, "the finished close lets the table's lock go");
-    free_process(second);
-    close_process(first);
-    check(!proc_list && !allocations, "the finished close leaves nothing allocated");
-}
-
-/**
  * A growth adds a chunk as large as the table and moves no entry, so the
  * address of an entry stays its slot's: chunk k > 0 holds the entries from
  * FD_TABLE_FIRST << (k - 1), each chunk contiguous.
@@ -950,40 +890,6 @@ static void description_holders(void)
 }
 
 /**
- * Whether a description is open still, which an epoll registration checks
- * of the one it was made for: while a reference is left, by the serial it was
- * made with and no other, which a later description at its address has; not
- * while its file system closes it after its last reference, nor after.
- */
-static void description_live(void)
-{
-    struct vfs_mount mnt = {0};
-    struct open_file *ofd = fd_ofd_new();
-    uint32_t serial;
-
-    mnt.type = &plain_type;
-    check(ofd != 0, "a description");
-    if (!ofd) {
-        return;
-    }
-    serial = ofd->serial;
-    check(fd_ofd_live(ofd, serial), "a description with a reference is open");
-    check(!fd_ofd_live(ofd, serial + 1), "a description is not one with another serial");
-    fd_ofd_ref(ofd);
-    fd_ofd_unref(ofd);
-    check(fd_ofd_live(ofd, serial), "a description a second reference kept is open");
-    ofd->vmnt = &mnt;
-    closing = ofd;
-    closing_serial = serial;
-    fd_ofd_unref(ofd);
-    closing = 0;
-    check(closing_live == 0,
-          "a description its file system closes after its last reference is not open");
-    check(!fd_ofd_live(ofd, serial) && allocations == 0,
-          "a description is not open after its last reference");
-}
-
-/**
  * The last end of a description on a type that reads without the big lock
  * takes the lock for inotify only when a watch is on the description's own
  * file system, as Linux's fsnotify_sb_has_watchers asks of the file's super
@@ -1056,10 +962,8 @@ int main(void)
     table_copies();
     allocation_errors();
     description_holders();
-    description_live();
     description_watch();
     shared_closes();
-    close_finish();
     table_chunks();
     description_last();
     status_flags_row();

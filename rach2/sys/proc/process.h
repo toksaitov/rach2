@@ -121,13 +121,25 @@ struct vfs_mount;
 struct mm;
 struct tgroup;
 
-/* A sleeper's record on a wait queue: one is in every process record, for
- * the one queue a process sleeps on, and `poll` supplies one per watched
- * object from an array it took before it began, so entering a queue
- * allocates nothing. */
+/* A record on a wait queue: one is in every process record, for the one
+ * queue a process sleeps on, `poll` supplies one per watched object from an
+ * array it took before it began, so entering a queue allocates nothing, and
+ * an epoll registration has one on the queue of what it watches. A record
+ * with `func` stays on its queue through every wake, which calls `func`, as
+ * Linux's wait entry with a wake function (include/linux/wait.h:15-31);
+ * one without leaves the queue at the wake, which makes `proc` ready. */
 struct wq_waiter {
     struct process *proc;
     struct wq_waiter *next;
+    /* Called under the queue's lock with interrupts off for each wake of
+     * the kinds `kinds` (WQ_DATA and the rest, or WQ_FREE), with `nest` the
+     * subclass the queue's lock is held at and `cpus` the processors to
+     * interrupt once it is let go (wait_queue.h): nonzero when it woke a
+     * waiter, which ends a wake's turn of the WQ_EXCLUSIVE records. */
+    int (*func)(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus);
+    /* The queue a record with `func` is on, NULL once off it. */
+    struct wait_queue *wq;
+    uint32_t flags; /* WQ_EXCLUSIVE */
 };
 
 struct bbuf; /* the buffer cache's buffer, bcache.h */
@@ -623,24 +635,11 @@ struct process {
     /* The next sharer of its descriptor table (`fd_table_t.sharers`). The
      * map, this link and `fd_holding` change under the table's lock. */
     struct process *fd_sharer_next;
-    /* While the thread sleeps in `poll_wait` (io/poll.c), the queues it has
-     * records on and the records, `poll_n` of each, which a close by
-     * another thread may take off their queues (`close_fd`); NULL and 0 at
-     * any other time. */
-    struct wait_queue **poll_wqs;
-    struct wq_waiter *poll_recs;
-    uint32_t poll_n;
-    /* Under `poll_lock` (io/poll.c): `poll_quiet` is set from the end of
-     * the scan before a sleep until the thread takes its records back, so
-     * that a close may take them and the thread's holds then; `poll_drop`
-     * asks a thread not quiet to give back its holds of descriptors being
-     * closed (`poll_let_go`), and its wait clears it. */
-    int poll_quiet;
-    int poll_drop;
-    /* Set while the thread waits in epoll_wait on the set at descriptor
-     * `epoll_wait_fd`. */
-    int epoll_waiting;
-    int epoll_wait_fd;
+    /* Set by a wake of a queue a `poll_wait` of the thread has a record
+     * on, and cleared by the wait before each scan, as Linux's
+     * `poll_wqueues.triggered` (fs/select.c:208-258): a wait whose scan
+     * found nothing sleeps only while it is clear. */
+    volatile int poll_woken;
     /* The system call filters seccomp(2) installed, newest first, which the
      * thread shares with the threads and children that inherit them, and
      * the mode, SECCOMP_MODE_ (seccomp.h); a fork passes both on and an

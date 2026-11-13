@@ -1,0 +1,21 @@
+0
+drwx------ 7 root root 0 Jan  1  1970 /sys/kernel/debug
+1
+vol 1:1
+pcm 100:100
+speaker 100:100
+mic 100:100
+rec 93:93
+igain 67:67
+monitor 100:100 rec
+32:	1071450	LAPIC	timer
+33:	4	IO-APIC	kbd
+41:	28	IO-APIC	acpi
+48:	697954	MSI	hrtimer
+49:	468	MSI	hda
+50:	1	MSI	xhci
+51:	34171	MSI	ahci
+52:	12015	MSI	rtl8168
+53:	13601	MSI	i915
+SPU:	0	spurious
+FBK:	0	usb fallback

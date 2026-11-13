@@ -1,0 +1,9 @@
+window 309.8 ms, wined3d_cs 2662: 1001 request adds, 1009 i915 interrupts, 1005 sleeps, 1007 wakes
+i915 interrupts by processor: [(0, 1009)]
+sleeps woken by an i915 interrupt, asleep for: 1002, mean 118.9 us, median 107.0, p90 113.0, max 3543.0, sum 119.1 ms
+  request add to i915 interrupt entry (GPU and delivery): 1002, mean 141.6 us, median 127.0, p90 129.0, max 3570.0, sum 141.8 ms
+  interrupt entry to sched_waking: 1002, mean 15.7 us, median 15.0, p90 18.0, max 717.0, sum 15.8 ms
+  sched_waking to sched_wakeup: 1002, mean 5.5 us, median 5.0, p90 6.0, max 24.0, sum 5.5 ms
+  sched_wakeup to switch-in (ready wait): 1002, mean 3.3 us, median 2.0, p90 3.0, max 757.0, sum 3.3 ms
+  woken on the interrupt's processor and run there: 0
+other sleeps' waking to switch-in: 3, mean 9.3 us, median 9.0, p90 11.0, max 11.0, sum 0.0 ms

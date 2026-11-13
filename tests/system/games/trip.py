@@ -9,25 +9,26 @@ Usage: trip.py OUT N. The counters of each run go to OUT/trip-gl-I.loop.txt
 and its summary to the output.
 
 Rach2's debugfs is root's alone, so the user that runs the loop asks a reader
-of root's for each snapshot of bkl/calls, bkl/profile and bkl/tick, and reads
-only those copies. trip.sh makes the reader's workspace with
-trip.py --prepare UID, which prints its path DIR, and starts the reader with
-trip.py --reader DIR. The user appends each request's name, a line, to
-DIR/ask, a file of its own, and the reader copies the three files into
-DIR/snap/NAME, which the user may read but not write. Every directory there
-is root's and writable by root alone, and the reader writes only relative to
-directories it holds open, creating each entry with its final mode and
-following no symbolic link, so that the user can redirect none of root's
-writes.
+of root's for each snapshot of bkl/calls, bkl/profile and bkl/tick. trip.sh
+starts the user's command under trip.py --reader LIMIT ARGV, which runs ARGV
+with one end of an AF_UNIX socket pair as its standard input and answers each
+byte read from the other end with one frame of the three files, LIMIT times
+at most; it opens nothing else and makes nothing. trip.sh makes OUT with
+trip.py --out USER PATH, which walks PATH from / by descriptor through
+directories of root's that root alone may write, makes OUT there and gives
+it to USER by its descriptor, so that root acts on no name USER can change.
 """
 import collections
-import itertools
 import os
 from pathlib import Path
+import pwd
 import re
 import shutil
 import signal
+import socket
 import stat
+import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -40,7 +41,7 @@ import run
 STAT_KEYS = ("ctxt", "bkl_wait_us", "scheduler_picks", "tlb_shootdown_ipis")
 
 # debugfs's files of the big lock, Rach2's alone (debugfs(5)), which the
-# reader copies and nothing else: calls, the complete holds by entry and the
+# reader reads and nothing else: calls, the complete holds by entry and the
 # takes after a switch, by the system call the thread slept in, and each
 # call's and ioctl request's time with rach2.cycleaccount; profile, whose
 # samples by entry over the loop the summary gives, and whose whole-kernel
@@ -50,25 +51,18 @@ STAT_KEYS = ("ctxt", "bkl_wait_us", "scheduler_picks", "tlb_shootdown_ipis")
 BKL = Path("/sys/kernel/debug/bkl")
 BKL_FILES = ("calls", "profile", "tick")
 
-# The reader's directory and process ID, which trip.sh passes; empty where
-# there is no bkl directory, as on Linux.
-READER_DIR = os.environ.get("TRIP_BKL", "")
-READER_PID = os.environ.get("TRIP_BKL_PID", "")
-requests = itertools.count(1)
+# A frame's header of each file in BKL_FILES order: the length of the text
+# that follows, or -1 for a file the reader could not read.
+LENGTH = struct.Struct("!q")
 
+# The user's end of the reader's socket, taken from standard input when
+# trip.sh sets TRIP_BKL; None where there is no bkl directory, as on Linux.
+reader = None
+reader_lock = threading.Lock()
 
-# The reader's workspace's parent, root's and sticky or writable by root
-# alone, where a user can rename and remove none of root's entries; never
-# TMPDIR, which the caller chooses.
-WORKSPACE_PARENT = "/tmp"
-
-# Open flags of a directory the reader writes in: a symbolic link in its
+# Open flags of a directory that --out walks or makes: a symbolic link in its
 # place fails with ELOOP.
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-
-# Open flags of a file the reader makes: an entry of any kind already there,
-# a symbolic link among them, fails with EEXIST.
-NEW_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 def protected(st, what):
@@ -79,125 +73,152 @@ def protected(st, what):
                          % what)
 
 
-def check_parent():
-    """Refuse WORKSPACE_PARENT unless it is a directory, not a link, of
-    root's that is sticky or writable by root alone."""
-    st = os.lstat(WORKSPACE_PARENT)
-    if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0
-            or (st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX)):
-        raise SystemExit("trip: %s is not root's, or others may rename its entries"
-                         % WORKSPACE_PARENT)
-
-
-def prepare(uid):
-    """As root, make the reader's workspace in WORKSPACE_PARENT and return its
-    path: the directory, made 0700 by mkdtemp, with snap, 0755, and ask, an
-    empty file of UID's, 0600, made in it through its descriptor while no
-    one else may enter it; then the directory made 0755. Removes the
-    workspace if any step fails."""
-    check_parent()
+def make_out(user, path):
+    """As root, make PATH, the output directory, for USER and return its
+    absolute path. Each directory from / to PATH's parent is opened by
+    descriptor, relative to the one before it and following no symbolic
+    link, and must be root's and writable by root alone; a missing one is
+    made so, 0755. PATH itself is made 0755 and given to USER through its
+    descriptor. A PATH that is already USER's directory is left as it is;
+    anything else there is refused."""
+    uid = pwd.getpwnam(user).pw_uid
+    target = os.path.abspath(path)
+    names = [name for name in target.split("/") if name]
+    if not names:
+        raise SystemExit("trip: OUT cannot be /")
     os.umask(0o022)
-    path = tempfile.mkdtemp(prefix="trip-bkl.", dir=WORKSPACE_PARENT)
+    walked, fd = "", os.open("/", DIR_FLAGS)
     try:
-        base = os.open(path, DIR_FLAGS)
+        protected(os.fstat(fd), "/")
+        for name in names[:-1]:
+            walked += "/" + name
+            try:
+                os.mkdir(name, 0o755, dir_fd=fd)
+            except FileExistsError:
+                pass
+            try:
+                child = os.open(name, DIR_FLAGS, dir_fd=fd)
+            except OSError as e:
+                raise SystemExit("trip: %s: %s" % (walked, e.strerror))
+            os.close(fd)
+            fd = child
+            protected(os.fstat(fd), walked)
+        made = True
         try:
-            os.mkdir("snap", 0o755, dir_fd=base)
-            fd = os.open("ask", NEW_FLAGS, 0o600, dir_fd=base)
-            try:
-                os.fchown(fd, uid, -1)
-            finally:
-                os.close(fd)
-            os.fchmod(base, 0o755)
+            os.mkdir(names[-1], 0o755, dir_fd=fd)
+        except FileExistsError:
+            made = False
+        try:
+            out = os.open(names[-1], DIR_FLAGS, dir_fd=fd)
+        except OSError as e:
+            raise SystemExit("trip: %s: %s" % (target, e.strerror))
+        try:
+            if made:
+                os.fchown(out, uid, -1)
+            elif os.fstat(out).st_uid != uid:
+                raise SystemExit("trip: %s exists and is not %s's" % (target, user))
         finally:
-            os.close(base)
-    except BaseException:
-        shutil.rmtree(path, ignore_errors=True)
-        raise
-    return path
-
-
-def copy(snap, name):
-    """Copy the files of BKL_FILES that read into snap/NAME.tmp, a new
-    directory 0755, as files 0644 made through its descriptor, and rename it
-    to snap/NAME. SNAP is the descriptor of the snapshots' directory."""
-    tmp = name + ".tmp"
-    os.mkdir(tmp, 0o755, dir_fd=snap)
-    fd = os.open(tmp, DIR_FLAGS, dir_fd=snap)
-    try:
-        for f in BKL_FILES:
-            try:
-                text = (BKL / f).read_bytes()
-            except OSError:
-                continue
-            out = os.open(f, NEW_FLAGS, 0o644, dir_fd=fd)
-            try:
-                while text:
-                    text = text[os.write(out, text):]
-            finally:
-                os.close(out)
+            os.close(out)
     finally:
         os.close(fd)
-    os.rename(tmp, name, src_dir_fd=snap, dst_dir_fd=snap)
+    return target
 
 
-def serve(path):
-    """As root, answer each request named in PATH/ask, a line of at most 16
-    digits, once, with a copy of BKL_FILES in PATH/snap/NAME (copy). Opens
-    the workspace and snap once, refusing either unless it is a directory of
-    root's that root alone may write, and polls ask every millisecond;
-    returns when its parent, trip.sh, has gone."""
-    check_parent()
-    os.umask(0o022)
-    base = os.open(path, DIR_FLAGS)
-    protected(os.fstat(base), path)
-    snap = os.open("snap", DIR_FLAGS, dir_fd=base)
-    protected(os.fstat(snap), path + "/snap")
-    ask = os.open("ask", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=base)
-    if not stat.S_ISREG(os.fstat(ask).st_mode):
-        raise SystemExit("trip: %s/ask is not a file" % path)
-    parent, done, pending = os.getppid(), set(), b""
-    while os.getppid() == parent:
-        pending += os.read(ask, 4096)
-        lines = pending.split(b"\n")
-        pending = lines.pop()
-        if len(pending) > 16:
-            pending = b""
-        for line in lines:
-            name = line.decode("ascii", "replace")
-            if name in done or not name.isdigit() or len(name) > 16:
-                continue
-            done.add(name)
-            copy(snap, name)
-        time.sleep(0.001)
+def frame():
+    """One reply: each file of BKL_FILES, read now, as LENGTH and its text."""
+    parts = []
+    for f in BKL_FILES:
+        try:
+            text = (BKL / f).read_bytes()
+        except OSError:
+            parts.append(LENGTH.pack(-1))
+            continue
+        parts += [LENGTH.pack(len(text)), text]
+    return b"".join(parts)
 
 
-def reader_alive(pid):
-    """Whether process PID runs and is not a zombie; a reader that has gone
-    stays a zombie until trip.sh, waiting for the loop, reaps it."""
+def answer(sock, limit):
+    """Answer each byte read from SOCK with a frame, LIMIT times at most,
+    then close SOCK. The byte's value is not read; the user sends no name,
+    count or path."""
     try:
-        stat = Path("/proc/%d/stat" % pid).read_text()
+        for _ in range(limit):
+            if not sock.recv(1):
+                break
+            sock.sendall(frame())
     except OSError:
-        return False
-    return stat[stat.rindex(")") + 2:].split()[0] not in ("Z", "X")
+        pass
+    finally:
+        sock.close()
+
+
+def serve(limit, argv):
+    """As root, run ARGV with one end of a socket pair as its standard input
+    and answer its requests on the other in a thread of their own (answer);
+    return ARGV's status, 128 and the signal's number for a signal. HUP, INT
+    and TERM are passed on to ARGV. A user that never reads its reply blocks
+    only the answering thread, which ends with the process."""
+    proc, pending = None, []
+
+    def forward(signum, _frame):
+        if proc is None:
+            pending.append(signum)
+        else:
+            proc.send_signal(signum)
+    for stop_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(stop_signal, forward)
+    ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        proc = subprocess.Popen(argv, stdin=theirs.fileno())
+    finally:
+        theirs.close()
+    for signum in pending:
+        proc.send_signal(signum)
+    threading.Thread(target=answer, args=(ours, limit), daemon=True).start()
+    status = proc.wait()
+    return 128 - status if status < 0 else status
+
+
+def take_reader():
+    """In the user's mode with TRIP_BKL set, take the reader's socket from
+    standard input and point standard input at /dev/null, since run.py's
+    children inherit it."""
+    global reader
+    if not os.environ.get("TRIP_BKL"):
+        return
+    reader = socket.socket(fileno=os.dup(0))
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.close(null)
+
+
+def receive(n):
+    """N bytes from the reader; fails if the reader has gone first."""
+    data = b""
+    while len(data) < n:
+        got = reader.recv(n - len(data))
+        if not got:
+            raise RuntimeError("trip: the reader of debugfs has gone")
+        data += got
+    return data
 
 
 def bkl_snapshot():
-    """The reader's copies of BKL_FILES, by name, taken now; none without a
-    reader. Waits for the copy as long as the reader runs."""
-    if not READER_DIR:
+    """The texts of BKL_FILES that the reader read now, by name; none
+    without a reader."""
+    if reader is None:
         return {}
-    base, name = Path(READER_DIR), str(next(requests))
-    fd = os.open(base / "ask", os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
-    try:
-        os.write(fd, (name + "\n").encode())
-    finally:
-        os.close(fd)
-    path = base / "snap" / name
-    while not path.exists():
-        if not reader_alive(int(READER_PID)):
-            raise RuntimeError("trip: the reader of debugfs has gone")
-        time.sleep(0.001)
-    return {f: (path / f).read_text() for f in BKL_FILES if (path / f).exists()}
+    texts = {}
+    with reader_lock:
+        try:
+            reader.sendall(b"\0")
+            for f in BKL_FILES:
+                (n,) = LENGTH.unpack(receive(LENGTH.size))
+                if n >= 0:
+                    texts[f] = receive(n).decode("utf-8", "replace")
+        except OSError as e:
+            raise RuntimeError("trip: the reader of debugfs has gone: %s" % e)
+    return texts
 
 
 def snapshot():
@@ -227,9 +248,10 @@ def snapshot():
         except OSError:
             pass
     # The lines of the thread bkl/calls counts alone, which trip.sh -t
-    # chooses: its switches away by the thread switched to, and its sleeps.
+    # chooses: its switches away by the thread switched to, the switches to
+    # threads past the kernel's 32 slots, and its sleeps.
     text += ["filter " + line + "\n" for line in bkl.get("calls", "").splitlines()
-             if line.startswith(("thread ", "switch ", "block "))]
+             if line.startswith(("thread ", "switch ", "switch_lost ", "block "))]
     return "".join(text)
 
 
@@ -326,9 +348,17 @@ def summary(start, end):
     return lines
 
 
+# The key of filtered's line of the switches lost to full slots.
+LOST = "switches to threads past the slots"
+
+
 def filtered(start, end):
     """Lines that give the changes of the chosen thread's switches away, by
-    the thread switched to, and of its sleeps, by call and ioctl request."""
+    the thread switched to, and of its sleeps, by call and ioctl request,
+    and the switches the kernel counted under no thread, once its 32 slots
+    were taken; the slots last until bkl/calls is written, so a run's
+    switches can be lost to threads of earlier runs, and the line is given
+    whenever the counts have it."""
     def counts(text):
         found, name = {}, None
         for line in text.splitlines():
@@ -337,6 +367,8 @@ def filtered(start, end):
                 name = f[2]
             elif line.startswith("filter switch ") and len(f) >= 5:
                 found["switch to %s %s" % (f[2], " ".join(f[5:]))] = (int(f[3]), int(f[4]))
+            elif line.startswith("filter switch_lost ") and len(f) == 3:
+                found[LOST] = (int(f[2]), 0)
             elif line.startswith("filter block ") and len(f) == 5:
                 found["sleep in %s %s" % (f[2], f[3])] = (int(f[4]), 0)
         return name, found
@@ -349,7 +381,7 @@ def filtered(start, end):
         x, y = a.get(key, (0, 0)), b[key]
         if key.startswith("switch") and y != x:
             lines.append("filter %s: %d yields, %d preemptions" % (key, y[0] - x[0], y[1] - x[1]))
-        elif y[0] != x[0]:
+        elif y[0] != x[0] or key == LOST:
             lines.append("filter %s: %d" % (key, y[0] - x[0]))
     return lines
 
@@ -416,16 +448,18 @@ def ioctls(path):
 
 def main():
     """Run the round trips in OUT, N times plain and once under each tracer;
-    or, as root, with --prepare UID make the reader's workspace and print
-    its path, and with --reader DIR serve the snapshots of debugfs."""
-    if len(sys.argv) == 3 and sys.argv[1] == "--prepare":
-        print(prepare(int(sys.argv[2])), flush=True)
+    or, as root, with --out USER PATH make OUT for USER and print its path,
+    and with --reader LIMIT ARGV run ARGV and serve it LIMIT snapshots of
+    debugfs."""
+    if len(sys.argv) == 4 and sys.argv[1] == "--out":
+        print(make_out(sys.argv[2], sys.argv[3]), flush=True)
         return 0
-    if len(sys.argv) == 3 and sys.argv[1] == "--reader":
-        serve(sys.argv[2])
-        return 0
+    if len(sys.argv) >= 4 and sys.argv[1] == "--reader" and sys.argv[2].isdigit():
+        return serve(int(sys.argv[2]), sys.argv[3:])
     if len(sys.argv) != 3:
-        raise SystemExit("usage: trip.py OUT N | trip.py --prepare UID | trip.py --reader DIR")
+        raise SystemExit("usage: trip.py OUT N | trip.py --out USER PATH | "
+                         "trip.py --reader LIMIT ARGV...")
+    take_reader()
     out, count = Path(sys.argv[1]).resolve(), int(sys.argv[2])
     if count < 1:
         raise SystemExit("trip: runs must be positive")
@@ -470,8 +504,9 @@ def main():
 if __name__ == "__main__":
     # run.py's handlers, which its own guard installs only when it is the
     # program: they stop the children and unwind through main's cleanup.
-    # The reader and --prepare have neither and end at their signal.
-    if sys.argv[1:2] not in (["--reader"], ["--prepare"]):
+    # --out has none and ends at its signal; the reader passes its signals on
+    # to its child (serve).
+    if sys.argv[1:2] not in (["--reader"], ["--out"]):
         for stop_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
             signal.signal(stop_signal, run.interrupted)
     sys.exit(main())

@@ -7,8 +7,9 @@
 # and a loop restarts as master's version when master changes it. When the
 # copy fails, STATE/run stays as it was, and the loop logs the failure and
 # tries again a minute later. While a session runs, STATE/session has the id
-# of its process group. STATE is under `build/flow` of the clone's main
-# working tree unless the loop is given another.
+# of its process group and of the boot, as session.pl says. STATE is under
+# `build/flow` of the clone's main working tree unless the loop is given
+# another.
 
 # primary REPO: print the main working tree of the clone REPO, the one whose
 # `.git` the clone's worktrees share, or REPO itself when it is that tree.
@@ -133,31 +134,47 @@ limit_end()
 # The supervisor that `session.pl` runs leaves the loop's group before it
 # starts anything, so a hangup that ends the loop reaches neither it nor the
 # session: the session runs on under its limit, and `wait_session` keeps the
-# next loop from starting another beside it.
+# next loop from starting another beside it. The supervisor holds
+# STATE/session.live for its life; the loop's own lock, STATE/loop.live on
+# descriptor 7, is closed for it, so that only the loop holds that.
 run_session()
 {
     out=$1 err=$2 limit=$3
     shift 3
-    perl "$(dirname "$0")/session.pl" "$state/session" "$state/loop.log" "$limit" "$@" \
-        > "$out" 2> "$err" < /dev/null
+    RACH2_LOOP_LIVE='' perl "$(dirname "$0")/session.pl" "$state/session" "$state/loop.log" "$limit" "$@" \
+        > "$out" 2> "$err" < /dev/null 7>&-
 }
 
-# wait_session: wait while the process group whose id is in STATE/session is
-# alive, testing it every half minute, and then remove the file. A loop calls
-# this before it does anything in the clone: a session that outlived the loop
-# that started it, as one does when the loop's tmux session is killed, still
-# has its group and the file, and the clone must not get a second session.
+# locked FILE: succeed while a process holds the lock FILE, as a loop holds
+# STATE/loop.live and a session's supervisor STATE/session.live; fail when it
+# is free or FILE does not exist. FILE is never created. A lock that cannot
+# be probed counts as held.
+locked()
+{
+    perl -MFcntl=:flock -e 'open(L, "<", shift) or exit($!{ENOENT} ? 1 : 0);
+        exit(flock(L, LOCK_SH | LOCK_NB) ? 1 : 0)' "$1"
+}
+
+# wait_session: wait while the supervisor of an earlier loop's session holds
+# STATE/session.live, testing it every half minute. A loop calls this before
+# it does anything in the clone: a session that outlived the loop that
+# started it, as one does when the loop's tmux session is killed, still has
+# its supervisor, which holds the lock until the session's group is gone, and
+# the clone must not get a second session. A STATE/session that stays once
+# the lock is free was left by a supervisor that was killed, and its session
+# may still run: it stays, and the next session.pl removes it only once it
+# has proved the group gone, and starts nothing until then.
 wait_session()
 {
-    group=$(cat "$state/session" 2> /dev/null)
-    if [ -n "$group" ] && kill -0 -"$group" 2> /dev/null; then
-        log "session group $group of an earlier loop still runs; waiting for it"
-        while kill -0 -"$group" 2> /dev/null; do
+    if locked "$state/session.live"; then
+        log "the session of an earlier loop still runs; waiting for its supervisor"
+        while locked "$state/session.live"; do
             sleep 30
         done
-        log "session group $group ended"
+        log "the session of the earlier loop ended"
     fi
-    rm -f "$state/session"
+    [ ! -e "$state/session" ] ||
+        log "$state/session names the group of a supervisor that was killed; the next session starts once it is gone"
 }
 
 # landed REF: succeed when `origin/master` or a branch `origin/milestone/*`

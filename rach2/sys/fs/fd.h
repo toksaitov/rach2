@@ -170,6 +170,8 @@ struct file_ra_state {
  * no other kind of descriptor reads or writes; `offset` is the position of
  * every other kind.
  */
+struct epitem;
+
 struct open_file {
     /* References: descriptors and the holders above. Changed only by an
      * atomic step (`fd_ofd_ref`, `fd_ofd_unref`), since descriptors of one
@@ -222,10 +224,10 @@ struct open_file {
     /* The selected regular-file entry, shared by fork and descriptor exec.
      * Its parent and mount stay held until the description's last unref. */
     struct vfs_name *name;
-    /* The count of descriptions made when this one was, which tells it
-     * from a new description the heap gives the same address after its
-     * last close; an epoll registration keeps both. */
-    uint32_t serial;
+    /* The epoll registrations made of this description, under epoll.c's
+     * lock of them, which the release of its last descriptor removes
+     * (`epoll_release_file`), as Linux's `file->f_ep`. */
+    struct epitem *epolls;
     /* For a device opened through a device node of tmpfs or ext2, the only
      * types that make one, that node and its mount, held as an O_PATH
      * description holds its own: what an open of /proc/PID/fd/N checks and
@@ -552,16 +554,6 @@ int fd_held_elsewhere(fd_table_t *table, int fd);
 int fd_close_claim(fd_table_t *table, int fd);
 
 /**
- * Take over the release of descriptor `fd` of `table`, which a close marked
- * closing (`fd_close_claim`) while another sharer's call held it, once that
- * hold is gone: 1, with the slot marked releasing, when it is closing, not
- * releasing and held by no other sharer's call, for the caller to release
- * it; 0 when a call still holds it, or another thread has begun or ended
- * its release. Taken under the table's lock.
- */
-int fd_close_finish(fd_table_t *table, int fd);
-
-/**
  * Take slot `fd` of `table` for dup2 under its lock: 0 when it was free,
  * now reserved and held by the call, for the caller to fill and publish
  * (`fd_install`); 1 when it is open and no other sharer's call holds it,
@@ -580,16 +572,6 @@ int fd_dup_target(fd_table_t *table, int fd);
  * ends (`fd_holds_release`).
  */
 int fd_holds_claim(int from);
-
-/**
- * `fd_holds_claim` for the holds of descriptors being closed alone, but
- * `keep`'s: each such hold of the calling thread from `from` up is let
- * go, and the first descriptor no other sharer holds is returned, marked
- * releasing for the caller to release, or -1 once none is left. The other
- * holds stay. An epoll wait that a close asked to give back its holds
- * (`poll_let_go`) calls it, keeping its set's descriptor.
- */
-int fd_holds_claim_closing(int from, int keep);
 
 /**
  * Add or drop a reference to an open file description, each in one atomic
@@ -658,14 +640,6 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to);
  * a write or a truncation is for the length of its call: what an attachment
  * of the file asks before it takes the file. */
 int fd_node_busy(struct vfs_mount *mnt, void *node);
-
-/**
- * Whether the description at `ofd`, made with `serial`, is open still: some
- * descriptor or other holder has a reference to it. Only the list of live
- * descriptions is read, so `ofd` may be the address of one freed since, or
- * of a later one at that address, whose serial is another.
- */
-int fd_ofd_live(const struct open_file *ofd, uint32_t serial);
 
 /** How many descriptions of (`mnt`, `node`) there are, `going` counted only
  * when it keeps a reference besides the one its release drops: the holders

@@ -8,7 +8,9 @@
  * space stop the test at once. A row may name a lock another thread holds
  * (`host_busy`): a write trylock of it fails, and the write lock that waits
  * for it runs the row's `host_wait` first, as that thread would run while
- * this one sleeps.
+ * this one sleeps. A row may also have another thread run just before the
+ * next take of the page-table lock (`host_ptl_hook`), as one on another
+ * processor may come between a fault's look and its lock.
  */
 #include "../../../rach2/sys/mm/mm.h"
 
@@ -16,6 +18,9 @@
  * lock waits for it, or NULL; and what that thread does meanwhile, or NULL. */
 struct mm *host_busy;
 void (*host_wait)(struct mm *mm);
+/* What another thread does before the next take of a page-table lock, run
+ * once, or NULL. */
+void (*host_ptl_hook)(struct mm *mm);
 
 /* The holds of the one thread: the address space, its depth and whether the
  * first hold was to write. Two at once, as on the machine. */
@@ -129,9 +134,16 @@ int mmap_may_drop(const struct mm *mm)
     return i >= 0 && host_holds[i].depth == 1 && !host_holds[i].write;
 }
 
-/** Take `mm`'s page-table lock: trap if it is held already. */
+/** Take `mm`'s page-table lock, after `host_ptl_hook`, which it clears:
+ * trap if it is held already. */
 uint32_t mm_ptl_lock(struct mm *mm)
 {
+    void (*hook)(struct mm *mm) = host_ptl_hook;
+
+    if (hook) {
+        host_ptl_hook = NULL;
+        hook(mm);
+    }
     if (mm->ptl.locked) {
         __builtin_trap();
     }

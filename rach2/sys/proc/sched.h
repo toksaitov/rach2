@@ -367,6 +367,19 @@ int sched_all_idle(void);
  */
 int sched_spin_on(const process_t *owner, int cpu);
 
+/** The processor whose current thread is `owner` and that is not halted in
+ * an idle wait, or -1 when none is: where a sleeping lock's holder runs,
+ * for a waiter whose note of the holder's processor is stale. `owner` is
+ * compared, never read. Interrupts on or off. */
+int sched_running_cpu(const process_t *owner);
+
+/** Nonzero when no interrupt switches the running thread off its processor,
+ * since it is a kernel thread or inside a system call or a fault
+ * (`sched_preempt`): the processor stays its own until it sleeps or reaches
+ * a service point, as Linux's preempt_disable keeps it for a spin on a
+ * sleeping lock's owner. */
+int sched_spin_pinned(void);
+
 /** Ticks that found a processor parked in an idle wait, and those that did
  * not, summed over the processors in 64 bits; each processor's own are in
  * its record (percpu.h). Counted rather than timed: each processor counts

@@ -69,7 +69,10 @@ probe='
 st=$1
 case $st in "~"*) st=$HOME${st#"~"} ;; esac
 if [ ! -d "$st" ]; then echo "no loop has run here: no $st"; exit 0; fi
-if pgrep -f "$st/run/worker.sh" > /dev/null; then
+# The loop holds STATE/loop.live for its life; a lock that cannot be probed
+# reads as held.
+if perl -MFcntl=:flock -e '"'"'open(L, "<", shift) or exit($!{ENOENT} ? 1 : 0);
+        exit(flock(L, LOCK_SH | LOCK_NB) ? 1 : 0)'"'"' "$st/loop.live"; then
     loop=runs
     [ ! -e "$st/stop" ] || loop="runs, asked to stop"
 else

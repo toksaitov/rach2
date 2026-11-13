@@ -1087,17 +1087,13 @@ static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
     if (!indexed && !d->unstored) {
         return 0;
     }
-    ext2_node_dirty(d);
-    d->flags &= ~EXT2_INDEX_FL;
+    EXT2_NODE_SET(d, flags, d->flags & ~EXT2_INDEX_FL);
     rc = ext2_inode_store(em, d);
     if (rc == 0) {
         rc = inode_commit(em, d);
     }
     if (rc != 0) {
-        if (indexed) {
-            d->flags |= EXT2_INDEX_FL;
-        }
-        ext2_node_dirty(d);
+        EXT2_NODE_SET(d, flags, d->flags | (indexed ? EXT2_INDEX_FL : 0));
         return rc;
     }
     return 0;
@@ -1118,7 +1114,9 @@ static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
  * a name in that block, stores and writes the inode first. A failure before the
  * size, of the block's write or of `ext2_map_alloc`'s store of a new indirect
  * block, leaves the pointer in memory past the size, where no entry is looked
- * for, and the next growth maps the same block and writes it again. Linux
+ * for, with `i_blocks` raised under the mark its change set
+ * (`ext2_node_blocks_add`), and the next growth maps the same block and writes
+ * it again. Linux
  * writes the inode after the
  * entry (`ext2_handle_dirsync`), which puts both on the device before the next
  * step too. 0, -EFBIG for a directory that would pass 4 GiB less a block,
@@ -1404,15 +1402,6 @@ static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int 
     return -ELOOP;
 }
 
-/** Set the link count of node `n` to `nlink` and mark the node
- * (`ext2_node_dirty`): every change of a count here goes through it. The
- * caller holds `n`'s lock or has `n` alone. */
-static void nlink_set(struct ext2_node *n, uint32_t nlink)
-{
-    ext2_node_dirty(n);
-    n->nlink = nlink;
-}
-
 /**
  * A new inode of mode `mode` in the directory `dir`, allocated, written
  * initialised and held once in a new node, into `*out`; the caller names
@@ -1474,23 +1463,23 @@ static int inode_make(struct ext2_mount *em, const struct ext2_node *dir, uint32
         }
         return rc;
     }
-    ext2_node_dirty(n);
-    n->uid = current_proc ? proc_fsuid(current_proc) : 0;
-    n->gid = current_proc ? proc_fsgid(current_proc) : 0;
+    EXT2_NODE_SET(n, uid, current_proc ? proc_fsuid(current_proc) : 0);
+    EXT2_NODE_SET(n, gid, current_proc ? proc_fsgid(current_proc) : 0);
     if (dir->mode & S_ISGID_) {
-        n->gid = dir->gid;
+        EXT2_NODE_SET(n, gid, dir->gid);
         if ((mode & S_IFMT_) == S_IFDIR_) {
             mode |= S_ISGID_;
         }
     }
-    n->mode = mode;
-    n->nlink = (mode & S_IFMT_) == S_IFDIR_ ? 2 : 1;
-    n->extra_isize = em->new_extra;
+    EXT2_NODE_SET(n, mode, mode);
+    ext2_node_nlink_set(n, (mode & S_IFMT_) == S_IFDIR_ ? 2 : 1);
+    EXT2_NODE_SET(n, extra_isize, em->new_extra);
     ext2_stamp(n, T_ATIME | T_MTIME | T_CTIME);
     if (ext2_extra_has(n, EXT2_CRTIME + 4)) {
-        n->crtime = ext2_time_fit(n, EXT2_CRTIME_EXTRA + 4, n->ctime.sec, n->ctime.nsec);
+        EXT2_NODE_SET(n, crtime,
+                      ext2_time_fit(n, EXT2_CRTIME_EXTRA + 4, n->ctime.sec, n->ctime.nsec));
     }
-    n->generation = ext2_generation_next(em);
+    EXT2_NODE_SET(n, generation, ext2_generation_next(em));
     rc = store ? ext2_inode_write(em, n, 1, WRITE_THROUGH)
                : ext2_write_bytes(em, ext2_inode_offset(em, n->ino), 0, em->inode_size,
                                   WRITE_THROUGH | WRITE_KIND(READ_SLOT));
@@ -1559,7 +1548,7 @@ static void child_give(struct ext2_mount *em, struct ext2_node *c)
  */
 static void inode_abandon(struct ext2_mount *em, struct ext2_node *n)
 {
-    nlink_set(n, 0);
+    ext2_node_nlink_set(n, 0);
     n->unlinked = 1;
     child_give(em, n);
 }
@@ -1601,7 +1590,7 @@ static int child_unlinked(struct ext2_mount *em, struct ext2_node *c)
 static void child_drop_link(struct ext2_mount *em, struct ext2_node *c)
 {
     if (c->nlink > 0) {
-        nlink_set(c, c->nlink - 1);
+        ext2_node_nlink_set(c, c->nlink - 1);
     }
     if (c->nlink == 0) {
         (void)child_unlinked(em, c);
@@ -1622,7 +1611,7 @@ static void child_drop_link(struct ext2_mount *em, struct ext2_node *c)
 static void dir_lose_parent(struct ext2_mount *em, struct ext2_node *d, int lose)
 {
     if (lose && d->nlink > 2) {
-        nlink_set(d, d->nlink - 1);
+        ext2_node_nlink_set(d, d->nlink - 1);
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
     (void)ext2_inode_store(em, d);
@@ -1740,11 +1729,10 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         uint32_t major = (rdev >> 8) & 0xFFFu;
         uint32_t minor = (rdev & 0xFFu) | ((rdev >> 12) & 0xFFF00u);
 
-        ext2_node_dirty(n);
         if (major < 256 && minor < 256) {
-            n->block[0] = (major << 8) | minor;
+            EXT2_NODE_SET(n, block[0], (major << 8) | minor);
         } else {
-            n->block[1] = (minor & 0xFFu) | (major << 8) | ((minor & 0xFFF00u) << 12);
+            EXT2_NODE_SET(n, block[1], (minor & 0xFFu) | (major << 8) | ((minor & 0xFFF00u) << 12));
         }
     }
     rc = ext2_inode_store(em, n);
@@ -1886,14 +1874,14 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         rc = inode_commit(em, n);
     }
     if (rc == 0) {
-        nlink_set(d, d->nlink + 1);
+        ext2_node_nlink_set(d, d->nlink + 1);
         ext2_stamp(d, T_MTIME | T_CTIME);
         rc = ext2_inode_store(em, d);
         if (rc == 0) {
             rc = dir_add(em, d, name, n->ino, 2);
         }
         if (rc != 0) {
-            nlink_set(d, d->nlink - 1);
+            ext2_node_nlink_set(d, d->nlink - 1);
         }
     }
     if (rc != 0) {
@@ -1952,7 +1940,7 @@ int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
         rc = dir_remove_at(em, d, at, prev, &sc);
     }
     if (rc == 0) {
-        nlink_set(c, 0);
+        ext2_node_nlink_set(c, 0);
         c->unlinked = 1;
         dir_lose_parent(em, d, 1);
         (void)child_unlinked(em, c);
@@ -1988,16 +1976,16 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
     if (rc == 1) {
         return -EEXIST;
     }
-    nlink_set(n, n->nlink + 1);
+    ext2_node_nlink_set(n, n->nlink + 1);
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_store(em, n);
     if (rc != 0) {
-        nlink_set(n, n->nlink - 1);
+        ext2_node_nlink_set(n, n->nlink - 1);
         return rc;
     }
     rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode));
     if (rc != 0) {
-        nlink_set(n, n->nlink - 1);
+        ext2_node_nlink_set(n, n->nlink - 1);
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
@@ -2098,7 +2086,8 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
         uint32_t i;
 
         for (i = 0; i < tlen; i++) {
-            n->block[i / 4] |= (uint32_t)(uint8_t)target[i] << ((i % 4) * 8);
+            EXT2_NODE_SET(n, block[i / 4],
+                          n->block[i / 4] | (uint32_t)(uint8_t)target[i] << ((i % 4) * 8));
         }
         n->fast_target = 1;
     } else {
@@ -2185,12 +2174,18 @@ struct ext2_rename_names {
  * The rename of directory `n` from `r->oldname` in `r->od` to `r->newname`
  * in `r->nd`, over the empty directory `victim` at `nsc`, `nat` and `nprev`
  * when it is not NULL, for `ext2_rename`, whose caller holds every lock: the
- * victim removed as rmdir removes it, then the new entry, then `..` rewritten
- * and the new parent's count raised when the parents differ, then the old
- * entry removed and the old parent's count lowered. A failed store of a
- * count or of times after an entry change is on the device fails nothing:
- * the node keeps its mark, which its next store settles. 0, -ENOENT,
- * -EMLINK, or -errno.
+ * victim removed as rmdir removes it, the new parent's count lowered for the
+ * victim's `..`, then the new entry, then `..` rewritten and the new parent's
+ * count raised when the parents differ, then the old entry removed and the old
+ * parent's count lowered when the parents differ. Within one parent the count
+ * falls by one, for the victim; between two, the new parent's is unchanged
+ * with a victim and the old parent's falls by one, as Linux's `ext2_rename`
+ * leaves `new_dir` with a target and drops `old_dir`
+ * (fs/ext2/namei.c:354-396). A failed store of a count or of times after an
+ * entry change is on the device fails nothing: the node keeps its mark, which
+ * its next store settles. 0, -ENOENT, -EMLINK when the parents differ, there
+ * is no victim and the new parent's count would pass 65000, as Linux tests it
+ * only when the new name is no directory (fs/namei.c:5090-5093), or -errno.
  */
 static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
                       struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat,
@@ -2203,7 +2198,7 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
     uint32_t oat, oprev;
     int rc;
 
-    if (od != nd && nd->nlink >= 65000) {
+    if (od != nd && !victim && nd->nlink >= 65000) {
         return -EMLINK;
     }
     if (victim) {
@@ -2211,9 +2206,9 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
         if (rc != 0) {
             return rc;
         }
-        nlink_set(victim, 0);
+        ext2_node_nlink_set(victim, 0);
         victim->unlinked = 1;
-        dir_lose_parent(em, nd, 0);
+        dir_lose_parent(em, nd, 1);
         (void)child_unlinked(em, victim);
     }
     rc = dir_add(em, nd, r->newname, n->ino, 2);
@@ -2225,7 +2220,7 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
         if (rc != 0) {
             return rc;
         }
-        nlink_set(nd, nd->nlink + 1);
+        ext2_node_nlink_set(nd, nd->nlink + 1);
         ext2_stamp(nd, T_MTIME | T_CTIME);
         (void)ext2_inode_store(em, nd);
     }
@@ -2268,11 +2263,11 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
     uint32_t oat, oprev;
     int rc;
 
-    nlink_set(n, n->nlink + 1);
+    ext2_node_nlink_set(n, n->nlink + 1);
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_store(em, n);
     if (rc != 0) {
-        nlink_set(n, n->nlink - 1);
+        ext2_node_nlink_set(n, n->nlink - 1);
         return rc;
     }
     if (victim) {
@@ -2301,7 +2296,7 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
     } else {
         rc = dir_add(em, nd, r->newname, n->ino, ext2_ftype_of(n->mode));
         if (rc != 0) {
-            nlink_set(n, n->nlink - 1);
+            ext2_node_nlink_set(n, n->nlink - 1);
             return rc;
         }
     }
@@ -2313,14 +2308,15 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
     if (rc != 0) {
         return rc;
     }
-    nlink_set(n, n->nlink - 1);
+    ext2_node_nlink_set(n, n->nlink - 1);
     (void)ext2_inode_store(em, n);
     ext2_stamp(od, T_MTIME | T_CTIME);
     (void)ext2_inode_store(em, od);
     if (od != nd) {
-        ext2_node_dirty(nd);
-        nd->mtime = ext2_time_fit(nd, EXT2_MTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec);
-        nd->ctime = ext2_time_fit(nd, EXT2_CTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec);
+        EXT2_NODE_SET(nd, mtime,
+                      ext2_time_fit(nd, EXT2_MTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec));
+        EXT2_NODE_SET(nd, ctime,
+                      ext2_time_fit(nd, EXT2_CTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec));
         (void)ext2_inode_store(em, nd);
     }
     return 0;

@@ -10,19 +10,20 @@
  * word of data the program chooses; epoll_wait returns the descriptors
  * ready, with their events and data.
  *
- * A registration is level-triggered, reported at every wait while its
- * descriptor is ready, or with EPOLLET edge-triggered, reported when an event
- * appears or its descriptor's wait queue is woken for a kind of change among
- * its events (data, room, or a hangup), and not again until then.
- * EPOLLONESHOT stops the reports after the first until epoll_ctl changes the
- * registration. A registration ends when its descriptor is closed: the next
- * wait finds the number naming another open file, or none, and drops it. A
- * wait uses the poll core (poll.c). An epoll set inside another is ready
- * while a wait on it would report an event, and a wait on the outer set is
- * on the queues of the sets inside it and of what they watch, four sets
- * deep at most, as Linux nests them; an add that would nest sets deeper,
- * counting those above the set added to as well as those below the set
- * added, or make a cycle, is refused.
+ * As in Linux, each registration has a record on the wait queue of what it
+ * watches, and a wake of a kind its events watch (data, room, or a hangup)
+ * puts it on the set's ready list; a wait polls only the registrations on
+ * that list. A registration is level-triggered, reported at every wait
+ * while its descriptor is ready, or with EPOLLET edge-triggered, reported
+ * after such a wake and not again until the next. EPOLLONESHOT stops the
+ * reports after the first until epoll_ctl changes the registration, and
+ * EPOLLEXCLUSIVE makes the set one of the queue's exclusive waiters, of
+ * which a wake wakes one. A registration lasts until the last close of the
+ * open file it was made for, whatever became of the number it was added
+ * by. An epoll set inside another is ready while a wait on it would report
+ * an event, four sets deep at most, as Linux nests them; an add that would
+ * nest sets deeper, counting those above the set added to as well as those
+ * below the set added, or make a cycle, is refused.
  */
 
 struct isr_params;
@@ -32,24 +33,21 @@ struct wait_queue;
 /** Whether the descriptor `e` is an epoll set. */
 int epoll_is_set(const struct fd_entry *e);
 
-/**
- * The readiness of the epoll set `e` for poll and select: POLLIN among
- * `events` while a wait on it would report an event. The wait queues a poll
- * of it must be on, the set's own and those of what it watches, go to
- * `wqs`, as many as `room` has, and their count, which may be more, to
- * `*n`. The caller has interrupts off, as the scan of `poll_wait` does.
- */
-short epoll_poll_set(struct fd_entry *e, short events, struct wait_queue **wqs, uint32_t room,
-                     uint32_t *n);
-
 struct open_file;
+
+/**
+ * Remove every registration of the open file `ofd` from the sets it is in,
+ * at the release of its last descriptor and before what it names is
+ * released, as Linux's `eventpoll_release_file` (fs/eventpoll.c:
+ * 1287-1325). May sleep, for each set's lock.
+ */
+void epoll_release_file(struct open_file *ofd);
 
 /**
  * The open file of the `toff`th registration, from 0, of descriptor number
  * `tfd` in the epoll set `e`, as kcmp's KCMP_EPOLL_TFD asks: 0 with it in
  * `*ofd`; -EINVAL when `e` is no epoll set, or
- * -ENOENT for no such registration. A registration whose file has closed is
- * none.
+ * -ENOENT for no such registration.
  */
 int32_t epoll_target(const struct fd_entry *e, int tfd, uint32_t toff,
                      const struct open_file **ofd);
@@ -72,8 +70,10 @@ long sys_epoll_create1(struct isr_params *params);
  *
  * Returns 0, -EBADF when either descriptor is not open, -EINVAL when the
  * set is not an epoll set or is the descriptor added, for an unknown
- * operation and for EPOLL_CTL_MOD with EPOLLEXCLUSIVE in the new events or
- * the old, -EPERM for a regular file or a directory, -EFAULT, -EEXIST for an
+ * operation, for EPOLL_CTL_MOD with EPOLLEXCLUSIVE in the new events or the
+ * old, and for EPOLLEXCLUSIVE with a set or with an event other than
+ * EPOLLIN, EPOLLOUT, EPOLLERR, EPOLLHUP, EPOLLWAKEUP and EPOLLET, -EPERM
+ * for a regular file or a directory, -EFAULT, -EEXIST for an
  * add of a descriptor registered already, -ENOENT for a change or removal
  * of one that is not, -ELOOP for an add that nests sets more than four deep
  * or makes a cycle, or -ENOMEM.

@@ -19,7 +19,15 @@ void mutex_lock(struct mutex *m)
     if (m->owner) {
         __builtin_trap();
     }
-    m->owner = m;
+    m->owner = (uintptr_t)m;
+}
+
+/** Take `m`, which must be free; the lock class's `subclass` is not
+ * modelled. */
+void mutex_lock_nested(struct mutex *m, unsigned int subclass)
+{
+    (void)subclass;
+    mutex_lock(m);
 }
 
 /** Take `m`, which must be free; no signal comes to a host test. */
@@ -37,7 +45,7 @@ int mutex_lock_killable(struct mutex *m)
     if (m->owner) {
         return -EINTR;
     }
-    m->owner = m;
+    m->owner = (uintptr_t)m;
     return 0;
 }
 
@@ -47,7 +55,7 @@ int mutex_trylock(struct mutex *m)
     if (m->owner) {
         return 0;
     }
-    m->owner = m;
+    m->owner = (uintptr_t)m;
     return 1;
 }
 

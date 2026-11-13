@@ -14,6 +14,7 @@ musl/hdaprobe manual audio path and rate diagnostic
 musl/hello manual musl startup smoke test
 musl/kvmipimusl manual load of a halted vCPU's wakes by IPI and by INIT and SIPI (rach2/sys/kvm/Readme.md)
 musl/wakemusl manual measure of the yield spin's calls and of the futex and epoll wakes beside Linux in the same QEMU (dev-log/84-locks/84-151.md)
+musl/mutexmusl manual measure of a briefly held kernel mutex, the Unix socket's receive lock, from one to four processors beside Linux in the same QEMU (dev-log/84-locks/84-165.md)
 musl/kvmmusl KVM run page and fork check, run by the native collection on the Lenovo, whose VMX no suite profile has yet
 musl/kvmslotmusl KVM memory slot check, run by the native collection on the Lenovo; its guest rows need a backend that runs guests
 musl/mallocqsort manual allocation and sort test

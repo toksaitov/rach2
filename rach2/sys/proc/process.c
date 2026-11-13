@@ -1007,9 +1007,14 @@ struct tgroup *tgroup_new(struct process *leader)
     return tg;
 }
 
+/** An epoll registration of a signalfd keeps a record on the signalfd
+ * queue of the group that added it, which may outlast the group, so the
+ * records are taken off before the group goes (`wq_wake_free`), as
+ * Linux's `signalfd_cleanup` (fs/signalfd.c:36-39). */
 void tgroup_put(struct tgroup *tg)
 {
     if (tg && --tg->refs == 0) {
+        wq_wake_free(&tg->sigfd);
         kfree(tg);
     }
 }
