@@ -165,6 +165,7 @@ struct epoll {
  * progress, under `ep_nest_mtx`. */
 static uint32_t walk_marks;
 static struct mutex ep_nest_mtx = {0,
+                                   -1,
                                    0,
                                    {0}
 #ifdef RACH2_LOCKDEP
