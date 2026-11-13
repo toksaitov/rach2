@@ -35,9 +35,11 @@
  * A shared store reaches every clean mapping; a private store copies first.
  * A page is read on first touch and written back whole, up to the file's
  * size, which a mapping does not change. A shared writer writes back only
- * the pages a store has reached (`stored`), which a shared mapping maps
- * read-only until its first write fault (`mkwrite`). The mount and inode
- * number identify the file to descriptor operations.
+ * the pages a store has reached since their last write (`stored`), which a
+ * shared mapping maps read-only until its first write fault (`mkwrite`),
+ * and again from each write-back of the page on, as Linux's write-back
+ * makes a folio's entries read-only before it writes the folio. The mount
+ * and inode number identify the file to descriptor operations.
  *
  * The table of `sh` changes only under the file's lock (`vfs_node_lock`):
  * a page joins it at a fault, and a truncation or the last release takes
@@ -90,17 +92,18 @@ struct dshare {
      * first write fault (`filemap_mkwrite_disk`), as Linux marks a folio
      * dirty at page_mkwrite: only these are written back, so that a page
      * read from a hole and never stored to leaves the hole a hole. A
-     * successful write of the page clears its bit while no writable mapping
-     * lives (`writers`), and a truncation clears the bits of the pages it
+     * write-back clears a page's bit after it has taken write access from
+     * every entry that maps the page and before it writes the page
+     * (`dshare_write_word`), and sets it again when the write fails or a
+     * device holds the frame; a truncation clears the bits of the pages it
      * frees. Under the file's lock. */
     uint32_t **stored;
     uint32_t nstored; /* the leaves `stored` reaches */
     uint32_t ndirty;  /* the bits set in `stored`, under the file's lock */
     /* The shared mappings through a description open for writing whose
-     * release has not begun: while one lives, a page it maps writable takes
-     * stores with no fault, so no write of the page may clear its bit. A
-     * store reaches a page only through `mkwrite` once none lives. Changed
-     * under the big lock. */
+     * release has not begun: the last to go writes the pages back
+     * (`filemap_release`), and while one lives the record keeps no writer
+     * of its own. Changed under the big lock. */
     uint32_t writers;
     /* The copy of the descriptor of the last writable mapping whose release
      * left dirty pages, which the record owns with a hold of `users` of its
@@ -527,77 +530,192 @@ static int dshare_write_bytes(fd_entry_t *via, uintptr_t phys, uint32_t len, uin
     return 0;
 }
 
+/** Set the dirty bit of page `i` of `ds` again, after a failed write of
+ * the page or one a device may still store into, in the leaf that held it,
+ * which the file's lock has kept. Under the file's lock. */
+static void dshare_set(struct dshare *ds, uint32_t i)
+{
+    uint32_t bit = i % SHMEM_LEAF;
+
+    ds->stored[i / SHMEM_LEAF][bit / 32u] |= 1u << (bit % 32u);
+    ds->ndirty++;
+}
+
+/** The first page of `ds` from `i` up to `end` whose dirty bit is set, or
+ * `end` for none, passing a missing leaf and a clear word whole. Under the
+ * file's lock. */
+static uint32_t dshare_next(const struct dshare *ds, uint32_t i, uint32_t end)
+{
+    uint32_t leaf, bit, w, skip;
+
+    while (i < end) {
+        leaf = i / SHMEM_LEAF;
+        bit = i % SHMEM_LEAF;
+        if (leaf >= ds->nstored) {
+            return end;
+        }
+        w = ds->stored[leaf] ? ds->stored[leaf][bit / 32u] >> (bit % 32u) : 0u;
+        if (w != 0) {
+            for (; !(w & 1u); w >>= 1) {
+                i++;
+            }
+            return i < end ? i : end;
+        }
+        skip = ds->stored[leaf] ? (i | 31u) + 1u : (leaf + 1u) * SHMEM_LEAF;
+        if (skip <= i) {
+            return end; /* past the last page a 32-bit index names */
+        }
+        i = skip;
+    }
+    return end;
+}
+
+static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys);
+
+/* What a write-back's walk takes write access from: the pages `first` to
+ * `end` of the file whose record is `ds`, in its shared mappings. */
+struct dshare_span {
+    const struct dshare *ds;
+    uint32_t first, end;
+};
+
+/** The `paging_wrprotect_where` match of `dshare_write_word`: the part of
+ * the region `r` that maps the pages of `arg`, a `struct dshare_span`,
+ * through a shared mapping of its file, the only kind whose entries store
+ * into the file's pages; a private mapping's writable page is a copy. */
+static int dshare_span_match(const vma_t *r, void *arg, uintptr_t *lo, uintptr_t *hi)
+{
+    const struct dshare_span *s = arg;
+    const struct filemap *m = (const struct filemap *)r->file;
+    uint32_t last, from, to;
+
+    if (!m || r->file->share != filemap_share_disk || m->ds != s->ds || !m->shared) {
+        return 0;
+    }
+    last = r->pgoff + (uint32_t)((r->end - r->start) / PAGE_SIZE);
+    from = r->pgoff > s->first ? r->pgoff : s->first;
+    to = last < s->end ? last : s->end;
+    if (from >= to) {
+        return 0;
+    }
+    *lo = r->start + (uintptr_t)(from - r->pgoff) * PAGE_SIZE;
+    *hi = r->start + (uintptr_t)(to - r->pgoff) * PAGE_SIZE;
+    return 1;
+}
+
 /**
- * Write page `i` of `ds` back through the descriptor `via`, by way
- * of a stack buffer (`dshare_write_bytes`). The file's lock
- * (`vfs_node_lock`: the mount's namespace lock, or the file's own on a type
- * that sets `file_locked`) is held from before the file's size is read to
- * the end of the write, so a truncation, which takes it too, runs wholly
- * before or after: the write never reaches past the size it leaves, and the
- * page, looked up after the size is read and copied with nothing between that
- * sleeps, is one a truncation has not freed. A page whose dirty bit is clear
- * (`dshare_stored`) is not written, as Linux's write-back passes a clean
- * folio by (`write_cache_pages`, mm/page-writeback.c): it equals the file,
- * and writing a page read from a hole would allocate the hole's blocks. A
- * partial page's tail is zeroed before writing, as Linux's mpage_writepage
- * zeros bytes beyond EOF; the frame is mapped by `kmap_cpu`, which cannot
- * fail, so a page is never left unwritten for want of a mapping. A file a
- * loop device stands on is not written, as write(2) does not write it.
+ * Write back through the descriptor `via` the dirty pages of `ds` in the
+ * word of `stored` that holds the first dirty page from `from` up to `end`
+ * (`dshare_next`), cleaning them for the write as Linux's
+ * folio_clear_dirty_for_io does
+ * (mm/page-writeback.c:2987-3040). Under the file's lock (`vfs_node_lock`),
+ * under which `mkwrite` marks a page, every entry of every address space
+ * that maps one of the pages loses its write access first
+ * (`paging_wrprotect_where`), as folio_mkclean takes it (mm/rmap.c:1014-1118),
+ * and then each page's bit is cleared and the page written: a store after
+ * the walk faults, waits for the lock and marks the page again, for the next
+ * pass, so that no store reaches a page after its bit is cleared without
+ * setting it again. A walk per word and not per page keeps a pass over a
+ * large file to one walk of the address spaces for each 32 pages.
  *
- * A write that succeeds clears the page's bit in the same hold of the lock
- * when no writable mapping lived as the copy began (`writers`): a store
- * after the copy then needs `mkwrite`, which waits for the lock and sets the
- * bit again, as Linux clears a folio's dirty bit for write-back with its
- * mappings made read-only (folio_clear_dirty_for_io,
- * mm/page-writeback.c:2987-3040). A bit on a page past the end or not in
- * memory has nothing to write and is cleared. 1 after a write, 0 when there
- * was nothing to write, -EBUSY, or the write's error, which leaves the bit.
+ * The lock is held from before the file's size is read to the end of the
+ * last write, so a truncation, which takes it too, runs wholly before or
+ * after: no write reaches past the size it leaves, and each page, looked up
+ * after the size is read and copied with nothing between that sleeps, is
+ * one a truncation has not freed. A page whose bit is clear is not written,
+ * as Linux's write-back passes a clean folio by (`write_cache_pages`,
+ * mm/page-writeback.c): it equals the file, and writing a page read from a
+ * hole would allocate the hole's blocks. A bit on a page past the end or not
+ * in memory has nothing to write and is cleared. A partial page's tail is
+ * zeroed before writing, as Linux's mpage_writepage zeros bytes beyond EOF,
+ * and the page goes by way of a stack buffer (`dshare_write_bytes`). A file
+ * a loop device stands on is not written, as write(2) does not write it.
+ *
+ * A page whose write fails has its bit set again, for a later pass. A page
+ * written while a device holds its frame (`frame_pinned`) keeps its bit, so
+ * that every pass writes it again until the pin goes, since the device
+ * stores into the frame with no fault: Linux cleans such a folio and leaves
+ * the pin's holder to dirty it once more as it lets go
+ * (unpin_user_pages_dirty_lock, mm/gup.c:285-325), which a frame's pin here
+ * has no file to do, and refuses a long-term write pin of such a mapping
+ * outright (writable_file_mapping_allowed, mm/gup.c:1225-1260), as
+ * `pin_user` does. `*next` is set to the page after that word, or to `end`
+ * when no page is dirty. Returns the pages written, or the first failure,
+ * -EBUSY for a loop device's file or the write's error, with the pages
+ * after it still written.
  */
-static int dshare_write_page(struct dshare *ds, fd_entry_t *via, uint32_t i)
+static int dshare_write_word(struct dshare *ds, fd_entry_t *via, uint32_t from, uint32_t end,
+                             uint32_t *next)
 {
     struct vfs_mount *mnt = via->ofd->vmnt;
-    uint64_t at = (uint64_t)i * PAGE_SIZE;
+    struct dshare_span span;
     struct vfs_ref file;
     struct vfs_stat st;
+    uint32_t word = 0, lo, hi, i, len, flags;
     uintptr_t phys;
     uint8_t *page;
-    uint32_t len, flags;
-    int rc = 0, clean;
+    uint64_t at;
+    int rc = 0, wrote = 0, page_rc;
 
     file.mnt = mnt;
     file.node = via->ofd->vnode;
     vfs_node_lock(&file);
-    if (!dshare_stored(ds, i)) {
+    lo = dshare_next(ds, from, end);
+    hi = (lo | 31u) + 1u;
+    if (hi > end || hi <= lo) {
+        hi = end;
+    }
+    *next = hi;
+    for (i = lo; i < hi; i++) {
+        word |= (uint32_t)dshare_stored(ds, i) << (i - lo);
+    }
+    if (word == 0) {
         rc = 0;
     } else if (loop_backs(mnt, via->ofd->vnode)) {
         rc = -EBUSY;
     } else if (vfs_getattr(mnt, via->ofd->vnode, &st) != 0) {
         rc = -EIO;
-    } else if (at >= st.size || (phys = shmem_resident(&ds->sh, i)) == 0) {
-        dshare_clear(ds, i);
     } else {
-        clean = *(volatile uint32_t *)&ds->writers == 0;
-        len = st.size - at < PAGE_SIZE ? (uint32_t)(st.size - at) : PAGE_SIZE;
-        page = kmap_cpu(phys, &flags);
-        k_memset(page + len, 0, PAGE_SIZE - len);
-        kunmap_cpu(page, flags);
-        rc = dshare_write_bytes(via, phys, len, at);
-        if (rc == 0 && clean) {
+        span.ds = ds;
+        span.first = lo;
+        span.end = hi;
+        paging_wrprotect_where(dshare_span_match, &span);
+        for (i = lo; i < hi; i++) {
+            if (!(word >> (i - lo) & 1u)) {
+                continue;
+            }
             dshare_clear(ds, i);
+            at = (uint64_t)i * PAGE_SIZE;
+            if (at >= st.size || (phys = shmem_resident(&ds->sh, i)) == 0) {
+                continue;
+            }
+            len = st.size - at < PAGE_SIZE ? (uint32_t)(st.size - at) : PAGE_SIZE;
+            page = kmap_cpu(phys, &flags);
+            k_memset(page + len, 0, PAGE_SIZE - len);
+            kunmap_cpu(page, flags);
+            page_rc = dshare_write_bytes(via, phys, len, at);
+            if (page_rc != 0 || frame_pinned(phys)) {
+                dshare_set(ds, i);
+            }
+            if (page_rc == 0) {
+                wrote++;
+            } else if (rc == 0) {
+                rc = page_rc;
+            }
         }
-        rc = rc == 0 ? 1 : rc;
     }
     vfs_node_unlock(&file);
-    return rc;
+    return rc != 0 ? rc : wrote;
 }
 
 /**
  * The one write-back pass over the pages of a disk file's record, which a
  * release, msync, fsync, sync(2) and the flusher all run: each dirty page
- * of `ds` from page `first` up to page `end` written through `via`
- * (`dshare_write_page`), which clears the bit of each it writes while no
- * writable mapping lives. A page whose write fails keeps its bit for a
- * later pass, as Rach2 retries a failed write where Linux drops the
+ * of `ds` from page `first` up to page `end` written through `via`, a word
+ * of `stored` at a time (`dshare_write_word`), which takes write access from
+ * the pages' entries and clears their bits before it writes them, whether
+ * or not a writable mapping lives. A page whose write fails keeps its bit
+ * for a later pass, as Rach2 retries a failed write where Linux drops the
  * folio's dirty bit (fs/buffer.c:1959-1996), and the pass's first failure
  * is recorded once, in the write-back errors of the file's file system
  * (`vfs_wb_err_set`), as Linux's `mapping_set_error` records a failed
@@ -617,7 +735,7 @@ static int dshare_pass(struct dshare *ds, fd_entry_t *via, uint32_t first, uint3
 {
     uint64_t start = tick_count();
     struct vfs_mount *mnt;
-    uint32_t i, sets;
+    uint32_t i, next, sets;
     int rc = 0, wrote = 0;
 
     if (!via->ofd || !via->ofd->vmnt) {
@@ -625,13 +743,14 @@ static int dshare_pass(struct dshare *ds, fd_entry_t *via, uint32_t first, uint3
     }
     mnt = via->ofd->vmnt;
     sets = vfs_wb_err_sets(mnt);
-    for (i = first; i < end && i < ds->sh.npages; i++) {
-        int page_rc = shmem_resident(&ds->sh, i) ? dshare_write_page(ds, via, i) : 0;
+    end = end < ds->sh.npages ? end : ds->sh.npages;
+    for (i = first; i < end; i = next) {
+        int word_rc = dshare_write_word(ds, via, i, end, &next);
 
-        if (page_rc > 0) {
+        if (word_rc > 0) {
             wrote = 1;
-        } else if (page_rc != 0 && rc == 0) {
-            rc = page_rc;
+        } else if (word_rc != 0 && rc == 0) {
+            rc = word_rc;
         }
     }
     if (wrote) {
@@ -660,8 +779,9 @@ static int dshare_pass(struct dshare *ds, fd_entry_t *via, uint32_t first, uint3
  * (mm/msync.c:87). References to both descriptions are taken before the
  * pass sleeps, and the page range is bounded before it, so later mappings
  * and faults cannot extend the call. The pass needs no release to end
- * first: a mapping whose release has not begun, or is writing, keeps its
- * pages' bits, so the pass writes its stores itself. Then the record lets
+ * first: the stores of a mapping whose release has not begun, or is
+ * writing, are in its pages' bits, which the pass writes, and a store after
+ * the pass's walk marks its page again. Then the record lets
  * its writer go once no page is dirty and no writer lives
  * (`dshare_settle`).
  *
