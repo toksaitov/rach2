@@ -514,12 +514,15 @@ static void row_start(void)
                   ((i915->ggtt.total - 4u * (4096u + I915_RING_SIZE) - I915_PPGTT_PD_BYTES) &
                    ~(uint64_t)(I915_PPGTT_PD_ALIGN - 1u)) &&
               i915->gt.ggtt_bottom == i915->gt.ppgtt.pd_ggtt);
+    i915_uncore_tick(i915);
+    i915_uncore_tick(i915);
     wake = at(&m, FORCEWAKE_MT, 0x00010001u);
     release = last_write(&m, FORCEWAKE_MT);
     first = at(&m, RING_MI_MODE(RENDER_RING_BASE), I915_MASKED_ENABLE(STOP_RING));
     last = at(&m, RING_MI_MODE(BLT_RING_BASE), I915_MASKED_DISABLE(STOP_RING));
-    CHECK("start: under forcewake, released after",
-          wake < first && last < release && i915->uncore.wake_count == 0);
+    CHECK("start: under forcewake, released by the release timer after",
+          wake < first && last < release && i915->uncore.wake_count == 0 &&
+              i915_model_forcewake(&m)->req == 0);
     CHECK("start: the GT's user interrupts of three rings and power management's of the "
           "fourth enabled, and masked",
           user_irqs_enabled(&m));

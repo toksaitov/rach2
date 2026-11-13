@@ -99,12 +99,12 @@ extern const int i915_nids;
 /*
  * Forcewake and the GT FIFO (i915_uncore.c). `lock` is the register lock
  * of i915.h's order, over the rest. `wake_count` counts the references to
- * forcewake held, which is held on the chip while it is not 0.
- * `fifo_count` is how many free entries the driver believes the GT FIFO
- * has, read again from GTFIFOCTL once it reaches the reserve.
- * `fifo_timeouts` and `thread_timeouts` count the waits for the FIFO and
- * for the GT's threads to wake that reached their bound, which Linux too
- * logs and goes on past.
+ * forcewake held, and forcewake is held on the chip while it is not 0 or
+ * the release timer is armed. `fifo_count` is how many free entries the
+ * driver believes the GT FIFO has, read again from GTFIFOCTL once it
+ * reaches the reserve. `fifo_timeouts` and `thread_timeouts` count the
+ * waits for the FIFO and for the GT's threads to wake that reached their
+ * bound, which Linux too logs and goes on past.
  */
 struct i915_uncore {
     struct spinlock lock;
@@ -112,6 +112,11 @@ struct i915_uncore {
     uint32_t fifo_count;
     uint32_t fifo_timeouts;
     uint32_t thread_timeouts;
+    uint32_t timer_ticks; /* the boot processor's ticks until the release timer
+                           * runs, 0 when it is not armed */
+    uint32_t active;      /* a reference was taken or dropped since the timer
+                           * was armed, so that it runs once more before it
+                           * lets go */
 };
 
 /*
@@ -1605,17 +1610,33 @@ void i915_uncore_init(struct drm_i915_private *i915);
  */
 int32_t i915_forcewake_get(struct drm_i915_private *i915);
 
-/** Drop a reference `i915_forcewake_get` gave; the last withdraws the
- * request. A put with no reference held is logged and changes nothing. */
+/** Drop a reference `i915_forcewake_get` gave. The last arms the release
+ * timer, which withdraws the request one to two ticks of the boot
+ * processor later unless a reference is taken meanwhile, as Linux's
+ * intel_uncore_forcewake_put arms fw_domain_arm_timer for 1 ms, so that
+ * the GT does not sleep and wake between accesses close together. A put
+ * with no reference held is logged and changes nothing. */
 void i915_forcewake_put(struct drm_i915_private *i915);
 
 /**
  * Read `reg` as Linux's accessors do on Haswell: a register of the GT,
- * below 0x40000, under forcewake taken for the read when no reference is
- * held, and any other directly. A GT register whose forcewake cannot be
- * had reads all ones, as a register of a chip that has gone.
+ * below 0x40000, under forcewake, which a read that finds it not held takes
+ * and leaves to the release timer, as Linux's __force_wake_auto; and any other
+ * directly. A GT register whose forcewake cannot be had reads all ones, as
+ * a register of a chip that has gone.
  */
 uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg);
+
+/** Run the release timer once a tick: when its ticks run out, arm it again
+ * for a tick if a reference was taken or dropped since it was armed, and
+ * otherwise withdraw the request unless a reference is held, as Linux's
+ * intel_uncore_fw_release_timer. From the boot processor's tick, through
+ * `i915_tick`, with interrupts off; takes the register lock. */
+void i915_uncore_tick(struct drm_i915_private *i915);
+
+/** Disarm the release timer at once, withdrawing the request unless a
+ * reference is held, for an unbind, after which no tick serves the device. */
+void i915_uncore_fini(struct drm_i915_private *i915);
 
 /**
  * Write `value` to `reg` as Linux's gen6 accessors do: a write below

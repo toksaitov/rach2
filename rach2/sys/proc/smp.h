@@ -304,7 +304,7 @@ int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
  * `WAKE` run without the big lock, on every processor for the accounting
  * and on the one that makes the clock's pass for the other two, and so do
  * the boot processor's services with locks of their own, `HDA` to
- * `SPEAKER`; `LOCK` is the tick's try for the big lock, or its wait, and
+ * `I915`; `LOCK` is the tick's try for the big lock, or its wait, and
  * the rows after it run under the lock: the signals of the tick posted, the
  * load average, and the boot processor's other services. `NESTED` counts
  * the ticks whose locked part ran inside a hold the interrupted code
@@ -318,6 +318,7 @@ enum bkl_tick_row {
     BKL_TICK_BLOCK_LAG,
     BKL_TICK_BLOCK_REQUEST,
     BKL_TICK_SPEAKER,
+    BKL_TICK_I915,
     BKL_TICK_LOCK,
     BKL_TICK_SIGNALS,
     BKL_TICK_LOAD,

@@ -103,6 +103,19 @@ static void i915_irq_handler(isr_params_t *params)
     }
 }
 
+void i915_tick(void)
+{
+    uint32_t flags = spin_lock_irqsave(&i915_devices_lock);
+    unsigned i;
+
+    for (i = 0; i < sizeof(i915_devices) / sizeof(i915_devices[0]); i++) {
+        if (i915_devices[i]) {
+            i915_uncore_tick(i915_devices[i]);
+        }
+    }
+    spin_unlock_irqrestore(&i915_devices_lock, flags);
+}
+
 void i915_irq_sync(struct drm_i915_private *i915)
 {
     uint32_t flags, n;
@@ -208,9 +221,10 @@ void i915_pci_unmap(struct i915_hw *hw)
 /**
  * The DRM core's unplug hook: its requests fail and retire, RPS and RC6
  * turned off, the device stops interrupting, its message and vector are
- * given back, its rings stop and give their pages back, and programs' maps
- * of its buffers are revoked. /sys no longer shows the driver on the
- * function. The record stays until its last reference.
+ * given back, its rings stop and give their pages back, programs' maps of
+ * its buffers are revoked, and forcewake's release timer lets go, since no
+ * tick serves the device once it is out of the table. /sys no longer shows
+ * the driver on the function. The record stays until its last reference.
  */
 static void i915_unplug(struct drm_device *dev)
 {
@@ -229,6 +243,7 @@ static void i915_unplug(struct drm_device *dev)
     i915_devices_remove(i915);
     i915_gt_fini(i915);
     i915_gem_unplug(i915);
+    i915_uncore_fini(i915);
     i915_gem_unlock(i915, taken);
 }
 
@@ -395,15 +410,17 @@ static void i915_registered(struct drm_i915_private *i915)
 
 /**
  * Undo a bind that failed before its registration, in reverse, as Linux's
- * i915_driver_probe unwinds: the aperture's windows, the GTT, the display
- * power well's reference, the GTT's mapping, the VBT and the OpRegion; put
- * the command word back to `command` and free the record. The registers'
- * mapping is the caller's.
+ * i915_driver_probe unwinds: forcewake's release timer, which no tick
+ * serves for a device outside the table, the aperture's windows, the GTT,
+ * the display power well's reference, the GTT's mapping, the VBT and the
+ * OpRegion; put the command word back to `command` and free the record.
+ * The registers' mapping is the caller's.
  */
 static void bind_unwind(struct drm_i915_private *i915, uint16_t command)
 {
     const pci_device_t *pdev = &i915->pci;
 
+    i915_uncore_fini(i915);
     i915_aperture_fini(&i915->gem.aperture);
     i915_ggtt_fini(i915);
     if (i915->power.count) {
