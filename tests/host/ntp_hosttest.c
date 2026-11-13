@@ -47,15 +47,31 @@
  * clock 2500249 ns of the monotonic clock, the truncation costing under a
  * nanosecond; 500 ppm, 17592186044, makes it 2501249 ns.
  *
+ * Built at 250 Hz, as ntp250_hosttest.c builds it, each row counts its
+ * seconds in TICK_HZ and takes the second answer of `BY_HZ`, the same
+ * arithmetic for a tick of 4 ms: the PLL slews 125 us a tick from the first
+ * second, so the second second ends after 243 ticks, and 117.1875 us from
+ * there; the clock reads 2.031195312 s after 500 ticks and 4.087711273 s
+ * after 1000, with 386238 us left, and -500 ms leaves -439453 us with the
+ * clock at 2.939382812 s after 750. 100 ppm adds 400 ns to each tick after
+ * the one in progress, 999600 ns over ten seconds; adjtime's 1.2 ms adds
+ * 2000 ns to each of the first two seconds' 250 ticks and 800 ns to the
+ * third's 250, 1.2 ms in all; a shift leaves one tick of the PLL's 125 us;
+ * and 8.5 ms of the raw clock, two ticks pending and half a millisecond,
+ * is 8500849 ns at 100 ppm and 8504249 ns at 500 ppm.
+ *
  * Returns the failed-check count (0 == all passed), capped so it cannot wrap
  * to a false 0.
  */
 
 #include "clock.c"
 
-#if TICK_HZ != 1000 && !defined(NTP250_MODEL)
-#error "the literal answers are for TICK_HZ 1000"
+#if TICK_HZ != 1000 && TICK_HZ != 250
+#error "the literal answers are for TICK_HZ 1000 and 250"
 #endif
+
+/* The answer `at1000` at 1000 Hz and `at250` at 250 Hz. */
+#define BY_HZ(at1000, at250) (TICK_HZ == 1000 ? (at1000) : (at250))
 
 extern int printf(const char *fmt, ...);
 
@@ -268,13 +284,13 @@ static void offset_rows(void)
     steps = rtc_step_count();
     c = cancels;
     CHECK(adj(&tx, ADJ_OFFSET, 0, 500000, 0) == TIME_OK);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(real_now() - base == 1 * NS);
-    pass(1000);
-    CHECK(real_now() - base == 2031191406);
-    CHECK(mono_now() - 100 * NS == 2031191406);
-    pass(2000);
-    CHECK(real_now() - base == 4087701988);
+    pass(TICK_HZ);
+    CHECK(real_now() - base == BY_HZ(2031191406, 2031195312));
+    CHECK(mono_now() - 100 * NS == BY_HZ(2031191406, 2031195312));
+    pass(2 * TICK_HZ);
+    CHECK(real_now() - base == BY_HZ(4087701988, 4087711273));
     adj(&tx, 0, 0, 0, 0);
     CHECK(tx.offset == 386238 && tx.freq == 0);
     rtc_offset(&base, &nsec);
@@ -288,11 +304,11 @@ static void offset_rows(void)
     steps = rtc_step_count();
     c = cancels;
     adj(&tx, ADJ_OFFSET, 0, -500000, 0);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(real_now() - base == 1 * NS);
-    pass(2000);
-    CHECK(real_now() - base == 2939388671);
-    CHECK(mono_now() - 100 * NS == 2939388671);
+    pass(2 * TICK_HZ);
+    CHECK(real_now() - base == BY_HZ(2939388671, 2939382812));
+    CHECK(mono_now() - 100 * NS == BY_HZ(2939388671, 2939382812));
     adj(&tx, 0, 0, 0, 0);
     CHECK(tx.offset == -439453);
     rtc_offset(&base, &nsec);
@@ -308,7 +324,7 @@ static void pll_frequency_row(void)
 
     restart(1700000200);
     pll_restart();
-    pass(4000);
+    pass(4 * TICK_HZ);
     CHECK(real_now() == 1700000204LL * NS);
     adj(&tx, ADJ_OFFSET, 0, 1000, 0);
     CHECK(tx.freq == 64000);
@@ -330,7 +346,7 @@ static void pll_coarse_rows(void)
 
     restart(100);
     pll_restart();
-    pass(3999);
+    pass(4 * TICK_HZ - 1);
     phase_pending = 1;
     CHECK(adj(&tx, ADJ_OFFSET, 0, 1000, 0) == TIME_OK);
     CHECK(tx.sec == 104 && tx.usec == 0 && tx.freq == 48000);
@@ -338,13 +354,13 @@ static void pll_coarse_rows(void)
     adj(&tx, ADJ_STATUS | ADJ_FREQUENCY, 0, 0, 0);
 
     restart(100);
-    pass(3999);
+    pass(4 * TICK_HZ - 1);
     phase_pending = 1;
     pll_restart();
     CHECK(adj(&tx, ADJ_OFFSET, 0, 1000, 0) == TIME_OK);
     CHECK(tx.sec == 104 && tx.freq == 0);
     phase_pending = 0;
-    pass(1001);
+    pass(TICK_HZ + 1);
     CHECK(adj(&tx, ADJ_OFFSET, 0, 1000, 0) == TIME_OK);
     CHECK(tx.freq == 32000);
     adj(&tx, ADJ_STATUS | ADJ_FREQUENCY, 0, 0, 0);
@@ -388,11 +404,11 @@ static void frequency_row(void)
     c = cancels;
     adj(&tx, ADJ_FREQUENCY, 0, 0, 100LL << 16);
     CHECK(tx.freq == 6553600 && cancels == c);
-    pass(10000);
-    CHECK(real_now() - base - 10 * NS == 999900);
+    pass(10 * TICK_HZ);
+    CHECK(real_now() - base - 10 * NS == BY_HZ(999900, 999600));
     base = restart(1700000400);
     raw = raw_now();
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(real_now() - base - 1 * NS == 100000);
     CHECK(raw_now() - raw == 1 * NS);
     adj(&tx, 0, 0, 0, 0);
@@ -404,7 +420,7 @@ static void frequency_row(void)
     phase_pending = 2;
     phase_ns = 500000;
     rtc_tick_phase(&ticks, &phase);
-    CHECK(ticks == 100002 && phase == 500249);
+    CHECK(ticks == 100u * TICK_HZ + 2u && phase == BY_HZ(500249u, 500849u));
     phase_pending = 0;
     phase_ns = 0;
 
@@ -414,7 +430,7 @@ static void frequency_row(void)
     phase_pending = 2;
     phase_ns = 500000;
     rtc_tick_phase(&ticks, &phase);
-    CHECK(ticks == 100002 && phase == 501249);
+    CHECK(ticks == 100u * TICK_HZ + 2u && phase == BY_HZ(501249u, 504249u));
     phase_pending = 0;
     phase_ns = 0;
     adj(&tx, ADJ_FREQUENCY, 0, 0, 0);
@@ -435,20 +451,20 @@ static void singleshot_row(void)
     CHECK(tx.offset == 0);
     adj(&tx, ADJ_OFFSET_SS_READ, 0, 0, 0);
     CHECK(tx.offset == 1200);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(real_now() - base == 1 * NS);
     adj(&tx, ADJ_OFFSET_SS_READ, 0, 0, 0);
     CHECK(tx.offset == 700);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(real_now() - base == 2000500000);
     adj(&tx, ADJ_OFFSET_SS_READ, 0, 0, 0);
     CHECK(tx.offset == 200);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(real_now() - base == 3001000000LL);
     adj(&tx, ADJ_OFFSET_SS_READ, 0, 0, 0);
     CHECK(tx.offset == 0);
-    pass(2000);
-    CHECK(real_now() - base == 5001199800LL);
+    pass(2 * TICK_HZ);
+    CHECK(real_now() - base == BY_HZ(5001199800LL, 5001200000LL));
     adj(&tx, 0, 0, 0, 0);
     CHECK(tx.offset == 0 && cancels == c);
 }
@@ -470,7 +486,7 @@ static void setoffset_row(void)
     restart(1700000800);
     pll_restart();
     adj(&tx, ADJ_OFFSET, 0, 500000, 0);
-    pass(1000);
+    pass(TICK_HZ);
     c = cancels;
     epoch = rtc_boot_epoch();
     before = real_now();
@@ -479,8 +495,8 @@ static void setoffset_row(void)
     CHECK(real_now() - before == 5 * NS && cancels == c + 1 && rtc_boot_epoch() == epoch + 5);
     CHECK(rtc_step_count() != steps);
     base = last_real = real_now();
-    pass(1000);
-    CHECK(real_now() - base == 1000031250);
+    pass(TICK_HZ);
+    CHECK(real_now() - base == BY_HZ(1000031250, 1000125000));
     adj(&tx, 0, 0, 0, 0);
     CHECK(tx.offset == 0 && (tx.status & STA_UNSYNC));
     before = real_now();
@@ -510,9 +526,9 @@ static void leap_rows(void)
 
     base = restart(1700006398);
     CHECK(adj(&tx, ADJ_STATUS | ADJ_MAXERROR, STA_INS, 0, 0) == TIME_OK);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(adj(&tx, 0, 0, 0, 0) == TIME_INS && tx.sec == 1700006399);
-    pass(999);
+    pass(TICK_HZ - 1);
     phase_pending = 1;
     CHECK(adj(&tx, 0, 0, 0, 0) == TIME_OOP && tx.sec == 1700006399 && tx.tai == 1);
     phase_pending = 0;
@@ -525,23 +541,23 @@ static void leap_rows(void)
     rtc_realtime(&sec, &nsec);
     CHECK(sec == 1700006399 && nsec == 0);
     CHECK(adj(&tx, 0, 0, 0, 0) == TIME_OOP && tx.tai == 1);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(real_now() == 1700006400LL * NS);
     CHECK(adj(&tx, 0, 0, 0, 0) == TIME_WAIT);
     adj(&tx, ADJ_STATUS, 0, 0, 0);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(adj(&tx, 0, 0, 0, 0) == TIME_OK);
 
     base = restart(1700006397);
     CHECK(adj(&tx, ADJ_STATUS | ADJ_MAXERROR | ADJ_TAI, STA_DEL, 0, 0) == TIME_OK);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(adj(&tx, 0, 0, 0, 0) == TIME_DEL);
     c = cancels;
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(real_now() == 1700006400LL * NS && cancels == c + 1);
     CHECK(adj(&tx, 0, 0, 0, 0) == TIME_WAIT && tx.tai == -1);
     adj(&tx, ADJ_STATUS, 0, 0, 0);
-    pass(1000);
+    pass(TICK_HZ);
     CHECK(adj(&tx, 0, 0, 0, 0) == TIME_OK);
     (void)base;
 }
