@@ -721,6 +721,10 @@ struct i915_userptr {
     uintptr_t ptr;
     /* One held disk mapping per frame; NULL entries for other pages. */
     struct vm_file **files;
+    /* The page of its file each held mapping maps there, in the same
+     * allocation as `files`, which a release marks dirty
+     * (`filemap_pin_dirty`). */
+    uint32_t *pgoffs;
     struct mmn_range range;
     uint8_t set;
     uint8_t stale;

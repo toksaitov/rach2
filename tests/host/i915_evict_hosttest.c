@@ -709,6 +709,8 @@ static void userptr_file_lifetime(void)
 
     tracked_file.refs = 1;
     user_regions[0].file = &tracked_file;
+    user_regions[0].pgoff = 5;
+    pin_dirty_marks = 0;
     CHECK(userptr(start, PAGE_SIZE, 0, &h) == 0, "userptr: a shared file page");
     obj = object(&file_a, h);
     CHECK(pin_whole(obj, 0, &v) == 0 && tracked_file.refs == 2,
@@ -724,8 +726,12 @@ static void userptr_file_lifetime(void)
     i915_gem_userptr_put_pages(obj);
     CHECK(tracked_file.refs == 0 && !obj->frames && !obj->userptr.files,
           "userptr: only the final GPU store's end permits the file's writeback");
+    CHECK(pin_dirty_marks == 1 && pin_dirty_held &&
+              pin_dirty_pgoff == 5u + (uint32_t)((start - user_regions[0].start) / PAGE_SIZE),
+          "userptr: the release marks the file's page dirty before the unpin and the file's put");
     dma_fence_put(f);
     user_regions[0].file = NULL;
+    user_regions[0].pgoff = 0;
     close_handle(&file_a, h);
 }
 

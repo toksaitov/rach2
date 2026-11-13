@@ -729,7 +729,10 @@ void klog(int level, const char *subsystem, const char *fmt, ...)
  * gives, so that a page's frame is its address. A region whose file is
  * `device_file` stands for a device's mapping. `user_pins` counts the
  * frames pinned; `pin_sleep`, when set, runs once inside the next pin, as
- * another thread would while the pin sleeps.
+ * another thread would while the pin sleeps. `pin_dirty_marks` counts the
+ * pages a pin's release marked dirty, and `pin_dirty_pgoff` and
+ * `pin_dirty_held` keep the page of the last and whether its file and
+ * frame were still held then.
  */
 #define USER_REGIONS 4
 static vma_t user_regions[USER_REGIONS];
@@ -739,6 +742,8 @@ static struct vm_file device_file;
 static struct vm_file tracked_file;
 static int user_pins;
 static void (*pin_sleep)(void);
+static int pin_dirty_marks, pin_dirty_held;
+static uint32_t pin_dirty_pgoff;
 
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
@@ -814,6 +819,16 @@ void frame_unpin(uintptr_t phys)
 {
     (void)phys;
     user_pins--;
+}
+
+/** Count a pin's release marking page `pgoff` of `f` dirty, and whether
+ * `f` and the frame were still held. */
+void filemap_pin_dirty(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    (void)phys;
+    pin_dirty_marks++;
+    pin_dirty_pgoff = pgoff;
+    pin_dirty_held = f->refs > 0 && user_pins > 0;
 }
 
 /* ---- processes, descriptors, clocks and waits ---- */

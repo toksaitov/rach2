@@ -105,10 +105,13 @@ struct dshare {
      * every entry that maps the page and before it writes the page
      * (`dshare_write_word`), and sets it again when the write fails or a
      * device holds the frame; a truncation clears the bits of the pages it
-     * frees. Under the file's lock. */
+     * frees; and the release of a device's write pin sets the bit of each
+     * page it held (`filemap_pin_dirty`). Changed under the file's lock and
+     * the big lock, with nothing that sleeps between a read of a bit and its
+     * change, but for a pin's release, which holds the big lock alone. */
     uint32_t **stored;
     uint32_t nstored; /* the leaves `stored` reaches */
-    uint32_t ndirty;  /* the bits set in `stored`, under the file's lock */
+    uint32_t ndirty;  /* the bits set in `stored`, as `stored` is changed */
     /* The shared mappings through a description open for writing whose
      * release has not begun: the last to go writes the pages back
      * (`filemap_release`). Changed under the big lock. */
@@ -381,14 +384,16 @@ static uint32_t dshare_bits(uint32_t w)
     return n;
 }
 
-/** Clear the dirty bit of page `i` of `ds`, which is set, after a write of
- * the page that succeeded. Under the file's lock. */
+/** Clear the dirty bit of page `i` of `ds`, in a leaf that exists, before
+ * a write of the page. Under the file's lock and the big lock. */
 static void dshare_clear(struct dshare *ds, uint32_t i)
 {
-    uint32_t bit = i % SHMEM_LEAF;
+    uint32_t bit = i % SHMEM_LEAF, *w = &ds->stored[i / SHMEM_LEAF][bit / 32u];
 
-    ds->stored[i / SHMEM_LEAF][bit / 32u] &= ~(1u << (bit % 32u));
-    ds->ndirty--;
+    if (*w & (1u << (bit % 32u))) {
+        *w &= ~(1u << (bit % 32u));
+        ds->ndirty--;
+    }
 }
 
 /** Clear the marks of `ds` (`stored`) from page `first` on, the pages a
@@ -559,14 +564,17 @@ static int dshare_write_bytes(struct dshare *ds, uintptr_t phys, uint32_t len, u
 }
 
 /** Set the dirty bit of page `i` of `ds` again, after a failed write of
- * the page or one a device may still store into, in the leaf that held it,
- * which the file's lock has kept. Under the file's lock. */
+ * the page or one a device may have stored into, in the leaf that held it,
+ * which the file's lock has kept; a pin's release may have set it
+ * meanwhile. Under the file's lock and the big lock. */
 static void dshare_set(struct dshare *ds, uint32_t i)
 {
-    uint32_t bit = i % SHMEM_LEAF;
+    uint32_t bit = i % SHMEM_LEAF, *w = &ds->stored[i / SHMEM_LEAF][bit / 32u];
 
-    ds->stored[i / SHMEM_LEAF][bit / 32u] |= 1u << (bit % 32u);
-    ds->ndirty++;
+    if (!(*w & (1u << (bit % 32u)))) {
+        *w |= 1u << (bit % 32u);
+        ds->ndirty++;
+    }
 }
 
 /** The first page of `ds` from `i` up to `end` whose dirty bit is set, or
@@ -660,15 +668,19 @@ static int dshare_span_match(const vma_t *r, void *arg, uintptr_t *lo, uintptr_t
  * a loop device stands on is not written, as write(2) does not write it.
  *
  * A page whose write fails has its bit set again, for a later pass. A page
- * written while a device holds its frame (`frame_pinned`) keeps its bit, so
- * that every pass writes it again until the pin goes, since the device
- * stores into the frame with no fault: Linux cleans such a folio and leaves
- * the pin's holder to dirty it once more as it lets go
- * (unpin_user_pages_dirty_lock, mm/gup.c:285-325), which a frame's pin here
- * has no file to do, and refuses a long-term write pin of such a mapping
- * outright (writable_file_mapping_allowed, mm/gup.c:1225-1260), as
- * `pin_user` does. `*next` is set to the page after that word, or to `end`
- * when no page is dirty. Returns the pages written, or the first failure,
+ * a device holds (`frame_pinned`) when its copy begins or after its write
+ * keeps its bit, so that every pass writes it again until the pin goes,
+ * since the device stores into the frame with no fault; a pin that goes
+ * while the page is written sets the bit as it goes (`filemap_pin_dirty`),
+ * as Linux cleans such a folio and has the pin's holder dirty it once more
+ * as it lets go (unpin_user_pages_dirty_lock, mm/gup.c:285-325), so the
+ * device's last stores reach a later pass. No new write pin can come during
+ * the write: the walk left the page read-only, and the pin's fault waits in
+ * `mkwrite` for the file's lock. Linux refuses a long-term write pin of
+ * such a mapping outright (writable_file_mapping_allowed,
+ * mm/gup.c:1225-1260), as `pin_user` does. `*next` is set to the page
+ * after that word, or to `end` when no page is dirty. Returns the pages
+ * written, or the first failure,
  * -EBUSY for a loop device's file or the write's error, with the pages
  * after it still written.
  */
@@ -682,7 +694,7 @@ static int dshare_write_word(struct dshare *ds, uint32_t from, uint32_t end, uin
     uintptr_t phys;
     uint8_t *page;
     uint64_t at;
-    int rc = 0, wrote = 0, page_rc;
+    int rc = 0, wrote = 0, page_rc, pinned;
 
     file.mnt = mnt;
     file.node = ds->wr_node;
@@ -720,8 +732,9 @@ static int dshare_write_word(struct dshare *ds, uint32_t from, uint32_t end, uin
             page = kmap_cpu(phys, &flags);
             k_memset(page + len, 0, PAGE_SIZE - len);
             kunmap_cpu(page, flags);
+            pinned = frame_pinned(phys);
             page_rc = dshare_write_bytes(ds, phys, len, at);
-            if (page_rc != 0 || frame_pinned(phys)) {
+            if (page_rc != 0 || pinned || frame_pinned(phys)) {
                 dshare_set(ds, i);
             }
             if (page_rc == 0) {
@@ -1596,6 +1609,25 @@ void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t of
         in += take;
         off += take;
         len -= take;
+    }
+}
+
+void filemap_pin_dirty(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    struct filemap *m = (struct filemap *)f;
+    struct dshare *ds;
+
+    bkl_assert_held();
+    if (!f || f->share != filemap_share_disk || !filemap_writes(m)) {
+        return;
+    }
+    ds = m->ds;
+    if (!ds->wr_handle || shmem_resident(&ds->sh, pgoff) != phys) {
+        return;
+    }
+    if (dshare_mark(ds, pgoff) != 0) {
+        klog(KLOG_WARN, "mm", "shared mapping: inode %u: page %u: a device's stores lost",
+             (unsigned)ds->ino, (unsigned)pgoff);
     }
 }
 

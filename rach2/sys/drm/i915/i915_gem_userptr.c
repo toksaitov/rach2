@@ -22,11 +22,30 @@
  * during the pin gives -EAGAIN, as Linux's notifier sequence does. */
 #define USERPTR_PIN_TRIES 3
 
+/** Let the frames of `obj` go, each write pin's page of a shared mapping of
+ * a disk file marked dirty first (`filemap_pin_dirty`), as Linux's
+ * i915_gem_userptr_put_pages dirties each page with set_page_dirty_lock
+ * before its unpin, since the GPU may have written it; then the files held
+ * for the pages go. Takes the big lock for the marks when the caller does
+ * not hold it. */
 void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj)
 {
     uint32_t i, n = (uint32_t)(obj->base.size >> PAGE_SHIFT);
+    int big;
 
     if (obj->frames) {
+        big = !bkl_held();
+        if (big) {
+            bkl_enter();
+        }
+        for (i = 0; i < n; i++) {
+            if (obj->userptr.files[i]) {
+                filemap_pin_dirty(obj->userptr.files[i], obj->userptr.pgoffs[i], obj->frames[i]);
+            }
+        }
+        if (big) {
+            bkl_exit();
+        }
         for (i = 0; i < n; i++) {
             frame_unpin(obj->frames[i]);
             if (obj->userptr.files[i]) {
@@ -37,6 +56,7 @@ void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj)
         kfree(obj->userptr.files);
         obj->frames = 0;
         obj->userptr.files = 0;
+        obj->userptr.pgoffs = 0;
     }
     obj->userptr.stale = 0;
 }
@@ -182,20 +202,26 @@ static void userptr_files_put(struct vm_file **files, uint32_t n)
 }
 
 /**
- * Keep the mapped disk file of each pinned page until the GPU gives its
- * frame back. Under the regions' read lock, after the pin's sequence check,
- * so a release writes back stores made after an unmap revoked a busy pin.
+ * Keep the mapped disk file of each pinned page, and the page of the file
+ * it maps (`pgoffs`), until the GPU gives its frame back. Under the
+ * regions' read lock, after the pin's sequence check, so a release marks
+ * and writes back stores made after an unmap revoked a busy pin.
  */
-static void userptr_files_get(struct mm *mm, uintptr_t start, uint32_t n, struct vm_file **files)
+static void userptr_files_get(struct mm *mm, uintptr_t start, uint32_t n, struct vm_file **files,
+                              uint32_t *pgoffs)
 {
+    uintptr_t addr;
     uint32_t i;
 
     for (i = 0; i < n; i++) {
-        const vma_t *vma = vm_find(&mm->vm, start + (uintptr_t)i * PAGE_SIZE);
+        const vma_t *vma;
 
+        addr = start + (uintptr_t)i * PAGE_SIZE;
+        vma = vm_find(&mm->vm, addr);
         if (vma && filemap_disk_pages(vma->file)) {
             vm_file_get(vma->file);
             files[i] = vma->file;
+            pgoffs[i] = vma->pgoff + (uint32_t)((addr - vma->start) / PAGE_SIZE);
         }
     }
 }
@@ -212,6 +238,7 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     uintptr_t start = obj->userptr.ptr, end = start + (uintptr_t)obj->base.size;
     uintptr_t *frames;
     struct vm_file **files;
+    uint32_t *pgoffs;
     struct mm *mm;
     const volatile uint32_t *seqp = &obj->userptr.range.seq;
     uint32_t seq;
@@ -238,17 +265,18 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     if (!frames) {
         return -ENOMEM;
     }
-    files = kzalloc((size_t)n * sizeof(*files));
+    files = kzalloc((size_t)n * (sizeof(*files) + sizeof(uint32_t)));
     if (!files) {
         kfree(frames);
         return -ENOMEM;
     }
+    pgoffs = (uint32_t *)(files + n);
     for (tries = 0; tries < USERPTR_PIN_TRIES; tries++) {
         seq = *seqp;
         mmap_read_lock(mm);
         err = paging_pin_range(mm, start, end, PIN_WRITE, frames);
         if (err == 0 && seq == *seqp) {
-            userptr_files_get(mm, start, n, files);
+            userptr_files_get(mm, start, n, files, pgoffs);
         }
         mmap_unlock(mm);
         if (err != 0) {
@@ -274,6 +302,7 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
         if (seq == *seqp) {
             obj->frames = frames;
             obj->userptr.files = files;
+            obj->userptr.pgoffs = pgoffs;
             obj->pages_pin_count = 1;
             return 0;
         }

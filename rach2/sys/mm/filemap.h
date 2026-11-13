@@ -132,6 +132,20 @@ int filemap_memory_shared_writable(const struct vfs_mount *mnt, void *node);
 void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
                           uint32_t len);
 
+/**
+ * Mark page `pgoff` of the file `f` maps dirty, as the holder of a write
+ * pin of its frame `phys` lets the pin go, before the frame's unpin, as
+ * Linux's unpin_user_pages_dirty_lock dirties each page a device may have
+ * written (mm/gup.c:285-325): a write-back that began while the device
+ * still stored into the frame writes the page again on its next pass. Does
+ * nothing unless `f` is a shared mapping of a disk file through a
+ * description open for writing and `phys` is still the file's page there.
+ * The caller holds `f` and the big lock; this does not sleep. A write pin
+ * through `pin_user` needs no call, since a long-term write pin refuses
+ * such a mapping.
+ */
+void filemap_pin_dirty(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
+
 /*
  * The system calls on a file's descriptors call the four functions below,
  * with `filemap_disk_written` above, so that the file and its resident
