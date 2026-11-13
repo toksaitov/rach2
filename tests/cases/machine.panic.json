@@ -371,7 +371,7 @@
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"boot_options": "rach2.stackoverrun=fork panic=5 reboot=e", "machine": "pc", "firmware": "ovmf"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "panic_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "execution": {"program": "panic_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["panic-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes its copy of the disk and its evidence, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the panic disk by OVMF, whose menu gives rach2.stackoverrun=fork panic=5 reboot=e, read the panic and the reset's records, and wait for the machine to end"}
       ],
