@@ -483,6 +483,7 @@ void i915_gt_fini(struct drm_i915_private *i915)
             (void)i915_ring_stop(i915, e, 0);
             e->running = 0;
             e->irq_refs = 0;
+            e->irq_armed = 0;
         }
         i915_gt_pages_unmap(i915, e->ring, e->ring_size / I915_GTT_PAGE_SIZE, e->ring_ggtt);
         e->ring = 0;
