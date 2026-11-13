@@ -5,7 +5,7 @@
  * controller can use MSI, a PCI line, or polling, and each source can be
  * pending independently. The host IRQ functions model the interrupt flag.
  *
- * host-deps:
+ * host-deps: rach2/sys/tick.c
  */
 
 #include "../../rach2/sys/usb/usb.c"
@@ -122,6 +122,12 @@ void kirq_restore(uint32_t flags)
 
 /* The tick count `usb_poll` reads, which only the gap row moves. */
 volatile uint64_t kernel_ticks;
+
+/** Advance the service clock with the row's explicit ticks. */
+int64_t rtc_monotonic_ns(void)
+{
+    return (int64_t)kernel_ticks * TICK_NS;
+}
 
 /** Return 0: no row reads the clock. */
 uint32_t timer_now_us(void)

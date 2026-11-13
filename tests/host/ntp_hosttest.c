@@ -148,7 +148,7 @@ static int64_t mono_now(void)
     uint32_t phase;
 
     rtc_tick_phase(&ticks, &phase);
-    return (int64_t)ticks * 1000000 + phase;
+    return (int64_t)ticks * TICK_NS + phase;
 }
 
 /** Real time now in nanoseconds, the monotonic clock plus the offset. */

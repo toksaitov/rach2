@@ -3,7 +3,8 @@
  * held keys, modifiers, repeat and raw view, driven by key events and ticks,
  * and the events a program writes to a keyboard's event device.
  *
- * host-deps: rach2/sys/kbd.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/tick.c rach2/sys/kbd.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
  * The file is included whole. Its consumers are models: the event devices,
@@ -26,6 +27,12 @@ static int fails;
     } while (0)
 
 volatile uint64_t kernel_ticks;
+
+/** The model's explicit tick count also drives its fine clock. */
+int64_t rtc_monotonic_ns(void)
+{
+    return (int64_t)kernel_ticks * TICK_NS;
+}
 
 /** No interrupts to mask on the host: nothing to save. */
 uint32_t kirq_save(void)
@@ -209,7 +216,8 @@ static int kd_count(int value)
 }
 
 /* The tick count `ms` milliseconds past 10 s, where the repeat rows run. */
-#define AT(ms) ((10000u + (ms)) / TICK_MS)
+#define TICK_MS (1000u / TICK_HZ)
+#define AT(ms)  ((10000u + (ms)) / TICK_MS)
 
 /** Run the tick once at each count from the one after now to `to`. */
 static void tick_to(uint32_t to)
