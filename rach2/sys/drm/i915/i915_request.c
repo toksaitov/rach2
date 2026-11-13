@@ -1241,9 +1241,10 @@ static uint32_t breadcrumb_bytes(struct drm_i915_private *i915, struct i915_engi
  * A request on `ce` without the GT's checks, for `i915_request_create`
  * and the default state's recording: its image made, the GT unparked, the
  * fence on the engine's timeline, the invalidation and the switch emitted
- * and room kept for the breadcrumb.
+ * and room kept for the breadcrumb. `room` zeroed bytes follow the request
+ * in its block, freed with it.
  */
-static int32_t request_new(struct intel_context *ce, struct i915_request **out)
+static int32_t request_new(struct intel_context *ce, size_t room, struct i915_request **out)
 {
     struct drm_i915_private *i915 = ce->i915;
     struct i915_engine *e = ce->engine;
@@ -1258,7 +1259,7 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     if (err < 0) {
         return err;
     }
-    rq = (struct i915_request *)kzalloc(sizeof(*rq));
+    rq = (struct i915_request *)kzalloc(sizeof(*rq) + room);
     if (!rq) {
         return -ENOMEM;
     }
@@ -1536,7 +1537,7 @@ static int32_t record_defaults(struct drm_i915_private *i915)
     if (!ce) {
         return -ENOMEM;
     }
-    err = request_new(ce, &rq);
+    err = request_new(ce, 0, &rq);
     if (err == 0) {
         cs = i915_request_begin(rq, 8);
         if (cs) {
@@ -1555,7 +1556,7 @@ static int32_t record_defaults(struct drm_i915_private *i915)
         }
     }
     if (err == 0) {
-        err = request_new(e->kernel_ce, &flush);
+        err = request_new(e->kernel_ce, 0, &flush);
     }
     if (err == 0) {
         err = i915_request_add(flush);
@@ -1709,7 +1710,7 @@ int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
     }
 }
 
-int32_t i915_request_create(struct intel_context *ce, struct i915_request **out)
+int32_t i915_request_create_room(struct intel_context *ce, size_t room, struct i915_request **out)
 {
     struct drm_i915_private *i915 = ce->i915;
     int32_t err;
@@ -1737,7 +1738,12 @@ int32_t i915_request_create(struct intel_context *ce, struct i915_request **out)
             return err;
         }
     }
-    return request_new(ce, out);
+    return request_new(ce, room, out);
+}
+
+int32_t i915_request_create(struct intel_context *ce, struct i915_request **out)
+{
+    return i915_request_create_room(ce, 0, out);
 }
 
 void i915_requests_unplug(struct drm_i915_private *i915)
