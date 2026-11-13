@@ -17,6 +17,13 @@ fd_entry_t *fd_slot(const fd_table_t *table, int fd)
     return &table->chunks[0][fd];
 }
 
+/** The entry the table has for `fd`: a flat table has no spares, so the
+ * slot's own. */
+fd_entry_t *fd_table_entry(const fd_table_t *table, int fd)
+{
+    return &table->chunks[0][fd];
+}
+
 /** Publish the slot the test's `fd_alloc` reserved. */
 void fd_install(fd_table_t *table, int fd)
 {
