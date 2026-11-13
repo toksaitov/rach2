@@ -197,6 +197,14 @@ struct ext2_time {
 #define N_DYING   2
 #define N_FAILED  3
 
+/* The bits of a node's `unstored` word. EXT2_MARKED: a field changed and no
+ * store of it has succeeded since. EXT2_STORING: a store is under way, set in
+ * place of the mark it took, so that the word is never 0 from the change to
+ * the end of a store that succeeded, and a reader that finds it nonzero
+ * without the lock waits for the store on the lock (`node_owes`). */
+#define EXT2_MARKED  1
+#define EXT2_STORING 2
+
 /* The shared blocks a node lists for its `fsync` (`ext2_node_share`). */
 #define EXT2_NODE_SHARED 8
 
@@ -230,14 +238,18 @@ struct ext2_node {
     uint32_t lookup_from;
     /* Entry changes, under the directory lock; not stored on disk. */
     uint64_t dir_version;
-    /* A field `inode_encode` writes changed in memory and no store of it
-     * has succeeded since, under the node lock: set by the primitive of every
-     * change outside the batch and the load (`ext2_node_dirty`) and cleared
-     * only by a store that succeeded (`ext2_inode_write`) or the inode's free
-     * (`ext2_release_inode`). The last put, `sync`, `fsync` and a remount
-     * writable store a marked node, and every change of a directory's
-     * entries stores it first (`dir_settle`). The batch sets no mark: it
-     * holds its nodes and its drain stores them. */
+    /* EXT2_MARKED when a field `inode_encode` writes changed in memory and
+     * no store of it has succeeded since, and EXT2_STORING while a store
+     * runs, under the node lock: the mark is set by the primitive of every
+     * change outside the batch and the load (`ext2_node_dirty`), traded for
+     * EXT2_STORING by a store as it starts (`ext2_inode_write`), and the word
+     * is cleared only by a store that succeeded or the inode's free
+     * (`ext2_release_inode`), each change in one assignment, so a reader
+     * without the lock that finds it 0 has nothing to wait for. The last
+     * put, `sync`, `fsync` and a remount writable store a node whose word is
+     * not 0, and every change of a directory's entries stores it first
+     * (`dir_settle`). The batch sets no mark: it holds its nodes and its
+     * drain stores them. */
     int unstored;
     /* Set when a store found a field changed in memory without the mark
      * (`ext2_inode_write`), so that what the node holds cannot be trusted,

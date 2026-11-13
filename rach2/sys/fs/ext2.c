@@ -248,8 +248,7 @@ static void node_final(struct ext2_mount *em, struct ext2_node *n);
  */
 static void node_last(struct ext2_mount *em, struct ext2_node *n)
 {
-    if (!n->fenced &&
-        (n->unlinked || (n->unstored && n->state == N_LIVE && ext2_writes(em)))) {
+    if (!n->fenced && (n->unlinked || (n->unstored && n->state == N_LIVE && ext2_writes(em)))) {
         node_final(em, n);
     } else {
         node_drop(em, n);
@@ -2603,7 +2602,7 @@ struct ext2_time ext2_time_fit(const struct ext2_node *n, uint32_t extra_end, in
  */
 void ext2_node_dirty(struct ext2_node *n)
 {
-    n->unstored = 1;
+    n->unstored |= EXT2_MARKED;
 }
 
 /** Add `sectors` 512-byte units to `n`'s `i_blocks` and mark the node
@@ -3105,12 +3104,17 @@ static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, in
  * on `n` from changing under the read, the batch test and the write, so it
  * needs no big lock. 0, or -errno.
  *
- * The node's mark (`n->unstored`) is copied and cleared before the encode,
- * as Linux clears an inode's dirty bits before `write_inode`
- * (fs/fs-writeback.c:1767-1768 and 1796-1798), and set again on every
- * failure, so that only a store that succeeds, or one left to a drain still
- * to come, which owes it, clears it, and the next settle stores the node
- * again after a failed one. A slot whose fields but the times and the
+ * The node's mark (EXT2_MARKED of `n->unstored`) is copied and traded for
+ * EXT2_STORING before the encode, as Linux clears an inode's dirty bits
+ * before `write_inode` (fs/fs-writeback.c:1767-1768 and 1796-1798) and holds
+ * I_SYNC across it (1850 and 1884): a sync that reads the word without the
+ * lock finds it nonzero throughout the store's sleeps and waits for the
+ * store on the lock (`ext2_node_write_marked`), as `writeback_single_inode`
+ * waits for I_SYNC (1827-1836). At the end one assignment leaves the mark of
+ * a change made meanwhile and, on every failure, the mark taken, so that
+ * only a store that succeeds, or one left to a drain still to come, which
+ * owes it, clears the word, and the next settle stores the node again after
+ * a failed one. A slot whose fields but the times and the
  * deletion time would change on a node that had no mark, and that the batch
  * does not hold, is a change made without `ext2_node_dirty`: it is logged as
  * `ext2: inode N: changed but not marked`, reported to the mount's policy
@@ -3122,14 +3126,12 @@ static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, in
  */
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how)
 {
-    int marked = n->unstored;
+    int marked = n->unstored & EXT2_MARKED;
     int rc;
 
-    n->unstored = 0;
+    n->unstored = EXT2_STORING;
     rc = inode_write(em, n, fresh, how, marked);
-    if (rc != 0) {
-        n->unstored |= marked;
-    }
+    n->unstored = (n->unstored & EXT2_MARKED) | (rc != 0 ? marked : 0);
     return rc;
 }
 
