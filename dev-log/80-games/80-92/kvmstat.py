@@ -60,16 +60,21 @@ def ended(sig, frame):
     raise SystemExit(128 + sig)
 
 
-for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+end_signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+for s in end_signals:
     signal.signal(s, ended)
 
 try:
     for ev, h in hists.items():
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, end_signals)
         try:
-            trigger(ev, h)
-        except FileExistsError:
-            pass  # left by a run that ended without removing it; ours to remove
-        installed.append(ev)
+            try:
+                trigger(ev, h)
+            except FileExistsError:
+                pass  # left by a run that ended without removing it; ours to remove
+            installed.append(ev)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
     while True:
         vms = list(kvm.glob('*-*'))
         qemus = []
@@ -102,7 +107,7 @@ try:
             break
         time.sleep(0.02)
 finally:
-    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    for s in end_signals:
         signal.signal(s, signal.SIG_IGN)
     for ev in installed:
         try:
