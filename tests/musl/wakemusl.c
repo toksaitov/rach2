@@ -88,6 +88,7 @@ static int efd = -1;
 static int pfd[2] = {-1, -1};
 static int epfd = -1;
 static volatile int load_word[2]; /* the load's hand-off, one word a side */
+static int load_side[2] = {0, 1}; /* each load thread's argument */
 static volatile int load_stop;
 static unsigned long load_rounds;
 
@@ -224,11 +225,11 @@ static void *waiter(void *arg)
     return NULL;
 }
 
-/** One side of the load, on processor 2 + `arg`: wait for its word to
- * change, then change and wake the other side's. */
+/** One side of the load, on processor 2 + the side `arg` points to: wait
+ * for its word to change, then change and wake the other side's. */
 static void *load(void *arg)
 {
-    int me = (int)(long)arg;
+    int me = *(const int *)arg;
     int seen = 0;
     int first = me == 0;
 
@@ -258,11 +259,12 @@ static void *load(void *arg)
  * there: 0, or -1 where there is no such file, as on Linux. */
 static int calls_write(const char *text)
 {
-    FILE *f = fopen(CALLS_FILE, "w");
+    FILE *f;
 
-    if (!f && mount("debugfs", "/sys/kernel/debug", "debugfs", 0, NULL) == 0) {
-        f = fopen(CALLS_FILE, "w");
+    if (access(CALLS_FILE, F_OK) != 0) {
+        mount("debugfs", "/sys/kernel/debug", "debugfs", 0, NULL);
     }
+    f = fopen(CALLS_FILE, "w");
     if (!f) {
         return -1;
     }
@@ -427,8 +429,8 @@ int main(int argc, char **argv)
     printf("wakemusl: %ld processors, %.1f cycles a microsecond, %d rounds%s\n", cpus,
            cycles_per_us, rounds, loaded ? ", under load" : "");
     l0 = now_us();
-    if (loaded && (pthread_create(&loaders[0], NULL, load, (void *)0L) != 0 ||
-                   pthread_create(&loaders[1], NULL, load, (void *)1L) != 0)) {
+    if (loaded && (pthread_create(&loaders[0], NULL, load, &load_side[0]) != 0 ||
+                   pthread_create(&loaders[1], NULL, load, &load_side[1]) != 0)) {
         fail("pthread_create");
     }
     per_call("getrusage(RUSAGE_THREAD)", SIB_IDLE);
