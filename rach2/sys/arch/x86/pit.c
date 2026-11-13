@@ -16,7 +16,7 @@
 #include "../../lib/kirq.h"
 #include "../../lib/spinlock.h"
 
-uint32_t pit_reload = 1193182 / TICK_HZ;
+uint32_t pit_reload = (1193182 + TICK_HZ / 2) / TICK_HZ;
 
 /*
  * Microseconds per count as the counter is read in mode 3, where it steps by
@@ -27,7 +27,10 @@ uint32_t pit_reload = 1193182 / TICK_HZ;
 #define US_PER_COUNT_THOUSANDTHS 419u
 
 /**
- * The divisor scales the 1.193182 MHz input clock down to the rate. The
+ * The divisor scales the 1.193182 MHz input clock down to the rate, rounded
+ * to the nearest count as Linux's PIT_LATCH is (include/linux/i8253.h:21):
+ * 4773 at 250 Hz, whose period of 4.000229 ms is nearer the tick than
+ * 4772's 3.999390 ms. The
  * control byte, 0x36, selects channel 0, both bytes of the count and mode
  * 3, the square wave generator, and `udelay.c` converts counts to
  * microseconds on the strength of it: in mode 3 the counter steps by two
@@ -36,7 +39,7 @@ uint32_t pit_reload = 1193182 / TICK_HZ;
  */
 void init_pit(uint32_t frequency)
 {
-    uint32_t divisor = 1193182 / frequency;
+    uint32_t divisor = (1193182 + frequency / 2) / frequency;
 
     pit_reload = divisor;
     outb(0x43, 0x36);

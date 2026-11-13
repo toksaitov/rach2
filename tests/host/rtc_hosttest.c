@@ -40,7 +40,7 @@
 #include "cmdline.h"
 #include "vdso.h"
 
-#if TICK_HZ != 1000
+#if TICK_HZ != 1000 && !defined(RTC250_MODEL)
 #error "the literal answers are for TICK_HZ 1000"
 #endif
 

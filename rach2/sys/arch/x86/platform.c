@@ -427,7 +427,7 @@ void platform_timer_start(isr_handler_t tick)
 
 uint32_t platform_timer_hz(void)
 {
-    return tick_local ? TICK_HZ : 1193182u / pit_reload;
+    return tick_local ? TICK_HZ : (1193182u + pit_reload / 2u) / pit_reload;
 }
 
 /** `board_init` also masks the SCI's line: with ACPI on, an unhandled SCI is
