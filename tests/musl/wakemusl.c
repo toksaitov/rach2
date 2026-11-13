@@ -27,8 +27,15 @@
  * every row runs while other processors block and wake, as the loop's
  * other threads do; that needs four processors.
  *
- * Arguments: [ROUNDS [PAUSE [load]]], 20000 wakes a row and 50 us by
- * default. Prints one line for each row and "WAKEMUSL OK", or "WAKEMUSL
+ * With the word `calls` among the arguments after PAUSE, on Rach2, the
+ * woken thread, named `wakewaiter`, is the one thread debugfs's bkl/calls
+ * counts during the wake rows (`thread wakewaiter`, debugfs(5)), and the
+ * file is printed after them, each line after "calls: "; debugfs is
+ * mounted on /sys/kernel/debug first when it is not there. Linux has no
+ * such file, and the word does nothing there.
+ *
+ * Arguments: [ROUNDS [PAUSE [load] [calls]]], 20000 wakes a row and 50 us
+ * by default. Prints one line for each row and "WAKEMUSL OK", or "WAKEMUSL
  * FAIL (detail)" and exits 1. It needs at least two processors.
  */
 
@@ -41,6 +48,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/eventfd.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -188,6 +197,7 @@ static void *waiter(void *arg)
 
     (void)arg;
     pin(1);
+    prctl(PR_SET_NAME, "wakewaiter", 0, 0, 0);
     for (r = 0; r < rounds; r++) {
         if (wake_kind == WAKE_FUTEX || wake_kind == WAKE_PINGPONG) {
             while (word == r) {
@@ -240,6 +250,39 @@ static void *load(void *arg)
     __atomic_store_n(&load_word[!me], load_word[!me] + 1, __ATOMIC_SEQ_CST);
     futex(&load_word[!me], FUTEX_WAKE_PRIVATE, 1);
     return NULL;
+}
+
+#define CALLS_FILE "/sys/kernel/debug/bkl/calls"
+
+/** Write `text` to bkl/calls, mounting debugfs first when the file is not
+ * there: 0, or -1 where there is no such file, as on Linux. */
+static int calls_write(const char *text)
+{
+    FILE *f = fopen(CALLS_FILE, "w");
+
+    if (!f && mount("debugfs", "/sys/kernel/debug", "debugfs", 0, NULL) == 0) {
+        f = fopen(CALLS_FILE, "w");
+    }
+    if (!f) {
+        return -1;
+    }
+    fputs(text, f);
+    return fclose(f) == 0 ? 0 : -1;
+}
+
+/** Print bkl/calls, each line after "calls: ". */
+static void calls_print(void)
+{
+    char line[256];
+    FILE *f = fopen(CALLS_FILE, "r");
+
+    if (!f) {
+        fail("open bkl/calls");
+    }
+    while (fgets(line, sizeof line, f)) {
+        printf("calls: %s", line);
+    }
+    fclose(f);
 }
 
 /** qsort's order of two counter values, smallest first. */
@@ -352,7 +395,7 @@ int main(int argc, char **argv)
     double t0;
     uint64_t c0;
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    int loaded = argc > 3 && strcmp(argv[3], "load") == 0;
+    int loaded = 0, calls = 0, i;
     pthread_t loaders[2];
     double l0;
 
@@ -362,6 +405,10 @@ int main(int argc, char **argv)
     }
     if (argc > 2) {
         pause_us = atof(argv[2]);
+    }
+    for (i = 3; i < argc; i++) {
+        loaded |= strcmp(argv[i], "load") == 0;
+        calls |= strcmp(argv[i], "calls") == 0;
     }
     if (rounds < 100 || cpus < (loaded ? 4 : 2)) {
         errno = 0;
@@ -391,10 +438,20 @@ int main(int argc, char **argv)
     per_call("sched_yield", SIB_SPIN);
     per_call("sched_yield", SIB_YIELD);
     per_call("yield turn (getrusage, sched_yield, getrusage)", SIB_SPIN);
+    if (calls && calls_write("thread wakewaiter\n") != 0) {
+        printf("wakemusl: no bkl/calls\n");
+        calls = 0;
+    }
     wake_row("futex wake", WAKE_FUTEX);
     wake_row("eventfd write to epoll_pwait2", WAKE_EVENTFD);
     wake_row("pipe write to epoll_pwait2", WAKE_PIPE);
     wake_row("futex hand-off and back", WAKE_PINGPONG);
+    if (calls) {
+        calls_print();
+        if (calls_write("all\n") != 0) {
+            fail("write bkl/calls");
+        }
+    }
     if (loaded) {
         load_stop = 1;
         pthread_join(loaders[0], NULL);
