@@ -1344,17 +1344,34 @@ static int machine_line(struct release *r, const char *prefix, char *rest, size_
     return found;
 }
 /**
+ * Wait for the end of the run that a hold.pl holds in the run directory DIR,
+ * one that the release started detached: until that hold.pl has released
+ * DIR/live, which it holds while anything of the run's group runs. The wait
+ * has no clock of its own, so that a slow machine's run is judged whole.
+ */
+static void held_ended(const char *dir)
+{
+    char live[4300], end[4300];
+    int fd;
+    snprintf(live, sizeof(live), "%s/live", dir);
+    snprintf(end, sizeof(end), "%s/end", dir);
+    while (fx_exists(dir) && !fx_exists(live) && !fx_exists(end))
+        fx_pause();
+    fd = open(live, O_RDONLY);
+    if (fd >= 0) {
+        flock(fd, LOCK_SH);
+        close(fd);
+    }
+}
+/**
  * Find the Mac run that the record says started, copy its identity to `id`,
- * and wait for its end, since the release starts the run detached: until the
- * hold.pl that the Mac's run file names for it has released DIR/live, which
- * it holds while anything of the run's group runs. Succeed when the run's
- * times file then records its end. The wait has no clock of its own, so that
- * a slow machine's run is judged whole.
+ * wait for its end, as held_ended does for the run directory that the Mac's
+ * run file names for it, and succeed when the run's times file records its
+ * end.
  */
 static int mac_ran(struct release *r, char *id, size_t size)
 {
-    char path[4200], dir[4200] = "", live[4300], end[4300], *run;
-    int fd;
+    char path[4200], dir[4200] = "", *run;
     if (!machine_line(r, "mac started ", id, size))
         return 0;
     snprintf(path, sizeof(path), "%s/tree/build/machines/mac/runs/%s.times", r->f->work, id);
@@ -1362,17 +1379,8 @@ static int mac_ran(struct release *r, char *id, size_t size)
     if (run && strchr(run, ' ') && !strncmp(strchr(run, ' ') + 1, id, strlen(id)))
         snprintf(dir, sizeof(dir), "%.*s", (int)strcspn(run, " "), run);
     free(run);
-    if (*dir) {
-        snprintf(live, sizeof(live), "%s/live", dir);
-        snprintf(end, sizeof(end), "%s/end", dir);
-        while (fx_exists(dir) && !fx_exists(live) && !fx_exists(end))
-            fx_pause();
-        fd = open(live, O_RDONLY);
-        if (fd >= 0) {
-            flock(fd, LOCK_SH);
-            close(fd);
-        }
-    }
+    if (*dir)
+        held_ended(dir);
     return fx_exists(path) && fx_has(path, "\nend ");
 }
 /** Make the Mac's copy and admission site, with etude's build in the copy. */
@@ -3995,19 +4003,17 @@ static int only_rows(struct release *r)
     ok = check(r, f->status == 2 && !fx_exists(record(r)), "-o with -a is refused") && ok;
     return ok;
 }
-/** Succeed once `path` holds `text`, waiting up to ten seconds for a run that
- * -a started detached. */
-static int waited(const char *path, const char *text)
+/** Wait for the end of the Windows run that -a started detached, in the run
+ * directory that STATE/windows.run names, as held_ended does. */
+static void windows_ended(struct release *r)
 {
-    struct timespec pause = {0, 50000000};
-    unsigned i;
-    for (i = 0; i < 200; i++) {
-        if (fx_has(path, text))
-            return 1;
-        /* interval: poll the detached run's result every 50 ms */
-        nanosleep(&pause, NULL);
+    char *dir = fx_read(flow_path(r->f, "state/windows.run"));
+    if (dir) {
+        dir[strcspn(dir, "\n")] = 0;
+        if (*dir)
+            held_ended(dir);
     }
-    return 0;
+    free(dir);
 }
 /** -a refuses a run that passed and a commit off the branch. */
 static int restart_refusal_rows(struct release *r)
@@ -4105,12 +4111,11 @@ static int restart_windows_row(struct release *r)
                                  .machines = WINDOWS,
                                  .windows = "status 0",
                                  .again = "windows"});
+    windows_ended(r);
     return check(r,
                  !f->status && count(record(r), "^windows started " WINDOWS_ID) == 1 &&
-                     waited(record(r), "\nwindows done ") &&
                      count(record(r), "^windows done .* run " WINDOWS_ID) == 1 &&
-                     !fx_has(record(r), "failure newer") &&
-                     waited(flow_path(f, "calls"), " run routine-collect ") &&
+                     !fx_has(record(r), "failure newer") && called(r, " run routine-collect ") &&
                      called(r, " run routine-prepare "),
                  "-a runs Windows' failed run again detached and records its pass");
 }
