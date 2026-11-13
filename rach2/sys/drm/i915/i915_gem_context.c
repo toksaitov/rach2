@@ -548,11 +548,10 @@ static const i915_ext_fn engines_extensions[] = {engines_balance, engines_bond, 
 
 /**
  * ENGINES on a proto context, as Linux's set_proto_ctx_engines: the slots,
- * each an engine or a hole, then their extensions. The caller holds a
- * reference on `ctx`. The copies from the program may sleep, so the
- * context is looked at again before the map is stored: -ENOENT once it
- * is destroyed, -EINVAL once it is finalized or has a map, where Linux's
- * proto_context_lock orders the calls instead.
+ * each an engine or a hole, then their extensions. The caller holds the
+ * file's context lock, or owns `ctx` before the list shows it, so the
+ * copies from the program, which may sleep, cannot meet a destroy, a first
+ * use or another map, as Linux's proto_context_lock orders them.
  */
 static int32_t set_engines(struct i915_gem_context *ctx,
                            const struct drm_i915_gem_context_param *args)
@@ -604,11 +603,6 @@ static int32_t set_engines(struct i915_gem_context *ctx,
         err =
             i915_user_extensions(extensions, engines_extensions,
                                  sizeof(engines_extensions) / sizeof(engines_extensions[0]), &set);
-    }
-    if (err == 0 && (ctx->closed || !ctx->proto || ctx->nmap >= 0)) {
-        /* The copies slept: the context was destroyed, finalized or given
-         * a map meanwhile. */
-        err = ctx->closed ? -ENOENT : -EINVAL;
     }
     if (err < 0) {
         kfree(set.map);
