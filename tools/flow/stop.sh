@@ -12,7 +12,9 @@
 # then KILL half a minute later, and exits once the group is gone, and ends
 # the loop itself. A group that STATE/session names and that has no
 # supervisor is not signalled, since its number may now be another's; it is
-# a line `stop: left: STATE: ...`. It then stops what the sessions
+# a line `stop: left: STATE: ...`, as is a supervisor that has not ended in
+# ninety seconds and a loop whose host did not answer, and each counts in
+# the final count and status. It then stops what the sessions
 # left running on the Mac, in WSL and on Windows: QEMU guests, test runs, the
 # worker scripts and the board's watches, selecting and signalling each in
 # one pass, so that no process number waits between the two. On Windows it
@@ -68,9 +70,11 @@ WHAT='qemu-system|/worker\.sh|board\.sh watch|tests/run|/etude |/rach2-etude'
 # argument, relative to the home directory or absolute. The session is
 # signalled only through its supervisor, which run_session in lib.sh starts as
 # `perl STATE/run/session.pl STATE/session ...`, STATE being absolute as the
-# loop makes it, and which stops the group it made, reaps its leader and
-# removes STATE/session once the group is gone; the wait counts ninety
-# seconds, which covers its TERM, its half minute and its KILL.
+# loop makes it, and which stops the group it made while the group's leader,
+# its anchor, is its unreaped child, and removes STATE/session once the
+# group is gone. The anchor has the supervisor's command line and ignores
+# the TERM. The wait counts ninety seconds, which covers the TERM, thirty
+# turns and the KILL.
 halt='
 st=$1
 case $st in "~"*) st=$HOME${st#"~"} ;; esac
@@ -145,8 +149,19 @@ machine()
     awk -v n="$1" '$1 == "windows" && $2 == n { print $3; exit }' "$here/machines"
 }
 
-# loops: stop each loop, as the header says.
+# loops: stop each loop, as the header says, and keep in unsure, which `left`
+# counts, each loop whose stop is not confirmed: a supervisor that has not
+# ended, a group without one, a host that did not answer.
 loops()
+{
+    lp_out=$(halts)
+    printf '%s\n' "$lp_out" | grep -v -e '^stop: left: ' -e '^$'
+    lp_left=$(printf '%s\n' "$lp_out" | sed -n 's/^stop: left: //p')
+    [ -z "$lp_left" ] || unsure="$unsure$lp_left$nl"
+}
+
+# halts: run halt for each loop, as the header says, and print its lines.
+halts()
 {
     grep -v '^#' "$here/workers" | while read -r name host st; do
         [ -n "$name" ] || continue
@@ -371,16 +386,25 @@ stragglers()
 }
 
 # runners: stop the GitHub runners and turn them off at boot, once neither has
-# a job, as tools/Readme.md says.
+# a job, as tools/Readme.md says; a runner that has a job, or a stop that
+# fails or cannot be read, is kept in unsure, which `left` counts.
 runners()
 {
     busy=$(gh api "repos/$REPO/actions/runners" --jq '[.runners[] | select(.busy)] | length') || busy=unknown
     if [ "$busy" != 0 ]; then
-        echo "stop: left: github: a runner has a job, or cannot be read: $busy"
+        unsure="${unsure}github: a runner has a job, or cannot be read: $busy$nl"
         return
     fi
-    echo "systemctl disable --now $RUNNERS 2>&1 | grep -v Removed" | wsl
-    echo "stop: the GitHub runners are off; \`systemctl enable --now\` starts them"
+    # shellcheck disable=SC2016 # the remote shell expands these
+    rn_out=$(echo "o=\$(systemctl disable --now $RUNNERS 2>&1); rc=\$?"'
+        printf "%s\n" "$o" | grep -v -e Removed -e "^\$"
+        exit $rc' | wsl)
+    [ -z "$rn_out" ] || printf '%s\n' "$rn_out"
+    if printf '%s\n' "$rn_out" | grep -q '^wsl: unknown: '; then
+        unsure="${unsure}github: the runners' stop in WSL failed or could not be read$nl"
+    else
+        echo "stop: the GitHub runners are off; \`systemctl enable --now\` starts them"
+    fi
 }
 
 # left: print what `running` lists, the claims of the admission ledger and
