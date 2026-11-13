@@ -480,6 +480,9 @@ static int sched_preempt_cpu(const process_t *p, int cpu)
 
     if (sched_cpu_idle(cpu)) {
         if (cur) {
+            if (cur->need_resched) {
+                return -1;
+            }
             cur->need_resched = 1;
         }
         return cpu;
@@ -1086,26 +1089,13 @@ void sched_wait_off_cpu(const process_t *p)
  * idle task holds no big lock: its selection and its halt need none, and a
  * thread it switches to takes the lock in its tail when it holds it.
  *
- * A tick taken in the wait of a processor other than the boot one stops its
- * tick (`tick_may_stop`), whose next tick is then up to half the watchdog's
- * sample period away, as Linux's NO_HZ idle stops it: an idle processor's
- * tick only charged an idle tick and looked for work on the other queues,
- * which a busy processor's tick now offers it (`sched_idle_balance`), and
- * under KVM each tick cost two exits, its halt and the timer's count. The
- * switch to a thread starts it again (`timer_idle_exit`), and the end of
- * each wait charges the ticks skipped so far as idle.
  */
 void sched_idle_loop(void)
 {
-    struct percpu *cpu;
-
     for (;;) {
         arch_irq_disable();
         schedule();
-        cpu = this_cpu();
-        cpu->tick_may_stop = arch_cpu_id() != 0;
         idle_wait_irq_off();
-        cpu->tick_may_stop = 0;
     }
 }
 
@@ -1126,16 +1116,14 @@ void sched_idle_balance(void)
     if (run_queues[me].count == 0) {
         return;
     }
-    for (c = 0; c < NR_CPUS && !timer_tick_stopped(c); c++) {
+    for (c = 0; c < NR_CPUS && !cpu_table[c].tick_stopped; c++) {
     }
     if (c == NR_CPUS) {
         return;
     }
     flags = spin_lock_irqsave(&sched_lock);
     for (c = 0; c < NR_CPUS && kick < 0; c++) {
-        if (c != me && timer_tick_stopped(c) && sched_cpu_idle(c) &&
-            !cpu_table[c].current->need_resched && sched_find(me, c, 0)) {
-            cpu_table[c].current->need_resched = 1;
+        if (c != me && cpu_table[c].tick_stopped && sched_cpu_idle(c) && sched_find(me, c, 0)) {
             kick = c;
         }
     }
@@ -1583,7 +1571,7 @@ void sched_account_tick(int user, int64_t due)
         return;
     }
     ticks = tick_div64((uint64_t)gap, TICK_NS, NULL);
-    if (due != 0 && found != ACCOUNT_SYSTEM) {
+    if (due != 0 && found != ACCOUNT_SYSTEM && sched_cycle_account) {
         on = timer_cycles_when(user ? cpu->user_cycles : cpu->idle_cycles, arch_cycles(), now);
         if (due >= on && now >= due && now - due < (int64_t)TICK_NS) {
             cpu->tick_late_ns += (now - due - cpu->tick_late_ns) / 8;
@@ -1788,7 +1776,8 @@ static int idle_sleep(int stop_tick, uint32_t per_us)
  * so its interrupt ends the poll before a halt can follow it. Only a poll
  * which finds no wake stops the tick for a halt. A stopped tick skips the
  * poll, committing its deferred events before another halt. No APIC register
- * read is needed.
+ * read is needed. A kick received while awake ends this wait before polling
+ * or halting; absorbed service kicks also install their published target.
  *
  * A kernel wait with its tick running polls with interrupts off: poll this
  * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake turned
@@ -1830,8 +1819,14 @@ static void idle_halt(int stop_tick)
     uint64_t start, limit, now, look, gone;
     uint32_t grow;
     int open = stop_tick;
-    int polling = per_us != 0 && arch_idle_poll() && !cpu->tick_stopped && !timer_idle_pending();
+    int polling;
 
+    timer_service_ipi();
+    polling = per_us != 0 && arch_idle_poll() && !cpu->tick_stopped && !timer_idle_pending();
+    if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
+        timer_service_ipi();
+        return;
+    }
     start = polling ? arch_cycles() : 0;
     if (polling && cpu->idle_poll_us != 0) {
         limit = (uint64_t)cpu->idle_poll_us * per_us;
@@ -1860,7 +1855,9 @@ static void idle_halt(int stop_tick)
             arch_irq_disable();
         }
         if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
-            idle_kicked_window();
+            timer_service_ipi();
+            arch_irq_enable(); /* `sti` lets a pending interrupt in after the return */
+            arch_irq_disable();
             return;
         }
     }

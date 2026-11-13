@@ -327,3 +327,5 @@ Other suites ([the suites](../../../tests/system/suites.md)):
 * `tests/run memory` includes the overrun of a kernel stack ([the architectures' Readme](../arch/Readme.md)).
 
 `tests/run host` runs the host tests ([the host tests](../../../tests/host/Readme.md)) of this directory: `sched_hosttest.c`, `wait_queue_hosttest.c`, `smp_hosttest.c`, `process_timer_hosttest.c`, `exit_hosttest.c`, `elf_hosttest.c`, `uimage_hosttest.c`, `coredump_hosttest.c` and `corefile_hosttest.c`, in `tests/host/`.
+
+An earlier CPU0 service target whose kick was absorbed by an awake or polling idle task is installed before that task returns to selection or starts its next wait (`timer_service_ipi`). The following final timer commitment includes it even when a short wait retains the tick.

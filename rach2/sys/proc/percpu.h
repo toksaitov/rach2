@@ -66,7 +66,6 @@ struct percpu {
     volatile int online;                        /* started, and taking work */
     volatile unsigned int admit;                /* CPU_STARTING, ADMITTED or REFUSED */
     volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
-    int tick_may_stop;                          /* its idle task waits: a tick may stop it */
     volatile unsigned int idle_poll;            /* CPU_POLL_: polling or awake, or kicked */
     uint32_t idle_poll_us;                      /* the poll's length now, 0 to IDLE_POLL_MAX_US */
     volatile int in_nmi;                        /* NMIs it is handling, nested */
@@ -85,6 +84,7 @@ struct percpu {
     volatile uint64_t busy_ticks;               /* ticks that found it running code */
     volatile uint64_t user_ticks;               /* of those, ticks that found it in user mode */
     volatile uint64_t steal_ticks;              /* ticks the hypervisor kept from it */
+    volatile uint64_t switches;                 /* switches from one thread to another */
     volatile uint64_t steal_ns;                 /* the steal time its counts reach, ns */
     volatile int64_t accounted_ns;              /* the monotonic time its counts reach, ns */
     int idle_short;                   /* last halt ended before a scheduler period without a tick */

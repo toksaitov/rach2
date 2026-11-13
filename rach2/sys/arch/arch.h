@@ -418,6 +418,18 @@ uint64_t arch_steal_ns(void);
  * this one's. Any processor may read it; no MSR is read. */
 uint64_t arch_cpu_steal_ns(int cpu);
 
+/** Whether KVM marks processor `cpu` as preempted by its host. A hint
+ * read without a lock; zero without a shared steal-time record. */
+int arch_cpu_preempted(int cpu);
+
+/** Have the hypervisor flush processor `cpu`'s TLB before it runs again,
+ * where it has taken that processor off the host's processors: KVM's
+ * KVM_VCPU_FLUSH_TLB mark in the steal-time record, which KVM offers by
+ * KVM_FEATURE_PV_TLB_FLUSH. 1 when marked, and the caller needs no answer
+ * from that processor to know its TLB holds none of the translations it
+ * changed; 0 otherwise, or where there is no such hypervisor. */
+int arch_cpu_tlb_deferred(int cpu);
+
 /** A value from the processor's entropy source into `out`: `seed` asks for
  * the conditioned seed source (RDSEED), otherwise the generator (RDRAND).
  * Returns 1, or 0 when the source has none to give. */

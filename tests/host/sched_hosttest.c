@@ -40,12 +40,12 @@ static uint32_t irq_flags;
 static unsigned switches;
 static int failures;
 static int idle_timer_ready, idle_timer_exits, idle_timer_enters, idle_halts;
-static int idle_wake_on_enter, poll_wake, poll_tick;
+static int idle_wake_on_enter, poll_wake, poll_tick, poll_service;
 static uint32_t poll_rate;
 static uint64_t poll_cycles;
 static uint32_t halt_cycles;
 static int halt_tick;
-static int idle_hw_pending, idle_retains;
+static int idle_hw_pending, idle_retains, service_pending;
 static int64_t tick_due_model;
 static int affinity_step;
 static unsigned int affinity_kicks;
@@ -144,6 +144,15 @@ void arch_idle_masked(void)
     }
 }
 
+/** Install a published target, including a kick which sent no IPI. */
+void timer_service_ipi(void)
+{
+    if (service_pending) {
+        service_pending = 0;
+        idle_hw_pending = 1;
+    }
+}
+
 /** This model normally has no deferred hardware change. */
 int timer_idle_pending(void)
 {
@@ -189,20 +198,6 @@ uint32_t timer_calibrate(void)
 int arch_idle_poll(void)
 {
     return poll_rate != 0;
-}
-
-/** Nothing: the model has no tick to stop. */
-void timer_idle_exit(void)
-{}
-
-/* The processors whose ticks the model stopped, a bit each: none but in
- * the balancer's row. */
-static uint64_t ticks_stopped;
-
-/** Whether the model stopped processor `cpu`'s tick. */
-int timer_tick_stopped(int cpu)
-{
-    return (int)((ticks_stopped >> cpu) & 1u);
 }
 
 /** 0: no interrupt waits; only an idle wait's poll asks, which none
@@ -1551,6 +1546,13 @@ static void nohz_ready_entry(void)
 /** Deliver a ready thread from another modeled CPU during the poll. */
 static void poll_wake_step(void)
 {
+    if (poll_service) {
+        poll_service = 0;
+        service_pending = 1;
+        host_cpu = 1;
+        smp_kick(0);
+        host_cpu = 0;
+    }
     if (poll_tick) {
         poll_tick = 0;
         tick_due_model += 4000000;
@@ -1686,6 +1688,45 @@ static void nohz_dirty_poll(void)
     poll_rate = 0;
 }
 
+/** Absorbed service kicks install their earlier event before selection
+ * can retain the tick or leave idle, from awake and open-poll states. */
+static void nohz_absorbed_service(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    this_cpu()->idle_short = 1;
+    sched_idle_awake();
+    service_pending = 1;
+    host_cpu = 1;
+    smp_kick(0);
+    host_cpu = 0;
+    idle_retains = idle_halts = 0;
+    idle_wait_irq_off();
+    CHECK(!service_pending && idle_hw_pending && !idle_halts,
+          "an awake service kick installs its target before returning to selection");
+    idle_wait_irq_off();
+    CHECK(idle_retains == 1 && idle_halts == 1 && !idle_hw_pending,
+          "the next retained halt commits the absorbed awake service target");
+    this_cpu()->idle_poll_us = 20;
+    poll_rate = TICK_US;
+    poll_service = 1;
+    idle_retains = idle_halts = 0;
+    idle_wait_irq_off();
+    CHECK(!poll_service && !service_pending && idle_hw_pending && !idle_halts,
+          "a service kick during the open poll installs its target before return");
+    procs[1].affinity = 1;
+    sched_make_ready(&procs[1]);
+    schedule();
+    CHECK(current_proc == &procs[1] && !idle_hw_pending,
+          "selection commits an absorbed service event even with a retained tick");
+    poll_rate = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -1697,6 +1738,7 @@ int main(int argc, char **argv)
         nohz_short_waits();
         nohz_poll_tick();
         nohz_dirty_poll();
+        nohz_absorbed_service();
         dprintf(1, "sched-hosttest: idle: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
@@ -1730,6 +1772,7 @@ int main(int argc, char **argv)
     nohz_short_waits();
     nohz_poll_tick();
     nohz_dirty_poll();
+    nohz_absorbed_service();
     if (failures) {
         return 1;
     }
@@ -1769,6 +1812,7 @@ int timer_idle_enter(void)
 /** Nothing: no timer hardware is modeled. */
 void timer_idle_exit(void)
 {
+    idle_hw_pending = 0;
     idle_timer_exits++;
 }
 

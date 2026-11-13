@@ -1022,12 +1022,10 @@ void isr_local_router(isr_params_t *params)
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         sched_idle_awake();
+    } else if (this_cpu()->idle_poll == CPU_POLL_ON) {
+        this_cpu()->idle_poll = CPU_POLL_KICKED;
     }
     if (params->vector == IPI_VECTOR) {
-        if (this_cpu()->idle_poll == CPU_POLL_ON) {
-            this_cpu()->idle_poll = CPU_POLL_KICKED;
-        }
-        smp_ipi();
         lapic_eoi();
         smp_ipi();
         timer_service_ipi();
@@ -1088,7 +1086,7 @@ static void irq_dispatch_edge(isr_params_t *params)
             return; /* the run under way sees `edge_again` */
         }
         while (arch_atomic_xchg(&edge_again[v], 0u) != 0) {
-            irq_dispatch(params);
+            irq_dispatch(params, 0);
         }
         (void)arch_atomic_xchg(&edge_busy[v], 0u);
     } while (edge_again[v] != 0);
@@ -1229,17 +1227,19 @@ void _irq_router(isr_params_t *params)
 
     lapic_eoi_enter((uint32_t)params->vector);
     user_entry(params);
-    if (cpu->idle_poll == CPU_POLL_ON) {
-        cpu->idle_poll = CPU_POLL_KICKED;
-    }
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
+        sched_idle_awake();
+    } else if (cpu->idle_poll == CPU_POLL_ON) {
+        cpu->idle_poll = CPU_POLL_KICKED;
+    }
+    if (lines_apic && (timer || params->vector >= 48)) {
+        lapic_eoi();
     }
     timer_kind = apic_hr_entry(params->vector);
     if (!timer_kind) {
         count_up(&irq_count);
         count_up(&vector_count[params->vector - 32]);
-        lapic_eoi();
         bkl_frame_push(0); /* isr_leave pops it as a tick's without the lock */
         return;
     }
@@ -1276,15 +1276,13 @@ void _irq_router(isr_params_t *params)
 #endif
 
     if (params->vector >= 48) {
-        irq_dispatch(params, timer_kind);
-        lapic_eoi();
+        irq_dispatch_edge(params);
         sched_tick(); /* a woken reader runs now, or at the call's exit */
         return;
     }
 
     if (lines_apic) {
         if (params->vector == IRQ_VECTOR(0)) {
-            lapic_eoi();
             irq_dispatch(params, timer_kind);
             if ((timer_kind & APIC_HR_TICK) == 0) {
                 sched_tick();

@@ -7,6 +7,7 @@ unsigned int host_cpu;
 static unsigned int features, writes, last_msr;
 static uint64_t last_value;
 static int failures;
+static volatile uint32_t *registered_eoi[NR_CPUS];
 
 #define CHECK(test, message)                                        \
     do {                                                            \
@@ -28,6 +29,49 @@ uint32_t kcpu_kvm_features(void)
     return features;
 }
 
+/** No exclusive-CPU hint is supplied by this model. */
+uint32_t kcpu_kvm_hints(void)
+{
+    return 0;
+}
+
+/** The model offers no hypercall feature. */
+int kcpu_vmmcall(void)
+{
+    return 0;
+}
+
+/** Reject an unexpected hypercall; these rows offer no IPI feature. */
+long kcpu_hypercall4(int vmmcall, unsigned long nr, unsigned long a0, unsigned long a1,
+                     unsigned long a2, unsigned long a3)
+{
+    (void)vmmcall;
+    (void)nr;
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    CHECK(0, "the shared-record rows request no hypercall");
+    return -1;
+}
+
+/** Give each model CPU its own APIC identity. */
+uint32_t smpboot_apic_id(int cpu)
+{
+    return (uint32_t)cpu;
+}
+
+/** Complete a serial model compare and exchange. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    unsigned int was = *p;
+
+    if (was == old) {
+        *p = value;
+    }
+    return was;
+}
+
 /** Record a setup write without touching a processor register. */
 void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
 {
@@ -40,32 +84,30 @@ void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
 void arch_dma_fence(void)
 {}
 
-/** Check feature gating, alignment, local completion and the fallback. */
+/** Record the local APIC's shared completion word. */
+void lapic_set_pv_eoi(int cpu, volatile uint32_t *word)
+{
+    registered_eoi[cpu] = word;
+}
+
+/** Check independent feature setup and local and remote steal reads. */
 int main(void)
 {
     host_cpu = 0;
-    CHECK(!kvm_guest_eoi(), "before setup the APIC must receive the EOI");
     features = KVM_FEATURE_PV_EOI;
     kvm_steal_cpu_setup(0);
     CHECK(writes == 1 && last_msr == MSR_KVM_PV_EOI_EN &&
-              last_value == ((uint64_t)(uint32_t)(uintptr_t)eoi_record(0) | 1u) &&
-              ((uintptr_t)eoi_record(0) & 63u) == 0,
-          "the EOI feature alone registers its aligned physical word");
-    CHECK(!kvm_guest_eoi(), "a clear shared bit needs the ordinary EOI");
-    *eoi_record(0) = 1;
-    CHECK(kvm_guest_eoi() && *eoi_record(0) == 0 && !kvm_guest_eoi(),
-          "the host's bit is consumed exactly once");
+              last_value == ((uint64_t)(uint32_t)(uintptr_t)registered_eoi[0] | 1u),
+          "the EOI feature alone registers its physical word with the APIC");
     kvm_steal_cpu_setup(1);
-    *eoi_record(0) = 1;
-    *eoi_record(1) = 1;
-    host_cpu = 1;
-    CHECK(kvm_guest_eoi() && *eoi_record(0) == 1 && *eoi_record(1) == 0,
-          "one CPU completes no other CPU's interrupt");
+    CHECK(registered_eoi[1] != registered_eoi[0] &&
+              (uintptr_t)registered_eoi[1] - (uintptr_t)registered_eoi[0] == 64,
+          "each CPU registers its own cache line");
     features = KVM_FEATURE_STEAL_TIME;
     kvm_steal_cpu_setup(2);
     host_cpu = 2;
-    CHECK(last_msr == MSR_KVM_STEAL_TIME && !kvm_guest_eoi(),
-          "steal time alone leaves the EOI fallback in place");
+    CHECK(last_msr == MSR_KVM_STEAL_TIME && !registered_eoi[2],
+          "steal time alone registers no EOI word");
     steal_record(2)->steal = 123456789u;
     CHECK(arch_steal_ns() == 123456789u && arch_cpu_steal_ns(2) == 123456789u,
           "the local and remote readers keep the selected steal record");
