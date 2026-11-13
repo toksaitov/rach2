@@ -141,13 +141,43 @@ def record(stop, samples, ready):
         os.close(fd)
 
 
+def pitch(block):
+    """Give the cycles and samples of the sounding stretches of `block`.
+
+    A stretch ends at 48 samples, 1 ms, below 200 in magnitude, which a 440 Hz
+    tone of the case's level never holds; within a stretch the cycles are
+    counted between its first and last rising zero crossing, and a crossing
+    in the quiet samples after the stretch's last loud one is not its own.
+    """
+    cycles = samples = 0
+    rising = []
+    loud = None
+    for i in range(1, len(block) + 1):
+        if i < len(block) and abs(block[i]) >= 200:
+            loud = i
+        if loud is not None and (i == len(block) or i - loud == 48):
+            rising = [r for r in rising if r <= loud]
+            if len(rising) >= 2:
+                cycles += len(rising) - 1
+                samples += rising[-1] - rising[0]
+            rising = []
+            loud = None
+        elif loud is not None and block[i - 1] <= 0 < block[i]:
+            rising.append(i)
+    return cycles, samples
+
+
 def measured(data):
     """Require at least ten 50 ms windows of the requested 440 Hz tone.
 
-    A loud window that does not measure 440 Hz holds the tone's start or
-    end, or a gap where an emulated machine ran the sound server late; a
-    fault in the route itself puts most windows off, so one off window is
-    allowed for every five good ones.
+    A window is judged by the pitch of the stretches of it that sound. When
+    an emulated machine runs the player or the sound server late, the device
+    plays silence for the frames that did not come in time, and the window
+    holds the tone and a gap; the tone keeps its pitch on either side of the
+    gap. A window that sounds for less than half its length holds the tone's
+    start or end, or most of a gap, and is not judged. A fault in the route
+    itself, such as a wrong rate, moves the pitch of every window, so one off
+    window is allowed for every five good ones.
     """
     values = struct.unpack("<%dh" % (len(data) // 2), data)
     good = off = 0
@@ -157,9 +187,12 @@ def measured(data):
         rms = math.sqrt(sum(x*x for x in block) / len(block))
         if rms < 200:
             continue
-        crossings = sum(a <= 0 < b for a, b in zip(block, block[1:]))
-        hz = crossings * 20
-        windows.append((int(rms), hz))
+        cycles, samples = pitch(block)
+        if samples < 1200:
+            windows.append((int(rms), samples, None))
+            continue
+        hz = cycles * 48000 // samples
+        windows.append((int(rms), samples, hz))
         if abs(hz - 440) <= 40:
             good += 1
         else:
