@@ -48,6 +48,16 @@
  * drops it if the write fails and lets the writer go, while any other hold
  * leaves both.
  *
+ * A pass cleans a page as Linux's write-back does, while a writable mapping
+ * lives: it takes write access from the shared mapping's entry, and not a
+ * private one's, under the file's lock, clears the bit and writes the page,
+ * so a store after it faults and marks the page and the next pass writes
+ * that store alone, and a pass with no store between writes nothing. A pass
+ * between a fault's mark and its entry makes the store fault and mark
+ * again; a failed write keeps the page for the next pass; and a page a
+ * device holds keeps its bit, so each pass writes what the device stored,
+ * until the pin goes.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -457,6 +467,55 @@ uint32_t tmpfs_seals(void *node)
     return 0;
 }
 
+/* The model's entry of page 0 in the shared mapping that stores into it:
+ * whether it is writable, so that a store takes no fault; the count of
+ * zaps of its space; and the walks that took write access from it, and
+ * the regions they matched. */
+static int model_pte_w;
+static uint32_t model_zaps;
+static int wrprotects, wrprotect_maps;
+
+/**
+ * The walk of every address space, under the file's lock, as paging.c makes
+ * it: each mapping on the list stands for a region of four pages at
+ * 0x400000 that maps the file from page 0, and each region `match` picks has
+ * its entries made read-only and its space's count of zaps moved.
+ */
+void paging_wrprotect_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo,
+                                         uintptr_t *hi),
+                            void *arg)
+{
+    struct filemap *m;
+    vma_t r;
+    uintptr_t lo, hi;
+
+    check(file_locked > 0, "a write-back's walk runs under the file's lock");
+    wrprotects++;
+    for (m = maps; m; m = m->next) {
+        k_memset(&r, 0, sizeof(r));
+        r.start = 0x400000u;
+        r.end = r.start + 4u * PAGE_SIZE;
+        r.file = &m->vf;
+        if (match(&r, arg, &lo, &hi)) {
+            check(lo == r.start && hi > lo && hi <= r.end,
+                  "the walk takes the part of the region that maps the pass's pages");
+            wrprotect_maps++;
+            model_zaps++;
+            model_pte_w = 0;
+        }
+    }
+}
+
+/* Whether a device holds the model frame. */
+static int model_pinned;
+
+/** Whether a device holds the frame: `model_pinned`. */
+int frame_pinned(uintptr_t phys)
+{
+    (void)phys;
+    return model_pinned;
+}
+
 /** Not reached. */
 void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
                       void *arg)
@@ -803,6 +862,7 @@ static void late_mark_rows(struct vm_file *f)
     struct filemap *m = (struct filemap *)f;
     struct dshare *ds = m->ds;
     uintptr_t old = MODEL_FRAME;
+    uint32_t next;
 
     model_page = old;
     check(f->mkwrite(f, 1, old) == 0 && dshare_stored(ds, 1),
@@ -822,7 +882,7 @@ static void late_mark_rows(struct vm_file *f)
     check(f->mkwrite(f, 1, old) == -EAGAIN && !dshare_stored(ds, 1),
           "a delayed mark also refuses a replacement at the same file offset");
     disk_writes = 0;
-    check(dshare_write_page(ds, &m->entry, 1) == 0 && disk_writes == 0,
+    check(dshare_write_word(ds, &m->entry, 1, 2, &next) == 0 && next == 2 && disk_writes == 0,
           "writeback leaves a regrown clean hole unallocated");
     check(f->mkwrite(f, 1, model_page) == 0 && dshare_stored(ds, 1),
           "a new fault may mark the replacement frame itself");
@@ -1025,11 +1085,11 @@ static void writeback_release_rows(void)
     vm_file_put(f);
     check(filemap_sync_file(&ofd) == 0 && disk_writes == 1 && disk_bytes[0] == 0x65,
           "fsync writes a queued writer's stores without waiting for its release");
-    check(model_dead == f && maps == (struct filemap *)f && record_of(f)->ndirty == 1,
-          "and leaves the release queued and the page dirty while the writer lives");
+    check(model_dead == f && maps == (struct filemap *)f && record_of(f)->ndirty == 0,
+          "and leaves the release queued and the page clean while the writer lives");
     vm_file_reap();
-    check(!maps && !model_dead && dshare_count == 0,
-          "the queued writer's release writes the page and lets the record go");
+    check(!maps && !model_dead && dshare_count == 0 && disk_writes == 1,
+          "the queued writer's release finds the page clean and lets the record go");
 }
 
 /* The mapping whose last put the late-put row makes while a sync writes. */
@@ -1060,8 +1120,8 @@ static void writeback_late_put_rows(void)
     check(filemap_sync_file(&ofd) == 0 && disk_writes > 0 && disk_bytes[0] == 0x65 &&
               disk_bytes[PAGE_SIZE - 1] == 0x65,
           "a writer whose last put lands while the sync writes is written back");
-    check(model_dead == f && f->refs == 0 && record_of(f)->ndirty == 1,
-          "and its release stays queued with the page dirty");
+    check(model_dead == f && f->refs == 0 && record_of(f)->ndirty == 0,
+          "and its release stays queued with the page clean");
     vm_file_reap();
     check(!model_dead && !maps && dshare_count == 0,
           "a later reap frees the writer after its stores reached the file");
@@ -1580,12 +1640,142 @@ static void writeback_tail_rows(void)
               model_bytes[PAGE_SIZE - 1] == 0,
           "writeback zeros stores past EOF before a later growth can make them file data");
     model_size = PAGE_SIZE;
-    check(filemap_sync_file(&ofd) == 0 && disk_bytes[16] == 0x65 && disk_bytes[17] == 0 &&
-              disk_bytes[PAGE_SIZE - 1] == 0,
+    check(f->mkwrite(f, 0, model_page) == 0 && filemap_sync_file(&ofd) == 0 && disk_writes == 2 &&
+              disk_bytes[16] == 0x65 && disk_bytes[17] == 0 && disk_bytes[PAGE_SIZE - 1] == 0,
           "regrowth writes only zeros from the old page's tail");
     vm_file_put(f);
     vm_file_reap();
     check(!maps && dshare_count == 0 && !model_dead, "writeback rows leave no retained file");
+}
+
+/* The mapping and description of `clean_rows`, for the sync that runs
+ * between a fault's mark and its entry. */
+static struct open_file *clean_ofd;
+
+/** fsync of `clean_ofd`'s file, as another thread may run it while a fault
+ * waits between its file's `mkwrite` and its entry. */
+static void clean_sync_now(void)
+{
+    check(filemap_sync_file(clean_ofd) == 0, "a sync between the mark and the entry writes");
+}
+
+/**
+ * A store of `byte` into page 0 through the shared mapping `f`, as the
+ * processor and a fault make it: through a writable entry with no fault;
+ * else the fault has the file's `mkwrite` mark the page and makes the entry
+ * writable only while its space's count of zaps has not moved since it
+ * began (`shared_mkwrite`), and otherwise the store faults again. Returns
+ * the faults taken.
+ */
+static int model_store(struct vm_file *f, uint8_t byte)
+{
+    int faults = 0;
+
+    while (!model_pte_w && faults < 4) {
+        uint32_t seq = model_zaps;
+
+        faults++;
+        check(f->mkwrite(f, 0, model_page) == 0, "a store's fault marks the page");
+        model_pte_w = model_zaps == seq;
+    }
+    model_bytes[0] = byte;
+    return faults;
+}
+
+/** The failed write and the pinned page of `clean_rows`, through the
+ * shared mapping `f` of the file of `ofd`, whose record is `ds`. */
+static void clean_keep_rows(struct vm_file *f, struct open_file *ofd, struct dshare *ds)
+{
+    check(model_store(f, 0x73) == 1, "a store marks the page once more");
+    disk_error = -EIO;
+    check(filemap_sync_file(ofd) == -EIO && ds->ndirty == 1 && dshare_stored(ds, 0),
+          "a failed write keeps the page for the next pass");
+    disk_error = 0;
+    check(filemap_sync_file(ofd) == 0 && disk_bytes[0] == 0x73 && ds->ndirty == 0,
+          "which writes it");
+    (void)model_fsync(ofd);
+    check(model_store(f, 0x74) == 1, "a store marks the page before a device holds it");
+    model_pinned = 1;
+    check(filemap_sync_file(ofd) == 0 && disk_bytes[0] == 0x74 && ds->ndirty == 1,
+          "a pass writes a page a device holds and keeps its bit");
+    model_bytes[0] = 0x75;
+    check(filemap_sync_file(ofd) == 0 && disk_bytes[0] == 0x75 && ds->ndirty == 1,
+          "so the next pass writes what the device stored with no fault");
+    model_pinned = 0;
+    check(filemap_sync_file(ofd) == 0 && ds->ndirty == 0,
+          "and the pass after the pin goes clears it");
+}
+
+/** The stores of `clean_rows` after a pass, through the shared mapping `f`
+ * of the file of `ofd`, whose record is `ds`. */
+static void clean_store_rows(struct vm_file *f, struct open_file *ofd, struct dshare *ds)
+{
+    check(filemap_sync_file(ofd) == 0 && disk_writes == 1 && wrprotects == 1,
+          "a pass with no store since writes nothing and walks nothing");
+    check(model_store(f, 0x71) == 1 && ds->ndirty == 1 && model_pte_w,
+          "a store after the pass faults and marks the page");
+    check(model_store(f, 0x71) == 0, "and the next store takes no fault until the next pass");
+    check(filemap_sync_file(ofd) == 0 && disk_writes == 2 && disk_bytes[0] == 0x71 &&
+              ds->ndirty == 0 && !model_pte_w,
+          "the next pass writes that store alone");
+    clean_ofd = ofd;
+    model_unlock_hook = clean_sync_now;
+    check(model_store(f, 0x72) == 2 && ds->ndirty == 1 && disk_writes == 3 && disk_bytes[0] == 0x71,
+          "a pass between a fault's mark and its entry makes the store fault and mark again");
+    check(filemap_sync_file(ofd) == 0 && disk_writes == 4 && disk_bytes[0] == 0x72,
+          "and the next pass writes it");
+}
+
+/**
+ * A pass writes only the pages stored since the last write of each, while a
+ * writable mapping lives, as Linux's clear_page_dirty_for_io and
+ * folio_mkclean give (mm/page-writeback.c:2987-3040, mm/rmap.c:1014-1118):
+ * the pass takes write access from the page's entries under the file's lock
+ * and clears its bit before the write, so the next store faults and marks
+ * it again; a pass with no store between writes nothing; a sync between a
+ * fault's mark and its entry makes the store fault again; a failed write
+ * keeps the page for the next pass; a page a device holds keeps its bit
+ * while the pin lasts; and a private mapping of the file is not walked.
+ */
+static void clean_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd, own;
+    struct vm_file *f, *p;
+    struct dshare *ds;
+    fd_entry_t e;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&own, 0, sizeof(own));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    ds = record_of(f);
+    own.vmnt = &mnt;
+    own.ino = ofd.ino;
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_FILE;
+    e.flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e.ofd = &own;
+    p = filemap_private(&e, NULL, 1);
+    check(p != NULL && ds->writers == 1, "a private mapping of the same file is made");
+    model_pte_w = 1;
+    wrprotects = wrprotect_maps = 0;
+    check(filemap_sync_file(&ofd) == 0 && disk_writes == 1 && disk_bytes[0] == 0x65,
+          "a sync writes the stored page while its writable mapping lives");
+    check(ds->ndirty == 0 && !dshare_stored(ds, 0) && !model_pte_w && wrprotects == 1 &&
+              wrprotect_maps == 1,
+          "after taking write access from the shared mapping's entry alone and clearing the bit");
+    clean_store_rows(f, &ofd, ds);
+    clean_keep_rows(f, &ofd, ds);
+    if (p) {
+        vm_file_put(p);
+    }
+    vm_file_put(f);
+    vm_file_reap();
+    check(!maps && dshare_count == 0 && !model_dead, "the clean rows leave no mapping");
 }
 
 int main(void)
@@ -1607,6 +1797,7 @@ int main(void)
     gone_rows();
     unmount_rows();
     writeback_tail_rows();
+    clean_rows();
     if (fails) {
         printf("filemap-hosttest: %d failed\n", fails);
         return 1;

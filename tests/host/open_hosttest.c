@@ -1464,6 +1464,23 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
     check(0, "unexpected unmap");
 }
 
+/** No address space of the rows maps a page writable: a write-back's walk
+ * has no entry to change. */
+void paging_wrprotect_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo,
+                                         uintptr_t *hi),
+                            void *arg)
+{
+    (void)match;
+    (void)arg;
+}
+
+/** No device holds a frame of the rows. */
+int frame_pinned(uintptr_t phys)
+{
+    (void)phys;
+    return 0;
+}
+
 /** An address space keeps `program`, a node of the root, as its program's
  * file. */
 int mm_exe_holds(const struct vfs_mount *mnt, const void *n)
