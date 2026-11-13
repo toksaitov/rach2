@@ -11,6 +11,10 @@
 # `build/flow` of the clone's main working tree unless the loop is given
 # another.
 
+# flowbin is the directory of the flow's scripts, that of the script that
+# reads this file unless the reader set it first, as a test does.
+flowbin=${flowbin:-$(cd "$(dirname "$0")" && pwd)}
+
 # primary REPO: print the main working tree of the clone REPO, the one whose
 # `.git` the clone's worktrees share, or REPO itself when it is that tree.
 primary()
@@ -65,13 +69,21 @@ update()
     return "$restart"
 }
 
-# refresh: fetch, and bring a clone with nothing uncommitted and no commit
-# that origin lacks to `origin/master`, so that a finished task's branch is
-# checked out nowhere and `tidy` can delete it; leave a clone with work in it
-# as it is. A linked worktree cannot check out master while another working
-# tree has it, so there the clone is detached at `origin/master` instead.
+# refresh: fetch, and bring a clone with nothing uncommitted and no commit that
+# origin lacks to `origin/master`, so that a finished task's branch is checked
+# out nowhere and `tidy` can delete it; leave a clone with work in it as it is.
+# A linked worktree cannot check out master while another working tree has it,
+# so there the clone is detached at `origin/master` instead. Fail, and change
+# nothing, unless `session_state` says that no session of the loop may still
+# run, since a session whose supervisor was killed may still write the clone,
+# whoever calls this.
 refresh()
 {
+    rf_session=$(session_state)
+    if [ "$rf_session" != ended ]; then
+        log "refresh: the session that $state/session records may still run, $rf_session; the clone stays as it is"
+        return 1
+    fi
     git fetch -q origin || return 1
     if [ -z "$(git status --porcelain)" ] &&
         [ -z "$(git rev-list -n 1 HEAD --not --remotes=origin --)" ]; then
@@ -141,40 +153,49 @@ run_session()
 {
     out=$1 err=$2 limit=$3
     shift 3
-    RACH2_LOOP_LIVE='' perl "$(dirname "$0")/session.pl" "$state/session" "$state/loop.log" "$limit" "$@" \
+    RACH2_LOOP_LIVE='' perl "$flowbin/session.pl" "$state/session" "$state/loop.log" "$limit" "$@" \
         > "$out" 2> "$err" < /dev/null 7>&-
 }
 
-# locked FILE: succeed while a process holds the lock FILE, as a loop holds
-# STATE/loop.live and a session's supervisor STATE/session.live; fail when it
-# is free or FILE does not exist. FILE is never created. A lock that cannot
-# be probed counts as held.
-locked()
+# session_state: print what `session.pl -q` says of the session that
+# STATE/session records: `running`, `ended`, `lost GROUP` or `unknown: WHY`.
+# It is the one decider of whether a session of the loop may still run;
+# nothing that changes the clone, or removes what a session left, goes on
+# but on `ended`.
+session_state()
 {
-    perl -MFcntl=:flock -e 'open(L, "<", shift) or exit($!{ENOENT} ? 1 : 0);
-        exit(flock(L, LOCK_SH | LOCK_NB) ? 1 : 0)' "$1"
+    perl "$flowbin/session.pl" -q "$state/session"
 }
 
-# wait_session: wait while the supervisor of an earlier loop's session holds
-# STATE/session.live, testing it every half minute. A loop calls this before
-# it does anything in the clone: a session that outlived the loop that
-# started it, as one does when the loop's tmux session is killed, still has
-# its supervisor, which holds the lock until the session's group is gone, and
-# the clone must not get a second session. A STATE/session that stays once
-# the lock is free was left by a supervisor that was killed, and its session
-# may still run: it stays, and the next session.pl removes it only once it
-# has proved the group gone, and starts nothing until then.
+# wait_session: wait until `session_state` says ended, asking every half minute,
+# and succeed; fail once STATE/stop exists, within five seconds. A loop calls
+# this before it does anything in the clone, at its start and before each
+# turn: a session that outlived the loop that started it, as one does when
+# the loop's tmux session is killed, still has its supervisor, which holds
+# STATE/session.live until the session's group is gone, and a STATE/session
+# that stays once the lock is free was left by a supervisor that was killed,
+# whose session may still run. Neither lets the loop go on; the second waits
+# until session.pl has proved the group gone, or a person has stopped it.
 wait_session()
 {
-    if locked "$state/session.live"; then
-        log "the session of an earlier loop still runs; waiting for its supervisor"
-        while locked "$state/session.live"; do
-            sleep 30
+    ws_told=
+    while ws_now=$(session_state); [ "$ws_now" != ended ]; do
+        if [ "$ws_now" != "$ws_told" ]; then
+            case $ws_now in
+                running) log "the session of an earlier loop still runs; waiting for its supervisor" ;;
+                *) log "the session that $state/session records may still run, $ws_now; nothing changes the clone until it is proved gone" ;;
+            esac
+            ws_told=$ws_now
+        fi
+        ws_i=0
+        while [ "$ws_i" -lt 6 ]; do
+            [ ! -e "$state/stop" ] || return 1
+            sleep 5
+            ws_i=$((ws_i + 1))
         done
-        log "the session of the earlier loop ended"
-    fi
-    [ ! -e "$state/session" ] ||
-        log "$state/session names the group of a supervisor that was killed; the next session starts once it is gone"
+    done
+    [ -z "$ws_told" ] || log "the session of the earlier loop ended"
+    return 0
 }
 
 # landed REF: succeed when `origin/master` or a branch `origin/milestone/*`
@@ -357,7 +378,8 @@ HOMES='/home/testing /home/toksaitov-a /home/toksaitov-d /home/toksaitov-m /home
 # master's commit from this clone, and the copies to keep: the default copy
 # of testing.sh, the release's and its preparation's, and each loop's that the
 # file `copy` of a state directory under build/flow of this clone's main
-# working tree names, unless STATE/stop says that the loop has ended.
+# working tree names, unless STATE/stop says that the loop has ended and
+# `session.pl -q` that no session of it may still run.
 # Print the lines of each run with its machine's name first; fail, and run
 # neither, when master or the issues cannot be read. -n removes nothing and
 # lists what would go.
@@ -374,7 +396,10 @@ leftovers()
     for c in /home/testing/rach2 $(sed -n 's/^COPY=\$OWNER/\/home\/testing\/rach2/p
         s/^PREPARE_COPY=\$OWNER/\/home\/testing\/rach2/p' "$here/release.sh") \
         $(for f in "$(primary .)"/build/flow/*/copy; do
-            [ -e "${f%/copy}/stop" ] || cat "$f" 2> /dev/null
+            if ! [ -e "${f%/copy}/stop" ] ||
+                ! perl "$here/session.pl" -q "${f%/copy}/session" > /dev/null; then
+                cat "$f" 2> /dev/null
+            fi
         done); do
         case $c in ''|/*[!A-Za-z0-9/._-]*|*/..*|[!/]*) continue ;; esac
         keep="$keep -k $c"

@@ -36,8 +36,14 @@
 # process group of the session that is running in `session`, the clone's path in
 # `repo`, and in `copy` the copy on the testing host that RACH2_TESTING_COPY
 # names for testing.sh, if any; `touch STATE/stop` ends the loop after the
-# session that is running, and before it takes or starts a task;
-# tools/flow/stop.sh stops the session as well.
+# session that is running, and before it takes or starts a task, within five
+# seconds of any wait; tools/flow/stop.sh also leaves STATE/session.stop, on
+# which session.pl stops the session, and which the loop removes before each
+# session. The loop holds STATE/loop.live, a lock on descriptor 7, for its
+# whole life, through its exec of master's copy, and closes it for each
+# session, whose supervisor holds STATE/session.live; stop.sh and status.sh
+# probe the two locks to tell whether the loop and its session run. A loop
+# that finds STATE/loop.live held exits, since another loop has STATE.
 # Sessions run with RACH2_MIN_FREE_GIB at 40 unless the environment gives
 # another, so that a build they start stops before it fills the disk, and
 # with RACH2_WORKER_STATE set to STATE, so that `board.sh release` of the
@@ -58,10 +64,13 @@
 # one, which it could not work. One shorter than two minutes for another
 # reason, such as a lost network or a lapsed login, doubles the wait before
 # the next, from one minute up to thirty. A session still running after six
-# hours is stopped, with every process in its group. A loop that starts while
-# a session of the loop before it still runs, as one does after that loop's
-# tmux session is killed, waits for the session to end before it does anything
-# in the clone.
+# hours is stopped, with every process in its group. At its start and before
+# each turn, before it touches the clone, drops a task or claims one, the loop
+# waits until `session.pl -q` says that no session of it may still run, as
+# `wait_session` in lib.sh says: a session of the loop before it that still
+# runs, as one does after that loop's tmux session is killed, or one whose
+# supervisor was killed, until session.pl has proved its group gone; and
+# `refresh` changes nothing in the clone until then, whoever calls it.
 #
 # While it holds no task, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its
@@ -170,6 +179,16 @@ session()
     last=$state/s-$t
 }
 
+# nap SECONDS: wait SECONDS, in steps of five, or until STATE/stop exists.
+nap()
+{
+    np_left=$1
+    while [ "$np_left" -gt 0 ] && [ ! -e "$state/stop" ]; do
+        sleep 5
+        np_left=$((np_left - 5))
+    done
+}
+
 main()
 {
     agent=claude state='' repo=
@@ -190,13 +209,27 @@ main()
     [ -n "$state" ] || state=$flowdir/$agent
     mkdir -p "$state" "$flowdir"
     state=$(cd "$state" && pwd)
+    # The lock passes to master's copy on the exec below, with
+    # RACH2_LOOP_LIVE naming the file it holds.
+    if [ "${RACH2_LOOP_LIVE-}" != "$state/loop.live" ]; then
+        exec 7>> "$state/loop.live"
+        perl -MFcntl=:flock -e 'open(L, ">&=7") && flock(L, LOCK_EX | LOCK_NB) or exit 1' || {
+            echo "worker: another loop holds $state/loop.live" >&2
+            exit 1
+        }
+        RACH2_LOOP_LIVE=$state/loop.live
+        export RACH2_LOOP_LIVE
+    fi
     cd "$repo" || exit 1
     echo "$repo" > "$state/repo"
     echo "${RACH2_TESTING_COPY:-}" > "$state/copy"
     RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
     RACH2_WORKER_STATE=$state
     export RACH2_MIN_FREE_GIB RACH2_WORKER_STATE
-    wait_session
+    if ! wait_session; then
+        log stopped
+        exit 0
+    fi
     git config core.hooksPath tools/git-hooks
     if [ "$0" != "$state/run/worker.sh" ]; then
         refresh
@@ -213,9 +246,10 @@ main()
     fi
     fails=0
     while [ ! -e "$state/stop" ]; do
+        wait_session || break
         if ! refresh; then
             log "fetch failed"
-            sleep 60
+            nap 60
             continue
         fi
         update worker.sh 2>> "$state/loop.log"
@@ -225,14 +259,14 @@ main()
                 exec sh "$state/run/worker.sh" -a "$agent" -s "$state" -r "$repo" ;;
             2)
                 log "update failed"
-                sleep 60
+                nap 60
                 continue ;;
         esac
         issue=$(cat "$state/issue" 2> /dev/null)
         if [ -n "$issue" ]; then
             if ! held=$(sh "$state/run/board.sh" mine "$issue"); then
                 log "board unreachable"
-                sleep 60
+                nap 60
                 continue
             fi
             if [ "$held" != yes ]; then
@@ -244,36 +278,37 @@ main()
         if [ -z "$issue" ]; then
             until=$(cat "$state/limit" 2> /dev/null)
             if [ "$(date +%s)" -lt "${until:-0}" ]; then
-                sleep 300
+                nap 300
                 continue
             fi
             tidy
             prune_logs 's-*'
             [ -e "$state/stop" ] && break
             if ! claim; then
-                sleep 60
+                nap 60
                 continue
             fi
             issue=$(cat "$state/issue" 2> /dev/null)
         fi
         if [ -z "$issue" ]; then
             log idle
-            sleep 300
+            nap 300
             continue
         fi
         branch=$(sh "$state/run/board.sh" branch "$issue" 2>> "$state/loop.log")
         case $branch in
             ''|*[!A-Za-z0-9._/-]*)
                 log "#$issue: no usable milestone branch"
-                sleep 300
+                nap 300
                 continue ;;
         esac
+        rm -f "$state/session.stop"
         [ -e "$state/stop" ] && break
         session "$issue" "$branch"
         if why=$(limited "$last.jsonl" "$last.err"); then
             log "limit: $why"
             limit_end "$why" > "$state/limit"
-            sleep 900
+            nap 900
             continue
         fi
         rm -f "$state/limit"
@@ -288,11 +323,11 @@ main()
             done
             [ "$wait" -le 1800 ] || wait=1800
             log "short session; waiting ${wait}s"
-            sleep "$wait"
+            nap "$wait"
             continue
         fi
         fails=0
-        sleep 20
+        nap 20
     done
     log stopped
     exit 0
