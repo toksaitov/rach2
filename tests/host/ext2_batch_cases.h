@@ -480,10 +480,10 @@ static void batch_reuse_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "block reuse leaves a clean volume");
 }
 
-/* The stage rows' queued writer's description and the node whose mode the
-   queued setattr changes; the flush at which to queue them, the count of
-   flushes seen, and the count of times the queued work ran. */
-static void *stage_writer, *stage_attribute;
+/* The stage rows' queued writer's description and its node, and the node
+   whose mode the queued setattr changes; the flush at which to queue them,
+   the count of flushes seen, and the count of times the queued work ran. */
+static void *stage_writer, *stage_writer_node, *stage_attribute;
 static int stage_target, stage_seen, stage_ran;
 
 /** Process B of the stage rows: a write of another file and a setattr of a
@@ -518,7 +518,7 @@ static void batch_stage_pause(void)
     sleeps = 0;
     pass_turn();
     check(sleeps > 0 && stage_ran == 0, "a strict drain keeps em->batch across its flushes");
-    check(OPS->getattr(&mnt, stage_writer, &st) == 0 && st.size == 0,
+    check(OPS->getattr(&mnt, stage_writer_node, &st) == 0 && st.size == 0,
           "a queued writer cannot change the frozen generation");
 }
 
@@ -552,6 +552,7 @@ static void batch_stage_rows(void)
                   OPS->write(&mnt, handle, bytes, 4096, 1035ull * 4096) == 4096 &&
                   OPS->write(&mnt, handle, bytes + 4096, 4096, 1036ull * 4096) == 4096,
               "the frozen generation crosses an indirect level");
+        stage_writer_node = writer;
         stage_seen = stage_ran = 0;
         stage_target = barrier;
         flush_pause = batch_stage_pause;
