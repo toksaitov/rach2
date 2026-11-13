@@ -2183,7 +2183,9 @@ struct ext2_rename_names {
  * leaves `new_dir` with a target and drops `old_dir`
  * (fs/ext2/namei.c:354-396). A failed store of a count or of times after an
  * entry change is on the device fails nothing: the node keeps its mark, which
- * its next store settles. 0, -ENOENT, -EMLINK, or -errno.
+ * its next store settles. 0, -ENOENT, -EMLINK when the parents differ, there
+ * is no victim and the new parent's count would pass 65000, as Linux tests it
+ * only when the new name is no directory (fs/namei.c:5090-5093), or -errno.
  */
 static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
                       struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat,
@@ -2196,7 +2198,7 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
     uint32_t oat, oprev;
     int rc;
 
-    if (od != nd && nd->nlink >= 65000) {
+    if (od != nd && !victim && nd->nlink >= 65000) {
         return -EMLINK;
     }
     if (victim) {
