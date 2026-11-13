@@ -711,9 +711,9 @@ static void row_late_master(void)
     a = attaches;
     p = plane_updates;
     c = dumb_creates;
+    drm_mode_file_release(&fa); /* takes the commit lock, before the role goes */
     lock_other = 1;
     model_wait = lock_wait_master;
-    drm_mode_file_release(&fa);
     drm_master_release(&fa);
     CHECK(dev.master == &fc && con.handed && !lock_other && !mutex_held(&dev.mode_lock),
           "the newcomer holds the screen");
