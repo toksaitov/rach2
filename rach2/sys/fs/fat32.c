@@ -1859,8 +1859,14 @@ out:
     return rc;
 }
 
-/** Join the run from `run_first` to the tail of `n`'s `have` clusters and
- * flush the join, the tail ended again when the flush fails. 0 or -errno. */
+/**
+ * Join the run from `run_first` to the tail of `n`'s `have` clusters and
+ * flush the join. On a failure the run is freed, after the tail is ended
+ * again when the join was written; when that write fails too, as every
+ * write through does on a device whose flush failed (`bcache_write`), the
+ * join may be on the medium, and the run stays allocated, a surplus tail,
+ * as a failed `fat_write` leaves it. 0 or -errno.
+ */
 static int join_run(struct fat_mount *fm, struct fat_node *n, uint32_t have, uint32_t run_first)
 {
     uint32_t tail;
@@ -1869,12 +1875,15 @@ static int join_run(struct fat_mount *fm, struct fat_node *n, uint32_t have, uin
     rc = chain_at(fm, n, n->first, have - 1, &tail);
     if (rc == 0) {
         rc = fat_set(fm, tail, run_first);
-    }
-    if (rc == 0) {
-        rc = bcache_flush(fm->dev);
-        if (rc != 0) {
-            (void)fat_set(fm, tail, FAT_EOC_MIN);
+        if (rc == 0) {
+            rc = bcache_flush(fm->dev);
+            if (rc != 0 && fat_set(fm, tail, FAT_EOC_MIN) != 0) {
+                return rc;
+            }
         }
+    }
+    if (rc != 0) {
+        free_chain(fm, run_first);
     }
     return rc;
 }
@@ -1949,7 +1958,6 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         if (run_first != 0 && have > 0) {
             rc = join_run(fm, n, have, run_first);
             if (rc != 0) {
-                free_chain(fm, run_first);
                 goto out;
             }
         } else if (run_first != 0) {
