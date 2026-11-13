@@ -18,6 +18,13 @@
  * NAME=VALUE argument, such as the `root=PATH` a native run appends, is not
  * the directory.
  *
+ * Either way the rows run in lchownwork, a directory of mode 0755 the
+ * program makes in the one named and removes. The links change owner to
+ * accounts other than root, and in a sticky directory others may write, as
+ * /tmp is, fs.protected_symlinks lets nobody but the link's owner or the
+ * directory's follow such a link, root included, as Linux's may_follow_link
+ * does; chown through it would be EACCES.
+ *
  * The program runs as root. It prints `LCHOWNMUSL OK`, followed by
  * " (links)" when the link rows ran, and exits 0 on success, and prints
  * `LCHOWNMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -44,11 +51,16 @@
 #define SYS_fchown32 SYS_fchown
 #endif
 
-/* The names the rows make in the directory, and remove. */
-static char file[256], link_name[256], dangling[256], subdir[256];
+/* The directory the rows run in, which the program makes in the one
+ * named. */
+static char work[256];
+
+/* The names the rows make in `work`, and remove. */
+static char file[sizeof(work) + 16], link_name[sizeof(work) + 16], dangling[sizeof(work) + 16],
+    subdir[sizeof(work) + 16];
 
 /* A second directory there, and in it a second lchown.tmp. */
-static char decoy_dir[256], decoy[sizeof(decoy_dir) + sizeof("/lchown.tmp")];
+static char decoy_dir[sizeof(work) + 16], decoy[sizeof(decoy_dir) + sizeof("/lchown.tmp")];
 
 /* The checks, one assertion each, in the order the program makes them, and
  * the text it prints for each that fails. */
@@ -83,7 +95,7 @@ static const struct {
     const char *text;
 } checks[CHECKS] = {
     {"working-dir", "the working directory"},
-    {"make-file", "make the file"},
+    {"make-file", "make the directory and the file"},
     {"symlink", "a symbolic link where the file system has them"},
     {"lchown", "lchown on a file"},
     {"lchown-number", "lchown by number"},
@@ -335,15 +347,18 @@ static int link_rows(void)
     return 0;
 }
 
-/** Remove what the rows made. */
+/** Remove what the rows made, from the root, so that the working directory
+ * is not in `work` when it goes. */
 static void tidy(void)
 {
+    (void)chdir("/");
     unlink(dangling);
     unlink(link_name);
     unlink(file);
     rmdir(subdir);
     unlink(decoy);
     rmdir(decoy_dir);
+    rmdir(work);
 }
 
 int main(int argc, char **argv)
@@ -367,15 +382,21 @@ int main(int argc, char **argv)
         dir = where;
     }
     sep = dir[strlen(dir) - 1] == '/' ? "" : "/";
-    snprintf(file, sizeof(file), "%s%slchown.tmp", dir, sep);
-    snprintf(link_name, sizeof(link_name), "%s%slchown.lnk", dir, sep);
-    snprintf(dangling, sizeof(dangling), "%s%slchown.dng", dir, sep);
-    snprintf(subdir, sizeof(subdir), "%s%slchowndir", dir, sep);
-    snprintf(decoy_dir, sizeof(decoy_dir), "%s%slchowndecoy", dir, sep);
+    snprintf(work, sizeof(work), "%s%slchownwork", dir, sep);
+    dir = work;
+    snprintf(file, sizeof(file), "%s/lchown.tmp", dir);
+    snprintf(link_name, sizeof(link_name), "%s/lchown.lnk", dir);
+    snprintf(dangling, sizeof(dangling), "%s/lchown.dng", dir);
+    snprintf(subdir, sizeof(subdir), "%s/lchowndir", dir);
+    snprintf(decoy_dir, sizeof(decoy_dir), "%s/lchowndecoy", dir);
     snprintf(decoy, sizeof(decoy), "%s/lchown.tmp", decoy_dir);
     tidy();
+    if (mkdir(work, 0755) != 0) {
+        return fail(MAKE_FILE);
+    }
     fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0 || chdir(dir) != 0) {
+        tidy();
         return fail(MAKE_FILE);
     }
     close(fd);

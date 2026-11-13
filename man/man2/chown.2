@@ -255,7 +255,11 @@ changes the target, and that a dangling link can be changed.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES
-Search permission was denied on an ancestor directory.
+Search permission was denied on an ancestor directory, or a final
+symbolic link the call would follow is in a sticky directory others may
+write and neither the caller nor the directory's owner owns it, root
+included
+.Pq Xr symlink 2 .
 .It Bq Er EBADF
 .Fa fd
 is not open; a relative
