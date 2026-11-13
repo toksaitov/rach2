@@ -1,6 +1,6 @@
 /**
  * vfs_unmount: the unmount functions of rach2/sys/fs/vfs.c, compiled whole
- * with substitutes for the calls they make, and checked in 18 cases, for
+ * with substitutes for the calls they make, and checked in 21 cases, for
  * the vfs-unmount case of tests/run usbdisk.
  *
  * Preparation copies the functions into unmount.inc. The substitutes for the
@@ -11,7 +11,11 @@
  * also check that a caller with a root of its own names the target from that
  * root, and that a target named as a directory, by a path that ends in one,
  * must reach a directory, the node of the one walk being the node checked.
- * The USB disk rows test the same path with a real device.
+ * The pages in memory of a mount's files are ended (`filemap_unmount`) only
+ * for a mount that is no bind, once nothing holds it and its operations
+ * have drained, and before its file system is synced, and a bind's unmount
+ * leaves them to its base. The USB disk rows test the same path with a real
+ * device.
  */
 #include <errno.h>
 #include <stdint.h>
@@ -263,6 +267,23 @@ static void dcache_forget_mount(struct vfs_mount *m)
     (void)m;
 }
 
+/* The calls of `filemap_unmount`, the mount of the last, and whether each
+ * came as it must: on a mount that is no bind, unmounting, drained, held by
+ * nothing, with no namespace lock held and before any sync of this case. */
+static int fm_unmounts, fm_misplaced;
+static struct vfs_mount *fm_last;
+
+/** Count the end of the pages in memory of the files of `m`, and whether
+ * it came in its place in the unmount. */
+static void filemap_unmount(struct vfs_mount *m)
+{
+    if (m->refs != 0 || m->bind_of || m->state != VFS_UNMOUNTING || m->inprogress != 0 ||
+        locks != 0 || syncs != 0 || prepares != 0)
+        fm_misplaced++;
+    fm_unmounts++;
+    fm_last = m;
+}
+
 /** Let a loop device set to clear itself go; no loop device is mounted. */
 static void loop_unmounted(struct block_device *d)
 {
@@ -343,6 +364,8 @@ static void setup(void)
     node_mode = 0040755;
     getattrs = 0;
     walk_node = NULL;
+    fm_unmounts = fm_misplaced = 0;
+    fm_last = NULL;
 }
 
 /** Count a failed case, `name`, and report it. */
@@ -354,13 +377,15 @@ static void check(int condition, const char *name)
     }
 }
 
-/** Run the cases; 0 when all pass, 1 otherwise. */
-int main(void)
+/** The cases of a busy and a live child below a mount whose device has
+ * gone, and of that mount's own unmount after them. */
+static void child_cases(void)
 {
     setup();
     records[4].refs = 1;
     check(vfs_do_umount("/mnt/a/b", 0) == -EBUSY, "child description remains busy");
-    check(records[4].state == VFS_ACTIVE && !syncs && !claims, "busy child stays intact");
+    check(records[4].state == VFS_ACTIVE && !syncs && !claims && !fm_unmounts,
+          "busy child stays intact, its files' pages untouched");
     records[4].refs = 0;
     records[4].inprogress = 1;
     check(vfs_do_umount("/mnt/a/b", 0) == 0, "live child below removed parent unmounts");
@@ -369,10 +394,35 @@ int main(void)
           "child releases its claim, nodes and parent after draining");
     check(syncs == 1 && prepares == 1 && flushes == 1 && resolve_calls == 2,
           "live child flushes without another ancestor lookup");
+    check(fm_unmounts == 1 && fm_last == &records[4] && !fm_misplaced,
+          "live child ends its files' pages once nothing holds it, before its sync");
     lookup_error = 0;
     check(vfs_do_umount("/mnt/a", 0) == 0 && records[0].refs == 0 && claims == 2 && syncs == 1 &&
               flushes == 1,
           "removed parent releases without writes");
+}
+
+/** The cases of a bind's unmount, held and not. */
+static void bind_cases(void)
+{
+    setup();
+    records[5].bind_of = &records[4];
+    records[5].covered_path = "/mnt/bind";
+    records[4].refs = 1;
+    records[5].refs = 1;
+    check(unmount_mount(&records[5]) == -EBUSY && records[5].state == VFS_ACTIVE &&
+              records[4].refs == 1 && !fm_unmounts,
+          "a held bind stays mounted, its base's files' pages untouched");
+    records[5].refs = 0;
+    check(unmount_mount(&records[5]) == 0 && !records[5].state && records[4].refs == 0 &&
+              records[4].state == VFS_ACTIVE && !fm_unmounts && !syncs,
+          "a bind's unmount lets its base go and leaves the base's files' pages to the base");
+}
+
+/** Run the cases; 0 when all pass, 1 otherwise. */
+int main(void)
+{
+    child_cases();
     setup();
     disks[4].backing_flags = BLOCK_GONE;
     check(vfs_do_umount("/mnt/a/b", 0) == 0 && !syncs && !prepares && !flushes,
@@ -429,8 +479,9 @@ int main(void)
     setup();
     check(vfs_do_umount("/mnt/a/b", 1) == 0 && !records[4].state && !getattrs,
           "a target named as a directory below a removed device unmounts by its recorded name");
+    bind_cases();
     if (failures)
         return 1;
-    puts("vfs-unmount: result: 18 checks passed");
+    puts("vfs-unmount: result: 21 checks passed");
     return 0;
 }
