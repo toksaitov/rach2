@@ -8,6 +8,7 @@
 #include "process.h"
 #include "sched.h"
 #include "../cmdline.h"
+#include "../fs/cpuinfo.h"
 #include "../klog.h"
 #include "../panic.h"
 #include "../platform.h"
@@ -2183,6 +2184,7 @@ static void smp_cpu_main(int cpu)
     }
     sched_account_start();
     self->online = 1;
+    sched_cache_join(cpuinfo_llc_shared(cpu));
     bkl_take(1);
     (void)bkl_drop();
     sched_idle_loop();

@@ -415,6 +415,13 @@ extern int sched_cycle_account;
  * processor's, as it comes online, before its first tick. */
 void sched_account_start(void);
 
+/** Record that this processor, now online, shares its last-level cache
+ * with the processors of `shared`, a bit each, and they with it, for the
+ * placement of a wake (`sched_wake_choose`). Called by each application
+ * processor as it comes online; the boot processor learns its peers from
+ * theirs. */
+void sched_cache_join(uint64_t shared);
+
 /** Fold the processes running or ready to run into the load averages every
  * five seconds and a tick (`sched_loadavg`). Called by the boot
  * processor's timer tick alone. */
