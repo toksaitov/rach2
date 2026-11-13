@@ -311,6 +311,11 @@ run()
             status=1
         }
     done
+    # The guest's kernel log names what killed a failed command, such as its
+    # out-of-memory killer; the console log goes with $work.
+    # shellcheck disable=SC2086 # opts are words
+    [ "$status" -eq 0 ] || ssh $opts -p "$port" gfx@127.0.0.1 'sudo dmesg | tail -n 40' \
+        </dev/null 2>/dev/null | sed 's/^/debian-ref: guest: /' >&2 || true
     # shellcheck disable=SC2086 # opts are words
     ssh $opts -p "$port" gfx@127.0.0.1 'cat /tmp/graphics.env; sudo systemctl poweroff' \
         </dev/null >> "$work/record" 2>/dev/null || true
