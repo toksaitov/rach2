@@ -22,6 +22,7 @@
 # Each process is read through a pidfd that this process opens first: its
 # command line, session, user and directory come from /proc, and a signal 0
 # through the pidfd then shows that the process the pidfd names still runs,
+# by its success or, for another user's process, its EPERM,
 # so that what was read was its own, since its number cannot have passed to
 # another process meanwhile. With -k the TERM goes through the same pidfd,
 # which names that process and no other, so no signal reaches a process
@@ -66,11 +67,13 @@ sub fail
 }
 
 # gone FD: succeed when the process the pidfd FD names has ended; fail the
-# scan when that cannot be read.
+# scan when that cannot be read. A signal 0 refused with EPERM names another
+# user's process that runs, since the kernel checks the permission only on a
+# process that has not ended.
 sub gone
 {
     my $fd = shift;
-    return 0 if syscall($PIDFD_SEND_SIGNAL, $fd, 0, 0, 0) == 0;
+    return 0 if syscall($PIDFD_SEND_SIGNAL, $fd, 0, 0, 0) == 0 || $!{EPERM};
     return 1 if $!{ESRCH};
     fail("a pidfd cannot be signalled: $!");
 }
