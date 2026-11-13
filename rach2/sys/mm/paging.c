@@ -3769,23 +3769,17 @@ static uint32_t zap_walks;
 
 /**
  * Take write access from every present entry of [start, end) of `mm`, for
- * `paging_wrprotect_where`, with one flush at the end. The count of zaps
- * moves first, under the page-table lock, under which a fault that gives a
- * shared page write access reads it again before its entry
- * (`install_entry`, `shared_mkwrite`), so that a fault whose file's
- * `mkwrite` ran before this walk makes no entry writable after it. Each
- * table's entries change under the page-table lock as well, so a fault of
- * a space the caller holds only to read changes none of them meanwhile.
+ * `paging_wrprotect_where`, adding each page changed to `b`, which the
+ * caller flushes once for the space (`walk_space`). Each table's entries
+ * change under the page-table lock, so a fault of a space the caller holds
+ * only to read changes none of them meanwhile.
  */
-static void wrprotect_user_range(struct mm *mm, uintptr_t start, uintptr_t end)
+static void wrprotect_user_range(struct mm *mm, struct flush_batch *b, uintptr_t start,
+                                 uintptr_t end)
 {
-    struct flush_batch b;
     uintptr_t addr, next;
-    uint32_t lock = mm_ptl_lock(mm);
+    uint32_t lock;
 
-    mm->zaps++;
-    mm_ptl_unlock(mm, lock);
-    batch_start(&b, mm->dir);
     for (addr = start; addr < end; addr = next) {
         pte_t *table = user_span(mm->dir, addr, end, &next);
 
@@ -3798,12 +3792,61 @@ static void wrprotect_user_range(struct mm *mm, uintptr_t start, uintptr_t end)
 
             if ((*e & (PTE_P | PTE_W)) == (PTE_P | PTE_W)) {
                 *e &= ~(pte_t)PTE_W;
-                batch_add(&b, addr);
+                batch_add(b, addr);
             }
         }
         mm_ptl_unlock(mm, lock);
     }
-    batch_flush(&b);
+}
+
+/**
+ * Change each region of `mm` that `match` picks, for `walk_where`: unmap
+ * it for MMN_TRUNCATE, or take write access from it for MMN_PROTECT. A
+ * write-protecting walk counts the space under way once, from before its
+ * first region's notice to after its one flush, and moves its count of
+ * zaps first, under the page-table lock, under which a fault that gives a
+ * shared page write access reads it again before its entry
+ * (`install_entry`, `shared_mkwrite`), so that a fault whose file's
+ * `mkwrite` ran before this walk makes no entry writable after it. The
+ * caller holds the space's regions' lock, or holds it to read and changes
+ * it as it stands.
+ */
+static void walk_space(struct mm *mm,
+                       int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
+                       void *arg, int event)
+{
+    struct flush_batch b;
+    const vma_t *r;
+    uintptr_t lo, hi;
+    uint32_t lock;
+    int begun = 0;
+
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+        if (!match(r, arg, &lo, &hi)) {
+            continue;
+        }
+        if (event == MMN_TRUNCATE) {
+            mmn_change_begin(mm);
+            mmn_notify(mm, event, lo, hi);
+            unmap_user_range(mm->dir, lo, hi);
+            mmn_change_end(mm);
+            continue;
+        }
+        if (!begun) {
+            mmn_change_begin(mm);
+            lock = mm_ptl_lock(mm);
+            mm->zaps++;
+            mm_ptl_unlock(mm, lock);
+            batch_start(&b, mm->dir);
+            begun = 1;
+        }
+        mmn_notify(mm, event, lo, hi);
+        wrprotect_user_range(mm, &b, lo, hi);
+    }
+    if (begun) {
+        batch_flush(&b);
+        mmn_change_end(mm);
+    }
 }
 
 /**
@@ -3835,8 +3878,6 @@ static void walk_where(int (*match)(const struct vma *r, void *arg, uintptr_t *l
                        void *arg, int event)
 {
     process_t *p;
-    const vma_t *r;
-    uintptr_t lo, hi;
     uint32_t walk;
     int held, taken;
 
@@ -3865,19 +3906,7 @@ again:
             mm->zaps++;
         }
         mm->zap_walk = walk;
-        for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
-            if (match(r, arg, &lo, &hi)) {
-                /* Under way, for a space this thread holds only to read. */
-                mmn_change_begin(mm);
-                mmn_notify(mm, event, lo, hi);
-                if (event == MMN_TRUNCATE) {
-                    unmap_user_range(mm->dir, lo, hi);
-                } else {
-                    wrprotect_user_range(mm, lo, hi);
-                }
-                mmn_change_end(mm);
-            }
-        }
+        walk_space(mm, match, arg, event);
         if (taken) {
             mmap_unlock(mm);
         }
