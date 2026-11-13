@@ -2263,17 +2263,44 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
 }
 
 /**
+ * Refuse a check of the volume while a node of the mount, live or held back,
+ * keeps its mark (`n->unstored`): the check reads the disk, which lacks the
+ * node's change, and would count the blocks it names lost. Logged as `ext2:
+ * remount: inode N: not stored before the check`. 0, or -EIO. The big lock is
+ * taken for the walk.
+ */
+static int nodes_unstored(struct ext2_mount *em)
+{
+    int big = ext2_big_enter();
+    struct ext2_node *n = em->nodes;
+
+    while (n && !n->unstored) {
+        n = n->next;
+    }
+    if (n) {
+        klog(KLOG_WARN, "ext2", "remount: inode %d: not stored before the check", (int)n->ino);
+    }
+    ext2_big_exit(big);
+    return n ? -EIO : 0;
+}
+
+/**
  * Make a read-only mount writable, or one a fault stopped (EXT2_MODE_STOPPED),
  * whose operations under way `em_close` waited for: the only way a stop ends.
  * The writes the batch accepted before the fault (`ext2_mark_error`) are
- * drained, and a stopped mount's marked nodes stored (`nodes_settle`), so that
- * the check reads the volume they leave; a volume whose valid bit is clear or
- * whose error bit is set is checked as a writable mount checks it, the batch
- * set up when the mount has none, the valid bit cleared on the medium, and the
- * mode set EXT2_MODE_RW under `em->super`. 0, -EROFS for a volume whose
- * features keep it read-only (`em->readonly_why`) or a failed mount
- * (`ext2_failed`), -ENOMEM for a batch the heap cannot give, the drain's or a
- * marked node's store's -errno, or -errno.
+ * drained, the final puts left on the list reaped, and every marked node stored
+ * (`nodes_settle`), a directory whose growth failed to store it among them,
+ * with the mount writing for the purpose (`em->opening`), whether it was
+ * stopped or read-only after a remount whose settle failed; then the final puts
+ * are held back (`em_hold`), and a node still marked refuses the check
+ * (`nodes_unstored`), so that the check reads the volume the nodes leave; a
+ * volume whose valid bit is clear or whose error bit is set is checked as a
+ * writable mount checks it, the batch set up when the mount has none, the valid
+ * bit cleared on the medium, and the mode set EXT2_MODE_RW under `em->super`.
+ * 0, -EROFS for a volume whose features keep it read-only (`em->readonly_why`)
+ * or a failed mount (`ext2_failed`), -ENOMEM for a batch the heap cannot give,
+ * the drain's or a marked node's store's -errno, -EIO for a node still marked,
+ * or -errno.
  *
  * The check holds no lock: admission is closed (`em_close`), the mount admits
  * no change and allocates nothing, and the final puts are held back until the
@@ -2288,16 +2315,17 @@ static int remount_writable(struct ext2_mount *em)
     if (em->readonly_why || ext2_failed(em)) {
         return -EROFS;
     }
+    em->opening = 1;
     rc = ext2_writeback_drain(em);
-    if (rc == 0 && em->mode == EXT2_MODE_STOPPED) {
+    em_reap(em);
+    if (rc == 0) {
         rc = nodes_settle(em);
     }
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        em_hold(em);
+        rc = nodes_unstored(em);
     }
-    em_hold(em);
-    em->opening = 1;
-    if (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS)) {
+    if (rc == 0 && (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS))) {
         rc = ext2_check_volume(em);
     }
     ext2_batch_lock(em);
