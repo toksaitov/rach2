@@ -24,7 +24,7 @@ The accelerator outside is the run's, as for every case: on the testing PC KVM, 
 
 `svm-entry race SECONDS CPU`, which no case runs, checks an outer TCG for the first of them: a guest on processor CPU reads a byte through nested paging and writes it to a port, while a child on another processor runs FXRSTOR without end, for SECONDS. It prints `svm-entry: race: pass: N exits in S s on processor CPU`, or the first exit that is not the port with the byte.
 
-`tests/run bed-shm` runs the four cases of [`machine.bed-shm.json`](../cases/machine.bed-shm.json), `virgl`, `nocopy`, `vm-death` and `console`, on the testing PC alone, under `host-svm`: an x86-64 Rach2 boots `gnu-test.disk` with `bed-shm.sh`, `vgshmprobe` and `nocopy.c` on a data disk, `bed-shm.ext2`, and the test bed's VM, which `bed/vm/image/vm.sh rach2` makes ([bed/vm](../../bed/vm/Readme.md)), as its third disk, `vm.disk`.
+`tests/run bed-shm` runs the four cases of [`machine.bed-shm.json`](../cases/machine.bed-shm.json), `virgl`, `nocopy`, `vm-death` and `console`, on the testing PC alone, under `host-svm`: an x86-64 Rach2 boots `gnu-test.disk` with `bed-shm.sh`, `vgshmprobe` and `nocopy.c` on a data disk, `bed-shm.ext2`, and the test bed's VM, which `bed/vm/image/vm.sh rach2` makes ([bed/vm](../../bed/vm/Readme.md)), as its third disk, `vm.disk`. The release runs this suite under KVM as well, through [`tools/ci/kvm-suites`](../../tools/ci/kvm-suites).
 
 On a Rach2 with the GNU root, the runners run alone, as root:
 
