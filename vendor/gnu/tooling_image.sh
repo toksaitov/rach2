@@ -148,6 +148,7 @@ STAGE=
 FOLLOWER=
 JOB=
 LOCKED=
+BREAKING=
 
 # cleanup: stop the follower and the job, then remove the stage and the lock.
 # A signal that reached this script alone, as make sends one, is passed on to
@@ -167,6 +168,7 @@ cleanup()
     fi
     [ -z "$STAGE" ] || rm -rf "$STAGE"
     [ -z "$LOCKED" ] || rm -f "$LOCK"
+    [ -z "$BREAKING" ] || rmdir "$LOCK.break"
 }
 
 # stop STATUS: exit with STATUS for a signal, and ignore any later one, which
@@ -203,6 +205,24 @@ running()
     return 1
 }
 
+# break_lock HOLDER: remove the lock of HOLDER, a holder that is gone. One
+# waiter at a time breaks it, under the directory LOCK.break, and only while
+# the lock still names HOLDER, so that a waiter never removes the lock another
+# has just taken. A breaker killed outright leaves the directory, which a
+# waiter removes once it is a minute old.
+break_lock()
+{
+    if mkdir "$LOCK.break" 2>/dev/null; then
+        BREAKING=1
+        [ "$(readlink "$LOCK" 2>/dev/null)" != "$1" ] || rm -f "$LOCK"
+        rmdir "$LOCK.break"
+        BREAKING=
+    else
+        [ -z "$(find "$LOCK.break" -prune -mmin +1 2>/dev/null)" ] || rmdir "$LOCK.break" 2>/dev/null
+        sleep 1
+    fi
+}
+
 # take_lock: wait until no other job uses the build disk, and take it. The
 # lock is a symbolic link whose target is the holder's process ID, which a
 # holder that is gone leaves for the next to remove once no etude that a
@@ -213,9 +233,13 @@ take_lock()
     said=
     until ln -s "$$" "$LOCK" 2>/dev/null; do
         holder=$(readlink "$LOCK" 2>/dev/null) || continue
-        if ! kill -0 "$holder" 2>/dev/null && ! holder=$(running); then
-            rm -f "$LOCK"
-            continue
+        if ! kill -0 "$holder" 2>/dev/null; then
+            if etude=$(running); then
+                holder=$etude
+            else
+                break_lock "$holder"
+                continue
+            fi
         fi
         if [ -z "$said" ]; then
             echo "gnu: tooling: waiting for $DISK, which process $holder uses" >&2
