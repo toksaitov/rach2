@@ -67,7 +67,8 @@
 # hours is stopped, with every process in its group. A loop that starts while
 # a session of the loop before it still runs, as one does after that loop's
 # tmux session is killed, waits for the session to end before it does anything
-# in the clone.
+# in the clone; and a session whose supervisor was killed keeps the next one
+# from starting until session.pl has proved its group gone.
 #
 # While it holds no task, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its

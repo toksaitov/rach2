@@ -13,8 +13,9 @@
 # group is gone; it then waits for both to end, signalling neither, by the
 # locks that each holds for its life, STATE/loop.live and STATE/session.live.
 # A STATE/session whose supervisor is gone names a group that is not
-# signalled, since its number may now be another's; it is a line `stop: left:
-# STATE: ...`, as is a supervisor or a loop that has not ended in ninety
+# signalled, since its number may now be another's; unless the group is
+# proved gone, as session.pl proves it, it is a line `stop: left: STATE:
+# ...`, as is a supervisor or a loop that has not ended in ninety
 # seconds and a loop whose host did not answer, and each counts in the final
 # count and status. Every ssh is bounded by bound.pl. It then stops what the
 # sessions left running in WSL and on Windows, QEMU guests, test runs and the
@@ -30,15 +31,16 @@
 # starts nothing, and then stops each release run that `winclean.sh -l` lists
 # from Windows' output directory, by its parts' jobs, which end everything
 # the parts started, and removes the run's scratch there; then each other
-# program under D:\rach2 is stopped through its own handle. Then it brings
-# the board up to date, runs sweep.sh, with -a unless a release still runs,
-# and prints what is still there: a line `stop: left: MACHINE: WHAT` for each
-# process, each run of the release that has not ended, each job and each
-# claim of the admission ledger, and a line `stop: left: MACHINE: unknown:
-# WHY` for each look that cannot be read and each list or stop on Windows
-# that failed. It ends with `stop: everything is stopped` and status 0, or
-# `stop: N left` and status 1. dev-log/84-locks/84-111-lifecycle.md gives the
-# model of a release's runs, Windows parts and WSL claims that this follows.
+# program under D:\rach2 is stopped through its own handle. Then it brings the
+# board up to date, runs sweep.sh, with -a only once no run of the release is
+# left, a lost one among them, and every loop's stop is confirmed, and prints
+# what is still there: a line `stop: left: MACHINE: WHAT` for each process, each
+# run of the release that has not ended, each job and each claim of the
+# admission ledger, and a line `stop: left: MACHINE: unknown: WHY` for each look
+# that cannot be read and each list or stop on Windows that failed. It ends with
+# `stop: everything is stopped` and status 0, or `stop: N left` and status 1.
+# dev-log/84-locks/84-111-lifecycle.md gives the model of a release's runs,
+# Windows parts and WSL claims that this follows.
 #
 # -n changes nothing and prints only what runs now, in the same form. A running
 # release is left alone and counts as left, since it costs hours to repeat:
@@ -86,7 +88,9 @@ WHAT='qemu-system|/worker\.sh|board\.sh watch|tests/run|/etude |/rach2-etude'
 # STATE/stop exists and its session has ended, within five seconds of a wait.
 # The wait counts ninety seconds, which covers the TERM, thirty turns, the
 # KILL and the loop's end. A STATE/session whose supervisor is gone names a
-# group that may still run, which a person checks.
+# group that may still run: halt removes it when it proves the group gone as
+# session.pl does, by a boot that is not this one or a ps that shows no
+# process in the group, and otherwise a person checks it.
 halt='
 st=$1
 case $st in "~"*) st=$HOME${st#"~"} ;; esac
@@ -99,6 +103,25 @@ held() {
     perl -MFcntl=:flock -e '"'"'open(L, "<", shift) or exit($!{ENOENT} ? 1 : 0);
         exit(flock(L, LOCK_SH | LOCK_NB) ? 1 : 0)'"'"' "$1"
 }
+# gone RECORD: succeed when the group that RECORD, `GROUP BOOT`, names is
+# proved gone, as session.pl proves it.
+gone() {
+    perl -e '"'"'
+        open(R, "<", $ARGV[0]) or exit 1;
+        my ($g, $b) = split(" ", <R> // "");
+        my $n = "";
+        if (open(B, "<", "/proc/sys/kernel/random/boot_id")) {
+            $n = <B>;
+        } elsif ($^O eq "darwin") {
+            $n = `/usr/sbin/sysctl -n kern.bootsessionuuid 2> /dev/null`;
+        }
+        chomp $n;
+        exit 0 if defined $b && $b ne "-" && $n ne "" && $b ne $n;
+        defined $g && $g =~ /^\d+$/ or exit 1;
+        my @ps = `ps -A -o pgid=`;
+        exit 1 if $? != 0;
+        exit((grep { /^\s*(\d+)\s*$/ && $1 == $g } @ps) ? 1 : 0)'"'"' "$1"
+}
 i=0
 while { held "$st/session.live" || held "$st/loop.live"; } && [ "$i" -lt 90 ]; do
     sleep 1
@@ -106,8 +129,8 @@ while { held "$st/session.live" || held "$st/loop.live"; } && [ "$i" -lt 90 ]; d
 done
 if held "$st/session.live"; then
     echo "stop: left: $st: its session.pl has not ended in ninety seconds"
-elif [ -s "$st/session" ]; then
-    echo "stop: left: $st: $st/session names process group $(cat "$st/session"), whose session.pl is gone; a person checks it"
+elif [ -e "$st/session" ] && ! { gone "$st/session" && rm -f "$st/session"; }; then
+    echo "stop: left: $st: $st/session names process group $(cut -d " " -f 1 "$st/session"), whose session.pl was killed, and the group is not proved gone; a person checks it"
 elif held "$st/loop.live"; then
     echo "stop: left: $st: its loop has not ended in ninety seconds"
 else
@@ -461,9 +484,11 @@ stragglers
 [ -z "$github" ] || runners
 sh "$here/board.sh" 'done' > /dev/null 2>&1 || echo "stop: board.sh done failed"
 sh "$here/board.sh" archive > /dev/null 2>&1 || echo "stop: board.sh archive failed"
-if live_release; then
-    sh "$here/sweep.sh"
-else
+# -a only once no run of the release is left, lost ones among them, and
+# every loop's stop is confirmed.
+if [ -z "$(releases)" ] && [ -z "$unsure" ]; then
     sh "$here/sweep.sh" -a
+else
+    sh "$here/sweep.sh"
 fi
 left

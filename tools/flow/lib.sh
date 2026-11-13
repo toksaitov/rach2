@@ -7,8 +7,9 @@
 # and a loop restarts as master's version when master changes it. When the
 # copy fails, STATE/run stays as it was, and the loop logs the failure and
 # tries again a minute later. While a session runs, STATE/session has the id
-# of its process group. STATE is under `build/flow` of the clone's main
-# working tree unless the loop is given another.
+# of its process group and of the boot, as session.pl says. STATE is under
+# `build/flow` of the clone's main working tree unless the loop is given
+# another.
 
 # primary REPO: print the main working tree of the clone REPO, the one whose
 # `.git` the clone's worktrees share, or REPO itself when it is that tree.
@@ -155,13 +156,14 @@ locked()
 }
 
 # wait_session: wait while the supervisor of an earlier loop's session holds
-# STATE/session.live, testing it every half minute, and then remove
-# STATE/session. A loop calls this before it does anything in the clone: a
-# session that outlived the loop that started it, as one does when the loop's
-# tmux session is killed, still has its supervisor, which holds the lock
-# until the session's group is gone, and the clone must not get a second
-# session. A STATE/session that a killed supervisor left names a group that
-# nothing here reads by its number; the lock is free, and it is removed.
+# STATE/session.live, testing it every half minute. A loop calls this before
+# it does anything in the clone: a session that outlived the loop that
+# started it, as one does when the loop's tmux session is killed, still has
+# its supervisor, which holds the lock until the session's group is gone, and
+# the clone must not get a second session. A STATE/session that stays once
+# the lock is free was left by a supervisor that was killed, and its session
+# may still run: it stays, and the next session.pl removes it only once it
+# has proved the group gone, and starts nothing until then.
 wait_session()
 {
     if locked "$state/session.live"; then
@@ -171,7 +173,8 @@ wait_session()
         done
         log "the session of the earlier loop ended"
     fi
-    rm -f "$state/session"
+    [ ! -e "$state/session" ] ||
+        log "$state/session names the group of a supervisor that was killed; the next session starts once it is gone"
 }
 
 # landed REF: succeed when `origin/master` or a branch `origin/milestone/*`
