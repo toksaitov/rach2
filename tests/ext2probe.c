@@ -1386,7 +1386,9 @@ static void xattr_rows(void)
     int form;
 
     fd = syscall3(SYS_OPEN, (long)path, O_CREAT | O_RDWR, 0600);
-    expect_ok(fd, "creating the attribute file");
+    if (fd < 0) {
+        fail_with("creating the attribute file", (int)fd);
+    }
     for (form = 0; form < 3; form++) {
         target = form == 2 ? fd : (long)path;
         expect_ok(syscall5(XA_SET + form, target, (long)name, (long)"ABCD", 4, 1),
@@ -1425,7 +1427,9 @@ static void xattr_rows(void)
     for (form = 0; form < 2; form++) {
         path = form ? "/dev/shm/xa-unsupported" : "/xa-unsupported";
         fd = syscall3(SYS_OPEN, (long)path, O_CREAT | O_RDWR, 0600);
-        expect_ok(fd, "creating an unsupported attribute file");
+        if (fd < 0) {
+            fail_with("creating an unsupported attribute file", (int)fd);
+        }
         if (syscall4(XA_SET + 3, (long)path, (long)name, (long)value, sizeof(value)) != -95 ||
             syscall3(XA_SET + 8, fd, (long)value, sizeof(value)) != 0)
             fail("KRFFS and tmpfs keep their unsupported answers");
