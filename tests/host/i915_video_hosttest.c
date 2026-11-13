@@ -5,6 +5,8 @@
  * i915_cmd_parser.c, judged as Linux 6.12's parser judges batches on
  * Haswell's vcs0 and vecs0.
  *
+ * host-deps: rach2/sys/tick.c
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_irq.c
  * host-deps: rach2/sys/drm/i915/i915_firstlight.c
  * host-deps: rach2/sys/drm/i915/i915_ppgtt.c

@@ -5,6 +5,7 @@
  * Lenovo's HD 4400, whose rings run the requests' commands from memory and
  * whose GEN6_GDRST resets them.
  *
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_hangcheck.c
  * host-deps: rach2/sys/drm/i915/i915_reset.c
  * host-deps: rach2/sys/drm/i915/i915_gpu_error.c

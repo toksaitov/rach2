@@ -4,6 +4,8 @@
  * host model of the Lenovo's HD 4400, whose rings run the driver's
  * commands from memory and whose interrupt registers raise its message.
  *
+ * host-deps: rach2/sys/tick.c
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_irq.c
  * host-deps: rach2/sys/drm/i915/i915_firstlight.c
  * host-deps: rach2/sys/drm/i915/i915_ppgtt.c

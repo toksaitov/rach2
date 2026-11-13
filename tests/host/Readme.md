@@ -517,10 +517,12 @@ The virtual channel rows of `dsp_hosttest.c` also cover two readers receiving th
 
 `kvmguest_hosttest` models the guest's KVM records: independent feature setup, per-CPU EOI word registration and local and remote steal-time reads.
 
-`itco_hosttest`'s elapsed rows check irregular service spans, zero elapsed time, the open deadline, and the next service across a tick-count wrap. The ordinary run ends with them, and `--elapsed-only` runs them alone. `timercal_hosttest --idle` also checks the guest's 4 ms scheduler phase and an independent 1 ms event.
+`itco_hosttest`'s elapsed rows check irregular service spans, zero elapsed time, the open deadline, and the next service across a tick-count wrap. The ordinary run ends with them, and `--elapsed-only` runs them alone. `timercal_hosttest --idle` also checks the physical/guest 4 ms scheduler phase and an independent 1 ms event.
 
 `process_timer_hosttest --fine-alarm` runs its fine-alarm rows alone: expiry and posting without a coarse tick, nanosecond readback, phase after late signal consumption and units preserved by exec. The ordinary run includes these rows.
 
 `timercal_hosttest --hz250` runs only its physical/guest common-phase row at the production rate, with a fine event and a stopped idle span. Its other event rows express positions in logical tick units and counts at the model's actual device rate.
 
 `kvm_irq_hosttest --fine-timer` runs only the half-millisecond halted-vCPU deadline and hardware-bound rows, including a synthetic timer with no APIC timer armed. `kvm_svm_hosttest --fine-timer` runs only the software-event arming row. Their ordinary runs include these new rows.
+
+`i915_base_hosttest --fine-forcewake` runs only its new two-millisecond forcewake release row, with the monotonic clock independent of HZ and the deadline published after the register lock. The shared i915 clock fixture uses explicit milliseconds for these driver rows.

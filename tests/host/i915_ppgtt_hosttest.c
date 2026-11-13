@@ -4,6 +4,8 @@
  * walk the PPGTT from the directory their registers name and run batches
  * through it.
  *
+ * host-deps: rach2/sys/tick.c
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_irq.c rach2/sys/drm/i915/i915_ppgtt.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
  * host-deps: rach2/sys/drm/i915/i915_gtt.c rach2/sys/drm/i915/i915_hw.c

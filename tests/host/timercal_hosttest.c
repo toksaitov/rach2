@@ -1273,10 +1273,10 @@ static void idle_guest_period(void)
         apic_timer_start(TICK_NS, TICK_HZ);
         CHECK(timer_tick_period() == 1, "one logical tick per scheduler period");
         now_ns = EDGE(10001.2);
-        timer_wake_at((int64_t)EDGE(10001.7));
+        timer_wake_at((int64_t)now_ns + 1000000);
         CHECK(c->oneshot && c->tick == (int64_t)EDGE(10002),
               "a fine event joins the common four-millisecond phase");
-        now_ns = EDGE(10001.7);
+        now_ns = EDGE(10001.2) + 1000000u;
         CHECK(take_hr_event(APIC_TIMER_VECTOR) == APIC_HR_EVENT,
               "a fine event takes no future scheduler tick");
         now_ns = EDGE(10002);

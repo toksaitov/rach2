@@ -5,6 +5,7 @@
  * pcode answers its mailbox, and whose interrupt registers raise the up
  * and down interrupts.
  *
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_rc6.c rach2/sys/drm/i915/i915_rps.c
  * host-deps: rach2/sys/drm/i915/i915_irq.c rach2/sys/drm/i915/i915_uncore.c
  * host-deps: rach2/sys/drm/i915/i915_hw.c tests/host/i915_model.c
@@ -318,7 +319,8 @@ static void done(struct i915_model *m)
 /** The ticks until forcewake's release timer runs, 0 when it is not armed. */
 static uint32_t fw_left(const struct drm_i915_private *i915)
 {
-    return i915->uncore.timer_armed ? i915->uncore.timer_due - (uint32_t)kernel_ticks : 0;
+    return i915->uncore.timer_armed ? (uint32_t)(i915->uncore.timer_due / 1000000u - kernel_ticks)
+                                    : 0;
 }
 
 /** Let `ms` milliseconds pass on the model's clock, the boot processor's

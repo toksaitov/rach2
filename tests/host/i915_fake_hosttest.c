@@ -3,6 +3,7 @@
  * which stands on QEMU's edu device for tests in QEMU, with the driver
  * bound to it through its real probe and bind.
  *
+ * host-deps: tests/host/compat/i915_time_host.c
  * host-deps: rach2/sys/drm/i915/i915_pci.c rach2/sys/drm/i915/i915_hw.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
  * host-deps: rach2/sys/drm/i915/i915_stolen.c rach2/sys/drm/i915/i915_gtt.c

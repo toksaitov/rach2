@@ -4,9 +4,9 @@ The inventory covers every direct `TICK_HZ` use in the kernel after the conversi
 
 | File | Lines | Disposition |
 |---|---|---|
-| `rach2/kernel.c` | 519, 1190, 1194, 1195, 3781 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
+| `rach2/kernel.c` | 581, 1259, 1263, 1264, 3850 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
 | `rach2/sys/arch/x86/alps.c` | 2707 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
-| `rach2/sys/arch/x86/apictimer.c` | 39, 73, 438, 439 | Calibration and reference arithmetic use counts per actual tick. Physical periods, counts and phases scale together; fine events are independent. |
+| `rach2/sys/arch/x86/apictimer.c` | 39, 71, 436, 437 | Calibration and reference arithmetic use counts per actual tick. Physical periods, counts and phases scale together; fine events are independent. |
 | `rach2/sys/arch/x86/iommu/fault.c` | 370 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
 | `rach2/sys/arch/x86/iommu/hw.c` | 187 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
 | `rach2/sys/arch/x86/itco.c` | 578, 580, 720, 727 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
@@ -25,8 +25,11 @@ The inventory covers every direct `TICK_HZ` use in the kernel after the conversi
 | `rach2/sys/block/request.c` | 216, 1498 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
 | `rach2/sys/clock.c` | 99, 100 | NTP interval frequency and fixed-point tick length scale together; USER_HZ stays 100. Fine interpolation uses the rate, not tick invocation count. |
 | `rach2/sys/display/blank.c` | 25, 177 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
+| `rach2/sys/drm/i915/i915.h` | 1641 | The actual rate scales the interval; fine events retain their own nanosecond deadline. |
 | `rach2/sys/drm/i915/i915_debugfs.c` | 341 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
 | `rach2/sys/drm/i915/i915_handoff.c` | 208 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
+| `rach2/sys/drm/i915/i915_pci.c` | 124 | The actual rate scales the interval; fine events retain their own nanosecond deadline. |
+| `rach2/sys/drm/i915/i915_uncore.c` | 223 | Forcewake uses monotonic nanoseconds; an armed release requests millisecond service and publishes its deadline after the register lock. |
 | `rach2/sys/drm/i915/intel_gmbus.c` | 195 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
 | `rach2/sys/drm/i915/intel_pps.c` | 46, 69 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
 | `rach2/sys/drm/vkms.c` | 949, 954 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
@@ -56,12 +59,12 @@ The inventory covers every direct `TICK_HZ` use in the kernel after the conversi
 | `rach2/sys/platform.h` | 64 | Second-based lifetimes or bounded service waits scale by the actual rate; milliseconds use MS_TO_TICKS or multiply before division. |
 | `rach2/sys/proc/coredump.c` | 267 | Seconds and remainders use TICK_HZ and TICK_NS/TICK_US. User clock_t uses tick_clock. Real itimers use nanoseconds. |
 | `rach2/sys/proc/sched.c` | 1653, 1749 | Elapsed accounting and steal time use TICK_NS; load sample is five seconds plus one tick. Slice events use nanoseconds. |
-| `rach2/sys/syscall.c` | 681, 937, 1245, 1424, 1463, 1651, 1874, 2959 | Seconds and remainders use TICK_HZ and TICK_NS/TICK_US. User clock_t uses tick_clock. Real itimers use nanoseconds. |
+| `rach2/sys/syscall.c` | 681, 937, 1245, 1424, 1463, 1651, 1874, 2957 | Seconds and remainders use TICK_HZ and TICK_NS/TICK_US. User clock_t uses tick_clock. Real itimers use nanoseconds. |
 | `rach2/sys/syscall_proc.c` | 3600, 3602 | Seconds and remainders use TICK_HZ and TICK_NS/TICK_US. User clock_t uses tick_clock. Real itimers use nanoseconds. |
 | `rach2/sys/tick.c` | 65, 71, 73, 78 | Multiply before division; seconds and remainders avoid overflowing CPU-time conversion; hundredths round up. |
 | `rach2/sys/timer.h` | 11, 12, 14, 15, 18, 24 | One default rate; upward milliseconds, 100 Hz user units and 4 ms ticks. The two literal clock models explicitly compile at 1000 Hz. |
 | `rach2/sys/tty/tty.c` | 42, 1097, 1166, 1168 | VTIME tenths and console backup fifths divide 250 exactly; service intervals stay in ticks. |
 | `rach2/sys/usb/usb.c` | 565 | Fine polling uses elapsed monotonic milliseconds. Coarse service queries retain the separate millisecond event. |
-| `rach2/sys/watchdog.c` | 213, 227, 589, 1059, 1073, 1197, 1282, 1284, 1468, 1492 | Seconds and accounting ticks scale together. Watchdog samples remain absolute monotonic events and PMU counts use the actual rate. |
+| `rach2/sys/watchdog.c` | 214, 228, 590, 1072, 1086, 1210, 1295, 1297, 1481, 1505 | Seconds and accounting ticks scale together. Watchdog samples remain absolute monotonic events and PMU counts use the actual rate. |
 
-There are 151 direct occurrences in 59 files, including declarations and comments. The search also covered `TICK_NS`, `TICK_US`, `kernel_ticks`, `rtc_ticks_now`, millisecond divisors, and rate-independent numeric tick constants.
+There are 154 direct occurrences in 62 files, including declarations and comments. The search also covered `TICK_NS`, `TICK_US`, `kernel_ticks`, `rtc_ticks_now`, millisecond divisors, and rate-independent numeric tick constants.
