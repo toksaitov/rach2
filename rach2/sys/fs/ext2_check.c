@@ -34,9 +34,10 @@
  * not match the entries, a block of the volume's tables or a reached inode
  * the bitmap calls free. The volume mounts writable all the same, as
  * Linux's ext2 mounts a volume whose error bit is set with a warning
- * (`ext2_setup_super`). The group descriptors' free counts are recomputed
- * from the bitmaps rather than taken from the disk, since a crash leaves
- * them stale.
+ * (`ext2_setup_super`), once the blocks of a check that stopped are found
+ * again apart from the tree (below). The group descriptors' free counts
+ * are recomputed from the bitmaps rather than taken from the disk, since a
+ * crash leaves them stale.
  *
  * The walk keeps its state on the heap rather than on the stack: the node
  * of each directory level, the hard links and the shared attribute blocks
@@ -47,8 +48,9 @@
  * attribute blocks than its table holds, or hard links the heap cannot
  * record stop the check, which says which: none is a fault of the volume,
  * which mounts writable unchecked, as Linux mounts a volume whose valid
- * bit is clear, and keeps the state that called for the check. Hard-link
- * records are allocated as files are met.
+ * bit is clear, once its blocks are found again (below), and keeps the
+ * state that called for the check. Hard-link records are allocated as
+ * files are met.
  */
 #define EXT2_CHECK_DEPTH        32  /* the directory levels the walk holds */
 #define EXT2_CHECK_LINK_BUCKETS 512 /* the index, not a limit on linked files */
@@ -755,13 +757,253 @@ static void check_report(struct ext2_check *c)
     }
 }
 
+/* ---- the blocks of a check that stopped ---- */
+
+/*
+ * A check that stops, at a fault of the volume or at a limit of its own,
+ * has not compared the bitmaps with the blocks files name, and the walk's
+ * marks are partial: it stopped part way through the tree. Yet the volume
+ * mounts writable, and a block a stop left named by a pointer and free in
+ * its bitmap would go to a second file at the next allocation. So the
+ * blocks are found again apart from the namespace: every inode of the
+ * table is read, and each live one has every block it names marked and
+ * each of its pointer blocks read, whatever its directory or link count
+ * says. Live means a reserved inode below `s_first_ino` other than the
+ * root that names blocks, or any other inode with a mode and a link,
+ * whatever its bit; a deleted inode has no links, as Linux's ext2 leaves
+ * it. Then each group's block bitmap has the bits of the marked blocks set
+ * and its free count recounted, as the full check does.
+ *
+ * Nothing is judged. A block that may not hold data
+ * (`ext2_data_block_ok`) is neither marked nor read, since the allocator
+ * never gives it out; any other block a pointer names is marked, and a
+ * damaged pointer costs no more than the bit of a block e2fsck later frees.
+ * The walk bitmap holds PROTECT_BITS bits a block: whether it is marked,
+ * and whether it was read as a pointer block of each level, so that a block
+ * named many times, by damage, is read at most once at each level, and the
+ * pass reads each block of the volume at most three times however the
+ * pointers are damaged. When that bitmap cannot be had or a read fails,
+ * the mount gives out no block or inode (`em->alloc_withheld`).
+ */
+#define PROTECT_BITS 4
+#define PROTECT_MAX  (0xFFFFFFF0u / PROTECT_BITS) /* blocks the bitmap can number */
+
+/** The heap state of the pass: one inode and one bitmap block. */
+struct ext2_protect {
+    struct ext2_node node;
+    uint8_t bitmap[4096];
+};
+
+/** Mark block `b`, which a live inode names, when it may hold data. */
+static void protect_mark(const struct ext2_mount *em, uint32_t b)
+{
+    if (ext2_data_block_ok(em, b)) {
+        (void)fat_walk_test_set(b * PROTECT_BITS);
+    }
+}
+
+/**
+ * Mark pointer block `b` at `level`, 1 for one that names data, and every
+ * block it names, unless it was read at that level already or may not hold
+ * data. 0, or the read's -errno.
+ */
+static int protect_level(struct ext2_mount *em, uint32_t b, int level)
+{
+    uint32_t per = em->block_size / 4, j;
+    int rc;
+
+    if (!ext2_data_block_ok(em, b)) {
+        return 0;
+    }
+    (void)fat_walk_test_set(b * PROTECT_BITS);
+    if (fat_walk_test_set(b * PROTECT_BITS + (uint32_t)level)) {
+        return 0;
+    }
+    for (j = 0; j < per; j++) {
+        uint8_t raw[4];
+        uint32_t p;
+
+        rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)b * em->block_size + j * 4, raw, 4);
+        if (rc != 0) {
+            return rc;
+        }
+        p = ext2_le32(raw);
+        if (p == 0) {
+            continue;
+        }
+        if (level == 1) {
+            protect_mark(em, p);
+        } else {
+            rc = protect_level(em, p, level - 1);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ * Mark every block inode `n` names when it is live, as the section above
+ * says: its attribute block and, unless it keeps no block pointers (a fast
+ * symbolic link, a device, a pipe or a socket), its direct blocks and
+ * pointer trees. 0, or the read's -errno.
+ */
+static int protect_inode(struct ext2_mount *em, const struct ext2_node *n)
+{
+    uint32_t type = n->mode & S_IFMT_, i;
+    int as_data = n->ino < em->first_ino && n->ino != EXT2_ROOT_INO;
+    int rc;
+
+    if (as_data ? n->blocks == 0 : n->mode == 0 || n->nlink == 0) {
+        return 0;
+    }
+    if (n->file_acl != 0) {
+        protect_mark(em, n->file_acl);
+    }
+    if (!as_data && type != S_IFREG_ && type != S_IFDIR_ &&
+        (type != S_IFLNK_ || ext2_fast_link(em, n))) {
+        return 0;
+    }
+    for (i = 0; i < EXT2_NDIR; i++) {
+        if (n->block[i] != 0) {
+            protect_mark(em, n->block[i]);
+        }
+    }
+    for (i = 0; i < 3; i++) {
+        if (n->block[EXT2_NDIR + i] != 0) {
+            rc = protect_level(em, n->block[EXT2_NDIR + i], (int)i + 1);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ * Set the bit of each marked block that group `g`'s block bitmap calls
+ * free, writing the bitmap when one was set, and recount the group's free
+ * blocks into its descriptor in memory; `*set` gains the bits set. 0, 1
+ * when the bitmap could not be read, or the write's -errno.
+ */
+static int protect_group(struct ext2_mount *em, uint32_t g, uint8_t *bitmap, uint32_t *set)
+{
+    uint8_t *gd = em->gd + g * 32;
+    uint64_t at = (uint64_t)ext2_le32(gd + 0) * em->block_size;
+    uint32_t lo = em->first_data + g * em->bpg;
+    uint32_t free = 0, i;
+    int changed = 0, rc;
+
+    if (ext2_read_bytes(em, READ_QUIET, 0, at, bitmap, em->block_size) != 0) {
+        return 1;
+    }
+    for (i = 0; i < em->bpg && lo + i < em->blocks; i++) {
+        uint8_t bit = (uint8_t)(1u << (i & 7));
+
+        if (!(bitmap[i >> 3] & bit) && fat_walk_marked((lo + i) * PROTECT_BITS)) {
+            bitmap[i >> 3] = (uint8_t)(bitmap[i >> 3] | bit);
+            (*set)++;
+            changed = 1;
+        }
+        if (!(bitmap[i >> 3] & bit)) {
+            free++;
+        }
+    }
+    if (changed) {
+        ext2_group_lock(em, g);
+        rc = ext2_write_bytes(em, at, bitmap, em->block_size,
+                              WRITE_THROUGH | WRITE_KIND(READ_BITMAP));
+        ext2_group_unlock(em, g);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    LE16_PUT(gd + 12, free);
+    return 0;
+}
+
+/**
+ * Find every block a live inode names after a check that stopped, and set
+ * the bits of those the bitmaps call free, as the section above says: the
+ * changed bitmaps written, each group's free block count recounted into
+ * its descriptor and stored, and `em->free_blocks` their sum, logged as
+ * `ext2: check: N blocks named by files were free, marked used` when N is
+ * not 0. When the memory or an inode the pass needs cannot be had, nothing
+ * is set or recounted; when a group's bitmap cannot be read, that group
+ * keeps its bitmap and count and the others are done. Either is logged by
+ * name and sets `em->alloc_withheld`. 0, or the -errno of a failed write.
+ */
+static int check_protect(struct ext2_mount *em)
+{
+    struct ext2_protect *p = 0;
+    const char *why = 0;
+    uint32_t ino, g, set = 0;
+    int counted = 0, rc = 0, got;
+
+    if (em->blocks <= PROTECT_MAX && fat_walk_acquire(em->blocks * PROTECT_BITS) == 0) {
+        p = kzalloc(sizeof(*p));
+        if (!p) {
+            fat_walk_release();
+        }
+    }
+    if (!p) {
+        why = "no memory to find the blocks files name";
+    }
+    for (ino = 1; p && !why && ino <= em->inodes; ino++) {
+        if (ext2_inode_check_load(em, ino, &p->node) != 0 || protect_inode(em, &p->node) != 0) {
+            why = "a read failed while finding the blocks files name";
+        }
+    }
+    if (p && !why) {
+        counted = 1;
+        for (g = 0; g < em->groups; g++) {
+            got = protect_group(em, g, p->bitmap, &set);
+            if (got > 0) {
+                why = "a block bitmap could not be read";
+            } else if (got < 0) {
+                rc = got;
+                break;
+            }
+        }
+    }
+    if (p) {
+        fat_walk_release();
+        kfree(p);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (counted) {
+        em->free_blocks = 0;
+        for (g = 0; g < em->groups; g++) {
+            em->free_blocks += ext2_le16(em->gd + g * 32 + 12);
+            ext2_group_lock(em, g);
+            rc = ext2_gd_store(em, g);
+            ext2_group_unlock(em, g);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    if (set != 0) {
+        klog(KLOG_WARN, "ext2", "check: %d blocks named by files were free, marked used", (int)set);
+    }
+    if (why) {
+        em->alloc_withheld = 1;
+        klog(KLOG_WARN, "ext2", "check: %s, allocating nothing", why);
+    }
+    return 0;
+}
+
 /**
  * End a check that met its first fault or one of its own limits, `c->fault`:
  * the free counts put back to `free_blocks` and `free_inodes` and the
  * descriptors read again, since the recount may have stopped part way; the
- * fault logged, and the error bit set for a fault of the volume or
- * `em->check_owed` for a limit of the check's, as `check_volume` says.
- * 0, or the read's -errno.
+ * blocks live inodes name found again and their bits set (`check_protect`),
+ * which recounts the free blocks; the fault logged, and the error bit set
+ * for a fault of the volume or `em->check_owed` for a limit of the
+ * check's, as `check_volume` says. 0, or the -errno of a read or write.
  */
 static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t free_inodes)
 {
@@ -772,6 +1014,10 @@ static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t fr
     em->free_inodes = free_inodes;
     rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
                          em->groups * 32);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = check_protect(em);
     if (rc != 0) {
         return rc;
     }
@@ -808,12 +1054,17 @@ static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t fr
  *   longer name them;
  * - a fault is logged as `ext2: check: inode N: WHY` and sets the error
  *   bit in memory, which the mount's write of the superblock puts on the
- *   disk, with the counts as the disk has them, since the recount may have
- *   stopped part way;
- * - a check stopped at one of its own limits is logged by name and sets
- *   `em->check_owed`, with the counts as the disk has them and the state
- *   as it is, so that no unmount marks the volume valid and the next
- *   writable mount checks it again.
+ *   disk, with the free inode counts as the disk has them, since the
+ *   recount may have stopped part way;
+ * - a check stopped at one of its own limits, its workspace among them, is
+ *   logged by name and sets `em->check_owed`, with the free inode counts as
+ *   the disk has them and the state as it is, so that no unmount marks the
+ *   volume valid and the next writable mount checks it again.
+ *
+ * A check that stops either way first finds every block a live inode names
+ * apart from the tree and sets the bits of those the bitmaps call free,
+ * recounting the free blocks (`check_protect`), or, when it cannot, sets
+ * `em->alloc_withheld`, so that the mount gives out nothing.
  *
  * The last two log `ext2: mounting with errors, running e2fsck is
  * recommended` or `ext2: mounting unchecked, running e2fsck is
@@ -827,8 +1078,13 @@ static int check_volume(struct ext2_mount *em)
     int rc;
 
     em->check_owed = 0;
+    em->alloc_withheld = 0;
     c = check_state(em);
     if (!c) {
+        rc = check_protect(em);
+        if (rc != 0) {
+            return rc;
+        }
         klog(KLOG_WARN, "ext2", "check: no memory for the %d KiB of workspace the volume needs",
              (int)((fat_walk_bytes(em->blocks) + (em->inodes + 7) / 8 + sizeof(*c)) / 1024));
         em->check_owed = 1;

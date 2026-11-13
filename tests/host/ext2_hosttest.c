@@ -6187,6 +6187,74 @@ static void structural_policy_row(const char *img)
     check(structural_kept(img, was), "and the table's block is as it was, its bit set again");
 }
 
+/**
+ * Mount dirty volumes whose check stops while /hello.txt, which keeps its
+ * name, has lost the bit of its block, as a stop leaves a pointer before
+ * its bit. At a fault, the root's link count, the check must still set the
+ * bit, so that filling the volume gives the block to no other file and
+ * e2fsck after the unmount finds no bitmap difference and no block claimed
+ * twice. On a machine too short of memory to find the blocks at all, the
+ * volume mounts writable but gives out nothing, and a create is EROFS.
+ */
+static void protect_rows(void)
+{
+    const char *img = fix_path("protect.ext2");
+    char script[128];
+    uint64_t bytes;
+    void *n;
+    long blk;
+    int rc;
+
+    build_image(img, 4096, 128, PROFILE, 16, "tree");
+    blk = debugfs_number(img, "blocks /hello.txt", "");
+    snprintf(script, sizeof(script), "sif / links_count 9\nfreeb %ld\n", blk);
+    bytes = dirty_image(img, script);
+    use_image(img, bytes);
+    last_check[0] = 0;
+    last_warn[0] = 0;
+    check_log[0] = 0;
+    rc = mount_rw();
+    if (blk <= 0 || rc != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 ||
+        !strstr(check_log, "check: 1 blocks named by files were free, marked used\n") ||
+        !strstr(last_check, "a directory link count that does not match its entries") ||
+        !streq(last_warn, "mounting with errors, running e2fsck is recommended")) {
+        printf("  block %ld, mount %d, flags 0x%x, check: %s", blk, rc, (unsigned)mnt.flags,
+               check_log);
+        check(0, "a check stopped by a fault still sets the bit of a block a file names");
+    } else {
+        check(1, "a check stopped by a fault still sets the bit of a block a file names");
+    }
+    if (rc != 0) {
+        return;
+    }
+    check(fill_volume() == 0 && unmount_rw() == 0 && disk_state(img) == 2 &&
+              e2fsck_status(img) == 4 &&
+              !ext2_fixture_contains(fix_path("fsck.out"), "Block bitmap differences") &&
+              !ext2_fixture_contains(fix_path("fsck.out"), "Multiply"),
+          "and filling the volume gives that block to no other file");
+
+    bytes = dirty_image(img, script);
+    use_image(img, bytes);
+    check_log[0] = 0;
+    host_free_frames = 0;
+    rc = mount_rw();
+    host_free_frames = 1u << 20;
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(check_log, "check: no memory to find the blocks files name, allocating "
+                                "nothing\n") != 0,
+          "a stopped check without the memory to find the blocks mounts allocating nothing");
+    if (rc != 0) {
+        return;
+    }
+    n = make_file(mnt.root, "new", &rc);
+    check(n == 0 && rc == -EROFS, "and a create there is EROFS");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(unmount_rw() == 0 && disk_state(img) == 0,
+          "and its unmount leaves the valid bit clear for the next mount to check");
+}
+
 /** A volume whose valid bit is clear: checked at a writable mount, mounted
  * unchecked by name when memory is short, and marked valid again only by
  * an unmount that follows a clean check. */
@@ -6231,6 +6299,7 @@ static void dirty_rows(void)
     }
 
     deep_row(img);
+    protect_rows();
 
     bytes = dirty_image(img, "ssv free_blocks_count 1\nssv free_inodes_count 1\n"
                              "set_bg 0 free_blocks_count 1\nset_bg 0 free_inodes_count 1\n");
@@ -8795,6 +8864,7 @@ static const struct {
     {"--cache-partial-only", cache_partial_row},
     {"--xattr-only", xattr_rows},
     {"--dirty-only", dirty_rows},
+    {"--protect-only", protect_rows},
     {"--readonly-only", readonly_rows},
     {"--ftype-only", ftype_rows},
     {"--removal-only", removal_rows},
