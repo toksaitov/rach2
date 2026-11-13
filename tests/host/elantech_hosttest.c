@@ -2514,7 +2514,7 @@ static void reconnect_rows(void)
     irq_feed(NULL, 30);
     CHECK("the fifth in a row stops the port and asks for a reconnect",
           state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT && last_warning &&
-              strcmp(last_warning, "sync: %d bad packets in a row: reconnecting") == 0);
+              strcmp(last_warning, "sync: %u bad packets in a row: reconnecting") == 0);
     irq_byte(v3_finger[0]);
     CHECK("the port then drops every byte", etd_pktcnt == 0);
     n_took = 0;

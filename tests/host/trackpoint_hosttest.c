@@ -2113,7 +2113,7 @@ static void reset_rows(void)
     irq_byte(0x08);
     CHECK("the fifth stops the port and asks for a reconnect",
           state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT &&
-              starts_with(last_warning, "sync: %d bad packets in a row"));
+              starts_with(last_warning, "sync: %u bad packets in a row"));
     pad_packet(3000, 3000, 50, 8, 0, 0);
     take(&pad_w);
     CHECK("a packet after it is dropped", n_got == 0 && pktcnt == 0);
@@ -2272,7 +2272,7 @@ static void mouse_sync_rows(void)
     }
     CHECK("the fifth in a row stops the port and asks for a reconnect",
           state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT &&
-              starts_with(last_warning, "sync: %d bad packets in a row"));
+              starts_with(last_warning, "sync: %u bad packets in a row"));
     irq_byte(0x08);
     CHECK("the port then drops every byte", packet_index == 0);
     dev = mouse_dev;
