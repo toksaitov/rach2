@@ -15756,6 +15756,8 @@ static int32_t copy_pos_done(fd_entry_t *e, uintptr_t uoff, int narrow, uint64_t
     return 0;
 }
 
+static long splice_file(const isr_params_t *params, fd_entry_t *in, fd_entry_t *out);
+
 /**
  * splice(2): move up to the length in argument 4 between the descriptors in
  * arguments 0 and 2, at least one of them a pipe, with the offsets at the
@@ -15769,6 +15771,13 @@ static int32_t copy_pos_done(fd_entry_t *e, uintptr_t uoff, int narrow, uint64_t
  * argument 1, or from and past the description's (`copy_from_file`). A
  * pipe end is waited on unless SPLICE_F_NONBLOCK or its description's
  * O_NONBLOCK; the other flags change nothing.
+ *
+ * The call runs without the big lock, as read(2) and write(2) do, and
+ * takes it for a move to or from anything but a pipe (`splice_file`): pipe
+ * to pipe needs only the pipes' locks, and a holder of the big lock that
+ * waits for the next write would spin only while no other processor wants
+ * the lock (`bkl_spin_ok`), so GNU cat, which splices its input pipe into a
+ * pipe of its own, would sleep for each of the writer's records.
  *
  * Returns the bytes moved, 0 for a length of 0 or an empty pipe with no
  * writer, or a negative errno, in Linux's order: -EINVAL for an unknown
@@ -15789,9 +15798,7 @@ long sys_splice(isr_params_t *params)
     uint32_t flags = (uint32_t)SC_ARG(params, 5);
     int nonblock = (flags & SPLICE_F_NONBLOCK) != 0;
     fd_entry_t *in, *out;
-    uint64_t pos = 0;
-    int32_t rc;
-    char *buf;
+    long rc;
 
     if (len == 0) {
         return 0;
@@ -15816,6 +15823,29 @@ long sys_splice(isr_params_t *params)
     if (pipe_is(in) && pipe_is(out)) {
         return pipe_tee(in, out, len, nonblock || copy_nonblock(in) || copy_nonblock(out), 1);
     }
+    bkl_enter();
+    rc = splice_file(params, in, out);
+    bkl_exit();
+    return rc;
+}
+
+/**
+ * The part of splice(2) in `params` whose ends are a pipe and something
+ * else, the descriptors `in` and `out`, which `sys_splice` has looked up
+ * and checked with the call's flags and length. Called under the big lock.
+ * Returns what `sys_splice` does.
+ */
+static long splice_file(const isr_params_t *params, fd_entry_t *in, fd_entry_t *out)
+{
+    uintptr_t uoff_in = SC_ARG(params, 1);
+    int fd_out = (int)SC_ARG(params, 2);
+    uintptr_t uoff_out = SC_ARG(params, 3);
+    uint32_t len = USER_RW_LEN(SC_ARG(params, 4));
+    int nonblock = (SC_ARG(params, 5) & SPLICE_F_NONBLOCK) != 0;
+    uint64_t pos = 0;
+    int32_t rc;
+    char *buf;
+
     if (pipe_is(in)) {
         if (out->ofd && (out->ofd->status_flags & OFD_APPEND)) {
             return -EINVAL;
@@ -15871,7 +15901,8 @@ long sys_splice(isr_params_t *params)
  * does. Returns the bytes copied, 0 for a length of 0 or an empty pipe with
  * no writer, or a negative errno: -EINVAL for an unknown flag, -EBADF for a
  * descriptor not open for its direction, -EINVAL for a descriptor that is no
- * pipe or one pipe at both ends, or the pipes' errors.
+ * pipe or one pipe at both ends, or the pipes' errors. It runs without the
+ * big lock, as a splice between pipes does.
  */
 long sys_tee(isr_params_t *params)
 {
