@@ -6938,9 +6938,11 @@ static int dir_seek_size(fd_entry_t *entry, long long off, int whence, long long
  * SEEK_SET takes any offset and SEEK_CUR adds to it modulo 2^64, as Linux's
  * mem_lseek stores either in its unsigned f_pos (fs/proc/base.c), and a read
  * past the machine's addresses is then -EIO (`procfs_mem_access`). Another
- * `whence` is -EINVAL, and an offset past `limit`, the largest the call can
- * return, -EOVERFLOW, as Linux's lseek answers when its result does not fit.
- * The offset is stored under the description's lock and returned in `*out`.
+ * `whence` is -EINVAL. The offset is stored under the description's lock
+ * and returned in `*out`. A call whose result is 64 bits, `limit` 2^63-1,
+ * returns any position, as Linux's mem_lseek forces its result to count as
+ * a success; past a smaller `limit`, i686's lseek, the position is stored
+ * and the call is -EOVERFLOW, as Linux's ksys_lseek answers after the seek.
  */
 static int seek_mem(fd_entry_t *entry, long long off, int whence, uint64_t limit, long long *out)
 {
@@ -6955,10 +6957,10 @@ static int seek_mem(fd_entry_t *entry, long long off, int whence, uint64_t limit
     }
     fd_ofd_lock(entry->ofd);
     at = (uint64_t)off + (whence == 1 ? entry->ofd->offset : 0);
-    if (at > limit) {
+    entry->ofd->offset = at;
+    if (limit < 0x7FFFFFFFFFFFFFFFull && at > limit) {
         rc = -EOVERFLOW;
     } else {
-        entry->ofd->offset = at;
         *out = (long long)at;
     }
     fd_ofd_unlock(entry->ofd);
