@@ -222,8 +222,13 @@ An access to a page wholly past the end raises
 A truncation takes the pages past the new end out of every mapping.
 Writeback zeros the page's tail past EOF before a later growth can expose
 it as file data.
-A page stays marked until a write of it succeeds with no writable
-mapping of the file left, or a truncation frees it.
+A write-back first makes the page read-only in every mapping, then
+clears its mark and writes it, so the next store faults and marks it
+again, and each write-back writes only the pages stored since their last
+write, as on Linux.
+A page whose write fails stays marked, and so does a page a device holds
+pinned, which each write-back writes again until the pin goes.
+A truncation clears the marks of the pages it frees.
 A page that cannot go back when its last mapping goes stays in memory
 with its file open until a later
 .Xr sync 2 ,

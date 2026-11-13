@@ -67,12 +67,15 @@ int filemap_in_memory(const struct vm_file *f);
  * from the file at a page's first touch and written back to it by
  * `filemap_sync_file`, by `msync`, by sync(2), by the flusher, and when the
  * last mapping through a descriptor open for writing goes. A page keeps a
- * dirty bit from a store's first fault until a write of it succeeds with no
- * such mapping left, and the pages go once the file has no mapping and no
- * dirty page: until then the last such mapping's descriptor stays the
- * pages' own, and every later write-back writes through it. A device that
- * has gone, a mount no namespace sees and an unmount drop what cannot be
- * written (`filemap_unmount`). NULL when the heap has no room.
+ * dirty bit from a store's fault until a write-back, which first takes
+ * write access from every entry that maps the page, so that the next store
+ * faults and sets the bit again, and each write-back writes only the pages
+ * stored since their last write; a failed write keeps the bit, and so does
+ * a write of a page a device holds. The pages go once the file has no
+ * mapping and no dirty page: until then the last such mapping's descriptor
+ * stays the pages' own, and every later write-back writes through it. A
+ * device that has gone, a mount no namespace sees and an unmount drop what
+ * cannot be written (`filemap_unmount`). NULL when the heap has no room.
  */
 struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 
