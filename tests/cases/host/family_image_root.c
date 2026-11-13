@@ -61,6 +61,8 @@ int family_image_root_make(struct fixture *f, const char *target, const char *op
         a[n++] = ignored[i];
     }
     a[n++] = "PROGS=conloadprobe";
+    /* TinyCC has no -m32; the fixture's manifests stage no ia32 probe. */
+    a[n++] = "IA32_PROGS=";
     a[n++] = "DEMO_CREDS=";
     a[n++] = "MAN_ALL=";
     a[n++] = "LIBC_STAMP=vendor/musl/.stamp";
