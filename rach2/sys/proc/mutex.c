@@ -333,13 +333,13 @@ int mutex_trylock(struct mutex *m)
     return 1;
 }
 
-/** Before the first thread nothing sleeps and no other processor runs, so
- * the take is tried in place. */
-void mutex_lock(struct mutex *m)
+/** Take `m` for `mutex_lock` or `mutex_lock_nested`, which have told the
+ * lock checker of the take. Before the first thread nothing sleeps and no
+ * other processor runs, so the take is tried in place. */
+static void mutex_lock_held(struct mutex *m)
 {
     struct mutex_wait w;
 
-    DEP_ACQUIRE(&m->dep);
     if (mutex_take(m) || mutex_spin(m)) {
         return;
     }
@@ -351,6 +351,21 @@ void mutex_lock(struct mutex *m)
     }
     mutex_wait_init(&w, m, 0);
     (void)wq_wait_event_nointr(&m->wq, mutex_wait_cond, &w);
+}
+
+void mutex_lock(struct mutex *m)
+{
+    DEP_ACQUIRE(&m->dep);
+    mutex_lock_held(m);
+}
+
+void mutex_lock_nested(struct mutex *m, unsigned int subclass)
+{
+#ifdef RACH2_LOCKDEP
+    lockdep_acquire(&m->dep, subclass, LOCKDEP_SLEEPING, DEP_CALLER);
+#endif
+    (void)subclass;
+    mutex_lock_held(m);
 }
 
 /**

@@ -53,11 +53,31 @@ static void wq_lock(wait_queue_t *wq)
     wq->lock.locked = 1;
     wq_host_held++;
 }
+/** Mark the lock of `wq` held, as the `nest`th of its class. */
+static void wq_lock_nested(wait_queue_t *wq, unsigned int nest)
+{
+    (void)nest;
+    wq_lock(wq);
+}
 /** Mark the lock of `wq` free and count it gone. */
 static void wq_unlock(wait_queue_t *wq)
 {
     wq->lock.locked = 0;
     wq_host_held--;
+}
+/* The host has one processor and no interrupt: the free lock is a word. */
+static struct spinlock wq_free_lock;
+/** Mark `wq_free_lock` held: no flags to restore. */
+static uint32_t free_lock(void)
+{
+    wq_free_lock.locked = 1;
+    return 0;
+}
+/** Mark `wq_free_lock` free. */
+static void free_unlock(uint32_t flags)
+{
+    (void)flags;
+    wq_free_lock.locked = 0;
 }
 /** Make `p` ready and woken if it is blocked: the processor it ran on, to
  * interrupt, or -1. */
@@ -114,10 +134,40 @@ static void wq_lock(wait_queue_t *wq)
     spin_lock(&wq->lock);
 }
 
+/** Take the spinlock of `wq` as the `nest`th of the queues held at once;
+ * interrupts are off. */
+static void wq_lock_nested(wait_queue_t *wq, unsigned int nest)
+{
+#ifdef RACH2_LOCKDEP
+    if (wq->lock.dep.key == NULL) {
+        wq->lock.dep.name = "wq_head->lock";
+        wq->lock.dep.key = &wq_lock_key;
+    }
+#endif
+    spin_lock_nested(&wq->lock, nest);
+}
+
 /** Let the spinlock of `wq` go. */
 static void wq_unlock(wait_queue_t *wq)
 {
     spin_unlock(&wq->lock);
+}
+
+/* Over the queue of each record `wq_entry_add` filed: a removal reads it
+ * and leaves it under this lock, and `wq_wake_free` clears it under this
+ * lock before the queue is freed. It comes before every queue's lock. */
+static struct spinlock wq_free_lock = SPINLOCK_INIT_NAMED("wq_free_lock");
+
+/** Take `wq_free_lock` with interrupts off: the flags to restore. */
+static uint32_t free_lock(void)
+{
+    return spin_lock_irqsave(&wq_free_lock);
+}
+
+/** Let `wq_free_lock` go and restore `flags`. */
+static void free_unlock(uint32_t flags)
+{
+    spin_unlock_irqrestore(&wq_free_lock, flags);
 }
 
 /** Make the woken process `p` ready if it is blocked
@@ -144,13 +194,24 @@ static void wq_kick_add(uint64_t *cpus, int cpu)
 
 void wait_queue_init(wait_queue_t *wq)
 {
+#if defined(RACH2_LOCKDEP) && !defined(WAIT_QUEUE_HOSTTEST)
+    wait_queue_init_key(wq, "wq_head->lock", &wq_lock_key);
+#else
+    wait_queue_init_key(wq, "wq_head->lock", 0);
+#endif
+}
+
+void wait_queue_init_key(wait_queue_t *wq, const char *name, const struct lockdep_key *key)
+{
     int k;
 
+    (void)name;
+    (void)key;
     if (wq) {
         wq->head = NULL;
         wq->lock.locked = 0;
 #if defined(RACH2_LOCKDEP) && !defined(WAIT_QUEUE_HOSTTEST)
-        lockdep_init_map(&wq->lock.dep, "wq_head->lock", &wq_lock_key);
+        lockdep_init_map(&wq->lock.dep, name, key);
 #endif
         for (k = 0; k < WQ_KINDS; k++) {
             wq->wakes[k] = 0;
@@ -328,22 +389,34 @@ int wq_active(const wait_queue_t *wq)
  * `__wake_up_common_lock` walks its list under the head's lock
  * (kernel/sched/wait.c:99-108): a record leaves its queue only under the
  * lock, so a poller's or a stack's record is not read after its owner has
- * let it go. The processors the wakes would interrupt are added to `*cpus`.
+ * let it go. A record with a function stays and has its function called
+ * with `nest`; of the exclusive ones, only those before the first whose
+ * function woke a waiter are called (`__wake_up_common`, wait.c:73-97).
+ * The processors the wakes would interrupt are added to `*cpus`.
  */
-static void wq_wake_locked(wait_queue_t *wq, uint32_t kinds, uint64_t *cpus)
+static void wq_wake_locked(wait_queue_t *wq, uint32_t kinds, unsigned int nest, uint64_t *cpus)
 {
-    struct wq_waiter *w, *next;
+    struct wq_waiter **link = &wq->head;
+    struct wq_waiter *w;
+    int exclusive_done = 0;
     int k;
 
-    w = wq->head;
-    wq->head = NULL;
     for (k = 0; k < WQ_KINDS; k++) {
         if (kinds & (1u << k)) {
             wq->wakes[k]++;
         }
     }
-    for (; w; w = next) {
-        next = w->next;
+    while ((w = *link) != NULL) {
+        if (w->func) {
+            if (!(w->flags & WQ_EXCLUSIVE)) {
+                (void)w->func(w, kinds, nest, cpus);
+            } else if (!exclusive_done) {
+                exclusive_done = w->func(w, kinds, nest, cpus) != 0;
+            }
+            link = &w->next;
+            continue;
+        }
+        *link = w->next;
         w->next = NULL;
         if (w->proc && w->proc->state == PROC_BLOCKED) {
             wq_kick_add(cpus, wq_ready(w->proc));
@@ -367,7 +440,7 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     }
     flags = irq_save();
     wq_lock(wq);
-    wq_wake_locked(wq, kinds, &cpus);
+    wq_wake_locked(wq, kinds, 0, &cpus);
     wq_unlock(wq);
     wq_kick(cpus);
     irq_restore(flags);
@@ -382,7 +455,7 @@ void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus)
     }
     flags = irq_save();
     wq_lock(wq);
-    wq_wake_locked(wq, WQ_ALL, cpus);
+    wq_wake_locked(wq, WQ_ALL, 0, cpus);
     wq_unlock(wq);
     irq_restore(flags);
 }
@@ -394,7 +467,7 @@ void wq_complete(wait_queue_t *wq, volatile int *done)
 
     wq_lock(wq);
     *done = 1;
-    wq_wake_locked(wq, WQ_ALL, &cpus);
+    wq_wake_locked(wq, WQ_ALL, 0, &cpus);
     wq_unlock(wq);
     wq_kick(cpus);
     irq_restore(flags);
@@ -403,7 +476,8 @@ void wq_complete(wait_queue_t *wq, volatile int *done)
 /**
  * The sleeper is taken off the queue under its lock before its wake, as
  * `wq_wake_locked` takes each, and goes back on at the tail when it files
- * itself again; a poller's record, which has no process, is passed over.
+ * itself again; a record with a wake function, a poller's or an epoll
+ * registration's, is passed over.
  */
 void wq_wake_first(wait_queue_t *wq, void (*fn)(struct process *first, void *arg), void *arg)
 {
@@ -417,7 +491,7 @@ void wq_wake_first(wait_queue_t *wq, void (*fn)(struct process *first, void *arg
     flags = irq_save();
     wq_lock(wq);
     for (link = &wq->head; *link; link = &(*link)->next) {
-        if ((*link)->proc) {
+        if ((*link)->proc && !(*link)->func) {
             w = *link;
             break;
         }
@@ -448,6 +522,76 @@ void wq_wake_proc(process_t *p)
     wq_kick_add(&cpus, wq_ready(p));
     wq_kick(cpus);
     irq_restore(flags);
+}
+
+int wq_ready_deferred(process_t *p, uint64_t *cpus)
+{
+    int cpu;
+
+    if (p->state != PROC_BLOCKED) {
+        return 0;
+    }
+    cpu = wq_ready(p);
+    wq_kick_add(cpus, cpu);
+    return 1;
+}
+
+void wq_wake_nested(wait_queue_t *wq, uint32_t kinds, unsigned int nest, uint64_t *cpus)
+{
+    wq_lock_nested(wq, nest);
+    wq_wake_locked(wq, kinds, nest, cpus);
+    wq_unlock(wq);
+}
+
+void wq_entry_add(wait_queue_t *wq, struct wq_waiter *w)
+{
+    uint32_t flags = irq_save();
+
+    wq_lock(wq);
+    w->wq = wq;
+    wq_enqueue(wq, w);
+    wq_unlock(wq);
+    irq_restore(flags);
+}
+
+void wq_entry_remove(struct wq_waiter *w)
+{
+    uint32_t flags = free_lock();
+    wait_queue_t *wq = w->wq;
+
+    if (wq) {
+        wq_lock(wq);
+        wq_dequeue(wq, w);
+        wq_unlock(wq);
+        w->wq = NULL;
+    }
+    free_unlock(flags);
+}
+
+/** The records leave the queue before the queue's lock is let go, and no
+ * function runs after: a caller that frees the queue once this returns
+ * leaves no record pointing at it. */
+void wq_wake_free(wait_queue_t *wq)
+{
+    struct wq_waiter **link = &wq->head;
+    struct wq_waiter *w;
+    uint64_t cpus = 0;
+    uint32_t flags = free_lock();
+
+    wq_lock(wq);
+    while ((w = *link) != NULL) {
+        if (!w->func) {
+            link = &w->next;
+            continue;
+        }
+        (void)w->func(w, WQ_FREE, 0, &cpus);
+        *link = w->next;
+        w->next = NULL;
+        w->wq = NULL;
+    }
+    wq_unlock(wq);
+    free_unlock(flags);
+    wq_kick(cpus);
 }
 
 uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds)
