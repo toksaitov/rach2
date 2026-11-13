@@ -729,9 +729,13 @@ static int32_t i915_fence_wait(struct dma_fence *fence, int intr, int64_t deadli
 
 /* Linux's i915_fence_ops (i915_request.c:173-180); the fence is the
  * request's first member, and its last reference frees the request. */
-const struct dma_fence_ops i915_fence_ops = {i915_fence_driver,           i915_fence_timeline,
-                                             i915_fence_enable_signaling, 0,
-                                             i915_fence_signaled,         i915_fence_wait};
+const struct dma_fence_ops i915_fence_ops = {i915_fence_driver,
+                                             i915_fence_timeline,
+                                             i915_fence_enable_signaling,
+                                             0,
+                                             i915_fence_signaled,
+                                             i915_fence_wait,
+                                             0};
 
 /**
  * Signal `rq`, which is on `e`'s list, complete, and not yet past the

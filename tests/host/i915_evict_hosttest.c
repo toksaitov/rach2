@@ -1188,7 +1188,7 @@ int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeo
 
 /* The driver's fences, i915_request.c's; no fence here is a request whose
  * breadcrumb a chip writes, so each signals only when a row signals it. */
-const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0, 0};
 
 int main(void)
 {

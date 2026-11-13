@@ -42,7 +42,7 @@ static const char *sw_timeline_name(struct dma_fence *f)
 }
 
 static const struct dma_fence_ops sw_ops = {
-    sw_driver_name, sw_timeline_name, NULL, NULL, NULL, NULL};
+    sw_driver_name, sw_timeline_name, NULL, NULL, NULL, NULL, 0};
 
 /** Complete every point reached, detaching it before callbacks can run. */
 static void sw_advance(struct sw_timeline *t, uint32_t increment, int close)
@@ -50,7 +50,7 @@ static void sw_advance(struct sw_timeline *t, uint32_t increment, int close)
     struct sw_point **p = &t->points, *point;
     t->value += increment;
     while ((point = *p) != NULL) {
-        if (close || (int32_t)(t->value - (uint32_t)point->fence.seqno) >= 0) {
+        if (close || !dma_fence_seqno_is_later(point->fence.seqno, t->value, &sw_ops)) {
             *p = point->next;
             point->next = NULL;
             if (close)

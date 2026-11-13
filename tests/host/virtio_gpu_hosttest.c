@@ -910,8 +910,8 @@ void drm_dev_unplug(struct drm_device *d)
 }
 #endif
 
-static const struct dma_fence_ops model_fence_ops = {fence_driver, fence_timeline, NULL,
-                                                     NULL,         NULL,           NULL};
+static const struct dma_fence_ops model_fence_ops = {fence_driver, fence_timeline, NULL, NULL,
+                                                     NULL,         NULL,           0};
 
 /** The first unsignalled fence of `resv`, held, or a signalled one; NULL
  * when that cannot be allocated, as the kernel's gives for no memory. */

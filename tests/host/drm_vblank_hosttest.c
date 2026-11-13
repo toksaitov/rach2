@@ -939,7 +939,7 @@ static void plane_fence_release(struct dma_fence *fence)
 }
 
 static const struct dma_fence_ops plane_fence_ops = {
-    NULL, NULL, plane_fence_enable, plane_fence_release, plane_fence_signaled, NULL};
+    NULL, NULL, plane_fence_enable, plane_fence_release, plane_fence_signaled, NULL, 0};
 
 /** Signal an engine's completion while its interrupt locks are held. */
 static void plane_fence_signal(struct plane_fence *f)

@@ -69,6 +69,29 @@ void dma_fence_init(struct dma_fence *f, const struct dma_fence_ops *ops, uint64
     wait_queue_init(&f->wq);
 }
 
+/** Order two seqnos of one timeline by its producer's width, as Linux's
+ * __dma_fence_is_later (include/linux/dma-fence.h). */
+int dma_fence_seqno_is_later(uint64_t f1, uint64_t f2, const struct dma_fence_ops *ops)
+{
+    if (ops && ops->use_64bit_seqno)
+        return f1 > f2;
+    return (int32_t)((uint32_t)f1 - (uint32_t)f2) > 0;
+}
+
+/** Order two fences of one context, as Linux's dma_fence_is_later. */
+int dma_fence_is_later(struct dma_fence *f1, struct dma_fence *f2)
+{
+    if (f1->context != f2->context)
+        return 0;
+    return dma_fence_seqno_is_later(f1->seqno, f2->seqno, f1->ops);
+}
+
+/** Whether `f1` is `f2` or later, as Linux's dma_fence_is_later_or_same. */
+int dma_fence_is_later_or_same(struct dma_fence *f1, struct dma_fence *f2)
+{
+    return f1 == f2 || dma_fence_is_later(f1, f2);
+}
+
 /** Take a fence reference, allowing NULL. Any context. */
 struct dma_fence *dma_fence_get(struct dma_fence *f)
 {
@@ -412,9 +435,13 @@ static int array_signaled(struct dma_fence *f)
     return 1;
 }
 
-static const struct dma_fence_ops array_ops = {array_driver_name,      array_timeline_name,
-                                               array_enable_signaling, array_release,
-                                               array_signaled,         NULL};
+static const struct dma_fence_ops array_ops = {array_driver_name,
+                                               array_timeline_name,
+                                               array_enable_signaling,
+                                               array_release,
+                                               array_signaled,
+                                               NULL,
+                                               0};
 
 static const struct dma_fence_ops chain_ops;
 
@@ -560,7 +587,8 @@ struct dma_fence *dma_fence_at(struct dma_fence *f, uint32_t index)
     return leaf;
 }
 
-/** Build an all-of fence, flattening nested merges and duplicate contexts. */
+/** Build an all-of fence, flattening nested merges and keeping of each
+ * context the leaf that `dma_fence_is_later` puts last. */
 struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
 {
     struct dma_fence_unwrap u;
@@ -596,7 +624,7 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
                 if (a->fences[k]->context == f->context)
                     break;
             if (k < a->count) {
-                if ((int64_t)(f->seqno - a->fences[k]->seqno) <= 0)
+                if (!dma_fence_is_later(f, a->fences[k]))
                     continue;
                 dma_fence_put(a->fences[k]);
             } else if (a->count < total)
@@ -807,9 +835,13 @@ static void chain_release(struct dma_fence *f)
     kfree(c);
 }
 
-static const struct dma_fence_ops chain_ops = {chain_driver_name,      chain_timeline_name,
-                                               chain_enable_signaling, chain_release,
-                                               chain_signaled,         NULL};
+static const struct dma_fence_ops chain_ops = {chain_driver_name,
+                                               chain_timeline_name,
+                                               chain_enable_signaling,
+                                               chain_release,
+                                               chain_signaled,
+                                               NULL,
+                                               1};
 
 /** Allocate a chain record for dma_fence_chain_init. */
 struct dma_fence_chain *dma_fence_chain_alloc(void)
@@ -824,7 +856,7 @@ void dma_fence_chain_init(struct dma_fence_chain *c, struct dma_fence *prev,
 {
     struct dma_fence_chain *p = to_dma_fence_chain(prev);
     uint64_t context, prev_seqno = 0;
-    if (p && seqno > prev->seqno) {
+    if (p && dma_fence_seqno_is_later(seqno, prev->seqno, prev->ops)) {
         context = prev->context;
         prev_seqno = prev->seqno;
     } else {
@@ -894,7 +926,7 @@ static const char *stub_name(struct dma_fence *f)
     return "stub";
 }
 
-static const struct dma_fence_ops stub_ops = {stub_name, stub_name, NULL, NULL, NULL, NULL};
+static const struct dma_fence_ops stub_ops = {stub_name, stub_name, NULL, NULL, NULL, NULL, 0};
 
 /* The shared stub, and the lock over its making, as Linux's
  * dma_fence_stub and dma_fence_stub_lock (drivers/dma-buf/dma-fence.c:27-28

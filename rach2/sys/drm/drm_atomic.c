@@ -2457,7 +2457,7 @@ static const char *crtc_fence_timeline(struct dma_fence *fence)
 }
 
 static const struct dma_fence_ops crtc_fence_ops = {
-    crtc_fence_driver, crtc_fence_timeline, NULL, NULL, NULL, NULL};
+    crtc_fence_driver, crtc_fence_timeline, NULL, NULL, NULL, NULL, 0};
 
 /** Append the string `src` to `out` of `cap` bytes at `*at`, cut to fit. */
 static void put_str(char *out, uint32_t cap, uint32_t *at, const char *src)
