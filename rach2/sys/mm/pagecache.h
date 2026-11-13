@@ -66,7 +66,8 @@ uint32_t pc_resident(void);
  * previous backing had dirty pages calls `pc_sync` first. NULL functions and
  * a size of 0 take the backing away. `fs_size` is clamped to
  * `pc_window_size()` and rounded up to a whole page; a window fault at or
- * past that bound is a wild pointer the fault handler panics on.
+ * past that bound is a wild pointer the fault handler panics on. A failure
+ * held for `pc_on_failure`, a previous backing's, is dropped.
  */
 void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
 
@@ -76,7 +77,10 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
  * eviction, so that the file system the window holds records the failure
  * for its syncs to report: the page stays dirty, and a later write of it
  * that succeeds would otherwise hide the failure. `failed` may be called
- * with interrupts off, from a page fault; NULL calls nothing.
+ * with interrupts off, from a page fault; NULL calls nothing. A write that
+ * fails before a hook is installed, such as the boot's write of the root's
+ * orphan repair before the root is mounted, is held, the last one's answer,
+ * and `failed` is called with it here, so that the root's syncs report it.
  */
 void pc_on_failure(void (*failed)(int rc));
 
