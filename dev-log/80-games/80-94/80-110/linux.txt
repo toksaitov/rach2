@@ -1,0 +1,6 @@
+sleep 2
+cat /proc/interrupts
+tar cf - /opt/proton | cat > /dev/null
+cat /proc/interrupts
+tar cf - /opt/proton | cat > /dev/null
+cat /proc/interrupts

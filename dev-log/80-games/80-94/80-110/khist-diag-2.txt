@@ -1,0 +1,73 @@
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      31210, ecx:       2059 } hitcount:          3
+
+Totals:
+    Hits: 3
+    Entries: 1
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      31210, ecx:       2059 } hitcount:         22
+{ common_pid:      31211, ecx:       2059 } hitcount:          1
+
+Totals:
+    Hits: 23
+    Entries: 2
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      31210, ecx:       2059 } hitcount:       1389
+{ common_pid:      31211, ecx:       2059 } hitcount:        798
+{ common_pid:      31212, ecx:       2059 } hitcount:         69
+{ common_pid:      31213, ecx:       2059 } hitcount:          1
+
+Totals:
+    Hits: 2257
+    Entries: 4
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      31210, ecx:       2059 } hitcount:         11
+
+Totals:
+    Hits: 11
+    Entries: 1
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      31210, ecx:       2059 } hitcount:        384
+{ common_pid:      31211, ecx:       2059 } hitcount:        242
+{ common_pid:      31212, ecx:       2059 } hitcount:        139
+{ common_pid:      31213, ecx:       2059 } hitcount:         27
+
+Totals:
+    Hits: 792
+    Entries: 4
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      31210, ecx:       2059 } hitcount:          2
+
+Totals:
+    Hits: 2
+    Entries: 1
+    Dropped: 0

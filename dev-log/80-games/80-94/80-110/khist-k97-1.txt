@@ -1,0 +1,93 @@
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      18995, ecx:       1760 } hitcount:         29
+{ common_pid:      18995, ecx:       2059 } hitcount:          4
+{ common_pid:      18997, ecx:       1760 } hitcount:          5
+{ common_pid:      18998, ecx:       1760 } hitcount:          5
+{ common_pid:      18999, ecx:       1760 } hitcount:          5
+
+Totals:
+    Hits: 48
+    Entries: 5
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      18995, ecx:       2059 } hitcount:          3
+{ common_pid:      18995, ecx:       1760 } hitcount:         24
+{ common_pid:      18997, ecx:       1760 } hitcount:          2
+{ common_pid:      18999, ecx:       1760 } hitcount:          3
+
+Totals:
+    Hits: 32
+    Entries: 4
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      18995, ecx:       1760 } hitcount:       1976
+{ common_pid:      18995, ecx:       2059 } hitcount:       1740
+{ common_pid:      18997, ecx:       1760 } hitcount:       2586
+{ common_pid:      18997, ecx:       2059 } hitcount:        666
+{ common_pid:      18998, ecx:       2059 } hitcount:          6
+{ common_pid:      18998, ecx:       1760 } hitcount:        117
+{ common_pid:      18999, ecx:       1760 } hitcount:         24
+{ common_pid:      18999, ecx:       2059 } hitcount:          1
+
+Totals:
+    Hits: 7116
+    Entries: 8
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      18995, ecx:       2059 } hitcount:          2
+{ common_pid:      18995, ecx:       1760 } hitcount:         22
+{ common_pid:      18997, ecx:       1760 } hitcount:         22
+
+Totals:
+    Hits: 46
+    Entries: 3
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      18995, ecx:       1760 } hitcount:        604
+{ common_pid:      18995, ecx:       2059 } hitcount:        261
+{ common_pid:      18997, ecx:       1760 } hitcount:       2700
+{ common_pid:      18997, ecx:       2059 } hitcount:        117
+{ common_pid:      18998, ecx:       2059 } hitcount:         19
+{ common_pid:      18998, ecx:       1760 } hitcount:       1431
+{ common_pid:      18999, ecx:       1760 } hitcount:        412
+{ common_pid:      18999, ecx:       2059 } hitcount:          5
+
+Totals:
+    Hits: 5549
+    Entries: 8
+    Dropped: 0
+# event histogram
+#
+# trigger info: hist:keys=common_pid,ecx:vals=hitcount:sort=common_pid:size=256 if write == 1 && (ecx == 2059 || ecx == 1760) [active]
+#
+
+{ common_pid:      18995, ecx:       1760 } hitcount:         33
+{ common_pid:      18995, ecx:       2059 } hitcount:          2
+{ common_pid:      18997, ecx:       1760 } hitcount:          4
+{ common_pid:      18998, ecx:       1760 } hitcount:          1
+{ common_pid:      18999, ecx:       1760 } hitcount:          1
+
+Totals:
+    Hits: 41
+    Entries: 5
+    Dropped: 0
