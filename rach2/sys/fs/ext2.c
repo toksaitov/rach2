@@ -706,7 +706,7 @@ static void em_open(struct ext2_mount *em)
 /**
  * Begin a plan on mount `em`, try `tries` of PLAN_TRIES: until
  * `ext2_plan_end`, the caller's reads of a block the cache lacks or another
- * holds answer -EAGAIN (`ext2_volume_get`), for it to fetch with its locks
+ * holds answer -EAGAIN (`volume_get`), for it to fetch with its locks
  * let go. The last try, and a caller with no process, reads as any caller
  * does. The mark is the thread's (`fs_plan` in process.h), so that plans in
  * two groups of one mount run at once.
@@ -750,9 +750,10 @@ static int plan_lacks(struct ext2_mount *em, uint64_t blk)
  * caller plans (`ext2_plan_begin`), a block the cache lacks or another holds
  * is not waited for: NULL with `*rc` -EAGAIN and the block in the thread's
  * `fs_missed`, for it to fetch with its locks let go. NULL with -EIO for a
- * failed read.
+ * failed read. Only the read primitive calls it (`ext2_block_get`,
+ * `ext2_read_bytes`).
  */
-struct bbuf *ext2_volume_get(struct ext2_mount *em, uint64_t blk, int *rc)
+static struct bbuf *volume_get(struct ext2_mount *em, uint64_t blk, int *rc)
 {
     struct bbuf *b;
 
@@ -798,24 +799,121 @@ void ext2_volume_fetch(struct ext2_mount *em, uint64_t blk)
     }
 }
 
-/**
- * Copy `len` bytes at byte offset `off` of the volume into `dst`, one cache
- * block at a time, from the batch's image of a block when it has one, since
- * the batch's writes are not in the cache yet. The offset is 64 bits, so the
- * volume's size is the block layer's business and not this reader's. 0,
- * -EIO, or -EAGAIN for a block the cache lacks under a plan
- * (`ext2_volume_get`).
+/*
+ * What the read primitive does for each kind of block it reads (READ_ in
+ * ext2_internal.h): the name of the block in a record, whether the block
+ * must lie in the data zone before it is read, which is refused, logged and
+ * reported otherwise (`ext2_zone_check`), and whether a failed read is
+ * logged and reported to the mount's policy (`ext2_mark_error`). The Linux
+ * line each row follows is in ext2.Readme.md's kind table. -EAGAIN under a
+ * plan is no failure and passes unreported for every kind.
  */
-int ext2_read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t len)
+static const struct read_rule {
+    const char *what;
+    int zone;
+    int report;
+} read_rules[READ_KINDS] = {
+    {"block", 0, 0},            /* READ_QUIET */
+    {"block", 0, 0},            /* READ_DATA */
+    {"table block", 0, 1},      /* READ_SLOT */
+    {"bitmap block", 0, 1},     /* READ_BITMAP */
+    {"descriptor block", 0, 1}, /* READ_DESC */
+    {"superblock", 0, 1},       /* READ_SUPER */
+    {"pointer block", 1, 0},    /* READ_MAP */
+    {"pointer block", 1, 1},    /* READ_RECLAIM */
+    {"attribute block", 1, 0},  /* READ_ATTR */
+    {"attribute block", 1, 1},  /* READ_ATTR_FREE */
+};
+
+/**
+ * Refuse block `b`, which inode `ino` names as `what`, when it may not hold
+ * data (`ext2_data_block_ok`): logged as `ext2: inode N: WHAT B is out of
+ * range`, reported to the mount's policy (`ext2_mark_error`) and -EIO, as
+ * Linux's `ext2_error` reports a block outside the data zone. 0 for a block
+ * that may hold data. The caller holds no buffer.
+ */
+int ext2_zone_check(struct ext2_mount *em, uint32_t ino, const char *what, uint32_t b)
+{
+    if (ext2_data_block_ok(em, b)) {
+        return 0;
+    }
+    klog(KLOG_WARN, "ext2", "inode %d: %s %d is out of range", (int)ino, what, (int)b);
+    ext2_mark_error(em);
+    return -EIO;
+}
+
+/** The rule of `kind` before a read of block `b` of inode `ino`: 0, or
+ * -EIO reported for a block outside the data zone. */
+static int read_before(struct ext2_mount *em, int kind, uint32_t ino, uint32_t b)
+{
+    return read_rules[kind].zone ? ext2_zone_check(em, ino, read_rules[kind].what, b) : 0;
+}
+
+/** The rule of `kind` after a read of block `b` of inode `ino`, or of no
+ * inode at 0, that failed with `rc`: an -EIO logged and reported when the
+ * kind reports one; -EAGAIN never. Returns `rc`. The caller holds no
+ * buffer. */
+static int read_failed(struct ext2_mount *em, int kind, uint32_t ino, uint32_t b, int rc)
+{
+    if (rc != -EIO || !read_rules[kind].report) {
+        return rc;
+    }
+    if (ino != 0) {
+        klog(KLOG_WARN, "ext2", "inode %d: %s %d cannot be read", (int)ino, read_rules[kind].what,
+             (int)b);
+    } else {
+        klog(KLOG_WARN, "ext2", "%s %d cannot be read", read_rules[kind].what, (int)b);
+    }
+    ext2_mark_error(em);
+    return rc;
+}
+
+/**
+ * Cache block `blk` of the volume, held, read as a block of kind `kind` of
+ * inode `ino`, or of no inode at 0: the kind's rules before and after the
+ * read (`read_rules`), then `volume_get`. NULL with `*rc` set: -EIO for a
+ * block refused or a failed read, or -EAGAIN under a plan.
+ */
+struct bbuf *ext2_block_get(struct ext2_mount *em, int kind, uint32_t ino, uint64_t blk, int *rc)
+{
+    uint32_t b = (uint32_t)((blk << BCACHE_BLOCK_SHIFT) >> em->block_shift);
+    struct bbuf *buf;
+
+    *rc = read_before(em, kind, ino, b);
+    if (*rc != 0) {
+        return 0;
+    }
+    buf = volume_get(em, blk, rc);
+    if (!buf) {
+        (void)read_failed(em, kind, ino, b, *rc);
+    }
+    return buf;
+}
+
+/**
+ * The read primitive: copy `len` bytes at byte offset `off` of the volume
+ * into `dst`, read as a block of kind `kind` of inode `ino`, or of no inode
+ * at 0, under the kind's rules (`read_rules`), one cache block at a time,
+ * from the batch's image of a block when it has one, since the batch's
+ * writes are not in the cache yet. The offset is 64 bits, so the volume's
+ * size is the block layer's business and not this reader's. 0, -EIO, or
+ * -EAGAIN for a block the cache lacks under a plan (`volume_get`).
+ */
+int ext2_read_bytes(struct ext2_mount *em, int kind, uint32_t ino, uint64_t off, void *dst,
+                    uint32_t len)
 {
     uint8_t *out = dst;
+    uint32_t block = (uint32_t)(off >> em->block_shift);
+    int rc = read_before(em, kind, ino, block);
 
+    if (rc != 0) {
+        return rc;
+    }
     while (len > 0) {
         uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
         uint32_t in = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
         uint32_t take = BCACHE_BLOCK_BYTES - in;
         struct bbuf *b;
-        int rc;
 
         if (take > len) {
             take = len;
@@ -826,13 +924,13 @@ int ext2_read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t len
             len -= take;
             continue;
         }
-        b = ext2_volume_get(em, blk, &rc);
+        b = volume_get(em, blk, &rc);
         if (!b) {
-            return rc;
+            return read_failed(em, kind, ino, block, rc);
         }
         if (in + take > b->bytes) {
             bcache_release(b);
-            return -EIO;
+            return read_failed(em, kind, ino, block, -EIO);
         }
         k_memcpy(out, b->data + in, take);
         bcache_release(b);
@@ -947,22 +1045,6 @@ int ext2_fast_link(const struct ext2_mount *em, const struct ext2_node *n)
 }
 
 /**
- * Report an inode's table block that cannot be read, when `rc` is -EIO, as
- * Linux's `ext2_get_inode` reports it to `ext2_error` for a load and for a
- * store alike (fs/ext2/inode.c:1348): logged with the inode and the block
- * at byte `at`, and the mount's policy applied (`ext2_mark_error`). Any
- * other `rc` is left to the caller. The caller holds no buffer.
- */
-static void table_unread(struct ext2_mount *em, uint32_t ino, uint64_t at, int rc)
-{
-    if (rc == -EIO) {
-        klog(KLOG_WARN, "ext2", "inode %d: its table block %d cannot be read", (int)ino,
-             (int)(at >> em->block_shift));
-        ext2_mark_error(em);
-    }
-}
-
-/**
  * Load inode `ino` into `n`: its number checked against the count, its
  * table found through its group's descriptor. The first 128 bytes of the
  * slot are read, and of a larger slot the extra fields up to EXT2_LARGE;
@@ -998,10 +1080,8 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, 
     index = (ino - 1) % em->ipg;
     table = ext2_le32(em->gd + g * 32 + 8);
     at = (uint64_t)table * em->block_size + (uint64_t)index * em->inode_size;
-    rc = ext2_read_bytes(em, at, raw, em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
-    if (report) {
-        table_unread(em, ino, at, rc);
-    }
+    rc = ext2_read_bytes(em, report ? READ_SLOT : READ_QUIET, ino, at, raw,
+                         em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
     if (rc != 0) {
         return rc;
     }
@@ -1040,10 +1120,8 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, 
     n->flags = ext2_le32(raw + 32);
     n->generation = ext2_le32(raw + 100);
     n->file_acl = ext2_le32(raw + 104);
-    if (report && n->file_acl != 0 && !ext2_data_block_ok(em, n->file_acl)) {
-        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d is out of range", (int)ino,
-             (int)n->file_acl);
-        goto damaged;
+    if (report && n->file_acl != 0 && ext2_zone_check(em, ino, "attribute block", n->file_acl)) {
+        return -EIO;
     }
     for (i = 0; i < (int)EXT2_NBLOCKS; i++) {
         n->block[i] = ext2_le32(raw + 40 + i * 4);
@@ -1419,14 +1497,8 @@ int ext2_block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t ind
             for (i = 1; i < level; i++) {
                 div *= per;
             }
-            if (!ext2_data_block_ok(em, b)) {
-                klog(KLOG_WARN, "ext2", "inode %d: pointer block %d is out of range", (int)n->ino,
-                     (int)b);
-                ext2_mark_error(em);
-                return -EIO;
-            }
-            rc = ext2_read_bytes(em, (uint64_t)b * em->block_size + (uint64_t)(rest / div) * 4, ptr,
-                                 4);
+            rc = ext2_read_bytes(em, READ_MAP, n->ino,
+                                 (uint64_t)b * em->block_size + (uint64_t)(rest / div) * 4, ptr, 4);
             if (rc != 0) {
                 return rc;
             }
@@ -1435,9 +1507,7 @@ int ext2_block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t ind
             level--;
         }
     }
-    if (b != 0 && !ext2_data_block_ok(em, b)) {
-        klog(KLOG_WARN, "ext2", "inode %d: block %d is out of range", (int)n->ino, (int)b);
-        ext2_mark_error(em);
+    if (b != 0 && ext2_zone_check(em, n->ino, "block", b) != 0) {
         return -EIO;
     }
     *out = b;
@@ -1470,7 +1540,8 @@ int ext2_read_data(struct ext2_mount *em, const struct ext2_node *n, uint64_t of
         if (b == 0) {
             k_memset(out, 0, take);
         } else {
-            rc = ext2_read_bytes(em, (uint64_t)b * em->block_size + in, out, take);
+            rc = ext2_read_bytes(em, READ_DATA, n->ino, (uint64_t)b * em->block_size + in, out,
+                                 take);
             if (rc != 0) {
                 if (unread) {
                     *unread = 1;
@@ -2609,8 +2680,7 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
         k_memset(raw, 0, len);
         inode_encode(em, n, raw);
     } else {
-        rc = ext2_read_bytes(em, at, raw, len);
-        table_unread(em, n->ino, at, rc);
+        rc = ext2_read_bytes(em, READ_SLOT, n->ino, at, raw, len);
         if (rc != 0) {
             return rc;
         }
@@ -2916,7 +2986,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     em->dev = dev;
     em->mnt = mnt;
     em->next_generation = now_seconds() << 8;
-    rc = ext2_read_bytes(em, 1024, sb, sizeof(sb));
+    rc = ext2_read_bytes(em, READ_QUIET, 0, 1024, sb, sizeof(sb));
     if (rc != 0) {
         return rc;
     }
@@ -3016,7 +3086,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     if (!em->gd) {
         return -ENOMEM;
     }
-    rc = ext2_read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
+    rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
                          em->groups * 32);
     if (rc != 0) {
         return rc;
@@ -3338,12 +3408,13 @@ static int admit_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, u
     return rc;
 }
 
-/** Read a node's external attribute block into a private checked copy.
- * A block out of range or malformed is logged, reported to the mount's
- * policy (`ext2_mark_error`) and -EIO, as Linux's `ext2_xattr_get` reports a
- * bad block (fs/ext2/xattr.c:229); a failed read is returned unreported, as
- * there. The node is locked; NULL in `*out` means no block. Returns 0 or
- * -errno. */
+/** Read a node's external attribute block into a private checked copy, as
+ * a block of kind READ_ATTR: one out of range is refused and reported, and a
+ * failed read returned unreported, as Linux's `ext2_xattr_get` returns it.
+ * A malformed block is logged, reported to the mount's policy
+ * (`ext2_mark_error`) and -EIO, as Linux's `ext2_xattr_get` reports a bad
+ * block (fs/ext2/xattr.c:229). The node is locked; NULL in `*out` means no
+ * block. Returns 0 or -errno. */
 static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
 {
     int rc;
@@ -3351,16 +3422,11 @@ static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
     *out = NULL;
     if (!n->file_acl)
         return 0;
-    if (!ext2_data_block_ok(em, n->file_acl)) {
-        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d is out of range", (int)n->ino,
-             (int)n->file_acl);
-        ext2_mark_error(em);
-        return -EIO;
-    }
     *out = kmalloc(em->block_size);
     if (!*out)
         return -ENOMEM;
-    rc = ext2_read_bytes(em, (uint64_t)n->file_acl * em->block_size, *out, em->block_size);
+    rc = ext2_read_bytes(em, READ_ATTR, n->ino, (uint64_t)n->file_acl * em->block_size, *out,
+                         em->block_size);
     if (!rc) {
         rc = ext2_xattr_check(*out, em->block_size);
         if (rc != 0) {
@@ -3373,15 +3439,18 @@ static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
 }
 
 /** Enable external attributes, promoting a revision-zero superblock first.
- * `em->super` serialises the feature write; a stop after promotion
- * still has a valid dynamic revision with no attribute inode yet. */
+ * The revision is read before `em->super` is taken, since a failed read is
+ * reported and the report takes that lock: two calls that both find
+ * revision zero write the same bytes. `em->super` serialises the feature
+ * write; a stop after promotion still has a valid dynamic revision with no
+ * attribute inode yet. */
 static int attr_feature(struct ext2_mount *em)
 {
     uint8_t raw[16], feature[4];
     int rc;
 
+    rc = ext2_read_bytes(em, READ_SUPER, 0, 1024 + 76, raw, sizeof(raw));
     ext2_super_lock(em);
-    rc = ext2_read_bytes(em, 1024 + 76, raw, sizeof(raw));
     if (!rc && ext2_le32(raw) == 0) {
         LE32_PUT(raw, 1);
         LE32_PUT(raw + 8, em->first_ino);

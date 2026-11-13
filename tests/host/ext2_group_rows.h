@@ -92,11 +92,13 @@ static int group_totals_ok(void)
         uint32_t count = em->blocks - base < em->bpg ? em->blocks - base : em->bpg;
         uint32_t fb, fi;
 
-        if (ext2_read_bytes(em, (uint64_t)ext2_le32(gd) * em->block_size, bits, 4096) != 0) {
+        if (ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)ext2_le32(gd) * em->block_size, bits,
+                            4096) != 0) {
             return 0;
         }
         fb = group_clear_bits(bits, count);
-        if (ext2_read_bytes(em, (uint64_t)ext2_le32(gd + 4) * em->block_size, bits, 4096) != 0) {
+        if (ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)ext2_le32(gd + 4) * em->block_size, bits,
+                            4096) != 0) {
             return 0;
         }
         fi = group_clear_bits(bits, em->ipg);

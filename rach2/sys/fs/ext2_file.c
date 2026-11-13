@@ -124,7 +124,7 @@ static int read_missing(struct ext2_mount *em, const struct ext2_node *n, uint64
         if (level == 0) {
             return 0;
         }
-        if (ext2_read_bytes(em, off + (uint64_t)(index / div) * 4, ptr, 4) != 0) {
+        if (ext2_read_bytes(em, READ_QUIET, 0, off + (uint64_t)(index / div) * 4, ptr, 4) != 0) {
             return 0;
         }
         b = ext2_le32(ptr);
@@ -626,24 +626,21 @@ struct punch_walk {
 };
 
 /**
- * Refuse pointer block `b`, at `*slot` of walk `w`, which lies outside the
- * data zone: logged and reported to the mount's policy (`ext2_mark_error`).
- * When the walk frees all it covers (`whole`), its pointer is cleared at
- * `slot_at`, dirtied `first`, or for 0 in the inode in memory, with nothing
- * below it read or freed, as Linux's `ext2_free_branches` clears the
- * pointer and its `ext2_free_blocks` refuses the block
- * (fs/ext2/balloc.c:498), so that the rest of the file and its inode can
- * still be freed, and `*emptied` is set; a block whose range the walk keeps
- * in part stays, -EIO. 0, or -errno.
+ * Refuse the pointer block at `*slot` of walk `w`, which lies outside the
+ * data zone and was logged and reported (`ext2_zone_check`). When the walk
+ * frees all it covers (`whole`), its pointer is cleared at `slot_at`,
+ * dirtied `first`, or for 0 in the inode in memory, with nothing below it
+ * read or freed, as Linux's `ext2_free_branches` clears the pointer and its
+ * `ext2_free_blocks` refuses the block (fs/ext2/balloc.c:498), so that the
+ * rest of the file and its inode can still be freed, and `*emptied` is set;
+ * a block whose range the walk keeps in part stays, -EIO. 0, or -errno.
  */
-static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, uint32_t b,
-                         int whole, int *emptied)
+static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int whole,
+                         int *emptied)
 {
     struct ext2_mount *em = w->em;
     int rc;
 
-    klog(KLOG_WARN, "ext2", "inode %d: pointer block %d is out of range", (int)w->n->ino, (int)b);
-    ext2_mark_error(em);
     if (!whole) {
         return -EIO;
     }
@@ -702,8 +699,8 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
         int all_gone = 1;
         uint32_t k;
 
-        if (!ext2_data_block_ok(em, b)) {
-            return punch_refused(w, slot, slot_at, b, base >= keep, emptied);
+        if (ext2_zone_check(em, n->ino, "pointer block", b) != 0) {
+            return punch_refused(w, slot, slot_at, base >= keep, emptied);
         }
         for (k = per; k > 0; k--) {
             uint32_t child_base = base + (k - 1) * (span / per);
@@ -720,13 +717,8 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
                 w->visits = 0;
                 sched_service_point();
             }
-            rc = ext2_read_bytes(em, at, ptr, 4);
+            rc = ext2_read_bytes(em, READ_RECLAIM, n->ino, at, ptr, 4);
             if (rc != 0) {
-                if (rc == -EIO) {
-                    klog(KLOG_WARN, "ext2", "inode %d: pointer block %d cannot be read",
-                         (int)n->ino, (int)b);
-                    ext2_mark_error(em);
-                }
                 return rc;
             }
             child = ext2_le32(ptr);
@@ -952,16 +944,6 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
     return rc;
 }
 
-/** Refuse block `b`, which `n`'s map names outside the data zone: logged,
- * reported to the mount's policy (`ext2_mark_error`) and -EIO, as
- * `ext2_block_at` refuses it. The caller holds no buffer. */
-static int map_refused(struct ext2_mount *em, const struct ext2_node *n, uint32_t b)
-{
-    klog(KLOG_WARN, "ext2", "inode %d: block %d is out of range", (int)n->ino, (int)b);
-    ext2_mark_error(em);
-    return -EIO;
-}
-
 /**
  * The block for data index `index` of `n`, allocated when missing, into
  * `*out`, with `*fresh` set for a new data block. A missing pointer block is
@@ -977,7 +959,7 @@ static int map_refused(struct ext2_mount *em, const struct ext2_node *n, uint32_
  * `n->blocks` and the inode's own pointers change in memory; the caller
  * stores the inode with them, and holds `n`'s lock and not `em->batch`. 0,
  * -EFBIG past the triple indirect's reach, -ENOSPC, -EIO for a block out of
- * range (`map_refused`), or -errno.
+ * range, reported (`ext2_zone_check`), or -errno.
  */
 int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, uint32_t *out,
                    int *fresh)
@@ -1046,11 +1028,8 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
                 hint = b + 1;
             }
             b = *slot;
-            if (!ext2_data_block_ok(em, b)) {
-                return map_refused(em, n, b);
-            }
             slot_at = (uint64_t)b * em->block_size + (uint64_t)(rest / div) * 4;
-            rc = ext2_read_bytes(em, slot_at, ptr, 4);
+            rc = ext2_read_bytes(em, READ_MAP, n->ino, slot_at, ptr, 4);
             if (rc != 0) {
                 return rc;
             }
@@ -1080,8 +1059,8 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
         }
         *slot = b;
         *fresh = 1;
-    } else if (!ext2_data_block_ok(em, *slot)) {
-        return map_refused(em, n, *slot);
+    } else if (ext2_zone_check(em, n->ino, "block", *slot) != 0) {
+        return -EIO;
     }
     *out = *slot;
     return 0;

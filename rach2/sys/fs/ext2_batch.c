@@ -155,26 +155,21 @@ static void writeback_list(struct ext2_writeback *wb, struct ext2_image *im, uin
 }
 
 /**
- * The batch's image of metadata block `block` at stage `stage`: the one it
- * has, or a new one in the next free page, zeroed with `blank` and a copy of
- * the cache's block otherwise, not yet marked changed, listed before the
- * cache's buffer goes, so that a write through the cache to the block from
- * then on finds the image (`ext2_write_owned`). NULL with `*rc` set:
- * -EIO for a failed read, or for an image the batch has at another stage,
- * which only crossed maps give and which is logged and reported to the
- * mount's policy (`ext2_mark_error`),
- * -ENOMEM for a full table, and -EAGAIN for a block the cache lacks under a
- * plan (`ext2_volume_get`). A piece that fails gives back the new images it
- * took (`writeback_try`); an image the batch had is not changed here.
+ * The batch's image of metadata block `block` at stage `stage`, the one it
+ * has, with `*fresh` clear; or a new one in the next free page, not yet
+ * marked changed or listed, with `*fresh` set. NULL with `*rc` set: -EIO for
+ * an image the batch has at another stage, which only crossed maps give and
+ * which is logged and reported to the mount's policy (`ext2_mark_error`),
+ * and -ENOMEM for a full table.
  */
-static struct ext2_image *writeback_meta(struct ext2_mount *em, uint32_t block, int stage,
-                                         int blank, int *rc)
+static struct ext2_image *meta_find(struct ext2_mount *em, uint32_t block, int stage, int *fresh,
+                                    int *rc)
 {
     struct ext2_writeback *wb = em->wb;
     struct ext2_image *im;
-    struct bbuf *b;
     int i;
 
+    *fresh = 0;
     for (i = 0; i < wb->metas; i++) {
         im = &wb->meta[i];
         if (im->block == block) {
@@ -196,18 +191,55 @@ static struct ext2_image *writeback_meta(struct ext2_mount *em, uint32_t block, 
     im->data = wb->slot[EXT2_WB_DATA + wb->metas];
     im->dirty = 0;
     im->owner = 0;
-    if (blank) {
-        k_memset(im->data, 0, BCACHE_BLOCK_BYTES);
-        writeback_list(wb, im, block, stage, &wb->metas);
+    *fresh = 1;
+    return im;
+}
+
+/**
+ * The batch's image of metadata block `block` at stage `stage`
+ * (`meta_find`), a new one a copy of the cache's block read as a block of
+ * kind `kind` of inode `ino` (`ext2_block_get`), listed before the cache's
+ * buffer goes, so that a write through the cache to the block from then on
+ * finds the image (`ext2_write_owned`). NULL with `*rc` set: the errors of
+ * `meta_find`, -EIO for a block the kind refuses or a failed read, each
+ * reported as the kind says, and -EAGAIN for a block the cache lacks under
+ * a plan. A piece that fails gives back the new images it took
+ * (`writeback_try`); an image the batch had is not changed here.
+ */
+static struct ext2_image *writeback_meta(struct ext2_mount *em, int kind, uint32_t ino,
+                                         uint32_t block, int stage, int *rc)
+{
+    struct ext2_image *im;
+    struct bbuf *b;
+    int fresh;
+
+    im = meta_find(em, block, stage, &fresh, rc);
+    if (!im || !fresh) {
         return im;
     }
-    b = ext2_volume_get(em, block, rc);
+    b = ext2_block_get(em, kind, ino, block, rc);
     if (!b) {
         return 0;
     }
     k_memcpy(im->data, b->data, BCACHE_BLOCK_BYTES);
-    writeback_list(wb, im, block, stage, &wb->metas);
+    writeback_list(em->wb, im, block, stage, &em->wb->metas);
     bcache_release(b);
+    return im;
+}
+
+/** The batch's image of metadata block `block` at stage `stage`, a block
+ * the piece has just reserved: a new one zeroed and listed (`meta_find`),
+ * or the one the batch has. NULL with `*rc` set, as `meta_find` says. */
+static struct ext2_image *writeback_blank(struct ext2_mount *em, uint32_t block, int stage, int *rc)
+{
+    struct ext2_image *im;
+    int fresh;
+
+    im = meta_find(em, block, stage, &fresh, rc);
+    if (im && fresh) {
+        k_memset(im->data, 0, BCACHE_BLOCK_BYTES);
+        writeback_list(em->wb, im, block, stage, &em->wb->metas);
+    }
     return im;
 }
 
@@ -305,11 +337,12 @@ static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint3
         if (rc < 0) {
             return rc;
         }
-        r->bitmap = writeback_meta(em, ext2_le32(gd), WB_ALLOC, 0, &rc);
+        r->bitmap = writeback_meta(em, READ_BITMAP, 0, ext2_le32(gd), WB_ALLOC, &rc);
         if (!r->bitmap) {
             return rc;
         }
-        r->descriptor = writeback_meta(em, em->first_data + 1 + (g * 32) / 4096, WB_ALLOC, 0, &rc);
+        r->descriptor =
+            writeback_meta(em, READ_DESC, 0, em->first_data + 1 + (g * 32) / 4096, WB_ALLOC, &rc);
         if (!r->descriptor) {
             return rc;
         }
@@ -388,11 +421,9 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_write_plan *plan
  * into `plan`: the image of each pointer block on the path, a missing one
  * reserved and blank, and a missing data block reserved, nothing yet taken.
  * The arithmetic is for 4 KiB blocks of 1024 pointers, which a writable
- * mount has. 0, -EIO for a block out of range, or the errors of
- * `writeback_reserve` and `writeback_meta`. A block out of range is not
- * reported here: `writeback_fetch` walked the same index by `ext2_block_at`,
- * which reports it, under the same hold of `n`'s lock, so the fault is
- * reported once.
+ * mount has. 0, -EIO for a block out of range, reported
+ * (`ext2_zone_check`, READ_MAP), or the errors of `writeback_reserve` and
+ * `writeback_meta`.
  */
 static int writeback_plan_map(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                               struct ext2_write_plan *plan)
@@ -427,10 +458,9 @@ static int writeback_plan_map(struct ext2_mount *em, struct ext2_node *n, uint32
             } else {
                 plan->children[plan->paths - 1] = block;
             }
-        } else if (!ext2_data_block_ok(em, block)) {
-            return -EIO;
         }
-        parent = writeback_meta(em, block, WB_LEAF + level - 1, blank, &rc);
+        parent = blank ? writeback_blank(em, block, WB_LEAF + level - 1, &rc)
+                       : writeback_meta(em, READ_MAP, n->ino, block, WB_LEAF + level - 1, &rc);
         if (!parent) {
             return rc;
         }
@@ -454,7 +484,7 @@ static int writeback_plan_map(struct ext2_mount *em, struct ext2_node *n, uint32
         } else {
             plan->root = block;
         }
-    } else if (!ext2_data_block_ok(em, block)) {
+    } else if (ext2_zone_check(em, n->ino, "block", block) != 0) {
         return -EIO;
     }
     plan->block = block;
@@ -481,13 +511,13 @@ static int writeback_plan(struct ext2_mount *em, struct ext2_node *n, uint64_t o
     if (plan->node_index == wb->count && wb->count == EXT2_WB_NODES) {
         return -ENOMEM;
     }
-    plan->table =
-        writeback_meta(em, (uint32_t)(ext2_inode_offset(em, n->ino) >> 12), WB_INODE, 0, &rc);
+    plan->table = writeback_meta(em, READ_SLOT, n->ino,
+                                 (uint32_t)(ext2_inode_offset(em, n->ino) >> 12), WB_INODE, &rc);
     if (!plan->table) {
         return rc;
     }
     if (offset + len >= 0x80000000u && !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
-        plan->feature = writeback_meta(em, 0, WB_FEATURE, 0, &rc);
+        plan->feature = writeback_meta(em, READ_SUPER, 0, 0, WB_FEATURE, &rc);
         if (!plan->feature) {
             return rc;
         }
@@ -499,7 +529,7 @@ static int writeback_plan(struct ext2_mount *em, struct ext2_node *n, uint64_t o
  * the one it has, or a new one, zeroed for a new block or one the piece of
  * `len` bytes writes whole, and a copy of the cache's block otherwise. 0,
  * -ENOMEM when the table is full, -EIO, or -EAGAIN under a plan
- * (`ext2_volume_get`). */
+ * (`ext2_block_get`). */
 static int writeback_prepare_data(struct ext2_mount *em, uint32_t owner, uint32_t len,
                                   struct ext2_write_plan *plan)
 {
@@ -519,7 +549,7 @@ static int writeback_prepare_data(struct ext2_mount *em, uint32_t owner, uint32_
         data->data = wb->slot[i];
         data->dirty = 0;
         if (!plan->fresh && len != BCACHE_BLOCK_BYTES) {
-            b = ext2_volume_get(em, plan->block, &rc);
+            b = ext2_block_get(em, READ_DATA, owner, plan->block, &rc);
             if (!b) {
                 return rc;
             }
@@ -1053,13 +1083,8 @@ static int writeback_missing(struct ext2_mount *em, const struct ext2_node *n,
         }
         return 0;
     }
-    if (!ext2_data_block_ok(em, block)) {
-        klog(KLOG_WARN, "ext2", "inode %d: block %d is out of range", (int)n->ino, (int)block);
-        ext2_mark_error(em);
-        return -EIO;
-    }
     if (level == 0) {
-        return 0;
+        return ext2_zone_check(em, n->ino, "block", block);
     }
     for (depth = 1; depth < level; depth++) {
         span *= per;
@@ -1070,7 +1095,8 @@ static int writeback_missing(struct ext2_mount *em, const struct ext2_node *n,
         uint32_t end = i == last / span ? last % span : span - 1;
         int rc;
 
-        rc = ext2_read_bytes(em, (uint64_t)block * em->block_size + (uint64_t)i * 4, raw, 4);
+        rc = ext2_read_bytes(em, READ_MAP, n->ino,
+                             (uint64_t)block * em->block_size + (uint64_t)i * 4, raw, 4);
         if (rc == 0) {
             struct writeback_step under;
 

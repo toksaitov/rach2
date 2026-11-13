@@ -36,28 +36,12 @@ int ext2_gd_store(struct ext2_mount *em, uint32_t g)
 }
 
 /**
- * Report a failed read of the bitmap in block `bitmap_block`, as Linux's
- * `read_block_bitmap` and `read_inode_bitmap` report one to `ext2_error`
- * (fs/ext2/balloc.c:142-156, ialloc.c:58): an EIO is logged and reported to
- * the mount's policy (`ext2_mark_error`); -EAGAIN, a block the cache lacks
- * under a plan, is no failure. Returns `rc`. The caller holds no buffer.
- */
-static int bitmap_unread(struct ext2_mount *em, uint32_t bitmap_block, int rc)
-{
-    if (rc == -EIO) {
-        klog(KLOG_WARN, "ext2", "bitmap block %d cannot be read", (int)bitmap_block);
-        ext2_mark_error(em);
-    }
-    return rc;
-}
-
-/**
  * The first clear bit at or after `from` and before `count` of the bitmap
  * in block `bitmap_block`, into `*out`, or `count` when every one is set.
  * The bitmap is read 64 bytes at a time and a byte with every bit set is
  * passed over whole, so an allocation in a group whose first part is full
  * does not read each of its bits through the cache alone. 0, or the
- * errors of `bitmap_unread`.
+ * errors of the read primitive, a failed read reported (READ_BITMAP).
  */
 int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
                          uint32_t count, uint32_t *out)
@@ -73,9 +57,10 @@ int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t 
         if (take > sizeof(chunk)) {
             take = sizeof(chunk);
         }
-        rc = ext2_read_bytes(em, (uint64_t)bitmap_block * em->block_size + first, chunk, take);
+        rc = ext2_read_bytes(em, READ_BITMAP, 0, (uint64_t)bitmap_block * em->block_size + first,
+                             chunk, take);
         if (rc != 0) {
-            return bitmap_unread(em, bitmap_block, rc);
+            return rc;
         }
         for (; i < count && i / 8 < first + take; i++) {
             uint8_t b = chunk[i / 8 - first];
@@ -95,18 +80,18 @@ int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t 
 /** Set bit `index` of the bitmap in block `bitmap_block` to `value`, written
  * in the way `how` says; 0, 1 with nothing written when a bit to clear is
  * clear already, which only damage gives and the caller reports, or the
- * errors of `bitmap_unread`. The caller holds the lock of the bitmap's
- * group, so that no other change of the byte comes between its read and
- * its write. */
+ * errors of the read primitive (READ_BITMAP). The caller holds the lock of
+ * the bitmap's group, so that no other change of the byte comes between its
+ * read and its write. */
 static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value,
                      int how)
 {
     uint64_t at = (uint64_t)bitmap_block * em->block_size + index / 8;
     uint8_t byte;
-    int rc = ext2_read_bytes(em, at, &byte, 1);
+    int rc = ext2_read_bytes(em, READ_BITMAP, 0, at, &byte, 1);
 
     if (rc != 0) {
-        return bitmap_unread(em, bitmap_block, rc);
+        return rc;
     }
     if (!value && !(byte & (1u << (index % 8)))) {
         return 1;
@@ -495,18 +480,12 @@ int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
     uint32_t refs, g;
     int rc;
 
-    if (!ext2_data_block_ok(em, b)) {
-        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d is out of range", (int)ino, (int)b);
-        ext2_mark_error(em);
+    if (ext2_zone_check(em, ino, "attribute block", b) != 0) {
         return 0;
     }
     g = (b - em->first_data) / em->bpg;
     ext2_group_lock(em, g);
-    rc = ext2_read_bytes(em, at, raw, sizeof(raw));
-    if (rc == -EIO) {
-        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d cannot be read", (int)ino, (int)b);
-        ext2_mark_error(em);
-    }
+    rc = ext2_read_bytes(em, READ_ATTR_FREE, ino, at, raw, sizeof(raw));
     if (rc == 0 && (ext2_le32(raw) != EXT2_XATTR_MAGIC || ext2_le32(raw + 8) != 1)) {
         klog(KLOG_WARN, "ext2", "inode %d: attribute block %d has no valid header", (int)ino,
              (int)b);
