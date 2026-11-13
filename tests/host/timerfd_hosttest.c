@@ -3,6 +3,7 @@
  *
  * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
+ * host-cflags: -DTICK_HZ=1000
  * host-deps: rach2/sys/tick.c
  *
  * The timerfd code is the kernel's, included whole to reach its static read

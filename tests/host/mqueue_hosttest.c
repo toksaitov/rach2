@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c tests/host/compat/kheap_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
+ * host-cflags: -DTICK_HZ=1000
  *
  * The source is included whole, to reach `mq_deadline` and `mq_sleep`. User
  * memory is a byte array, and a user address is an offset into it. The
