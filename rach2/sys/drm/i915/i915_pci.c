@@ -534,6 +534,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
         i915_msi_stop(i915);
         i915_devices_remove(i915);
         i915_gt_fini(i915);
+        i915_uncore_fini(i915);
         pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
         drm_dev_put(&i915->drm);
         return err;

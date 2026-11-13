@@ -312,14 +312,33 @@ static void done(struct i915_model *m)
     bus = 0;
 }
 
-/** Let `ms` milliseconds pass on the model's clock. */
+/** Let `ms` milliseconds pass on the model's clock, the boot processor's
+ * 1000 Hz tick at the end of each, which runs forcewake's release timer as
+ * `i915_tick` does. The tick is modelled here, outside the driver's waits,
+ * since a wait under the register lock never sees the tick on its own
+ * processor. */
 static void pass_ms(struct i915_model *m, uint32_t ms)
 {
     uint32_t i;
 
     for (i = 0; i < ms; i++) {
         i915_delay_us(&m->hw, 1000);
+        i915_uncore_tick(&dev);
     }
+}
+
+/** Let the ticks pass that forcewake's release timer waits for, so that
+ * nothing holds the GT awake: two, or three when the timer was renewed. */
+static void fw_settle(struct i915_model *m)
+{
+    uint32_t n;
+
+    for (n = 0; n < 8 && dev.uncore.timer_ticks != 0; n++) {
+        pass_ms(m, 1);
+    }
+    CHECK("forcewake: released by the timer",
+          dev.uncore.wake_count == 0 && dev.uncore.timer_ticks == 0 &&
+              (i915_model_peek(m, FORCEWAKE_ACK_HSW) & 1u) == 0);
 }
 
 /** The log index of the first write of `value` to `reg`, or a large
@@ -353,14 +372,16 @@ static void row_rc6_enable(void)
 
     i915_model_poke(&m, GEN6_RC_CONTROL, 0x88040000u);
     i915_model_poke(&m, GEN6_RC_STATE, 0x40000u);
+    fw_settle(&m);
     m.nlog = 0;
     i915_rc6_init(i915);
     CHECK("rc6 init: supported, not enabled", i915->rc6.supported && !i915->rc6.enabled);
     CHECK("rc6 init: the firmware's RC6 turned off under forcewake",
           i915_model_peek(&m, GEN6_RC_CONTROL) == 0 && i915_model_peek(&m, GEN6_RC_STATE) == 0 &&
               at(&m, FORCEWAKE_MT, 0x00010001u) < at(&m, GEN6_RC_CONTROL, 0) &&
-              i915->uncore.wake_count == 0);
+              i915->uncore.wake_count == 0 && i915->uncore.timer_ticks != 0);
 
+    fw_settle(&m);
     m.nlog = 0;
     i915_rc6_enable(i915);
     CHECK("rc6 enable: Linux's wake limits, interval and hysteresis",
@@ -386,12 +407,24 @@ static void row_rc6_enable(void)
               i915->rc6.manual && i915->rc6.enabled);
     CHECK("rc6 enable: GEN6_RC_CONTROL left for the park",
           i915_model_count(&m, I915_MODEL_WRITE, GEN6_RC_CONTROL) == 0);
-    CHECK("rc6 enable: the pcode's voltages read, under forcewake, released",
+    CHECK("rc6 enable: the pcode's voltages read, under forcewake, left to the timer",
           i915_model_rc6(&m)->last_cmd == GEN6_PCODE_READ_RC6VIDS && i915->uncore.wake_count == 0 &&
-              at(&m, FORCEWAKE_MT, 0x00010001u) < at(&m, GEN6_RC6_THRESHOLD, 50000));
+              i915->uncore.timer_ticks != 0 &&
+              at(&m, FORCEWAKE_MT, 0x00010001u) < at(&m, GEN6_RC6_THRESHOLD, 50000) &&
+              at(&m, FORCEWAKE_MT, 0x00010000u) == 1L << 30);
+    fw_settle(&m);
+    CHECK("rc6 enable: released by the timer after the thresholds",
+          at(&m, GEN6_RC6_THRESHOLD, 50000) < at(&m, FORCEWAKE_MT, 0x00010000u) &&
+              at(&m, FORCEWAKE_MT, 0x00010000u) < 1L << 30);
     done(&m);
+}
 
-    i915 = fresh(&m, 0);
+/** A part without RC6 left alone. */
+static void row_rc6_absent(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m, 0);
+
     dev.id = 0;
     i915_rc6_init(i915);
     i915_rc6_enable(i915);
@@ -414,6 +447,9 @@ static void row_rc6_idle(void)
               i915_model_peek(&m, GEN6_RC_STATE) == 4u << RC_SW_TARGET_STATE_SHIFT);
     CHECK("park: no forcewake held", i915->uncore.wake_count == 0);
     CHECK("rc6: nothing yet", i915_rc6_residency_ms(i915) == 0);
+    fw_settle(&m);
+    CHECK("rc6: nothing while the release timer holds the GT awake",
+          i915_rc6_residency_ms(i915) == 0);
     pass_ms(&m, 10000);
     CHECK("rc6: entered at idle", r->in_rc6);
     CHECK("rc6: 10 s idle reads 10000 ms, as Linux's 9960 at most",
@@ -422,6 +458,7 @@ static void row_rc6_idle(void)
     i915_gt_unpark(i915);
     CHECK("unpark: RC6 under the hardware's timers",
           i915_model_peek(&m, GEN6_RC_CONTROL) == i915->rc6.ctl_enable);
+    fw_settle(&m);
     r->busy = 1;
     pass_ms(&m, 500);
     CHECK("rc6: not while the GT is busy", !r->in_rc6 && i915_rc6_residency_ms(i915) == 10000);
@@ -438,6 +475,13 @@ static void row_rc6_idle(void)
     CHECK("rc6: not while forcewake holds the GT awake",
           !r->in_rc6 && i915_rc6_residency_ms(i915) == before);
     i915_forcewake_put(i915);
+    pass_ms(&m, 1);
+    CHECK("rc6: not for a tick after the put, the timer holding the GT awake",
+          !r->in_rc6 && i915->uncore.timer_ticks == 1 && i915_rc6_residency_ms(i915) == before);
+    pass_ms(&m, 1);
+    CHECK("forcewake: released by the timer two ticks after the put",
+          i915->uncore.timer_ticks == 0 && (i915_model_peek(&m, FORCEWAKE_ACK_HSW) & 1u) == 0 &&
+              i915_rc6_residency_ms(i915) == before);
     pass_ms(&m, 300);
     CHECK("rc6: again once it is released", i915_rc6_residency_ms(i915) == before + 300);
     done(&m);
@@ -451,6 +495,7 @@ static void row_rc6_wrap(void)
     struct i915_model_rc6 *r = i915_model_rc6(&m);
     uint64_t before;
 
+    fw_settle(&m);
     r->residency = 0xffffff00u;
     i915->rc6.prev_hw = 0xffffff00u;
     i915->rc6.cur = 0;
@@ -706,6 +751,7 @@ static void row_rps_interrupts(void)
     pm_event(&m, GEN6_PM_RP_UP_THRESHOLD);
     pm_event(&m, GEN6_PM_RP_UP_THRESHOLD);
     CHECK("up to RP0 again", asked(&m) == 20);
+    fw_settle(&m);
     m.nlog = 0;
     i915_gt_park(i915);
     CHECK("park: inactive, the interrupts off and cleared",
@@ -972,6 +1018,7 @@ static void sysfs_values(struct i915_model *m)
     CHECK("sysfs: cur 200 when idle", show("gt_cur_freq_mhz") && strcmp(shown, "200\n") == 0);
     CHECK("sysfs: act 200", show("gt_act_freq_mhz") && strcmp(shown, "200\n") == 0);
     CHECK("sysfs: rc6_enable 1", show("power/rc6_enable") && strcmp(shown, "1\n") == 0);
+    fw_settle(m);
     pass_ms(m, 10000);
     CHECK("sysfs: rc6_residency_ms after 10 s idle",
           show("power/rc6_residency_ms") && strcmp(shown, "10000\n") == 0);
@@ -1060,6 +1107,7 @@ static void row_disable(void)
 int main(void)
 {
     row_rc6_enable();
+    row_rc6_absent();
     row_rc6_idle();
     row_rc6_wrap();
     row_pcode();

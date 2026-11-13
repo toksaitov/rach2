@@ -61,6 +61,7 @@ void i915_uncore_init(struct drm_i915_private *i915)
     i915->uncore.wake_count = 0;
     i915->uncore.timer_ticks = 0;
     i915->uncore.active = 0;
+    i915->uncore.gone = 0;
     i915->uncore.fifo_count = i915_read(hw, GTFIFOCTL) & GT_FIFO_FREE_ENTRIES_MASK;
 }
 
@@ -124,7 +125,9 @@ int32_t i915_forcewake_get(struct drm_i915_private *i915)
     uint32_t flags = spin_lock_irqsave(&u->lock);
     int32_t err = 0;
 
-    if (!i915_fw_held(u)) {
+    if (u->gone) {
+        err = -ENODEV;
+    } else if (!i915_fw_held(u)) {
         err = i915_fw_wake(i915);
     } else if (u->timer_ticks != 0) {
         u->active = 1;
@@ -141,6 +144,10 @@ void i915_forcewake_put(struct drm_i915_private *i915)
     struct i915_uncore *u = &i915->uncore;
     uint32_t flags = spin_lock_irqsave(&u->lock);
 
+    if (u->gone) {
+        spin_unlock_irqrestore(&u->lock, flags);
+        return;
+    }
     if (u->wake_count == 0) {
         spin_unlock_irqrestore(&u->lock, flags);
         klog(KLOG_ERR, "i915", "forcewake: put with no reference held");
@@ -165,7 +172,7 @@ uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg)
         return i915_read(&i915->hw, reg);
     }
     flags = spin_lock_irqsave(&u->lock);
-    if (i915_fw_held(u) || i915_fw_wake(i915) == 0) {
+    if (!u->gone && (i915_fw_held(u) || i915_fw_wake(i915) == 0)) {
         if (!i915_fw_held(u)) {
             i915_fw_arm_timer(u);
         }
@@ -196,13 +203,13 @@ void i915_uncore_fini(struct drm_i915_private *i915)
     struct i915_uncore *u = &i915->uncore;
     uint32_t flags = spin_lock_irqsave(&u->lock);
 
-    if (u->timer_ticks != 0) {
-        u->timer_ticks = 0;
-        u->active = 0;
-        if (u->wake_count == 0) {
-            i915_fw_release(i915);
-        }
+    if (!u->gone && i915_fw_held(u)) {
+        i915_fw_release(i915);
     }
+    u->wake_count = 0;
+    u->timer_ticks = 0;
+    u->active = 0;
+    u->gone = 1;
     spin_unlock_irqrestore(&u->lock, flags);
 }
 
