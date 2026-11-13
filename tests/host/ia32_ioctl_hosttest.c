@@ -124,7 +124,7 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
 /* ---- descriptors ---- */
 
 static fd_entry_t entries[8];
-static fd_table_t table = {{entries}, 8, 1, 0, SPINLOCK_INIT, NULL};
+static fd_table_t table = {.chunks = {entries}, .cap = 8, .refs = 1, .lock = SPINLOCK_INIT};
 static process_t proc;
 static struct socket inet6_sock;
 

@@ -591,7 +591,7 @@ void mouse_written(uint16_t type, uint16_t code, int32_t value)
 
 #define FDS 32
 static fd_entry_t fd_entries[FDS];
-static fd_table_t fd_table = {{fd_entries}, FDS, 1, 0, SPINLOCK_INIT, NULL};
+static fd_table_t fd_table = {.chunks = {fd_entries}, .cap = FDS, .refs = 1, .lock = SPINLOCK_INIT};
 static process_t self;
 static struct tgroup self_tg;
 static struct mm self_mm;

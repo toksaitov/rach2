@@ -102,7 +102,7 @@ static struct mm caller_mm, child_mm;
 static process_t caller;
 static fd_entry_t entries[64];
 static int reserved[64];
-static fd_table_t table = {{entries}, 64, 1, 0, SPINLOCK_INIT, NULL};
+static fd_table_t table = {.chunks = {entries}, .cap = 64, .refs = 1, .lock = SPINLOCK_INIT};
 struct percpu cpu_table[NR_CPUS] = {{.current = &caller}, {.current = &caller}};
 unsigned int host_cpu;
 

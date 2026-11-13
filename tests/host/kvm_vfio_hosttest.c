@@ -12,7 +12,7 @@ static int failures, live, fail_alloc, fail_fd, fail_out, caller_ok = 1;
 static int releases, coherency_on, coherency_off, waits;
 static fd_entry_t entries[16];
 static struct open_file descriptions[16];
-static fd_table_t table = {{entries}, 16, 1, 0, SPINLOCK_INIT, NULL};
+static fd_table_t table = {.chunks = {entries}, .cap = 16, .refs = 1, .lock = SPINLOCK_INIT};
 static process_t caller;
 struct percpu cpu_table[NR_CPUS] = {{.current = &caller}};
 unsigned int host_cpu;
