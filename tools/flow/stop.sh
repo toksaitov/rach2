@@ -428,10 +428,10 @@ left()
     n=$(printf '%s' "$out" | grep -c '^stop: left')
     if [ "$n" -eq 0 ]; then
         echo "stop: everything is stopped"
-    else
-        echo "stop: $n left"
+        return 0
     fi
-    return "$n"
+    echo "stop: $n left"
+    return 1
 }
 
 dry='' github='' release='' unsure=''
