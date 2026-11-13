@@ -265,7 +265,8 @@ static int dir_names_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at,
  * second too; one found with the lock held is damage, reported as Linux's
  * `ext2_lookup` reports `deleted inode referenced` (`ext2_stale`). The node
  * table's big lock, which `ext2_node_for` takes, comes after a node's lock,
- * and the load takes no node lock.
+ * and the load takes no node lock. A fenced directory (`d->fenced`) is -EIO,
+ * found under its lock, as Linux's bad inode answers a lookup.
  */
 int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
@@ -286,7 +287,7 @@ int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
     }
     for (held = 0;; held = 1) {
         ext2_node_lock(d);
-        rc = dir_lookup(em, d, name, &ino, &at);
+        rc = d->fenced ? -EIO : dir_lookup(em, d, name, &ino, &at);
         version = d->dir_version;
         if (rc > 0 && ino == d->ino) {
             ext2_node_ref(d, 1);
@@ -422,6 +423,7 @@ static int dir_realign(struct ext2_mount *em, struct ext2_node *d, uint32_t *cur
  * block that cannot be read is logged and reported to the mount's policy
  * (`ext2_mark_error`), as Linux's `ext2_readdir` reports a bad page
  * (fs/ext2/dir.c:282); a lookup's failed read is not, as Linux's is not.
+ * A fenced directory (`d->fenced`) is -EIO, found under its lock.
  */
 int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
@@ -434,7 +436,7 @@ int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct v
         return -ENOTDIR;
     }
     ext2_node_lock(d);
-    rc = d->unlinked ? -ENOENT : 0;
+    rc = d->fenced ? -EIO : d->unlinked ? -ENOENT : 0;
     if (rc == 0 && (h->dir_version != d->dir_version || h->cursor != *cursor)) {
         rc = dir_realign(em, d, cursor, &unread);
     }
@@ -513,7 +515,8 @@ static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *b
  * the length; -ENAMETOOLONG when `cap` cannot hold it; -EINVAL for a node
  * that is not a link; or -EIO for a size of a block or more, a link of 60
  * bytes or more without blocks, a long link without its block, or a failed
- * read. Takes the link's lock (`link_target`), as a read does.
+ * read, or for a fenced link (`n->fenced`), found under the lock. Takes the
+ * link's lock (`link_target`), as a read does.
  */
 int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
@@ -524,7 +527,7 @@ int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
         return -EINVAL;
     }
     ext2_node_lock(n);
-    rc = link_target(ext2_em_of(mnt), n, buf, cap);
+    rc = n->fenced ? -EIO : link_target(ext2_em_of(mnt), n, buf, cap);
     ext2_node_unlock(n);
     return rc;
 }
@@ -538,14 +541,15 @@ int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
  * `ext2_fast_link` reads `blocks` and `file_acl`, which a setxattr changes in
  * two stores under the big lock that this walk does not take. A link's mode,
  * size and words do not change while a hold keeps it, so this takes no
- * lock.
+ * lock. A fenced link (`n->fenced`) is -1, which sends the caller to
+ * `ext2_readlink`, which refuses it.
  */
 int ext2_readlink_cached(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *n = node;
 
-    if (!n->fast_target || n->size >= EXT2_FAST_LINK || n->size + 1 > cap) {
+    if (n->fenced || !n->fast_target || n->size >= EXT2_FAST_LINK || n->size + 1 > cap) {
         return -1;
     }
     return link_target(em, n, buf, cap);
@@ -1046,7 +1050,9 @@ static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *hea
  * `ext2_node_dirty`), keep the change; then store the inode with
  * WRITE_THROUGH and, on a mount that writes back, write it to the device
  * (`inode_commit`). Every change of a directory's entries comes here
- * first. 0, or -errno, with the entries untouched.
+ * first, so a fenced directory (`d->fenced`), whose blocks cannot be
+ * trusted, is -EIO here before any entry is written. 0, or -errno, with the
+ * entries untouched.
  *
  * This driver keeps the linear entries only, which an index leaves readable
  * as they are: the index root lies in the slack of `..`, and each index
@@ -1084,6 +1090,9 @@ static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
     int indexed = (d->flags & EXT2_INDEX_FL) != 0;
     int rc;
 
+    if (d->fenced) {
+        return -EIO;
+    }
     if (!indexed && !d->unstored) {
         return 0;
     }
@@ -1513,7 +1522,9 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
  * name in unlink, rmdir and rename before it calls the type, and this takes
  * that lock again by depth. 0, or the errors of `ext2_node_for`, a freed
  * inode reported as damage (`ext2_stale`), since the caller holds the lock
- * of the directory that names it.
+ * of the directory that names it, or -EIO with nothing held for a fenced
+ * node (`c->fenced`), whose entry stays and whose inode is neither stored
+ * nor freed, for e2fsck.
  */
 static int child_take(struct ext2_mount *em, uint32_t ino, struct ext2_node **out)
 {
@@ -1524,6 +1535,11 @@ static int child_take(struct ext2_mount *em, uint32_t ino, struct ext2_node **ou
         return rc == -ESTALE ? ext2_stale(em, ino) : rc;
     }
     ext2_node_lock(c);
+    if (c->fenced) {
+        ext2_node_unlock(c);
+        ext2_put(em->mnt, c);
+        return -EIO;
+    }
     *out = c;
     return 0;
 }
@@ -2348,7 +2364,9 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
  * Returns 0; -ENOENT for a missing source or a removed destination
  * directory, which takes no entry; -EISDIR, -ENOTDIR, -ENOTEMPTY; -EINVAL
  * for a directory moved below itself, found by a walk up `..` before any
- * write; -EMLINK; -ENAMETOOLONG; -EROFS; -ENOSPC; or -errno.
+ * write; -EMLINK; -ENAMETOOLONG; -EROFS; -ENOSPC; -EIO, with nothing
+ * written, when either directory, the inode moved or the one it replaces is
+ * fenced (`n->fenced`); or -errno.
  */
 int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                 const char *newname)
@@ -2382,6 +2400,9 @@ int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *
     if (nd->unlinked) {
         return -ENOENT;
     }
+    if (od->fenced || nd->fenced) {
+        return -EIO;
+    }
     rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
     if (rc <= 0) {
         return rc < 0 ? rc : -ENOENT;
@@ -2412,7 +2433,9 @@ int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *
         if (second) {
             ext2_node_lock(second);
         }
-        if (victim && (victim->mode & S_IFMT_) == S_IFDIR_) {
+        if (n->fenced || (victim && victim->fenced)) {
+            rc = -EIO;
+        } else if (victim && (victim->mode & S_IFMT_) == S_IFDIR_) {
             int empty;
 
             rc = dir_is_empty(em, victim, &empty);

@@ -240,11 +240,13 @@ struct ext2_node {
      * holds its nodes and its drain stores them. */
     int unstored;
     /* Set when a store found a field changed in memory without the mark
-     * (`ext2_inode_write`), so that what the node holds cannot be trusted:
-     * no store of it is made again, a write to it is refused, and it counts
-     * as marked for a sync, the valid bit and a remount's check
-     * (`node_owes`) until it is dropped, at its last put without a store. No
-     * store clears it. */
+     * (`ext2_inode_write`), so that what the node holds cannot be trusted,
+     * and the node is Linux's bad inode (fs/bad_inode.c): nothing is written
+     * through its number, its pointers or its attribute block, nothing they
+     * name is freed, every operation on it but getattr is -EIO, and it
+     * counts as marked for a sync, the valid bit and a remount's check
+     * (`node_owes`) until it is dropped, at its last put without a store or
+     * a free, even when unlinked. No store clears it. */
     int fenced;
     int unlinked;                /* no name left; the inode and its blocks go at the last put */
     int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */

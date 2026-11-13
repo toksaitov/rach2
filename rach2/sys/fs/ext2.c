@@ -238,13 +238,18 @@ static void node_final(struct ext2_mount *em, struct ext2_node *n);
  * cache (`n->unstored`) on a mount that writes, go through `node_final`,
  * whose free frees or stores the inode before the node goes, as Linux's
  * `iput_final` writes a dirty inode before it evicts it (fs/inode.c:1861);
- * any other node is dropped at once, a fenced one (`n->fenced`) among them,
- * which no store may write. A node whose load failed, or a new inode's that
- * was never made, is not live, and its mark names nothing.
+ * any other node is dropped at once. A fenced node (`n->fenced`) is dropped
+ * whatever `unlinked` says, since nothing may be written through it or
+ * freed from what it names: an unlinked one stays allocated on the disk for
+ * e2fsck, whose error bit the fence set, as Linux's `ext2_evict_inode`
+ * deletes only an inode that is not bad (fs/ext2/inode.c:77). A node whose
+ * load failed, or a new inode's that was never made, is not live, and its
+ * mark names nothing.
  */
 static void node_last(struct ext2_mount *em, struct ext2_node *n)
 {
-    if (n->unlinked || (n->unstored && !n->fenced && n->state == N_LIVE && ext2_writes(em))) {
+    if (!n->fenced &&
+        (n->unlinked || (n->unstored && n->state == N_LIVE && ext2_writes(em)))) {
         node_final(em, n);
     } else {
         node_drop(em, n);
@@ -3346,13 +3351,18 @@ static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
  * bit is freed. Each step reads
  * through the reclaim reader (`ext2_read_reclaim`), which reports a damaged
  * or unread block and leaves what it holds taken, so a step returns only a
- * failed write, after which nothing further would land. 0, or -errno.
+ * failed write, after which nothing further would land. A fenced node
+ * (`n->fenced`) is -EIO before any of it, since its pointers and its
+ * attribute block may name another file's blocks. 0, or -errno.
  */
 int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
 {
     int was_dir = (n->mode & S_IFMT_) == S_IFDIR_;
     int rc;
 
+    if (n->fenced) {
+        return -EIO;
+    }
     if ((n->mode & S_IFMT_) == S_IFREG_ || was_dir ||
         ((n->mode & S_IFMT_) == S_IFLNK_ && !ext2_fast_link(em, n))) {
         rc = ext2_punch(em, n, 0);
@@ -4038,7 +4048,10 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
 
 /** The extended attribute operation, admitted and locked for shutdown.
  * Kernel buffers only; user. attributes of regular files and directories
- * are supported. Other namespaces return -EOPNOTSUPP. */
+ * are supported. Other namespaces return -EOPNOTSUPP. A fenced node
+ * (`n->fenced`) is -EIO under its lock, before its attribute block is read
+ * or written in place (`attr_inplace`) ahead of the store that would refuse
+ * it. */
 static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
 {
     int op = arg->op;
@@ -4057,7 +4070,7 @@ static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
     if (op != VFS_XATTR_LIST && type != S_IFREG_ && type != S_IFDIR_)
         return op >= VFS_XATTR_SET ? -EPERM : -ENODATA;
     em_enter_node(em, n);
-    rc = attr_read(em, n, &raw);
+    rc = n->fenced ? -EIO : attr_read(em, n, &raw);
     if (!rc && op <= VFS_XATTR_LIST)
         rc = ext2_xattr_read(raw, em->block_size, name ? name + 5 : NULL, arg->value, arg->size);
     else if (!rc) {

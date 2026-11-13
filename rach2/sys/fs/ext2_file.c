@@ -7,8 +7,10 @@
 
 /** The `open` of `vfs_ops`: a new handle holding the node once more, with
  * a directory cursor not yet validated; `flags` is not read. Returns
- * -ENOMEM when the handle cannot be allocated, or -EACCES for a device
- * node, since devices are opened in `/dev`. */
+ * -ENOMEM when the handle cannot be allocated, -EACCES for a device node,
+ * since devices are opened in `/dev`, or -EIO for a fenced node
+ * (`n->fenced`), as Linux's bad inode refuses an open (fs/bad_inode.c:20);
+ * the fence is only ever set, so it is read without the lock. */
 int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     struct ext2_node *n = node;
@@ -19,6 +21,9 @@ int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
     (void)flags;
     if (type == S_IFCHR_ || type == S_IFBLK_) {
         return -EACCES;
+    }
+    if (n->fenced) {
+        return -EIO;
     }
     h = kzalloc(sizeof(*h));
     if (!h) {
@@ -223,8 +228,9 @@ static int read_piece(struct ext2_mount *em, const struct ext2_node *n, uint64_t
  * lock. A caller without the big lock passes a kernel buffer; the batch's
  * images it finds are copied under the batch's lists' lock in the step
  * that finds them (`ext2_writeback_copy`), and a drain puts an image in the
- * cache before it lets the image go. The bytes read, -EISDIR, -EFAULT, or
- * -EIO.
+ * cache before it lets the image go. A fenced node (`n->fenced`), whose
+ * pointers cannot be trusted, is -EIO under its lock, for a handle opened
+ * before the fence was set. The bytes read, -EISDIR, -EFAULT, or -EIO.
  */
 int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset)
 {
@@ -238,6 +244,7 @@ int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count
         return -EISDIR;
     }
     ext2_node_lock(n);
+    rc = n->fenced ? -EIO : 0;
     while (rc == 0 && done < count && offset + done < n->size) {
         uint64_t at = offset + done;
         uint32_t take = em->block_size - ((uint32_t)at & (em->block_size - 1));
@@ -520,7 +527,8 @@ static uint32_t frame_fill(const struct frame_read *fr, uint32_t pg, uint32_t le
  * write, truncation or free of the file changes a planned block before it
  * is read, as Linux's locked folio holds off a truncation of its page until
  * its read ends (`truncate_inode_pages_range`, mm/truncate.c). The pages
- * filled, 0 at or past the end, -EISDIR, or the first page's error.
+ * filled, 0 at or past the end, -EISDIR, -EIO for a fenced node
+ * (`n->fenced`), found under the lock, or the first page's error.
  *
  * With `done_with` not NULL the runs go to the device without a wait and the
  * answer is the pages started, its completion being called for each as
@@ -553,12 +561,13 @@ int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, ui
     ext2_node_lock(n);
     size = n->size;
     pages = (uint32_t)((size + PAGE_SIZE - 1) >> 12);
-    if (first >= pages) {
+    rc = n->fenced ? -EIO : 0;
+    if (rc != 0 || first >= pages) {
         ext2_node_unlock(n);
         if (plan != small) {
             kfree(plan);
         }
-        return 0;
+        return rc;
     }
     if (count > pages - first) {
         count = pages - first;
@@ -869,8 +878,11 @@ static void punch_settle(struct ext2_mount *em, const struct punch_list *list)
  * reach the device at the sync that ends the round, past the check a write
  * through makes. A round ends at a service point, since a file of gigabytes in
  * the cache frees with no sleep and what is ready on the processor waits for
- * it; a device that failed meanwhile stops the next round. The caller holds
- * `n`'s lock and not `em->batch`. 0, or -errno.
+ * it; a device that failed meanwhile stops the next round. A fenced node
+ * (`n->fenced`) is -EIO before anything is read, since its pointers cannot be
+ * trusted; a release and a truncate refuse it first, and this serves any
+ * later caller. The caller holds `n`'s lock and not `em->batch`. 0, or
+ * -errno.
  */
 int ext2_punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
@@ -879,7 +891,7 @@ int ext2_punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
     int rc, err;
 
     ext2_assert_node_locked(n);
-    if (em->dev->flags & BLOCK_WRITE_FAILED) {
+    if (n->fenced || (em->dev->flags & BLOCK_WRITE_FAILED)) {
         return -EIO;
     }
     if (ext2_writeback_holds(em, n)) {
