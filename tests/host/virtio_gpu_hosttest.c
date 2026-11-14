@@ -1037,7 +1037,8 @@ static struct {
     uint32_t kicks;          /* kicks of either queue */
     uint32_t kicks_unlocked; /* of them, made without the big lock */
     uint32_t kicks_counted;  /* of them, counted in the driver's `kicking` */
-    uint32_t fail_type;      /* answer this command with ERR_INVALID_RESOURCE_ID */
+    uint32_t fail_type;      /* answer this command with an error: */
+    uint32_t fail_resp;      /* this one, or ERR_INVALID_RESOURCE_ID for 0 */
     struct {
         uint32_t w, h, enabled;
     } scanout[4];
@@ -1413,7 +1414,7 @@ static uint32_t execute(const uint8_t *req, uint32_t n, uint8_t *resp)
         break;
     }
     if (type == gpu.fail_type) {
-        ok = VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        ok = gpu.fail_resp ? gpu.fail_resp : VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
         len = sizeof(*rh);
     }
     rh->type = ok;

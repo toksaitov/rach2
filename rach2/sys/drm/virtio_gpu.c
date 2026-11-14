@@ -1140,14 +1140,23 @@ static void obj_release(struct virtio_gpu_object *bo)
     kfree(bo);
 }
 
-/** The host has let go of an object's resource: free the object, and drop
- * the hold its UNREF kept on the device. */
+/**
+ * The host has let go of an object's resource: free the object, and drop
+ * the hold its UNREF kept on the device. An answer of an invalid resource id
+ * says the host has no resource of that id, so it holds none of the
+ * object's frames, as when its CREATE_BLOB failed after the host's render
+ * server died; the object is freed and the device goes on, as Linux's
+ * virtio_gpu_cmd_unref_cb frees it whatever the answer. Any other error may
+ * leave the host holding the frames, so the device is unplugged, which
+ * resets it and stops its DMA before they are freed.
+ */
 static void unref_done(struct virtio_gpu_cmd *cmd)
 {
     struct virtio_gpu_object *bo = (struct virtio_gpu_object *)cmd->arg;
     struct drm_device *dev = bo->shmem.base.dev;
 
-    if (cmd->resp_type != VIRTIO_GPU_RESP_OK_NODATA && !cmd->vg->dead) {
+    if (cmd->resp_type != VIRTIO_GPU_RESP_OK_NODATA &&
+        cmd->resp_type != VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID && !cmd->vg->dead) {
         drm_dev_unplug(dev);
     }
     cmd->vg->unrefs--;

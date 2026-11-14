@@ -435,8 +435,14 @@ static void reset_pending(uint32_t h)
     drm_gem_object_put(obj);
 }
 
-/** Force loss while releasing backing, before a host could stop reading it. */
-static void release_failure(int no_memory)
+/**
+ * Fail a resource's release: with `how` 0, the UNREF's allocation; 1, its
+ * answer, ERR_UNSPEC, after which the host may still hold the backing, so
+ * the device is lost before the backing is freed; 2, its answer
+ * ERR_INVALID_RESOURCE_ID, which says the host holds no resource of the id,
+ * so the backing is freed and the device goes on.
+ */
+static void release_failure(int how)
 {
     uint32_t h;
 
@@ -447,16 +453,25 @@ static void release_failure(int no_memory)
     CHECK(bind() == 1 && vgpu_open(dev, &file) == 0, "bind for resource-release failure");
     h = resource();
     drm_dev_get(dev);
-    if (no_memory) {
+    if (how == 0) {
         fail_after = 0;
     } else {
         gpu.fail_type = VIRTIO_GPU_CMD_RESOURCE_UNREF;
+        gpu.fail_resp =
+            how == 1 ? VIRTIO_GPU_RESP_ERR_UNSPEC : VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
     }
     CHECK(drm_gem_handle_delete(&file, h) == 0, "close the resource in the forced failure");
     fail_after = -1;
     vgpu_reap(vg);
-    CHECK(vg->dead && gpu.torn_down && !pages_held && !vg->resources,
-          "an unref allocation failure or error stops DMA before backing is freed");
+    if (how == 2) {
+        CHECK(!vg->dead && !dev->unplugged && !gpu.torn_down && !pages_held && !vg->resources,
+              "an unref answered with an invalid resource id frees the backing and keeps the "
+              "device");
+        drm_dev_put(dev);
+    } else {
+        CHECK(vg->dead && gpu.torn_down && !pages_held && !vg->resources,
+              "an unref allocation failure or error stops DMA before backing is freed");
+    }
     vgpu_context_close(dev, &file);
     unbind();
     model_reset();
@@ -494,8 +509,9 @@ int main(void)
     model_reset();
     CHECK(!allocations && !pages_held && !irq_depth,
           "all model allocations, pages and locks are released");
-    release_failure(1);
     release_failure(0);
+    release_failure(1);
+    release_failure(2);
     printf("vgpu3d-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }
