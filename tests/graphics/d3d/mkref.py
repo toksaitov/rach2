@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fold the rows that reference.sh recorded into a reference for run.py.
 
-usage: mkref.py [-s UNIT]... SOURCE OUT.json DIR...
+usage: mkref.py [-s UNIT]... [-a TEST=CHECK]... SOURCE OUT.json DIR...
 
 Each DIR is a run of reference.sh; each of its numbered directories is one
 row of run.py -R, with its environment.json and results.json. A unit that
@@ -16,6 +16,13 @@ description of where it was taken.
 author saw stall in Linux's runs, its process alive and idle, and stopped:
 the reference stops it where it stalled, at the last test line its log has,
 counted as often as the log has it, as linux.json stops WineD3D's DXGI unit.
+
+-a names a vkd3d-proton test whose failure count differs from one of Linux's
+runs to the next because its check reads the address at which mmap put the
+driver's memory, and the text that each failure of that check prints: the
+reference's "placement" keeps it, and run.py accepts any count of failures
+that all print it, as test_suballocate_va_alignment's "Expected VA to be
+aligned" on lavapipe and Venus.
 """
 import getopt
 import json
@@ -66,12 +73,19 @@ def merge_stall(old, new, unit):
 def main():
     """Read every recorded row and write the reference whole."""
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "s:")
+        opts, args = getopt.getopt(sys.argv[1:], "s:a:")
     except getopt.GetoptError:
         opts, args = [], []
     if len(args) < 3:
-        fail("usage: mkref.py [-s UNIT]... SOURCE OUT.json DIR...")
-    stalled = {value for _, value in opts}
+        fail("usage: mkref.py [-s UNIT]... [-a TEST=CHECK]... SOURCE OUT.json DIR...")
+    stalled = {value for opt, value in opts if opt == "-s"}
+    placement = {}
+    for opt, value in opts:
+        if opt == "-a":
+            name, _, check = value.partition("=")
+            if not name or not check:
+                fail("-a takes TEST=CHECK, not %s" % value)
+            placement[name] = check
     source, output, dirs = args[0], Path(args[1]), args[2:]
     ref = {"source": source, "probe": {}, "wine": {}, "vkd3d": {}, "flakes": []}
     adapters = set()
@@ -160,6 +174,10 @@ def main():
         # A test that crashed in every run is matched by its crash alone.
         ref["vkd3d"].setdefault(name, {"failures": [], "min_checks": 0, "max_skipped": 0})
     ref["flakes"].sort()
+    for name in placement:
+        if name not in ref["vkd3d"]:
+            fail("-a names %s, which the records lack" % name)
+    ref["placement"] = dict(sorted(placement.items()))
     output.write_text(json.dumps(ref, indent=2) + "\n")
     print("mkref: result: %d probes, %d Wine units, %d vkd3d tests, %d flakes in %s" % (
         len(ref["probe"]), sum(len(u) for u in ref["wine"].values()), len(ref["vkd3d"]),
