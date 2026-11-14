@@ -1397,7 +1397,12 @@ static int traced_zombie(void)
     int tfd = -1, copy = -1, ok = 0, st;
 
     w.tid = -1;
-    if (pipe(w.ready) != 0 || pipe(w.go) != 0) {
+    if (pipe(w.ready) != 0) {
+        return fail("pipe for a traced thread");
+    }
+    if (pipe(w.go) != 0) {
+        close(w.ready[0]);
+        close(w.ready[1]);
         return fail("pipe for a traced thread");
     }
     pid = fork();
@@ -1409,6 +1414,7 @@ static int traced_zombie(void)
             pause();
         }
     }
+    close(w.ready[1]);
     if (pid > 0 && read(w.ready[0], &w.tid, sizeof(w.tid)) == (ssize_t)sizeof(w.tid)) {
         tfd = (int)syscall(SYS_pidfd_open, (long)w.tid, (long)PIDFD_THREAD);
         copy = tfd >= 0 ? (int)syscall(SYS_pidfd_getfd, (long)tfd, (long)w.go[0], 0L) : -1;
@@ -1435,7 +1441,6 @@ static int traced_zombie(void)
         close(tfd);
     }
     close(w.ready[0]);
-    close(w.ready[1]);
     close(w.go[0]);
     close(w.go[1]);
     if (!ok) {
