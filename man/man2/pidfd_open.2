@@ -71,7 +71,8 @@ sends it to a process ID, which 0 also does;
 .It Dv PIDFD_SIGNAL_PROCESS_GROUP
 each member of the process group whose ID is the process's, as
 .Xr kill 2
-sends it to the negated ID, even once the process has been reaped.
+sends it to the negated ID, even once the process has been reaped, but
+never a group given that ID after the process's own group has gone.
 .El
 .Pp
 A null
@@ -190,7 +191,7 @@ No process has the ID
 .Fa pid ,
 the pidfd's process has been reaped, or the process group
 .Dv PIDFD_SIGNAL_PROCESS_GROUP
-names has no members.
+names has no members, which a later group given its ID does not change.
 .El
 .Sh SEE ALSO
 .Xr fork 2 ,

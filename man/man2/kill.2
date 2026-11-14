@@ -161,6 +161,9 @@ given to
 or
 .Nm tgkill
 is not positive.
+These two calls check the IDs first, then find the thread, which may be
+.Bq Er ESRCH ,
+and only then check the signal, as Linux does.
 .It Bq Er EPERM
 The caller may not signal the target, or may not signal any member of
 the selected group.
