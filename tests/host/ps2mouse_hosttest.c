@@ -178,6 +178,7 @@ static void model_reset(void)
     mouse_knock = 0;
     mouse_registrations = 0;
     registered_name = 0;
+    setup_failed = 0; /* i8042.c's, as at boot */
     registered_product = 0;
     irq_on = 1;
     ports_with_irq_on = 0;
@@ -1033,6 +1034,7 @@ static void bringup_controller_rows(void)
     CHECK("a stuck input buffer is reported", warned("the aux port would not enable"));
     CHECK("a stuck input buffer registers no handler", registrations == 0);
     CHECK("a stuck input buffer turns interrupts on again", irq_on);
+    CHECK("a port that would not enable leaves the controller's setup standing", !i8042_failed());
 
     /* A controller that loses the configuration byte. */
     model_reset();
@@ -1045,6 +1047,7 @@ static void bringup_controller_rows(void)
           warned("reading the configuration byte timed out"));
     CHECK("a lost configuration byte registers no handler", registrations == 0);
     CHECK("a lost configuration byte turns interrupts on again", irq_on);
+    CHECK("a lost configuration byte fails the controller's setup", i8042_failed());
 }
 
 /** `init_mouse` against each fault of the mouse. */

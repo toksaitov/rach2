@@ -36,15 +36,17 @@
  * the reads go on until two agree, so the translation bit kbd_init caches
  * is the controller's, the answer left over drained before the handler
  * can take it for a key; a controller whose reads never agree gives -1
- * after ten, and kbd_init then keeps translation on, so that on a portable
- * chassis a later BAT starts the probe at RESET_DIS, never at GETID.
+ * after ten.
  *
- * The slow controller's rows hold the input buffer full after WRITE_CONFIG
- * past the wait's bound: the read fails, kbd_init keeps translation on, and
- * the configuration byte, owed with translation on, goes out before the
- * LED command's 0xED, or before another controller command, so that no
- * keyboard byte becomes the configuration; while the controller holds the
- * command nothing is written, and no byte is written into a full buffer.
+ * The setup's rows time out each command of the configuration's read and
+ * write-back in turn, READ_CONFIG not taken or not answered and WRITE_CONFIG
+ * or its byte not taken, and fail the controller's setup as Linux's
+ * i8042_controller_init does: no keyboard is bound, no handler is taken,
+ * IRQ 1 and IRQ 12 are masked and none unmasked, no key reaches the decoder
+ * and nothing more is written to the controller, also once it takes the
+ * command it held. A setup that succeeds binds a keyboard that the
+ * controller translates as its configuration byte says, and a failure of
+ * the controller after that, the mouse's, unbinds the keyboard.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DTICK_HZ=1000
@@ -84,11 +86,15 @@ static int fails;
  * holding a byte waits in `pending` until the controller takes the next
  * byte written, or the row lets time pass (`catch_up`), as a controller
  * that runs its commands in order answers. The byte after WRITE_CONFIG is
- * the configuration, kept in `config_written`, not a byte for the
- * keyboard. After WRITE_CONFIG the input buffer reads full for the next
- * `slow_takes` reads of the status, as a controller slow to take the
- * command, and `input_busy` counts those left; a byte written meanwhile
- * counts in `overruns`. */
+ * the configuration, kept in `config_written` and made `model_config`, not
+ * a byte for the keyboard; a key the keyboard sends, in set 2, reaches the
+ * data port in set 1 while `model_config` has the translation bit
+ * (`model_key`). After WRITE_CONFIG the input buffer reads full for the
+ * next `slow_takes` reads of the status, as a controller slow to take the
+ * command, and after the `busy_at_read`th READ_CONFIG for the next
+ * `read_takes`; `input_busy` counts those left, and a byte written
+ * meanwhile counts in `overruns`. While `mute_reads` is set READ_CONFIG
+ * gets no answer. */
 #define MAX_WRITES 256
 #define MAX_QUEUED 64
 static uint8_t model_status;
@@ -108,6 +114,9 @@ static int config_written = -1;
 static int slow_takes;
 static int input_busy;
 static int overruns;
+static int busy_at_read;
+static int read_takes;
+static int mute_reads;
 static int data_reads;
 static int port_writes;
 static uint8_t data_writes[MAX_WRITES];
@@ -173,13 +182,20 @@ void outb(uint16_t port, uint8_t val)
     catch_up();
     if (port == PS2_CMD_PORT && val == PS2_CMD_READ_CONFIG) {
         config_commands++;
-        if (stray >= 0) {
+        if (busy_at_read > 0 && --busy_at_read == 0) {
+            input_busy = read_takes;
+        }
+        if (mute_reads) {
+            /* no answer */
+        } else if (stray >= 0) {
             queue((uint8_t)stray, stray_mouse ? MOUSE_BYTE : KEYBOARD_BYTE);
             if (!stray_always) {
                 stray = -1;
             }
         }
-        if (late_answers && n_queued > 0) {
+        if (mute_reads) {
+            /* no answer */
+        } else if (late_answers && n_queued > 0) {
             pending = model_config;
         } else {
             queue(model_config, PS2_STATUS_OUTPUT_FULL);
@@ -192,10 +208,23 @@ void outb(uint16_t port, uint8_t val)
         }
     } else if (port == PS2_DATA_PORT && config_next) {
         config_written = val;
+        model_config = val;
         config_next = 0;
     } else if (port == PS2_DATA_PORT && n_data_writes < MAX_WRITES) {
         data_writes[n_data_writes++] = val;
     }
+}
+
+/** The byte the controller gives for the key `set2` of the keyboard's set
+ * 2, as its configuration byte says: the key's set-1 code while it
+ * translates, the code itself while it does not. The rows' keys alone, A
+ * and Enter. */
+static uint8_t model_key(uint8_t set2)
+{
+    if ((model_config & PS2_CONFIG_TRANSLATE) == 0) {
+        return set2;
+    }
+    return set2 == 0x1C ? 0x1E : set2 == 0x5A ? 0x1C : set2;
 }
 
 /* The tick the rows set, the LEDs they want, and the warnings logged. */
@@ -310,18 +339,35 @@ void paging_leave_kernel(uintptr_t saved)
     (void)saved;
 }
 
-/** The handler is called directly. */
+/* The handlers taken; the IRQ lines unmasked and masked, a bit each, and
+ * the unmasks made. */
+static int handlers;
+static unsigned int unmasked;
+static unsigned int masked;
+static int unmasks;
+
+/** Count the handler, which the rows call directly. */
 void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     (void)vector;
     (void)handler;
     (void)name;
+    handlers++;
 }
 
-/** No interrupt controller. */
+/** Mark line `irq` unmasked. */
 void pic_unmask_irq(uint8_t irq)
 {
-    (void)irq;
+    unmasked |= 1u << irq;
+    masked &= ~(1u << irq);
+    unmasks++;
+}
+
+/** Mark line `irq` masked. */
+void pic_mask_irq(uint8_t irq)
+{
+    masked |= 1u << irq;
+    unmasked &= ~(1u << irq);
 }
 
 /** Run one IRQ 1 with `status` in the status register and `data` waiting,
@@ -825,78 +871,143 @@ static void unstable_rows(void)
     stray_always = 0;
 }
 
-/** A configuration read that fails on a portable chassis: kbd_init takes
- * translation to be on, with a warning, so a later BAT starts the probe at
- * RESET_DIS and never sends the laptop's keyboard GETID. */
-static void failed_config_rows(void)
+/** Boot again: the controller's setup not yet run and the keyboard's
+ * driver as it starts, the model's controller empty and quick, the
+ * translation on. */
+static void boot_again(void)
 {
-    int w = warnings, k;
-
-    chassis = "9";
-    stray = 0x1E;
-    stray_always = 1;
-    kbd.translated = 0;
-    kbd_init();
+    setup_failed = 0;
+    k_memset(&kbd, 0, sizeof(kbd));
+    k_memset(&leds, 0, sizeof(leds));
+    k_memset(&ps2_keyboard, 0, sizeof(ps2_keyboard));
+    serio0_unbound = 0;
+    model_status = 0;
+    n_queued = 0;
+    pending = -1;
     stray = -1;
     stray_always = 0;
-    CHECK("a failed configuration read keeps translation",
-          kbd.translated == 1 && kbd.portable && warnings == w + 1 && n_queued == 0);
-    CHECK("so a BAT writes RESET_DIS, not GETID",
-          answer_at(T(3400), 0xAA) == 1 && last_write() == 0xF5);
-    CHECK("and the keyboard answers it and ENABLE",
-          answer_at(T(3401), 0xFA) == 1 && last_write() == 0xF4 && answer_at(T(3402), 0xFA) == 0 &&
-              kbd.job == JOB_NONE && !serio0_unbound);
-    k = keys;
-    CHECK("its keys flow", answer_at(T(3500), 0x1E) == 0 && keys == k + 1);
-    CHECK("whose LEDs follow", leds_sent(T(3501)));
-    kbd.portable = 0;
-    chassis = 0;
+    late_answers = 0;
+    slow_takes = 0;
+    busy_at_read = 0;
+    read_takes = 0;
+    mute_reads = 0;
+    input_busy = 0;
+    config_next = 0;
+    config_written = -1;
+    model_config = 0x45;
+    unmasked = 0;
+    masked = 0;
+    wanted_leds = 0;
 }
 
-/** A controller that takes WRITE_CONFIG only after the wait's bound: the
- * configuration read fails with the byte owed, and the owed byte, with
- * translation on as kbd_init takes it, goes out before any other byte. */
-static void slow_config_rows(void)
+/** Run kbd_init on the model as a row has set it, and check that the
+ * controller's setup failed with nothing bound: `what` names the timeout.
+ * Then let the controller take what it held, press a key, want LEDs and
+ * step the tick: nothing reaches the decoder and nothing is written. */
+static void failed_setup_row(const char *what, uint32_t at)
 {
-    int w = warnings, d;
+    int a = attaches, h = handlers, u = unmasks, k = keys, w = warnings, writes, reads;
 
+    kbd_init();
+    CHECK(what, i8042_failed() && warnings > w);
+    CHECK("  binds no keyboard and takes no handler",
+          attaches == a && !ps2_keyboard.dev && serio0_unbound && handlers == h);
+    CHECK("  unmasks nothing and masks IRQ 1 and IRQ 12",
+          unmasks == u && unmasked == 0 && (masked & 0x1002u) == 0x1002u);
+    input_busy = 0;
+    pending = -1;
+    writes = port_writes;
+    reads = data_reads;
+    wanted_leds = 0x02;
+    kernel_ticks = at;
+    model_status = KEYBOARD_BYTE;
+    model_data = model_key(0x5A);
+    kbd_irq(0);
+    model_status = KEYBOARD_BYTE;
+    model_data = 0xAA;
+    kbd_irq(0);
+    CHECK("  lets no byte reach the decoder", keys == k && data_reads == reads);
+    CHECK("  and writes nothing more", tick_at(at) == 0 && tick_at(at + WAIT) == 0 &&
+                                           port_writes == writes && ps2_read_config() == -1 &&
+                                           port_writes == writes);
+}
+
+/** A timeout of each command of the setup fails it, as Linux's
+ * i8042_controller_init fails with EIO and i8042_probe binds no port; a
+ * setup that succeeds binds a keyboard translated as the controller's
+ * configuration says; and a failure the mouse's setup finds later unbinds
+ * it. */
+static void setup_rows(void)
+{
+    int a, d, k, h;
+
+    boot_again();
+    input_busy = PS2_TIMEOUT + 10;
+    failed_setup_row("a READ_CONFIG the controller does not take fails the setup", T(3400));
+
+    boot_again();
+    mute_reads = 1;
+    failed_setup_row("a READ_CONFIG the controller does not answer fails the setup", T(3410));
+
+    boot_again();
+    busy_at_read = 2;
+    read_takes = PS2_TIMEOUT + 10;
+    failed_setup_row("a WRITE_CONFIG the controller does not take fails the setup", T(3420));
+    CHECK("  and its byte is never written", config_written == -1 && overruns == 0);
+
+    boot_again();
     slow_takes = PS2_TIMEOUT + 10;
-    n_queued = 0;
-    config_written = -1;
-    overruns = 0;
-    CHECK("a WRITE_CONFIG not taken in time fails the read", ps2_read_config() == -1);
-    CHECK("with its byte not yet written", config_written == -1 && overruns == 0);
-    input_busy = 0;
-    /* 0xA8, the mouse driver's ENABLE_MOUSE. */
-    CHECK("a controller command first gives the owed byte",
-          ps2_send_command(0xA8) == 0 && config_written == 0x45 && overruns == 0);
+    failed_setup_row("a byte of WRITE_CONFIG the controller does not take fails the setup",
+                     T(3430));
+    CHECK("  and the byte, nor any other, is written into the full buffer",
+          config_written == -1 && overruns == 0);
 
-    config_written = -1;
-    kbd.translated = 0;
+    boot_again();
+    stray = 0x1E;
+    stray_always = 1;
+    failed_setup_row("reads that never agree fail the setup", T(3440));
+
+    boot_again();
+    model_status = 0xFF;
+    failed_setup_row("a controller that is not there fails the setup", T(3450));
+
+    boot_again();
+    a = attaches;
+    h = handlers;
+    k = keys;
     kbd_init();
-    CHECK("kbd_init keeps translation on, with a warning",
-          kbd.translated == 1 && warnings == w + 1 && config_written == -1);
-    input_busy = 0;
-    CHECK("the first tick writes the owed byte, no 0xED",
-          tick_at(T(3600)) == 0 && config_written == 0x45);
-    CHECK("then the LEDs go to the keyboard", leds_sent(T(3601)) && config_written == 0x45);
+    CHECK("a setup that succeeds binds the keyboard and unmasks IRQ 1",
+          !i8042_failed() && attaches == a + 1 && ps2_keyboard.dev && !serio0_unbound &&
+              handlers == h + 1 && unmasked == 0x0002u && config_written == 0x45);
+    CHECK("which the controller translates", kbd.translated &&
+                                                 answer_at(T(3500), model_key(0x1C)) == 0 &&
+                                                 keys == k + 1 && last_key == 0x1E);
+    CHECK("and whose LEDs follow", leds_sent(T(3501)));
 
-    /* A controller whose configuration has translation off and that holds
-     * WRITE_CONFIG through the LED command's first ticks. */
+    boot_again();
     model_config = 0x05;
-    slow_takes = 3 * PS2_TIMEOUT;
-    config_written = -1;
-    kbd.translated = 0;
+    k = keys;
     kbd_init();
-    d = n_data_writes;
-    CHECK("nothing goes while the controller holds the command",
-          tick_at(T(3700)) == 0 && tick_at(T(3701)) == 0 && config_written == -1);
-    input_busy = 0;
-    CHECK("once it takes it, the owed byte says translation is on",
-          tick_at(T(3702)) == 0 && config_written == 0x45 && kbd.translated == 1);
-    CHECK("and the LEDs follow", leds_sent(T(3703)) && n_data_writes == d + 2 && overruns == 0);
-    model_config = 0x45;
-    slow_takes = 0;
+    CHECK("a controller that does not translate gives set 2, and is taken so",
+          !kbd.translated && answer_at(T(3600), model_key(0x1C)) == 0 && keys == k + 1 &&
+              last_key == 0x1C);
+
+    boot_again();
+    kbd_init();
+    a = attaches;
+    d = detaches;
+    k = keys;
+    i8042_fail();
+    kbd_stop();
+    CHECK("a failure after the keyboard is bound unbinds it",
+          detaches == d + 1 && !ps2_keyboard.dev && serio0_unbound && attaches == a);
+    CHECK("and masks IRQ 1 and IRQ 12", unmasked == 0 && (masked & 0x1002u) == 0x1002u);
+    wanted_leds = 0x04;
+    d = port_writes;
+    CHECK("its keys stop and nothing is written",
+          answer_at(T(3700), model_key(0x1C)) == 0 && keys == k && tick_at(T(3701)) == 0 &&
+              tick_at(T(3701) + WAIT) == 0 && port_writes == d);
+    boot_again();
 }
 
 int main(void)
@@ -935,8 +1046,7 @@ int main(void)
     nodes_rows();
     config_rows();
     unstable_rows();
-    failed_config_rows();
-    slow_config_rows();
+    setup_rows();
 
     if (fails == 0) {
         printf("ps2kbd-test: pass\n");
