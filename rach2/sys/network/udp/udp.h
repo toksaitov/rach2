@@ -61,7 +61,7 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
  * (`pmtudisc`): in fragments past the route's MTU, or refused.
  *
  * Returns what `ip_tx_opts` or `ip6_tx_opts` returned: 0 when the datagram
- * left, went onto the loopback ring or waits for ARP, and a negative errno
+ * left, went onto the loopback backlog or waits for ARP, and a negative errno
  * for what the caller must hear about, -EINVAL among them for a source of
  * `opt` that is not this machine's or an interface that disagrees. A
  * payload past UDP_PAYLOAD_MAX, or UDP6_PAYLOAD_MAX over IPv6, is

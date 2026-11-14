@@ -92,14 +92,14 @@ int icmp6_send_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t
 /**
  * Tell the sender of `dgram`, `len` bytes this machine sent from its own
  * address, that its next hop did not answer, with an address unreachable
- * (RFC 4861, 7.2.2) that goes round the loopback ring; nothing for an
+ * (RFC 4861, 7.2.2) that goes round the loopback backlog; nothing for an
  * ICMPv6 error, which would answer itself. Called with interrupts off.
  */
 void icmp6_unreach_local(const uint8_t *dgram, uint16_t len);
 
 /**
  * Answer the datagram `dgram` of `len` bytes, received on `nd` or from the
- * loopback ring for NULL, with an error of `type` and `code` whose 32-bit
+ * loopback backlog for NULL, with an error of `type` and `code` whose 32-bit
  * field is `param`, quoting as much of the datagram as fits the 1280-byte
  * minimum MTU (RFC 4443, 2.4).
  *

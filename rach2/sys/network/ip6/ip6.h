@@ -59,7 +59,7 @@
 /* The largest datagram, header included, that leaves a card whole: one
  * Ethernet payload, a card's largest MTU. The link's own MTU, at most this,
  * is `nd6_link_mtu`, and a larger datagram leaves in fragments. The
- * loopback ring's MTU is `lo`'s, NETDEV_LOOPBACK_MTU. */
+ * loopback backlog's MTU is `lo`'s, NETDEV_LOOPBACK_MTU. */
 #define IP6_MTU 1500u
 
 struct netdev;
@@ -78,7 +78,7 @@ struct net_mib6 {
     uint32_t ip6_in_delivers;
     uint32_t ip6_in_mcast_pkts;
     uint32_t ip6_out_requests;
-    uint32_t ip6_out_discards; /* refused by a full card or loopback ring */
+    uint32_t ip6_out_discards; /* refused by a full card, or no memory for the loopback backlog */
     uint32_t ip6_out_no_routes;
     uint32_t ip6_out_mcast_pkts;
     uint32_t ip6_reasm_timeout; /* datagrams whose fragments did not all come in time */
@@ -226,7 +226,7 @@ void ip6_loop_rx(int ifindex, const uint8_t *data, uint32_t len);
  * its source is an address of this machine. It is this machine's when its
  * destination is an address
  * an interface holds, a link-local one only on the interface that holds
- * it, ::1 from the ring, or a group `nd` is a member of.
+ * it, ::1 from the loopback backlog, or a group `nd` is a member of.
  *
  * Its extension headers are then processed as RFC 8200, section 4, says.
  * Hop-by-hop options are taken only right after the IPv6 header; an option
@@ -253,7 +253,7 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
  * `src` is NULL or :: to take the one `ip6_source` chooses, or else must be
  * an address of this machine; an upper layer that sums a pseudo-header
  * chooses the source first, with `ip6_route` and `ip6_source`. A datagram
- * to ::1 or to an address an interface holds goes onto the loopback ring.
+ * to ::1 or to an address an interface holds goes onto the loopback backlog.
  * One to a group goes to the group's station address by its interface. One
  * to any other address goes to its next hop by the neighbour cache
  * (`nd6_output`), which holds it while it asks for the hop's station
@@ -261,13 +261,14 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
  * unreachable. A datagram past the destination's path MTU
  * (`ip6_path_mtu`) leaves in fragments, as `frag6_output` says.
  *
- * Returns 0 when the datagram left or went onto the loopback ring, or a
+ * Returns 0 when the datagram left or went onto the loopback backlog, or a
  * negative errno: -EMSGSIZE when the driver refused the frame's length,
  * -EINVAL for a link-scoped destination with no interface to leave by
  * where there is more than one card, or for a source that is not this
  * machine's, -ENETUNREACH for a destination no route reaches,
  * -EADDRNOTAVAIL when the interface has no source address to use, or
- * -ENOBUFS when the ring is full or the driver did not take a frame.
+ * -ENOBUFS when no memory holds a datagram for the loopback backlog or the
+ * driver did not take a frame.
  *
  * The datagram is built in a buffer of this file's, so the caller has
  * interrupts off (`net_lock` in a system call).
@@ -294,7 +295,7 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
  * `ip6_tx` with the IP6_TXF_* of `opts`. IP6_TXF_UNSPEC sends from ::
  * whatever `src` is, and only by a card; IP6_TXF_ONLINK needs a card that
  * is up in `ifindex`, -ENETUNREACH otherwise. IP6_TXF_LOOP puts a copy of a
- * datagram to a group on the loopback ring as received by the card it left
+ * datagram to a group on the loopback backlog as received by the card it left
  * by, when the card is a member, unless it left in fragments.
  */
 int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
@@ -337,9 +338,10 @@ struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via);
 /**
  * The most bytes, IPv6 header included, a datagram to `dst` by `out` may have
  * without being fragmented: the link's MTU, `nd6_link_mtu` for a card and
- * NETDEV_LOOPBACK_MTU for the loopback ring, or less when a Packet Too Big has
- * lowered the destination's within the last ten minutes (`ip6_pmtu_lower`); 0
- * for a NULL `out`. A link-scoped destination is told apart by `out`.
+ * NETDEV_LOOPBACK_MTU for the loopback backlog, or less when a Packet Too
+ * Big has lowered the destination's within the last ten minutes
+ * (`ip6_pmtu_lower`); 0 for a NULL `out`. A link-scoped destination is
+ * told apart by `out`.
  */
 uint32_t ip6_path_mtu(const struct netdev *out, const uint8_t *dst);
 

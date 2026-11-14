@@ -361,7 +361,7 @@ void frag6_input(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t of
  * The fragmentable part is the whole payload, since this layer sends no
  * extension header of its own: each fragment is the fixed header, a
  * fragment header and the most payload, in 8-byte units, that `mtu` leaves
- * room for, 1232 bytes at the least MTU. A fragment for the loopback ring,
+ * room for, 1232 bytes at the least MTU. A fragment for the loopback backlog,
  * whose MTU is past this file's buffer, is built in a block of the heap.
  * A datagram for a unicast hop whose station address is not known is held
  * whole by the neighbour cache, which calls here again once it is.

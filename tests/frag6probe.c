@@ -5,7 +5,7 @@
  * The probe sends through the kernel's echo, SC_PING6, through a raw ICMPv6
  * socket, and through a raw socket of IPPROTO_RAW, which sends a datagram it
  * built whole: fragments and extension headers no other path makes. Every
- * datagram goes round the loopback ring, which delivers in the order it was
+ * datagram goes round the loopback backlog, which delivers in the order it was
  * given them, so a probe that sends a crafted datagram and then a plain echo
  * request, and reads its raw socket until that echo's reply, has seen by
  * then whatever answer the crafted one had: an absent answer is judged by

@@ -45,7 +45,7 @@
  * IPV6_MULTICAST_IF of eth0's index are ENODEV.
  *
  * Datagrams over ::1 and the copies of a group's datagrams go round the
- * loopback ring in the order they were sent, so an absence is judged by the
+ * loopback backlog in the order they were sent, so an absence is judged by the
  * datagram that arrives in its place, never by a wait. The card's
  * link-local address is tentative for a second after boot, and the first
  * send to the group waits for it, polling without a time limit of its own.

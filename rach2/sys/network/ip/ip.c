@@ -1,7 +1,7 @@
 /*
  * ip.c: the IPv4 layer, as ip.h describes it: the checks of a received
  * datagram, the transmit, its choice of interface and its fragments, the
- * datagrams held for ARP, and the loopback ring; ipfrag.c reassembles. The
+ * datagrams held for ARP, and the loopback backlog; ipfrag.c reassembles. The
  * 20-byte header has the source and destination addresses, the protocol number,
  * a TTL, and a one's complement checksum over the header, its multi-byte fields
  * big-endian.
@@ -66,8 +66,8 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
  *
  * A datagram from the wire whose source is an address of this machine or in
  * 127/8 is a martian, a spoof no peer sends, and is dropped before any reply
- * can be steered onto the loopback ring or sent with a loopback source. A
- * datagram on the loopback ring has this machine's source by design, so the
+ * can be steered onto the loopback backlog or sent with a loopback source. A
+ * datagram on the loopback backlog has this machine's source by design, so the
  * check depends on the path the datagram came by and not on its source. One
  * from the wire to 127/8 is dropped too, so that a socket bound to 127.0.0.1
  * is reachable from this machine alone. A fragment is judged by the same
@@ -295,49 +295,52 @@ void ip_hold_forget(struct netdev *nd)
     }
 }
 
-/* The loopback ring: datagrams addressed to this machine, copied whole and
- * delivered by `ip_loop_drain_from`, from the timer tick, the idle wait, or
- * the return to user mode of a thread that put one there (WORK_LOOP).
- * `loop_head` is the next slot to fill and `loop_tail` the next to deliver;
- * both only grow, so their difference is the queue's depth and a slot is
- * the counter modulo the ring's size. A full ring refuses the datagram, as
- * a full card's ring would.
- *
- * The slots are a power of two: the two counters are 32 bits and wrap, and a
- * size that does not divide 2^32 moves every slot's place at the wrap, which
- * loses frames and delivers others twice without refusing anything. 64 is
- * more than the 45 full segments of a send window, which a local TCP
- * connection puts in the ring in one system call, before the first
- * acknowledgement can come back. A slot holds a datagram of one frame; a
- * larger one, up to `lo`'s MTU, is kept on the heap, in `loop_ring_big`,
- * until it is delivered. */
-#define LOOP_RING_SLOTS 64u
-static uint8_t loop_ring[LOOP_RING_SLOTS][ETH_MTU];
-static uint8_t *loop_ring_big[LOOP_RING_SLOTS];
-/* A slot's length, 0 for a datagram dropped on the ring (`ip_loop_ns_gone`). */
-static uint32_t loop_ring_len[LOOP_RING_SLOTS];
-/* The card an IPv6 datagram is delivered as received by, or 0 for `lo`
- * (`ip_loop_put_on`). */
-static int loop_ring_if[LOOP_RING_SLOTS];
-/* The network namespace a slot's datagram is delivered in, `ip_ns` when it
- * was put there. */
-static const struct netns *loop_ring_ns[LOOP_RING_SLOTS];
+/* The loopback backlog: datagrams addressed to this machine, each copied
+ * whole into a block of its own on the heap and delivered in the order sent
+ * by `ip_loop_drain_from`, from the timer tick, the idle wait, or the return
+ * to user mode of a thread that put one there (WORK_LOOP). It is Linux's
+ * backlog, the queue that loopback_xmit fills through __netif_rx
+ * (net/core/dev.c, enqueue_to_backlog), kept once for the machine, since
+ * the big lock orders every producer and the drain. A datagram that finds
+ * more than `netdev_max_backlog` waiting is dropped and counted, and its
+ * sender is told nothing, as loopback_xmit ignores the drop; TCP sends the
+ * segment again when it finds it lost. */
+struct loop_dgram {
+    struct loop_dgram *next;
+    const struct netns *ns; /* the namespace it is delivered in, `ip_ns` when put */
+    int ifindex;            /* IPv6: the card it is received as by, 0 for `lo` */
+    uint32_t len;           /* its bytes, which follow; 0 once `ip_loop_ns_gone` dropped it */
+};
+static struct loop_dgram *loop_first, *loop_last;
+/* The datagrams on the backlog, the one being delivered among them. */
+static uint32_t loop_qlen;
+
+/* The most datagrams one drain delivers, Linux's netdev_budget, so that a
+ * chain of replies cannot hold the timer; the rest wait for the next. */
+#define LOOP_BUDGET 300u
+
+int netdev_max_backlog = 1000;
+
+/* Each processor's counts, as Linux's softnet_data keeps them: the
+ * datagrams its drains delivered, those it put on a full backlog, and its
+ * drains that stopped at LOOP_BUDGET with datagrams left. */
+static struct {
+    uint32_t processed;
+    uint32_t dropped;
+    uint32_t squeezed;
+} loop_softnet[NR_CPUS];
 
 const struct netns *ip_ns;
 
-/* Datagrams the ring had no room for. Only the first drop is logged, as
- * `loop_drop_logged` records: a line for each would wrap the kernel log and
- * lose the boot record with it. */
-static uint32_t loop_dropped;
-/* The most the ring has ever held at once, which shows how far the ring's
- * size is above what one system call can put in it. */
-static uint32_t loop_peak;
+/* Whether a drop has been logged. Only the first is: a line for each would
+ * wrap the kernel log and lose the boot record with it. */
 static int loop_drop_logged;
+/* The most the backlog has held at once. */
+static uint32_t loop_peak;
 
 /* Nonzero while `ip_loop_drain_from` is running, so a delivery that sends a
- * reply onto the ring cannot drain it again from inside itself. */
+ * reply onto the backlog cannot drain it again from inside itself. */
 static int loop_draining;
-static uint32_t loop_head, loop_tail;
 
 /**
  * The interface a broadcast to `dst` leaves by: the card whose subnet `dst`
@@ -381,61 +384,71 @@ int ip_loop_put_on(const uint8_t *dgram, uint32_t total_len, int ifindex)
     return ip_loop_put_parts(dgram, total_len, 0, 0, ifindex);
 }
 
-/** Count a datagram the ring had no room for, logging the first. */
-static int loop_drop(void)
+/** Count a datagram dropped on a full backlog, on this processor and as a
+ * receive drop of `lo`, the interface it was sent on, as enqueue_to_backlog
+ * counts it, and log the first. */
+static void loop_drop(struct netdev *lo)
 {
-    loop_dropped++;
+    loop_softnet[arch_cpu_id()].dropped++;
+    if (lo) {
+        lo->rx_dropped++;
+    }
     if (!loop_drop_logged) {
         loop_drop_logged = 1;
-        klog(KLOG_WARN, "ip", "loopback: the ring is full, dropped; further drops are counted");
+        klog(KLOG_WARN, "ip", "loopback: the backlog is full, dropped; further drops are counted");
     }
-    return -ENOBUFS;
 }
 
 int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload, uint32_t plen,
                       int ifindex)
 {
-    uint32_t slot, total_len = hlen + plen;
+    uint32_t total_len = hlen + plen;
+    struct loop_dgram *d;
     struct netdev *lo;
     uint8_t *at;
 
     if (total_len > NETDEV_LOOPBACK_MTU) {
         return -EMSGSIZE;
     }
-    if (loop_head - loop_tail == LOOP_RING_SLOTS) {
-        return loop_drop();
+    lo = ip_ns ? ip_ns->lo : netdev_loopback();
+    /* Linux compares the int as unsigned: a negative limit drops nothing. */
+    if (loop_qlen > (uint32_t)netdev_max_backlog) {
+        loop_drop(lo);
+        return 0;
     }
-    slot = loop_head % LOOP_RING_SLOTS;
-    at = loop_ring[slot];
-    if (total_len > sizeof(loop_ring[0])) {
-        at = kmalloc(total_len);
-        if (!at) {
-            return loop_drop();
-        }
+    d = kmalloc(sizeof(*d) + total_len);
+    if (!d) {
+        return -ENOBUFS;
     }
-    loop_ring_big[slot] = at != loop_ring[slot] ? at : 0;
+    at = (uint8_t *)(d + 1);
     k_memcpy(at, hdr, hlen);
     if (plen) {
         k_memcpy(at + hlen, payload, plen);
     }
-    loop_ring_len[slot] = total_len;
-    loop_ring_if[slot] = ifindex;
-    loop_ring_ns[slot] = ip_ns;
-    loop_head++;
+    d->next = 0;
+    d->ns = ip_ns;
+    d->ifindex = ifindex;
+    d->len = total_len;
+    if (loop_last) {
+        loop_last->next = d;
+    } else {
+        loop_first = d;
+    }
+    loop_last = d;
+    loop_qlen++;
     proc_work_set(current_proc, WORK_LOOP);
-    lo = ip_ns ? ip_ns->lo : netdev_loopback();
     if (lo) {
         lo->tx_packets++;
         lo->tx_bytes += total_len;
     }
-    if (loop_head - loop_tail > loop_peak) {
-        loop_peak = loop_head - loop_tail;
+    if (loop_qlen > loop_peak) {
+        loop_peak = loop_qlen;
     }
     return 0;
 }
 
 /** Put the datagram whose header is in `hdr` and whose `plen` bytes of
- * payload are at `payload` on the loopback ring, counting a refusal in
+ * payload are at `payload` on the loopback backlog, counting a refusal in
  * `net_mib`. */
 static int loop_put(const uint8_t *hdr, const uint8_t *payload, uint16_t plen)
 {
@@ -600,8 +613,8 @@ static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint
 
 /**
  * Choose the card a datagram from `src` to `dst` leaves by, as `ip_tx_opts`
- * says, into `*out`, NULL for the loopback ring, and its next hop into
- * `*hop`. An address of this machine's is reached through the loopback ring
+ * says, into `*out`, NULL for the loopback backlog, and its next hop into
+ * `*hop`. An address of this machine's is reached through the loopback backlog
  * whatever card `ifindex` names, as on Linux. Returns 0, -EINVAL for a
  * source in 127/8 and a destination that is not this machine's, or
  * -ENETUNREACH with no route, counted in OutNoRoutes.
@@ -717,12 +730,30 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
 
 uint32_t ip_loop_dropped(void)
 {
-    return loop_dropped;
+    uint32_t n = 0;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        n += loop_softnet[c].dropped;
+    }
+    return n;
+}
+
+void ip_loop_softnet(int cpu, struct ip_softnet *out)
+{
+    out->processed = loop_softnet[cpu].processed;
+    out->dropped = loop_softnet[cpu].dropped;
+    out->squeezed = loop_softnet[cpu].squeezed;
+}
+
+uint32_t ip_loop_qlen(void)
+{
+    return loop_qlen;
 }
 
 int ip_loop_pending(void)
 {
-    return loop_head != loop_tail;
+    return loop_first != 0;
 }
 
 uint32_t ip_loop_peak(void)
@@ -730,12 +761,12 @@ uint32_t ip_loop_peak(void)
     return loop_peak;
 }
 
-/* Datagrams a tick found on the ring with every processor idle. */
+/* Datagrams a tick found on the backlog with every processor idle. */
 static uint32_t loop_left_idle;
 
 void ip_loop_count_idle(void)
 {
-    loop_left_idle += loop_head - loop_tail;
+    loop_left_idle += loop_qlen;
 }
 
 uint32_t ip_loop_left_idle(void)
@@ -754,43 +785,49 @@ uint32_t ip_loop_delivered(int from)
 /**
  * Each caller has interrupts off and has left any `net_lock` bracket of its
  * own, so every delivery finds the stack at rest, as a card's interrupt
- * does. A delivery may itself send onto this ring (an acknowledgement, an
- * echo reply); the tail advances only after `ip_rx` returns, so such a send
- * never overwrites the datagram being read. The budget, four times the
- * ring's slots, bounds one call's work, so that a chain of replies cannot
- * hold the timer.
+ * does. A delivery may itself send onto the backlog (an acknowledgement, an
+ * echo reply), behind the datagram being read, which leaves the queue only
+ * after `ip_rx` returns.
  */
 void ip_loop_drain_from(int from)
 {
-    unsigned budget = LOOP_RING_SLOTS * 4;
+    unsigned budget = LOOP_BUDGET;
+    unsigned cpu = arch_cpu_id();
 
     if (loop_draining) {
         return;
     }
     loop_draining = 1;
-    while (loop_tail != loop_head && budget--) {
-        uint32_t slot = loop_tail % LOOP_RING_SLOTS;
-
-        const uint8_t *dg = loop_ring_big[slot] ? loop_ring_big[slot] : loop_ring[slot];
+    while (loop_first) {
+        struct loop_dgram *d = loop_first;
+        const uint8_t *dg = (const uint8_t *)(d + 1);
         struct netdev *lo;
 
-        ip_ns = loop_ring_ns[slot];
-        lo = loop_ring_len[slot] == 0 ? 0 : ip_ns ? ip_ns->lo : netdev_loopback();
+        if (budget-- == 0) {
+            loop_softnet[cpu].squeezed++;
+            break;
+        }
+        ip_ns = d->ns;
+        lo = d->len == 0 ? 0 : ip_ns ? ip_ns->lo : netdev_loopback();
         if (lo) {
             lo->rx_packets++;
-            lo->rx_bytes += loop_ring_len[slot];
+            lo->rx_bytes += d->len;
         }
-        if (loop_ring_len[slot] == 0) {
+        if (d->len == 0) {
             /* dropped when its namespace ended */
         } else if ((dg[0] >> 4) == 6) {
-            ip6_loop_rx(loop_ring_if[slot], dg, loop_ring_len[slot]);
-        } else if (loop_ring_len[slot] <= 0xFFFFu) {
-            ip_rx(dg, (uint16_t)loop_ring_len[slot], 1);
+            ip6_loop_rx(d->ifindex, dg, d->len);
+        } else if (d->len <= 0xFFFFu) {
+            ip_rx(dg, (uint16_t)d->len, 1);
         }
         ip_ns = 0;
-        kfree(loop_ring_big[slot]);
-        loop_ring_big[slot] = 0;
-        loop_tail++;
+        loop_first = d->next;
+        if (!loop_first) {
+            loop_last = 0;
+        }
+        loop_qlen--;
+        kfree(d);
+        loop_softnet[cpu].processed++;
         if (from >= 0 && from < 3) {
             loop_delivered[from]++;
         }
@@ -800,11 +837,11 @@ void ip_loop_drain_from(int from)
 
 void ip_loop_ns_gone(const struct netns *ns)
 {
-    uint32_t at;
+    struct loop_dgram *d;
 
-    for (at = loop_tail; at != loop_head; at++) {
-        if (loop_ring_ns[at % LOOP_RING_SLOTS] == ns) {
-            loop_ring_len[at % LOOP_RING_SLOTS] = 0;
+    for (d = loop_first; d; d = d->next) {
+        if (d->ns == ns) {
+            d->len = 0;
         }
     }
 }

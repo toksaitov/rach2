@@ -196,7 +196,8 @@ static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t d
  * Answer a send of `len` bytes that IP or UDP answered with `r`: `len`, or
  * `r` when it is an error other than -ENOBUFS.
  *
- * -ENOBUFS says that a full driver queue or loopback ring lost the datagram.
+ * -ENOBUFS says that a full driver queue lost the datagram, or that no
+ * memory held it for the loopback backlog.
  * A datagram may be lost on the way in any case, and the sender's own timer
  * covers it. Linux, whose device queue stands in front of its driver, tells
  * a raw or UDP socket nothing of it without IP_RECVERR, and BusyBox ping

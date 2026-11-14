@@ -255,7 +255,7 @@ struct netdev {
 
     /* The interface's counts, in 64 bits as Linux's `rtnl_link_stats64`,
      * so that none wraps in practice: ethernet.c keeps a card's, and the IP
-     * layer's loopback ring `lo`'s. Each is changed with interrupts off, as
+     * layer's loopback backlog `lo`'s. Each is changed with interrupts off, as
      * net.h's rule has it. On i686 a 64-bit add is two instructions, so a
      * reader that ran between them would see a torn value, half old and half
      * new; Linux has `u64_stats_sync` for that. A reader here copies the
@@ -373,7 +373,7 @@ int netdev_listed(void);
 /**
  * `lo`, the loopback interface, listed after the cards, or NULL before the
  * probe. It has 127.0.0.1/8 and is always up. A datagram to this machine
- * goes through the IP layer's loopback ring (`ip_tx_from`), which counts it
+ * goes through the IP layer's loopback backlog (`ip_tx_from`), which counts it
  * as `lo`'s traffic, and never through `lo`'s `tx`, so no route names `lo`
  * and a frame a packet socket sends on it is dropped. An address, a route
  * or taking it down is refused, EOPNOTSUPP.

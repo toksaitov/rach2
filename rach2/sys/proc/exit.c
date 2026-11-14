@@ -31,7 +31,7 @@
  * another process shares keeps its record locks, which it owns (`lock.h`),
  * and the release of a table by its last sharer drops them.
  *
- * What closing the descriptors put on the loopback ring, a FIN or a reset,
+ * What closing the descriptors put on the loopback backlog, a FIN or a reset,
  * is delivered before a waiter is told of the end, since this thread
  * reaches no system call's exit: on Linux the close by exit_files in
  * do_exit (kernel/exit.c:949 in 6.12.115) runs the softirq on its

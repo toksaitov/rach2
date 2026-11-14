@@ -171,8 +171,11 @@ when the heap has no room for them, and
 .Er EMFILE
 only at the descriptor limit.
 These allocations are outside the resource-limit table.
-Other fixed capacities are the loopback ring, 64 frames;
-the USB device table, sixteen records; and the disk registry, eight records.
+The loopback backlog holds one datagram more than
+.Pa /proc/sys/net/core/netdev_max_backlog ,
+1001 by default.
+Other fixed capacities are the USB device table, sixteen records, and the
+disk registry, eight records.
 A user namespace may be nested 7 deep below the first, and so may a PID
 namespace; its ID maps have at most 340 extents each, as on Linux.
 Mount namespaces are bounded by memory and by

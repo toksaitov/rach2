@@ -2348,7 +2348,7 @@ int usbdisk_pending(void)
 /* No USB disk has work for the entry's choice of the big lock. */
 volatile int usbdisk_waiting;
 
-/** The loopback ring is empty in these rows, so the drain at a return to
+/** The loopback backlog is empty in these rows, so the drain at a return to
  * user mode (`syscall_loop_drain`) takes no lock. */
 int ip_loop_pending(void)
 {

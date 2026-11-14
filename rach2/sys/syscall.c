@@ -3643,7 +3643,7 @@ static void syscall_futex_unlock(void)
  * at each end.
  *
  * The rest of the exit's work is the return's (`isr_leave`): a switch an
- * interrupt asked for, and whatever the loopback ring holds, a lone
+ * interrupt asked for, and whatever the loopback backlog holds, a lone
  * datagram too, so that a receive that follows the call finds what it
  * sent, as on Linux 6.12.115, where loopback_xmit queues the datagram for
  * the softirq (drivers/net/loopback.c:69-92) and the sender's

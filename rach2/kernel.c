@@ -457,7 +457,7 @@ static void timer_service_rearm(void);
 
 /**
  * The boot processor's work under the big lock, from the cycle count `t`:
- * the load average and the idle count of the loopback ring, then the
+ * the load average and the idle count of the loopback backlog, then the
  * periodic services, each charged to its row. The caller holds the lock.
  */
 static void timer_locked_work(uint64_t t)
@@ -815,7 +815,7 @@ void timer_idle_work(void)
  * the process it interrupted, as user time when the interrupted code
  * segment is ring 3's and as system time otherwise; on the boot processor
  * the clock's pass comes first, so that the ticks it counts are charged by
- * this tick. The datagrams on the loopback ring when every processor is
+ * this tick. The datagrams on the loopback backlog when every processor is
  * halted in an idle wait are counted in the locked part, before the TCP
  * timers can send onto it (`ip_loop_count_idle`). The sleepers are woken
  * whether or not the current process is in a system call, so one parked

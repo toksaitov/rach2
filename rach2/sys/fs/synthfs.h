@@ -183,6 +183,8 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_LOCKDEP       71
 #define SYNTH_PROC_LOCKDEP_STATS 72
 #define SYNTH_PROC_IRQ_AFFINITY  73
+/* /proc/net/softnet_stat, a file of `synth_net_file`'s. */
+#define SYNTH_PROC_NETSOFTNET    74
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -417,6 +419,9 @@ int synth_sys_count(void);
 /* The entry of kernel/lock_stat, whose value is fs/sleeplock.h's
  * `sleep_lock_stat`. */
 #define SYNTH_SYS_LOCK_STAT              84
+/* The entry of net/core/netdev_max_backlog, whose value is ip.h's
+ * `netdev_max_backlog`. */
+#define SYNTH_SYS_NETDEV_MAX_BACKLOG     86
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

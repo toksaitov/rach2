@@ -743,6 +743,18 @@ or
 for a mapping set by hand as permanent, and the mask is
 .Ql * .
 The device is the interface on which the mapping was learned.
+.It Pa /proc/net/softnet_stat
+One line for each processor online, of fifteen eight-digit hexadecimal
+fields, as Linux 6.12 writes it: the datagrams the processor's drains of
+the loopback backlog delivered, those it dropped because more than
+.Pa /proc/sys/net/core/netdev_max_backlog
+datagrams waited, and its drains that stopped at their budget of 300 with
+more waiting; then zeros in the six fields Linux no longer counts and in
+the counts of RPS and the flow limit; the backlog's length; the
+processor's number; and the backlog's length again as the queue still to
+take and the one being processed, the second always 0.
+The backlog is the machine's, so its length is shown on the boot
+processor's line alone.
 .It Pa /proc/net/wireless
 Wireless station quality, signal, noise and discard counters; see
 .Xr wlan 4 .
@@ -1310,6 +1322,13 @@ from 0 to 255, and
 1, the mode of black-hole detection, from 0 to 2, are the settings of
 .Xr tcp 7 ,
 which a privileged caller's write sets for every connection at once.
+.Pa net/core/netdev_max_backlog ,
+1000, the datagrams the loopback backlog holds before it drops the next,
+less one, as Linux's: a send to this machine past it still succeeds and
+its datagram is lost, counted in
+.Pa /proc/net/softnet_stat ;
+a privileged caller's write of any int sets it, and a negative one drops
+nothing, as Linux compares it unsigned.
 .Pa net/ipv6/conf/ Ns Ar NAME ,
 for
 .Ar NAME
@@ -1634,9 +1653,11 @@ Frames dropped in the 2 seconds after a new pairwise key because their packet
 numbers continue the old key's, and lie more than 256 from its last number:
 a deep access point queue, sent under the new key with the old count.
 .It Li loopback_dropped
-Datagrams dropped because the loopback ring was full.
+Datagrams dropped because the loopback backlog was full, the sum of the
+second column of
+.Pa /proc/net/softnet_stat .
 .It Li loopback_peak
-Maximum number of datagrams in the loopback ring at once.
+Maximum number of datagrams in the loopback backlog at once.
 .It Li loopback_delivered_tick
 Datagrams delivered by the timer tick's loopback drain.
 .It Li loopback_delivered_idle
@@ -1645,9 +1666,9 @@ Datagrams delivered by the idle wait's loopback drain.
 Datagrams delivered by the loopback drain at system call exit, and at the
 end of a thread, once its descriptors are closed.
 .It Li loopback_left_idle
-Datagrams a timer tick found on the loopback ring while every processor was
+Datagrams a timer tick found on the loopback backlog while every processor was
 halted in an idle wait.
-The idle wait of a blocked process delivers the ring before it halts, so
+The idle wait of a blocked process delivers the backlog before it halts, so
 these are datagrams that waited for the timer with nothing running.
 .It Li namecache_hits
 Lookups of one name in one directory that the name cache answered, since

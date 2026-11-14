@@ -349,7 +349,7 @@ static void tcb_init(struct tcb *tcb)
  * fragmentation-needed report or a Packet Too Big may have lowered below
  * the interface's (`ip_path_mtu`, `ip6_path_mtu`), and in `*link` the
  * interface's, for IPv6 the link's (`nd6_link_mtu`). A datagram to this
- * machine goes round the loopback ring, whose MTU is `lo`'s. With no route
+ * machine goes round the loopback backlog, whose MTU is `lo`'s. With no route
  * an IPv6 path counts as the least MTU, which keeps a retransmission small
  * enough for any path, and an IPv4 path as a card's largest, 1500.
  */

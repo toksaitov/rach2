@@ -25,7 +25,7 @@
  *
  * The send rows run `ip_tx` against the same recorders: the MTU on every
  * path, with the fragments of a datagram past it, a driver's refusal, the
- * loopback ring filled past its last slot, and the interface a broadcast
+ * loopback backlog filled past its limit, and the interface a broadcast
  * leaves by on a machine with two cards. `ipfrag.c` is compiled in too, and
  * the receive rows reassemble a datagram from its fragments.
  */
@@ -78,7 +78,7 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     to_ip6++;
 }
 
-/** Count an IPv6 datagram the loopback ring delivers. */
+/** Count an IPv6 datagram the loopback backlog delivers. */
 void ip6_loop_rx(int ifindex, const uint8_t *data, uint32_t len)
 {
     (void)ifindex;
@@ -267,11 +267,13 @@ struct netdev *netdev_at(int n)
     return n == 1 && ifaces == 2 ? &second_iface : 0;
 }
 
-/** Report no loopback interface; the loopback ring counts its traffic only
- * when there is one. */
+/* The loopback interface, whose counts the backlog keeps. */
+static struct netdev the_lo = {.name = "lo", .loopback = 1};
+
+/** Report `the_lo` as the loopback interface. */
 struct netdev *netdev_loopback(void)
 {
-    return 0;
+    return &the_lo;
 }
 
 /** Report whether `ip` is the address of an interface present. */
@@ -374,7 +376,7 @@ int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
     return tx_answer;
 }
 
-/* The lines the loopback ring's refusal writes, which the ring row counts.
+/* The lines the loopback backlog's drop writes, which its row counts.
  * The two files' other records are not what is under test. */
 static unsigned loop_lines;
 
@@ -397,7 +399,8 @@ void klog(int level, const char *subsystem, const char *format, ...)
 #include "../../rach2/sys/network/ethernet/ethernet.c"
 #include "../../rach2/sys/network/ip/ip.c"
 
-/* The CPU table that `current_proc` reads in the loopback ring's producer. */
+/* The CPU table that `current_proc` reads in the loopback backlog's
+ * producer. */
 struct percpu cpu_table[NR_CPUS];
 
 #include "../../rach2/sys/network/ip/ipfrag.c"
@@ -511,17 +514,21 @@ static unsigned build_ip(uint8_t *f, uint8_t proto, unsigned payload_len)
     return 20;
 }
 
-/** Empty the loopback ring without delivering it, freeing what a datagram
- * past one slot holds on the heap. */
+/** Empty the loopback backlog without delivering it, and clear its counts
+ * and `lo`'s. */
 static void loop_reset(void)
 {
-    unsigned i;
+    while (loop_first) {
+        struct loop_dgram *d = loop_first;
 
-    for (i = 0; i < LOOP_RING_SLOTS; i++) {
-        kfree(loop_ring_big[i]);
-        loop_ring_big[i] = 0;
+        loop_first = d->next;
+        kfree(d);
     }
-    loop_head = loop_tail = loop_dropped = loop_peak = 0;
+    loop_last = 0;
+    loop_qlen = loop_peak = 0;
+    memset(loop_softnet, 0, sizeof(loop_softnet));
+    the_lo.rx_packets = the_lo.rx_bytes = the_lo.rx_dropped = 0;
+    the_lo.tx_packets = the_lo.tx_bytes = 0;
 }
 
 /* The fragments `len` bytes of payload leave in by a card: one within the
@@ -530,7 +537,7 @@ static void loop_reset(void)
 
 /**
  * Check a datagram of `len` bytes of payload that ip_tx took, where path `path`
- * puts it: 0 the loopback ring, whole and with DF, however long; 1 an ARP
+ * puts it: 0 the loopback backlog, whole and with DF, however long; 1 an ARP
  * request and no data frame, the datagram held whole; any other the driver, one
  * frame with DF within the MTU, else its fragments, of which the last is in
  * `ip_tx_buf`.
@@ -540,10 +547,10 @@ static void check_tx_path(unsigned path, uint16_t len)
     unsigned frags = FRAGMENTS(len);
 
     if (path == 0) {
-        const uint8_t *dg = loop_ring_big[0] ? loop_ring_big[0] : loop_ring[0];
+        const uint8_t *dg = (const uint8_t *)(loop_first + 1);
 
         CHECK("loopback queues the complete IP datagram",
-              loop_head == 1 && loop_ring_len[0] == 20u + len && read16be(dg + 2) == 20 + len &&
+              loop_qlen == 1 && loop_first->len == 20u + len && read16be(dg + 2) == 20 + len &&
                   read16be(dg + 6) == 0x4000 && ip_checksum(dg, 20) == 0 && tx_frames == 0 &&
                   arp_queries == 0);
     } else if (path == 1) {
@@ -596,8 +603,8 @@ static void test_tx_size(unsigned path, uint32_t dst, uint8_t proto, uint16_t le
         CHECK("oversize IP payload returns -EMSGSIZE on every path", rc == -EMSGSIZE);
         CHECK("oversize IP payload has no routing or transmit side effects",
               route_queries == 0 && arp_queries == 0 && arp_requests == 0 && tx_frames == 0 &&
-                  loop_head == 0 && loop_dropped == 0 && loop_peak == 0 && ip_id_counter == 0 &&
-                  the_iface.tx_dropped == 0);
+                  loop_qlen == 0 && ip_loop_dropped() == 0 && loop_peak == 0 &&
+                  ip_id_counter == 0 && the_iface.tx_dropped == 0);
     } else if (path == 4) {
         CHECK("in-range IP payload without a route returns -ENETUNREACH",
               rc == -ENETUNREACH && route_queries == 1 && tx_frames == 0);
@@ -769,70 +776,100 @@ static void test_tx_errors(void)
 }
 
 /**
- * Fill the loopback ring and go on sending to this machine's own address.
+ * Fill the loopback backlog past its limit and go on sending to this
+ * machine's own address.
  *
- * Every datagram past the last slot is refused with `-ENOBUFS`, which is what
- * lets TCP keep a refused segment and send it again, and is counted; the ring
- * keeps what it held. One line records the first refusal and no later one: a
- * line per refusal would wrap the kernel log and lose the boot record. A ring
- * drained and filled past its end again writes no second line.
- * Every datagram has its own number in its first two bytes, so the drain
- * shows that the ring delivers the datagrams it took, in the order they were
- * sent, and none of those it refused.
+ * The backlog takes a datagram while no more than `netdev_max_backlog` wait,
+ * one more than the limit in all, as Linux's enqueue_to_backlog does. A
+ * datagram past that is dropped, and the send still answers 0, as Linux's
+ * loopback_xmit ignores the drop; the drop is counted on the processor and
+ * as `lo`'s receive drop, and `lo` counts no transmit for it. One line
+ * records the first drop and no later one: a line per drop would wrap the
+ * kernel log and lose the boot record. Every datagram has its own number in
+ * its first two bytes, so the drain shows that the backlog delivers the
+ * datagrams it took, in the order they were sent, and none it dropped. A
+ * negative limit drops nothing, since Linux compares it as unsigned. A drain
+ * delivers at most 300, Linux's netdev_budget, and counts the squeeze when
+ * more wait.
  */
 static void test_loop_full(void)
 {
     uint8_t payload[64] = {0};
-    unsigned i, taken = 0, refused = 0, again = 0, in_order = 0;
+    unsigned i, sent = 0, in_order = 0;
+    struct ip_softnet sn;
 
     reset();
+    loop_reset();
     tx_frames = arp_queries = 0;
-    loop_head = loop_tail = loop_dropped = loop_peak = 0;
     loop_drop_logged = 0;
     loop_lines = 0;
-    for (i = 0; i < LOOP_RING_SLOTS; i++) {
+    netdev_max_backlog = 8;
+    for (i = 0; i < 9; i++) {
         write16be(payload, (uint16_t)i);
-        taken += ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0;
+        sent += ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0;
     }
-    CHECK("the loopback ring takes as many datagrams as it has slots",
-          taken == LOOP_RING_SLOTS && loop_head - loop_tail == LOOP_RING_SLOTS);
-    for (i = 0; i < 3 * LOOP_RING_SLOTS; i++) {
-        write16be(payload, (uint16_t)(LOOP_RING_SLOTS + i));
-        refused +=
-            ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == -ENOBUFS;
+    CHECK("the loopback backlog takes one datagram more than its limit",
+          sent == 9 && loop_qlen == 9 && ip_loop_dropped() == 0 && the_lo.tx_packets == 9);
+    for (i = 0; i < 27; i++) {
+        write16be(payload, (uint16_t)(9 + i));
+        sent += ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0;
     }
-    CHECK("a datagram past a full loopback ring is refused with -ENOBUFS",
-          refused == 3 * LOOP_RING_SLOTS);
-    CHECK("each refused datagram is counted", ip_loop_dropped() == 3 * LOOP_RING_SLOTS);
-    CHECK("a full ring keeps the datagrams it held",
-          loop_head - loop_tail == LOOP_RING_SLOTS && ip_loop_peak() == LOOP_RING_SLOTS);
-    CHECK("one line records the refusals, not one a datagram", loop_lines == 1);
+    CHECK("a datagram past a full backlog is dropped and the send answers 0", sent == 36);
+    ip_loop_softnet(0, &sn);
+    CHECK("each drop is counted on the processor and as lo's receive drop",
+          ip_loop_dropped() == 27 && sn.dropped == 27 && the_lo.rx_dropped == 27);
+    CHECK("and lo counts no transmit for a dropped datagram", the_lo.tx_packets == 9);
+    CHECK("a full backlog keeps the datagrams it held", loop_qlen == 9 && ip_loop_peak() == 9);
+    CHECK("one line records the drops, not one a datagram", loop_lines == 1);
     CHECK("a datagram to this machine reaches no driver and asks no ARP",
           tx_frames == 0 && arp_queries == 0);
     ip_loop_drain_from(IP_LOOP_FROM_TICK);
-    CHECK("the drained ring delivers what it held",
-          to_udp == LOOP_RING_SLOTS && !ip_loop_pending());
-    for (i = 0; i < LOOP_RING_SLOTS && i < UDP_SEEN_MAX; i++) {
+    ip_loop_softnet(0, &sn);
+    CHECK("the drained backlog delivers what it held", to_udp == 9 && !ip_loop_pending() &&
+                                                           loop_qlen == 0 && sn.processed == 9 &&
+                                                           the_lo.rx_packets == 9);
+    for (i = 0; i < 9; i++) {
         in_order += udp_seen[i].number == i && udp_seen[i].len == sizeof(payload);
     }
-    CHECK("the drain delivers the datagrams the ring took, in the order sent, and none it refused",
-          to_udp == LOOP_RING_SLOTS && in_order == LOOP_RING_SLOTS);
-    for (i = 0; i < LOOP_RING_SLOTS + 1; i++) {
-        again +=
-            ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == -ENOBUFS;
+    CHECK("the drain delivers the datagrams the backlog took, in the order sent, and none it "
+          "dropped",
+          in_order == 9);
+    for (i = 0; i < 10; i++) {
+        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
     }
-    CHECK("the drained ring takes datagrams again and refuses past its end",
-          again == 1 && ip_loop_dropped() == 3 * LOOP_RING_SLOTS + 1);
-    CHECK("and the later refusal writes no second line", loop_lines == 1);
+    CHECK("the drained backlog takes datagrams again and drops past its limit",
+          loop_qlen == 9 && ip_loop_dropped() == 28);
+    CHECK("and the later drop writes no second line", loop_lines == 1);
+    loop_reset();
+    netdev_max_backlog = -1;
+    for (i = 0; i < 20; i++) {
+        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
+    }
+    CHECK("a negative limit drops nothing", loop_qlen == 20 && ip_loop_dropped() == 0);
+    loop_reset();
+    netdev_max_backlog = 1000;
+    reset();
+    for (i = 0; i < LOOP_BUDGET + 1; i++) {
+        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
+    }
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    ip_loop_softnet(0, &sn);
+    CHECK("a drain delivers at most its budget and counts the squeeze",
+          to_udp == LOOP_BUDGET && loop_qlen == 1 && sn.squeezed == 1);
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    ip_loop_softnet(0, &sn);
+    CHECK("and the next drain delivers the rest",
+          to_udp == LOOP_BUDGET + 1 && !ip_loop_pending() && sn.squeezed == 1);
     loop_reset();
 }
 
 /**
- * Count what a tick finds on the loopback ring while the machine is idle.
+ * Count what a tick finds on the loopback backlog while the machine is idle.
  *
- * `ip_loop_count_idle` adds the datagrams the ring holds, those a delivery
- * has taken not among them, and an empty ring adds nothing, so the count is
- * the datagrams that waited for the timer and not the ticks that looked.
+ * `ip_loop_count_idle` adds the datagrams the backlog holds, those a
+ * delivery has taken not among them, and an empty one adds nothing, so the
+ * count is the datagrams that waited for the timer and not the ticks that
+ * looked.
  */
 static void test_loop_left_idle(void)
 {
@@ -840,25 +877,25 @@ static void test_loop_left_idle(void)
     unsigned i;
 
     reset();
-    loop_head = loop_tail = loop_left_idle = 0;
+    loop_reset();
+    loop_left_idle = 0;
     ip_loop_count_idle();
-    CHECK("an empty ring leaves nothing for the timer", ip_loop_left_idle() == 0);
+    CHECK("an empty backlog leaves nothing for the timer", ip_loop_left_idle() == 0);
     for (i = 0; i < 2; i++) {
         (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
     }
     ip_loop_count_idle();
-    CHECK("a tick that finds two datagrams on the ring counts two", ip_loop_left_idle() == 2);
+    CHECK("a tick that finds two datagrams on the backlog counts two", ip_loop_left_idle() == 2);
     ip_loop_drain_from(IP_LOOP_FROM_TICK);
     ip_loop_count_idle();
-    CHECK("and a tick after the ring was delivered counts none more",
+    CHECK("and a tick after the backlog was delivered counts none more",
           ip_loop_left_idle() == 2 && !ip_loop_pending());
     loop_reset();
 }
 
 /**
- * A datagram past one slot of the loopback ring, up to `lo`'s MTU, goes
- * round the ring whole and is delivered whole, and its block of the heap is
- * freed once it is.
+ * A datagram up to `lo`'s MTU goes round the loopback backlog whole and is
+ * delivered whole, and its block of the heap is freed once it is.
  */
 static void test_loop_big(void)
 {
@@ -867,13 +904,13 @@ static void test_loop_big(void)
     reset();
     loop_reset();
     write16be(payload, 0xBEEF);
-    CHECK("the largest UDP datagram to this machine goes onto the ring whole",
+    CHECK("the largest UDP datagram to this machine goes onto the backlog whole",
           ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0 &&
-              loop_head == 1 && loop_ring_big[0] != 0 && loop_ring_len[0] == 65535u);
+              loop_qlen == 1 && loop_first->len == 65535u);
     ip_loop_drain_from(IP_LOOP_FROM_TICK);
     CHECK("and is delivered whole",
           to_udp == 1 && udp_seen[0].number == 0xBEEF && udp_seen[0].len == sizeof(payload));
-    CHECK("and its block is freed", loop_ring_big[0] == 0 && !ip_loop_pending());
+    CHECK("and its block is freed", loop_first == 0 && !ip_loop_pending());
     loop_reset();
 }
 

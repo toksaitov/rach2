@@ -130,7 +130,7 @@ int icmp6_send_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t
  * and packet too big are the exceptions the RFC allows for a group; this
  * machine sends the first, from the source `ip6_source` chooses, since a
  * group is no source. A datagram this machine sent itself is answered from
- * the loopback ring without the limit.
+ * the loopback backlog without the limit.
  */
 void icmp6_error(struct netdev *nd, const uint8_t *dgram, uint16_t len, uint8_t type, uint8_t code,
                  uint32_t param)
@@ -166,7 +166,7 @@ void icmp6_error(struct netdev *nd, const uint8_t *dgram, uint16_t len, uint8_t 
  * follows. Only a datagram this machine sent, from ::1 or an address of its
  * own, has a path whose MTU it may lower. A destination link-scoped is
  * taken in the scope of the interface the message came by, or for the
- * loopback ring the one that holds the quoted source. A quoted TCP segment
+ * loopback backlog the one that holds the quoted source. A quoted TCP segment
  * lowers it only when its sequence is in flight on its connection
  * (`tcp_in_flight`), and a quote too short to give the sequence not at all.
  */

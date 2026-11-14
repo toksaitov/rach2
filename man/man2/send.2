@@ -178,7 +178,7 @@ is zero, the socket must have a peer set by
 An explicit destination overrides that peer for this send.
 A supplied address must contain at least its first eight bytes.
 The port and address are in network byte order.
-A datagram to 127/8 goes round the kernel's loopback ring from 127.0.0.1,
+A datagram to 127/8 goes round the kernel's loopback backlog from 127.0.0.1,
 or from the socket's bound address when that is another of the machine's;
 one from a socket bound in 127/8 to an address that is not the machine's
 gets

@@ -248,11 +248,11 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * pages (ipc/pipe.h); what a panic does once its record is out and
  * whether an oops panics (panic.h); the settings of the lockup detectors
  * (watchdog.h); the write-back's thresholds and periods (bcache.h,
- * writeback.h); and whether the sleeping locks time their holds
- * (fs/sleeplock.h). An entry whose text is empty is procfs's, which reads
- * its value when the file is opened.
- * A new entry goes at the end, so that the indices SYNTH_SYS_ names stay
- * the same. */
+ * writeback.h); whether the sleeping locks time their holds
+ * (fs/sleeplock.h); and the loopback backlog's limit (ip.h). An entry
+ * whose text is empty is procfs's, which reads its value when the file is
+ * opened. A new entry goes at the end, so that the indices SYNTH_SYS_ names
+ * stay the same. */
 static const struct {
     int parent;
     const char *name;
@@ -341,7 +341,9 @@ static const struct {
                {29, "dirty_ratio", ""},
                {29, "dirty_writeback_centisecs", ""},
                {29, "dirtytime_expire_seconds", ""},
-               {6, "lock_stat", ""}};
+               {6, "lock_stat", ""},
+               {20, "core", 0},
+               {85, "netdev_max_backlog", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -373,27 +375,35 @@ int synth_sys_ipv6(int entry, const char **dir, int *key)
     return 1;
 }
 
+/* The entries outside a range of `synth_sys_writable`'s that take a write. */
+static const int sys_writable_lone[] = {SYNTH_SYS_HOSTNAME,           SYNTH_SYS_DOMAINNAME,
+                                        SYNTH_SYS_IP_FORWARD,         SYNTH_SYS_NR_OPEN,
+                                        SYNTH_SYS_FILE_MAX,           SYNTH_SYS_RANDOMIZE_VA_SPACE,
+                                        SYNTH_SYS_MAX_MNT_NAMESPACES, SYNTH_SYS_PANIC,
+                                        SYNTH_SYS_PANIC_ON_OOPS,      SYNTH_SYS_LOCK_STAT,
+                                        SYNTH_SYS_NETDEV_MAX_BACKLOG};
+
 int synth_sys_writable(int entry)
 {
     const char *dir;
     int key;
+    unsigned i;
 
     if (synth_sys_ipv6(entry, &dir, &key)) {
         return key >= 0;
     }
-    return entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME ||
-           entry == SYNTH_SYS_IP_FORWARD ||
-           (entry >= SYNTH_SYS_INOTIFY_QUEUED && entry <= SYNTH_SYS_INOTIFY_WATCHES) ||
+    for (i = 0; i < sizeof(sys_writable_lone) / sizeof(sys_writable_lone[0]); i++) {
+        if (entry == sys_writable_lone[i]) {
+            return 1;
+        }
+    }
+    return (entry >= SYNTH_SYS_INOTIFY_QUEUED && entry <= SYNTH_SYS_INOTIFY_WATCHES) ||
            (entry >= SYNTH_SYS_MAX_MAP_COUNT && entry <= SYNTH_SYS_OVERFLOWUID) ||
-           entry == SYNTH_SYS_NR_OPEN || entry == SYNTH_SYS_FILE_MAX ||
-           entry == SYNTH_SYS_RANDOMIZE_VA_SPACE || entry == SYNTH_SYS_MAX_MNT_NAMESPACES ||
            (entry >= SYNTH_SYS_PIPE_MAX_SIZE && entry <= SYNTH_SYS_PIPE_USER_PAGES_SOFT) ||
-           entry == SYNTH_SYS_PANIC || entry == SYNTH_SYS_PANIC_ON_OOPS ||
            (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_HUNG_TASK_WARNINGS &&
             (entry != SYNTH_SYS_NMI_WATCHDOG || watchdog_hardlockup_available())) ||
            (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2) ||
-           (entry >= SYNTH_SYS_PROTECTED_FIFOS && entry <= SYNTH_SYS_DIRTYTIME_EXPIRE) ||
-           entry == SYNTH_SYS_LOCK_STAT;
+           (entry >= SYNTH_SYS_PROTECTED_FIFOS && entry <= SYNTH_SYS_DIRTYTIME_EXPIRE);
 }
 
 /* The files of /proc/net after the first four, by origin and name. */
@@ -414,11 +424,12 @@ static const struct {
                 {SYNTH_PROC_NETRAW6, "raw6"},
                 {SYNTH_PROC_NETNETSTAT, "netstat"},
                 {SYNTH_PROC_NETWIRELESS, "wireless"},
+                {SYNTH_PROC_NETSOFTNET, "softnet_stat"},
                 {SYNTH_PROC_NETSTAT_RT, "stat/rt_cache"},
                 {SYNTH_PROC_NETSTAT_ARP, "stat/arp_cache"}};
 
 /* The files of `netfiles` directly in /proc/net, the ones before stat's. */
-#define SYNTH_NET_FILES 14
+#define SYNTH_NET_FILES 15
 
 int synth_net_slot(int origin)
 {

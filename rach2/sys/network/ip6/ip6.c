@@ -171,7 +171,7 @@ static int ip6_options(struct netdev *nd, const uint8_t *dg, uint32_t len, uint3
 
 /**
  * Whether the destination `dst` of a datagram received on `nd`, NULL for
- * the loopback ring, is this machine's. A link-local address belongs to one
+ * the loopback backlog, is this machine's. A link-local address belongs to one
  * link, so it is accepted only on the interface that holds it; another
  * address of any interface is accepted on any card, as IPv4's are.
  */
@@ -193,7 +193,7 @@ static int destined_here(struct netdev *nd, const uint8_t *dst)
 }
 
 /**
- * Check a datagram received on `nd`, NULL for the loopback ring; `looped`
+ * Check a datagram received on `nd`, NULL for the loopback backlog; `looped`
  * is set for a copy of this machine's own datagram to a group, which
  * `ip6_loop_rx` gives as the card's, and whose source is this machine's by
  * design.
@@ -265,7 +265,7 @@ static void ip6_input(struct netdev *nd, const uint8_t *data, uint32_t len, int 
  * upper layer's or the end of the chain. Every extension header is a
  * multiple of 8 bytes and at least 8 long, so the walk moves forward at
  * each step and ends within the datagram. The interface a raw socket
- * reports a message arrived on is the card's, or for the loopback ring the
+ * reports a message arrived on is the card's, or for the loopback backlog the
  * one that holds the destination, else `lo`.
  */
 void ip6_walk(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t off, uint8_t nh,
@@ -426,14 +426,14 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
 
 /**
  * The route comes first, since the interface decides the source. A
- * datagram for this machine goes round the loopback ring, whose drain gives
+ * datagram for this machine goes round the loopback backlog, whose drain gives
  * it to `ip6_rx`, so that a send never runs the receive path inside the
  * sender's own call, as `ip_tx_from` keeps IPv4's. A source of ::1 may
  * reach only this machine, which no card may carry. A unicast next hop is
  * the neighbour cache's (`nd6_output`), which may hold the datagram while
  * it asks. A datagram with a router alert is MLD's, small enough never to
  * be fragmented. A datagram past this file's buffer can only be one for
- * the loopback ring, whose MTU is `lo`'s, and goes onto the ring in two
+ * the loopback backlog, whose MTU is `lo`'s, and goes onto the backlog in two
  * parts, the header from the buffer and the payload where it lies. A
  * datagram of a network namespace other than the first (`ip_ns`) is
  * -ENETUNREACH, since the namespace's `lo` has no IPv6.

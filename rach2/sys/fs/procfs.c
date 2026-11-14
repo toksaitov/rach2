@@ -3860,16 +3860,16 @@ static void procfs_work_counts(struct procfs_text *t)
  * Render /proc/stat: the tick counters, the interrupt total, the boot epoch,
  * the process counts, and this kernel's own counters: the sleeps a signal
  * cut short (`process_sleeps_cut_short`), the longest delays since boot
- * (latency.h), and the loopback ring's.
+ * (latency.h), and the loopback backlog's.
  *
  * `clock_calls` is the clock's system calls made since boot (vdso.h), and
  * `vdso_tsc` is 1 when the vDSO reads the clock from the TSC and those
  * calls are not needed, 0 when its functions make them.
  *
- * `loopback_dropped` is the datagrams the loopback ring had no room for, which
- * the ring logs once and counts thereafter, and `loopback_peak` is the most it
- * has held at once, which says how much room it has over what one system
- * call can put in it; the `loopback_delivered_` counts are its datagrams
+ * `loopback_dropped` is the datagrams dropped on a full loopback backlog,
+ * the sum of /proc/net/softnet_stat's second column, of which the first is
+ * logged, and `loopback_peak` is the most it has held at once; the
+ * `loopback_delivered_` counts are its datagrams
  * delivered by the tick, by the idle wait and at the exit of a system call,
  * and `loopback_left_idle` is those a tick found on it while every processor
  * was halted in an idle wait, which waited for the timer.
@@ -5693,6 +5693,47 @@ static int procfs_gen_netipv6route(struct procfs_text *t)
     return t->len;
 }
 
+/**
+ * Render /proc/net/softnet_stat as Linux 6.12's softnet_seq_show does
+ * (net/core/net-procfs.c): a line for each processor online, of fifteen
+ * eight-digit hex fields, the datagrams its loopback drains delivered, those
+ * it dropped on a full backlog and its drains cut short at their budget,
+ * then zeros where Linux keeps fields no longer counted and what RPS and the
+ * flow limit count, the backlog's length, the processor's number, and the
+ * backlog's length again in two parts, the queue still to take and the one
+ * being processed. The one backlog is the machine's, and its length is
+ * shown on the boot processor's line, as all of it waiting to be taken.
+ */
+static int procfs_gen_softnet(struct procfs_text *t)
+{
+    int c, f;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        struct ip_softnet sn;
+        uint32_t qlen = c == 0 ? ip_loop_qlen() : 0;
+        uint32_t v[15];
+
+        if (!cpu_table[c].online) {
+            continue;
+        }
+        ip_loop_softnet(c, &sn);
+        for (f = 0; f < 15; f++) {
+            v[f] = 0;
+        }
+        v[0] = sn.processed;
+        v[1] = sn.dropped;
+        v[2] = sn.squeezed;
+        v[11] = qlen;
+        v[12] = (uint32_t)c;
+        v[13] = qlen;
+        for (f = 0; f < 15; f++) {
+            ap_xlow(t, v[f], 8);
+            ap_ch(t, f < 14 ? ' ' : '\n');
+        }
+    }
+    return t->nomem ? -1 : t->len;
+}
+
 /** Render Linux's wireless statistics, with signed dBm signal and noise. */
 static int procfs_gen_wireless(struct procfs_text *t)
 {
@@ -5734,6 +5775,8 @@ static int procfs_gen_net(struct procfs_text *t, int origin)
     switch (origin) {
     case SYNTH_PROC_NETWIRELESS:
         return procfs_gen_wireless(t);
+    case SYNTH_PROC_NETSOFTNET:
+        return procfs_gen_softnet(t);
     case SYNTH_PROC_NETPACKET:
         return procfs_gen_netpacket(t);
     case SYNTH_PROC_NETSNMP6:
@@ -8679,8 +8722,9 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
 
 /* The /proc/sys files whose values are their owners' variables, and the
  * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one;
- * kernel/panic, kernel/panic_on_oops and kernel/lock_stat take any int, as
- * Linux's `proc_dointvec` does (kernel/sysctl.c, kernel/locking/lockdep.c).
+ * kernel/panic, kernel/panic_on_oops, kernel/lock_stat and
+ * net/core/netdev_max_backlog take any int, as Linux's `proc_dointvec` does
+ * (kernel/sysctl.c, kernel/locking/lockdep.c, net/core/sysctl_net_core.c).
  */
 static const struct {
     int entry;
@@ -8726,7 +8770,8 @@ static const struct {
     {SYNTH_SYS_DIRTY_RATIO, &vm_dirty_ratio, 0, 100},
     {SYNTH_SYS_DIRTY_WRITEBACK, &dirty_writeback_interval, 0, 0x7FFFFFFF},
     {SYNTH_SYS_DIRTYTIME_EXPIRE, &dirtytime_expire_interval, 0, 0x7FFFFFFF},
-    {SYNTH_SYS_LOCK_STAT, &sleep_lock_stat, -0x7FFFFFFF - 1, 0x7FFFFFFF}};
+    {SYNTH_SYS_LOCK_STAT, &sleep_lock_stat, -0x7FFFFFFF - 1, 0x7FFFFFFF},
+    {SYNTH_SYS_NETDEV_MAX_BACKLOG, &netdev_max_backlog, -0x7FFFFFFF - 1, 0x7FFFFFFF}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)

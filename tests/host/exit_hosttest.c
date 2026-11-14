@@ -12,7 +12,7 @@
  * which are in it, and before its files and the publication of its death, as
  * Linux's exit_mm drops it before the zombie can be reaped, and the processor
  * must go on in the kernel's directory. What closing the files put on the
- * loopback ring is delivered once, with interrupts off, before the
+ * loopback backlog is delivered once, with interrupts off, before the
  * directories go and the death is published.
  */
 #define WAIT_QUEUE_HOSTTEST
@@ -338,7 +338,7 @@ static void run_case(int files, int directory, int has_parent, int32_t status, i
     CHECK(notified == (has_parent && !quiet), "the parent is notified once");
     CHECK(vfork_released == 1, "a vfork parent is let go once");
     CHECK(loop_drained == 1 && !irq_off,
-          "the loopback ring is delivered once and interrupts are back on");
+          "the loopback backlog is delivered once and interrupts are back on");
     CHECK(parent.state == (has_parent ? PROC_READY : PROC_BLOCKED),
           "a blocked parent becomes ready");
     CHECK(!wq_active(&lock_wait), "cleanup leaves no waiter");

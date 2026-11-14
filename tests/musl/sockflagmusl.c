@@ -132,7 +132,7 @@ static int has(int fd, int cloexec, int nonblock)
 /**
  * Accept a connection on the non-blocking listener `ls` with the accept4
  * `flags`, waiting in poll(2) for the listener to be readable while the
- * handshake's last segment is on its way through the loopback ring. Returns
+ * handshake's last segment is on its way through the loopback backlog. Returns
  * the new descriptor, or -1 with errno set to an error other than EAGAIN.
  */
 static int accept_arrived(int ls, int flags)

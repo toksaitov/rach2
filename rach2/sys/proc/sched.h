@@ -186,7 +186,7 @@ void sched_set_affinity(process_t *p, uint64_t mask);
  * nothing, wait for an interrupt with the big lock let go
  * (`idle_wait_irq_off`), which stops the tick until the next event.
  * Entered holding no big lock, which the idle task never holds but to drain
- * the loopback ring.
+ * the loopback backlog.
  */
 void sched_idle_loop(void);
 
@@ -349,7 +349,7 @@ uint32_t sched_work_count(unsigned int index);
 
 /** Wait for an interrupt, with the big lock let go, and return with
  * interrupts off, as `sti; hlt; cli` does. The caller enters with them off,
- * having tested its condition. When the loopback ring has datagrams, they
+ * having tested its condition. When the loopback backlog has datagrams, they
  * are delivered instead and the call returns without the wait. */
 void idle_wait_irq_off(void);
 

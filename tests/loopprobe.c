@@ -2,10 +2,10 @@
  * loopprobe: the loopback, the probe's sockets reaching each other through
  * 127.0.0.1 with no ARP and no wire.
  *
- * The IP layer turns a datagram to 127/8 around through the loopback ring, from
- * 127.0.0.1. A datagram socket connected to 127.0.0.1 reports 127.0.0.1 as its
- * own address. A UDP datagram sent to 127.0.0.1 at the socket's own bound port
- * comes back with the payload intact and the source 127.0.0.1, an empty
+ * The IP layer turns a datagram to 127/8 around through the loopback backlog,
+ * from 127.0.0.1. A datagram socket connected to 127.0.0.1 reports 127.0.0.1 as
+ * its own address. A UDP datagram sent to 127.0.0.1 at the socket's own bound
+ * port comes back with the payload intact and the source 127.0.0.1, an empty
  * datagram comes back as one, and a recvfrom given an address and no length
  * pointer fails with EFAULT and leaves the datagram for the next receive. A
  * receive with MSG_PEEK leaves a datagram and a stream's bytes for the next
@@ -22,16 +22,16 @@
  * handshake, moves data both ways and reports the peer 127.0.0.1, and one the
  * server closes at once after accept still connects; a nonblocking accept right
  * after the connect finds the connection, and a poll with a zero timeout right
- * after a write finds the bytes. A transfer larger than the ring arrives whole
- * with no datagram dropped, and the legs of the round trips between two
- * processes are delivered at the exits of the calls that sent them, none left
- * on the ring for the timer while the machine idles. A listener bound to
- * 127.0.0.1 is not reached at the machine's interface address, a bind to an
- * address the machine lacks is refused, and a connect to a closed port is
- * refused by the reset that answers its SYN. The rows of TCP ports check a
- * client's bound source port, the one listener a port may have, ephemeral ports
- * and a shutdown, and a socket that dials its own port opens a connection to
- * itself by a simultaneous open.
+ * after a write finds the bytes. A transfer of many windows arrives whole with
+ * no datagram dropped, and the legs of the round trips between two processes
+ * are delivered at the exits of the calls that sent them, none left on the
+ * backlog for the timer while the machine idles. A listener bound to 127.0.0.1
+ * is not reached at the machine's interface address, a bind to an address the
+ * machine lacks is refused, and a connect to a closed port is refused by the
+ * reset that answers its SYN. The rows of TCP ports check a client's bound
+ * source port, the one listener a port may have, ephemeral ports and a
+ * shutdown, and a socket that dials its own port opens a connection to itself
+ * by a simultaneous open.
  *
  * A row that waits for a datagram or a connection blocks in the receive or
  * in poll(2) until it comes, and judges what came; the case's watchdog ends
@@ -307,9 +307,9 @@ static const struct step {
     {"a bulk write that poll said had room wrote nothing", "bulk-arrives"},
     {"the bulk connection ended before the transfer arrived", "bulk-arrives"},
     {"bulk bytes came back wrong", "bulk-arrives"},
-    {"a transfer larger than the loopback ring did not arrive whole", "bulk-arrives"},
-    {"the loopback ring refused a datagram during the transfer", "bulk-no-drop"},
-    {"the loopback ring was never pressed in this boot", "bulk-ring-pressed"},
+    {"a transfer of many windows through the loopback did not arrive whole", "bulk-arrives"},
+    {"the loopback backlog dropped a datagram during the transfer", "bulk-no-drop"},
+    {"the loopback backlog was never pressed in this boot", "bulk-ring-pressed"},
     {"pipes for the round-trip calibration", "pipe-calibration"},
     {"fork for the round-trip calibration", "pipe-calibration"},
     {"writing to the child in the round-trip calibration", "pipe-calibration"},
@@ -844,7 +844,7 @@ static void udp_loop(void)
 
 /** A recvfrom given an address and no length pointer fails with EFAULT
  * before it takes the datagram, which the next recvfrom takes whole. A
- * second datagram follows the refused call, and the ring and the socket's
+ * second datagram follows the refused call, and the backlog and the socket's
  * queue keep their order, so the blocking receive after it takes the first
  * if it is still queued and the second if the refused call took it. */
 static void udp_no_length(void)
@@ -1112,7 +1112,7 @@ static int recvmsg2_got(const char *want, int alen, int blen)
  * `as`. The replacement is writable too, so the unfixed kernel fails the
  * contents check without faulting. The nonblocking read comes right after
  * the write, and finds its bytes, since the write's exit delivered the
- * loopback ring, as Linux's loopback delivers within the sender's call. */
+ * loopback backlog, as Linux's loopback delivers within the sender's call. */
 static void tcp_recvmsg_overlap(int cs, int as)
 {
     struct iovec_probe iov[2], replacement;
@@ -1632,10 +1632,10 @@ static void tcp_loop(void)
     sys_close(ls);
 }
 
-/* The bytes `tcp_loop_bulk` sends, more than the loopback ring holds. */
+/* The bytes `tcp_loop_bulk` sends, four windows of 64 KiB. */
 #define BULK_BYTES      (256u * 1024u)
-/* The least the ring's high-water mark must reach, so that the transfer is
- * known to have pressed the ring. */
+/* The least the backlog's high-water mark must reach, so that the transfer
+ * is known to have pressed it. */
 #define LOOP_PEAK_FLOOR 8u
 
 /** The counter `key` of /proc/stat, `keylen` bytes with its trailing space,
@@ -1679,13 +1679,13 @@ static uint32_t proc_stat_u32(const char *key, int keylen)
     return 0;
 }
 
-/** The datagrams the loopback ring has refused since boot. */
+/** The datagrams dropped on the loopback backlog since boot. */
 static uint32_t loop_dropped_now(void)
 {
     return proc_stat_u32("loopback_dropped ", 17);
 }
 
-/** The most datagrams the loopback ring has held at once since boot. */
+/** The most datagrams the loopback backlog has held at once since boot. */
 static uint32_t loop_peak_now(void)
 {
     return proc_stat_u32("loopback_peak ", 14);
@@ -1705,7 +1705,7 @@ static char stream_byte(uint32_t n)
  * ends of one connection, both non-blocking, within this process. It waits
  * in poll for either: the client writes when its ring has room and the
  * server reads what has arrived, so the two take turns, and every byte must
- * arrive in order. The wait in poll is also what delivers the loopback ring
+ * arrive in order. The wait in poll is also what delivers the loopback backlog
  * when no system call's exit has, since a blocked process's idle wait
  * drains it. Fails the probe on a wrong byte, an error or an early end.
  */
@@ -1755,21 +1755,20 @@ static void bulk_transfer(int cs, int as)
         }
     }
     if (got != BULK_BYTES) {
-        fail("a transfer larger than the loopback ring did not arrive whole");
+        fail("a transfer of many windows through the loopback did not arrive whole");
     }
 }
 
 /**
- * More bytes than the loopback ring holds, BULK_BYTES, through the ring
- * within one process, as `bulk_transfer` moves them, and the kernel's count
- * of datagrams the ring refused must not rise.
+ * BULK_BYTES through the loopback backlog within one process, as
+ * `bulk_transfer` moves them, and the kernel's count of datagrams dropped on
+ * the backlog must not rise.
  *
- * A write offers up to 64 KiB, so that a call puts the most it can in the
- * ring: a window's worth, 65535 bytes, is 45 segments of 1460 bytes, of the
- * ring's 64 slots, and the call's exit delivers the ring. The ring's
- * high-water mark is kept since boot, so it can show that the ring was
- * pressed but not that this transfer pressed it: the row requires
- * LOOP_PEAK_FLOOR of it and prints it.
+ * A write offers up to 64 KiB, so that a call puts the most it can on the
+ * backlog: a window's worth, 65535 bytes, is 45 segments of 1460 bytes, and
+ * the call's exit delivers the backlog. Its high-water mark is kept since
+ * boot, so it can show that the backlog was pressed but not that this
+ * transfer pressed it: the row requires LOOP_PEAK_FLOOR of it and prints it.
  */
 static void tcp_loop_bulk(void)
 {
@@ -1825,14 +1824,14 @@ static void tcp_loop_bulk(void)
     bulk_transfer(cs, as);
     dropped_after = loop_dropped_now();
     if (!probe_native() && dropped_after != dropped_before) {
-        fail("the loopback ring refused a datagram during the transfer");
+        fail("the loopback backlog dropped a datagram during the transfer");
     }
     if (loop_peak_now() < LOOP_PEAK_FLOOR) {
-        fail("the loopback ring was never pressed in this boot");
+        fail("the loopback backlog was never pressed in this boot");
     }
-    print("LOOPPROBE ring peak ");
+    print("LOOPPROBE backlog peak ");
     print_u32(loop_peak_now());
-    print(" of 64 since boot\n");
+    print(" since boot\n");
     sys_close(cs);
     sys_close(as);
     sys_close(ls);
@@ -1840,7 +1839,7 @@ static void tcp_loop_bulk(void)
 
 /** The milliseconds PINGPONG_ROUNDS round trips of a byte each way take
  * between this process and a child over two pipes, the same rounds as the
- * loopback's without a ring. */
+ * loopback's without a backlog. */
 static int pipe_pingpong_ms(void)
 {
     int up[2], down[2];
@@ -1893,11 +1892,11 @@ static int pipe_pingpong_ms(void)
  * Linux 6.12.115's local_bh_enable runs the softirq that loopback_xmit queued
  * it for (drivers/net/loopback.c:69-92, kernel/softirq.c:402-407); a tick
  * that comes between the send and the exit may take it first. The sender
- * then blocks in its read with the ring empty, so the idle wait's drain
+ * then blocks in its read with the backlog empty, so the idle wait's drain
  * (`idle_wait_irq_off`) finds nothing and delivers no leg. The exits must
  * have delivered at least one datagram a round, which a broken exit drain
  * leaves to the idle wait and the timer. `loopback_left_idle`, the datagrams
- * a tick found on the ring with every processor halted, must not rise: such
+ * a tick found on the backlog with every processor halted, must not rise: such
  * a leg waited for the timer with nothing running, a turn of one window a
  * tick. The other counts and the times of these rounds and of the same
  * rounds over pipes are printed for a person and not judged.

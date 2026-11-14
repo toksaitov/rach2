@@ -525,7 +525,7 @@ void tcb_free(struct tcb *tcb);
  * dropped, and one that matches no block is answered with a reset unless it
  * is a reset. Counts in `net_mib`. Called with interrupts off, from `ip_rx`:
  * in a card's interrupt, the timer's poll of a card, or a delivery from the
- * loopback ring.
+ * loopback backlog.
  */
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 

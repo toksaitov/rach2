@@ -8,7 +8,7 @@
  * received datagram is checked, reassembled when it came in fragments
  * (ipfrag.c), and given to its protocol. A datagram sent has a 20-byte
  * header with no options, and leaves by its route, by broadcast, or round
- * the loopback ring when it is addressed to this machine. One within its
+ * the loopback backlog when it is addressed to this machine. One within its
  * path MTU carries DF, as Linux's path MTU discovery sends it; a larger
  * one leaves in fragments, unless its socket asked for DF with
  * IP_MTU_DISCOVER. The path MTU is the interface's MTU, lowered for a
@@ -52,7 +52,7 @@
 #define IP_PMTU_MIN 552
 
 /* The loopback network, 127/8, and the address a datagram to it leaves
- * from. Its datagrams never reach a card: they go round the loopback ring,
+ * from. Its datagrams never reach a card: they go round the loopback backlog,
  * and one that arrives from the wire is dropped. */
 #define IP_IS_LOOPBACK(ip) (((ip) & 0xFF000000u) == 0x7F000000u)
 #define IP_LOOPBACK_ADDR   0x7F000001u
@@ -161,7 +161,7 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
  * `ip_source_on` chooses.
  *
  * A datagram to 127/8 or to an address an interface holds goes onto the
- * loopback ring, whose MTU is `lo`'s, 65536 bytes, so that it never needs
+ * loopback backlog, whose MTU is `lo`'s, 65536 bytes, so that it never needs
  * fragments; `ip_loop_drain_from` delivers it later. A broadcast, to
  * 255.255.255.255 or a subnet's broadcast address, goes to the all-ones
  * station address by the card on that subnet, or the first card for
@@ -175,13 +175,13 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
  * bytes of the payload but the last, all with one identification and none
  * with DF, counted in FragOKs and FragCreates.
  *
- * Returns 0 when the datagram left, went onto the loopback ring, or waits
+ * Returns 0 when the datagram left, went onto the loopback backlog, or waits
  * for ARP: a datagram send promises no delivery. Returns a negative errno
  * for what the caller must hear about: -EMSGSIZE for a payload past
  * IP_PAYLOAD_MAX, or past the MTU under IP_PMTUDISC_DO or PROBE, counted
  * in FragFails; -ENETUNREACH for a destination with no route, -ENOBUFS when
- * the loopback ring is full, no memory holds a datagram past one slot of
- * it, or the driver did not take a frame; -EOPNOTSUPP for a broadcast of
+ * no memory holds a datagram for the loopback backlog or the driver did not
+ * take a frame; -EOPNOTSUPP for a broadcast of
  * anything but UDP; and -EINVAL for a datagram from 127/8 to an address
  * that is not this machine's, which no card may carry.
  * In a network namespace other than the first (`ip_ns`), only 127/8 is
@@ -202,7 +202,7 @@ struct netdev;
  * without being fragmented: `out`'s MTU, or less when a
  * fragmentation-needed report has lowered the path's estimate for `dst`
  * within the last ten minutes (`ip_pmtu_lower`); NETDEV_LOOPBACK_MTU for a
- * NULL `out`, the loopback ring. Called with interrupts off.
+ * NULL `out`, the loopback backlog. Called with interrupts off.
  */
 uint32_t ip_path_mtu(const struct netdev *out, uint32_t dst);
 
@@ -241,19 +241,20 @@ struct netns;
  */
 extern const struct netns *ip_ns;
 
-/** Drop the datagrams on the loopback ring of the network namespace `ns`,
+/** Drop the datagrams on the loopback backlog of the network namespace `ns`,
  * which has ended, so that none reaches a namespace made at its address
  * later. Called with interrupts off. */
 void ip_loop_ns_gone(const struct netns *ns);
 
 /**
  * Put the datagram of `total_len` bytes at `dgram`, IPv4 or IPv6, on the
- * loopback ring, counted as `lo`'s traffic, as Linux counts it, and marked
- * with `ip_ns`, the namespace it is delivered in. A datagram past a slot's
- * 1520 bytes is copied to the heap. Returns 0, -EMSGSIZE past `lo`'s MTU,
- * NETDEV_LOOPBACK_MTU, or -ENOBUFS when the ring is full or no memory holds
- * the datagram, which is counted in `ip_loop_dropped` and logged once.
- * Called with interrupts off.
+ * loopback backlog, counted as `lo`'s traffic, as Linux counts it, and
+ * marked with `ip_ns`, the namespace it is delivered in. Returns 0 when it
+ * is queued and also when more than `netdev_max_backlog` datagrams wait,
+ * which drops it, counts the drop on this processor and as `lo`'s receive
+ * drop and logs the first, as Linux's loopback_xmit ignores the drop of
+ * enqueue_to_backlog; -EMSGSIZE past `lo`'s MTU, NETDEV_LOOPBACK_MTU; or
+ * -ENOBUFS when no memory holds the datagram. Called with interrupts off.
  */
 int ip_loop_put(const uint8_t *dgram, uint32_t total_len);
 
@@ -265,7 +266,7 @@ int ip_loop_put_on(const uint8_t *dgram, uint32_t total_len, int ifindex);
  * are at `hdr` and the rest, `plen` bytes, at `payload`, so that a sender
  * need not gather a datagram past its own buffer first. Marks the current
  * thread's work (WORK_LOOP), so that its return to user mode delivers the
- * ring. */
+ * backlog. */
 int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload, uint32_t plen,
                       int ifindex);
 
@@ -281,17 +282,19 @@ void ip_loop_drain(void);
 #define IP_LOOP_FROM_CALL 2
 
 /**
- * Deliver the datagrams on the loopback ring through `ip_rx`, or `ip6_rx`
- * for an IPv6 datagram, at most four times the ring's slots in one call,
- * and count them under `from`, an `IP_LOOP_FROM_*` value.
+ * Deliver the datagrams on the loopback backlog through `ip_rx`, or `ip6_rx`
+ * for an IPv6 datagram, in the order sent and at most 300 in one call, as
+ * Linux's netdev_budget, counting them under `from`, an `IP_LOOP_FROM_*`
+ * value, and on this processor; a call that stops at the budget with more
+ * waiting is counted as a squeeze.
  *
  * Called with interrupts off, after the caller has finished with the stack,
  * since a delivery runs the receive path and may transmit: from the tick,
  * the idle wait, the return to user mode of a thread that put a datagram
- * on the ring (`syscall_loop_drain`) and a thread's end, once its
+ * on the backlog (`syscall_loop_drain`) and a thread's end, once its
  * descriptors are closed. A call made from inside a delivery returns at
  * once, and the drain already running delivers what that delivery put on
- * the ring.
+ * the backlog.
  */
 void ip_loop_drain_from(int from);
 
@@ -299,25 +302,45 @@ void ip_loop_drain_from(int from);
  * value that is no `IP_LOOP_FROM_*`. */
 uint32_t ip_loop_delivered(int from);
 
-/** Nonzero while the loopback ring holds anything at all. */
+/** Nonzero while the loopback backlog holds anything at all. */
 int ip_loop_pending(void);
 
-/** Count the datagrams on the loopback ring as left for the timer by an idle
+/** Count the datagrams on the loopback backlog as left for the timer by an idle
  * machine. The boot processor's tick calls it, before its own work can send
- * onto the ring, when every processor online is halted in an idle wait. The
- * idle wait of a blocked process (`idle_wait_irq_off`) delivers the ring
- * before it halts, so what the ring holds then is left for the timer. */
+ * onto the backlog, when every processor online is halted in an idle wait.
+ * The idle wait of a blocked process (`idle_wait_irq_off`) delivers the
+ * backlog before it halts, so what it holds then is left for the timer. */
 void ip_loop_count_idle(void);
 
 /** The datagrams `ip_loop_count_idle` has counted since boot. */
 uint32_t ip_loop_left_idle(void);
 
-/** Datagrams the loopback ring had no room for since boot. */
+/** Datagrams dropped on a full loopback backlog since boot, on every
+ * processor. */
 uint32_t ip_loop_dropped(void);
 
-/** The most datagrams the loopback ring has held at once, which says how much
- * room the ring has over what one system call can put in it. */
+/** The most datagrams the loopback backlog has held at once. */
 uint32_t ip_loop_peak(void);
+
+/** The most datagrams the loopback backlog holds before it drops one, less
+ * one: Linux's net.core.netdev_max_backlog, 1000 unless written through
+ * /proc/sys/net/core/netdev_max_backlog. A negative value drops nothing,
+ * since Linux compares it as unsigned. */
+extern int netdev_max_backlog;
+
+/* A processor's counts of the loopback backlog, the first three columns of
+ * Linux's /proc/net/softnet_stat. */
+struct ip_softnet {
+    uint32_t processed; /* datagrams its drains delivered */
+    uint32_t dropped;   /* datagrams it put on a full backlog */
+    uint32_t squeezed;  /* drains it stopped at their budget with more waiting */
+};
+
+/** Copy processor `cpu`'s counts, below NR_CPUS, into `*out`. */
+void ip_loop_softnet(int cpu, struct ip_softnet *out);
+
+/** The datagrams on the loopback backlog now. */
+uint32_t ip_loop_qlen(void);
 
 /**
  * The Internet checksum of the `len` bytes at `buf`: the one's complement of

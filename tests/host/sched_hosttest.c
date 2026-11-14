@@ -519,9 +519,10 @@ int ip_loop_pending(void)
  * off and with the big lock, and count the drain. */
 void ip_loop_drain_from(int from)
 {
-    CHECK(from == IP_LOOP_FROM_IDLE && !irq_flags && !this_cpu()->idle_wait &&
-              (this_cpu()->bkl_depth > 0 || bkl_held()),
-          "an idle wait drains the loopback ring with interrupts off and the big lock, unmarked");
+    CHECK(
+        from == IP_LOOP_FROM_IDLE && !irq_flags && !this_cpu()->idle_wait &&
+            (this_cpu()->bkl_depth > 0 || bkl_held()),
+        "an idle wait drains the loopback backlog with interrupts off and the big lock, unmarked");
     loop_pending = 0;
     loop_drains++;
 }

@@ -2330,7 +2330,7 @@ static void idle_halt(int stop_tick)
  * never before it. The marker is set while interrupts are still off, so no
  * tick can be delivered between setting it and the halt it describes.
  *
- * Anything on the loopback ring is delivered before the processor is parked,
+ * Anything on the loopback backlog is delivered before the processor is parked,
  * and this returns without halting so the caller checks its condition again.
  * Every return without a halt, that one and a scheduler idle task's that
  * ready work cancels, lets a pending interrupt in for one instruction first
@@ -2342,7 +2342,7 @@ static void idle_halt(int stop_tick)
  * before the marker is set; that of ready work found once it is set opens
  * while the processor is still marked idle.
  * The drain needs the big lock: a caller without it, the idle task, tries
- * the lock, and when another processor holds it leaves the ring to that
+ * the lock, and when another processor holds it leaves the backlog to that
  * holder, whose call's exit drains it, or to the next tick that has the
  * lock, and halts.
  * Those datagrams are this machine's own, a delivery can be what makes a

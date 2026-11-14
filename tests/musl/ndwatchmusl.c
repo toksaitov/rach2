@@ -27,7 +27,7 @@
  * instead of running without end.
  *
  * Datagrams to ::1 and the copies of a group's datagrams go round the
- * loopback ring in the order they were sent, so an absence is judged by the
+ * loopback backlog in the order they were sent, so an absence is judged by the
  * datagram that arrives in its place. The card's link-local address is
  * tentative for a second after boot, and the first send to a group waits
  * for it, polling without a time limit of its own. The test image has no

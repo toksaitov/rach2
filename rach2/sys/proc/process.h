@@ -796,7 +796,7 @@ typedef struct process process_t;
  * WORK_RESCHED: `need_resched`. WORK_TRACE: a tracer's PT_SYSCALL or
  * PT_STEP, whose stops a call takes. WORK_SECCOMP: a seccomp filter, which
  * judges each call. WORK_RSEQ: `rseq_notify`. WORK_LOOP: datagrams the
- * thread put on the loopback ring, delivered at its return to user mode.
+ * thread put on the loopback backlog, delivered at its return to user mode.
  * WORK_DEBUGREG: the processor's debug registers may not be the thread's.
  * WORK_WAKETIME: a timed wake's record to finish (waketime.h).
  */

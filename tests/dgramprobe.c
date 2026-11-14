@@ -574,7 +574,7 @@ PROBE_SP_ENTRY;
  * The probe, entered with `sp` at argc: the rows of the list above, in its
  * order.
  *
- * A datagram to the machine's own address goes on the loopback ring, which
+ * A datagram to the machine's own address goes on the loopback backlog, which
  * the kernel delivers after the send returns, so the first read of each
  * exchange waits for it, and a read that expects nothing waits first for
  * /proc/net/snmp to count the datagram as refused (`expect_refused`). The

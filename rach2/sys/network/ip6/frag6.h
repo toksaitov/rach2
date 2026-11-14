@@ -30,7 +30,7 @@ struct netdev;
 
 /**
  * Process the datagram of `len` bytes at `dg`, received on `nd` (NULL for
- * the loopback ring), from offset `off`, where a header of next-header
+ * the loopback backlog), from offset `off`, where a header of next-header
  * value `nh` starts; `nhoff` is the offset of the byte that names it, which
  * a parameter problem about `nh` points at. `reassembled` is nonzero for a
  * datagram `frag6_input` made, in which a fragment header is refused. The
@@ -51,7 +51,7 @@ void ip6_set_class(uint8_t *buf, uint8_t tclass);
 
 /**
  * Hand the whole datagram of `len` bytes at `buf` to `out`, toward the next
- * hop `via`: onto the loopback ring for `lo`, to the station address of a
+ * hop `via`: onto the loopback backlog for `lo`, to the station address of a
  * group, or to a unicast hop by the neighbour cache (`nd6_output`). Returns
  * 0, or -EMSGSIZE or -ENOBUFS as `ip6_tx` says. Called with interrupts off.
  */

@@ -20,7 +20,7 @@
  * this gives back, as Linux's `exit_to_user_mode_loop` acts only on the
  * work its flags name (kernel/entry/common.c:90-127). The bits are cleared
  * before the work they stand for is tested, so a bit set meanwhile stays
- * for the next return. In order: the loopback ring's datagrams
+ * for the next return. In order: the loopback backlog's datagrams
  * (`syscall_loop_drain`) and a switch the thread owes
  * (`sched_take_preempt`); then, under the big lock, taken here when the
  * entry ran without it, the signals of the tick the thread has waiting
