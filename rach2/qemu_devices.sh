@@ -14,7 +14,7 @@
 # Networking (on QEMU's SLIRP user network) is enabled by default:
 #   NET=off                     attach no network card (-nic none)
 #   NET_HOSTFWD="hostfwd=..."   override the host port forwards
-#   NIC=rtl8139|e1000           choose the card (default rtl8139)
+#   NIC=rtl8139|e1000|virtio-net-pci  choose the card (default rtl8139)
 #
 # QEMU opens a window, which on Linux and the other Unix systems needs an X or
 # Wayland display. With neither DISPLAY nor WAYLAND_DISPLAY set, as in an ssh
@@ -179,10 +179,12 @@ esac
 # 10.0.2.15; the host is reachable from the guest at 10.0.2.2. Host port 8080
 # is forwarded to the guest's httpd on port 80.
 #
-# The kernel drives two of QEMU's cards, so the card is a choice. The RTL8139
-# is the default because it is the card the test harness gives a machine. The
-# e1000 is the 82540EM, which is what QEMU attaches when nothing asks for a
-# card, so it is what a plain qemu-system-i386 command line gets. NET=off
+# The kernel drives three of QEMU's cards, so the card is a choice. The
+# RTL8139 is the default, a card a PC may have. The e1000 is the 82540EM,
+# which is what QEMU attaches when nothing asks for a card, so it is what a
+# plain qemu-system-i386 command line gets. virtio-net-pci is the virtio
+# network device, which the test harness gives most of its machines and
+# which costs the fewest exits under a hypervisor. NET=off
 # passes -nic none, which turns that default card off, so the machine has no
 # network card at all.
 NET="${NET:-on}"

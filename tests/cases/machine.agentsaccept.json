@@ -125,7 +125,7 @@
             "memory_bytes": 268435456,
             "firmware": "direct",
             "devices": [
-              "rtl8139"
+              "virtio-net-pci"
             ],
             "boot_options": [
               "rach2.root=ext2",
@@ -155,7 +155,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "restrict": true,
                 "forwards": [
                   {
@@ -487,7 +487,7 @@
             "memory_bytes": 268435456,
             "firmware": "direct",
             "devices": [
-              "rtl8139"
+              "virtio-net-pci"
             ],
             "boot_options": [
               "rach2.root=ext2",
@@ -517,7 +517,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "restrict": true,
                 "forwards": [
                   {
@@ -849,7 +849,7 @@
             "memory_bytes": 268435456,
             "firmware": "direct",
             "devices": [
-              "rtl8139"
+              "virtio-net-pci"
             ],
             "boot_options": [
               "rach2.root=ext2",
@@ -879,7 +879,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "restrict": true,
                 "forwards": [
                   {
@@ -1211,7 +1211,7 @@
             "memory_bytes": 268435456,
             "firmware": "direct",
             "devices": [
-              "rtl8139"
+              "virtio-net-pci"
             ],
             "boot_options": [
               "rach2.root=ext2",
@@ -1241,7 +1241,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "restrict": true,
                 "forwards": [
                   {
@@ -1573,7 +1573,7 @@
             "memory_bytes": 268435456,
             "firmware": "direct",
             "devices": [
-              "rtl8139"
+              "virtio-net-pci"
             ],
             "boot_options": [
               "rach2.root=ext2",
@@ -1603,7 +1603,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "restrict": true,
                 "forwards": [
                   {

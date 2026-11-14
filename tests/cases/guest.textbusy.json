@@ -33,7 +33,7 @@
           "memory_bytes": 134217728,
           "firmware": "direct",
           "devices": [
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "rach2.rescue"
@@ -177,7 +177,7 @@
           "memory_bytes": 134217728,
           "firmware": "direct",
           "devices": [
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "rach2.rescue"

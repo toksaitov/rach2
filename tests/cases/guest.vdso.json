@@ -10,7 +10,7 @@
       "domain": "guest",
       "architectures": ["x86_64"],
       "workload": {"arguments": ["clock=tsc"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.tscreliable"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.tscreliable"]}},
       "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "absent", "checks": "on the i686 kernel an image has no AT_SYSINFO_EHDR, and maps names neither [vvar] nor [vdso]", "source": "program"},
@@ -49,7 +49,7 @@
       "domain": "guest",
       "architectures": ["x86_64"],
       "workload": {"arguments": ["clock=tsc"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "absent", "checks": "on the i686 kernel an image has no AT_SYSINFO_EHDR, and maps names neither [vvar] nor [vdso]", "source": "program"},
@@ -88,7 +88,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["clock=syscall"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.notsc"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.notsc"]}},
       "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "absent", "checks": "on the i686 kernel an image has no AT_SYSINFO_EHDR, and maps names neither [vvar] nor [vdso]", "source": "program"},

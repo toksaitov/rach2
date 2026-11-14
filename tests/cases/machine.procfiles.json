@@ -424,7 +424,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "forwards": [
                   {
                     "protocol": "tcp",

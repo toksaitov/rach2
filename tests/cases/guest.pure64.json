@@ -33,7 +33,7 @@
           "memory_bytes": 134217728,
           "firmware": "direct",
           "devices": [
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": []
         }
@@ -165,7 +165,7 @@
           "memory_bytes": 134217728,
           "firmware": "direct",
           "devices": [
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "ia32_emulation=0"

@@ -10,7 +10,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "either"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "either"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "fpuprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "switches", "checks": "a forked child and its parent each keep their own x87, XMM, control word and MXCSR values across switches", "source": "program"},
@@ -41,7 +41,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "present"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.noxsave"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "present"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.noxsave"]}},
       "execution": {"program": "fpuprobe", "stdin": null, "role": "boot", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "kernel-path", "checks": "the kernel says it saves with FXSAVE and not XSAVE", "source": "executor", "record": "fpu: fxsr: on, sse: on, xsave: off"},
@@ -73,7 +73,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["noxsave"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "present"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.noxsave"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "present"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.noxsave"]}},
       "execution": {"program": "xsaveprobe", "stdin": null, "role": "boot", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "kernel-path", "checks": "the kernel says it saves with FXSAVE and not XSAVE", "source": "executor", "record": "fpu: fxsr: on, sse: on, xsave: off"},
@@ -104,7 +104,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "fpuprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "kernel-path", "checks": "the kernel says it saves with FXSAVE and not XSAVE", "source": "executor", "record": "fpu: fxsr: on, sse: on, xsave: off"},
@@ -136,7 +136,7 @@
       "domain": "guest",
       "architectures": ["i686"],
       "workload": {"arguments": ["x87"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.nofxsr"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.nofxsr"]}},
       "execution": {"program": "fpuprobe", "stdin": null, "role": "boot", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "kernel-path", "checks": "the kernel says it saves without FXSAVE", "source": "executor", "record": "fpu: fxsr: off"},

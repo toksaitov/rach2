@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "family_id": "machine.ssh",
-  "summary": "Logins to os-real over SSH on the RTL8139, one boot that tests/cases/machine/ssh_scenario.c drives",
+  "summary": "Logins to os-real over SSH on the virtio network device, one boot that tests/cases/machine/ssh_scenario.c drives",
   "cases": [
     {
       "case_id": "machine.ssh.logins",
-      "behavior": "logins to os-real's dropbear over the RTL8139 with nobody at the keyboard: root by key and the test account by password, the logins that must be refused, and root's console login under a flood of connections",
+      "behavior": "logins to os-real's dropbear over the virtio network device with nobody at the keyboard: root by key and the test account by password, the logins that must be refused, and root's console login under a flood of connections",
       "units": ["ssh", "tests/system/ssh_flood_test.sh"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -72,7 +72,7 @@
       "machines": [
         {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
          "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "virtio"}],
-         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["virtio-net-pci"],
          "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
          "console": "serial", "qmp": true, "helper": true},
         {
@@ -85,7 +85,7 @@
             "processors": 1,
             "memory_bytes": 134217728,
             "firmware": "direct",
-            "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+            "devices": [{"model": "virtio-net-pci", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
             "boot_options": ["rach2.fsdisk"]
           },
           "console": "serial",

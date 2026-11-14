@@ -42,7 +42,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "restrict": true,
                 "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}],
                 "guest_forwards": [{"address": "10.0.2.100", "guest_port": 443, "port": 1, "relay": ["agent_relay"]}]

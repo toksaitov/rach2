@@ -41,7 +41,7 @@
           "machine": "q35",
           "display": "std-vga",
           "devices": [
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "rach2.rescue"
@@ -215,7 +215,7 @@
           "machine": "q35",
           "display": "std-vga",
           "devices": [
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "rach2.rescue"
@@ -389,7 +389,7 @@
           "machine": "q35",
           "display": "std-vga",
           "devices": [
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "rach2.rescue"
@@ -563,7 +563,7 @@
           "machine": "q35",
           "display": "std-vga",
           "devices": [
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "rach2.rescue"

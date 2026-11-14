@@ -30,7 +30,7 @@
       "machines": [
         {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
          "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
-         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["virtio-net-pci"],
          "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
          "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "control",
@@ -40,7 +40,7 @@
         {"machine_id": "diagnostic",
          "qemu": {"kernel": "metal-kernel", "initrd": "metal-image", "disks": [{"name": "ro-disk", "bus": "ahci"}], "cpu": "max", "processors": 1,
                   "memory_bytes": 134217728, "firmware": "direct",
-                  "devices": [{"model": "rtl8139", "net": "192.168.90.0/24", "host": "192.168.90.2", "dhcpstart": "192.168.90.15",
+                  "devices": [{"model": "virtio-net-pci", "net": "192.168.90.0/24", "host": "192.168.90.2", "dhcpstart": "192.168.90.15",
                                "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
                   "boot_options": ["rach2.ip=192.168.90.15/24", "rach2.gateway=192.168.90.2", "rach2.disk=ahci", "rach2.diskdiag"]},
          "console": "serial", "qmp": true, "helper": false},

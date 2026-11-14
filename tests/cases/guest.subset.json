@@ -10,7 +10,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["ring-skipped", "+audio: skipped: rach2.noaudio", "not-started", "-audio: started"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.noaudio"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.noaudio"]}},
       "execution": {"program": "bootlogprobe", "stdin": null, "role": "boot", "privileges": "root, as etude-guest runs it, which syslog(2) needs to read the ring", "isolation": [], "children": "none", "cleanup": "nothing to remove; the machine ends with the case"},
       "assertions": [
         {"assertion_id": "skipped", "checks": "the console has the record that audio's probe was left out for rach2.noaudio", "source": "executor", "record": "audio: skipped: rach2.noaudio"},
@@ -43,7 +43,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["ring-skipped", "+mouse: skipped: rach2.nomouse", "not-started", "-mouse: started"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.nomouse"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.nomouse"]}},
       "execution": {"program": "bootlogprobe", "stdin": null, "role": "boot", "privileges": "root, as etude-guest runs it, which syslog(2) needs to read the ring", "isolation": [], "children": "none", "cleanup": "nothing to remove; the machine ends with the case"},
       "assertions": [
         {"assertion_id": "skipped", "checks": "the console has the record that mouse's probe was left out for rach2.nomouse", "source": "executor", "record": "mouse: skipped: rach2.nomouse"},
@@ -76,7 +76,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["ring-skipped", "+net: skipped: rach2.nonet", "not-started", "-net: started"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.nonet"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.nonet"]}},
       "execution": {"program": "bootlogprobe", "stdin": null, "role": "boot", "privileges": "root, as etude-guest runs it, which syslog(2) needs to read the ring", "isolation": [], "children": "none", "cleanup": "nothing to remove; the machine ends with the case"},
       "assertions": [
         {"assertion_id": "skipped", "checks": "the console has the record that net's probe was left out for rach2.nonet", "source": "executor", "record": "net: skipped: rach2.nonet"},
@@ -109,7 +109,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["ring-skipped", "+block: skipped: rach2.nodisk", "not-started", "-block: started"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.nodisk"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.nodisk"]}},
       "execution": {"program": "bootlogprobe", "stdin": null, "role": "boot", "privileges": "root, as etude-guest runs it, which syslog(2) needs to read the ring", "isolation": [], "children": "none", "cleanup": "nothing to remove; the machine ends with the case"},
       "assertions": [
         {"assertion_id": "skipped", "checks": "the console has the record that block's probe was left out for rach2.nodisk", "source": "executor", "record": "block: skipped: rach2.nodisk"},
@@ -142,7 +142,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["ring-skipped", "+usb: skipped: rach2.nousb", "not-started", "-usb: started"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.nousb"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.nousb"]}},
       "execution": {"program": "bootlogprobe", "stdin": null, "role": "boot", "privileges": "root, as etude-guest runs it, which syslog(2) needs to read the ring", "isolation": [], "children": "none", "cleanup": "nothing to remove; the machine ends with the case"},
       "assertions": [
         {"assertion_id": "skipped", "checks": "the console has the record that usb's probe was left out for rach2.nousb", "source": "executor", "record": "usb: skipped: rach2.nousb"},
@@ -175,7 +175,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["ring-skipped", "+mouse: skipped: rach2.nomouse", "mouse-not-started", "-mouse: started", "audio-not-started", "-audio: started", "block-not-started", "-block: started", "usb-not-started", "-usb: started", "net-not-started", "-net: started"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.noaudio", "rach2.nomouse", "rach2.nonet", "rach2.nodisk", "rach2.nousb"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.noaudio", "rach2.nomouse", "rach2.nonet", "rach2.nodisk", "rach2.nousb"]}},
       "execution": {"program": "bootlogprobe", "stdin": null, "role": "boot", "privileges": "root, as etude-guest runs it, which syslog(2) needs to read the ring", "isolation": [], "children": "none", "cleanup": "nothing to remove; the machine ends with the case"},
       "assertions": [
         {"assertion_id": "mouse-skipped", "checks": "the console has the record that mouse's probe was left out for rach2.nomouse", "source": "executor", "record": "mouse: skipped: rach2.nomouse"},
@@ -213,7 +213,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["ring-started", "+usb: started", "no-skip", "-skipped: rach2.no"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "bootlogprobe", "stdin": null, "role": "boot", "privileges": "root, as etude-guest runs it, which syslog(2) needs to read the ring", "isolation": [], "children": "none", "cleanup": "nothing to remove; the machine ends with the case"},
       "assertions": [
         {"assertion_id": "mouse-started", "checks": "the console has the record that mouse's probe started", "source": "executor", "record": "mouse: started"},

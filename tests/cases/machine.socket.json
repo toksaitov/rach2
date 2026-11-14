@@ -28,7 +28,7 @@
       "machines": [
         {"machine_id": "guest",
          "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
-                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []},
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []},
          "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [
@@ -99,7 +99,7 @@
       "machines": [
         {"machine_id": "guest",
          "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
-                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []},
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []},
          "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [

@@ -37,7 +37,7 @@
       "machines": [
         {"machine_id": "clock",
          "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
-                  "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+                  "memory_bytes": 268435456, "firmware": "direct", "devices": ["virtio-net-pci"],
                   "boot_options": ["rach2.rescue"]},
          "console": "serial", "qmp": true, "helper": false}
       ],

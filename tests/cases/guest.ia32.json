@@ -10,7 +10,7 @@
       "domain": "guest",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "mixprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "exec-to-i386", "checks": "an execve of /ia32/mixprobe runs it in CS 0x23 with its argument and environment vectors whole", "source": "program"},
@@ -50,7 +50,7 @@
       "domain": "guest",
       "architectures": ["i686"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "ldtprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "absent", "checks": "on the i686 kernel modify_ldt fails with ENOSYS", "source": "program"},
@@ -91,7 +91,7 @@
       "domain": "guest",
       "architectures": ["i686"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139", "vga"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci", "vga"], "boot_options": []}},
       "execution": {"program": "drmcompatprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "open", "checks": "one of /dev/dri/card0 to card15 opens and answers GET_CAP with DRM_CAP_DUMB_BUFFER set", "source": "program"},
@@ -126,7 +126,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["-C", "/dev/shm"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 4, "memory_bytes": 536870912, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.vgem"]}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 4, "memory_bytes": 536870912, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.vgem"]}},
       "execution": {"program": "lockstressmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the program joins its threads, reaps every child and removes the file and directory it made in /dev/shm"},
       "assertions": [
         {"assertion_id": "switch", "checks": "pairs of threads, one for each processor and at least two, pass 2000 counts each way through a futex word with FUTEX_WAIT and FUTEX_WAKE and then through two pipes, each side seeing every count in order", "source": "program"},

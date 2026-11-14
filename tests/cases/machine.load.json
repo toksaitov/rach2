@@ -17,7 +17,7 @@
         {"step_id": "load", "stage": "execute", "machine": "guest", "does": "run loadprobe at the debug shell, type six lines, each once the reader says it took the one before, take the report from the console and end the machine with QMP's quit"}
       ],
       "machines": [
-        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "load-disk", "flush": false}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue", "rach2.blocklag=1"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "load-disk", "flush": false}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue", "rach2.blocklag=1"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "mounted", "checks": "the FAT32 volume of /dev/disk0p1 mounts on /lo", "source": "scenario"},
@@ -58,7 +58,7 @@
         {"step_id": "load", "stage": "execute", "machine": "guest", "does": "run loadprobe Wnr at the debug shell, type six lines, each once the reader says it took the one before, take the report from the console and end the machine with QMP's quit"}
       ],
       "machines": [
-        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["load-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue", "rach2.atapio"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["load-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue", "rach2.atapio"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "mounted", "checks": "the FAT32 volume of /dev/disk0p1 mounts on /lo", "source": "scenario"},

@@ -10,7 +10,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "saltnoent", "stdin": null, "role": "ordinary", "privileges": "root, to take the lock and read /etc/shadow", "isolation": [], "children": "none", "cleanup": "nothing to remove; /etc/shadow, its temporary files and /etc/.pwlock are as the image has them"},
       "assertions": [
         {"assertion_id": "premise", "checks": "getrandom fails with EIO", "source": "program"},
@@ -43,7 +43,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "passwdmusl", "stdin": null, "role": "ordinary", "privileges": "root, to run the set-user-ID /passwd as uid 1000 and read /etc/shadow", "isolation": [], "children": "reaped", "cleanup": "the probe restores /etc/passwd, /etc/shadow and /etc/group and removes the lock"},
       "assertions": [
         {"assertion_id": "change", "checks": "a uid-1000 change of its own password gives a new $6$ hash that crypt reproduces, and leaves every other line, the mode, the owner, no temporary file and no lock", "source": "program"},
@@ -78,7 +78,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "rngprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "cpuid-leaf7", "checks": "kcpu_id gives leaf 7 subleaf 0 as a direct cpuid does", "source": "program"},
@@ -111,7 +111,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "keygennoent", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the program removes keygennoent.key from its working directory on every path"},
       "assertions": [
         {"assertion_id": "premise", "checks": "getrandom fails with EIO", "source": "program"},

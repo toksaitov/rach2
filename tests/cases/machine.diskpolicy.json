@@ -193,7 +193,7 @@
             "memory_bytes": 1073741824,
             "firmware": "direct",
             "devices": [
-              "rtl8139"
+              "virtio-net-pci"
             ],
             "boot_options": [
               "rach2.root=ext2",

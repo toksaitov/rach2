@@ -32,7 +32,7 @@ RESCUE=1 ./run.sh               # no root, the kernel debug shell
 | --- | --- | --- | --- |
 | `ARCH` | every script | `i686` | `x86_64` boots `build/x86_64/rach2/kernel` and the images under `build/x86_64/images/` on `qemu-system-x86_64`. |
 | `CPU` | every script | `max` | The QEMU processor model. `max` has `RDRAND` and `RDSEED`, so the random generator has a trusted seed ([krandom](sys/lib/krandom.Readme.md)); without one, `getrandom` fails and Dropbear cannot make its keys. |
-| `NIC` | every script | `rtl8139` | The network card, `rtl8139` or `e1000`, on QEMU's user network. |
+| `NIC` | every script | `rtl8139` | The network card, `rtl8139`, `e1000` or `virtio-net-pci`, on QEMU's user network. |
 | `NET_HOSTFWD` | every script | `hostfwd=tcp::8080-:80` | The user network's forwarding rule. `run_from_disk.sh` forwards host port 2222 to the guest's SSH server instead. |
 | `NET` | every script | `on` | `off` passes `-nic none`, so the machine has no network card; without it QEMU would add its default e1000. |
 | `DISPLAY_MODE` | every script | unset | Passed to QEMU's `-display`. Unset, it is `none` on a host other than macOS and Windows when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, as in an ssh session, and QEMU opens no window; the console is then the terminal alone. |

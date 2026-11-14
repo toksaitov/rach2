@@ -53,7 +53,7 @@
               "bus": "ahci0.0",
               "drive": "drv0"
             },
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "rach2.disk=ahci",
@@ -224,7 +224,7 @@
               "bus": "ahci0.0",
               "drive": "drv0"
             },
-            "rtl8139"
+            "virtio-net-pci"
           ],
           "boot_options": [
             "rach2.disk=ahci",

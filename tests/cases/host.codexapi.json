@@ -251,7 +251,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "restrict": true,
                 "guest_forwards": [
                   {
@@ -511,7 +511,7 @@
             "firmware": "direct",
             "devices": [
               {
-                "model": "rtl8139",
+                "model": "virtio-net-pci",
                 "restrict": true,
                 "guest_forwards": [
                   {

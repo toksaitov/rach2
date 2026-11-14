@@ -13,7 +13,7 @@
       "requirements": {
         "host_api": "c", "tools": [], "features": {},
         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
-                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}
       },
       "execution": {
         "program": "poolprobe", "stdin": null, "role": "ordinary", "privileges": "any",
@@ -53,7 +53,7 @@
       "requirements": {
         "host_api": "c", "tools": [], "features": {},
         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
-                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}
       },
       "execution": {
         "program": "poolprobe", "stdin": null, "role": "ordinary", "privileges": "any",

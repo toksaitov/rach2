@@ -4,12 +4,13 @@
  *
  * The order of the table is the probe's order, and so the order of the
  * interfaces' names on a machine with cards of more than one kind: the
- * RTL8139; the e1000, which QEMU attaches when no card is named; the
+ * RTL8139, which rach2/qemu_devices.sh gives QEMU unless `NIC` names
+ * another card; the e1000, which QEMU attaches when no card is named; the
  * RTL8168GU, the Lenovo G50-70's card, which QEMU does not emulate; and the
- * virtio network device, which rach2/qemu_devices.sh gives QEMU unless
- * `NIC` names another card. The cards a PC has come first, so a machine
- * that has one beside a virtio device, as one that gives the virtio device
- * to a guest, keeps the card as its first interface.
+ * virtio network device, which the suites give most of their machines. The
+ * cards a PC has come first, so a machine that has one beside a virtio
+ * device, as one that gives the virtio device to a guest, keeps the card as
+ * its first interface.
  */
 
 #include "../../idle_timer.h"
