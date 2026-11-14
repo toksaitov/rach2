@@ -204,12 +204,12 @@
 953 fail 3333581 5 0 0 fail deqp/functional/gles3/fbocolorbuffer/tex3d_05.html
 954 fail 2001013 13 0 0 fail deqp/functional/gles3/fbocolorbuffer/blend.html
 955 fail 5752956 25 0 0 fail deqp/functional/gles3/fboinvalidate/default.html
-956 fail 3451744 18 0 0 fail deqp/functional/gles3/fboinvalidate/whole.html
+956 fail 3451743 19 0 0 fail deqp/functional/gles3/fboinvalidate/whole.html
 957 fail 3287391 19 0 0 fail deqp/functional/gles3/fboinvalidate/sub.html
 958 fail 2301295 14 0 0 fail deqp/functional/gles3/fboinvalidate/format_00.html
 959 fail 2301295 14 0 0 fail deqp/functional/gles3/fboinvalidate/format_01.html
 960 fail 2136915 13 0 0 fail deqp/functional/gles3/fboinvalidate/format_02.html
-961 fail 5917082 23 0 0 fail deqp/functional/gles3/fboinvalidate/target.html
+961 fail 5917078 27 0 0 fail deqp/functional/gles3/fboinvalidate/target.html
 962 fail 739870 3 0 0 fail deqp/functional/gles3/fborender/stencil_clear.html
 963 fail 624829 18 0 0 fail deqp/functional/gles3/fborender/shared_colorbuffer_clear.html
 964 fail 2535898 12 0 0 fail deqp/functional/gles3/fborender/shared_colorbuffer_00.html

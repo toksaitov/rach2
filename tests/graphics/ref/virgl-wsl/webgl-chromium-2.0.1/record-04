@@ -2,33 +2,33 @@ runner webgl
 system Debian GNU/Linux 13 (trixie)
 kernel Linux 6.12.115+deb13.1-amd64
 cpus 8
-memory_kib 8136932
+memory_kib 8136944
 mesa 25.0.7-2+deb13u1
 iommu units none groups 0 cmdline none
 cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
 cache browser a new profile for each browser started
 size 1280x800
-load start 0.00 0.00 0.00
-processes start 205
-kernel_before cpu  104 0 406 2917 261 0 25 0 0 0
-kernel_before cpu0 10 0 90 353 14 0 12 0 0 0
-kernel_before cpu1 12 0 36 377 38 0 5 0 0 0
-kernel_before cpu2 6 0 38 390 28 0 1 0 0 0
-kernel_before cpu3 13 0 32 381 41 0 1 0 0 0
-kernel_before cpu4 12 0 62 351 37 0 2 0 0 0
-kernel_before cpu5 32 0 65 304 40 0 1 0 0 0
-kernel_before cpu6 10 0 41 370 40 0 1 0 0 0
-kernel_before cpu7 6 0 36 389 17 0 0 0 0 0
-kernel_before intr 87000 33 9 0 0 387 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 257 348 225 400 558 321 388 200 0 1018 564 0 0 5 0 68 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-kernel_before ctxt 31089
-kernel_before btime 1794345506
-kernel_before processes 842
+load start 0.08 0.02 0.01
+processes start 202
+kernel_before cpu  144 0 509 3717 299 0 20 0 0 0
+kernel_before cpu0 15 0 127 394 49 0 4 0 0 0
+kernel_before cpu1 18 0 48 481 18 0 7 0 0 0
+kernel_before cpu2 11 0 39 527 12 0 4 0 0 0
+kernel_before cpu3 10 0 60 472 46 0 1 0 0 0
+kernel_before cpu4 13 0 68 463 43 0 0 0 0 0
+kernel_before cpu5 16 0 70 447 40 0 2 0 0 0
+kernel_before cpu6 39 0 41 456 41 0 0 0 0 0
+kernel_before cpu7 19 0 52 473 47 0 0 0 0 0
+kernel_before intr 87612 29 9 0 0 344 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 689 271 212 195 498 277 324 357 0 819 611 0 0 5 0 83 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 31804
+kernel_before btime 1794697505
+kernel_before processes 891
 kernel_before procs_running 1
 kernel_before procs_blocked 0
-kernel_before softirq 11378 0 702 6 1063 0 0 24 2257 0 7326
+kernel_before softirq 12752 0 813 5 1150 0 0 25 2526 0 8233
 env GRAPHICS_CLASS=conformance
 env GRAPHICS_CPUS=8
-env GRAPHICS_MEMORY_KIB=8136932
+env GRAPHICS_MEMORY_KIB=8136944
 env LP_NUM_THREADS=0
 env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
 env MESA_SHADER_CACHE_FILES=0
@@ -38,32 +38,32 @@ case webgl chromium 2.0.1 chunk 4 of 250 pages
 warmup 0
 repetitions 1, and each page that does not pass once more
 suite /tmp/webgl
-omitted none
+omitted conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_video/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_video/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_video/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_video/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_blob/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_blob/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_blob/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_blob/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-float.html,conformance2/uniforms/incompatible-texture-type-for-sampler.html
 browser Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)
-switches --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-gpu-blocklist --disable-gpu-process-crash-limit --js-flags=--expose-gc --disable-background-timer-throttling --disable-renderer-backgrounding --disable-background-networking --disable-hang-monitor --autoplay-policy=no-user-gesture-required
+switches --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-gpu-blocklist --disable-gpu-process-crash-limit --js-flags=--expose-gc --disable-background-timer-throttling --disable-renderer-backgrounding --disable-background-networking --disable-hang-monitor --autoplay-policy=no-user-gesture-required 
 compositor weston 14.0.2 headless gl kiosk no-config
 list 2.0.1 2865 pages sha256 9d7bddb435701ca417201b55f82c6b9f88933fbd175a3b346ddc4165917a380b
 renderer webgl WebKit WebGL; WebGL 1.0 (OpenGL ES 2.0 Chromium); unmasked ANGLE (Mesa, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), OpenGL ES 3.1); vendor Google Inc. (Mesa)
 renderer webgl2 WebKit WebGL; WebGL 2.0 (OpenGL ES 3.0 Chromium); unmasked ANGLE (Mesa, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), OpenGL ES 3.1); vendor Google Inc. (Mesa)
 list fetches failed 0
-load end 1.84 1.64 1.32
-busy 18.9%
-kernel_after cpu  203366 88 32072 1125494 412 0 26865 111 0 0
-kernel_after cpu0 25543 22 4118 140220 34 0 17506 14 0 0
-kernel_after cpu1 29143 4 4090 136886 65 0 5786 14 0 0
-kernel_after cpu2 25891 15 4097 139451 40 0 2093 12 0 0
-kernel_after cpu3 25881 9 3838 140634 71 0 710 15 0 0
-kernel_after cpu4 29116 8 4088 137149 56 0 321 12 0 0
-kernel_after cpu5 25284 8 3891 141147 58 0 203 13 0 0
-kernel_after cpu6 27668 11 3934 138751 56 0 143 14 0 0
-kernel_after cpu7 14837 6 4012 151253 28 0 100 14 0 0
-kernel_after intr 10979005 33 9 0 0 389 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 836 763 629 1347 1501 1053 1147 494 0 15287 11222 0 0 39 0 190316 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-kernel_after ctxt 15199227
-kernel_after btime 1794345507
-kernel_after processes 19994
+load end 2.00 1.88 1.46
+busy 19.9%
+kernel_after cpu  232389 208 33358 1197208 1128 0 30916 855 0 0
+kernel_after cpu0 33030 6 4335 145267 127 0 19480 113 0 0
+kernel_after cpu1 33427 5 4227 145139 157 0 7206 114 0 0
+kernel_after cpu2 29471 8 4107 149344 158 0 2500 108 0 0
+kernel_after cpu3 27100 42 4291 151444 214 0 834 113 0 0
+kernel_after cpu4 29004 18 4136 149689 149 0 381 121 0 0
+kernel_after cpu5 32136 15 4123 146880 139 0 231 99 0 0
+kernel_after cpu6 31971 99 4069 146791 84 0 159 84 0 0
+kernel_after cpu7 16246 11 4066 162651 97 0 122 100 0 0
+kernel_after intr 11279695 29 9 0 0 344 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 1727 2415 2654 2487 1131 2164 1285 1254 0 20785 15518 0 0 40 0 187585 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 15568179
+kernel_after btime 1794697506
+kernel_after processes 20375
 kernel_after procs_running 1
 kernel_after procs_blocked 0
-kernel_after softirq 2346622 0 172356 20 160043 0 0 28 923224 0 1090951
+kernel_after softirq 2516355 0 187895 10 169191 0 0 30 1000082 0 1159147
 guest profile virgl
 guest firmware seabios
 guest accelerator kvm
@@ -73,61 +73,113 @@ guest memory_mib 8192
 guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
 guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
 guest snapshot 20261108T000000Z
-guest claim debian-ref:toksaitov-m:2635125:1794345504
+guest claim debian-ref:toksaitov-a:599911:1794696292
 guest host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
-guest host_load 5.49 7.48 8.50
-guest host_claims 4
+guest host_load 10.12 10.70 9.61
+guest host_claims 8
 guest host_ledger etude-ledger 1
-guest host_ledger claim launch:771b235b1ce32c8bd62ccd196b493c33
+guest host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:ports
 guest host_ledger system linux
-guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
-guest host_ledger owner 2620550 7639709 1
-guest host_ledger account toksaitov-a
-guest host_ledger state running
-guest host_ledger resource memory_bytes 5368709120
-guest host_ledger process keeper 2620646 7639711 1
-guest host_ledger process case 2620647 7639711 1
-guest host_ledger end
-guest host_ledger claim tests.x86_64.20261110T211810Z.2616672:ports
-guest host_ledger system linux
-guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
-guest host_ledger owner 2616672 7639591 1
-guest host_ledger account toksaitov-d
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3710991 8722049 1
+guest host_ledger account ghrunner
 guest host_ledger state reserved
 guest host_ledger resource collections 1
 guest host_ledger end
-guest host_ledger claim tests.x86_64.20261110T211810Z.2616672:machine.bed-shm.nocopy:x86_64:r0:a0
+guest host_ledger claim tests.x86_64.20261114T204301Z.3932768:ports
 guest host_ledger system linux
-guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
-guest host_ledger owner 2616672 7639591 1
-guest host_ledger account toksaitov-d
-guest host_ledger state running
-guest host_ledger resource cpu_millis 2000
-guest host_ledger resource memory_bytes 7516192768
-guest host_ledger resource disk_bytes 8589934592
-guest host_ledger process keeper 2623901 7639874 1
-guest host_ledger process case 2623904 7639874 1
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3932768 8893182 1
+guest host_ledger account toksaitov-a
+guest host_ledger state reserved
+guest host_ledger resource collections 1
 guest host_ledger end
-guest host_ledger claim debian-ref:toksaitov-m:2635125:1794345504
+guest host_ledger claim debian-ref:toksaitov-s:580229:1794695782
 guest host_ledger system linux
-guest host_ledger boot 1e38264c-ea2b-4fee-8e32-7e1cd88f6600
-guest host_ledger owner 2635125 7641218 1
-guest host_ledger account toksaitov-m
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 580229 9678934 1
+guest host_ledger account toksaitov-s
 guest host_ledger state running
 guest host_ledger resource cpu_millis 8000
 guest host_ledger resource memory_bytes 9663676416
-guest host_ledger process keeper 2635652 7641266 1
-guest host_ledger process case 2635653 7641266 1
+guest host_ledger process keeper 597619 9724425 1
+guest host_ledger process case 597620 9724425 1
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-a:599896:1794696292
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 599896 9729879 1
+guest host_ledger account toksaitov-a
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 638411 9815716 1
+guest host_ledger process case 638412 9815716 1
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-a:599911:1794696292
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 599911 9729880 1
+guest host_ledger account toksaitov-a
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 643035 9850978 1
+guest host_ledger process case 643036 9850978 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:machine.d3d-vkd3d.2:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3710991 8722049 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 18253611008
+guest host_ledger resource disk_bytes 21474836480
+guest host_ledger process keeper 632183 9786848 1
+guest host_ledger process case 632184 9786849 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261114T204301Z.3932768:machine.virgl.webgl-chromium-webgl2-08:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3932768 8893182 1
+guest host_ledger account toksaitov-a
+guest host_ledger state waiting
+guest host_ledger ticket 15
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:machine.d3d-wine.proton-d3d9-d3d9ex:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3710991 8722049 1
+guest host_ledger account ghrunner
+guest host_ledger state blocked
+guest host_ledger ticket 16
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 18253611008
+guest host_ledger resource disk_bytes 21474836480
 guest host_ledger end
 guest env GRAPHICS_CLASS=conformance
 guest env GRAPHICS_CPUS=8
-guest env GRAPHICS_MEMORY_KIB=8136932
+guest env GRAPHICS_MEMORY_KIB=8136944
 guest env LP_NUM_THREADS=0
 guest env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
 guest env MESA_SHADER_CACHE_FILES=0
 guest env GRAPHICS_DONE=1
 guest env XVFB=-noreset
 host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
-host_load 2.74 3.50 4.79
-host_claims 0
+host_load 10.86 7.34 7.44
+host_claims 1
 host_ledger etude-ledger 1
+host_ledger claim launch:934a0d7206201d90e6e13e3809f7c1d5
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 816244 10035564 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource memory_bytes 35433480192
+host_ledger process keeper 816259 10035567 1
+host_ledger process case 816260 10035567 1
+host_ledger end
