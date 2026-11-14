@@ -1365,15 +1365,15 @@ static const char *const sysctl_int_refusals[] = {
 static void sysctl_int_rows(void)
 {
     static const char path[] = "/proc/sys/net/core/netdev_max_backlog";
-    static char was[24], buf[32];
+    static char was[24], got[32];
     unsigned long args[1];
     int had = slurp(path, was, (int)sizeof(was));
     int i, n, fd, ok = had >= 2;
 
     for (i = 0; ok && i < (int)(sizeof(sysctl_int_takes) / sizeof(sysctl_int_takes[0])); i++) {
         n = write_file(path, sysctl_int_takes[i].text, sysctl_int_takes[i].len);
-        ok = n == sysctl_int_takes[i].ret && slurp(path, buf, (int)sizeof(buf)) > 0 &&
-             same_str(buf, sysctl_int_takes[i].reads);
+        ok = n == sysctl_int_takes[i].ret && slurp(path, got, (int)sizeof(got)) > 0 &&
+             same_str(got, sysctl_int_takes[i].reads);
     }
     check("sysctl-int-take", ok,
           "net/core/netdev_max_backlog takes spaces, a minus, octal and hex, an int's ends and "
@@ -1383,7 +1383,7 @@ static void sysctl_int_rows(void)
          i++) {
         ok = write_file(path, sysctl_int_refusals[i], (int)strlen(sysctl_int_refusals[i])) ==
                  -EINVAL &&
-             slurp(path, buf, (int)sizeof(buf)) > 0 && same_str(buf, "12\n");
+             slurp(path, got, (int)sizeof(got)) > 0 && same_str(got, "12\n");
     }
     check("sysctl-int-refuse", ok,
           "net/core/netdev_max_backlog refuses a plus, trailing bytes, a number past an int and "
@@ -1394,7 +1394,7 @@ static void sysctl_int_rows(void)
     if (fd >= 0) {
         syscall1(SYS_CLOSE, fd);
     }
-    check("sysctl-int-offset", ok && slurp(path, buf, (int)sizeof(buf)) > 0 && same_str(buf, "3\n"),
+    check("sysctl-int-offset", ok && slurp(path, got, (int)sizeof(got)) > 0 && same_str(got, "3\n"),
           "a second write to net/core/netdev_max_backlog on one descriptor is taken whole and "
           "ignored");
     args[0] = 0x7F000001ul;
