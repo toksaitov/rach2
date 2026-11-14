@@ -9,6 +9,7 @@
 
 #include "../arch.h"
 #include "../x86/pit.h"
+#include "../x86/refclock.h"
 #include "../x86/tsc.h"
 
 #include "../../klog.h"
@@ -91,6 +92,41 @@ static uint64_t mono_base_ns;
 static uint64_t raw_base_ns;
 static int64_t wall_ns;
 static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
+
+/*
+ * The watch on a TSC that nothing vouches for (`timer_tsc_watch`), as
+ * Linux's clocksource watchdog keeps such a TSC (kernel/time/clocksource.c:
+ * 108-148, 245-294 and 419-560 in 6.12). Over each span of at least
+ * WATCH_SPAN_NS of the tick's raw clock, the TSC's counts at the measured
+ * rate are set against the raw clock, and a clock that parts from it by
+ * more than WATCH_LIMIT_NS, Linux's margins of the TSC and the HPET
+ * together, 500 parts in a million of the span, stops for good. A reading
+ * of the tick's clock whose two TSC readings lie more than WATCH_SKEW_NS
+ * apart is no measure: it begins the span again, as Linux skips a round
+ * whose read of the HPET was held up, and so does a span past twice its
+ * length, as Linux skips a long interval. The first span, of at least
+ * WATCH_FIRST_NS, sets the rate instead, as Linux's
+ * tsc_refine_calibration_work measures the TSC again a second after boot
+ * (arch/x86/kernel/tsc.c:1379-1470): the boot's measure spans 20 ms.
+ */
+#define WATCH_SPAN_NS  500000000u /* WATCHDOG_INTERVAL */
+#define WATCH_FIRST_NS 1000000000u
+#define WATCH_LIMIT_NS 248000u /* 4 * WATCHDOG_MAX_SKEW */
+#define WATCH_SKEW_NS  124000u /* 2 * WATCHDOG_MAX_SKEW */
+
+/*
+ * The watch's state: whether the running clock reads a watched TSC, whether
+ * the TSC parted from the tick's clock, whether the first span set the rate,
+ * the TSC and the raw clock where the span in progress began, the TSC 0
+ * for none, and for the log the span that parted or the rate set.
+ */
+static int watching;
+static int watch_parted;
+static int watch_refined;
+static uint64_t watch_tsc;
+static uint64_t watch_raw;
+static uint64_t watch_ran_ns;
+static uint64_t watch_span_ns;
 
 /* The time zone settimeofday set, for a page built after it
  * (`vclock_set_tz`). */
@@ -275,7 +311,7 @@ static uint64_t vclock_reference(struct vclock_sample *before, struct vclock_sam
  * where the page counts KVM's clock, and the TSC's otherwise. */
 static uint32_t vclock_counts_per_tick(void)
 {
-    return data->mode == VCLOCK_PVCLOCK ? TICK_NS : tsc_counts_per_tick();
+    return data->mode == VCLOCK_PVCLOCK ? TICK_NS : tsc_clock_per_tick();
 }
 
 /** The rate and its shift for `per_tick` counts a tick: the largest shift,
@@ -323,6 +359,10 @@ static int vclock_page(void)
 /* The refusal the tick tries again (`vclock_refusal`). */
 static const char vclock_withdrawn_why[] = "kvm's clock page withdrew its stable bit";
 
+/* The refusal for good of a watched TSC that parted from the tick's clock
+ * (`vclock_watch`). */
+static const char vclock_parted_why[] = "the tsc parted from the tick's clock";
+
 /** Why the clock cannot run from the TSC, for the log, or NULL when it
  * can: `vclock_withdrawn_why` where only the boot processor's KVM clock
  * page, which may set its stable bit again, stands in the way. */
@@ -331,8 +371,11 @@ static const char *vclock_refusal(void)
     uint64_t behind;
     int cpu;
 
-    if (tsc_counts_per_tick() == 0) {
-        return "no tsc at one rate was measured";
+    if (watch_parted) {
+        return vclock_parted_why;
+    }
+    if (tsc_clock_per_tick() == 0) {
+        return "no tsc was measured";
     }
     if (!tsc_synced(&cpu, &behind)) {
         if (behind != 0) {
@@ -392,6 +435,8 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     vclock_write_end();
     running = 1;
     kvm_stopped = 0;
+    watching = !kvm && tsc_counts_per_tick() == 0;
+    watch_tsc = 0;
     *mono_ns = mono_base_ns;
     *raw_ns = raw_base_ns;
     spin_unlock(&vclock_lock);
@@ -467,6 +512,11 @@ void vclock_start(void)
         klog(KLOG_INFO, "vdso", "clock: the system call; %s", vclock_withdrawn_why);
         return;
     }
+    if (watching) {
+        klog(KLOG_INFO, "vdso", "clock: the tsc, %d counts a tick, watched against the %s",
+             (int)tsc_clock_per_tick(), refclock_name());
+        return;
+    }
     klog(KLOG_INFO, "vdso", "clock: the tsc, %d counts a tick", (int)tsc_counts_per_tick());
 }
 
@@ -507,6 +557,59 @@ static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns)
     return ahead ? mult - adjust : mult + adjust;
 }
 
+/* What `vclock_watch` found: nothing to do, the first span's rate set, or
+ * the TSC parted from the tick's clock. */
+enum { WATCH_KEEP, WATCH_REFINED, WATCH_PARTED };
+
+/**
+ * Set the watched TSC against the tick's raw clock `ref_raw`, read between
+ * the moments `*before` and `*after` (`vclock_reference`), as the comment
+ * at WATCH_SPAN_NS says: begin a span, measure the rate over the first one,
+ * or test a later one. WATCH_PARTED after it sets `watch_parted`, which the
+ * caller acts on once it has let go of the lock. Under `vclock_lock`.
+ */
+static int vclock_watch(const struct vclock_sample *before, const struct vclock_sample *after,
+                        uint64_t ref_raw)
+{
+    uint64_t tsc, span, need, ran;
+    uint32_t per_tick;
+
+    if (after->tsc < before->tsc ||
+        vclock_scale(after->tsc - before->tsc, mult_measured, data->shift) > WATCH_SKEW_NS) {
+        watch_tsc = 0;
+        return WATCH_KEEP;
+    }
+    tsc = vclock_middle(before->tsc, after->tsc);
+    need = watch_refined ? WATCH_SPAN_NS : WATCH_FIRST_NS;
+    span = ref_raw - watch_raw;
+    if (watch_tsc == 0 || ref_raw <= watch_raw || tsc <= watch_tsc || span > 2u * need) {
+        watch_tsc = tsc;
+        watch_raw = ref_raw;
+        return WATCH_KEEP;
+    }
+    if (span < need) {
+        return WATCH_KEEP;
+    }
+    if (!watch_refined) {
+        per_tick = (uint32_t)tick_div64((tsc - watch_tsc) * TICK_NS, span, NULL);
+        timer_tsc_watch_refine(per_tick);
+        watch_refined = 1;
+        watch_tsc = tsc;
+        watch_raw = ref_raw;
+        return WATCH_REFINED;
+    }
+    ran = vclock_scale(tsc - watch_tsc, mult_measured, data->shift);
+    watch_tsc = tsc;
+    watch_raw = ref_raw;
+    if ((ran > span ? ran - span : span - ran) > WATCH_LIMIT_NS) {
+        watch_parted = 1;
+        watch_ran_ns = ran;
+        watch_span_ns = span;
+        return WATCH_PARTED;
+    }
+    return WATCH_KEEP;
+}
+
 /**
  * The errors are measured at the tick's reading, its counts taken as every
  * count is (`vclock_count`), and the base advanced to a moment read after
@@ -534,6 +637,7 @@ void vclock_tick(void)
     struct vclock_sample before, after;
     uint64_t at_ref, ref_ns, ref_raw, clock_ns, clock_raw;
     uint32_t mono_mult;
+    int watched = WATCH_KEEP;
 
     if (!running) {
         if (kvm_stopped && !vclock_refusal()) {
@@ -556,6 +660,9 @@ void vclock_tick(void)
     at_ref = vclock_middle(vclock_count(&before), vclock_count(&after));
     clock_ns = vclock_at(at_ref);
     clock_raw = vclock_raw_at(at_ref);
+    if (watching) {
+        watched = vclock_watch(&before, &after, ref_raw);
+    }
     vclock_write_begin();
     vclock_advance(vclock_step(ref_ns, clock_ns), vclock_step(ref_raw, clock_raw));
     if (vclock_counts_per_tick() != per_tick_used) {
@@ -569,6 +676,15 @@ void vclock_tick(void)
     vclock_write_times();
     vclock_write_end();
     spin_unlock(&vclock_lock);
+    if (watched == WATCH_REFINED) {
+        klog(KLOG_INFO, "vdso", "clock: tsc: refined to %d counts a tick",
+             (int)tsc_clock_per_tick());
+    } else if (watched == WATCH_PARTED) {
+        rtc_vclock_change(vclock_stop);
+        vclock_kick();
+        klog(KLOG_WARN, "vdso", "clock: the system call; the tsc ran %lu ns in %lu ns of the %s",
+             (unsigned long)watch_ran_ns, (unsigned long)watch_span_ns, refclock_name());
+    }
 }
 
 /** The page's base seconds, nanoseconds and rate of the clock `which`. */
@@ -753,7 +869,7 @@ void vclock_set_tz(int32_t minuteswest, int32_t dsttime)
 
 uint32_t vclock_resolution_ns(void)
 {
-    uint32_t per_tick = tsc_counts_per_tick();
+    uint32_t per_tick = tsc_clock_per_tick();
 
     return per_tick ? (TICK_NS + per_tick - 1u) / per_tick : TICK_NS;
 }

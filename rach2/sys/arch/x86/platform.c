@@ -365,6 +365,8 @@ void platform_timer_start(isr_handler_t tick)
     }
     if (timer_tsc_trusted()) {
         (void)timer_calibrate(); /* before the first tick, which starts the reference */
+    } else {
+        (void)timer_tsc_watch(); /* before the processors' checks of it */
     }
     apic = ioapic_wanted(a);
     if (apic) {

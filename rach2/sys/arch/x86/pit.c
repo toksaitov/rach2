@@ -195,6 +195,12 @@ static volatile uint32_t ref_us_base;
 static uint32_t tsc_per_tick;
 static int tsc_measured;
 
+/* The counts in a tick of a TSC that nothing vouches for, measured for the
+ * vDSO's clock alone (`timer_tsc_watch`), 0 for none; and whether it has
+ * measured. */
+static uint32_t tsc_watch_per_tick;
+static int tsc_watch_measured;
+
 /* The waits on the 8254 that `timer_calibrate` measures the TSC over, and
  * the 8254's counts in each, 20 ms. */
 #define TSC_WINDOWS     3u
@@ -595,6 +601,52 @@ uint32_t timer_calibrate(void)
 uint32_t tsc_counts_per_tick(void)
 {
     return tsc_per_tick;
+}
+
+/**
+ * Measure, once, with interrupts off, a TSC that `timer_calibrate` leaves
+ * alone because nothing vouches that it runs at one rate, as under QEMU's
+ * emulator, against the HPET or the PM timer as `timer_calibrate` would,
+ * for the x86-64 vDSO's clock alone, which watches it against the tick's
+ * clock (arch/x86_64/vclock.c): Linux takes such a TSC as its clock source
+ * under the clocksource watchdog (kernel/time/clocksource.c:419-560 in
+ * 6.12), where the system call and every read of the HPET would be exits.
+ * The tick, `k_udelay` and the other users of `tsc_counts_per_tick` go on
+ * without it. 0 where the TSC is the trusted one, under `rach2.notsc`,
+ * with no platform counter, and on i686, whose kernel has no vDSO.
+ */
+uint32_t timer_tsc_watch(void)
+{
+    uint32_t flags;
+
+    if (tsc_watch_measured) {
+        return tsc_watch_per_tick;
+    }
+    tsc_watch_measured = 1;
+#if defined(__x86_64__)
+    if (kcmdline_has("rach2.notsc") || tsc_one_rate() || timer_tsc_trusted() ||
+        tsc_kvm_counts_per_tick() != 0 || !refclock_name()) {
+        return 0;
+    }
+    flags = kirq_save();
+    tsc_watch_per_tick = tsc_against_reference();
+    kirq_restore(flags);
+#else
+    (void)flags;
+#endif
+    return tsc_watch_per_tick;
+}
+
+void timer_tsc_watch_refine(uint32_t per_tick)
+{
+    if (tsc_watch_per_tick != 0 && per_tick != 0) {
+        tsc_watch_per_tick = per_tick;
+    }
+}
+
+uint32_t tsc_clock_per_tick(void)
+{
+    return tsc_per_tick ? tsc_per_tick : tsc_watch_per_tick;
 }
 
 /** Scale cycles by the measured rate, without i686's absent libgcc divide. */

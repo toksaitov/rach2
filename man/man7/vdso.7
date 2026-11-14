@@ -111,6 +111,14 @@ says the counter runs at one rate whatever the processor's clock does, or
 on the command line says to take it as one that does, as QEMU's emulator
 needs; never under
 .Cm rach2.notsc .
+Elsewhere, where the HPET or the PM timer keeps the clock and KVM states
+no rate, as under QEMU's emulator, the kernel measures the counter against
+that reference for the vDSO alone and watches it, as Linux's clocksource
+watchdog watches a TSC that nothing vouches for: a second after the clock
+starts it measures the rate again over that second, and at each half
+second after, a counter that has parted from the reference by more than
+248 microseconds, 500 parts in a million, turns the TSC clock off for
+good.
 Under KVM, where KVM offers its stable clock and its clock page says the
 counter is one clock on every processor, the kernel takes the counter's
 rate from that page instead of measuring it, and the clock counts KVM's
@@ -131,7 +139,9 @@ TSC clock off.
 The boot log says which clock the vDSO reads:
 .Bd -literal -offset indent
 vdso: clock: the tsc, 4192065 counts a tick
-vdso: clock: the system call; no tsc at one rate was measured
+vdso: clock: the tsc, 16768176 counts a tick, watched against the hpet
+vdso: clock: the system call; no tsc was measured
+vdso: clock: the system call; the tsc ran 500312000 ns in 500000000 ns of the hpet
 .Ed
 .Pp
 The kernel keeps the clock's state in a page of its own, mapped read-only

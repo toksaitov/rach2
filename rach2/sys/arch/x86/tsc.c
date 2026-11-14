@@ -444,7 +444,7 @@ static int sync_mark(int cpu, unsigned int flag)
 static int sync_wait(int cpu, unsigned int flag)
 {
     uint64_t start = tsc_ordered();
-    uint64_t limit = SYNC_MEET_TICKS * (uint64_t)tsc_counts_per_tick();
+    uint64_t limit = SYNC_MEET_TICKS * (uint64_t)tsc_clock_per_tick();
     unsigned int old;
 
     for (;;) {
@@ -499,7 +499,7 @@ void tsc_sync_open(int cpu)
 
 int tsc_sync_source(int cpu, uint64_t *behind)
 {
-    uint64_t window = tick_div64((uint64_t)tsc_counts_per_tick() * 2000u, TICK_US, NULL);
+    uint64_t window = tick_div64((uint64_t)tsc_clock_per_tick() * 2000u, TICK_US, NULL);
     int done, verdict;
 
     *behind = 0;
@@ -530,7 +530,7 @@ int tsc_sync_source(int cpu, uint64_t *behind)
 
 void tsc_sync_target(int cpu)
 {
-    uint64_t window = tick_div64((uint64_t)tsc_counts_per_tick() * 2000u, TICK_US, NULL);
+    uint64_t window = tick_div64((uint64_t)tsc_clock_per_tick() * 2000u, TICK_US, NULL);
 
     if (window == 0 || !sync_mark(cpu, SYNC_TARGET) || !sync_wait(cpu, SYNC_SOURCE)) {
         return;

@@ -91,6 +91,22 @@ uint32_t pit_wait_counts(uint32_t counts);
  * KVM and no `rach2.tscreliable`, or `rach2.notsc`. */
 uint32_t tsc_counts_per_tick(void);
 
+/**
+ * Measure a TSC that nothing vouches for, for the vDSO's clock alone,
+ * where `tsc_counts_per_tick` has no rate (pit.c). Its counts in a tick,
+ * or 0. Called once, before the first tick, with interrupts off.
+ */
+uint32_t timer_tsc_watch(void);
+
+/** Take `per_tick` as the watched TSC's counts in a tick, the rate the
+ * vDSO's clock measured over its first span (vclock.c); nothing where no
+ * TSC is watched. */
+void timer_tsc_watch_refine(uint32_t per_tick);
+
+/** The counts in a tick of the TSC the clock may run from: the trusted
+ * rate, `tsc_counts_per_tick`, or else the watched one, or 0. */
+uint32_t tsc_clock_per_tick(void);
+
 /** Whether the TSC keeps the clock even where the HPET or the PM timer
  * could, and is measured before the first tick (`platform_timer_start`):
  * under `rach2.tscreliable`, or where KVM's clock page states its rate and
