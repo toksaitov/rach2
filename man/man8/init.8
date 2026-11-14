@@ -419,22 +419,41 @@ on the boot partition, so that the disk's menu goes on booting the saved
 default, as Ubuntu's boot clears it; a failure is reported and the boot
 goes on.
 .Pp
-Every build applies the kernel settings of
-.Pa /etc/sysctl.conf ,
-where the image has one, with BusyBox's
-.Ql sysctl -q -p ,
-before the stable secret below, so a card restarted for the secret makes
-its addresses under them; a line sysctl cannot apply is reported and the
-rest applied.
+Every build applies the image's kernel settings as procps's
+.Ql sysctl --system
+does, each file with BusyBox's
+.Ql sysctl -q -p :
+every file
+.Pa NAME.conf
+of
+.Pa /etc/sysctl.d ,
+.Pa /run/sysctl.d ,
+.Pa /usr/local/lib/sysctl.d ,
+.Pa /usr/lib/sysctl.d
+and
+.Pa /lib/sysctl.d ,
+in the order of the names, a name in an earlier directory masking the same
+name in a later one, and then
+.Pa /etc/sysctl.conf .
+It does so before the stable secret below, so a card restarted for the
+secret makes its addresses under them; a line sysctl cannot apply is
+reported and the rest applied.
 The installed systems set
 .Va use_tempaddr
-to 2 there, for
+to 2 in
+.Pa /etc/sysctl.conf ,
+for
 .Ql all
 and
 .Ql default ,
 so an outgoing IPv6 connection takes a temporary address while the stable
 one still answers; see
 .Xr ipv6 7 .
+The GNU system's
+.Pa /usr/lib/sysctl.d/10-map-count.conf
+sets
+.Va vm.max_map_count
+to 1048576, as Debian's does.
 .Pp
 Every build keeps IPv6's stable secret across a reboot, so that the
 addresses a router's prefix gives the machine stay the same from one boot
@@ -567,7 +586,7 @@ The mixer's levels and its record of a mute, saved when the machine stops
 and written back at boot.
 .It Pa /etc/rach2/limits
 Initial resource limits.
-.It Pa /etc/sysctl.conf
+.It Pa /etc/sysctl.conf , Pa /etc/sysctl.d , Pa /usr/lib/sysctl.d
 Kernel settings applied at boot.
 .It Pa /etc/ifplugd/ifplugd.action
 The action of

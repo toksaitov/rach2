@@ -8,10 +8,11 @@
  * session when it exits, so the console is never left without one, and
  * continue a child that is stopped, since nothing else can. Beside that it
  * clears `/var/run`, writes the boot's utmp record, sets the resource limits,
- * applies /etc/sysctl.conf, keeps each backlight's level and the mixer's
- * across a reboot, and keeps, on an image with its configuration, BusyBox's
- * acpid running, which acts on the power, volume and brightness keys. The
- * kernel writes dirty data back by itself, so no periodic sync runs here.
+ * applies the kernel settings files, keeps each backlight's level and the
+ * mixer's across a reboot, and keeps, on an image with its configuration,
+ * BusyBox's acpid running, which acts on the power, volume and brightness
+ * keys. The kernel writes dirty data back by itself, so no periodic sync runs
+ * here.
  * It never exits; if it did, the kernel would have no reaper, so the kernel
  * panics if init dies.
  *
@@ -249,6 +250,18 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * addresses there.
  */
 #define SYSCTL_CONF "/etc/sysctl.conf"
+
+/*
+ * The directories of settings files, NAME.conf in the same format, in the
+ * order in which a file masks one of the same name in a directory after it,
+ * as procps's `sysctl --system` and systemd-sysctl read them; the GNU root's
+ * /usr/lib/sysctl.d has Debian's vm.max_map_count. `SYSCTL_FILES` bounds the
+ * files taken.
+ */
+static const char *const sysctl_dirs[] = {"/etc/sysctl.d", "/run/sysctl.d",
+                                          "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d",
+                                          "/lib/sysctl.d"};
+#define SYSCTL_FILES 64
 
 /*
  * Each backlight's level is kept across a reboot, as systemd-backlight keeps
@@ -2961,19 +2974,16 @@ static void apply_limits(void)
 }
 
 /**
- * Apply `SYSCTL_CONF`, where the image has one, with BusyBox's `sysctl -q -p`,
- * and wait for it. sysctl reports a line it cannot apply on standard error
- * and goes on with the rest, and init reports that it failed and goes on too.
+ * Apply one settings file with BusyBox's `sysctl -q -p`, and wait for it.
+ * sysctl reports a line it cannot apply on standard error and goes on with
+ * the rest, and init reports that it failed and goes on too.
  */
-static void apply_sysctl(void)
+static void apply_sysctl_file(const char *path)
 {
     char *argv[5];
     int status;
     pid_t pid;
 
-    if (access(SYSCTL_CONF, R_OK) != 0) {
-        return;
-    }
     pid = fork();
     if (pid < 0) {
         fprintf(stderr, "init: sysctl: cannot fork\n");
@@ -2983,7 +2993,7 @@ static void apply_sysctl(void)
         argv[0] = (char *)"sysctl";
         argv[1] = (char *)"-q";
         argv[2] = (char *)"-p";
-        argv[3] = (char *)SYSCTL_CONF;
+        argv[3] = (char *)path;
         argv[4] = 0;
         execve(BUSYBOX_PROGRAM, argv, environ);
         _exit(127);
@@ -2994,8 +3004,82 @@ static void apply_sysctl(void)
         }
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        fprintf(stderr, "init: sysctl: %s was not applied whole (status 0x%x)\n", SYSCTL_CONF,
+        fprintf(stderr, "init: sysctl: %s was not applied whole (status 0x%x)\n", path,
                 (unsigned)status);
+    }
+}
+
+/* A settings file `apply_sysctl` found: its name, and its directory's index
+ * in `sysctl_dirs`. */
+struct sysctl_file {
+    char name[NAME_MAX + 1];
+    int dir;
+};
+
+/** Order two `sysctl_file` entries by name, for qsort(3). */
+static int sysctl_file_order(const void *a, const void *b)
+{
+    return strcmp(((const struct sysctl_file *)a)->name, ((const struct sysctl_file *)b)->name);
+}
+
+/**
+ * Apply the image's kernel settings as procps's `sysctl --system` does: each
+ * file NAME.conf of `sysctl_dirs`, in the order of the names, where a name
+ * found in an earlier directory masks the same name in a later one, and
+ * then `SYSCTL_CONF`. A directory or file the image lacks is passed over.
+ */
+static void apply_sysctl(void)
+{
+    static struct sysctl_file files[SYSCTL_FILES];
+    char path[PATH_MAX];
+    struct dirent *e;
+    struct stat st;
+    size_t len;
+    unsigned d;
+    int n = 0;
+    int i;
+    DIR *dir;
+
+    for (d = 0; d < sizeof(sysctl_dirs) / sizeof(sysctl_dirs[0]); d++) {
+        dir = opendir(sysctl_dirs[d]);
+        if (!dir) {
+            continue;
+        }
+        while ((e = readdir(dir)) != NULL) {
+            len = strlen(e->d_name);
+            if (e->d_name[0] == '.' || len < 6 || strcmp(e->d_name + len - 5, ".conf") != 0) {
+                continue;
+            }
+            for (i = 0; i < n && strcmp(files[i].name, e->d_name) != 0; i++) {
+            }
+            if (i < n) {
+                continue;
+            }
+            if (snprintf(path, sizeof(path), "%s/%s", sysctl_dirs[d], e->d_name) >=
+                    (int)sizeof(path) ||
+                stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+                continue;
+            }
+            if (n == SYSCTL_FILES) {
+                fprintf(stderr, "init: sysctl: more than %d files; %s not applied\n", SYSCTL_FILES,
+                        path);
+                continue;
+            }
+            memcpy(files[n].name, e->d_name, len + 1);
+            files[n].dir = (int)d;
+            n++;
+        }
+        closedir(dir);
+    }
+    qsort(files, (size_t)n, sizeof(files[0]), sysctl_file_order);
+    for (i = 0; i < n; i++) {
+        if (snprintf(path, sizeof(path), "%s/%s", sysctl_dirs[files[i].dir], files[i].name) <
+            (int)sizeof(path)) {
+            apply_sysctl_file(path);
+        }
+    }
+    if (access(SYSCTL_CONF, R_OK) == 0) {
+        apply_sysctl_file(SYSCTL_CONF);
     }
 }
 

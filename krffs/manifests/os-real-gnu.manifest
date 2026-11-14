@@ -47,6 +47,10 @@
 #   over a directory the image lacks.
 # * /etc/ifplugd/ifplugd.action, /sbin/ndwatch and /etc/sysctl.conf, as
 #   the metal disk has them.
+# * /usr/lib/sysctl.d/10-map-count.conf sets vm.max_map_count to 1048576,
+#   as Debian 13's 50-default.conf and systemd's 10-map-count.conf do, since
+#   vkd3d-proton on lavapipe and Wine's games hold more than Linux's default
+#   of 65530 mappings; init applies it at boot.
 # * /etc/ntp.conf names the servers of the NTP pool, by which BusyBox's
 #   ntpd keeps the clock; init starts ntpd while the file names a server.
 # * /bin/term and its font, as the metal disk has them; os-real's RAM image
@@ -266,6 +270,9 @@ file 0755 /sbin/wsimrelay build/utils/sbin/wsimrelay
 # (RFC 8981), while the stable address still answers connections from
 # outside.
 text 0644 /etc/sysctl.conf # Kernel settings, NAME = VALUE, which init applies at boot with sysctl -p.\n# Outgoing IPv6 connections use temporary addresses (RFC 8981).\nnet.ipv6.conf.all.use_tempaddr = 2\nnet.ipv6.conf.default.use_tempaddr = 2\n
+dir 0755 /usr/lib
+dir 0755 /usr/lib/sysctl.d
+text 0644 /usr/lib/sysctl.d/10-map-count.conf # The mappings a process may hold, as Debian sets it (init(8)).\nvm.max_map_count = 1048576\n
 # The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
 # (vendor/keymaps/Readme.md).
 tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
