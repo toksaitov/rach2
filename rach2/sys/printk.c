@@ -71,15 +71,14 @@ void printk_params_early(void)
     if (kcmdline_early("ignore_loglevel")) {
         param_set(PARAM_IGNORE_LOGLEVEL, 1);
     }
-    if (kcmdline_setup("no_console_suspend")) {
-        param_set(PARAM_CONSOLE_SUSPEND, 0);
-    }
     for (i = 0; i < PRINTK_NR_PARAMS; i++) {
         for (j = 0; params[i].name[j] != '\0'; j++) {
             key[7 + j] = params[i].name[j];
         }
         key[7 + j] = '\0';
-        param_set(i, kcmdline_param_bool(key, param_get(i)));
+        param_set(i, i == PARAM_CONSOLE_SUSPEND
+                         ? kcmdline_param_bool_setup(key, "no_console_suspend", 0, param_get(i))
+                         : kcmdline_param_bool(key, param_get(i)));
     }
 }
 

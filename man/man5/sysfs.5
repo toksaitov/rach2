@@ -717,7 +717,12 @@ and
 .Cm ignore_loglevel
 and
 .Cm no_console_suspend
-too.
+too, the last word that names a parameter counting, so that
+.Cm printk.console_suspend=Y no_console_suspend
+leaves
+.Ql N ;
+.Cm ignore_loglevel
+is read before the others, as Linux reads an early parameter.
 .Pa ignore_loglevel ,
 .Ql N ,
 shows every record on the screen,

@@ -5,10 +5,12 @@
 
 /**
  * Set the parameters from the boot line, as Linux reads them: the early
- * `ignore_loglevel` and the setup `no_console_suspend`, then each
- * `printk.NAME=` boolean, a bare `printk.NAME` true, the last that gives a
- * boolean counting. Called once the line is captured, before the boot's
- * records go out, so that they follow `printk.time` and `ignore_loglevel`.
+ * `ignore_loglevel` first, then each `printk.NAME=` boolean, a bare
+ * `printk.NAME` true, the last that gives a boolean counting, with the
+ * setup word `no_console_suspend` taken in its place among the
+ * `printk.console_suspend` words (`kcmdline_param_bool_setup`). Called
+ * once the line is captured, before the boot's records go out, so that
+ * they follow `printk.time` and `ignore_loglevel`.
  */
 void printk_params_early(void);
 

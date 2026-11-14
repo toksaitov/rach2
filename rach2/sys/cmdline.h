@@ -145,6 +145,19 @@ int kcmdline_bool(const char *key, int dflt);
 int kcmdline_param_bool(const char *key, int dflt);
 
 /**
+ * The boolean module parameter `key`, read as `kcmdline_param_bool` reads
+ * it, which a word that `kcmdline_setup` matches to the `__setup` string
+ * `setup` sets to `setval`, each word in the line's order, so that the last
+ * of either kind counts. Linux's parse_args gives each word to the
+ * parameter it names (parse_one), and a word that names none to
+ * unknown_bootoption, whose obsolete_checksetup runs the `__setup` it
+ * begins with (Linux 6.12, kernel/params.c and init/main.c), so that
+ * `printk.console_suspend=Y no_console_suspend` leaves `console_suspend` N
+ * and the other order leaves it Y.
+ */
+int kcmdline_param_bool_setup(const char *key, const char *setup, int setval, int dflt);
+
+/**
  * The int module parameter `key`, read as Linux's param_set_int reads it
  * (Linux 6.12.115, kernel/params.c:237): each `key=value` token in the
  * line's order whose value kstrtoint takes in base 0, an optional sign,

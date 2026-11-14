@@ -438,17 +438,22 @@ int kcmdline_parse_bool(const char *text, int *out)
 
 /**
  * The boolean option `key`, as `kcmdline_bool` reads it; a bare `key` token
- * is true when `bare` is nonzero, and is ignored otherwise.
+ * is true when `bare` is nonzero, and is ignored otherwise. A word that
+ * names no `key` but begins with `setup`, as `kcmdline_setup` matches it,
+ * sets the value to `setval` in its place in the line; `setup` NULL is none.
  */
-static int cmdline_bool(const char *key, int dflt, int bare)
+static int cmdline_bool(const char *key, int dflt, int bare, const char *setup, int setval)
 {
-    size_t klen = k_strlen(key);
+    size_t klen = k_strlen(key), slen = setup ? k_strlen(setup) : 0;
     const char *p = kcmdline;
     struct arg a;
     int value = dflt;
 
     while (next_arg(&p, &a)) {
         if (!arg_is(&a, key, klen)) {
+            if (setup && arg_starts(&a, setup, slen)) {
+                value = setval;
+            }
             continue;
         }
         if (a.val == 0) {
@@ -464,12 +469,17 @@ static int cmdline_bool(const char *key, int dflt, int bare)
 
 int kcmdline_bool(const char *key, int dflt)
 {
-    return cmdline_bool(key, dflt, 0);
+    return cmdline_bool(key, dflt, 0, 0, 0);
 }
 
 int kcmdline_param_bool(const char *key, int dflt)
 {
-    return cmdline_bool(key, dflt, 1);
+    return cmdline_bool(key, dflt, 1, 0, 0);
+}
+
+int kcmdline_param_bool_setup(const char *key, const char *setup, int setval, int dflt)
+{
+    return cmdline_bool(key, dflt, 1, setup, setval);
 }
 
 /** The value is read in place by k_strtoll, Linux's kstrtoll, whose range
