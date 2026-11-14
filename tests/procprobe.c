@@ -1736,6 +1736,10 @@ static void loop_drain_rows(void)
         msgs[i].hdr.namelen = 16;
         msgs[i].hdr.iov = &iov;
         msgs[i].hdr.iovlen = 1;
+        msgs[i].hdr.control = 0;
+        msgs[i].hdr.controllen = 0;
+        msgs[i].hdr.flags = 0;
+        msgs[i].len = 0;
     }
     before = softnet_squeezed();
     if (ok) {
