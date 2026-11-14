@@ -222,7 +222,7 @@
 
 /* The assertions of etude's report in the order they are checked, more than
  * probe_report.h's path holds, and how many are planned and reported. */
-static const char *rows[112];
+static const char *rows[115];
 static int rows_planned, rows_reported;
 
 /** Add the assertion `id` to the end of the planned rows. */
@@ -2571,10 +2571,215 @@ static int ptimer_other_thread(void)
 }
 
 /**
+ * Check that a tick charged while timer_settime samples the clock and arms
+ * the timer is either in the sample or taken off the time left, as Linux's
+ * tick compares the clock itself with the timer's absolute expiry: a one-shot
+ * timer of SIGEV_NONE on the process's clock, set again and again to a
+ * nanosecond past the clock, must have expired whenever the clock read after
+ * the setting has reached that time. The process only makes the calls, so
+ * nearly every tick lands in the kernel, some between the sample and the
+ * arming; it does so for `ticks` ticks of `tick` nanoseconds of processor
+ * time. Returns 0, or 1 after the failure is printed.
+ */
+static int ptimer_tick_at_arming(long long tick, long long ticks)
+{
+    struct itimerspec set = {{0, 0}, {0, 0}}, cur;
+    struct sigevent ev;
+    timer_t timer;
+    long long start, now, at;
+
+    memset(&ev, 0, sizeof ev);
+    ev.sigev_notify = SIGEV_NONE;
+    if (timer_create(CLOCK_PROCESS_CPUTIME_ID, &ev, &timer) != 0) {
+        return fail("timer_create of SIGEV_NONE on the process's clock of processor time");
+    }
+    start = now = cpu_ns(CLOCK_PROCESS_CPUTIME_ID);
+    while (now - start < ticks * tick) {
+        at = now + 1;
+        set.it_value.tv_sec = (time_t)(at / 1000000000LL);
+        set.it_value.tv_nsec = (long)(at % 1000000000LL);
+        if (timer_settime(timer, TIMER_ABSTIME, &set, NULL) != 0) {
+            timer_delete(timer);
+            return fail("timer_settime of a nanosecond past the process's clock");
+        }
+        now = cpu_ns(CLOCK_PROCESS_CPUTIME_ID);
+        if (timer_gettime(timer, &cur) != 0) {
+            timer_delete(timer);
+            return fail("timer_gettime of a timer of processor time");
+        }
+        if (now >= at && (cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec != 0)) {
+            timer_delete(timer);
+            return fail("a tick between the sample and the arming of a timer of processor time "
+                        "reached its time and left it armed");
+        }
+    }
+    timer_delete(timer);
+    return 0;
+}
+
+/**
+ * Check that a timer on a child's clock of processor time can be set while
+ * the child is a zombie, and that once the child is reaped timer_settime
+ * fails with ESRCH, a disarming one too, and timer_gettime reports nothing,
+ * as Linux's posix_cpu_timer_set and posix_cpu_timer_get find no task.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int ptimer_reaped(void)
+{
+    struct itimerspec second = {{0, 0}, {1, 0}}, off = {{0, 0}, {0, 0}}, cur;
+    struct sigevent ev;
+    clockid_t clock;
+    timer_t timer;
+    siginfo_t info;
+    int fds[2], status, zombie_set, gone_set, gone_errno, off_set, off_errno, got;
+    pid_t child;
+    char c;
+
+    if (pipe(fds) != 0) {
+        return fail("pipe for the timer's child");
+    }
+    child = fork();
+    if (child < 0) {
+        return fail("fork of the timer's child");
+    }
+    if (child == 0) {
+        close(fds[1]);
+        _exit(read(fds[0], &c, 1) == 0 ? 0 : 1);
+    }
+    close(fds[0]);
+    memset(&ev, 0, sizeof ev);
+    ev.sigev_notify = SIGEV_NONE;
+    if (clock_getcpuclockid(child, &clock) != 0 || timer_create(clock, &ev, &timer) != 0) {
+        close(fds[1]);
+        waitpid(child, &status, 0);
+        return fail("timer_create on a child's clock of processor time");
+    }
+    close(fds[1]);
+    memset(&info, 0, sizeof info);
+    if (waitid(P_PID, (id_t)child, &info, WEXITED | WNOWAIT) != 0) {
+        timer_delete(timer);
+        return fail("waitid of the timer's child");
+    }
+    zombie_set = timer_settime(timer, 0, &second, NULL) == 0 && timer_gettime(timer, &cur) == 0 &&
+                 (cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec != 0);
+    waitpid(child, &status, 0);
+    errno = 0;
+    gone_set = timer_settime(timer, 0, &second, NULL);
+    gone_errno = errno;
+    errno = 0;
+    off_set = timer_settime(timer, 0, &off, NULL);
+    off_errno = errno;
+    memset(&cur, 0xff, sizeof cur);
+    got = timer_gettime(timer, &cur);
+    timer_delete(timer);
+    if (!zombie_set) {
+        return fail("timer_settime on the clock of a zombie child");
+    }
+    if (gone_set != -1 || gone_errno != ESRCH || off_set != -1 || off_errno != ESRCH) {
+        return fail("timer_settime on the clock of a reaped child did not fail with ESRCH");
+    }
+    if (got != 0 || cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec != 0 ||
+        cur.it_interval.tv_sec != 0 || cur.it_interval.tv_nsec != 0) {
+        return fail("timer_gettime on the clock of a reaped child reported a setting");
+    }
+    return 0;
+}
+
+/* The leader's timer on its own clock of processor time and its process id,
+ * for `leader_gone`. */
+static timer_t leader_timer;
+static pid_t leader_pid;
+
+/**
+ * Wait until the leader has ended, as its state in /proc shows, and set its
+ * timer: the process's status is 0 when the setting succeeds and
+ * timer_gettime then reports the time left, 2 when it fails, and 3 when the
+ * leader is not seen to end.
+ */
+static void *leader_gone(void *arg)
+{
+    struct itimerspec second = {{0, 0}, {1, 0}}, cur;
+    char path[64], line[256], *paren;
+    int tries, fd;
+    ssize_t n;
+
+    (void)arg;
+    snprintf(path, sizeof path, "/proc/self/task/%d/stat", (int)leader_pid);
+    for (tries = 0; tries < 100000; tries++) {
+        fd = open(path, O_RDONLY);
+        n = fd < 0 ? -1 : read(fd, line, sizeof line - 1);
+        if (fd >= 0) {
+            close(fd);
+        }
+        if (n > 0) {
+            line[n] = 0;
+            paren = strrchr(line, ')');
+            if (paren && paren[1] == ' ' && paren[2] == 'Z') {
+                break;
+            }
+        }
+        sched_yield();
+    }
+    if (tries == 100000) {
+        _exit(3);
+    }
+    if (timer_settime(leader_timer, 0, &second, NULL) != 0 ||
+        timer_gettime(leader_timer, &cur) != 0 ||
+        (cur.it_value.tv_sec == 0 && cur.it_value.tv_nsec == 0)) {
+        _exit(2);
+    }
+    _exit(0);
+    return NULL;
+}
+
+/**
+ * Check that a timer on the clock of processor time of a leader that has
+ * called pthread_exit can be set from another thread while the leader is a
+ * zombie, as Linux's posix_cpu_timer_set finds the leader until it is
+ * reaped. Returns 0, or 1 after the failure is printed.
+ */
+static int ptimer_zombie_leader(void)
+{
+    struct sigevent ev;
+    pthread_t thread;
+    pid_t child;
+    int status;
+
+    fflush(stdout);
+    child = fork();
+    if (child < 0) {
+        return fail("fork of the leader's process");
+    }
+    if (child == 0) {
+        memset(&ev, 0, sizeof ev);
+        ev.sigev_notify = SIGEV_NONE;
+        leader_pid = getpid();
+        if (timer_create(CLOCK_THREAD_CPUTIME_ID, &ev, &leader_timer) != 0 ||
+            pthread_create(&thread, NULL, leader_gone, NULL) != 0) {
+            _exit(1);
+        }
+        pthread_exit(NULL);
+    }
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) == 1) {
+        return fail("the leader's process did not make its timer and thread");
+    }
+    if (WEXITSTATUS(status) == 3) {
+        return fail("the leader that called pthread_exit was not seen to end");
+    }
+    if (WEXITSTATUS(status) != 0) {
+        return fail("timer_settime on the clock of a leader that called pthread_exit");
+    }
+    return 0;
+}
+
+/**
  * The rows of a setting of a timer of processor time: ITIMER_PROF's and
  * ITIMER_VIRTUAL's first expiry a tick later than asked (`itimer_first`),
- * a POSIX timer set to a time past (`ptimer_past`), and one on another
- * thread's clock (`ptimer_other_thread`). Returns 0, or 1 after the failure
+ * a POSIX timer set to a time past (`ptimer_past`), one on another
+ * thread's clock (`ptimer_other_thread`), a tick between a setting's sample
+ * and arming (`ptimer_tick_at_arming`), a timer on a child's clock once the
+ * child is reaped (`ptimer_reaped`), and one on a leader that called
+ * pthread_exit (`ptimer_zombie_leader`). Returns 0, or 1 after the failure
  * is printed.
  */
 static int cpu_settings(void)
@@ -2595,6 +2800,18 @@ static int cpu_settings(void)
     }
     held();
     if (ptimer_other_thread() != 0) {
+        return 1;
+    }
+    held();
+    if (ptimer_tick_at_arming(tick, 400) != 0) {
+        return 1;
+    }
+    held();
+    if (ptimer_reaped() != 0) {
+        return 1;
+    }
+    held();
+    if (ptimer_zombie_leader() != 0) {
         return 1;
     }
     held();
@@ -3077,66 +3294,23 @@ static void plan_rows(const char *const *ids, unsigned n)
 #define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
 
 /* The rows checked after `adjtimex`, in their order. */
-static const char *const after_rows[] = {"clock-adjtime",
-                                         "listxattr",
-                                         "getxattr-absent",
-                                         "lsetxattr-enoent",
-                                         "readahead-fadvise",
-                                         "fadvise-espipe",
-                                         "noctty-session",
-                                         "maxrss-self",
-                                         "maxrss-child",
-                                         "udp-refused",
-                                         "setgid-file",
-                                         "setgid-dir",
-                                         "privacy-other-root",
-                                         "privacy-own-maps",
-                                         "privacy-kept-dirs",
-                                         "privacy-kept-opens",
-                                         "privacy-dumpable",
-                                         "privacy-kept-files",
-                                         "privacy-dev-list",
-                                         "privacy-kept-links",
-                                         "privacy-fchdir-owner",
-                                         "privacy-fd-walk",
-                                         "privacy-link-walks",
-                                         "fd-size-reserved",
-                                         "timer-si-timer",
-                                         "timer-overrun",
-                                         "timer-delete",
-                                         "sigqueue",
-                                         "rt-sigqueueinfo",
-                                         "pty-nonblock-eagain",
-                                         "pty-writer-sleeps",
-                                         "pty-64k",
-                                         "pty-whole-lines",
-                                         "signalfd-eagain",
-                                         "signalfd-read",
-                                         "itimer-interval",
-                                         "itimer-signals",
-                                         "ptimer-gettime",
-                                         "ptimer-signals",
-                                         "itimer-first-tick",
-                                         "ptimer-past-due",
-                                         "ptimer-other-thread",
-                                         "devmem-low",
-                                         "devmem-ram-eperm",
-                                         "devmem-private-einval",
-                                         "devmem-apic",
-                                         "klog-size",
-                                         "klog-records",
-                                         "klog-clear",
-                                         "dev-log-link",
-                                         "rtc-alarm-range",
-                                         "rtc-aie-on-past",
-                                         "rtc-alarm-readback",
-                                         "rtc-alarm-invalid",
-                                         "rtc-read-af",
-                                         "rtc-wakealarm-empty",
-                                         "rtc-wakeup-enabled",
-                                         "power-state-mode",
-                                         "freeze-wakes",
-                                         "freeze-holds"};
+static const char *const after_rows[] = {
+    "clock-adjtime",        "listxattr",           "getxattr-absent",       "lsetxattr-enoent",
+    "readahead-fadvise",    "fadvise-espipe",      "noctty-session",        "maxrss-self",
+    "maxrss-child",         "udp-refused",         "setgid-file",           "setgid-dir",
+    "privacy-other-root",   "privacy-own-maps",    "privacy-kept-dirs",     "privacy-kept-opens",
+    "privacy-dumpable",     "privacy-kept-files",  "privacy-dev-list",      "privacy-kept-links",
+    "privacy-fchdir-owner", "privacy-fd-walk",     "privacy-link-walks",    "fd-size-reserved",
+    "timer-si-timer",       "timer-overrun",       "timer-delete",          "sigqueue",
+    "rt-sigqueueinfo",      "pty-nonblock-eagain", "pty-writer-sleeps",     "pty-64k",
+    "pty-whole-lines",      "signalfd-eagain",     "signalfd-read",         "itimer-interval",
+    "itimer-signals",       "ptimer-gettime",      "ptimer-signals",        "itimer-first-tick",
+    "ptimer-past-due",      "ptimer-other-thread", "ptimer-tick-at-arming", "ptimer-reaped-esrch",
+    "ptimer-zombie-leader", "devmem-low",          "devmem-ram-eperm",      "devmem-private-einval",
+    "devmem-apic",          "klog-size",           "klog-records",          "klog-clear",
+    "dev-log-link",         "rtc-alarm-range",     "rtc-aie-on-past",       "rtc-alarm-readback",
+    "rtc-alarm-invalid",    "rtc-read-af",         "rtc-wakealarm-empty",   "rtc-wakeup-enabled",
+    "power-state-mode",     "freeze-wakes",        "freeze-holds"};
 
 /**
  * Begin the report, with the branch of the architecture, and plan its
