@@ -3,8 +3,10 @@
 # set Rach2 beside Linux as the KVM host of the same machine: every test
 # unit-tests.list runs but debug and xapic, which Linux 6.12 as that host did
 # not finish in 900 s, debug after its MOVSS-blocking single step and xapic
-# after nmi-after-sti. It runs in about half an hour under either host on
-# the testing PC, 12 to 14 minutes of it x2apic's. EXPECT is
+# after nmi-after-sti. Under Linux it runs in about half an hour on the
+# testing PC, 12 to 14 minutes of it x2apic's; under Rach2, where the case
+# sets outer_kvm and the list expects x2apic to fail, corpus.sh ends x2apic
+# at unittests.cfg's 30 s. EXPECT is
 # unit-tests.list's. LINUX is the result of Debian's Linux 6.12.107 as the
 # host of the same machine with an invariant TSC, run by linux-corpus.sh -k
 # unit on 2026-11-12, and REASON names Linux's failure and skip where the

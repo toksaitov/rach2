@@ -29,7 +29,12 @@
 # * `unit`: kvm-unit-tests' run_tests.sh, once a test, from a copy of
 #   /opt/kvm-unit-tests, with ACCEL `kvm,kernel-irqchip=split`, as in the
 #   Linux reference, and TIMEOUT 0, so that no test is judged by the clock.
-#   A test passes on its PASS line and skips on its SKIP line.
+#   A test whose EXPECT here is `fail` runs with TIMEOUT unset instead, so
+#   that unittests.cfg's limit, or the runner's 90 s, ends it as upstream
+#   does, with the FAIL line `timeout; duration=N`, the result the list
+#   expects: under an outer KVM, x2apic took 12 to 14 minutes to fail and
+#   once ran past 40 minutes with no output. A test passes on its PASS line
+#   and skips on its SKIP line.
 # * `selftests`: each program of /opt/kvm-selftests, run in a directory of
 #   its own; exit 0 is a pass and 4, kselftest's code, a skip. A NAME of
 #   the form PROGRAM,ARG,... runs PROGRAM with the ARGs, which hold no
@@ -174,9 +179,12 @@ if [ "$kind" = unit ]; then
     # One run of the runner a test, so that each test's seconds are known.
     # Each run empties the runner's log directory, so each test has its own.
     mkdir "$work/logs" || exit 1
-    while read -r name _; do
+    while read -r name expect; do
+        # The runner reads an empty TIMEOUT as unset (scripts/runtime.bash).
+        limit=0
+        [ "$expect" != fail ] || limit=
         start=$(date +%s)
-        (cd "$work/kut" && ACCEL=kvm,kernel-irqchip=split TIMEOUT=0 \
+        (cd "$work/kut" && ACCEL=kvm,kernel-irqchip=split TIMEOUT=$limit \
             unittest_log_dir="$work/logs/$name" ./run_tests.sh -a "$name") >> "$work/out" 2>&1
         echo "$name $(($(date +%s) - start))" >> "$work/secs"
         echo "kvm-corpus: $name: ran" >&2
