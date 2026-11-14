@@ -97,8 +97,9 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
 
 /** Read the native `siginfo_t` at `in` into `info`, its union whole, for a
  * signal `signo`, whose layout gives the members the rest of the kernel
- * reads, for rt_sigqueueinfo and PTRACE_SETSIGINFO (siginfo.c). */
-void sigframe_take_siginfo(const uint8_t *in, int signo, struct k_siginfo *info);
+ * reads, for rt_sigqueueinfo and PTRACE_SETSIGINFO: 0, or -E2BIG for a code
+ * of a layout Linux does not know with bytes past the union (siginfo.c). */
+int32_t sigframe_take_siginfo(const uint8_t *in, int signo, struct k_siginfo *info);
 
 /** Write the 128-byte `struct signalfd_siginfo` of `signo` with `info` at
  * `out`, the fields of the layout, as Linux's signalfd_copyinfo writes them
@@ -113,9 +114,11 @@ void signalfd_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
 void siginfo_to_caller(uint8_t *out, int signo, const struct k_siginfo *info);
 
 /** Read a `siginfo_t` the calling system call passed, in its ABI's layout,
- * as `siginfo_to_caller` chooses it, as one of the signal `signo`. Defined
- * in syscall_proc.c. */
-void siginfo_from_caller(const uint8_t *in, int signo, struct k_siginfo *info);
+ * as `siginfo_to_caller` chooses it, as one of the signal `signo`: 0, or
+ * the native reader's -E2BIG; the i386 one, as Linux's
+ * post_copy_siginfo_from_user32, refuses nothing. Defined in
+ * syscall_proc.c. */
+int32_t siginfo_from_caller(const uint8_t *in, int signo, struct k_siginfo *info);
 
 #if defined(IA32_SYSCALL_TABLE_SIZE)
 /* The bytes of an i386 `siginfo_t` through si_status, which waitid writes

@@ -67,12 +67,13 @@ is the siginfo, whose
 .Va si_signo
 must be
 .Fa sig ,
-and whose code a process may give another process only when it is
-negative and not
+and whose code a thread may give a process it does not lead only when it
+is negative and not
 .Dv SI_TKILL ,
 as
 .Xr rt_sigqueueinfo 2
-has it.
+has it; a native caller's siginfo is refused as there when its code's
+layout is unknown and it has bytes past the kept fields.
 The kernel copies the whole siginfo before resolving the process, so a
 page fault during the copy cannot leave a stale target.
 Signal 0 checks the permission and sends nothing, and a signal to a process
@@ -120,6 +121,12 @@ opens, polls, signals and waits on pidfds, takes a pipe through
 and checks the refusals.
 .Sh ERRORS
 .Bl -tag -width "[EMFILE]"
+.It Bq Er E2BIG
+.Fa info
+has a code of a layout Linux does not know and a byte past the kept
+fields that is not zero, as
+.Xr rt_sigqueueinfo 2
+describes.
 .It Bq Er EBADF
 .Fa pidfd
 is not an open pidfd, or

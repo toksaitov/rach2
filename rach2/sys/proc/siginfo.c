@@ -14,6 +14,7 @@
 
 #include "sigframe.h"
 
+#include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 
 /* The bytes of a pointer or a long in the native layout, and where the
@@ -38,8 +39,12 @@
 #define NSIGPOLL 6
 #define NSIGSYS  2
 
-/* The code of a SIGIO a descriptor's owner is sent, Linux's SI_SIGIO. */
-#define SI_SIGIO (-5)
+/* The code of a SIGIO a descriptor's owner is sent, Linux's SI_SIGIO, and
+ * the lowest negative code of the run from SI_USER down, SI_DETHREAD, with
+ * the one below it whose layout Linux knows, SI_ASYNCNL. */
+#define SI_SIGIO    (-5)
+#define SI_DETHREAD (-7)
+#define SI_ASYNCNL  (-60)
 
 /** Store `v` at `p`, which need not be aligned. */
 static void put16(uint8_t *p, uint16_t v)
@@ -155,6 +160,53 @@ int siginfo_layout(int signo, int32_t code)
         return SIL_POLL;
     }
     return code < 0 ? SIL_RT : SIL_KILL;
+}
+
+/**
+ * Whether Linux 6.12 knows the layout of `signo`'s code `code`, as its
+ * known_siginfo_layout does: SI_KERNEL; a positive code up to the last of
+ * the signal's own codes, or up to SIGPOLL's last for a signal with none;
+ * and the codes from SI_USER down to SI_DETHREAD, and SI_ASYNCNL. A
+ * siginfo a program gives with any other code must have nothing past the
+ * union the kernel keeps, since that union is all a later read gives back.
+ */
+static int siginfo_known(int signo, int32_t code)
+{
+    int32_t last;
+
+    if (code == SI_KERNEL) {
+        return 1;
+    }
+    if (code <= SI_USER) {
+        return code >= SI_DETHREAD || code == SI_ASYNCNL;
+    }
+    switch (signo) {
+    case SIGILL:
+        last = NSIGILL;
+        break;
+    case SIGFPE:
+        last = NSIGFPE;
+        break;
+    case SIGSEGV:
+        last = NSIGSEGV;
+        break;
+    case SIGBUS:
+        last = NSIGBUS;
+        break;
+    case SIGTRAP:
+        last = NSIGTRAP;
+        break;
+    case SIGCHLD:
+        last = NSIGCHLD;
+        break;
+    case SIGSYS:
+        last = NSIGSYS;
+        break;
+    default:
+        last = NSIGPOLL;
+        break;
+    }
+    return code <= last;
 }
 
 /** Whether `layout` is one of a fault's, whose union begins with si_addr. */
@@ -288,17 +340,33 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
     union_of(out + UNION_AT, signo, info);
 }
 
-/** Keep the native siginfo at `in` whole, as Linux's copy_siginfo_from_user
+/**
+ * Keep the native siginfo at `in` whole, as Linux's copy_siginfo_from_user
  * keeps it, and read the members the rest of the kernel uses by the layout
- * of `signo` and its code. */
-void sigframe_take_siginfo(const uint8_t *in, int signo, struct k_siginfo *info)
+ * of `signo` and its code. Returns 0, or -E2BIG, leaving `info` alone, for a
+ * code whose layout Linux does not know (`siginfo_known`) with a byte past
+ * the kept union that is not zero, as Linux's post_copy_siginfo_from_user
+ * refuses it.
+ */
+int32_t sigframe_take_siginfo(const uint8_t *in, int signo, struct k_siginfo *info)
 {
+    int32_t code = (int32_t)get32(in + 8);
+    unsigned int i;
+
+    if (!siginfo_known(signo, code)) {
+        for (i = UNION_AT + SIGINFO_UNION_SIZE; i < SIGINFO_SIZE; i++) {
+            if (in[i] != 0) {
+                return -E2BIG;
+            }
+        }
+    }
     k_memset(info, 0, sizeof(*info));
     info->err = (int32_t)get32(in + 4);
     info->code = (int32_t)get32(in + 8);
     k_memcpy(info->fields, in + UNION_AT, SIGINFO_UNION_SIZE);
     info->packed = 1;
     union_decode(info, siginfo_layout(signo, info->code));
+    return 0;
 }
 
 /**

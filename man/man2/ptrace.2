@@ -510,7 +510,11 @@ which tells it from a signal-delivery stop of the stop signal;
 .Dv PTRACE_SETSIGINFO
 reads its buffer first, and fails with
 .Er EFAULT
-for one it cannot read at any stop.
+for one it cannot read at any stop, and with
+.Er E2BIG
+for a native tracer's siginfo that
+.Xr rt_sigqueueinfo 2
+refuses so.
 .It Dv PTRACE_GET_THREAD_AREA , PTRACE_SET_THREAD_AREA
 The TLS descriptor of entry
 .Fa addr ,
@@ -677,6 +681,10 @@ writes one through
 and finds it in the child.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
+.It Bq Er E2BIG
+.Dv PTRACE_SETSIGINFO
+was given a siginfo whose code's layout Linux does not know with a byte
+past the fields the kernel keeps that is not zero.
 .It Bq Er EFAULT
 A buffer at
 .Fa data ,

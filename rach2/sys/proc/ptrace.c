@@ -712,13 +712,16 @@ static int32_t tracee_memory(process_t *t, uintptr_t addr, void *word, uint32_t 
  * a stop that has no siginfo (`PT_NOINFO`), as Linux's ptrace_getsiginfo
  * and ptrace_setsiginfo refuse a stop without last_siginfo, or -ESRCH
  * for a thread gone from its stop during the copy in. PTRACE_SETSIGINFO
- * copies its siginfo in before it looks for one to replace, so that a bad
- * pointer is -EFAULT at any stop, as Linux copies it before
- * ptrace_setsiginfo runs. */
+ * copies and reads its siginfo before it looks for one to replace, so that
+ * a bad pointer is -EFAULT, and a code of a layout Linux does not know with
+ * bytes past the kept union -E2BIG (`sigframe_take_siginfo`), at any stop,
+ * as Linux's copy_siginfo_from_user runs before ptrace_setsiginfo. */
 static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[SIGINFO_SIZE];
+    struct k_siginfo info;
     int32_t signo;
+    int32_t rc;
 
     if (!set) {
         if (t->ptrace & PT_NOINFO) {
@@ -730,6 +733,11 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
     if (copy_from_user(buf, (const void __user *)data, sizeof(buf)) != 0) {
         return -EFAULT;
     }
+    k_memcpy(&signo, buf, sizeof(signo));
+    rc = siginfo_from_caller(buf, signo, &info);
+    if (rc != 0) {
+        return rc;
+    }
     t = ptrace_tracee(pid);
     if (!t) {
         return -ESRCH;
@@ -737,8 +745,7 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
     if (t->ptrace & PT_NOINFO) {
         return -EINVAL;
     }
-    k_memcpy(&signo, buf, sizeof(signo));
-    siginfo_from_caller(buf, signo, &t->ptrace_info);
+    t->ptrace_info = info;
     t->ptrace_info_signo = signo;
     return 0;
 }
