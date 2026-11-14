@@ -21,6 +21,9 @@ uint32_t vclock_generation(void)
 void vclock_tick(void)
 {}
 
+void vclock_watch_cpu(void)
+{}
+
 int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
 {
     (void)which;

@@ -180,6 +180,10 @@ void isr_cpu_offline(void)
 void platform_pmu_disable(void)
 {}
 
+/** No TSC is watched in this model (`smp_ipi`). */
+void vclock_watch_cpu(void)
+{}
+
 /** Count an NMI sent to `cpu` and, when `takes_nmi` says it takes one, run
  * the real stop handler there; one that does not stays stuck. */
 void platform_cpu_nmi(int cpu)

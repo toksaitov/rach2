@@ -3,7 +3,8 @@
  * vclock.c, built, started, ticked and stopped against a model machine.
  *
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
- * host-cflags: -DRACH2_HOST_X86_64
+ * host-deps: rach2/sys/tick.c
+ * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  * host-inputs: rach2/sys/arch/x86_64/vdsocode.s
  * host-inputs: rach2/sys/arch/x86_64/vdso32code.s
  *
@@ -51,7 +52,16 @@
  * settimeofday set from the data page, with no system call even where the
  * time needs one (`abi_rows`); and that a boot whose start finds the bit
  * withdrawn starts the clock at the tick once the bit is back, with a time
- * zone set before the page was built on it (`boot_rows`).
+ * zone set before the page was built on it (`boot_rows`). Without KVM's
+ * pages and with a TSC no rate vouches for, the watch sets the TSC against
+ * the tick's clock (`watch_rows`): a second processor, idle but for the
+ * kicks the tick sends it, whose TSC drifts 500 parts in a million while
+ * the boot processor's keeps time, parts its span from the clock and stops
+ * it, which a watch of the boot processor alone never does; and with every
+ * 25th tick's reads of the tick's clock held up 200 us, the tick's own and
+ * the watch's first, the watch keeps its span, sets the rate and keeps a
+ * TSC that keeps time, and stops one that drifts 1000 parts in a million,
+ * where a span begun again at each held read never ends.
  */
 
 #include "arch/x86_64/vclock.c"
@@ -80,6 +90,25 @@ static uint64_t tsc_held;
 static uint64_t kvm_back_ns;
 static uint64_t kvm_boot_back_ns;
 static int kvm_kept_model;
+
+/* The processor the code runs on (`arch_cpu_id`), the processors' records,
+ * of which a row marks those online, each processor's TSC's drift from the
+ * machine's clock in parts in a million since `drift_from_ns`, whether a
+ * rate vouches for the TSC, and the watched TSC's rate as `timer_tsc_watch`
+ * measured it and the watch refined it. */
+unsigned int host_cpu;
+struct percpu cpu_table[NR_CPUS];
+static uint64_t drift_ppm[NR_CPUS];
+static uint64_t drift_from_ns;
+static int tsc_untrusted;
+static uint32_t watch_per_tick;
+
+/* The held reads of the tick's clock: in each tick whose count is
+ * `hold_phase` modulo `hold_every`, the first `hold_reads` reads each take
+ * `hold_ns`, the machine's clock moving on meanwhile; the ticks so far, and
+ * the reads held in this one. */
+static uint32_t hold_every, hold_phase, hold_reads, hold_ns;
+static uint32_t tick_index, held;
 
 /* Whether the boot processor's page, which the vDSO and the clock's stop
  * and start read, and the running processor's page have withdrawn their
@@ -124,7 +153,12 @@ static void irq_read(void)
 /** The running processor's TSC. */
 uint64_t tsc_ordered(void)
 {
-    return now_ns * 2u + tsc_ahead - tsc_held;
+    uint64_t drift = 0;
+
+    if (now_ns > drift_from_ns) {
+        drift = (now_ns - drift_from_ns) * 2u * drift_ppm[host_cpu] / 1000000u;
+    }
+    return now_ns * 2u + tsc_ahead - tsc_held + drift;
 }
 
 /** The running processor's page read whole: its TSC, KVM's clock it
@@ -160,16 +194,29 @@ int tsc_kvm_boot_withdrawn(void)
     return kvm_kept_model && kvm_boot_withdrawn;
 }
 
-/** The TSC's counts in a tick: 2 GHz. */
+/** The TSC's counts in a tick: 2 GHz, or none where no rate vouches for
+ * it. */
 uint32_t tsc_counts_per_tick(void)
 {
-    return 2u * TICK_NS;
+    return tsc_untrusted ? 0u : 2u * TICK_NS;
 }
 
-/** The clock's rate, the trusted TSC's. */
+/** The clock's rate, the trusted TSC's, or else the watched one's. */
 uint32_t tsc_clock_per_tick(void)
 {
-    return tsc_counts_per_tick();
+    return tsc_untrusted ? watch_per_tick : tsc_counts_per_tick();
+}
+
+/** The watched TSC's rate, as the watch refined it. */
+void timer_tsc_watch_refine(uint32_t per_tick)
+{
+    watch_per_tick = per_tick;
+}
+
+/** The reference the watched TSC is set against, for the log. */
+const char *refclock_name(void)
+{
+    return "hpet";
 }
 
 /** tick.c's 64-bit division, which the host does itself. */
@@ -286,11 +333,16 @@ void sched_kick_cpus(uint64_t cpus)
     kicked_gen = generation;
 }
 
-/** The tick's clocks: the machine's clock, less the lag. */
+/** The tick's clocks: the machine's clock, less the lag, read at the
+ * read's start; a held read ends `hold_ns` later. */
 void rtc_tick_both(uint64_t *mono_ns, uint64_t *raw_ns)
 {
     *mono_ns = now_ns - tick_lag_ns;
     *raw_ns = now_ns - tick_lag_ns;
+    if (hold_every != 0 && tick_index % hold_every == hold_phase && held < hold_reads) {
+        held++;
+        now_ns += hold_ns;
+    }
 }
 
 /** The NTP state slews nothing. */
@@ -1222,6 +1274,129 @@ static void boot_rows(void)
           "and it reads the tick's clock");
 }
 
+/** A boot without KVM's pages, with a TSC no rate vouches for and
+ * `cpus` processors online, at second 10 of the machine's clock; the
+ * clock's and the watch's state cleared. */
+static void watch_boot(int cpus)
+{
+    int c;
+
+    running = 0;
+    kvm_stopped = 0;
+    data = 0;
+    watch_parted = 0;
+    watch_refined = 0;
+    floor_mono = 0;
+    floor_raw = 0;
+    kvm_kept_model = 0;
+    kvm_boot_withdrawn = 0;
+    kvm_here_withdrawn = 0;
+    tick_lag_ns = 0;
+    tsc_ahead = 0;
+    tsc_held = 0;
+    tsc_untrusted = 1;
+    watch_per_tick = 2u * TICK_NS;
+    for (c = 0; c < NR_CPUS; c++) {
+        cpu_table[c].online = c < cpus;
+        drift_ppm[c] = 0;
+    }
+    drift_from_ns = 0;
+    hold_every = 0;
+    tick_index = 0;
+    host_cpu = 0;
+    now_ns = 10000000000ULL;
+    vclock_start();
+}
+
+/* The kicks that woke processor 1 (`watch_tick`). */
+static int woken_1;
+
+/**
+ * The machine's next tick, at its own time: the boot processor's, whose
+ * clock pass runs `vclock_tick` and whose tick then runs
+ * `vclock_watch_cpu`, and processor 1's, online, which runs it only when
+ * the tick kicked it alone, as one idle with its tick stopped; the stop's
+ * kick of every processor is no watch's. Whether the clock
+ * still runs.
+ */
+static int watch_tick(void)
+{
+    int sent = kicks;
+
+    tick_index++;
+    held = 0;
+    now_ns = 10000000000ULL + (uint64_t)tick_index * TICK_NS;
+    host_cpu = 0;
+    vclock_tick();
+    vclock_watch_cpu();
+    if (cpu_table[1].online && kicks != sent && kicked_cpus == 2u) {
+        host_cpu = 1;
+        woken_1++;
+        vclock_watch_cpu();
+        host_cpu = 0;
+    }
+    return vclock_running();
+}
+
+/** `ticks` ticks, or until the clock stops; how many ran. */
+static uint32_t watch_ticks(uint32_t ticks)
+{
+    uint32_t i;
+
+    for (i = 0; i < ticks; i++) {
+        if (!watch_tick()) {
+            return i + 1u;
+        }
+    }
+    return i;
+}
+
+/**
+ * The watch of every online processor, and its span kept through held
+ * reads of the tick's clock, as the comment at the head of this file says.
+ */
+static void watch_rows(void)
+{
+    uint32_t ran;
+
+    watch_boot(2);
+    CHECK(vclock_running() && watching && data->mode == VCLOCK_TSC,
+          "a TSC no rate vouches for runs the clock, watched");
+    drift_ppm[1] = 500;
+    drift_from_ns = now_ns;
+    woken_1 = 0;
+    ran = watch_ticks(TICK_HZ + 1u);
+    CHECK(ran == TICK_HZ + 1u && watch_refined && watch_per_tick == 2u * TICK_NS && woken_1 == 0,
+          "the boot processor's first span of a second sets the rate");
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted,
+          "a second processor's TSC drifting 500 parts in a million while the boot "
+          "processor's keeps time stops the clock");
+    CHECK(woken_1 == 1 && ran <= TICK_HZ + 2u,
+          "at the kick of its first span, the second after the rate's, and the tick after");
+    CHECK(data->mode == VCLOCK_NONE, "and the vDSO makes the system call");
+
+    watch_boot(1);
+    hold_every = 25;
+    hold_phase = 1;
+    hold_reads = 2;
+    hold_ns = 200000;
+    ran = watch_ticks(4u * TICK_HZ);
+    CHECK(ran == 4u * TICK_HZ && vclock_running() && watch_refined &&
+              watch_per_tick == 2u * TICK_NS,
+          "with every 25th tick's two first reads of the tick's clock held up 200 us, "
+          "a TSC that keeps time keeps the clock, its rate set");
+    drift_ppm[0] = 1000;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted,
+          "and a TSC that drifts 1000 parts in a million then stops it");
+    CHECK(ran <= TICK_HZ + 1u, "within a second");
+    tsc_untrusted = 0;
+    hold_every = 0;
+    drift_ppm[0] = 0;
+}
+
 /** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
@@ -1232,5 +1407,6 @@ int main(void)
     abi_rows();
 #endif
     boot_rows();
+    watch_rows();
     return fails != 0;
 }

@@ -782,19 +782,20 @@ void timer_idle_work(void)
  * `clock_pass_lock`, one writer at a time; another processor's tick makes
  * it only when the boot processor's is late (`timer_pass_late`), and none
  * makes it while another is in it. Every tick then accounts itself as idle
- * or busy (`sched_account_tick`), and the tick that made the clock's pass
- * makes the timer pass, which wakes the sleepers and timerfds whose time
- * has come (`timer_wake_pass`). On the boot processor the periodic work
- * that has locks of its own follows (`timer_own_work`): the HDA tick, the
- * lag device, the block requests' deadlines, the end of a speaker's tone
- * and the i915's release of forcewake. A signal the accounting or the
- * timer pass finds due, SIGALRM, SIGVTALRM, SIGPROF or a POSIX timer's, is
- * left for a holder of the big lock to post (`proc_tick_signal`,
- * `ptimer_fire_later`, timerfd.c), since signals are posted under it. The
- * real-time timer is set again only once its SIGALRM is posted; the timers of
- * SIGVTALRM and SIGPROF and the POSIX timers are set again at the tick, and
- * expirations before the post go into the one signal, a POSIX timer's into its
- * overrun.
+ * or busy (`sched_account_tick`) and reads the watched TSC's span where it
+ * is the processor's turn (`vclock_watch_cpu`), and the tick that made the
+ * clock's pass makes the timer pass, which wakes the sleepers and timerfds
+ * whose time has come (`timer_wake_pass`). On the boot processor the
+ * periodic work that has locks of its own follows (`timer_own_work`): the
+ * HDA tick, the lag device, the block requests' deadlines, the end of a
+ * speaker's tone and the i915's release of forcewake. A signal the
+ * accounting or the timer pass finds due, SIGALRM, SIGVTALRM, SIGPROF or a
+ * POSIX timer's, is left for a holder of the big lock to post
+ * (`proc_tick_signal`, `ptimer_fire_later`, timerfd.c), since signals are
+ * posted under it. The real-time timer is set again only once its SIGALRM
+ * is posted; the timers of SIGVTALRM and SIGPROF and the POSIX timers are
+ * set again at the tick, and expirations before the post go into the one
+ * signal, a POSIX timer's into its overrun.
  *
  * The second part takes the big lock, by a try, for the work that still
  * needs it (`timer_lock_take`): the signals of the tick are posted, and on
@@ -860,6 +861,7 @@ static void timer_handler(isr_params_t *params)
         passed = timer_clock_try(1);
         t = bkl_tick_charge(BKL_TICK_CLOCK, t);
     }
+    vclock_watch_cpu();
     if (passed) {
         timer_wake_pass();
         t = bkl_tick_charge(BKL_TICK_WAKE, t);

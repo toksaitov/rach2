@@ -18,6 +18,7 @@
 #include "../../lib/kstring.h"
 #include "../../lib/spinlock.h"
 #include "../../mm/paging.h"
+#include "../../proc/percpu.h"
 #include "../../proc/sched.h"
 
 /* The struct's offsets, which vdsocode.s reads the page at: an array size of -1
@@ -100,28 +101,41 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * WATCH_SPAN_NS of the tick's raw clock, the TSC's counts at the measured
  * rate are set against the raw clock, and a clock that parts from it by
  * more than WATCH_LIMIT_NS, Linux's margins of the TSC and the HPET
- * together, 500 parts in a million of the span, stops for good. A reading
- * of the tick's clock whose two TSC readings lie more than WATCH_SKEW_NS
- * apart is no measure: it begins the span again, as Linux skips a round
- * whose read of the HPET was held up, and so does a span past twice its
- * length, as Linux skips a long interval. The first span, of at least
- * WATCH_FIRST_NS, sets the rate instead, as Linux's
- * tsc_refine_calibration_work measures the TSC again a second after boot
- * (arch/x86/kernel/tsc.c:1314-1406): the boot's measure spans 20 ms. A
- * first span that differs from the boot's rate by more than a hundredth
- * keeps that rate, as Linux's does, and the watch goes on from there; a
- * TSC that has not moved over a span parts from the clock.
+ * together, 500 parts in a million of the span, stops for good. Each span
+ * ends on the next online processor after the one it began on, as Linux's
+ * clocksource_watchdog moves its timer to the next online processor on
+ * each pass (add_timer_on of cpumask_next), so that a processor whose TSC
+ * drifts from the others' after the boot's check parts its span from the
+ * clock: the vDSO reads whichever processor's TSC it runs on. The span's
+ * end is read on that processor, at its own tick or at the kick the tick
+ * that found the span due sends it (`vclock_watch_cpu`). A reading of the
+ * tick's clock whose two TSC readings lie more than WATCH_SKEW_NS apart is
+ * no measure: it is read again, up to WATCH_READS times, as Linux's
+ * cs_watchdog_read reads again a read of the HPET that was held up, and
+ * where every one was held up the span keeps its start and the next tick
+ * tries again. A span past twice its length begins again, as Linux skips a
+ * long interval. The first span, of at least WATCH_FIRST_NS, read on one
+ * processor, sets the rate instead, as Linux's tsc_refine_calibration_work
+ * measures the TSC again a second after boot (arch/x86/kernel/tsc.c:
+ * 1314-1406): the boot's measure spans 20 ms. A first span that differs
+ * from the boot's rate by more than a hundredth keeps that rate, as
+ * Linux's does, and the watch goes on from there; a TSC that has not moved
+ * over a span parts from the clock.
  */
 #define WATCH_SPAN_NS  500000000u /* WATCHDOG_INTERVAL */
 #define WATCH_FIRST_NS 1000000000u
 #define WATCH_LIMIT_NS 248000u /* 4 * WATCHDOG_MAX_SKEW */
 #define WATCH_SKEW_NS  124000u /* 2 * WATCHDOG_MAX_SKEW */
+#define WATCH_READS    3       /* cs_watchdog_read's on 4 to 15 processors */
 
 /*
  * The watch's state: whether the running clock reads a watched TSC, whether
  * the TSC parted from the tick's clock, whether the first span set the rate,
  * whether a span is in progress, the TSC and the raw clock where it
- * began, and for the log the span that parted or the rate set.
+ * began, and for the log the span that parted or the rate set. The tick
+ * sets `watch_due` once the span is long enough, and the processor
+ * `watch_cpu` reads its end and clears it; each changes under
+ * `vclock_lock`, and `vclock_watch_cpu` reads them first without it.
  */
 static int watching;
 static int watch_based;
@@ -131,6 +145,8 @@ static uint64_t watch_tsc;
 static uint64_t watch_raw;
 static uint64_t watch_ran_ns;
 static uint64_t watch_span_ns;
+static volatile int watch_due;
+static volatile int watch_cpu;
 
 /* The time zone settimeofday set, for a page built after it
  * (`vclock_set_tz`). */
@@ -441,6 +457,8 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     kvm_stopped = 0;
     watching = !kvm && tsc_counts_per_tick() == 0;
     watch_based = 0;
+    watch_due = 0;
+    watch_cpu = (int)arch_cpu_id();
     *mono_ns = mono_base_ns;
     *raw_ns = raw_base_ns;
     spin_unlock(&vclock_lock);
@@ -561,27 +579,24 @@ static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns)
     return ahead ? mult - adjust : mult + adjust;
 }
 
-/* What `vclock_watch` found: nothing to do, the first span's rate set, or
- * the TSC parted from the tick's clock. */
-enum { WATCH_KEEP, WATCH_REFINED, WATCH_PARTED };
+/* What `vclock_watch` found: a span begun or kept, the first span's rate
+ * set, the TSC parted from the tick's clock, or a span not yet long
+ * enough. */
+enum { WATCH_KEEP, WATCH_REFINED, WATCH_PARTED, WATCH_EARLY };
 
 /**
  * Set the watched TSC against the tick's raw clock `ref_raw`, read between
- * the moments `*before` and `*after` (`vclock_reference`), as the comment
- * at WATCH_SPAN_NS says: begin a span, measure the rate over the first one,
- * or test a later one. WATCH_PARTED after it sets `watch_parted`, which the
- * caller acts on once it has let go of the lock. Under `vclock_lock`.
+ * the moments `*before` and `*after` on this processor, a reading not held
+ * up (`vclock_watch_cpu`), as the comment at WATCH_SPAN_NS says: begin a
+ * span, measure the rate over the first one, or test a later one.
+ * WATCH_PARTED after it sets `watch_parted`, which the tick acts on. Under
+ * `vclock_lock`.
  */
 static int vclock_watch(const struct vclock_sample *before, const struct vclock_sample *after,
                         uint64_t ref_raw)
 {
     uint64_t tsc, span, need, ran, delta, most, per_tick;
 
-    if (after->tsc < before->tsc ||
-        vclock_scale(after->tsc - before->tsc, mult_measured, data->shift) > WATCH_SKEW_NS) {
-        watch_based = 0;
-        return WATCH_KEEP;
-    }
     tsc = vclock_middle(before->tsc, after->tsc);
     need = watch_refined ? WATCH_SPAN_NS : WATCH_FIRST_NS;
     span = ref_raw - watch_raw;
@@ -592,7 +607,7 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
         return WATCH_KEEP;
     }
     if (span < need) {
-        return WATCH_KEEP;
+        return WATCH_EARLY;
     }
     /* A TSC behind the span's start ran none of it, and one past twice
      * the counts the span should hold ran twice it, which bounds the
@@ -626,6 +641,88 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
     return WATCH_KEEP;
 }
 
+/** The online processor after `cpu`, in a ring of their indices, or `cpu`
+ * where no other is online. */
+static int vclock_next_cpu(int cpu)
+{
+    int i, c;
+
+    for (i = 1; i <= NR_CPUS; i++) {
+        c = (cpu + i) % NR_CPUS;
+        if (cpu_table[c].online) {
+            return c;
+        }
+    }
+    return cpu;
+}
+
+/**
+ * Whether the watch's span is due to end, by the tick's raw clock
+ * `ref_raw`: one not yet begun, or as long as it must be by a reading
+ * later than its start, which a processor that read the start after the
+ * tick read `ref_raw` may have put past it. A due span whose
+ * processor is no longer online passes to the next. The processor to kick
+ * so that it reads the span's end, or -1 where that is this one, which
+ * reads it at this tick. Under `vclock_lock`.
+ */
+static int vclock_watch_due(uint64_t ref_raw)
+{
+    uint64_t need = watch_refined ? WATCH_SPAN_NS : WATCH_FIRST_NS;
+
+    if (!watch_due && (!watch_based || (ref_raw > watch_raw && ref_raw - watch_raw >= need))) {
+        watch_due = 1;
+    }
+    if (!watch_due) {
+        return -1;
+    }
+    if (!cpu_table[watch_cpu].online) {
+        watch_cpu = vclock_next_cpu(watch_cpu);
+    }
+    return watch_cpu != (int)arch_cpu_id() ? watch_cpu : -1;
+}
+
+/** The tick's clock is read outside `vclock_lock`, up to WATCH_READS
+ * times, until one reading's two TSC readings lie within WATCH_SKEW_NS at
+ * the watched rate; the span is judged under the lock, where it is still
+ * this processor's and due. */
+void vclock_watch_cpu(void)
+{
+    struct vclock_sample before, after;
+    uint64_t ref_raw = 0, skew;
+    int me = (int)arch_cpu_id();
+    int i, found = WATCH_KEEP, refined;
+
+    if (!watch_due || watch_cpu != me) {
+        return;
+    }
+    skew = tick_div64((uint64_t)WATCH_SKEW_NS * tsc_clock_per_tick(), TICK_NS, NULL);
+    for (i = 0; i < WATCH_READS; i++) {
+        (void)vclock_reference(&before, &after, &ref_raw);
+        if (after.tsc >= before.tsc && after.tsc - before.tsc <= skew) {
+            break;
+        }
+    }
+    if (i == WATCH_READS) {
+        return;
+    }
+    spin_lock(&vclock_lock);
+    if (running && watching && !watch_parted && watch_due && watch_cpu == me) {
+        refined = watch_refined;
+        found = vclock_watch(&before, &after, ref_raw);
+        if (found != WATCH_EARLY) {
+            watch_due = 0;
+            if (refined) {
+                watch_cpu = vclock_next_cpu(me);
+            }
+        }
+    }
+    spin_unlock(&vclock_lock);
+    if (found == WATCH_REFINED) {
+        klog(KLOG_INFO, "vdso", "clock: tsc: refined to %d counts a tick",
+             (int)tsc_clock_per_tick());
+    }
+}
+
 /**
  * The errors are measured at the tick's reading, its counts taken as every
  * count is (`vclock_count`), and the base advanced to a moment read after
@@ -647,13 +744,19 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
  * boot, and the bit set again starts it afresh from the tick's clocks, or
  * from the last time a reading gave where that is later
  * (`rtc_vclock_change`).
+ *
+ * A watched TSC's span that is due to end has its processor kicked, so
+ * that it reads the end even with its tick stopped in an idle wait, as
+ * Linux's add_timer_on wakes the processor it puts the watchdog's timer
+ * on (`vclock_watch_due`, `vclock_watch_cpu`); a span that parted stops
+ * the clock at the next tick.
  */
 void vclock_tick(void)
 {
     struct vclock_sample before, after;
     uint64_t at_ref, ref_ns, ref_raw, clock_ns, clock_raw;
     uint32_t mono_mult;
-    int watched = WATCH_KEEP;
+    int kick = -1;
 
     if (!running) {
         if (kvm_stopped && !vclock_refusal()) {
@@ -663,6 +766,13 @@ void vclock_tick(void)
                      (int)tsc_counts_per_tick());
             }
         }
+        return;
+    }
+    if (watch_parted) {
+        rtc_vclock_change(vclock_stop);
+        vclock_kick();
+        klog(KLOG_WARN, "vdso", "clock: the system call; the tsc ran %lu ns in %lu ns of the %s",
+             (unsigned long)watch_ran_ns, (unsigned long)watch_span_ns, refclock_name());
         return;
     }
     if (tsc_kvm_boot_withdrawn()) {
@@ -677,7 +787,7 @@ void vclock_tick(void)
     clock_ns = vclock_at(at_ref);
     clock_raw = vclock_raw_at(at_ref);
     if (watching) {
-        watched = vclock_watch(&before, &after, ref_raw);
+        kick = vclock_watch_due(ref_raw);
     }
     vclock_write_begin();
     vclock_advance(vclock_step(ref_ns, clock_ns), vclock_step(ref_raw, clock_raw));
@@ -692,14 +802,8 @@ void vclock_tick(void)
     vclock_write_times();
     vclock_write_end();
     spin_unlock(&vclock_lock);
-    if (watched == WATCH_REFINED) {
-        klog(KLOG_INFO, "vdso", "clock: tsc: refined to %d counts a tick",
-             (int)tsc_clock_per_tick());
-    } else if (watched == WATCH_PARTED) {
-        rtc_vclock_change(vclock_stop);
-        vclock_kick();
-        klog(KLOG_WARN, "vdso", "clock: the system call; the tsc ran %lu ns in %lu ns of the %s",
-             (unsigned long)watch_ran_ns, (unsigned long)watch_span_ns, refclock_name());
+    if (kick >= 0) {
+        sched_kick_cpus((uint64_t)1 << kick);
     }
 }
 

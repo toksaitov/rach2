@@ -386,7 +386,9 @@ void smp_service(void);
 
 /** The interprocessor interrupt's handler, which the platform runs without
  * the big lock: it answers the requests in this processor's record
- * (`smp_service`). An interrupt sent only to end an idle halt finds none. */
+ * (`smp_service`), and reads the watched TSC's span where the tick kicked
+ * this processor for it (`vclock_watch_cpu`). An interrupt sent only to
+ * end an idle halt finds no request. */
 void smp_ipi(void);
 
 /** End an idle wait on processor `cpu`, unless it is this one or not

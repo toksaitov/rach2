@@ -143,6 +143,17 @@ uint32_t vclock_generation(void);
 void vclock_tick(void);
 
 /**
+ * Read the end of the watched TSC's span on this processor, when the tick
+ * found it due and it is this processor's turn, and pass the turn to the
+ * next online processor, so that the watch sets every processor's TSC
+ * against the tick's clock, as Linux's clocksource watchdog does. Every
+ * processor's tick runs it, and so does the interprocessor interrupt that
+ * the tick's kick sends one in an idle wait. With interrupts off; nothing
+ * where no TSC is watched.
+ */
+void vclock_watch_cpu(void);
+
+/**
  * The clock `which` now, VCLOCK_READ_MONO, VCLOCK_READ_REAL or
  * VCLOCK_READ_RAW, from the TSC, or with `coarse` as of the last tick, in
  * `*sec` and `*nsec`, which is below 10^9; the raw clock has no coarse

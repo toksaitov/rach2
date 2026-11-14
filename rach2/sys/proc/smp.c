@@ -18,6 +18,7 @@
 #include "../lib/spinlock.h"
 #include "../timer.h"
 #include "../udelay.h"
+#include "../vdso.h"
 #include "../watchdog.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
@@ -1820,6 +1821,7 @@ void smp_service(void)
 void smp_ipi(void)
 {
     smp_service();
+    vclock_watch_cpu();
 }
 
 void smp_kick(int cpu)
