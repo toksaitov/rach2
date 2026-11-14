@@ -51,6 +51,24 @@
  * only then check the signal: a signal out of range to no such thread, or
  * to a thread of another process, is ESRCH, and to this thread EINVAL.
  *
+ * pidfd_open with PIDFD_THREAD gives a pidfd of a second thread and of the
+ * leading one, whose F_GETFL is O_RDWR with O_EXCL, Linux's PIDFD_THREAD,
+ * which a pidfd of the process lacks; without the flag the second thread is
+ * EINVAL, as Linux 6.12 refuses a thread that does not lead its process. By
+ * the second thread's pidfd, pidfd_getfd and PIDFD_SIGNAL_PROCESS_GROUP are
+ * ESRCH and waitid with P_PIDFD ECHILD. pidfd_send_signal with no flag on it
+ * posts a blocked SIGUSR1 to that thread alone, which the caller does not
+ * find pending and the thread takes with SI_TKILL; on the leading thread's,
+ * to the leading thread alone with SI_TKILL, and with
+ * PIDFD_SIGNAL_THREAD_GROUP to the process with SI_USER. The second
+ * thread's pidfd does not poll readable while it runs; once it has ended it
+ * polls readable and hung up, while the process's own pidfd does not, and
+ * pidfd_open of its id and pidfd_send_signal on its pidfd are ESRCH. A
+ * child whose leading thread ends while another runs has a thread pidfd of
+ * that leader that polls readable and not hung up, and a process pidfd that
+ * does not poll readable until the child is killed; once it is reaped both
+ * poll hung up.
+ *
  * Touching 64 new pages raises getrusage's ru_minflt by at least 64; a
  * mapping of 64 pages made with MAP_POPULATE raises it by at least 64 in the
  * mmap call and by fewer than 64 when they are then written. A child that
@@ -68,9 +86,11 @@
  * `process-file-info`, `thread-file-info`, `info-before-target`,
  * `queued-code-permission`, `scope-thread`, `scope-thread-group`,
  * `scope-process-group`, `scope-group-reaped`, `scope-group-reused`,
- * `reaped-namespace` and `tkill-order`. The first failure fails its
- * assertion and leaves the rest not run. The program runs as root, which
- * the write of ns_last_pid needs.
+ * `reaped-namespace`, `tkill-order`, `thread-open`, `thread-refusals`,
+ * `thread-signal`, `leader-thread-signal`, `thread-poll` and
+ * `leader-thread-poll`. The first failure fails its assertion and leaves
+ * the rest not run. The program runs as root, which the write of
+ * ns_last_pid needs.
  */
 
 #define _GNU_SOURCE
@@ -113,6 +133,7 @@
 #define CLONE_VM_FLAG       0x00000100ull
 #define CLONE_CLEAR_SIGHAND 0x100000000ull
 #define PIDFD_NONBLOCK      O_NONBLOCK
+#define PIDFD_THREAD        O_EXCL
 
 /* pidfd_send_signal's scopes since Linux 6.9: the pidfd's thread, its
  * process, and the process group whose id is the process's. */
@@ -966,6 +987,227 @@ static int tkill_order(void)
     return 0;
 }
 
+/* The second thread of the thread rows and its two pipes: its id, which it
+ * sends on `to_main` when it starts, the go it waits for on `to_thread`,
+ * and whether it then took the SIGUSR1 sent to it alone with SI_TKILL. */
+static int to_main[2], to_thread[2];
+static int took_tkill;
+
+/** The second thread: send its id, wait for the go, and take the blocked
+ * SIGUSR1 that is pending for it. */
+static void *second_thread(void *arg)
+{
+    struct timespec zero = {0, 0};
+    pid_t tid = (pid_t)syscall(SYS_gettid);
+    siginfo_t si;
+    sigset_t set;
+    char b;
+
+    (void)arg;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    memset(&si, 0, sizeof(si));
+    if (write(to_main[1], &tid, sizeof(tid)) == (ssize_t)sizeof(tid) &&
+        read(to_thread[0], &b, 1) == 1) {
+        took_tkill = sigtimedwait(&set, &si, &zero) == SIGUSR1 && si.si_code == SI_TKILL &&
+                     si.si_pid == getpid();
+    }
+    return NULL;
+}
+
+/** The status flags of the pidfd `fd` have O_RDWR, and O_EXCL as `excl`
+ * says. */
+static int pidfd_flags(int fd, int excl)
+{
+    int fl = fcntl(fd, F_GETFL);
+
+    return fl >= 0 && (fl & O_ACCMODE) == O_RDWR && ((fl & O_EXCL) != 0) == excl;
+}
+
+/** Whether this thread finds SIGUSR1 pending, for it or for the process. */
+static int usr1_pending_here(void)
+{
+    sigset_t set;
+
+    return sigpending(&set) == 0 && sigismember(&set, SIGUSR1);
+}
+
+/** The refusals of the pidfd `tfd` of the second thread, while it runs. */
+static int thread_refusals(int tfd)
+{
+    siginfo_t si;
+
+    memset(&si, 0, sizeof(si));
+    return syscall(SYS_pidfd_getfd, (long)tfd, 0L, 0L) == -1 && errno == ESRCH &&
+           syscall(SYS_pidfd_send_signal, (long)tfd, 0L, NULL, PIDFD_SIGNAL_PROCESS_GROUP) == -1 &&
+           errno == ESRCH && waitid(P_PIDFD, (id_t)tfd, &si, WEXITED | WNOHANG) == -1 &&
+           errno == ECHILD;
+}
+
+/** The leading thread's signal scope, and the poll of the pidfd `tfd` of
+ * the second thread `tid`, which has been joined. */
+static int thread_ended(int self, int lfd, pid_t tid, int tfd)
+{
+    if (!scoped_to_self(lfd, 0L, 0, SI_TKILL) ||
+        !scoped_to_self(lfd, PIDFD_SIGNAL_THREAD_GROUP, 1, SI_USER)) {
+        return fail("the leading thread's pidfd did not signal it alone with no flag, or the "
+                    "process with PIDFD_SIGNAL_THREAD_GROUP");
+    }
+    report_held();
+    if (!polls(tfd, POLLIN, 1) || !polls(tfd, POLLIN | POLLHUP, 0) || polls(self, POLLIN, 0) ||
+        syscall(SYS_pidfd_open, (long)tid, (long)PIDFD_THREAD) != -1 || errno != ESRCH ||
+        syscall(SYS_pidfd_send_signal, (long)tfd, 0L, NULL, 0L) != -1 || errno != ESRCH) {
+        return fail("the pidfd of a thread that ended did not poll readable and hung up apart "
+                    "from its process, or its id was still found");
+    }
+    report_held();
+    return 0;
+}
+
+/** Start the second thread with its pipes: 0 with its handle in `*t` and
+ * its id in `*tid`, or -1. */
+static int thread_start(pthread_t *t, pid_t *tid)
+{
+    if (pipe(to_main) != 0 || pipe(to_thread) != 0 ||
+        pthread_create(t, NULL, second_thread, NULL) != 0) {
+        return -1;
+    }
+    return read(to_main[0], tid, sizeof(*tid)) == (ssize_t)sizeof(*tid) ? 0 : -1;
+}
+
+/** Give the second thread `t` its go, join it and close its pipes: whether
+ * it was joined. */
+static int thread_stop(pthread_t t)
+{
+    char b = 'g';
+    int ok = write(to_thread[1], &b, 1) == 1 && pthread_join(t, NULL) == 0;
+
+    close(to_main[0]);
+    close(to_main[1]);
+    close(to_thread[0]);
+    close(to_thread[1]);
+    return ok;
+}
+
+/** The opening and the refusals of a pidfd of the second thread `tid`,
+ * which runs: 0 with the pidfd in `*tfd`, or the failure. `self` is a pidfd
+ * of this process, `lfd` one of its leading thread. */
+static int thread_opens(int self, int lfd, pid_t tid, int *tfd)
+{
+    *tfd = (int)syscall(SYS_pidfd_open, (long)tid, (long)PIDFD_THREAD);
+    if (*tfd < 0 || !pidfd_flags(*tfd, 1) || !pidfd_flags(lfd, 1) || !pidfd_flags(self, 0) ||
+        syscall(SYS_pidfd_open, (long)tid, 0L) != -1 || errno != EINVAL) {
+        return fail("pidfd_open with PIDFD_THREAD gave no pidfd with O_EXCL, or without it took a "
+                    "thread that does not lead its process");
+    }
+    report_held();
+    if (!thread_refusals(*tfd)) {
+        return fail("pidfd_getfd, PIDFD_SIGNAL_PROCESS_GROUP or waitid by a pidfd of a thread that "
+                    "does not lead its process was not refused");
+    }
+    report_held();
+    return 0;
+}
+
+/** The rows of a pidfd of one thread in this process: its opening, its
+ * refusals, its signal scope, and its poll at the thread's end. `self` is
+ * a pidfd of this process, `lfd` one of its leading thread. */
+static int thread_rows(int self, int lfd)
+{
+    pthread_t t;
+    pid_t tid = 0;
+    int tfd = -1, rc, sent;
+
+    if (thread_start(&t, &tid) != 0) {
+        return fail("could not start a second thread");
+    }
+    rc = thread_opens(self, lfd, tid, &tfd);
+    sent = rc == 0 && !polls(tfd, POLLIN, 0) &&
+           syscall(SYS_pidfd_send_signal, (long)tfd, (long)SIGUSR1, NULL, 0L) == 0 &&
+           !usr1_pending_here();
+    if (!thread_stop(t) && rc == 0) {
+        rc = fail("could not join the second thread");
+    }
+    if (rc == 0 && (!sent || !took_tkill)) {
+        rc = fail("pidfd_send_signal with no flag on a pidfd of a thread did not signal that "
+                  "thread alone with SI_TKILL");
+    }
+    if (rc == 0) {
+        report_held();
+        rc = thread_ended(self, lfd, tid, tfd);
+    }
+    close(tfd);
+    return rc;
+}
+
+/** The start of the child's second thread, which waits to be killed. */
+static void *pausing_thread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        pause();
+    }
+    return NULL;
+}
+
+/** A child whose leading thread ends while its second thread runs: the
+ * leader's thread pidfd and the process's pidfd at its end and its reap. */
+static int leader_thread_poll(void)
+{
+    pthread_t t;
+    pid_t pid = fork();
+    int tfd, pfd, ok;
+
+    if (pid == 0) {
+        if (pthread_create(&t, NULL, pausing_thread, NULL) != 0) {
+            _exit(2);
+        }
+        pthread_exit(NULL);
+    }
+    tfd = pid > 0 ? (int)syscall(SYS_pidfd_open, (long)pid, (long)PIDFD_THREAD) : -1;
+    pfd = pid > 0 ? (int)syscall(SYS_pidfd_open, (long)pid, 0L) : -1;
+    ok = tfd >= 0 && pfd >= 0 && polls(tfd, POLLIN, 1) && !polls(tfd, POLLHUP, 0) &&
+         !polls(pfd, POLLIN, 0);
+    if (pid > 0) {
+        kill(pid, SIGKILL);
+        ok = ok && polls(pfd, POLLIN, 1) && reaped_killed(pid) && polls(tfd, POLLHUP, 0) &&
+             polls(pfd, POLLHUP, 0);
+    }
+    close(tfd);
+    close(pfd);
+    if (!ok) {
+        return fail("a child's leading thread that ended before its process did not poll "
+                    "readable alone, or its pidfds did not hang up at the reap");
+    }
+    report_held();
+    return 0;
+}
+
+/** pidfd_open's PIDFD_THREAD: the rows of a pidfd of one thread. */
+static int threads(void)
+{
+    sigset_t set, old;
+    int self = (int)syscall(SYS_pidfd_open, (long)getpid(), 0L);
+    int lfd = (int)syscall(SYS_pidfd_open, (long)getpid(), (long)PIDFD_THREAD);
+    int rc;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    if (self < 0 || sigprocmask(SIG_BLOCK, &set, &old) != 0) {
+        return fail("pidfd_open of this process");
+    }
+    if (lfd < 0) {
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        close(self);
+        return fail("pidfd_open with PIDFD_THREAD of the leading thread");
+    }
+    rc = thread_rows(self, lfd);
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    close(lfd);
+    close(self);
+    return rc != 0 ? rc : leader_thread_poll();
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
@@ -981,7 +1223,9 @@ static void plan(void)
         "thread-file-info",   "info-before-target",   "queued-code-permission",
         "scope-thread",       "scope-thread-group",   "scope-process-group",
         "scope-group-reaped", "scope-group-reused",   "reaped-namespace",
-        "tkill-order"};
+        "tkill-order",        "thread-open",          "thread-refusals",
+        "thread-signal",      "leader-thread-signal", "thread-poll",
+        "leader-thread-poll"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.pidfdmusl"));
@@ -995,7 +1239,7 @@ int main(void)
     plan();
     if (clones() != 0 || opens() != 0 || getfds() != 0 || faults() != 0 || hangup_wakes() != 0 ||
         file_info() != 0 || queued_checks() != 0 || scopes() != 0 || process_groups() != 0 ||
-        namespaces() != 0 || tkill_order() != 0) {
+        namespaces() != 0 || tkill_order() != 0 || threads() != 0) {
         return 1;
     }
     report_end();
