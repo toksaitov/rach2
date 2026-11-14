@@ -27,10 +27,16 @@ counts()
 {
     awk '$1 ~ /^(vfio_(groups|devices|dma_mappings|dma_pages|dma_io_pages)|msi_vectors_free|kvm_(vms|vcpus|slots|tdp_pages|run_mappings))$/ { print }' /proc/stat
 }
+# Give the function to vfio-pci as a Linux user does: let its driver go, as
+# virtio-pci has the NIC, then bind it by driver_override.
 bind()
 {
     echo vfio-pci > "/sys/bus/pci/devices/$1/driver_override"
-    if [ "$(readlink "/sys/bus/pci/devices/$1/driver" 2>/dev/null || :)" != /sys/bus/pci/drivers/vfio-pci ]; then
+    drv=$(readlink "/sys/bus/pci/devices/$1/driver" 2>/dev/null || :)
+    if [ -n "$drv" ] && [ "${drv##*/}" != vfio-pci ]; then
+        echo "$1" > "/sys/bus/pci/drivers/${drv##*/}/unbind"
+    fi
+    if [ "${drv##*/}" != vfio-pci ]; then
         echo "$1" > /sys/bus/pci/drivers/vfio-pci/bind
     fi
 }

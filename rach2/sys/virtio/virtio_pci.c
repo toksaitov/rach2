@@ -107,13 +107,18 @@ struct vp_shm {
     uint64_t addr, len;
 };
 
-/* A function the transport took, kept from its probe for the life of the
- * kernel on the list `vp_list`, in the order of the bus. */
+/* A function the transport took, kept from its probe on the list `vp_list`,
+ * in the order of the bus, until it is unbound (`vp_unbind`). An unbound
+ * record a driver still holds stays, off the list and reaching no register,
+ * until the driver's virtio_put. */
 struct virtio_pci {
     struct virtio_dev dev;
     pci_device_t pci;
     struct virtio_pci *next;
     uint16_t command; /* the function's command word before the probe */
+    int claimed;      /* the probe made the kernel the function's PCI owner */
+    int held;         /* a driver has `dev`, from virtio_pci_find to virtio_put */
+    int gone;         /* unbound: its windows given back, its registers out of reach */
     struct vp_window common, notify, isr, device;
     uint32_t notify_mult; /* bytes between queues' notification addresses */
     struct vp_shm shm[VP_SHM];
@@ -149,40 +154,52 @@ static struct virtio_pci *vp_of(struct virtio_dev *d)
     return (struct virtio_pci *)d->transport;
 }
 
+/*
+ * The common configuration's fields. Once the function is unbound its
+ * window is gone: a read gives 0, as of a device reset, and a write is
+ * dropped, for a driver that has not yet let go of the record.
+ */
+
 /** Read the 8-bit field at `off` of the common configuration. */
 static uint8_t vp_r8(struct virtio_pci *vp, uint32_t off)
 {
-    return mmio_read8(vp->common.base + off);
+    return vp->gone ? 0 : mmio_read8(vp->common.base + off);
 }
 
 /** Read the 16-bit field at `off` of the common configuration. */
 static uint16_t vp_r16(struct virtio_pci *vp, uint32_t off)
 {
-    return mmio_read16(vp->common.base + off);
+    return vp->gone ? 0 : mmio_read16(vp->common.base + off);
 }
 
 /** Read the 32-bit field at `off` of the common configuration. */
 static uint32_t vp_r32(struct virtio_pci *vp, uint32_t off)
 {
-    return mmio_read32(vp->common.base + off);
+    return vp->gone ? 0 : mmio_read32(vp->common.base + off);
 }
 
 /** Write the 8-bit field at `off` of the common configuration. */
 static void vp_w8(struct virtio_pci *vp, uint32_t off, uint8_t v)
 {
-    mmio_write8(vp->common.base + off, v);
+    if (!vp->gone) {
+        mmio_write8(vp->common.base + off, v);
+    }
 }
 
 /** Write the 16-bit field at `off` of the common configuration. */
 static void vp_w16(struct virtio_pci *vp, uint32_t off, uint16_t v)
 {
-    mmio_write16(vp->common.base + off, v);
+    if (!vp->gone) {
+        mmio_write16(vp->common.base + off, v);
+    }
 }
 
 /** Write the 32-bit field at `off` of the common configuration. */
 static void vp_w32(struct virtio_pci *vp, uint32_t off, uint32_t v)
 {
-    mmio_write32(vp->common.base + off, v);
+    if (!vp->gone) {
+        mmio_write32(vp->common.base + off, v);
+    }
 }
 
 /** A 64-bit field as two 32-bit writes, low first (virtio 1.2, 4.1.3.1). */
@@ -321,9 +338,9 @@ static uint16_t vp_queue_entry(const struct virtio_pci *vp, uint16_t index)
 
 /**
  * Select queue `vq->index` and give it the size, the MSI-X entry and the
- * three addresses, then enable it (virtio 1.2, 4.1.5.1.3). Returns 0, or
- * -EIO when the device refuses the entry or names a notification address
- * past its window.
+ * three addresses, then enable it (virtio 1.2, 4.1.5.1.3). Returns 0, -EIO
+ * when the device refuses the entry or names a notification address past
+ * its window, or -ENODEV once the function is unbound.
  */
 static int vp_queue_enable(struct virtio_dev *d, struct virtqueue *vq)
 {
@@ -331,6 +348,9 @@ static int vp_queue_enable(struct virtio_dev *d, struct virtqueue *vq)
     uint16_t entry = vp_queue_entry(vp, vq->index);
     uint32_t off;
 
+    if (vp->gone) {
+        return -ENODEV;
+    }
     vp_w16(vp, VP_QUEUE_SELECT, vq->index);
     vp_w16(vp, VP_QUEUE_SIZE, vq->size);
     vp_w16(vp, VP_QUEUE_MSIX_VECTOR, entry);
@@ -355,11 +375,12 @@ static int vp_queue_enable(struct virtio_dev *d, struct virtqueue *vq)
 }
 
 /** Without VIRTIO_F_NOTIFICATION_DATA the queue's number is what is
- * written (virtio 1.2, 4.1.5.2). */
+ * written (virtio 1.2, 4.1.5.2); nothing once the function is unbound. */
 static void vp_notify(struct virtio_dev *d, struct virtqueue *vq)
 {
-    (void)d;
-    mmio_write16(vq->notify, vq->index);
+    if (!vp_of(d)->gone) {
+        mmio_write16(vq->notify, vq->index);
+    }
 }
 
 /** Take the interrupt for slot `k`'s target, counted in the slot while it
@@ -576,13 +597,18 @@ static int vp_msix_take(struct virtio_pci *vp, int n)
  * for each queue and one for the configuration where the table and the
  * free vectors allow; else one entry for the configuration and one the
  * queues share; else the INTx line; else no interrupts, and the driver
- * polls.
+ * polls. -ENODEV once the function is unbound.
  */
 static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
 {
     struct virtio_pci *vp = vp_of(d);
-    uint32_t entries = isr_msi_ready() ? vp_msix_map(vp) : 0;
+    uint32_t entries;
     int want = nqueues + 1;
+
+    if (vp->gone) {
+        return -ENODEV;
+    }
+    entries = isr_msi_ready() ? vp_msix_map(vp) : 0;
 
     vp_msix_free(vp);
     vp->mode = VP_IRQ_NONE;
@@ -636,11 +662,15 @@ static void vp_irq_start(struct virtio_dev *d)
 }
 
 /** Turn MSI-X off and give back its vectors and slots, or leave the INTx
- * line, whose handler then passes the device over. */
+ * line, whose handler then passes the device over; nothing once the
+ * function is unbound, which released them. */
 static void vp_irq_release(struct virtio_dev *d)
 {
     struct virtio_pci *vp = vp_of(d);
 
+    if (vp->gone) {
+        return;
+    }
     if (vp->mode == VP_IRQ_MSIX || vp->mode == VP_IRQ_SHARED) {
         vp_msix_free(vp);
     }
@@ -692,6 +722,18 @@ static int vp_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint6
     return -ENOENT;
 }
 
+/** The driver has let go of `d`: an unbound record is freed now, a bound
+ * one stays on the list for the next driver; `put` of virtio.h. */
+static void vp_put(struct virtio_dev *d)
+{
+    struct virtio_pci *vp = vp_of(d);
+
+    vp->held = 0;
+    if (vp->gone) {
+        kfree(vp);
+    }
+}
+
 static const struct virtio_ops vp_ops = {"virtio-pci",
                                          vp_get_status,
                                          vp_set_status,
@@ -713,7 +755,7 @@ static const struct virtio_ops vp_ops = {"virtio-pci",
                                          NULL,
                                          NULL,
                                          NULL,
-                                         NULL,
+                                         vp_put,
                                          NULL,
                                          NULL,
                                          NULL};
@@ -895,9 +937,12 @@ static int vp_map_window(struct vp_window *w)
     return 0;
 }
 
-/** Give back the windows of `vp` that `vp_map_window` mapped, and put back
- * the command word the function had before `vp_attach`, so that a function
- * the transport does not keep decodes and masters as it did. */
+/** Give back the windows of `vp` that `vp_map_window` mapped and its MSI-X
+ * table, put back the command word the function had before `vp_attach`, so
+ * that a function the transport does not keep decodes and masters as it
+ * did, and give back the kernel's PCI claim when the probe took it, as
+ * Linux's pci_disable_device ends a probe or a binding, so that another
+ * driver, vfio-pci among them, may have the function. */
 static void vp_detach(struct virtio_pci *vp)
 {
     struct vp_window *w[4];
@@ -911,14 +956,27 @@ static void vp_detach(struct virtio_pci *vp)
         if (w[i]->mapped) {
             mmio_unmap(w[i]->base, w[i]->len);
             w[i]->mapped = 0;
+            w[i]->base = 0;
+            w[i]->len = 0;
         }
     }
+    if (vp->msix_table) {
+        mmio_unmap(vp->msix_table, vp->msix_entries * 16u);
+        vp->msix_table = 0;
+        vp->msix_entries = 0;
+    }
     pci_write_config16(vp->pci.bus, vp->pci.device, vp->pci.function, PCI_COMMAND, vp->command);
+    if (vp->claimed) {
+        pci_unclaim(vp->pci.bus, (uint8_t)(vp->pci.device << 3 | vp->pci.function),
+                    PCI_OWNER_KERNEL);
+        vp->claimed = 0;
+    }
 }
 
 /** Read, check and map the capabilities of the function `vp->pci`, and turn
- * on its memory decoding and bus mastering. Returns 0, or -EIO with the
- * reason in the log and every window it mapped given back
+ * on its memory decoding and bus mastering, which makes the kernel the
+ * function's owner when it had none (`claimed`). Returns 0, or -EIO with
+ * the reason in the log and every window it mapped given back
  * (`vp_detach`). */
 static int vp_attach(struct virtio_pci *vp)
 {
@@ -939,6 +997,7 @@ static int vp_attach(struct virtio_pci *vp)
         vp_detach(vp);
         return -EIO;
     }
+    vp->claimed = pci_owner(vp->pci.bus, (uint8_t)(vp->pci.device << 3 | vp->pci.function)) == NULL;
     pci_enable_memory_space(&vp->pci);
     pci_enable_bus_master(&vp->pci);
     vp_intx_disable(vp, 1);
@@ -988,14 +1047,36 @@ static struct virtio_pci *vp_record(const pci_device_t *p)
 }
 
 /**
- * Take the virtio function `p`, as Linux's virtio_pci_probe does: show it
- * bound to virtio-pci, read and map its capabilities, add its virtio device
- * to the bus, which names it, log it and send the function's "bind" uevent,
- * and keep its record at the end of `vp_list`. 0, or -ENOMEM, -EIO, or the
- * error of showing it in /sys, with nothing of it left: no record, binding,
- * window or change to its command word.
+ * Reset the device of `vp` and set ACKNOWLEDGE, as Linux's
+ * register_virtio_device does before it publishes a device, whether a
+ * driver of its type exists or not, so that no DRIVER_OK or queue a
+ * previous owner left stands. 0, or -ETIMEDOUT with a record when the
+ * reset did not finish.
  */
-static int vp_probe_one(const pci_device_t *p)
+static int vp_acknowledge(struct virtio_pci *vp)
+{
+    int k = virtio_reset(&vp->dev);
+
+    if (k != 0) {
+        klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: the device did not reset: error %d",
+             vp->pci.bus, vp->pci.device, vp->pci.function, k);
+        return k;
+    }
+    vp_set_status(&vp->dev, VIRTIO_STATUS_ACKNOWLEDGE);
+    return 0;
+}
+
+/**
+ * Take the virtio function `p`, as Linux's virtio_pci_probe does: show it
+ * bound to virtio-pci, read and map its capabilities, reset its device and
+ * acknowledge it (`vp_acknowledge`), add its virtio device to the bus,
+ * which names it, log it and send the function's "bind" uevent, and keep
+ * its record at the end of `vp_list`, in `*out` when `out` is not NULL.
+ * 0, or -ENOMEM, -EIO, -ETIMEDOUT, or the error of showing it in /sys,
+ * with nothing of it left: no record, binding, window, PCI claim or change
+ * to its command word.
+ */
+static int vp_probe_one(const pci_device_t *p, struct virtio_pci **out)
 {
     struct virtio_pci *vp, **tail;
     int k, key;
@@ -1028,12 +1109,18 @@ static int vp_probe_one(const pci_device_t *p)
     }
     k = vp_attach(vp);
     if (k == 0) {
-        k = virtio_bus_add(&vp->dev, sysfs_anchor(SYSFS_PCI_DEVICE, key),
-                           pci_read_config16(p->bus, p->device, p->function, PCI_SUBSYSTEM_VENDOR));
+        k = vp_acknowledge(vp);
+        if (k == 0) {
+            k = virtio_bus_add(
+                &vp->dev, sysfs_anchor(SYSFS_PCI_DEVICE, key),
+                pci_read_config16(p->bus, p->device, p->function, PCI_SUBSYSTEM_VENDOR));
+            if (k != 0) {
+                klog(KLOG_WARN, "virtio",
+                     "refused: %02x:%02x.%d: not added to the virtio bus: error %d", p->bus,
+                     p->device, p->function, k);
+            }
+        }
         if (k != 0) {
-            klog(KLOG_WARN, "virtio",
-                 "refused: %02x:%02x.%d: not added to the virtio bus: error %d", p->bus, p->device,
-                 p->function, k);
             vp_detach(vp);
         }
     }
@@ -1047,7 +1134,260 @@ static int vp_probe_one(const pci_device_t *p)
     }
     *tail = vp;
     sysfs_pci_uevent(key, "bind");
+    if (out) {
+        *out = vp;
+    }
     return 0;
+}
+
+/** The key of the function `p` in /sys, bus << 8 | device << 3 | function. */
+static int vp_key(const pci_device_t *p)
+{
+    return (int)p->bus << 8 | p->device << 3 | p->function;
+}
+
+/**
+ * Let go of the function of `vp`, as Linux's virtio_pci_remove does when
+ * the function is unbound from virtio-pci: its child driver removed first
+ * (`removed` of virtio.h), as unregister_virtio_device removes it, the
+ * device reset, its interrupts released, its virtio device taken off the
+ * bus, which gives its number back, the record taken off `vp_list`, its
+ * windows and PCI claim given back with its command word less bus
+ * mastering, as pci_disable_device leaves it, and the function shown
+ * unbound with its "unbind" uevent. The record is freed now, or at the
+ * driver's virtio_put while one still holds it. May sleep, in the child's
+ * removal.
+ */
+static void vp_unbind(struct virtio_pci *vp)
+{
+    struct virtio_pci **link;
+    pci_device_t pdev = vp->pci;
+    int key = vp_key(&vp->pci);
+
+    if (vp->dev.removed) {
+        vp->dev.removed(&vp->dev);
+    }
+    (void)virtio_reset(&vp->dev);
+    if (vp->mode != VP_IRQ_NONE) {
+        vp_irq_release(&vp->dev);
+    }
+    virtio_bus_remove(&vp->dev);
+    for (link = &vp_list; *link; link = &(*link)->next) {
+        if (*link == vp) {
+            *link = vp->next;
+            break;
+        }
+    }
+    vp_detach(vp);
+    pci_disable_bus_master(&pdev);
+    vp->gone = 1;
+    sysfs_pci_unbind(key);
+    (void)sysfs_pci_uevent(key, "unbind");
+    klog(KLOG_INFO, "virtio", "unbound: %s: %02x:%02x.%d", vp->dev.name, pdev.bus, pdev.device,
+         pdev.function);
+    if (!vp->held) {
+        kfree(vp);
+    }
+}
+
+/** Whether the `n` bytes at `text` are the whole of the string `word`. */
+static int vp_text_is(const char *text, int n, const char *word)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (word[i] == '\0' || text[i] != word[i]) {
+            return 0;
+        }
+    }
+    return word[n] == '\0';
+}
+
+/** The value of the hexadecimal digit `c`, or -1. */
+static int vp_hex(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    c = (char)(c | 0x20);
+    return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+/**
+ * The function a write of `bind` or `unbind` names, "0000:BB:DD.F" with
+ * perhaps a newline or spaces after it, into `*out` from the buses: 0, or
+ * -ENODEV for text that names no function there.
+ */
+static int vp_name_function(const char *buf, uint32_t len, pci_device_t *out)
+{
+    int b1, b0, d1, d0, f, i;
+
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == ' ')) {
+        len--;
+    }
+    if (len != 12 || !vp_text_is(buf, 5, "0000:") || buf[7] != ':' || buf[10] != '.') {
+        return -ENODEV;
+    }
+    b1 = vp_hex(buf[5]);
+    b0 = vp_hex(buf[6]);
+    d1 = vp_hex(buf[8]);
+    d0 = vp_hex(buf[9]);
+    f = vp_hex(buf[11]);
+    if (b1 < 0 || b0 < 0 || d1 < 0 || d0 < 0 || f < 0 || d1 > 1 || f > 7) {
+        return -ENODEV;
+    }
+    for (i = 0; pci_nth(i, out); i++) {
+        if (out->bus == (uint8_t)(b1 << 4 | b0) && out->device == (uint8_t)(d1 << 4 | d0) &&
+            out->function == (uint8_t)f) {
+            return 0;
+        }
+    }
+    return -ENODEV;
+}
+
+/**
+ * Whether the driver_override of the function `key` lets virtio-pci have
+ * it, as Linux's driver_match_device reads it: none, which the file shows
+ * as "(null)", or "virtio-pci". A function without the file, which VFIO
+ * adds to the functions the IOMMU has in groups, has none.
+ */
+static int vp_override_allows(int key)
+{
+    char text[SYSFS_NAME_MAX + 8];
+    int pci = sysfs_anchor_find(SYSFS_PCI_DEVICE, key);
+    int file = pci > 0 ? sysfs_node_child(pci, "driver_override", 15) : 0;
+    int32_t n;
+
+    if (file <= 0) {
+        return 1;
+    }
+    n = sysfs_node_show(file, text, (uint32_t)sizeof(text));
+    if (n <= 0 || n > (int32_t)sizeof(text)) {
+        return n <= 0;
+    }
+    if (text[n - 1] == '\n') {
+        n--;
+    }
+    return vp_text_is(text, n, "(null)") || vp_text_is(text, n, "virtio-pci");
+}
+
+/* Whether a write of the driver's files is under way; the unbind may sleep
+ * in the child's removal, and a second write waits for none. */
+static int vp_busy;
+
+/**
+ * Take the function `p` as at boot (`vp_probe_one`), then give its device
+ * to the driver of its type, as Linux's bus then probes the virtio
+ * drivers: -ENODEV for a function that is no virtio function or whose
+ * driver_override names another driver, -EBUSY for one the transport or
+ * another driver has; else the probe's error. The child driver's failure
+ * leaves the function bound to virtio-pci, as on Linux.
+ */
+static int vp_bind(const pci_device_t *p)
+{
+    struct virtio_pci *vp;
+    virtio_probe_t probe;
+    int k;
+
+    if (!vp_is_virtio(p) || !vp_override_allows(vp_key(p))) {
+        return -ENODEV;
+    }
+    if (vp_record(p) || pci_owner(p->bus, (uint8_t)(p->device << 3 | p->function)) != NULL) {
+        return -EBUSY;
+    }
+    k = vp_probe_one(p, &vp);
+    if (k != 0) {
+        return k;
+    }
+    probe = virtio_driver_for(vp->dev.id);
+    if (probe) {
+        vp->held = 1;
+        k = (int)probe(&vp->dev);
+        if (k != 0) {
+            klog(KLOG_WARN, "virtio", "bind: %s: its driver refused it: error %d", vp->dev.name, k);
+        }
+    }
+    return 0;
+}
+
+/** /sys/bus/pci/drivers/virtio-pci/bind: take the function named
+ * (`vp_bind`). */
+static int32_t vp_store_bind(void *obj, int arg, const char *buf, uint32_t len)
+{
+    pci_device_t p;
+    int k;
+
+    (void)obj;
+    (void)arg;
+    k = vp_name_function(buf, len, &p);
+    if (k != 0) {
+        return k;
+    }
+    if (vp_busy) {
+        return -EBUSY;
+    }
+    vp_busy = 1;
+    k = vp_bind(&p);
+    vp_busy = 0;
+    return k != 0 ? k : (int32_t)len;
+}
+
+/** /sys/bus/pci/drivers/virtio-pci/unbind: let go of the function named
+ * (`vp_unbind`); -ENODEV for one the transport does not have, -EBUSY while
+ * another write of the directory sleeps. */
+static int32_t vp_store_unbind(void *obj, int arg, const char *buf, uint32_t len)
+{
+    pci_device_t p;
+    struct virtio_pci *vp;
+    int k;
+
+    (void)obj;
+    (void)arg;
+    k = vp_name_function(buf, len, &p);
+    if (k != 0) {
+        return k;
+    }
+    vp = vp_record(&p);
+    if (!vp) {
+        return -ENODEV;
+    }
+    if (vp_busy) {
+        return -EBUSY;
+    }
+    vp_busy = 1;
+    vp_unbind(vp);
+    vp_busy = 0;
+    return (int32_t)len;
+}
+
+static const struct sysfs_attr vp_attr_bind = {"bind", 0200u, NULL, vp_store_bind};
+static const struct sysfs_attr vp_attr_unbind = {"unbind", 0200u, NULL, vp_store_unbind};
+
+/** The directory `name` below `parent`, made when it is not there yet: its
+ * handle, or -errno. */
+static int vp_dir_at(int parent, const char *name)
+{
+    int h;
+
+    if (parent <= 0) {
+        return parent < 0 ? parent : -ENOENT;
+    }
+    h = sysfs_node_child(parent, name, (int)k_strlen(name));
+    return h > 0 ? h : sysfs_add_dir(parent, name);
+}
+
+/** Make /sys/bus/pci/drivers/virtio-pci with `bind` and `unbind`, as Linux
+ * registers the driver whether or not a function is there for it. A
+ * failure leaves the functions to the boot's probe alone, with a record. */
+static void vp_sys_start(void)
+{
+    int dir = vp_dir_at(vp_dir_at(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers"), "virtio-pci");
+
+    if (dir < 0 || sysfs_add_attr(dir, &vp_attr_bind, NULL, 0) < 0 ||
+        sysfs_add_attr(dir, &vp_attr_unbind, NULL, 0) < 0) {
+        klog(KLOG_WARN, "virtio", "/sys/bus/pci/drivers/virtio-pci not made: error %d",
+             dir < 0 ? dir : -ENOMEM);
+    }
 }
 
 int virtio_pci_probe(void)
@@ -1055,13 +1395,35 @@ int virtio_pci_probe(void)
     pci_device_t p;
     int i, n = 0;
 
+    if (!vp_probed) {
+        vp_sys_start();
+    }
     vp_probed = 1;
     for (i = 0; pci_nth(i, &p); i++) {
-        if (vp_is_virtio(&p) && !vp_record(&p) && vp_probe_one(&p) == 0) {
+        if (vp_is_virtio(&p) && !vp_record(&p) && vp_probe_one(&p, NULL) == 0) {
             n++;
         }
     }
     return n;
+}
+
+int virtio_pci_bind(uint8_t bus, uint8_t devfn)
+{
+    pci_device_t p;
+    int i, k;
+
+    for (i = 0; pci_nth(i, &p); i++) {
+        if (p.bus == bus && (uint8_t)(p.device << 3 | p.function) == devfn) {
+            if (vp_busy) {
+                return -EBUSY;
+            }
+            vp_busy = 1;
+            k = vp_bind(&p);
+            vp_busy = 0;
+            return k;
+        }
+    }
+    return -ENODEV;
 }
 
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
@@ -1073,6 +1435,7 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
     }
     for (vp = vp_list; vp; vp = vp->next) {
         if (vp->dev.id == id && nth-- == 0) {
+            vp->held = 1;
             *out = &vp->dev;
             return 0;
         }

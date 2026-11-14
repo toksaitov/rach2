@@ -15,8 +15,9 @@
  * without ACS with an endpoint behind it, and the LPC bridge with two
  * functions beside it, one held by a kernel driver. The rows check the
  * groups as Linux's pci_device_group forms them and their entries of /sys
- * and /dev; binding by driver_override, new_id and drivers_probe; the
- * group and container ioctls; Type1's checks, mappings and capabilities;
+ * and /dev; binding by driver_override, new_id and drivers_probe, which
+ * offers virtio-pci a function vfio-pci does not match; the group and
+ * container ioctls; Type1's checks, mappings and capabilities;
  * the device's regions and their information; the configuration space as
  * the owner sees it; the line, MSI and MSI-X into eventfds; and the reset
  * at the open, at VFIO_DEVICE_RESET and at the release, with every vector
@@ -450,6 +451,17 @@ void pci_unclaim(uint8_t bus, uint8_t devfn, const char *owner)
 const char *pci_owner(uint8_t bus, uint8_t devfn)
 {
     return fn_at(bus, devfn >> 3, devfn & 7)->owner;
+}
+
+/* The functions drivers_probe offered virtio-pci: how many, and the last
+ * one's bus << 8 | devfn. virtio_pci_shm_hosttest.c tests the bind. */
+static int virtio_offers, virtio_offered = -1;
+
+int virtio_pci_bind(uint8_t bus, uint8_t devfn)
+{
+    virtio_offers++;
+    virtio_offered = bus << 8 | devfn;
+    return -ENODEV;
 }
 
 int pci_reset_method(const pci_device_t *dev)
@@ -1254,10 +1266,14 @@ static void binding_rows(void)
     CHECK(store(child(drv, "unbind"), "0000:02:00.0") == 12 && !vdev("0000:02:00.0")->bound &&
               pci_owner(2, 0) == NULL,
           "unbind takes the device back");
+    CHECK(store(probe, "0000:02:00.0\n") == 13 && !vdev("0000:02:00.0")->bound &&
+              virtio_offers == 1 && virtio_offered == 0x0200,
+          "drivers_probe offers a function vfio-pci does not match to virtio-pci");
     CHECK(store(child(sysfs_anchor(SYSFS_PCI_DEVICE, 0x0200), "driver_override"), "vfio-pci") ==
                   8 &&
               store(probe, "0000:02:00.0") == 12 && vdev("0000:02:00.0")->bound,
           "drivers_probe binds by driver_override");
+    CHECK(virtio_offers == 1, "and offers virtio-pci nothing it binds");
     CHECK(store(child(sysfs_anchor(SYSFS_PCI_DEVICE, 0x00A0), "driver_override"), "vfio-pci") ==
                   8 &&
               store(probe, "0000:00:14.0") == 12 && vdev("0000:00:14.0")->bound,

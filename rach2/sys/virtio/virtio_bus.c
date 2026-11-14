@@ -291,3 +291,41 @@ void virtio_driver_unbind(struct virtio_dev *d)
         sysfs_uevent(d->sys_dir, "unbind", NULL);
     }
 }
+
+/* The drivers of the device types, as virtio_driver_register records them;
+ * a NULL probe ends the table. */
+#define VB_DRIVERS 4
+
+static struct {
+    uint16_t id;
+    virtio_probe_t probe;
+} vb_drivers[VB_DRIVERS];
+
+int virtio_driver_register(uint16_t id, virtio_probe_t probe)
+{
+    int i;
+
+    for (i = 0; i < VB_DRIVERS && vb_drivers[i].probe; i++) {
+        if (vb_drivers[i].id == id && vb_drivers[i].probe == probe) {
+            return 0;
+        }
+    }
+    if (i == VB_DRIVERS) {
+        return -ENOSPC;
+    }
+    vb_drivers[i].id = id;
+    vb_drivers[i].probe = probe;
+    return 0;
+}
+
+virtio_probe_t virtio_driver_for(uint16_t id)
+{
+    int i;
+
+    for (i = 0; i < VB_DRIVERS && vb_drivers[i].probe; i++) {
+        if (vb_drivers[i].id == id) {
+            return vb_drivers[i].probe;
+        }
+    }
+    return NULL;
+}

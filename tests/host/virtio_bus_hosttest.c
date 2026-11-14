@@ -17,8 +17,9 @@
  * "bind", "unbind" and "remove" uevents. A device of a transport that shows
  * none, the shared region's, is left alone. The `..` rows check which
  * links' targets lie inside a walk's root, the whole of /sys or a bind of
- * a directory in it. The last rows add and remove devices and check that
- * each takes the lowest number free.
+ * a directory in it. The next rows add and remove devices and check that
+ * each takes the lowest number free; the last, the drivers registered for
+ * the device types.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -420,12 +421,49 @@ static void row_numbers(void)
           "every number is free again");
 }
 
+/** A probe the registry keeps; never called here. */
+static int32_t probe_a(struct virtio_dev *d)
+{
+    (void)d;
+    return 0;
+}
+
+/** Another driver's probe. */
+static int32_t probe_b(struct virtio_dev *d)
+{
+    (void)d;
+    return -ENODEV;
+}
+
+/** The drivers of the device types, as Linux's register_virtio_driver
+ * records them, which a transport binding a device later asks for: each
+ * type's own, a second registration of the same taken as done, and a full
+ * table refusing more. */
+static void row_drivers(void)
+{
+    CHECK(virtio_driver_for(VIRTIO_ID_GPU) == NULL, "no driver before one registers");
+    CHECK(virtio_driver_register(VIRTIO_ID_GPU, probe_a) == 0 &&
+              virtio_driver_register(VIRTIO_ID_GPU, probe_a) == 0 &&
+              virtio_driver_register(VIRTIO_ID_NET, probe_b) == 0,
+          "the GPU's driver registers, again without a second entry, and the net driver");
+    CHECK(virtio_driver_for(VIRTIO_ID_GPU) == probe_a &&
+              virtio_driver_for(VIRTIO_ID_NET) == probe_b &&
+              virtio_driver_for(VIRTIO_ID_BLOCK) == NULL,
+          "each type has its own driver, and a type none registered has none");
+    CHECK(virtio_driver_register(VIRTIO_ID_BLOCK, probe_b) == 0 &&
+              virtio_driver_register(VIRTIO_ID_INPUT, probe_b) == 0 &&
+              virtio_driver_register(VIRTIO_ID_SOUND, probe_b) == -ENOSPC &&
+              virtio_driver_for(VIRTIO_ID_SOUND) == NULL,
+          "a full table refuses a fifth driver");
+}
+
 int main(void)
 {
     row_add();
     row_bind();
     row_remove();
     row_numbers();
+    row_drivers();
     if (failures) {
         return 1;
     }

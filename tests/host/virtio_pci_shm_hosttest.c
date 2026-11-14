@@ -21,12 +21,26 @@
  * is found, with its virtio device added to the bus once, which names it,
  * and one "bind" uevent.
  *
- * The probe rows add three functions after them: a GPU without its common
+ * The probe rows add four functions after them: a GPU without its common
  * capability, which is refused, unbound and unmapped and adds nothing to
  * the bus, so that the next function takes the next free name; a
- * virtio-net function, which has its device though no driver asks for it;
- * and a GPU whose bus registration fails, which leaves no window mapped,
- * its command word as it was and no record.
+ * virtio-net function, which has its device though no driver asks for it,
+ * reset and acknowledged over the status a previous owner left; a GPU whose
+ * bus registration fails, which leaves no window mapped, its command word
+ * as it was, no record and no PCI claim but one it found; and a virtio-net
+ * function whose reset does not finish, refused the same way. The model's
+ * enables make the kernel a function's owner, as pci.c's do, so that a
+ * claim left behind fails a row.
+ *
+ * The driver's rows write /sys/bus/pci/drivers/virtio-pci/unbind and bind:
+ * virtio-net let go, off the bus, unmapped, unclaimed, without bus mastering
+ * and with its "unbind" uevent, its held record reaching no register until
+ * its virtio_put; refused binds for a driver_override naming vfio-pci, a
+ * function vfio-pci has, one the transport has, and the probe's error;
+ * virtio-net bound again as virtio2, reset and acknowledged and given to the
+ * driver registered for its type; a driver's refusal, which leaves the
+ * function bound; and the GPU unbound while its driver holds it, the driver
+ * removed first and the MSI-X table given back with the windows.
  *
  * The interrupt rows give every MSI-X entry a remapped message, release
  * them before vectors, and force vector and remapper allocation failures.
@@ -37,6 +51,7 @@
 #include <stdarg.h>
 
 #include "virtio/virtio.h"
+#include "fs/sysfs.h"
 #include "irq.h"
 #include "klog.h"
 #include "pci.h"
@@ -61,7 +76,7 @@ static int failures;
 
 /* ---- the model: two functions on bus 0 ---- */
 
-#define FUNCTIONS 5
+#define FUNCTIONS 6
 #define TIB       ((uint64_t)1 << 40)
 #define GIB       ((uint64_t)1 << 30)
 
@@ -76,6 +91,7 @@ static int reject_entry = -1;
 static unsigned live_vectors, remapped_entries;
 static unsigned starts;
 static char log_text[2048];
+static const char *owner[FUNCTIONS]; /* each function's PCI owner, as pci.c records it */
 
 /** The function at device `dev` of bus 0. */
 static int fn_of(uint8_t bus, uint8_t dev)
@@ -147,14 +163,46 @@ uint64_t pci_bar_size64(const pci_device_t *d, int i)
     return d->bar[i] & 1 ? 0 : bar_size[d->device][i];
 }
 
+/** Make the kernel the owner of `dev` when it has none, as pci.c's enables
+ * do, so that a claim a failed probe or an unbind keeps fails a row. */
+static void claim_kernel(const pci_device_t *dev)
+{
+    int f = fn_of(dev->bus, dev->device);
+
+    if (!owner[f]) {
+        owner[f] = PCI_OWNER_KERNEL;
+    }
+}
+
 void pci_enable_bus_master(pci_device_t *dev)
 {
+    claim_kernel(dev);
     space[fn_of(dev->bus, dev->device)][PCI_COMMAND] |= PCI_CMD_BUS_MASTER;
 }
 
 void pci_enable_memory_space(pci_device_t *dev)
 {
+    claim_kernel(dev);
     space[fn_of(dev->bus, dev->device)][PCI_COMMAND] |= PCI_CMD_MEMORY_SPACE;
+}
+
+void pci_disable_bus_master(pci_device_t *dev)
+{
+    space[fn_of(dev->bus, dev->device)][PCI_COMMAND] &= (uint8_t)~PCI_CMD_BUS_MASTER;
+}
+
+const char *pci_owner(uint8_t bus, uint8_t devfn)
+{
+    return owner[fn_of(bus, (uint8_t)(devfn >> 3))];
+}
+
+void pci_unclaim(uint8_t bus, uint8_t devfn, const char *who)
+{
+    int f = fn_of(bus, (uint8_t)(devfn >> 3));
+
+    if (owner[f] && strcmp(owner[f], who) == 0) {
+        owner[f] = 0;
+    }
 }
 
 /** Expose three entries in the notification BAR's unused final page. */
@@ -309,8 +357,9 @@ void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flag
     (void)flags;
 }
 
-/* The bindings the transport showed in /sys: how many, and the last. */
-static int binds, bound_key = -1;
+/* The bindings the transport showed in /sys: how many, the last, and the
+ * last taken away. */
+static int binds, bound_key = -1, unbound_key = -1;
 static const char *bound_driver = "";
 
 /** Record a binding, as sysfs.c shows one. */
@@ -325,6 +374,7 @@ int sysfs_pci_bind(int key, const char *driver)
 /** Take the binding of `key` away. */
 void sysfs_pci_unbind(int key)
 {
+    unbound_key = key;
     if (key == bound_key) {
         bound_key = -1;
     }
@@ -333,14 +383,20 @@ void sysfs_pci_unbind(int key)
 /* The "bind" uevents of functions, and the devices added to the virtio bus:
  * how many, the last one's name, vendor and type, the numbers taken, and
  * what the next addition fails with, or 0. */
-static int bind_events, bus_adds, bus_error;
+static int bind_events, unbind_events, bus_adds, bus_removes, bus_error;
 static char bus_name[16];
 static unsigned bus_vendor, bus_type;
 static int bus_taken[10];
 
-/** Count a function's "bind" uevent. */
+/** Count a function's "bind" and "unbind" uevents. */
 int32_t sysfs_pci_uevent(int key, const char *action)
 {
+    if (strcmp(action, "unbind") == 0) {
+        CHECK(key == unbound_key && key != bound_key,
+              "the unbind uevent is the function's whose binding went");
+        unbind_events++;
+        return 0;
+    }
     CHECK(key == bound_key && strcmp(action, "bind") == 0,
           "the bind uevent is the bound function's");
     bind_events++;
@@ -352,6 +408,96 @@ int sysfs_anchor(int node, int key)
 {
     (void)node;
     return key + 1;
+}
+
+int sysfs_anchor_find(int node, int key)
+{
+    return sysfs_anchor(node, key);
+}
+
+/* The driver's files the transport made, /sys/bus/pci/drivers/virtio-pci's
+ * `bind` and `unbind`, and the driver_override every function shows, ""
+ * for none, which `sysfs_node_child` gives as handle 1000. */
+static const struct sysfs_attr *attr_bind, *attr_unbind;
+static const char *override = "";
+static int sys_dirs;
+
+int sysfs_node_child(int dir, const char *name, int len)
+{
+    (void)dir;
+    (void)len;
+    return strcmp(name, "driver_override") == 0 && override[0] ? 1000 : 0;
+}
+
+int32_t sysfs_node_show(int handle, char *buf, uint32_t cap)
+{
+    uint32_t n = (uint32_t)k_strlen(override);
+
+    CHECK(handle == 1000 && n + 1 <= cap, "driver_override is read whole");
+    k_memcpy(buf, override, n);
+    buf[n] = '\n';
+    return (int32_t)(n + 1);
+}
+
+int sysfs_add_dir(int parent, const char *name)
+{
+    (void)parent;
+    (void)name;
+    return 2000 + sys_dirs++;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)obj;
+    (void)arg;
+    if (strcmp(attr->name, "bind") == 0) {
+        attr_bind = attr;
+    } else if (strcmp(attr->name, "unbind") == 0) {
+        attr_unbind = attr;
+    }
+    return 3000;
+}
+
+/** Write `text` to the driver's file `a`, as a write(2) of it does. */
+static int32_t driver_write(const struct sysfs_attr *a, const char *text)
+{
+    CHECK(a != 0, "the driver's file is there");
+    return a ? a->store(0, 0, text, (uint32_t)k_strlen(text)) : -ENOENT;
+}
+
+/* The device resets: how many, and whether the next does not finish. */
+static int resets, reset_stuck;
+
+/** Reset `d` as virtqueue.c does, which virtio_hosttest.c tests: write 0
+ * and read it back, or time out while `reset_stuck`. */
+int virtio_reset(struct virtio_dev *d)
+{
+    resets++;
+    if (reset_stuck) {
+        return -ETIMEDOUT;
+    }
+    d->ops->set_status(d, 0);
+    return d->ops->get_status(d) == 0 ? 0 : -ETIMEDOUT;
+}
+
+/* The net driver the rows register, its probes and what each returns. */
+static int net_driver, net_probes, net_result;
+
+/** A net driver's probe: counted, and the device given back on failure, as
+ * a driver's virtio_put gives it. */
+static int32_t net_probe(struct virtio_dev *d)
+{
+    net_probes++;
+    if (net_result != 0) {
+        d->ops->put(d);
+    }
+    return net_result;
+}
+
+virtio_probe_t virtio_driver_for(uint16_t id)
+{
+    return id == VIRTIO_ID_NET && net_driver ? net_probe : NULL;
 }
 
 /** Record a device added to the virtio bus and name it virtioN for the
@@ -379,6 +525,15 @@ int virtio_bus_add(struct virtio_dev *d, int parent, uint16_t vendor)
     bus_vendor = vendor;
     bus_type = d->id;
     return 0;
+}
+
+/** Take `d` off the bus, giving its number back. */
+void virtio_bus_remove(struct virtio_dev *d)
+{
+    CHECK(d->name[6] >= '0' && d->name[6] <= '9' && bus_taken[d->name[6] - '0'],
+          "a device taken off the bus is on it");
+    bus_taken[d->name[6] - '0'] = 0;
+    bus_removes++;
 }
 
 void virtio_interrupt_config(struct virtio_dev *d)
@@ -619,8 +774,11 @@ static void probe_refused(void)
     make_function(3, 0xFB000000u);
     fns[3].device_id = 0x1041;
     space[3][2] = 0x41;
+    windows[3][0x14] = 0x0F; /* DRIVER_OK and more, as a previous owner left it */
     log_text[0] = 0;
     CHECK(virtio_pci_probe() == 1, "the probe takes the virtio-net function alone");
+    CHECK(windows[3][0x14] == VIRTIO_STATUS_ACKNOWLEDGE && owner[3] && !owner[2],
+          "virtio-net is reset and acknowledged before it is published, and owned by the kernel");
     CHECK(strstr(log_text, "refused: 00:02.0: no common capability in a memory BAR") != 0 &&
               bound_key != (2 << 3) && live_maps == maps + 4 && space[2][PCI_COMMAND] == 0,
           "the GPU without its common capability is refused, unbound, unmapped and untouched, "
@@ -649,7 +807,132 @@ static void probe_bus_fails(void)
           "the failed registration is recorded and the function unbound");
     CHECK(live_maps == maps && space[4][PCI_COMMAND] == 0x03 && space[4][PCI_COMMAND + 1] == 0,
           "no window stays mapped and the command word is as it was");
+    CHECK(owner[4] == 0, "the kernel's claim the probe took is given back, so VFIO may bind it");
     CHECK(virtio_pci_find(VIRTIO_ID_GPU, 2, &d) == -ENODEV, "the function has no record");
+
+    owner[4] = PCI_OWNER_KERNEL;
+    bus_error = -ENOMEM;
+    CHECK(virtio_pci_probe() == 0 && owner[4] && strcmp(owner[4], PCI_OWNER_KERNEL) == 0,
+          "a claim the probe found is kept when the registration fails");
+    owner[4] = 0;
+}
+
+/** A device whose reset does not finish: refused before it is published,
+ * with no window, binding or claim left and its command word as it was. */
+static void probe_reset_fails(void)
+{
+    int adds = bus_adds, maps = live_maps, r = resets;
+
+    make_function(5, 0xF9000000u);
+    fns[5].device_id = 0x1041;
+    space[5][2] = 0x41;
+    reset_stuck = 1;
+    log_text[0] = 0;
+    CHECK(virtio_pci_probe() == 0 && resets > r, "the probe resets the device and takes nothing");
+    CHECK(strstr(log_text, "refused: 00:05.0: the device did not reset: error -110") != 0 &&
+              bus_adds == adds && bound_key == -1 && live_maps == maps &&
+              space[5][PCI_COMMAND] == 0 && owner[5] == 0,
+          "the device that did not reset is refused, unbound, unmapped and unclaimed");
+    reset_stuck = 0;
+}
+
+/**
+ * The driver's files, /sys/bus/pci/drivers/virtio-pci/unbind and bind, as
+ * a user gives a function to vfio-pci and takes it back: virtio-net's
+ * function unbound, its device off the bus, its windows, claim and bus
+ * mastering given back and its "unbind" uevent sent; bound again as the
+ * lowest free name, reset and acknowledged, with its driver's probe run;
+ * a driver's refusal leaving the function bound; and the refusals.
+ */
+static void driver_files(void)
+{
+    struct virtio_dev *d, *held;
+    int maps = live_maps, removes = bus_removes, unbinds = unbind_events, adds = bus_adds;
+
+    CHECK(virtio_pci_find(VIRTIO_ID_NET, 0, &held) == 0, "virtio-net is held");
+    CHECK(driver_write(attr_unbind, "0000:00:03.0\n") == 13, "unbind: virtio-net let go");
+    CHECK(held->ops->get_status(held) == 0, "unbind: the held record reaches no register");
+    held->ops->put(held);
+    CHECK(bus_removes == removes + 1 && unbind_events == unbinds + 1 && unbound_key == 3 << 3 &&
+              live_maps == maps - 4 && owner[3] == 0 &&
+              !(space[3][PCI_COMMAND] & PCI_CMD_BUS_MASTER),
+          "unbind: its device off the bus, the function shown unbound, its four windows, claim "
+          "and bus mastering given back");
+    CHECK(virtio_pci_find(VIRTIO_ID_NET, 0, &d) == -ENODEV, "unbind: virtio-net has no record");
+    CHECK(driver_write(attr_unbind, "0000:00:03.0") == -ENODEV &&
+              driver_write(attr_unbind, "0000:00:07.0") == -ENODEV &&
+              driver_write(attr_unbind, "00:03.0") == -ENODEV,
+          "unbind: refused for a function it does not have and for a name that is none");
+
+    override = "vfio-pci";
+    CHECK(driver_write(attr_bind, "0000:00:03.0") == -ENODEV && bus_adds == adds,
+          "bind: refused while driver_override names vfio-pci");
+    override = "";
+    owner[3] = "vfio-pci";
+    CHECK(driver_write(attr_bind, "0000:00:03.0") == -EBUSY && bus_adds == adds,
+          "bind: refused while vfio-pci has the function");
+    owner[3] = 0;
+
+    windows[3][0x14] = 0x07;
+    net_driver = 1;
+    override = "virtio-pci";
+    CHECK(driver_write(attr_bind, "0000:00:03.0\n") == 13, "bind: virtio-net taken again");
+    override = "";
+    CHECK(bus_adds == adds + 1 && strcmp(bus_name, "virtio2") == 0 && bound_key == 3 << 3 &&
+              owner[3] && strcmp(owner[3], PCI_OWNER_KERNEL) == 0 && live_maps == maps &&
+              windows[3][0x14] == VIRTIO_STATUS_ACKNOWLEDGE && net_probes == 1,
+          "bind: virtio2 again, reset and acknowledged, owned, mapped, and given to its driver");
+    CHECK(driver_write(attr_bind, "0000:00:03.0") == -EBUSY &&
+              driver_write(attr_bind, "0000:00:01.0") == -EBUSY,
+          "bind: refused for a function the transport has");
+    CHECK(driver_write(attr_bind, "0000:00:02.0") == -EIO && owner[2] == 0,
+          "bind: the probe's error for the function without its common capability");
+
+    net_result = -EIO;
+    CHECK(driver_write(attr_bind, "0000:00:05.0") == 12 && net_probes == 2 && bound_key == 5 << 3 &&
+              strcmp(bus_name, "virtio3") == 0,
+          "bind: a driver's refusal leaves the function bound to virtio-pci, as on Linux");
+    CHECK(driver_write(attr_unbind, "0000:00:05.0") == 12 && owner[5] == 0,
+          "unbind: the function the driver refused, its record freed at once");
+    net_result = 0;
+    net_driver = 0;
+}
+
+static int removals; /* the child driver's removals */
+
+/** The child driver's `removed`: it lets go of its device, as virtio-gpu's
+ * unplug does, but keeps the record until its virtio_put. */
+static void child_removed(struct virtio_dev *d)
+{
+    removals++;
+    d->removed = 0;
+}
+
+/**
+ * The GPU, virtio0, unbound while its driver holds it: the driver removed
+ * first, the MSI-X table given back with the windows, and the record kept,
+ * reaching no register, until the driver's virtio_put frees it.
+ */
+static void unbind_held(void)
+{
+    struct virtio_dev *d, *held;
+    int maps = live_maps;
+
+    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &held) == 0, "the GPU is held by a driver");
+    d = held;
+    msix_ready = 1;
+    CHECK(d->ops->irq_setup(d, 2) == 0, "the driver set up its interrupts");
+    msix_ready = 0;
+    d->removed = child_removed;
+    CHECK(driver_write(attr_unbind, "0000:00:00.0") == 12 && removals == 1,
+          "unbind: the child driver removed first");
+    CHECK(!live_vectors && !remapped_entries && live_maps == maps - 5 && owner[0] == 0,
+          "unbind: the vectors, the four windows and the MSI-X table given back, and no owner");
+    CHECK(d->ops->get_status(d) == 0 && d->ops->irq_setup(d, 2) == -ENODEV,
+          "unbind: the held record reaches no register");
+    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &d) == 0 && strcmp(d->name, "virtio1") == 0,
+          "unbind: the first GPU the transport has is virtio1");
+    held->ops->put(held);
 }
 
 /** Run the rows. */
@@ -660,6 +943,9 @@ int main(void)
     interrupts();
     probe_refused();
     probe_bus_fails();
+    probe_reset_fails();
+    driver_files();
+    unbind_held();
     printf("virtio-pci-shm-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }

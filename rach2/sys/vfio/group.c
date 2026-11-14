@@ -18,6 +18,7 @@
 #include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
+#include "../virtio/virtio.h"
 
 struct vfio_device vfio_devices[VFIO_DEVICES_MAX];
 int vfio_ndevices;
@@ -656,8 +657,10 @@ static int32_t store_unbind(void *obj, int arg, const char *buf, uint32_t len)
 }
 
 /** /sys/bus/pci/drivers_probe: give the function named, if it has no
- * driver, to vfio-pci when vfio-pci matches it; a function no driver
- * takes is left alone, as on Linux, and the write succeeds. */
+ * driver, to vfio-pci when vfio-pci matches it, and else to virtio-pci,
+ * which takes a virtio function whose driver_override allows it
+ * (`virtio_pci_bind`); a function no driver takes is left alone, as on
+ * Linux, and the write succeeds. */
 static int32_t store_probe(void *obj, int arg, const char *buf, uint32_t len)
 {
     struct vfio_device *d = vfio_device_by_name(buf, (int)len);
@@ -667,8 +670,13 @@ static int32_t store_probe(void *obj, int arg, const char *buf, uint32_t len)
     if (d == NULL) {
         return -ENODEV;
     }
-    if (!d->bound && vfio_matches(d) && pci_owner(d->pci.bus, devfn_of(&d->pci)) == NULL) {
+    if (d->bound || pci_owner(d->pci.bus, devfn_of(&d->pci)) != NULL) {
+        return (int32_t)len;
+    }
+    if (vfio_matches(d)) {
         (void)vfio_bind(d);
+    } else {
+        (void)virtio_pci_bind(d->pci.bus, devfn_of(&d->pci));
     }
     return (int32_t)len;
 }

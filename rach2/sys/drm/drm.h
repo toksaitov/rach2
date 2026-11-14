@@ -2290,7 +2290,8 @@ int32_t i915_probe(void);
  * (`i915_uncore_tick`). Nothing while no device is bound. Its deadline is
  * `i915_idle_ticks`, in idle_timer.h. */
 void i915_tick(void);
-/** The virtio GPUs on virtio-pci. */
+/** The virtio GPUs on virtio-pci, and the driver registered for one bound
+ * later through /sys/bus/pci/drivers/virtio-pci/bind. */
 int32_t virtio_gpu_probe(void);
 struct virtio_dev;
 /** Bind virtio-gpu to `vdev`, a device of a transport other than virtio-pci,

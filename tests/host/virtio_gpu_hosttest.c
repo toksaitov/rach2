@@ -1661,6 +1661,15 @@ void virtio_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
     kfree(p);
 }
 
+/** The probe records the driver for a GPU bound later through /sys, which
+ * virtio_bus_hosttest.c tests; nothing is bound later here. */
+int virtio_driver_register(uint16_t id, virtio_probe_t probe)
+{
+    (void)id;
+    (void)probe;
+    return 0;
+}
+
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
 {
     CHECK(id == VIRTIO_ID_GPU, "the probe looks for a GPU");

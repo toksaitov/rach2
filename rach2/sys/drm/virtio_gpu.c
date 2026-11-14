@@ -2505,6 +2505,9 @@ int32_t virtio_gpu_probe(void)
     int nth, bound = 0;
     int32_t rc, last = -ENODEV;
 
+    if (virtio_driver_register(VIRTIO_ID_GPU, virtio_gpu_bind) != 0) {
+        klog(KLOG_WARN, "virtio_gpu", "not registered: a GPU bound later through /sys is left");
+    }
     for (nth = 0; nth < VGPU_DEVICES; nth++) {
         rc = virtio_pci_find(VIRTIO_ID_GPU, nth, &vdev);
         if (rc == -ENODEV) {

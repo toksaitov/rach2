@@ -500,21 +500,43 @@ void virtio_interrupt_config(struct virtio_dev *d);
  * the order of the bus, as Linux's virtio_pci_probe takes each, whether a
  * driver of its type exists or not: the function shown in /sys bound to
  * virtio-pci (`sysfs_pci_bind`), its capabilities read and mapped, its
+ * device reset and acknowledged, as register_virtio_device does, its
  * virtio device added below it (`virtio_bus_add`), which names it, logged
  * as `virtio: found: virtio0: 00:02.0 gpu: common bar 4+0x0 ...`, and the
  * function's "bind" uevent sent. A function that lacks a capability virtio
- * 1.x requires, or whose window cannot be mapped or whose entries cannot be
- * made, is refused with a record and left as it was: unbound, unmapped and
- * with its command word put back. Called once at boot, before the drivers'
- * probes. Returns how many functions it took.
+ * 1.x requires, whose window cannot be mapped, whose device does not reset
+ * or whose entries cannot be made, is refused with a record and left as it
+ * was: unbound, unmapped, without the kernel's PCI claim the probe took and
+ * with its command word put back. The first call also makes
+ * /sys/bus/pci/drivers/virtio-pci, whose `unbind` lets go of a function
+ * the transport has, its child driver, device, entries, windows and PCI
+ * claim, so that another driver, vfio-pci among them, may have it, and
+ * whose `bind` takes a function no driver has again and gives its device
+ * to the driver of its type (`virtio_driver_register`); each takes the
+ * function's name, 0000:BB:DD.F, and `bind` heeds its driver_override, as
+ * on Linux. Called once at boot, before the drivers' probes. Returns how
+ * many functions it took.
  */
 int virtio_pci_probe(void);
+
+/**
+ * Take the function `bus` and `devfn` as a write of its name to
+ * /sys/bus/pci/drivers/virtio-pci/bind does, for /sys/bus/pci/drivers_probe.
+ *
+ * @return 0; -ENODEV for a function that is not there, is no virtio
+ *         function or whose driver_override names another driver; -EBUSY
+ *         for one a driver has, or while a write of the driver's files
+ *         sleeps; or the probe's error.
+ */
+int virtio_pci_bind(uint8_t bus, uint8_t devfn);
 
 /**
  * Find the `nth` virtio-pci function of device type `id` that the transport
  * took (`virtio_pci_probe`, which this runs first when nothing has), counting
  * from zero in the order of the bus. A second call for the same function
- * returns the same record.
+ * returns the same record. The driver holds the record until its
+ * virtio_put, which an unbound function's record waits for before it is
+ * freed.
  *
  * @return 0 with `*out` set; -ENODEV when there is no such function.
  */
@@ -573,6 +595,19 @@ void virtio_driver_bound(struct virtio_dev *d);
 /** Take away the binding `virtio_driver_bind` showed, and send "unbind" when
  * "bind" was sent; nothing when there is none. */
 void virtio_driver_unbind(struct virtio_dev *d);
+
+/** A driver's probe of a device of its type, as virtio_gpu_bind: 0, or
+ * -errno with the device given back by virtio_put. */
+typedef int32_t (*virtio_probe_t)(struct virtio_dev *d);
+
+/** Register `probe` as the driver of devices of type `id`, as Linux's
+ * register_virtio_driver does, for a transport that takes a device after
+ * the boot's probes, as a bind through /sys does: 0, also for `probe`
+ * registered already, or -ENOSPC when the table is full. */
+int virtio_driver_register(uint16_t id, virtio_probe_t probe);
+
+/** The driver registered for devices of type `id`, or NULL. */
+virtio_probe_t virtio_driver_for(uint16_t id);
 
 /*
  * The shared-memory transport (shmem.c).

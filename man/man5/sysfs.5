@@ -264,6 +264,34 @@ them that has no driver;
 forgets ids it gave, and is
 .Er ENODEV
 for others.
+.It Pa /sys/bus/pci/drivers/virtio-pci/{bind,unbind}
+Write-only, mode 0200.
+A function's name written to
+.Pa unbind
+lets go of a virtio function the kernel has, as Linux's virtio-pci does:
+the driver of its virtio device, such as
+.Ql virtio_gpu ,
+is removed first, then the device is reset, its interrupts released, its
+.Pa virtioN
+removed, its windows unmapped and its bus mastering turned off, so that
+another driver, vfio-pci above all, may take the function; it is
+.Er ENODEV
+for a name the kernel has no virtio function of.
+A name written to
+.Pa bind
+takes a virtio function no driver has as at boot and gives its device to
+the driver of its type; it is
+.Er ENODEV
+for a name no function has, a function that is no virtio function, or one
+whose
+.Pa driver_override
+names another driver,
+.Er EBUSY
+while a driver holds the function, and otherwise the error of taking it.
+Either is
+.Er EBUSY
+while another write of the directory sleeps.
+The directory has a link, named as the function, to each function bound.
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/virtioN
 The virtio device of a virtio function the kernel has taken, bound to
 .Ql virtio-pci ,
@@ -308,9 +336,11 @@ virtio-gpu does.
 .It Pa /sys/bus/virtio/devices/virtioN
 A link to each virtio device.
 .It Pa /sys/bus/pci/drivers_probe
-Write-only, mode 0200: a function's name written here gives it to
-vfio-pci if it has no driver and vfio-pci matches it, and leaves it alone
-otherwise.
+Write-only, mode 0200: a function's name written here gives it, if it has
+no driver, to vfio-pci when vfio-pci matches it, else to virtio-pci when
+it is a virtio function whose
+.Pa driver_override
+allows it, and leaves it alone otherwise.
 .It Pa /sys/kernel/iommu_groups/N
 On the x86-64 kernel, IOMMU group N, which
 .Xr vfio 4
