@@ -424,8 +424,10 @@ static void svc_fail(void)
  * `flags`. With `spans` pointer blocks and no dense blocks that point is
  * inside the walk of the only round: the round frees nothing. With dense
  * blocks and no spans it is the end of the first round, of PUNCH_BLOCKS: no
- * other round walks. The cut answers -EIO, the mount's free count is what
- * the rounds before gave, no write reaches the device, and the device is as
+ * other round walks. The cut stops with -EROFS, when its next write meets
+ * the funnel of the failed mount (`ext2_write_owned`), or with -EIO, when
+ * it meets the device's failure first; the mount's free count is what the
+ * rounds before gave, no write reaches the device, and the device is as
  * a power cut leaves it: e2fsck names no block that a pointer holds and a
  * bit does not.
  */
@@ -446,7 +448,8 @@ static void svc_fail_row(uint32_t flags, uint32_t spans, uint32_t dense, uint64_
     rc = svc_free(dir, node, handle, 0);
     points = svc_points;
     service_pause = 0;
-    check(rc == -EIO, "a device that fails at a service point stops the free with -EIO");
+    check(rc == -EIO || rc == -EROFS,
+          "a device that fails at a service point stops the free with -EIO or -EROFS");
     check(points >= 1, "and the service point came");
     check(OPS->statfs(&mnt, &after) == 0 && after.bfree == before.bfree + freed,
           spans ? "the round frees nothing" : "and no round after it frees anything");
