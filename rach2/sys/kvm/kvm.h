@@ -2197,8 +2197,11 @@ int kvm_emul_mmio(struct kvm_vcpu *v, const uint64_t info[5]);
  * them on a processor without; and VMCALL or VMMCALL, whichever the
  * host's processor lacks, which is rewritten in the guest's memory as the
  * one it has and left to run again. Any other is given back to the guest
- * as the #UD it raised. `v->exit` and `info` as `kvm_emul_mmio`. 0, or
- * -EFAULT.
+ * as the #UD it raised. Behind the forced emulation prefix, which
+ * `kvm_force_emulation_prefix` allows, any instruction is carried out,
+ * unless a code breakpoint at it, the caller's or the guest's, ends the
+ * exit as KVM_X_DEBUG or with #DB queued first, as Linux checks one there.
+ * `v->exit` and `info` as `kvm_emul_mmio`. 0, or -EFAULT.
  */
 int kvm_emul_ud(struct kvm_vcpu *v, const uint64_t info[5]);
 

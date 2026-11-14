@@ -41,6 +41,7 @@
 #define DR6_BS         0x4000ull
 #define DR6_ACTIVE_LOW 0xFFFF0FF0ull /* the bits an event clears */
 #define DR7_GD         0x2000ull
+#define DR7_BP_EN      0xFFull /* the local and global enables of DR0 to DR3 */
 
 /* The page-table entry bits the walk reads. */
 #define GPTE_P    0x001ull
@@ -4145,11 +4146,72 @@ static int runs_on_ud(const struct kvm_insn *in)
            in->op == KVM_OP_MOVBE || in->op == KVM_OP_HYPERCALL || in->op == KVM_OP_RDPID;
 }
 
+/** The breakpoints among DR0 to DR3, `db`, that DR7 `dr7` enables for
+ * the execution of the instruction at the linear address `la`, as DR6's
+ * B0 to B3, as Linux's kvm_vcpu_check_hw_bp reads them: an enabled one
+ * whose R/W and LEN fields are both 0 and whose address is `la`. */
+static uint32_t code_bp_hits(uint64_t la, uint64_t dr7, const uint64_t *db)
+{
+    uint32_t hits = 0, i;
+
+    for (i = 0; i < 4u; i++) {
+        if (((dr7 >> (2u * i)) & 3u) && ((dr7 >> (16u + 4u * i)) & 15u) == 0 && db[i] == la) {
+            hits |= 1u << i;
+        }
+    }
+    return hits;
+}
+
+/**
+ * Whether a code breakpoint at the instruction behind the forced emulation
+ * prefix ends its emulation, as Linux's kvm_vcpu_check_code_breakpoint
+ * checks for EMULTYPE_TRAP_UD_FORCED: the processor checked the prefix's
+ * address, never the instruction's. One of the caller's, under
+ * KVM_GUESTDBG_USE_HW_BP, makes `v->exit` KVM_X_DEBUG at that address;
+ * else one of the guest's queues #DB with its bits in DR6, unless
+ * RFLAGS.RF is set or a MOV SS shadow holds a guest that is not AMD's or
+ * Hygon's, whose processors do not hold code breakpoints in it. Either
+ * way RIP stays past the prefix and nothing runs.
+ */
+static int code_breakpoint(struct kvm_vcpu *v)
+{
+    const struct kvm_guest_debug *g = &v->guest_debug;
+    struct kvm_run_debug *d = &v->exit.debug;
+    uint64_t la = v->regs.rip;
+    uint32_t hits;
+
+    if (kvm_emul_mode(v) != 64) {
+        la = (v->sregs.cs.base + la) & 0xFFFFFFFFull;
+    }
+    if ((g->control & KVM_GUESTDBG_USE_HW_BP) && (g->debugreg[7] & DR7_BP_EN)) {
+        hits = code_bp_hits(la, g->debugreg[7], g->debugreg);
+        if (hits) {
+            v->exit.kind = KVM_X_DEBUG;
+            k_memset(d, 0, sizeof(*d));
+            d->exception = DB_VECTOR;
+            d->pc = la;
+            d->dr6 = hits | DR6_ACTIVE_LOW;
+            return 1;
+        }
+    }
+    if (!(v->debugregs.dr7 & DR7_BP_EN) || (v->regs.rflags & RFLAGS_RF) ||
+        (!kvm_guest_amd(v) && (v->events.interrupt.shadow & KVM_X86_SHADOW_INT_MOV_SS))) {
+        return 0;
+    }
+    hits = code_bp_hits(la, v->debugregs.dr7, v->debugregs.db);
+    if (hits) {
+        kvm_queue_db(v, hits);
+        return 1;
+    }
+    return 0;
+}
+
 /**
  * Fetch the instruction at CS:RIP and decode it; for a #UD exit, `ud` 1,
  * keep only those Linux's emulator carries out after one, and for one
  * behind the forced emulation prefix, `ud` 2, any it decodes, as Linux's
- * EMULTYPE_TRAP_UD_FORCED. Then run it.
+ * EMULTYPE_TRAP_UD_FORCED, once `code_breakpoint` finds none at it. Then
+ * run it.
  */
 static int emul_begin(struct kvm_vcpu *v, int ud)
 {
@@ -4161,6 +4223,9 @@ static int emul_begin(struct kvm_vcpu *v, int ud)
     emul_end(v);
     em->ud = ud;
     v->exit.kind = KVM_X_AGAIN;
+    if (ud == 2 && code_breakpoint(v)) {
+        return 0;
+    }
     n = fetch(v, bytes);
     if (n < 0) {
         return 0;
