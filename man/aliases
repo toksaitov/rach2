@@ -569,6 +569,10 @@ framefail 4 bootlog
 tty 4 console
 ptmx 4 console
 pts 4 console
+hvc0 4 hvc
+vport 4 hvc
+vport0p1 4 hvc
+virtio_console 4 hvc
 dri 4 drm
 simpledrm 4 fbdrm
 bochs-drm 4 bochs

@@ -26,6 +26,11 @@ opened
 .Dv O_RDWR ;
 a program such as tmux writes through its standard input.
 Keyboard and serial input pass through one terminal line discipline.
+When the boot line names a port of a virtio console,
+.Sy console= Ns Cm hvc0 ,
+that port carries what this page says of COM1, the output and the
+input; see
+.Xr hvc 4 .
 The kernel's screen log level is controlled through
 .Pa /dev/screenlog ;
 see
@@ -668,4 +673,5 @@ may refuse them.
 .Xr bootlog 4 ,
 .Xr drm 4 ,
 .Xr fbdrm 4 ,
+.Xr hvc 4 ,
 .Xr proc 5
