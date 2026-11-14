@@ -1,5 +1,7 @@
-Zero-extend an unsigned int that a 64-bit value was cast to when x86-64
-code widens it to 64 bits again.
+Clear the high half of an unsigned int that x86-64 code reads from a whole
+64-bit register: where it widens the value to 64 bits and where it converts
+it to floating point. Widen the size of a VLA's element before it scales an
+index, so that the 64-bit add of the pointer takes a 64-bit product.
 
 On a 64-bit target gen_cast emits nothing for a cast of a 64-bit value to
 unsigned int, which leaves the value's high half in its register, and
@@ -11,13 +13,44 @@ kernel's USER_LEN32 tests, came out as x and as true. The widening of an
 unsigned int on x86-64 now clears the high half with movl r, r. The
 registers RC_INT names are rax, rcx and rdx, which need no REX prefix.
 
+gen_cvt_itof converts an unsigned int with the 64-bit cvtsi2sd or
+cvtsi2ss, and to long double with fildll of the whole register pushed, so
+(double)(unsigned)(c ? a : 0) with a = 0x100000001 came out 4294967297.
+It now clears the high half with movl r, r before either.
+
+The size of a VLA's element is an int, so an index into a pointer to one
+was scaled by a 32-bit imul, whose product the 64-bit add of the pointer
+took as zero-extended: p + i with i = -1 moved p almost 4 GiB forward. The
+size is now cast to long long first, which widens the index with it, by
+movslq or movl, and makes the multiply 64 bits wide.
+
+Every other use of a 32-bit value is a 32-bit instruction, a load or store
+of 32 bits, or an argument or return value, whose high half the ABI leaves
+undefined.
+
 --- a/tccgen.c
 +++ b/tccgen.c
-@@ -2618,7 +2618,17 @@
- #else
+@@ -2221,9 +2221,14 @@ redo:
+ #endif
+             type1 = vtop[-1].type;
+             type1.t &= ~VT_ARRAY;
+-            if (vtop[-1].type.t & VT_VLA)
++            if (vtop[-1].type.t & VT_VLA) {
+                 vla_runtime_pointed_size(&vtop[-1].type);
+-            else {
++#if PTR_SIZE == 8
++                /* the int size of a VLA, widened so that the index is
++                   too and the pointer takes all 64 bits of the product */
++                gen_cast_s(VT_LLONG);
++#endif
++            } else {
+                 u = pointed_size(&vtop[-1].type);
+                 if (u < 0)
+                     tcc_error("unknown array element size");
+@@ -2619,6 +2624,16 @@ static void gen_cast(CType *type)
  #error
  #endif
-+                    }
+                     }
 +#if defined(TCC_TARGET_X86_64)
 +                    else {
 +                        /* x86_64 specific: movl r, r clears the high half,
@@ -26,8 +59,34 @@ registers RC_INT names are rax, rcx and rdx, which need no REX prefix.
 +                        int r = gv(RC_INT);
 +                        o(0x89);
 +                        o(0xc0 + (REG_VALUE(r) << 3) + REG_VALUE(r));
-                     }
++                    }
 +#endif
                  }
  #endif
              } else if (dbt == VT_BOOL) {
+--- a/x86_64-gen.c
++++ b/x86_64-gen.c
+@@ -2087,6 +2087,9 @@ void gen_cvt_itof(int t)
+             /* unsigned int to float/double/long double */
+             o(0x6a); /* push $0 */
+             g(0x00);
++            /* movl r, r clears the high half, which fildll reads */
++            o(0x89);
++            o(0xc0 + (vtop->r & VT_VALMASK) * 9);
+             o(0x50 + (vtop->r & VT_VALMASK)); /* push r */
+             o(0x242cdf); /* fildll (%rsp) */
+             o(0x10c48348); /* add $16, %rsp */
+@@ -2100,6 +2103,13 @@ void gen_cvt_itof(int t)
+     } else {
+         int r = get_reg(RC_FLOAT);
+         gv(RC_INT);
++        if ((vtop->type.t & (VT_BTYPE | VT_UNSIGNED)) ==
++            (VT_INT | VT_UNSIGNED)) {
++            /* movl r, r clears the high half, which the 64-bit
++               cvtsi2sd of an unsigned int reads */
++            o(0x89);
++            o(0xc0 + (vtop->r & VT_VALMASK) * 9);
++        }
+         o(0xf2 + ((t & VT_BTYPE) == VT_FLOAT?1:0));
+         if ((vtop->type.t & (VT_BTYPE | VT_UNSIGNED)) ==
+             (VT_INT | VT_UNSIGNED) ||

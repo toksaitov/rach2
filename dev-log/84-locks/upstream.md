@@ -144,3 +144,25 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `vendor/tcc/rach2-x86_64-zero-extend.patch` clears the high half with `movl r, r` at the widening of an `unsigned int` on x86-64.
 * Status: unreported.
 * Next: read TinyCC's mob branch to see whether its reworked `gen_cast` truncates or zero-extends here, and report it with the reproduction if not.
+
+## TinyCC's x86-64 code converts an unsigned int to floating point from the whole register
+
+* Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `x86_64-gen.c`.
+* Fails: `gen_cvt_itof` (lines 2074-2113) converts an `unsigned int` to `float` or `double` with the REX.W form of `cvtsi2ss` or `cvtsi2sd` (line 2107), and to `long double` by pushing the whole register and loading it with `fildll` (lines 2085-2092), so both read the register's high half, which a 64-bit value cast to `unsigned int` in a register still holds, as the entry above says.
+* Found: 2026-11-14, Codex's review of the patch of the entry above, milestone 84, task 84-261e, which read the code generator for every other path that reads such a register whole.
+* Reproduction: compile `double f(unsigned long a, int c) { return (unsigned)(c ? a : 0); }` with the x86-64 TinyCC 0.9.27 and read the object: `cvtsi2sd %rax,%xmm0` follows the conditional expression with no `movl %eax,%eax`, and `f(0x100000001, 1)` returns 4294967297 in place of 1. A `float` result gives `cvtsi2ss %rax`, and a `long double` one `push %rax` and `fildll (%rsp)`.
+* Evidence: `vendor/tcc/rach2-x86_64-zero-extend.patch`; the `widened` assertion of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
+* Rach2: `vendor/tcc/rach2-x86_64-zero-extend.patch` clears the high half with `movl r, r` before each of the three conversions of an `unsigned int`.
+* Status: unreported.
+* Next: report it with the entry above, after reading the mob branch's `gen_cvt_itof`.
+
+## TinyCC's x86-64 code adds a 32-bit index into a VLA to a 64-bit pointer
+
+* Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccgen.c` and `x86_64-gen.c`.
+* Fails: `gen_op` scales the index of a pointer into an array of variable length by the element's size, which `vla_runtime_pointed_size` (`tccgen.c` line 2225) pushes as an `int` where a fixed size is pushed as a `long long`, so the multiply is 32 bits wide; `gen_opic` then adds the product to the pointer with a width that `gen_opi` takes from the pointer alone (`x86_64-gen.c` line 1742), 64 bits, and a negative product, zero-extended by the 32-bit `imul`, moves the pointer almost 4 GiB forward.
+* Found: 2026-11-14, the owner's Mac, milestone 84, task 84-261e, reading the code generator for paths that read a 32-bit value from a whole register.
+* Reproduction: compile `long g(int n, int i) { int a[2][n]; return (char *)(a + i) - (char *)a; }` with the x86-64 TinyCC 0.9.27 and read the object: `imul %ecx,%eax` is followed by `add %rax,%rcx`, and `g(3, -1)` returns 4294967284 in place of -12.
+* Evidence: `vendor/tcc/rach2-x86_64-zero-extend.patch`; the `widened` assertion of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
+* Rach2: `vendor/tcc/rach2-x86_64-zero-extend.patch` casts the element's size to `long long` before the multiply on a 64-bit target, which widens the index with it and makes the multiply 64 bits wide.
+* Status: unreported.
+* Next: read the mob branch's pointer arithmetic for a VLA, and report it with the reproduction if it is unchanged.
