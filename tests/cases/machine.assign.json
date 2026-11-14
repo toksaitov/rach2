@@ -136,7 +136,8 @@
               "rach2.root=MBRID=82274701,1"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -221,6 +222,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -369,7 +375,8 @@
               "rach2.root=MBRID=82274701,1"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -454,6 +461,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -602,7 +614,8 @@
               "rach2.root=MBRID=82274701,1"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -687,6 +700,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -835,7 +853,8 @@
               "rach2.root=MBRID=82274701,1"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -920,6 +939,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -1068,7 +1092,8 @@
               "rach2.root=MBRID=82274701,1"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -1153,6 +1178,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -1301,7 +1331,8 @@
               "rach2.root=MBRID=82274701,1"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -1386,6 +1417,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -1534,7 +1570,8 @@
               "rach2.root=MBRID=82274701,1"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -1619,6 +1656,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -1769,7 +1811,8 @@
               "rach2.i915fake"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -1854,6 +1897,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -2004,7 +2052,8 @@
               "rach2.i915fake"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -2089,6 +2138,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -2239,7 +2293,8 @@
               "rach2.i915fake"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -2324,6 +2379,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {
@@ -2474,7 +2534,8 @@
               "rach2.i915fake"
             ],
             "display": "virtio-gpu",
-            "machine": "q35"
+            "machine": "q35",
+            "emulator": "assign-qemu"
           },
           "console": "serial",
           "qmp": true,
@@ -2559,6 +2620,11 @@
         {
           "name": "assign-data",
           "node": "tests/cases/assign/assign.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
           "per_architecture": false
         },
         {

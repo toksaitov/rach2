@@ -1934,7 +1934,8 @@ include tests/native/native.mk
 # the step taken as done.
 STEP_STAMPS = $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
               $(E2FSPROGS_STAMP) $(KBD_STAMP) $(LIBTSM_STAMP) $(LIBTSM_HOST_STAMP) $(MTOOLS_STAMP) \
-              $(OPENSSL_STAMP) $(LIBNL_STAMP) $(HOSTAP_STAMP) $(IW_STAMP) $(GNU_STEP_STAMPS)
+              $(OPENSSL_STAMP) $(LIBNL_STAMP) $(HOSTAP_STAMP) $(IW_STAMP) $(ASSIGN_QEMU_STAMP) \
+              $(GNU_STEP_STAMPS)
 STEP_PRODUCTS = $(LIBC_STAMP):$(LIBC_A) $(BUSYBOX_STAMP):$(BUSYBOX_BIN) \
                 $(DROPBEAR_STAMP):$(DROPBEAR_BIN) $(TCC_STAMP):$(TCC_BIN) \
                 $(PDPMAKE_STAMP):$(PDPMAKE_BIN) $(E2FSPROGS_STAMP):$(E2FSCK_BIN) \
@@ -1942,7 +1943,8 @@ STEP_PRODUCTS = $(LIBC_STAMP):$(LIBC_A) $(BUSYBOX_STAMP):$(BUSYBOX_BIN) \
                 $(KBD_STAMP):$(KBD_STAGE)/loadkeys $(MTOOLS_STAMP):$(MTOOLS_BIN) \
                 $(OPENSSL_STAMP):$(OPENSSL_STAGE)/lib/libcrypto.a \
                 $(LIBNL_STAMP):$(LIBNL_STAGE)/lib/libnl-3.a \
-                $(HOSTAP_STAMP):$(HOSTAP_STAGE)/wpa_supplicant $(IW_STAMP):$(IW_STAGE)/iw
+                $(HOSTAP_STAMP):$(HOSTAP_STAGE)/wpa_supplicant $(IW_STAMP):$(IW_STAGE)/iw \
+                $(ASSIGN_QEMU_STAMP):$(ASSIGN_QEMU)
 ifeq ($(DRY_RUN),)
 _ := $(shell $(foreach p,$(STEP_PRODUCTS),[ -s "$(lastword $(subst :, ,$(p)))" ] || \
         rm -f "$(firstword $(subst :, ,$(p)))";) :)

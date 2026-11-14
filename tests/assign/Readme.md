@@ -46,19 +46,20 @@ The outer QEMU needs `qemu-vtd-cfi.patch`. QEMU 10.2.1 does not acknowledge GCMD
 
 ### The outer emulator
 
-Use the official [QEMU 10.2.1 archive](https://download.qemu.org/qemu-10.2.1.tar.xz), SHA-256 `a3717477d8e2c84d630bfffbc20f6cd3293eb45aa1e6dac6d0cc27689991c9e1`. Keep it and its extracted source under `build/cache/qemu`, apply `patch -p1 -d build/cache/qemu/qemu-10.2.1 < tests/assign/qemu-vtd-cfi.patch` from the repository root, and configure in a separate `build/cache/qemu/out` directory. Through the testing host's installed build admission, run:
+Every machine of the suite names `assign-qemu` as its `emulator` ([etude](../../tools/etude/Readme.md#cases)), so etude runs it in place of the `qemu-system-x86_64` on `PATH`. `make build/tests/cases/assign/qemu/bin/qemu-system-x86_64`, which the cases' preparation runs, builds it with `build_qemu.sh` through `etude build`, so that the host's store keeps one build for every copy and a copy whose inputs are the same takes it from there. The step's inputs are the script, `qemu.txt` and `qemu-vtd-cfi.patch`, and its key is the same for either `ARCH`.
+
+`build_qemu.sh` takes the official QEMU 10.2.1 archive and the Ubuntu 26.04 packages of GLib, pixman, slirp, PCRE2, libffi, sysprof's capture library, zlib, Ninja and pip that `qemu.txt` pins by URL and SHA-256. Each is kept in `build/cache/qemu`, and one the copy lacks is taken from `/var/cache/rach2-downloads` when the file there has the pinned digest, or downloaded and added there. It unpacks the packages with `dpkg-deb -x` into its scratch directory, with no package installation, applies the patch, and configures and builds with
 
 ```sh
-../qemu-10.2.1/configure --target-list=x86_64-softmmu \
+configure --target-list=x86_64-softmmu \
     --without-default-features --enable-system --enable-kvm --enable-tcg \
     --enable-slirp --enable-pixman --disable-docs --disable-guest-agent \
     --disable-rust --disable-download --with-pkgversion=rach2-vtd-cfi
-ninja -j8 qemu-system-x86_64
 ```
 
-The build needs GLib, pixman, slirp and their development headers, Ninja, Meson, Python pip and setuptools. On the testing host their Ubuntu packages are unpacked with `dpkg-deb -x` into `build/cache/qemu/deps`, without a package installation. Set `PATH` to its `usr/bin`, `PYTHONPATH` to its `usr/lib/python3/dist-packages`, and `PKG_CONFIG_LIBDIR` to its `usr/lib/x86_64-linux-gnu/pkgconfig` followed by the system pkg-config directories. Relocate `prefix=/usr` in the private `.pc` files to that private `usr` directory. Set `LD_LIBRARY_PATH` to its `usr/lib/x86_64-linux-gnu`. GLib's pkg-config dependencies also need the private `libpcre2-dev`, `libffi-dev` and `libsysprof-capture-4-dev` packages. Keep the private libraries with the emulator.
+with pkg-config reading the private packages alone, their libraries found through `LIBRARY_PATH`, and the program linked with the run path `$ORIGIN/../lib`. The host gives only sh, Python 3 with its venv module, a C compiler, binutils, pkg-config, patch, xz and dpkg-deb; Meson comes from QEMU's archive.
 
-Put the absolute `build/cache/qemu/out` directory first on `PATH` for the assignment run, and retain that `LD_LIBRARY_PATH`. The build tree finds its shipped firmware through its `pc-bios` link. No global emulator is replaced. Record `qemu-system-x86_64 --version`, the binary's SHA-256 and the private dependency versions with the run.
+The step's output, `build/tests/cases/assign/qemu`, has the stripped `bin/qemu-system-x86_64`; `lib/`, the private libraries it loads, by its run path and with no `LD_LIBRARY_PATH`; `share/qemu/`, the firmware of QEMU's x86 machines and the key maps, which QEMU finds beside its program; and `version`, what the program prints for `--version`, its SHA-256, the patch's and each pinned source's. Make prints `version` when it builds or takes the step. The output names no path of the copy's, which the store requires, and the script fails when it would. The scenario's invocation in the run's evidence names the program and its artifact digest. The build fails, and the cases do not run, when a source cannot be fetched with its digest or the program is not the patched one; no case falls back to the host's QEMU.
 
 ## Tests
 

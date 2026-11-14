@@ -1,0 +1,28 @@
+# qemu.txt: the sources of the assignment cases' outer QEMU, which
+# build_qemu.sh builds, one to a line: a name, the version, the URL and the
+# SHA-256.
+#
+# The tarball's digest is the one tests/assign/Readme.md has given since the
+# patch was written. The packages are Ubuntu 26.04's, from Launchpad's
+# librarian, which keeps a version after the archive drops it; each one's
+# SHA-512 was checked against the one the archive's signed index lists. The
+# development packages give the headers, the pkg-config files and the link
+# names; the runtime packages give the libraries the emulator is linked
+# against and run with. Ninja and pip come with them, since the build needs
+# no package of the host's but Python and a C compiler.
+qemu 10.2.1 https://download.qemu.org/qemu-10.2.1.tar.xz a3717477d8e2c84d630bfffbc20f6cd3293eb45aa1e6dac6d0cc27689991c9e1
+libglib2.0-0t64 2.88.0-1ubuntu0.1 https://launchpad.net/ubuntu/+archive/primary/+files/libglib2.0-0t64_2.88.0-1ubuntu0.1_amd64.deb 7868fd4b24fd4b6e644a63685b6d0c282c6b636deac842d1455d71ff5c9ecd07
+libgio-2.0-dev 2.88.0-1ubuntu0.1 https://launchpad.net/ubuntu/+archive/primary/+files/libgio-2.0-dev_2.88.0-1ubuntu0.1_amd64.deb 61064485b5aca20235061ba40ad96479b157d01dd665eae5ada1d6ea633082b5
+libpcre2-8-0 10.46-1ubuntu0.1 https://launchpad.net/ubuntu/+archive/primary/+files/libpcre2-8-0_10.46-1ubuntu0.1_amd64.deb 44ebbeb6493eacffbc460ca71446959ba86a00b2e23515e4cfb1a5cc317d6672
+libpcre2-dev 10.46-1ubuntu0.1 https://launchpad.net/ubuntu/+archive/primary/+files/libpcre2-dev_10.46-1ubuntu0.1_amd64.deb 620917f311929429e1b448af69d49b4f009ef52f7c2a14c352b9fe916f17206a
+libffi8 3.5.2-4 https://launchpad.net/ubuntu/+archive/primary/+files/libffi8_3.5.2-4_amd64.deb 4a7423124bbd459c0aa38b7389ec7802fa6899654767a95fc27de70967fedd48
+libffi-dev 3.5.2-4 https://launchpad.net/ubuntu/+archive/primary/+files/libffi-dev_3.5.2-4_amd64.deb 6f594146dc6f5d77694811c38c6743a99424e5bdd2e955afa82fcd19883f42cc
+libsysprof-capture-4-dev 50.0-1 https://launchpad.net/ubuntu/+archive/primary/+files/libsysprof-capture-4-dev_50.0-1_amd64.deb dd4d9812c035d6731229650c6860a07586961c2ac491de622032a338ba0129f0
+libpixman-1-0 0.46.4-1 https://launchpad.net/ubuntu/+archive/primary/+files/libpixman-1-0_0.46.4-1_amd64.deb 55a274db32d4824a1f1a48c42e959fe4293a4e4b545d400d89949cfabe160cc3
+libpixman-1-dev 0.46.4-1 https://launchpad.net/ubuntu/+archive/primary/+files/libpixman-1-dev_0.46.4-1_amd64.deb c98809a1473c93b5390f057279091ff2685c8b1012f5cce56146df5950b8f3ad
+libslirp0 4.9.1-1ubuntu1.1 https://launchpad.net/ubuntu/+archive/primary/+files/libslirp0_4.9.1-1ubuntu1.1_amd64.deb bfc8e5afed3287ecd28675fd683913e6b3c9d73bd16a63bc8f45cc3b7e6f83fb
+libslirp-dev 4.9.1-1ubuntu1.1 https://launchpad.net/ubuntu/+archive/primary/+files/libslirp-dev_4.9.1-1ubuntu1.1_amd64.deb 75f1f23bbb61fff3c267c0cb77d1d657f7122ca17fff63a3f412fb8aa19d97b8
+ninja-build 1.13.2-1 https://launchpad.net/ubuntu/+archive/primary/+files/ninja-build_1.13.2-1_amd64.deb 533239a464183f041f7c979f899fd8419e31ac82366540e57902a255de78f156
+python3-pip 25.1.1+dfsg-1ubuntu2 https://launchpad.net/ubuntu/+archive/primary/+files/python3-pip_25.1.1+dfsg-1ubuntu2_all.deb 644e86f631605c3166df44b458815cfce1746d6278773b575b5365cbe804d894
+zlib1g 1:1.3.dfsg+really1.3.1-1ubuntu3.2 https://launchpad.net/ubuntu/+archive/primary/+files/zlib1g_1.3.dfsg+really1.3.1-1ubuntu3.2_amd64.deb 10084666f747247550c3e82f9a12cbfd9184c19241a42eb34d8893ecb8e03b35
+zlib1g-dev 1:1.3.dfsg+really1.3.1-1ubuntu3.2 https://launchpad.net/ubuntu/+archive/primary/+files/zlib1g-dev_1.3.dfsg+really1.3.1-1ubuntu3.2_amd64.deb 2e4663ab8d018aff8351ee949e53971911b2aca3491eefde61e82111ee83cbc3

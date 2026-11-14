@@ -2237,6 +2237,20 @@ $(ASSIGN_DIR)/assign.ext2: $(ASSIGN_DIR)/assign.tar
 	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
 	    -d "$$work" $@.tmp $${kib}k; \
 	mv $@.tmp $@
+# The outer emulator, QEMU with qemu-vtd-cfi.patch, which every machine of
+# the suite names as its emulator. It runs on the host, so its step is the
+# same for either ARCH; the store keeps it for every copy.
+ASSIGN_QEMU_DIR = $(ASSIGN_DIR)/qemu
+ASSIGN_QEMU = $(ASSIGN_QEMU_DIR)/bin/qemu-system-x86_64
+ASSIGN_QEMU_STAMP = $(ASSIGN_DIR)/qemu.stamp
+$(ASSIGN_QEMU_STAMP): tests/assign/build_qemu.sh tests/assign/qemu.txt \
+                      tests/assign/qemu-vtd-cfi.patch | $(ETUDE)
+	@rm -f $@ $(ASSIGN_QEMU)
+	+@$(ETUDE) build -s '$(RACH2_STORE)' -a x86_64 -n assign-qemu -t $@ -c cc $(STEP_INPUTS) \
+	    -o $(ASSIGN_QEMU_DIR) -- sh tests/assign/build_qemu.sh $(ASSIGN_QEMU_DIR)
+	@test -s $(ASSIGN_QEMU) || { echo 'assign-qemu: the step made no emulator' >&2; exit 1; }
+	@cat $(ASSIGN_QEMU_DIR)/version
+$(ASSIGN_QEMU): $(ASSIGN_QEMU_STAMP)
 
 # Assignment needs the product's GNU root, without the GNU test inventories
 # or a person's staged logins. Give it a fixed MBR identity so the AHCI
