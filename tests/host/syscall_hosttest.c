@@ -247,6 +247,14 @@ int copy_from_user(void *dst, const void __user *src, size_t len)
 }
 
 static void tick(void);
+static void clock_to_ns(int64_t at);
+
+/* With `pass_at_end`, the timer's pass on another processor has tested the
+ * sleeper's time of the monotonic clock and holds the run queues' lock
+ * until it records the expiry, which the sleeper's end of its wait waits
+ * for: the next end of a wait with a time moves the clock to that time and
+ * records it first, once. */
+static int pass_at_end;
 
 /** Timer list membership is checked by process_timer_hosttest. */
 void proc_timer_update(process_t *p)
@@ -255,10 +263,17 @@ void proc_timer_update(process_t *p)
 }
 
 /** Set the thread's timed wait as the kernel does, under no lock, since the
- * model has one processor and no timer pass runs beside the thread, and
- * return the expiry record. */
+ * model has one processor and no timer pass runs beside the thread but the
+ * one `pass_at_end` holds, and return the expiry record. */
 int64_t proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
 {
+    if (pass_at_end && tick == 0 && ns == 0 && current_proc->wakeup_ns != 0) {
+        pass_at_end = 0;
+        clock_to_ns(current_proc->wakeup_ns);
+        if (current_proc->rt_steps == 0 || current_proc->rt_steps == model_steps) {
+            current_proc->wakeup_fired = current_proc->wakeup_ns;
+        }
+    }
     current_proc->wakeup_tick = tick;
     current_proc->wakeup_ns = ns;
     current_proc->rt_steps = steps;
@@ -765,6 +780,19 @@ static void tick(void)
     }
 }
 
+/** Move the model's monotonic clock to `at` nanoseconds since boot, the
+ * ticks it crosses counted, as the interrupt between ticks finds it. */
+static void clock_to_ns(int64_t at)
+{
+    while (at - ((int64_t)kernel_uptime_seconds * 1000000000 +
+                 (int64_t)kernel_second_ticks * TICK_NS) >=
+           (int64_t)TICK_NS) {
+        ticks_pass(1);
+    }
+    mono_phase_ns =
+        at - ((int64_t)kernel_uptime_seconds * 1000000000 + (int64_t)kernel_second_ticks * TICK_NS);
+}
+
 /** Move the model's clock forward to `tick`, never back. */
 static void clock_to(uint64_t tick)
 {
@@ -821,13 +849,7 @@ void schedule(void)
         int64_t at = armed_ns;
 
         armed_ns = 0;
-        while (at - ((int64_t)kernel_uptime_seconds * 1000000000 +
-                     (int64_t)kernel_second_ticks * TICK_NS) >=
-               (int64_t)TICK_NS) {
-            ticks_pass(1);
-        }
-        mono_phase_ns = at - ((int64_t)kernel_uptime_seconds * 1000000000 +
-                              (int64_t)kernel_second_ticks * TICK_NS);
+        clock_to_ns(at);
         wake(0);
         if (step_after_wake != 0) {
             current_proc->wakeup_fired = at;
@@ -949,6 +971,7 @@ static void model_at(uint64_t tick)
     armed_ns = blocked_ns = 0;
     wake_between = 0;
     signal_moves_ns = 0;
+    pass_at_end = 0;
     current_proc->state = PROC_RUNNING;
     current_proc->wakeup_tick = 0;
 }
@@ -1963,6 +1986,58 @@ static void realtime_steps(void)
     model_epoch_ns = 0;
 }
 
+/**
+ * A sleep whose time the timer's pass on another processor found reached,
+ * between the sleep's look at the clock and its look for a signal, returns
+ * 0 though the signal is pending, as Linux's do_nanosleep returns 0 once its
+ * hrtimer's callback has cleared its task: the end of the wait, under the
+ * run queues' lock, waits for the pass's record of the expiry and finds it.
+ * A sleep of three ticks from tick 3000, with the signal posted in tick
+ * 3002, returns 0 at 3003, writes no remainder, counts no sleep cut short
+ * and leaves nothing for restart_syscall, and so does one with no place
+ * for a remainder. An absolute sleep on time since boot and one on real
+ * time return 0 the same way, where the same signal without the pass's
+ * record returns -EINTR.
+ */
+static void sleep_expired_at_signal(void)
+{
+    isr_params_t p;
+
+    ask_sleep(&p, 0, TICKS_NS(3));
+    uptime_at(3000);
+    post_at_block = pass_at_end = 1;
+    current_proc->restart_kind = RESTART_NONE;
+    CHECK(sleep_call(&p) == 0 && kernel_ticks == 3003 && cut_short == 0 && remainder_untouched() &&
+              current_proc->restart_kind == RESTART_NONE,
+          "a sleep the pass found expired before the signal returns 0 with no remainder");
+    CHECK(current_proc->wakeup_ns == 0 && current_proc->rt_steps == 0,
+          "and leaves its timed wait ended");
+
+    ask_sleep(&p, 0, TICKS_NS(3));
+    p.ecx = 0;
+    uptime_at(3000);
+    post_at_block = pass_at_end = 1;
+    CHECK(sleep_call(&p) == 0 && cut_short == 0, "so does one with no place for a remainder");
+
+    ask_clock_tick(&p, 1, 1, 0, 1003, 0);
+    uptime_at(1000);
+    post_at_block = pass_at_end = 1;
+    CHECK(clock_sleep_call(&p) == 0 && kernel_ticks == 1003 && cut_short == 0 &&
+              current_proc->restart_kind == RESTART_NONE,
+          "an absolute sleep on time since boot the pass found expired returns 0");
+    ask_clock_tick(&p, 1, 1, 0, 1003, 0);
+    uptime_at(1000);
+    post_at_block = 1;
+    CHECK(clock_sleep_call(&p) == -EINTR, "where the signal alone returns -EINTR");
+    current_proc->restart_kind = RESTART_NONE;
+
+    ask_rt_sleep(&p, TICK_HZ + 10u);
+    post_at_block = pass_at_end = 1;
+    CHECK(clock_sleep_call(&p) == 0 && kernel_ticks == TICK_HZ + 10u && cut_short == 0,
+          "and so does an absolute sleep on real time");
+    pending = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 /**
  * A UDP send answers its length when a full queue lost the datagram, as
@@ -2309,6 +2384,7 @@ int main(void)
     sleep_races();
     sleep_held_clock();
     sleep_between();
+    sleep_expired_at_signal();
     timer_first_expiry();
     timer_marked();
     stream_sendmsg();
