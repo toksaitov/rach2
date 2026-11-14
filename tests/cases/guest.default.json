@@ -2207,7 +2207,7 @@
     },
     {
       "case_id": "guest.default.jobprobe",
-      "behavior": "Job control on the console, the controlling terminal of the debug shell's init: process groups in the foreground and background, the signals of a terminal, and a session's end",
+      "behavior": "Job control on the console, the controlling terminal of the debug shell's init: process groups in the foreground and background, the signals of a terminal, a member's TIOCNOTTY, and a session's end, which hangs up the console's descriptions of /dev/tty",
       "units": ["default", "jobprobe"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -2275,13 +2275,13 @@
     },
     {
       "case_id": "guest.default.ptyprobe",
-      "behavior": "A pseudo-terminal pair opens, unlocks and sizes from the master, becomes a child's controlling terminal with its termios, carries cooked input, echo and output, gives end of input to blocked readers on hangup, holds its foreground group by identity, and is released with SIGHUP to that group when its session leader exits.",
+      "behavior": "A pseudo-terminal pair opens, unlocks and sizes from the master, becomes a child's controlling terminal with its termios, carries cooked input, echo and output, gives end of input to blocked readers on hangup, holds its foreground group by identity and by its numbers in a child PID namespace, and is released with SIGHUP to that group when its session leader exits.",
       "units": ["default", "ptyprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "ptyprobe", "stdin": null, "role": "ordinary", "privileges": "root, as etude-guest runs it, which writes /proc/sys/kernel/ns_last_pid", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "execution": {"program": "ptyprobe", "stdin": null, "role": "ordinary", "privileges": "root, as etude-guest runs it, which writes /proc/sys/kernel/ns_last_pid and makes a PID namespace", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "ptmx-open", "checks": "/dev/ptmx opens a master.", "source": "program"},
         {"assertion_id": "tiocgptn", "checks": "TIOCGPTN gives its number N.", "source": "program"},
@@ -2302,7 +2302,8 @@
         {"assertion_id": "hangup-queued", "checks": "A line queued before the close is read in short reads, and end of input persists after it.", "source": "program"},
         {"assertion_id": "hangup-blocked", "checks": "With SIGHUP blocked, the blocked readers read end of input in the same way.", "source": "program"},
         {"assertion_id": "fg-reused", "checks": "Once the slave's foreground group has ended and a new group of the session is given its number through /proc/sys/kernel/ns_last_pid, TIOCGPGRP still gives the number, and ^C, ^\\, ^Z, a new window size and the master's close signal none of the new group.", "source": "program"},
-        {"assertion_id": "leader-exit", "checks": "A session leader's TIOCGSID gives its session; its exit sends SIGHUP to the slave's foreground group, and the master's TIOCGSID is then ENOTTY and its TIOCGPGRP 0.", "source": "program"}
+        {"assertion_id": "leader-exit", "checks": "A session leader's TIOCGSID gives its session; its exit sends SIGHUP to the slave's foreground group, and the master's TIOCGSID is then ENOTTY and its TIOCGPGRP 0.", "source": "program"},
+        {"assertion_id": "fg-pidns", "checks": "In a child PID namespace, once the slave's foreground group has ended and been reaped, the slave's and the master's TIOCGPGRP give its number in that namespace, and a fork after ns_last_pid is set below it is given the number again.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

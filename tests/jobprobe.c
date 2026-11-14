@@ -12,9 +12,17 @@
  *     and TIOCSPGRP moves the foreground to a group of the session, one of
  *     a single unreaped zombie included, or a thread's number in that
  *     session even when it names no group, and refuses any other;
+ *   * the TIOCNOTTY of a member that does not lead the session takes the
+ *     terminal from its process alone: /dev/tty is then -ENXIO to it and to
+ *     a child it forks, and its TIOCGPGRP -ENOTTY, while the session keeps
+ *     the terminal;
  *   * the leader's TIOCNOTTY sends SIGHUP to its foreground group and gives
  *     the terminal up, after which TIOCGPGRP, TIOCNOTTY and TIOCSPGRP are
  *     -ENOTTY;
+ *   * the end of a session's leader sends its foreground group SIGHUP and,
+ *     on the console, hangs up the descriptions of /dev/tty a member opened,
+ *     whose non-blocking read then gives 0 and whose write is -EIO, while a
+ *     description of /dev/console still writes; on a pty it hangs up none;
  *   * the probe's own group, which is orphaned because it leads its session,
  *     gets -ENOTTY from TIOCSPGRP once it is in the background, and goes
  *     ahead while it ignores SIGTTOU, as a shell does;
@@ -42,6 +50,7 @@
 
 #define SIGHUP  1
 #define SIGKILL 9
+#define SIGPIPE 13
 #define SIGTERM 15
 #define SIGCHLD 17
 #define SIGCONT 18
@@ -71,9 +80,16 @@
 #define TIOCGPGRP 0x540F
 #define TIOCSPGRP 0x5410
 #define TIOCNOTTY 0x5422
+#define KDGETMODE 0x4B3B
+
+#define O_RDWR     2
+#define O_NOCTTY   0400
+#define O_NONBLOCK 04000
 
 #define EPERM  1
 #define ESRCH  3
+#define EIO    5
+#define ENXIO  6
 #define EINVAL 22
 #define ENOTTY 25
 
@@ -196,6 +212,27 @@ static unsigned long long sigpending(void)
 static int read(int fd, void *buf, int n)
 {
     return syscall3(SYS_READ, fd, (long)buf, n);
+}
+/** The write call: the count written, or a negated errno. */
+static int write(int fd, const void *buf, int n)
+{
+    return syscall3(SYS_WRITE, fd, (long)buf, n);
+}
+/** The open call with no mode: a descriptor, or a negated errno. */
+static int open(const char *path, int flags)
+{
+    return syscall3(SYS_OPEN, (long)path, flags, 0);
+}
+/** The close call: 0, or a negated errno. */
+static int close(int fd)
+{
+    return syscall1(SYS_CLOSE, fd);
+}
+/** The pipe call: 0 with the read end in fds[0] and the write end in
+ * fds[1], or a negated errno. */
+static int pipe(int *fds)
+{
+    return syscall1(SYS_PIPE, (long)fds);
 }
 
 /** The length of the string `s`. */
@@ -329,6 +366,169 @@ static int run_child(int (*body)(void))
         return -3; /* WTERMSIG */
     }
     return (status >> 8) & 0xff; /* WEXITSTATUS */
+}
+
+/** Whether /dev/tty is -ENXIO to the caller, which has no controlling
+ * terminal; a descriptor it gives is closed. */
+static int no_dev_tty(void)
+{
+    int fd = open("/dev/tty", O_RDWR);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    return fd == -ENXIO;
+}
+
+/**
+ * A child's body for `run_child`, in the session whose controlling terminal
+ * is on fd 0, which it does not lead: its TIOCNOTTY succeeds and takes the
+ * terminal from its process alone, as Linux's no_tty, so /dev/tty is
+ * -ENXIO, its TIOCGPGRP -ENOTTY, and a child it forks has no terminal
+ * either. Returns 0, or 50 to 54 for the first check that fails.
+ */
+static int child_notty(void)
+{
+    int pgrp = -1, pid, status = -1;
+
+    if (ioctl(0, TIOCNOTTY, 0) != 0) {
+        return 50;
+    }
+    if (!no_dev_tty()) {
+        return 51;
+    }
+    if (ioctl(0, TIOCGPGRP, &pgrp) != -ENOTTY) {
+        return 52;
+    }
+    pid = fork();
+    if (pid == 0) {
+        sys_exit(no_dev_tty() ? 0 : 1);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+        return 53;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 54;
+}
+
+/**
+ * A member's TIOCNOTTY, while the probe's session controls fd 0: the member
+ * loses the terminal (`child_notty`), and the session keeps it, with the
+ * probe's group in front.
+ */
+static void member_notty(void)
+{
+    int pgrp = -1;
+
+    check(run_child(child_notty) == 0, "a member's TIOCNOTTY takes the terminal from it alone");
+    check(ioctl(0, TIOCGPGRP, &pgrp) == 0 && pgrp == getpgrp(),
+          "the session keeps its terminal after a member's TIOCNOTTY");
+}
+
+/**
+ * The member of `leader_hangup`, in the session of the leader that forked
+ * it and in its group: with SIGHUP blocked, it opens /dev/tty, the
+ * terminal on fd 0, non-blocking, writes 'r' to `up` and waits for a byte
+ * on `go`, which comes once the leader has ended. It then writes to `up`
+ * '0' when SIGHUP is pending and the /dev/tty description is as Linux
+ * leaves it: on the console, which answers KDGETMODE, hung up, its read
+ * giving 0 and its write -EIO, while a description of /dev/console still
+ * writes; on a pty, not hung up. Otherwise it writes a letter for the first
+ * check that fails. It does not return.
+ */
+static void hangup_member(int up, int go)
+{
+    unsigned long long hup = 1ull << (SIGHUP - 1);
+    int tty, cons = -1, mode = 0, console;
+    char byte;
+
+    console = ioctl(0, KDGETMODE, &mode) == 0;
+    if (sigmask_change(1, hup) != 0) {
+        sys_exit(1);
+    }
+    tty = open("/dev/tty", O_RDWR | O_NONBLOCK);
+    if (console) {
+        cons = open("/dev/console", O_RDWR | O_NOCTTY | O_NONBLOCK);
+    }
+    if (tty < 0 || (console && cons < 0) || write(up, "r", 1) != 1 || read(go, &byte, 1) != 1) {
+        sys_exit(1);
+    }
+    if ((sigpending() & hup) == 0) {
+        byte = 'a';
+    } else if (!console) {
+        byte = write(tty, "", 0) == 0 ? '0' : 'b';
+    } else if (read(tty, &byte, 1) != 0) {
+        byte = 'c';
+    } else {
+        byte = write(tty, "", 0) != -EIO ? 'd' : write(cons, "", 0) != 0 ? 'e' : '0';
+    }
+    write(up, &byte, 1);
+    sys_exit(0);
+}
+
+/**
+ * The leader of `leader_hangup`: a new session's leader, it makes the
+ * terminal on fd 0, which no session holds, its controlling terminal, forks
+ * `hangup_member`, closes the pipe ends it does not use, waits for the
+ * member's 'r' on `up` and exits 0, or 3 for a step that failed. It does
+ * not return.
+ */
+static void hangup_leader(int *up, int *go)
+{
+    int member = -1;
+    char byte;
+
+    if (setsid() >= 0 && ioctl(0, TIOCSCTTY, 0) == 0) {
+        member = fork();
+    }
+    if (member == 0) {
+        close(up[0]);
+        close(go[1]);
+        hangup_member(up[1], go[0]);
+    }
+    close(up[1]);
+    close(go[0]);
+    close(go[1]);
+    sys_exit(member > 0 && read(up[0], &byte, 1) == 1 && byte == 'r' ? 0 : 3);
+}
+
+/**
+ * The end of a session's leader, while the probe holds no terminal: a
+ * leader takes the terminal on fd 0 and ends, and the member it leaves,
+ * the foreground group, finds SIGHUP pending. On the console, as in the
+ * default suite, the description of /dev/tty that the member opened is
+ * hung up and a description of /dev/console is not, as Linux's
+ * disassociate_ctty calls tty_vhangup_session for any terminal but a pty,
+ * whose hangup passes over /dev/console; on a pty, as in a native run, the
+ * description is not hung up (`hangup_member`). Every process closes the
+ * pipe ends it does not use, so a reader sees the end of a process that
+ * failed; SIGPIPE is ignored for the write to a member that ended. The
+ * member, orphaned by the leader's end, is the probe's to reap when the
+ * probe is init, as in the default suite, and otherwise init's, when the
+ * wait for any child finds none.
+ */
+static void leader_hangup(void)
+{
+    int up[2] = {-1, -1}, go[2] = {-1, -1};
+    int leader, status = -1;
+    char byte = 0;
+
+    check(signal_set(SIGPIPE, SIG_IGN) == 0 && pipe(up) == 0 && pipe(go) == 0,
+          "pipes for the leader's end");
+    leader = fork();
+    if (leader == 0) {
+        hangup_leader(up, go);
+    }
+    close(up[1]);
+    close(go[0]);
+    check(leader > 0 && waitpid(leader, &status, 0) == leader && WIFEXITED(status) &&
+              WEXITSTATUS(status) == 0,
+          "a leader takes the terminal and forks a member");
+    check(write(go[1], "g", 1) == 1 && read(up[0], &byte, 1) == 1 && byte == '0',
+          "the leader's end hangs up the console's /dev/tty, but not /dev/console or a pty");
+    close(go[1]);
+    waitpid(-1, &status, 0);
+    close(up[0]);
+    check(signal_set(SIGPIPE, SIG_DFL) == 0, "SIGPIPE back to its default");
 }
 
 /**
@@ -518,9 +718,11 @@ PROBE_START void _start(void)
         }
         group_numbers();
         zombie_group();
+        member_notty();
 
         leader_notty();
     }
+    leader_hangup();
 
     /* The stop, continue and kill cycle, each reported through wait4. */
     {

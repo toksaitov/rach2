@@ -29,7 +29,9 @@
  *   signal of the terminal reaches the new group (`fg_reused`). The session
  *   leader's exit sends SIGHUP to the foreground group and leaves the slave
  *   with no session or group, which the master's TIOCGSID and TIOCGPGRP
- *   read (`leader_exit`).
+ *   read (`leader_exit`). In a child PID namespace, TIOCGPGRP gives an
+ *   ended foreground group's number in that namespace, and the number can
+ *   be given out again (`fg_pidns`).
  *
  * The child checks the ioctls and the cooked read and reports through its
  * exit status; the parent checks the echo and the output it reads back on
@@ -39,7 +41,10 @@
  * that it cannot come: the readiness line or the child's exit, a reader's
  * state S in /proc/PID/stat or its exit, a released reader's exit or its
  * sleep again after the hangup. No wait counts its looks or its time; the
- * case's watchdog ends a run that stalls. Prints
+ * case's watchdog ends a run that stalls. A process closes the ends of a
+ * pipe that it does not use, so that a read sees the end of a writer that
+ * failed, and SIGPIPE is ignored, so that a write to a reader that failed
+ * returns. Prints
  * "PTYPROBE START", then "PTYPROBE OK" or "PTYPROBE FAIL (why)".
  * Freestanding; direct system calls (probe.h).
  *
@@ -48,8 +53,8 @@
  * the row after it: `ptmx-open`, `tiocgptn`, `unlock`, `master-winsz`,
  * `master-nonblock`, `ctty`, `proc-stat-tty`, `slave-winsz`, `tcgets`,
  * `tcsets`, `tcgets2`, `tcsetsw2`, `cooked-read`, `slave-output`, `echo`,
- * `hangup-ignored`, `hangup-queued`, `hangup-blocked`, `fg-reused` and
- * `leader-exit`. The child's rows,
+ * `hangup-ignored`, `hangup-queued`, `hangup-blocked`, `fg-reused`,
+ * `leader-exit` and `fg-pidns`. The child's rows,
  * `ctty` to `tcsetsw2` and the cooked read, are reported from its exit status
  * and its readiness line. The first failure fails its assertion and leaves the
  * rest not run; a child that ends before it is ready with a status no row gives
@@ -66,6 +71,8 @@
 #define SIGINT   2
 #define SIGQUIT  3
 #define SIGKILL  9
+#define SIGPIPE  13
+#define SIGCHLD  17
 #define SIGTSTP  20
 #define SIGWINCH 28
 #define EAGAIN   11
@@ -103,6 +110,8 @@
 #define WS_COLS 100
 
 #define WNOHANG 1
+
+#define CLONE_NEWPID 0x20000000
 
 #define WIFEXITED(s)   (((s) & 0x7f) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xff)
@@ -162,6 +171,17 @@ static int sys_setpgid(int pid, int pgid)
 static int sys_block(unsigned long long mask)
 {
     return syscall4(SYS_RT_SIGPROCMASK, 0, (long)&mask, 0, 8);
+}
+/** Ignore the signal `sig` (SIG_IGN): 0, or a negated errno. */
+static int sys_ignore(int sig)
+{
+    /* The kernel's sigaction: handler, flags, restorer, mask. */
+    struct {
+        unsigned long handler, flags, restorer;
+        unsigned long long mask;
+    } action = {1, 0, 0, 0};
+
+    return syscall4(SYS_RT_SIGACTION, sig, (long)&action, 0, 8);
 }
 /** The caller's pending signals, as rt_sigpending gives them, or 0. */
 static unsigned long long sys_pending(void)
@@ -629,33 +649,46 @@ static void reused_child(int ready, int go)
 
 /**
  * Fork `reused_child` with the pid `want`, which is free, by setting
- * ns_last_pid below it, and wait for its ready byte on `ready`. Returns its
- * pid, or -1 when a few tries, which another fork may race, give the number
- * to none, or the child does not get ready.
+ * ns_last_pid below it, and wait for its ready byte. The child closes the
+ * pair's ends `master` and `slave` before it is ready, so that the probe's
+ * close of the master is the pair's last, and each try's pipe for the ready
+ * byte is closed at both ends in the process that does not use them, so
+ * that a child that ends before it is ready gives the probe's read the end
+ * of the pipe; that child is reaped. Returns its pid, or -1 when a few
+ * tries, which another fork may race, give the number to none, or the child
+ * does not get ready.
  */
-static int reused_child_at(int want, int *ready, int *go)
+static int reused_child_at(int want, int master, int slave, int *go)
 {
-    int tries, pid, status;
+    int tries, pid, status, ready[2];
     char byte;
 
     for (tries = 0; tries < 8; tries++) {
-        if (!set_last_pid(want - 1)) {
+        if (sys_pipe(ready) < 0) {
             return -1;
         }
-        pid = sys_fork();
+        pid = set_last_pid(want - 1) ? sys_fork() : -1;
         if (pid == 0) {
             sys_close(ready[0]);
             sys_close(go[1]);
+            sys_close(master);
+            sys_close(slave);
             reused_child(ready[1], go[0]);
         }
+        sys_close(ready[1]);
+        if (pid == want && sys_read(ready[0], &byte, 1) == 1) {
+            sys_close(ready[0]);
+            return pid;
+        }
+        sys_close(ready[0]);
         if (pid < 0) {
             return -1;
         }
-        if (pid == want) {
-            return sys_read(ready[0], &byte, 1) == 1 ? pid : -1;
-        }
         syscall3(SYS_KILL, pid, SIGKILL, 0);
         sys_waitpid(pid, &status, 0);
+        if (pid == want) {
+            return -1;
+        }
     }
     return -1;
 }
@@ -665,25 +698,29 @@ static int reused_child_at(int want, int *ready, int *go)
  * struct pid. On a new pair that is the probe's controlling terminal, the
  * foreground goes to the group of a child, which ends and is reaped; a new
  * child given the group's number leads a group of that number in the same
- * session. TIOCGPGRP still gives the number, as Linux's does, and ^C, ^\,
- * ^Z, a new window size and the master's close send their signals to the
- * ended group, so none reaches the new one, which blocks them and finds
- * none pending. Returns 1 when all of it held.
+ * session, and holds no end of the pair. TIOCGPGRP still gives the number,
+ * as Linux's does, and ^C, ^\, ^Z, a new window size and the master's
+ * close, the pair's last, send their signals to the ended group, so none
+ * reaches the new one, which blocks them and finds none pending. Each
+ * process closes the ends of the pipe that it does not use, and a child
+ * left on a failure is killed and reaped. Returns 1 when all of it held.
  */
 static int fg_reused(void)
 {
-    int master = -1, slave = -1, ready[2] = {-1, -1}, go[2] = {-1, -1};
-    int group, again = -1, pgrp = -1, status = -1, ok = 0;
+    int master = -1, slave = -1, go[2] = {-1, -1};
+    int group = -1, ended = -1, again = -1, pgrp = -1, status = -1, ok = 0;
     short ws[4] = {WS_ROWS + 1, WS_COLS + 1, 0, 0};
 
-    if (!open_pair(&master, &slave) || sys_ioctl(slave, TIOCSCTTY, 0) < 0 || sys_pipe(ready) < 0 ||
-        sys_pipe(go) < 0) {
+    if (!open_pair(&master, &slave) || sys_ioctl(slave, TIOCSCTTY, 0) < 0 || sys_pipe(go) < 0) {
         goto done;
     }
     group = sys_fork();
     if (group == 0) {
         char byte;
 
+        sys_close(go[1]);
+        sys_close(master);
+        sys_close(slave);
         sys_setpgid(0, 0);
         sys_exit(sys_read(go[0], &byte, 1) == 1 ? 0 : 1);
     }
@@ -691,8 +728,12 @@ static int fg_reused(void)
         sys_write(go[1], "e", 1) != 1 || sys_waitpid(group, &status, 0) != group) {
         goto done;
     }
-    again = reused_child_at(group, ready, go);
-    if (again != group || sys_ioctl(slave, TIOCGPGRP, &pgrp) != 0 || pgrp != group) {
+    ended = group;
+    group = -1;
+    again = reused_child_at(ended, master, slave, go);
+    sys_close(go[0]);
+    go[0] = -1;
+    if (again != ended || sys_ioctl(slave, TIOCGPGRP, &pgrp) != 0 || pgrp != ended) {
         puts("PTYPROBE FAIL (a child given the ended group's number, and TIOCGPGRP)\n");
         goto done;
     }
@@ -706,12 +747,14 @@ static int fg_reused(void)
          WEXITSTATUS(status) == 0;
     again = -1;
 done:
+    if (group > 0) {
+        syscall3(SYS_KILL, group, SIGKILL, 0);
+        sys_waitpid(group, &status, 0);
+    }
     if (again > 0) {
         syscall3(SYS_KILL, again, SIGKILL, 0);
         sys_waitpid(again, &status, 0);
     }
-    sys_close(ready[0]);
-    sys_close(ready[1]);
     sys_close(go[0]);
     sys_close(go[1]);
     if (master >= 0) {
@@ -729,7 +772,9 @@ done:
  * blocks SIGHUP, leads a group of its own and writes a byte to `up`, then
  * waits for a byte on `go` and writes '1' to `up` when SIGHUP is pending,
  * '0' when it is not. The leader puts that group in front, checks TIOCGSID
- * and exits 0, or 42 to 45 for the step that failed. It does not return.
+ * and exits 0, or 42 to 45 for the step that failed. Each closes the pipe
+ * ends it does not use, so that the leader's read of `up` ends with the
+ * member. It does not return.
  */
 static void exiting_leader(const char *path, int *up, int *go)
 {
@@ -742,6 +787,8 @@ static void exiting_leader(const char *path, int *up, int *go)
     }
     member = sys_fork();
     if (member == 0) {
+        sys_close(up[0]);
+        sys_close(go[1]);
         if (sys_block(SIGBIT(SIGHUP)) != 0 || sys_setpgid(0, 0) != 0 ||
             sys_write(up[1], "r", 1) != 1 || sys_read(go[0], &byte, 1) != 1) {
             sys_exit(1);
@@ -750,6 +797,9 @@ static void exiting_leader(const char *path, int *up, int *go)
         sys_write(up[1], &byte, 1);
         sys_exit(0);
     }
+    sys_close(up[1]);
+    sys_close(go[0]);
+    sys_close(go[1]);
     if (member < 0 || sys_setpgid(member, member) != 0 || sys_read(up[0], &byte, 1) != 1) {
         sys_exit(43);
     }
@@ -767,7 +817,9 @@ static void exiting_leader(const char *path, int *up, int *go)
  * disassociate_ctty: the leader's TIOCGSID gives its session; at its exit
  * the slave's foreground group, a member that blocks SIGHUP, finds SIGHUP
  * pending; and the master's TIOCGSID then finds no session (-ENOTTY) and
- * its TIOCGPGRP no group (0). Returns 1 when all of it held.
+ * its TIOCGPGRP no group (0). The probe closes the pipe ends it does not
+ * use, so that its read of `up` ends with the member. Returns 1 when all of
+ * it held.
  */
 static int leader_exit(void)
 {
@@ -785,6 +837,9 @@ static int leader_exit(void)
     if (leader == 0) {
         exiting_leader(path, up, go);
     }
+    sys_close(up[1]);
+    sys_close(go[0]);
+    up[1] = go[0] = -1;
     if (leader < 0 || sys_waitpid(leader, &status, 0) != leader) {
         goto done;
     }
@@ -808,6 +863,86 @@ done:
         sys_close(master);
     }
     return ok;
+}
+
+/**
+ * The first process of the PID namespace `fg_pidns` makes: a new session's
+ * leader, it makes a new pair's slave its controlling terminal, gives the
+ * foreground to the group of a child, and ends and reaps that child. The
+ * slave's and the master's TIOCGPGRP must then give the child's number in
+ * the namespace, which the terminal keeps as Linux's struct pid keeps its
+ * numbers, and a fork after ns_last_pid is set below it must be given the
+ * number again, which the terminal does not hold. Exits 0, or 60 to 66 for
+ * the step that failed. It does not return.
+ */
+static void pidns_first(void)
+{
+    int master = -1, slave = -1, go[2] = {-1, -1};
+    int group, again, pgrp = -1, status = -1;
+
+    if (sys_setsid() < 0) {
+        sys_exit(60);
+    }
+    if (!open_pair(&master, &slave) || sys_ioctl(slave, TIOCSCTTY, 0) < 0 || sys_pipe(go) < 0) {
+        sys_exit(61);
+    }
+    group = sys_fork();
+    if (group == 0) {
+        char byte;
+
+        sys_close(go[1]);
+        sys_setpgid(0, 0);
+        sys_exit(sys_read(go[0], &byte, 1) == 1 ? 0 : 1);
+    }
+    sys_close(go[0]);
+    if (group < 0 || sys_setpgid(group, group) != 0 || sys_ioctl(slave, TIOCSPGRP, &group) != 0 ||
+        sys_write(go[1], "e", 1) != 1 || sys_waitpid(group, &status, 0) != group) {
+        sys_exit(62);
+    }
+    if (sys_ioctl(slave, TIOCGPGRP, &pgrp) != 0 || pgrp != group) {
+        sys_exit(63);
+    }
+    pgrp = -1;
+    if (sys_ioctl(master, TIOCGPGRP, &pgrp) != 0 || pgrp != group) {
+        sys_exit(64);
+    }
+    if (!set_last_pid(group - 1)) {
+        sys_exit(65);
+    }
+    again = sys_fork();
+    if (again == 0) {
+        sys_exit(0);
+    }
+    if (again != group || sys_waitpid(again, &status, 0) != again) {
+        sys_exit(66);
+    }
+    sys_exit(0);
+}
+
+/**
+ * A terminal's ended foreground group seen from a child PID namespace: the
+ * probe clones a process into a new namespace, whose first process runs
+ * `pidns_first`, and requires its exit status 0. Returns 1 when it held.
+ */
+static int fg_pidns(void)
+{
+    int pid, status = -1;
+    char line[64];
+
+    pid = (int)syscall5(SYS_CLONE, CLONE_NEWPID | SIGCHLD, 0, 0, 0, 0);
+    if (pid == 0) {
+        pidns_first();
+    }
+    if (pid < 0 || sys_waitpid(pid, &status, 0) != pid) {
+        return 0;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        numbered_path(line, "PTYPROBE FAIL (the namespace's first process: status ",
+                      WIFEXITED(status) ? WEXITSTATUS(status) : 1, ")\n");
+        puts(line);
+        return 0;
+    }
+    return 1;
 }
 
 /** Print "PTYPROBE FAIL (`why`)", fail the report's next assertion with
@@ -1005,7 +1140,8 @@ static void plan(unsigned long *sp)
         "ptmx-open",      "tiocgptn",      "unlock",         "master-winsz", "master-nonblock",
         "ctty",           "proc-stat-tty", "slave-winsz",    "tcgets",       "tcsets",
         "tcgets2",        "tcsetsw2",      "cooked-read",    "slave-output", "echo",
-        "hangup-ignored", "hangup-queued", "hangup-blocked", "fg-reused",    "leader-exit"};
+        "hangup-ignored", "hangup-queued", "hangup-blocked", "fg-reused",    "leader-exit",
+        "fg-pidns"};
     unsigned i;
 
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.ptyprobe"));
@@ -1041,6 +1177,9 @@ void probe_main(unsigned long *sp)
 
     puts("PTYPROBE START\n");
     plan(sp);
+    if (sys_ignore(SIGPIPE) != 0) {
+        fail("ignore SIGPIPE");
+    }
     master = open_master(&ptn);
     numbered_path(path, "/dev/pts/", ptn, "");
 
@@ -1103,6 +1242,10 @@ void probe_main(unsigned long *sp)
     report_held();
     if (!leader_exit()) {
         fail("the session leader's exit did not disassociate the terminal");
+    }
+    report_held();
+    if (!fg_pidns()) {
+        fail("TIOCGPGRP lost an ended foreground group's number in a child PID namespace");
     }
     report_held();
     report_end();
