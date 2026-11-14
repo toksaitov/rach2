@@ -509,8 +509,13 @@ struct drm_virtgpu_context_init {
  * answer and frees it. Otherwise the answer puts it on the device's done
  * list, and the reaper (`virtio_gpu_reap`, process context) runs its
  * `complete` and frees it. `next` links it on the pending list, while the
- * queue has no room for it, and then on the done list; `live_next` on the
- * list of every command not yet freed, which an unplug walks.
+ * queue has no room for it, and then on the done list; `live_next` and
+ * `live_prev` on the list of every command not yet freed, which an unplug
+ * walks; `fence_next` and `fence_prev`, from its start until its answer, on
+ * the list of fences the device has yet to signal, which each answer walks,
+ * as Linux's virtio_gpu_fence_event_process walks its `fences`
+ * (virtgpu_fence.c:134-174 in 6.12.115). Every list is the device's, under
+ * its lock.
  */
 #define VIRTIO_GPU_RESP_OFF  2048u
 #define VIRTIO_GPU_CMD_EXTRA 64 /* entry pages beyond the command's own */
@@ -530,7 +535,8 @@ struct vgpu_dma_page {
 
 struct virtio_gpu_cmd {
     struct virtio_gpu_cmd *next;
-    struct virtio_gpu_cmd *live_next;
+    struct virtio_gpu_cmd *live_next, *live_prev;
+    struct virtio_gpu_cmd *fence_next, *fence_prev;
     struct virtio_gpu_device *vg;
     struct virtqueue *vq;
     uint8_t *page; /* the request at 0, the answer at VIRTIO_GPU_RESP_OFF */
@@ -555,6 +561,7 @@ struct virtio_gpu_cmd {
                                 counted when it is freed answered OK */
     int prepared;            /* the fence has its number and one reference */
     int queued;              /* started: its fence is live */
+    int fence_listed;        /* on the device's list of unsignalled fences */
     int done;
     int waited;
     int sleepable; /* its sender may sleep: the notify lets the big lock go */
@@ -669,8 +676,10 @@ struct virtio_gpu_device {
     /* By queue: a quiet command went in that no notify has carried yet, so
      * the next command that is not quiet notifies even when it is held. */
     int unkicked[2];
-    struct virtio_gpu_cmd *done_list;
+    struct virtio_gpu_cmd *done_list, *done_tail;
     struct virtio_gpu_cmd *live;
+    /* The started commands whose fences wait for an answer, oldest first. */
+    struct virtio_gpu_cmd *fences, *fences_tail;
     volatile int display_pending;
     int dead;          /* reset or unplugged: no more commands */
     uint32_t errors;   /* answers that were errors */

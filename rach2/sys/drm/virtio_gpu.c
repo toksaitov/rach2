@@ -130,6 +130,9 @@ struct virtio_gpu_cmd *vgpu_cmd_new(struct virtio_gpu_device *vg, struct virtque
     cmd->nout = 1;
     flags = spin_lock_irqsave(&vg->lock);
     cmd->live_next = vg->live;
+    if (vg->live) {
+        vg->live->live_prev = cmd;
+    }
     vg->live = cmd;
     spin_unlock_irqrestore(&vg->lock, flags);
     return cmd;
@@ -149,23 +152,46 @@ void vgpu_cmd_unfence(struct virtio_gpu_cmd *cmd)
     cmd->fence = NULL;
 }
 
+/** Take `cmd` off the device's list of unsignalled fences, if it is on
+ * it. Under the lock. */
+static void fence_unlist(struct virtio_gpu_device *vg, struct virtio_gpu_cmd *cmd)
+{
+    if (!cmd->fence_listed) {
+        return;
+    }
+    if (cmd->fence_prev) {
+        cmd->fence_prev->fence_next = cmd->fence_next;
+    } else {
+        vg->fences = cmd->fence_next;
+    }
+    if (cmd->fence_next) {
+        cmd->fence_next->fence_prev = cmd->fence_prev;
+    } else {
+        vg->fences_tail = cmd->fence_prev;
+    }
+    cmd->fence_next = cmd->fence_prev = NULL;
+    cmd->fence_listed = 0;
+}
+
 /** Free `cmd`, its pages and its hold on its fence, counting the bytes its
  * transfers copied once the device has answered it OK. A fence never
  * started, which has no reference yet, is freed. Process context. */
 void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
 {
     struct virtio_gpu_device *vg = cmd->vg;
-    struct virtio_gpu_cmd **p;
     uint32_t flags, i;
     uint64_t copied;
 
     flags = spin_lock_irqsave(&vg->lock);
-    for (p = &vg->live; *p; p = &(*p)->live_next) {
-        if (*p == cmd) {
-            *p = cmd->live_next;
-            break;
-        }
+    if (cmd->live_prev) {
+        cmd->live_prev->live_next = cmd->live_next;
+    } else {
+        vg->live = cmd->live_next;
     }
+    if (cmd->live_next) {
+        cmd->live_next->live_prev = cmd->live_prev;
+    }
+    fence_unlist(vg, cmd);
     copied = cmd->done && cmd->resp_type >= VIRTIO_GPU_RESP_OK_NODATA &&
                      cmd->resp_type < VIRTIO_GPU_RESP_ERR_UNSPEC
                  ? cmd->copied
@@ -199,20 +225,23 @@ void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
 /** Put `cmd` on the done list for the reaper. Under the lock. */
 static void done_add(struct virtio_gpu_device *vg, struct virtio_gpu_cmd *cmd)
 {
-    struct virtio_gpu_cmd **p = &vg->done_list;
-
-    while (*p) {
-        p = &(*p)->next;
-    }
     cmd->next = NULL;
-    *p = cmd;
+    if (vg->done_list) {
+        vg->done_tail->next = cmd;
+    } else {
+        vg->done_list = cmd;
+    }
+    vg->done_tail = cmd;
 }
 
-/** Publish the commands held for queue `q` while it has room, in order.
- * Returns 1 when one went in, so that the caller notifies the device once
- * it has let go of the lock (`vgpu_notify`), as Linux's
- * virtqueue_kick_prepare; 0 otherwise. Under the lock; a handler may call
- * it. */
+/** Publish the commands held for queue `q` while it has room, in order,
+ * each fenced one going on the list of fences its answer may signal, as
+ * Linux's virtio_gpu_queue_ctrl_sgs emits a fence only once the queue has
+ * room for its command (virtgpu_vq.c:338-355 in 6.12.115), so that the list
+ * holds no more than the queue. Returns 1 when one went in, so that the
+ * caller notifies the device once it has let go of the lock
+ * (`vgpu_notify`), as Linux's virtqueue_kick_prepare; 0 otherwise. Under
+ * the lock; a handler may call it. */
 static int pending_push(struct virtio_gpu_device *vg, int q)
 {
     struct virtqueue *vq = q == VIRTIO_GPU_QUEUE_CONTROL ? vg->ctrlq : vg->cursorq;
@@ -225,6 +254,16 @@ static int pending_push(struct virtio_gpu_device *vg, int q)
         }
         vg->pending[q] = cmd->next;
         cmd->next = NULL;
+        if (cmd->fence) {
+            cmd->fence_prev = vg->fences_tail;
+            if (vg->fences_tail) {
+                vg->fences_tail->fence_next = cmd;
+            } else {
+                vg->fences = cmd;
+            }
+            vg->fences_tail = cmd;
+            cmd->fence_listed = 1;
+        }
         added = 1;
     }
     if (!vg->pending[q]) {
@@ -340,15 +379,18 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
 
 /**
  * A queue's `done`: the device answered `cmd` with `len` bytes. Under the
- * device's lock, which keeps the list of live commands, the fence signals
- * first, failing with -EIO on an error answer, and with it every fence of
- * its fence context that it comes after by dma_fence_is_later, the
- * producer's 32-bit ordering, whose order the device keeps, as Linux's
- * virtio_gpu_fence_event_process does under its fence lock
- * (virtgpu_fence.c:134-174), while the command is still neither its
- * waiter's to free nor on the done list; then it is marked done, and the
- * commands held for the queue go in. Handler context, without the big lock
- * on a device with MSI-X (`irq_unlocked`).
+ * device's lock, which keeps the list of unsignalled fences, the fence
+ * signals first, failing with -EIO on an error answer, and with it every
+ * fence of its fence context on that list that it comes after by
+ * dma_fence_is_later, the producer's 32-bit ordering, whose order the device
+ * keeps, each taken off the list, as Linux's virtio_gpu_fence_event_process
+ * does under its fence lock (virtgpu_fence.c:134-174), while the command is
+ * still neither its waiter's to free nor on the done list; then it is
+ * marked done, and the commands held for the queue go in. The walk covers
+ * the fences in flight alone: a walk of every command not yet freed, for
+ * each answer, held a processor in this handler for more than 3 s under
+ * four dEQP-VK processes on Venus. Handler context, without the big lock on
+ * a device with MSI-X (`irq_unlocked`).
  */
 static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
 {
@@ -361,7 +403,7 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
     uint32_t type = len >= sizeof(*resp) ? resp->type : 0;
     int ok = type >= VIRTIO_GPU_RESP_OK_NODATA && type < VIRTIO_GPU_RESP_ERR_UNSPEC;
     uint32_t flags;
-    struct virtio_gpu_cmd *prior;
+    struct virtio_gpu_cmd *prior, *after;
     int kick;
     int valid_fence =
         !cmd->fence || (len >= sizeof(*resp) && (resp->flags & VIRTIO_GPU_FLAG_FENCE) &&
@@ -378,12 +420,15 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
             dma_fence_set_error(cmd->fence, -EIO);
         }
         if (valid_fence) {
-            for (prior = vg->live; prior; prior = prior->live_next) {
-                if (prior->queued && prior->fence && dma_fence_is_later(cmd->fence, prior->fence)) {
+            for (prior = vg->fences; prior; prior = after) {
+                after = prior->fence_next;
+                if (dma_fence_is_later(cmd->fence, prior->fence)) {
                     dma_fence_signal(prior->fence);
+                    fence_unlist(vg, prior);
                 }
             }
         }
+        fence_unlist(vg, cmd);
         dma_fence_signal(cmd->fence);
     }
     cmd->resp_type = type;
@@ -424,7 +469,7 @@ void vgpu_reap(struct virtio_gpu_device *vg)
     }
     flags = spin_lock_irqsave(&vg->lock);
     list = vg->done_list;
-    vg->done_list = NULL;
+    vg->done_list = vg->done_tail = NULL;
     spin_unlock_irqrestore(&vg->lock, flags);
     while ((cmd = list) != NULL) {
         list = cmd->next;
@@ -2174,6 +2219,9 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     flags = spin_lock_irqsave(&vg->lock);
     vg->pending[0] = vg->pending[1] = NULL;
     vg->pending_tail[0] = vg->pending_tail[1] = NULL;
+    while (vg->fences) {
+        fence_unlist(vg, vg->fences);
+    }
     for (cmd = vg->live; cmd; cmd = cmd->live_next) {
         if (cmd->queued && !cmd->done) {
             cmd->done = 1;
