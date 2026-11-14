@@ -72,7 +72,16 @@ struct pty {
      * session's idle time from the first. */
     uint32_t atime;
     uint32_t mtime;
+    /* For a pair whose master the kernel holds (`pty_kernel_make`): the
+     * slave's node in /dev, as "hvc1", and its device number, major << 8 |
+     * minor. NULL and 0 for a pair of /dev/ptmx. */
+    const char *knode;
+    uint32_t kdev;
 };
+
+/* The first index of the pairs whose master the kernel holds, past any
+ * /dev/pts/N: they are not listed there and take none of its numbers. */
+#define PTY_KERNEL_INDEX 0x100000
 
 /** Empty the list of live ptys; called once at boot. Each pair is allocated
  * from the heap when its master opens. */
@@ -101,6 +110,56 @@ int pty_open_master(int flags);
  */
 int pty_open_slave(int index, int flags);
 
+/*
+ * A terminal whose master end the kernel holds, as a console driver holds
+ * the far end of Linux's hvc terminals: the slave is a pair's slave in
+ * every way but its name, a node of /dev the holder registers (devfs.h)
+ * with `pty_slave_ops` and an open that calls `pty_kernel_slave_open`, and
+ * the holder moves the bytes itself. Each wake of the master's queue,
+ * `m_read_wq`, with WQ_DATA says the slave has output or echo to take and
+ * with WQ_ROOM that its discipline has room for input again. Every call
+ * runs under the big lock in process context.
+ */
+
+struct file_ops;
+
+/** Make a pair whose master the kernel holds, unlocked, its slave named
+ * `node` in /dev, a string the caller keeps while the pair lives, with the
+ * device number `dev`, major << 8 | minor, which /proc reports for a
+ * process the slave controls. NULL when the heap has no room. */
+struct pty *pty_kernel_make(uint32_t dev, const char *node);
+
+/** The holder lets go of `p` as a master's close does: the slave's
+ * foreground group takes SIGHUP, the slave is hung up, and the pair is
+ * freed once no slave description is open. The holder does not use `p`
+ * after the call. */
+void pty_kernel_close(struct pty *p);
+
+/**
+ * Feed the `n` bytes at `bytes` to the slave's discipline as a master's
+ * write does, without waiting: the bytes it has room for, with a signal
+ * character and a VSTOP or VSTART among those that wait acting at once.
+ * Returns the bytes taken; the rest are fed again once the master's queue
+ * is woken for room.
+ */
+uint32_t pty_kernel_feed(struct pty *p, const unsigned char *bytes, uint32_t n);
+
+/** Take up to `n` bytes of the slave's output and echo into `out`, and wake
+ * a slave writer that waits for room. Returns the bytes taken. */
+uint32_t pty_kernel_take(struct pty *p, unsigned char *out, uint32_t n);
+
+/** The open of the slave's node: bind the slave of `p` to the descriptor
+ * `e`, being opened with the flags `flags`, as `pty_open_slave` binds one.
+ * 0, -ESRCH with no current process, or -ENXIO once the holder let go. */
+int32_t pty_kernel_slave_open(struct pty *p, struct fd_entry *e, int flags);
+
+/** The slave's file operations, for the node of a kernel-held pair. */
+const struct file_ops *pty_slave_ops(void);
+
+/** The node in /dev of the kernel-held slave that is session `sid`'s
+ * controlling terminal, or NULL: /dev/tty opens it by that name. */
+const char *pty_session_node(int sid);
+
 struct kernel_iovec;
 
 /** Write an imported vector to the held master descriptor `e`, with the
@@ -128,8 +187,9 @@ int pty_session_slave(int sid);
  */
 void tty_make_sole_ctty(struct tty *keep, int sid, int pgid, uint64_t serial);
 
-/** The slave tty behind a FD_TYPE_PTS descriptor (for the shared tty ioctls),
- * or NULL if e is not a pty slave. */
+/** The slave tty behind a FD_TYPE_PTS descriptor, or behind a device's
+ * whose node is a kernel-held slave (for the shared tty ioctls), or NULL if
+ * e is not a pty slave. */
 struct tty *pty_slave_tty(struct fd_entry *e);
 
 /** The slave index N (in /dev/pts/N) behind a FD_TYPE_PTS descriptor, or -1 if

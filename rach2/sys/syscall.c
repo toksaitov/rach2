@@ -2359,14 +2359,14 @@ static int32_t fd_ioctl_nbio(fd_entry_t *entry, uintptr_t arg)
 }
 
 /** The tty behind a descriptor for the shared terminal ioctls: the console for
- * a FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd, else
- * NULL. */
+ * a FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd and
+ * for the device descriptor of a kernel-held slave (pty.h), else NULL. */
 struct tty *fd_tty(fd_entry_t *e)
 {
     if (e->type == FD_TYPE_CONSOLE) {
         return &console_tty;
     }
-    if (e->type == FD_TYPE_PTS) {
+    if (e->type == FD_TYPE_PTS || e->type == FD_TYPE_DEVICE) {
         return pty_slave_tty(e);
     }
     return NULL;

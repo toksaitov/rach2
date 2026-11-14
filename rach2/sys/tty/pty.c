@@ -224,12 +224,13 @@ static void pty_flow(struct tty *t, int what)
 }
 
 /**
- * Allocate a pair at the lowest free index, or return NULL when the heap has
- * no room. One queue serves the master's readers, writers and pollers; the
- * slave's `space_wq` points at it, so a flush, a termios change, or a signal
- * char or an erase the master wrote wakes a master writer waiting for room.
+ * Allocate a pair at the lowest free index from `first` on, 0 for a pair of
+ * /dev/ptmx, or return NULL when the heap has no room. One queue serves the
+ * master's readers, writers and pollers; the slave's `space_wq` points at
+ * it, so a flush, a termios change, or a signal char or an erase the master
+ * wrote wakes a master writer waiting for room.
  */
-static struct pty *pty_alloc(void)
+static struct pty *pty_alloc(int first)
 {
     struct pty *p = kzalloc(sizeof(*p));
     int i;
@@ -237,7 +238,7 @@ static struct pty *pty_alloc(void)
     if (!p) {
         return NULL;
     }
-    for (i = 0; pty_by_index(i); i++) {
+    for (i = first; pty_by_index(i); i++) {
     }
     p->index = i;
     p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
@@ -393,7 +394,7 @@ static int signal_char_at(const struct n_tty *ld, const uint8_t *bytes, int n)
 
 /* A master write's place: the piece of it copied in and where it stands. */
 struct ptm_feed {
-    fd_entry_t *e;
+    fd_entry_t *e; /* NULL for the kernel's feed */
     struct pty *p;
     const uint8_t *kbuf; /* the piece copied from the user */
     uint32_t chunk;      /* its bytes */
@@ -446,7 +447,8 @@ static uint32_t ptm_look_end(const struct ptm_feed *f, uint32_t i)
  * (`ptm_look_end`). It takes the bytes it acted on before any wait
  * (`ptm_take_acted`), while the space measured is still its own, and returns
  * that accepted prefix. Returns 0 to go on feeding, or what `ptm_write_in`
- * returns: the bytes fed with `f->prior` among them, -EAGAIN or -EINTR.
+ * returns: the bytes fed with `f->prior` among them, -EAGAIN or -EINTR. A
+ * feed with no descriptor, the kernel's (`pty_kernel_feed`), never waits.
  */
 static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
 {
@@ -473,7 +475,7 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
             }
         }
         ptm_take_acted(f, i);
-        if (f->prior + f->done + *i > 0 || fd_is_nonblock(f->e)) {
+        if (f->prior + f->done + *i > 0 || !f->e || fd_is_nonblock(f->e)) {
             wake_master(p, &f->pushed);
             return f->prior + f->done + *i > 0 ? (int32_t)(f->prior + f->done + *i) : -EAGAIN;
         }
@@ -830,17 +832,12 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 /**
- * Mark the master closed, send SIGHUP to the slave's foreground group and
- * hang up the slave, which wakes its readers; free the pair when no slave
- * description is open.
+ * Mark the master of `p` closed, send SIGHUP to the slave's foreground group
+ * and hang up the slave, which wakes its readers; free the pair when no
+ * slave description is open.
  */
-static void ptm_close(fd_entry_t *e)
+static void pty_master_gone(struct pty *p)
 {
-    struct pty *p = (struct pty *)e->priv;
-
-    if (!p) {
-        return;
-    }
     p->master_open = 0;
     if (p->slave.fg_pgid != 0) {
         tty_signal_group(p->slave.fg_pgid, p->slave.fg_serial, SIGHUP);
@@ -849,6 +846,17 @@ static void ptm_close(fd_entry_t *e)
     if (p->slave_opens == 0) {
         pty_free(p);
     }
+}
+
+/** The master's close (`pty_master_gone`). */
+static void ptm_close(fd_entry_t *e)
+{
+    struct pty *p = (struct pty *)e->priv;
+
+    if (!p) {
+        return;
+    }
+    pty_master_gone(p);
 }
 
 static const struct file_ops ptm_ops = {ptm_read,  ptm_write, ptm_poll, ptm_ioctl,
@@ -1148,7 +1156,7 @@ int pty_open_master(int flags)
     if (!current_proc) {
         return -ESRCH;
     }
-    p = pty_alloc();
+    p = pty_alloc(0);
     if (!p) {
         return -ENFILE;
     }
@@ -1181,6 +1189,28 @@ static int session_has_ctty(int sid)
     return console_tty.sid == sid || pty_session_slave(sid) >= 0;
 }
 
+/**
+ * Give the descriptor `e`, which is being opened with the open flags
+ * `flags`, the slave of `p`: the pair counts one more slave description,
+ * which remembers the slave's count of hangups, and a session leader
+ * without a controlling terminal that opens a slave no session has, without
+ * O_NOCTTY, takes it as its controlling terminal.
+ */
+static void pts_bind(struct pty *p, fd_entry_t *e, int flags)
+{
+    e->priv = p;
+    if (e->ofd) {
+        e->ofd->tty_hangups = p->slave.vhangups;
+    }
+    p->slave_opens++;
+    p->hung_up = 0;
+    if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 && current_proc->sid == current_proc->tgid &&
+        !session_has_ctty((int)current_proc->sid)) {
+        tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid,
+                           current_proc->pgrp_serial);
+    }
+}
+
 int pty_open_slave(int index, int flags)
 {
     struct pty *p;
@@ -1206,10 +1236,6 @@ int pty_open_slave(int index, int flags)
     e->node = NULL;
     e->sock = NULL;
     e->ops = &pts_ops;
-    e->priv = p;
-    if (e->ofd) {
-        e->ofd->tty_hangups = p->slave.vhangups;
-    }
     if ((flags & 3) == 1) {
         e->flags = FD_FLAG_WRITE;
     } else if ((flags & 3) == 2) {
@@ -1223,15 +1249,105 @@ int pty_open_slave(int index, int flags)
     if (e->ofd) {
         e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     }
-    p->slave_opens++;
-    p->hung_up = 0;
-    if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 && current_proc->sid == current_proc->tgid &&
-        !session_has_ctty((int)current_proc->sid)) {
-        tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid,
-                           current_proc->pgrp_serial);
-    }
+    pts_bind(p, e, flags);
     fd_install(current_proc->fds, fd);
     return fd;
+}
+
+struct pty *pty_kernel_make(uint32_t dev, const char *node)
+{
+    struct pty *p = pty_alloc(PTY_KERNEL_INDEX);
+
+    if (!p) {
+        return NULL;
+    }
+    p->locked = 0;
+    p->uid = 0;
+    p->kdev = dev;
+    p->knode = node;
+    p->master_open = 1;
+    return p;
+}
+
+void pty_kernel_close(struct pty *p)
+{
+    pty_master_gone(p);
+}
+
+uint32_t pty_kernel_feed(struct pty *p, const unsigned char *bytes, uint32_t n)
+{
+    struct ptm_feed f;
+    uint32_t i;
+
+    f.e = NULL;
+    f.p = p;
+    f.kbuf = bytes;
+    f.chunk = n;
+    f.done = f.prior = f.ahead = f.acted = 0;
+    f.pushed = p->m_tail;
+    for (i = 0; i < n; i++) {
+        if (ptm_wait_feed(&f, &i) != 0) {
+            return i;
+        }
+        if (i >= n) {
+            break;
+        }
+        if (i < f.ahead) {
+            tty_input_looked(&p->slave, bytes[i]);
+        } else {
+            tty_input_char(&p->slave, bytes[i]);
+        }
+    }
+    wake_master(p, &f.pushed);
+    return n;
+}
+
+uint32_t pty_kernel_take(struct pty *p, unsigned char *out, uint32_t n)
+{
+    uint32_t flags = kirq_save();
+    uint32_t i, have = pty_m_avail(p);
+
+    if (n > have) {
+        n = have;
+    }
+    for (i = 0; i < n; i++) {
+        out[i] = p->m_buf[p->m_head & (PTY_BUF_SIZE - 1)];
+        p->m_head++;
+    }
+    kirq_restore(flags);
+    if (n > 0) {
+        wq_wake(&p->slave.input_wq, WQ_ROOM);
+    }
+    return n;
+}
+
+int32_t pty_kernel_slave_open(struct pty *p, struct fd_entry *e, int flags)
+{
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (!p->master_open) {
+        return -ENXIO;
+    }
+    pts_bind(p, e, flags);
+    return 0;
+}
+
+const struct file_ops *pty_slave_ops(void)
+{
+    return &pts_ops;
+}
+
+const char *pty_session_node(int sid)
+{
+    struct pty *p;
+
+    for (p = sid != 0 ? ptys : NULL; p; p = p->next) {
+        if (p->slave.sid == sid && p->knode) {
+            return p->knode;
+        }
+    }
+    return NULL;
 }
 
 int tty_controlling(const process_t *proc, uint32_t *dev, int *fg_pgid)
@@ -1247,7 +1363,7 @@ int tty_controlling(const process_t *proc, uint32_t *dev, int *fg_pgid)
         if (tty_is_ctty(&p->slave, proc)) {
             uint32_t n = (uint32_t)p->index;
 
-            *dev = (136u << 8) | (n & 0xFFu) | ((n & ~0xFFu) << 12);
+            *dev = p->kdev ? p->kdev : (136u << 8) | (n & 0xFFu) | ((n & ~0xFFu) << 12);
             *fg_pgid = (int)tty_fg_seen(&p->slave);
             return 1;
         }
@@ -1334,7 +1450,8 @@ void tty_make_sole_ctty(struct tty *keep, int sid, int pgid, uint64_t serial)
 
 struct tty *pty_slave_tty(struct fd_entry *e)
 {
-    if (!e || e->type != FD_TYPE_PTS || !e->priv) {
+    if (!e || (e->type != FD_TYPE_PTS && e->type != FD_TYPE_DEVICE) || e->ops != &pts_ops ||
+        !e->priv) {
         return NULL;
     }
     return &((struct pty *)e->priv)->slave;
@@ -1344,7 +1461,7 @@ int pty_is_allocated(int index)
 {
     struct pty *p = index < 0 ? NULL : pty_by_index(index);
 
-    return p != NULL && p->master_open;
+    return p != NULL && p->master_open && !p->knode;
 }
 
 int pty_index_limit(void)
@@ -1353,7 +1470,7 @@ int pty_index_limit(void)
     int limit = 0;
 
     for (p = ptys; p; p = p->next) {
-        if (p->index + 1 > limit) {
+        if (!p->knode && p->index + 1 > limit) {
             limit = p->index + 1;
         }
     }
