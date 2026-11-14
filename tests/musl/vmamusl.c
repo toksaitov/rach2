@@ -28,9 +28,11 @@
  * Linux's vma_merge answers by merging neighbours of equal protection: the
  * pages mapped one at a time over the guard's reservation, a protection
  * changed and changed back, a page unmapped and mapped again, and the
- * range shrunk and grown back in place with mremap; and it grows the heap
- * with brk three times. Linux 6.18 lists one region for the pages at each
- * step but the second and fourth, and one [heap].
+ * range shrunk and grown back in place with mremap; then two pages of a
+ * memfd mapped by two calls, which are one region where the file's offsets
+ * continue through one open file; and it grows the heap with brk three
+ * times. Linux 6.18 lists one region for the pages at each step but the
+ * second and fourth, and one [heap].
  *
  * Prints `VMAMUSL OK` and exits 0 on success, and prints
  * `VMAMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -110,6 +112,68 @@ static int count_regions(unsigned long lo, unsigned long hi, const char *name)
 }
 
 /**
+ * Map two pages of one memfd at neighbouring addresses between guard pages
+ * with two mmap calls and count the regions there as Linux does: the pages
+ * are one region where the file's offsets continue, and two where they do
+ * not or where the second page maps another open of the file, Linux's
+ * other struct file. Returns 0, or 1 with what differed in `detail`.
+ */
+static int check_file_merges(char *detail, size_t size)
+{
+    static const char *const cases[] = {"offsets that continue", "offsets that do not",
+                                        "a second open of the file"};
+    static const int linux_regions[] = {3, 4, 4};
+    long pg = sysconf(_SC_PAGESIZE);
+    size_t span = 6 * (size_t)pg;
+    char path[64];
+    char *base, *p, *q;
+    int fd, other, got, i;
+
+    fd = memfd_create("vmamusl", 0);
+    if (fd < 0 || ftruncate(fd, 4 * pg) != 0) {
+        snprintf(detail, size, "the memfd could not be made");
+        return 1;
+    }
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    other = open(path, O_RDWR);
+    if (other < 0) {
+        close(fd);
+        snprintf(detail, size, "the memfd could not be opened again");
+        return 1;
+    }
+    for (i = 0; i < 3; i++) {
+        base = mmap(0, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        p = q = MAP_FAILED;
+        if (base != MAP_FAILED) {
+            p = mmap(base + pg, (size_t)pg, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
+            q = mmap(base + 2 * pg, (size_t)pg, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED,
+                     i == 2 ? other : fd, i == 1 ? 2 * pg : pg);
+        }
+        got = p == MAP_FAILED || q == MAP_FAILED
+                  ? -2
+                  : count_regions((unsigned long)base, (unsigned long)base + span, NULL);
+        if (base != MAP_FAILED) {
+            munmap(base, span);
+        }
+        if (got != linux_regions[i]) {
+            close(fd);
+            close(other);
+            if (got == -2) {
+                snprintf(detail, size, "a memfd page could not be mapped for %s", cases[i]);
+            } else {
+                snprintf(detail, size, "%d regions for memfd pages of %s, where Linux has %d", got,
+                         cases[i], linux_regions[i]);
+            }
+            return 1;
+        }
+    }
+    close(fd);
+    close(other);
+
+    return 0;
+}
+
+/**
  * Run the third half's calls and check the regions after each against
  * Linux's. Returns 0, or 1 with what differed in `detail`.
  */
@@ -186,6 +250,9 @@ static int check_merges(char *detail, size_t size)
         }
     }
     munmap(base, span);
+    if (check_file_merges(detail, size) != 0) {
+        return 1;
+    }
 
     brk0 = syscall(SYS_brk, 0);
     for (i = 1; i <= 3; i++) {
