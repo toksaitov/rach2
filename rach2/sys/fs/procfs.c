@@ -651,8 +651,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
         proc_cpu_time(p, &user, &sys);
         proc_faults(p, &minor, &major);
     } else {
-        user = p->utime;
-        sys = p->stime;
+        thread_cpu_time(p, &user, &sys);
         minor = p->min_flt;
         major = p->maj_flt;
     }

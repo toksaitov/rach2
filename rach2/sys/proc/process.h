@@ -489,11 +489,16 @@ struct process {
      * kernel, and a tick of an idle wait to neither, under `timer_lock` for a
      * thread of a process (`ptimer_cpu_tick`). A fork starts both at
      * zero; an exec keeps them. The reaped children's time is the thread
-     * group's (`tgroup.h`). They are 64 bits wide, so they do not wrap; on
-     * the i686 a reader on another processor than the one counting could
-     * see the two halves of one count apart, once in 2^32 of its ticks. */
+     * group's (`tgroup.h`). They are 64 bits wide, so they do not wrap, and
+     * the i686 writes one in two halves, so a reader of another thread's
+     * takes `timer_lock` (`thread_cpu_time`, `tgroup_cpu_time`). */
     uint64_t utime;
     uint64_t stime;
+    /* This record's number, from a count of all records made since boot,
+     * which no other record shares, as another thread may share `pid` once
+     * the ids wrap: a POSIX timer of a thread's CPU clock keeps it to know
+     * its thread, as Linux's keeps the struct pid (`clock_cpu_target`). */
+    uint64_t serial;
     /* The page faults this thread took, getrusage's ru_minflt and ru_majflt:
      * each page a fault, or the kernel's own touch of user memory, backed or
      * copied for it, and of those the pages of a file mapping the file cache
@@ -1108,8 +1113,19 @@ isr_params_t *proc_user_frame(const process_t *t);
 void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys);
 
 /** The CPU time in ticks of the process `tg`, as `proc_cpu_time` counts it,
- * which is this for the process of its thread. */
+ * which is this for the process of its thread, read under `timer_lock`
+ * (`ptimer_times_lock`), which the tick adds to the times under, so that
+ * each count is whole on the i686 and a thread's time folded into the
+ * group's (`proc_thread_fold`) counts once. Interrupts may be on or off;
+ * never under `timer_lock` or a lock taken after it. */
 void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys);
+
+/** `tgroup_cpu_time` for a caller that holds `timer_lock`. */
+void tgroup_cpu_time_locked(const struct tgroup *tg, uint64_t *user, uint64_t *sys);
+
+/** The CPU time in ticks of the thread `t` of a process alone, read as
+ * `tgroup_cpu_time` reads it. */
+void thread_cpu_time(const process_t *t, uint64_t *user, uint64_t *sys);
 
 /** The minor and major page faults of the whole process `p` is a thread of,
  * every thread's, those that have ended included. */
@@ -1121,8 +1137,11 @@ void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major)
 void proc_switches(const process_t *p, unsigned long *voluntary, unsigned long *involuntary);
 
 /** Add the CPU time, page faults and context switches of `t`, a thread that
- * has ended and whose record goes, to its group's totals. */
-void proc_thread_fold(const process_t *t);
+ * has ended and whose record goes, to its group's totals. The CPU time
+ * moves, leaving `t`'s 0, under `timer_lock`, so that a reader of the
+ * process's time (`tgroup_cpu_time`) while `t` is still listed counts it
+ * once. */
+void proc_thread_fold(process_t *t);
 
 /* The number of records of ended threads that are neither leaders nor
  * traced, which no wait reaps; the next return to user mode frees them

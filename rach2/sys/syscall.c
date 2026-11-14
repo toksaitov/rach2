@@ -602,19 +602,14 @@ static int32_t clock_resolve(int32_t clk, struct kclock *out)
 }
 
 /** A CPU clock's reading in ticks: the thread's own, or every thread's of
- * the process. The thread's is read with interrupts masked, since the tick
- * adds to it. */
+ * the process, each read under the lock the tick adds to it under. */
 static uint64_t clock_cpu_ticks(const struct kclock *c)
 {
     uint64_t user;
     uint64_t sys;
 
     if (c->thread) {
-        uint32_t flags = kirq_save();
-
-        user = c->proc->utime;
-        sys = c->proc->stime;
-        kirq_restore(flags);
+        thread_cpu_time(c->proc, &user, &sys);
     } else {
         proc_cpu_time(c->proc, &user, &sys);
     }
@@ -697,7 +692,8 @@ static int32_t clock_res_ns(const struct kclock *c)
     return (int32_t)(vclock_running() ? vclock_resolution_ns() : timer_resolution_ns());
 }
 
-int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *id, int *thread, int *user_only)
+int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *id, uint64_t *serial,
+                         int *thread, int *user_only)
 {
     struct kclock c;
 
@@ -707,25 +703,26 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *id, int *thr
     *tg = c.proc->tg;
     (*tg)->refs++;
     *id = c.thread ? c.proc->pid : c.proc->tgid;
+    *serial = c.proc->serial;
     *thread = c.thread;
     *user_only = c.user_only;
     return 0;
 }
 
-int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t id, int thread, int user_only,
-                         uint64_t *ns)
+int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t id, uint64_t serial, int thread,
+                         int user_only, uint64_t *ns)
 {
     const process_t *p = get_process(id);
     uint64_t user, sys;
 
-    if (!p || p->tg != tg || (!thread && p != tg->leader)) {
+    if (!p || p->tg != tg || (thread ? p->serial != serial : p != tg->leader)) {
         return -ESRCH;
     }
     if (thread) {
         user = p->utime;
         sys = p->stime;
     } else {
-        tgroup_cpu_time(tg, &user, &sys);
+        tgroup_cpu_time_locked(tg, &user, &sys);
     }
     *ns = (user_only ? user : user + sys) * (uint64_t)TICK_NS;
     return 0;

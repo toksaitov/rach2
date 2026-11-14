@@ -199,32 +199,46 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec);
  * The clocks' part as well: the target of the clock of processor time `clk`
  * for timer_create, the process whose time it counts, held, which
  * `tgroup_put` lets go of, the id that names it, the thread's for a clock
- * of a thread, which `thread` then says, and the process's otherwise, and
- * whether it counts user time alone. 0, or -EINVAL for a clock that is not
- * of processor time or names no process or no thread of the caller's.
+ * of a thread, which `thread` then says, and the process's otherwise, the
+ * thread's `serial`, and whether it counts user time alone. 0, or -EINVAL
+ * for a clock that is not of processor time or names no process or no
+ * thread of the caller's.
  */
-int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *id, int *thread,
-                         int *user_only);
+int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *id, uint64_t *serial,
+                         int *thread, int *user_only);
 
 /**
  * The clocks' part as well: the processor time, in nanoseconds, of the
- * target `clock_cpu_target` gave, the thread `id` of the process `tg` for
- * `thread` and the process `tg`, whose id is `id`, otherwise, user time
+ * target `clock_cpu_target` gave, the thread `id` of the process `tg`
+ * whose `serial` is `serial` for `thread`, and the process `tg`, whose id
+ * is `id`, otherwise, user time
  * alone for `user_only`, as Linux's posix_cpu_timer_set samples the task a
  * timer was made for and not the caller (kernel/time/posix-cpu-timers.c:
  * 719-751). The target is looked up by its id at every call and must still
  * be of `tg`, and a process's must still be its leader, so that a thread
  * that has ended, the leader among them, is sampled until it is reaped and
  * a process until its leader is, as Linux finds the task by its pid until
- * release_task detaches it; ids are not given again before two thousand
- * million others, and `tg` is held, so no other thread or process passes
- * for it. 0, or -ESRCH once the target is reaped, as Linux's
+ * release_task detaches it; `tg` is held, and a thread given the id again
+ * has another serial, so no other thread or process passes for it, as
+ * Linux's timer keeps the struct pid, which a new thread of the same number
+ * does not share. 0, or -ESRCH once the target is reaped, as Linux's
  * cpu_timer_task_rcu then finds no task. The caller holds the big lock and
  * `timer_lock`, under which the tick adds to the times
  * (`ptimer_cpu_tick`).
  */
-int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t id, int thread, int user_only,
-                         uint64_t *ns);
+int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t id, uint64_t serial, int thread,
+                         int user_only, uint64_t *ns);
+
+/** Take `timer_lock`, with interrupts off, for a reader of the CPU times of
+ * a thread of a process, which the tick adds to under it, so that the
+ * reader sees each 64-bit count whole on the i686 (`thread_cpu_time`,
+ * `tgroup_cpu_time`); returns the interrupt state for
+ * `ptimer_times_unlock`. Nothing may be taken under it but what
+ * `timer_lock`'s holders take. */
+uint32_t ptimer_times_lock(void);
+
+/** Let go of what `ptimer_times_lock` took. */
+void ptimer_times_unlock(uint32_t irq);
 
 /** Add a tick to the processor time of the thread `p`, to its user time
  * when `user` and its system time otherwise, and count it against the POSIX

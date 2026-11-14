@@ -522,6 +522,13 @@ void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys)
     *sys = process.stime + thread.stime;
 }
 
+/** One thread's time. */
+void thread_cpu_time(const process_t *t, uint64_t *user, uint64_t *sys)
+{
+    *user = t->utime;
+    *sys = t->stime;
+}
+
 /** The whole process's page faults, its two threads' together. */
 void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major)
 {

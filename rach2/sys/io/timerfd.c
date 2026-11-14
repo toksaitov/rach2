@@ -137,6 +137,9 @@ struct ktimer {
                             * `cpu_thread` clear of the process, by which
                             * every setting and reading finds it
                             * (`clock_cpu_sample`) */
+    uint64_t cpu_serial;   /* the `serial` of the thread it counts, which
+                            * another thread given `cpu_tid` again does not
+                            * have, as Linux's timer keeps the struct pid */
     int cpu_thread;
     int cpu_user;
 
@@ -709,6 +712,16 @@ static void cpu_timer_charge(struct ktimer *t)
     ptimer_fire_later(t, n);
 }
 
+uint32_t ptimer_times_lock(void)
+{
+    return spin_lock_irqsave(&timer_lock);
+}
+
+void ptimer_times_unlock(uint32_t irq)
+{
+    spin_unlock_irqrestore(&timer_lock, irq);
+}
+
 void ptimer_cpu_tick(process_t *p, int user)
 {
     struct ktimer *t;
@@ -723,7 +736,7 @@ void ptimer_cpu_tick(process_t *p, int user)
     while (t) {
         struct ktimer *next = t->next;
 
-        if (t->cpu_tg == p->tg && (!t->cpu_thread || t->cpu_tid == p->pid) &&
+        if (t->cpu_tg == p->tg && (!t->cpu_thread || t->cpu_serial == p->serial) &&
             (user || !t->cpu_user)) {
             cpu_timer_charge(t);
         }
@@ -1147,7 +1160,7 @@ static void current_setting(struct ktimer *t, struct setting *s)
     if (t->armed && t->cpu_tg) {
         uint64_t ns;
 
-        if (clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_thread, 0, &ns) != 0) {
+        if (clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_serial, t->cpu_thread, 0, &ns) != 0) {
             timer_unlock(irq);
             return;
         }
@@ -1233,7 +1246,8 @@ static int32_t cpu_time_left(const struct ktimer *t, int flags, const struct set
                              uint64_t *left, uint64_t *over)
 {
     uint64_t now, v = ns_of(s->vsec, s->vnsec);
-    int32_t rc = clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_thread, t->cpu_user, &now);
+    int32_t rc =
+        clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_serial, t->cpu_thread, t->cpu_user, &now);
 
     *left = v;
     *over = 0;
@@ -1956,7 +1970,8 @@ static int32_t ptimer_clock(struct ktimer *t, int clock)
     if (clock == CLOCK_REALTIME || clock == CLOCK_MONOTONIC || clock == CLOCK_BOOTTIME) {
         return 0;
     }
-    return clock_cpu_target(clock, &t->cpu_tg, &t->cpu_tid, &t->cpu_thread, &t->cpu_user);
+    return clock_cpu_target(clock, &t->cpu_tg, &t->cpu_tid, &t->cpu_serial, &t->cpu_thread,
+                            &t->cpu_user);
 }
 
 /**

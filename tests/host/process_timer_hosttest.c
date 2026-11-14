@@ -108,6 +108,18 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
+/** No tick runs here, so the CPU times are read without `timer_lock`. */
+uint32_t ptimer_times_lock(void)
+{
+    return 0;
+}
+
+/** Let go of nothing: `ptimer_times_lock` took nothing. */
+void ptimer_times_unlock(uint32_t irq)
+{
+    (void)irq;
+}
+
 static int failures;
 static process_t sleeper, runner, follower;
 static process_t crowd[20];

@@ -557,6 +557,18 @@ void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
     proc_cpu_time(tg == other.tg ? &other : &proc, user, sys);
 }
 
+/** `tgroup_cpu_time`, which takes no lock here. */
+void tgroup_cpu_time_locked(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
+{
+    tgroup_cpu_time(tg, user, sys);
+}
+
+/** A thread's CPU time, the process's here. */
+void thread_cpu_time(const process_t *t, uint64_t *user, uint64_t *sys)
+{
+    proc_cpu_time(t, user, sys);
+}
+
 /** Find the model's processes: this one and pid 9. */
 process_t *get_process(uint32_t pid)
 {

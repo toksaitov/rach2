@@ -385,20 +385,26 @@ static void tick(uint64_t n)
 }
 
 /** No timer here counts processor time, so none holds a process. */
-int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *user_only)
+int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, uint64_t *serial,
+                         int *thread, int *user_only)
 {
     (void)clk;
     (void)tg;
     (void)tid;
+    (void)serial;
+    (void)thread;
     (void)user_only;
     return -EINVAL;
 }
 
 /** Never called: no timer here counts processor time. */
-int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t tid, int user_only, uint64_t *ns)
+int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t tid, uint64_t serial, int thread,
+                         int user_only, uint64_t *ns)
 {
     (void)tg;
     (void)tid;
+    (void)serial;
+    (void)thread;
     (void)user_only;
     *ns = 0;
     return -ESRCH;

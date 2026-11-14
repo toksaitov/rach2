@@ -278,6 +278,18 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
+/** No tick runs here, so the CPU times are read without `timer_lock`. */
+uint32_t ptimer_times_lock(void)
+{
+    return 0;
+}
+
+/** Let go of nothing: `ptimer_times_lock` took nothing. */
+void ptimer_times_unlock(uint32_t irq)
+{
+    (void)irq;
+}
+
 /** No row switches to a process, so the context is never laid out. */
 void arch_context_init(struct process *proc, void (*entry)(void))
 {

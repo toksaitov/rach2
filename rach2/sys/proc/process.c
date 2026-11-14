@@ -20,6 +20,7 @@
 #include "../timer.h"
 #include "ns.h"
 #include "../tty/tty.h"
+#include "../io/timerfd.h"
 
 process_t *proc_list;
 process_t *proc_idle;
@@ -506,6 +507,9 @@ extern volatile uint32_t init_pid;
 static uint32_t next_pid = 0;
 static uint32_t last_pid;
 
+/* The `serial` of the last record made. */
+static uint64_t last_serial;
+
 uint32_t proc_last_pid(void)
 {
     return last_pid;
@@ -698,6 +702,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     }
     p->sigacts = p->tg->action;
     p->pid = pid_next();
+    p->serial = ++last_serial;
     p->tgid = group ? tgid : p->pid;
     p->state = parent ? PROC_UNUSED : PROC_READY;
     p->sid = p->pid;
@@ -1080,10 +1085,18 @@ void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys)
     tgroup_cpu_time(p->tg, user, sys);
 }
 
-void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
+void thread_cpu_time(const process_t *t, uint64_t *user, uint64_t *sys)
+{
+    uint32_t irq = ptimer_times_lock();
+
+    *user = t->utime;
+    *sys = t->stime;
+    ptimer_times_unlock(irq);
+}
+
+void tgroup_cpu_time_locked(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
 {
     const process_t *t;
-    uint32_t flags = kirq_save();
 
     *user = tg->utime;
     *sys = tg->stime;
@@ -1093,7 +1106,14 @@ void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
             *sys += t->stime;
         }
     }
-    kirq_restore(flags);
+}
+
+void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
+{
+    uint32_t irq = ptimer_times_lock();
+
+    tgroup_cpu_time_locked(tg, user, sys);
+    ptimer_times_unlock(irq);
 }
 
 void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major)
@@ -1126,12 +1146,16 @@ void proc_switches(const process_t *p, unsigned long *voluntary, unsigned long *
     }
 }
 
-void proc_thread_fold(const process_t *t)
+void proc_thread_fold(process_t *t)
 {
     struct tgroup *tg = t->tg;
+    uint32_t irq = ptimer_times_lock();
 
     tg->utime += t->utime;
     tg->stime += t->stime;
+    t->utime = 0;
+    t->stime = 0;
+    ptimer_times_unlock(irq);
     tg->min_flt += t->min_flt;
     tg->maj_flt += t->maj_flt;
     tg->nvcsw += t->nvcsw;

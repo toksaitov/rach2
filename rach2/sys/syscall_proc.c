@@ -2104,9 +2104,9 @@ static void exec_take_leader(void)
     proc_exchange_pids(current_proc, old);
     proc_alarm_take(current_proc, old);
     current_proc->jc_status = old->jc_status;
-    proc_thread_fold(old);
     tg->leader = current_proc;
     sched_wait_off_cpu(old);
+    proc_thread_fold(old);
     mm_drop(old);
     kstack_free(old->kernel_stack);
     free_process(old);
