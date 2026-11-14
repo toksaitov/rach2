@@ -331,8 +331,13 @@ struct process;
 
 /**
  * Set `anon` (vm.h) on each region of anonymous memory that meets [start,
- * end) and has a page written anywhere in it, before a call splits or
- * merges a region, drops pages of the range or takes write from it. Linux
+ * end) and has a page written anywhere in it, and on each private mapping
+ * of a file that meets the range or borders it and has a private copy of a
+ * page (a frame `frame_make_anon` marked), before a call splits or merges a
+ * region, drops pages of the range or takes write from it, so that
+ * `vm_merge` can refuse two private mappings of one file that each have
+ * pages of their own. A call that adds a region passes the range the region
+ * will take, so that its neighbours are marked. Linux
  * gives a region its anon_vma at its first private page and keeps it after
  * the page goes, and a split gives both parts the one it has; the store
  * that writes a page here sets its entry's dirty bit with no fault, so the

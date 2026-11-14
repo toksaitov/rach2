@@ -275,10 +275,12 @@ typedef struct vma {
     struct vm_file *file;
     uint32_t pgoff;
     struct vm_policy *policy; /* mbind's, with a reference; NULL for the default */
-    /* 1 once `mm_note_anon` (mm.c) found a page of it written, as
-     * Linux gives a region an anon_vma at its first private page; a split,
-     * a move and a fork's copy keep it, unless VM_PROT_WIPEONFORK, and a
-     * merge takes either side's. Only VM_PROT_ACCOUNT's drop reads it. */
+    /* 1 once `mm_note_anon` (mm.c) found a page of it written, or a
+     * private copy of a file's page in it, as Linux gives a region an
+     * anon_vma at its first private page; a split, a move and a fork's copy
+     * keep it, unless VM_PROT_WIPEONFORK, and a merge takes either side's.
+     * VM_PROT_ACCOUNT's drop reads it, and `vm_merge` refuses two private
+     * regions of separate records of a file that both have it. */
     uint8_t anon;
     struct vma *left, *right, *parent; /* AVL tree links */
     struct vma *prev, *next;           /* address order; next also links spare nodes */

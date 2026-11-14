@@ -8408,6 +8408,9 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, uint32_t
             vma_exhausted("mmap");
         }
     }
+    if (rc == 0 && src->file && src->type != VM_SHARED) {
+        mm_note_anon(mm, base, base + len);
+    }
     if (rc == 0 &&
         vm_insert_file(vm, base, base + len, src->prot, src->type, src->file, src->pgoff) != 0) {
         rc = -ENOMEM;
@@ -8944,6 +8947,7 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
     (void)vm_detach(vm, addr, addr + len);
     unmap_user_range(_curr_dir, addr, addr + len);
     vm_release_detached(vm);
+    mm_note_anon(current_proc->mm, to, to + new_len);
     rc = vm_insert_like(vm, to, to + new_len, &like, pgoff);
     vm_file_put(like.file);
     vm_policy_put(like.policy);
@@ -9036,6 +9040,7 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
     }
     if (addr + old_len == r->end && addr <= task_size() - new_len &&
         addr + new_len <= vm->stack_limit && !vm_overlaps(vm, addr + old_len, addr + new_len)) {
+        mm_note_anon(current_proc->mm, addr, addr + new_len);
         if (vm_insert_like(vm, addr + old_len, addr + new_len, r,
                            r->pgoff + (uint32_t)((addr + old_len - r->start) / PAGE_SIZE)) != 0) {
             vma_exhausted("mremap");
@@ -10697,6 +10702,7 @@ long sys_mlockall(isr_params_t *params)
     }
     vm->def_prot = (flags & 2u) ? bits : 0u;
     if (flags & 1u) {
+        mm_note_anon(mm, 0, ~(uintptr_t)0);
         vm_lock_all(vm, bits);
     }
     mmap_unlock(mm);
@@ -10715,6 +10721,7 @@ long sys_munlockall(isr_params_t *params)
     }
     mmap_write_lock(current_proc->mm);
     current_proc->mm->vm.def_prot = 0;
+    mm_note_anon(current_proc->mm, 0, ~(uintptr_t)0);
     vm_lock_all(&current_proc->mm->vm, 0);
     mmap_unlock(current_proc->mm);
     return 0;

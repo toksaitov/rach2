@@ -521,13 +521,17 @@ void mm_resident_add(const struct page_dir *dir, long pages)
 void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end)
 {
     struct paging_frame_counts counts;
+    uintptr_t lo = start >= PAGE_SIZE ? start - PAGE_SIZE : 0;
+    uintptr_t hi = end <= ~(uintptr_t)0 - PAGE_SIZE ? end + PAGE_SIZE : end;
     vma_t *r;
 
-    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
-        if (!r->anon && !r->file && r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
-            paging_user_frames(mm->dir, r->start, r->end, &counts);
-            r->anon = counts.frames > 0;
+    for (r = vm_lower(&mm->vm, lo); r && r->start < hi; r = vm_next(r)) {
+        if (r->anon || r->type == VM_SHARED || (r->prot & VM_PROT_IO) ||
+            (!r->file && (r->end <= start || r->start >= end))) {
+            continue;
         }
+        paging_user_frames(mm->dir, r->start, r->end, &counts);
+        r->anon = (r->file ? counts.anon : counts.frames) > 0;
     }
 }
 

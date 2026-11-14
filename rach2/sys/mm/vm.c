@@ -151,6 +151,7 @@ int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32
     d->vf.unlocked = 0;
     d->vf.around = NULL;
     d->vf.mkwrite = NULL;
+    d->vf.same = NULL;
     d->ops = ops;
     d->obj = obj;
     vma->file = &d->vf;
@@ -503,7 +504,10 @@ static int vm_file_same(const struct vm_file *a, const struct vm_file *b)
 
 /** Merge a compatible right neighbour into r; return 1 if one was removed.
  * When the two map one open file through two records, r keeps its own and
- * the neighbour's is put, which `vm_file_reap` releases after the change. */
+ * the neighbour's is put, which `vm_file_reap` releases after the change.
+ * Two private regions of separate records merge only while at most one of
+ * them has pages of its own (`anon`), as Linux's is_mergeable_anon_vma
+ * refuses two regions with different anon_vma records. */
 static int vm_merge(vm_space_t *vm, vma_t *r)
 {
     vma_t *s = r->next;
@@ -511,7 +515,8 @@ static int vm_merge(vm_space_t *vm, vma_t *r)
 
     if (!s || r->end != s->start || r->prot != s->prot || r->type != s->type ||
         !vm_file_same(r->file, s->file) || !vm_policy_equal(r->policy, s->policy) ||
-        (r->file && r->pgoff + ((r->end - r->start) >> VM_PAGE_SHIFT) != s->pgoff)) {
+        (r->file && r->pgoff + ((r->end - r->start) >> VM_PAGE_SHIFT) != s->pgoff) ||
+        (r->file != s->file && r->type != VM_SHARED && r->anon && s->anon)) {
         return 0;
     }
     end = s->end;
