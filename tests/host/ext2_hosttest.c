@@ -4887,12 +4887,22 @@ static void ftype_rows(void)
 static const char *const removal_kinds[3] = {"an empty file", "a fast symlink",
                                              "a file with blocks"};
 /* How it removes it, by its `way`: an unlink; an unlink and a new node of
-   another type, which takes the freed inode; a rename of a file over it; and
-   a new file made and then the unlink, so that the free meets the new
-   inode's bit not yet on the device in the same bitmap block. */
-#define REMOVAL_WAYS 4
+   another type, which takes the freed inode; a rename of a file over it; a
+   new file made and then the unlink, so that the free meets the new inode's
+   bit not yet on the device in the same bitmap block; and the two across a
+   remount to `sync` (REMOVAL_REMOUNT): an unlink beside `src`'s, then the
+   remount and a new file, which takes one freed inode while the other's
+   cleared bit and zeroed slot are pending, and a new file, then the remount
+   and the unlink, while the new inode's bit and slot are pending. */
+#define REMOVAL_WAYS    6
+#define REMOVAL_REMOUNT 4
 static const char *const removal_ways[REMOVAL_WAYS] = {
-    "unlinked", "unlinked with its inode reused", "renamed over", "unlinked after a file is made"};
+    "unlinked",
+    "unlinked with its inode reused",
+    "renamed over",
+    "unlinked after a file is made",
+    "unlinked with another, then a file made after a remount to sync",
+    "unlinked after a file is made and a remount to sync"};
 
 /* The repairs e2fsck may ask for after a stop of a removal on a mount that
    writes back: counts and bitmaps, an inode left with no name, a new
@@ -4900,7 +4910,8 @@ static const char *const removal_ways[REMOVAL_WAYS] = {
    unconnected with its `..` naming the root, and the name `new` written
    before its inode, as Linux's ext2_add_link writes it too. No finding of
    `gone` or `src`, an entry naming a free inode or one of another type, is
-   among them. `#` is a run of digits. */
+   among them. The last is allowed only once a remount made the mount strict
+   (`removal_findings_allowed`). `#` is a run of digits. */
 static const char *const removal_findings[] = {
     "Free inodes count wrong",
     "Free blocks count wrong",
@@ -4915,6 +4926,11 @@ static const char *const removal_findings[] = {
     "Unconnected directory inode #",
     "'..' in ... (#) is / (2), should be <The NULL inode> (0).",
     "Entry 'new' in / (2) has ",
+    /* A strict unlink of a file with blocks stores the inode's count of 0
+       through before it frees the blocks, and its zeroed slot with the
+       deletion time after them, as the strict matrix allows
+       (`allowed_findings`); e2fsck -p sets the time. */
+    "Deleted inode # has zero dtime",
 };
 
 /**
@@ -4950,14 +4966,43 @@ static int removal_setup(int kind, uint64_t *ino)
     return rc == 0 ? OPS->sync(&mnt) : rc;
 }
 
+/** Make `new` in the root, a file of 10 bytes, and put it. 0, or the first
+ * error. */
+static int removal_new(void)
+{
+    int rc = 0;
+    void *n = make_file(mnt.root, "new", &rc);
+
+    if (n) {
+        rc = write_at(n, pattern, 10, 0);
+        OPS->put(&mnt, n);
+    }
+    return rc;
+}
+
+/** Remount the writable mount with `sync` added, and give the mount the
+ * flags, as `vfs_remount` stores them once the type's `remount` succeeds.
+ * 0, or the remount's error. */
+static int removal_remount(void)
+{
+    int rc = OPS->remount(&mnt, mnt.flags | VFS_MS_SYNCHRONOUS, NULL);
+
+    if (rc == 0) {
+        mnt.flags |= VFS_MS_SYNCHRONOUS;
+    }
+    return rc;
+}
+
 /**
  * Remove `gone` of `kind` in `way` and sync the volume: by an unlink; by an
  * unlink and then a new node `new` of another type, a fast link for an
  * empty file, a file of 10 bytes for a link and a directory for a file with
  * blocks, which takes the freed inode as the lowest free one of its group;
- * by a rename of `src` over it; or by a file `new` of 10 bytes made and
- * then an unlink. The inode number of `new` in `*reused` for the second
- * way, 0 otherwise. Returns 0, or the first error.
+ * by a rename of `src` over it; by a file `new` of 10 bytes made and then
+ * an unlink; by an unlink of `src` and of it, a remount to `sync` and then
+ * `new` made; or by `new` made, the remount and then an unlink
+ * (`removal_remount`). The inode number of `new` in `*reused` for the
+ * second way, 0 otherwise. Returns 0, or the first error.
  */
 static int removal_run(int kind, int way, uint64_t *reused)
 {
@@ -4965,19 +5010,26 @@ static int removal_run(int kind, int way, uint64_t *reused)
     int rc = 0;
 
     *reused = 0;
-    if (way == 3) {
-        n = make_file(mnt.root, "new", &rc);
-        if (n) {
-            rc = write_at(n, pattern, 10, 0);
-            OPS->put(&mnt, n);
-            n = 0;
-        }
+    if (way == 3 || way == 5) {
+        rc = removal_new();
+    }
+    if (rc == 0 && way == 5) {
+        rc = removal_remount();
+    }
+    if (rc == 0 && way == 4) {
+        rc = OPS->unlink(&mnt, mnt.root, "src");
     }
     if (rc != 0) {
     } else if (way == 2) {
         rc = OPS->rename(&mnt, mnt.root, "src", mnt.root, "gone");
     } else {
         rc = OPS->unlink(&mnt, mnt.root, "gone");
+    }
+    if (rc == 0 && way == 4) {
+        rc = removal_remount();
+        if (rc == 0) {
+            rc = removal_new();
+        }
     }
     if (rc == 0 && way == 1) {
         if (kind == 0) {
@@ -5027,10 +5079,13 @@ static int findings_among(const char *const *allowed, unsigned count)
     return ok;
 }
 
-/** Whether every question in findings.txt is one of `removal_findings`. */
-static int removal_findings_allowed(void)
+/** Whether every question in findings.txt is one of `removal_findings`,
+ * the last of them only for a `way` that remounts to `sync`. */
+static int removal_findings_allowed(int way)
 {
-    return findings_among(removal_findings, sizeof(removal_findings) / sizeof(removal_findings[0]));
+    unsigned count = sizeof(removal_findings) / sizeof(removal_findings[0]);
+
+    return findings_among(removal_findings, way >= REMOVAL_REMOUNT ? count : count - 1);
 }
 
 /** Whether `gone` and `src`, where the root of `img` still lists them, name
@@ -5134,7 +5189,7 @@ static void removal_judge(int kind, int way, int k, int n)
              "%s %s on a mount that writes back, stopped after write %d of %d, "
              "leaves e2fsck counts, bitmaps and unnamed inodes to repair",
              removal_kinds[kind], removal_ways[way], k, n);
-    ok = fsck_judged(wimg) >= 0 && removal_findings_allowed();
+    ok = fsck_judged(wimg) >= 0 && removal_findings_allowed(way);
     check(ok, what);
     if (!ok) {
         ext2_fixture_head(fix_path("fsck.out"), 30);
@@ -5186,26 +5241,16 @@ static int removal_row(int kind, int way)
 }
 
 /**
- * On a mount that writes back, remove a synced empty file, fast symlink and
- * file with blocks by an unlink, by an unlink whose inode a node of another
- * type takes again, by a rename over it, and by an unlink after a new file
- * is made (`removal_run`), and stop the removal and the sync after it after
- * each of their writes. No stop may leave the removed name on the disk
- * naming an inode the bitmap calls free or one of another type, as Linux's
- * ext2 writes a directory's change before the inode loses its count
- * (`ext2_handle_dirsync`, fs/ext2/dir.c:440 in Linux 6.12.115), nor an
- * inode in use whose bit is clear, which Linux's ext2 does not promise:
- * e2fsck must run to its end and ask only for the repairs of
- * `removal_findings`, with no `+` among the inode bitmap's differences, and
- * debugfs must find each name left marked in use.
+ * The removal rows of the ways from `first` on (`removal_rows`): each kind
+ * removed in each, whole and then stopped after each write.
  */
-static void removal_rows(void)
+static void removal_ways_rows(int first)
 {
     int kind, way, got, total = 0;
 
     fill_pattern();
     for (kind = 0; kind < 3; kind++) {
-        for (way = 0; way < REMOVAL_WAYS; way++) {
+        for (way = first; way < REMOVAL_WAYS; way++) {
             got = removal_row(kind, way);
             if (got < 0) {
                 check(0, "the volume of the removal rows mounts and takes its files");
@@ -5215,6 +5260,32 @@ static void removal_rows(void)
         }
     }
     printf("ext2_hosttest: %d stops of removals walked\n", total);
+}
+
+/**
+ * On a mount that writes back, remove a synced empty file, fast symlink and
+ * file with blocks by an unlink, by an unlink whose inode a node of another
+ * type takes again, by a rename over it, by an unlink after a new file is
+ * made, and by the last two across a remount to `sync` with the free or the
+ * allocation pending (`removal_run`), and stop the removal and the sync
+ * after it after each of their writes, the remount's among them. No stop may
+ * leave the removed name on the disk naming an inode the bitmap calls free
+ * or one of another type, as Linux's ext2 writes a directory's change
+ * before the inode loses its count (`ext2_handle_dirsync`, fs/ext2/dir.c:440
+ * in Linux 6.12.115), nor an inode in use whose bit is clear, which Linux's
+ * ext2 does not promise: e2fsck must run to its end and ask only for the
+ * repairs of `removal_findings`, with no `+` among the inode bitmap's
+ * differences, and debugfs must find each name left marked in use.
+ */
+static void removal_rows(void)
+{
+    removal_ways_rows(0);
+}
+
+/** The removal rows across a remount to `sync` alone (`removal_rows`). */
+static void removal_remount_rows(void)
+{
+    removal_ways_rows(REMOVAL_REMOUNT);
 }
 
 /**
@@ -9509,6 +9580,7 @@ static const struct {
     {"--readonly-only", readonly_rows},
     {"--ftype-only", ftype_rows},
     {"--removal-only", removal_rows},
+    {"--removal-remount-only", removal_remount_rows},
     {"--dir-commit-only", dir_commit_rows},
     {"--mark-only", mark_rows},
     {"--stop-only", stop_rows},
