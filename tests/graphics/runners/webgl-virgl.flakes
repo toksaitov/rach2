@@ -9,3 +9,27 @@
 # Debian guest as on Rach2 (dev-log/84-locks/upstream.md); the page's 454
 # other subtests passed in every run and are judged.
 conformance2/query/occlusion-query-scissor.html ^pass [0-9]+, result: 1 === expected: 0$
+
+# deqp/functional/gles3/texturefiltering/: each of these pages fails every
+# one of its 6 or 18 cases with "Image verification failed" in every run, in
+# the Debian guest as on Rach2, and the count of the checks that pass inside
+# those failed comparisons changes from run to run, by 8 to 920 in three
+# runs of the chunk, two in the Debian guest and one on Rach2
+# (dev-log/84-locks/upstream.md). The judge would otherwise compare that
+# count with one run's.
+deqp/functional/gles3/texturefiltering/2d_sizes_02.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/2d_sizes_03.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_formats_00.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_sizes_00.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_sizes_03.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_sizes_04.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_combinations_00.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_combinations_01.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_combinations_03.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_combinations_04.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/cube_combinations_05.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/2d_array_combinations_00.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/2d_array_combinations_01.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/2d_array_combinations_02.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/2d_array_combinations_04.html : Image verification failed$
+deqp/functional/gles3/texturefiltering/2d_array_combinations_05.html : Image verification failed$
