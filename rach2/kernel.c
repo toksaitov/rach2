@@ -1854,7 +1854,7 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
                             const elf_image_t *img, uintptr_t ehdr, uintptr_t *bottom)
 {
     struct uimage u;
-    struct uimage_aux root = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    struct uimage_aux root = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     uint8_t random16[16];
     uint32_t envc = 0;
     uintptr_t sp = 0;
@@ -1865,14 +1865,15 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
     while (envp[envc] != 0) {
         envc++;
     }
+    root.hwcap = arch_hwcap();
 #if ELF_IA32
     if (mm->compat) {
         top = IA32_TASK_SIZE;
-        root.hwcap = ia32_hwcap();
         root.sysinfo = ehdr ? vdso32_vsyscall_at(ehdr) : 0;
     }
 #endif
     rc = uimage_start(&u, top, RLIM_STACK_DEFAULT, (uint32_t)argc, envc);
+    u.platform = ARCH_NAME;
     if (mm->compat) {
         u.word = 4u;
         u.platform = "i686";

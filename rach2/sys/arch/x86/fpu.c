@@ -526,6 +526,14 @@ uintptr_t fpu_frame_bytes(void)
     return FPU_LINUX_SIZE + 63u;
 }
 
+uintptr_t fpu_linux_state_bytes(int fregs)
+{
+    if (!use_fxsr) {
+        return LX_PREFIX;
+    }
+    return (use_xsave ? area_size + 4u : FX_SIZE) + (fregs ? LX_PREFIX : 0u);
+}
+
 /** Write the software bytes `sw` of a frame's XSAVE image, Linux's
  * `struct _fpx_sw_bytes`, for a frame whose state has `prefix` bytes
  * before its image. */

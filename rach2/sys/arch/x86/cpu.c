@@ -14,6 +14,14 @@
 #include "../arch.h"
 #include "../../cmdline.h"
 
+uint32_t arch_hwcap(void)
+{
+    uint32_t edx = 0;
+
+    kcpu_id(1, NULL, NULL, NULL, &edx);
+    return edx;
+}
+
 void arch_irq_enable(void)
 {
     __asm__ __volatile__("sti" : : : "memory");

@@ -12,10 +12,9 @@
 struct page_dir;
 
 /* The auxiliary vector's entries, AT_NULL included: an i386 image on the
- * x86-64 kernel has all of them, and another, which lacks AT_HWCAP,
- * AT_PLATFORM and AT_SYSINFO, and AT_SYSINFO_EHDR without a vDSO, has
- * AT_NULL in their places. */
-#define UIMAGE_AUXV 22u
+ * x86-64 kernel has all of them, and another, which lacks AT_SYSINFO, and
+ * AT_SYSINFO_EHDR without a vDSO, has AT_NULL in their places. */
+#define UIMAGE_AUXV 24u
 
 /* Linux's limits on the strings of an execve (fs/exec.c): one string, its
  * NUL included, is at most 32 pages; the strings with their pointers take a
@@ -127,8 +126,10 @@ int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc);
 /* What the auxiliary vector says beside the program's image: where the
  * interpreter was loaded (AT_BASE, 0 without one), where the vDSO's image
  * is (AT_SYSINFO_EHDR, 0 without one, and then no entry), the ids the image
- * runs with, AT_SECURE, and for an i386 image AT_HWCAP and the vDSO's
- * __kernel_vsyscall (AT_SYSINFO), each 0 for no entry. */
+ * runs with, AT_SECURE, the processor's features (AT_HWCAP and AT_HWCAP2,
+ * given even when 0, as Linux gives them on x86), and for an i386 image on
+ * the x86-64 kernel the vDSO's __kernel_vsyscall (AT_SYSINFO), 0 for no
+ * entry. */
 struct uimage_aux {
     uintptr_t base;
     uintptr_t sysinfo_ehdr;
@@ -138,6 +139,7 @@ struct uimage_aux {
     uint32_t egid;
     int secure;
     uint32_t hwcap;
+    uint32_t hwcap2;
     uintptr_t sysinfo;
 };
 
@@ -148,11 +150,12 @@ struct uimage_aux {
  * in NULL, and the auxiliary vector (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY,
  * AT_PAGESZ, AT_CLKTCK 100, AT_SECURE, AT_RANDOM, AT_BASE, AT_UID, AT_EUID,
  * AT_GID, AT_EGID, AT_EXECFN, AT_MINSIGSTKSZ, AT_RSEQ_FEATURE_SIZE,
- * AT_RSEQ_ALIGN, AT_HWCAP, AT_PLATFORM and AT_SYSINFO where `aux` and `u`
- * give them, AT_SYSINFO_EHDR where there is a vDSO, and AT_NULL, which
- * fills the vector's rest), which a dynamic linker reads to find itself and
- * the program it loads. The vector and the bounds of the strings are kept
- * in `u` too. 0, or -1 when no temporary mapping was free.
+ * AT_RSEQ_ALIGN, AT_HWCAP, AT_FLAGS 0, AT_HWCAP2, AT_PLATFORM and
+ * AT_SYSINFO where `aux` and `u` give them, AT_SYSINFO_EHDR where there is a
+ * vDSO, and AT_NULL, which fills the vector's rest), which a dynamic linker
+ * reads to find itself and the program it loads. The vector and the bounds
+ * of the strings are kept in `u` too. 0, or -1 when no temporary mapping
+ * was free.
  */
 int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image_t *img,
                  const uint8_t random16[16], const struct uimage_aux *aux);

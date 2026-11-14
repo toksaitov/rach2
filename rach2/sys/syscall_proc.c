@@ -1872,9 +1872,10 @@ static uintptr_t aslr_pages(uintptr_t pages)
  * bytes, the mmap base is lowered and the program's base raised by random
  * numbers of pages, and at 2 the heap's start is raised by one.
  *
- * An i386 program on the x86-64 kernel (`s->compat`) has the layout Linux
- * gives a compat task, the IA32_ addresses and bounds of cpu.h, and its
- * stack's words are 4 bytes, with AT_PLATFORM "i686", Linux's
+ * AT_PLATFORM is the architecture's name, uname's machine, as Linux's
+ * ELF_PLATFORM. An i386 program on the x86-64 kernel (`s->compat`) has the
+ * layout Linux gives a compat task, the IA32_ addresses and bounds of cpu.h,
+ * and its stack's words are 4 bytes, with AT_PLATFORM "i686", Linux's
  * COMPAT_ELF_PLATFORM.
  */
 static void exec_layout(struct exec_state *s)
@@ -1890,6 +1891,7 @@ static void exec_layout(struct exec_state *s)
     s->stack_top = USER_ADDR_MAX;
     s->mmap_base = USER_MMAP_BASE;
     s->dyn_base = ELF_ET_DYN_BASE;
+    s->args.platform = ARCH_NAME;
 #if ELF_IA32
     if (s->compat) {
         s->stack_top = IA32_TASK_SIZE;
@@ -1990,8 +1992,8 @@ typedef char
  * PT_INTERP names; the vDSO of the program's ABI, one free page above the
  * range mmap places mappings in, so that no mapping there ends against it
  * (`vdso_map`); the regions; and the stack, with the pointers and the
- * auxiliary vector below its strings, an i386 program's with AT_HWCAP and
- * AT_SYSINFO beside the rest. The address space is marked an i386 one for
+ * auxiliary vector below its strings, an i386 program's with AT_SYSINFO
+ * beside the rest. The address space is marked an i386 one for
  * such a program, and keeps the vDSO's address. Each of the program
  * and the interpreter maps its segments from its file where it can, and the
  * reference to the file's mapping goes from the open file to the image, which
@@ -2052,9 +2054,9 @@ static int32_t exec_build(struct exec_state *s)
         return -ENOMEM;
     }
     aux.sysinfo_ehdr = (uintptr_t)ehdr;
+    aux.hwcap = arch_hwcap();
 #if ELF_IA32
     if (s->compat) {
-        aux.hwcap = ia32_hwcap();
         aux.sysinfo = ehdr != 0 ? vdso32_vsyscall_at((uintptr_t)ehdr) : 0;
     }
 #endif

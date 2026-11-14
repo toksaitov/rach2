@@ -28,18 +28,19 @@
 #define AT_PHNUM             5 /* Number of program headers              (populated) */
 #define AT_PAGESZ            6 /* System page size                       (populated) */
 #define AT_BASE              7 /* Where the interpreter was loaded, or 0 (populated) */
-#define AT_FLAGS             8
+#define AT_FLAGS             8 /* Flags of the interpreter, always 0      (populated) */
 #define AT_ENTRY             9 /* Program entry point                    (populated) */
 #define AT_NOTELF            10
 #define AT_UID               11 /* Real user id                           (populated) */
 #define AT_EUID              12 /* Effective user id                      (populated) */
 #define AT_GID               13 /* Real group id                          (populated) */
 #define AT_EGID              14 /* Effective group id                     (populated) */
-#define AT_PLATFORM          15 /* The processor's name, an i386 program's (populated) */
-#define AT_HWCAP             16 /* CPUID leaf 1's EDX, an i386 program's  (populated) */
+#define AT_PLATFORM          15 /* The processor's name, uname's machine   (populated) */
+#define AT_HWCAP             16 /* CPUID leaf 1's EDX                    (populated) */
 #define AT_CLKTCK            17 /* times(2) ticks per second, 100         (populated) */
 #define AT_SECURE            23 /* 1 when euid != ruid or egid != rgid    (populated) */
 #define AT_RANDOM            25 /* Address of 16 random bytes             (populated) */
+#define AT_HWCAP2            26 /* Features the kernel enabled, HWCAP2_*  (populated) */
 #define AT_RSEQ_FEATURE_SIZE 27 /* The bytes of struct rseq kept   (populated) */
 #define AT_RSEQ_ALIGN        28 /* The alignment of an rseq area         (populated) */
 #define AT_EXECFN            31 /* Address of the program's path          (populated) */

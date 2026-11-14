@@ -53,7 +53,7 @@ struct vfs_ref;
 /* The words of an auxiliary vector an address space keeps: two for each of
  * the UIMAGE_AUXV entries an image is given (proc/uimage.h), which
  * syscall_proc.c checks. */
-#define MM_AUXV_WORDS 44
+#define MM_AUXV_WORDS 48
 
 struct mm {
     uint32_t users;

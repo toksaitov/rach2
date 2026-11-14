@@ -1,13 +1,11 @@
 /*
  * ia32_exec.c: the i386 forms of execve, execveat, clone and the two mmap
- * calls, for the compat table (ia32_systab.c), the processor's AT_HWCAP an
- * i386 program's auxiliary vector has, and the boot option that turns the
- * i386 ABI off.
+ * calls, for the compat table (ia32_systab.c), and the boot option that
+ * turns the i386 ABI off.
  */
 
 #include "ia32.h"
 
-#include "../x86/kcpu.h"
 #include "../../proc/process.h"
 #include "../../fs/fd.h"
 #include "../../fs/vfs.h"
@@ -84,16 +82,6 @@ long compat_sys_ia32_mmap(isr_params_t *params)
 long compat_sys_mmap_pgoff(isr_params_t *params)
 {
     return sys_mmap2(params);
-}
-
-/** The AT_HWCAP of an i386 program, as Linux's ELF_HWCAP on i386: the
- * feature bits of CPUID leaf 1 in EDX. */
-uint32_t ia32_hwcap(void)
-{
-    uint32_t edx = 0;
-
-    kcpu_id(1, NULL, NULL, NULL, &edx);
-    return edx;
 }
 
 /**

@@ -169,6 +169,15 @@ uintptr_t fpu_frame_place(uintptr_t sp);
  * state it places, the state's alignment included. */
 uintptr_t fpu_frame_bytes(void);
 
+/**
+ * The state Linux's `fpu__get_fpstate_size` counts in its bound on a signal
+ * frame: the XSAVE image and its 4-byte end mark, or the `fxsave` image,
+ * and with `fregs` the 112 bytes of x87 state an i386 frame puts before it,
+ * which Linux counts on every kernel that runs i386 programs; without FXSR
+ * the 112 bytes of the `fnsave` image alone.
+ */
+uintptr_t fpu_linux_state_bytes(int fregs);
+
 /** Write the state in `area` into a frame, at the user address `fp` that
  * `fpu_frame_place` gave. Returns 0, or -1 when the stack cannot be
  * written. */

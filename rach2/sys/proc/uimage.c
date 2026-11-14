@@ -387,9 +387,9 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     uimage_aux_add(aux, &n, AT_MINSIGSTKSZ, sigframe_stack_bytes());
     uimage_aux_add(aux, &n, AT_RSEQ_FEATURE_SIZE, RSEQ_FEATURE_SIZE);
     uimage_aux_add(aux, &n, AT_RSEQ_ALIGN, RSEQ_ALIGN);
-    if (ids->hwcap != 0) {
-        uimage_aux_add(aux, &n, AT_HWCAP, ids->hwcap);
-    }
+    uimage_aux_add(aux, &n, AT_HWCAP, ids->hwcap);
+    uimage_aux_add(aux, &n, AT_FLAGS, 0);
+    uimage_aux_add(aux, &n, AT_HWCAP2, ids->hwcap2);
     if (u->platform != NULL) {
         uimage_aux_add(aux, &n, AT_PLATFORM, uimage_platform_at(u));
     }

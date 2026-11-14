@@ -37,9 +37,10 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
 /**
  * The most bytes `sigframe_setup` puts below the top of an alternate stack:
  * the floating-point state, which XSAVE makes as large as its components,
- * and the larger frame, each with its alignment. A stack smaller than this
- * may not take a frame. The initial stack's auxiliary vector gives it as
- * AT_MINSIGSTKSZ, as Linux gives it on x86.
+ * and the larger frame, each with its alignment, or Linux's larger bound on
+ * them, rounded up to 16 bytes. A stack smaller than this may not take a
+ * frame. The initial stack's auxiliary vector gives it as AT_MINSIGSTKSZ,
+ * the value Linux gives on x86.
  */
 uintptr_t sigframe_stack_bytes(void);
 

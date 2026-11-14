@@ -293,14 +293,15 @@ static void random_bytes(uint8_t rnd[16])
     }
 }
 
-/** The interpreter's base, the ids and AT_SECURE for the auxiliary vector:
- * a set-user-id image when `secure`, with no vDSO and none of an i386
- * program's entries. */
+/** The interpreter's base, the ids, AT_SECURE and the processor's features
+ * for the auxiliary vector: a set-user-id image when `secure`, with no vDSO
+ * and none of an i386 program's entries. */
 static void aux_ids(struct uimage_aux *aux, int secure)
 {
     aux->base = 0xAFF00000u;
     aux->sysinfo_ehdr = 0;
-    aux->hwcap = 0;
+    aux->hwcap = 0x178BFBFFu;
+    aux->hwcap2 = 0x2u;
     aux->sysinfo = 0;
     aux->uid = 1000u;
     aux->euid = secure ? 0u : 1000u;
@@ -359,7 +360,11 @@ static void check_auxv(uintptr_t va, const elf_image_t *img, const uint8_t rnd[1
     CHECK(word(va + 30u * W) == AT_RSEQ_FEATURE_SIZE && word(va + 31u * W) == RSEQ_FEATURE_SIZE &&
               word(va + 32u * W) == AT_RSEQ_ALIGN && word(va + 33u * W) == RSEQ_ALIGN,
           "AT_RSEQ_FEATURE_SIZE and AT_RSEQ_ALIGN give the rseq area's size and alignment");
-    CHECK(word(va + 34u * W) == AT_NULL && word(va + 35u * W) == 0,
+    CHECK(word(va + 34u * W) == AT_HWCAP && word(va + 35u * W) == aux->hwcap &&
+              word(va + 36u * W) == AT_FLAGS && word(va + 37u * W) == 0 &&
+              word(va + 38u * W) == AT_HWCAP2 && word(va + 39u * W) == aux->hwcap2,
+          "AT_HWCAP, AT_FLAGS and AT_HWCAP2 describe the processor");
+    CHECK(word(va + 40u * W) == AT_NULL && word(va + 41u * W) == 0,
           "the auxiliary vector ends in AT_NULL");
     CHECK((rnd_at & 15u) == 0, "AT_RANDOM is aligned to 16 bytes");
     for (i = 0; i < 16; i++) {

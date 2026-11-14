@@ -158,19 +158,35 @@ static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, ui
     sc->fpstate = fp_addr;
 }
 
+/* sizeof(struct sigframe_ia32) as Linux's x86-64 build lays it out: the
+ * i386 frame's 732 bytes padded to 736 by the 8-byte alignment of the u64
+ * in its `struct _fpx_sw_bytes`. */
+#define LINUX_IA32_FRAME 736u
+
 /** The frame's alignment in `sigframe_setup` costs up to 15 bytes, and the
- * 8 below the 16-byte boundary 8 more; an i386 frame may take more, and the
- * larger is given. */
+ * 8 below the 16-byte boundary 8 more; an i386 frame may take more. Linux's
+ * `init_sigframe_size` bounds every frame by the largest frame structure,
+ * the i386 one with the i386 ABI, 15 bytes of alignment, the state of
+ * `fpu_linux_state_bytes` and 63 bytes of the state's alignment, which is
+ * more than these frames take; the largest of them is given, rounded up to
+ * 16 bytes as Linux rounds it. */
 uintptr_t sigframe_stack_bytes(void)
 {
-    uintptr_t native = fpu_frame_bytes() + sizeof(struct lx_rt_sigframe) + 15u + 8u;
+    uintptr_t most = fpu_frame_bytes() + sizeof(struct lx_rt_sigframe) + 15u + 8u;
 #if RACH2_IA32
     uintptr_t ia32 = ia32_sigframe_bytes();
+    uintptr_t lx = LINUX_IA32_FRAME + 15u + fpu_linux_state_bytes(1) + 63u;
 
-    return native > ia32 ? native : ia32;
+    if (ia32 > most) {
+        most = ia32;
+    }
 #else
-    return native;
+    uintptr_t lx = sizeof(struct lx_rt_sigframe) + 15u + fpu_linux_state_bytes(0) + 63u;
 #endif
+    if (lx > most) {
+        most = lx;
+    }
+    return (most + 15u) & ~(uintptr_t)15u;
 }
 
 /**

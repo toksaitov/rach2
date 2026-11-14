@@ -89,7 +89,28 @@ registers, and
 .Dv AT_MINSIGSTKSZ ,
 the least alternate signal stack a frame fits on this processor, whose
 XSAVE state can make it larger than
-.Dv MINSIGSTKSZ .
+.Dv MINSIGSTKSZ :
+Linux's bound, the i386 frame of 732 bytes, or 736 as the x86-64 kernel
+lays it out, the XSAVE image with its 4-byte end mark, or the 512-byte
+.Ic fxsave
+image, 112 bytes of x87 state and 78 of alignment, rounded up to 16;
+.Dv AT_HWCAP ,
+the feature bits
+.Ic cpuid
+leaf 1 gives in EDX,
+.Dv AT_HWCAP2 ,
+the features the kernel enabled for programs, 0 here, since it enables
+neither of the two Linux names,
+.Dv AT_FLAGS
+0, and
+.Dv AT_PLATFORM ,
+the address of the architecture's name,
+.Ql i686
+or
+.Ql x86_64 ,
+as
+.Xr uname 2
+gives it.
 On x86-64 it also has
 .Dv AT_SYSINFO_EHDR ,
 the address of the vDSO, a library of the clock calls that the kernel maps
@@ -452,14 +473,10 @@ Where addresses are randomized, the stack's top is lowered by pages under
 8 MiB, the top of the mapping range by pages under 1 MiB, and a
 position-independent program raised by pages under 1 MiB.
 Its initial stack is the System V i386 one, of 4-byte words, and its
-auxiliary vector has, beside the entries above,
-.Dv AT_HWCAP ,
-the feature bits
-.Ic cpuid
-leaf 1 gives in EDX,
-.Dv AT_PLATFORM ,
-the address of the string
+auxiliary vector has
+.Dv AT_PLATFORM
 .Ql i686 ,
+as Linux's compat layer gives it, and, beside the entries above,
 .Dv AT_SYSINFO ,
 the address of the 32-bit vDSO's
 .Fn __kernel_vsyscall ,

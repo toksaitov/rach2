@@ -237,15 +237,15 @@ typedef long (*syscall_fn_t)(isr_params_t *params);
  * `syscall_entry` gives its frame before it calls `_isr_router`. */
 void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params));
 
+/** AT_HWCAP of every program, Linux's ELF_HWCAP on x86: the feature bits of
+ * `cpuid` leaf 1 in EDX (x86/cpu.c). */
+uint32_t arch_hwcap(void);
+
 #if defined(IA32_SYSCALL_TABLE_SIZE)
 /** Fill `table`, IA32_SYSCALL_TABLE_SIZE entries, with the handler of each
  * i386 number, for the calls a frame's SC_COMPAT marks (x86_64/ia32_systab.c).
  * The entry is the one `arch_syscall_init` routes. */
 void ia32_syscall_init(syscall_fn_t *table);
-
-/** AT_HWCAP of an i386 program, Linux's ELF_HWCAP: the EDX of `cpuid` leaf
- * 1 (x86_64/ia32_exec.c). */
-uint32_t ia32_hwcap(void);
 
 /** Whether the kernel runs i386 programs and calls, Linux's `ia32_enabled`:
  * 1 unless the boot option `ia32_emulation=` turned them off. The second,

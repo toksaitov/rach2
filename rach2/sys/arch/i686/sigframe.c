@@ -115,11 +115,20 @@ static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, ui
     sc->cr2 = current_proc->trap_addr;
 }
 
+/** The frame and its alignment, or Linux's bound, `init_sigframe_size`'s,
+ * if larger: the plain frame, the largest, with 15 bytes of alignment, the
+ * state of `fpu_linux_state_bytes` and 63 bytes of the state's alignment;
+ * rounded up to 16 bytes as Linux rounds it. */
 uintptr_t sigframe_stack_bytes(void)
 {
     uintptr_t rt = sizeof(struct lx_rt_sigframe), plain = sizeof(struct lx_sigframe);
+    uintptr_t most = fpu_frame_bytes() + (rt > plain ? rt : plain) + FRAME_ALIGN - 1u;
+    uintptr_t lx = plain + 15u + fpu_linux_state_bytes(1) + 63u;
 
-    return fpu_frame_bytes() + (rt > plain ? rt : plain) + FRAME_ALIGN - 1u;
+    if (lx > most) {
+        most = lx;
+    }
+    return (most + 15u) & ~(uintptr_t)15u;
 }
 
 int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,

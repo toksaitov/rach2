@@ -24,8 +24,9 @@
  * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
  * assertion for each check, which `check` names: `registers-zero`,
  * `stack-aligned`, `argv`, `envp`, `auxv-end`, `pagesz`, `phdr`, `phent`,
- * `clktck`, `secure`, `entry`, `minsigstksz`, `sysinfo`, `machine`, `random`
- * and `random-page`, each failed with its first failed check.
+ * `clktck`, `secure`, `entry`, `minsigstksz`, `hwcap`, `hwcap2`, `flags`,
+ * `platform`, `sysinfo`, `machine`, `random` and `random-page`, each failed
+ * with its first failed check.
  */
 
 #include "probe.h"
@@ -41,10 +42,14 @@ typedef unsigned char u8;
 #define AT_PHENT        4
 #define AT_PHNUM        5
 #define AT_PAGESZ       6
+#define AT_FLAGS        8
 #define AT_ENTRY        9
+#define AT_PLATFORM     15
+#define AT_HWCAP        16
 #define AT_CLKTCK       17
 #define AT_SECURE       23
 #define AT_RANDOM       25
+#define AT_HWCAP2       26
 #define AT_SYSINFO      32
 #define AT_SYSINFO_EHDR 33
 #define AT_MINSIGSTKSZ  51
@@ -320,6 +325,102 @@ static unsigned long aux_find(const unsigned long *auxv, unsigned long type)
     return 0;
 }
 
+/** Whether `auxv`, which AT_NULL ends within 64 pairs, has an entry of type
+ * `type`. */
+static int aux_has(const unsigned long *auxv, unsigned long type)
+{
+    int i;
+
+    for (i = 0; i < 128 && auxv[i] != AT_NULL; i += 2) {
+        if (auxv[i] == type) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Run `cpuid` for `leaf` and `sub` and leave EAX, EBX, ECX and EDX in
+ * `r`. The instruction writes EBX, which an i386 position-independent build
+ * keeps for its global offset table, so EBX is exchanged with ESI around
+ * it. */
+static void cpuid(u32 leaf, u32 sub, u32 *r)
+{
+    u32 a = leaf, b, c = sub, d;
+
+#if defined __x86_64__
+    __asm__ __volatile__("mov %%rbx, %%rsi\n\tcpuid\n\txchg %%rsi, %%rbx"
+                         : "+a"(a), "=S"(b), "+c"(c), "=d"(d));
+#else
+    __asm__ __volatile__("mov %%ebx, %%esi\n\tcpuid\n\txchg %%esi, %%ebx"
+                         : "+a"(a), "=S"(b), "+c"(c), "=d"(d));
+#endif
+    r[0] = a;
+    r[1] = b;
+    r[2] = c;
+    r[3] = d;
+}
+
+/** The feature bits of `cpuid` leaf 1 in EDX, Linux's ELF_HWCAP on x86. */
+static u32 cpuid1_edx(void)
+{
+    u32 r[4];
+
+    cpuid(1, 0, r);
+    return r[3];
+}
+
+/**
+ * Linux's AT_MINSIGSTKSZ on x86, `init_sigframe_size`'s bound: the i386
+ * `struct sigframe_ia32`, its largest frame, 732 bytes, or 736 as the
+ * `x86_64` kernel lays it out, 15 bytes of the frame's alignment, the state
+ * of `fpu__get_fpstate_size` and 63 bytes of the state's alignment, rounded
+ * up to 16. The state is the XSAVE image of the components XCR0 enables,
+ * whose size `cpuid` leaf 0xD gives in EBX, with its 4-byte end mark, or
+ * the 512-byte `fxsave` image, and the 112 bytes of x87 state before it in
+ * an i386 frame; or without FXSR those 112 bytes alone.
+ */
+static unsigned long linux_minsigstksz(int x86_64)
+{
+    u32 r[4];
+    unsigned long state = 112;
+
+    cpuid(1, 0, r);
+    if (r[2] & (1u << 27)) { /* OSXSAVE */
+        u32 x[4];
+
+        cpuid(0xD, 0, x);
+        state = x[1] + 4 + 112;
+    } else if (r[3] & (1u << 24)) { /* FXSR */
+        state = 512 + 112;
+    }
+    return ((x86_64 ? 736ul : 732ul) + 15 + state + 63 + 15) & ~15ul;
+}
+
+/**
+ * Check the entries that describe the processor, as Linux's
+ * `create_elf_tables` gives them on x86: AT_HWCAP, `cpuid` leaf 1's EDX;
+ * AT_HWCAP2, the features the kernel enabled, there even when 0; AT_FLAGS,
+ * 0; and AT_PLATFORM, the name of the program's own architecture, i686 for
+ * an i386 program on either kernel.
+ */
+static void check_cpu(const unsigned long *auxv)
+{
+    const char *platform = (const char *)aux_find(auxv, AT_PLATFORM);
+
+    check(aux_has(auxv, AT_HWCAP) && aux_find(auxv, AT_HWCAP) == cpuid1_edx(), "hwcap",
+          "AT_HWCAP missing or not cpuid leaf 1's EDX");
+    check(aux_has(auxv, AT_HWCAP2), "hwcap2", "AT_HWCAP2 missing");
+    check(aux_has(auxv, AT_FLAGS) && aux_find(auxv, AT_FLAGS) == 0, "flags",
+          "AT_FLAGS missing or nonzero");
+    if (platform != 0) {
+        puts_("platform=");
+        puts_(platform);
+        puts_("\n");
+    }
+    check(platform != 0 && same(platform, OWN_ARCH), "platform",
+          "AT_PLATFORM missing or not the program's architecture");
+}
+
 /**
  * Check the vDSO's auxv entries, `ehdr` and `sysinfo` or 0 where absent,
  * and uname's machine against `kernel`, the kernel's architecture, as the
@@ -359,9 +460,8 @@ static void check_kernel(const char *kernel, unsigned long ehdr, unsigned long s
 
 /**
  * The probe, entered with `sp` at argc. It reads at most 64 auxv pairs.
- * AT_MINSIGSTKSZ must exceed 512 bytes: a signal frame has the
- * floating-point state, 512 bytes at the least, and the registers and the
- * siginfo above it.
+ * AT_MINSIGSTKSZ must be Linux's bound for the processor and the kernel
+ * (`linux_minsigstksz`).
  */
 void probe_main(unsigned long *sp)
 {
@@ -464,7 +564,14 @@ void probe_main(unsigned long *sp)
     check(clktck == 100, "clktck", "AT_CLKTCK != 100");
     check(saw_secure && secure == 0, "secure", "AT_SECURE missing or nonzero");
     check(entry != 0, "entry", "AT_ENTRY == 0");
-    check(minsigstksz > 512, "minsigstksz", "AT_MINSIGSTKSZ missing or smaller than a frame");
+    puts_("minsigstksz=");
+    put_u32((u32)minsigstksz);
+    puts_(" linux=");
+    put_u32((u32)linux_minsigstksz(same(env_kernel(envp), "x86_64")));
+    puts_("\n");
+    check(minsigstksz == linux_minsigstksz(same(env_kernel(envp), "x86_64")), "minsigstksz",
+          "AT_MINSIGSTKSZ missing or not Linux's bound for this processor and kernel");
+    check_cpu(auxv);
     check_kernel(env_kernel(envp), aux_find(auxv, AT_SYSINFO_EHDR), aux_find(auxv, AT_SYSINFO));
 
     check_random(random_ptr, auxv_end);
