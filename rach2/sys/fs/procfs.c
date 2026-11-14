@@ -9267,16 +9267,14 @@ static int32_t wakealarm_store(const char *text, uint32_t count)
 }
 
 /**
- * Take a write of the `count` bytes at `text` to the uevent `attr` of the
- * device `key` of `node` (`sysfs_attr_uevent`), as Linux's
- * dev_uevent_store: the action and its arguments (`sysfs_uevent_parse`) are
- * sent as that uevent with the device's variables, so that udev's coldplug
- * hears the device. `count`, -EINVAL, -ENOENT for a device that is gone,
- * or -ENOMEM.
+ * Send the uevent `action` of the device `key` of `node`, whose uevent file
+ * is the attribute `attr`, with the lines of `env` (or none for NULL), the
+ * device's variables and its subsystem, as Linux's kobject_uevent_env sends
+ * a device's. 0, -ENOENT for a device that is gone, -ENOMEM or -E2BIG.
  */
-static int32_t procfs_uevent_write(int node, int key, int attr, const char *text, uint32_t count)
+static int32_t procfs_sys_uevent(int node, int key, int attr, const char *action, const char *env)
 {
-    char env[SYSFS_SYNTH_ENV_MAX], action[8], path[96];
+    char path[96];
     const char *subsystem = node == SYSFS_PCI_DEVICE   ? "pci"
                             : node == SYSFS_USB_DEVICE ? "usb"
                             : node == SYSFS_NET_IF     ? "net"
@@ -9288,10 +9286,6 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char *text
     int32_t rc;
     int got = key;
 
-    rc = sysfs_uevent_parse(text, count, action, env);
-    if (rc != 0) {
-        return rc;
-    }
     k_memset(&vp, 0, sizeof(vp));
     vp.kind = VNODE_SYS_FILE;
     vp.sysent = node;
@@ -9307,7 +9301,31 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char *text
         rc = sysfs_uevent_path(path, subsystem, action, env, vars.buf, (uint32_t)vars.len);
     }
     kfree(vars.buf);
+    return rc < 0 ? rc : 0;
+}
+
+/**
+ * Take a write of the `count` bytes at `text` to the uevent `attr` of the
+ * device `key` of `node` (`sysfs_attr_uevent`), as Linux's
+ * dev_uevent_store: the action and its arguments (`sysfs_uevent_parse`) are
+ * sent as that uevent with the device's variables, so that udev's coldplug
+ * hears the device. `count`, -EINVAL, -ENOENT for a device that is gone,
+ * or -ENOMEM.
+ */
+static int32_t procfs_uevent_write(int node, int key, int attr, const char *text, uint32_t count)
+{
+    char env[SYSFS_SYNTH_ENV_MAX], action[8];
+    int32_t rc = sysfs_uevent_parse(text, count, action, env);
+
+    if (rc == 0) {
+        rc = procfs_sys_uevent(node, key, attr, action, env);
+    }
     return rc < 0 ? rc : (int32_t)count;
+}
+
+int32_t sysfs_pci_uevent(int key, const char *action)
+{
+    return procfs_sys_uevent(SYSFS_PCI_DEVICE, key, SYSFS_PCI_UEVENT, action, NULL);
 }
 
 /**

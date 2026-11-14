@@ -251,4 +251,14 @@ void sysfs_pci_unbind(int key);
 /** The driver the function `key` is shown bound to, or NULL. */
 const char *sysfs_pci_driver(int key);
 
+/**
+ * Send the uevent `action` of the function `key` with its variables, its
+ * DRIVER among them, and SUBSYSTEM=pci, as a write of its `uevent` sends
+ * it. A driver sends "bind" once its probe has succeeded and its device is
+ * registered, as Linux's driver_bound does after really_probe. 0, -ENOENT
+ * for a function that is gone, -ENOMEM or -E2BIG. procfs.c, which writes
+ * the variables, defines it.
+ */
+int32_t sysfs_pci_uevent(int key, const char *action);
+
 #endif /* _SYSFS_H_ */

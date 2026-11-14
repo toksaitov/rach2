@@ -783,9 +783,12 @@ static const struct drm_driver bochs_driver = {DRM_IDENT_BOCHS,    NULL, NULL, b
  * the display made and the device registered. The function is shown bound
  * to bochs-drm in /sys before its card appears, as Linux's driver core
  * links a device to its driver before the driver's probe runs, so that a
- * reader of the card's uevent finds the parent's driver. 0, -ENODEV for a
- * device that is not a DISPI one, or -errno. The caller has removed the
- * firmware's framebuffer and mapped both.
+ * reader of the card's uevent finds the parent's driver; a failure to show
+ * it fails the bind, as Linux's really_probe stops when driver_sysfs_add
+ * fails. Once the card is registered the function's "bind" uevent is sent,
+ * as Linux's driver_bound sends it. 0, -ENODEV for a device that is not a
+ * DISPI one, or -errno. The caller has removed the firmware's framebuffer
+ * and mapped both.
  */
 static int32_t bochs_bind(const pci_device_t *pdev, uintptr_t mmio, uint32_t mmio_size,
                           uintptr_t vram, uint64_t vram_phys, uint32_t vram_size)
@@ -793,7 +796,7 @@ static int32_t bochs_bind(const pci_device_t *pdev, uintptr_t mmio, uint32_t mmi
     struct bochs_device *b = (struct bochs_device *)kzalloc(sizeof(*b));
     uint32_t mem;
     int32_t err;
-    int key, bound;
+    int key;
 
     if (!b) {
         return -ENOMEM;
@@ -830,16 +833,18 @@ static int32_t bochs_bind(const pci_device_t *pdev, uintptr_t mmio, uint32_t mmi
     b->drm.driver_priv = b;
     b->drm.pci = &b->pci;
     err = bochs_kms_init(b);
+    key = (int)pdev->bus << 8 | pdev->device << 3 | pdev->function;
     if (err == 0) {
-        key = (int)pdev->bus << 8 | pdev->device << 3 | pdev->function;
-        bound = sysfs_pci_bind(key, "bochs-drm");
-        if (bound != 0) {
-            klog(KLOG_WARN, "bochs", "driver link not added: error %d", bound);
-        }
+        err = sysfs_pci_bind(key, "bochs-drm");
+    }
+    if (err == 0) {
         err = drm_dev_register(&b->drm);
-        if (err != 0 && bound == 0) {
+        if (err != 0) {
             sysfs_pci_unbind(key);
         }
+    }
+    if (err == 0) {
+        sysfs_pci_uevent(key, "bind");
     }
     if (err != 0) {
         klog(KLOG_ERR, "bochs", "register: error %d", (int)err);

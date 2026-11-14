@@ -823,6 +823,20 @@ void sysfs_pci_unbind(int key)
     }
 }
 
+/* The uevents of the function sent on its binding: "bind" and "unbind". */
+static int bind_events, unbind_events;
+
+int32_t sysfs_pci_uevent(int key, const char *action)
+{
+    (void)key;
+    if (strcmp(action, "bind") == 0) {
+        bind_events++;
+    } else if (strcmp(action, "unbind") == 0) {
+        unbind_events++;
+    }
+    return 0;
+}
+
 int32_t sysfs_node_show(int handle, char *buf, uint32_t cap)
 {
     struct sys_node *n = handle > 0 && handle <= SYS_NODES ? &sys[handle - 1] : 0;
@@ -1747,8 +1761,10 @@ static void row_boot(void)
           "boot: registered, the rings started, pipe A adopted with the firmware's framebuffer");
     fw_obj = i915->display.crtc[0].primary.state->fb->obj[0];
     CHECK(sys_bus_path("drivers", "i915", "bind") > 0 &&
-              sys_bus_path("drivers", "i915", "unbind") > 0 && sys_bound(),
-          "boot: /sys has the driver's directory, bind and unbind, and the driver on the function");
+              sys_bus_path("drivers", "i915", "unbind") > 0 && sys_bound() && bind_events == 1 &&
+              unbind_events == 0,
+          "boot: /sys has the driver's directory, bind and unbind, and the driver on the function, "
+          "with one bind uevent");
     CHECK(owner && strcmp(owner, PCI_OWNER_KERNEL) == 0 && msi_on() && vectors_live == 1 &&
               (command() & (PCI_CMD_BUS_MASTER | PCI_CMD_MEMORY_SPACE)) ==
                   (PCI_CMD_BUS_MASTER | PCI_CMD_MEMORY_SPACE),
@@ -1817,7 +1833,8 @@ static int released(void)
 {
     return display_off() && rings_idle() && rings_running_at_unplug == 0 && interrupts_off() &&
            !msi_on() && vectors_live == 0 && !(command() & PCI_CMD_BUS_MASTER) && owner == NULL &&
-           !sys_bound() && sys_bus_path("drivers", "i915", "bind") > 0 &&
+           !sys_bound() && unbind_events == bind_events &&
+           sys_bus_path("drivers", "i915", "bind") > 0 &&
            sys_bus_path("drivers", "i915", "unbind") > 0 && card() == NULL;
 }
 

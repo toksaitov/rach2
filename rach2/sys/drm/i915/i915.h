@@ -4388,11 +4388,12 @@ void i915_debugfs_register(struct drm_i915_private *i915);
  * if it is not there, and show the driver on the function as Linux's
  * driver core does (`sysfs_pci_bind`): its `driver` link, the directory's
  * link to it and DRIVER= in its uevent, which libudev, IGT's device scan
- * and Mesa's loader read. From the bind, under the big lock. */
+ * and Mesa's loader read, and send the function's "bind" uevent. From the
+ * bind, under the big lock. */
 void i915_handoff_bound(struct drm_i915_private *i915);
 
-/** A device is unplugged: take that binding away. Nothing for a device
- * `i915_handoff_bound` was not told of. */
+/** A device is unplugged: take that binding away and send "unbind".
+ * Nothing for a device `i915_handoff_bound` did not show bound. */
 void i915_handoff_unbound(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */

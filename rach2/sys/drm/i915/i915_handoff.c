@@ -74,6 +74,7 @@
 /* A bound device, which /sys shows bound to the driver. */
 static struct handoff_slot {
     struct drm_i915_private *i915; /* NULL for a free slot */
+    int linked;                    /* shown bound to i915 in /sys */
 } slots[HANDOFF_DEVICES];
 
 static int sys_dir;        /* /sys/bus/pci/drivers/i915, or 0 */
@@ -526,7 +527,7 @@ static void sys_start(void)
 void i915_handoff_bound(struct drm_i915_private *i915)
 {
     struct handoff_slot *slot = 0;
-    int i, err;
+    int i, err, key;
 
     for (i = 0; i < HANDOFF_DEVICES && !slot; i++) {
         if (!slots[i].i915) {
@@ -539,20 +540,28 @@ void i915_handoff_bound(struct drm_i915_private *i915)
     }
     sys_start();
     slot->i915 = i915;
-    err = sysfs_pci_bind((int)i915->pci.bus << 8 | devfn_of(&i915->pci), "i915");
+    key = (int)i915->pci.bus << 8 | devfn_of(&i915->pci);
+    err = sysfs_pci_bind(key, "i915");
     if (err != 0) {
         klog(KLOG_WARN, "i915", "handoff: driver link not added: error %d", err);
+    } else {
+        slot->linked = 1;
+        sysfs_pci_uevent(key, "bind");
     }
 }
 
 void i915_handoff_unbound(struct drm_i915_private *i915)
 {
-    int i;
+    int key = (int)i915->pci.bus << 8 | devfn_of(&i915->pci), i;
 
     for (i = 0; i < HANDOFF_DEVICES; i++) {
         if (slots[i].i915 == i915) {
-            sysfs_pci_unbind((int)i915->pci.bus << 8 | devfn_of(&i915->pci));
+            if (slots[i].linked) {
+                sysfs_pci_unbind(key);
+                sysfs_pci_uevent(key, "unbind");
+            }
             slots[i].i915 = 0;
+            slots[i].linked = 0;
         }
     }
 }

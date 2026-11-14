@@ -32,8 +32,9 @@
  * `nomodeset` and `bochs.modeset`, which bind it or not as Linux's
  * drm_pci_register_driver_if_modeset decides; the function shown bound to
  * bochs-drm in /sys before its card registers, as Linux's driver core binds
- * it; and a failed registration, which releases the device whole and leaves
- * the function unbound.
+ * it, and its bind uevent after; a failed registration, which releases the
+ * device whole and leaves the function unbound; and a binding that cannot
+ * be shown, which fails the bind before the card registers.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -191,11 +192,28 @@ int32_t drm_dev_register(struct drm_device *d)
     return 0;
 }
 
-/** Show `key` bound, as sysfs.c does. */
+/* The error the next binding returns, 0 to show it; and the "bind" uevents
+ * sent of the bound function. */
+static int bind_rc, bind_events;
+
+/** Show `key` bound, as sysfs.c does, or fail as the row asks. */
 int sysfs_pci_bind(int key, const char *driver)
 {
+    if (bind_rc != 0) {
+        return bind_rc;
+    }
     bound_key = key;
     bound_driver = driver;
+    return 0;
+}
+
+/** Count a "bind" uevent of the bound function, which comes after its card
+ * registers. */
+int32_t sysfs_pci_uevent(int key, const char *action)
+{
+    CHECK(key == bound_key && strcmp(action, "bind") == 0 && last_dev && last_dev->registered,
+          "the function's bind uevent comes after its card registers");
+    bind_events++;
     return 0;
 }
 
@@ -994,10 +1012,34 @@ static void row_register_fails(void)
     register_rc = -ENOSPC;
     released = 0;
     bound_key = -1;
+    bind_events = 0;
     CHECK(bind() == -ENOSPC && released == 1 && allocations == base,
           "a failed registration releases the device and its EDID");
-    CHECK(bound_key == -1, "a failed registration leaves the function unbound");
+    CHECK(bound_key == -1 && bind_events == 0,
+          "a failed registration leaves the function unbound, with no bind uevent");
     register_rc = 0;
+}
+
+/** A binding that cannot be shown fails the bind before the card
+ * registers, as Linux's really_probe stops when driver_sysfs_add fails;
+ * one that is shown sends one bind uevent. */
+static void row_bind_fails(void)
+{
+    int base = allocations, was = registered;
+
+    model_reset(1);
+    bind_rc = -ENOMEM;
+    released = 0;
+    bound_key = -1;
+    bind_events = 0;
+    CHECK(bind() == -ENOMEM && released == 1 && registered == was && allocations == base,
+          "a binding not shown fails the bind and registers no card");
+    CHECK(bound_key == -1 && bind_events == 0, "a failed binding sends no bind uevent");
+    bind_rc = 0;
+    model_reset(1);
+    CHECK(bind() == 0 && bind_events == 1, "a bound function sends one bind uevent");
+    take_device();
+    unbind();
 }
 
 int main(void)
@@ -1017,6 +1059,7 @@ int main(void)
     row_probe();
     row_modeset();
     row_register_fails();
+    row_bind_fails();
     CHECK(allocations == base, "every allocation freed");
     free(vram);
     if (failures) {
