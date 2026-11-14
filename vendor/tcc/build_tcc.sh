@@ -132,8 +132,9 @@ tar xf "$TARBALL" -C "$WORK"
 # offsetof, and gives the x86-64 runtime's va_arg no call of abort(); and on
 # x86-64 it clears the high half of an unsigned int widened to 64 bits or
 # converted to floating point, keeps a VLA's size in a size_t, and scales an
-# index into a pointer to a VLA by the VLA's size; and it lets an array
-# parameter's bound name an earlier parameter, as C99 programs do.
+# index into a pointer to a VLA by the VLA's size; it lets an array
+# parameter's bound name an earlier parameter, as C99 programs do; and it
+# calls a static executable's IFUNC through the function its resolver returns.
 # Patches applied here rather than an edited tree, so the vendored source stays
 # as upstream shipped it and the diff a reader wants is a file in this
 # repository. A patch that does not apply is a build that stops: silently
@@ -143,7 +144,8 @@ echo "tcc: applying the output policy, the static link and the kernel's needs"
 for p in rach2-output-policy.patch rach2-x86_64-static-link.patch \
          rach2-x86-asm.patch rach2-linker-script.patch \
          rach2-builtin-offsetof.patch rach2-va-list-trap.patch \
-         rach2-x86_64-zero-extend.patch rach2-vla-param.patch; do
+         rach2-x86_64-zero-extend.patch rach2-vla-param.patch \
+         rach2-ifunc.patch; do
     if ! (cd "$SRC" && patch -p1 --batch --forward < "$SCRIPT_DIR/$p" >/dev/null); then
         echo "tcc: $p did not apply to $SRC" >&2
         exit 1
@@ -170,6 +172,9 @@ if ! grep -q "s1->seg_size = 64;" "$SRC/tccasm.c" ||
    ! grep -q "the size is a size_t, as GCC keeps it" "$SRC/tccgen.c" ||
    ! grep -q "a VLA, or a pointer to one" "$SRC/tccgen.c" ||
    ! grep -q "^static void func_vla_params" "$SRC/tccgen.c" ||
+   ! grep -q "^static void param_bound_replay" "$SRC/tccgen.c" ||
+   ! grep -q "^static void ifunc_entry_code" "$SRC/tccelf.c" ||
+   ! grep -q '"gnu_indirect_function"' "$SRC/tccasm.c" ||
    ! grep -q "movl r, r clears the high half, which fildll reads" "$SRC/x86_64-gen.c"; then
     echo "tcc: the kernel's assembler, linker, runtime or code generation changes are not in the source it is about to build" >&2
     exit 1

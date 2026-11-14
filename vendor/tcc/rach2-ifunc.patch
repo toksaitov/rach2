@@ -1,0 +1,308 @@
+Call a static executable's IFUNC through the function its resolver
+returns, and let the assembler make one with .type gnu_indirect_function.
+
+An STT_GNU_IFUNC symbol is a resolver: what a call to the symbol must reach
+is the function the resolver returns. GNU ld writes an IRELATIVE
+relocation for each, which a dynamic loader applies, or in a static
+executable glibc's startup through __rela_iplt_start. musl's startup
+applies none, and TinyCC 0.9.27 writes none: a static link put the
+resolver's address in every reference, so a call ran the resolver and
+returned the function's address, and rach2-x86_64-static-link.patch's
+direct call to a defined function does the same. The assembler ignored
+the type, so TinyCC could not make an IFUNC at all.
+
+.type sym, @gnu_indirect_function or STT_GNU_IFUNC now sets the attribute
+ifunc, and update_storage gives the ELF symbol that type. In a static
+executable, build_got_entries takes each reference to a defined IFUNC
+before any other rule, the direct call among them, gives the IFUNC a GOT
+entry, and points the reference at a stub of .iplt, `jmp *entry`, whose
+address is the function's for every reference, a GOT entry's included, as
+GNU ld makes it in an executable that is not position independent.
+ifunc_entry_code then writes into .iplt code that calls each resolver and
+stores what it returns in its entry, keeping the stack pointer and %edx or
+%rdx, which the ABI gives the entry point, and aligning the stack to 16
+bytes for each call, and that jumps to the entry point, whose place in the
+ELF header it takes. The resolvers thus run before any constructor, as
+glibc's static startup runs them; like there, a resolver must not rely on
+the C library's initialization. An executable without an IFUNC links as
+before.
+
+diff --git a/tcc.h b/tcc.h
+index 67c229c..14c68b4 100644
+--- a/tcc.h
++++ b/tcc.h
+@@ -440,7 +440,8 @@ struct SymAttr {
+     visibility  : 2,
+     dllexport   : 1,
+     dllimport   : 1,
+-    unused      : 5;
++    ifunc       : 1, /* .type gnu_indirect_function: an STT_GNU_IFUNC */
++    unused      : 4;
+ };
+ 
+ /* function attributes or temporary attributes for parsing */
+@@ -787,6 +788,9 @@ struct TCCState {
+     /* got & plt handling */
+     Section *got;
+     Section *plt;
++    /* a static executable's stubs for its IFUNCs and the code that fills
++       their GOT entries before its entry point */
++    Section *iplt;
+ 
+     /* temporary dynamic symbol sections (for dll loading) */
+     Section *dynsymtab_section;
+diff --git a/tccasm.c b/tccasm.c
+index c20f3c2..709791d 100644
+--- a/tccasm.c
++++ b/tccasm.c
+@@ -822,6 +822,14 @@ static void asm_parse_directive(TCCState *s1, int global)
+             if (!strcmp(newtype, "function") || !strcmp(newtype, "STT_FUNC")) {
+                 sym->type.t = (sym->type.t & ~VT_BTYPE) | VT_FUNC;
+             }
++            else if (!strcmp(newtype, "gnu_indirect_function") ||
++                     !strcmp(newtype, "STT_GNU_IFUNC")) {
++                /* the symbol is a resolver, which returns the function
++                   that a call to the symbol reaches; its C type, which a
++                   declaration may give it, stays */
++                sym->a.ifunc = 1;
++                update_storage(sym);
++            }
+             else if (s1->warn_unsupported)
+                 tcc_warning("change type of '%s' from 0x%x to '%s' ignored", 
+                     get_tok_str(sym->v, NULL), sym->type.t, newtype);
+diff --git a/tccelf.c b/tccelf.c
+index ffa2480..89b6014 100644
+--- a/tccelf.c
++++ b/tccelf.c
+@@ -1014,13 +1014,178 @@ static struct sym_attr * put_got_entry(TCCState *s1, int dyn_reloc_type,
+     return attr;
+ }
+ 
++#if defined TCC_TARGET_X86_64 || defined TCC_TARGET_I386
++/* A static executable has no dynamic loader to apply the IRELATIVE
++   relocations through which GNU ld has an IFUNC resolved, and musl's
++   startup applies none.  Each IFUNC it defines gets instead a GOT entry and
++   a stub in .iplt, `jmp *entry`, which every relocation of the IFUNC takes;
++   the code that ifunc_entry_code puts before the entry point stores into
++   each entry the function its resolver returns. */
++
++/* Return the section of the IFUNC stubs and entry code, made if need be. */
++static Section *iplt_section(TCCState *s1)
++{
++    if (!s1->iplt) {
++        s1->iplt = new_section(s1, ".iplt", SHT_PROGBITS,
++                               SHF_ALLOC | SHF_EXECINSTR);
++        s1->iplt->sh_addralign = 16;
++    }
++    return s1->iplt;
++}
++
++/* Return whether a relocation of type 'type' reads a GOT entry. */
++static int ifunc_got_reloc(int type)
++{
++    switch (type) {
++#ifdef TCC_TARGET_X86_64
++    case R_X86_64_GOT32:
++    case R_X86_64_GOT64:
++    case R_X86_64_GOTPCREL:
++    case R_X86_64_GOTPCRELX:
++    case R_X86_64_REX_GOTPCRELX:
++#else
++    case R_386_GOT32:
++    case R_386_GOT32X:
++#endif
++        return 1;
++    }
++    return 0;
++}
++
++/* Return the index of the local symbol of the stub of the IFUNC
++   'sym_index', making the stub and the IFUNC's GOT entry if need be. */
++static int ifunc_stub(TCCState *s1, int sym_index)
++{
++    ElfW(Sym) *sym;
++    struct sym_attr *attr;
++    Section *iplt;
++    unsigned char *p;
++    unsigned off;
++    int got_sym;
++
++    sym = &((ElfW(Sym) *)symtab_section->data)[sym_index];
++    attr = put_got_entry(s1, R_GLOB_DAT, sym->st_size, sym->st_info,
++                         sym_index);
++    if (attr->plt_sym)
++        return attr->plt_sym;
++    iplt = iplt_section(s1);
++    got_sym = find_elf_sym(symtab_section, "_GLOBAL_OFFSET_TABLE_");
++    off = iplt->data_offset;
++    p = section_ptr_add(iplt, 8);
++    p[0] = 0xff; /* jmp *entry */
++    p[1] = 0x25;
++#ifdef TCC_TARGET_X86_64
++    write32le(p + 2, 0);
++    put_elf_reloca(symtab_section, iplt, off + 2, R_X86_64_PC32, got_sym,
++                   attr->got_offset - 4);
++#else
++    write32le(p + 2, attr->got_offset);
++    put_elf_reloc(symtab_section, iplt, off + 2, R_386_32, got_sym);
++#endif
++    p[6] = 0x90;
++    p[7] = 0x90;
++    attr->plt_sym = put_elf_sym(symtab_section, off, 8,
++                                ELFW(ST_INFO)(STB_LOCAL, STT_FUNC), 0,
++                                iplt->sh_num, NULL);
++    return attr->plt_sym;
++}
++
++/* Put before the entry point of a static executable the code that calls
++   the resolver of each IFUNC with a GOT entry and stores what it returns in
++   the entry, as glibc's static startup applies IRELATIVE relocations
++   before any constructor runs.  The code keeps the stack pointer and %edx
++   or %rdx, which the ABI gives the entry point, aligns the stack to 16
++   bytes for each call, and jumps to the entry point, whose place it takes
++   in the ELF header. */
++static void ifunc_entry_code(TCCState *s1)
++{
++    ElfW(Sym) *sym;
++    Section *iplt;
++    unsigned char *p;
++    unsigned off, start, got_offset;
++    int i, nb_syms, got_sym, entry_sym, found;
++    const char *entry;
++
++    found = 0;
++    nb_syms = symtab_section->data_offset / sizeof(ElfW(Sym));
++    for (i = 1; i < nb_syms && i < s1->nb_sym_attrs; i++) {
++        sym = &((ElfW(Sym) *)symtab_section->data)[i];
++        if (ELFW(ST_TYPE)(sym->st_info) == STT_GNU_IFUNC &&
++            s1->sym_attrs[i].got_offset)
++            found = 1;
++    }
++    if (!found)
++        return;
++    entry = s1->elf_entry ? s1->elf_entry : "_start";
++    entry_sym = find_elf_sym(symtab_section, entry);
++    if (!entry_sym ||
++        ((ElfW(Sym) *)symtab_section->data)[entry_sym].st_shndx == SHN_UNDEF)
++        tcc_error("%s not defined", entry);
++    got_sym = find_elf_sym(symtab_section, "_GLOBAL_OFFSET_TABLE_");
++    iplt = iplt_section(s1);
++    start = iplt->data_offset;
++#ifdef TCC_TARGET_X86_64
++    p = section_ptr_add(iplt, 5);
++    memcpy(p, "\x52\x48\x83\xec\x08", 5); /* push %rdx; sub $8,%rsp */
++#else
++    p = section_ptr_add(iplt, 4);
++    memcpy(p, "\x52\x83\xec\x0c", 4); /* push %edx; sub $12,%esp */
++#endif
++    for (i = 1; i < nb_syms && i < s1->nb_sym_attrs; i++) {
++        sym = &((ElfW(Sym) *)symtab_section->data)[i];
++        got_offset = s1->sym_attrs[i].got_offset;
++        if (ELFW(ST_TYPE)(sym->st_info) != STT_GNU_IFUNC || !got_offset)
++            continue;
++        off = iplt->data_offset;
++#ifdef TCC_TARGET_X86_64
++        p = section_ptr_add(iplt, 12);
++        p[0] = 0xe8; /* call resolver */
++        write32le(p + 1, 0);
++        put_elf_reloca(symtab_section, iplt, off + 1, R_X86_64_PC32, i, -4);
++        p[5] = 0x48; /* mov %rax,entry(%rip) */
++        p[6] = 0x89;
++        p[7] = 0x05;
++        write32le(p + 8, 0);
++        put_elf_reloca(symtab_section, iplt, off + 8, R_X86_64_PC32, got_sym,
++                       got_offset - 4);
++#else
++        p = section_ptr_add(iplt, 10);
++        p[0] = 0xe8; /* call resolver */
++        write32le(p + 1, -4);
++        put_elf_reloc(symtab_section, iplt, off + 1, R_386_PC32, i);
++        p[5] = 0xa3; /* mov %eax,entry */
++        write32le(p + 6, got_offset);
++        put_elf_reloc(symtab_section, iplt, off + 6, R_386_32, got_sym);
++#endif
++    }
++    off = iplt->data_offset;
++#ifdef TCC_TARGET_X86_64
++    p = section_ptr_add(iplt, 10);
++    memcpy(p, "\x48\x83\xc4\x08\x5a\xe9", 6); /* add $8,%rsp; pop %rdx */
++    write32le(p + 6, 0);
++    put_elf_reloca(symtab_section, iplt, off + 6, R_X86_64_PC32, entry_sym,
++                   -4);
++#else
++    p = section_ptr_add(iplt, 9);
++    memcpy(p, "\x83\xc4\x0c\x5a\xe9", 5); /* add $12,%esp; pop %edx */
++    write32le(p + 5, -4);
++    put_elf_reloc(symtab_section, iplt, off + 5, R_386_PC32, entry_sym);
++#endif
++    put_elf_sym(symtab_section, start, iplt->data_offset - start,
++                ELFW(ST_INFO)(STB_GLOBAL, STT_FUNC), STV_HIDDEN,
++                iplt->sh_num, ".iplt.entry");
++    tcc_free(s1->elf_entry);
++    s1->elf_entry = tcc_strdup(".iplt.entry");
++}
++#endif
++
+ /* build GOT and PLT entries */
+ ST_FUNC void build_got_entries(TCCState *s1)
+ {
+     Section *s;
+     ElfW_Rel *rel;
+     ElfW(Sym) *sym;
+-    int i, type, gotplt_entry, reloc_type, sym_index;
++    int i, type, gotplt_entry, reloc_type, sym_index, stub;
+     struct sym_attr *attr;
+ 
+     for(i = 1; i < s1->nb_sections; i++) {
+@@ -1042,6 +1207,27 @@ ST_FUNC void build_got_entries(TCCState *s1)
+                 continue;
+             }
+ 
++#if defined TCC_TARGET_X86_64 || defined TCC_TARGET_I386
++            /* A static executable's IFUNC is reached through its stub, whose
++               address is the function's for every reference, a GOT entry's
++               included, as GNU ld makes it in an executable that is not
++               position independent. */
++            if (s1->output_type == TCC_OUTPUT_EXE && s1->static_link &&
++                ELFW(ST_TYPE)(sym->st_info) == STT_GNU_IFUNC &&
++                sym->st_shndx != SHN_UNDEF) {
++                if (!s1->got)
++                    build_got(s1);
++                if (gotplt_entry == BUILD_GOT_ONLY)
++                    continue;
++                stub = ifunc_stub(s1, sym_index);
++                rel->r_info = ELFW(R_INFO)(stub, type);
++                if (ifunc_got_reloc(type))
++                    put_got_entry(s1, R_GLOB_DAT, 8,
++                                  ELFW(ST_INFO)(STB_LOCAL, STT_FUNC), stub);
++                continue;
++            }
++#endif
++
+             /* Automatically create PLT/GOT [entry] if it is an undefined
+ 	       reference (resolved at runtime), or the symbol is absolute,
+ 	       probably created by tcc_add_symbol, and thus on 64-bit
+@@ -2989,6 +3175,10 @@ static int elf_output_file(TCCState *s1, const char *filename)
+             ld_declare_symbols(ls);
+         }
+         build_got_entries(s1);
++#if defined TCC_TARGET_X86_64 || defined TCC_TARGET_I386
++        if (file_type == TCC_OUTPUT_EXE && s1->static_link)
++            ifunc_entry_code(s1);
++#endif
+     }
+ 
+     /* we add a section for symbols */
+diff --git a/tccgen.c b/tccgen.c
+index 144ae31..6be91ba 100644
+--- a/tccgen.c
++++ b/tccgen.c
+@@ -326,6 +326,8 @@ ST_FUNC void update_storage(Sym *sym)
+     if (sym_bind != old_sym_bind) {
+         esym->st_info = ELFW(ST_INFO)(sym_bind, ELFW(ST_TYPE)(esym->st_info));
+     }
++    if (sym->a.ifunc)
++        esym->st_info = ELFW(ST_INFO)(sym_bind, STT_GNU_IFUNC);
+ 
+ #ifdef TCC_TARGET_PE
+     if (sym->a.dllimport)
