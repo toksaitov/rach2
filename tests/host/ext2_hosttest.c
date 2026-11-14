@@ -4889,29 +4889,35 @@ static const char *const removal_kinds[3] = {"an empty file", "a fast symlink",
 /* How it removes it, by its `way`: an unlink; an unlink and a new node of
    another type, which takes the freed inode; a rename of a file over it; a
    new file made and then the unlink, so that the free meets the new inode's
-   bit not yet on the device in the same bitmap block; and the two across a
-   remount to `sync` (REMOVAL_REMOUNT): an unlink beside `src`'s, then the
-   remount and a new file, which takes one freed inode while the other's
-   cleared bit and zeroed slot are pending, and a new file, then the remount
-   and the unlink, while the new inode's bit and slot are pending. */
-#define REMOVAL_WAYS    6
-#define REMOVAL_REMOUNT 4
+   bit not yet on the device in the same bitmap block; a second name of
+   `src` and a FIFO made, then the unlink; `src` renamed to a new name, then
+   the unlink; and two across a remount to `sync` (REMOVAL_REMOUNT): an
+   unlink beside `src`'s, then the remount and a new file, which takes one
+   freed inode while the other's cleared bit and zeroed slot are pending,
+   and a new file, then the remount and the unlink, while the new inode's
+   bit and slot are pending. */
+#define REMOVAL_WAYS    8
+#define REMOVAL_REMOUNT 6
 static const char *const removal_ways[REMOVAL_WAYS] = {
     "unlinked",
     "unlinked with its inode reused",
     "renamed over",
     "unlinked after a file is made",
+    "unlinked after a link and a FIFO are made",
+    "unlinked after a file is renamed",
     "unlinked with another, then a file made after a remount to sync",
     "unlinked after a file is made and a remount to sync"};
 
 /* The repairs e2fsck may ask for after a stop of a removal on a mount that
-   writes back: counts and bitmaps, an inode left with no name, a new
+   writes back: counts and bitmaps, an inode left with no name, and a new
    directory's inode, which is written before its parent names it, left
-   unconnected with its `..` naming the root, and the name `new` written
-   before its inode, as Linux's ext2_add_link writes it too. No finding of
-   `gone` or `src`, an entry naming a free inode or one of another type, is
-   among them. The last is allowed only once a remount made the mount strict
-   (`removal_findings_allowed`). `#` is a run of digits. */
+   unconnected with its `..` naming the root. A link count is among them
+   only above its names (`counts_kept`). No entry naming a free or zeroed
+   inode, `gone`, `src` or a new name, nor one of another type is among
+   them, as machine.ext2stop allows none: a new inode reaches the device
+   before the entry that names it. The last is allowed only once a remount
+   made the mount strict (`removal_findings_allowed`). `#` is a run of
+   digits. */
 static const char *const removal_findings[] = {
     "Free inodes count wrong",
     "Free blocks count wrong",
@@ -4925,7 +4931,6 @@ static const char *const removal_findings[] = {
     "Unattached zero-length inode #",
     "Unconnected directory inode #",
     "'..' in ... (#) is / (2), should be <The NULL inode> (0).",
-    "Entry 'new' in / (2) has ",
     /* A strict unlink of a file with blocks stores the inode's count of 0
        through before it frees the blocks, and its zeroed slot with the
        deletion time after them, as the strict matrix allows
@@ -4980,6 +4985,27 @@ static int removal_new(void)
     return rc;
 }
 
+/** Make `twin`, a second name of `src`, and `fifo`, a FIFO, in the root.
+ * 0, or the first error. */
+static int removal_names(void)
+{
+    int rc = 0;
+    void *n = walk("/src", &rc);
+
+    if (n) {
+        rc = OPS->link(&mnt, mnt.root, "twin", n);
+        OPS->put(&mnt, n);
+        n = 0;
+    }
+    if (rc == 0) {
+        rc = OPS->mknod(&mnt, mnt.root, "fifo", 0010644, 0, &n);
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    return rc;
+}
+
 /** Remount the writable mount with `sync` added, and give the mount the
  * flags, as `vfs_remount` stores them once the type's `remount` succeeds.
  * 0, or the remount's error. */
@@ -4999,10 +5025,12 @@ static int removal_remount(void)
  * empty file, a file of 10 bytes for a link and a directory for a file with
  * blocks, which takes the freed inode as the lowest free one of its group;
  * by a rename of `src` over it; by a file `new` of 10 bytes made and then
- * an unlink; by an unlink of `src` and of it, a remount to `sync` and then
- * `new` made; or by `new` made, the remount and then an unlink
- * (`removal_remount`). The inode number of `new` in `*reused` for the
- * second way, 0 otherwise. Returns 0, or the first error.
+ * an unlink; by a second name of `src` and a FIFO made (`removal_names`) and
+ * then an unlink; by `src` renamed to `moved` and then an unlink; by an
+ * unlink of `src` and of it, a remount to `sync` and then `new` made; or by
+ * `new` made, the remount and then an unlink (`removal_remount`). The inode
+ * number of `new` in `*reused` for the second way, 0 otherwise. Returns 0,
+ * or the first error.
  */
 static int removal_run(int kind, int way, uint64_t *reused)
 {
@@ -5010,13 +5038,19 @@ static int removal_run(int kind, int way, uint64_t *reused)
     int rc = 0;
 
     *reused = 0;
-    if (way == 3 || way == 5) {
+    if (way == 3 || way == 7) {
         rc = removal_new();
     }
-    if (rc == 0 && way == 5) {
+    if (way == 4) {
+        rc = removal_names();
+    }
+    if (way == 5) {
+        rc = OPS->rename(&mnt, mnt.root, "src", mnt.root, "moved");
+    }
+    if (rc == 0 && way == 7) {
         rc = removal_remount();
     }
-    if (rc == 0 && way == 4) {
+    if (rc == 0 && way == 6) {
         rc = OPS->unlink(&mnt, mnt.root, "src");
     }
     if (rc != 0) {
@@ -5025,7 +5059,7 @@ static int removal_run(int kind, int way, uint64_t *reused)
     } else {
         rc = OPS->unlink(&mnt, mnt.root, "gone");
     }
-    if (rc == 0 && way == 4) {
+    if (rc == 0 && way == 6) {
         rc = removal_remount();
         if (rc == 0) {
             rc = removal_new();
@@ -5146,25 +5180,83 @@ static void drop_as_crash(void)
 }
 
 /**
- * Whether e2fsck's output `out` names no inode in use that its bitmap calls
- * free: its `Inode bitmap differences:` line, if any, holds only `-N` and
- * `-(N--M)`, inodes marked in use that nothing uses, which a stop may leave,
+ * Whether e2fsck's output `out` names nothing in use that a bitmap calls
+ * free: its line that begins with `head`, `Inode bitmap differences:` or
+ * `Block bitmap differences:`, if any, holds only `-N` and `-(N--M)`,
+ * inodes or blocks marked in use that nothing uses, which a stop may leave,
  * and no `+`, which a later allocation would hand out a second time. The
- * line is printed when it has one.
+ * line is printed, after `what`, when it has one. e2fsck writes the whole
+ * list on one line, which is read whole however long.
  */
+static int bits_kept(const char *out, const char *head, const char *what)
+{
+    void *f = fopen(out, "r");
+    char part[4096];
+    int ok = 1, start = 1, listed = 0;
+
+    if (!f) {
+        return 0;
+    }
+    while (fgets(part, sizeof(part), f)) {
+        if (start) {
+            listed = strstr(part, head) == part;
+        }
+        if (listed && strstr(part, "+") != 0) {
+            printf("  %s: %s%s", what, part, strstr(part, "\n") ? "" : "\n");
+            ok = 0;
+        }
+        start = strstr(part, "\n") != 0;
+    }
+    fclose(f);
+    return ok;
+}
+
+/** Whether e2fsck's output `out` names no live inode whose bit is clear
+ * (`bits_kept`). */
 static int inode_bits_kept(const char *out)
 {
-    static const char head[] = "Inode bitmap differences:";
+    return bits_kept(out, "Inode bitmap differences:", "a live inode whose bit is clear");
+}
+
+/** Whether e2fsck's output `out` names no block in use whose bit is clear
+ * (`bits_kept`). */
+static int block_bits_kept(const char *out)
+{
+    return bits_kept(out, "Block bitmap differences:", "a named block whose bit is clear");
+}
+
+/**
+ * Whether e2fsck's output `out` finds no link count below the names of its
+ * inode, `Inode N ref count is C, should be L.` with C below L: a removal
+ * of one name would take such a count to 0 and free the inode while
+ * another name still names it. A count above its names, which a stop
+ * leaves when a removed name reached the device before the lowered count,
+ * or a raised count before a new name, is a repair. Each such line is
+ * printed.
+ */
+static int counts_kept(const char *out)
+{
     void *f = fopen(out, "r");
-    char line[4096];
+    char line[512];
     int ok = 1;
 
     if (!f) {
         return 0;
     }
     while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, head) == line && strstr(line, "+") != 0) {
-            printf("  a live inode whose bit is clear: %s", line);
+        char *at = strstr(line, " ref count is "), *end;
+        long was, should;
+
+        if (strstr(line, "Inode ") != line || !at) {
+            continue;
+        }
+        was = strtol(at + 14, &end, 10);
+        if (strstr(end, ", should be ") != end) {
+            continue;
+        }
+        should = strtol(end + 12, &end, 10);
+        if (was < should) {
+            printf("  a count below its names: %s", line);
             ok = 0;
         }
     }
@@ -5176,7 +5268,8 @@ static int inode_bits_kept(const char *out)
  * Drop the mount and its cache as a crash would, after `kind` was removed
  * in `way` and stopped after write `k` of `n`, and judge the volume left:
  * e2fsck run to its end asking only for `removal_findings`, with no inode
- * in use whose bit is clear (`inode_bits_kept`), and each name left marked
+ * or block in use whose bit is clear (`inode_bits_kept`, `block_bits_kept`)
+ * and no count below its names (`counts_kept`), and each name left marked
  * in use (`removal_names_used`).
  */
 static void removal_judge(int kind, int way, int k, int n)
@@ -5198,6 +5291,14 @@ static void removal_judge(int kind, int way, int k, int n)
              "%s %s, stopped after write %d of %d, leaves no live inode whose bit is clear",
              removal_kinds[kind], removal_ways[way], k, n);
     check(inode_bits_kept(fix_path("fsck.out")), what);
+    snprintf(what, sizeof what,
+             "%s %s, stopped after write %d of %d, leaves no named block whose bit is clear",
+             removal_kinds[kind], removal_ways[way], k, n);
+    check(block_bits_kept(fix_path("fsck.out")), what);
+    snprintf(what, sizeof what,
+             "%s %s, stopped after write %d of %d, leaves no count below its names",
+             removal_kinds[kind], removal_ways[way], k, n);
+    check(counts_kept(fix_path("fsck.out")), what);
     snprintf(what, sizeof what,
              "%s %s, stopped after write %d of %d, leaves no name of a free inode",
              removal_kinds[kind], removal_ways[way], k, n);
@@ -5266,16 +5367,20 @@ static void removal_ways_rows(int first)
  * On a mount that writes back, remove a synced empty file, fast symlink and
  * file with blocks by an unlink, by an unlink whose inode a node of another
  * type takes again, by a rename over it, by an unlink after a new file is
- * made, and by the last two across a remount to `sync` with the free or the
- * allocation pending (`removal_run`), and stop the removal and the sync
- * after it after each of their writes, the remount's among them. No stop may
- * leave the removed name on the disk naming an inode the bitmap calls free
- * or one of another type, as Linux's ext2 writes a directory's change
- * before the inode loses its count (`ext2_handle_dirsync`, fs/ext2/dir.c:440
- * in Linux 6.12.115), nor an inode in use whose bit is clear, which Linux's
- * ext2 does not promise: e2fsck must run to its end and ask only for the
- * repairs of `removal_findings`, with no `+` among the inode bitmap's
- * differences, and debugfs must find each name left marked in use.
+ * made, after a link and a FIFO are made and after a rename to a new name,
+ * and by an unlink beside another or after a new file across a remount to
+ * `sync` with the free or the allocation pending (`removal_run`), and stop
+ * the removal and the sync after it after each of their writes, the
+ * remount's among them. No stop may leave the removed name on the disk
+ * naming an inode the bitmap calls free or one of another type, as Linux's
+ * ext2 writes a directory's change before the inode loses its count
+ * (`ext2_handle_dirsync`, fs/ext2/dir.c:440 in Linux 6.12.115), nor a new
+ * name naming a zeroed inode, an inode or a block in use whose bit is
+ * clear, or a count below its names, which Linux's ext2 does not promise:
+ * e2fsck must run to its end and ask only for the repairs of
+ * `removal_findings`, with no `+` among the bitmaps' differences and no
+ * count below its names, and debugfs must find each name left marked in
+ * use.
  */
 static void removal_rows(void)
 {
@@ -5286,6 +5391,215 @@ static void removal_rows(void)
 static void removal_remount_rows(void)
 {
     removal_ways_rows(REMOVAL_REMOUNT);
+}
+
+/* ---- a block's bit before every pointer to the block ---- */
+
+/* How a regrowth row frees the blocks of `gone`, a file of REGROW_GONE
+   blocks, its single indirect block among them, beside `grow`, a file of
+   one block that grows past its direct blocks by REGROW_MORE more and so
+   takes an indirect block, by its `way`: `gone` truncated to two blocks and
+   then `grow` written; `grow` written and then `gone` truncated; `gone`
+   unlinked and then `grow` written; `grow` written and then `gone`
+   unlinked; a directory made, which takes its block by the allocator and
+   not the batch, and then `gone` truncated; `gone` truncated and then a
+   directory made; and two across a remount to `sync` (REGROW_REMOUNT):
+   `gone` truncated, the remount, then `grow` written, while the cleared
+   bits are pending, and `grow` written, the remount, then `gone`
+   truncated, while the set bits are. */
+#define REGROW_WAYS    8
+#define REGROW_REMOUNT 6
+#define REGROW_GONE    20
+#define REGROW_MORE    16
+static const char *const regrow_ways[REGROW_WAYS] = {
+    "truncated, then a file written past its direct blocks",
+    "truncated after a file is written past its direct blocks",
+    "unlinked, then a file written past its direct blocks",
+    "unlinked after a file is written past its direct blocks",
+    "truncated after a directory is made",
+    "truncated, then a directory made",
+    "truncated, then a file written past its direct blocks after a remount to sync",
+    "truncated after a file is written past its direct blocks and a remount to sync"};
+
+/**
+ * Make a fresh volume of one group, mount it so that it writes back, and
+ * give it `gone` and `grow` (`regrow_ways`), synced. Returns 0, or the
+ * first error, with the volume unmounted.
+ */
+static int regrow_mount(void)
+{
+    void *n;
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    rc = mount_flags(0);
+    n = rc == 0 ? make_file(mnt.root, "gone", &rc) : 0;
+    if (n) {
+        rc = write_at(n, pattern, REGROW_GONE * 4096, 0);
+        OPS->put(&mnt, n);
+    }
+    n = rc == 0 ? make_file(mnt.root, "grow", &rc) : 0;
+    if (n) {
+        rc = write_at(n, pattern, 4096, 0);
+        OPS->put(&mnt, n);
+    }
+    if (rc == 0) {
+        rc = OPS->sync(&mnt);
+    }
+    if (rc != 0) {
+        printf("  rc %d\n", rc);
+        unmount_image();
+    }
+    return rc;
+}
+
+/** Write REGROW_MORE blocks onto the end of `grow`. 0, or the error. */
+static int regrow_write(void)
+{
+    int rc = 0;
+    void *n = walk("/grow", &rc);
+
+    if (n) {
+        rc = write_at(n, pattern + 4096, REGROW_MORE * 4096, 4096);
+        OPS->put(&mnt, n);
+    }
+    return rc;
+}
+
+/** Truncate `gone` to two blocks. 0, or the error. */
+static int regrow_truncate(void)
+{
+    void *n, *h = 0;
+    int rc = 0;
+
+    n = walk("/gone", &rc);
+    if (n) {
+        rc = OPS->open(&mnt, n, 1, &h);
+        if (rc == 0) {
+            rc = OPS->truncate(&mnt, h, 2 * 4096);
+            OPS->release(&mnt, h);
+        }
+        OPS->put(&mnt, n);
+    }
+    return rc;
+}
+
+/**
+ * Free blocks of `gone` and take new ones beside it in `way`
+ * (`regrow_ways`), then sync the volume. Returns 0, or the first error.
+ */
+static int regrow_run(int way)
+{
+    int rc = 0;
+
+    if (way == 1 || way == 3 || way == 7) {
+        rc = regrow_write();
+    }
+    if (rc == 0 && way == 4) {
+        rc = OPS->mkdir(&mnt, mnt.root, "made", 0755);
+    }
+    if (rc == 0 && way == 7) {
+        rc = removal_remount();
+    }
+    if (rc != 0) {
+    } else if (way == 2 || way == 3) {
+        rc = OPS->unlink(&mnt, mnt.root, "gone");
+    } else {
+        rc = regrow_truncate();
+    }
+    if (rc == 0 && way == 6) {
+        rc = removal_remount();
+    }
+    if (rc == 0 && (way == 0 || way == 2 || way == 6)) {
+        rc = regrow_write();
+    }
+    if (rc == 0 && way == 5) {
+        rc = OPS->mkdir(&mnt, mnt.root, "made", 0755);
+    }
+    return rc == 0 ? OPS->sync(&mnt) : rc;
+}
+
+/**
+ * Drop the mount as a crash would after `way` stopped after write `k` of
+ * `n`, and judge the volume left: e2fsck run to its end asking only for
+ * `removal_findings`, with no block or inode in use whose bit is clear
+ * (`block_bits_kept`, `inode_bits_kept`).
+ */
+static void regrow_judge(int way, int k, int n)
+{
+    char what[240];
+    int ok;
+
+    drop_as_crash();
+    snprintf(what, sizeof what,
+             "a file with blocks %s on a mount that writes back, stopped after write %d of %d, "
+             "leaves e2fsck counts, bitmaps and unnamed inodes to repair",
+             regrow_ways[way], k, n);
+    ok = fsck_judged(wimg) >= 0 &&
+         findings_among(removal_findings, sizeof(removal_findings) / sizeof(removal_findings[0]) -
+                                              (way >= REGROW_REMOUNT ? 0 : 1));
+    check(ok, what);
+    if (!ok) {
+        ext2_fixture_head(fix_path("fsck.out"), 30);
+    }
+    snprintf(what, sizeof what,
+             "a file with blocks %s, stopped after write %d of %d, leaves no named block whose "
+             "bit is clear",
+             regrow_ways[way], k, n);
+    check(block_bits_kept(fix_path("fsck.out")), what);
+    snprintf(what, sizeof what,
+             "a file with blocks %s, stopped after write %d of %d, leaves no live inode whose "
+             "bit is clear",
+             regrow_ways[way], k, n);
+    check(inode_bits_kept(fix_path("fsck.out")), what);
+}
+
+/**
+ * On a volume of one group, whose one block bitmap takes every change, free
+ * blocks of a synced file with an indirect block, by a truncate and by an
+ * unlink, beside a file written past its direct blocks through the batch
+ * and a directory made through the allocator, in either order and across a
+ * remount to `sync` (`regrow_run`), once whole, counting the writes, and
+ * then once stopped after each of them, the sync's and the remount's among
+ * them. No stop may leave a block a file names whose bit is clear, which a
+ * later allocation would hand out a second time: a set bit reaches the
+ * device before every pointer to its block, the inode's or an indirect
+ * block's, and a pointer's removal before the cleared bit. e2fsck must run
+ * to its end and ask only for the repairs of `removal_findings`, with no
+ * `+` among the bitmaps' differences.
+ */
+static void regrow_rows(void)
+{
+    char what[240];
+    int way, k, n, total = 0;
+
+    fill_pattern();
+    for (way = 0; way < REGROW_WAYS; way++) {
+        if (regrow_mount() != 0) {
+            check(0, "the volume of the regrowth rows mounts and takes its files");
+            return;
+        }
+        writes_made = 0;
+        snprintf(what, sizeof what, "on a mount that writes back, a file with blocks is %s",
+                 regrow_ways[way]);
+        check(regrow_run(way) == 0, what);
+        n = writes_made;
+        check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+        for (k = 0; k <= n; k++) {
+            if (regrow_mount() != 0) {
+                check(0, "the volume of the regrowth rows mounts and takes its files");
+                return;
+            }
+            writes_made = 0;
+            stop_after = k;
+            (void)regrow_run(way);
+            regrow_judge(way, k, n);
+        }
+        total += n + 1;
+    }
+    printf("ext2_hosttest: %d stops of regrowths walked\n", total);
 }
 
 /**
@@ -9581,6 +9895,7 @@ static const struct {
     {"--ftype-only", ftype_rows},
     {"--removal-only", removal_rows},
     {"--removal-remount-only", removal_remount_rows},
+    {"--regrowth-only", regrow_rows},
     {"--dir-commit-only", dir_commit_rows},
     {"--mark-only", mark_rows},
     {"--stop-only", stop_rows},
@@ -9591,7 +9906,8 @@ static const struct {
  * Make the native fixture tree using the prepared independent tools, and run
  * the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes and at 2
  * KiB, the 1 KiB levels, the failures, the write sequences, the types of
- * replaced entries, the removals stopped on a mount that writes back, the
+ * replaced entries, the removals and the frees beside growths stopped on a
+ * mount that writes back, the
  * directory's inode and a reused block before the next step, the marks of nodes
  * whose change is not stored, the error policy's stops beside them, the order
  * rows, the writer's failures, the dirty volumes, the read-only volumes, the
@@ -9639,6 +9955,7 @@ int main(int argc, char **argv)
     write_rows();
     ftype_rows();
     removal_rows();
+    regrow_rows();
     dir_commit_rows();
     mark_rows();
     stop_rows();

@@ -1006,7 +1006,8 @@ static void order_again(block_device_t *dev, uint64_t blk, int order)
  * run the other way, and another owner's block in block order. A pointer
  * block does not wait for data dirtied after its last mark. The shared
  * tree, owner 0, as a directory's, waits for the shared blocks and not a
- * file's.
+ * file's; a file's tree waits for a shared block dirtied before it, such as
+ * the bitmap that took its block, and not for another file's.
  */
 static void pointer_order_rows(void)
 {
@@ -1035,6 +1036,17 @@ static void pointer_order_rows(void)
     check(bcache_sync_block(&vast, 62) == 0 && writes_made == 2 && writes_lba[0] == 73 * 8 &&
               writes_lba[1] == 62 * 8 && dirty_now(&vast, 90),
           "a shared pointer block waits for the shared blocks and not a file's");
+    bcache_sync(&vast);
+
+    dirty_for(&vast, 92, 9, 0);
+    dirty_for(&vast, 74, 0, 0);
+    dirty_pointer_for(&vast, 67, 7, 1);
+    dirty_for(&vast, 79, 0, 0);
+    writes_made = 0;
+    check(bcache_sync_block(&vast, 67) == 0 && writes_made == 2 && writes_lba[0] == 74 * 8 &&
+              writes_lba[1] == 67 * 8 && dirty_now(&vast, 92) && dirty_now(&vast, 79),
+          "a file's pointer block waits for a shared block dirtied before it, as the bitmap "
+          "that took its block, and not for another file's or a later one");
     bcache_sync(&vast);
 }
 
