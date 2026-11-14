@@ -12,6 +12,9 @@
  *     and TIOCSPGRP moves the foreground to a group of the session, one of
  *     a single unreaped zombie included, or a thread's number in that
  *     session even when it names no group, and refuses any other;
+ *   * the leader's TIOCNOTTY sends SIGHUP to its foreground group and gives
+ *     the terminal up, after which TIOCGPGRP, TIOCNOTTY and TIOCSPGRP are
+ *     -ENOTTY;
  *   * the probe's own group, which is orphaned because it leads its session,
  *     gets -ENOTTY from TIOCSPGRP once it is in the background, and goes
  *     ahead while it ignores SIGTTOU, as a shell does;
@@ -37,6 +40,7 @@
 
 #include "probe.h"
 
+#define SIGHUP  1
 #define SIGKILL 9
 #define SIGTERM 15
 #define SIGCHLD 17
@@ -173,6 +177,21 @@ static int signal_set(int sig, unsigned long handler)
     ka.mask = 0;
     return syscall4(SYS_RT_SIGACTION, sig, (long)&ka, 0, 8);
 }
+/** Block the signals of `mask` (SIG_BLOCK) when `block`, else unblock them
+ * (SIG_UNBLOCK): 0, or a negated errno. */
+static int sigmask_change(int block, unsigned long long mask)
+{
+    return syscall4(SYS_RT_SIGPROCMASK, block ? 0 : 1, (long)&mask, 0, 8);
+}
+/** The caller's pending signals, as rt_sigpending gives them, or 0. */
+static unsigned long long sigpending(void)
+{
+    unsigned long long set = 0;
+
+    syscall2(SYS_RT_SIGPENDING, (long)&set, 8);
+    return set;
+}
+
 /** The read call: the count read, 0 at the end, or a negated errno. */
 static int read(int fd, void *buf, int n)
 {
@@ -206,6 +225,30 @@ static void check(int cond, const char *msg)
         syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
     }
+}
+
+/**
+ * TIOCNOTTY from the session's leader with its own group in the foreground:
+ * the call succeeds, the group, the probe, gets SIGHUP, which the probe
+ * blocks and finds pending, and a foreground query then finds the terminal
+ * is no longer the caller's controlling terminal (-ENOTTY), as on Linux,
+ * where disassociate_ctty sends SIGHUP and SIGCONT to the foreground group
+ * and clears the terminal's session. SIGHUP stays ignored after, so the
+ * later TIOCNOTTY of `background_read` cannot end the probe.
+ */
+static void leader_notty(void)
+{
+    unsigned long long hup = 1ull << (SIGHUP - 1);
+    int pgrp = -1;
+
+    check(sigmask_change(1, hup) == 0, "block SIGHUP for TIOCNOTTY");
+    check(ioctl(0, TIOCNOTTY, 0) == 0, "TIOCNOTTY detaches");
+    check((sigpending() & hup) != 0, "the leader's TIOCNOTTY sends SIGHUP to the foreground group");
+    check(signal_set(SIGHUP, SIG_IGN) == 0 && sigmask_change(0, hup) == 0,
+          "ignore SIGHUP after TIOCNOTTY");
+    check(ioctl(0, TIOCGPGRP, &pgrp) == -ENOTTY, "after NOTTY, TIOCGPGRP -> -ENOTTY");
+    check(ioctl(0, TIOCNOTTY, 0) == -ENOTTY, "TIOCNOTTY with no ctty -> -ENOTTY");
+    check(ioctl(0, TIOCSPGRP, &pgrp) == -ENOTTY, "TIOCSPGRP with no ctty -> -ENOTTY");
 }
 
 /**
@@ -476,10 +519,7 @@ PROBE_START void _start(void)
         group_numbers();
         zombie_group();
 
-        /* Detach, then a foreground query finds no controlling session. */
-        check(ioctl(0, TIOCNOTTY, 0) == 0, "TIOCNOTTY detaches");
-        check(ioctl(0, TIOCGPGRP, &pgrp) == 0 && pgrp == 0, "after NOTTY, fg group is 0");
-        check(ioctl(0, TIOCSPGRP, &pgrp) == -ENOTTY, "TIOCSPGRP with no ctty -> -ENOTTY");
+        leader_notty();
     }
 
     /* The stop, continue and kill cycle, each reported through wait4. */
