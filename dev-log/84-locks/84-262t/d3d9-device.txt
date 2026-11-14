@@ -1,0 +1,29 @@
+Proton's d3d9:device under KVM, x86_64, GE-Proton11-12 on Mesa 25.0.7 lavapipe.
+STAMP is seconds since the unit started, from a stamping trace in the guest.
+
+Exits of the unit, all runs of task 84-262t:
+  Debian 13 reference guest: 5 in 12 of 12
+  Rach2: 245 in 38 of 66, 5 in 28 (with and without kernel tracing, -9 once)
+
+Debian, exit 5:
+STAMP 1.056 device.c:5041: Test marked todo: cw is 0x7f, expected 0xf60.
+STAMP 1.056 device.c:5051: Test marked todo: Callback cw is 0x7f, expected 0xf60.
+STAMP 16.622 device.c:6587: Test failed: Got unexpected hr 0x1.
+STAMP 16.622 device.c:6590: Test failed: Got unexpected query result 0xffffffff00000000.
+STAMP 18.631 device.c:6759: Expects 0x0000000104000000 samples.
+STAMP 23.598 err:   DxvkSubmissionQueue: Timeout occured, GPU likely hung.
+STAMP 34.330 device.c:6780: Test failed: Got unexpected query result 0x0000000004000000.
+STAMP 34.330 err:   DxvkSubmissionQueue: Command submission failed: VK_ERROR_DEVICE_LOST
+d3d: unit: d3d9:device {"exit": 5, "summary": null, "progress": false, "lines": 762, "matched": true}
+
+Rach2, exit 245:
+STAMP 19.120 device.c:6587: Test failed: Got unexpected hr 0x1.
+STAMP 19.120 device.c:6590: Test failed: Got unexpected query result 0xffffffff00000000.
+STAMP 21.389 device.c:6759: Expects 0x0000000104000000 samples.
+STAMP 26.381 err:   DxvkSubmissionQueue: Timeout occured, GPU likely hung.
+d3d: unit: d3d9:device {"exit": 245, "summary": null, "progress": false, "lines": 141, "matched": false}
+@etude 1 assert row fail Direct3D row did not match Linux; see direct3d evidence
+
+Rach2 with the progress stop at device.c:6759 (v1.log):
+d3d: unit: d3d9:device {"exit": -9, "summary": null, "progress": true, "lines": 141, "matched": true}
+D3DROW OK wine proton/d3d9:device
