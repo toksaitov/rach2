@@ -78,6 +78,8 @@ extern int dprintf(int fd, const char *format, ...);
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_list;
 static process_t consumer, producer, poller;
+/* The processes' thread groups, which keep whether each left its terminal. */
+static struct tgroup consumer_group, producer_group, poller_group;
 static struct pty pair;
 static fd_entry_t master, slave;
 static int failures, irq_enabled = 1, pending_signal, switches;
@@ -222,6 +224,20 @@ process_t *signal_process_target(process_t *p)
 /** No row has a PID namespace: the kernel's number, `kid`. */
 uint32_t pid_seen(uint32_t kid)
 {
+    return kid;
+}
+
+/** No row has a PID namespace: a terminal keeps no numbers. */
+void pid_nums_set(struct pid_nums *n, uint32_t kid)
+{
+    (void)kid;
+    n->ns = NULL;
+}
+
+/** No row has a PID namespace: the kernel's number, `kid`. */
+uint32_t pid_nums_seen(const struct pid_nums *n, uint32_t kid)
+{
+    (void)n;
     return kid;
 }
 
@@ -508,6 +524,12 @@ static void setup_pair(void)
     clear(&consumer, sizeof(consumer));
     clear(&producer, sizeof(producer));
     clear(&poller, sizeof(poller));
+    clear(&consumer_group, sizeof(consumer_group));
+    clear(&producer_group, sizeof(producer_group));
+    clear(&poller_group, sizeof(poller_group));
+    consumer.tg = &consumer_group;
+    producer.tg = &producer_group;
+    poller.tg = &poller_group;
     consumer.state = PROC_RUNNING;
     consumer.waiter.proc = &consumer;
     producer.state = PROC_READY;
@@ -1416,11 +1438,11 @@ static void flow_console(void)
     CHECK(!(tty_poll(&console_tty, POLLOUT, &wq) & POLLOUT) && wq == &console_tty.input_wq,
           "stopped output takes POLLOUT from the console");
     irq_enabled = 1;
-    CHECK(tty_wait_output(&console_tty, 1, console_tty.vhangups) == -EAGAIN,
+    CHECK(tty_wait_output(&console_tty, 1, &console_tty.vhangups) == -EAGAIN,
           "a nonblocking writer gets EAGAIN");
     scheduled_action = console_restart_action;
     wake_detail = "COM1's VSTART wakes the console writer";
-    CHECK(tty_wait_output(&console_tty, 0, console_tty.vhangups) == 0 && switches == 1,
+    CHECK(tty_wait_output(&console_tty, 0, &console_tty.vhangups) == 0 && switches == 1,
           "the writer waits once, until VSTART");
     CHECK(!console_tty.ldisc.stopped && !scroll_lock, "VSTART restarts it and clears Scroll Lock");
     CHECK(tty_write(&console_tty, (const unsigned char *)"x", 1) == 1, "the write goes");

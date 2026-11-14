@@ -8,6 +8,7 @@
 #include "../lib/kint.h"
 #include "n_tty.h"
 #include "../proc/wait_queue.h"
+#include "../proc/ns.h"
 
 /*
  * A terminal. The N_TTY line discipline (n_tty.h) edits canonical lines,
@@ -56,10 +57,15 @@ struct tty {
      * ended, `fg_pgid` still reads as its number and no signal reaches any
      * group. */
     uint64_t fg_serial;
+    /* The foreground group's numbers in its PID namespace and those above
+     * it, which TIOCGPGRP reads once the group has ended and the numbers'
+     * record is gone (`tty_fg_seen`). */
+    struct pid_nums fg_nums;
     int hungup; /* tty_hangup ran: a read with nothing to take returns 0 */
-    /* The vhangup(2)s of the terminal (`tty_vhangup`). A description opened
-     * when the count was lower is hung up: its reads give 0, its writes and
-     * ioctls EIO (`tty_desc_hung`). */
+    /* The hangups of the terminal (`tty_vhangup`). A description opened
+     * when the count was lower is hung up, but the console's own
+     * (`tty_console` in fd.h): its reads give 0, its writes and ioctls EIO
+     * (`tty_desc_hung`). */
     uint32_t vhangups;
 };
 
@@ -158,6 +164,19 @@ void tty_set_session(struct tty *t, int sid, int pgid, uint64_t serial);
  */
 void tty_set_foreground(struct tty *t, int pgid, uint64_t serial);
 
+/** The foreground group of `t` as the current process's PID namespace sees
+ * it, its number even once it has ended, as Linux's pid_vnr of the
+ * terminal's struct pid; 0 for none, or for a group outside that
+ * namespace. */
+uint32_t tty_fg_seen(const struct tty *t);
+
+/**
+ * Whether `t` is the controlling terminal of the process of `p`: the
+ * terminal of its session, which it has not left by TIOCNOTTY
+ * (`tty_detached` in tgroup.h), as Linux's `p->signal->tty == t`.
+ */
+int tty_is_ctty(const struct tty *t, const process_t *p);
+
 /**
  * Set the window size of `t` to `*ws`, as Linux's tty_do_resize: when the
  * size changes, the foreground group gets SIGWINCH.
@@ -169,7 +188,8 @@ void tty_resize(struct tty *t, const struct tty_winsize *ws);
  * it up, as Linux's disassociate_ctty: its foreground group, if it has one,
  * gets SIGHUP, and SIGCONT after it when `on_exit` is 0, which TIOCNOTTY
  * passes and the leader's end does not; then the terminal has no session and
- * no foreground group.
+ * no foreground group. The leader's end on the console is
+ * `tty_vhangup_session`'s instead, as on Linux for any terminal but a pty.
  */
 void tty_disassociate(struct tty *t, int on_exit);
 
@@ -258,13 +278,13 @@ int tty_tcflow(struct tty *t, int action);
 
 /**
  * Wait until output stopped on `t` restarts, for a writer whose description
- * was opened at `opened` vhangups. Returns 0 when it runs, -EAGAIN at once
- * when it is stopped and `nonblock` is set, -EIO when a vhangup has hung the
- * description up, or -EINTR when a signal ends the wait. The wait drains
- * the pump, as a read's does, so a VSTART from COM1 restarts it. Thread
- * context.
+ * was opened at `*opened` vhangups, or which no hangup reaches when `opened`
+ * is NULL. Returns 0 when it runs, -EAGAIN at once when it is stopped and
+ * `nonblock` is set, -EIO when a vhangup has hung the description up, or
+ * -EINTR when a signal ends the wait. The wait drains the pump, as a read's
+ * does, so a VSTART from COM1 restarts it. Thread context.
  */
-int tty_wait_output(struct tty *t, int nonblock, uint32_t opened);
+int tty_wait_output(struct tty *t, int nonblock, const uint32_t *opened);
 
 /**
  * Wait until `t` has input a read can take, then copy up to `count` bytes of
@@ -350,19 +370,30 @@ void tty_flush_input(struct tty *t);
 void tty_hangup(struct tty *t);
 
 /**
- * Hang `t` up as vhangup(2) does, Linux's `__tty_hangup` for a terminal that
- * a session leader's exit does not hang up: post SIGHUP and then SIGCONT to
- * the leader of the session `t` controls, take the terminal from that
- * session and its foreground group, discard unread input, queued output and
- * the echo held, give `t` the default termios (`n_tty_default_termios`), as
- * Linux resets a pty's and a virtual console's, and count the hangup, which
- * makes every description opened before it a hung-up one (`tty_desc_hung`).
- * A stop of output stays, as Linux's flow state does. Every reader, writer
- * and poller of `t` is woken; a read waiting then returns 0. A pty's master
- * is left no pending packet status (TTY_FLUSH_HANGUP). Thread context; it
- * takes interrupts off itself.
+ * Hang `t` up as vhangup(2) does, Linux's `__tty_hangup`: post SIGHUP and
+ * then SIGCONT to the leader of the session `t` controls, take the terminal
+ * from that session and its foreground group, discard unread input, queued
+ * output and the echo held, give `t` the default termios
+ * (`n_tty_default_termios`), as Linux resets a pty's and a virtual
+ * console's, and count the hangup, which makes every description opened
+ * before it a hung-up one (`tty_desc_hung`), but the console's own
+ * (`tty_console` in fd.h), as Linux's hangup passes over a file of
+ * /dev/console. A stop of output stays, as Linux's flow state does. Every
+ * reader, writer and poller of `t` is woken; a read waiting then returns 0,
+ * as Linux aborts every reader during a hangup. A pty's master is left no
+ * pending packet status (TTY_FLUSH_HANGUP). Thread context; it takes
+ * interrupts off itself.
  */
 void tty_vhangup(struct tty *t);
+
+/**
+ * Hang up `t`, the console, at the end of the leader of the session it
+ * controls, as Linux's disassociate_ctty calls tty_vhangup_session for any
+ * terminal but a pty: as `tty_vhangup`, but the foreground group gets
+ * SIGHUP, the leader, which is ending, nothing, and COM1's ring, not yet
+ * the terminal's input, keeps its bytes.
+ */
+void tty_vhangup_session(struct tty *t);
 
 /**
  * The console keyboard's Hold, Scroll Lock in the US keymap: stop the

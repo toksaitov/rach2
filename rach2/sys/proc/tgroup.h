@@ -131,6 +131,12 @@ struct tgroup {
      * rather than to init (`reparent_children`). A fork starts at 0 and an
      * exec keeps it, as on Linux. */
     uint32_t child_subreaper;
+    /* The process has left its session's controlling terminal by TIOCNOTTY
+     * without leading the session, as Linux's no_tty clears signal->tty:
+     * the terminal is not its controlling terminal (`tty_is_ctty`), though
+     * the session keeps it. A fork passes it on, an exec keeps it and
+     * setsid clears it, as on Linux. */
+    uint32_t tty_detached;
     /* The pidfds of the process and of its threads, each open one, linked
      * through their `next` under the big lock: an end or a reap wakes the
      * pollers of those whose id's lifetime it changed (`pidfd.h`). */

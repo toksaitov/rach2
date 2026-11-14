@@ -275,6 +275,29 @@ process_t *proc_named(uint32_t pid);
 /** pid_seen for the viewer `viewer` in place of the current process. */
 uint32_t pid_seen_by(const process_t *viewer, uint32_t kid);
 
+/*
+ * The numbers of an id in its PID namespace and in those above it, kept
+ * apart from any record, as Linux's struct pid keeps them for whoever holds
+ * a reference to it: a terminal's foreground group (`fg_nums` in tty.h),
+ * whose number TIOCGPGRP gives once the group has ended. They do not keep
+ * the number from being given out again.
+ */
+struct pid_nums {
+    struct pidns *ns; /* held by a reference; NULL for none or the first */
+    uint32_t nr[NS_LEVELS];
+};
+
+/** Make `*n` the numbers of the id `kid`, a record's or those a group or a
+ * session keeps of a reaped one (`pid_seen`), and drop those `*n` had; none
+ * for 0, an id in the first namespace, or one with no numbers. The caller
+ * holds the big lock. */
+void pid_nums_set(struct pid_nums *n, uint32_t kid);
+
+/** The number of `kid` whose numbers are `*n` as the current process sees
+ * it, as `pid_seen` gives it, 0 when it is not in the current process's
+ * namespace or below it. */
+uint32_t pid_nums_seen(const struct pid_nums *n, uint32_t kid);
+
 /** Take a reference to the PID namespace `ns`, which the caller drops with
  * `ns_put`, and return `ns`. */
 struct pidns *pidns_get(struct pidns *ns);

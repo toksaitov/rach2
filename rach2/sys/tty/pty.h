@@ -149,13 +149,14 @@ int pty_index_limit(void);
 struct pty *pty_get(int index);
 
 /**
- * The controlling terminal of the session `sid`: 1 with its device number
- * in `*dev`, in the encoding /proc/PID/stat's tty_nr has, and its
- * foreground process group in `*fg_pgid`, 0 for none; 0 when the session
- * has no terminal. The console is /dev/console, 5:1, and a pty's slave
+ * The controlling terminal of the process of `proc` (`tty_is_ctty`): 1 with
+ * its device number in `*dev`, in the encoding /proc/PID/stat's tty_nr has,
+ * and its foreground process group in `*fg_pgid` as the current process
+ * sees it (`tty_fg_seen`), 0 for none; 0 when the process has no
+ * controlling terminal. The console is /dev/console, 5:1, and a pty's slave
  * /dev/pts/N, 136:N.
  */
-int tty_controlling(int sid, uint32_t *dev, int *fg_pgid);
+int tty_controlling(const process_t *proc, uint32_t *dev, int *fg_pgid);
 
 /** The controlling terminal of the session `sid`, the console or a pty's
  * slave, or NULL when the session has none (always for `sid` 0). */

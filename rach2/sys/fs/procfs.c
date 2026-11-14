@@ -584,14 +584,14 @@ static void ap_tty(struct procfs_text *t, const process_t *p)
     uint32_t dev;
     int fg;
 
-    if (!tty_controlling((int)p->sid, &dev, &fg)) {
+    if (!tty_controlling(p, &dev, &fg)) {
         ap_str(t, " 0 -1");
         return;
     }
     ap_ch(t, ' ');
     ap_u32(t, dev);
     ap_ch(t, ' ');
-    ap_int(t, fg > 0 ? (int)pid_seen((uint32_t)fg) : -1);
+    ap_int(t, fg > 0 ? fg : -1);
 }
 
 /**

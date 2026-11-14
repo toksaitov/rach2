@@ -2344,7 +2344,7 @@ int fd_tty_hung(fd_entry_t *e)
 {
     struct tty *t = fd_tty(e);
 
-    return t && e->ofd && tty_desc_hung(t, e->ofd->tty_hangups);
+    return t && e->ofd && !e->ofd->tty_console && tty_desc_hung(t, e->ofd->tty_hangups);
 }
 
 /**
@@ -2426,7 +2426,7 @@ static int32_t tty_set_pgrp(struct tty *t, uintptr_t arg)
     if (pgrp < 0) {
         return -EINVAL;
     }
-    if (t->sid == 0 || (int)current_proc->sid != t->sid) {
+    if (!tty_is_ctty(t, current_proc)) {
         return -ENOTTY;
     }
     pgrp = (int)pid_named((uint32_t)pgrp);
@@ -2447,16 +2447,17 @@ static int32_t tty_set_pgrp(struct tty *t, uintptr_t arg)
  *
  * TIOCGPGRP and TIOCGSID give the foreground group's number and the
  * session's, and need the terminal to be the caller's controlling terminal
- * (-ENOTTY), as on Linux. The terminal keeps its foreground group by its id
- * and its lifetime of that id (`fg_serial`), so once the group has ended
- * TIOCGPGRP still gives its number, as Linux's reference to the group's
- * struct pid does, and no signal of the terminal reaches a later group
- * given that number. A session's id cannot pass to another session while
- * the terminal holds it, since the leader cannot leave its session and its
- * end releases the terminal (`pty_release_leader`).
+ * (`tty_is_ctty`, -ENOTTY), as on Linux. The terminal keeps its foreground
+ * group by its id, its lifetime of that id (`fg_serial`) and its numbers in
+ * its PID namespaces (`fg_nums`), so once the group has ended TIOCGPGRP
+ * still gives its number in the caller's namespace, as Linux's reference to
+ * the group's struct pid does, and no signal of the terminal reaches a
+ * later group given that number. A session's id cannot pass to another
+ * session while the terminal holds it, since the leader cannot leave its
+ * session and its end releases the terminal (`pty_release_leader`).
  *
- * TIOCSPGRP needs the caller's session to be the one the terminal controls,
- * and a group in that session, or a thread in it when the number names no
+ * TIOCSPGRP needs the terminal to be the caller's controlling terminal,
+ * and a group in its session, or a thread in it when the number names no
  * group (`tty_pgrp_session`, -EPERM). A negative number is EINVAL; one no
  * thread, group or session holds is ESRCH. TIOCSCTTY lets a session leader
  * take a terminal no other session controls, with the caller's group in the
@@ -2467,13 +2468,13 @@ static int32_t tty_set_pgrp(struct tty *t, uintptr_t arg)
  * /dev/tty resolves to `t`. TIOCNOTTY is -ENOTTY on a terminal that is not
  * the caller's controlling terminal; from the session's leader it sends the
  * foreground group SIGHUP and SIGCONT and gives the terminal up, as Linux's
- * disassociate_ctty, and from another member it changes nothing, since a
- * controlling terminal here is the session's and Linux would drop it for
- * the caller alone.
+ * disassociate_ctty, and from another member it leaves the terminal to the
+ * session and takes it from the caller's process alone (`tty_detached`), as
+ * Linux's no_tty.
  */
 static int32_t tty_session_ioctl(struct tty *t, uint32_t request, uintptr_t arg, int *handled)
 {
-    int ours = t->sid != 0 && t->sid == (int)current_proc->sid;
+    int ours = tty_is_ctty(t, current_proc);
     int id;
 
     *handled = 1;
@@ -2483,8 +2484,7 @@ static int32_t tty_session_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
         if (!ours) {
             return -ENOTTY;
         }
-        id = request == TIOCGSID ? t->sid : t->fg_pgid;
-        id = id > 0 ? (int)pid_seen((uint32_t)id) : 0;
+        id = request == TIOCGSID ? (int)pid_seen((uint32_t)t->sid) : (int)tty_fg_seen(t);
         if (!arg || copy_to_user((void __user *)arg, &id, sizeof(id)) != 0) {
             return -EFAULT;
         }
@@ -2510,6 +2510,8 @@ static int32_t tty_session_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
         }
         if (current_proc->sid == current_proc->tgid) {
             tty_disassociate(t, 0);
+        } else {
+            current_proc->tg->tty_detached = 1;
         }
         return 0;
 
@@ -2604,8 +2606,9 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
  * `arg`: TIOCL_BLANKSCREEN blanks the console until TIOCL_UNBLANKSCREEN,
  * which a key does not undo, TIOCL_UNBLANKSCREEN unblanks it, and
  * TIOCL_BLANKEDSCREEN returns 1 while it is blank and 0 otherwise, as
- * Linux's first console would (display/blank.h). The caller's session must
- * control the console, or the caller be privileged, as on Linux (-EPERM).
+ * Linux's first console would (display/blank.h). The console must be the
+ * caller's controlling terminal, or the caller be privileged, as on Linux
+ * (-EPERM).
  * Another subcode is -EINVAL.
  */
 static int32_t console_tioclinux(uintptr_t arg)
@@ -2615,8 +2618,7 @@ static int32_t console_tioclinux(uintptr_t arg)
     if (copy_from_user(&sub, (const void __user *)arg, 1) != 0) {
         return -EFAULT;
     }
-    if ((console_tty.sid == 0 || console_tty.sid != (int)current_proc->sid) &&
-        !proc_privileged(current_proc)) {
+    if (!tty_is_ctty(&console_tty, current_proc) && !proc_privileged(current_proc)) {
         return -EPERM;
     }
     switch (sub) {
@@ -2751,7 +2753,7 @@ long sys_vhangup(isr_params_t *params)
         return -EPERM;
     }
     t = tty_session_tty((int)current_proc->sid);
-    if (t) {
+    if (t && tty_is_ctty(t, current_proc)) {
         tty_vhangup(t);
     }
     return 0;

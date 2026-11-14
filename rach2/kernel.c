@@ -952,14 +952,15 @@ static int32_t terminate_core(int32_t signo)
 
 /**
  * Release what the end of process `pid`, the current one, gives up beyond
- * its threads: the console its session leads, the pty slaves that session
- * controls, each after SIGHUP to its foreground group (`tty_disassociate`),
- * and the framebuffer it owns, so a later session can claim them.
+ * its threads: the console its session leads, hung up
+ * (`tty_vhangup_session`), the pty slaves that session controls, each after
+ * SIGHUP to its foreground group (`tty_disassociate`), and the framebuffer
+ * it owns, so a later session can claim them.
  */
 static void terminate_release_session(uint32_t pid)
 {
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
-        tty_disassociate(&console_tty, 1);
+        tty_vhangup_session(&console_tty);
     }
     pty_release_leader((int)current_proc->sid, (int)pid);
     fb_release_if_owner(pid);

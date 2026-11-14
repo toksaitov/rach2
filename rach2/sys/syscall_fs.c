@@ -1292,7 +1292,8 @@ static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t
     char kbuf[256];
     uint32_t done = 0;
     int nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
-    uint32_t opened = entry->ofd ? entry->ofd->tty_hangups : console_tty.vhangups;
+    const uint32_t *opened =
+        entry->ofd && !entry->ofd->tty_console ? &entry->ofd->tty_hangups : NULL;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;

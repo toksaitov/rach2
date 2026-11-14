@@ -12,6 +12,7 @@
 
 #include "../idle_timer.h"
 #include "tty.h"
+#include "../proc/tgroup.h"
 #include "../latency.h"
 #include "../timer.h"
 #include "../rtc.h"
@@ -67,6 +68,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->sid = 0;
     t->fg_pgid = 0;
     t->fg_serial = 0;
+    t->fg_nums.ns = NULL;
     t->hungup = 0;
     t->vhangups = 0;
 }
@@ -107,6 +109,16 @@ void tty_signal_group(int pgid, uint64_t serial, int signo)
 static void tty_deliver_signal(struct tty *t, int signo)
 {
     tty_signal_group(t->fg_pgid, t->fg_serial, signo);
+}
+
+uint32_t tty_fg_seen(const struct tty *t)
+{
+    return t->fg_pgid > 0 ? pid_nums_seen(&t->fg_nums, (uint32_t)t->fg_pgid) : 0;
+}
+
+int tty_is_ctty(const struct tty *t, const process_t *p)
+{
+    return t->sid != 0 && t->sid == (int)p->sid && !p->tg->tty_detached;
 }
 
 int tty_is_background(struct tty *t, int sid, int pgid, uint64_t serial)
@@ -169,7 +181,8 @@ int tty_job_check(struct tty *t, int signo)
 {
     process_t *self = current_proc;
 
-    if (!self || !tty_is_background(t, (int)self->sid, (int)self->pgid, self->pgrp_serial)) {
+    if (!self || !tty_is_ctty(t, self) ||
+        !tty_is_background(t, (int)self->sid, (int)self->pgid, self->pgrp_serial)) {
         return 0;
     }
     if ((self->sig_blocked & KSIG_BIT(signo)) || self->sigacts[signo].handler == KSIG_IGN) {
@@ -187,7 +200,8 @@ int tty_job_check(struct tty *t, int signo)
  * its sid is nonzero, and then delivers a signal to fg_pgid and fg_serial by
  * value, so a torn update (sid already set while fg_pgid is still 0) would
  * send a serial ^C or ^Z to group 0, which drops it. With interrupts off the
- * stores are one step to that drain.
+ * stores are one step to that drain. The group's numbers, which no interrupt
+ * reads, follow under the big lock.
  */
 void tty_set_session(struct tty *t, int sid, int pgid, uint64_t serial)
 {
@@ -198,6 +212,7 @@ void tty_set_session(struct tty *t, int sid, int pgid, uint64_t serial)
     t->fg_pgid = pgid;
     t->fg_serial = serial;
     kirq_restore(flags);
+    pid_nums_set(&t->fg_nums, (uint32_t)pgid);
 }
 
 void tty_set_foreground(struct tty *t, int pgid, uint64_t serial)
@@ -208,6 +223,7 @@ void tty_set_foreground(struct tty *t, int pgid, uint64_t serial)
     t->fg_pgid = pgid;
     t->fg_serial = serial;
     kirq_restore(flags);
+    pid_nums_set(&t->fg_nums, (uint32_t)pgid);
 }
 
 void tty_resize(struct tty *t, const struct tty_winsize *ws)
@@ -222,10 +238,8 @@ void tty_resize(struct tty *t, const struct tty_winsize *ws)
     }
 }
 
-/** Linux 6.12's disassociate_ctty (drivers/tty/tty_jobctrl.c) for a pty, and
- * the signal to the foreground group that its hangup of any other terminal
- * sends when the session ends (tty_signal_session_leader); the hangup of the
- * console's descriptors is not made here. */
+/** Linux 6.12's disassociate_ctty (drivers/tty/tty_jobctrl.c) for a pty,
+ * and for any terminal on TIOCNOTTY. */
 void tty_disassociate(struct tty *t, int on_exit)
 {
     if (t->fg_pgid != 0) {
@@ -441,8 +455,16 @@ int tty_tcflow(struct tty *t, int action)
 /* A writer's wait for stopped output to restart. */
 struct tty_out_wait {
     struct tty *t;
-    uint32_t opened; /* the vhangups when the writer's description opened */
+    /* the vhangups when the writer's description opened, or NULL for one
+     * no hangup reaches */
+    const uint32_t *opened;
 };
+
+/** Whether the writer's description of `w` is hung up. */
+static int tty_out_hung(const struct tty_out_wait *w)
+{
+    return w->opened && tty_desc_hung(w->t, *w->opened);
+}
 
 /** The writer's wait predicate: drain the pump, then whether output runs
  * or the description has been hung up. Interrupts off. */
@@ -453,10 +475,10 @@ static int tty_output_cond(void *arg)
     if (w->t->pump) {
         w->t->pump(w->t);
     }
-    return !w->t->ldisc.stopped || tty_desc_hung(w->t, w->opened);
+    return !w->t->ldisc.stopped || tty_out_hung(w);
 }
 
-int tty_wait_output(struct tty *t, int nonblock, uint32_t opened)
+int tty_wait_output(struct tty *t, int nonblock, const uint32_t *opened)
 {
     struct tty_out_wait w;
     uint32_t flags;
@@ -468,7 +490,7 @@ int tty_wait_output(struct tty *t, int nonblock, uint32_t opened)
         flags = kirq_save();
         go = tty_output_cond(&w);
         kirq_restore(flags);
-        if (tty_desc_hung(t, opened)) {
+        if (tty_out_hung(&w)) {
             return -EIO;
         }
         if (go) {
@@ -844,11 +866,34 @@ void tty_hangup(struct tty *t)
     wq_wake_all(&t->input_wq);
 }
 
-void tty_vhangup(struct tty *t)
+/** What a hangup does once its signals are sent (`tty_vhangup`). With
+ * `keep_ring` the discipline's input goes and the console's serial ring
+ * keeps its bytes, which no session has read yet. */
+static void tty_hang(struct tty *t, int keep_ring)
 {
     struct ktermios kt;
-    process_t *p;
     uint32_t flags;
+
+    tty_set_session(t, 0, 0, 0);
+    flags = kirq_save();
+    t->vhangups++;
+    t->ldisc.echo_head = t->ldisc.echo_tail;
+    if (keep_ring) {
+        n_tty_flush(&t->ldisc);
+    }
+    kirq_restore(flags);
+    n_tty_default_termios(&kt);
+    tty_set_termios(t, &kt, !keep_ring);
+    if (t->flush) {
+        t->flush(t, TTY_FLUSH_HANGUP);
+    }
+    wq_wake_all(&t->input_wq);
+    wq_wake(t->space_wq, WQ_ROOM);
+}
+
+void tty_vhangup(struct tty *t)
+{
+    process_t *p;
 
     if (t->sid != 0) {
         for (p = proc_list; p; p = p->next) {
@@ -859,18 +904,19 @@ void tty_vhangup(struct tty *t)
             }
         }
     }
-    tty_set_session(t, 0, 0, 0);
-    flags = kirq_save();
-    t->vhangups++;
-    t->ldisc.echo_head = t->ldisc.echo_tail;
-    kirq_restore(flags);
-    n_tty_default_termios(&kt);
-    tty_set_termios(t, &kt, 1);
-    if (t->flush) {
-        t->flush(t, TTY_FLUSH_HANGUP);
+    tty_hang(t, 0);
+}
+
+/** Linux 6.12's __tty_hangup with exit_session set: its
+ * tty_signal_session_leader sends the foreground group SIGHUP alone. The
+ * bytes of COM1's ring stay for the kernel's debug shell, which reads the
+ * ring once no session holds the console, or for the next session. */
+void tty_vhangup_session(struct tty *t)
+{
+    if (t->fg_pgid != 0) {
+        tty_signal_group(t->fg_pgid, t->fg_serial, SIGHUP);
     }
-    wq_wake_all(&t->input_wq);
-    wq_wake(t->space_wq, WQ_ROOM);
+    tty_hang(t, 1);
 }
 
 void tty_console_hold(void)

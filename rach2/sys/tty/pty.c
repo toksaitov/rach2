@@ -82,6 +82,7 @@ static void pty_free(struct pty *p)
     if (*link) {
         *link = p->next;
     }
+    pid_nums_set(&p->slave.fg_nums, 0);
     kfree(p);
 }
 
@@ -797,7 +798,7 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return 0;
     }
     case TIOCGPGRP: {
-        int pgrp = p->slave.fg_pgid > 0 ? (int)pid_seen((uint32_t)p->slave.fg_pgid) : 0;
+        int pgrp = (int)tty_fg_seen(&p->slave);
 
         return copy_to_user((void __user *)arg, &pgrp, sizeof(pgrp)) != 0 ? -EFAULT : 0;
     }
@@ -1236,24 +1237,21 @@ int pty_open_slave(int index, int flags)
     return fd;
 }
 
-int tty_controlling(int sid, uint32_t *dev, int *fg_pgid)
+int tty_controlling(const process_t *proc, uint32_t *dev, int *fg_pgid)
 {
     struct pty *p;
 
-    if (sid == 0) {
-        return 0;
-    }
-    if (console_tty.sid == sid) {
+    if (tty_is_ctty(&console_tty, proc)) {
         *dev = (5u << 8) | 1u;
-        *fg_pgid = console_tty.fg_pgid;
+        *fg_pgid = (int)tty_fg_seen(&console_tty);
         return 1;
     }
     for (p = ptys; p; p = p->next) {
-        if (p->slave.sid == sid) {
+        if (tty_is_ctty(&p->slave, proc)) {
             uint32_t n = (uint32_t)p->index;
 
             *dev = (136u << 8) | (n & 0xFFu) | ((n & ~0xFFu) << 12);
-            *fg_pgid = p->slave.fg_pgid;
+            *fg_pgid = (int)tty_fg_seen(&p->slave);
             return 1;
         }
     }
@@ -1326,6 +1324,15 @@ void tty_make_sole_ctty(struct tty *keep, int sid, int pgid, uint64_t serial)
         }
     }
     kirq_restore(flags);
+    pid_nums_set(&keep->fg_nums, (uint32_t)pgid);
+    if (console_tty.fg_pgid == 0) {
+        pid_nums_set(&console_tty.fg_nums, 0);
+    }
+    for (p = ptys; p; p = p->next) {
+        if (p->slave.fg_pgid == 0) {
+            pid_nums_set(&p->slave.fg_nums, 0);
+        }
+    }
 }
 
 struct tty *pty_slave_tty(struct fd_entry *e)

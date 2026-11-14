@@ -117,8 +117,9 @@ static void kd_init(void)
     spin_unlock_irqrestore(&kd_lock, flags);
 }
 
-/** Whether the caller may set the keyboard's mode and LEDs: a process of the
- * console's session, the screen's owner, or a privileged one. */
+/** Whether the caller may set the keyboard's mode and LEDs: a process whose
+ * controlling terminal is the console (`tty_is_ctty`), the screen's owner,
+ * or a privileged one. */
 static int kd_may_set(void)
 {
     process_t *p = current_proc;
@@ -126,7 +127,7 @@ static int kd_may_set(void)
     if (proc_privileged(p)) {
         return 1;
     }
-    if (console_tty.sid != 0 && (int)p->sid == console_tty.sid) {
+    if (tty_is_ctty(&console_tty, p)) {
         return 1;
     }
     return fb_owner_pid != 0 && fb_owner_pid == p->tgid;

@@ -1533,6 +1533,7 @@ int fd_init_stdio(fd_table_t *table, uint32_t hangups)
             return -1;
         }
         ofd->tty_hangups = hangups;
+        ofd->tty_console = 1;
         k_memset(e, 0, sizeof(*e));
         e->type = FD_TYPE_CONSOLE;
         e->ofd = ofd;

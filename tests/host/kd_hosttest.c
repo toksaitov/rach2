@@ -79,6 +79,13 @@ static int faults(const void *p, size_t n)
     return fault_at != NULL && (const char *)fault_at >= c && (const char *)fault_at < c + n;
 }
 
+/** The console is the controlling terminal of a process of its session, as
+ * the kernel's test has it for a process that kept its terminal. */
+int tty_is_ctty(const struct tty *t, const process_t *p)
+{
+    return t->sid != 0 && t->sid == (int)p->sid;
+}
+
 /** Every call here is an x86-64 program's. */
 int in_compat_syscall(void)
 {

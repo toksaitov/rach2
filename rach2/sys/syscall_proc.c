@@ -419,10 +419,11 @@ static void proc_end_others(void)
 
 /**
  * What a process's end releases beyond its threads: the framebuffer it owns,
- * the console its session leads, and the pty slaves that session controls,
- * each after SIGHUP to its foreground group (`tty_disassociate`), so a later
- * session can claim them. The console goes before the process is
- * published as a zombie while the teardown runs with interrupts on;
+ * the console its session leads, hung up (`tty_vhangup_session`), and the
+ * pty slaves that session controls, each after SIGHUP to its foreground
+ * group (`tty_disassociate`), so a later session can claim them. The
+ * console goes before the process is published as a zombie while the
+ * teardown runs with interrupts on;
  * otherwise the timer-IRQ serial drain (tty_console_poll) keeps draining
  * COM1 against the vanishing session, dropping a ^C/^Z and stealing bytes
  * the kernel debug shell should read. shell_reset_input on the init path
@@ -432,7 +433,7 @@ static void exit_release_session(void)
 {
     fb_release_if_owner(current_proc->tgid);
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->tgid)) {
-        tty_disassociate(&console_tty, 1);
+        tty_vhangup_session(&console_tty);
     }
     pty_release_leader((int)current_proc->sid, (int)current_proc->tgid);
 }
@@ -2782,16 +2783,16 @@ static int32_t fork_nproc(const process_t *parent)
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
  * setsid or setpgid, the nice value, the scheduling policy with its
- * parameters, the I/O priority, the OOM score adjustment and
- * its floor, the persona, the no_new_privs flag, whether it
- * gave up its capabilities, the seccomp mode and filters, the limits, the
- * credentials, the memory policy, with a reference that `mm_drop` gives
- * back, and the program name, which `execve` sets and a child that
- * never execs would otherwise never have: a daemon that forks itself into
- * the background is such a child, and without it shows in `ps` and in
- * /proc/<pid>/stat with no name. The dumpable flag comes with the address
- * space (`fork_mm`). A thread shares its process's adjustment, since the
- * group it joins keeps it.
+ * parameters, the I/O priority, the OOM score adjustment and its floor,
+ * whether it left its controlling terminal, the persona, the no_new_privs
+ * flag, whether it gave up its capabilities, the seccomp mode and filters,
+ * the limits, the credentials, the memory policy, with a reference that
+ * `mm_drop` gives back, and the program name, which `execve` sets and a
+ * child that never execs would otherwise never have: a daemon that forks
+ * itself into the background is such a child, and without it shows in `ps`
+ * and in /proc/<pid>/stat with no name. The dumpable flag comes with the
+ * address space (`fork_mm`). A thread shares its process's adjustment, since
+ * the group it joins keeps it.
  */
 static void fork_ids(process_t *child, const process_t *parent)
 {
@@ -2822,6 +2823,7 @@ static void fork_ids(process_t *child, const process_t *parent)
     if (child->tg != parent->tg) {
         child->tg->oom_score_adj = parent->tg->oom_score_adj;
         child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
+        child->tg->tty_detached = parent->tg->tty_detached;
     }
     child->persona = parent->persona;
     child->no_new_privs = parent->no_new_privs;
@@ -6920,7 +6922,9 @@ static uint64_t pgrp_serial_in_session(uint32_t pgid, uint32_t sid)
  * ksys_setsid refuses while pid_task(sid, PIDTYPE_PGID) finds one: a
  * leader cannot take its group into a new session, and a leader that left
  * its group for another while members stayed in it cannot make a second
- * group of that id. Returns the new session id (the caller's pid).
+ * group of that id. Returns the new session id (the caller's pid). The new
+ * session has no controlling terminal, and the caller is no longer detached
+ * from one (`tty_detached` in tgroup.h).
  */
 long sys_setsid(isr_params_t *params)
 {
@@ -6933,6 +6937,7 @@ long sys_setsid(isr_params_t *params)
         return -EPERM;
     }
     group_set_ids(current_proc, current_proc->tgid, current_proc->tgid, current_proc->tg->serial);
+    current_proc->tg->tty_detached = 0;
     return (int32_t)pid_seen(current_proc->tgid);
 }
 

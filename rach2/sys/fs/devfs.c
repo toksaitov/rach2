@@ -14,6 +14,7 @@
 #include "fd.h"
 #include "file.h"
 #include "../proc/process.h"
+#include "../proc/tgroup.h"
 #include "../mm/usercopy.h"
 #include "../lib/kstring.h"
 #include "../lib/krandom.h"
@@ -2531,6 +2532,8 @@ static int32_t devfs_open_state(const struct devfs_entry *dev, fd_entry_t *e, in
 /**
  * /dev/tty follows POSIX: the console when the caller is in the console's
  * session, else the pty slave that has the caller's session, else ENXIO,
+ * which a caller that left its terminal by TIOCNOTTY gets too
+ * (`tty_detached` in tgroup.h),
  * which is also what dropbear's probe after setsid expects. A job-control
  * shell over a pty opens /dev/tty to set its foreground process group, and
  * given the console instead it would never see itself in the foreground and
@@ -2558,7 +2561,7 @@ int devfs_open(const char *name, int flags)
     }
 
     if (dev->ops == NULL && name_eq(name, "tty")) {
-        int sid = current_proc ? (int)current_proc->sid : 0;
+        int sid = current_proc && !current_proc->tg->tty_detached ? (int)current_proc->sid : 0;
         if (console_tty.sid == 0 || console_tty.sid != sid) {
             int idx = pty_session_slave(sid);
             if (idx >= 0) {
@@ -2598,6 +2601,7 @@ int devfs_open(const char *name, int flags)
         e->ops = NULL;
         e->priv = NULL;
         e->ofd->tty_hangups = console_tty.vhangups;
+        e->ofd->tty_console = name_eq(name, "console");
     }
 
     if ((flags & 3) == 1) {

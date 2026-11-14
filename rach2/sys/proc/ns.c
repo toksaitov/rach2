@@ -833,6 +833,35 @@ uint32_t pid_seen(uint32_t kid)
     return pid_seen_by(current_proc, kid);
 }
 
+void pid_nums_set(struct pid_nums *n, uint32_t kid)
+{
+    struct pidns *old = n->ns;
+    const process_t *p = kid != 0 ? get_process(kid) : NULL;
+    const struct pid_held *h = p || kid == 0 ? NULL : pid_held_find(kid);
+
+    n->ns = NULL;
+    if (p && proc_pidns(p) != &init_pidns) {
+        n->ns = pidns_get(proc_pidns(p));
+        k_memcpy(n->nr, p->nspid, sizeof(n->nr));
+    } else if (h) {
+        n->ns = pidns_get(h->ns);
+        k_memcpy(n->nr, h->nr, sizeof(n->nr));
+    }
+    if (old) {
+        ns_put(&old->c);
+    }
+}
+
+uint32_t pid_nums_seen(const struct pid_nums *n, uint32_t kid)
+{
+    const struct pidns *v = proc_pidns(current_proc);
+
+    if (v == &init_pidns || kid == 0) {
+        return kid;
+    }
+    return n->ns ? pid_number(n->ns, n->nr, kid, v) : 0;
+}
+
 struct pidns *pidns_get(struct pidns *ns)
 {
     ns_get(&ns->c);

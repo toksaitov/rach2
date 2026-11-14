@@ -263,8 +263,12 @@ struct open_file {
     char *leaf;
     /* For a description of a terminal, the console or a pty's slave, the
      * terminal's count of vhangups when it was opened; a later vhangup
-     * leaves it hung up (`tty_desc_hung`). */
+     * leaves it hung up (`tty_desc_hung`), unless `tty_console`. */
     uint32_t tty_hangups;
+    /* The description is the console's own, one of /dev/console or of the
+     * first process's descriptors 0, 1 and 2, which no hangup reaches, as
+     * Linux's hangup passes over a file of /dev/console. */
+    uint32_t tty_console;
 };
 
 /* An open(2) made the description, which reports its open and close, and
@@ -495,7 +499,8 @@ int fd_table_reach(fd_table_t *table, int fd);
  * `/dev/console` opened O_RDWR on all three: a program may write through its
  * standard input, as tmux's server draws through the terminal its client
  * passes it. `hangups` is the console's count of vhangups now, which each
- * description records (`tty_hangups`). Returns 0, or -1 with nothing left
+ * description records (`tty_hangups`), though none is hung up
+ * (`tty_console`). Returns 0, or -1 with nothing left
  * open when the heap has no room.
  */
 int fd_init_stdio(fd_table_t *table, uint32_t hangups);
