@@ -63,6 +63,11 @@
  * while a TOSTOP write that ignores SIGTTOU goes ahead; the console's TCIOFF
  * writes its character under TCOOFF; and a session leader's read of a slave
  * does not make it its controlling terminal.
+ *
+ * At the end of the console's session leader, a reader asleep across it
+ * takes none of the next session's line though that line came before the
+ * reader ran, a writer whose copy from the user spans it writes nothing
+ * more, and a poller that asked for no events is woken.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -342,6 +347,10 @@ int usb_stamp_recording(void)
 {
     return recording;
 }
+
+/** Nothing: the rows run one process at a time. */
+void sched_service_point(void)
+{}
 
 /** Count completed console reads. */
 void usb_stamp_read(void)
@@ -702,7 +711,8 @@ static void latency_read(void)
     scheduled_action = serial_action;
     wake_detail = "serial notification wakes console reader";
     CHECK(!wq_active(&console_tty.input_wq), "latency check starts without a waiter");
-    CHECK(tty_read(&console_tty, out, sizeof(out), 0) == 2, "console read completes");
+    CHECK(tty_read(&console_tty, out, sizeof(out), 0, console_tty.vhangups) == 2,
+          "console read completes");
     CHECK(out[0] == 'q' && out[1] == '\n', "console input is intact");
     CHECK(recorded_waits == 1 && read_stamps == 1, "latency path records wait and read");
     CHECK(switches == 1 && irq_enabled, "console read restores interrupt state");
@@ -741,7 +751,7 @@ static void raw_serial(void)
     serial_len = 1;
     tty_console_poll();
     irq_enabled = 1;
-    CHECK(tty_read(&console_tty, out, sizeof(out), 0) == 1 && out[0] == 'e',
+    CHECK(tty_read(&console_tty, out, sizeof(out), 0, console_tty.vhangups) == 1 && out[0] == 'e',
           "a translating console reads COM1 again");
 }
 
@@ -952,7 +962,7 @@ static void nonblocking_latency(void)
     current_proc = &producer;
     CHECK(ptm_write(&master, "a", 1) == 1 && pair.slave.ready_us != 0,
           "input written to the master starts a latency span");
-    CHECK(tty_read(&pair.slave, out, sizeof(out), 1) == 1 && out[0] == 'a',
+    CHECK(tty_read(&pair.slave, out, sizeof(out), 1, pair.slave.vhangups) == 1 && out[0] == 'a',
           "a read that does not wait takes the input");
     CHECK(spans == 1 && pair.slave.ready_us == 0,
           "a read that does not wait ends the latency span");
@@ -1102,7 +1112,7 @@ static int timed_read(int console, int vmin, int vtime, char *out, int count,
     scheduled_action = n > 0 ? timed_action : NULL;
     wake_detail = "a timed reader wakes for its input or its deadline";
     if (console) {
-        rc = tty_read(&console_tty, (unsigned char *)out, count, 0);
+        rc = tty_read(&console_tty, (unsigned char *)out, count, 0, console_tty.vhangups);
     } else {
         rc = pts_read(&slave, out, (uint32_t)count);
     }
@@ -1234,9 +1244,10 @@ static void long_lines(void)
     irq_enabled = 1;
     CHECK(serial_pos == serial_len && console_tty.ldisc.counters.line_drops == 1,
           "the console takes COM1's line and drops its 4096th byte");
-    n = tty_read(&console_tty, (unsigned char *)long_out, N_TTY_READ_CHUNK, 1);
-    for (done = 0; n > 0;
-         n = tty_read_rest(&console_tty, (unsigned char *)long_out + done, N_TTY_READ_CHUNK)) {
+    n = tty_read(&console_tty, (unsigned char *)long_out, N_TTY_READ_CHUNK, 1,
+                 console_tty.vhangups);
+    for (done = 0; n > 0; n = tty_read_rest(&console_tty, (unsigned char *)long_out + done,
+                                            N_TTY_READ_CHUNK, console_tty.vhangups)) {
         done += n;
     }
     CHECK(long_read(done), "the console's read returns 4095 bytes and the newline");
@@ -1465,7 +1476,7 @@ static void flow_console(void)
     CHECK(console_tty.ldisc.stopped && serial_pos == serial_len - 1,
           "a VSTOP behind a full console acts at once and waits its turn");
     while (n_tty_inq(&console_tty.ldisc) > 0) {
-        tty_read(&console_tty, (unsigned char *)bytes, sizeof(bytes), 1);
+        tty_read(&console_tty, (unsigned char *)bytes, sizeof(bytes), 1, console_tty.vhangups);
     }
     tty_tcflow(&console_tty, TTY_TCOOFF);
     tty_tcflow(&console_tty, TTY_TCOON);
@@ -1947,6 +1958,112 @@ static void read_claims_nothing(void)
     CHECK(pair.slave.sid == 0 && pair.slave.fg_pgid == 0, "the read claims no terminal");
 }
 
+/** The end of the console's session leader, the next session's claim of
+ * the console and its typed line, all while an old reader sleeps. */
+static void next_session_action(void)
+{
+    tty_vhangup_session(&console_tty);
+    tty_set_session(&console_tty, 9, 9, 0);
+    tty_input_char(&console_tty, 'n');
+    tty_input_char(&console_tty, '\n');
+}
+
+/**
+ * A console reader asleep across the end of its session's leader, which
+ * runs only after the next session has claimed the console and typed a
+ * line, returns 0 and leaves the line, which the next session's reader
+ * reads; a reader with SIGHUP blocked is such a reader, since the
+ * foreground group's SIGHUP does not end its wait.
+ */
+static void hangup_next_session(void)
+{
+    unsigned char out[4];
+    uint32_t opened;
+
+    setup_pair();
+    tty_console_init();
+    tty_set_session(&console_tty, 1, 1, 0);
+    serial_pos = serial_len = 0;
+    signals_expected = 1;
+    opened = console_tty.vhangups;
+    scheduled_action = next_session_action;
+    wake_detail = "the leader's end wakes the console reader";
+    CHECK(tty_read(&console_tty, out, sizeof(out), 0, opened) == 0 && switches == 1,
+          "a console reader asleep across its leader's end takes none of the next session's line");
+    CHECK(tty_read(&console_tty, out, sizeof(out), 1, opened) == 0,
+          "a read that began before the leader's end reads 0 without waiting");
+    CHECK(tty_read(&console_tty, out, sizeof(out), 1, console_tty.vhangups) == 2 && out[0] == 'n',
+          "the next session's reader reads its line");
+    tty_set_session(&console_tty, 0, 0, 0);
+}
+
+/** End the console's session leader during a copy from the user. */
+static void hangup_copy_action(void)
+{
+    tty_vhangup_session(&console_tty);
+}
+
+/** Arm `hangup_copy_action` for the next copy from the user. */
+static void hangup_next_copy(void)
+{
+    copy_action = hangup_copy_action;
+}
+
+/**
+ * A writer of a description the end of the console's session leader hangs
+ * up while its copy from the user sleeps on a fault writes nothing after
+ * the copy: the call returns the bytes written before it, or -EIO when
+ * there are none. A write of the console's own description goes on.
+ */
+static void hangup_writer(void)
+{
+    uint32_t opened;
+
+    setup_pair();
+    tty_console_init();
+    tty_set_session(&console_tty, 1, 1, 0);
+    signals_expected = 1;
+    opened = console_tty.vhangups;
+    console_bytes = 0;
+    copy_action = hangup_next_copy;
+    CHECK(tty_write_user(&console_tty, bytes, 300, 0, &opened) == 256 && console_bytes == 256,
+          "a console writer whose second copy spans the leader's end returns its first piece");
+    tty_set_session(&console_tty, 1, 1, 0);
+    opened = console_tty.vhangups;
+    console_bytes = 0;
+    copy_action = hangup_copy_action;
+    CHECK(tty_write_user(&console_tty, bytes, 10, 0, &opened) == -EIO && console_bytes == 0,
+          "a console writer whose only copy spans the leader's end writes nothing and gets EIO");
+    tty_set_session(&console_tty, 1, 1, 0);
+    console_bytes = 0;
+    copy_action = hangup_copy_action;
+    CHECK(tty_write_user(&console_tty, bytes, 10, 0, NULL) == 10 && console_bytes == 10,
+          "a writer of the console's own description writes across the leader's end");
+    tty_set_session(&console_tty, 0, 0, 0);
+}
+
+/** A console poller that asks for no events waits on the queue the end of
+ * the session's leader wakes, as Linux reports POLLHUP whatever was asked. */
+static void hangup_poll_no_events(void)
+{
+    wait_queue_t *wq = NULL;
+
+    setup_pair();
+    tty_console_init();
+    tty_set_session(&console_tty, 1, 1, 0);
+    signals_expected = 1;
+    CHECK(tty_poll(&console_tty, 0, &wq) == 0 && wq == &console_tty.input_wq,
+          "a console poll for no events gives a queue");
+    if (wq) {
+        poller.state = PROC_BLOCKED;
+        wq_poll_add(wq, &poller.waiter);
+        tty_vhangup_session(&console_tty);
+        CHECK(poller.state == PROC_READY, "the leader's end wakes a poller for no events");
+        wq_poll_remove(wq, &poller.waiter);
+    }
+    tty_set_session(&console_tty, 0, 0, 0);
+}
+
 int main(void)
 {
     read_wakes_poll();
@@ -1987,6 +2104,9 @@ int main(void)
     job_check();
     console_tcioff();
     read_claims_nothing();
+    hangup_next_session();
+    hangup_writer();
+    hangup_poll_no_events();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

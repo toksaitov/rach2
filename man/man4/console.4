@@ -45,6 +45,15 @@ hangs it up, every description of the console opened through
 .Pa /dev/tty
 is hung up: a read returns 0 and a write fails with
 .Er EIO .
+A call already under way on such a description ends too: a read returns
+0, or the bytes it has copied, and takes none of the input typed after
+the hangup; a write returns the bytes it has written, or fails with
+.Er EIO ;
+and
+.Xr poll 2
+reports
+.Dv POLLHUP
+even to a caller that asked for no events.
 The descriptions of
 .Pa /dev/console ,
 and the descriptors 0, 1 and 2 the kernel gives the first process, are

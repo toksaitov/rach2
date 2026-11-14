@@ -6,6 +6,7 @@
 #define _TTY_H_
 
 #include "../lib/kint.h"
+#include "../lib/kuser.h"
 #include "n_tty.h"
 #include "../proc/wait_queue.h"
 #include "../proc/ns.h"
@@ -297,21 +298,29 @@ int tty_wait_output(struct tty *t, int nonblock, const uint32_t *opened);
  * `wakeup_tick` and cleared before the return. With `nonblock` set it does
  * not wait: it drains the pump and returns -EAGAIN when nothing is ready (a
  * pending end of file counts as ready) and the terminal has not hung up.
- * Thread context, with a current process; it takes interrupts off itself.
+ * `opened` is the count of vhangups the read belongs to: its description's
+ * (`tty_hangups` of `struct open_file`), or the count when the read began
+ * for a description no hangup reaches. Once `t`'s count differs, the read
+ * drains and takes nothing and returns 0, even with a later session's input
+ * queued, as Linux's hung-up file reads end of file and its hangup aborts
+ * every reader. Thread context, with a current process; it takes interrupts
+ * off itself.
  */
-int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock);
+int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock, uint32_t opened);
 
 /**
  * Copy up to `count` bytes more of the canonical line the last read of `t`
  * stopped inside (`n_tty_line_open`) into `kbuf`, without waiting.
  *
  * Returns the byte count, or 0 when no line is open, as after a read that
- * ended at its line's end or when another reader took the rest. A read of
- * the console or a slave calls it after `tty_read` while its user buffer has
- * room, so that one read returns a line longer than its bounce buffer whole.
- * Thread context; it takes interrupts off itself.
+ * ended at its line's end or when another reader took the rest, or when a
+ * vhangup has come since `opened`, the count `tty_read` was given, during
+ * the caller's copy to the user. A read of the console or a slave calls it
+ * after `tty_read` while its user buffer has room, so that one read returns
+ * a line longer than its bounce buffer whole. Thread context; it takes
+ * interrupts off itself.
  */
-int tty_read_rest(struct tty *t, unsigned char *kbuf, int count);
+int tty_read_rest(struct tty *t, unsigned char *kbuf, int count, uint32_t opened);
 
 /**
  * Write `count` bytes of `kbuf` through output processing (OPOST, ONLCR) to
@@ -328,6 +337,23 @@ int tty_read_rest(struct tty *t, unsigned char *kbuf, int count);
 int tty_write(struct tty *t, const unsigned char *kbuf, int count);
 
 /**
+ * Write `count` bytes of the user's `buf` to `t`, for a description opened
+ * at `*opened` vhangups, or one no hangup reaches when `opened` is NULL.
+ *
+ * The bytes go in pieces of 256 through a kernel buffer and `tty_write`.
+ * While output is stopped the write waits for it to restart
+ * (`tty_wait_output`), or returns on a nonblocking description. The copy
+ * from the user may sleep on a fault, and the scheduler may run others
+ * between pieces, so the hangup is tested before each `tty_write`, as
+ * Linux's n_tty_write tests tty_hung_up_p on every turn. Returns `count`,
+ * or the bytes written before a fault, a hangup, a signal or a nonblocking
+ * stop, or when none were: -EFAULT, -EIO, -EINTR or -EAGAIN. Thread
+ * context.
+ */
+int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, int nonblock,
+                       const uint32_t *opened);
+
+/**
  * Install `kt` on `t`, as TCSETS and its kin do; with `flush_input`, discard
  * the unread input first, on the console the serial ring too, and report the
  * flush through `flush` (TTY_FLUSH_IN) as TCSETSF does on Linux. Wakes
@@ -340,9 +366,10 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input);
 
 /**
  * poll(2) readiness: POLLIN when a read would not block, and POLLOUT while
- * output is not stopped. A query with POLLIN, or with POLLOUT on stopped
- * output, drains the polled source and sets *wq to input_wq for the poll
- * core to re-check on. Takes interrupts off itself.
+ * output is not stopped. Every query sets *wq to input_wq for the poll core
+ * to re-check on, one with no events among them, since a hangup wakes that
+ * queue; one with POLLIN, or with POLLOUT on stopped output, drains the
+ * polled source. Takes interrupts off itself.
  */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq);
 

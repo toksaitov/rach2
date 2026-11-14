@@ -875,13 +875,15 @@ static int pts_hung(const fd_entry_t *e, const struct pty *p)
  * discipline's single canonical EOF marker. A raw read returns at most
  * N_TTY_READ_CHUNK bytes, and a canonical one its whole line, copied a chunk
  * at a time (`tty_read_rest`); each chunk wakes a master writer waiting for
- * room.
+ * room. A vhangup(2) of the description ends the read with 0, or with the
+ * bytes already copied when it comes during a copy to the user.
  */
 static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
     unsigned char kbuf[N_TTY_READ_CHUNK];
     uint32_t want, done;
+    uint32_t opened = e->ofd ? e->ofd->tty_hangups : p->slave.vhangups;
     int n;
 
     if (!(e->flags & FD_FLAG_READ)) {
@@ -898,7 +900,8 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (n != 0) {
         return n;
     }
-    n = tty_read(&p->slave, kbuf, (int)want, e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
+    n = tty_read(&p->slave, kbuf, (int)want, e->ofd && (e->ofd->status_flags & OFD_NONBLOCK),
+                 opened);
     if (n < 0) {
         return n;
     }
@@ -914,7 +917,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
         if (want > sizeof(kbuf)) {
             want = sizeof(kbuf);
         }
-        n = tty_read_rest(&p->slave, kbuf, (int)want);
+        n = tty_read_rest(&p->slave, kbuf, (int)want, opened);
     }
     return (int32_t)done;
 }
@@ -1086,11 +1089,9 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * master ring has room for a byte of it, and POLLHUP once the master has
  * closed.
  *
- * tty_poll sets the wait queue for a POLLIN query, or a POLLOUT one on
- * stopped output, but a master close wakes that same input queue
- * (tty_hangup), and a master read wakes it with room, so a poller waiting
- * only for the hangup or for room is parked on it too; otherwise it would
- * sleep through ptm_close or the read.
+ * tty_poll parks every poller on the slave's input queue, which a master
+ * close (tty_hangup) and a master read with room wake too, so a poller
+ * waiting only for the hangup or for room wakes for ptm_close or the read.
  */
 static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -1101,10 +1102,6 @@ static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         return (short)TTY_HUNG_POLL;
     }
     revents = tty_poll(&p->slave, events, wq);
-
-    if (!*wq) {
-        *wq = &p->slave.input_wq;
-    }
     if (!p->master_open) {
         revents |= POLLHUP;
     } else if (pts_fit(p) == 0) {

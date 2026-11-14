@@ -13,6 +13,8 @@
 #include "../idle_timer.h"
 #include "tty.h"
 #include "../proc/tgroup.h"
+#include "../proc/sched.h"
+#include "../mm/usercopy.h"
 #include "../latency.h"
 #include "../timer.h"
 #include "../rtc.h"
@@ -513,8 +515,11 @@ struct tty_wait {
     unsigned int pending; /* the bytes queued when the timer was last armed */
     uint64_t deadline;    /* the tick at which the timer runs out, while armed */
     int armed;            /* the timer runs */
-    uint32_t vhangups;    /* the terminal's vhangups when the read began */
+    uint32_t vhangups;    /* the terminal's vhangups the read belongs to */
 };
+
+/** Whether a vhangup since the read of `w` began has ended it. */
+#define tty_wait_hung(w) ((w)->t->vhangups != (w)->vhangups)
 
 /** Whether the read's VTIME timer has run out. */
 static int tty_wait_expired(const struct tty_wait *w)
@@ -530,22 +535,26 @@ static int tty_wait_ready(const struct tty_wait *w)
 }
 
 /**
- * The read-sleep predicate: drain the polled input source (if any) into the
- * discipline, then report whether the wait ends: the read can proceed, the
- * terminal hung up, or the queue changed under a timer that restarts with
- * each byte, which the caller arms again. wq_wait_event calls this with
- * interrupts off before each sleep, so the serial drain and the test cannot
- * be split by a waker.
+ * The read-sleep predicate: report whether the wait ends: a vhangup has
+ * ended the read, which then drains nothing, since the input behind it is
+ * the next session's; or, once the polled input source (if any) has been
+ * drained into the discipline, the read can proceed, the master hung up, or
+ * the queue changed under a timer that restarts with each byte, which the
+ * caller arms again. wq_wait_event calls this with interrupts off before
+ * each sleep, so the serial drain and the test cannot be split by a waker.
  */
 static int tty_wait_cond(void *arg)
 {
     struct tty_wait *w = (struct tty_wait *)arg;
     struct tty *t = w->t;
 
+    if (tty_wait_hung(w)) {
+        return 1;
+    }
     if (t->pump) {
         t->pump(t);
     }
-    return tty_wait_ready(w) || t->hungup || t->vhangups != w->vhangups ||
+    return tty_wait_ready(w) || t->hungup ||
            (n_tty_read_timer(&t->ldisc) == N_TTY_TIMER_BYTE &&
             (unsigned int)n_tty_inq(&t->ldisc) != w->pending);
 }
@@ -589,7 +598,11 @@ static int tty_take(struct tty *t, unsigned char *kbuf, int count)
 
 /**
  * After a wake the readiness test and the copy run in one interrupts-off
- * step, so an input IRQ cannot change the queue mid-read. Another reader
+ * step, so an input IRQ cannot change the queue mid-read. A vhangup since
+ * the read's description was opened, or since the read began, is tested
+ * first, before each drain and each copy, so that a reader woken by it
+ * returns 0 even when a later session's input is already queued, as Linux's
+ * hung-up file reads end of file. Another reader
  * woken by the same line may have taken it, and a read of the empty queue
  * would then return 0, which means end of file; such a reader waits again.
  * A wait that ended for its timer to restart is armed and waits again too.
@@ -603,7 +616,7 @@ static int tty_take(struct tty *t, unsigned char *kbuf, int count)
  * file, on any tty, calls `usb_stamp_read`, the last of the record's four
  * stamps.
  */
-int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
+int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock, uint32_t opened)
 {
     struct tty_wait w;
     int rc;
@@ -619,9 +632,13 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
     w.pending = 0;
     w.deadline = 0;
     w.armed = 0;
-    w.vhangups = t->vhangups;
+    w.vhangups = opened;
     if (nonblock) {
         flags = kirq_save();
+        if (tty_wait_hung(&w)) {
+            kirq_restore(flags);
+            return 0;
+        }
         if (t->pump) {
             t->pump(t);
         }
@@ -657,13 +674,14 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
             return rc;
         }
         flags = kirq_save();
-        if (tty_wait_ready(&w)) {
+        hungup = tty_wait_hung(&w);
+        if (!hungup && tty_wait_ready(&w)) {
             n = tty_take(t, kbuf, count);
             kirq_restore(flags);
             usb_stamp_read();
             return n;
         }
-        hungup = t->hungup || t->vhangups != w.vhangups;
+        hungup = hungup || t->hungup;
         kirq_restore(flags);
         if (hungup) {
             usb_stamp_read();
@@ -672,7 +690,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
     }
 }
 
-int tty_read_rest(struct tty *t, unsigned char *kbuf, int count)
+int tty_read_rest(struct tty *t, unsigned char *kbuf, int count, uint32_t opened)
 {
     uint32_t flags;
     int n = 0;
@@ -681,7 +699,7 @@ int tty_read_rest(struct tty *t, unsigned char *kbuf, int count)
         return 0;
     }
     flags = kirq_save();
-    if (n_tty_line_open(&t->ldisc)) {
+    if (!tty_desc_hung(t, opened) && n_tty_line_open(&t->ldisc)) {
         n = n_tty_read(&t->ldisc, kbuf, count);
     }
     kirq_restore(flags);
@@ -748,18 +766,58 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count)
     return i;
 }
 
-/** A poller for POLLOUT alone on stopped output waits on `input_wq` too,
- * which a restart wakes, and drains the pump, so a VSTART from COM1 reaches
- * the discipline while it waits. The poll core calls with interrupts on, and
- * the console's tick and interrupt fill the discipline, so the pump and the
- * reads run with interrupts off, as in tty_inq. */
+int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, int nonblock,
+                       const uint32_t *opened)
+{
+    unsigned char kbuf[256];
+    uint32_t done = 0;
+
+    while (done < count) {
+        uint32_t chunk = count - done;
+        uint32_t put = 0;
+
+        if (chunk > sizeof(kbuf)) {
+            chunk = sizeof(kbuf);
+        }
+        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
+            return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        for (;;) {
+            int32_t rc;
+
+            if (opened && tty_desc_hung(t, *opened)) {
+                return done + put > 0 ? (int32_t)(done + put) : -EIO;
+            }
+            put += (uint32_t)tty_write(t, kbuf + put, (int)(chunk - put));
+            if (put == chunk) {
+                break;
+            }
+            rc = tty_wait_output(t, nonblock, opened);
+            if (rc < 0) {
+                return done + put > 0 ? (int32_t)(done + put) : rc;
+            }
+        }
+        done += chunk;
+        sched_service_point();
+    }
+    return (int32_t)count;
+}
+
+/** Every poller waits on `input_wq`, which a hangup wakes, as Linux's
+ * n_tty_poll waits on its queues whatever was asked: one that asks for no
+ * events is still told of the hangup of its description. A poller for POLLIN
+ * or for POLLOUT on stopped output drains the pump, so that input and a
+ * VSTART from COM1 reach the discipline while it waits. The poll core calls
+ * with interrupts on, and the console's tick and interrupt fill the
+ * discipline, so the pump and the reads run with interrupts off, as in
+ * tty_inq. */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq)
 {
     short revents = 0;
     uint32_t flags = kirq_save();
 
+    *wq = &t->input_wq;
     if ((events & POLLIN) || ((events & POLLOUT) && t->ldisc.stopped)) {
-        *wq = &t->input_wq;
         if (t->pump) {
             t->pump(t);
         }

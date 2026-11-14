@@ -1274,23 +1274,24 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
  * Write `count` bytes of `buf` to the console through the console
  * descriptor `entry`, for `write_fd`.
  *
- * The bytes go in pieces through a 256-byte kernel buffer and the
- * terminal's output processing (OPOST and ONLCR, so a bare newline becomes
- * CR LF on the screen and on the serial line). A fault on the user buffer
- * returns the bytes already written, or -EFAULT when there are none. While
- * output is stopped, by VSTOP under IXON or by TCOOFF, the write waits for it
- * to restart (`tty_wait_output`), or returns the bytes written, or -EAGAIN
- * when none, on a nonblocking description, as Linux's n_tty_write. A
- * process of a background group of the console's session writes freely
- * unless TOSTOP is set; with it set, SIGTTOU goes to the process group and
- * the call is -EINTR, unless the process blocks or ignores SIGTTOU, when it
- * writes, or its group is orphaned, when the call is -EIO
- * (`tty_job_check`), as Linux's n_tty_write.
+ * The bytes go through the terminal's output processing (OPOST and ONLCR,
+ * so a bare newline becomes CR LF on the screen and on the serial line), a
+ * piece at a time (`tty_write_user`). A fault on the user buffer returns the
+ * bytes already written, or -EFAULT when there are none. While output is
+ * stopped, by VSTOP under IXON or by TCOOFF, the write waits for it to
+ * restart, or returns the bytes written, or -EAGAIN when none, on a
+ * nonblocking description, as Linux's n_tty_write. A hangup of the
+ * description, at the end of the session's leader or by vhangup(2), before
+ * the call or during it, ends it with the bytes written or -EIO, but on a
+ * description of the console's own (`tty_console`). A process of a
+ * background group of the console's session writes freely unless TOSTOP is
+ * set; with it set, SIGTTOU goes to the process group and the call is
+ * -EINTR, unless the process blocks or ignores SIGTTOU, when it writes, or
+ * its group is orphaned, when the call is -EIO (`tty_job_check`), as
+ * Linux's n_tty_write.
  */
 static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t count)
 {
-    char kbuf[256];
-    uint32_t done = 0;
     int nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
     const uint32_t *opened =
         entry->ofd && !entry->ofd->tty_console ? &entry->ofd->tty_hangups : NULL;
@@ -1308,33 +1309,7 @@ static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t
             return rc;
         }
     }
-    while (done < count) {
-        uint32_t chunk = count - done;
-        uint32_t put = 0;
-
-        if (chunk > sizeof(kbuf)) {
-            chunk = sizeof(kbuf);
-        }
-        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
-            return (done > 0) ? (int32_t)done : -EFAULT;
-        }
-        for (;;) {
-            int32_t rc;
-
-            put += (uint32_t)tty_write(&console_tty, (const unsigned char *)kbuf + put,
-                                       (int)(chunk - put));
-            if (put == chunk) {
-                break;
-            }
-            rc = tty_wait_output(&console_tty, nonblock, opened);
-            if (rc < 0) {
-                return done + put > 0 ? (int32_t)(done + put) : rc;
-            }
-        }
-        done += chunk;
-        sched_service_point();
-    }
-    return (int32_t)count;
+    return tty_write_user(&console_tty, buf, count, nonblock, opened);
 }
 
 /** Check a scalar I/O request before its count is cut at USER_RW_MAX.
@@ -7688,11 +7663,19 @@ static int32_t socket_read(fd_entry_t *entry, char __user *buf, uint32_t count)
  * or -EIO when SIGTTIN is blocked or ignored or the group is orphaned
  * (`tty_job_check`), as POSIX has it. The check comes before
  * `stdin_waiting_proc` is set, so no return leaves it set.
+ *
+ * A hangup of the description, or for one of the console's own
+ * (`tty_console`) a hangup after the read began, ends the read with 0, or
+ * with the bytes already copied when it comes during a copy to the user
+ * (`tty_read`, `tty_read_rest`), so that the read takes none of the next
+ * session's input.
  */
 static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
     unsigned char kbuf[N_TTY_READ_CHUNK];
     uint32_t want, done;
+    uint32_t opened =
+        entry->ofd && !entry->ofd->tty_console ? entry->ofd->tty_hangups : console_tty.vhangups;
     int n;
 
     if (!(entry->flags & FD_FLAG_READ)) {
@@ -7713,7 +7696,7 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
     }
     stdin_waiting_proc = current_proc;
     n = tty_read(&console_tty, kbuf, (int)want,
-                 entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+                 entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK), opened);
     stdin_waiting_proc = NULL;
     if (n < 0) {
         return n;
@@ -7728,7 +7711,7 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
         if (want > sizeof(kbuf)) {
             want = sizeof(kbuf);
         }
-        n = tty_read_rest(&console_tty, kbuf, (int)want);
+        n = tty_read_rest(&console_tty, kbuf, (int)want, opened);
     }
     return (int32_t)done;
 }
