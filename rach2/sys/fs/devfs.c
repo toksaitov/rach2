@@ -575,12 +575,12 @@ struct devfs_owned {
 };
 
 static struct devfs_owned owned[DEVFS_OWNED_MAX];
-/* Protects the writes of `owned` and the reads that take more than one
- * field; it is taken last, inside every other lock. */
+/* Protects every read and write of `owned`; it is taken last, inside every
+ * other lock. */
 static struct spinlock owned_lock = SPINLOCK_INIT_NAMED("devfs_owned_lock");
 
-/** The record of `dev`, or NULL for a device that has none. A reader that
- * races a chmod or chown sees the bits before it or after it. */
+/** The record of `dev`, or NULL for a device that has none. The caller
+ * holds `owned_lock` across the lookup and every read of the record. */
 static const struct devfs_owned *owned_of(const struct devfs_entry *dev)
 {
     int i;
@@ -610,9 +610,12 @@ static void owned_drop(const struct devfs_entry *dev)
 /** The permission bits of `dev`: its record's, else its entry's. */
 static uint32_t dev_mode(const struct devfs_entry *dev)
 {
+    uint32_t flags = spin_lock_irqsave(&owned_lock);
     const struct devfs_owned *o = owned_of(dev);
+    uint32_t mode = o ? o->mode : dev->mode;
 
-    return o ? o->mode : dev->mode;
+    spin_unlock_irqrestore(&owned_lock, flags);
+    return mode;
 }
 
 static const struct file_ops diskwin_ops;
