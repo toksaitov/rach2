@@ -332,3 +332,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing in DXVK, Mesa, glibc or the kernel; `tests/graphics/d3d/ref/linux.json` stops Proton's `d3d9:device` at its `device.c:6759` record, before the timeout, in the commit of task 84-262t, and task 84-264u keeps the stop, since the rest of the unit follows a race that glibc 2.41 wins and glibc 2.44 loses in about half the runs; `venus.json` stops Proton's `d3d9:visual` at its `visual.c:2412` record, before `z_range_test`, in the commit of task 84-263n.
 * Status: unreported.
 * Next: reproduce on Linux under ASan or valgrind with lavapipe and `LP_NUM_THREADS=0` to show the use after free, symbolize the host's crash at offset 0x144ab7 with Mesa 26.0.8's debug symbols to confirm that Venus's is the same, check that upstream DXVK still frees the list after a timeout, and propose that DXVK wait for the queue to go idle, or leak the list, before it resets a submission it calls lost.
+
+## vkd3d-proton's test_unused_attachments_mix_and_match reads NaN and short sums from render targets 1 to 7 on lavapipe
+
+* Project: Mesa 25.0.7's lavapipe, Debian's 25.0.7-2+deb13u1 with LLVM 19.1.7; vkd3d-proton at `8293130eb`, the commit GE-Proton11-12 carries, pinned in `tests/graphics/d3d/sources.txt`. Which of the two holds the fault was not traced.
+* Fails: the test's check at `tests/d3d12_render_target.c:2888` fails on render targets 1 to 7, which read back `-nan` or a sum short of the 256 blended draws, such as 1664 or 1920 where 2048 is expected; render target 0 and the depth-stencil checks pass. The count varies from run to run: 1677 in the Debian guest and 1688 to 1691 on the testing PC's WSL host on 2026-11-14, 0 and 1670 to 1677 in run 2's discovery (`tests/graphics/d3d/ref/linux.json`), 1684 to 1692 in eight runs on Rach2; of the 1,792 checks that expect a nonzero value there, the rest come out right by chance. On Venus over the host's lavapipe all 1,792 fail.
+* Found: 2026-11-14, the testing PC under KVM, milestone 84, task 84-262y, while finding why `machine.d3d-vkd3d.5` ran past its bound.
+* Reproduction: run `d3d12` with `VKD3D_TEST_MATCH=test_unused_attachments_mix_and_match` on lavapipe with `LP_NUM_THREADS=8`, as `tests/graphics/d3d/run.py vkd3d test_unused_attachments_mix_and_match OUT` does, and count the failures of line 2888; it takes some 900 s of one processor.
+* Evidence: `dev-log/84-locks/84-262y.md`.
+* Rach2: run.py judges the test by the lines its failures are on (`varying_lines`), not by their count.
+* Status: unreported.
+* Next: run the test on a current Mesa and vkd3d-proton; find whether the NaN comes from the attachments the pipeline leaves unused or from the blend of a format the pass does not bind, with `LP_DEBUG` and a smaller copy of the test.
