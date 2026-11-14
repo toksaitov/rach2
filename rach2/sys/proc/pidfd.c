@@ -330,7 +330,10 @@ long sys_pidfd_getfd(struct isr_params *params)
     if (!may_take_fds(t)) {
         return -EPERM;
     }
-    if (!t->fds || fd_peek(t->fds, targetfd, &src, 0) != 0) {
+    if (!t->fds) {
+        return -ESRCH;
+    }
+    if (fd_peek(t->fds, targetfd, &src, 0) != 0) {
         return -EBADF;
     }
     fd = fd_alloc(current_proc->fds);
@@ -341,7 +344,7 @@ long sys_pidfd_getfd(struct isr_params *params)
      * table's lock, since its owner may have closed it meanwhile. */
     if (!t->fds || fd_peek(t->fds, targetfd, &src, FD_PEEK_REF) != 0) {
         fd_free(current_proc->fds, fd);
-        return -EBADF;
+        return t->fds ? -EBADF : -ESRCH;
     }
     dst = fd_slot(current_proc->fds, fd);
     fd_ofd_unref(dst->ofd);

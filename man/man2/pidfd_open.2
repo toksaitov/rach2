@@ -196,7 +196,7 @@ describes.
 .Fa pidfd
 is not an open pidfd, or
 .Fa targetfd
-is not open in the thread, which has none once it has ended.
+is not open in the thread.
 .It Bq Er EFAULT
 .Fa info
 cannot be read.
@@ -227,7 +227,10 @@ that siginfo code, or take its descriptors.
 No thread has the ID
 .Fa pid ,
 the pidfd's process has been reaped or its thread has let its ID go, the
-process group
+thread
+.Fn pidfd_getfd
+names has ended and released its descriptors, as a traced thread that
+has not been reaped has, or the process group
 .Dv PIDFD_SIGNAL_PROCESS_GROUP
 names has no members, which a later group given its ID does not change.
 .El

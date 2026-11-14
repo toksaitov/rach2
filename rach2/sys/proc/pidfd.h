@@ -118,9 +118,11 @@ long sys_pidfd_open(struct isr_params *params);
  * lifetime, as Linux 6.12's pidfd_getfd takes the task by PIDTYPE_PID, so a
  * pidfd of a thread that does not lead its process copies from it too. The
  * caller needs the thread to be of its own process, or the right to trace
- * it. -EINVAL for a flag, -EBADF for no pidfd or no such descriptor, which
- * a thread that has ended has none of, -ESRCH for a process reaped or a
- * thread that has let its id go, -EPERM, -EMFILE or -ENOMEM.
+ * it. -EINVAL for a flag, -EBADF for no pidfd or no such descriptor,
+ * -ESRCH for a process reaped, a thread that has let its id go, or one
+ * that has ended and released its table, as a traced thread not yet reaped
+ * has, as Linux's __pidfd_fget answers a task past exit_files(), -EPERM,
+ * -EMFILE or -ENOMEM. The permission is checked before the table.
  */
 long sys_pidfd_getfd(struct isr_params *params);
 
