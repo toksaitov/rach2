@@ -81,7 +81,7 @@ Every disk is a `struct block_device`, a sector count and a table of functions. 
 
 ### The network
 
-`sys/network/` has drivers for the RTL8139, the e1000 and the RTL8168, and over them Ethernet, ARP, IPv4, ICMP, UDP and TCP, the sockets, netlink, and netconsole, which sends the log to UDP targets and broadcasts it. Programs written for Linux, such as Dropbear and the DHCP clients, use it through Linux's calls ([the network](sys/network/Readme.md)).
+`sys/network/` has drivers for the RTL8139, the e1000, the RTL8168 and the virtio network device, and over them Ethernet, ARP, IPv4, ICMP, UDP and TCP, the sockets, netlink, and netconsole, which sends the log to UDP targets and broadcasts it. Programs written for Linux, such as Dropbear and the DHCP clients, use it through Linux's calls ([the network](sys/network/Readme.md)).
 
 ### The log, the panic and the library
 

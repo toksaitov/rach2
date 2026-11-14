@@ -1,0 +1,113 @@
+.Dd November 14, 2026
+.Dt VIRTIO-NET 4
+.Os
+.Sh NAME
+.Nm virtio-net ,
+.Nm virtio_net
+.Nd driver of the virtio network device
+.Sh SYNOPSIS
+.Pa /sys/class/net/ethN
+.Pa /sys/bus/virtio/drivers/virtio_net
+.Sh DESCRIPTION
+The
+.Nm
+driver binds the virtio network device of virtio 1.2, device 1, on the
+PCI bus, QEMU's
+.Ql -device virtio-net-pci ,
+as Linux's virtio_net does, and makes it an Ethernet interface,
+.Li ethN .
+The device has no registers: a frame is a buffer on a queue shared with
+the hypervisor, so a burst of frames costs one notification where an
+emulated card costs an exit for each access to a register.
+.Pp
+The driver takes these features when the device offers them:
+.Bl -tag -width "VIRTIO_NET_F_SPEED_DUPLEX"
+.It Dv VIRTIO_NET_F_MAC
+The device's station address.
+A device without it gets a random locally administered address, which
+the driver gives the device with
+.Dv VIRTIO_NET_F_CTRL_MAC_ADDR .
+.It Dv VIRTIO_NET_F_STATUS
+The link.
+The device interrupts when it changes, and the kernel logs
+.Ql virtio_net: link: virtioN: up
+or
+.Ql down .
+A device without it is always up.
+.It Dv VIRTIO_NET_F_MTU
+The device's largest MTU, which is the interface's MTU and the most it
+takes when it is below 1500; one below 68 is ignored.
+.It Dv VIRTIO_NET_F_MRG_RXBUF
+A frame received may span buffers.
+.It Dv VIRTIO_NET_F_CTRL_VQ , Dv VIRTIO_NET_F_CTRL_RX
+The control queue, through which the driver asks for every multicast
+frame and no promiscuous mode.
+.It Dv VIRTIO_NET_F_SPEED_DUPLEX
+The link's speed and duplex.
+Without it
+.Pa /sys/class/net/ethN/speed
+reads \-1 and
+.Pa duplex
+reads
+.Ql unknown ,
+as on Linux.
+.It Dv VIRTIO_F_EVENT_IDX
+The device interrupts once for a burst of frames, and is told once of a
+burst of buffers.
+.El
+.Pp
+It asks for no checksum or segmentation offload, since the kernel
+computes and checks every checksum itself and sends frames of at most
+1514 bytes.
+The device interrupts by MSI-X, a vector for each queue, or by its
+function's line; a device with neither is read at each tick.
+.Pp
+A write of the function's name,
+.Ar 0000:BB:DD.F ,
+to
+.Pa /sys/bus/pci/drivers/virtio-pci/unbind
+stops the device and takes the driver off it, so that
+.Xr vfio 4
+may have the function.
+The interface stays, without a carrier.
+A write of the name to
+.Pa bind
+brings the device up again as the same interface.
+.Sh LIMITS
+A device of virtio 1.x only: QEMU's
+.Ql disable-modern=on
+is refused.
+One receive and one transmit queue.
+An interface is made only at boot: a device bound later that had none is
+refused, and an unbound device's interface keeps its addresses, where
+Linux removes the interface.
+.Pa /sys/class/net/ethN/device
+leads to the PCI function, where Linux's leads to the virtio device
+below it.
+.Sh FILES
+.Bl -tag -width /sys/bus/virtio/drivers/virtio_net
+.It Pa /sys/class/net/ethN
+The interface's attribute files
+.Pq Xr sysfs 5 .
+.It Pa /sys/bus/virtio/devices/virtioN
+The virtio device, with its
+.Pa driver
+link while the driver has it.
+.It Pa /sys/bus/virtio/drivers/virtio_net
+The driver, with a link to each device it has.
+.It Pa /sys/bus/pci/drivers/virtio-pci
+The transport's bind and unbind.
+.El
+.Sh EXAMPLES
+Boot os-real in QEMU with the device, from rach2/:
+.Bd -literal -offset indent
+$ NIC=virtio-net-pci ./run.sh os-real
+.Ed
+.Sh SEE ALSO
+.Xr vfio 4 ,
+.Xr virtio-gpu 4 ,
+.Xr sysfs 5 ,
+.Xr ip 8
+.Sh HISTORY
+The driver follows Linux's drivers/net/virtio_net.c.
+Its device is that of virtio 1.2, section 5.1.

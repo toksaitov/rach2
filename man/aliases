@@ -574,6 +574,7 @@ simpledrm 4 fbdrm
 bochs-drm 4 bochs
 virtio_gpu 4 virtio-gpu
 virtio-vga 4 virtio-gpu
+virtio_net 4 virtio-net
 bootpart 4 disk
 grubcore 4 disk
 loop-control 4 loop

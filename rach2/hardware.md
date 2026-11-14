@@ -97,6 +97,7 @@ The kernel tries HDA, then the SB16, then the speaker, and plays one output stre
 | Realtek RTL8139 | 10EC:8139 | QEMU's card for the suites; one card; needs an interrupt line from 0 to 15 |
 | Intel 82540EM (e1000) | 8086:100E | QEMU's default card; several cards; needs an interrupt line from 0 to 15; other Intel gigabit devices, such as QEMU's `e1000e`, are refused |
 | Realtek RTL8168GU | 10EC:8168, GU family by its `TxConfig` revision | the Lenovo's card, which QEMU does not emulate; other members of the 8168 family are refused; one card |
+| virtio network device | 1AF4:1000 or 1AF4:1041, virtio 1.x | QEMU's `virtio-net-pci`, driven as Linux's virtio_net ([virtio-net(4)](../man/man4/virtio-net.4)); several devices; MSI-X, the function's line, or neither; a legacy-only device is refused |
 
 There is no wireless driver, and the stack is IPv4 alone. On i686 an e1000 or RTL8168 whose memory window is above 4 GiB does not start. [The network](sys/network/Readme.md) has the drivers and the stack.
 

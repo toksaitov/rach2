@@ -899,7 +899,9 @@ the hardware addresses in lowercase;
 .Pa duplex ,
 .Ql full ,
 .Ql half
-or
+or, without a link or on a card that does not say, as a
+.Xr virtio-net 4
+device that gives none,
 .Ql unknown ;
 .Pa flags ,
 0x1003 up and 0x1002 down;
@@ -908,14 +910,16 @@ and
 .Pa iflink ,
 the interface's index;
 .Pa mtu ,
-the interface's MTU, 1500 unless set lower;
+the interface's MTU, 1500 unless set lower or a virtio device's largest
+is lower;
 .Pa operstate ,
 .Ql up ,
 .Ql down
 or
 .Ql unknown ;
 .Pa speed ,
-the link's megabits a second, -1 without a link;
+the link's megabits a second, -1 without a link or on a card that does
+not say;
 .Pa tx_queue_len ,
 1000;
 .Pa type ,
