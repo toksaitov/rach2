@@ -41,9 +41,15 @@
  * group, is ESRCH, and SI_USER by the program's own pidfd is EPERM. Once
  * the leader is killed and reaped, its pidfd is ESRCH without a flag but
  * still kills the member with the process-group scope, and is ESRCH with
- * it once the group is empty. A child in new user and PID namespaces is
- * refused with EINVAL by the pidfd of a process outside them, before and
- * after that process is reaped.
+ * it once the group is empty. Once a lone leader is reaped and a new child,
+ * which /proc/sys/kernel/ns_last_pid makes take its pid, leads a group of
+ * that number, the leader's pidfd is ESRCH with that scope and the child
+ * lives, as Linux tells the two groups apart. A child in new user and PID
+ * namespaces is refused with EINVAL by the pidfd of a process outside
+ * them, and acknowledges that check before the process is reaped, and
+ * again after. tkill and tgkill check the ids, then find the thread, and
+ * only then check the signal: a signal out of range to no such thread, or
+ * to a thread of another process, is ESRCH, and to this thread EINVAL.
  *
  * Touching 64 new pages raises getrusage's ru_minflt by at least 64; a
  * mapping of 64 pages made with MAP_POPULATE raises it by at least 64 in the
@@ -61,8 +67,10 @@
  * and `children-faults`, followed by `hangup-wakes`, `pidfd-file-info`,
  * `process-file-info`, `thread-file-info`, `info-before-target`,
  * `queued-code-permission`, `scope-thread`, `scope-thread-group`,
- * `scope-process-group`, `scope-group-reaped` and `reaped-namespace`. The
- * first failure fails its assertion and leaves the rest not run.
+ * `scope-process-group`, `scope-group-reaped`, `scope-group-reused`,
+ * `reaped-namespace` and `tkill-order`. The first failure fails its
+ * assertion and leaves the rest not run. The program runs as root, which
+ * the write of ns_last_pid needs.
  */
 
 #define _GNU_SOURCE
@@ -742,6 +750,89 @@ static int reaped_killed(pid_t pid)
     return waitpid(pid, &st, 0) == pid && WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL;
 }
 
+/** Write `pid` to /proc/sys/kernel/ns_last_pid: 0 when the file then reads
+ * `pid`, or -1. */
+static int set_last_pid(pid_t pid)
+{
+    char text[24];
+    int fd, n, ok;
+
+    n = snprintf(text, sizeof(text), "%d\n", (int)pid);
+    fd = open("/proc/sys/kernel/ns_last_pid", O_WRONLY);
+    ok = fd >= 0 && write(fd, text, (size_t)n) == n;
+    if (fd >= 0) {
+        close(fd);
+    }
+    fd = ok ? open("/proc/sys/kernel/ns_last_pid", O_RDONLY) : -1;
+    n = fd >= 0 ? (int)read(fd, text, sizeof(text) - 1) : -1;
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = '\0';
+    return atoi(text) == (int)pid ? 0 : -1;
+}
+
+/** A pausing child whose pid is `want`, which is free, made by setting
+ * ns_last_pid below it: its pid, or -1 when a few tries, which another
+ * process's fork may race, give the number to none. */
+static pid_t pausing_child_at(pid_t want)
+{
+    int tries;
+
+    for (tries = 0; tries < 8; tries++) {
+        pid_t pid = set_last_pid(want - 1) == 0 ? pausing_child() : -1;
+
+        if (pid == want || pid < 0) {
+            return pid;
+        }
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+    }
+    return -1;
+}
+
+/** The process-group scope of the pidfd of a reaped lone leader, once a
+ * new child given the leader's pid leads a group of that number: ESRCH,
+ * with the child left alive, as Linux walks the leader's own struct pid. */
+static int reused_group(void)
+{
+    pid_t lead, again;
+    int lfd, ok;
+
+    lead = pausing_child();
+    if (lead <= 0 || setpgid(lead, lead) != 0) {
+        if (lead > 0) {
+            kill(lead, SIGKILL);
+            waitpid(lead, NULL, 0);
+        }
+        return fail("could not make a child lead a group");
+    }
+    lfd = (int)syscall(SYS_pidfd_open, (long)lead, 0L);
+    kill(lead, SIGKILL);
+    ok = reaped_killed(lead) && lfd >= 0;
+    again = ok ? pausing_child_at(lead) : -1;
+    ok = ok && again == lead && setpgid(again, again) == 0 && kill(-again, 0) == 0 &&
+         syscall(SYS_pidfd_send_signal, (long)lfd, (long)SIGKILL, NULL,
+                 PIDFD_SIGNAL_PROCESS_GROUP) == -1 &&
+         errno == ESRCH && waitpid(again, NULL, WNOHANG) == 0;
+    if (again > 0) {
+        kill(again, SIGKILL);
+        waitpid(again, NULL, 0);
+    }
+    if (lfd >= 0) {
+        close(lfd);
+    }
+    if (!ok) {
+        return fail("PIDFD_SIGNAL_PROCESS_GROUP reached a later group given the reaped leader's "
+                    "pid");
+    }
+    report_held();
+    return 0;
+}
+
 /** pidfd_send_signal's process-group scope: the group a child leads, while
  * it lives and once it is reaped, and the refusals. */
 static int process_groups(void)
@@ -800,20 +891,22 @@ static int process_groups(void)
         return fail("PIDFD_SIGNAL_PROCESS_GROUP did not kill the group of a reaped leader");
     }
     report_held();
-    return 0;
+    return reused_group();
 }
 
 /** pidfd_send_signal from a PID namespace below the one of the pidfd's
- * process, before and after that process is reaped. */
+ * process, before and after that process is reaped: the child acknowledges
+ * its first check on `ack` before the parent kills and reaps the process,
+ * and makes its second once `go` says the reap is done. */
 static int namespaces(void)
 {
     pid_t x, n;
-    int px, go[2], st, ok;
+    int px, go[2], ack[2], st, ok;
     char b = 'g';
 
     x = pausing_child();
     px = x > 0 ? (int)syscall(SYS_pidfd_open, (long)x, 0L) : -1;
-    if (px < 0 || pipe(go) != 0) {
+    if (px < 0 || pipe(go) != 0 || pipe(ack) != 0) {
         if (x > 0) {
             kill(x, SIGKILL);
             waitpid(x, NULL, 0);
@@ -823,25 +916,51 @@ static int namespaces(void)
     n = (pid_t)syscall(SYS_clone, CLONE_NEWUSER_FLAG | CLONE_NEWPID_FLAG | (long)SIGCHLD, 0L, 0L,
                        0L, 0L);
     if (n == 0) {
+        close(go[1]);
+        close(ack[0]);
         if (syscall(SYS_pidfd_send_signal, (long)px, 0L, NULL, 0L) != -1 || errno != EINVAL) {
             _exit(2);
         }
-        if (read(go[0], &b, 1) != 1) {
+        if (write(ack[1], &b, 1) != 1 || read(go[0], &b, 1) != 1) {
             _exit(3);
         }
         _exit(syscall(SYS_pidfd_send_signal, (long)px, 0L, NULL, 0L) == -1 && errno == EINVAL ? 0
                                                                                               : 4);
     }
+    close(go[0]);
+    close(ack[1]);
+    ok = n > 0 && read(ack[0], &b, 1) == 1;
     kill(x, SIGKILL);
     waitpid(x, NULL, 0);
-    ok = n > 0 && write(go[1], &b, 1) == 1 && waitpid(n, &st, 0) == n && WIFEXITED(st) &&
-         WEXITSTATUS(st) == 0;
-    close(go[0]);
+    ok = ok && write(go[1], &b, 1) == 1;
     close(go[1]);
+    close(ack[0]);
+    ok = n > 0 && waitpid(n, &st, 0) == n && ok && WIFEXITED(st) && WEXITSTATUS(st) == 0;
     close(px);
     if (!ok) {
         return fail("pidfd_send_signal from a PID namespace below the process's was not EINVAL "
                     "before and after the reap");
+    }
+    report_held();
+    return 0;
+}
+
+/** tkill's and tgkill's checks in Linux 6.12's order: the ids, then the
+ * thread, then the signal. 65 is above the last signal, and 2147483647
+ * above pid_max, so no thread has it. */
+static int tkill_order(void)
+{
+    long self = syscall(SYS_gettid);
+
+    if (syscall(SYS_tkill, 0L, 0L) != -1 || errno != EINVAL ||
+        syscall(SYS_tgkill, 0L, self, 0L) != -1 || errno != EINVAL ||
+        syscall(SYS_tkill, 2147483647L, 65L) != -1 || errno != ESRCH ||
+        syscall(SYS_tgkill, (long)getpid(), 2147483647L, 65L) != -1 || errno != ESRCH ||
+        syscall(SYS_tgkill, (long)getppid(), self, 65L) != -1 || errno != ESRCH ||
+        syscall(SYS_tkill, self, 65L) != -1 || errno != EINVAL ||
+        syscall(SYS_tgkill, (long)getpid(), self, 65L) != -1 || errno != EINVAL) {
+        return fail("tkill and tgkill did not check the ids, the thread and the signal in "
+                    "Linux's order");
     }
     report_held();
     return 0;
@@ -861,7 +980,8 @@ static void plan(void)
         "hangup-wakes",       "pidfd-file-info",      "process-file-info",
         "thread-file-info",   "info-before-target",   "queued-code-permission",
         "scope-thread",       "scope-thread-group",   "scope-process-group",
-        "scope-group-reaped", "reaped-namespace"};
+        "scope-group-reaped", "scope-group-reused",   "reaped-namespace",
+        "tkill-order"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.pidfdmusl"));
@@ -875,7 +995,7 @@ int main(void)
     plan();
     if (clones() != 0 || opens() != 0 || getfds() != 0 || faults() != 0 || hangup_wakes() != 0 ||
         file_info() != 0 || queued_checks() != 0 || scopes() != 0 || process_groups() != 0 ||
-        namespaces() != 0) {
+        namespaces() != 0 || tkill_order() != 0) {
         return 1;
     }
     report_end();

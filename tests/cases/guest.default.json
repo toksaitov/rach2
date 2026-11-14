@@ -4950,7 +4950,7 @@
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "pidfdmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "execution": {"program": "pidfdmusl", "stdin": null, "role": "ordinary", "privileges": "root, as etude-guest runs it, which writes /proc/sys/kernel/ns_last_pid", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "clear-sighand", "checks": "clone3 with CLONE_CLEAR_SIGHAND makes a child whose caught signal is back at SIG_DFL and whose ignored one stays ignored.", "source": "program"},
         {"assertion_id": "clear-sighand-einval", "checks": "CLONE_CLEAR_SIGHAND with CLONE_SIGHAND is EINVAL.", "source": "program"},
@@ -4980,7 +4980,9 @@
         {"assertion_id": "scope-thread-group", "checks": "With PIDFD_SIGNAL_THREAD_GROUP it posts SIGUSR1 to the process, which a new thread finds pending, with SI_USER and the program's pid.", "source": "program"},
         {"assertion_id": "scope-process-group", "checks": "With PIDFD_SIGNAL_PROCESS_GROUP the pidfd of a child that leads no group is ESRCH, SI_USER by the program's own pidfd is EPERM, and SIGKILL by the pidfd of a child that leads a group of two kills both.", "source": "program"},
         {"assertion_id": "scope-group-reaped", "checks": "Once that leader is killed and reaped, its pidfd is ESRCH without a flag, kills the remaining member with PIDFD_SIGNAL_PROCESS_GROUP, and is ESRCH with it once the group is empty.", "source": "program"},
-        {"assertion_id": "reaped-namespace", "checks": "A child in new user and PID namespaces is refused with EINVAL by pidfd_send_signal on the pidfd of a process outside them, before and after that process is reaped.", "source": "program"}
+        {"assertion_id": "scope-group-reused", "checks": "Once a lone group leader is reaped and a new child, given its pid through /proc/sys/kernel/ns_last_pid, leads a group of that number, the leader's pidfd is ESRCH with PIDFD_SIGNAL_PROCESS_GROUP and the child is left alive.", "source": "program"},
+        {"assertion_id": "reaped-namespace", "checks": "A child in new user and PID namespaces is refused with EINVAL by pidfd_send_signal on the pidfd of a process outside them, and acknowledges that check before the process is killed and reaped, and is refused again after.", "source": "program"},
+        {"assertion_id": "tkill-order", "checks": "tkill and tgkill check the ids, then find the thread, then check the signal: signal 65 to no such thread or to a thread of another process is ESRCH, and to the calling thread EINVAL.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
