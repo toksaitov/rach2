@@ -430,6 +430,10 @@ Selector 1 does nothing, and selector 2 discards unread input only;
 queued pseudoterminal output is unchanged.
 .It Dv TIOCGPGRP
 Read the foreground process group ID.
+The console must be the caller's controlling terminal.
+.It Dv TIOCGSID
+Read the session ID; the console must be the caller's controlling
+terminal.
 .It Dv TIOCSPGRP
 Set the foreground process group.
 The terminal must be the caller's controlling terminal, and the group
@@ -441,7 +445,14 @@ to another session.
 .It Dv TIOCGWINSZ
 Read the terminal window size.
 .It Dv TIOCNOTTY
-Detach the terminal from the caller's session if that session controls it.
+From the leader of the session the console controls, send the foreground
+group
+.Dv SIGHUP
+and
+.Dv SIGCONT
+and detach the console from the session; from another member, change
+nothing.
+The console must be the caller's controlling terminal.
 .El
 .Pp
 The console also answers Linux's

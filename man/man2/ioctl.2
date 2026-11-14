@@ -187,13 +187,29 @@ Read or replace the terminal's
 .Vt "struct winsize"
 through
 .Fa arg .
-Setting it through the console or slave does not send
-.Dv SIGWINCH .
+A new size sends
+.Dv SIGWINCH
+to the foreground process group; the same size sends nothing.
 .It Dv TIOCGPGRP
 Write the foreground process group ID through the
 .Vt int
 pointer
 .Fa arg .
+The terminal must be the caller's controlling terminal, or the request
+fails with
+.Er ENOTTY .
+The terminal holds its foreground group by identity, as Linux holds a
+reference to the group: once the group has ended, the request still gives
+its number, 0 only when no group was set, and no signal of the terminal
+reaches a later group given that number.
+.It Dv TIOCGSID
+Write the session ID of the terminal through the
+.Vt int
+pointer
+.Fa arg .
+The terminal must be the caller's controlling terminal, or the request
+fails with
+.Er ENOTTY .
 .It Dv TIOCSPGRP
 Read a positive process group ID through the
 .Vt int
@@ -222,9 +238,25 @@ pseudo-terminal slave no session has by opening it without
 .Dv O_NOCTTY ,
 as on Linux.
 .It Dv TIOCNOTTY
-Detach the terminal if it belongs to the caller's session.
-Otherwise succeed without action.
+Give up the caller's controlling terminal.
+From the session leader, the terminal's foreground group gets
+.Dv SIGHUP
+and
+.Dv SIGCONT ,
+and the terminal is detached from the session, as on Linux.
+From another member of the session it succeeds and changes nothing, since
+a controlling terminal belongs to the whole session, where Linux would
+detach it from the caller alone.
+A terminal that is not the caller's controlling terminal fails with
+.Er ENOTTY .
 .El
+.Pp
+When a session leader exits, each terminal its session controls sends
+.Dv SIGHUP
+to its foreground group and is detached, as Linux's
+.Fn disassociate_ctty
+does; the console's open descriptors are not hung up, as Linux would
+hang up a virtual terminal's.
 .Pp
 A process of a background group of the session a terminal controls that
 calls
@@ -307,9 +339,19 @@ through
 Nonzero locks the slave; zero unlocks it.
 .It Dv TIOCGWINSZ , TIOCSWINSZ
 Read or replace the slave's window size.
-Setting it through the master sends
+A new size sends
 .Dv SIGWINCH
-to the slave's foreground group, if one is set.
+to the slave's foreground group, if one is set; the same size sends
+nothing.
+.It Dv TIOCGPGRP , TIOCGSID
+Write the slave's foreground process group ID, 0 when it has none, or its
+session ID through an
+.Vt int
+pointer, as on Linux, whether or not the slave is the caller's
+controlling terminal.
+.Dv TIOCGSID
+of a slave that no session controls fails with
+.Er ENOTTY .
 .It Dv TIOCPKT , TIOCGPKT
 Set packet mode from an
 .Vt int ,
@@ -866,6 +908,8 @@ It checks the refusals for a foreign group, a missing, zero or negative
 group ID, and a
 terminal detached by
 .Dv TIOCNOTTY ,
+which sends the session leader's foreground group
+.Dv SIGHUP ,
 and that once a zombie's group is in front its own orphaned group's
 .Dv TIOCSPGRP
 fails with
