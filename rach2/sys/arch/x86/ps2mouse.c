@@ -453,7 +453,7 @@ static uint32_t reply_delay(uint32_t usec)
 static int ps2_wait_mouse_output(uint32_t limit_us)
 {
     uint32_t start = reply_clock(), last = start, now;
-    uint32_t waited, still = 0, step = 0, slept = 0, reads = 0;
+    uint32_t waited, still = 0, step, slept = 0, reads = 0;
     uint8_t status;
 
     for (;;) {
