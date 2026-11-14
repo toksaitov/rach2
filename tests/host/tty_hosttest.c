@@ -69,17 +69,23 @@
  * takes none of the next session's line though that line came before the
  * reader ran, nor in the rest of a line it reads after its copy; a writer
  * whose copy from the user, service point or wait for stopped output spans
- * it writes nothing more; and a poller that asked for no events is woken.
- * Serial input, a Ctrl-C and a Ctrl-Z that come while the console's only
- * waiter is such a poller, or an epoll registration, reach the discipline
- * and the foreground group at the tick, before any scan.
+ * it writes nothing more; and a poller that asked for no events is woken,
+ * and its description's poll then gives POLLHUP. Serial input, a Ctrl-C
+ * and a Ctrl-Z that come while the console's only waiter is such a poller,
+ * or an epoll registration, reach the discipline and the foreground group
+ * at the tick, before any scan.
  *
- * The console's echo is held at receipt and written once from a thread: by
- * a reader that waits in epoll, poll, select or a blocking read, whose line
- * the tick has already drained, by a write, or, with nobody reading, by the
- * echo thread, whose pass the rows run (`console_echo_work`). A burst past
+ * The console's echo is held at receipt and written once, with interrupts
+ * on, by a write or by the echo thread, whose passes the rows run
+ * (`console_echo_work`), and never by a reader's or poller's drain: a line
+ * read by a reader that waits in epoll, poll, select or a blocking read,
+ * whose line the tick has already drained, is echoed once. A burst past
  * the tick's budget is echoed whole; a Ctrl-C discards the echo held before
- * it unless NOFLSH; and a hangup discards the echo not yet written.
+ * it unless NOFLSH; and a hangup discards the echo not yet written. The
+ * echo thread and a writer give the echo a batch at a time, with a service
+ * point after each and no more than a 16550's FIFO of bytes written with
+ * interrupts off, and a writer's hangup or a VSTOP at that service point
+ * ends or stops the write.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -164,10 +170,19 @@ uint32_t kirq_save(void)
     return saved;
 }
 
-/** Set the model's interrupt flag to `flags`. */
+/* The console's bytes written since interrupts were last on, and the most
+ * such bytes seen since a row cleared it: the bytes a 16550 receives
+ * meanwhile with no reader of its FIFO. */
+static int irqoff_run, irqoff_max;
+
+/** Set the model's interrupt flag to `flags`; turning interrupts on ends
+ * the run of bytes written with them off. */
 void kirq_restore(uint32_t flags)
 {
     irq_enabled = (int)flags;
+    if (irq_enabled) {
+        irqoff_run = 0;
+    }
 }
 
 /** The wait queue's wait, with interrupts off around it as the kernel's
@@ -364,12 +379,16 @@ int usb_stamp_recording(void)
 /* What the next service point does, once, as another thread would while
  * the caller gives way there; NULL for nothing. */
 static void (*service_action)(void);
+/* The service points reached since a row cleared the count. */
+static int service_points;
 
-/** Run `service_action` once: the rows run one process at a time. */
+/** Count the service point and run `service_action` once: the rows run one
+ * process at a time. */
 void sched_service_point(void)
 {
     void (*action)(void) = service_action;
 
+    service_points++;
     service_action = NULL;
     if (action) {
         action();
@@ -400,9 +419,15 @@ static char console_last;
 static char console_text[CONSOLE_TEXT_MAX];
 
 /** Count a byte of the console's output, keep it as the last, and keep
- * it in `console_text` while there is room. */
+ * it in `console_text` while there is room; count it in the run of bytes
+ * written with interrupts off while they are off. */
 void console_putc_raw(char c)
 {
+    if (irq_enabled) {
+        irqoff_run = 0;
+    } else if (++irqoff_run > irqoff_max) {
+        irqoff_max = irqoff_run;
+    }
     if (console_bytes < CONSOLE_TEXT_MAX) {
         console_text[console_bytes] = c;
     }
@@ -1601,17 +1626,50 @@ static int hup_rec_wake(struct wq_waiter *w, uint32_t kinds, unsigned int nest, 
  * `hup_wakes` in place of the thread. */
 static struct wq_waiter kick_rec;
 
+/* What a row's first service point saw: the console's bytes, the echo
+ * held and the interrupt flag. */
+static int seen_bytes, seen_held, seen_irq;
+
+/** Keep what the service point sees (`seen_bytes`). */
+static void echo_point_seen(void)
+{
+    seen_bytes = console_bytes;
+    seen_held = (int)(console_tty.ldisc.echo_tail - console_tty.ldisc.echo_head);
+    seen_irq = irq_enabled;
+}
+
+/** Run the echo thread's passes while its predicate holds, as kconsoled
+ * does between its sleeps, at most a full buffer's worth; return the
+ * passes run. */
+static int echo_thread_drain(void)
+{
+    int passes;
+
+    for (passes = 0; passes <= N_TTY_ECHO_MAX; passes++) {
+        uint32_t flags = kirq_save();
+        int due = console_echo_due(NULL);
+
+        kirq_restore(flags);
+        if (!due) {
+            break;
+        }
+        console_echo_work();
+    }
+    return passes;
+}
+
 /**
  * A full buffer of keyboard echo held during a stop takes the echo of an
  * ordinary byte COM1's interrupt drains, its oldest byte giving way, as
  * Linux's echo buffer discards its oldest; the byte leaves the discipline
  * without room for a line, and the look ahead acts on the VSTART behind it,
- * whose restart wakes the echo thread, which writes the buffer once.
+ * whose restart wakes the echo thread, which writes the buffer once, a
+ * batch at a time with interrupts on and a service point after each.
  */
 static void console_silent_full(void)
 {
     struct n_tty *ld = &console_tty.ldisc;
-    int k;
+    int k, passes;
 
     setup_pair();
     tty_console_init();
@@ -1640,7 +1698,16 @@ static void console_silent_full(void)
               ld->echo_buf[(ld->echo_tail - 1) & (N_TTY_ECHO_MAX - 1)] == 'q',
           "COM1's byte holds its echo behind a full buffer, whose oldest byte gives way");
     CHECK(hup_wakes > 0, "COM1's VSTART wakes the echo thread for the echo held");
-    console_echo_work();
+    service_points = 0;
+    seen_bytes = -1;
+    service_action = echo_point_seen;
+    passes = echo_thread_drain();
+    service_action = NULL;
+    CHECK(seen_bytes == TTY_ECHO_BATCH && seen_held == N_TTY_ECHO_MAX - TTY_ECHO_BATCH && seen_irq,
+          "the echo thread writes a batch of a full buffer and reaches a service point before the "
+          "next");
+    CHECK(passes == N_TTY_ECHO_MAX / TTY_ECHO_BATCH && service_points == passes,
+          "the echo thread reaches a service point after each batch of a full buffer");
     console_echo_work();
     CHECK(console_bytes == N_TTY_ECHO_MAX && console_text[0] == 'b' && console_last == 'q' &&
               ld->echo_tail == ld->echo_head,
@@ -2109,16 +2176,19 @@ static void hangup_writer(void)
 }
 
 /** A console poller that asks for no events waits on the queue the end of
- * the session's leader wakes, as Linux reports POLLHUP whatever was asked. */
+ * the session's leader wakes, and its description's poll then gives
+ * POLLHUP, as Linux reports POLLHUP whatever was asked. */
 static void hangup_poll_no_events(void)
 {
-    wait_queue_t *wq = NULL;
+    wait_queue_t *wq = NULL, *hung_wq = NULL;
+    uint32_t opened;
 
     setup_pair();
     tty_console_init();
     tty_set_session(&console_tty, 1, 1, 0);
+    opened = console_tty.vhangups;
     signals_expected = 1;
-    CHECK(tty_poll(&console_tty, 0, &wq) == 0 && wq == &console_tty.input_wq,
+    CHECK(tty_console_desc_poll(&opened, 1, 0, &wq) == 0 && wq == &console_tty.input_wq,
           "a console poll for no events gives a queue");
     if (wq) {
         poller.state = PROC_BLOCKED;
@@ -2127,6 +2197,9 @@ static void hangup_poll_no_events(void)
         CHECK(poller.state == PROC_READY, "the leader's end wakes a poller for no events");
         wq_poll_remove(wq, &poller.waiter);
     }
+    CHECK(tty_console_desc_poll(&opened, 1, 0, &hung_wq) == (short)TTY_HUNG_POLL &&
+              (TTY_HUNG_POLL & POLLHUP) != 0,
+          "the hung description's poll for no events gives POLLHUP");
     tty_set_session(&console_tty, 0, 0, 0);
 }
 
@@ -2168,7 +2241,7 @@ static void hangup_poller_drains(void)
     signals_expected = 1;
     hup_wakes = 0;
 
-    CHECK(tty_poll(&console_tty, 0, &wq) == 0 && wq == &console_tty.input_wq,
+    CHECK(tty_console_desc_poll(&opened, 1, 0, &wq) == 0 && wq == &console_tty.input_wq,
           "a console poll for no events gives a queue");
     poller.waiter.func = hup_rec_wake;
     poller.state = PROC_BLOCKED;
@@ -2184,11 +2257,16 @@ static void hangup_poller_drains(void)
     hup_serial("\032");
     CHECK(serial_pos == serial_len && signals_posted == 2 && last_signo == SIGTSTP,
           "a COM1 Ctrl-Z reaches the foreground group before a poller for no events scans");
-    CHECK(tty_poll(&console_tty, 0, &wq) == 0, "the scan of a poller for no events reports none");
+    CHECK(tty_console_desc_poll(&opened, 1, 0, &wq) == 0,
+          "the scan of a poller for no events reports none");
     poller.state = PROC_BLOCKED;
     tty_vhangup_session(&console_tty);
     CHECK(poller.state == PROC_READY && tty_desc_hung(&console_tty, opened),
           "the leader's end wakes the poller's record and hangs up its description");
+    wq = NULL;
+    CHECK(tty_console_desc_poll(&opened, 1, 0, &wq) == (short)TTY_HUNG_POLL &&
+              (TTY_HUNG_POLL & POLLHUP) != 0,
+          "the hung description's poll for no events gives POLLHUP");
     wq_poll_remove(&console_tty.input_wq, &poller.waiter);
     tty_set_session(&console_tty, 1, 2, 0);
     signals_posted = 0;
@@ -2355,6 +2433,103 @@ static void echo_no_reader(void)
               console_tty.ldisc.echo_head == console_tty.ldisc.echo_tail,
           "with ECHO off the input holds no echo and the thread writes nothing");
     wq_entry_remove(&kick_rec);
+    tty_set_session(&console_tty, 0, 0, 0);
+    proc_list = saved;
+}
+
+/* The bytes a 16550's receive FIFO holds: those that may arrive while the
+ * console writes with interrupts off before COM1's input overruns. */
+#define UART_FIFO 16
+
+/* The keyboard echo held in `echo_batches`, past three batches. */
+#define ECHO_HELD 200
+
+/** Keep what the service point sees, then end the session's leader. */
+static void echo_point_hangup(void)
+{
+    echo_point_seen();
+    tty_vhangup_session(&console_tty);
+}
+
+/** Keep what the service point sees, then type a VSTOP. */
+static void echo_point_stop(void)
+{
+    echo_point_seen();
+    tty_input_char(&console_tty, 023);
+}
+
+/** Make the console fresh (`echo_setup`) and type ECHO_HELD bytes at its
+ * keyboard, whose echo is held. */
+static void echo_type_held(void)
+{
+    int i;
+
+    echo_setup();
+    for (i = 0; i < ECHO_HELD; i++) {
+        tty_input_char(&console_tty, 'k');
+    }
+}
+
+/**
+ * The echo held goes to COM1 with interrupts on, a batch at a time, with a
+ * service point after each. After COM1's VSTART restarts output stopped
+ * with more than a batch held, a poller's and FIONREAD's drains write none
+ * of it, and the echo thread writes it whole with no more than a FIFO's
+ * worth written with interrupts off. A writer gives the echo held before
+ * its bytes and tests its hangup and output's flow again after each
+ * service point: a hangup there ends the write with EIO, its bytes
+ * unwritten, and a VSTOP there leaves the rest of the echo held and a
+ * nonblocking write with EAGAIN.
+ */
+static void echo_batches(void)
+{
+    struct n_tty *ld = &console_tty.ldisc;
+    process_t *saved = proc_list;
+    wait_queue_t *wq = NULL;
+    uint32_t opened;
+    int passes;
+
+    echo_type_held();
+    hup_serial("\023");
+    CHECK(ld->stopped && ld->echo_tail - ld->echo_head == ECHO_HELD && console_bytes == 0,
+          "COM1's VSTOP holds the keyboard's echo");
+    hup_serial("\021");
+    irqoff_max = 0;
+    (void)tty_poll(&console_tty, POLLIN, &wq);
+    (void)tty_inq(&console_tty);
+    CHECK(!ld->stopped && console_bytes == 0,
+          "after COM1's VSTART a poller's and FIONREAD's drains write no echo");
+    service_points = 0;
+    seen_bytes = -1;
+    service_action = echo_point_seen;
+    passes = echo_thread_drain();
+    CHECK(seen_bytes == TTY_ECHO_BATCH && seen_held == ECHO_HELD - TTY_ECHO_BATCH && seen_irq,
+          "the echo thread writes a batch with interrupts on and reaches a service point");
+    CHECK(console_bytes == ECHO_HELD &&
+              passes == (ECHO_HELD + TTY_ECHO_BATCH - 1) / TTY_ECHO_BATCH &&
+              service_points == passes && irqoff_max <= UART_FIFO,
+          "the echo thread writes the echo held whole, at most a FIFO's worth with interrupts off");
+
+    echo_type_held();
+    signals_expected = 1;
+    opened = console_tty.vhangups;
+    copy_failure = 0;
+    seen_bytes = -1;
+    service_action = echo_point_hangup;
+    CHECK(tty_write_user(&console_tty, (const char *)"z", 1, 0, &opened) == -EIO &&
+              seen_bytes == TTY_ECHO_BATCH && console_bytes == TTY_ECHO_BATCH &&
+              console_last == 'k',
+          "a writer's hangup at the service point after a batch of the echo ends it with EIO");
+
+    echo_type_held();
+    opened = console_tty.vhangups;
+    seen_bytes = -1;
+    service_action = echo_point_stop;
+    CHECK(tty_write_user(&console_tty, (const char *)"z", 1, 1, &opened) == -EAGAIN &&
+              seen_bytes == TTY_ECHO_BATCH && console_bytes == TTY_ECHO_BATCH && ld->stopped &&
+              ld->echo_tail - ld->echo_head == ECHO_HELD - TTY_ECHO_BATCH,
+          "a VSTOP at a writer's service point keeps the rest of the echo held and its bytes");
+    service_action = NULL;
     tty_set_session(&console_tty, 0, 0, 0);
     proc_list = saved;
 }
@@ -2575,6 +2750,7 @@ int main(void)
     echo_once(WAIT_READ);
     echo_no_reader();
     echo_lifecycle();
+    echo_batches();
     hangup_read_rest();
     hangup_writer_waits();
     printf("tty-test: result: %d failures\n", failures);

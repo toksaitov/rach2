@@ -51,9 +51,9 @@ struct tty {
      * nothing. Called with interrupts off, from an interrupt as well. */
     void (*flow)(struct tty *t, int what);
     /* Set for a terminal whose echo is held at receipt, which may be in an
-     * interrupt, and given to the sink later from a thread: by a reader,
-     * writer, poller or FIONREAD of the terminal, or by the thread this
-     * wakes, the console's echo thread. Called with interrupts off, from an
+     * interrupt, and given to the sink later from a thread with interrupts
+     * on: by a writer of the terminal, or by the thread this wakes, the
+     * console's echo thread. Called with interrupts off, from an
      * interrupt as well, while echo is held and output runs. NULL for a
      * terminal whose receipt gives its echo to the sink, a pty slave's. */
     void (*echo_kick)(struct tty *t);
@@ -156,10 +156,10 @@ void tty_console_init(void);
 
 /**
  * Start the console's echo thread, `kconsoled`, which gives the echo held
- * to the screen and COM1 when no reader, writer or poller of the console
- * does, as Linux's n_tty echoes from its receive worker. Process context,
- * once init has its pid, as the kernel's other threads start; before it,
- * the echo waits for the console's next reader, writer or poller.
+ * to the screen and COM1 a batch at a time, with interrupts on and a
+ * service point after each batch, as Linux's n_tty echoes from its receive
+ * worker. Process context, once init has its pid, as the kernel's other
+ * threads start; before it, the echo waits for the console's next writer.
  */
 void tty_console_thread_start(void);
 
@@ -280,8 +280,9 @@ void tty_input_looked(struct tty *t, unsigned char c);
  * VSTART under IXON (`n_tty_lookahead`), as Linux looks ahead in the bytes
  * its discipline cannot take yet. A restart with `echo` nonzero gives the
  * echo held to the sink, as far as its room allows, as Linux's VSTART runs
- * process_echoes; with `echo` 0 the echo waits for the next input or write,
- * or for `echo_kick`'s thread.
+ * process_echoes, or wakes `echo_kick`'s thread for it where the echo is
+ * deferred; with `echo` 0 the echo waits for the next input or write, or
+ * for that thread, which any restart wakes.
  * The byte is later fed with `tty_input_looked`. Returns nonzero when the
  * byte stopped or restarted output. Takes interrupts off itself.
  */
@@ -347,7 +348,8 @@ int tty_read_rest(struct tty *t, unsigned char *kbuf, int count, uint32_t opened
  * `count` when output is stopped, where the caller waits
  * (`tty_wait_output`), or when the sink's `room` cannot take a byte at its
  * largest; a tty write does not wait itself. The echo held goes only as far
- * as the room allows, and the rest stays held. On the
+ * as the room allows, or one batch of it on a terminal that defers its echo
+ * (`echo_kick`), and the rest stays held. On the
  * console the write is bracketed by console_write_begin and
  * console_write_end, so a kernel log record raised during it waits and is not
  * printed inside the program's output, and the screen's answers to queries in
@@ -364,7 +366,10 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count);
  * (`tty_wait_output`), or returns on a nonblocking description. The copy
  * from the user may sleep on a fault, and the scheduler may run others
  * between pieces, so the hangup is tested before each `tty_write`, as
- * Linux's n_tty_write tests tty_hung_up_p on every turn. Returns `count`,
+ * Linux's n_tty_write tests tty_hung_up_p on every turn. On a terminal
+ * that defers its echo (`echo_kick`), the echo held goes first, a batch at
+ * a time with a service point after each, and the hangup and output's flow
+ * are tested again after each. Returns `count`,
  * or the bytes written before a fault, a hangup, a signal or a nonblocking
  * stop, or when none were: -EFAULT, -EIO, -EINTR or -EAGAIN. Thread
  * context.
@@ -391,6 +396,21 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input);
  * polled source. Takes interrupts off itself.
  */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq);
+
+/**
+ * poll(2) readiness of a descriptor of the console, whose description was
+ * opened at `*opened` vhangups, or which no hangup reaches when `opened` is
+ * NULL, and which is `readable` when it was opened for reading. A
+ * description hung up answers TTY_HUNG_POLL whatever was asked, as Linux's
+ * hung_up_tty_poll does, and sets no queue. Any other answers through
+ * `tty_poll`: POLLIN, whose query drains serial input, only when readable,
+ * so poll(stdout, POLLOUT) never drains serial input, and POLLOUT for any
+ * descriptor, as a terminal answers on Linux whatever the descriptor's
+ * mode, so that a caller polling a read-only one for output is not left
+ * waiting; its write is then EBADF. Every such poller, one that asks for no
+ * events among them, waits on the queue the hangup wakes.
+ */
+short tty_console_desc_poll(const uint32_t *opened, int readable, short events, wait_queue_t **wq);
 
 /**
  * FIONREAD: the bytes ready to read, every completed line in canonical mode.

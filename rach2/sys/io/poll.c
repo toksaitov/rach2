@@ -65,15 +65,8 @@ static void irq_restore(uint32_t flags)
  * A descriptor with a poll operation answers through it, and a socket
  * through the network stack. A regular file, a directory, the framebuffer
  * and the mouse are always ready and have no queue. The console answers
- * through its tty: POLLIN, whose query drains serial input, only for a
- * readable descriptor, so poll(stdout, POLLOUT) never drains serial input,
- * and POLLOUT for any descriptor, as a terminal answers on Linux whatever
- * the descriptor's mode, so that a caller polling a read-only one for output
- * is not left waiting; its write is then EBADF. `tty_poll` parks every
- * console poller on the queue the hangup wakes, one that asks for no events
- * among them. A description of the console opened before a vhangup(2), or
- * before the end of its session's leader, answers TTY_HUNG_POLL whatever was
- * asked, as Linux's hung_up_tty_poll does.
+ * through its tty (`tty_console_desc_poll`), which gives a description
+ * hung up TTY_HUNG_POLL; the console's own descriptions no hangup reaches.
  */
 static short poll_locked(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -86,17 +79,9 @@ static short poll_locked(fd_entry_t *e, short events, struct wait_queue **wq)
     if (e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) {
         return (short)(events & (POLLIN | POLLOUT));
     }
-    if (e->type == FD_TYPE_CONSOLE && e->ofd && !e->ofd->tty_console &&
-        tty_desc_hung(&console_tty, e->ofd->tty_hangups)) {
-        return (short)TTY_HUNG_POLL;
-    }
     if (e->type == FD_TYPE_CONSOLE) {
-        short want = 0;
-        if (e->flags & FD_FLAG_READ) {
-            want = (short)(events & POLLIN);
-        }
-        want = (short)(want | (events & POLLOUT));
-        return tty_poll(&console_tty, want, wq);
+        return tty_console_desc_poll(e->ofd && !e->ofd->tty_console ? &e->ofd->tty_hangups : NULL,
+                                     (e->flags & FD_FLAG_READ) != 0, events, wq);
     }
     return (short)(events & (POLLIN | POLLOUT));
 }

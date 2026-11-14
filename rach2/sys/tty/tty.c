@@ -8,8 +8,8 @@
  * discipline recognizes, and drains the console's serial ring. A reader waits
  * in tty_read until tty_input_char (from the keyboard drivers or the serial
  * drain) completes a line; output and echo leave through each tty's sink.
- * The console's echo is held at receipt and written from a thread: its next
- * reader, writer or poller, or its echo thread, kconsoled.
+ * The console's echo is held at receipt and written with interrupts on by a
+ * thread: its next writer, or its echo thread, kconsoled.
  */
 
 #include "../idle_timer.h"
@@ -39,10 +39,9 @@
  * reader's own drain empties the ring, since a reader that parks with bytes
  * still in the ring is woken for them only by the tick. */
 #define TTY_PUMP_BUDGET 64
-/* Most bytes of echo held given to a sink that defers its echo
- * (`echo_kick`) with interrupts off at a time: a byte to COM1 waits on the
- * UART's transmitter for 87 microseconds, so a batch keeps interrupts off
- * for some 6 ms at most. */
+/* Most bytes of echo held a sink that defers its echo (`echo_kick`) takes
+ * in one batch, between two service points: a byte to COM1 waits on the
+ * UART's transmitter for 87 microseconds, so a batch runs for some 6 ms. */
 #define TTY_ECHO_BATCH  64
 
 /* VTIME's unit, a tenth of a second, in milliseconds. */
@@ -322,30 +321,64 @@ static unsigned int tty_echo_room(struct tty *t)
     return t->echo_kick && room > TTY_ECHO_BATCH ? TTY_ECHO_BATCH : room;
 }
 
-/** Give the echo held to the sink, unless output is stopped, as far as one
- * step's room allows (`tty_echo_room`), tell `flow` when any went, and
- * leave the rest to the thread `echo_kick` wakes. Interrupts off. */
+/** Give the echo held to the sink, unless output is stopped, as far as its
+ * room allows, and tell `flow` when any went; where the echo is deferred
+ * (`echo_kick`), wake the thread that writes it instead, since a wait's
+ * predicate and an interrupt call this and a write to COM1 needs
+ * interrupts on. Interrupts off. */
 static void tty_echo_out(struct tty *t)
 {
-    if (n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx, tty_echo_room(t)) > 0 && t->flow) {
+    if (t->echo_kick) {
+        tty_echo_kick(t);
+    } else if (n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx, tty_room(t)) > 0 && t->flow) {
         t->flow(t, TTY_FLOW_DATA);
     }
-    tty_echo_kick(t);
 }
 
-/** Give all the echo held to the sink in steps of `tty_echo_room`, each with
- * interrupts off and the caller's interrupt flag between them, until none
- * is held, output stops or the sink has no room. Process context. */
-static void tty_echo_drain(struct tty *t)
-{
-    uint32_t flags;
+/* Where `tty_echo_batch` puts the echo it takes off the queue. */
+struct tty_echo_buf {
+    unsigned char *buf;
     int n;
+};
 
-    do {
-        flags = kirq_save();
-        n = n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx, tty_echo_room(t));
+/** The sink of `tty_echo_batch`'s take: keep `c` in the buffer `ctx`. */
+static void tty_echo_keep(void *ctx, unsigned char c)
+{
+    struct tty_echo_buf *b = (struct tty_echo_buf *)ctx;
+
+    b->buf[b->n++] = c;
+}
+
+/**
+ * Give one batch of the echo held to the sink, unless output is stopped,
+ * and return the bytes given. Where the echo is deferred (`echo_kick`), at
+ * most TTY_ECHO_BATCH bytes are taken off the queue with interrupts off and
+ * written with interrupts on, so that COM1's receive interrupt is served
+ * while they go, as Linux's process_echoes writes through the driver under
+ * the tty's locks and not with interrupts masked; an interrupt adds echo
+ * only behind them. Any other terminal's sink, a pty's buffer, takes as
+ * much as its room allows with interrupts off. Process context.
+ */
+static int tty_echo_batch(struct tty *t)
+{
+    unsigned char buf[TTY_ECHO_BATCH];
+    struct tty_echo_buf b;
+    uint32_t flags = kirq_save();
+    int i;
+
+    if (!t->echo_kick) {
+        i = n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx, tty_room(t));
         kirq_restore(flags);
-    } while (n > 0);
+        return i;
+    }
+    b.buf = buf;
+    b.n = 0;
+    (void)n_tty_echo_flush(&t->ldisc, tty_echo_keep, &b, tty_echo_room(t));
+    kirq_restore(flags);
+    for (i = 0; i < b.n; i++) {
+        t->sink(t->sink_ctx, buf[i]);
+    }
+    return b.n;
 }
 
 /** The echo sink of a receive on a terminal whose sink has a `room`: the
@@ -799,12 +832,13 @@ static int tty_output_fits(struct tty *t)
 }
 
 /**
- * The echo held goes first, as far as the sink's room allows, as Linux's
- * n_tty_write begins with process_echoes, a batch at a time with interrupts
- * off (`tty_echo_drain`), and the bytes then go one at a time while output
- * runs and the sink has room: a VSTOP from the keyboard's interrupt stops
- * the write between two bytes, and echo that took room the caller counted
- * on makes the write short instead of dropping its bytes.
+ * The echo held goes first, as Linux's n_tty_write begins with
+ * process_echoes: as far as the sink's room allows, or one batch where the
+ * echo is deferred (`tty_echo_batch`), whose writer gives the rest before
+ * (`tty_write_user`); the bytes then go one at a time while output runs
+ * and the sink has room: a VSTOP from the keyboard's interrupt stops the
+ * write between two bytes, and echo that took room the caller counted on
+ * makes the write short instead of dropping its bytes.
  */
 int tty_write(struct tty *t, const unsigned char *kbuf, int count)
 {
@@ -813,7 +847,7 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count)
     if (t->sink == console_sink) {
         console_write_begin();
     }
-    tty_echo_drain(t);
+    (void)tty_echo_batch(t);
     for (i = 0; i < count && !t->ldisc.stopped && tty_output_fits(t); i++) {
         n_tty_output(&t->ldisc, kbuf[i], t->sink, t->sink_ctx);
     }
@@ -822,6 +856,22 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count)
         console_answer(t);
     }
     return i;
+}
+
+/** Give one batch of the echo held to the sink of `t`, which defers its
+ * echo, inside a console write's bracket, then reach a service point, so
+ * that a long echo lets other kernel work run between its batches; the
+ * caller tests output's flow and its hangup again after it. */
+static void tty_echo_step(struct tty *t)
+{
+    if (t->sink == console_sink) {
+        console_write_begin();
+    }
+    (void)tty_echo_batch(t);
+    if (t->sink == console_sink) {
+        console_write_end();
+    }
+    sched_service_point();
 }
 
 int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, int nonblock,
@@ -841,10 +891,19 @@ int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, in
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         for (;;) {
+            uint32_t flags;
             int32_t rc;
+            int due;
 
             if (opened && tty_desc_hung(t, *opened)) {
                 return done + put > 0 ? (int32_t)(done + put) : -EIO;
+            }
+            flags = kirq_save();
+            due = tty_echo_due(t);
+            kirq_restore(flags);
+            if (due) {
+                tty_echo_step(t);
+                continue;
             }
             put += (uint32_t)tty_write(t, kbuf + put, (int)(chunk - put));
             if (put == chunk) {
@@ -864,14 +923,14 @@ int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, in
 /** Every poller waits on `input_wq`, which a hangup wakes, as Linux's
  * n_tty_poll waits on its queues whatever was asked: one that asks for no
  * events is still told of the hangup of its description. Every poller that
- * may sleep drains the pump at each scan, which writes a batch of the echo
- * held: one for POLLIN, one for POLLOUT on stopped output, so that a VSTART
- * from COM1 reaches the discipline, and one for neither, which waits for the
- * hangup alone, since the console's tick and interrupt drain only a budget
- * of the ring (`console_deliver`). A poller for POLLOUT alone on running
- * output is answered at once and drains nothing. The poll core calls with
- * interrupts on, and the console's tick and interrupt fill the discipline,
- * so the pump and the reads run with interrupts off, as in tty_inq. */
+ * may sleep drains the pump at each scan: one for POLLIN, one for POLLOUT
+ * on stopped output, so that a VSTART from COM1 reaches the discipline, and
+ * one for neither, which waits for the hangup alone, since the console's
+ * tick and interrupt drain only a budget of the ring (`console_deliver`).
+ * A poller for POLLOUT alone on running output is answered at once and
+ * drains nothing. The poll core calls with interrupts on, and the console's
+ * tick and interrupt fill the discipline, so the pump and the reads run
+ * with interrupts off, as in tty_inq. */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq)
 {
     short revents = 0;
@@ -891,6 +950,19 @@ short tty_poll(struct tty *t, short events, wait_queue_t **wq)
     }
     kirq_restore(flags);
     return revents;
+}
+
+short tty_console_desc_poll(const uint32_t *opened, int readable, short events, wait_queue_t **wq)
+{
+    short want = (short)(events & POLLOUT);
+
+    if (opened && tty_desc_hung(&console_tty, *opened)) {
+        return (short)TTY_HUNG_POLL;
+    }
+    if (readable) {
+        want = (short)(want | (events & POLLIN));
+    }
+    return tty_poll(&console_tty, want, wq);
 }
 
 int tty_inq(struct tty *t)
@@ -1122,10 +1194,9 @@ static int console_signal_through(struct tty *t)
 /** When the discipline has no room for a line, act on the VSTOP and VSTART
  * among the bytes that wait in the ring (`tty_lookahead`), so that a full
  * console still stops and restarts its output, as Linux's
- * n_tty_lookahead_flow_ctrl; a restart gives a batch of the echo held to
- * the screen when `echo` is nonzero, and wakes the echo thread for the
- * rest. Interrupts off. */
-static void console_lookahead(struct tty *t, int echo)
+ * n_tty_lookahead_flow_ctrl; a restart wakes the echo thread for the echo
+ * held. Interrupts off. */
+static void console_lookahead(struct tty *t)
 {
     unsigned char ahead[64];
     int n, i;
@@ -1135,7 +1206,7 @@ static void console_lookahead(struct tty *t, int echo)
     }
     while ((n = serial_rx_lookahead(ahead, (int)sizeof(ahead))) > 0) {
         for (i = 0; i < n; i++) {
-            tty_lookahead(t, ahead[i], echo);
+            tty_lookahead(t, ahead[i], 0);
         }
     }
 }
@@ -1171,10 +1242,10 @@ static int console_serial_closed(void)
  * until it is empty with `budget` negative, each byte's echo held for a
  * thread (`echo_kick`); a full discipline stops the drain but still takes a
  * signal character from the ring (console_signal_through) and acts on the
- * VSTOP and VSTART behind it (console_lookahead, with `echo`). The readers
- * are woken once, at the end. Interrupts off.
+ * VSTOP and VSTART behind it (console_lookahead). The readers are woken
+ * once, at the end. Interrupts off.
  */
-static void console_drain(struct tty *t, int budget, int echo)
+static void console_drain(struct tty *t, int budget)
 {
     unsigned int held = n_tty_held(&t->ldisc);
     int n, fed = 0;
@@ -1187,7 +1258,7 @@ static void console_drain(struct tty *t, int budget, int echo)
                 fed = 1;
                 continue;
             }
-            console_lookahead(t, echo);
+            console_lookahead(t);
             break;
         }
         looked = serial_rx_looked();
@@ -1205,9 +1276,9 @@ static void console_drain(struct tty *t, int budget, int echo)
 
 /**
  * The console's polled input source: drain the serial ring, which the port's
- * interrupt and the tick fill, into the discipline, and give a batch of the
- * echo held to the screen and COM1 (`tty_echo_out`), whether or not the
- * ring held bytes, leaving the rest to the echo thread.
+ * interrupt and the tick fill, into the discipline, each byte's echo held
+ * for the echo thread, since a wait's predicate calls this and a write to
+ * COM1 needs interrupts on.
  *
  * Runs in thread context with interrupts off, from tty_wait_cond before each
  * read-sleep, from tty_output_cond, from tty_poll and from tty_inq. It goes
@@ -1217,15 +1288,14 @@ static void console_pump(struct tty *t)
 {
     reader_drains++;
     if (!console_serial_closed()) {
-        console_drain(t, -1, 1);
+        console_drain(t, -1);
     }
-    tty_echo_out(t);
 }
 
 /**
  * The interrupt-side drain, run from tty_console_poll: like console_pump,
  * but at most TTY_PUMP_BUDGET bytes per call, so a flood cannot hold the
- * interrupt off, and no echo written. Echo runs through console_sink to
+ * interrupt off. Echo runs through console_sink to
  * serial_out, which busy-waits on the UART's transmit-holding register, so
  * the echo of each byte is held and the echo thread woken for it. A serial
  * ^C or ^Z reaches the foreground group at receipt.
@@ -1234,7 +1304,7 @@ static void console_pump_irq(struct tty *t)
 {
     tick_drains++;
     if (!console_serial_closed()) {
-        console_drain(t, TTY_PUMP_BUDGET, 0);
+        console_drain(t, TTY_PUMP_BUDGET);
     }
 }
 
@@ -1257,30 +1327,28 @@ static int console_echo_due(void *arg)
     return tty_echo_due(&console_tty);
 }
 
-/** One pass of the echo thread: give all the echo held to the screen and
- * COM1, a batch at a time (`tty_echo_drain`), inside a console write's
- * bracket, as a write gives it. */
+/** One pass of the echo thread: give one batch of the echo held to the
+ * screen and COM1 with interrupts on, inside a console write's bracket, as
+ * a write gives it, then reach a service point (`tty_echo_step`). */
 static void console_echo_work(void)
 {
-    console_write_begin();
-    tty_echo_drain(&console_tty);
-    console_write_end();
+    tty_echo_step(&console_tty);
 }
 
 #ifndef RACH2_HOSTTEST
 static process_t *echo_thread;
 
 /** The echo thread, kconsoled: sleep until echo is held and output runs,
- * then write it, holding the big lock as kernel code does, with a service
- * point after each pass, as Linux's worker calls cond_resched between
- * works. */
+ * then write a batch of it, holding the big lock as kernel code does, with
+ * a service point after each batch, as Linux's worker calls cond_resched
+ * between works; the wait's predicate tests output's flow and the echo
+ * held, which a hangup discards, again after each. */
 static void kconsoled(void)
 {
     arch_irq_enable();
     for (;;) {
         (void)wq_wait_event_idle(&echo_wq, console_echo_due, NULL);
         console_echo_work();
-        sched_service_point();
     }
 }
 
@@ -1388,10 +1456,9 @@ static uint64_t read_at; /* next serial backup poll, in kernel ticks */
  * byte's echo held and the echo thread woken for it (console_pump_irq), so a
  * serial ^C/^Z reaches the foreground group at once and type-ahead waits in
  * the discipline; a reader, writer or poller parked on the console is woken,
- * and drains the rest and writes a batch of the echo in its own context
- * (console_pump). With no session the ring is left to the kernel debug
- * shell, which polls it itself and releases the console (tty_set_session 0)
- * whenever it regains control.
+ * and drains the rest in its own context (console_pump). With no session
+ * the ring is left to the kernel debug shell, which polls it itself and
+ * releases the console (tty_set_session 0) whenever it regains control.
  */
 void tty_console_poll(void)
 {
