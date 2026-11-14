@@ -264,13 +264,13 @@ static uint32_t pc_new_pass(void)
 {
     uint32_t i;
 
-    if (++pc_pass == 0) {
+    if (pc_pass == 0xFFFFFFFFu) {
         for (i = 0; i < PC_SLOTS; ++i) {
             pc_slots[i].failed_pass = 0;
         }
-        pc_pass = 1;
+        pc_pass = 0;
     }
-    return pc_pass;
+    return ++pc_pass;
 }
 
 /** Mark the page of `e` dirty and count it; a page that goes dirty at or
