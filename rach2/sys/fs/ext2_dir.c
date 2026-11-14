@@ -1011,16 +1011,34 @@ static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
  * that allocated or freed since its last write. Those are what the write
  * costs past its own request: a directory's own blocks were written as
  * they changed (`dir_commit`). A strict mount wrote the inode through
- * already. 0; -EROFS without a write once a write on the device has
- * failed; or the write's -errno, with the block still dirty.
+ * already.
+ *
+ * A file the file-write batch holds was not stored into the table block
+ * (`ext2_writeback_keeps`), so the batch is drained first, which encodes the
+ * node as memory has it into the block, its raised count among it, and puts
+ * the blocks the batch's pointers name in the cache before the block. Else a
+ * link of a file with a buffered write and an open description would write
+ * the old count here and the new name after it, and a stop between would
+ * leave two names and a count of one. The caller holds `n`'s lock, under
+ * which alone `n` joins the batch, so it stays out of it until the write.
+ * 0; -EROFS without a write once a write on the device has failed; the
+ * drain's -errno; or the write's, with the block still dirty.
  */
 static int inode_commit(struct ext2_mount *em, const struct ext2_node *n)
 {
+    int rc;
+
     if (ext2_em_strict(em)) {
         return 0;
     }
     if (em->dev->flags & BLOCK_WRITE_FAILED) {
         return -EROFS;
+    }
+    if (ext2_writeback_holds(em, n)) {
+        rc = ext2_writeback_drain(em);
+        if (rc != 0) {
+            return rc;
+        }
     }
     return bcache_sync_block(em->dev, ext2_inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT);
 }
@@ -2037,7 +2055,8 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
 /**
  * The `link` of `vfs_ops`: a new name `name` in `dir` for the file `node`:
  * the count raised first and, on a mount that writes back, written to the
- * device (`inode_commit`), then the name written, so that a stop between
+ * device (`inode_commit`), after a drain of the batch when it holds the
+ * file, then the name written, so that a stop between
  * leaves a count one too high, which is a count repair; then the
  * directory's times. A failure to write the name lowers the count again in
  * memory, which the file's mark has its next store write.
@@ -2292,7 +2311,8 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
  * The rename of file `n` from `r->oldname` in `r->od` to `r->newname` in
  * `r->nd`, over the file `victim` whose entry is `nsc` at `nat` when it is
  * not NULL, for `ext2_rename`, whose caller holds every lock: the count
- * raised and written (`inode_commit`), the new entry written or the
+ * raised and written (`inode_commit`, which drains the batch first when it
+ * holds `n`), the new entry written or the
  * victim's entry pointed at `n`, the
  * victim's count lowered as unlink lowers it, the old entry removed and the
  * count lowered again. A failed store of a count or of times after an entry
