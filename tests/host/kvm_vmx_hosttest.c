@@ -4723,6 +4723,88 @@ static void fep_rows(int fd)
     kvm_force_emulation_prefix = 0;
 }
 
+/** Give the vCPU on `fd` the debug registers DR0 `dr0` and DR7 `dr7`,
+ * DR6 at its reset value. */
+static void set_dr(int fd, uint64_t dr0, uint64_t dr7)
+{
+    struct kvm_debugregs d;
+
+    k_memset(&d, 0, sizeof(d));
+    d.db[0] = dr0;
+    d.dr6 = 0xFFFF0FF0u;
+    d.dr7 = dr7;
+    CHECK(fdio(fd, KVM_SET_DEBUGREGS, (uintptr_t)&d) == 0, "KVM_SET_DEBUGREGS");
+}
+
+/** Put RFLAGS.RF of the vCPU on `fd` on. */
+static void set_rf(int fd)
+{
+    struct kvm_regs r = regs_of(fd);
+
+    r.rflags |= 0x10000u;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with RF");
+}
+
+/** A code breakpoint at the instruction behind the forced emulation
+ * prefix, at 0x1005, whose address the processor never checked, as
+ * Linux's kvm_vcpu_check_code_breakpoint checks it for
+ * EMULTYPE_TRAP_UD_FORCED: the guest's queues #DB there with B0, unless
+ * RF is set or a MOV SS shadow holds this guest of Intel's vendor; the
+ * caller's ends KVM_RUN as KVM_EXIT_DEBUG. Each run's HLT steps RIP by
+ * one. */
+static void fep_bp_rows(int fd)
+{
+    uint32_t ud = UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    uint32_t db = DB_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_debugregs d;
+    struct row *w;
+
+    kvm_force_emulation_prefix = 1;
+    emul_start(fd, "\x0f\x0bkvm\x89\xd8", 7, 0, 0x1234, 0);
+    set_dr(fd, 0x1005, 0x401);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == db && regs_of(fd).rip == 0x1006 &&
+              regs_of(fd).rax == 0,
+          "the guest's breakpoint at the MOV behind the prefix is #DB there, the MOV not run");
+    CHECK(fdio(fd, KVM_GET_DEBUGREGS, (uintptr_t)&d) == 0 && d.dr6 == 0xFFFF0FF1u,
+          "with B0 in the guest's DR6");
+
+    emul_start(fd, "\x0f\x0bkvm\x89\xd8", 7, 0, 0x1234, 0);
+    set_dr(fd, 0x1005, 0x401);
+    set_rf(fd);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1008 &&
+              regs_of(fd).rax == 0x1234,
+          "RF holds it back, and the MOV is emulated");
+    kvm_force_emulation_prefix = 3;
+    emul_start(fd, "\x0f\x0bkvm\x89\xd8", 7, 0, 0x1234, 0);
+    set_dr(fd, 0x1005, 0x401);
+    set_rf(fd);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == db && regs_of(fd).rip == 0x1006 &&
+              regs_of(fd).rax == 0,
+          "unless force_emulation_prefix's bit 1 clears RF first");
+    kvm_force_emulation_prefix = 1;
+
+    emul_start(fd, "\x0f\x0bkvm\x89\xd8", 7, 0, 0x1234, 0);
+    set_dr(fd, 0x1005, 0x401);
+    w = script(EXIT_EXCEPTION_NMI, 0, 0);
+    w->intr_info = ud;
+    w->intr_state = INTR_MOV_SS;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1008 && regs_of(fd).rax == 0x1234,
+          "a MOV SS shadow holds it back for a guest of Intel's vendor");
+
+    emul_start(fd, "\x0f\x0bkvm\x89\xd8", 7, 0, 0x1234, 0);
+    set_dr(fd, 0, 0x400);
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP, 0x1005, 0x1);
+    script(EXIT_EXCEPTION_NMI, 0, 0)->intr_info = ud;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.exception == DB_VECTOR &&
+              rp->u.debug.pc == 0x1005 && rp->u.debug.dr6 == (1u | DR6_FIXED) &&
+              regs_of(fd).rip == 0x1005 && regs_of(fd).rax == 0 && m.injected == 0,
+          "the caller's breakpoint there is KVM_EXIT_DEBUG at it, with B0, the MOV not run");
+    guest_debug(fd, 0, 0, 0);
+    kvm_force_emulation_prefix = 0;
+}
+
 /** MMX and SSE moves with their memory operand on device memory. */
 static void simd_rows(int fd)
 {
@@ -4971,6 +5053,7 @@ static void ts_rows(int vm)
     emul_rows(fd);
     ud_rows(fd);
     fep_rows(fd);
+    fep_bp_rows(fd);
     simd_rows(fd);
     db_rows(fd);
     fdclose(fd);

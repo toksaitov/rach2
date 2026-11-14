@@ -647,11 +647,18 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = NULL;
 }
 
+/* The records the kernel logged: their count and the formats of the last
+ * two, `klog_last` the newer. */
+static int klog_count;
+static const char *klog_last, *klog_prev;
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
     (void)subsystem;
-    (void)format;
+    klog_count++;
+    klog_prev = klog_last;
+    klog_last = format;
 }
 
 /** A frame is its own address in the model. */
@@ -1747,15 +1754,28 @@ static void startup_msr_lists(void)
           "with LASTBRANCHFROMIP to LASTINTTOIP beside it, as Linux's msrs_to_save_base");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
-    CHECK(r == 0 && buf.list.nmsrs == 2 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345,
-          "the feature list names UCODE_REV and PERF_CAPABILITIES");
-    buf.msrs.nmsrs = 2;
+    CHECK(r == 0 && buf.list.nmsrs == 3 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345 &&
+              MSR_INDICES[2] == 0xCE,
+          "the feature list names UCODE_REV, PERF_CAPABILITIES and PLATFORM_INFO");
+    buf.msrs.nmsrs = 3;
     MSR_ENTRIES[0].index = 0x8B;
     MSR_ENTRIES[1].index = 0x10A;
+    MSR_ENTRIES[1].data = 5;
+    MSR_ENTRIES[2].index = 0xCE;
+    MSR_ENTRIES[2].data = 5;
     r = dev(KVM_GET_MSRS, (uintptr_t)&buf);
-    CHECK(r == 1 && MSR_ENTRIES[0].data == 0x2800000000ull,
-          "KVM_GET_MSRS of /dev/kvm reads feature MSRs up to the first that is not, "
-          "UCODE_REV as the host's");
+    CHECK(r == 1 && MSR_ENTRIES[0].data == 0x2800000000ull && MSR_ENTRIES[1].data == 0 &&
+              MSR_ENTRIES[2].data == 5,
+          "KVM_GET_MSRS of /dev/kvm reads feature MSRs up to the first that fails, "
+          "UCODE_REV as the host's, the failed one's data 0 and the rest left");
+    buf.msrs.nmsrs = 2;
+    MSR_ENTRIES[0].index = 0xCE;
+    MSR_ENTRIES[1].index = 0x10;
+    MSR_ENTRIES[1].data = 5;
+    r = dev(KVM_GET_MSRS, (uintptr_t)&buf);
+    CHECK(r == 2 && MSR_ENTRIES[0].data == 0x80000000u && MSR_ENTRIES[1].data == 0,
+          "PLATFORM_INFO reads CPUID faulting, and the TSC, which the index list names, 0, "
+          "as Linux's kvm_do_msr_access answers the caller");
 }
 
 /** Check the offered CPUID entry `e` against the model's processor. */
@@ -3474,18 +3494,20 @@ static void param_rows(void)
     uint64_t value = 5;
     int vm, fd;
 
-    CHECK(param_reads("ignore_msrs", "N\n") && param_reads("eager_page_split", "N\n") &&
+    CHECK(param_reads("ignore_msrs", "N\n") && param_reads("eager_page_split", "Y\n") &&
+              param_reads("report_ignored_msrs", "Y\n") &&
               param_reads("force_emulation_prefix", "0\n"),
-          "ignore_msrs and eager_page_split read N and force_emulation_prefix 0");
+          "Linux's defaults: ignore_msrs N, eager_page_split and report_ignored_msrs Y, "
+          "force_emulation_prefix 0");
     CHECK(param_write("ignore_msrs", "Y\n") == 2 && kvm_ignore_msrs == 1 &&
               param_reads("ignore_msrs", "Y\n"),
           "ignore_msrs takes Y and a newline");
     CHECK(param_write("ignore_msrs", "off") == 3 && kvm_ignore_msrs == 0 &&
               param_write("ignore_msrs", "x") == -EINVAL && kvm_ignore_msrs == 0,
           "off, and refuses x with EINVAL, as kstrtobool");
-    CHECK(param_write("eager_page_split", "1") == 1 && kvm_eager_page_split == 1 &&
-              param_write("eager_page_split", "n") == 1 && kvm_eager_page_split == 0,
-          "eager_page_split takes 1 and n");
+    CHECK(param_write("eager_page_split", "n") == 1 && kvm_eager_page_split == 0 &&
+              param_write("eager_page_split", "1") == 1 && kvm_eager_page_split == 1,
+          "eager_page_split takes n and 1");
     CHECK(param_write("force_emulation_prefix", "0x3\n") == 4 && kvm_force_emulation_prefix == 3 &&
               param_reads("force_emulation_prefix", "3\n"),
           "force_emulation_prefix takes 0x3 in base 0 and reads 3");
@@ -3516,6 +3538,85 @@ static void param_rows(void)
     CHECK(kvm_msr_set(v, 0xC0010015u, 1ull << 30, 0) == KVM_MSR_INVAL,
           "a value HWCR refuses stays refused");
     kvm_ignore_msrs = 0;
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/** KVM_GET_MSRS of /dev/kvm under ignore_msrs, as Linux's
+ * do_get_feature_msr judges it by kvm_do_msr_access: an MSR KVM does not
+ * have reads 0 and the read goes on; without the parameter it stops. */
+static void ignore_feature_rows(void)
+{
+    kvm_ignore_msrs = 1;
+    buf.msrs.nmsrs = 2;
+    MSR_ENTRIES[0].index = 0x4B564DFFu;
+    MSR_ENTRIES[0].data = 5;
+    MSR_ENTRIES[1].index = 0x8B;
+    CHECK(dev(KVM_GET_MSRS, (uintptr_t)&buf) == 2 && MSR_ENTRIES[0].data == 0 &&
+              MSR_ENTRIES[1].data == 0x2800000000ull,
+          "under ignore_msrs, KVM_GET_MSRS of /dev/kvm reads an unknown MSR as 0 and goes on");
+    kvm_ignore_msrs = 0;
+    MSR_ENTRIES[0].data = 5;
+    CHECK(dev(KVM_GET_MSRS, (uintptr_t)&buf) == 0 && MSR_ENTRIES[0].data == 0,
+          "and without it stops there, the entry's data 0");
+}
+
+/** Whether the newest record the kernel logged is an ignored MSR's. */
+static int ignored_logged(void)
+{
+    return klog_last != NULL && strncmp(klog_last, "ignored %s", 10) == 0;
+}
+
+/**
+ * report_ignored_msrs: each access ignore_msrs lets succeed is logged, as
+ * Linux's kvm_pr_unimpl in kvm_do_msr_access, at most ten in five seconds
+ * of the raw clock, as printk's default rate limit, and the first after
+ * the window says how many were held back; nothing without the parameter
+ * or for an access that fails.
+ */
+static void report_rows(void)
+{
+    uint64_t saved = mono_ns, value;
+    struct kvm_vcpu *v;
+    int vm, fd, n, i;
+
+    CHECK(param_write("report_ignored_msrs", "N") == 1 && kvm_report_ignored_msrs == 0 &&
+              param_write("report_ignored_msrs", "y\n") == 2 && kvm_report_ignored_msrs == 1,
+          "report_ignored_msrs takes N and y");
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    n = klog_count;
+    CHECK(kvm_msr_get(v, 0x4B564DFFu, &value, 0) == KVM_MSR_UNKNOWN && klog_count == n,
+          "an unsupported access that fails is not logged");
+    kvm_ignore_msrs = 1;
+    mono_ns += 6000000000ull;
+    CHECK(kvm_msr_get(v, 0x4B564DFFu, &value, 0) == 0 && ignored_logged(),
+          "under ignore_msrs, the guest's read is logged");
+    n = klog_count;
+    CHECK(kvm_msr_set(v, 0x4B564DFFu, 7, 0) == 0 && klog_count == n + 1 && ignored_logged(),
+          "and its write");
+    kvm_report_ignored_msrs = 0;
+    CHECK(kvm_msr_get(v, 0x4B564DFFu, &value, 0) == 0 && klog_count == n + 1,
+          "but not while report_ignored_msrs is N");
+    kvm_report_ignored_msrs = 1;
+    for (i = 0; i < 8; i++) {
+        (void)kvm_msr_get(v, 0x4B564DFFu, &value, 0);
+    }
+    CHECK(klog_count == n + 9, "ten lines in the window are logged");
+    CHECK(kvm_msr_get(v, 0x4B564DFFu, &value, 0) == 0 && kvm_msr_set(v, 0x4B564DFFu, 0, 0) == 0 &&
+              klog_count == n + 9,
+          "and the next held back, the access still succeeding");
+    mono_ns += 5000000000ull;
+    (void)kvm_msr_get(v, 0x4B564DFFu, &value, 0);
+    CHECK(klog_count == n + 9, "until five seconds have passed");
+    mono_ns += 1000000ull;
+    (void)kvm_msr_get(v, 0x4B564DFFu, &value, 0);
+    CHECK(klog_count == n + 11 && ignored_logged() && klog_prev != NULL &&
+              strncmp(klog_prev, "ignored msrs: %u lines suppressed", 33) == 0,
+          "after which a new window logs, the lines held back counted first");
+    kvm_ignore_msrs = 0;
+    mono_ns = saved;
     fdclose(fd);
     fdclose(vm);
 }
@@ -4595,6 +4696,8 @@ static void selftest_rows(void)
     vm_cap_rows();
     feature_msr_rows();
     param_rows();
+    ignore_feature_rows();
+    report_rows();
     svm_debugctl_rows();
     svm_sfmask_rows();
     spec_rows();
