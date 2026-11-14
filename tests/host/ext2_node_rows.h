@@ -166,7 +166,9 @@ static void failed_load_row(void)
 /**
  * A lookup that finds a dying inode waits for it to go and looks again. Only
  * a damaged volume names one: here "one" and "alias" share a link count of
- * 1, so the driver frees the inode at the last put of "alias".
+ * 1, so the driver frees the inode at the last put of "alias", and the
+ * lookup of "one" then reads a freed inode, which it reports and answers
+ * EIO, as Linux's `ext2_iget` answers a deleted inode a name references.
  */
 static void dying_node_row(void)
 {
@@ -200,8 +202,12 @@ static void dying_node_row(void)
     }
     finish_turns();
     check(sleeps > 0, "a lookup of the dying inode slept");
-    check(row_rc[1] == 0 && row_nodes[1] != 0,
-          "and found a node of its own once the inode had gone");
+    check(row_rc[1] == -EIO && row_nodes[1] == 0 &&
+              strstr(last_warn, "a name references it, freed") != 0,
+          "and, once the inode had gone, found it freed and answered EIO");
+    if (row_rc[1] != -EIO) {
+        printf("  rc %d, last warning '%s'\n", row_rc[1], last_warn);
+    }
     if (row_nodes[1]) {
         OPS->put(&mnt, row_nodes[1]);
     }
