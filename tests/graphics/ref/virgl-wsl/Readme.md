@@ -20,7 +20,7 @@ Debian's results through virgl on the testing PC's WSL, the reference that Rach2
 | Chromium 2.0.1 | 2,865 | 2,641 | 199 | 25 | 1,170,141,562 | 4,805 |
 | Firefox 2.0.1 | 2,865 | 2,655 | 205 | 5 | 1,186,963,675 | 11,506 |
 
-No page timed out, crashed or hung. Most of the failures in 2.0.1 are dEQP's GLES3 pages that the suite runs: in chunk 4, 103 pages of `deqp/functional/gles3/texturefiltering/` and 15 of `shadertexturefunction/` in both browsers, and in Chromium's chunk 3, 49 framebuffer and fragment output pages, each of which passes most of its subtests: they run after virglrenderer refuses Chromium's context on `fbocolorbuffer/tex3d_01.html`, so their cases read back images they did not draw, and which of them pass changes from run to run ([upstream faults](../../../../dev-log/upstream.md)).
+No page timed out, crashed or hung. Most of the failures in 2.0.1 are dEQP's GLES3 pages that the suite runs: in chunk 4, 103 pages of `deqp/functional/gles3/texturefiltering/` and 15 of `shadertexturefunction/` in both browsers, and in Chromium's chunk 3, 49 framebuffer and fragment output pages, each of which passes most of its subtests: they run after virglrenderer refuses Chromium's context on `fbocolorbuffer/tex3d_01.html`, so their cases read back images they did not draw, and which of them pass follows the Windows GPU driver ([upstream faults](../../../../dev-log/upstream.md)).
 
 The runs that took them, from the top of the tree, with each output then moved here:
 
