@@ -34,8 +34,10 @@
  * bytes waiting before the read, which the drain takes, and with a key or
  * mouse byte that arrives after the drain and answers the first READ_CONFIG:
  * the reads go on until two agree, so the translation bit kbd_init caches
- * is the controller's, and a controller whose reads never agree gives -1
- * after ten.
+ * is the controller's, the answer left over drained before the handler
+ * can take it for a key; a controller whose reads never agree gives -1
+ * after ten, and kbd_init then keeps translation on, so that on a portable
+ * chassis a later BAT starts the probe at RESET_DIS, never at GETID.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DTICK_HZ=1000
@@ -703,7 +705,7 @@ static void nodes_rows(void)
  * it, so kbd_init caches the controller's translation bit. */
 static void config_rows(void)
 {
-    int c;
+    int c, k;
 
     model_status = 0;
     n_queued = 0;
@@ -718,20 +720,25 @@ static void config_rows(void)
     CHECK("a key byte after the drain is not the configuration",
           ps2_read_config() == 0x45 && config_commands == c + 3);
     /* The first answer waits behind the stray byte and answers the second
-     * READ_CONFIG; the second answer is left over. */
-    n_queued = 0;
+     * READ_CONFIG; the third's answer is left over, and drained. */
+    CHECK("and the answer left over is drained", n_queued == 0);
     stray_mouse = 1;
     stray = 0x08;
     c = config_commands;
-    CHECK("nor a mouse byte", ps2_read_config() == 0x45 && config_commands == c + 3);
-    n_queued = 0;
+    CHECK("nor a mouse byte",
+          ps2_read_config() == 0x45 && config_commands == c + 3 && n_queued == 0);
     stray_mouse = 0;
 
     stray = 0x1E;
     kbd.translated = 0;
     kbd_init();
     CHECK("kbd_init caches the controller's translation past a key byte", kbd.translated == 1);
-    n_queued = 0;
+    c = data_reads;
+    k = keys;
+    model_status = 0;
+    kbd_irq(0);
+    CHECK("and leaves no answer for the handler, which takes no key",
+          n_queued == 0 && data_reads == c && keys == k);
 }
 
 /** A controller that answers every READ_CONFIG after a fresh key byte reads
@@ -745,9 +752,37 @@ static void unstable_rows(void)
     n_queued = 0;
     CHECK("reads that never agree give -1", ps2_read_config() == -1);
     CHECK("after ten of them", config_commands == c + 10);
+    CHECK("leaving no byte waiting", n_queued == 0);
     stray = -1;
     stray_always = 0;
-    n_queued = 0;
+}
+
+/** A configuration read that fails on a portable chassis: kbd_init takes
+ * translation to be on, with a warning, so a later BAT starts the probe at
+ * RESET_DIS and never sends the laptop's keyboard GETID. */
+static void failed_config_rows(void)
+{
+    int w = warnings, k;
+
+    chassis = "9";
+    stray = 0x1E;
+    stray_always = 1;
+    kbd.translated = 0;
+    kbd_init();
+    stray = -1;
+    stray_always = 0;
+    CHECK("a failed configuration read keeps translation",
+          kbd.translated == 1 && kbd.portable && warnings == w + 1 && n_queued == 0);
+    CHECK("so a BAT writes RESET_DIS, not GETID",
+          answer_at(T(3400), 0xAA) == 1 && last_write() == 0xF5);
+    CHECK("and the keyboard answers it and ENABLE",
+          answer_at(T(3401), 0xFA) == 1 && last_write() == 0xF4 && answer_at(T(3402), 0xFA) == 0 &&
+              kbd.job == JOB_NONE && !serio0_unbound);
+    k = keys;
+    CHECK("its keys flow", answer_at(T(3500), 0x1E) == 0 && keys == k + 1);
+    CHECK("whose LEDs follow", leds_sent(T(3501)));
+    kbd.portable = 0;
+    chassis = 0;
 }
 
 int main(void)
@@ -786,6 +821,7 @@ int main(void)
     nodes_rows();
     config_rows();
     unstable_rows();
+    failed_config_rows();
 
     if (fails == 0) {
         printf("ps2kbd-test: pass\n");
