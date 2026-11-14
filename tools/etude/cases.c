@@ -345,6 +345,7 @@ static void prepared_qemu(const struct rule *r, const struct json *qemu)
     prepared(r, json_member(qemu, "initrd"), "the initial RAM image");
     prepared(r, json_member(qemu, "acpi_table"), "the ACPI table");
     prepared(r, json_member(qemu, "audio_input"), "the audio input");
+    prepared(r, json_member(qemu, "emulator"), "the emulator");
     for (i = 0; disks != NULL && i < disks->count; i++) {
         if (json_member(disks->item[i], "base") != NULL) {
             prepared(r, json_member(disks->item[i], "base"), "the overlay's base");
@@ -393,6 +394,33 @@ static void prepared_fixtures(const struct rule *r, const struct json *list)
     }
 }
 
+/**
+ * Reports a machine whose profile names another emulator than the first
+ * machine's, or none where it names one: the scenario's site has one program
+ * for each architecture, so a case's machines run on the same one.
+ */
+static void one_emulator(const struct rule *r, const struct json *machines)
+{
+    const struct json *first, *e;
+    const char *want, *got;
+    size_t i;
+
+    if (machines == NULL || machines->count == 0)
+        return;
+    first = json_member(json_member(machines->item[0], "qemu"), "emulator");
+    want = first != NULL && first->type == JSON_STRING ? first->string : NULL;
+    for (i = 1; i < machines->count; i++) {
+        e = json_member(json_member(machines->item[i], "qemu"), "emulator");
+        got = e != NULL && e->type == JSON_STRING ? e->string : NULL;
+        if (want == NULL ? got != NULL : got == NULL || !same(got, want))
+            finding(r->file, line_at(machines->item[i], "qemu"),
+                    "%s: a machine names the emulator %s and another %s; the case's machines "
+                    "run on one",
+                    json_text(r->c, "case_id"), want != NULL ? want : "none",
+                    got != NULL ? got : "none");
+    }
+}
+
 /** Every artifact the case uses is one that prepare lists, once. */
 static void rule_artifacts(const struct rule *r)
 {
@@ -407,6 +435,7 @@ static void rule_artifacts(const struct rule *r)
     for (i = 0; machines != NULL && i < machines->count; i++) {
         prepared_qemu(r, json_member(machines->item[i], "qemu"));
     }
+    one_emulator(r, machines);
     prepared_fixtures(r, json_member(exec, "isolation"));
     prepared_fixtures(r, native_fixtures(r->c));
 }

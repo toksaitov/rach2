@@ -102,7 +102,7 @@
           "additionalProperties": {"enum": ["present", "absent", "either"]}
         },
         "hosts": {"type": "array", "items": {"enum": ["linux", "macos", "windows"]}, "minItems": 1, "uniqueItems": true},
-        "qemu": {"allOf": [{"$ref": "#/$defs/qemu"}, {"not": {"required": ["architecture"]}}]}
+        "qemu": {"allOf": [{"$ref": "#/$defs/qemu"}, {"not": {"anyOf": [{"required": ["architecture"]}, {"required": ["emulator"]}]}}]}
       }
     },
     "qemu": {
@@ -130,6 +130,7 @@
         "captures": {"type": "array", "items": {"type": "string", "pattern": "^net[1-9]?[0-9]$"}, "uniqueItems": true},
         "smbios_vendor": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[ -~]+$"},
         "acpi_table": {"$ref": "#/$defs/name"},
+        "emulator": {"$ref": "#/$defs/name"},
         "display": {"enum": ["none", "std-vga", "virtio-vga", "virtio-gpu", "virgl", "venus"]}
       }
     },

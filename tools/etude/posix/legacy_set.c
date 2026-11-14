@@ -3379,21 +3379,61 @@ int (*legacy_set_put)(struct etude_store *s, const char *path, const char *expec
 #define legacy_set_put etude_store_put
 #endif
 
+/**
+ * Put in `qemu` the program that runs the machines of case `k` on its
+ * architecture: the emulator its machines' profiles name, an artifact of its
+ * `prepare`, where the tree's build made it, since such a program loads the
+ * libraries and firmware beside it, which the store's copy of the one file
+ * lacks; and otherwise the site's. `etude check manifest` makes every machine
+ * of a case name the same one; the first machine's is read.
+ *
+ * @return 0, or -1 with the reason in `why`.
+ */
+static int case_emulator(const struct set *x, const struct legacy_case *k, char qemu[2][PATH_LEN],
+                         char *why, size_t size)
+{
+    const struct json *machines = json_member(k->json, "machines");
+    const char *name = NULL;
+    char *slot = qemu[strcmp(k->arch, "x86_64") == 0];
+    size_t g;
+
+    if (machines != NULL && machines->type == JSON_ARRAY && machines->count > 0)
+        name = json_text(json_member(machines->item[0], "qemu"), "emulator");
+    if (name == NULL)
+        return 0;
+    for (g = 0; g < k->ngoals && strcmp(k->names[g], name) != 0; g++) {
+    }
+    if (g == k->ngoals) {
+        fit(why, size, "its emulator %s is no artifact it prepares", name);
+        return -1;
+    }
+    if (fit(slot, PATH_LEN, "%s/%s", x->tree, k->goals[g]) != 0 || access(slot, X_OK) != 0) {
+        fit(why, size, "its emulator %s, %s, is not a program", name, k->goals[g]);
+        return -1;
+    }
+    return 0;
+}
+
 /** Publish the artifacts of machine case member `m` to the tree's store, and
  * write its invocation; 0, or -1 with the reason in `why`. An object the
  * store has already is checked first, so that a good one is not copied
- * again and a damaged one is replaced. */
-static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN], char *why,
+ * again and a damaged one is replaced. The invocation names the emulator
+ * case_emulator gives in place of the site's. */
+static int publish_member(struct set *x, struct member *m, char site[2][PATH_LEN], char *why,
                           size_t size)
 {
     const struct legacy_case *k = m->k;
-    const char *emulator = qemu[strcmp(k->arch, "x86_64") == 0];
-    char path[PATH_LEN], hex[ETUDE_DIGEST_HEX + 1];
+    char qemu[2][PATH_LEN], path[PATH_LEN], hex[ETUDE_DIGEST_HEX + 1];
+    const char *emulator;
     struct stat st;
     size_t g;
 
     if (boundary_admits(x, m, why, size) != 0)
         return -1;
+    memcpy(qemu, site, sizeof(qemu));
+    if (case_emulator(x, k, qemu, why, size) != 0)
+        return -1;
+    emulator = qemu[strcmp(k->arch, "x86_64") == 0];
     if (strchr(emulator, '/') == NULL) {
         fit(why, size, "its emulator %s is not on PATH", emulator);
         return -1;
