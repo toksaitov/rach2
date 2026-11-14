@@ -569,6 +569,10 @@ void thread_cpu_time(const process_t *t, uint64_t *user, uint64_t *sys)
     proc_cpu_time(t, user, sys);
 }
 
+/** Nothing: no forced torn write runs here. */
+void ptimer_test_read(void)
+{}
+
 /** Find the model's processes: this one and pid 9. */
 process_t *get_process(uint32_t pid)
 {
