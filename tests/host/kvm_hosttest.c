@@ -1754,14 +1754,13 @@ static void startup_msr_lists(void)
           "with LASTBRANCHFROMIP to LASTINTTOIP beside it, as Linux's msrs_to_save_base");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
-    CHECK(r == 0 && buf.list.nmsrs == 3 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345 &&
-              MSR_INDICES[2] == 0xCE,
-          "the feature list names UCODE_REV, PERF_CAPABILITIES and PLATFORM_INFO");
+    CHECK(r == 0 && buf.list.nmsrs == 2 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345,
+          "the feature list names UCODE_REV and PERF_CAPABILITIES");
     buf.msrs.nmsrs = 3;
     MSR_ENTRIES[0].index = 0x8B;
     MSR_ENTRIES[1].index = 0x10A;
     MSR_ENTRIES[1].data = 5;
-    MSR_ENTRIES[2].index = 0xCE;
+    MSR_ENTRIES[2].index = 0x8B;
     MSR_ENTRIES[2].data = 5;
     r = dev(KVM_GET_MSRS, (uintptr_t)&buf);
     CHECK(r == 1 && MSR_ENTRIES[0].data == 0x2800000000ull && MSR_ENTRIES[1].data == 0 &&
@@ -1770,11 +1769,12 @@ static void startup_msr_lists(void)
           "UCODE_REV as the host's, the failed one's data 0 and the rest left");
     buf.msrs.nmsrs = 2;
     MSR_ENTRIES[0].index = 0xCE;
+    MSR_ENTRIES[0].data = 5;
     MSR_ENTRIES[1].index = 0x10;
     MSR_ENTRIES[1].data = 5;
     r = dev(KVM_GET_MSRS, (uintptr_t)&buf);
-    CHECK(r == 2 && MSR_ENTRIES[0].data == 0x80000000u && MSR_ENTRIES[1].data == 0,
-          "PLATFORM_INFO reads CPUID faulting, and the TSC, which the index list names, 0, "
+    CHECK(r == 2 && MSR_ENTRIES[0].data == 0 && MSR_ENTRIES[1].data == 0,
+          "PLATFORM_INFO and the TSC, which the index list names, read 0, "
           "as Linux's kvm_do_msr_access answers the caller");
 }
 

@@ -168,10 +168,7 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_UCODE_REV,
                                       MSR_TSC_AUX};
 
-/* KVM_GET_MSR_FEATURE_INDEX_LIST, in Linux's order of
- * msr_based_features_all_except_vmx: the microcode revision,
- * PERF_CAPABILITIES and PLATFORM_INFO. */
-static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV, 0x345u, MSR_PLATFORM_INFO};
+static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV, 0x345u}; /* PERF_CAPABILITIES */
 
 #define N_INDEX   (sizeof(index_list) / sizeof(index_list[0]))
 #define N_FEATURE (sizeof(feature_list) / sizeof(feature_list[0]))
@@ -540,10 +537,6 @@ static int feature_get(uint32_t index, uint64_t *value)
          * a processor with VMX or SVM has the MSR. */
         kcpu_rdmsr(MSR_IA32_UCODE_REV, &lo, &hi);
         *value = ((uint64_t)hi << 32) | lo;
-        return 0;
-    }
-    if (index == MSR_PLATFORM_INFO) {
-        *value = PLATFORM_INFO_CPUID_FAULT;
         return 0;
     }
     return kvm_pmu_feature(index, value) == 0 ? 0 : KVM_MSR_UNKNOWN;
