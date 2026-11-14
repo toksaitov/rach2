@@ -314,7 +314,7 @@ whole() {
 # number, a tab and the text, and the files DIFF creates in $WORK/new. A hunk
 # counts its lines, since an added line may itself start with `++`.
 added() {
-    awk -v new="$WORK/new" '
+    LC_ALL=C awk -v new="$WORK/new" '
         left > 0 && /^\+/ { printf "%s\t%d\t%s\n", path, line++, substr($0, 2); left--; next }
         /^--- / { fresh = ($2 == "/dev/null"); next }
         /^\+\+\+ / {
@@ -336,7 +336,7 @@ added() {
 # out; so are the host tests' reports and the vendored trees.
 wording() {
     grep -vE '^(tools/verify/(prose|quickcheck)|tests/system/style_hooks_test|AGENTS\.md|CLAUDE\.md|dev-log/|vendor/|ports/doom/src/)' \
-        "$WORK/added" | awk -F'\t' '
+        "$WORK/added" | LC_ALL=C awk -F'\t' '
         {
             text = $0
             sub(/^[^\t]*\t[^\t]*\t/, "", text)
@@ -379,9 +379,9 @@ opening() {
 blocks() {
     grep '\.c$' "$CFILES" | while IFS= read -r f; do
         [ -f "$TREE/$f" ] || continue
-        awk -F'\t' -v want="$f" '$1 == want { print $2 }' "$WORK/added" >"$WORK/lines"
+        LC_ALL=C awk -F'\t' -v want="$f" '$1 == want { print $2 }' "$WORK/added" >"$WORK/lines"
         [ -s "$WORK/lines" ] || continue
-        awk -v file="$f" '
+        LC_ALL=C awk -v file="$f" '
             FNR == NR { fresh[$0] = 1; next }
             /^\{/ {
                 if (start && sig !~ /^(typedef|struct|union|enum|extern "C")/ && sig !~ /=[ \t]*$/ &&
