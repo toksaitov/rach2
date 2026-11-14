@@ -58,6 +58,12 @@ static unsigned klog_refusals; /* records whose format begins "refused:" */
  * as many as fit. */
 static char klog_refused[8];
 
+/** printk's `time`, on as the kernel starts. */
+int klog_time(void)
+{
+    return 1;
+}
+
 /** Count a record of a refusal and note its kind, then discard it, or with
  * `klog_feeds` give its subsystem and a newline to netconsole; no row reads
  * the rest of netconsole's own report. */

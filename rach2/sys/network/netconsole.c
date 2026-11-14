@@ -987,9 +987,9 @@ static uint32_t nc_put_dropped(const struct nc_target *t, char *out)
  */
 static uint32_t nc_plain(struct nc_target *t, char *out, uint32_t n)
 {
-    uint32_t i, j = 0, stamp = n, text = n;
+    uint32_t i, j = 0, stamp = n, text = klog_time() ? 0 : nc_prefix(t, n);
 
-    if (!klog_time() && (text = nc_prefix(t, n)) != 0) {
+    if (text != 0) {
         for (stamp = 0; nc_line[stamp] != '>'; stamp++) {
         }
         stamp++;
