@@ -124,8 +124,8 @@ free_port()
 }
 
 # watch PID LOG MARK QUIET: wait for QEMU's PID to end while its serial LOG
-# grows, and stop it once the log has not grown for QUIET seconds or holds
-# MARK. Succeed when the log holds MARK.
+# grows, and stop waiting once the log has not grown for QUIET seconds or
+# holds MARK; QEMU is left running. Succeed when the log holds MARK.
 watch()
 {
     last=-1 still=0
@@ -141,6 +141,17 @@ watch()
         fi
     done
     grep -aq "$3" "$2"
+}
+
+# reap PID SECONDS: give QEMU's PID SECONDS to end, then stop it.
+reap()
+{
+    waited=0
+    while kill -0 "$1" 2>/dev/null && [ "$waited" -lt "$2" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    kill "$1" 2>/dev/null || true
 }
 
 # ready: whether the prepared image is there with the key the seed makes.
@@ -322,6 +333,10 @@ run()
     ssh $opts -p "$port" gfx@127.0.0.1 'cat /tmp/graphics.env; sudo systemctl poweroff' \
         </dev/null >> "$work/record" 2>/dev/null || true
     watch "$qemu" "$work/console.log" 'reboot: Power down' 120 || kill "$qemu" 2>/dev/null || true
+    # Debian's virtio_gpu may go on warning from its damage worker after the
+    # guest logs "reboot: Power down", and QEMU then runs on (14 minutes,
+    # until stopped, on the testing PC); the overlay is thrown away anyway.
+    reap "$qemu" 30
     wait "$qemu" 2>/dev/null || true
     qemu=
     if [ -n "$record" ]; then
