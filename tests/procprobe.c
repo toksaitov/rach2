@@ -258,6 +258,10 @@ static const struct row {
             {"panic-write", ROW_PLAIN},
             {"panic-refuse", ROW_PLAIN},
             {"panic-on-oops", ROW_PLAIN},
+            {"sysctl-int-take", ROW_PLAIN},
+            {"sysctl-int-refuse", ROW_PLAIN},
+            {"sysctl-int-offset", ROW_PLAIN},
+            {"loop-echo-backlog-0", ROW_PLAIN},
             {"rtc-open", ROW_PLAIN},
             {"rtc-read", ROW_PLAIN},
             {"rtc-time-of-day", ROW_PLAIN},
@@ -1324,6 +1328,84 @@ static void panic_rows(void)
     }
 }
 
+/* What a write to net/core/netdev_max_backlog takes, as Linux 6.12's
+ * proc_dointvec reads it: the text, its bytes, what the write returns and
+ * what the file then reads. */
+static const struct {
+    const char *text;
+    int len;
+    int ret;
+    const char *reads;
+} sysctl_int_takes[] = {{"5\n", 2, 2, "5\n"},
+                        {" \t-7\n", 5, 5, "-7\n"},
+                        {"010\n", 4, 4, "8\n"},
+                        {"0x1F\n", 5, 5, "31\n"},
+                        {"-2147483648\n", 12, 12, "-2147483648\n"},
+                        {"2147483647", 10, 10, "2147483647\n"},
+                        {"000000000001\n", 13, 13, "1\n"},
+                        {"12  junk\n", 9, 4, "12\n"}};
+
+/* What the same file refuses with EINVAL, as Linux does. */
+static const char *const sysctl_int_refusals[] = {
+    "+1\n",  "000000000001x", "2147483648\n", "-2147483649\n",           "  \n",
+    "1\r\n", "-\n",           "08\n",         "0000000000000000000001\n"};
+
+/**
+ * net/core/netdev_max_backlog, a file of an int, takes a write as Linux's
+ * proc_dointvec reads one: spaces, a minus, a number in base 0 of fewer than
+ * 21 characters within an int, then a space, a tab, a newline or the end,
+ * returning the bytes up to the end of the spaces after the number. It
+ * refuses a plus sign, any other byte after the number, a number past an
+ * int, a write of spaces alone and a number of 21 characters with EINVAL. A
+ * second write on the same descriptor, at an offset past 0, is taken whole
+ * and changes nothing. With the limit at 0 an echo to 127.0.0.1 is still
+ * answered, since its reply is sent while the request is delivered and
+ * finds the input queue empty. The value is put back as it was read.
+ */
+static void sysctl_int_rows(void)
+{
+    static const char path[] = "/proc/sys/net/core/netdev_max_backlog";
+    static char was[24], buf[32];
+    unsigned long args[1];
+    int had = slurp(path, was, (int)sizeof(was));
+    int i, n, fd, ok = had >= 2;
+
+    for (i = 0; ok && i < (int)(sizeof(sysctl_int_takes) / sizeof(sysctl_int_takes[0])); i++) {
+        n = write_file(path, sysctl_int_takes[i].text, sysctl_int_takes[i].len);
+        ok = n == sysctl_int_takes[i].ret && slurp(path, buf, (int)sizeof(buf)) > 0 &&
+             same_str(buf, sysctl_int_takes[i].reads);
+    }
+    check("sysctl-int-take", ok,
+          "net/core/netdev_max_backlog takes spaces, a minus, octal and hex, an int's ends and "
+          "trailing text, as proc_dointvec does");
+    ok = had >= 2;
+    for (i = 0; ok && i < (int)(sizeof(sysctl_int_refusals) / sizeof(sysctl_int_refusals[0]));
+         i++) {
+        ok = write_file(path, sysctl_int_refusals[i], (int)strlen(sysctl_int_refusals[i])) ==
+                 -EINVAL &&
+             slurp(path, buf, (int)sizeof(buf)) > 0 && same_str(buf, "12\n");
+    }
+    check("sysctl-int-refuse", ok,
+          "net/core/netdev_max_backlog refuses a plus, trailing bytes, a number past an int and "
+          "21 digits with EINVAL, as proc_dointvec does");
+    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_TRUNC, 0);
+    ok = fd >= 0 && syscall3(SYS_WRITE, fd, (long)"3\n", 2) == 2 &&
+         syscall3(SYS_WRITE, fd, (long)"4\n", 2) == 2;
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    check("sysctl-int-offset", ok && slurp(path, buf, (int)sizeof(buf)) > 0 && same_str(buf, "3\n"),
+          "a second write to net/core/netdev_max_backlog on one descriptor is taken whole and "
+          "ignored");
+    args[0] = 0x7F000001ul;
+    ok = write_file(path, "0\n", 2) == 2 && sock_call(SC_PING, args) >= 0;
+    check("loop-echo-backlog-0", ok,
+          "an echo to 127.0.0.1 is answered with net/core/netdev_max_backlog at 0");
+    if (had >= 2) {
+        write_file(path, was, had);
+    }
+}
+
 /** /proc/sys/kernel/hostname takes a write as sethostname does, the text
  * before its newline; /proc/version gives the kernel's name and release; and
  * net/ipv4/ip_forward takes 0 and refuses forwarding, which the stack does
@@ -1353,6 +1435,7 @@ static void sysctl_rows(void)
               write_file("/proc/sys/net/ipv4/ip_forward", "1\n", 2) == -EINVAL,
           "/proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL");
     panic_rows();
+    sysctl_int_rows();
 }
 
 /** /dev/rtc0: the CMOS clock as hwclock reads it, the time of day of

@@ -1413,6 +1413,20 @@ A write to a file of a number takes it as
 with base 0 does, and one out of the file's range, which is from 0 up
 unless this entry says otherwise, fails with
 .Er EINVAL .
+A file whose value is an int reads its write as Linux's
+.Fn proc_dointvec
+does, from its first 4095 bytes: spaces, then an optional minus, then a
+digit that begins the number, octal after a 0 and hexadecimal after 0x,
+of fewer than 21 characters with its sign and within an int's range, then
+a space, a tab, a newline or the end.
+A plus sign, any other byte after the number, an empty write and a write
+of spaces alone fail with
+.Er EINVAL .
+The write returns the bytes up to the end of the spaces after the number,
+and moves the file's offset by them; a write at an offset past 0 is taken
+whole and changes nothing, as Linux's
+.Pa kernel/sysctl_writes_strict
+of 1 has it.
 The writable files have mode 0644, and an open of one for writing
 by a caller without privilege fails with
 .Er EACCES .

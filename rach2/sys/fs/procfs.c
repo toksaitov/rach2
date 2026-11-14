@@ -8723,6 +8723,128 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     return fd;
 }
 
+/* The bytes of a write that Linux's sysctl handlers read, PAGE_SIZE - 1. */
+#define SYSCTL_WRITE_MAX 4095u
+
+/* The characters of a number that Linux's `proc_get_long` reads, its sign
+ * among them, TMPBUFLEN - 1; one that fills them all is refused. */
+#define SYSCTL_NUMBER_MAX 21u
+
+/**
+ * Read the digits of a number in base 0 from `tmp`, NUL-ended, at `*at`, as
+ * Linux's `strtoul_lenient` reads them: octal after a 0, hexadecimal after
+ * 0x and a hexadecimal digit, else decimal. Moves `*at` past them. Returns
+ * the number, with `*over` set when an unsigned long does not hold it.
+ */
+static unsigned long sysctl_digits(const char *tmp, uint32_t *at, int *over)
+{
+    uint32_t i = *at, base = 10, d;
+    unsigned long mag = 0;
+
+    if (tmp[i] == '0') {
+        base = 8;
+        if ((tmp[i + 1] == 'x' || tmp[i + 1] == 'X') && oom_digit(tmp[i + 2]) < 16u) {
+            base = 16;
+            i += 2;
+        }
+    }
+    for (; (d = oom_digit(tmp[i])) < base; i++) {
+        if (mag > (~0ul - d) / base) {
+            *over = 1;
+        } else {
+            mag = mag * base + d;
+        }
+    }
+    *at = i;
+    return mag;
+}
+
+/**
+ * Read the one integer of the `len` bytes at `s` as Linux 6.12's
+ * `proc_dointvec` reads a write (kernel/sysctl.c, `__do_proc_dointvec` with
+ * `proc_get_long` and `do_proc_dointvec_conv`): spaces skipped, as
+ * `isspace` has them; a minus, unless it is the last byte; a digit, which
+ * begins a number in base 0, octal after a 0 and hexadecimal after 0x,
+ * read in an unsigned long; fewer than SYSCTL_NUMBER_MAX characters with
+ * the sign; then a space, a tab, a newline or the end; and within an int's
+ * range. The spaces after it are taken too, and whatever follows them is
+ * left for the caller to count as not written. Returns the bytes taken,
+ * with the value in `*v`, or -EINVAL, Linux's answer to each refusal,
+ * overflow among them.
+ */
+static int32_t sysctl_dointvec(const char *s, uint32_t len, int32_t *v)
+{
+    char tmp[SYSCTL_NUMBER_MAX + 1];
+    uint32_t at = 0, n, i = 0;
+    unsigned long mag;
+    int neg = 0, over = 0;
+
+    while (at < len && oom_space(s[at])) {
+        at++;
+    }
+    if (at == len) {
+        return -EINVAL;
+    }
+    n = len - at < SYSCTL_NUMBER_MAX ? len - at : SYSCTL_NUMBER_MAX;
+    k_memcpy(tmp, s + at, n);
+    tmp[n] = '\0';
+    if (tmp[0] == '-' && len - at > 1) {
+        neg = 1;
+        i = 1;
+    }
+    if (tmp[i] < '0' || tmp[i] > '9') {
+        return -EINVAL;
+    }
+    mag = sysctl_digits(tmp, &i, &over);
+    if (over || i == SYSCTL_NUMBER_MAX) {
+        return -EINVAL;
+    }
+    if (at + i < len && s[at + i] != ' ' && s[at + i] != '\t' && s[at + i] != '\n') {
+        return -EINVAL;
+    }
+    if (neg ? mag > 0x80000000ul : mag > 0x7FFFFFFFul) {
+        return -EINVAL;
+    }
+    *v = neg ? (int32_t)(0u - (uint32_t)mag) : (int32_t)mag;
+    at += i;
+    while (at < len && oom_space(s[at])) {
+        at++;
+    }
+    return (int32_t)at;
+}
+
+/**
+ * Read the integer of a write of `count` bytes at `buf` to a /proc/sys file
+ * whose value is an int, as Linux's `proc_dointvec` takes one
+ * (`sysctl_dointvec`) from its first SYSCTL_WRITE_MAX bytes. Returns what
+ * the write returns, as Linux counts it: the bytes up to the end of the
+ * spaces after the number, and every byte past those read, with the value
+ * in `*v`; 0 for
+ * a write at an offset past 0, which Linux takes whole and ignores, as
+ * `sysctl_writes_strict` is 1; -EINVAL, -EFAULT or -ENOMEM.
+ */
+static int32_t sysctl_int_text(fd_entry_t *e, const char __user *buf, uint32_t count, int32_t *v)
+{
+    uint32_t n = count < SYSCTL_WRITE_MAX ? count : SYSCTL_WRITE_MAX;
+    char *text;
+    int32_t taken;
+
+    if (e->ofd->offset != 0) {
+        return 0;
+    }
+    text = kmalloc(n + 1);
+    if (!text) {
+        return -ENOMEM;
+    }
+    if (copy_from_user(text, buf, n) != 0) {
+        kfree(text);
+        return -EFAULT;
+    }
+    taken = sysctl_dointvec(text, n, v);
+    kfree(text);
+    return taken < 0 ? taken : (int32_t)(count - (n - (uint32_t)taken));
+}
+
 /* The most seconds a /proc/sys file of TCP's takes: as many as the kernel's
  * clock counts in 31 bits. */
 #define SYSCTL_SECONDS_MAX (0x7FFFFFFF / TICK_HZ)
@@ -9185,6 +9307,40 @@ static int32_t sysctl_value_write(int entry, int32_t v, uint32_t count)
 }
 
 /**
+ * Write the integer of a write of `count` bytes at `buf`, read as
+ * `sysctl_int_text` reads it, to the /proc/sys file `entry` through `e`: a
+ * file of net/ipv6/conf through `nd6_conf_set`, any other through
+ * `sysctl_value_write`. Moves the offset by what the write returns.
+ */
+static int32_t sysctl_int_write_text(fd_entry_t *e, int entry, const char __user *buf,
+                                     uint32_t count)
+{
+    int32_t v, taken = sysctl_int_text(e, buf, count, &v);
+    const char *dir;
+    int key, rc;
+
+    if (taken == 0) {
+        e->ofd->offset += count;
+        return (int32_t)count;
+    }
+    if (taken < 0) {
+        return taken;
+    }
+    if (synth_sys_ipv6(entry, &dir, &key)) {
+        int which = sysctl_ipv6_which(dir);
+
+        rc = which == -ENODEV ? which : nd6_conf_set(which, sysctl_ipv6_keys[key], v);
+        taken = rc != 0 ? rc : taken;
+    } else {
+        taken = sysctl_value_write(entry, v, (uint32_t)taken);
+    }
+    if (taken > 0) {
+        e->ofd->offset += (uint32_t)taken;
+    }
+    return taken;
+}
+
+/**
  * Write a /proc/sys file, as Linux's sysctl handlers take one.
  *
  * kernel/hostname and kernel/domainname become the text up to its first
@@ -9193,9 +9349,12 @@ static int32_t sysctl_value_write(int entry, int32_t v, uint32_t count)
  * vm's byte counts take an unsigned long (`sysctl_ulong_write`), and
  * fs/pipe-max-size rounds it
  * as Linux's `round_pipe_size` does, so that 1 sets a page. A write to
- * another file is an integer, read as `oom_parse` reads one. A file of
- * `sysctl_ints` stores it in its owner's variable, which the owner reads at
- * its next use, and a value out of the file's range is -EINVAL.
+ * another file is an integer, read as Linux's `proc_dointvec` reads one
+ * (`sysctl_int_text`), which returns the bytes it took and moves the
+ * offset by them, and one at an offset past 0 is taken whole and ignored.
+ * A file of `sysctl_ints` stores it in its owner's variable, which the
+ * owner reads at its next use, and a value out of the file's range is
+ * -EINVAL.
  * user/max_mnt_namespaces is the
  * limit of the caller's user namespace, from 0 to INT_MAX
  * (`ns_set_max_mnt`). kernel/ns_last_pid sets the last number of the
@@ -9215,7 +9374,6 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     char text[65];
     uint32_t n = count < 64u ? count : 64u;
     uint32_t len = 0;
-    int32_t v;
     int rc;
     const char *dir;
     int key;
@@ -9254,18 +9412,7 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
         rc = nd6_secret_set(which, secret);
         return rc != 0 ? rc : (int32_t)count;
     }
-    text[12] = '\0';
-    rc = oom_parse(text, &v);
-    if (rc != 0) {
-        return rc;
-    }
-    if (synth_sys_ipv6(f->origin_pid, &dir, &key)) {
-        int which = sysctl_ipv6_which(dir);
-
-        rc = which == -ENODEV ? which : nd6_conf_set(which, sysctl_ipv6_keys[key], v);
-        return rc != 0 ? rc : (int32_t)count;
-    }
-    return sysctl_value_write(f->origin_pid, v, count);
+    return sysctl_int_write_text(e, f->origin_pid, buf, count);
 }
 
 static const struct file_ops procfs_sysctl_ops = {procfs_sysctl_read,
