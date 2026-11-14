@@ -851,6 +851,31 @@ struct pidns *pidns_get(struct pidns *ns)
     return ns;
 }
 
+uint32_t pidns_last_pid(void)
+{
+    const struct pidns *ns = proc_pidns(current_proc);
+
+    return ns == &init_pidns ? proc_last_pid() : ns->last;
+}
+
+int32_t pidns_set_last_pid(int32_t pid)
+{
+    struct pidns *ns = proc_pidns(current_proc);
+
+    if (!ns_owner_privileged(current_proc, &ns->c)) {
+        return -EPERM;
+    }
+    if (pid < 0 || pid > 2000000000) {
+        return -EINVAL;
+    }
+    if (ns == &init_pidns) {
+        proc_set_last_pid((uint32_t)pid);
+    } else {
+        ns->last = (uint32_t)pid;
+    }
+    return 0;
+}
+
 int pidns_seen(const struct pidns *ns)
 {
     const struct pidns *v = proc_pidns(current_proc);

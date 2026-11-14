@@ -8314,6 +8314,9 @@ int procfs_fd_writable(struct fd_entry *e)
     if (f->origin_file == SYNTH_PROC_ACPI_CALL) {
         return 0600;
     }
+    if (f->origin_file == SYNTH_PROC_SYSCTL && f->origin_pid == SYNTH_SYS_NS_LAST_PID) {
+        return 0666;
+    }
     return f->origin_file == SYNTH_PROC_SYSCTL && synth_sys_writable(f->origin_pid) ? 0644 : 0;
 }
 
@@ -8919,6 +8922,22 @@ static int sysctl_ipv6_text(struct procfs_text *t, const char *dir, int key)
     return rc;
 }
 
+/** Append the value of the /proc/sys file `entry` when it is one of a
+ * namespace of the caller's, user/max_mnt_namespaces of its user namespace
+ * or kernel/ns_last_pid of its PID namespace: 1, or 0 for another file. */
+static int sysctl_ns_text(struct procfs_text *t, int entry)
+{
+    if (entry == SYNTH_SYS_MAX_MNT_NAMESPACES) {
+        ap_int(t, ns_max_mnt(proc_userns(current_proc)));
+    } else if (entry == SYNTH_SYS_NS_LAST_PID) {
+        ap_u32(t, pidns_last_pid());
+    } else {
+        return 0;
+    }
+    ap_ch(t, '\n');
+    return 1;
+}
+
 /**
  * The text a read of the /proc/sys file `entry` gives, appended to `t`.
  *
@@ -8946,9 +8965,8 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
     if (entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) {
         ap_str(t, entry == SYNTH_SYS_HOSTNAME ? uts_hostname() : uts_domainname());
         ap_ch(t, '\n');
-    } else if (entry == SYNTH_SYS_MAX_MNT_NAMESPACES) {
-        ap_int(t, ns_max_mnt(proc_userns(current_proc)));
-        ap_ch(t, '\n');
+    } else if (sysctl_ns_text(t, entry)) {
+        return 0;
     } else if (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_NMI_WATCHDOG) {
         ap_int(t, watchdog_sysctl_value(entry - SYNTH_SYS_WATCHDOG));
         ap_ch(t, '\n');
@@ -9140,12 +9158,22 @@ static int sysctl_ulong_write(int entry, const char *text, int *rc)
     }
 }
 
-/** Set the caller's user namespace's user/max_mnt_namespaces to `v`:
- * `count`, or -EINVAL out of its range. */
-static int32_t sysctl_max_mnt_write(int32_t v, uint32_t count)
+/** Write the integer `v` to the /proc/sys file `entry`: the caller's user
+ * namespace's user/max_mnt_namespaces (`ns_set_max_mnt`), -EINVAL out of
+ * its range; kernel/ns_last_pid (`pidns_set_last_pid`), -EPERM or
+ * -EINVAL; or a file of `sysctl_ints` (`sysctl_int_write`). `count` on
+ * success. */
+static int32_t sysctl_value_write(int entry, int32_t v, uint32_t count)
 {
-    int rc = ns_set_max_mnt(proc_userns(current_proc), v);
+    int rc;
 
+    if (entry == SYNTH_SYS_MAX_MNT_NAMESPACES) {
+        rc = ns_set_max_mnt(proc_userns(current_proc), v);
+    } else if (entry == SYNTH_SYS_NS_LAST_PID) {
+        rc = pidns_set_last_pid(v);
+    } else {
+        return sysctl_int_write(entry, v, count);
+    }
     return rc != 0 ? rc : (int32_t)count;
 }
 
@@ -9163,7 +9191,10 @@ static int32_t sysctl_max_mnt_write(int32_t v, uint32_t count)
  * its next use, and a value out of the file's range is -EINVAL.
  * user/max_mnt_namespaces is the
  * limit of the caller's user namespace, from 0 to INT_MAX
- * (`ns_set_max_mnt`). To net/ipv4/ip_forward 0, its
+ * (`ns_set_max_mnt`). kernel/ns_last_pid sets the last number of the
+ * caller's PID namespace (`pidns_set_last_pid`), -EPERM unless the caller
+ * is privileged over that namespace and -EINVAL out of 0 to pid_max.
+ * To net/ipv4/ip_forward 0, its
  * value, is taken, and any other value is -EINVAL, since the stack forwards
  * nothing between interfaces, where Linux would begin to. A file of
  * net/ipv6/conf is `nd6_conf_set`'s, with its checks, and stable_secret
@@ -9227,10 +9258,7 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
         rc = which == -ENODEV ? which : nd6_conf_set(which, sysctl_ipv6_keys[key], v);
         return rc != 0 ? rc : (int32_t)count;
     }
-    if (f->origin_pid == SYNTH_SYS_MAX_MNT_NAMESPACES) {
-        return sysctl_max_mnt_write(v, count);
-    }
-    return sysctl_int_write(f->origin_pid, v, count);
+    return sysctl_value_write(f->origin_pid, v, count);
 }
 
 static const struct file_ops procfs_sysctl_ops = {procfs_sysctl_read,
@@ -9791,7 +9819,9 @@ static int procfs_open_irq(const struct vpath *vp, int flags)
  * needs a privileged caller, as the file's mode, 0644 and owned by root, says;
  * the names of the UTS namespace need privilege over it, and a limit of
  * /proc/sys/user privilege in the caller's user namespace, whose limit it
- * is, as Linux lets the root of a user namespace write its own. O_CREAT and
+ * is, as Linux lets the root of a user namespace write its own;
+ * kernel/ns_last_pid, whose mode is 0666 as on Linux, opens for anyone and
+ * checks its writer at each write (`pidns_set_last_pid`). O_CREAT and
  * O_TRUNC are taken as they are for a file that exists, which is what a
  * shell's redirection and BusyBox's `sysctl -w` ask for. Each read and
  * write reaches the value as it is then.
@@ -9805,6 +9835,7 @@ static int procfs_open_sysctl(int entry, int flags)
 
     if (acc == 3 ||
         !((entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) ? uts_privileged()
+          : entry == SYNTH_SYS_NS_LAST_PID                               ? 1
           : entry == SYNTH_SYS_MAX_MNT_NAMESPACES
               ? ns_privileged(current_proc, proc_userns(current_proc))
               : proc_privileged(current_proc))) {

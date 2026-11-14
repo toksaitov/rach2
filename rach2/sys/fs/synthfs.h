@@ -422,6 +422,10 @@ int synth_sys_count(void);
 /* The entry of net/core/netdev_max_backlog, whose value is ip.h's
  * `netdev_max_backlog`. */
 #define SYNTH_SYS_NETDEV_MAX_BACKLOG     86
+/* The entry of kernel/ns_last_pid, the last process ID of the reader's PID
+ * namespace (`pidns_last_pid` in proc/ns.h), which anyone may open and
+ * only a writer privileged over the namespace may write, as on Linux. */
+#define SYNTH_SYS_NS_LAST_PID            87
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

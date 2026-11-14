@@ -240,6 +240,10 @@ struct process {
      * them. The session leader has sid==pid; a group leader has pgid==pid. */
     uint32_t sid;
     uint32_t pgid;
+    /* The `serial` of the thread group (`tgroup.h`) whose leader's id is
+     * `pgid`, which tells this group from a later one given the same id, as
+     * Linux tells them by their struct pid. */
+    uint64_t pgrp_serial;
     /* Job-control status pending for the parent's wait4: 0 = none, a Linux
      * WIFSTOPPED value ((stopsig<<8)|0x7f) when stopped, or 0xffff when
      * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED).
@@ -864,6 +868,12 @@ extern process_t *proc_idle;
 
 /** The last process ID given out, 0 before the first. */
 uint32_t proc_last_pid(void);
+
+/** Make `pid` the last process ID given out, so that the next new record
+ * takes the first free one above it, as a write of Linux's
+ * /proc/sys/kernel/ns_last_pid in the first PID namespace sets its
+ * allocator's cursor. The caller holds the big kernel lock. */
+void proc_set_last_pid(uint32_t pid);
 
 /* The running process, `current_proc`, is the running processor's
  * (percpu.h). */

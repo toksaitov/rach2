@@ -9669,7 +9669,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         int32_t rc = synth_proc_stat(kst, procfs_ino_sys(vp->sysent));
 
         if (synth_sys_writable(vp->sysent)) {
-            kst->st_mode = S_IFREG | 0644;
+            kst->st_mode = S_IFREG | (vp->sysent == SYNTH_SYS_NS_LAST_PID ? 0666 : 0644);
         }
         return rc;
     }

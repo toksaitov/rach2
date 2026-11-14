@@ -279,6 +279,19 @@ struct pidns *pidns_get(struct pidns *ns);
  * access_pidfd_pidns asks of a pidfd's namespace. */
 int pidns_seen(const struct pidns *ns);
 
+/** The last number the current process's PID namespace gave out, or the
+ * one last written, 0 before either: what Linux's
+ * /proc/sys/kernel/ns_last_pid reads. */
+uint32_t pidns_last_pid(void);
+
+/** Make `pid` the last number of the current process's PID namespace, so
+ * that its next process takes the first free number above it, as a write
+ * of Linux 6.12's ns_last_pid does (kernel/pid_namespace.c,
+ * pid_ns_ctl_handler): 0, -EPERM unless the caller is privileged over the
+ * namespace, or -EINVAL for a number below 0 or above pid_max,
+ * 2000000000. */
+int32_t pidns_set_last_pid(int32_t pid);
+
 /**
  * The child `child` takes `parent`'s namespaces, and new ones for the
  * CLONE_NEW flags of `flags`, and its numbers in the PID namespaces it is

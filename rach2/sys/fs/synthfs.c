@@ -249,7 +249,8 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * whether an oops panics (panic.h); the settings of the lockup detectors
  * (watchdog.h); the write-back's thresholds and periods (bcache.h,
  * writeback.h); whether the sleeping locks time their holds
- * (fs/sleeplock.h); and the loopback backlog's limit (ip.h). An entry
+ * (fs/sleeplock.h); the loopback backlog's limit (ip.h); and the last
+ * process ID the reader's PID namespace gave out (proc/ns.h). An entry
  * whose text is empty is procfs's, which reads its value when the file is
  * opened. A new entry goes at the end, so that the indices SYNTH_SYS_ names
  * stay the same. */
@@ -343,7 +344,8 @@ static const struct {
                {29, "dirtytime_expire_seconds", ""},
                {6, "lock_stat", ""},
                {20, "core", 0},
-               {85, "netdev_max_backlog", ""}};
+               {85, "netdev_max_backlog", ""},
+               {6, "ns_last_pid", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -381,7 +383,7 @@ static const int sys_writable_lone[] = {SYNTH_SYS_HOSTNAME,           SYNTH_SYS_
                                         SYNTH_SYS_FILE_MAX,           SYNTH_SYS_RANDOMIZE_VA_SPACE,
                                         SYNTH_SYS_MAX_MNT_NAMESPACES, SYNTH_SYS_PANIC,
                                         SYNTH_SYS_PANIC_ON_OOPS,      SYNTH_SYS_LOCK_STAT,
-                                        SYNTH_SYS_NETDEV_MAX_BACKLOG};
+                                        SYNTH_SYS_NETDEV_MAX_BACKLOG, SYNTH_SYS_NS_LAST_PID};
 
 int synth_sys_writable(int entry)
 {

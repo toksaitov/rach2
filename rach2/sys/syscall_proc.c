@@ -2796,6 +2796,7 @@ static void fork_ids(process_t *child, const process_t *parent)
 {
     child->sid = parent->sid;
     child->pgid = parent->pgid;
+    child->pgrp_serial = parent->pgrp_serial;
     child->nice = parent->nice;
     child->ioprio = parent->ioprio;
     child->sched_policy = parent->sched_policy;
@@ -5280,12 +5281,16 @@ static int cred_may_signal(const process_t *target, int signo)
  * 6.12.115's __kill_pgrp_info does (kernel/signal.c:1478-1488): each
  * member through its leader (`signal_process_target`), whose credentials
  * the permission check reads, with the siginfo `given`, or kill's when it
- * is NULL. 0 if any member may be signalled, -ESRCH if the group is empty,
- * -EINVAL if it is not and the signal is out of range, and -EPERM if
- * members exist but none may be signalled. signo 0 only probes. A member
- * that has ended and is not yet reaped counts and discards the signal, as
- * on Linux. A kernel thread is in no group of a process. */
-static int32_t kill_group(int pgid, int signo, const struct k_siginfo *given)
+ * is NULL. A `serial` other than 0 takes only the group of that lifetime
+ * of the id (`pgrp_serial` in process.h), as Linux walks one struct pid's
+ * list, which stays empty once its group is gone, even when the id has
+ * been given to another group since. 0 if any member may be signalled,
+ * -ESRCH if the group is empty, -EINVAL if it is not and the signal is out
+ * of range, and -EPERM if members exist but none may be signalled. signo 0
+ * only probes. A member that has ended and is not yet reaped counts and
+ * discards the signal, as on Linux. A kernel thread is in no group of a
+ * process. */
+static int32_t kill_group(int pgid, int signo, const struct k_siginfo *given, uint64_t serial)
 {
     int found = 0;
     int allowed = 0;
@@ -5294,7 +5299,8 @@ static int32_t kill_group(int pgid, int signo, const struct k_siginfo *given)
     for (p = proc_list; p; p = p->next) {
         process_t *target = signal_process_target(p);
 
-        if (!target || proc_is_kthread(target) || (int)target->pgid != pgid) {
+        if (!target || proc_is_kthread(target) || (int)target->pgid != pgid ||
+            (serial != 0 && target->pgrp_serial != serial)) {
             continue;
         }
         found = 1;
@@ -5372,14 +5378,15 @@ static int32_t do_kill(int pid, int signo)
         return -EINVAL;
     }
     if (pid == 0) {
-        return current_proc ? kill_group((int)current_proc->pgid, signo, NULL) : -ESRCH;
+        return current_proc ? kill_group((int)current_proc->pgid, signo, NULL, 0) : -ESRCH;
     }
     if (pid < -1) {
         if (pid == -2147483647 - 1) {
             return -ESRCH; /* INT_MIN: -pid would overflow */
         }
-        return pid_named((uint32_t)-pid) ? kill_group((int)pid_named((uint32_t)-pid), signo, NULL)
-                                         : -ESRCH;
+        return pid_named((uint32_t)-pid)
+                   ? kill_group((int)pid_named((uint32_t)-pid), signo, NULL, 0)
+                   : -ESRCH;
     }
     if (pid == -1) {
         return current_proc ? kill_all(signo) : -ESRCH;
@@ -5419,19 +5426,26 @@ static int thread_gone(const process_t *t)
  * thread of the process `tgid` unless `tgid` is 0. Both ids are positive: a
  * thread id is never a kill(2) group selector, so a zero or negative one is
  * -EINVAL, not a group. A thread that has ended but keeps its id
- * (`thread_gone`) is checked and discards the signal.
+ * (`thread_gone`) is checked and discards the signal. The checks run in
+ * the order of Linux 6.12's do_tkill: -EINVAL for the ids, -ESRCH for no
+ * such thread of that process, as do_send_specific finds and matches it,
+ * and only then -EINVAL for a signal out of range and -EPERM from the
+ * permission, as check_kill_permission tests them.
  */
 static int32_t do_tkill(int tgid, int tid, int signo)
 {
     process_t *t;
     struct k_siginfo info;
 
-    if (tid <= 0 || tgid < 0 || signo < 0 || signo > KSIG_MAX) {
+    if (tid <= 0 || tgid < 0) {
         return -EINVAL;
     }
     t = proc_named((uint32_t)tid);
     if (thread_gone(t) || (tgid != 0 && t->tgid != pid_named((uint32_t)tgid))) {
         return -ESRCH;
+    }
+    if (signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
     }
     if (!cred_may_signal(t, signo)) {
         return -EPERM;
@@ -5593,9 +5607,10 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
  * process, PIDFD_SIGNAL_THREAD the process's leader alone, as tgkill posts,
  * and PIDFD_SIGNAL_PROCESS_GROUP each member of the process group whose id
  * is the process's, as kill(2) of the negated id posts (`kill_group`), even
- * once the process has been reaped. Signal 0, and a signal to a process
- * whose threads have all ended or to a leader that has ended, are checked
- * and not posted. The checks run in the order of Linux 6.12's
+ * once the process has been reaped, but never a group given that id after
+ * the process's group has gone, which is -ESRCH. Signal 0, and a signal to
+ * a process whose threads have all ended or to a leader that has ended, are
+ * checked and not posted. The checks run in the order of Linux 6.12's
  * pidfd_send_signal: -EINVAL for an unknown flag or more than one; -EBADF
  * for a descriptor that is not a pidfd; -EINVAL for a process outside the
  * caller's PID namespace and those below it, reaped or not, by the
@@ -5648,7 +5663,7 @@ long sys_pidfd_send_signal(isr_params_t *params)
         (target != current_proc || flags == PIDFD_SIGNAL_PROCESS_GROUP)) {
         rc = -EPERM;
     } else if (flags == PIDFD_SIGNAL_PROCESS_GROUP) {
-        rc = kill_group((int)ref.pid, signo, uinfo ? &info : NULL);
+        rc = kill_group((int)ref.pid, signo, uinfo ? &info : NULL, ref.tg->serial);
     } else if (!target) {
         rc = -ESRCH;
     } else if (signo < 0 || signo > KSIG_MAX) {
@@ -6865,8 +6880,9 @@ long sys_gettid(isr_params_t *params)
 }
 
 /** Give every thread of the process of `p` the session `sid` and the
- * process group `pgid`, which are the process's. */
-static void group_set_ids(const process_t *p, uint32_t sid, uint32_t pgid)
+ * process group `pgid`, which are the process's, and the group's `serial`
+ * (`pgrp_serial` in process.h). */
+static void group_set_ids(const process_t *p, uint32_t sid, uint32_t pgid, uint64_t serial)
 {
     process_t *t;
 
@@ -6874,8 +6890,23 @@ static void group_set_ids(const process_t *p, uint32_t sid, uint32_t pgid)
         if (t->tg == p->tg) {
             t->sid = sid;
             t->pgid = pgid;
+            t->pgrp_serial = serial;
         }
     }
+}
+
+/** The `pgrp_serial` of the process group `pgid` in the session `sid`,
+ * which a member has, or 0 when the session has no such group. */
+static uint64_t pgrp_serial_in_session(uint32_t pgid, uint32_t sid)
+{
+    const process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p->pgid == pgid && p->sid == sid) {
+            return p->pgrp_serial;
+        }
+    }
+    return 0;
 }
 
 /**
@@ -6896,7 +6927,7 @@ long sys_setsid(isr_params_t *params)
     if (current_proc->pgid == current_proc->tgid) {
         return -EPERM;
     }
-    group_set_ids(current_proc, current_proc->tgid, current_proc->tgid);
+    group_set_ids(current_proc, current_proc->tgid, current_proc->tgid, current_proc->tg->serial);
     return (int32_t)pid_seen(current_proc->tgid);
 }
 
@@ -6909,7 +6940,8 @@ long sys_setsid(isr_params_t *params)
  * The target must not be a session leader, whose group is fixed with its
  * session, else -EPERM. A group other than the target's own must already
  * exist in the target's session, else -EPERM: some process must be in it,
- * whether or not its leader is still alive (`pgrp_in_session`). Returns 0;
+ * whether or not its leader is still alive (`pgrp_serial_in_session`), and
+ * the target takes that group's lifetime of the id. Returns 0;
  * -EINVAL for a negative pgid, -EPERM for a pgid the caller cannot see, and
  * -ESRCH for no such process. A child that has successfully executed a new
  * image cannot be moved by its parent; the call returns -EACCES.
@@ -6919,6 +6951,7 @@ long sys_setpgid(isr_params_t *params)
     int pid = (int)SC_ARG(params, 0);
     int pgid = (int)SC_ARG(params, 1);
     process_t *target;
+    uint64_t serial;
 
     if (!current_proc) {
         return -ESRCH;
@@ -6951,10 +6984,12 @@ long sys_setpgid(isr_params_t *params)
     if (pgid == 0) {
         pgid = (int)target->tgid;
     }
-    if ((uint32_t)pgid != target->tgid && !pgrp_in_session(pgid, (int)target->sid)) {
+    serial = (uint32_t)pgid == target->tgid ? target->tg->serial
+                                            : pgrp_serial_in_session((uint32_t)pgid, target->sid);
+    if (serial == 0) {
         return -EPERM;
     }
-    group_set_ids(target, target->sid, (uint32_t)pgid);
+    group_set_ids(target, target->sid, (uint32_t)pgid, serial);
     return 0;
 }
 

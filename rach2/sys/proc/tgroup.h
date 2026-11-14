@@ -36,6 +36,10 @@ struct tgroup {
     uint32_t refs;
     uint32_t live;          /* threads that have not ended */
     struct process *leader; /* its id is the process id */
+    /* Unique for the boot, from 1: names the lifetime of the process id, so
+     * that a process group given that id later is not taken for this
+     * process's (`pgrp_serial` in process.h). */
+    uint64_t serial;
     /* The dispositions, by signal number, index 0 unused. */
     struct k_sigaction action[KSIG_MAX + 1];
     uint64_t pending;      /* signals sent to the process, which any thread takes */

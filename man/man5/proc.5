@@ -1168,6 +1168,10 @@ reports;
 .Pa kernel/pid_max ,
 2000000000, above which process IDs are not given out: they start again
 from 1;
+.Pa kernel/ns_last_pid ,
+mode 0666, the last process ID the reader's PID namespace gave out; a
+write of a number from 0 to pid_max, which needs privilege over the
+namespace, makes its next process take the first free ID above it;
 .Pa kernel/core_pattern ,
 .Ql core ,
 the name a core file always has here, as

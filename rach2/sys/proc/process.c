@@ -510,6 +510,12 @@ uint32_t proc_last_pid(void)
     return last_pid;
 }
 
+void proc_set_last_pid(uint32_t pid)
+{
+    last_pid = pid;
+    next_pid = pid + 1u;
+}
+
 /**
  * The layout is checked at boot in every build, for the kernel TinyCC
  * builds, since that compiler cannot check it at build time.
@@ -552,10 +558,27 @@ void process_count_fork(void)
     ++_forks_since_boot;
 }
 
+/** Whether a record has `pid` as its process group or its session, which
+ * keeps the id from a new record after its own record is freed. */
+static int pid_held_as_group(uint32_t pid)
+{
+    const process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p->pgid == pid || p->sid == pid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** The next pid for a new record: `next_pid`, kept in the positive int range,
  * since the /proc path layer has a pid as an int, and skipping a pid still in
- * use, so that the pids in use stay unique; the wrap comes only after two
- * thousand million records. The caller holds the big kernel lock. */
+ * use, as a record's id, group or session, so that the pids in use stay
+ * unique, as Linux's alloc_pid gives no number whose struct pid a task
+ * still has; the wrap comes only after two thousand million records, or
+ * after a write of ns_last_pid (`proc_set_last_pid`). The caller holds the
+ * big kernel lock. */
 static uint32_t pid_next(void)
 {
     uint32_t candidate;
@@ -565,7 +588,7 @@ static uint32_t pid_next(void)
             next_pid = 1;
         }
         candidate = next_pid++;
-    } while (get_process(candidate) != NULL);
+    } while (get_process(candidate) != NULL || pid_held_as_group(candidate));
     last_pid = candidate;
     return candidate;
 }
@@ -678,6 +701,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     p->state = parent ? PROC_UNUSED : PROC_READY;
     p->sid = p->pid;
     p->pgid = p->pid;
+    p->pgrp_serial = p->tg->serial;
     process_limits(p);
     p->waiter.proc = p;
     p->cpu = (int)arch_cpu_id();
@@ -1017,6 +1041,9 @@ uint64_t proc_alarm_at(uint64_t now, uint64_t ticks)
     return at != 0 ? at : 1u;
 }
 
+/* The last thread group's `serial`. */
+static uint64_t tgroup_serials;
+
 struct tgroup *tgroup_new(struct process *leader)
 {
     struct tgroup *tg = kzalloc(sizeof(*tg));
@@ -1025,6 +1052,7 @@ struct tgroup *tgroup_new(struct process *leader)
         tg->refs = 1;
         tg->live = 1;
         tg->leader = leader;
+        tg->serial = ++tgroup_serials;
         spin_lock_init(&tg->cpu_lock, "tg->cpu_lock");
         wait_queue_init(&tg->chld);
         wait_queue_init(&tg->gone);
