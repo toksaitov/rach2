@@ -1,4 +1,4 @@
-.Dd November 14, 2026
+.Dd November 15, 2026
 .Dt VIRTIO-NET 4
 .Os
 .Sh NAME
@@ -60,7 +60,14 @@ It asks for no checksum or segmentation offload, since the kernel
 computes and checks every checksum itself and sends frames of at most
 1514 bytes.
 The device interrupts by MSI-X, a vector for each queue, or by its
-function's line; a device with neither is read at each tick.
+function's line; a device with neither is read at each tick, and its link
+five times a second.
+.Pp
+The interface's
+.Pa /sys/class/net/ethN/device
+is a link to the virtio device,
+.Pa /sys/devices/pci0000:00/0000:BB:DD.F/virtioN ,
+as on Linux, where a PCI card's is a link to its function.
 .Pp
 A write of the function's name,
 .Ar 0000:BB:DD.F ,
@@ -69,10 +76,14 @@ to
 stops the device and takes the driver off it, so that
 .Xr vfio 4
 may have the function.
-The interface stays, without a carrier.
+The interface stays, without a carrier and without its
+.Pa device
+link.
 A write of the name to
 .Pa bind
-brings the device up again as the same interface.
+brings the device up again as the same interface, with the device's
+address and largest MTU as they are then: an MTU above a smaller limit
+comes down to it.
 .Sh LIMITS
 A device of virtio 1.x only: QEMU's
 .Ql disable-modern=on
@@ -81,9 +92,6 @@ One receive and one transmit queue.
 An interface is made only at boot: a device bound later that had none is
 refused, and an unbound device's interface keeps its addresses, where
 Linux removes the interface.
-.Pa /sys/class/net/ethN/device
-leads to the PCI function, where Linux's leads to the virtio device
-below it.
 .Sh FILES
 .Bl -tag -width /sys/bus/virtio/drivers/virtio_net
 .It Pa /sys/class/net/ethN

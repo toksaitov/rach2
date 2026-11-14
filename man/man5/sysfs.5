@@ -1,4 +1,4 @@
-.Dd November 14, 2026
+.Dd November 15, 2026
 .Dt SYSFS 5
 .Os
 .Sh NAME
@@ -946,7 +946,11 @@ those
 gives.
 .It Pa /sys/class/net/IF/device
 A symbolic link to the interface's PCI function,
-.Pa ../../../devices/pci0000:00/0000:BB:DD.F .
+.Pa ../../../devices/pci0000:00/0000:BB:DD.F ,
+or for a virtio network device to the virtio device below that function,
+.Pa ../../../devices/pci0000:00/0000:BB:DD.F/virtioN ,
+as on Linux; see
+.Xr virtio-net 4 .
 .It Pa /sys/class/ieee80211/phyN
 A registered radio's attributes and driver links; see
 .Xr wlan 4 .
