@@ -30,6 +30,7 @@ C_SRC_SHARED = kernel.c \
     sys/kio.c \
     sys/wcwidth.c \
     sys/klog.c \
+    sys/printk.c \
     sys/syscall.c \
     sys/syscall_proc.c \
     sys/syscall_fs.c \

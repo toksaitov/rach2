@@ -27,7 +27,7 @@ The command line is a list of words, which [cmdline.md](cmdline.md) gives in ful
 <3>[12.340000] ahci: command: timed out on port 0
 ```
 
-The levels are `KLOG_CRIT` 2, `KLOG_ERR` 3, `KLOG_WARN` 4, `KLOG_INFO` 6 and `KLOG_DEBUG` 7. A 128 KiB ring, Linux's default size, keeps the latest records, which `/dev/bootlog` ([bootlog(4)](../man/man4/bootlog.4)), `syslog` ([syslog(2)](../man/man2/syslog.2)) and `dmesg` read. COM1 receives every record. The screen shows `INFO` and more urgent during the boot, and `CRIT` alone once init starts, unless the command line gave a level or `rach2.fsck`, or the root is read-only.
+The levels are `KLOG_CRIT` 2, `KLOG_ERR` 3, `KLOG_WARN` 4, `KLOG_INFO` 6 and `KLOG_DEBUG` 7. A 128 KiB ring, Linux's default size, keeps the latest records, which `/dev/bootlog` ([bootlog(4)](../man/man4/bootlog.4)), `syslog` ([syslog(2)](../man/man2/syslog.2)) and `dmesg` read. COM1 receives every record. The screen shows `INFO` and more urgent during the boot, and `CRIT` alone once init starts, unless the command line gave a level or `rach2.fsck`, or the root is read-only. printk's parameters, on the command line and in `/sys/module/printk/parameters` ([sysfs(5)](../man/man5/sysfs.5)), are Linux's: `ignore_loglevel` puts every record, `DEBUG` too, on the screen, and `time` set to `N` takes the timestamp off COM1's lines and plain netconsole's (`sys/printk.c`).
 
 [hardware.md](hardware.md) lists the devices the kernel drives, and [man/programs.md](../man/programs.md) the programs the images stage.
 

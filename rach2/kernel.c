@@ -13,6 +13,7 @@
 #include "sys/syscall.h"
 #include "sys/display/fb.h"
 #include "sys/module.h"
+#include "sys/printk.h"
 #include "sys/cmdline.h"
 #include "sys/irq.h"
 #include "sys/mm/heap.h"
@@ -4460,15 +4461,25 @@ static void publish_disks(void)
  * Take the boot record's command line `cmdline` into the kernel's buffer
  * (`kcmdline_capture`), and log a line too long to keep whole: the bytes
  * kept, and the bytes the record has, "or more" when the record cut the
- * loader's line at its own limit too. Then read `netpoll.carrier_timeout=`
- * (`netconsole_read_params`), as Linux's `parse_args` reads its parameters
- * once the line is in place (init/main.c:912-915).
+ * loader's line at its own limit too, after the screen's level from
+ * `rach2.loglevel=` and printk's parameters (`printk_params_early`), which
+ * that record and those after it follow. Then read
+ * `netpoll.carrier_timeout=` (`netconsole_read_params`), as Linux's
+ * `parse_args` reads its parameters once the line is in place
+ * (init/main.c:912-915).
  */
 static void capture_cmdline(const char *cmdline)
 {
     unsigned int given;
+    int cut = kcmdline_capture(cmdline);
+    char level[8];
 
-    if (kcmdline_capture(cmdline)) {
+    if (kcmdline_value("rach2.loglevel", level, sizeof(level)) && level[0] >= '0' &&
+        level[0] <= '9' && level[1] == '\0') {
+        klog_set_screen_level_from_cmdline(level[0] - '0');
+    }
+    printk_params_early();
+    if (cut) {
         given = (unsigned int)k_strlen(cmdline);
         klog(KLOG_WARN, "boot", "command line cut: kept %u of %u%s bytes, at its last whole option",
              (unsigned int)k_strlen(kcmdline_get()), given,
@@ -4688,15 +4699,6 @@ void kernel_main(const struct boot_info *boot)
 
     capture_cmdline(boot->cmdline);
     k_panic_setup();
-
-    {
-        char level[8];
-
-        if (kcmdline_value("rach2.loglevel", level, sizeof(level)) && level[0] >= '0' &&
-            level[0] <= '9' && level[1] == '\0') {
-            klog_set_screen_level_from_cmdline(level[0] - '0');
-        }
-    }
 
     k_cls();
     k_font_init();
@@ -4943,6 +4945,7 @@ void kernel_main(const struct boot_info *boot)
 
     drm_start();
     pstore_start();
+    printk_params_start();
 #if defined(__x86_64__)
     kvm_start();
     vfio_start();

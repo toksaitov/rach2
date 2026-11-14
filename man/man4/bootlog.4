@@ -64,7 +64,12 @@ Warnings.
 .It 6
 Information.
 .It 7
-Debug messages.
+As 6: debug messages reach the screen only while
+.Pa /sys/module/printk/parameters/ignore_loglevel
+is
+.Ql Y ,
+which shows every level whatever this one; see
+.Xr sysfs 5 .
 .El
 .Pp
 Critical errors cannot be hidden.

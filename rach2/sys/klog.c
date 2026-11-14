@@ -216,6 +216,20 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     sinks[me].over = was_over;
 }
 
+/** Where the timestamp of `r` begins, past its `<level>`, which its body
+ * follows; `r->len`, past every byte, when the record has none. */
+static uint32_t record_stamp(const struct klog_record *r)
+{
+    uint32_t i;
+
+    for (i = 0; i + 1u < r->body; i++) {
+        if (r->text[i] == '>') {
+            return r->text[i + 1u] == '[' ? i + 1u : r->len;
+        }
+    }
+    return r->len;
+}
+
 /* ---- destination 1: the ring ---- */
 
 static char ring[KLOG_RING_SIZE];
@@ -496,6 +510,14 @@ static int screen_line_open;
  */
 static int screen_level = KLOG_INFO;
 
+/* printk's `ignore_loglevel`: the screen shows every record, KLOG_DEBUG
+ * among them, whatever `screen_level` says (`klog_set_ignore_loglevel`). */
+static volatile int screen_all_levels;
+
+/* printk's `time`: the serial port's and plain netconsole's lines carry
+ * the record's timestamp (`klog_set_time`). */
+static volatile int show_time = 1;
+
 /* Whether a panic has stopped the screen's records (`klog_screen_stop`). */
 static int screen_stopped;
 
@@ -530,7 +552,10 @@ static display_color_t screen_color(int level)
 }
 
 /**
- * Show the record from its body on, without the priority and the timestamp.
+ * Show the record from its body on, without the priority and the timestamp,
+ * when its level is `screen_level` or more urgent and not KLOG_DEBUG, or
+ * whatever its level under printk's `ignore_loglevel`, until a panic stops
+ * the screen's records.
  *
  * Those two are for a reader with a capture and a scrollback; a person
  * watching a boot has neither, and every line would begin with the same eight
@@ -543,7 +568,8 @@ static void dest_screen(const struct klog_record *r)
 {
     uint32_t i, flags;
 
-    if (r->level > screen_level || screen_stopped) {
+    if (screen_stopped ||
+        (!screen_all_levels && (r->level > screen_level || r->level > KLOG_INFO))) {
         return;
     }
     if (!console_lock_bounded(&flags, screen_contended ? 0u : 1000000u)) {
@@ -619,15 +645,16 @@ static void report_put(int how)
 }
 
 /**
- * Write the record to the port.
- *
- * The machine's own copy is the ring, which was written before this and which
- * `/dev/bootlog` hands out; there is no second copy to keep here.
+ * Write the record `r` to the port, after a newline that ends a line the
+ * console left open, with each newline as a carriage return and a newline,
+ * and without its timestamp while `klog_time` is off, as Linux's console
+ * line leaves out `[seconds.microseconds]` without `printk.time`
+ * (`info_print_prefix`, kernel/printk/printk.c). The caller holds the
+ * report lock, or a panic went on without it.
  */
-static void dest_serial(const struct klog_record *r)
+static void serial_record(const struct klog_record *r)
 {
-    uint32_t i;
-    int how = report_get(0);
+    uint32_t i, stamp = show_time ? r->len : record_stamp(r);
 
     if (serial_line_open) {
         serial_out('\r');
@@ -635,11 +662,28 @@ static void dest_serial(const struct klog_record *r)
         serial_line_open = 0;
     }
     for (i = 0; i < r->len; i++) {
+        if (i == stamp) {
+            i = r->body - 1u;
+            continue;
+        }
         if (r->text[i] == '\n') {
             serial_out('\r');
         }
         serial_out(r->text[i]);
     }
+}
+
+/**
+ * Write the record to the port.
+ *
+ * The machine's own copy is the ring, which was written before this and which
+ * `/dev/bootlog` hands out; there is no second copy to keep here.
+ */
+static void dest_serial(const struct klog_record *r)
+{
+    int how = report_get(0);
+
+    serial_record(r);
     report_put(how);
 }
 
@@ -734,20 +778,17 @@ static void dest_net(const struct klog_record *r)
 /* ---- the table ---- */
 
 /*
- * The destinations, in the order a record reaches them, each with the least
- * urgent level it accepts. A table and not a registry of subscribers: the four
- * are known at build time, nothing may be added while the machine runs, and an
- * order that is data is an order a reader can check.
+ * The destinations, in the order a record reaches them; each takes every
+ * level but the screen, which decides for itself (`dest_screen`). A table
+ * and not a registry of subscribers: the four are known at build time,
+ * nothing may be added while the machine runs, and an order that is data is
+ * an order a reader can check.
  */
 struct klog_dest {
-    int takes_down_to;
     void (*write)(const struct klog_record *r);
 };
 
-static const struct klog_dest DESTS[] = {{KLOG_DEBUG, dest_ring},
-                                         {KLOG_INFO, dest_screen},
-                                         {KLOG_DEBUG, dest_serial},
-                                         {KLOG_DEBUG, dest_net}};
+static const struct klog_dest DESTS[] = {{dest_ring}, {dest_screen}, {dest_serial}, {dest_net}};
 
 #define KLOG_N_DESTS ((int)(sizeof(DESTS) / sizeof(DESTS[0])))
 
@@ -925,13 +966,11 @@ static void klog_drain(void)
             if ((had & (1u << i)) != 0u) {
                 continue; /* it had the record whole before a panic */
             }
-            if (r.level <= DESTS[i].takes_down_to) {
-                DESTS[i].write(&r);
-                had |= 1u << i;
-                k_barrier();
-                pending_had = (n << 4) | had;
-                k_barrier();
-            }
+            DESTS[i].write(&r);
+            had |= 1u << i;
+            k_barrier();
+            pending_had = (n << 4) | had;
+            k_barrier();
         }
         flags = kirq_save();
         pending_first = n + 1u;
@@ -1286,9 +1325,7 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
         if (queued && DESTS[i].write != dest_ring) {
             continue;
         }
-        if (level <= DESTS[i].takes_down_to) {
-            DESTS[i].write(&r);
-        }
+        DESTS[i].write(&r);
     }
     if (!nested) {
         klog_drain();
@@ -1322,7 +1359,6 @@ void klog_report(int how, int level, const char *subsystem, const char *format, 
 {
     struct klog_record r;
     va_list ap;
-    uint32_t i;
 
     va_start(ap, format);
     klog_build(&r, level, subsystem, format, ap);
@@ -1331,17 +1367,7 @@ void klog_report(int how, int level, const char *subsystem, const char *format, 
     if (how == KLOG_REPORT_RING) {
         return;
     }
-    if (serial_line_open) {
-        serial_out('\r');
-        serial_out('\n');
-        serial_line_open = 0;
-    }
-    for (i = 0; i < r.len; i++) {
-        if (r.text[i] == '\n') {
-            serial_out('\r');
-        }
-        serial_out(r.text[i]);
-    }
+    serial_record(&r);
 }
 
 void klog_report_end(int how)
@@ -1465,6 +1491,26 @@ void klog_set_screen_level(int level)
         level = KLOG_DEBUG;
     }
     screen_level = level;
+}
+
+void klog_set_ignore_loglevel(int on)
+{
+    screen_all_levels = on != 0;
+}
+
+int klog_ignore_loglevel(void)
+{
+    return screen_all_levels;
+}
+
+void klog_set_time(int on)
+{
+    show_time = on != 0;
+}
+
+int klog_time(void)
+{
+    return show_time;
 }
 
 void klog_set_screen_level_from_cmdline(int level)

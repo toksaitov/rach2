@@ -980,6 +980,31 @@ static uint32_t nc_put_dropped(const struct nc_target *t, char *out)
 }
 
 /**
+ * Copy the `n` characters of `nc_line` to `out` as the plain form sends
+ * them, and return how many: all of them, or, while printk's `time` is off
+ * (`klog_time`), all but the timestamp of the record prefix that begins
+ * them, as Linux's plain netconsole has the console's line without it.
+ */
+static uint32_t nc_plain(struct nc_target *t, char *out, uint32_t n)
+{
+    uint32_t i, j = 0, stamp = n, text = n;
+
+    if (!klog_time() && (text = nc_prefix(t, n)) != 0) {
+        for (stamp = 0; nc_line[stamp] != '>'; stamp++) {
+        }
+        stamp++;
+    }
+    for (i = 0; i < n; i++) {
+        if (i == stamp) {
+            i = text - 1u;
+            continue;
+        }
+        out[j++] = nc_line[i];
+    }
+    return j;
+}
+
+/**
  * Send `t` its next line before the place `end`, after what it lost: the
  * count added to the extended form's `seq`, which is then the record's own
  * number among those written since the target began, as Linux's is
@@ -996,7 +1021,7 @@ static int nc_send_line(struct nc_target *t, uint32_t end)
 {
     uint8_t src[16];
     char *out = (char *)nc_pkt + nc_payload_at(t);
-    uint32_t n, i, from, pre = 0;
+    uint32_t n, from, pre = 0;
     int r;
 
     if (!nc_link_ready(t->nd, &t->start, nc_behind(t->tail)) || !nc_source(t, src)) {
@@ -1016,10 +1041,7 @@ static int nc_send_line(struct nc_target *t, uint32_t end)
         t->lost = 0;
         r = nc_send_ext(t, src, nc_extend(t, n));
     } else {
-        for (i = 0; i < n; i++) {
-            out[pre + i] = nc_line[i];
-        }
-        r = nc_udp_tx(t, src, pre + n);
+        r = nc_udp_tx(t, src, pre + nc_plain(t, out + pre, n));
     }
     if (r == NETDEV_TX_DROPPED) {
         t->held = 1;

@@ -650,6 +650,57 @@ and
 on SVM.
 See
 .Xr kvm 4 .
+.It Pa /sys/module/printk/parameters
+The parameters of the kernel's log, as Linux has them, each
+.Ql Y
+or
+.Ql N
+and a newline, mode 0644, which root sets by writing any text Linux's
+.Fn kstrtobool
+takes, a first byte of
+.Ql y ,
+.Ql t
+or
+.Ql 1
+or the text
+.Ql on
+for
+.Ql Y ;
+another write fails with
+.Er EINVAL .
+The command line sets each as
+.Cm printk. Ns Ar name Ns = ,
+and
+.Cm ignore_loglevel
+and
+.Cm no_console_suspend
+too.
+.Pa ignore_loglevel ,
+.Ql N ,
+shows every record on the screen,
+.Dv KLOG_DEBUG
+among them, whatever the screen's level, when
+.Ql Y .
+.Pa time ,
+.Ql Y ,
+gives each line on COM1 and each plain netconsole datagram the record's
+timestamp; with
+.Ql N
+they leave it out, while the ring, which
+.Xr bootlog 4
+and
+.Xr syslog 2
+read, and extended netconsole keep it.
+.Pa console_suspend ,
+.Ql Y ,
+.Pa console_no_auto_verbose ,
+.Ql N ,
+and
+.Pa always_kmsg_dump ,
+.Ql N ,
+keep what is written and change nothing: suspend to idle leaves every
+console running, no oops is survived to raise the screen's level, and
+ramoops writes the log at a panic alone.
 .It Pa /sys/class/net/IF
 A directory for each network interface, named as
 .Xr ip 8
@@ -1345,7 +1396,7 @@ options.
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent.
 .It Pa /sys/module
-KVM's parameters.
+The parameters of printk and of KVM.
 .El
 .Sh EXAMPLES
 .Bd -literal -offset indent

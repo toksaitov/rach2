@@ -226,6 +226,30 @@ void klog_set_screen_level_from_cmdline(int level);
 int klog_screen_level_was_asked_for(void);
 
 /**
+ * printk's `ignore_loglevel`: while `on`, the screen shows every record,
+ * KLOG_DEBUG among them, whatever `klog_set_screen_level` set, as Linux's
+ * consoles print every level (`suppress_message_printing`,
+ * kernel/printk/printk.c); off by default. The other destinations take
+ * every record either way, and a panic still stops the screen's records.
+ */
+void klog_set_ignore_loglevel(int on);
+
+/** Whether the screen shows every level (`klog_set_ignore_loglevel`). */
+int klog_ignore_loglevel(void);
+
+/**
+ * printk's `time`: while `on`, the default, the serial port's lines and
+ * plain netconsole's carry each record's `[seconds.microseconds]` after its
+ * `<level>`; while off, they leave it out, as Linux's console lines do
+ * without `printk.time`. The ring keeps the timestamp, which `/dev/bootlog`,
+ * syslog(2) and extended netconsole read, and the screen never shows it.
+ */
+void klog_set_time(int on);
+
+/** Whether the console's lines carry the timestamp (`klog_set_time`). */
+int klog_time(void);
+
+/**
  * The debug shell's own output: the screen and the serial port, nothing else.
  * `console_putc` writes one byte, and a newline goes to the port as a
  * carriage return and a newline; `console_printf` formats as `k_printf` does,
