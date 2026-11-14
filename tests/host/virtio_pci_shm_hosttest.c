@@ -28,7 +28,8 @@
  * reset and acknowledged over the status a previous owner left; a GPU whose
  * bus registration fails, which leaves no window mapped, its command word
  * as it was, no record and no PCI claim but one it found; and a virtio-net
- * function whose reset does not finish, refused the same way. The model's
+ * function whose reset does not finish, refused the same way, its bus
+ * mastering never turned on. The model's
  * enables make the kernel a function's owner, as pci.c's do, so that a
  * claim left behind fails a row.
  *
@@ -39,8 +40,11 @@
  * function vfio-pci has, one the transport has, and the probe's error;
  * virtio-net bound again as virtio2, reset and acknowledged and given to the
  * driver registered for its type; a driver's refusal, which leaves the
- * function bound; and the GPU unbound while its driver holds it, the driver
- * removed first and the MSI-X table given back with the windows.
+ * function bound; and the GPU unbound while its driver holds it and its
+ * device does not reset, the driver removed first, freeing its buffers only
+ * with bus mastering off, which nothing turns on again, and the MSI-X table
+ * given back with the windows. No reset that does not finish, at a probe or
+ * an unbind, runs with bus mastering on.
  *
  * The interrupt rows give every MSI-X entry a remapped message, release
  * them before vectors, and force vector and remapper allocation failures.
@@ -466,8 +470,17 @@ static int32_t driver_write(const struct sysfs_attr *a, const char *text)
     return a ? a->store(0, 0, text, (uint32_t)k_strlen(text)) : -ENOENT;
 }
 
-/* The device resets: how many, and whether the next does not finish. */
-static int resets, reset_stuck;
+/* The device resets: how many, whether the next does not finish, and how
+ * many that did not finish found the function's bus mastering on. */
+static int resets, reset_stuck, stuck_mastering;
+
+/** Whether the function of `d` has bus mastering on in the model's space. */
+static int mastering(const struct virtio_dev *d)
+{
+    const pci_device_t *p = virtio_pci_function(d);
+
+    return (space[fn_of(p->bus, p->device)][PCI_COMMAND] & PCI_CMD_BUS_MASTER) != 0;
+}
 
 /** Reset `d` as virtqueue.c does, which virtio_hosttest.c tests: write 0
  * and read it back, or time out while `reset_stuck`. */
@@ -475,6 +488,7 @@ int virtio_reset(struct virtio_dev *d)
 {
     resets++;
     if (reset_stuck) {
+        stuck_mastering += mastering(d);
         return -ETIMEDOUT;
     }
     d->ops->set_status(d, 0);
@@ -818,7 +832,8 @@ static void probe_bus_fails(void)
 }
 
 /** A device whose reset does not finish: refused before it is published,
- * with no window, binding or claim left and its command word as it was. */
+ * with no window, binding or claim left and its command word as it was,
+ * and bus mastering never turned on for it. */
 static void probe_reset_fails(void)
 {
     int adds = bus_adds, maps = live_maps, r = resets;
@@ -833,6 +848,7 @@ static void probe_reset_fails(void)
               bus_adds == adds && bound_key == -1 && live_maps == maps &&
               space[5][PCI_COMMAND] == 0 && owner[5] == 0,
           "the device that did not reset is refused, unbound, unmapped and unclaimed");
+    CHECK(stuck_mastering == 0, "bus mastering waits for a reset that finished");
     reset_stuck = 0;
 }
 
@@ -898,20 +914,30 @@ static void driver_files(void)
     net_driver = 0;
 }
 
-static int removals; /* the child driver's removals */
+static int removals;        /* the child driver's removals */
+static int freed_mastering; /* its frees made while bus mastering was on */
 
 /** The child driver's `removed`: it lets go of its device, as virtio-gpu's
- * unplug does, but keeps the record until its virtio_put. */
+ * unplug does, but keeps the record until its virtio_put. Its reset does
+ * not finish, so it stops the device's memory access before it frees its
+ * buffers, as virtio_teardown does. */
 static void child_removed(struct virtio_dev *d)
 {
     removals++;
+    reset_stuck = 1;
+    if (virtio_reset(d) != 0 && d->ops->dma_enable) {
+        d->ops->dma_enable(d, 0);
+    }
+    freed_mastering += mastering(d);
     d->removed = 0;
 }
 
 /**
- * The GPU, virtio0, unbound while its driver holds it: the driver removed
- * first, the MSI-X table given back with the windows, and the record kept,
- * reaching no register, until the driver's virtio_put frees it.
+ * The GPU, virtio0, unbound while its driver holds it and while its device
+ * does not reset: the driver removed first, its buffers freed with bus
+ * mastering off, which no later step turns on, the MSI-X table given back
+ * with the windows, and the record kept, reaching no register, until the
+ * driver's virtio_put frees it.
  */
 static void unbind_held(void)
 {
@@ -924,8 +950,15 @@ static void unbind_held(void)
     CHECK(d->ops->irq_setup(d, 2) == 0, "the driver set up its interrupts");
     msix_ready = 0;
     d->removed = child_removed;
+    CHECK(mastering(d), "a function whose reset finished masters");
+    stuck_mastering = 0;
     CHECK(driver_write(attr_unbind, "0000:00:00.0") == 12 && removals == 1,
           "unbind: the child driver removed first");
+    reset_stuck = 0;
+    CHECK(freed_mastering == 0 && stuck_mastering == 1 &&
+              !(space[0][PCI_COMMAND] & PCI_CMD_BUS_MASTER),
+          "unbind: a device that did not reset frees nothing while mastering, and its command "
+          "word is put back without it");
     CHECK(!live_vectors && !remapped_entries && live_maps == maps - 5 && owner[0] == 0,
           "unbind: the vectors, the four windows and the MSI-X table given back, and no owner");
     CHECK(d->ops->get_status(d) == 0 && d->ops->irq_setup(d, 2) == -ENODEV,

@@ -14,7 +14,9 @@
  * offsets. It reads the queues the core wrote only through those addresses,
  * walks each chain, direct or indirect, writes the device-writable buffers
  * and returns them on the used ring, as a device does. Rows check what the
- * core returned, what the model saw, and the memory the model still holds.
+ * core returned, what the model saw, and the memory the model still holds;
+ * the model fails a row that frees memory while a device whose reset has
+ * not ended may still reach it.
  */
 
 #include <stdarg.h>
@@ -118,6 +120,7 @@ struct model {
     int started_before_ok; /* irq_start ran while DRIVER_OK was clear */
     int dma_fail;          /* refuse every allocation */
     int dma_out;           /* pages given and not freed */
+    int master;            /* it may reach memory, as dma_enable leaves it */
 };
 
 static struct model m;
@@ -306,6 +309,14 @@ static void m_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
         arena_taken[i] = 0;
     }
     mod(d)->dma_out--;
+    check(!(mod(d)->master && mod(d)->resetting),
+          "nothing is freed while a device that did not reset may reach memory");
+}
+
+/** Let the device reach memory or not. */
+static void m_dma_enable(struct virtio_dev *d, int on)
+{
+    mod(d)->master = on;
 }
 
 /** Region 1 only. */
@@ -321,14 +332,24 @@ static int m_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint64
 }
 
 static const struct virtio_ops model_ops = {
-    "model",      m_get_status,  m_set_status,   m_get_features, m_set_features,
+    "model",       m_get_status,   m_set_status, m_get_features, m_set_features, m_generation,
+    m_config_read, m_config_write, m_queue_max,  m_queue_enable, m_notify,       m_irq_setup,
+    m_irq_start,   m_irq_release,  m_dma_alloc,  m_dma_free,     m_shm_region,   NULL,
+    NULL,          NULL,           NULL,         NULL,           NULL,           NULL,
+    NULL,          m_dma_enable};
+
+/* The same without dma_enable, as a transport whose reset always ends. */
+static const struct virtio_ops bare_ops = {
+    "bare",       m_get_status,  m_set_status,   m_get_features, m_set_features,
     m_generation, m_config_read, m_config_write, m_queue_max,    m_queue_enable,
     m_notify,     m_irq_setup,   m_irq_start,    m_irq_release,  m_dma_alloc,
     m_dma_free,   m_shm_region,  NULL,           NULL,           NULL,
-    NULL,         NULL,          NULL,           NULL,           NULL};
+    NULL,         NULL,          NULL,           NULL,           NULL,
+    NULL};
 
-/** A fresh model offering VERSION_1, INDIRECT_DESC, RING_PACKED and device
- * bits 0, 1 and 5, with two queues of 256; a row adds EVENT_IDX. */
+/** A fresh model that may reach memory, offering VERSION_1, INDIRECT_DESC,
+ * RING_PACKED and device bits 0, 1 and 5, with two queues of 256; a row adds
+ * EVENT_IDX. */
 static struct virtio_dev *model_reset(void)
 {
     k_memset(&m, 0, sizeof(m));
@@ -336,6 +357,7 @@ static struct virtio_dev *model_reset(void)
     m.dev.ops = &model_ops;
     m.dev.transport = &m;
     m.dev.name = "model0";
+    m.master = 1; /* as a transport leaves a function it took */
     m.dev.id = VIRTIO_ID_GPU;
     m.offered = VIRTIO_BIT(VIRTIO_F_VERSION_1) | VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) |
                 VIRTIO_BIT(VIRTIO_F_RING_PACKED) | 0x23u;
@@ -605,12 +627,52 @@ static void queue_setup(void)
           "a queue whose ring cannot be had is refused with nothing kept");
 
     d = model_reset();
+    m.dev.ops = &bare_ops;
     check(virtio_init(d, 0, 1) == 0 && virtio_queue_setup(d, 0, done, 0, &vq) == 0,
           "a queue for the stuck reset");
     m.reset_polls = -1;
     virtio_teardown(d);
     check(m.dma_out == 2 && !d->queues[0],
-          "teardown after a reset that did not end keeps the pages the device may write");
+          "teardown after a reset that did not end keeps the pages the device may write, "
+          "on a transport that cannot stop the device");
+}
+
+/**
+ * A reset that does not end at teardown, as virtio-gpu's kill meets it
+ * before it frees its commands' pages: the device is stopped from reaching
+ * memory before the queues or the driver's buffer queued on them are freed,
+ * and comes back to memory only after a reset that ends.
+ */
+static void stuck_reset(void)
+{
+    struct virtio_dev *d = model_reset();
+    struct virtqueue *vq = 0;
+    struct virtio_sg sg;
+    uint8_t *buf;
+    uint64_t addr = 0;
+
+    check(virtio_init(d, 0, 1) == 0 && virtio_queue_setup(d, 0, done, 0, &vq) == 0,
+          "a queue for the stuck reset");
+    check(m.master == 1, "init lets a device that reset reach memory");
+    buf = (uint8_t *)virtio_dma_alloc(d, 4096, &addr);
+    sg.addr = addr;
+    sg.len = 64;
+    check(buf != 0 && virtio_ready(d) == 0 && virtqueue_add(vq, &sg, 0, 1, buf) == 0,
+          "a buffer the device may write is queued");
+    m.reset_polls = -1;
+    virtio_teardown(d);
+    check(m.master == 0 && !d->queues[0] && m.dma_out == 1 &&
+              strstr(last_log, "stopped: model0: its memory access turned off") != 0,
+          "teardown after a reset that did not end stops the device and frees its queue");
+    virtio_dma_free(d, buf, 4096);
+    check(m.dma_out == 0, "the driver frees its buffer after the teardown");
+    check(virtio_init(d, 0, 1) == -ETIMEDOUT && m.master == 0,
+          "init leaves a device that does not reset without memory access");
+    m.reset_polls = 3;
+    check(virtio_init(d, 0, 1) == 0 && m.master == 1,
+          "init lets the device reach memory again once a reset ends");
+    virtio_teardown(d);
+    check(m.dma_out == 0 && m.master == 1, "a teardown whose reset ends leaves the access be");
 }
 
 /** Fill a queue, drain it, and wrap its 16-bit indices. */
@@ -923,6 +985,7 @@ int main(void)
     negotiation();
     refusals();
     queue_setup();
+    stuck_reset();
     fill_wrap_drain();
     indirect();
     event_index();
@@ -930,7 +993,8 @@ int main(void)
     config_and_interrupts();
     if (!failures) {
         printf("virtqueue-hosttest: result: pass: negotiation, refusals, queue setup, fill, "
-               "wrap and drain, indirect tables, event index, device faults, configuration "
+               "wrap and drain, a stuck reset, indirect tables, event index, device faults, "
+               "configuration "
                "and interrupts\n");
     }
     return failures != 0;
