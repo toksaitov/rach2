@@ -2392,16 +2392,25 @@ static long long itimer_time(int virt)
  * set_cpu_itimer adds TICK_NSEC to the first value: at 250 Hz the fourth
  * tick, where 10 ms alone is the third. `tick` is the length of a tick of
  * processor time in nanoseconds. The ticks are counted in the time the
- * timer counts, from a setting that no tick came during to the first
- * signal, which comes at the return from the tick that ran the timer out;
- * one more is allowed for a tick that came before the handler read the
- * time. Returns 0, or 1 after the failure is printed.
+ * timer counts, from a setting that no tick came during. The signal comes
+ * at the return from the tick that ran the timer out, before the next user
+ * instruction, so the handler's reading shows at least that many ticks,
+ * and each reading taken while no signal had come shows fewer. The
+ * handler's reading has no upper bound: a tick that comes late is charged
+ * with those missed in one interrupt, as `sched_account_tick` charges them,
+ * and those after the timer's tick and any charged while the signal is
+ * delivered come before the handler reads the time. Linux's handler reads
+ * past the tick too, since its timers count one tick an interrupt
+ * (kernel/time/tick-sched.c:309, kernel/sched/cputime.c:486-497) and its
+ * CLOCK_PROCESS_CPUTIME_ID is the scheduler's runtime
+ * (kernel/time/posix-cpu-timers.c:218, 1658). Returns 0, or 1 after the
+ * failure is printed.
  */
 static int itimer_first(int virt, long long tick)
 {
     struct itimerval once = {{0, 0}, {0, 10000}}, off = {{0, 0}, {0, 0}};
     int which = virt ? ITIMER_VIRTUAL : ITIMER_PROF, signo = virt ? SIGVTALRM : SIGPROF;
-    long long want = (10000000LL + tick + tick - 1) / tick, before = 0, ticks;
+    long long want = (10000000LL + tick + tick - 1) / tick, before = 0, now, last, ticks;
     int tries;
     static char why[160];
 
@@ -2417,15 +2426,27 @@ static int itimer_first(int virt, long long tick)
         }
         setitimer(which, &off, NULL);
     }
-    while (firsts == 0 && itimer_time(virt) - before < 3000000000LL) {
+    last = before;
+    for (;;) {
+        now = itimer_time(virt);
+        /* a reading the handler ran after may have been taken past expiry */
+        if (firsts != 0 || now - before >= 3000000000LL) {
+            break;
+        }
+        last = now;
         spin_user();
     }
     setitimer(which, &off, NULL);
     signal(signo, SIG_DFL);
     ticks = ((virt ? first_user_us * 1000 : first_cpu_ns) - before) / tick;
-    if (tries == 100 || firsts == 0 || ticks < want || ticks > want + 1) {
+    if (tries == 100 || firsts == 0 || ticks < want) {
         snprintf(why, sizeof why, "%s of 10 ms expired after %lld ticks charged, not %lld",
                  virt ? "ITIMER_VIRTUAL" : "ITIMER_PROF", firsts ? ticks : -1LL, want);
+        return fail(why);
+    }
+    if ((last - before) / tick >= want) {
+        snprintf(why, sizeof why, "%s of 10 ms had not expired after %lld ticks charged",
+                 virt ? "ITIMER_VIRTUAL" : "ITIMER_PROF", (last - before) / tick);
         return fail(why);
     }
     return 0;
