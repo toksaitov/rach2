@@ -32,19 +32,19 @@ static char extended[] = "offset=" OFFSET_TEXT ",hash_seed=52616368-3200-4578-74
 static char uuid[] = "52616368-3200-4578-7432-000000000015";
 
 /* What e2fsck -fn says of a stopped volume that the kernel's check also
- * counts: the inodes no name reaches, each an orphan; the files whose size
- * or i_blocks is behind their pointers, each kept; and the blocks a file
- * names that the bitmap calls free, each of whose bits the check sets. */
+ * counts: the inodes no name reaches, each an orphan, and the files whose
+ * size or i_blocks is behind their pointers, each kept. */
 struct tally {
     long unattached; /* in use with links: `Unattached inode N` */
     long freed;      /* bit set, inode unused: in `Inode bitmap differences` */
     long sized;      /* `Inode N, i_size is` or `i_blocks is`, once per inode */
     long last;       /* the inode of the last such line */
-    long named;      /* `+` in `Block bitmap differences` */
 };
 
 /* What the kernel's check of the stopped volume counted, from its records:
- * `ext2: check: J blocks named by files were free, marked used`, `ext2:
+ * `ext2: check: J blocks named by files were free, marked used`, which a
+ * stop no longer leaves since a block's bit reaches the disk before any
+ * pointer to the block, `ext2:
  * check: F files with a size or i_blocks that does not match their blocks,
  * kept for e2fsck` and `ext2: check: L lost blocks, M orphan inodes, kept
  * for e2fsck`, the first two only when there are any. */
@@ -546,10 +546,11 @@ static const char *check_counts(const char *w, struct counted *k, char *bad, siz
  * of the boot after a stop. A checked volume must keep the HELD inodes as
  * orphans, and may keep more: the files a writer removed whose inode or bit
  * the stop kept from the disk, after the entry that named them, which the
- * removal writes at once. It may also set the bits of blocks a file names
- * and keep files whose size or i_blocks is behind their pointers, which a
- * stop leaves when a pointer block reached the disk before the bitmap and
- * the inode. What it counted goes in `*k`, whose orphans are -1 when there
+ * removal writes at once. It may also keep files whose size or i_blocks is
+ * behind their pointers, which a stop leaves when a pointer block reached
+ * the disk before the inode, but sets the bit of no block a file names,
+ * since each bit reaches the disk before any pointer to its block. What it
+ * counted goes in `*k`, whose orphans are -1 when there
  * is no record of that form. Assertions PREFIX-writable, PREFIX-check,
  * PREFIX-same, PREFIX-wrote and PREFIX-umount.
  */
@@ -628,10 +629,9 @@ static int is_held(long ino, const long held[HELD])
  * bitmap differences:` in e2fsck's output, names only numbers the bitmap
  * marks used and e2fsck found free, each `-N` or `-(N--M)`: lost blocks,
  * or inodes, which `*inodes`, when not NULL, counts. A `+`, a number the
- * bitmap calls free that a file uses, `+N` or `+(N--M)`, is counted in
- * `*named` when that is not NULL, and is a fault when it is.
+ * bitmap calls free that a file uses, `+N` or `+(N--M)`, is a fault.
  */
-static int only_freed(const char *list, long *inodes, long *named)
+static int only_freed(const char *list, long *inodes)
 {
     long *count;
     const char *p = list;
@@ -643,9 +643,7 @@ static int only_freed(const char *list, long *inodes, long *named)
             p++;
             continue;
         }
-        if (*p == '+' && named != NULL)
-            count = named;
-        else if (*p == '-')
+        if (*p == '-')
             count = inodes;
         else
             return 0;
@@ -699,7 +697,7 @@ static int size_line(const char *text, struct tally *t)
  * `allowed` of the line `text`, a string the caller owns, which loses its
  * trailing spaces and carriage return here.
  */
-static int allowed_text(char *text, const long held[HELD], int stopped, struct tally *t)
+static int allowed_text(char *text, const long held[HELD], struct tally *t)
 {
     static const char *const fixed[] = {"Pass ",
                                         "Free blocks count wrong",
@@ -742,9 +740,9 @@ static int allowed_text(char *text, const long held[HELD], int stopped, struct t
     if ((ok = size_line(text, t)) != -1)
         return ok;
     if (strncmp(text, blocks, strlen(blocks)) == 0)
-        return only_freed(text + strlen(blocks), NULL, stopped ? &t->named : NULL);
+        return only_freed(text + strlen(blocks), NULL);
     if (strncmp(text, inodes, strlen(inodes)) == 0)
-        return only_freed(text + strlen(inodes), &t->freed, NULL);
+        return only_freed(text + strlen(inodes), &t->freed);
     return 0;
 }
 
@@ -757,10 +755,10 @@ static int allowed_text(char *text, const long held[HELD], int stopped, struct t
  * after `Unattached zero-length inode N` when it has no blocks) other than
  * a held one, the free counts, a question e2fsck asks and is told no, or
  * its summary; and a regular file's size or i_blocks behind its pointers,
- * which the kernel's check keeps. On the volume as the stop left it,
- * `stopped`, a block the bitmap calls free that a file names is allowed
- * too, the bit the check sets; after the check, not. The inodes no name
- * reaches, the files kept and the blocks named free are counted in `*t`.
+ * which the kernel's check keeps. A block the bitmap calls free that a
+ * file names is not allowed, on the volume as the stop left it too, since
+ * each bit reaches the disk before any pointer to its block. The inodes no
+ * name reaches and the files kept are counted in `*t`.
  *
  * Beyond the held inodes, those are the files a writer removed: the removal
  * writes the entry to the disk at once, so that no name there names a freed
@@ -773,8 +771,7 @@ static int allowed_text(char *text, const long held[HELD], int stopped, struct t
  * differences on one line, and a `+N` past any fixed length would pass
  * unread. A line that cannot be copied is not allowed.
  */
-static int allowed(const char *line, size_t len, const long held[HELD], int stopped,
-                   struct tally *t)
+static int allowed(const char *line, size_t len, const long held[HELD], struct tally *t)
 {
     char *text = malloc(len + 1);
     int ok;
@@ -783,7 +780,7 @@ static int allowed(const char *line, size_t len, const long held[HELD], int stop
         return 0;
     memcpy(text, line, len);
     text[len] = '\0';
-    ok = allowed_text(text, held, stopped, t);
+    ok = allowed_text(text, held, t);
     free(text);
     return ok;
 }
@@ -791,8 +788,9 @@ static int allowed(const char *line, size_t len, const long held[HELD], int stop
 /**
  * Say in `why`, of `size` bytes, where what e2fsck found, `t`, differs from
  * what the kernel's check counted, `k`: the inodes no name reaches, the
- * files kept and, `before` the check ran, the blocks named free. @return 1
- * when they agree, and when `k` is NULL or has no count of orphans.
+ * files kept, and, `before` the check ran, no bit it set of a block named
+ * free. @return 1 when they agree, and when `k` is NULL or has no count of
+ * orphans.
  */
 static int agrees(const struct tally *t, const struct counted *k, int before, char *why,
                   size_t size)
@@ -813,10 +811,9 @@ static int agrees(const struct tally *t, const struct counted *k, int before, ch
                  t->sized, k->sized);
         return 0;
     }
-    if (before && t->named != k->marked) {
-        snprintf(why, size,
-                 "e2fsck -fn finds %ld blocks named but free, the kernel's check set %ld bits",
-                 t->named, k->marked);
+    if (before && k->marked != 0) {
+        snprintf(why, size, "the kernel's check set the bits of %ld blocks named but free",
+                 k->marked);
         return 0;
     }
     return 1;
@@ -832,8 +829,8 @@ static int agrees(const struct tally *t, const struct counted *k, int before, ch
  * allowed is the reason. When `k` is not NULL, what e2fsck finds must be
  * what the kernel's check counted: as many inodes no name reaches,
  * unattached or freed, as orphans, as many files with a size or i_blocks
- * behind their pointers as files kept, and, before the check, as many
- * blocks named free as bits it set.
+ * behind their pointers as files kept, and, before the check, no bit set
+ * of a block named free.
  */
 static void judge(struct lc *l, const char *disk, const char *output, const long *held, int before,
                   const struct counted *k)
@@ -841,7 +838,7 @@ static void judge(struct lc *l, const char *disk, const char *output, const long
     char vol[1100], why[400], id[48];
     char *argv[] = {"e2fsck", "-fn", vol, NULL};
     char *text, *p;
-    struct tally t = {0, 0, 0, 0, 0};
+    struct tally t = {0, 0, 0, 0};
     size_t n;
     int status, ok, stopped = held != NULL;
 
@@ -853,7 +850,7 @@ static void judge(struct lc *l, const char *disk, const char *output, const long
     ok = text != NULL && (status == 0 || (stopped && status == 4));
     for (p = text; ok && p != NULL && *p != '\0'; p += n + (p[n] == '\n')) {
         n = strcspn(p, "\n");
-        if (stopped && !allowed(p, n, held, before, &t)) {
+        if (stopped && !allowed(p, n, held, &t)) {
             snprintf(why, sizeof(why), "e2fsck -fn exits %d and says: %.*s", status,
                      (int)(n < 300 ? n : 300), p);
             ok = 0;
