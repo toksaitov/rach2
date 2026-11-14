@@ -501,6 +501,13 @@ int dspdev_present(void)
     return 0;
 }
 
+/** No virtio console's port is the console's input. */
+int virtio_console_node(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
 /** The operations of an event device, the mixer and dsp, which no row
  * opens. */
 int32_t evdev_open(fd_entry_t *e, int n)

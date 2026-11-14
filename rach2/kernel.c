@@ -92,6 +92,7 @@
 #include "sys/watchdog.h"
 #include "sys/drm/drm.h"
 #include "sys/virtio/virtio.h"
+#include "sys/virtio/virtio_console.h"
 #if defined(__x86_64__)
 #include "sys/kvm/kvm.h"
 #include "sys/vfio/vfio.h"
@@ -5040,6 +5041,9 @@ void kernel_main(const struct boot_info *boot)
      * it, so that each has its virtioN whether a driver of its type exists
      * or not. */
     virtio_pci_probe();
+    /* The console's line moves to a virtio console's port here, when the
+     * boot line names one (`console=hvc0`), with the log so far. */
+    (void)virtio_console_start();
     start_network();
     drm_start();
     pstore_start();
