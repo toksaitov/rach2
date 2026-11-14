@@ -86,10 +86,15 @@
  * is rt_sigqueueinfo to pid -1. A native program's siginfo whose code has
  * a layout Linux does not know and a byte past the kept union is refused
  * with E2BIG by both queueing calls and by PTRACE_SETSIGINFO, before the
- * latter's EINVAL at a stop without a siginfo. The waits of these rows end
- * on the stop or state they wait for, with no limit of their own, so a
- * loaded host never fails one and a stop that never comes holds it to the
- * case's bound.
+ * latter's EINVAL at a stop without a siginfo. The queueing calls and
+ * pidfd_send_signal give their errors in Linux's order: the siginfo is
+ * copied before the IDs and the signal are checked, and a pidfd is found
+ * before the siginfo is copied. A native siginfo of a layout Linux knows is
+ * read only as far as the union Linux keeps, so each call and
+ * PTRACE_SETSIGINFO take one whose extension lies on an unreadable page.
+ * The waits of these rows end on the stop or state they wait for, with no
+ * limit of their own, so a loaded host never fails one and a stop that
+ * never comes holds it to the case's bound.
  *
  * The program takes no positional argument and runs every row. It prints
  * "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
@@ -141,7 +146,10 @@
  * `queued-signo-replaced`, `queued-fallback-layouts`,
  * `queued-fault-payloads`, `setsiginfo-fault-payloads`,
  * `setsiginfo-signo-kept`, `queued-code-own-thread`,
- * `queued-unknown-extension`, `tp-set-readback` and `tp-tracee-runs`.
+ * `queued-unknown-extension`, `sigqueueinfo-error-order`,
+ * `tgsigqueueinfo-error-order`, `pidfd-send-signal-error-order`,
+ * `queued-extension-unread`, `setsiginfo-extension-unread`,
+ * `tp-set-readback` and `tp-tracee-runs`.
  * x86-64 adds `dr7-bit32-einval`, `setoptions-wide-einval`,
  * `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
  * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
@@ -2946,6 +2954,336 @@ static int queued_unknown_extension(void)
     return 0;
 }
 
+/* The bytes of a native siginfo_t that Linux's kernel_siginfo keeps, which
+ * copy_siginfo_from_user reads for a layout it knows: 48 on x86-64 and 32
+ * on i386. An i386 program on x86-64 has its 128 bytes read whole. */
+#define SI_KEPT (sizeof(long) == 8 ? 48 : 32)
+
+/* An address past `SI_KEPT` bytes of readable memory, at whose page nothing
+ * may be read, as two pages mapped and the second made PROT_NONE; NULL
+ * before `edge_map` and after `edge_unmap`. */
+static unsigned char *edge;
+
+/** Map the two pages of `edge`. Returns 0, or -1. */
+static int edge_map(void)
+{
+    unsigned char *p = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+    if (p == MAP_FAILED) {
+        return -1;
+    }
+    if (mprotect(p + 4096, 4096, PROT_NONE) != 0) {
+        munmap(p, 8192);
+        return -1;
+    }
+    edge = p + 4096;
+    return 0;
+}
+
+/** Unmap the two pages of `edge`. */
+static void edge_unmap(void)
+{
+    if (edge) {
+        munmap(edge - 4096, 8192);
+        edge = NULL;
+    }
+}
+
+/** The first `SI_KEPT` bytes of `si` copied to end at `edge`, as a
+ * siginfo whose extension lies on the page nothing may read. */
+static siginfo_t *at_edge(const siginfo_t *si)
+{
+    memcpy(edge - SI_KEPT, si, SI_KEPT);
+    return (siginfo_t *)(void *)(edge - SI_KEPT);
+}
+
+/* A pid and a tid that no process has: above Linux's largest pid_max. */
+#define NO_PID 0x7fffffffL
+
+/* A signal past the last, which every call refuses with EINVAL once it has
+ * found its target. */
+#define BAD_SIG 65L
+
+/**
+ * Check each queueing call's errors in Linux 6.12's order, rt_sigqueueinfo's
+ * as its __copy_siginfo_from_user, do_rt_sigqueueinfo and
+ * group_send_sig_info make them: an unreadable siginfo is EFAULT before a
+ * bad signal; SI_KERNEL to pid -1 is EPERM before it; no such process is
+ * ESRCH before it; and the bad signal to this process is EINVAL. Then
+ * rt_tgsigqueueinfo's, as do_rt_tgsigqueueinfo and do_send_specific make
+ * them: an unreadable siginfo is EFAULT before IDs of 0; IDs of 0 are
+ * EINVAL before a code only the kernel gives; that code to a thread not the
+ * caller's is EPERM before the thread is looked for; no such thread is
+ * ESRCH before a bad signal; and the bad signal to this thread is EINVAL.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int queue_order(void)
+{
+    const char *failed = NULL;
+    siginfo_t kern, queued;
+    long pid = getpid(), tid = syscall(SYS_gettid);
+
+    memset(&kern, 0, sizeof(kern));
+    kern.si_signo = SIGUSR2;
+    kern.si_code = SI_KERNEL;
+    queued = kern;
+    queued.si_code = SI_QUEUE;
+    if (syscall(SYS_rt_sigqueueinfo, pid, BAD_SIG, edge) != -1 || errno != EFAULT) {
+        failed = "rt_sigqueueinfo of signal 65 from an unreadable siginfo was not EFAULT";
+    } else if (syscall(SYS_rt_sigqueueinfo, -1L, BAD_SIG, &kern) != -1 || errno != EPERM) {
+        failed = "rt_sigqueueinfo of signal 65 and SI_KERNEL to pid -1 was not EPERM";
+    } else if (syscall(SYS_rt_sigqueueinfo, NO_PID, BAD_SIG, &queued) != -1 || errno != ESRCH) {
+        failed = "rt_sigqueueinfo of signal 65 to no such process was not ESRCH";
+    } else if (syscall(SYS_rt_sigqueueinfo, pid, BAD_SIG, &queued) != -1 || errno != EINVAL) {
+        failed = "rt_sigqueueinfo of signal 65 to this process was not EINVAL";
+    }
+    if (failed) {
+        return fail(failed);
+    }
+    held();
+    if (syscall(SYS_rt_tgsigqueueinfo, 0L, 0L, (long)SIGUSR2, edge) != -1 || errno != EFAULT) {
+        failed = "rt_tgsigqueueinfo to IDs 0 from an unreadable siginfo was not EFAULT";
+    } else if (syscall(SYS_rt_tgsigqueueinfo, 0L, 0L, (long)SIGUSR2, &kern) != -1 ||
+               errno != EINVAL) {
+        failed = "rt_tgsigqueueinfo of SI_KERNEL to IDs 0 was not EINVAL";
+    } else if (syscall(SYS_rt_tgsigqueueinfo, pid, NO_PID, BAD_SIG, &kern) != -1 ||
+               errno != EPERM) {
+        failed = "rt_tgsigqueueinfo of signal 65 and SI_KERNEL to no such thread was not EPERM";
+    } else if (syscall(SYS_rt_tgsigqueueinfo, pid, NO_PID, BAD_SIG, &queued) != -1 ||
+               errno != ESRCH) {
+        failed = "rt_tgsigqueueinfo of signal 65 to no such thread was not ESRCH";
+    } else if (syscall(SYS_rt_tgsigqueueinfo, pid, tid, BAD_SIG, &queued) != -1 ||
+               errno != EINVAL) {
+        failed = "rt_tgsigqueueinfo of signal 65 to this thread was not EINVAL";
+    }
+    if (failed) {
+        return fail(failed);
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check pidfd_send_signal's errors in Linux 6.12's order: an unknown flag,
+ * 8, is EINVAL before a descriptor that is not open; that descriptor is
+ * EBADF before an unreadable siginfo and before one of a layout Linux does
+ * not know with a byte past the kept union, which it never reads; this
+ * process's pidfd with an unreadable siginfo is EFAULT; the pidfd of a
+ * child reaped is ESRCH before a bad signal; and the bad signal to this
+ * process is EINVAL. Returns 0, or 1 after the failure is printed.
+ */
+static int pidfd_order(void)
+{
+    const char *failed = NULL;
+    siginfo_t si;
+    long self = syscall(SYS_pidfd_open, (long)getpid(), 0L), gone = -1;
+    pid_t c = fork();
+
+    if (c == 0) {
+        _exit(0);
+    }
+    if (c > 0) {
+        gone = syscall(SYS_pidfd_open, (long)c, 0L);
+        waitpid(c, NULL, 0);
+    }
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGTRAP;
+    si.si_code = 7;
+    ((unsigned char *)&si)[SI_EXPANSION] = 1;
+    if (self < 0 || gone < 0) {
+        failed = "pidfd_open of this process and of a child";
+    } else if (syscall(SYS_pidfd_send_signal, -1L, BAD_SIG, NULL, 8L) != -1 || errno != EINVAL) {
+        failed = "pidfd_send_signal with an unknown flag on no descriptor was not EINVAL";
+    } else if (syscall(SYS_pidfd_send_signal, -1L, (long)SIGUSR2, edge, 0L) != -1 ||
+               errno != EBADF) {
+        failed = "pidfd_send_signal on no descriptor from an unreadable siginfo was not EBADF";
+    } else if (syscall(SYS_pidfd_send_signal, -1L, (long)SIGTRAP, &si, 0L) != -1 ||
+               errno != EBADF) {
+        failed = "pidfd_send_signal on no descriptor of SIGTRAP code 7 with a byte past its "
+                 "union was not EBADF";
+    } else if (syscall(SYS_pidfd_send_signal, self, (long)SIGUSR2, edge, 0L) != -1 ||
+               errno != EFAULT) {
+        failed = "pidfd_send_signal from an unreadable siginfo was not EFAULT";
+    } else if (syscall(SYS_pidfd_send_signal, gone, BAD_SIG, NULL, 0L) != -1 || errno != ESRCH) {
+        failed = "pidfd_send_signal of signal 65 to a child reaped was not ESRCH";
+    } else if (syscall(SYS_pidfd_send_signal, self, BAD_SIG, NULL, 0L) != -1 || errno != EINVAL) {
+        failed = "pidfd_send_signal of signal 65 to this process was not EINVAL";
+    }
+    if (self >= 0) {
+        close((int)self);
+    }
+    if (gone >= 0) {
+        close((int)gone);
+    }
+    if (failed) {
+        return fail(failed);
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Send this process SIGUSR2 by pidfd_send_signal with the siginfo `si`
+ * copied to end at `edge`, with SIGUSR2 blocked, and take it back: taken
+ * with SI_QUEUE and the value 0x6b6b from a native program, EFAULT from an
+ * i386 one on x86-64. Returns NULL, or what failed.
+ */
+static const char *pidfd_edge_queue(const siginfo_t *si)
+{
+    const char *failed = NULL;
+    siginfo_t got;
+    sigset_t set, old;
+    long self = syscall(SYS_pidfd_open, (long)getpid(), 0L);
+    int rc;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR2);
+    if (self < 0 || sigprocmask(SIG_BLOCK, &set, &old) != 0) {
+        failed = "pidfd_open of this process and blocking SIGUSR2";
+    } else {
+        errno = 0;
+        rc = (int)syscall(SYS_pidfd_send_signal, self, (long)SIGUSR2, at_edge(si), 0L);
+        if (on_compat() ? rc != -1 || errno != EFAULT
+                        : rc != 0 || sigwaitinfo(&set, &got) != SIGUSR2 ||
+                              got.si_code != SI_QUEUE || got.si_value.sival_int != 0x6b6b) {
+            failed = "pidfd_send_signal of SI_QUEUE with its extension unreadable";
+        }
+        sigprocmask(SIG_SETMASK, &old, NULL);
+    }
+    if (self >= 0) {
+        close((int)self);
+    }
+    return failed;
+}
+
+/**
+ * Check that a SIGUSR2 with SI_QUEUE and a value, whose siginfo ends at
+ * `edge` after the bytes Linux's kernel_siginfo keeps, is taken by
+ * rt_sigqueueinfo, rt_tgsigqueueinfo and pidfd_send_signal
+ * (`pidfd_edge_queue`) to this process with its value from a native
+ * program, as Linux's copy_siginfo_from_user reads the extension only for a
+ * layout it does not know, and refused with EFAULT from an i386 one on
+ * x86-64, whose 128 bytes Linux reads whole; and that SIGTRAP code 7 there,
+ * a layout Linux does not know, is EFAULT by either ABI. Returns 0, or 1
+ * after the failure is printed.
+ */
+static int queue_extension_unread(void)
+{
+    const char *failed = NULL;
+    siginfo_t si, got;
+    int thread, rc;
+
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGUSR2;
+    si.si_code = SI_QUEUE;
+    si.si_pid = getpid();
+    si.si_uid = getuid();
+    si.si_value.sival_int = 0x6b6b;
+    for (thread = 0; thread < 2 && !failed; thread++) {
+        errno = 0;
+        rc = queue_and_take(SIGUSR2, at_edge(&si), thread, &got, NULL);
+        if (on_compat() ? rc != -1 || errno != EFAULT
+                        : rc != 0 || got.si_code != SI_QUEUE || got.si_value.sival_int != 0x6b6b) {
+            failed = thread ? "rt_tgsigqueueinfo of SI_QUEUE with its extension unreadable"
+                            : "rt_sigqueueinfo of SI_QUEUE with its extension unreadable";
+        }
+    }
+    if (!failed) {
+        failed = pidfd_edge_queue(&si);
+    }
+    si.si_signo = SIGTRAP;
+    si.si_code = 7;
+    for (thread = 0; thread < 2 && !failed; thread++) {
+        errno = 0;
+        if (queue_and_take(SIGTRAP, at_edge(&si), thread, &got, NULL) != -1 || errno != EFAULT) {
+            failed = thread ? "rt_tgsigqueueinfo of SIGTRAP code 7 with its extension unreadable "
+                              "was not EFAULT"
+                            : "rt_sigqueueinfo of SIGTRAP code 7 with its extension unreadable "
+                              "was not EFAULT";
+        }
+    }
+    if (failed) {
+        return fail(failed);
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check that PTRACE_SETSIGINFO at a child's SIGUSR1 delivery stop takes a
+ * SIGUSR1 with SI_QUEUE and a value whose siginfo ends at `edge` from a
+ * native tracer, which PTRACE_GETSIGINFO then gives back, and refuses it
+ * with EFAULT from an i386 one on x86-64, as Linux's copy_siginfo_from_user
+ * and copy_siginfo_from_user32 read them; and that SIGTRAP code 7 there is
+ * EFAULT from either. The child, resumed without a signal, exits 0.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int setsiginfo_extension_unread(void)
+{
+    siginfo_t si, got;
+    long rc;
+    pid_t c = fork();
+
+    if (c == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0) {
+            _exit(2);
+        }
+        raise(SIGUSR1);
+        _exit(0);
+    }
+    if (c < 0) {
+        return fail("fork for PTRACE_SETSIGINFO with its extension unreadable");
+    }
+    if (granted(c, !stops_with(c, SIGUSR1), "no SIGUSR1 delivery stop")) {
+        return 1;
+    }
+    memset(&si, 0, sizeof(si));
+    memset(&got, 0, sizeof(got));
+    si.si_signo = SIGUSR1;
+    si.si_code = SI_QUEUE;
+    si.si_value.sival_int = 0x6c6c;
+    errno = 0;
+    rc = ptrace(PTRACE_SETSIGINFO, c, NULL, at_edge(&si));
+    if (granted(c,
+                on_compat() ? rc != -1 || errno != EFAULT
+                            : rc != 0 || ptrace(PTRACE_GETSIGINFO, c, NULL, &got) != 0 ||
+                                  got.si_code != SI_QUEUE || got.si_value.sival_int != 0x6c6c,
+                "PTRACE_SETSIGINFO of SI_QUEUE with its extension unreadable")) {
+        return 1;
+    }
+    si.si_signo = SIGTRAP;
+    si.si_code = 7;
+    errno = 0;
+    rc = ptrace(PTRACE_SETSIGINFO, c, NULL, at_edge(&si));
+    if (granted(c, rc != -1 || errno != EFAULT,
+                "PTRACE_SETSIGINFO of SIGTRAP code 7 with its extension unreadable was not "
+                "EFAULT") ||
+        granted(c, ptrace(PTRACE_CONT, c, NULL, NULL), "PTRACE_CONT from SIGUSR1") ||
+        granted(c, !exits_zero(c), "the child did not exit 0 after its stop")) {
+        return 1;
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Run the rows of `queue_order`, `pidfd_order`, `queue_extension_unread`
+ * and `setsiginfo_extension_unread` with the pages of `edge` mapped, and
+ * unmap them. Returns 0, or 1 after the failure is printed.
+ */
+static int siginfo_copy_order(void)
+{
+    int rc;
+
+    if (edge_map() != 0) {
+        return fail("two pages, the second unreadable");
+    }
+    rc =
+        queue_order() || pidfd_order() || queue_extension_unread() || setsiginfo_extension_unread();
+    edge_unmap();
+    return rc;
+}
+
 /**
  * Check that PTRACE_SINGLESTEP over a system call instruction stops at
  * step_return with the call's result and TRAP_TRACE, before the increment of
@@ -3507,7 +3845,8 @@ static int second_rows(void)
            tracer_gone_stop() || sigcont_detach() || thread_detach_stop() ||
            attach_group_noinfo() || queued_kernel_info() || queued_signo_replaced() ||
            queued_fallback_layouts() || queued_fault_payloads() || setsiginfo_payloads() ||
-           queued_own_thread() || queued_unknown_extension() || thread_pointer();
+           queued_own_thread() || queued_unknown_extension() || siginfo_copy_order() ||
+           thread_pointer();
 }
 
 /* The assertions after `ended-mem-freed`, in the order they are checked. */
@@ -3623,6 +3962,11 @@ static const char *const later_rows[] = {
     "setsiginfo-signo-kept",
     "queued-code-own-thread",
     "queued-unknown-extension",
+    "sigqueueinfo-error-order",
+    "tgsigqueueinfo-error-order",
+    "pidfd-send-signal-error-order",
+    "queued-extension-unread",
+    "setsiginfo-extension-unread",
 #if defined __x86_64__
     "tp-arch-get-fs",
     "tp-peekuser-fs",

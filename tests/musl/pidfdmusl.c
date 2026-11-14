@@ -27,8 +27,10 @@
  * A sibling blocks in poll with no requested events on an unreaped child's
  * pidfd. Reaping the child wakes it with POLLHUP. Each queued-signal call
  * copies siginfo from a file page not yet faulted into the caller's mapping;
- * the signal retains its code, sender, errno and value. Bad siginfo is
- * rejected before a missing target, and kernel codes stay within a process.
+ * the signal retains its code, sender, errno and value. rt_sigqueueinfo
+ * and rt_tgsigqueueinfo reject an unreadable siginfo before a missing
+ * target, and pidfd_send_signal a descriptor that is not open before the
+ * siginfo, as Linux 6.12 orders them; kernel codes stay within a process.
  *
  * Touching 64 new pages raises getrusage's ru_minflt by at least 64; a
  * mapping of 64 pages made with MAP_POPULATE raises it by at least 64 in the
@@ -575,21 +577,22 @@ out:
     return error ? fail(error) : 0;
 }
 
-/** Check siginfo copy ordering and preserve the restriction on kernel codes.
- * A child used as the foreign target is killed and reaped on every path. */
+/** Check siginfo copy ordering, EBADF for pidfd_send_signal on no descriptor
+ * before its unreadable siginfo and EFAULT for the queueing calls to no such
+ * process, and preserve the restriction on kernel codes. A child used as the
+ * foreign target is killed and reaped on every path. */
 static int queued_checks(void)
 {
     pid_t pid;
     int pidfd, ok;
     siginfo_t si;
 
-    if (syscall(SYS_pidfd_send_signal, -1L, (long)SIGUSR1, (void *)1, 0L) != -1 ||
-        errno != EFAULT ||
+    if (syscall(SYS_pidfd_send_signal, -1L, (long)SIGUSR1, (void *)1, 0L) != -1 || errno != EBADF ||
         syscall(SYS_rt_sigqueueinfo, 2000000000L, (long)SIGUSR1, (void *)1) != -1 ||
         errno != EFAULT ||
         syscall(SYS_rt_tgsigqueueinfo, 2000000000L, 2000000000L, (long)SIGUSR1, (void *)1) != -1 ||
         errno != EFAULT) {
-        return fail("queued siginfo was not copied before resolving the target");
+        return fail("queued siginfo was not copied in Linux's order");
     }
     report_held();
     pid = pausing_child();
