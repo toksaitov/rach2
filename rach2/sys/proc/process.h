@@ -1165,6 +1165,43 @@ void proc_files_put(process_t *p);
  * -ENOMEM. */
 int32_t proc_files_unshare(void);
 
+struct vfs_ref;
+struct vfs_stat;
+struct vm_file;
+
+/**
+ * The stack of a new image whose top page ends at `top`, with its mmap base
+ * at `mmap_base`, when the pages its arguments took start at `bottom` and
+ * the soft RLIMIT_STACK is `limit`, as execve lays it out and as the kernel
+ * shell's `exec` lays out the program it starts. Defined in syscall_proc.c.
+ *
+ * The stack may grow to `limit`, in whole pages, which bounds the whole
+ * stack as Linux's does, but never into the range below `mmap_base` where
+ * anonymous mappings are placed, and always as far as `bottom`; a limit
+ * changed later applies at the next exec. The region starts, at the exec,
+ * 128 KiB below `bottom`, within that window, as Linux 6.12's
+ * `setup_arg_pages` (fs/exec.c) expands it, so that a program's first
+ * frames lie in the region and need no growth, which an accessible mapping
+ * within the guard gap below them would refuse; an i386 Wine maps the
+ * address space below its stack to within 128 KiB of its stack pointer.
+ *
+ * @return how far below its top page the stack may grow, with the page
+ *         the region starts at in `*base`.
+ */
+uintptr_t exec_stack_span(uintptr_t top, uintptr_t mmap_base, uintptr_t bottom, unsigned long limit,
+                          uintptr_t *base);
+
+/**
+ * Make `*map` a private mapping of the regular file at `ref`, whose
+ * attributes on a mount other than the KRFFS root are `vst`, for
+ * `elf_load_image_at` to map the program's segments by, as execve does.
+ * `*map`, NULL on the call, stays NULL for a file that is not regular,
+ * whose segments the loader copies. The caller puts the mapping
+ * (`vm_file_put`). 0, -ENOMEM or the open's error. Defined in
+ * syscall_proc.c.
+ */
+int32_t exec_map_file(const struct vfs_ref *ref, const struct vfs_stat *vst, struct vm_file **map);
+
 /** Give the current process directories and a umask of its own, a copy of
  * those it shares with others, as unshare's CLONE_FS does. 0 or -ENOMEM. */
 int32_t proc_fs_unshare(void);

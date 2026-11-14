@@ -1798,6 +1798,29 @@ static int boot_keep_exe(struct mm *mm, const char *path)
     return exe.node && mm_exe_open(mm, &exe) == 0 ? 0 : -1;
 }
 
+/**
+ * Make `*map` a private mapping of the program `path` that `exec_program`
+ * loads, as execve maps its program (`exec_map_file`), so that its text and
+ * read-only data map the file and are not copied into anonymous pages: the
+ * node held in `boot_ctx` on a root that is not KRFFS, and the node `path`
+ * names on the KRFFS root. 0, or -ENOENT or the mapping's error.
+ */
+static int32_t boot_map_exe(const char *path, struct vm_file **map)
+{
+    struct vfs_ref ref = boot_ctx.ref;
+    struct vfs_stat vst;
+
+    *map = NULL;
+    k_memset(&vst, 0, sizeof(vst));
+    if (!ref.mnt) {
+        ref.mnt = vfs_root_mount();
+        ref.node = krffs_resolve(path);
+    } else if (vfs_getattr(ref.mnt, ref.node, &vst) != 0) {
+        return -EIO;
+    }
+    return ref.node ? exec_map_file(&ref, &vst, map) : -ENOENT;
+}
+
 /** Close and release the node `exec_program` read through the root's mount,
  * if it opened one. */
 static void boot_exec_done(void)
@@ -1965,19 +1988,44 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
 }
 
 /**
+ * Make the regions of `mm`, whose program `img` is loaded and whose initial
+ * stack's top page is at `stack_base`, its strings down to `stack_bottom`:
+ * the program's segments, the heap after them, and the stack's region as
+ * execve makes it (`exec_stack_span`), in a window of the default
+ * RLIMIT_STACK, which init has on Linux, and reaching 128 KiB below the
+ * strings, with anonymous mappings placed below `mmap_base`. 0, or -1 for
+ * no memory.
+ */
+static int boot_regions(struct mm *mm, const elf_image_t *img, uintptr_t stack_base,
+                        uintptr_t stack_bottom, uintptr_t mmap_base)
+{
+    uintptr_t region;
+    uintptr_t window = exec_stack_span(stack_base + PAGE_SIZE, mmap_base, stack_bottom,
+                                       RLIM_STACK_DEFAULT, &region);
+
+    if (elf_setup_vmas(&mm->vm, img, img->image_end, stack_base, window, mmap_base) != 0) {
+        return -1;
+    }
+    return region < stack_base && !vm_grow_stack(&mm->vm, region, RLIM_INFINITY) ? -1 : 0;
+}
+
+/**
  * Load the ELF program `argv[0]` and run it in ring 3, with the `argc`
  * strings of `argv` as its arguments and a default environment (PATH, HOME
  * and TERM).
  *
  * The program is read from the KRFFS root by path, or, when the root is not
  * KRFFS, through the root's mount, the node held and open until the segments
- * are in. The segments are read from the file straight into a new address
- * space, so no buffer bounds the program's size, and the file is kept with
- * the address space (`boot_keep_exe`). The initial stack is the one execve
- * builds (`boot_stack`), with the auxiliary vector and its 16 random bytes.
- * The segments are mapped as they are loaded; the regions made after them
- * let the fault handler serve the heap, the stack, the vDSO a free page
- * above the mmap range, as execve places it, and later mappings.
+ * are in. A segment whose file offset and address agree modulo the page
+ * maps the file, as execve maps it (`boot_map_exe`), and another is read
+ * from the file straight into a new address space, so no buffer bounds the
+ * program's size; the file is kept with the address space
+ * (`boot_keep_exe`). The initial stack is the one execve builds
+ * (`boot_stack`), with the auxiliary vector and its 16 random bytes, and
+ * its region the one execve gives it (`boot_regions`). The regions made
+ * after the segments let the fault handler serve the heap, the stack, the
+ * vDSO a free page above the mmap range, as execve places it, and later
+ * mappings.
  *
  * Enters user mode through `enter_program` and does not return. A setup
  * failure prints a diagnostic and returns to the caller.
@@ -1995,6 +2043,7 @@ static void exec_program(int argc, char *argv[])
     uintptr_t stack_base = USER_STACK_BASE;
     int abi = VDSO_NATIVE;
     struct exec_krffs_ctx kctx;
+    struct vm_file *map = NULL;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
     static char env_home[] = "HOME=/";
     static char env_term[] = "TERM=rach2";
@@ -2039,12 +2088,15 @@ static void exec_program(int argc, char *argv[])
     }
 
     kctx.name = path;
-    if (elf_load_image_at(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
-                          boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, mm->dir, 0, NULL,
+    if (boot_map_exe(path, &map) != 0 ||
+        elf_load_image_at(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
+                          boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, mm->dir, 0, map,
                           &img) != 0 ||
         boot_keep_exe(mm, path) != 0) {
         boot_exec_done();
+        vm_file_put(map);
         mm_put(mm);
+        mm_reap();
         console_puts("exec: Failed to load ELF segments");
         return;
     }
@@ -2064,19 +2116,22 @@ static void exec_program(int argc, char *argv[])
     user_sp = boot_stack(mm, argc, argv, default_envp, &img,
                          vdso_span(abi) ? vdso_at + VDSO_VVAR_PAGES * PAGE_SIZE : 0, &stack_bottom);
     if (user_sp == 0) {
+        vm_file_put(map);
         mm_put(mm);
+        mm_reap();
         console_puts("exec: the initial stack could not be built");
         return;
     }
 
-    if (elf_setup_vmas(&mm->vm, &img, img.image_end, stack_base, VM_STACK_MAX_GROWTH, mmap_base) !=
-            0 ||
-        vdso_map(&mm->vm, vdso_at, abi) < 0 ||
-        (stack_bottom < stack_base && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
+    if (boot_regions(mm, &img, stack_base, stack_bottom, mmap_base) != 0 ||
+        vdso_map(&mm->vm, vdso_at, abi) < 0) {
+        vm_file_put(map);
         mm_put(mm);
+        mm_reap();
         console_puts("exec: no memory for the program's regions");
         return;
     }
+    vm_file_put(map);
     mm_set_exe(mm, path);
     enter_program(mm, path, entry_point, user_sp);
 }

@@ -1158,59 +1158,35 @@ static void exec_privileges(struct mm *mm, int secure, int unreadable, int ids_m
     }
 }
 
-/**
- * How far below its top page the stack of the new image in `s` may grow,
- * when the pages its arguments took start at `bottom`: to `limit`, the soft
- * RLIMIT_STACK in force at the exec, in whole pages, which bounds the whole
- * stack as Linux's does, but never into the range below the image's mmap
- * base where anonymous mappings are placed, and always as far as `bottom`.
- * A limit changed later applies at the next exec.
- */
-static uintptr_t exec_stack_window(const struct exec_state *s, uintptr_t bottom,
-                                   unsigned long limit)
-{
-    uintptr_t size = limit & ~(unsigned long)(PAGE_SIZE - 1);
-    uintptr_t floor;
-
-    if (size > s->stack_top - s->mmap_base) {
-        size = s->stack_top - s->mmap_base;
-    }
-    floor = s->stack_top - size;
-    if (floor > bottom) {
-        floor = bottom;
-    }
-    return s->stack_top - PAGE_SIZE - floor;
-}
-
 /** The stack's growth at an exec below the pages its arguments took. */
 #define EXEC_STACK_EXPAND 131072UL
 
-/**
- * The page the stack of the new image in `s` starts at once the exec ends:
- * `EXEC_STACK_EXPAND` bytes below `bottom`, where the pages its arguments
- * took start, while the whole stack stays within the soft RLIMIT_STACK
- * `limit`, as Linux 6.12's `setup_arg_pages` (fs/exec.c) expands it, and
- * never below `floor`, the bottom of the window `exec_stack_window` gives.
- * A program's first frames then lie in the stack's region and need no
- * growth, which an accessible mapping within the guard gap below them would
- * refuse; an i386 Wine maps the address space below its stack to within
- * 128 KiB of its stack pointer.
- */
-static uintptr_t exec_stack_base(const struct exec_state *s, uintptr_t bottom, unsigned long limit,
-                                 uintptr_t floor)
+uintptr_t exec_stack_span(uintptr_t top, uintptr_t mmap_base, uintptr_t bottom, unsigned long limit,
+                          uintptr_t *base)
 {
-    uintptr_t size = s->stack_top - bottom + EXEC_STACK_EXPAND;
     uintptr_t rlim = limit & ~(unsigned long)(PAGE_SIZE - 1);
-    uintptr_t base;
+    uintptr_t size = rlim;
+    uintptr_t floor;
 
+    if (size > top - mmap_base) {
+        size = top - mmap_base;
+    }
+    floor = top - size;
+    if (floor > bottom) {
+        floor = bottom;
+    }
+    size = top - bottom + EXEC_STACK_EXPAND;
     if (size > rlim) {
         size = rlim;
     }
-    base = s->stack_top - size;
-    if (base < floor) {
-        base = floor;
+    *base = top - size;
+    if (*base < floor) {
+        *base = floor;
     }
-    return base < bottom ? base : bottom;
+    if (*base > bottom) {
+        *base = bottom;
+    }
+    return top - PAGE_SIZE - floor;
 }
 
 /**
@@ -1385,7 +1361,7 @@ static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct 
 }
 
 /**
- * Make `f->map` a private mapping of the file at `ref`, whose attributes on
+ * Make `*map` a private mapping of the file at `ref`, whose attributes on
  * a mount other than the KRFFS root are `vst`, for the loader to map the
  * file's segments by (`elf_load_image_at`), as Linux's `elf_map` maps them
  * from the open file. The mapping keeps a description of the file open for
@@ -1399,7 +1375,7 @@ static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct 
  * is not regular gets none, and the loader copies its segments. 0, or
  * -ENOMEM or the open's error.
  */
-static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const struct vfs_stat *vst)
+int32_t exec_map_file(const struct vfs_ref *ref, const struct vfs_stat *vst, struct vm_file **map)
 {
     const krffs_node_t *node = ref->node;
     int root = mnt_is_root(ref->mnt);
@@ -1432,9 +1408,9 @@ static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const st
     e.flags = FD_FLAG_READ;
     e.ofd = ofd;
     e.node = root ? ref->node : NULL;
-    f->map = filemap_private(&e, NULL, !root && ref->mnt->type == &vfs_ext2_type);
+    *map = filemap_private(&e, NULL, !root && ref->mnt->type == &vfs_ext2_type);
     fd_ofd_unref(ofd);
-    return f->map ? 0 : -ENOMEM;
+    return *map ? 0 : -ENOMEM;
 }
 
 /** Transfer the resolved entry, or share the descriptor execution selected. */
@@ -1626,7 +1602,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, int how
     nosuid = (ref.mnt->flags & VFS_MS_NOSUID) != 0;
     rc = exec_check(f, &ref, keep, &vst);
     if (rc == 0) {
-        rc = exec_map(f, &ref, &vst);
+        rc = exec_map_file(&ref, &vst, &f->map);
     }
     if (rc == 0 && keep != NULL) {
         rc = exec_keep(f, &ref, keep, link, real, path);
@@ -2064,8 +2040,7 @@ static int32_t exec_build(struct exec_state *s)
     if (s->secure && limit > RLIM_STACK_DEFAULT) {
         limit = RLIM_STACK_DEFAULT;
     }
-    window = exec_stack_window(s, bottom, limit);
-    base = exec_stack_base(s, bottom, limit, s->stack_top - PAGE_SIZE - window);
+    window = exec_stack_span(s->stack_top, s->mmap_base, bottom, limit, &base);
     if (elf_setup_vmas(&s->mm->vm, &s->img, s->img.image_end + s->heap_shift,
                        s->stack_top - PAGE_SIZE, window, s->mmap_base) != 0 ||
         (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
