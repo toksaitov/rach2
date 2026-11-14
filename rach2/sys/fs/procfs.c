@@ -9907,17 +9907,17 @@ static void procfs_kvm_irqs(struct procfs_text *t, void *vm)
 #endif
 
 /**
- * The text of /proc/PID/fdinfo/N, descriptor `fd` of process `pid`: its
- * offset, its flags in octal, the access mode with O_APPEND, O_NONBLOCK,
- * O_PATH and O_CLOEXEC, the id of its mount, 0 for an object on none, and
- * its inode number, the four lines Linux gives first. Its length, or
- * -ENOENT for a descriptor that is not open. A dma-buf also gives its
- * supplied name, copied before appending text or the stat can sleep, and a
- * KVM VM its interrupt counts, from a reference taken then. The entry is
- * copied under its table's lock with a hold on what it names
- * (`fd_peek_hold`), since its owner may close it meanwhile without the big
- * lock, as Linux's `seq_show` takes the file under `file_lock`
- * (fs/proc/fd.c:39-46); the hold is given back before the stat.
+ * The text of /proc/PID/fdinfo/N, descriptor `fd` of process `pid`: its offset,
+ * its flags in octal, the access mode with O_APPEND, O_NONBLOCK, O_SYNC's bits,
+ * O_PATH, O_CLOEXEC and a thread pidfd's O_EXCL, the id of its mount, 0 for an
+ * object on none, and its inode number, the four lines Linux gives first. Its
+ * length, or -ENOENT for a descriptor that is not open. A dma-buf also gives
+ * its supplied name, copied before appending text or the stat can sleep, and a
+ * KVM VM its interrupt counts, from a reference taken then. The entry is copied
+ * under its table's lock with a hold on what it names (`fd_peek_hold`), since
+ * its owner may close it meanwhile without the big lock, as Linux's `seq_show`
+ * takes the file under `file_lock` (fs/proc/fd.c:39-46); the hold is given back
+ * before the stat.
  */
 static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 {
@@ -9949,7 +9949,7 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
     flags = rw == (FD_FLAG_READ | FD_FLAG_WRITE) ? 2u : (rw == FD_FLAG_WRITE ? 1u : 0u);
     if (e->ofd) {
-        flags |= e->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK | OFD_SYNC);
+        flags |= e->ofd->status_flags & (OFD_EXCL | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC);
     }
     if (e->flags & FD_FLAG_PATH) {
         flags |= 010000000u;

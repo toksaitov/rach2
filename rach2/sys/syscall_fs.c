@@ -16791,15 +16791,15 @@ static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg);
  * -EBADF for a descriptor that is not open, -EINVAL for a command it does
  * not take.
  *
- * F_GETFD and F_SETFD read and set the close-on-exec bit, which belongs to
- * the descriptor. F_GETFL reports the access mode, 0, 1 or 2 for O_RDONLY,
- * O_WRONLY and O_RDWR, with O_APPEND, O_NONBLOCK, O_SYNC and O_DSYNC, and
- * O_PATH for an O_PATH descriptor. F_SETFL sets O_APPEND and O_NONBLOCK,
- * which belong to the open file description a dup or a fork shares, and
- * ignores the other bits, the access mode, O_CLOEXEC and the sync flags
- * among them, as POSIX allows and Linux's setfl does; it is
- * -EPERM when it would change O_APPEND of an append-only file, as Linux's
- * setfl refuses either way.
+ * F_GETFD and F_SETFD read and set the close-on-exec bit, which belongs to the
+ * descriptor. F_GETFL reports the access mode, 0, 1 or 2 for O_RDONLY, O_WRONLY
+ * and O_RDWR, with O_APPEND, O_NONBLOCK, O_SYNC and O_DSYNC, O_PATH for an
+ * O_PATH descriptor and O_EXCL for a pidfd of a thread. F_SETFL sets O_APPEND
+ * and O_NONBLOCK, which belong to the open file description a dup or a fork
+ * shares, and ignores the other bits, the access mode, O_CLOEXEC and the sync
+ * flags among them, as POSIX allows and Linux's setfl does; it is -EPERM when
+ * it would change O_APPEND of an append-only file, as Linux's setfl refuses
+ * either way.
  *
  * F_DUPFD and F_DUPFD_CLOEXEC duplicate onto the lowest free descriptor at
  * or above `arg`, as POSIX requires. The description the allocation gave
@@ -16873,7 +16873,8 @@ static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg)
             fl = 0;
         }
         if (entry->ofd) {
-            fl |= (int)(entry->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK | OFD_SYNC));
+            fl |=
+                (int)(entry->ofd->status_flags & (OFD_EXCL | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC));
         }
         if (entry->flags & FD_FLAG_PATH) {
             fl |= O_PATH;

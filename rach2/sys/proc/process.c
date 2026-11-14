@@ -14,6 +14,7 @@
 #include "sched.h"
 #include "smp.h"
 #include "tgroup.h"
+#include "ptrace.h"
 #include "seccomp.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -786,8 +787,8 @@ void free_process(process_t *proc)
     (void)tick_post_unlink(proc);
     spin_unlock_irqrestore(&tick_post_lock, flags);
     pid_remove(proc);
-    if (proc->pid == proc->tgid) {
-        wq_wake_all(&proc->tg->exited);
+    if (proc->tg) {
+        wq_wake_all(&proc->tg->exited); /* its pidfds hang up */
     }
     pid_records--;
     user_put(proc->user_count);
@@ -1152,6 +1153,12 @@ process_t *get_process(uint32_t pid)
         }
     }
     return NULL;
+}
+
+int proc_tid_gone(const process_t *t)
+{
+    return !t || t->state == PROC_UNUSED ||
+           (t->state == PROC_ZOMBIE && t->pid != t->tgid && !(t->ptrace & PT_TRACED));
 }
 
 int proc_is_kthread(const process_t *p)

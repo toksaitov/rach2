@@ -2971,16 +2971,17 @@ static void fork_clear_handlers(process_t *child)
 /**
  * CLONE_PIDFD: a pidfd of `child` in a descriptor of the caller's, reserved
  * here, with its number stored as an int at `at` in the caller's memory, as
- * Linux stores it before the child runs. The child, made with a copy of the
- * table before, has no such descriptor. Returns the descriptor, with the
- * pidfd in `*pf` for `pidfd_install`; -ENOMEM, -EMFILE, or -EFAULT for a
- * store that failed, with nothing kept.
+ * Linux stores it before the child runs; a pidfd of the one thread when
+ * `thread` is not zero, as Linux 6.9 makes one for CLONE_THREAD. The child,
+ * made with a copy of the table before, has no such descriptor. Returns the
+ * descriptor, with the pidfd in `*pf` for `pidfd_install`; -ENOMEM, -EMFILE, or
+ * -EFAULT for a store that failed, with nothing kept.
  */
-static int32_t fork_pidfd(process_t *child, uintptr_t at, struct pidfd **pf)
+static int32_t fork_pidfd(process_t *child, uintptr_t at, int thread, struct pidfd **pf)
 {
     int32_t fd;
 
-    *pf = pidfd_new(child);
+    *pf = pidfd_new(child, thread);
     if (!*pf) {
         return -ENOMEM;
     }
@@ -3206,7 +3207,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         goto out_delay;
     }
     if (req->flags & CLONE_PIDFD) {
-        pidfd = fork_pidfd(child, req->pidfd, &pf);
+        pidfd = fork_pidfd(child, req->pidfd, (req->flags & CLONE_THREAD) != 0, &pf);
         if (pidfd < 0) {
             rc = pidfd;
             goto fail_built;
@@ -3337,7 +3338,7 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
         ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD)) ||
-        ((flags & CLONE_PIDFD) && (flags & (CLONE_THREAD | CLONE_DETACHED))) ||
+        ((flags & CLONE_PIDFD) && (flags & CLONE_DETACHED)) ||
         ((flags & CLONE_PIDFD) && (flags & CLONE_PARENT_SETTID) && pidfd == ptid) ||
         (clear_sighand && (flags & CLONE_SIGHAND))) {
         return -EINVAL;
@@ -3379,7 +3380,8 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
  * process's semaphore adjustments are its own, which threads share, and
  * Linux ignores the second. CLONE_PIDFD stores a pidfd of the child, as
  * an int, at the parent tid address, so it takes neither CLONE_PARENT_SETTID
- * nor CLONE_THREAD nor CLONE_DETACHED. The CLONE_NEW flags give the child
+ * nor CLONE_DETACHED; with CLONE_THREAD the pidfd is one of the new thread
+ * (PIDFD_THREAD), as on Linux 6.9 and later. The CLONE_NEW flags give the child
  * new namespaces (`ns_fork`); a cgroup namespace and any other flag are
  * EINVAL.
  */
@@ -5407,26 +5409,11 @@ static int32_t do_kill(int pid, int signo)
 }
 
 /**
- * Whether the thread `t` is one that tkill, tgkill and rt_tgsigqueueinfo
- * cannot find: a free record, or a thread that has ended, does not lead its
- * process and is not traced, whose record waits for `reap_threads` where
- * Linux's release_task has already let its id go. An ended leader keeps its
- * id until its parent reaps the process, and an ended traced thread until
- * its tracer's wait, so each is found and checked and takes nothing, as
- * Linux's do_send_specific finds a zombie.
- */
-static int thread_gone(const process_t *t)
-{
-    return !t || t->state == PROC_UNUSED ||
-           (t->state == PROC_ZOMBIE && t->pid != t->tgid && !(t->ptrace & PT_TRACED));
-}
-
-/**
  * tkill and tgkill: send `signo` to the thread `tid` alone, which must be a
  * thread of the process `tgid` unless `tgid` is 0. Both ids are positive: a
  * thread id is never a kill(2) group selector, so a zero or negative one is
  * -EINVAL, not a group. A thread that has ended but keeps its id
- * (`thread_gone`) is checked and discards the signal. The checks run in
+ * (`proc_tid_gone`) is checked and discards the signal. The checks run in
  * the order of Linux 6.12's do_tkill: -EINVAL for the ids, -ESRCH for no
  * such thread of that process, as do_send_specific finds and matches it,
  * and only then -EINVAL for a signal out of range and -EPERM from the
@@ -5441,7 +5428,7 @@ static int32_t do_tkill(int tgid, int tid, int signo)
         return -EINVAL;
     }
     t = proc_named((uint32_t)tid);
-    if (thread_gone(t) || (tgid != 0 && t->tgid != pid_named((uint32_t)tgid))) {
+    if (proc_tid_gone(t) || (tgid != 0 && t->tgid != pid_named((uint32_t)tgid))) {
         return -ESRCH;
     }
     if (signo < 0 || signo > KSIG_MAX) {
@@ -5591,40 +5578,56 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
 }
 
 /* pidfd_send_signal's flags since Linux 6.9, at most one of which is given:
- * the signal goes to the pidfd's thread, to its process, the default for a
- * pidfd of a process, or to the process group whose id is the process's. */
+ * the signal goes to the pidfd's thread, the default for a pidfd of one
+ * thread, to its process, the default for a pidfd of a process, or to the
+ * process group whose id is the pidfd's. */
 #define PIDFD_SIGNAL_THREAD        1u
 #define PIDFD_SIGNAL_THREAD_GROUP  2u
 #define PIDFD_SIGNAL_PROCESS_GROUP 4u
 #define PIDFD_SIGNAL_SCOPES \
     (PIDFD_SIGNAL_THREAD | PIDFD_SIGNAL_THREAD_GROUP | PIDFD_SIGNAL_PROCESS_GROUP)
 
+/** The scope of pidfd_send_signal's `flags` for the pidfd `ref` holds: the
+ * flag given, or for none the thread of a pidfd of one thread and the
+ * process of a pidfd of a process, as Linux 6.12 infers it from the
+ * pidfd's PIDFD_THREAD. */
+static uint32_t pidfd_scope(uint32_t flags, const struct pidfd_ref *ref)
+{
+    if (flags != 0) {
+        return flags;
+    }
+    return ref->thread ? PIDFD_SIGNAL_THREAD : PIDFD_SIGNAL_THREAD_GROUP;
+}
+
 /**
  * pidfd_send_signal takes a pidfd, a signal, a siginfo or 0, and flags: the
- * signal posted under kill's permission, with the siginfo given, whose
- * si_signo must be the signal, or else kill's, SI_TKILL's for a thread. The
- * flags choose where it goes: none or PIDFD_SIGNAL_THREAD_GROUP the pidfd's
- * process, PIDFD_SIGNAL_THREAD the process's leader alone, as tgkill posts,
- * and PIDFD_SIGNAL_PROCESS_GROUP each member of the process group whose id
- * is the process's, as kill(2) of the negated id posts (`kill_group`), even
- * once the process has been reaped, but never a group given that id after
- * the process's group has gone, which is -ESRCH. Signal 0, and a signal to
- * a process whose threads have all ended or to a leader that has ended, are
+ * signal posted under kill's permission, with the siginfo given, whose si_signo
+ * must be the signal, or else kill's, SI_TKILL's for a thread. The flags choose
+ * where it goes: PIDFD_SIGNAL_THREAD the pidfd's thread alone, the leader for a
+ * pidfd of a process, as tgkill posts; PIDFD_SIGNAL_THREAD_GROUP the thread's
+ * process; PIDFD_SIGNAL_PROCESS_GROUP each member of the process group whose id
+ * is the pidfd's, as kill(2) of the negated id posts (`kill_group`), even once
+ * the process has been reaped, but never a group given that id after the
+ * process's group has gone, which is -ESRCH, as is the group of a thread that
+ * does not lead its process, which leads none; and none the thread for a pidfd
+ * of one thread (PIDFD_THREAD) and the process for a pidfd of a process, as
+ * Linux 6.12 infers the scope from the pidfd's type. Signal 0, and a signal to
+ * a process whose threads have all ended or to a thread that has ended, are
  * checked and not posted. The checks run in the order of Linux 6.12's
- * pidfd_send_signal: -EINVAL for an unknown flag or more than one; -EBADF
- * for a descriptor that is not a pidfd; -EINVAL for a process outside the
- * caller's PID namespace and those below it, reaped or not, by the
- * namespace the pidfd holds; then the siginfo is copied (-EFAULT, -E2BIG),
- * -EINVAL for a si_signo other than the signal, and -EPERM for a code that
- * only the kernel or tkill gives (`queued_reserved`) unless the pidfd's
- * process is led by the calling thread and the signal goes to it or to its
- * process, as Linux compares task_pid(current) with the pidfd's pid and
- * the scope with PIDTYPE_TGID; then -ESRCH for a process reaped, or an
- * empty group, and only then -EINVAL for a signal out of range and -EPERM
- * from the permission, as kill_pid_info_type's and __kill_pgrp_info's
- * check_kill_permission tests them. The pidfd's process is held across the
- * copy, which may sleep while the descriptor is closed, and found again
- * after it, since it may have been reaped meanwhile.
+ * pidfd_send_signal: -EINVAL for an unknown flag or more than one; -EBADF for a
+ * descriptor that is not a pidfd; -EINVAL for a process outside the caller's
+ * PID namespace and those below it, reaped or not, by the namespace the pidfd
+ * holds; then the siginfo is copied (-EFAULT, -E2BIG), -EINVAL for a si_signo
+ * other than the signal, and -EPERM for a code that only the kernel or tkill
+ * gives (`queued_reserved`) unless the pidfd's thread is the calling thread and
+ * the signal goes to it or to its process, as Linux compares task_pid(current)
+ * with the pidfd's pid and the scope with PIDTYPE_TGID; then -ESRCH for a
+ * process reaped, a thread that has let its id go, or an empty group, and only
+ * then -EINVAL for a signal out of range and -EPERM from the permission, as
+ * kill_pid_info_type's and __kill_pgrp_info's check_kill_permission tests them.
+ * The pidfd's process is held across the copy, which may sleep while the
+ * descriptor is closed, and found again after it, since it may have been reaped
+ * meanwhile.
  */
 long sys_pidfd_send_signal(isr_params_t *params)
 {
@@ -5644,6 +5647,7 @@ long sys_pidfd_send_signal(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
+    flags = pidfd_scope(flags, &ref);
     if (!pidfd_ref_seen(&ref)) {
         rc = -EINVAL;
         goto out;
@@ -5696,7 +5700,7 @@ out:
  * thread of that process; and only then -EINVAL for a signal out of range
  * and -EPERM from the permission, as do_send_specific's
  * check_kill_permission tests them. A thread that has ended but keeps its
- * id (`thread_gone`), an unreaped process's leader among them, is checked
+ * id (`proc_tid_gone`), an unreaped process's leader among them, is checked
  * and discards the signal.
  */
 long sys_rt_tgsigqueueinfo(isr_params_t *params)
@@ -5719,7 +5723,7 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
         return -EPERM;
     }
     t = proc_named((uint32_t)tid);
-    if (thread_gone(t) || t->tgid != pid_named((uint32_t)tgid)) {
+    if (proc_tid_gone(t) || t->tgid != pid_named((uint32_t)tgid)) {
         return -ESRCH;
     }
     if (signo < 0 || signo > KSIG_MAX) {

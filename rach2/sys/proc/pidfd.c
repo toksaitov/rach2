@@ -18,6 +18,7 @@
 #include "../lib/kerrno.h"
 
 #define PIDFD_NONBLOCK 04000 /* O_NONBLOCK */
+#define PIDFD_THREAD   0200  /* O_EXCL */
 
 #define POLLIN     0x001
 #define POLLHUP    0x010
@@ -25,27 +26,32 @@
 
 /* A pidfd: the thread group of its process and the PID namespace the
  * process has its number in, each held by a reference so that both outlast
- * the reap, and the process's kernel id, which its leader has, an exec by
- * another thread included. */
+ * the reap, and the kernel id it names: the process's, which its leader
+ * has, an exec by another thread included, or for a pidfd of one thread
+ * (PIDFD_THREAD) that thread's, which an exec by another thread of the
+ * process gives to the leader it ends, as Linux's exchange_tids does. */
 struct pidfd {
     struct anon_obj anon;
     struct tgroup *tg;
     struct pidns *ns;
     uint32_t pid;
+    uint32_t thread; /* a pidfd of the one thread `pid`, not of the process */
 };
 
-/** The leader of the process of the thread group `tg` whose leader's id is
- * `pid`, or NULL once the process has been reaped: the record of its id
- * must be a thread of its group, since the id may have been given to
- * another process since. */
+/** The thread of the thread group `tg` whose id is `pid`, or NULL once it
+ * no longer has the id: the record of the id must be a thread of the group,
+ * since the id may have been given to another process since, and must not
+ * be a thread whose id Linux has let go (`proc_tid_gone`). A process
+ * pidfd's leader keeps its id until the reap. */
 static process_t *group_task(const struct tgroup *tg, uint32_t pid)
 {
     process_t *p = get_process(pid);
 
-    return p && p->tg == tg && p->state != PROC_UNUSED ? p : NULL;
+    return p && p->tg == tg && !proc_tid_gone(p) ? p : NULL;
 }
 
-/** The leader of `pf`'s process, or NULL once the process has been reaped. */
+/** The thread `pf` names, the leader for a pidfd of a process, or NULL once
+ * it no longer has its id. */
 static process_t *pidfd_task(const struct pidfd *pf)
 {
     return group_task(pf->tg, pf->pid);
@@ -68,22 +74,24 @@ static int32_t pidfd_write(fd_entry_t *e, const char __user *buf, uint32_t count
     return -EINVAL;
 }
 
-/** poll of a pidfd: POLLIN once every thread of the process has ended, and
- * POLLHUP too once it has been reaped, with the queue woken at the
- * last thread's end and the leader's reap. */
+/** poll of a pidfd: POLLIN once every thread of the process has ended, or
+ * for a pidfd of one thread once that thread has, and POLLHUP too once the
+ * process has been reaped or the thread has let its id go, as Linux 6.12's
+ * pidfd_poll has it; the queue is woken at each thread's end and at the
+ * free of each record. */
 static short pidfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     const struct pidfd *pf = (const struct pidfd *)e->priv;
+    const process_t *t = pidfd_task(pf);
     short mask = 0;
 
     if (wq) {
         *wq = &pf->tg->exited;
     }
-    if (pf->tg->live == 0) {
-        mask |= POLLIN | POLLRDNORM;
-    }
-    if (!pidfd_task(pf)) {
-        mask |= POLLIN | POLLRDNORM | POLLHUP;
+    if (!t) {
+        mask = POLLIN | POLLRDNORM | POLLHUP;
+    } else if (pf->thread ? t->state == PROC_ZOMBIE : pf->tg->live == 0) {
+        mask = POLLIN | POLLRDNORM;
     }
     return (short)((mask & events) | (mask & POLLHUP));
 }
@@ -98,7 +106,7 @@ static void pidfd_close(fd_entry_t *e)
 static const struct file_ops pidfd_ops = {pidfd_read,  pidfd_write, pidfd_poll, NULL,
                                           pidfd_close, NULL,        NULL,       0};
 
-struct pidfd *pidfd_new(process_t *p)
+struct pidfd *pidfd_new(process_t *p, int thread)
 {
     struct pidfd *pf = kzalloc(sizeof(*pf));
 
@@ -107,7 +115,8 @@ struct pidfd *pidfd_new(process_t *p)
         pf->tg = p->tg;
         pf->tg->refs++;
         pf->ns = pidns_get(proc_pidns(p));
-        pf->pid = p->tgid;
+        pf->pid = thread ? p->pid : p->tgid;
+        pf->thread = thread != 0;
     }
     return pf;
 }
@@ -122,6 +131,9 @@ void pidfd_install(struct pidfd *pf, int fd, int nonblock)
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
     if (nonblock) {
         e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    if (pf->thread) {
+        e->ofd->status_flags |= OFD_EXCL;
     }
     fd_install(current_proc->fds, fd);
 }
@@ -162,6 +174,7 @@ int32_t pidfd_ref_get(int fd, struct pidfd_ref *ref)
     ref->tg->refs++;
     ref->ns = pidns_get(pf->ns);
     ref->pid = pf->pid;
+    ref->thread = pf->thread;
     return 0;
 }
 
@@ -183,25 +196,31 @@ void pidfd_ref_put(struct pidfd_ref *ref)
     ref->ns = NULL;
 }
 
+process_t *pidfd_process(process_t *t)
+{
+    return t && t->pid == t->tgid ? t : NULL;
+}
+
 long sys_pidfd_open(struct isr_params *params)
 {
     int32_t pid = (int32_t)SC_ARG(params, 0);
     uint32_t flags = (uint32_t)SC_ARG(params, 1);
+    int thread = (flags & PIDFD_THREAD) != 0;
     struct pidfd *pf;
     process_t *p;
     int fd;
 
-    if (pid <= 0 || (flags & ~(uint32_t)PIDFD_NONBLOCK) != 0) {
+    if ((flags & ~(uint32_t)(PIDFD_NONBLOCK | PIDFD_THREAD)) != 0 || pid <= 0) {
         return -EINVAL;
     }
     p = proc_named((uint32_t)pid);
-    if (!p || p->state == PROC_UNUSED) {
+    if (proc_tid_gone(p)) {
         return -ESRCH;
     }
-    if (p->pid != p->tgid) {
+    if (!thread && p->pid != p->tgid) {
         return -EINVAL;
     }
-    pf = pidfd_new(p);
+    pf = pidfd_new(p, thread);
     if (!pf) {
         return -ENOMEM;
     }
@@ -246,6 +265,7 @@ long sys_pidfd_getfd(struct isr_params *params)
     if (rc != 0) {
         return rc;
     }
+    t = pidfd_process(t);
     if (!t) {
         return -ESRCH;
     }

@@ -1790,7 +1790,9 @@ static int32_t setns_commit(process_t *self, struct ns_common *const ns[NS_KINDS
 }
 
 /**
- * setns of a pidfd naming `target`, NULL once reaped, with `flags` the
+ * setns of a pidfd naming `target`, the thread whose namespaces are joined,
+ * NULL once it has let its id go and -ESRCH, as is a thread that has ended,
+ * whose namespaces Linux's exit_task_namespaces has let go, with `flags` the
  * CLONE_NEW flags of the kinds to join: the caller joins each of those
  * namespaces of the target, or none of them, as on Linux. A user namespace
  * is joined first, under setns_user's rules, and the other kinds are then
@@ -1809,7 +1811,7 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
     if (flags == 0 || (flags & ~(unsigned long)CLONE_NEW_ANY)) {
         return -EINVAL;
     }
-    if (!target || target->tg->live == 0) {
+    if (!target || target->state == PROC_ZOMBIE || target->tg->live == 0) {
         return -ESRCH;
     }
     for (k = 0; k < NS_KINDS; k++) {

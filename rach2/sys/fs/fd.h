@@ -105,6 +105,7 @@ typedef enum {
  * belongs to one descriptor. The values are Linux's O_* bits, the same on
  * i386 and x86-64, so fcntl passes them through.
  */
+#define OFD_EXCL     0200     /* O_EXCL: kept only by a pidfd of a thread, PIDFD_THREAD */
 #define OFD_APPEND   02000    /* O_APPEND: every write goes to end-of-file */
 #define OFD_NONBLOCK 04000    /* O_NONBLOCK: a would-block returns -EAGAIN */
 #define OFD_DSYNC    010000   /* O_DSYNC: a write ends with an fdatasync */

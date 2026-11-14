@@ -940,6 +940,16 @@ void free_process(process_t *proc);
  * numbering, that of the first PID namespace; NULL for none. */
 process_t *get_process(uint32_t pid);
 
+/**
+ * Whether the thread `t` no longer has its id as Linux counts ids: no
+ * record, a free one, or a thread that has ended, does not lead its process
+ * and is not traced, whose record waits for `reap_threads` where Linux's
+ * release_task has already let its id go. An ended leader keeps its id
+ * until its parent reaps the process, and an ended traced thread until its
+ * tracer's wait, as a zombie keeps its pid on Linux.
+ */
+int proc_tid_gone(const process_t *t);
+
 /** Whether the record `p` is a kernel thread: a live record with no
  * address space that was started at a kernel entry (`setup_process_stack`),
  * marked in a call or not, or that is in no call; a user thread is without

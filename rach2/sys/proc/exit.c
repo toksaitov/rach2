@@ -51,8 +51,10 @@
  * adjustments, detaches its tracees, ends the rest of a PID namespace whose
  * init it is, gives the children to init, and gives the process its
  * status, the group's when exit_group or a fatal signal ended it and the
- * leader's own otherwise. It wakes the pidfds polled for the process's
- * end, and then tells the parent; or, when a process other than the parent
+ * leader's own otherwise. Each thread wakes the pidfds polled for its
+ * group, those of the process at its last thread's end and those of the one
+ * thread at that thread's, as Linux's exit_notify calls do_notify_pidfd;
+ * the last then tells the parent; or, when a process other than the parent
  * traces the leader, the tracer, whose wait reports the end first and then
  * tells the parent (`ptrace_exit_release`).
  * Each thread keeps the group's status once a group exit has begun, as
@@ -97,11 +99,11 @@ int proc_exit_cleanup(int32_t status)
     } else if (self != leader) {
         proc_dead_threads++;
     }
+    wq_wake_all(&tg->exited);
     if (tg->live != 0) {
         wq_wake_all(&tg->gone);
         return 0;
     }
-    wq_wake_all(&tg->exited);
     if ((leader->ptrace & PT_TRACED) && leader->tracer != leader->parent_pid) {
         if (leader != self) {
             ptrace_exit_notify(leader);

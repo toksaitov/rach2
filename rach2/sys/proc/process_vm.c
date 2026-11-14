@@ -357,7 +357,8 @@ static long pvm_advise(struct mm *mm, uintptr_t start, uintptr_t len, uint32_t a
  * process_madvise(pidfd, iovec, vlen, advice, flags), in Linux 6.12's order
  * of checks: flags other than 0 are -EINVAL; the vector is read and checked
  * as readv's (`pvm_import`, `pvm_local_total`); a descriptor that is no
- * pidfd is -EBADF and a process reaped -ESRCH; advice other than
+ * pidfd is -EBADF and a process reaped, or a pidfd of a thread that does
+ * not lead its process, -ESRCH; advice other than
  * MADV_WILLNEED, MADV_COLD, MADV_PAGEOUT and MADV_COLLAPSE is -EINVAL; a
  * process without an address space -ESRCH, one the caller may not read
  * (`pvm_may_read`) -EACCES, and another process's space without privilege,
@@ -386,6 +387,9 @@ long sys_process_madvise(isr_params_t *params)
         return rc;
     }
     rc = pidfd_lookup((int)SC_ARG(params, 0), &t, NULL);
+    if (rc == 0) {
+        t = pidfd_process(t);
+    }
     if (rc == 0 && !t) {
         rc = -ESRCH;
     } else if (rc == 0 && advice != PMADV_WILLNEED && advice != PMADV_COLD &&
@@ -462,7 +466,8 @@ static void pvm_reap(struct mm *mm)
 /**
  * process_mrelease(pidfd, flags), as Linux 6.12 answers it: flags other
  * than 0 are -EINVAL; a descriptor that is no pidfd -EBADF; a process
- * reaped, or with no thread left that has an address space, -ESRCH. The
+ * reaped, a pidfd of a thread that does not lead its process, or a process
+ * with no thread left that has an address space, -ESRCH. The
  * space of a dying process (`pvm_dying`), of which every other process
  * that shares it is dying too, has its private pages freed (`pvm_reap`)
  * and the answer is 0, as it is again once they are; a process that is
@@ -483,6 +488,7 @@ long sys_process_mrelease(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
+    t = pidfd_process(t);
     for (p = proc_list; t && p && !mm; p = p->next) {
         if (p->tg == t->tg && p->state != PROC_ZOMBIE) {
             mm = p->mm;
