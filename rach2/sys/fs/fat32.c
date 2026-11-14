@@ -2194,24 +2194,31 @@ static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index)
     return fat_put_bytes(fm, off, &e5, 1, FAT_THROUGH);
 }
 
-/** Free the entries of the name `sc` found: the short entry first, then its
- * long entries from the one nearest it back to the first, so that a reader
- * never trusts the long ones without the short one. */
-static int free_name_entries(struct fat_mount *fm, uint32_t dir_first, const struct fat_scan *sc)
+/** Free the entries of a name from entry `start` to its short entry at
+ * `index`: the short entry first, then the long entries from the one nearest
+ * it back to the first, so that a reader never trusts the long ones without
+ * the short one. 0, or -errno. */
+static int free_entries(struct fat_mount *fm, uint32_t dir_first, uint32_t start, uint32_t index)
 {
     uint32_t i;
-    int rc = free_entry(fm, dir_first, sc->index);
+    int rc = free_entry(fm, dir_first, index);
 
     if (rc != 0) {
         return rc;
     }
-    for (i = sc->index; i > sc->start; i--) {
+    for (i = index; i > start; i--) {
         rc = free_entry(fm, dir_first, i - 1);
         if (rc != 0) {
             return rc;
         }
     }
     return 0;
+}
+
+/** Free the entries of the name `sc` found, by `free_entries`. */
+static int free_name_entries(struct fat_mount *fm, uint32_t dir_first, const struct fat_scan *sc)
+{
+    return free_entries(fm, dir_first, sc->start, sc->index);
 }
 
 /** Dispose of the chain at `first` of the file whose entry `index` of the
@@ -2270,7 +2277,12 @@ static int fat_unlink(struct vfs_mount *mnt, void *dir, const char *name)
  * The `mkdir` operation: the new cluster is taken zeroed and ended, with
  * `.` and `..`, and reaches the medium, with the parent's room for the
  * name, before the parent's entry is written last; a crash before that
- * leaks the cluster.
+ * leaks the cluster. A failure before the entries' write frees the cluster.
+ * A failed write of the entries may leave the short entry in the cache,
+ * dirty (`bcache_write`), for a later sync to put on the disk, so the
+ * cluster is then freed only once the entries are written free again;
+ * otherwise it stays allocated, lost clusters a check frees, or the
+ * directory itself when the entry reaches the disk.
  */
 static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
@@ -2329,17 +2341,18 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (rc == 0) {
         rc = sync_disk(fm);
     }
-    if (rc == 0) {
-        n.dir_cluster = parent_cluster;
-        n.index = index + nn->entries;
-        entry_of(&n, raw);
-        rc = write_name_entries(fm, d->first, index, nn, raw);
-    }
     if (rc != 0) {
         free_chain(fm, c);
         return rc;
     }
-    return 0;
+    n.dir_cluster = parent_cluster;
+    n.index = index + nn->entries;
+    entry_of(&n, raw);
+    rc = write_name_entries(fm, d->first, index, nn, raw);
+    if (rc != 0 && free_entries(fm, d->first, index, index + nn->entries) == 0) {
+        free_chain(fm, c);
+    }
+    return rc;
 }
 
 /** The `rmdir` operation. A directory a node holds, as a description or a

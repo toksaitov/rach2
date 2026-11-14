@@ -2828,8 +2828,13 @@ static int ex_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
  * The `mkdir` of `vfs_ops`: a new directory `name` in `dir`, the root for
  * NULL. Its one cluster is taken, zeroed through and ended first, and the
  * set naming it written last, so a crash between leaves the cluster lost and
- * names nothing; a failure after the cluster was taken frees it. `mode` is
- * not kept. The caller holds the mount's namespace lock. 0, or the errors of
+ * names nothing. A failure before the set's write frees the cluster. A
+ * failed write of the set may leave it published in the cache, dirty
+ * (`bcache_write`), for a later sync to put on the disk, so the cluster is
+ * then freed only once `set_retire` has written the set retired again;
+ * otherwise it stays allocated, lost clusters the mount's check counts, or
+ * the directory itself when the set reaches the disk. `mode` is not kept.
+ * The caller holds the mount's namespace lock. 0, or the errors of
  * `ex_create`.
  */
 static int ex_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
@@ -2859,10 +2864,12 @@ static int ex_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (rc == 0) {
         rc = free_slots(em, d, count, &index);
     }
-    if (rc == 0) {
-        rc = set_store(em, d, index, count, 1);
-    }
     if (rc != 0) {
+        free_chain(em, c, 0, 0);
+        return rc;
+    }
+    rc = set_store(em, d, index, count, 1);
+    if (rc != 0 && set_retire(em, d, index, count) == 0) {
         free_chain(em, c, 0, 0);
     }
     return rc;
