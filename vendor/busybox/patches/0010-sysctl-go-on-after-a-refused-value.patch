@@ -7,12 +7,27 @@ from being applied. The write is now checked with full_write: a refused
 value is reported as an open failure is and fails that setting alone, and
 -p goes on with every later line and every later file.
 sysctl_handle_preload_file returns failure when any setting in its file
-failed and sysctl_main returns EXIT_FAILURE when any -p file did, as
-procps 4.0.4 does.
+failed or the file cannot be opened, and sysctl_main returns EXIT_FAILURE
+when any -p file did, as procps 4.0.4 does. With -e an unknown key is
+ignored in the status as well as in the messages, as procps's -e is.
 
 --- a/procps/sysctl.c
 +++ b/procps/sysctl.c
-@@ -191,7 +191,14 @@
+@@ -170,8 +170,11 @@
+ 	if (fd < 0) {
+ 		switch (errno) {
+ 		case ENOENT:
+-			if (option_mask32 & FLAG_SHOW_KEY_ERRORS)
+-				bb_error_msg("error: '%s' is an unknown key", outname);
++			/* -e ignores an unknown key, in the status too, as
++			 * procps does. */
++			if (!(option_mask32 & FLAG_SHOW_KEY_ERRORS))
++				goto end;
++			bb_error_msg("error: '%s' is an unknown key", outname);
+ 			break;
+ 		case EACCES:
+ 			/* Happens for write-only settings, e.g. net.ipv6.route.flush */
+@@ -191,7 +194,14 @@
  
  	if (writing) {
  //TODO: procps 3.2.7 writes "value\n", note trailing "\n"
@@ -28,15 +43,21 @@ procps 4.0.4 does.
  		close(fd);
  		if (!(option_mask32 & FLAG_QUIET)) {
  			if (option_mask32 & FLAG_SHOW_KEYS)
-@@ -274,6 +281,7 @@
- static int sysctl_handle_preload_file(const char *filename)
- {
+@@ -276,8 +286,12 @@
  	char *token[2];
  	parser_t *parser;
  	int parse_flags;
 +	int retval = 0;
  
-@@ -302,8 +310,8 @@
+ 	parser = config_open(filename);
++	/* A file that cannot be opened fails -p, as in procps. */
++	if (!parser)
++		retval = EXIT_FAILURE;
+ 	/* Must do it _after_ config_open(): */
+ 	xchdir("/proc/sys");
+ 
+@@ -301,11 +315,11 @@
+ 		*tp++ = '=';
  		overlapping_strcpy(tp, token[1]);
  
 -		sysctl_act_on_setting(token[0]);
@@ -47,7 +68,10 @@ procps 4.0.4 does.
 -	return 0;
 +	return retval;
  }
-@@ -322,13 +330,14 @@
+ 
+ int sysctl_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+@@ -321,16 +335,17 @@
+ 
  	if (opt & FLAG_PRELOAD_FILE) {
  		int cur_dir_fd;
 +		retval = 0;
@@ -64,3 +88,5 @@ procps 4.0.4 does.
 -		return 0; /* procps-ng 3.3.10 does not flag parse errors */
 +		return retval;
  	}
+ 	xchdir("/proc/sys");
+ 	if (opt & (FLAG_TABLE_FORMAT | FLAG_SHOW_ALL)) {
