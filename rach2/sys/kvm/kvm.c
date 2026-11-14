@@ -956,13 +956,9 @@ static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
 static int params_start(int backend)
 {
     struct sysfs_attr attr;
-    int module_dir, dir = 0, h, made = -1;
+    int dir = 0, h, made = -1;
     uint32_t i;
 
-    module_dir = sysfs_add_dir(sysfs_anchor(SYSFS_ROOT, 0), "module");
-    if (module_dir < 0) {
-        return module_dir;
-    }
     attr.mode = 0444u;
     attr.show = param_show;
     attr.store = NULL;
@@ -971,8 +967,7 @@ static int params_start(int backend)
             continue;
         }
         if (kvm_params[i].module != made) {
-            h = sysfs_add_dir(module_dir, kvm_modules[kvm_params[i].module]);
-            dir = h < 0 ? h : sysfs_add_dir(h, "parameters");
+            dir = sysfs_module_params(kvm_modules[kvm_params[i].module]);
             if (dir < 0) {
                 return dir;
             }

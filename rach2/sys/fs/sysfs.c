@@ -596,6 +596,15 @@ static int dir_made(int parent, const char *name)
     return h > 0 ? h : sysfs_add_dir(parent, name);
 }
 
+int sysfs_module_params(const char *module)
+{
+    int dir = sysfs_anchor(SYSFS_ROOT, 0);
+
+    dir = dir < 0 ? dir : dir_made(dir, "module");
+    dir = dir < 0 ? dir : dir_made(dir, module);
+    return dir < 0 ? dir : dir_made(dir, "parameters");
+}
+
 int sysfs_pci_bind(int key, const char *driver)
 {
     char name[SYSFS_NAME_MAX];

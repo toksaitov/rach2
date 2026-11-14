@@ -78,6 +78,12 @@ struct sysfs_attr {
  * are given `obj` and `arg`; its handle, or -errno as `sysfs_add_dir`. */
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg);
 
+/** The directory /sys/module/MODULE/parameters of the module `module`,
+ * made with the directories above it on its first use, where a driver adds
+ * its module's parameters as Linux's module_param shows them; its handle,
+ * or -errno as `sysfs_add_dir`. */
+int sysfs_module_params(const char *module);
+
 /** Add the link `name` below `parent` to the directory or anchor `target`,
  * which a path through the link reaches and `readlink` gives relative to
  * the link; its handle, or -errno as `sysfs_add_dir`, and -ENOENT for a
