@@ -55,8 +55,10 @@
  * leading one, whose F_GETFL is O_RDWR with O_EXCL, Linux's PIDFD_THREAD,
  * which a pidfd of the process lacks; without the flag the second thread is
  * EINVAL, as Linux 6.12 refuses a thread that does not lead its process. By
- * the second thread's pidfd, pidfd_getfd and PIDFD_SIGNAL_PROCESS_GROUP are
- * ESRCH and waitid with P_PIDFD ECHILD. pidfd_send_signal with no flag on it
+ * the second thread's pidfd, pidfd_getfd copies the thread's descriptor of
+ * a pipe's write end, close-on-exec, and a byte written through the copy
+ * is read from the pipe, PIDFD_SIGNAL_PROCESS_GROUP is ESRCH and waitid
+ * with P_PIDFD ECHILD. pidfd_send_signal with no flag on it
  * posts a blocked SIGUSR1 to that thread alone, which the caller does not
  * find pending and the thread takes with SI_TKILL; on the leading thread's,
  * to the leading thread alone with SI_TKILL, and with
@@ -67,7 +69,11 @@
  * child whose leading thread ends while another runs has a thread pidfd of
  * that leader that polls readable and not hung up, and a process pidfd that
  * does not poll readable until the child is killed; once it is reaped both
- * poll hung up.
+ * poll hung up. Once a thread has ended and a new thread is given its id
+ * through ns_last_pid, the ended thread's pidfd is ESRCH to
+ * pidfd_send_signal and polls readable and hung up. An edge-triggered
+ * epoll of a thread's pidfd reports its end once, and a sibling's end,
+ * which its own pidfd polls readable after, gives it no second event.
  *
  * Touching 64 new pages raises getrusage's ru_minflt by at least 64; a
  * mapping of 64 pages made with MAP_POPULATE raises it by at least 64 in the
@@ -87,10 +93,10 @@
  * `queued-code-permission`, `scope-thread`, `scope-thread-group`,
  * `scope-process-group`, `scope-group-reaped`, `scope-group-reused`,
  * `reaped-namespace`, `tkill-order`, `thread-open`, `thread-refusals`,
- * `thread-signal`, `leader-thread-signal`, `thread-poll` and
- * `leader-thread-poll`. The first failure fails its assertion and leaves
- * the rest not run. The program runs as root, which the write of
- * ns_last_pid needs.
+ * `thread-signal`, `leader-thread-signal`, `thread-poll`,
+ * `leader-thread-poll`, `thread-id-reused` and `thread-edge`. The first
+ * failure fails its assertion and leaves the rest not run. The program runs
+ * as root, which the write of ns_last_pid needs.
  */
 
 #define _GNU_SOURCE
@@ -105,6 +111,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/epoll.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -1032,13 +1039,22 @@ static int usr1_pending_here(void)
     return sigpending(&set) == 0 && sigismember(&set, SIGUSR1);
 }
 
-/** The refusals of the pidfd `tfd` of the second thread, while it runs. */
+/** pidfd_getfd through the pidfd `tfd` of the second thread, while it
+ * runs, and the refusals of that pidfd: the copy of the write end of
+ * `to_main` carries a byte to its read end. */
 static int thread_refusals(int tfd)
 {
     siginfo_t si;
+    char b = 0;
+    int copy = (int)syscall(SYS_pidfd_getfd, (long)tfd, (long)to_main[1], 0L);
+    int ok = copy >= 0 && fcntl(copy, F_GETFD) == FD_CLOEXEC && write(copy, "c", 1) == 1 &&
+             read(to_main[0], &b, 1) == 1 && b == 'c';
 
+    if (copy >= 0) {
+        close(copy);
+    }
     memset(&si, 0, sizeof(si));
-    return syscall(SYS_pidfd_getfd, (long)tfd, 0L, 0L) == -1 && errno == ESRCH &&
+    return ok &&
            syscall(SYS_pidfd_send_signal, (long)tfd, 0L, NULL, PIDFD_SIGNAL_PROCESS_GROUP) == -1 &&
            errno == ESRCH && waitid(P_PIDFD, (id_t)tfd, &si, WEXITED | WNOHANG) == -1 &&
            errno == ECHILD;
@@ -1102,8 +1118,8 @@ static int thread_opens(int self, int lfd, pid_t tid, int *tfd)
     }
     report_held();
     if (!thread_refusals(*tfd)) {
-        return fail("pidfd_getfd, PIDFD_SIGNAL_PROCESS_GROUP or waitid by a pidfd of a thread that "
-                    "does not lead its process was not refused");
+        return fail("pidfd_getfd by a pidfd of a thread that does not lead its process copied no "
+                    "descriptor, or PIDFD_SIGNAL_PROCESS_GROUP or waitid by it was not refused");
     }
     report_held();
     return 0;
@@ -1183,6 +1199,167 @@ static int leader_thread_poll(void)
     return 0;
 }
 
+/* A thread that sends its id on `ready` and ends at the go on `go`. */
+struct waiter {
+    int ready[2];
+    int go[2];
+    pthread_t t;
+    pid_t tid;
+};
+
+/** The waiter's thread: send its id, then wait for the go. */
+static void *waiting_thread(void *arg)
+{
+    struct waiter *w = arg;
+    pid_t tid = (pid_t)syscall(SYS_gettid);
+    char b;
+
+    if (write(w->ready[1], &tid, sizeof(tid)) == (ssize_t)sizeof(tid)) {
+        (void)read(w->go[0], &b, 1);
+    }
+    return NULL;
+}
+
+/** Start the waiter `w`: 0 with its id in `w->tid`, or -1 with nothing
+ * left open. */
+static int waiter_start(struct waiter *w)
+{
+    if (pipe(w->ready) != 0) {
+        return -1;
+    }
+    if (pipe(w->go) != 0) {
+        close(w->ready[0]);
+        close(w->ready[1]);
+        return -1;
+    }
+    if (pthread_create(&w->t, NULL, waiting_thread, w) == 0) {
+        if (read(w->ready[0], &w->tid, sizeof(w->tid)) == (ssize_t)sizeof(w->tid)) {
+            return 0;
+        }
+        close(w->go[1]);
+        pthread_join(w->t, NULL);
+        w->go[1] = -1;
+    }
+    close(w->ready[0]);
+    close(w->ready[1]);
+    close(w->go[0]);
+    if (w->go[1] >= 0) {
+        close(w->go[1]);
+    }
+    return -1;
+}
+
+/** Give the waiter `w` its go, join it and close its pipes: whether it was
+ * joined. */
+static int waiter_stop(struct waiter *w)
+{
+    int ok = write(w->go[1], "g", 1) == 1 && pthread_join(w->t, NULL) == 0;
+
+    close(w->ready[0]);
+    close(w->ready[1]);
+    close(w->go[0]);
+    close(w->go[1]);
+    return ok;
+}
+
+/** A waiter whose id is `want`, which is free, made by setting ns_last_pid
+ * below it: 0, or -1 when a few tries, which another fork may race or a
+ * record not yet freed may hold the id through, give the id to none. */
+static int waiter_start_at(struct waiter *w, pid_t want)
+{
+    int tries;
+
+    for (tries = 0; tries < 8; tries++) {
+        if (set_last_pid(want - 1) != 0 || waiter_start(w) != 0) {
+            return -1;
+        }
+        if (w->tid == want) {
+            return 0;
+        }
+        waiter_stop(w);
+    }
+    return -1;
+}
+
+/** The pidfd of a thread that has ended, once a new thread of the process
+ * is given its id through ns_last_pid: ESRCH to pidfd_send_signal and hung
+ * up, as Linux's pidfd keeps the ended thread's struct pid, which the new
+ * thread does not share. */
+static int thread_id_reused(void)
+{
+    struct waiter w;
+    pid_t tid;
+    int tfd, ok;
+
+    if (waiter_start(&w) != 0) {
+        return fail("could not start a second thread");
+    }
+    tid = w.tid;
+    tfd = (int)syscall(SYS_pidfd_open, (long)tid, (long)PIDFD_THREAD);
+    if (!waiter_stop(&w) || tfd < 0) {
+        if (tfd >= 0) {
+            close(tfd);
+        }
+        return fail("pidfd_open with PIDFD_THREAD of a second thread, or its join");
+    }
+    if (waiter_start_at(&w, tid) != 0) {
+        close(tfd);
+        return fail("could not give a new thread the id of one that ended");
+    }
+    ok = syscall(SYS_pidfd_send_signal, (long)tfd, 0L, NULL, 0L) == -1 && errno == ESRCH &&
+         polls(tfd, POLLIN | POLLHUP, 0);
+    ok = waiter_stop(&w) && ok;
+    close(tfd);
+    if (!ok) {
+        return fail("the pidfd of a thread that ended named a new thread given its id");
+    }
+    report_held();
+    return 0;
+}
+
+/** An edge-triggered epoll of the pidfd of a thread that has ended, whose
+ * event epoll_wait has taken: the end of a sibling gives it no second
+ * event, as Linux wakes only the ended thread's struct pid. The sibling's
+ * own pidfd polls readable once its end has woken its pollers. */
+static int thread_edge(void)
+{
+    struct waiter a, b;
+    struct epoll_event ev, out;
+    int afd, bfd, ep, ok;
+
+    if (waiter_start(&a) != 0) {
+        return fail("could not start a second thread");
+    }
+    if (waiter_start(&b) != 0) {
+        waiter_stop(&a);
+        return fail("could not start a third thread");
+    }
+    afd = (int)syscall(SYS_pidfd_open, (long)a.tid, (long)PIDFD_THREAD);
+    bfd = (int)syscall(SYS_pidfd_open, (long)b.tid, (long)PIDFD_THREAD);
+    ep = epoll_create1(EPOLL_CLOEXEC);
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLET;
+    ok = afd >= 0 && bfd >= 0 && ep >= 0 && epoll_ctl(ep, EPOLL_CTL_ADD, afd, &ev) == 0 &&
+         epoll_wait(ep, &out, 1, 0) == 0;
+    ok = waiter_stop(&a) && ok && epoll_wait(ep, &out, 1, -1) == 1 && (out.events & EPOLLIN) != 0;
+    ok = waiter_stop(&b) && ok && polls(bfd, POLLIN, 1) && epoll_wait(ep, &out, 1, 0) == 0;
+    if (ep >= 0) {
+        close(ep);
+    }
+    if (afd >= 0) {
+        close(afd);
+    }
+    if (bfd >= 0) {
+        close(bfd);
+    }
+    if (!ok) {
+        return fail("an edge-triggered epoll of an ended thread's pidfd had a second event when a "
+                    "sibling ended");
+    }
+    report_held();
+    return 0;
+}
+
 /** pidfd_open's PIDFD_THREAD: the rows of a pidfd of one thread. */
 static int threads(void)
 {
@@ -1205,7 +1382,13 @@ static int threads(void)
     sigprocmask(SIG_SETMASK, &old, NULL);
     close(lfd);
     close(self);
-    return rc != 0 ? rc : leader_thread_poll();
+    if (rc == 0) {
+        rc = leader_thread_poll();
+    }
+    if (rc == 0) {
+        rc = thread_id_reused();
+    }
+    return rc != 0 ? rc : thread_edge();
 }
 
 /** Begin the report and plan its assertions, in the order they are
@@ -1225,7 +1408,7 @@ static void plan(void)
         "scope-group-reaped", "scope-group-reused",   "reaped-namespace",
         "tkill-order",        "thread-open",          "thread-refusals",
         "thread-signal",      "leader-thread-signal", "thread-poll",
-        "leader-thread-poll"};
+        "leader-thread-poll", "thread-id-reused",     "thread-edge"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.pidfdmusl"));
