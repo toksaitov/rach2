@@ -805,19 +805,23 @@ int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, in
 
 /** Every poller waits on `input_wq`, which a hangup wakes, as Linux's
  * n_tty_poll waits on its queues whatever was asked: one that asks for no
- * events is still told of the hangup of its description. A poller for POLLIN
- * or for POLLOUT on stopped output drains the pump, so that input and a
- * VSTART from COM1 reach the discipline while it waits. The poll core calls
- * with interrupts on, and the console's tick and interrupt fill the
- * discipline, so the pump and the reads run with interrupts off, as in
- * tty_inq. */
+ * events is still told of the hangup of its description. Every poller that
+ * may sleep drains the pump at each scan, as Linux's n_tty takes input into
+ * its buffer whoever waits: one for POLLIN, one for POLLOUT on stopped
+ * output, so that a VSTART from COM1 reaches the discipline, and one for
+ * neither, which waits for the hangup alone, since the console's tick and
+ * interrupt leave the ring to a poller woken on its queue
+ * (`console_deliver`). A poller for POLLOUT alone on running output is
+ * answered at once and drains nothing. The poll core calls with interrupts
+ * on, and the console's tick and interrupt fill the discipline, so the pump
+ * and the reads run with interrupts off, as in tty_inq. */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq)
 {
     short revents = 0;
     uint32_t flags = kirq_save();
 
     *wq = &t->input_wq;
-    if ((events & POLLIN) || ((events & POLLOUT) && t->ldisc.stopped)) {
+    if ((events & POLLIN) || !(events & POLLOUT) || t->ldisc.stopped) {
         if (t->pump) {
             t->pump(t);
         }
@@ -1257,15 +1261,16 @@ static uint64_t read_at; /* next serial backup poll, in kernel ticks */
  * while the handler has left the line high at its pass limit: under KVM a
  * reading is a port access that QEMU serves in its own process, which
  * waits for QEMU's main lock, some 200 us and up to 8 ms while a virtio GPU
- * works, with the big lock held. A reader or poller
+ * works, with the big lock held. A reader, writer or poller
  * parked on the console, which nothing else would tell of serial input while
  * another process runs, is then only woken: it drains and echoes the ring in
- * its own context (console_pump). With nobody parked and a session owning the
- * console, as when a foreground job runs while its shell waits in wait4, the
- * ring is drained here without echo (console_pump_irq), so a serial ^C/^Z still
- * reaches the foreground group and type-ahead waits for the next reader. With
- * no session the ring is left to the kernel debug shell, which polls it itself
- * and releases the console (tty_set_session 0) whenever it regains control.
+ * its own context (console_pump). With no such thread parked and a session
+ * owning the console, as when a foreground job runs while its shell waits in
+ * wait4 or only an epoll registration watches, the ring is drained here
+ * without echo (console_pump_irq), so a serial ^C/^Z still reaches the
+ * foreground group and type-ahead waits for the next reader. With no session
+ * the ring is left to the kernel debug shell, which polls it itself and
+ * releases the console (tty_set_session 0) whenever it regains control.
  */
 void tty_console_poll(void)
 {
@@ -1289,18 +1294,39 @@ static void console_service(void)
     console_deliver();
 }
 
-/** Wake a reader or poller parked on the console when the ring holds bytes,
- * or with none parked and a session owning the console drain the ring into
- * the discipline, as `tty_console_poll` describes; no port access. */
+/** Note, in the int `arg` points at, that a waiter with a thread is on the
+ * console's queue (`wq_each_waiter`). */
+static void console_thread_seen(struct process *p, uint64_t arg)
+{
+    (void)p;
+    *(int *)(uintptr_t)arg = 1;
+}
+
+/**
+ * When the ring holds bytes, drain it into the discipline without echo if a
+ * session owns the console and no waiter on its queue has a thread, then
+ * wake the queue, as `tty_console_poll` describes; no port access. A waiter
+ * with a thread, a reader, a writer on stopped output or a poll(2) or
+ * select poller, drains the ring itself once woken, with echo (tty_wait_cond,
+ * tty_output_cond, tty_poll). An epoll registration has none: it is told of
+ * the wake and nothing more, and its set's owner may never wait, so the
+ * ring is drained here, as Linux's n_tty takes input whoever waits.
+ */
 static void console_deliver(void)
 {
+    int thread = 0;
+
     if (!serial_data_available() || console_serial_closed()) {
         return;
     }
+    if (console_tty.sid != 0) {
+        wq_each_waiter(&console_tty.input_wq, console_thread_seen, (uint64_t)(uintptr_t)&thread);
+        if (!thread) {
+            console_pump_irq(&console_tty);
+        }
+    }
     if (wq_active(&console_tty.input_wq)) {
         wq_wake_all(&console_tty.input_wq);
-    } else if (console_tty.sid != 0) {
-        console_pump_irq(&console_tty);
     }
 }
 

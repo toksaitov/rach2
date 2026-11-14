@@ -67,7 +67,9 @@
  * At the end of the console's session leader, a reader asleep across it
  * takes none of the next session's line though that line came before the
  * reader ran, a writer whose copy from the user spans it writes nothing
- * more, and a poller that asked for no events is woken.
+ * more, and a poller that asked for no events is woken. Serial input and a
+ * Ctrl-C that come while the console's only waiter is such a poller, or an
+ * epoll registration, reach the discipline and the foreground group.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -2064,6 +2066,89 @@ static void hangup_poll_no_events(void)
     tty_set_session(&console_tty, 0, 0, 0);
 }
 
+/* The wakes `hup_rec_wake` has been called for. */
+static int hup_wakes;
+
+/** The function of a record that stays on its queue through every wake, a
+ * poll(2) poller's or an epoll registration's: count the wake and make the
+ * record's thread ready, when it has one. */
+static int hup_rec_wake(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus)
+{
+    (void)nest;
+    if (kinds & WQ_FREE) {
+        return 0;
+    }
+    hup_wakes++;
+    return w->proc ? wq_ready_deferred(w->proc, cpus) : 0;
+}
+
+/** Put `text` in COM1's ring and run the console's tick, with interrupts
+ * off as the tick has them. */
+static void hup_serial(const char *text)
+{
+    serial_bytes = text;
+    serial_pos = 0;
+    serial_len = length(text);
+    irq_enabled = 0;
+    tty_console_poll();
+    irq_enabled = 1;
+}
+
+/**
+ * Serial input and a Ctrl-C that come while the console's only waiter
+ * waits for the hangup alone reach the discipline and the foreground group.
+ * A poll(2) poller's record, which stays on the queue through the wake,
+ * leaves the ring to the scan the wake brings, which drains it; an epoll
+ * registration, which has no thread, has the tick drain it.
+ */
+static void hangup_poller_drains(void)
+{
+    struct wq_waiter epoll_rec;
+    wait_queue_t *wq = NULL;
+    process_t *saved = proc_list;
+
+    setup_pair();
+    tty_console_init();
+    proc_list = &producer;
+    producer.next = NULL;
+    producer.tgid = producer.pgid = 2;
+    tty_set_session(&console_tty, 1, 2, 0);
+    signals_expected = 1;
+    hup_wakes = 0;
+
+    CHECK(tty_poll(&console_tty, 0, &wq) == 0 && wq == &console_tty.input_wq,
+          "a console poll for no events gives a queue");
+    poller.waiter.func = hup_rec_wake;
+    poller.state = PROC_BLOCKED;
+    wq_poll_add(&console_tty.input_wq, &poller.waiter);
+    hup_serial("ab\n");
+    CHECK(poller.state == PROC_READY && wq_active(&console_tty.input_wq),
+          "serial input wakes a poller for no events, which stays on the queue");
+    CHECK(tty_poll(&console_tty, 0, &wq) == 0 && serial_pos == serial_len &&
+              n_tty_readable(&console_tty.ldisc),
+          "the scan of a poller for no events drains COM1 into the discipline");
+    poller.state = PROC_BLOCKED;
+    hup_serial("\003");
+    CHECK(poller.state == PROC_READY && tty_poll(&console_tty, 0, &wq) == 0 &&
+              signals_posted == 1 && last_signo == SIGINT,
+          "a COM1 Ctrl-C reaches the foreground group through a poller for no events");
+    wq_poll_remove(&console_tty.input_wq, &poller.waiter);
+
+    clear(&epoll_rec, sizeof(epoll_rec));
+    epoll_rec.func = hup_rec_wake;
+    wq_entry_add(&console_tty.input_wq, &epoll_rec);
+    hup_wakes = 0;
+    hup_serial("cd\n");
+    CHECK(serial_pos == serial_len && n_tty_readable(&console_tty.ldisc) && hup_wakes == 1,
+          "the tick drains COM1 while only an epoll registration waits, and wakes it");
+    hup_serial("\003");
+    CHECK(serial_pos == serial_len && signals_posted == 2 && last_signo == SIGINT,
+          "a COM1 Ctrl-C reaches the foreground group while only an epoll registration waits");
+    wq_entry_remove(&epoll_rec);
+    tty_set_session(&console_tty, 0, 0, 0);
+    proc_list = saved;
+}
+
 int main(void)
 {
     read_wakes_poll();
@@ -2107,6 +2192,7 @@ int main(void)
     hangup_next_session();
     hangup_writer();
     hangup_poll_no_events();
+    hangup_poller_drains();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }
