@@ -39,6 +39,13 @@
  * after ten, and kbd_init then keeps translation on, so that on a portable
  * chassis a later BAT starts the probe at RESET_DIS, never at GETID.
  *
+ * The slow controller's rows hold the input buffer full after WRITE_CONFIG
+ * past the wait's bound: the read fails, kbd_init keeps translation on, and
+ * the configuration byte, owed with translation on, goes out before the
+ * LED command's 0xED, or before another controller command, so that no
+ * keyboard byte becomes the configuration; while the controller holds the
+ * command nothing is written, and no byte is written into a full buffer.
+ *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DTICK_HZ=1000
  *
@@ -78,7 +85,10 @@ static int fails;
  * byte written, or the row lets time pass (`catch_up`), as a controller
  * that runs its commands in order answers. The byte after WRITE_CONFIG is
  * the configuration, kept in `config_written`, not a byte for the
- * keyboard. */
+ * keyboard. After WRITE_CONFIG the input buffer reads full for the next
+ * `slow_takes` reads of the status, as a controller slow to take the
+ * command, and `input_busy` counts those left; a byte written meanwhile
+ * counts in `overruns`. */
 #define MAX_WRITES 256
 #define MAX_QUEUED 64
 static uint8_t model_status;
@@ -95,6 +105,9 @@ static int late_answers;
 static int pending = -1;
 static int config_next;
 static int config_written = -1;
+static int slow_takes;
+static int input_busy;
+static int overruns;
 static int data_reads;
 static int port_writes;
 static uint8_t data_writes[MAX_WRITES];
@@ -119,7 +132,12 @@ uint8_t inb(uint16_t port)
     int i;
 
     if (port == PS2_STATUS_PORT) {
-        return n_queued ? queued_status[0] : model_status;
+        byte = n_queued ? queued_status[0] : model_status;
+        if (input_busy > 0) {
+            input_busy--;
+            byte |= PS2_STATUS_INPUT_FULL;
+        }
+        return byte;
     }
     if (port == PS2_DATA_PORT) {
         data_reads++;
@@ -149,6 +167,9 @@ static void catch_up(void)
 void outb(uint16_t port, uint8_t val)
 {
     port_writes++;
+    if (input_busy > 0) {
+        overruns++;
+    }
     catch_up();
     if (port == PS2_CMD_PORT && val == PS2_CMD_READ_CONFIG) {
         config_commands++;
@@ -166,6 +187,9 @@ void outb(uint16_t port, uint8_t val)
     }
     if (port == PS2_CMD_PORT) {
         config_next = val == PS2_CMD_WRITE_CONFIG;
+        if (config_next) {
+            input_busy = slow_takes;
+        }
     } else if (port == PS2_DATA_PORT && config_next) {
         config_written = val;
         config_next = 0;
@@ -829,6 +853,52 @@ static void failed_config_rows(void)
     chassis = 0;
 }
 
+/** A controller that takes WRITE_CONFIG only after the wait's bound: the
+ * configuration read fails with the byte owed, and the owed byte, with
+ * translation on as kbd_init takes it, goes out before any other byte. */
+static void slow_config_rows(void)
+{
+    int w = warnings, d;
+
+    slow_takes = PS2_TIMEOUT + 10;
+    n_queued = 0;
+    config_written = -1;
+    overruns = 0;
+    CHECK("a WRITE_CONFIG not taken in time fails the read", ps2_read_config() == -1);
+    CHECK("with its byte not yet written", config_written == -1 && overruns == 0);
+    input_busy = 0;
+    /* 0xA8, the mouse driver's ENABLE_MOUSE. */
+    CHECK("a controller command first gives the owed byte",
+          ps2_send_command(0xA8) == 0 && config_written == 0x45 && overruns == 0);
+
+    config_written = -1;
+    kbd.translated = 0;
+    kbd_init();
+    CHECK("kbd_init keeps translation on, with a warning",
+          kbd.translated == 1 && warnings == w + 1 && config_written == -1);
+    input_busy = 0;
+    CHECK("the first tick writes the owed byte, no 0xED",
+          tick_at(T(3600)) == 0 && config_written == 0x45);
+    CHECK("then the LEDs go to the keyboard", leds_sent(T(3601)) && config_written == 0x45);
+
+    /* A controller whose configuration has translation off and that holds
+     * WRITE_CONFIG through the LED command's first ticks. */
+    model_config = 0x05;
+    slow_takes = 3 * PS2_TIMEOUT;
+    config_written = -1;
+    kbd.translated = 0;
+    kbd_init();
+    d = n_data_writes;
+    CHECK("nothing goes while the controller holds the command",
+          tick_at(T(3700)) == 0 && tick_at(T(3701)) == 0 && config_written == -1);
+    input_busy = 0;
+    CHECK("once it takes it, the owed byte says translation is on",
+          tick_at(T(3702)) == 0 && config_written == 0x45 && kbd.translated == 1);
+    CHECK("and the LEDs follow", leds_sent(T(3703)) && n_data_writes == d + 2 && overruns == 0);
+    model_config = 0x45;
+    slow_takes = 0;
+}
+
 int main(void)
 {
     /* A mouse byte, the first of a packet. */
@@ -866,6 +936,7 @@ int main(void)
     config_rows();
     unstable_rows();
     failed_config_rows();
+    slow_config_rows();
 
     if (fails == 0) {
         printf("ps2kbd-test: pass\n");
