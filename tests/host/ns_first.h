@@ -67,12 +67,13 @@ int ns_owner_privileged(const process_t *p, const struct ns_common *c)
 }
 
 /** Word `i` of the capabilities `p` holds in the first user namespace:
- * those it has not lost for effective uid 0, none for another. */
+ * those it has not lost for effective uid 0 or while its ambient set grants
+ * them (`amb_granted`), none for another. */
 uint32_t cap_word(const process_t *p, uint32_t i)
 {
     uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
 
-    return i < 2 && p->euid == 0 ? full & ~p->cap_lost[i] : 0u;
+    return i < 2 && (p->euid == 0 || p->amb_granted) ? full & ~p->cap_lost[i] : 0u;
 }
 
 /** Whether `p` holds `cap` in its effective set, as `cap_eff_word` gives it

@@ -7,7 +7,8 @@
  * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
  * and uevents of a DRM device and of a driver's own attributes, links, PCI
  * identity and resources, a writable attribute's offset and the mode its
- * open is judged by, a PCI function's resourceN files, and those of a PS/2
+ * open is judged by, the directions an attribute's open refuses before the
+ * capability overrides, a PCI function's resourceN files, and those of a PS/2
  * keyboard and a USB mouse (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
@@ -208,6 +209,23 @@ int32_t devfs_rtc_set_wakealarm(int64_t at)
 
 /** No attribute the rows write sends a uevent. */
 int sysfs_attr_uevent(int node, int attr)
+{
+    (void)node;
+    (void)attr;
+    return 0;
+}
+
+/** Whether a /sys file takes writes, as synthfs.c judges it: a registered
+ * attribute by sysfs.c, and of the fixed files those of transparent huge
+ * pages but the page-directory size. */
+int sysfs_file_writable(int node, int key, int attr)
+{
+    return node == SYSFS_REG ? sysfs_node_writable(key)
+                             : node == SYSFS_THP && attr != SYSFS_THP_PMD_SIZE;
+}
+
+/** No file these rows open is a private DMI field. */
+int sysfs_attr_private(int node, int attr)
 {
     (void)node;
     (void)attr;
@@ -3650,6 +3668,68 @@ static int reg_file_open(int h, int flags)
     return procfs_open_sysattr(SYSFS_REG, h, 0, flags);
 }
 
+/** Whether a read open of the registered attribute `h` is refused, as
+ * `procfs_open` asks before it renders the file. */
+static int reg_read_refused(int h)
+{
+    struct vpath vp;
+
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = SYSFS_REG;
+    vp.syskey = h;
+    return sysfs_read_refused(&vp);
+}
+
+/**
+ * A write-only attribute of mode 0200, with no show as VFIO's and i915's
+ * bind files have none and with one, and a read-only one of 0444 with a
+ * store, opened as Linux's kernfs_fop_open judges them after
+ * generic_permission: a direction the file does not support is refused
+ * before CAP_DAC_OVERRIDE can pass it, so that a user holding it opens
+ * neither write-only file to read, alone or with a write, and no caller
+ * writes the read-only one, while the mode lets root write a write-only
+ * one, and the capability a user.
+ */
+static void sysattr_direction_rows(void)
+{
+    static const struct sysfs_attr bind = {"bind", 0200u, NULL, store_flag};
+    static const struct sysfs_attr shown = {"shown", 0200u, show_flag, store_flag};
+    static const struct sysfs_attr stored = {"stored", 0444u, show_flag, store_flag};
+    int dir = sysfs_add_dir(sysfs_anchor(SYSFS_KERNEL, 0), "direction_rows");
+    int hb = sysfs_add_attr(dir, &bind, NULL, 0);
+    int hs = sysfs_add_attr(dir, &shown, NULL, 0);
+    int hr = sysfs_add_attr(dir, &stored, NULL, 0);
+
+    check(dir > 0 && hb > 0 && hs > 0 && hr > 0,
+          "the write-only and read-only attributes are made");
+    process.euid = 1000;
+    process.fsuid = 1000;
+    process.amb_granted = 1;
+    check(cap_holds(&process, CAP_DAC_OVERRIDE), "a user holds CAP_DAC_OVERRIDE as ambient");
+    check(reg_file_open(hb, 2) == -EACCES,
+          "and is refused an O_RDWR open of a write-only file with no show");
+    check(reg_file_open(hs, 2) == -EACCES, "and of a write-only file with one");
+    check(reg_read_refused(hb) && reg_read_refused(hs),
+          "and an O_RDONLY open of either, though the capability passes the mode");
+    check(reg_file_open(hb, 1) == 0, "while its O_WRONLY open passes by the capability");
+    procfs_close(&entries[0]);
+    check(reg_file_open(hr, 1) == -EACCES && reg_file_open(hr, 2) == -EACCES,
+          "and a read-only file with a store refuses it a write");
+    check(!reg_read_refused(hr), "but reads to it");
+    process.amb_granted = 0;
+    check(reg_file_open(hb, 1) == -EACCES && reg_read_refused(hb),
+          "a user without the capability opens the write-only file neither way");
+    process.euid = 0;
+    process.fsuid = 0;
+    check(reg_file_open(hb, 1) == 0, "root writes the write-only file by its mode");
+    procfs_close(&entries[0]);
+    check(reg_file_open(hb, 2) == -EACCES && reg_read_refused(hb),
+          "and opens it to read neither alone nor with a write");
+    check(reg_file_open(hr, 1) == -EACCES, "nor does root write the read-only file");
+    sysfs_remove(dir);
+}
+
 /**
  * A writable attribute of mode 0644, as /sys/module/printk/parameters has
  * them, through its descriptor, as Linux's kernfs gives it: a write moves
@@ -3658,7 +3738,8 @@ static int reg_file_open(int h, int flags)
  * page moves it a page; and the open is judged by the mode and the
  * file-system user id, so that root after setfsuid(1000) is refused and
  * uid 0 without CAP_SYS_ADMIN, or a user whose file-system id is root's,
- * writes it as its owner.
+ * writes it as its owner. The rows of the directions an open refuses
+ * follow (`sysattr_direction_rows`).
  */
 static void sysattr_file_rows(void)
 {
@@ -3713,6 +3794,7 @@ static void sysattr_file_rows(void)
     process.euid = 0;
     process.fsuid = 0;
     sysfs_remove(dir);
+    sysattr_direction_rows();
 }
 
 /** Whether the uevent of the PCI function `key` begins with `first`. */
