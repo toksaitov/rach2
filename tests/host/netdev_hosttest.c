@@ -11,9 +11,9 @@
  * machine that has two cards; the other two need drivers that misbehave on
  * purpose, which is what this file supplies.
  *
- * The table's drivers are replaced by models: the virtio driver, its first,
- * by one with no card, and the three after it by three whose verdicts the
- * test sets. netdev.c is compiled against them, so what is under test is
+ * The table's drivers are replaced by models: the first three by three
+ * whose verdicts the test sets, and the virtio driver, its last, by one with
+ * no card. netdev.c is compiled against them, so what is under test is
  * the walk itself: the order, the skip, the stop, and the binding.
  *
  * The test exits with the number of failed checks, at most 255.
@@ -222,8 +222,8 @@ static void nothing(void *dev)
     info_calls++;
 }
 
-/** Probe the virtio model, which has no card: the table's first driver is
- * asked before the three, notes '0' and answers NETDEV_ABSENT. */
+/** Probe the virtio model, which has no card: the table's last driver is
+ * asked after the three, notes '0' and answers NETDEV_ABSENT. */
 static int virtio_init(struct netdev *nd, int nth)
 {
     (void)nd;
@@ -234,8 +234,8 @@ static int virtio_init(struct netdev *nd, int nth)
 
 /* The names netdev.c links against. The real ones live in the four driver
    files; here they are these models, which is what puts the walk under test
-   rather than any card. The virtio driver, first in the table, is a model
-   with no card, so the three after it are the ones the rows set. */
+   rather than any card. The virtio driver, last in the table, is a model
+   with no card, so the three before it are the ones the rows set. */
 const struct netdev_ops virtio_net_netdev = {"virtio", virtio_init, 0, 0, 0, 0, 0, 0};
 const struct netdev_ops rtl8139_netdev = {"first",    first_init, first_tx,    0,
                                           first_stop, first_link, first_error, nothing};
@@ -347,7 +347,7 @@ static void injected_failure(void)
     refused_card = 0;
     CHECK(netdev_probe() == 1 && netdev_count() == 2,
           "cards after a refusal still become interfaces");
-    CHECK(m_second.inits == 2 && m_second.stops == 1 && same(trace, "012T23"),
+    CHECK(m_second.inits == 2 && m_second.stops == 1 && same(trace, "12T230"),
           "probing continues with the same driver and later drivers");
     CHECK(same(netdev_error(), "the card was refused on the boot line"),
           "successful cards preserve the refusal reason");
@@ -431,7 +431,7 @@ int main(void)
     CHECK(same(netdev_name(netdev_at(0)), "first"), "the first driver's card is the first");
     CHECK(same(netdev_name(netdev_at(1)), "second"), "the second driver's is next");
     CHECK(same(netdev_name(netdev_at(2)), "third"), "and the third driver's last");
-    CHECK(same(trace, "0123"), "every driver is asked, in the table's order");
+    CHECK(same(trace, "1230"), "every driver is asked, in the table's order");
     CHECK(netdev_at(0)->index == 1 && netdev_at(1)->index == 2 && netdev_at(2)->index == 3,
           "and they are numbered from one, as a packet socket binds to them");
     CHECK(same(netdev_at(0)->name, "eth0") && same(netdev_at(1)->name, "eth1") &&
@@ -442,7 +442,7 @@ int main(void)
     CHECK(netdev_probe() == 1, "a machine whose first card is absent still brings up the rest");
     CHECK(netdev_count() == 2, "one interface for each card that was there");
     CHECK(same(netdev_name(netdev_first()), "second"), "the next driver's card is the first");
-    CHECK(same(trace, "0123"), "the absent card is asked once and passed over");
+    CHECK(same(trace, "1230"), "the absent card is asked once and passed over");
     CHECK(m_first.stops == 0,
           "a card that is not in the machine is not silenced, having never started");
 
@@ -455,7 +455,7 @@ int main(void)
     CHECK(m_third.inits == 1, "the driver after the one that failed is still asked");
     CHECK(m_second.stops == 1,
           "the card that failed is silenced, because nothing will ever reach it again");
-    CHECK(same(trace, "012T3"), "it is silenced before the walk goes on");
+    CHECK(same(trace, "12T30"), "it is silenced before the walk goes on");
 
     reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_ABSENT);
     CHECK(netdev_probe() == 0, "a machine with no supported card binds nothing");
