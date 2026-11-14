@@ -18,8 +18,15 @@
  * and check that no window was mapped at a region's address.
  *
  * Each function taken is shown bound to virtio-pci once, however often it
- * is found, with its virtio device added to the bus once, named virtioN for
- * its place among the virtio functions, and one "bind" uevent.
+ * is found, with its virtio device added to the bus once, which names it,
+ * and one "bind" uevent.
+ *
+ * The probe rows add three functions after them: a GPU without its common
+ * capability, which is refused, unbound and unmapped and adds nothing to
+ * the bus, so that the next function takes the next free name; a
+ * virtio-net function, which has its device though no driver asks for it;
+ * and a GPU whose bus registration fails, which leaves no window mapped,
+ * its command word as it was and no record.
  *
  * The interrupt rows give every MSI-X entry a remapped message, release
  * them before vectors, and force vector and remapper allocation failures.
@@ -54,7 +61,7 @@ static int failures;
 
 /* ---- the model: two functions on bus 0 ---- */
 
-#define FUNCTIONS 2
+#define FUNCTIONS 5
 #define TIB       ((uint64_t)1 << 40)
 #define GIB       ((uint64_t)1 << 30)
 
@@ -63,7 +70,7 @@ static uint64_t bar_size[FUNCTIONS][6];
 static pci_device_t fns[FUNCTIONS];
 static uint8_t windows[FUNCTIONS][0x4000] __attribute__((aligned(4096)));
 static uint64_t mapped[16];
-static int nmapped;
+static int nmapped, live_maps;
 static int msix_ready, msix_held, msix_enabled, vector_limit = 3;
 static int reject_entry = -1;
 static unsigned live_vectors, remapped_entries;
@@ -142,12 +149,12 @@ uint64_t pci_bar_size64(const pci_device_t *d, int i)
 
 void pci_enable_bus_master(pci_device_t *dev)
 {
-    (void)dev;
+    space[fn_of(dev->bus, dev->device)][PCI_COMMAND] |= PCI_CMD_BUS_MASTER;
 }
 
 void pci_enable_memory_space(pci_device_t *dev)
 {
-    (void)dev;
+    space[fn_of(dev->bus, dev->device)][PCI_COMMAND] |= PCI_CMD_MEMORY_SPACE;
 }
 
 /** Expose three entries in the notification BAR's unused final page. */
@@ -220,10 +227,30 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
         uint64_t base = pci_bar_address64(&fns[f], 2);
 
         if (phys >= base && phys + size <= base + sizeof(windows[f])) {
+            live_maps++;
             return (uintptr_t)&windows[f][phys - base];
         }
     }
     return 0;
+}
+
+/** Give back a window `map_mmio` mapped. */
+void mmio_unmap(uintptr_t va, size_t size)
+{
+    CHECK(va >= (uintptr_t)windows && va + size <= (uintptr_t)windows + sizeof(windows) &&
+              live_maps > 0,
+          "a window given back is one the transport mapped");
+    live_maps--;
+}
+
+void *kzalloc(size_t size)
+{
+    return __builtin_calloc(1, size);
+}
+
+void kfree(void *ptr)
+{
+    __builtin_free(ptr);
 }
 
 uintptr_t paging_virt_to_phys(uintptr_t va)
@@ -304,10 +331,12 @@ void sysfs_pci_unbind(int key)
 }
 
 /* The "bind" uevents of functions, and the devices added to the virtio bus:
- * how many, the last one's name and vendor. */
-static int bind_events, bus_adds;
+ * how many, the last one's name, vendor and type, the numbers taken, and
+ * what the next addition fails with, or 0. */
+static int bind_events, bus_adds, bus_error;
 static char bus_name[16];
-static unsigned bus_vendor;
+static unsigned bus_vendor, bus_type;
+static int bus_taken[10];
 
 /** Count a function's "bind" uevent. */
 int32_t sysfs_pci_uevent(int key, const char *action)
@@ -325,13 +354,30 @@ int sysfs_anchor(int node, int key)
     return key + 1;
 }
 
-/** Record a device added to the virtio bus, as virtio_bus.c adds one. */
+/** Record a device added to the virtio bus and name it virtioN for the
+ * lowest N free, as virtio_bus.c does, which virtio_bus_hosttest.c tests;
+ * or fail with `bus_error`. */
 int virtio_bus_add(struct virtio_dev *d, int parent, uint16_t vendor)
 {
+    int n;
+
     CHECK(parent == bound_key + 1, "the virtio device goes below its function");
+    if (bus_error) {
+        n = bus_error;
+        bus_error = 0;
+        return n;
+    }
+    for (n = 0; n < 9 && bus_taken[n]; n++) {
+    }
+    bus_taken[n] = 1;
+    k_memcpy(d->bus_name, "virtio", 6);
+    d->bus_name[6] = (char)('0' + n);
+    d->bus_name[7] = '\0';
+    d->name = d->bus_name;
     bus_adds++;
     k_memcpy(bus_name, d->name, k_strlen(d->name) + 1);
     bus_vendor = vendor;
+    bus_type = d->id;
     return 0;
 }
 
@@ -503,7 +549,8 @@ static void refusals(void)
     add_cap(1, 8, 4, 5, 0, 0);
     add_cap(1, 8, 4, 6, GIB, 2 * GIB);
     log_text[0] = 0;
-    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 1, &d) == 0, "the second function is taken");
+    CHECK(virtio_pci_probe() == 1, "the probe takes the second function");
+    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 1, &d) == 0, "the second function is found");
     CHECK(bus_adds == 2 && strcmp(bus_name, "virtio1") == 0,
           "the second virtio function's device is virtio1");
     CHECK(d->ops->shm_region(d, 2, &addr, &len) == -ENOENT, "a region in an I/O BAR is refused");
@@ -513,10 +560,10 @@ static void refusals(void)
     CHECK(d->ops->shm_region(d, 5, &addr, &len) == -ENOENT, "an empty region is refused");
     CHECK(d->ops->shm_region(d, 6, &addr, &len) == 0 && addr == base + GIB && len == 2 * GIB,
           "a region within its BAR is taken at its offset");
-    CHECK(strstr(log_text, "refused: virtio1: shared memory 3: offset 0x0c0000000") != 0 &&
-              strstr(log_text, "refused: virtio1: shared memory 4:") != 0 &&
-              strstr(log_text, "refused: virtio1: shared memory 5:") != 0,
-          "each refusal is recorded with the region and its BAR");
+    CHECK(strstr(log_text, "refused: 00:01.0: shared memory 3: offset 0x0c0000000") != 0 &&
+              strstr(log_text, "refused: 00:01.0: shared memory 4:") != 0 &&
+              strstr(log_text, "refused: 00:01.0: shared memory 5:") != 0,
+          "each refusal is recorded by the function's address with the region and its BAR");
     CHECK(!was_mapped(base + GIB), "no region is mapped");
 }
 
@@ -559,12 +606,60 @@ static void interrupts(void)
     reject_entry = -1;
 }
 
+/** A GPU without its common capability, refused, and a virtio-net function
+ * after it, which takes the next free name and has its device though no
+ * driver asks for one, as Linux's virtio-pci takes every virtio function. */
+static void probe_refused(void)
+{
+    struct virtio_dev *d;
+    int adds = bus_adds, maps = live_maps;
+
+    make_function(2, 0xFC000000u);
+    space[2][0x40 + 3] = 0; /* the common capability's type, now none */
+    make_function(3, 0xFB000000u);
+    fns[3].device_id = 0x1041;
+    space[3][2] = 0x41;
+    log_text[0] = 0;
+    CHECK(virtio_pci_probe() == 1, "the probe takes the virtio-net function alone");
+    CHECK(strstr(log_text, "refused: 00:02.0: no common capability in a memory BAR") != 0 &&
+              bound_key != (2 << 3) && live_maps == maps + 4 && space[2][PCI_COMMAND] == 0,
+          "the GPU without its common capability is refused, unbound, unmapped and untouched, "
+          "and only virtio-net's four windows are mapped");
+    CHECK(bus_adds == adds + 1 && strcmp(bus_name, "virtio2") == 0 && bus_type == VIRTIO_ID_NET,
+          "the refused function takes no number, so virtio-net is virtio2");
+    CHECK(virtio_pci_find(VIRTIO_ID_NET, 0, &d) == 0 && strcmp(d->name, "virtio2") == 0,
+          "virtio-net is found as virtio2");
+    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 2, &d) == -ENODEV, "the refused GPU is no device");
+}
+
+/** A GPU whose registration on the bus fails: every window it mapped given
+ * back, its command word as it was before the probe, and no record. */
+static void probe_bus_fails(void)
+{
+    struct virtio_dev *d;
+    int adds = bus_adds, maps = live_maps;
+
+    make_function(4, 0xFA000000u);
+    space[4][PCI_COMMAND] = 0x0003;
+    bus_error = -ENOMEM;
+    log_text[0] = 0;
+    CHECK(virtio_pci_probe() == 0, "the probe takes nothing");
+    CHECK(strstr(log_text, "refused: 00:04.0: not added to the virtio bus: error -12") != 0 &&
+              bus_adds == adds && bound_key == -1,
+          "the failed registration is recorded and the function unbound");
+    CHECK(live_maps == maps && space[4][PCI_COMMAND] == 0x03 && space[4][PCI_COMMAND + 1] == 0,
+          "no window stays mapped and the command word is as it was");
+    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 2, &d) == -ENODEV, "the function has no record");
+}
+
 /** Run the rows. */
 int main(void)
 {
     qemu_layout();
     refusals();
     interrupts();
+    probe_refused();
+    probe_bus_fails();
     printf("virtio-pci-shm-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }

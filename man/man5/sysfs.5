@@ -267,8 +267,10 @@ for others.
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/virtioN
 The virtio device of a virtio function the kernel has taken, bound to
 .Ql virtio-pci ,
-as Linux's virtio-pci adds it: N is the function's place among the bus's
-virtio functions, from 0.
+as Linux's virtio-pci adds it at boot for every virtio function, whether a
+driver of its type exists or not: N is the lowest number no other virtio
+device holds when the function is taken, from 0, so that a function the
+kernel refuses takes none, and a device removed gives its number back.
 It has
 .Pa device
 and

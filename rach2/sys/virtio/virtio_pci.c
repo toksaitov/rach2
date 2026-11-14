@@ -14,6 +14,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../lib/spinlock.h"
+#include "../mm/kheap.h"
 #include "../mm/paging.h"
 
 /* The vendor of every virtio-pci function, and its device ids (virtio 1.2,
@@ -72,9 +73,8 @@
 #define VP_ISR_QUEUE  0x1u
 #define VP_ISR_CONFIG 0x2u
 
-/* Devices this transport holds, the interrupt slots they share, the shared
- * memory regions kept for each, and the most of a window that is mapped. */
-#define VP_DEVICES 4
+/* The interrupt slots the devices share, the shared memory regions kept
+ * for each, and the most of a window that is mapped. */
 #define VP_SLOTS   16
 #define VP_SHM     4
 #define VP_MAP_MAX 0x10000u
@@ -95,8 +95,9 @@
 
 /* A window a capability names, as mapped. */
 struct vp_window {
-    uintptr_t base; /* the kernel's address, 0 when absent */
-    uint32_t len;   /* the bytes mapped */
+    uintptr_t base; /* the kernel's address once mapped, else the physical */
+    uint32_t len;   /* the bytes mapped, 0 when absent */
+    int mapped;     /* whether `base` is the kernel's, given to mmio_unmap */
     uint8_t bar;
     uint32_t offset; /* into the BAR */
 };
@@ -106,10 +107,13 @@ struct vp_shm {
     uint64_t addr, len;
 };
 
+/* A function the transport took, kept from its probe for the life of the
+ * kernel on the list `vp_list`, in the order of the bus. */
 struct virtio_pci {
     struct virtio_dev dev;
     pci_device_t pci;
-    int used;
+    struct virtio_pci *next;
+    uint16_t command; /* the function's command word before the probe */
     struct vp_window common, notify, isr, device;
     uint32_t notify_mult; /* bytes between queues' notification addresses */
     struct vp_shm shm[VP_SHM];
@@ -121,7 +125,6 @@ struct virtio_pci {
     int slot[VIRTIO_MAX_QUEUES + 1];   /* by MSI-X entry, -1 when none */
     int nentries;                      /* entries in use */
     int line;                          /* the INTx line, while on it */
-    char name[16];                     /* "virtioN" */
 };
 
 /* An interrupt slot: which device and target its vector serves, and how
@@ -132,7 +135,8 @@ struct vp_slot {
     uint32_t inflight;
 };
 
-static struct virtio_pci vp_devs[VP_DEVICES];
+static struct virtio_pci *vp_list;
+static int vp_probed; /* whether `virtio_pci_probe` has run */
 static struct vp_slot vp_slots[VP_SLOTS];
 
 /* The slots' owners and counts, which a handler without the big lock reads
@@ -331,14 +335,14 @@ static int vp_queue_enable(struct virtio_dev *d, struct virtqueue *vq)
     vp_w16(vp, VP_QUEUE_SIZE, vq->size);
     vp_w16(vp, VP_QUEUE_MSIX_VECTOR, entry);
     if (vp_r16(vp, VP_QUEUE_MSIX_VECTOR) != entry) {
-        klog(KLOG_ERR, "virtio", "queue: %s: %d: the device refused msi-x entry %d", vp->name,
+        klog(KLOG_ERR, "virtio", "queue: %s: %d: the device refused msi-x entry %d", vp->dev.name,
              vq->index, entry);
         return -EIO;
     }
     off = (uint32_t)vp_r16(vp, VP_QUEUE_NOTIFY_OFF) * vp->notify_mult;
     if (off > vp->notify.len || vp->notify.len - off < 2u) {
-        klog(KLOG_ERR, "virtio", "queue: %s: %d: its notification lies past the window", vp->name,
-             vq->index);
+        klog(KLOG_ERR, "virtio", "queue: %s: %d: its notification lies past the window",
+             vp->dev.name, vq->index);
         return -EIO;
     }
     vp_w64(vp, VP_QUEUE_DESC, vq->desc_addr);
@@ -420,14 +424,13 @@ static const isr_handler_t vp_slot_handler[VP_SLOTS] = {
  * its ISR status, which says whether it raised the line and why. */
 static void vp_intx(isr_params_t *p)
 {
-    int i;
+    struct virtio_pci *vp;
 
     (void)p;
-    for (i = 0; i < VP_DEVICES; i++) {
-        struct virtio_pci *vp = &vp_devs[i];
+    for (vp = vp_list; vp; vp = vp->next) {
         uint8_t isr;
 
-        if (!vp->used || vp->mode != VP_IRQ_INTX) {
+        if (vp->mode != VP_IRQ_INTX) {
             continue;
         }
         isr = mmio_read8(vp->isr.base);
@@ -551,7 +554,7 @@ static int vp_msix_take(struct virtio_pci *vp, int n)
         vp->vector[e] = vector;
         vp->slot[e] = k;
         vp->nentries = e + 1;
-        register_isr_handler((uint8_t)vector, vp_slot_handler[k], vp->name);
+        register_isr_handler((uint8_t)vector, vp_slot_handler[k], vp->dev.name);
         if (vp->dev.irq_unlocked) {
             isr_register_flags((uint8_t)vector, vp_slot_handler[k], ISR_UNLOCKED);
         }
@@ -590,7 +593,7 @@ static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
             klog(KLOG_INFO, "virtio",
                  "interrupts: %s: msi-x, a vector for each of %d queues "
                  "and the configuration",
-                 vp->name, nqueues);
+                 vp->dev.name, nqueues);
             return 0;
         }
     }
@@ -601,7 +604,7 @@ static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
             klog(KLOG_INFO, "virtio",
                  "interrupts: %s: msi-x, one vector for the queues and one "
                  "for the configuration",
-                 vp->name);
+                 vp->dev.name);
             return 0;
         }
     }
@@ -611,14 +614,14 @@ static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
         vp->mode = VP_IRQ_POLLED;
         vp_intx_disable(vp, 1);
         klog(KLOG_INFO, "virtio", "interrupts: %s: polled, no msi-x and no interrupt line",
-             vp->name);
+             vp->dev.name);
         return 0;
     }
     vp->mode = VP_IRQ_INTX;
     vp->line = vp->pci.irq;
     register_isr_handler((uint8_t)IRQ_VECTOR(vp->line), vp_intx, "virtio");
     vp_intx_disable(vp, 0);
-    klog(KLOG_INFO, "virtio", "interrupts: %s: intx line %d", vp->name, vp->line);
+    klog(KLOG_INFO, "virtio", "interrupts: %s: intx line %d", vp->dev.name, vp->line);
     return 0;
 }
 
@@ -793,8 +796,9 @@ static void vp_take_window(struct virtio_pci *vp, uint8_t cap, struct vp_window 
  * Record the shared memory region the capability at `cap` names, as Linux's
  * vp_get_shm_region takes it: the first capability of each id whose BAR is
  * a programmed memory BAR, and whose offset and length lie within the BAR
- * without wrapping. Another is passed over with a record. The region is
- * not mapped; a driver maps the pieces it needs.
+ * without wrapping. Another is passed over with a record by the function's
+ * address, as Linux's dev_err names the PCI device. The region is not
+ * mapped; a driver maps the pieces it needs.
  */
 static void vp_take_shm(struct virtio_pci *vp, uint8_t cap)
 {
@@ -824,9 +828,10 @@ static void vp_take_shm(struct virtio_pci *vp, uint8_t cap)
     size = pci_bar_size64(p, bar);
     if (phys == 0 || len == 0 || off + len < off || off + len > size) {
         klog(KLOG_WARN, "virtio",
-             "refused: %s: shared memory %d: offset 0x%x%08x, length 0x%x%08x, bar %d of 0x%x%08x",
-             vp->name, id, (unsigned)(off >> 32), (unsigned)off, (unsigned)(len >> 32),
-             (unsigned)len, bar, (unsigned)(size >> 32), (unsigned)size);
+             "refused: %02x:%02x.%d: shared memory %d: offset 0x%x%08x, length 0x%x%08x, bar %d "
+             "of 0x%x%08x",
+             p->bus, p->device, p->function, id, (unsigned)(off >> 32), (unsigned)off,
+             (unsigned)(len >> 32), (unsigned)len, bar, (unsigned)(size >> 32), (unsigned)size);
         return;
     }
     vp->shm[vp->nshm].id = id;
@@ -886,15 +891,38 @@ static int vp_map_window(struct vp_window *w)
         return -1;
     }
     w->base = va;
+    w->mapped = 1;
     return 0;
 }
 
-/** Read, check and map the capabilities of the function `vp->pci`, and log
- * them. Returns 0, or -EIO with the reason in the log. */
-static int vp_attach(struct virtio_pci *vp)
+/** Give back the windows of `vp` that `vp_map_window` mapped, and put back
+ * the command word the function had before `vp_attach`, so that a function
+ * the transport does not keep decodes and masters as it did. */
+static void vp_detach(struct virtio_pci *vp)
 {
+    struct vp_window *w[4];
     int i;
 
+    w[0] = &vp->common;
+    w[1] = &vp->notify;
+    w[2] = &vp->isr;
+    w[3] = &vp->device;
+    for (i = 0; i < 4; i++) {
+        if (w[i]->mapped) {
+            mmio_unmap(w[i]->base, w[i]->len);
+            w[i]->mapped = 0;
+        }
+    }
+    pci_write_config16(vp->pci.bus, vp->pci.device, vp->pci.function, PCI_COMMAND, vp->command);
+}
+
+/** Read, check and map the capabilities of the function `vp->pci`, and turn
+ * on its memory decoding and bus mastering. Returns 0, or -EIO with the
+ * reason in the log and every window it mapped given back
+ * (`vp_detach`). */
+static int vp_attach(struct virtio_pci *vp)
+{
+    vp->command = pci_read_config16(vp->pci.bus, vp->pci.device, vp->pci.function, PCI_COMMAND);
     vp_read_caps(vp);
     if (vp->common.len < VP_COMMON_MIN || vp->notify.len == 0 || vp->isr.len == 0) {
         klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: no %s capability in a memory BAR",
@@ -908,24 +936,33 @@ static int vp_attach(struct virtio_pci *vp)
         vp_map_window(&vp->isr) != 0 || vp_map_window(&vp->device) != 0) {
         klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: a window could not be mapped",
              vp->pci.bus, vp->pci.device, vp->pci.function);
+        vp_detach(vp);
         return -EIO;
     }
     pci_enable_memory_space(&vp->pci);
     pci_enable_bus_master(&vp->pci);
     vp_intx_disable(vp, 1);
+    return 0;
+}
+
+/** Log the windows and shared memory of `vp`, by the name the bus gave
+ * it. */
+static void vp_log_found(struct virtio_pci *vp)
+{
+    int i;
+
     klog(KLOG_INFO, "virtio",
          "found: %s: %02x:%02x.%d %s, common bar %d+0x%x, notify bar %d+0x%x x%d, isr bar "
          "%d+0x%x, device %s%d+0x%x, %d queues",
-         vp->name, vp->pci.bus, vp->pci.device, vp->pci.function, vp_type_name(vp->dev.id),
+         vp->dev.name, vp->pci.bus, vp->pci.device, vp->pci.function, vp_type_name(vp->dev.id),
          vp->common.bar, vp->common.offset, vp->notify.bar, vp->notify.offset, vp->notify_mult,
          vp->isr.bar, vp->isr.offset, vp->device.len ? "bar " : "none ", vp->device.bar,
          vp->device.offset, vp_r16(vp, VP_NUM_QUEUES));
     for (i = 0; i < vp->nshm; i++) {
-        klog(KLOG_INFO, "virtio", "found: %s: shared memory %d at %x:%x, %d MiB", vp->name,
+        klog(KLOG_INFO, "virtio", "found: %s: shared memory %d at %x:%x, %d MiB", vp->dev.name,
              vp->shm[i].id, (unsigned)(vp->shm[i].addr >> 32), (unsigned)vp->shm[i].addr,
              (int)(vp->shm[i].len >> 20));
     }
-    return 0;
 }
 
 /** Whether `p` is a function Linux's virtio-pci takes: Red Hat's vendor id
@@ -936,93 +973,109 @@ static int vp_is_virtio(const pci_device_t *p)
            p->device_id <= VP_MODERN_LAST;
 }
 
-/** Name `vp` "virtioN", N the number of virtio functions before its own
- * among the `at` first of the bus, as Linux's register_virtio_device
- * numbers the devices virtio-pci takes in the order of the bus. */
-static void vp_name(struct virtio_pci *vp, int at)
+/** The record of the function `p`, or NULL when the transport has none. */
+static struct virtio_pci *vp_record(const pci_device_t *p)
 {
-    pci_device_t q;
-    char digits[11];
-    int n = 0, i, len = 6;
+    struct virtio_pci *vp;
 
-    for (i = 0; i < at && pci_nth(i, &q); i++) {
-        n += vp_is_virtio(&q);
+    for (vp = vp_list; vp; vp = vp->next) {
+        if (vp->pci.bus == p->bus && vp->pci.device == p->device &&
+            vp->pci.function == p->function) {
+            return vp;
+        }
     }
-    k_memcpy(vp->name, "virtio", 6);
-    i = 0;
-    do {
-        digits[i++] = (char)('0' + n % 10);
-        n /= 10;
-    } while (n && i < (int)sizeof(digits));
-    while (i > 0 && len < (int)sizeof(vp->name) - 1) {
-        vp->name[len++] = digits[--i];
+    return NULL;
+}
+
+/**
+ * Take the virtio function `p`, as Linux's virtio_pci_probe does: show it
+ * bound to virtio-pci, read and map its capabilities, add its virtio device
+ * to the bus, which names it, log it and send the function's "bind" uevent,
+ * and keep its record at the end of `vp_list`. 0, or -ENOMEM, -EIO, or the
+ * error of showing it in /sys, with nothing of it left: no record, binding,
+ * window or change to its command word.
+ */
+static int vp_probe_one(const pci_device_t *p)
+{
+    struct virtio_pci *vp, **tail;
+    int k, key;
+
+    vp = (struct virtio_pci *)kzalloc(sizeof(*vp));
+    if (!vp) {
+        klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: no memory for its record", p->bus,
+             p->device, p->function);
+        return -ENOMEM;
     }
-    vp->name[len] = '\0';
+    vp->pci = *p;
+    vp->dev.ops = &vp_ops;
+    vp->dev.notify_unlocked = 1;
+    vp->dev.transport = vp;
+    vp->dev.id = vp_type(p);
+    vp->dev.name = "virtio";
+    for (k = 0; k <= VIRTIO_MAX_QUEUES; k++) {
+        vp->vector[k] = -1;
+        vp->slot[k] = -1;
+    }
+    /* Linux's driver core shows the binding before virtio_pci_probe
+     * runs, and a failure to show it fails the probe. */
+    key = (int)p->bus << 8 | p->device << 3 | p->function;
+    k = sysfs_pci_bind(key, "virtio-pci");
+    if (k != 0) {
+        klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: driver link not added: error %d", p->bus,
+             p->device, p->function, k);
+        kfree(vp);
+        return k;
+    }
+    k = vp_attach(vp);
+    if (k == 0) {
+        k = virtio_bus_add(&vp->dev, sysfs_anchor(SYSFS_PCI_DEVICE, key),
+                           pci_read_config16(p->bus, p->device, p->function, PCI_SUBSYSTEM_VENDOR));
+        if (k != 0) {
+            klog(KLOG_WARN, "virtio",
+                 "refused: %02x:%02x.%d: not added to the virtio bus: error %d", p->bus, p->device,
+                 p->function, k);
+            vp_detach(vp);
+        }
+    }
+    if (k != 0) {
+        sysfs_pci_unbind(key);
+        kfree(vp);
+        return k;
+    }
+    vp_log_found(vp);
+    for (tail = &vp_list; *tail; tail = &(*tail)->next) {
+    }
+    *tail = vp;
+    sysfs_pci_uevent(key, "bind");
+    return 0;
+}
+
+int virtio_pci_probe(void)
+{
+    pci_device_t p;
+    int i, n = 0;
+
+    vp_probed = 1;
+    for (i = 0; pci_nth(i, &p); i++) {
+        if (vp_is_virtio(&p) && !vp_record(&p) && vp_probe_one(&p) == 0) {
+            n++;
+        }
+    }
+    return n;
 }
 
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
 {
-    pci_device_t p;
-    struct virtio_pci *vp = 0;
-    int i, k, key, seen = 0;
+    struct virtio_pci *vp;
 
-    for (i = 0; pci_nth(i, &p); i++) {
-        if (p.vendor_id != VP_VENDOR || vp_type(&p) != id || seen++ != nth) {
-            continue;
+    if (!vp_probed) {
+        virtio_pci_probe();
+    }
+    for (vp = vp_list; vp; vp = vp->next) {
+        if (vp->dev.id == id && nth-- == 0) {
+            *out = &vp->dev;
+            return 0;
         }
-        for (k = 0; k < VP_DEVICES; k++) {
-            struct virtio_pci *c = &vp_devs[k];
-
-            if (c->used && c->pci.bus == p.bus && c->pci.device == p.device &&
-                c->pci.function == p.function) {
-                *out = &c->dev;
-                return 0;
-            }
-            if (!c->used && !vp) {
-                vp = c;
-            }
-        }
-        if (!vp) {
-            klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: the transport holds %d devices",
-                 p.bus, p.device, p.function, VP_DEVICES);
-            return -ENOMEM;
-        }
-        k_memset(vp, 0, sizeof(*vp));
-        vp->pci = p;
-        vp->dev.ops = &vp_ops;
-        vp->dev.notify_unlocked = 1;
-        vp->dev.transport = vp;
-        vp->dev.id = id;
-        vp_name(vp, i);
-        vp->dev.name = vp->name;
-        for (k = 0; k <= VIRTIO_MAX_QUEUES; k++) {
-            vp->vector[k] = -1;
-            vp->slot[k] = -1;
-        }
-        /* Linux's driver core shows the binding before virtio_pci_probe
-         * runs, and a failure to show it fails the probe. */
-        key = (int)p.bus << 8 | p.device << 3 | p.function;
-        k = sysfs_pci_bind(key, "virtio-pci");
-        if (k != 0) {
-            klog(KLOG_WARN, "virtio", "refused: %s: driver link not added: error %d", vp->name, k);
-            return k;
-        }
-        if (vp_attach(vp) != 0) {
-            sysfs_pci_unbind(key);
-            return -EIO;
-        }
-        k = virtio_bus_add(&vp->dev, sysfs_anchor(SYSFS_PCI_DEVICE, key),
-                           pci_read_config16(p.bus, p.device, p.function, PCI_SUBSYSTEM_VENDOR));
-        if (k != 0) {
-            klog(KLOG_WARN, "virtio", "refused: %s: not added to the virtio bus: error %d",
-                 vp->name, k);
-            sysfs_pci_unbind(key);
-            return k;
-        }
-        vp->used = 1;
-        sysfs_pci_uevent(key, "bind");
-        *out = &vp->dev;
-        return 0;
     }
     return -ENODEV;
 }

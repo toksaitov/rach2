@@ -7,15 +7,18 @@
  * host-deps: rach2/sys/fs/synthfs.c rach2/sys/fs/sysfs.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * A model virtio-gpu device at 00:02.0 is added to the bus as virtio0 and
- * checked against Linux 6.12's shape: its directory below the PCI
- * function, its attributes, its `subsystem` link and its link in
+ * A model virtio-gpu device at 00:02.0 is added to the bus, which names it
+ * virtio0, and checked against Linux 6.12's shape: its directory below the
+ * PCI function, its attributes, its `subsystem` link and its link in
  * /sys/bus/virtio/devices, the link texts as kernfs writes them, and its
  * "add" uevent; then bound to virtio_gpu, with a card below it as
  * drm_sysfs.c makes one, whose /sys/dev/char link a `..` climbs from the
  * virtio device, as libdrm's drmParseSubsystemType reads it; then its
  * "bind", "unbind" and "remove" uevents. A device of a transport that shows
- * none, the shared region's, is left alone.
+ * none, the shared region's, is left alone. The `..` rows check which
+ * links' targets lie inside a walk's root, the whole of /sys or a bind of
+ * a directory in it. The last rows add and remove devices and check that
+ * each takes the lowest number free.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -256,9 +259,10 @@ static void row_add(void)
     k_memset(&dev, 0, sizeof(dev));
     dev.ops = &model_ops;
     dev.id = VIRTIO_ID_GPU;
-    dev.name = "virtio0";
+    dev.name = "virtio";
     dev.features = 0x3ull | 1ull << 32; /* VIRGL, EDID and VERSION_1 */
-    CHECK(virtio_bus_add(&dev, pci, 0x1AF4) == 0 && dev.sys_dir > 0, "virtio0 is added");
+    CHECK(virtio_bus_add(&dev, pci, 0x1AF4) == 0 && dev.sys_dir > 0 && eq(dev.name, "virtio0"),
+          "the first device added is virtio0");
     sysfs_node_path(dev.sys_dir, path, (int)sizeof(path));
     CHECK(eq(path, "/sys/devices/pci0000:00/0000:00:02.0/virtio0"),
           "virtio0 is below its PCI function");
@@ -381,11 +385,47 @@ static void row_remove(void)
     CHECK(events == 4, "and sends no uevent");
 }
 
+/** Each device added takes the lowest number no device on the bus holds,
+ * and one taken off the bus gives its number back, as Linux's
+ * virtio_index_ida. */
+static void row_numbers(void)
+{
+    struct virtio_dev d[4];
+    int i;
+
+    k_memset(d, 0, sizeof(d));
+    for (i = 0; i < 4; i++) {
+        d[i].ops = &model_ops;
+        d[i].id = VIRTIO_ID_NET;
+        d[i].name = "virtio";
+    }
+    CHECK(virtio_bus_add(&d[0], sysfs_anchor(SYSFS_PCI_DEVICE, 3 << 3), 0x1AF4) == 0 &&
+              virtio_bus_add(&d[1], sysfs_anchor(SYSFS_PCI_DEVICE, 4 << 3), 0x1AF4) == 0 &&
+              eq(d[0].name, "virtio0") && eq(d[1].name, "virtio1"),
+          "two devices on an empty bus are virtio0 and virtio1");
+    virtio_bus_remove(&d[0]);
+    CHECK(virtio_bus_add(&d[2], sysfs_anchor(SYSFS_PCI_DEVICE, 5 << 3), 0x1AF4) == 0 &&
+              eq(d[2].name, "virtio0") &&
+              synth_classify("sys/devices/pci0000:00/0000:00:05.0/virtio0", &vp) == VNODE_SYS_DIR,
+          "the next device after virtio0's removal takes virtio0");
+    CHECK(virtio_bus_add(&d[3], sysfs_anchor(SYSFS_PCI_DEVICE, 6 << 3), 0x1AF4) == 0 &&
+              eq(d[3].name, "virtio2"),
+          "and the one after it virtio2, the lowest number free");
+    for (i = 1; i < 4; i++) {
+        virtio_bus_remove(&d[i]);
+    }
+    CHECK(synth_classify("sys/bus/virtio/devices/virtio0", &vp) == VNODE_ENOENT &&
+              synth_classify("sys/bus/virtio/devices/virtio1", &vp) == VNODE_ENOENT &&
+              synth_classify("sys/bus/virtio/devices/virtio2", &vp) == VNODE_ENOENT,
+          "every number is free again");
+}
+
 int main(void)
 {
     row_add();
     row_bind();
     row_remove();
+    row_numbers();
     if (failures) {
         return 1;
     }

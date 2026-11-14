@@ -687,7 +687,7 @@
         },
         {
           "assertion_id": "i915_handoff",
-          "checks": "tests/host/i915_handoff_hosttest.c releases the Intel graphics driver's HD 4400 through /sys/bus/pci/drivers/i915/unbind and brings it up again through bind on the host model, start to finish: the display down in Linux's order and the GPU reset before the rings' pages go back, every interrupt masked, the message and bus mastering off, the function without an owner, the console told its screen has gone, the backlight on a stand-in that writes no register and a record a program still holds cut off from the chip; the release refused while a program holds an aperture window or the GPU will not reset, and the bring-up while vfio-pci has the function, its driver_override names another driver or the function's reset fails; then the function, left as a guest's driver would leave it, reset once before any access, the panel's power cycle waited out, the driver bound with nothing adopted and no entry of the guest's in the GTT, and a full mode set of the panel by SETCRTC with the link trained and frames counted, twice over, with no wait at its bound and every allocation given back, under ASan and UBSan and exits 0",
+          "checks": "tests/host/i915_handoff_hosttest.c releases the Intel graphics driver's HD 4400 through /sys/bus/pci/drivers/i915/unbind and brings it up again through bind on the host model, start to finish: the display down in Linux's order and the GPU reset before the rings' pages go back, every interrupt masked, the message and bus mastering off, the function without an owner, the console told its screen has gone, the backlight on a stand-in that writes no register and a record a program still holds cut off from the chip; the release refused while a program holds an aperture window or the GPU will not reset, and the bring-up while vfio-pci has the function, its driver_override names another driver or the function's reset fails, and a bring-up whose driver link cannot be shown, which registers no card; then the function, left as a guest's driver would leave it, reset once before any access, the panel's power cycle waited out, the driver bound with nothing adopted and no entry of the guest's in the GTT, and a full mode set of the panel by SETCRTC with the link trained and frames counted, twice over, with no wait at its bound and every allocation given back, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1612,12 +1612,12 @@
         },
         {
           "assertion_id": "virtio_bus",
-          "checks": "tests/host/virtio_bus_hosttest.c adds a model virtio-gpu to the virtio bus in /sys and checks its directory, attributes, links and uevents against Linux 6.12's, its card's parent through a link and its driver's binding under ASan and UBSan",
+          "checks": "tests/host/virtio_bus_hosttest.c adds a model virtio-gpu to the virtio bus in /sys and checks its directory, attributes, links and uevents against Linux 6.12's, its card's parent through a link, which links lie outside a bind of a directory of /sys, its driver's binding, and the lowest free number each device added takes, under ASan and UBSan",
           "source": "scenario"
         },
         {
           "assertion_id": "virtio_pci_shm",
-          "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of two functions, and shows each function bound with its virtio device and one bind uevent, under ASan and UBSan and exits 0",
+          "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of five functions, shows each function bound with its virtio device and one bind uevent, takes a non-GPU function, and leaves a refused function and a failed bus registration unbound, unmapped, with their command word and no number, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

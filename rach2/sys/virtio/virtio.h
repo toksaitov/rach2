@@ -315,12 +315,14 @@ struct virtio_dev {
      * sysfs.h: its directory, 0 when the transport shows none, and its link
      * in /sys/bus/virtio/devices; the driver it is shown bound to, NULL for
      * none, with its `driver` link and the driver's link back; whether its
-     * "bind" uevent was sent; and the vendor of its modalias. */
+     * "bind" uevent was sent; the vendor of its modalias; and its name on
+     * the bus, "virtioN", which `name` points to once it is added. */
     int sys_dir, sys_bus_link;
     const char *sys_driver;
     int sys_driver_link, sys_driver_back;
     int sys_bound;
     uint32_t vendor;
+    char bus_name[16];
 };
 
 /*
@@ -494,20 +496,27 @@ void virtio_interrupt_config(struct virtio_dev *d);
  */
 
 /**
- * Find the `nth` virtio-pci function of device type `id`, counting from
- * zero, read its capabilities, map them and log them, as
- * `virtio: found: virtio0: 00:02.0 gpu: common bar 4+0x0 ...`, as Linux's
- * virtio_pci_probe does: the function shown in /sys bound to virtio-pci
- * (`sysfs_pci_bind`), its virtio device added below it
- * (`virtio_bus_add`), named virtioN for its place among the bus's virtio
- * functions, as Linux numbers them when virtio-pci takes them all, and the
- * function's "bind" uevent sent. A second call for the same function
+ * Take every virtio function of the PCI bus the transport has not taken, in
+ * the order of the bus, as Linux's virtio_pci_probe takes each, whether a
+ * driver of its type exists or not: the function shown in /sys bound to
+ * virtio-pci (`sysfs_pci_bind`), its capabilities read and mapped, its
+ * virtio device added below it (`virtio_bus_add`), which names it, logged
+ * as `virtio: found: virtio0: 00:02.0 gpu: common bar 4+0x0 ...`, and the
+ * function's "bind" uevent sent. A function that lacks a capability virtio
+ * 1.x requires, or whose window cannot be mapped or whose entries cannot be
+ * made, is refused with a record and left as it was: unbound, unmapped and
+ * with its command word put back. Called once at boot, before the drivers'
+ * probes. Returns how many functions it took.
+ */
+int virtio_pci_probe(void);
+
+/**
+ * Find the `nth` virtio-pci function of device type `id` that the transport
+ * took (`virtio_pci_probe`, which this runs first when nothing has), counting
+ * from zero in the order of the bus. A second call for the same function
  * returns the same record.
  *
- * @return 0 with `*out` set; -ENODEV when there is no such function, -EIO
- *         when it lacks a capability virtio 1.x requires or one cannot be
- *         mapped, -ENOMEM when every record is taken, or the error of
- *         showing it in /sys, with nothing of it left there.
+ * @return 0 with `*out` set; -ENODEV when there is no such function.
  */
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out);
 
@@ -531,14 +540,18 @@ const pci_device_t *virtio_pci_function(const struct virtio_dev *d);
  * do nothing. Every call runs under the big kernel lock.
  */
 
-/** Add the device `d`, named `d->name`, below the directory `parent` of
- * sysfs.h, with `vendor` in its modalias (the PCI function's subsystem
- * vendor on virtio-pci, as Linux's vp_modern_probe takes it), and send its
- * "add" uevent. 0, or the error of making the entries, with none left. */
+/** Add the device `d` below the directory `parent` of sysfs.h, named
+ * "virtioN" for the lowest N no device on the bus holds, as Linux's
+ * virtio_index_ida gives it once the transport's probe has succeeded, with
+ * `d->name` set to it, with `vendor` in its modalias (the PCI function's
+ * subsystem vendor on virtio-pci, as Linux's vp_modern_probe takes it), and
+ * send its "add" uevent. 0, or the error of making the entries, with none
+ * left and `d->name` as it was. */
 int virtio_bus_add(struct virtio_dev *d, int parent, uint16_t vendor);
 
 /** Take `d` off the bus: its driver's binding, as `virtio_driver_unbind`,
- * then its "remove" uevent and its entries. */
+ * then its "remove" uevent and its entries, which gives its number back to
+ * the next device added. */
 void virtio_bus_remove(struct virtio_dev *d);
 
 /** The directory of `d` on the bus, a handle of sysfs.h, below which a

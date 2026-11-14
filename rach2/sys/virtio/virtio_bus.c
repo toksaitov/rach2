@@ -142,8 +142,41 @@ static int vb_bus(const char *sub)
     return sub ? vb_dir_at(bus, sub) : bus;
 }
 
+/**
+ * Write into `out`, of `cap` bytes, "virtioN" with N the lowest number no
+ * device on the bus holds, a link of /sys/bus/virtio/devices `devices`, as
+ * Linux's register_virtio_device takes the lowest free id of
+ * virtio_index_ida; a device taken off the bus gives its number back with
+ * its link.
+ */
+static void vb_name(int devices, char *out, int cap)
+{
+    char digits[11];
+    uint32_t n, v;
+    int len, i;
+
+    for (n = 0;; n++) {
+        len = 6;
+        k_memcpy(out, "virtio", 6);
+        v = n;
+        i = 0;
+        do {
+            digits[i++] = (char)('0' + v % 10u);
+            v /= 10u;
+        } while (v && i < (int)sizeof(digits));
+        while (i > 0 && len < cap - 1) {
+            out[len++] = digits[--i];
+        }
+        out[len] = '\0';
+        if (sysfs_node_child(devices, out, len) <= 0) {
+            return;
+        }
+    }
+}
+
 int virtio_bus_add(struct virtio_dev *d, int parent, uint16_t vendor)
 {
+    char name[sizeof(d->bus_name)];
     static const struct sysfs_attr attrs[] = {{"device", 0444u, vb_show, NULL},
                                               {"vendor", 0444u, vb_show, NULL},
                                               {"status", 0444u, vb_show, NULL},
@@ -160,8 +193,9 @@ int virtio_bus_add(struct virtio_dev *d, int parent, uint16_t vendor)
     if (bus < 0 || devices < 0 || drivers < 0) {
         return bus < 0 ? bus : devices < 0 ? devices : drivers;
     }
+    vb_name(devices, name, (int)sizeof(name));
     d->vendor = vendor;
-    dir = sysfs_add_dir(parent, d->name);
+    dir = sysfs_add_dir(parent, name);
     if (dir < 0) {
         return dir;
     }
@@ -174,11 +208,13 @@ int virtio_bus_add(struct virtio_dev *d, int parent, uint16_t vendor)
     if (h >= 0) {
         h = sysfs_add_link(dir, "subsystem", bus);
     }
-    link = h >= 0 ? sysfs_add_link(devices, d->name, dir) : h;
+    link = h >= 0 ? sysfs_add_link(devices, name, dir) : h;
     if (link < 0) {
         sysfs_remove(dir);
         return link;
     }
+    k_memcpy(d->bus_name, name, sizeof(name));
+    d->name = d->bus_name;
     d->sys_dir = dir;
     d->sys_bus_link = link;
     sysfs_uevent(dir, "add", NULL);
