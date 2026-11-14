@@ -15,7 +15,9 @@
 // or begins with an omitted path that ends in `/`, is not run; its result is
 // `omitted`. The page posts to /event, as each is
 // known: the renderer, the list's length and digest, each page started, a
-// tick every 10 s while one runs, each page's result, and the end.
+// tick every 10 s while one runs, each page's result, and the end. A
+// result carries the messages of the first FAILURES subtests that failed or
+// timed out, so that a run names them.
 //
 // The harness reads a list file whose fetch failed, with status 0, as an
 // empty one, and so gives a shorter list. The page posts each such fetch as
@@ -29,6 +31,7 @@ const OMIT_DIRS = [...OMIT].filter(s => s.endsWith("/"));
 const omitted = path => OMIT.has(path) || OMIT_DIRS.some(d => path.startsWith(d));
 const TRY = Number(q.get("try") || "0");
 const FAILED = [];
+const FAILURES = 100;
 
 const xhrOpen = XMLHttpRequest.prototype.open;
 const xhrSend = XMLHttpRequest.prototype.send;
@@ -86,7 +89,8 @@ function report(type, url, msg, success, skipped) {
       ready();
       break;
     case R.START_PAGE:
-      page = { url: url, index: index[url], passed: 0, failed: 0, skipped: 0, timeouts: 0 };
+      page = { url: url, index: index[url], passed: 0, failed: 0, skipped: 0, timeouts: 0,
+               failures: [] };
       tick = Date.now();
       post({ kind: "start", index: page.index, url: url });
       return true;
@@ -95,6 +99,8 @@ function report(type, url, msg, success, skipped) {
       else if (skipped) page.skipped++;
       else if (success) page.passed++;
       else page.failed++;
+      if ((success === undefined || (!skipped && !success)) && page.failures.length < FAILURES)
+        page.failures.push(String(msg));
       if (Date.now() - tick >= 10000) {
         tick = Date.now();
         post({ kind: "tick", index: page.index });

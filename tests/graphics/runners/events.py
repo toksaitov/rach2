@@ -6,6 +6,7 @@ Usage:
   python3 -I events.py pages EVENTS FROM TO STATE
   python3 -I events.py list EVENTS [FROM TO]
   python3 -I events.py renderer EVENTS
+  python3 -I events.py failures EVENTS
   python3 -I events.py plays EVENTS FROM TO
 
 `wait` reads EVENTS from line FROM until a `done` event, until the process
@@ -19,8 +20,11 @@ runs, so SILENCE ends only a browser that has stopped.
 has no result is `crash` when STATE is `ended` and `hung` when `silent`.
 `list` prints the length and SHA-256 of the first suite list in EVENTS, or
 in its lines FROM to TO, `0 none` when there is none; `renderer` the record's
-renderer lines; `plays` one line a play of video.html, `REP WARM TOTAL
-DROPPED CORRUPTED SECONDS WIDTHxHEIGHT ERROR`.
+renderer lines; `failures` one line a failed or timed-out subtest that a
+page's result names, `INDEX RUN MESSAGE`, RUN counting the page's results
+from 1 and each run of white space in MESSAGE made one space; `plays` one
+line a play of video.html, `REP WARM TOTAL DROPPED CORRUPTED SECONDS
+WIDTHxHEIGHT ERROR`.
 """
 import json
 import os
@@ -84,6 +88,17 @@ def pages(path, start, stop, state):
               running["url"])
 
 
+def failures(path):
+    events, _ = read(path)
+    runs = {}
+    for e in events:
+        if e.get("kind") != "result":
+            continue
+        runs[e["index"]] = runs.get(e["index"], 0) + 1
+        for message in e.get("failures", []):
+            print(e["index"], runs[e["index"]], " ".join(str(message).split()) or "-")
+
+
 def first(path, kind, start=0, stop=None):
     events, _ = read(path, start, stop)
     for e in events:
@@ -108,6 +123,8 @@ def main():
             print("renderer %s %s; %s; unmasked %s; vendor %s" % (
                 c.get("context"), c.get("renderer"), c.get("version"), c.get("unmasked"),
                 c.get("vendor")))
+    elif cmd == "failures":
+        failures(path)
     elif cmd == "plays":
         events, _ = read(path, int(sys.argv[3]), int(sys.argv[4]))
         for e in events:

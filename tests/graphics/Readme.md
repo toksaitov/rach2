@@ -107,7 +107,7 @@ A browser runner writes to its output directory `record`, `results`, its result 
 
     webgl: result: chromium 2.0.1 chunk 0 of 12 pages 250 pass 249 fail 1 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 1 subtests passed 26567 failed 2
 
-and writes `BROWSER-VERSION-NN.pages`, a line a page in the list's order: `INDEX STATUS PASSED FAILED SKIPPED TIMEOUTS FIRST URL`, where STATUS is `pass`, `fail` (a subtest failed), `timeout` (the harness's 20 s limit), `skip`, `empty` (no result at all), `crash` (the browser ended while the page ran), `hung` (it stopped), `notrun` or `omitted` (named by `-x`), and FIRST is the first run's status of a page that was run again. `video.sh` prints a line for each clip:
+and writes `BROWSER-VERSION-NN.pages`, a line a page in the list's order: `INDEX STATUS PASSED FAILED SKIPPED TIMEOUTS FIRST URL`, where STATUS is `pass`, `fail` (a subtest failed), `timeout` (the harness's 20 s limit), `skip`, `empty` (no result at all), `crash` (the browser ended while the page ran), `hung` (it stopped), `notrun` or `omitted` (named by `-x`), and FIRST is the first run's status of a page that was run again. It also writes `failures`, a line for each subtest that failed or timed out, the first 100 of each run of a page, `INDEX RUN MESSAGE`, RUN 1 for the first run and 2 for the second, so that a count of subtests passed is read by name. `video.sh` prints a line for each clip:
 
     video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 0,0,0 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
 

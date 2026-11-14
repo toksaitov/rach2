@@ -35,11 +35,13 @@
 # A browser that posts nothing for 120 s, six times the harness's limit, has
 # stopped: it is ended, and the page it was running is `hung`.
 #
-# OUT (.) gets the record and, for each chunk, BROWSER-VERSION-NN.pages, one
-# line a page in the list's order: `INDEX STATUS PASSED FAILED SKIPPED
-# TIMEOUTS FIRST URL`, STATUS being pass, fail, timeout, skip, empty (no
-# result at all), crash, hung, notrun or omitted, and FIRST the status of
-# the first run. Each chunk prints one line:
+# OUT (.) gets the record; `failures`, events.py's lines of the subtests
+# that failed or timed out, the first 100 of each page's run, by which a
+# page's count of subtests passed is read; and, for each chunk,
+# BROWSER-VERSION-NN.pages, one line a page in the list's order: `INDEX
+# STATUS PASSED FAILED SKIPPED TIMEOUTS FIRST URL`, STATUS being pass, fail,
+# timeout, skip, empty (no result at all), crash, hung, notrun or omitted,
+# and FIRST the status of the first run. Each chunk prints one line:
 #
 #   webgl: result: BROWSER VERSION chunk N of M pages P pass A fail F
 #       timeout T crash C hung H skip S empty E notrun R omitted O rerun X
@@ -202,5 +204,6 @@ else
     chunk "$which" || status=1
 fi
 runner_record "list fetches failed $(grep -c '"kind": "fetchfail"' "$events")"
+python3 -I "$RUNNER_DIR/events.py" failures "$events" > "$RUNNER_OUT/failures"
 runner_finish
 exit "$status"
