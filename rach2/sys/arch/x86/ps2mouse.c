@@ -72,8 +72,6 @@
 #endif
 
 /* 8042 Controller Commands (write to 0x64) */
-#define PS2_CMD_READ_CONFIG   0x20 /* Read command byte */
-#define PS2_CMD_WRITE_CONFIG  0x60 /* Write command byte */
 #define PS2_CMD_DISABLE_MOUSE 0xA7 /* Disable auxiliary port */
 #define PS2_CMD_ENABLE_MOUSE  0xA8 /* Enable auxiliary port */
 #define PS2_CMD_TEST_MOUSE    0xA9 /* Test auxiliary port */
@@ -2069,7 +2067,9 @@ static struct evdev *disconnect_protocol(void)
  * serio_find_driver, which binds psmouse again unless serio1's `bind_mode`
  * is manual. Then the port is left without a driver (`aux_unbound`), its
  * driver's and protocol's files gone, until the mode is auto again; a port
- * already without one has nothing to take away.
+ * already without one has nothing to take away. The binding that ends, in
+ * either mode, advances `aux_bind_gen`, so that a write that waited for the
+ * command lock changes nothing of its successor.
  */
 static void probe_port_anew(void)
 {
@@ -2078,15 +2078,15 @@ static void probe_port_anew(void)
     if (old) {
         evdev_unregister(old);
     }
+    if (!aux_unbound) {
+        aux_bind_gen++;
+    }
     if (evdev_sysfs_serio_manual(1)) {
         if (!aux_unbound) {
             klog(KLOG_WARN, "mouse", "reconnect: failed: serio1's bind mode is manual: unbound");
         }
         evdev_sysfs_serio_files(1, NULL);
         evdev_sysfs_serio_driver(1, NULL);
-        if (!aux_unbound) {
-            aux_bind_gen++;
-        }
         aux_unbound = 1;
         return;
     }
