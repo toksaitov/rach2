@@ -1283,8 +1283,12 @@ its number,
 and its
 .Pa uevent .
 .It Pa /sys/block/DISK/queue
-The disk's queue: sectors of 512 bytes, transfers of at most 128 KiB, no
-discard, a rotating disk, and no scheduler.
+The disk's queue: sectors of 512 bytes, transfers of at most 128 KiB, a
+rotating disk, and no scheduler;
+.Pa discard_max_bytes
+is the most one discard gives the device, 0 when it takes none, and
+.Pa discard_granularity
+512 when it takes them.
 .It Pa /sys/block/DISK/device
 Its
 .Pa model

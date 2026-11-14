@@ -17,7 +17,7 @@ The line is a list of words separated by spaces, tabs and the other bytes Linux'
 | `rach2.boot=SPEC` | Name the boot partition, which must be entry 1 of an MBR or a GUID table, by the forms of `rach2.root=SPEC`. Without it the boot disk is the root's, when the root is named by identity, and disk 0 otherwise. |
 | `rach2.audio.loopback` | Feed capture from the clipped playback mix before the hardware master volume, for audio loopback checks. |
 | `rach2.nodisk`, `rach2.nousb`, `rach2.nonet`, `rach2.noaudio`, `rach2.nomouse` | Skip the probe of the disks, the USB controllers, the network cards, the sound cards or the PS/2 mouse. |
-| `rach2.ahcipoll`, `rach2.nvmepoll` | Keep the AHCI or the NVMe disks polled, with no interrupts and no request queue. |
+| `rach2.ahcipoll`, `rach2.nvmepoll`, `rach2.vblkpoll` | Keep the AHCI, the NVMe or the virtio-blk disks polled, with no interrupts and no request queue. |
 | `rach2.atapio` | Move ATA transfers through the data port and not through the controller's bus master. |
 | `rach2.diskdiag` | Probe the disks once the root is mounted, when the boot has not, and log whether one answered; the whole-disk nodes are published either way ([disk(7)](../man/man7/disk.7)). |
 | `rach2.fsck` | Read by the recovery image's `init`, not by the kernel: run `e2fsck -p` on every ext2 partition first. The kernel reads it only to keep its records on the screen while that runs. |

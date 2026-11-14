@@ -1,0 +1,161 @@
+.Dd November 14, 2026
+.Dt VIRTIO_BLK 4
+.Os
+.Sh NAME
+.Nm virtio_blk
+.Nd virtio block device driver
+.Sh SYNOPSIS
+.Pa /dev/diskN
+.Pp
+.Pa /dev/diskNpM
+.Sh DESCRIPTION
+The
+.Nm
+driver drives each virtio block device of the virtio-pci transport, up to
+eight, as the disk a virtual machine is given with
+.Ql -device virtio-blk-pci .
+Each becomes a disk with the nodes
+.Xr disk 4
+describes.
+The kernel probes AHCI, then NVMe, then virtio-blk, then ATA, and the first
+disk found is disk 0.
+Partitions, mounts, a root selected by
+.Ql rach2.root=
+and a boot partition selected by
+.Ql rach2.boot=
+take a virtio disk as they take a SATA disk.
+.Pp
+.Pa /proc/disk
+lists the disk with transport
+.Ql virtio
+and a location of its place among the virtio block devices found.
+Its serial number is what the device answers to
+.Dv VIRTIO_BLK_T_GET_ID ,
+in
+.Pa /sys/block/diskN/device/serial ;
+it has no model or firmware revision, as on Linux.
+.Pa /sys/bus/virtio/devices/virtioN
+shows the device bound to
+.Ql virtio_blk ,
+with the feature bits taken.
+.Pp
+The driver makes one virtqueue for each processor, up to as many as the
+device offers and eight at most, each with indirect descriptor tables, so
+that a request of up to 1 MiB is one command.
+A request goes on the queue of the processor that makes it.
+The device's block size must be 512 bytes.
+A device that offers
+.Dv VIRTIO_BLK_F_RO
+is read-only.
+.Pp
+The boot reads and writes by polling the queues.
+Once the root is mounted, each device is moved to its interrupts, an
+MSI-X message for each queue where the transport has one; a transfer then
+sleeps its caller until its queue's message, and a page fault with
+interrupts off still polls.
+.Pa /proc/interrupts
+lists each vector as
+.Ql virtioN .
+The device keeps polling when the kernel command line has
+.Ql rach2.vblkpoll ,
+and when the transport could give it no interrupt.
+.Pp
+Virtio has no force unit access.
+When the device has a write cache, which it reports with
+.Dv VIRTIO_BLK_F_FLUSH
+and its writeback setting, a write is followed by a
+.Dv VIRTIO_BLK_T_FLUSH
+command before it returns, so it is on the medium when it returns.
+A file system that writes several blocks and flushes once after them
+sends them without the flush, and its flush is the device's.
+.Pp
+.Dv BLKDISCARD
+and
+.Dv BLKZEROOUT ,
+which
+.Xr disk 4
+describes, become
+.Dv VIRTIO_BLK_T_DISCARD
+and
+.Dv VIRTIO_BLK_T_WRITE_ZEROES
+when the device offers them, in pieces of at most the sectors its
+configuration allows;
+.Pa /sys/block/diskN/queue/discard_max_bytes
+gives that size.
+A device without write zeroes has the zeros written as data.
+.Pp
+When the device's configuration changes, the next transfer reads its
+capacity again.
+When the transport lets the device go, as a write of its function to
+.Pa /sys/bus/pci/drivers/virtio-pci/unbind
+does, the disk goes out of use as a stick that is pulled: its nodes go,
+its mounts read and write nothing more, and every transfer in flight fails
+with
+.Er EIO .
+.Pp
+The metal kernel's read-only policy, which
+.Xr disk 7
+describes, judges a virtio command by the ATA command it corresponds to: a
+read and
+.Dv GET_ID
+are allowed, and a write, a flush, a discard and a write of zeros are
+refused.
+.Sh DIAGNOSTICS
+The driver writes these lines to the kernel log, with
+.Ar virtioN
+the device's name on the virtio bus.
+.Bl -tag -width Ds
+.It Ql virtio-blk: virtioN: S MiB, Q queues, P pieces of B bytes, K sectors a request, cache on|off ...
+The device was brought up, with what it offers among read-only, discard
+and write zeroes.
+.It Ql virtio-blk: virtioN: refused: blocks of B bytes; the block layer counts in 512-byte sectors
+The device's block size is not 512 bytes; it is not published.
+.It Ql virtio-blk: virtioN: unusable: reason
+The device refused the features, its queues or DRIVER_OK, or did not
+answer
+.Dv GET_ID ;
+it is reset and the boot goes on.
+.It Ql virtio-blk: virtioN: request type T failed: status S
+The device failed the command, and the transfer fails with
+.Er EIO ,
+or with
+.Er EOPNOTSUPP
+when the device does not support the command.
+.It Ql virtio-blk: virtioN: request type T failed: no answer in thirty seconds
+The device did not answer a polled command within the wait, five seconds
+with interrupts off.
+.It Ql virtio-blk: virtioN: out of use: reason
+The device did not answer, its queue had no room for the wait, or it was
+removed.
+It is reset, or kept from reaching memory when the reset does not end,
+every transfer it held fails with
+.Er EIO ,
+and so does every later one.
+.It Ql virtio-blk: virtioN: capacity: S MiB, was R MiB
+The device's capacity changed.
+.It Ql virtio-blk: virtioN: interrupts: Q queues
+The device was moved to its queues' interrupts.
+.It Ql virtio-blk: virtioN: polled: reason
+The device keeps polling, for the reason given.
+.El
+.Sh SEE ALSO
+.Xr disk 4 ,
+.Xr nvme 4 ,
+.Xr virtio-gpu 4 ,
+.Xr proc 5 ,
+.Xr sysfs 5 ,
+.Xr disk 7
+.Sh STANDARDS
+The device, its features and its requests are those of section 5.2 of
+the Virtual I/O Device (VIRTIO) specification, version 1.2.
+.Sh CAVEATS
+Linux names a virtio disk
+.Pa /dev/vdX
+and its partitions
+.Pa /dev/vdXN ;
+Rach2 names it as any other disk.
+Linux waits for a device's answer without bound; Rach2 gives a device
+thirty seconds, since a page fault may be waiting on it with interrupts
+off, and then takes it out of use.
+Rach2 does not take the zoned, secure-erase or lifetime commands, packed
+virtqueues, or queues that poll beside those that interrupt.

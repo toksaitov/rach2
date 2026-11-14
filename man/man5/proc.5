@@ -515,12 +515,14 @@ is
 .Ql ahci ,
 .Ql ata ,
 .Ql nvme ,
+.Ql usb ,
 or
-.Ql usb .
+.Ql virtio .
 .Ar LOCATION
 is the AHCI port; the ATA position; the NVMe controller's number times
-four plus the namespace's place among those the controller published; or
-the USB class-driver slot times four plus the logical unit number.
+four plus the namespace's place among those the controller published;
+the USB class-driver slot times four plus the logical unit number; or the
+virtio block device's place among those found.
 ATA positions 0 through 3 are primary master, primary slave,
 secondary master, and secondary slave.
 .Ar TABLE

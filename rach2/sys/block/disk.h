@@ -46,12 +46,13 @@ struct disk {
     int present;
     int number;            /* N of /dev/diskN, the index in the registry */
     block_device_t *dev;   /* the whole disk, as the driver published it */
-    const char *transport; /* "ahci", "ata", "nvme" or "usb" */
+    const char *transport; /* "ahci", "ata", "nvme", "usb" or "virtio" */
     int location;          /* the place on the transport: the AHCI port;
                             * the ATA channel times 2 plus the drive; the
                             * NVMe controller times NVME_NAMESPACES plus
                             * the namespace; the stick's slot times
-                            * MSC_MAX_LUNS plus its unit */
+                            * MSC_MAX_LUNS plus its unit; the virtio block
+                            * device's place among those found */
     char model[DISK_MODEL_CHARS + 1];
     char serial[DISK_SERIAL_MAX + 1];
     char firmware[DISK_FIRMWARE_CHARS + 1];

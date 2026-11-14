@@ -17,8 +17,8 @@ Each active namespace with 512-byte blocks and no metadata becomes a disk,
 up to four a controller, with the nodes
 .Xr disk 4
 describes.
-The kernel probes AHCI, then NVMe, then ATA, and the first disk found is
-disk 0.
+The kernel probes AHCI, then NVMe, then virtio-blk, then ATA, and the
+first disk found is disk 0.
 Partitions, mounts, a root selected by
 .Ql rach2.root=
 and a boot partition selected by

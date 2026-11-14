@@ -46,8 +46,9 @@ A raw write to a write-protected stick fails with
 .Er EIO .
 .Pp
 ATA and AHCI flush the device cache after each successful write command,
-and NVMe sends each raw write with force unit access, so a successful raw
-write to any of them is durable on return.
+NVMe sends each raw write with force unit access, and virtio-blk follows
+each raw write with a flush when the device has a write cache, so a
+successful raw write to any of them is durable on return.
 USB raw writes issue ordinary SCSI writes without a device-cache flush;
 success does not guarantee that the data is durable.
 .Ss Boot devices
@@ -65,8 +66,8 @@ Neither includes sector zero.
 Both boot devices are character devices with mode 0600.
 Their reads and writes require sector-aligned offsets and lengths.
 They accept root's writes on ordinary and recovery kernels.
-The metal kernel's read-only ATA, AHCI and NVMe driver policy prevents writes
-through them as well as other writes to those disks.
+The metal kernel's read-only ATA, AHCI, NVMe and virtio-blk driver policy
+prevents writes through them as well as other writes to those disks.
 .Ss Reservations and mounts
 Each disk permits one write-capable open file description across its
 whole-disk node and the two boot devices in every build, and across its
@@ -96,6 +97,39 @@ in the calling process included; duplicated descriptors and boot-device
 opens are not counted.
 On a partition node it fails with
 .Er ENOTTY .
+.Ss Discard and zeroing
+The
+.Dv BLKDISCARD
+and
+.Dv BLKZEROOUT
+requests on a whole-disk or partition node take a byte range, two 64-bit
+numbers, its start and its length, within the node.
+.Dv BLKDISCARD
+tells the device it may forget the range, whose later reads may give
+anything;
+.Dv BLKZEROOUT
+makes the range read as zeros, through the device's own command where it
+has one and by writing zeros otherwise.
+Each alters the medium as a write does, so it has a raw write's
+authority: the ordinary kernel returns
+.Er EPERM ,
+and the recovery kernel requires effective user ID 0 and a descriptor open
+for writing, else
+.Er EBADF .
+A range that is empty, not of whole 512-byte sectors or past the node's
+end fails with
+.Er EINVAL .
+A discard on a device that cannot discard fails with
+.Er EOPNOTSUPP ;
+only virtio-blk discards, and
+.Pa /sys/block/diskN/queue/discard_max_bytes
+gives how much one command may discard, 0 when the device takes none.
+.Dv BLKSECDISCARD
+fails with
+.Er EOPNOTSUPP ,
+and
+.Dv BLKDISCARDZEROES
+answers 0, as on Linux.
 .Sh FILES
 All these devices use major number 240.
 .Bl -tag -width /dev/diskNpM
@@ -113,6 +147,7 @@ Minor 3.
 .Sh SEE ALSO
 .Xr loop 4 ,
 .Xr nvme 4 ,
+.Xr virtio_blk 4 ,
 .Xr disk 7 ,
 .Xr bootctl 8 ,
 .Xr mount 8 ,
