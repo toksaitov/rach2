@@ -46,17 +46,22 @@ struct evdev *ps2mouse_register(const char *name, uint16_t product, const uint8_
 #define PS2MOUSE_ACK 0xFA
 
 /**
- * Send the byte `cmd` to the auxiliary device and return its reply: the
- * ACK, or another byte some commands answer with. A request to send again
- * or a timeout tries again, three times in all. Returns the reply, or -1
- * after three failed tries. With interrupts off, during the bring-up.
+ * Send the byte `cmd` to the auxiliary device and return its reply, as
+ * Linux's ps2_do_sendbyte: the ACK, or another byte some commands answer
+ * with, within 200 ms, or a second for the reset's command. A request to
+ * send again sends the byte once more; a timeout does not. Returns the
+ * reply, or -1 when none came or the second try was refused too. During the
+ * bring-up, with interrupts off, or in a run of commands.
  */
 int ps2mouse_send(uint8_t cmd);
 
 /**
  * Wait for the auxiliary device's next byte, dropping keyboard bytes before
- * it, as a command's data comes after its ACK. Returns the byte, or -1 on
- * the 8042's timeout. With interrupts off, during the bring-up.
+ * it during the bring-up, as a command's data comes after its ACK: within
+ * half a second, as Linux's ps2_command waits for it, or after the reset's
+ * ACK four seconds for its self-test's 0xAA and then 100 ms for its ID.
+ * Returns the byte, or -1 when none came. During the bring-up, with
+ * interrupts off, or in a run of commands.
  */
 int ps2mouse_receive(void);
 

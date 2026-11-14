@@ -237,6 +237,12 @@ unsigned int input_leds(void)
     return wanted_leds;
 }
 
+/** The controller's waits between reads of its status; no time passes. */
+void k_udelay(uint32_t usec)
+{
+    (void)usec;
+}
+
 /** Count a warning; the text is not checked. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {

@@ -352,8 +352,47 @@ static void wait_turn(void)
 #endif
 }
 
+/*
+ * How long the device's reply to a byte may take, in microseconds, as
+ * Linux's ps2_command waits for it: the ACK of a byte, and of the reset's
+ * command; a byte of the answer after the ACK; the reset's first, the
+ * self-test's 0xAA, which a mouse sends once its test is done; and its ID
+ * after that, which a mouse sends at once or a keyboard never.
+ */
+#define REPLY_ACK_US       200000u
+#define REPLY_RESET_ACK_US 1000000u
+#define REPLY_BYTE_US      500000u
+#define REPLY_RESET_BAT_US 4000000u
+#define REPLY_RESET_ID_US  100000u
+
+/* How long the next byte of an answer may take, REPLY_*: what the last ACK
+ * acknowledged sets it, and the reset's 0xAA shortens it for the ID. */
+static uint32_t reply_us = REPLY_BYTE_US;
+
 /**
- * Spin until the 8042 output buffer has a byte from the mouse, ready to read.
+ * The wait before the next read of the status in a wait for the mouse's
+ * reply that began `waited` microseconds ago and may last `limit_us`: an
+ * eighth of the time waited, at least PS2_POLL_US and at most a tick, and
+ * no more than is left. A reply is taken within an eighth of its time, and
+ * one that never comes costs 89 reads of the status in REPLY_ACK_US, where
+ * each read is an exit to the hypervisor, instead of one every PS2_POLL_US.
+ */
+static uint32_t reply_step(uint32_t waited, uint32_t limit_us)
+{
+    uint32_t step = waited / 8;
+
+    step = step < PS2_POLL_US ? PS2_POLL_US : step > TICK_US ? TICK_US : step;
+    return step < limit_us - waited ? step : limit_us - waited;
+}
+
+/**
+ * Wait until the 8042 output buffer has a byte from the mouse, ready to
+ * read, for at most `limit_us`, as Linux's ps2_command sleeps on the
+ * interrupt for it: the status is read, then read again after
+ * `reply_step`. Inside a run of commands a step of a tick sleeps, and a
+ * shorter one lets another processor have the big lock first
+ * (`wait_turn`). A host test's model has no clock, and its reads take no
+ * time: there the wait ends once the steps add up to `limit_us`.
  *
  * During the bring-up a keyboard byte waiting in the buffer is read and
  * dropped: the buffer holds one byte, so the mouse's cannot arrive until the
@@ -362,71 +401,90 @@ static void wait_turn(void)
  *
  * @return 0 when a mouse byte is present, -1 on timeout.
  */
-static int ps2_wait_mouse_output(void)
+static int ps2_wait_mouse_output(uint32_t limit_us)
 {
-    uint32_t start = ps2_wait_begin();
-    int reads = 0;
+#ifndef RACH2_HOSTTEST
+    uint32_t start = timer_now_us();
+#endif
+    uint32_t waited = 0, step;
     uint8_t status;
 
-    while (!ps2_wait_over(start, reads++)) {
+    for (;;) {
         status = inb(PS2_STATUS_PORT);
-        if ((status & PS2_STATUS_OUTPUT_FULL) == 0) {
-            wait_turn();
+        if (status & PS2_STATUS_OUTPUT_FULL) {
+            if (status & PS2_STATUS_MOUSE_DATA) {
+                return 0;
+            }
+            if (!cmd_busy) {
+                inb(PS2_DATA_PORT);
+            }
+        }
+#ifndef RACH2_HOSTTEST
+        waited = timer_now_us() - start;
+#endif
+        if (waited >= limit_us) {
+            return -1;
+        }
+        step = reply_step(waited, limit_us);
+#ifdef RACH2_HOSTTEST
+        waited += step;
+#else
+        if (cmd_busy && step == TICK_US) {
+            ps2mouse_msleep(TICK_US / 1000u);
             continue;
         }
-        if (status & PS2_STATUS_MOUSE_DATA) {
-            return 0;
-        }
-        if (cmd_busy) {
-            wait_turn();
-            continue;
-        }
-        inb(PS2_DATA_PORT);
+#endif
+        wait_turn();
+#ifndef RACH2_HOSTTEST
+        k_udelay(step);
+#endif
     }
-    return -1;
 }
 
 /**
- * Send a byte to the mouse through the 8042 auxiliary port.
+ * Send a byte to the mouse through the 8042 auxiliary port, as Linux's
+ * ps2_do_sendbyte sends a byte of ps2_command.
  *
- * Each command must be prefixed with PS2_CMD_WRITE_MOUSE so the
- * controller routes the following data byte to the auxiliary device. The
- * reply is the next byte the status marks as the mouse's, and a keyboard
- * byte before it is dropped. A MOUSE_RESEND reply means the mouse saw a
- * framing error, and a timeout means the controller or the mouse did not
- * answer; either way the command is tried again, three times in all. Any
- * other byte is returned to the caller, since some commands answer with
- * data and not an ACK.
+ * Each byte must be prefixed with PS2_CMD_WRITE_MOUSE so the controller
+ * routes the following data byte to the auxiliary device. The reply is the
+ * next byte the status marks as the mouse's, and a keyboard byte before it
+ * is dropped; it may take REPLY_ACK_US, or REPLY_RESET_ACK_US for the reset.
+ * A MOUSE_RESEND reply means the mouse saw a framing error, and the byte is
+ * sent once more; a timeout means the controller or the mouse did not
+ * answer, and the byte is not sent again. Any other byte is returned to the
+ * caller, since some commands answer with data and not an ACK. An ACK sets
+ * how long the first byte of an answer may take (`reply_us`): REPLY_BYTE_US,
+ * or REPLY_RESET_BAT_US after the reset's.
  *
- * @return the mouse's response byte, or -1 after three failed tries.
+ * @return the mouse's response byte, or -1 when it did not answer or asked
+ * twice for the byte again.
  */
 static int mouse_send_command(uint8_t cmd)
 {
-    int retries = 3;
+    int tries = 2;
     uint8_t response;
     uint32_t flags;
 
-    while (retries-- > 0) {
+    while (tries-- > 0) {
         /* Prefix tells the 8042 to forward the next byte to the mouse; the
          * keyboard's LED command, from the tick, must not come between. */
         flags = kirq_save();
         if (ps2_send_command(PS2_CMD_WRITE_MOUSE) < 0 || ps2_wait_input() < 0) {
             kirq_restore(flags);
-            continue;
+            return -1;
         }
         outb(PS2_DATA_PORT, cmd);
         kirq_restore(flags);
 
-        if (ps2_wait_mouse_output() < 0) {
-            continue;
+        if (ps2_wait_mouse_output(cmd == MOUSE_CMD_RESET ? REPLY_RESET_ACK_US : REPLY_ACK_US) < 0) {
+            return -1;
         }
 
         response = inb(PS2_DATA_PORT);
         if (response == MOUSE_ACK) {
+            reply_us = cmd == MOUSE_CMD_RESET ? REPLY_RESET_BAT_US : REPLY_BYTE_US;
             return response;
-        } else if (response == MOUSE_RESEND) {
-            continue;
-        } else {
+        } else if (response != MOUSE_RESEND) {
             return response;
         }
     }
@@ -441,7 +499,15 @@ int ps2mouse_send(uint8_t cmd)
 
 int ps2mouse_receive(void)
 {
-    return ps2_wait_mouse_output() < 0 ? -1 : inb(PS2_DATA_PORT);
+    uint32_t limit = reply_us;
+
+    if (ps2_wait_mouse_output(limit) < 0) {
+        return -1;
+    }
+    if (limit == REPLY_RESET_BAT_US) {
+        reply_us = REPLY_RESET_ID_US;
+    }
+    return inb(PS2_DATA_PORT);
 }
 
 const struct ps2io ps2mouse_aux = {ps2mouse_send, ps2mouse_receive};
@@ -505,7 +571,8 @@ static int guest_files(int dir);
 
 /**
  * Reset the mouse and read the two bytes it sends after its ACK, 0xAA for a
- * passed self-test and 0x00 for its device ID. Their values are not checked,
+ * passed self-test and 0x00 for its device ID, the ID only once the 0xAA
+ * came, as Linux's ps2_command reads them. Their values are not checked,
  * and a timeout on either is tolerated.
  *
  * @return 0 when the mouse answered the reset, -1 when it did not.
@@ -515,11 +582,8 @@ static int mouse_reset(void)
     if (mouse_send_command(MOUSE_CMD_RESET) < 0) {
         return -1;
     }
-    if (ps2_wait_mouse_output() == 0) {
-        inb(PS2_DATA_PORT);
-    }
-    if (ps2_wait_mouse_output() == 0) {
-        inb(PS2_DATA_PORT);
+    if (ps2mouse_receive() >= 0) {
+        (void)ps2mouse_receive();
     }
     return 0;
 }
@@ -540,10 +604,10 @@ static int knock(const uint8_t *rates)
             return -1;
         }
     }
-    if (mouse_send_command(MOUSE_CMD_GET_ID) != MOUSE_ACK || ps2_wait_mouse_output() < 0) {
+    if (mouse_send_command(MOUSE_CMD_GET_ID) != MOUSE_ACK) {
         return -1;
     }
-    return inb(PS2_DATA_PORT);
+    return ps2mouse_receive();
 }
 
 /** Send `cmd` and its argument `arg`; a refusal is ignored, since the

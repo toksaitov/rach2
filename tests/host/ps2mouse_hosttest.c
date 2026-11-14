@@ -23,22 +23,23 @@
  * ID after the ACK of 0xF2, and reporting on after an ACK of 0xF4. A row can
  * give it a wheel: then, as QEMU's mouse, it answers ID 3 after the sample
  * rates 200, 100 and 80, and an Explorer ID 4 after 200, 200 and 80, until
- * it is reset. A row can make the mouse lose its answer to one
- * command, or ask once for that command again with 0xFE, and can make the
+ * it is reset. A row can make the mouse lose its answer to one command, or
+ * ask for that command again with 0xFE, once or twice, and can make the
  * controller lose the configuration byte, keep its input buffer full, keep
  * it full from a WRITE_CONFIG on, or keep its output buffer full for good;
  * a row can have the controller answer late, as interrupts come on again,
  * when the keyboard's IRQ 1 and LED tick run unless `kbd_stop` stopped the
- * keyboard first. The rows of the bring-up check the
- * writes in order, the state the controller and the mouse are left in, the
- * protocol found and the event device registered for it, the vector of the
- * handler, and that interrupts are off for every port access and on again
- * at every return. The handler's rows read the packets it reports, of three
- * bytes and of each wheel's four. The probes for a Synaptics, an ALPS and an
+ * keyboard first. The rows of the bring-up check the writes in order, the
+ * state the controller and the mouse are left in, the protocol found and the
+ * event device registered for it, the vector of the handler, and that
+ * interrupts are off for every port access and on again at every return.
+ * The handler's rows read the packets it reports, of three bytes and of each
+ * wheel's four. The rows of the waits count the reads of the status and the
+ * waits asked of `k_udelay`. The probes for a Synaptics, an ALPS and an
  * Elantech touchpad, which synaptics_hosttest.c, alps_hosttest.c and
- * elantech_hosttest.c test against touchpads, find none here, and the
- * model answers neither a ThinkingMouse's rates nor a Genius mouse's
- * status request as those mice do, so their probes find none either.
+ * elantech_hosttest.c test against touchpads, find none here, and the model
+ * answers neither a ThinkingMouse's rates nor a Genius mouse's status
+ * request as those mice do, so their probes find none either.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -102,11 +103,17 @@ static int kbd_stopped_with_irq_on;
 static int kbd_wakes;
 
 /* The mouse: whether one is there, a command it never answers and one it
- * first answers with MOUSE_RESEND (-1 for none), and whether it reports. */
+ * first answers with MOUSE_RESEND (-1 for none), how many times it does,
+ * and whether it reports. */
 static int mouse_present;
 static int mouse_silent_to;
 static int mouse_resend_to;
+static int mouse_resends;
 static int mouse_reporting;
+
+/* The waits asked of `k_udelay`, and their microseconds. */
+static int udelays;
+static uint32_t udelay_us;
 
 /* The mouse's wheel: the highest ID it answers, 0, ID_IMPS or ID_IMEX; the
  * ID it answers now; the command whose argument the next byte is, 0 for
@@ -187,7 +194,10 @@ static void model_reset(void)
     mouse_present = 0;
     mouse_silent_to = -1;
     mouse_resend_to = -1;
+    mouse_resends = 1;
     mouse_reporting = 0;
+    udelays = 0;
+    udelay_us = 0;
     mouse_wheel = 0;
     mouse_id = 0;
     mouse_arg_for = 0;
@@ -239,7 +249,9 @@ static void mouse_take(uint8_t cmd)
         return;
     }
     if (cmd == mouse_resend_to) {
-        mouse_resend_to = -1;
+        if (--mouse_resends == 0) {
+            mouse_resend_to = -1;
+        }
         model_put(MOUSE_BYTE, MOUSE_RESEND);
         return;
     }
@@ -616,7 +628,8 @@ void evdev_unregister(struct evdev *dev)
 /** The 10 ms a pass-through probe waits, which no row reaches. */
 void k_udelay(uint32_t usec)
 {
-    (void)usec;
+    udelays++;
+    udelay_us += usec;
 }
 
 /* The ticks of the kernel's clock, which `ps2mouse_msleep` moves. */
@@ -903,6 +916,80 @@ static void wheel_rows(void)
     packet_index = 0;
 }
 
+/** The reads of the status a wait for the mouse's reply that never comes
+ * makes in `limit_us`, by `reply_step`, and whether its steps add up to
+ * `limit_us`, each of PS2_POLL_US to a tick. */
+static int reply_reads(uint32_t limit_us, int *exact)
+{
+    uint32_t waited = 0, step;
+    int reads = 1;
+
+    *exact = 1;
+    while (waited < limit_us) {
+        step = reply_step(waited, limit_us);
+        if (step > TICK_US || (step < PS2_POLL_US && step != limit_us - waited)) {
+            *exact = 0;
+        }
+        waited += step;
+        reads++;
+    }
+    if (waited != limit_us) {
+        *exact = 0;
+    }
+    return reads;
+}
+
+/** The waits' bounds: the controller's by reads and by time, as Linux's
+ * i8042_wait_write, and the mouse's reply's by Linux's times, in a few
+ * reads of the status. */
+static void wait_rows(void)
+{
+    int exact, reads;
+
+    model_reset();
+    ctl_input_stuck = 1;
+    CHECK("a full input buffer ends the controller's wait", ps2_wait_input() == -1);
+    CHECK("after PS2_TIMEOUT waits of PS2_POLL_US, between PS2_TIMEOUT + 1 reads",
+          status_reads == PS2_TIMEOUT + 1 && udelays == PS2_TIMEOUT &&
+              udelay_us == PS2_TIMEOUT_US && PS2_TIMEOUT_US == 500000u);
+
+    reads = reply_reads(REPLY_ACK_US, &exact);
+    CHECK("a wait for an ACK that never comes reads the status 89 times in 200 ms",
+          reads == 89 && exact && REPLY_ACK_US == 200000u);
+    model_reset();
+    mouse_present = 1;
+    ctl_config = MOUSE_CONFIG;
+    mouse_silent_to = MOUSE_CMD_ENABLE;
+    CHECK("an unanswered command fails", mouse_send_command(MOUSE_CMD_ENABLE) == -1);
+    CHECK("after those reads and the two of the controller's waits, with no wait of the "
+          "controller's",
+          status_reads == 2 + reads && udelays == 0);
+
+    reads = reply_reads(REPLY_RESET_ACK_US, &exact);
+    model_reset();
+    mouse_present = 1;
+    ctl_config = MOUSE_CONFIG;
+    mouse_silent_to = MOUSE_CMD_RESET;
+    CHECK("an unanswered reset fails", mouse_send_command(MOUSE_CMD_RESET) == -1);
+    CHECK("after its wait of a second", status_reads == 2 + reads && exact && reads == 289);
+
+    model_reset();
+    mouse_present = 1;
+    ctl_config = MOUSE_CONFIG;
+    CHECK("an answered reset reads its 0xAA and ID",
+          mouse_send_command(MOUSE_CMD_RESET) == MOUSE_ACK && ps2mouse_receive() == 0xAA &&
+              ps2mouse_receive() == 0x00);
+    reads = reply_reads(REPLY_RESET_ID_US, &exact);
+    status_reads = 0;
+    CHECK("after which a byte more is waited for 100 ms",
+          ps2mouse_receive() == -1 && status_reads == reads && exact);
+    reads = reply_reads(REPLY_BYTE_US, &exact);
+    status_reads = 0;
+    CHECK("and after the next ACK, half a second",
+          mouse_send_command(MOUSE_CMD_GET_ID) == MOUSE_ACK && ps2mouse_receive() == 0 &&
+              ps2mouse_receive() == -1 && status_reads == 2 + 1 + 1 + reads && exact);
+}
+
 /** The mouse's commands, with keys pressed while they wait for the reply. */
 static void command_rows(void)
 {
@@ -918,11 +1005,23 @@ static void command_rows(void)
                                                write_port[1] == PS2_DATA_PORT &&
                                                write_value[1] == MOUSE_CMD_ENABLE);
 
-    /* A key and nothing from the mouse: three tries, each timed out. */
+    /* A key and nothing from the mouse: one try, timed out. */
     model_reset();
     model_put(KEYBOARD_BYTE, 0x1C);
     CHECK("a key alone is no reply", mouse_send_command(MOUSE_CMD_ENABLE) == -1);
-    CHECK("the command is tried three times", port_writes == 6);
+    CHECK("the command is not sent again after the timeout", port_writes == 2);
+
+    /* A mouse that asks for the command again, and again. */
+    model_reset();
+    mouse_present = 1;
+    ctl_config = MOUSE_CONFIG;
+    mouse_resend_to = MOUSE_CMD_ENABLE;
+    mouse_resends = 2;
+    CHECK("a second request to send again fails the command",
+          mouse_send_command(MOUSE_CMD_ENABLE) == -1);
+    CHECK("which was sent twice", port_writes == 4 && !mouse_reporting);
+
+    wait_rows();
 
     /* Keys pressed between the bytes of the reset's reply. */
     model_reset();
@@ -1155,11 +1254,11 @@ static void bringup_mouse_rows(void)
     mouse_silent_to = MOUSE_CMD_RESET;
     CHECK("an unanswered reset is tolerated", init_mouse() == 0);
     expect_controller();
-    expect_mouse(0xFF, 3);
+    expect_mouse(0xFF, 1);
     expect_mouse(0xF6, 1);
     expect_plain();
     expect_mouse(0xF4, 1);
-    CHECK("the reset is tried three times and the bring-up goes on", writes_expected());
+    CHECK("the reset is sent once and the bring-up goes on", writes_expected());
     CHECK("an unanswered reset leaves the mouse reporting", mouse_reporting);
     CHECK("an unanswered reset registers the handler", registrations == 1);
 
@@ -1192,8 +1291,8 @@ static void bringup_mouse_rows(void)
     expect_mouse(0xFF, 1);
     expect_mouse(0xF6, 1);
     expect_plain();
-    expect_mouse(0xF4, 3);
-    CHECK("the enable is tried three times", writes_expected());
+    expect_mouse(0xF4, 1);
+    CHECK("the enable is not sent again after its timeout", writes_expected());
     CHECK("a lost ACK of the enable is reported", warned("the device did not enable reporting"));
     CHECK("a lost ACK of the enable registers no handler", registrations == 0);
     CHECK("a lost ACK of the enable turns interrupts on again", irq_on);

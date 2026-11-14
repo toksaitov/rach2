@@ -9,10 +9,7 @@
 #include "../../klog.h"
 #include "../../lib/kctypes.h"
 #include "../../lib/kstring.h"
-#ifndef RACH2_HOSTTEST
-#include "../../timer.h"
 #include "../../udelay.h"
-#endif
 
 /* The most reads of the configuration byte that may pass before two in a
  * row agree, Linux's in i8042_controller_init. */
@@ -22,41 +19,20 @@
  * nothing more is written to it. */
 static int setup_failed;
 
-uint32_t ps2_wait_begin(void)
-{
-#ifndef RACH2_HOSTTEST
-    return timer_now_us();
-#else
-    return 0;
-#endif
-}
-
-int ps2_wait_over(uint32_t start, int reads)
-{
-    if (reads >= PS2_TIMEOUT) {
-        return 1;
-    }
-#ifndef RACH2_HOSTTEST
-    return (reads & 63) == 0 && timer_now_us() - start >= PS2_TIMEOUT_US;
-#else
-    (void)start;
-    return 0;
-#endif
-}
-
-/** Read the status until its bits `mask` equal `want`: 0, or -1 when the
- * wait is over (`ps2_wait_over`). */
+/** Read the status until its bits `mask` equal `want`, PS2_POLL_US apart,
+ * as Linux's i8042_wait_read and i8042_wait_write: 0, or -1 after
+ * PS2_TIMEOUT waits. */
 static int ps2_wait(uint8_t mask, uint8_t want)
 {
-    uint32_t start = ps2_wait_begin();
-    int reads = 0;
+    int i;
 
-    do {
-        if ((inb(PS2_STATUS_PORT) & mask) == want) {
-            return 0;
+    for (i = 0; (inb(PS2_STATUS_PORT) & mask) != want; i++) {
+        if (i == PS2_TIMEOUT) {
+            return -1;
         }
-    } while (!ps2_wait_over(start, ++reads));
-    return -1;
+        k_udelay(PS2_POLL_US);
+    }
+    return 0;
 }
 
 int ps2_wait_input(void)

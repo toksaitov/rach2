@@ -28,36 +28,29 @@
 #define PS2_STATUS_INPUT_FULL  0x02 /* the controller has not taken the last write */
 #define PS2_STATUS_MOUSE_DATA  0x20 /* the waiting byte is the mouse's */
 
-/* How many reads of the status a wait makes before it gives up, and how long
- * it lasts at most by the clock, Linux's 10000 waits of 50 us
- * (I8042_CTL_TIMEOUT): under a hypervisor each read is an exit, and
- * PS2_TIMEOUT of them took 42 s at the third level. */
-#define PS2_TIMEOUT    100000
-#define PS2_TIMEOUT_US 500000u
-
-/** The clock at the start of a wait of the status, for `ps2_wait_over`. */
-uint32_t ps2_wait_begin(void);
-
-/**
- * Whether a wait of the status begun at `start` (`ps2_wait_begin`) is over
- * after `reads` reads: PS2_TIMEOUT of them, or PS2_TIMEOUT_US by the clock,
- * which is read every 64 reads. A host test's model has no clock and ends by
- * the reads alone.
- */
-int ps2_wait_over(uint32_t start, int reads);
+/* How many times a wait of the controller reads its status before it gives
+ * up, and the wait between two reads, in microseconds: Linux's
+ * I8042_CTL_TIMEOUT and the udelay(50) of i8042_wait_read and
+ * i8042_wait_write. Under a hypervisor each read is an exit, so the wait
+ * between them keeps a wait the controller does not end to 10001 exits and
+ * half a second; and the most time such a wait takes, less the reads. */
+#define PS2_TIMEOUT    10000
+#define PS2_POLL_US    50u
+#define PS2_TIMEOUT_US (PS2_TIMEOUT * PS2_POLL_US)
 
 /**
- * Spin until the controller's input buffer is empty, ready for a byte.
- * Returns 0 when it is, -1 after PS2_TIMEOUT reads of the status or
- * PS2_TIMEOUT_US. For the bring-up, which runs with interrupts off and may
- * wait.
+ * Wait until the controller's input buffer is empty, ready for a byte, as
+ * Linux's i8042_wait_write: the status read, then PS2_POLL_US, at most
+ * PS2_TIMEOUT times. Returns 0 when it is, -1 when the wait is over. For
+ * the bring-up, which runs with interrupts off and may wait, and a run of
+ * the mouse's commands.
  */
 int ps2_wait_input(void);
 
 /**
- * Spin until the controller's output buffer has a byte, of either device.
- * Returns 0 when it has, -1 after PS2_TIMEOUT reads of the status or
- * PS2_TIMEOUT_US.
+ * Wait until the controller's output buffer has a byte, of either device,
+ * as Linux's i8042_wait_read waits: the status read, then PS2_POLL_US, at
+ * most PS2_TIMEOUT times. Returns 0 when it has, -1 when the wait is over.
  */
 int ps2_wait_output(void);
 

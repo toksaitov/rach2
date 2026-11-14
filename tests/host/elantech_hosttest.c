@@ -2611,14 +2611,14 @@ static void fallback_rows(void)
     CHECK("its refusal is logged", warnings == 2);
 
     model_reset(KIND_PAD, V2_PRESSURE);
-    drop_reads = 9;
+    drop_reads = 3;
     CHECK("a version 2 pad that answers its read back late comes up", bring_up_now());
     CHECK("the read back tried again after three tries of half a second and two seconds",
           waits == 3 && waited_us == 3000000);
     CHECK("its registers are set", regs[0x10] == 0x54);
     CHECK("each wait with interrupts on", waits_irq_on == 3 && irq_on);
 
-    drop_reads = 9;
+    drop_reads = 3;
     waits = 0;
     ticks_before = kernel_ticks;
     reconnect_wanted = RECONNECT_PORT;
