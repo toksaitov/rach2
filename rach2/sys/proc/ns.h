@@ -343,16 +343,20 @@ void ns_exec(process_t *p);
  * controls KVM_CAP_VM_DISABLE_NX_HUGE_PAGES; CAP_SYS_TTY_CONFIG controls
  * vhangup; CAP_SYS_RAWIO, with CAP_SYS_ADMIN, both in the first user
  * namespace, a write of an IOMMU group's type; CAP_CHECKPOINT_RESTORE, as
- * CAP_SYS_ADMIN does, a write of kernel/ns_last_pid. */
+ * CAP_SYS_ADMIN does, a write of kernel/ns_last_pid; CAP_NET_ADMIN, held
+ * in the first user namespace, a write of /proc/sys/net; CAP_SYS_RESOURCE
+ * in a user namespace, a write of its /proc/sys/user limits. */
 #define CAP_LAST_CAP           40
 #define CAP_HIGH_WORD          0x1FFu
 #define CAP_DAC_OVERRIDE       1
 #define CAP_DAC_READ_SEARCH    2
 #define CAP_SETPCAP            8
+#define CAP_NET_ADMIN          12
 #define CAP_SYS_RAWIO          17
 #define CAP_SYS_CHROOT         18
 #define CAP_SYS_ADMIN          21
 #define CAP_SYS_BOOT           22
+#define CAP_SYS_RESOURCE       24
 #define CAP_SYS_TTY_CONFIG     26
 #define CAP_CHECKPOINT_RESTORE 40
 

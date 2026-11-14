@@ -335,6 +335,10 @@ int synth_sys_count(void);
 #define SYNTH_SYS_PID_MAX                9
 #define SYNTH_SYS_HOSTNAME               11
 #define SYNTH_SYS_DOMAINNAME             12
+/* The directories net and user, whose files' permissions Linux's
+ * net_ctl_permissions and set_permissions give. */
+#define SYNTH_SYS_NET                    20
+#define SYNTH_SYS_USER                   52
 /* The entry of net/ipv4/ip_forward, which takes a write of 0. */
 #define SYNTH_SYS_IP_FORWARD             22
 /* The entries of fs/inotify's max_queued_events, max_user_instances and

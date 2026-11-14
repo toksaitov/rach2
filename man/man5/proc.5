@@ -1,4 +1,4 @@
-.Dd November 13, 2026
+.Dd November 14, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -18,9 +18,10 @@ A process that is gone by then makes that read fail with
 .Er ESRCH .
 The exceptions are
 .Pa /proc/PID/oom_score_adj ,
-.Pa /proc/PID/mem
-and
-.Pa /proc/acpi/call ,
+.Pa /proc/PID/mem ,
+.Pa /proc/acpi/call
+and the files of
+.Pa /proc/sys ,
 which each read reaches as they are then.
 A read or a write holds the descriptor's open file description for its
 length, as
@@ -1221,9 +1222,8 @@ and
 .Pa kernel/domainname ,
 the host and domain names of the reader's UTS namespace, as
 .Xr uname 2
-reports them, read when the file is opened, and set by a write of a caller
-privileged over the namespace to the text before its first newline, at
-most 64 bytes;
+reports them, which root's write sets to the text before its first
+newline, at most 64 bytes;
 .Pa kernel/overflowuid
 and
 .Pa kernel/overflowgid ,
@@ -1275,7 +1275,7 @@ fail with
 .Pa kernel/random/boot_id ,
 a random UUID drawn at its first read that stays for the boot, and
 .Pa kernel/random/uuid ,
-a new one at each open;
+a new one at each read;
 .Pa vm/max_map_count ,
 65536, the regions of memory a process may map, as
 .Xr mmap 2
@@ -1439,6 +1439,30 @@ write
 .Ql default Ns 's
 secret at start-up, from
 .Pa /var/lib/ipv6-stable-secret .
+Each file of
+.Pa /proc/sys
+is root's, with mode 0644 when it takes a write, 0666 for
+.Pa kernel/ns_last_pid
+and 0444 otherwise.
+An open, and each read and write after it, checks the caller as Linux's
+.Fn sysctl_perm
+does: an effective user ID of 0 has the owner's bits, an effective or
+supplementary group ID of 0 the group's, and any other caller the
+others'.
+A holder of
+.Dv CAP_NET_ADMIN
+in the first user namespace has the owner's bits on the files of
+.Pa net ,
+and a holder of
+.Dv CAP_SYS_RESOURCE
+in its user namespace on those of
+.Pa user ,
+which other callers may only read.
+An open the mode refuses fails with
+.Er EACCES ,
+and a read or write through a descriptor whose process has since lost
+the access with
+.Er EPERM .
 .Pa kernel/hostname ,
 .Pa kernel/domainname ,
 .Pa kernel/random/boot_id ,

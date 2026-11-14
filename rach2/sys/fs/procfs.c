@@ -7392,6 +7392,7 @@ static int procfs_regen(struct procfs_file *f)
 }
 
 static int sysctl_numeric(int entry);
+static unsigned sysctl_mode(int entry);
 
 /**
  * Read the snapshot from the description's offset, which moves past what
@@ -8327,10 +8328,10 @@ int procfs_fd_writable(struct fd_entry *e)
     if (f->origin_file == SYNTH_PROC_ACPI_CALL) {
         return 0600;
     }
-    if (f->origin_file == SYNTH_PROC_SYSCTL && f->origin_pid == SYNTH_SYS_NS_LAST_PID) {
-        return 0666;
+    if (f->origin_file == SYNTH_PROC_SYSCTL) {
+        return sysctl_mode(f->origin_pid);
     }
-    return f->origin_file == SYNTH_PROC_SYSCTL && synth_sys_writable(f->origin_pid) ? 0644 : 0;
+    return 0;
 }
 
 /** Whether `c` is a space as Linux's `isspace` has it: a space, a tab, a
@@ -9064,10 +9065,10 @@ static int sysctl_ns_text(struct procfs_text *t, int entry)
  *
  * fs/file-nr is Linux's three figures: the open file descriptions, 0 for
  * the freed ones Linux keeps, and fs/file-max. kernel/random/boot_id is
- * drawn once, at its first read, and stays for the
- * boot; kernel/random/uuid is drawn anew for each open, as Linux draws it
- * for each read. Both come from the kernel's generator, whatever its seed,
- * since neither is a key. A file of net/ipv6/conf is `sysctl_ipv6_text`'s.
+ * drawn once, at its first read, and stays for the boot;
+ * kernel/random/uuid is drawn anew for each read, as Linux draws it. Both
+ * come from the kernel's generator, whatever its seed, since neither is a
+ * key. A file of net/ipv6/conf is `sysctl_ipv6_text`'s.
  *
  * Returns 0, or a negative errno: -EIO for a stable secret not written.
  */
@@ -9195,9 +9196,69 @@ static int sysctl_kind(int entry)
     }
 }
 
+/* The access a /proc/sys check asks for, Linux's MAY_WRITE and MAY_READ. */
+#define SYSCTL_MAY_WRITE 2
+#define SYSCTL_MAY_READ  4
+
+/** The mode of the /proc/sys file `entry`, as Linux's tables give it: 0666
+ * for kernel/ns_last_pid, 0644 for a file that takes a write and 0444 for
+ * any other, each owned by root. */
+static unsigned sysctl_mode(int entry)
+{
+    if (entry == SYNTH_SYS_NS_LAST_PID) {
+        return 0666;
+    }
+    return synth_sys_writable(entry) ? 0644 : 0444;
+}
+
 /**
- * Read a /proc/sys file opened for writing as well: its value at this
- * read, from the description's offset. A numeric file reads nothing past
+ * Whether the current process may have the access `op`, of SYSCTL_MAY_,
+ * to the /proc/sys file `entry`, as Linux's sysctl_perm judges it at the
+ * open and at each read and write. A file of net gives every class its
+ * owner's bits to a holder of CAP_NET_ADMIN (`net_ctl_permissions`), in
+ * the first user namespace, which owns the one set of values the stack
+ * keeps; a file of user does to a holder of CAP_SYS_RESOURCE in the
+ * caller's user namespace, whose limit it is, and gives the others read
+ * alone (`set_permissions`). Then `test_perm`: an effective uid of 0 takes
+ * the owner's bits, an effective or supplementary gid of 0 the group's,
+ * any other caller the others'. Capabilities count only as said, so root
+ * that dropped them still writes, and a setuid process does not.
+ * Returns 1 or 0.
+ */
+static int sysctl_may(int entry, unsigned op)
+{
+    const process_t *p = current_proc;
+    unsigned mode = sysctl_mode(entry);
+    int top = entry, up;
+    uint32_t i;
+
+    while ((up = synth_sys_parent(top)) > 0) {
+        top = up;
+    }
+    if (top == SYNTH_SYS_NET && ns_capable(p, NULL, CAP_NET_ADMIN)) {
+        mode = ((mode >> 6) & 7) * 0111;
+    } else if (top == SYNTH_SYS_USER) {
+        mode = ns_capable(p, proc_userns(p), CAP_SYS_RESOURCE) ? ((mode >> 6) & 7) * 0111 : 0444;
+    }
+    if (p->euid == 0) {
+        mode >>= 6;
+    } else {
+        int root_group = p->egid == 0;
+
+        for (i = 0; i < p->ngroups && !root_group; i++) {
+            root_group = p->groups[i] == 0;
+        }
+        if (root_group) {
+            mode >>= 3;
+        }
+    }
+    return (op & ~mode & 7) == 0;
+}
+
+/**
+ * Read a /proc/sys file: its value at this read, from the description's
+ * offset, or -EPERM once the reader may no longer read it
+ * (`proc_sys_call_handler`). A numeric file reads nothing past
  * offset 0, as Linux's numeric handlers give a read at any other offset
  * nothing (`__do_proc_dointvec`, `__do_proc_douintvec`,
  * `__do_proc_doulongvec_minmax`), so that a read after a write on one
@@ -9211,6 +9272,9 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
     uint32_t n = 0;
     int rc;
 
+    if (!sysctl_may(f->origin_pid, SYSCTL_MAY_READ)) {
+        return -EPERM;
+    }
     if (off != 0 && sysctl_numeric(f->origin_pid)) {
         return 0;
     }
@@ -9541,6 +9605,9 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     const char *dir;
     int key;
 
+    if (!sysctl_may(f->origin_pid, SYSCTL_MAY_WRITE)) {
+        return -EPERM;
+    }
     if (sysctl_numeric(f->origin_pid)) {
         return sysctl_num_write(e, f->origin_pid, buf, count);
     }
@@ -10122,34 +10189,31 @@ static int procfs_open_irq(const struct vpath *vp, int flags)
 }
 
 /**
- * Open a writable /proc/sys file for writing, or for reading and writing,
- * or kernel/ns_last_pid for any access, which
- * needs a privileged caller, as the file's mode, 0644 and owned by root, says;
- * the names of the UTS namespace need privilege over it, and a limit of
- * /proc/sys/user privilege in the caller's user namespace, whose limit it
- * is, as Linux lets the root of a user namespace write its own;
- * kernel/ns_last_pid, whose mode is 0666 as on Linux, opens for anyone and
- * checks its writer at each write (`pidns_set_last_pid`); each read gives
- * the cursor of the reader's PID namespace at that read, as Linux's
- * pid_ns_ctl_handler reads it, even through a descriptor another process
- * opened. O_CREAT and
+ * Open a /proc/sys file, -EACCES unless `sysctl_may` grants the access the
+ * flags ask, as Linux's proc_sys_permission does: a read for O_RDONLY, a
+ * write for O_WRONLY or O_TRUNC, both for O_RDWR. kernel/ns_last_pid,
+ * whose mode is 0666 as on Linux, opens for anyone and checks its writer at
+ * each write (`pidns_set_last_pid`); each read gives the cursor of the
+ * reader's PID namespace at that read, as Linux's pid_ns_ctl_handler reads
+ * it, even through a descriptor another process opened. O_CREAT and
  * O_TRUNC are taken as they are for a file that exists, which is what a
  * shell's redirection and BusyBox's `sysctl -w` ask for. Each read and
- * write reaches the value as it is then.
+ * write reaches the value as it is then, and checks the access again.
  */
 static int procfs_open_sysctl(int entry, int flags)
 {
     struct procfs_file *f;
     fd_entry_t *e;
     int acc = flags & 3;
+    unsigned op = acc == 0   ? SYSCTL_MAY_READ
+                  : acc == 1 ? SYSCTL_MAY_WRITE
+                             : SYSCTL_MAY_READ | SYSCTL_MAY_WRITE;
     int fd;
 
-    if (acc == 3 ||
-        !((entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) ? uts_privileged()
-          : entry == SYNTH_SYS_NS_LAST_PID                               ? 1
-          : entry == SYNTH_SYS_MAX_MNT_NAMESPACES
-              ? ns_privileged(current_proc, proc_userns(current_proc))
-              : proc_privileged(current_proc))) {
+    if (flags & 01000 /* O_TRUNC */) {
+        op |= SYSCTL_MAY_WRITE;
+    }
+    if (acc == 3 || !sysctl_may(entry, op)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -10532,8 +10596,7 @@ static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid,
 /**
  * Open the file `vp` names, of process `pid` when it is one of a process,
  * through the open of its own when it has one: oom_score_adj, a write of an
- * ID map or comm, mem, a write of a /proc/sys file or any open of
- * kernel/ns_last_pid, the ACPI call file, a
+ * ID map or comm, mem, a /proc/sys file, the ACPI call file, a
  * PCI function's config and BAR files, and a write of a /sys attribute.
  * Returns 1 with the open's answer in `*fd`, or 0 for a file with none.
  */
@@ -10550,8 +10613,7 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
         *fd = procfs_open_idmap(vp, vp->procfile, pid, flags);
     } else if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
         *fd = procfs_open_mem(vp, pid, flags);
-    } else if (vp->kind == VNODE_PROC_SYS_FILE && ((synth_sys_writable(vp->sysent) && acc != 0) ||
-                                                   vp->sysent == SYNTH_SYS_NS_LAST_PID)) {
+    } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         *fd = procfs_open_sysctl(vp->sysent, flags);
     } else if (vp->kind == VNODE_PROC_ACPI_CALL) {
         *fd = procfs_open_acpicall(flags);

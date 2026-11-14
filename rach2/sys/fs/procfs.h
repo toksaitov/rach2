@@ -354,10 +354,11 @@ void procfs_owner_drop(struct synth_owner *o);
  * for another file; -1 when `e` is no such descriptor. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 
-/** The permission bits of `e` when it is open on a /proc/sys or /sys file,
- * or /proc/acpi/call, a privileged caller may write: 0600 for
- * /proc/acpi/call, which root alone reads, and 0644 for the others; 0 when
- * `e` is no such descriptor. */
+/** The permission bits of `e` when it is open on a /proc/sys file, a /sys
+ * file a privileged caller may write, or /proc/acpi/call: 0600 for
+ * /proc/acpi/call, which root alone reads, a /proc/sys file's mode as
+ * Linux's table gives it, and 0644 for the others; 0 when `e` is no such
+ * descriptor. */
 int procfs_fd_writable(struct fd_entry *e);
 
 #endif /* _PROCFS_H_ */
