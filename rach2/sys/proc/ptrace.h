@@ -20,6 +20,7 @@
 #define PT_INTERRUPT 0x10u /* PTRACE_INTERRUPT, or a change of its group stop, requests a stop */
 #define PT_START     0x20u /* a seized thread's first stop is still to come */
 #define PT_LISTEN    0x40u /* PTRACE_LISTEN keeps it in its group stop until that changes */
+#define PT_NOINFO    0x80u /* its ptrace stop, a group stop not seized, has no siginfo */
 
 /* The events of a stop, in bits 16-23 of its wait status, and the option bit
  * that enables each, 1 << event. */

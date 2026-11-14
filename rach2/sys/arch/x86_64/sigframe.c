@@ -161,9 +161,10 @@ static int is_sigsys(int signo, int32_t code)
 /**
  * The x86-64 siginfo: signo, errno and code, then at byte 16, past the
  * padding that aligns the union, Linux x86-64's fields of the kind the
- * code says: a fault's address, and for SIGSEGV with SEGV_PKUERR the key
- * at 32, `si_pkey`; a seccomp SIGSYS's call address, call
- * number at 24 and architecture at 28; and otherwise the sender's or
+ * code says, as Linux's siginfo_layout reads it: a fault's address, for a
+ * fault signal's code between SI_USER and SI_KERNEL, and for SIGSEGV with
+ * SEGV_PKUERR the key at 32, `si_pkey`; a seccomp SIGSYS's call address,
+ * call number at 24 and architecture at 28; and otherwise the sender's or
  * child's pid and uid at 16 and 20 and, at 24, a timer's or a queued
  * signal's si_value, all eight bytes, or a child's status. For a timer the
  * first two are its id and overrun.
@@ -172,7 +173,7 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
 {
     int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
                  signo == SIGTRAP) &&
-                info->code > 0;
+                info->code > 0 && info->code < SI_KERNEL;
 
     k_memset(out, 0, SIGINFO_SIZE);
     put32(out, (uint32_t)signo);

@@ -66,7 +66,9 @@ static int kill_pending(void)
  *
  * The tracer's wait reports the stop once; a SIGCHLD and a wake of the
  * tracer's child queue tell it of the stop. `info` is the siginfo
- * PTRACE_GETSIGINFO reads, none for a stop that is not a signal's. A thread
+ * PTRACE_GETSIGINFO reads; NULL, for a group stop of a thread not seized,
+ * leaves the stop without one, and the request fails with -EINVAL, as
+ * Linux's do_jobctl_trap passes ptrace_stop no siginfo. A thread
  * whose tracer has gone does not stop: it is no longer traced, and gets the
  * stop's own signal back, as though the tracer had resumed it with that.
  */
@@ -84,8 +86,10 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
     }
     if (info) {
         self->ptrace_info = *info;
+        self->ptrace &= ~PT_NOINFO;
     } else {
         k_memset(&self->ptrace_info, 0, sizeof(self->ptrace_info));
+        self->ptrace |= PT_NOINFO;
     }
     self->ptrace_signo = 0;
     self->ptrace_reported = 0;
@@ -118,6 +122,26 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
     return self->ptrace_signo;
 }
 
+/**
+ * Stop the current thread for its tracer with the wait status `status`, for
+ * a stop that no signal makes, with the siginfo Linux 6.12's
+ * ptrace_do_notify gives it (kernel/signal.c): the stop's signal, the code
+ * of the status's bits 8-23, `SIGTRAP | event << 8` for an event stop, and
+ * the thread's own ID and real user ID as its namespaces see them. Returns
+ * what `ptrace_stop` returns.
+ */
+static int ptrace_notify(uint32_t status)
+{
+    process_t *self = current_proc;
+    struct k_siginfo info;
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = (int32_t)((status >> 8) & 0xFFFFu);
+    info.pid = pid_seen_by(self, self->pid);
+    info.uid = ns_uid_from_kernel(proc_userns(self), self->ruid);
+    return ptrace_stop(status, &info);
+}
+
 /** The flags are read again after each stop, since the tracer may request
  * another while the thread is stopped; a pending SIGKILL ends the loop, so
  * that signal delivery can end the thread. */
@@ -130,7 +154,7 @@ void ptrace_return_stops(void)
            !kill_pending()) {
         signo = self->tg->stop ? self->tg->stop : SIGTRAP;
         self->ptrace &= ~(PT_START | PT_INTERRUPT);
-        (void)ptrace_stop(((uint32_t)PTRACE_EVENT_STOP << 16) | (signo << 8) | 0x7F, NULL);
+        (void)ptrace_notify(((uint32_t)PTRACE_EVENT_STOP << 16) | (signo << 8) | 0x7F);
     }
 }
 
@@ -188,9 +212,10 @@ int ptrace_group_stop(int signo)
     self->ptrace &= ~PT_INTERRUPT;
     status = ((uint32_t)signo << 8) | 0x7F;
     if (self->ptrace & PT_SEIZED) {
-        status |= (uint32_t)PTRACE_EVENT_STOP << 16;
+        (void)ptrace_notify(status | (uint32_t)PTRACE_EVENT_STOP << 16);
+    } else {
+        (void)ptrace_stop(status, NULL);
     }
-    (void)ptrace_stop(status, NULL);
     ptrace_return_stops();
     return 1;
 }
@@ -255,7 +280,7 @@ void ptrace_event(int event, uint32_t msg)
         return;
     }
     self->ptrace_msg = msg;
-    (void)ptrace_stop(((uint32_t)event << 16) | ((uint32_t)SIGTRAP << 8) | 0x7F, NULL);
+    (void)ptrace_notify(((uint32_t)event << 16) | ((uint32_t)SIGTRAP << 8) | 0x7F);
 }
 
 void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
@@ -283,7 +308,7 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     if (!stepping) {
         self->ptrace_msg = leaving ? PTRACE_EVENTMSG_SYSCALL_EXIT : PTRACE_EVENTMSG_SYSCALL_ENTRY;
     }
-    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);
+    sig = stepping ? ptrace_stop((signo << 8) | 0x7F, &info) : ptrace_notify((signo << 8) | 0x7F);
     if (!stepping) {
         self->ptrace_msg = 0;
     }
@@ -670,12 +695,17 @@ static int32_t tracee_memory(process_t *t, uintptr_t addr, void *word, uint32_t 
 /** PTRACE_GETSIGINFO and PTRACE_SETSIGINFO: the siginfo of the stop of `t`,
  * the thread `pid`, as the 128-byte `siginfo_t` at `data`, in the tracer's
  * layout, the i386 one for an i386 tracer on x86-64 whatever the tracee
- * runs, as Linux's `compat_ptrace_request` has it. 0, -EFAULT, or -ESRCH
+ * runs, as Linux's `compat_ptrace_request` has it. 0, -EFAULT, -EINVAL for
+ * a stop that has no siginfo (`PT_NOINFO`), as Linux's ptrace_getsiginfo
+ * and ptrace_setsiginfo refuse a stop without last_siginfo, or -ESRCH
  * for a thread gone from its stop during the copy in. */
 static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[SIGINFO_SIZE];
 
+    if (t->ptrace & PT_NOINFO) {
+        return -EINVAL;
+    }
     if (!set) {
         siginfo_to_caller(buf, (int)((t->ptrace_status >> 8) & 0x7F), &t->ptrace_info);
         return copy_to_user((void __user *)data, buf, sizeof(buf)) == 0 ? 0 : -EFAULT;
@@ -686,6 +716,9 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
     t = ptrace_tracee(pid);
     if (!t) {
         return -ESRCH;
+    }
+    if (t->ptrace & PT_NOINFO) {
+        return -EINVAL;
     }
     siginfo_from_caller(buf, &t->ptrace_info);
     return 0;

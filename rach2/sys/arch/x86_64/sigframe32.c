@@ -126,7 +126,8 @@ static uint32_t get32(const uint8_t *p)
 /**
  * The i386 siginfo: signo, errno and code, then at byte 12 the union, with
  * the fields of the kind the code says, as Linux's
- * `copy_siginfo_to_user32` writes them: a fault's address, and for SIGSEGV
+ * `copy_siginfo_to_user32` writes them: a fault's address, for a fault
+ * signal's code between SI_USER and SI_KERNEL, and for SIGSEGV
  * with SEGV_PKUERR the key at 20, `si_pkey`; a seccomp
  * SIGSYS's call address, call number at 16 and architecture at 20; and
  * otherwise the sender's or child's pid and uid at 12 and 16 and, at 20, a
@@ -138,7 +139,7 @@ void ia32_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info)
 {
     int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
                  signo == SIGTRAP) &&
-                info->code > 0;
+                info->code > 0 && info->code < SI_KERNEL;
 
     k_memset(out, 0, SIGINFO_SIZE);
     put32(out, (uint32_t)signo);

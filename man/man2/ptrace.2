@@ -459,6 +459,24 @@ describes.
 The 128-byte
 .Vt siginfo_t
 of the stop.
+A signal-delivery stop has the signal's.
+Every other stop but a group stop of a tracee that was not seized has
+the stop's signal in
+.Fa si_signo ,
+the status's bits 8 to 23 in
+.Fa si_code ,
+.Dv SIGTRAP | Pq Dv PTRACE_EVENT_STOP No << 8
+for a
+.Dv PTRACE_EVENT_STOP
+outside a group stop, and the tracee's own thread ID and real user ID in
+.Fa si_pid
+and
+.Fa si_uid ,
+as Linux gives them.
+A group stop of a tracee that was not seized has none, and both requests
+fail there with
+.Er EINVAL ,
+which tells it from a signal-delivery stop of the stop signal.
 .It Dv PTRACE_GET_THREAD_AREA , PTRACE_SET_THREAD_AREA
 The TLS descriptor of entry
 .Fa addr ,
@@ -634,8 +652,12 @@ of
 has less than the whole image.
 .It Bq Er EINVAL
 A debug register, an MXCSR, an XSAVE header, a TLS descriptor or entry,
-an option, or a register set the kernel does not take, or a register set's
-length that is not a multiple of its unit.
+an option, or a register set the kernel does not take, a register set's
+length that is not a multiple of its unit, or
+.Dv PTRACE_GETSIGINFO
+or
+.Dv PTRACE_SETSIGINFO
+at a stop that has no siginfo.
 .It Bq Er EIO
 An unknown request, a
 .Vt struct user
