@@ -131,7 +131,8 @@ tar xf "$TARBALL" -C "$WORK"
 # system instructions, links by a GNU ld script, knows GCC's name for
 # offsetof, and gives the x86-64 runtime's va_arg no call of abort(); and on
 # x86-64 it clears the high half of an unsigned int widened to 64 bits or
-# converted to floating point, and scales an index into a VLA in 64 bits.
+# converted to floating point, keeps a VLA's size in a size_t, and scales an
+# index into a pointer to a VLA by the VLA's size.
 # Patches applied here rather than an edited tree, so the vendored source stays
 # as upstream shipped it and the diff a reader wants is a file in this
 # repository. A patch that does not apply is a build that stops: silently
@@ -164,7 +165,8 @@ if ! grep -q "s1->seg_size = 64;" "$SRC/tccasm.c" ||
    ! grep -q '"__builtin_offsetof(type, field)"' "$SRC/libtcc.c" ||
    ! grep -q "__builtin_trap();" "$SRC/lib/va_list.c" ||
    ! grep -q "movl r, r clears the high half" "$SRC/tccgen.c" ||
-   ! grep -q "the int size of a VLA, widened" "$SRC/tccgen.c" ||
+   ! grep -q "the size is a size_t, as GCC keeps it" "$SRC/tccgen.c" ||
+   ! grep -q "a VLA, or a pointer to one" "$SRC/tccgen.c" ||
    ! grep -q "movl r, r clears the high half, which fildll reads" "$SRC/x86_64-gen.c"; then
     echo "tcc: the kernel's assembler, linker, runtime or code generation changes are not in the source it is about to build" >&2
     exit 1

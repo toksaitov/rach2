@@ -1,7 +1,8 @@
 Clear the high half of an unsigned int that x86-64 code reads from a whole
 64-bit register: where it widens the value to 64 bits and where it converts
-it to floating point. Widen the size of a VLA's element before it scales an
-index, so that the 64-bit add of the pointer takes a 64-bit product.
+it to floating point. Keep the size of a VLA in size_t, as GCC does, so
+that an index scales by it in the pointer's width, and scale an index into
+a declared pointer to a VLA row by the row's size.
 
 On a 64-bit target gen_cast emits nothing for a cast of a 64-bit value to
 unsigned int, which leaves the value's high half in its register, and
@@ -18,11 +19,23 @@ cvtsi2ss, and to long double with fildll of the whole register pushed, so
 (double)(unsigned)(c ? a : 0) with a = 0x100000001 came out 4294967297.
 It now clears the high half with movl r, r before either.
 
-The size of a VLA's element is an int, so an index into a pointer to one
-was scaled by a 32-bit imul, whose product the 64-bit add of the pointer
-took as zero-extended: p + i with i = -1 moved p almost 4 GiB forward. The
-size is now cast to long long first, which widens the index with it, by
-movslq or movl, and makes the multiply 64 bits wide.
+tcc kept the size of a VLA in an int slot and read it back as an int. An
+index into a pointer to a VLA row was scaled by a 32-bit imul, whose
+product the 64-bit add of the pointer took as zero-extended, so p + i
+with i = -1 moved p almost 4 GiB forward; and a size of 0x80000000 or
+more, which an int cannot hold, read back negative. The slot is now a
+size_t, the product of a length and an element's size is a size_t, and an
+element of fixed size is pushed as one, so that the index is widened to
+the pointer's width, by movslq for a signed index and movl for an
+unsigned one, before a 64-bit multiply. The difference of two pointers to
+VLA rows divides by the size cast to ptrdiff_t, which keeps the quotient
+signed. On i386 size_t is 32 bits wide and the code is the same.
+
+gen_op took the runtime size only for an operand whose own type has
+VT_VLA, which an array of variable length has and a declared pointer to
+one, int (*p)[n], does not: p + 1 moved p by the size of a pointer and
+p - q divided by it, on both targets. It now takes the runtime size when
+the pointed type has VT_VLA too.
 
 Every other use of a 32-bit value is a 32-bit instruction, a load or store
 of 32 bits, or an argument or return value, whose high half the ABI leaves
@@ -30,24 +43,29 @@ undefined.
 
 --- a/tccgen.c
 +++ b/tccgen.c
-@@ -2221,9 +2221,14 @@ redo:
+@@ -2195,8 +2195,11 @@ redo:
+                 tcc_error("cannot use pointers here");
+             check_comparison_pointer_types(vtop - 1, vtop, op);
+             /* XXX: check that types are compatible */
+-            if (vtop[-1].type.t & VT_VLA) {
++            /* a VLA, or a pointer to one, whose own type has no VT_VLA */
++            if ((vtop[-1].type.t | pointed_type(&vtop[-1].type)->t) & VT_VLA) {
+                 vla_runtime_pointed_size(&vtop[-1].type);
++                /* a size_t size would make the quotient unsigned */
++                gen_cast(&ptrdiff_type);
+             } else {
+                 vpushi(pointed_size(&vtop[-1].type));
+             }
+@@ -2221,7 +2224,7 @@ redo:
  #endif
              type1 = vtop[-1].type;
              type1.t &= ~VT_ARRAY;
 -            if (vtop[-1].type.t & VT_VLA)
-+            if (vtop[-1].type.t & VT_VLA) {
++            if ((vtop[-1].type.t | pointed_type(&vtop[-1].type)->t) & VT_VLA)
                  vla_runtime_pointed_size(&vtop[-1].type);
--            else {
-+#if PTR_SIZE == 8
-+                /* the int size of a VLA, widened so that the index is
-+                   too and the pointer takes all 64 bits of the product */
-+                gen_cast_s(VT_LLONG);
-+#endif
-+            } else {
+             else {
                  u = pointed_size(&vtop[-1].type);
-                 if (u < 0)
-                     tcc_error("unknown array element size");
-@@ -2619,6 +2624,16 @@ static void gen_cast(CType *type)
+@@ -2619,6 +2622,16 @@ static void gen_cast(CType *type)
  #error
  #endif
                      }
@@ -64,6 +82,37 @@ undefined.
                  }
  #endif
              } else if (dbt == VT_BOOL) {
+@@ -2726,9 +2739,9 @@ ST_FUNC void vla_runtime_type_size(CType *type, int *a)
+ {
+     if (type->t & VT_VLA) {
+         type_size(&type->ref->type, a);
+-        vset(&int_type, VT_LOCAL|VT_LVAL, type->ref->c);
++        vset(&size_type, VT_LOCAL|VT_LVAL, type->ref->c);
+     } else {
+-        vpushi(type_size(type, a));
++        vpushs(type_size(type, a));
+     }
+ }
+ 
+@@ -4368,13 +4381,16 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+         t1 |= type->t & VT_VLA;
+         
+         if (t1 & VT_VLA) {
+-            loc -= type_size(&int_type, &align);
++            /* the size is a size_t, as GCC keeps it, so that the length
++               times the element's size neither wraps at 32 bits nor
++               reads back sign-extended */
++            loc -= type_size(&size_type, &align);
+             loc &= -align;
+             n = loc;
+ 
+             vla_runtime_type_size(type, &align);
+             gen_op('*');
+-            vset(&int_type, VT_LOCAL|VT_LVAL, n);
++            vset(&size_type, VT_LOCAL|VT_LVAL, n);
+             vswap();
+             vstore();
+         }
 --- a/x86_64-gen.c
 +++ b/x86_64-gen.c
 @@ -2087,6 +2087,9 @@ void gen_cvt_itof(int t)

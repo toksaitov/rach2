@@ -159,10 +159,21 @@ Faults this milestone found in another project's code, one section each, in the 
 ## TinyCC's x86-64 code adds a 32-bit index into a VLA to a 64-bit pointer
 
 * Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccgen.c` and `x86_64-gen.c`.
-* Fails: `gen_op` scales the index of a pointer into an array of variable length by the element's size, which `vla_runtime_pointed_size` (`tccgen.c` line 2225) pushes as an `int` where a fixed size is pushed as a `long long`, so the multiply is 32 bits wide; `gen_opic` then adds the product to the pointer with a width that `gen_opi` takes from the pointer alone (`x86_64-gen.c` line 1742), 64 bits, and a negative product, zero-extended by the 32-bit `imul`, moves the pointer almost 4 GiB forward.
+* Fails: `post_type` stores the size of a VLA in an `int` slot (`tccgen.c` line 4371) and `vla_runtime_type_size` reads it back as an `int` (line 2729). `gen_op` scales the index of a pointer into an array of variable length by that size, where a fixed size is pushed as a `long long`, so the multiply is 32 bits wide; `gen_opic` then adds the product to the pointer with a width that `gen_opi` takes from the pointer alone (`x86_64-gen.c` line 1742), 64 bits, and a negative product, zero-extended by the 32-bit `imul`, moves the pointer almost 4 GiB forward. A size of 0x80000000 or more, which the `int` cannot hold, reads back negative, and a cast of it to 64 bits moves the pointer backward. GCC keeps the size in a `size_t`.
 * Found: 2026-11-14, the owner's Mac, milestone 84, task 84-261e, reading the code generator for paths that read a 32-bit value from a whole register.
-* Reproduction: compile `long g(int n, int i) { int a[2][n]; return (char *)(a + i) - (char *)a; }` with the x86-64 TinyCC 0.9.27 and read the object: `imul %ecx,%eax` is followed by `add %rax,%rcx`, and `g(3, -1)` returns 4294967284 in place of -12.
+* Reproduction: compile `long g(int n, int i) { int a[2][n]; return (char *)(a + 1 + i) - (char *)a; }` with the x86-64 TinyCC 0.9.27 and read the object: `imul %ecx,%eax` is followed by `add %rax,%rcx`, and `g(3, -1)` returns 4294967296 in place of 0.
 * Evidence: `vendor/tcc/rach2-x86_64-zero-extend.patch`; the `widened` assertion of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
-* Rach2: `vendor/tcc/rach2-x86_64-zero-extend.patch` casts the element's size to `long long` before the multiply on a 64-bit target, which widens the index with it and makes the multiply 64 bits wide.
+* Rach2: `vendor/tcc/rach2-x86_64-zero-extend.patch` keeps the size in a `size_t` slot, computes the product of a length and an element's size as a `size_t` and pushes a fixed element size as one, so that the index is widened to the pointer's width before the multiply; the difference of two pointers to VLA rows divides by the size cast to `ptrdiff_t`.
 * Status: unreported.
 * Next: read the mob branch's pointer arithmetic for a VLA, and report it with the reproduction if it is unchanged.
+
+## TinyCC scales an index into a pointer to a VLA by the size of a pointer
+
+* Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccgen.c`.
+* Fails: `gen_op` takes the runtime size of the pointed type only when the pointer operand's own type has `VT_VLA` (`tccgen.c` lines 2198 and 2224), which an array of variable length has and a declared pointer to one, `int (*p)[n]`, does not. `pointed_size` then gives the size of the pointed array type, which `type_size` takes for a pointer's, so `p + 1` moves `p` by 8 bytes on x86-64 and 4 on i386, and `p - q` divides by the same.
+* Found: 2026-11-14, the owner's Mac, milestone 84, task 84-261j, reading the code a host-built x86-64 TinyCC made for the test of the VLA's size.
+* Reproduction: compile `long g(int n) { int a[2][n]; int (*p)[n] = a; return (char *)(p + 1) - (char *)a; }` with TinyCC 0.9.27 for either target and read the object: the add is of the constant 8, or 4, and `g(3)` returns 8, or 4, in place of 12.
+* Evidence: `vendor/tcc/rach2-x86_64-zero-extend.patch`; the `widened` assertion of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
+* Rach2: `vendor/tcc/rach2-x86_64-zero-extend.patch` takes the runtime size when the pointed type has `VT_VLA` too.
+* Status: unreported.
+* Next: read the mob branch's `gen_op`, whose `vpush_type_size` of the pointed type may already cover it, and report it with the reproduction if not.
