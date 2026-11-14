@@ -15,7 +15,9 @@
  * more handled sources, at the same address and finding nothing, is
  * swallowed, as Linux's default_do_nmi swallows it
  * (arch/x86/kernel/nmi.c:404-405, 472-475), while one after a single source
- * is not.
+ * is not. One row more runs the soft-lockup detector's timer past its
+ * threshold with the host having stopped the guest and without
+ * (`arch_guest_paused`).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -25,12 +27,16 @@
 extern int printf(const char *fmt, ...);
 
 static int failures;
-static int overflow_ret; /* what the counter's overflow check returns */
-static int stop_ret;     /* what the check for another processor's stop returns */
-static int calls;        /* calls of the models below, in order */
-static int backtrace_at; /* the order of the backtrace's frame check, 0 for none */
-static int overflow_at;  /* the order of the last overflow check, 0 for none */
-static int handled_at;   /* the order of the last platform_pmu_handled */
+static int overflow_ret;    /* what the counter's overflow check returns */
+static int stop_ret;        /* what the check for another processor's stop returns */
+static int calls;           /* calls of the models below, in order */
+static int backtrace_at;    /* the order of the backtrace's frame check, 0 for none */
+static int overflow_at;     /* the order of the last overflow check, 0 for none */
+static int handled_at;      /* the order of the last platform_pmu_handled */
+static uint64_t cycles_now; /* the counter of 1 GHz, the detectors' clock */
+static int guest_paused;    /* what the host's stop of the guest reads as */
+static int paused_asked;    /* how often the timer asked for it */
+static int crit_logs;       /* records logged as KLOG_CRIT, a lockup's report */
 
 /** Record one failed contract. */
 static void check(int ok, const char *what)
@@ -106,7 +112,7 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
 
 uint64_t arch_cycles(void)
 {
-    return 0;
+    return cycles_now;
 }
 
 void arch_irq_enable(void)
@@ -182,9 +188,21 @@ void kirq_restore(uint32_t flags)
 
 void klog(int level, const char *subsystem, const char *format, ...)
 {
-    (void)level;
     (void)subsystem;
     (void)format;
+    if (level == KLOG_CRIT) {
+        crit_logs++;
+    }
+}
+
+/** Whether the host stopped the guest, as the row says, once. */
+int arch_guest_paused(void)
+{
+    int was = guest_paused;
+
+    paused_asked++;
+    guest_paused = 0;
+    return was;
 }
 
 void klog_flush_stuck(void)
@@ -396,11 +414,49 @@ static void single_row(void)
     check(nmi_at(0x8000, 0, 0, 0) == 0, "and an empty NMI after it is not swallowed");
 }
 
+/**
+ * The soft-lockup timer of a processor that last scheduled 99 s ago: within
+ * the threshold of its last report it asks nothing; past it, a guest the
+ * host stopped meanwhile is no lockup, nothing is reported and the report's
+ * time stays, as Linux's watchdog_timer_fn returns on
+ * kvm_check_and_clear_guest_paused; the timer after it, with the guest not
+ * stopped since, reports.
+ */
+static void paused_row(void)
+{
+    struct wd_cpu *w = &wd[arch_cpu_id()];
+    isr_params_t frame;
+
+    reset(0);
+    k_memset(&frame, 0, sizeof(frame));
+    wd_ready = 1;
+    w->gen = wd_gen;
+    w->enabled = 1;
+    w->touch_ts = 1;
+    w->report_ts = 95;
+    cycles_now = (uint64_t)100 * 1000000000u;
+    paused_asked = crit_logs = 0;
+    guest_paused = 1;
+    watchdog_timer_fn(w, &frame);
+    check(paused_asked == 0 && crit_logs == 0 && guest_paused,
+          "a timer within the threshold of the last report asks for no stop of the guest");
+    w->report_ts = 1;
+    watchdog_timer_fn(w, &frame);
+    check(paused_asked == 1 && crit_logs == 0 && w->report_ts == 1,
+          "a guest the host stopped is not reported as a soft lockup");
+    watchdog_timer_fn(w, &frame);
+    check(paused_asked == 2 && crit_logs == 1 && w->report_ts == 100,
+          "and the timer after it, with no stop since, reports the lockup");
+    wd_ready = 0;
+    cycles_now = 0;
+}
+
 int main(void)
 {
     order_row();
     swallow_row();
     single_row();
+    paused_row();
     if (failures) {
         printf("watchdog-nmi-hosttest: result: fail: %d checks\n", failures);
         return 1;

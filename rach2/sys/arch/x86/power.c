@@ -21,6 +21,7 @@
 #include "board.h"
 #include "efirt.h"
 #include "itco.h"
+#include "kvmclock.h"
 #include "smpboot.h"
 #include "../../cmdline.h"
 #ifndef RACH2_HOSTTEST
@@ -600,6 +601,13 @@ static void power_halt_forever(void)
  * (virt/kvm/kvm_main.c:5665-5681), and
  * `emergency_reboot_disable_virtualization` does it on the calling processor
  * before the others (arch/x86/kernel/reboot.c:579-600, 636).
+ *
+ * Under KVM each processor takes its clock page back as it stops
+ * (`arch_stop`), and this one once the others have (`kvmclock_cpu_stop`),
+ * as Linux's kvm_guest_cpu_offline does on every processor at a restart
+ * and kvm_shutdown on the last, so that KVM writes no page of a system
+ * that has ended; the page keeps its last values, which the waits below
+ * still read.
  */
 void power_stop(int how)
 {
@@ -610,6 +618,7 @@ void power_stop(int how)
     }
     pci_msi_shutdown((int)arch_cpu_id());
     smp_stop_others();
+    kvmclock_cpu_stop();
 
     if (how == POWER_OFF) {
         power_acpica_s5();

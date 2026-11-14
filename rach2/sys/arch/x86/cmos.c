@@ -7,6 +7,7 @@
 #include "portio.h"
 #include "../../klog.h"
 #include "cmos.h"
+#include "kvmclock.h"
 
 /*
  * The century is inferred, not read. Register 0x32 has one on machines
@@ -303,9 +304,36 @@ static void rtc_two(char *out, int32_t value)
     out[1] = (char)('0' + value % 10);
 }
 
+/** Log the time the boot anchored real time to, `*when`, as
+ * `rtc: 2026-10-15 12:00:00 UTC`. */
+static void rtc_log_time(const rtc_time_t *when)
+{
+    char text[20];
+
+    rtc_two(text + 0, when->year / 100);
+    rtc_two(text + 2, when->year);
+    text[4] = '-';
+    rtc_two(text + 5, when->month);
+    text[7] = '-';
+    rtc_two(text + 8, when->day);
+    text[10] = ' ';
+    rtc_two(text + 11, when->hour);
+    text[13] = ':';
+    rtc_two(text + 14, when->minute);
+    text[16] = ':';
+    rtc_two(text + 17, when->second);
+    text[19] = '\0';
+    klog(KLOG_INFO, "rtc", "%s UTC", text);
+}
+
 /**
  * Read the CMOS clock once, at boot with interrupts on, anchor real time to
- * it (`rtc_anchor`), and log the time read.
+ * it (`rtc_anchor`), and log the time read. Where KVM's clock pages are
+ * kept, real time is KVM's wall clock in its place (`kvmclock_wallclock`),
+ * as Linux under KVM reads its boot time from kvm-clock and not from the
+ * CMOS clock (kvm_get_wallclock, arch/x86/kernel/kvmclock.c), each read
+ * of which is an exit; the CMOS clock is still the one /dev/rtc reads and
+ * sets.
  *
  * The clock is sampled twice and the pair used only when the two agree,
  * because the registers advance while they are read: a sample that
@@ -325,12 +353,16 @@ void rtc_init(void)
     rtc_snapshot_t first;
     rtc_snapshot_t second;
     rtc_time_t when;
-    char text[20];
     int64_t seconds = 0;
-    uint32_t uptime;
+    uint32_t uptime, nsec;
     int disposition;
     int try;
 
+    if (kvmclock_wallclock(&seconds, &nsec) && rtc_time_of_seconds(seconds, &when) == 0) {
+        rtc_anchor(seconds, kernel_uptime_seconds);
+        rtc_log_time(&when);
+        return;
+    }
     for (try = 0; try < RTC_SAMPLE_TRIES; try++) {
         if (rtc_sample(&first) != 0 || rtc_sample(&second) != 0) {
             break;
@@ -347,22 +379,7 @@ void rtc_init(void)
             break;
         }
         rtc_anchor(seconds, uptime);
-
-        rtc_two(text + 0, when.year / 100);
-        rtc_two(text + 2, when.year);
-        text[4] = '-';
-        rtc_two(text + 5, when.month);
-        text[7] = '-';
-        rtc_two(text + 8, when.day);
-        text[10] = ' ';
-        rtc_two(text + 11, when.hour);
-        text[13] = ':';
-        rtc_two(text + 14, when.minute);
-        text[16] = ':';
-        rtc_two(text + 17, when.second);
-        text[19] = '\0';
-        klog(KLOG_INFO, "rtc", "%s UTC", text);
-
+        rtc_log_time(&when);
         return;
     }
 

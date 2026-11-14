@@ -9,6 +9,7 @@
 
 #include "exits.h"
 #include "kcpu.h"
+#include "kvmclock.h"
 
 #include "../arch.h"
 #include "../../cmdline.h"
@@ -64,8 +65,14 @@ int arch_idle_poll(void)
     return idle_poll;
 }
 
+/** The processor takes its clock page back from KVM first
+ * (`kvmclock_cpu_stop`), as Linux's kvm_guest_cpu_offline does for a
+ * processor that goes offline or stops at a shutdown, so that KVM writes
+ * no more into memory the processor has left. */
 void arch_stop(void)
 {
+    __asm__ __volatile__("cli" : : : "memory");
+    kvmclock_cpu_stop();
     for (;;) {
         __asm__ __volatile__("cli; hlt" : : : "memory");
     }

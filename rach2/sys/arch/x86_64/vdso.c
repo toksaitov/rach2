@@ -12,6 +12,7 @@
 #include "../../lib/kstring.h"
 #include "../../mm/paging.h"
 #include "../../proc/elf.h"
+#include "../x86/kvmclock.h"
 #include "../x86/tsc.h"
 
 /*
@@ -455,7 +456,7 @@ uintptr_t vdso_frame(int abi, uint32_t page)
         return vdso_data_frame();
     }
     if (page == VDSO_KVM_PAGE) {
-        return tsc_kvm_page_frame();
+        return kvmclock_page_frame();
     }
 #if RACH2_IA32
     return abi == VDSO_IA32 ? vdso32_image_frame() : image_phys;

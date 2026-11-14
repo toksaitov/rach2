@@ -75,7 +75,13 @@
  * again and set, and the clock runs, where one 6% high stops it; and while
  * the second processor never answers, a drift of the boot processor, the
  * one of two left, is caught, since the turn it takes back keeps until it
- * measured its span, and so is a third processor's.
+ * measured its span, and so is a third processor's. With KVM's pages kept
+ * and a TSC Linux rates above kvm-clock, the TSC is the clock, watched
+ * against kvm-clock, and one that parts hands the clock to kvm-clock at
+ * the next tick (`kvm_tsc_watch_rows`); one Linux leaves unwatched has no
+ * watch; a TSC that disagreed at a processor's start leaves the clock to
+ * kvm-clock; and `no-kvmclock-vsyscall` keeps the clock off KVM's page
+ * (`kvm_tsc_choice_rows`).
  */
 
 #include "arch/x86_64/vclock.c"
@@ -181,7 +187,7 @@ uint64_t tsc_ordered(void)
 /** The running processor's page read whole: its TSC, KVM's clock it
  * converts it to, `kvm_back_ns` behind, and its stable bit, while pages
  * are kept. */
-int tsc_kvm_read(struct tsc_kvm_sample *s)
+int kvmclock_read(struct kvmclock_sample *s)
 {
     if (!kvm_kept_model) {
         return 0;
@@ -195,7 +201,7 @@ int tsc_kvm_read(struct tsc_kvm_sample *s)
 
 /** The TSC and KVM's clock it converts to by the boot processor's page,
  * `kvm_boot_back_ns` behind, while that page keeps its stable bit. */
-int tsc_kvm_boot_read(uint64_t *tsc, uint64_t *ns)
+int kvmclock_boot_read(uint64_t *tsc, uint64_t *ns)
 {
     if (!kvm_kept_model || kvm_boot_withdrawn) {
         return 0;
@@ -206,9 +212,35 @@ int tsc_kvm_boot_read(uint64_t *tsc, uint64_t *ns)
 }
 
 /** Whether the boot processor's page has withdrawn its stable bit now. */
-int tsc_kvm_boot_withdrawn(void)
+int kvmclock_boot_withdrawn(void)
 {
     return kvm_kept_model && kvm_boot_withdrawn;
+}
+
+/** Whether KVM's pages are kept. */
+int kvmclock_kept(void)
+{
+    return kvm_kept_model;
+}
+
+/* Whether `no-kvmclock-vsyscall` keeps KVM's clock from the vDSO, how the
+ * TSC rates against kvm-clock (`timer_tsc_kvm`), below it but in the rows
+ * of a TSC that `cpuid` says runs at one rate, and whether a processor's
+ * TSC disagreed with the boot processor's at its start. */
+static int kvm_novsyscall;
+static int tsc_kvm_rank_model = TSC_KVM_BELOW;
+static int tsc_unsynced;
+
+/** Whether the vDSO may read KVM's clock. */
+int kvmclock_vsyscall(void)
+{
+    return !kvm_novsyscall;
+}
+
+/** How the TSC rates against kvm-clock, as the row has it. */
+int timer_tsc_kvm(void)
+{
+    return tsc_kvm_rank_model;
 }
 
 /** The TSC's counts in a tick: 2 GHz, or none where no rate vouches for
@@ -257,12 +289,13 @@ uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
     return n / d;
 }
 
-/** Every processor's TSC agreed at its start. */
+/** Every processor's TSC agreed at its start, but in the row where
+ * processor 1's was 100 counts behind. */
 int tsc_synced(int *cpu, uint64_t *behind)
 {
-    *cpu = 0;
-    *behind = 0;
-    return 1;
+    *cpu = tsc_unsynced ? 1 : 0;
+    *behind = tsc_unsynced ? 100u : 0u;
+    return !tsc_unsynced;
 }
 
 /** `rdtscp` is there; a step of the page's build. */
@@ -1295,9 +1328,13 @@ static void boot_rows(void)
 static int woken[NR_CPUS];
 static int deaf[NR_CPUS];
 
-/** A boot without KVM's pages, with a TSC no rate vouches for and
- * `cpus` processors online, at second 10 of the machine's clock; the
- * clock's and the watch's state cleared. */
+/* Whether `watch_boot` boots with KVM's pages kept, whose rate vouches for
+ * the TSC's, as the rows of the TSC under kvm-clock have it. */
+static int boot_kvm;
+
+/** A boot without KVM's pages, with a TSC no rate vouches for, or with
+ * them (`boot_kvm`), and `cpus` processors online, at second 10 of the
+ * machine's clock; the clock's and the watch's state cleared. */
 static void watch_boot(int cpus)
 {
     int c;
@@ -1309,13 +1346,13 @@ static void watch_boot(int cpus)
     watch_refined = 0;
     floor_mono = 0;
     floor_raw = 0;
-    kvm_kept_model = 0;
+    kvm_kept_model = boot_kvm;
     kvm_boot_withdrawn = 0;
     kvm_here_withdrawn = 0;
     tick_lag_ns = 0;
     tsc_ahead = 0;
     tsc_held = 0;
-    tsc_untrusted = 1;
+    tsc_untrusted = !boot_kvm;
     watch_per_tick = boot_per_tick ? boot_per_tick : 2u * TICK_NS;
     for (c = 0; c < NR_CPUS; c++) {
         cpu_table[c].online = c < cpus;
@@ -1680,6 +1717,98 @@ static void watch_silent_rows(void)
     drift_ppm[2] = 0;
 }
 
+/**
+ * The TSC and kvm-clock where KVM's pages are kept, as Linux rates the two
+ * (`timer_tsc_kvm`). A TSC rated above kvm-clock is the clock, VCLOCK_TSC,
+ * watched against kvm-clock, the tick's clock, at KVM's rate from the
+ * first span; a second processor's TSC drifting 500 parts in a million
+ * parts it, and the tick after the stop starts the clock again on
+ * kvm-clock, VCLOCK_PVCLOCK, where it stays, as Linux falls back to
+ * kvm-clock once the TSC is marked unstable.
+ */
+static void kvm_tsc_watch_rows(void)
+{
+    uint32_t ran;
+
+    boot_kvm = 1;
+    tsc_kvm_rank_model = TSC_KVM_WATCHED;
+    watch_boot(2);
+    CHECK(vclock_running() && vclock_mode() == VCLOCK_TSC && !pv_counted,
+          "a TSC rated above kvm-clock is the clock where KVM's pages are kept");
+    CHECK(watching && watch_kvm && watch_refined,
+          "watched against kvm-clock at KVM's rate, with no first span to set one");
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(ran == 3u * TICK_HZ && vclock_running() && !watch_parted && woken[1] >= 1,
+          "a TSC that keeps time keeps the clock, each processor's span read");
+    drift_ppm[1] = 500;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && vclock_mode() == VCLOCK_NONE && ran <= 2u * TICK_HZ,
+          "a second processor's TSC drifting 500 parts in a million stops the clock");
+    CHECK(vclock_refusal() == 0, "which kvm-clock may run again");
+    CHECK(watch_tick() && vclock_mode() == VCLOCK_PVCLOCK && pv_counted && !watching,
+          "the tick after starts the clock again on kvm-clock, unwatched");
+    ran = watch_ticks(2u * TICK_HZ);
+    CHECK(ran == 2u * TICK_HZ && vclock_mode() == VCLOCK_PVCLOCK,
+          "and the clock stays on kvm-clock whatever the TSC drifts");
+
+    boot_kvm = 0;
+    tsc_kvm_rank_model = TSC_KVM_BELOW;
+    kvm_kept_model = 0;
+    drift_ppm[1] = 0;
+}
+
+/**
+ * The TSC where KVM's pages are kept and no watch decides: a TSC Linux
+ * leaves unwatched runs the clock with no watch. A processor whose TSC
+ * disagreed at its start leaves the clock to kvm-clock, and refuses it
+ * only without KVM's pages. Under `no-kvmclock-vsyscall` the vDSO reads no
+ * page of KVM's, so the clock runs only on a TSC rated above kvm-clock.
+ * The model is put back for the rows after.
+ */
+static void kvm_tsc_choice_rows(void)
+{
+    uint32_t ran;
+
+    boot_kvm = 1;
+    tsc_kvm_rank_model = TSC_KVM_RELIABLE;
+    watch_boot(2);
+    CHECK(vclock_running() && vclock_mode() == VCLOCK_TSC && !watching && !watch_kvm,
+          "a TSC Linux leaves unwatched runs the clock with no watch");
+    drift_ppm[1] = 500;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(ran == 3u * TICK_HZ && vclock_mode() == VCLOCK_TSC, "and nothing parts it");
+
+    tsc_unsynced = 1;
+    watch_boot(2);
+    CHECK(vclock_running() && vclock_mode() == VCLOCK_PVCLOCK && pv_counted,
+          "a TSC that disagreed at a processor's start leaves the clock to kvm-clock");
+    boot_kvm = 0;
+    watch_boot(2);
+    CHECK(!vclock_running() && vclock_refusal() != 0 && vclock_refusal() != vclock_parted_why,
+          "and refuses the clock where no page of KVM's is kept");
+    tsc_unsynced = 0;
+
+    boot_kvm = 1;
+    kvm_novsyscall = 1;
+    tsc_kvm_rank_model = TSC_KVM_BELOW;
+    watch_boot(1);
+    CHECK(!vclock_running() && vclock_refusal() == vclock_novsyscall_why,
+          "under no-kvmclock-vsyscall the vDSO reads no page of KVM's");
+    CHECK(!watch_tick() && vclock_mode() == VCLOCK_NONE, "and no tick starts the clock");
+    tsc_kvm_rank_model = TSC_KVM_WATCHED;
+    watch_boot(1);
+    CHECK(vclock_running() && vclock_mode() == VCLOCK_TSC,
+          "while a TSC rated above kvm-clock runs it all the same");
+    kvm_novsyscall = 0;
+    tsc_kvm_rank_model = TSC_KVM_BELOW;
+    boot_kvm = 0;
+    kvm_kept_model = 0;
+    tsc_untrusted = 0;
+    drift_ppm[1] = 0;
+}
+
 /** The watch's rows, as the comment at the head of this file says. */
 static void watch_rows(void)
 {
@@ -1690,6 +1819,8 @@ static void watch_rows(void)
     watch_fast_rows();
     watch_misrate_rows();
     watch_silent_rows();
+    kvm_tsc_watch_rows();
+    kvm_tsc_choice_rows();
 }
 
 /** Run the rows: 0 when every check passes, 1 otherwise. */

@@ -118,6 +118,11 @@ void vclock_start(void);
 /** Whether the clock runs from the TSC. */
 int vclock_running(void);
 
+/** What the running clock counts: VCLOCK_TSC, the TSC itself,
+ * VCLOCK_PVCLOCK, the TSC through KVM's clock pages, or VCLOCK_NONE while
+ * it does not run. Read without a lock. */
+uint32_t vclock_mode(void);
+
 /** The clock's generation: a count that goes up each time the clock stops
  * or starts running from the TSC, after the page shows the change, so that
  * KVM decides its VMs' master clocks again (kvm/pvclock.c), as Linux's

@@ -429,6 +429,13 @@ uint64_t arch_cpu_steal_ns(int cpu);
  * read without a lock; zero without a shared steal-time record. */
 int arch_cpu_preempted(int cpu);
 
+/** Whether the host stopped this guest since the last call on this
+ * processor, as KVM's clock page says once and this clears
+ * (x86/kvmclock.c), so that a stretch the guest did not run is not taken
+ * for a lockup, as Linux's kvm_check_and_clear_guest_paused; 0 where no
+ * hypervisor says. Interrupts are off. */
+int arch_guest_paused(void);
+
 /** Have the hypervisor flush processor `cpu`'s TLB before it runs again,
  * where it has taken that processor off the host's processors: KVM's
  * KVM_VCPU_FLUSH_TLB mark in the steal-time record, which KVM offers by

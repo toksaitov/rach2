@@ -360,20 +360,23 @@ int64_t timer_cycles_when(uint64_t cycles, uint64_t at, int64_t now);
  * another reads true. Safe with interrupts off. */
 int timer_cycles_agree(void);
 
-/** The reference that keeps the clock, "hpet", "pm timer" or "tsc", or NULL
- * when the counter under the tick keeps it. */
+/** The reference that keeps the clock, "hpet", "pm timer", "tsc" or
+ * "kvm-clock", or NULL when the counter under the tick keeps it. */
 const char *timer_reference(void);
 
 /**
  * The `n`th clock source, from 0, by the name Linux gives it, best first as
- * Linux rates them: "tsc" when the counter under the tick is measured, then
- * the reference `refclock_init` found, "hpet" or "acpi_pm", or "jiffies"
- * when there is neither; NULL past the last. With `n` -1, the one the
- * kernel's clock reads now, as Linux's timekeeping reads its current clock
- * source: "tsc" while the clock runs from the TSC (`vclock_running`), which
- * it does where the TSC runs at one rate and every processor's agrees,
- * Linux's rule for a stable TSC; else the reference that keeps the clock,
- * as `timer_reference` names it, or "jiffies".
+ * Linux rates them: "kvm-clock" where KVM's clock pages are kept, after
+ * "tsc" where the TSC runs at one rate, as Linux rates kvm-clock 299 there
+ * and 400 elsewhere; "tsc" when the counter under the tick is measured;
+ * then the reference `refclock_init` found, "hpet" or "acpi_pm", or
+ * "jiffies" when there is none of them; NULL past the last. With `n` -1,
+ * the one the kernel's clock reads now, as Linux's timekeeping reads its
+ * current clock source: "tsc" while the clock reads the TSC itself
+ * (`vclock_mode`), which it does where the TSC runs at one rate and every
+ * processor's agrees, Linux's rule for a stable TSC; else the reference
+ * that keeps the clock, as `timer_reference` names it, "kvm-clock" under
+ * KVM, or "jiffies".
  */
 const char *timer_clocksource(int n);
 

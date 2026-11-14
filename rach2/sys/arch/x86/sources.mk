@@ -29,6 +29,7 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/efirt.c \
     sys/arch/x86/pit.c \
     sys/arch/x86/tsc.c \
+    sys/arch/x86/kvmclock.c \
     sys/arch/x86/kvmsteal.c \
     sys/arch/x86/cmos.c \
     sys/arch/x86/i8042.c \

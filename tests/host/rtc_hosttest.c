@@ -38,6 +38,7 @@
 #include "rtc.h"
 #include "pit.h"
 #include "tsc.h"
+#include "kvmclock.h"
 #include "cmos.h"
 #include "cmdline.h"
 #include "vdso.h"
@@ -287,31 +288,61 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     CHECK(0);
 }
 
+/** Nor is a sub-leaf read. */
+void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
+{
+    (void)sub;
+    kcpu_id(leaf, a, b, c, d);
+}
+
 /** Nor does KVM state the counter's rate here. */
-uint32_t tsc_kvm_counts_per_tick(void)
+uint32_t kvmclock_counts_per_tick(void)
 {
     return 0;
 }
 
-/** So no clock page of KVM's is followed. */
-int tsc_kvm_sample(struct tsc_kvm_sample *s)
+/** So no clock page of KVM's is kept. */
+int kvmclock_kept(void)
+{
+    return 0;
+}
+
+/** Nor followed. */
+int kvmclock_sample(struct kvmclock_sample *s)
 {
     (void)s;
-    return TSC_KVM_NONE;
+    return KVMCLOCK_NONE;
 }
 
 /** Nor read. */
-int tsc_kvm_now(uint64_t *tsc, uint64_t *ns)
+int kvmclock_now(uint64_t *tsc, uint64_t *ns)
 {
     (void)tsc;
     (void)ns;
     return 0;
 }
 
-/** Nor vouches for the counter. */
-int tsc_kvm_stable(void)
+/* KVM's wall clock as the boot's row sets it: whether KVM states one, and
+ * its seconds and nanoseconds. */
+static int kvm_wall_on;
+static int64_t kvm_wall_sec;
+static uint32_t kvm_wall_nsec;
+
+/** KVM's wall clock, where the boot's row gives one. */
+int kvmclock_wallclock(int64_t *sec, uint32_t *nsec)
 {
-    return 0;
+    if (!kvm_wall_on) {
+        return 0;
+    }
+    *sec = kvm_wall_sec;
+    *nsec = kvm_wall_nsec;
+    return 1;
+}
+
+/** The vDSO's clock is off, so pit.c names the tick's reference. */
+uint32_t vclock_mode(void)
+{
+    return VCLOCK_NONE;
 }
 
 uint32_t pit_wait_counts(uint32_t counts)
@@ -745,6 +776,38 @@ static void anchor_rows(void)
 }
 
 /**
+ * The boot anchors real time to KVM's wall clock where KVM states one, and
+ * chooses no register of the CMOS clock, each read of which is an exit
+ * under KVM. 1790000000 is 2026-09-21 13:46:40 UTC. Uptime is 9 s when the
+ * boot reads it, so real time 3 s later is 3 s past it. The anchor is then
+ * taken back, for the rows after.
+ */
+static void kvm_wall_rows(void)
+{
+    int64_t sec, ns;
+
+    rtc_forget_floors();
+    cmos_index = 0x7F;
+    kvm_wall_on = 1;
+    kvm_wall_sec = 1790000000LL;
+    kvm_wall_nsec = 5u;
+    kernel_uptime_seconds = 9;
+    kernel_second_ticks = 0;
+    count = pit_reload - 100u;
+    status = 0x80;
+    rtc_init();
+    CHECK(cmos_index == 0x7F);
+    kernel_uptime_seconds = 12;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 1790000003LL && ns == 41000);
+    kvm_wall_on = 0;
+    rtc_anchor(9 - 1790000000LL, 0u);
+    rtc_forget_floors();
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 12 && ns == 41000);
+}
+
+/**
  * Run the rows. The exit status is the count of failed checks, at most 100.
  *
  * Seconds go back to the calendar the clock keeps, for the 11-minute copy:
@@ -947,6 +1010,7 @@ int main(void)
         CHECK(rtc_pair_disposition(&b, &b) == RTC_PAIR_STOP);
     }
 
+    kvm_wall_rows();
     subtick_rows();
     set_rows();
     monotonic_rows();

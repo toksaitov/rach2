@@ -673,7 +673,8 @@ static void watchdog_enable(struct wd_cpu *w, unsigned int e)
  * kernel/watchdog.c:675-775, `watchdog_timer_fn`, each sample period: kick
  * the hard-lockup detector, queue the soft-lockup function, which the next
  * schedule runs (`watchdog_sched`), and report a soft lockup when the last
- * one ran more than 2 x `watchdog_thresh` seconds ago.
+ * one ran more than 2 x `watchdog_thresh` seconds ago, unless the host
+ * stopped the guest meanwhile (`arch_guest_paused`), which looks the same.
  *
  * The switches and the threshold are read first, and the timer returns
  * when a write has moved `wd_gen` since its tick checked it: a write moves
@@ -716,6 +717,9 @@ static void watchdog_timer_fn(struct wd_cpu *w, isr_params_t *regs)
         return;
     }
     duration = now - w->touch_ts;
+    if (arch_guest_paused()) {
+        return;
+    }
     if (sysctl_softlockup_all_cpu_backtrace && arch_atomic_xchg(&soft_lockup_nmi_warn, 1u) != 0u) {
         return;
     }

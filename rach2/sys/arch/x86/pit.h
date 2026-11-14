@@ -109,10 +109,23 @@ uint32_t tsc_clock_per_tick(void);
 
 /** Whether the TSC keeps the clock even where the HPET or the PM timer
  * could, and is measured before the first tick (`platform_timer_start`):
- * under `rach2.tscreliable`, or where KVM's clock page states its rate and
- * that it is one clock on every processor as of the last tick
- * (`tsc_kvm_stable`), as Linux's kvm-clock reads it with no exit. */
+ * under `rach2.tscreliable`, or where KVM's clock pages are kept
+ * (`kvmclock_kept`, kvmclock.h), whose clock, the TSC converted through a
+ * page, Linux reads with no exit. */
 int timer_tsc_trusted(void);
+
+/* What Linux makes of the TSC where KVM's clock pages are kept
+ * (`timer_tsc_kvm`). */
+#define TSC_KVM_BELOW    0 /* kvm-clock is the clock: no TSC at one rate */
+#define TSC_KVM_WATCHED  1 /* the TSC is, with kvm-clock its watchdog */
+#define TSC_KVM_RELIABLE 2 /* the TSC is, unwatched */
+
+/** How the TSC rates against kvm-clock, a TSC_KVM_ value, as Linux rates
+ * the two clock sources and decides whether its clocksource watchdog
+ * keeps the TSC: by the processor's invariant TSC bit, its IA32_TSC_ADJUST
+ * and `rach2.tscreliable`. The same on every processor and at every
+ * call. */
+int timer_tsc_kvm(void);
 
 /*
  * The wait `k_udelay` makes instead of counting channel 0, or NULL to count

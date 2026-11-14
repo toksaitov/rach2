@@ -8,6 +8,7 @@
 #include "vdsoimg.h"
 
 #include "../arch.h"
+#include "../x86/kvmclock.h"
 #include "../x86/pit.h"
 #include "../x86/refclock.h"
 #include "../x86/tsc.h"
@@ -81,10 +82,13 @@ typedef char
  * (kvm_clock_read and kvm_clock_get_cycles, arch/x86/kernel/kvmclock.c:
  * 74-87, 347), so that a change KVM makes to its clock, a new rate or a
  * new system time with the stable bit kept, moves the clock as it moves
- * KVM's.
+ * KVM's. `pv_counted` says which the clock counts, or counted when it
+ * last ran: where KVM's clock pages are kept it counts KVM's clock,
+ * unless the TSC rates above it (`vclock_tsc_over_kvm`).
  */
 static int running;
 static int kvm_stopped;
+static int pv_counted;
 static struct vdso_data *data;
 static uintptr_t data_phys;
 static uint32_t per_tick_used;
@@ -106,11 +110,17 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * clocksource_watchdog moves its timer to the next online processor on
  * each pass (add_timer_on of cpumask_next), so that a processor whose TSC
  * drifts from the others' after the boot's check parts its span from the
- * clock: the vDSO reads whichever processor's TSC it runs on. The span's
- * end is read on that processor, at its own tick or at the kick the tick
- * that found the span due sends it (`vclock_watch_cpu`). A reading of the
- * tick's clock whose two TSC readings lie more than WATCH_SKEW_NS apart is
- * no measure: it is read again, up to WATCH_READS times, as Linux's
+ * clock: the vDSO reads whichever processor's TSC it runs on. Where KVM's
+ * clock pages are kept and the TSC is the clock all the same
+ * (`vclock_tsc_over_kvm`), the tick's clock is kvm-clock, which Linux
+ * takes as the watchdog of such a TSC, the best clock source that needs
+ * no watching itself (clocksource_select_watchdog, kernel/time/
+ * clocksource.c); its rate is KVM's, so no first span measures it, and a
+ * TSC that parts from it gives the clock to kvm-clock (`vclock_tick`).
+ * The span's end is read on that processor, at its own tick or at the kick
+ * the tick that found the span due sends it (`vclock_watch_cpu`). A reading
+ * of the tick's clock whose two TSC readings lie more than WATCH_SKEW_NS
+ * apart is no measure: it is read again, up to WATCH_READS times, as Linux's
  * cs_watchdog_read reads again a read of the HPET that was held up, and
  * where every one was held up the span keeps its start and the next tick
  * tries again. A span past twice its length by the tick's clock begins
@@ -162,8 +172,9 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 /*
  * The watch's state: whether the running clock reads a watched TSC, whether
  * the TSC parted from the tick's clock, whether the first span set the rate,
- * whether a span is in progress, the TSC and the raw clock where it
- * began, and for the log the span that parted or the rate set. The tick
+ * whether the tick's clock it is set against is kvm-clock, whether a span
+ * is in progress, the TSC and the raw clock where it began, and for the
+ * log the span that parted or the rate set. The tick
  * sets `watch_due` once the span is long enough, and the processor
  * `watch_cpu` reads its end and clears it; the raw clock where that
  * processor's turn began and the clock passes since count toward its
@@ -174,6 +185,7 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * first spans measured so, change under `vclock_lock` alone.
  */
 static int watching;
+static int watch_kvm;
 static int watch_based;
 static int watch_parted;
 static int watch_refined;
@@ -274,15 +286,15 @@ struct vclock_sample {
 
 /** Read the moment now into `*s`: the running processor's KVM clock page
  * and its TSC in one pass, the TSC converted through the page and the
- * page's stable bit with them (`tsc_kvm_read`), as Linux's kvm_clock_read
+ * page's stable bit with them (`kvmclock_read`), as Linux's kvm_clock_read
  * reads this processor's page (kvmclock.c:74-82; pvclock.c:68-84); where
  * no page is kept, the TSC read in order, which `vclock_refusal` found one
  * clock on every processor. With interrupts off. */
 static void vclock_sample(struct vclock_sample *s)
 {
-    struct tsc_kvm_sample k;
+    struct kvmclock_sample k;
 
-    s->kvm = tsc_kvm_read(&k);
+    s->kvm = kvmclock_read(&k);
     if (s->kvm) {
         s->tsc = k.tsc;
         s->ns = k.ns;
@@ -303,18 +315,18 @@ static uint64_t vclock_middle(uint64_t a, uint64_t b)
 /**
  * The page's count of the moment `s` read, the one clamp every count taken
  * from a reading passes before a time is computed from it or it becomes
- * the base: KVM's clock read with the TSC where a page is kept, as Linux's
- * __pvclock_clocksource_read converts the TSC through the page whether or
- * not it has the stable bit (pvclock.c:68-88), and the TSC where none is
- * kept. A count behind the page's base is the base, so that no time is
- * taken from before it and the base never moves back. The base is Linux's
- * last_value (pvclock.c:47, 86-108), which no reading without the bit goes
- * behind: every such reading the kernel gives a time from becomes the base
- * (`vclock_withdrawn`). Under `vclock_lock`.
+ * the base: KVM's clock read with the TSC where the clock counts it
+ * (`pv_counted`), as Linux's __pvclock_clocksource_read converts the TSC
+ * through the page whether or not it has the stable bit (pvclock.c:68-88),
+ * and the TSC elsewhere. A count behind the page's base is the base, so
+ * that no time is taken from before it and the base never moves back. The
+ * base is Linux's last_value (pvclock.c:47, 86-108), which no reading
+ * without the bit goes behind: every such reading the kernel gives a time
+ * from becomes the base (`vclock_withdrawn`). Under `vclock_lock`.
  */
 static uint64_t vclock_count(const struct vclock_sample *s)
 {
-    uint64_t count = s->kvm ? s->ns : s->tsc;
+    uint64_t count = pv_counted && s->kvm ? s->ns : s->tsc;
 
     return count > data->cycle_base ? count : data->cycle_base;
 }
@@ -424,21 +436,43 @@ static const char vclock_withdrawn_why[] = "kvm's clock page withdrew its stable
  * (`vclock_watch`). */
 static const char vclock_parted_why[] = "the tsc parted from the tick's clock";
 
-/** Why the clock cannot run from the TSC, for the log, or NULL when it
- * can: `vclock_withdrawn_why` where only the boot processor's KVM clock
- * page, which may set its stable bit again, stands in the way. */
-static const char *vclock_refusal(void)
+/* The refusal for good where `no-kvmclock-vsyscall` keeps KVM's clock
+ * from the vDSO. */
+static const char vclock_novsyscall_why[] = "no-kvmclock-vsyscall";
+
+/**
+ * Whether the clock reads the TSC itself though KVM's clock pages are
+ * kept: where the TSC rates above kvm-clock (`timer_tsc_kvm`), the watch
+ * has not found it parted from kvm-clock, and every processor's agreed at
+ * its start, as Linux makes such a TSC its clock source and falls back to
+ * kvm-clock once the TSC is marked unstable.
+ */
+static int vclock_tsc_over_kvm(void)
 {
     uint64_t behind;
     int cpu;
 
-    if (watch_parted) {
+    return timer_tsc_kvm() != TSC_KVM_BELOW && !watch_parted && tsc_synced(&cpu, &behind);
+}
+
+/** Why the clock cannot run, for the log, or NULL when it can:
+ * `vclock_withdrawn_why` where only the boot processor's KVM clock page,
+ * which may set its stable bit again, stands in the way. Where KVM's clock
+ * pages are kept, a TSC that parted or disagrees between processors only
+ * leaves the clock to kvm-clock, which is one clock on every processor by
+ * KVM's word, its stable bit. */
+static const char *vclock_refusal(void)
+{
+    uint64_t behind;
+    int cpu, kvm = kvmclock_kept();
+
+    if (watch_parted && !kvm) {
         return vclock_parted_why;
     }
     if (tsc_clock_per_tick() == 0) {
         return "no tsc was measured";
     }
-    if (!tsc_synced(&cpu, &behind)) {
+    if (!kvm && !tsc_synced(&cpu, &behind)) {
         if (behind != 0) {
             klog(KLOG_WARN, "vdso", "tsc: cpu%d behind cpu0 by %lu counts", cpu,
                  (unsigned long)behind);
@@ -447,10 +481,13 @@ static const char *vclock_refusal(void)
         }
         return "the processors' tscs disagree";
     }
-    if (tsc_kvm_boot_withdrawn()) {
-        return vclock_withdrawn_why;
+    if (!kvm || vclock_tsc_over_kvm()) {
+        return 0;
     }
-    return 0;
+    if (!kvmclock_vsyscall()) {
+        return vclock_novsyscall_why;
+    }
+    return kvmclock_boot_withdrawn() ? vclock_withdrawn_why : 0;
 }
 
 /**
@@ -458,7 +495,10 @@ static const char *vclock_refusal(void)
  * have the vDSO read it, in VCLOCK_PVCLOCK where KVM's clock pages are
  * kept, as Linux's kvm-clock gives the vDSO VDSO_CLOCKMODE_PVCLOCK where
  * the boot processor's page has the stable bit (kvm_setup_vsyscall_timeinfo,
- * kvmclock.c:241-262): at clock.c's floors, `*mono_ns` and `*raw_ns`,
+ * kvmclock.c:241-262), unless the TSC rates above kvm-clock
+ * (`vclock_tsc_over_kvm`), where the clock is VCLOCK_TSC, watched against
+ * kvm-clock unless Linux would leave such a TSC unwatched (`timer_tsc_kvm`):
+ * at clock.c's floors, `*mono_ns` and `*raw_ns`,
  * where a clock stopped before is still ahead of the tick's, so that no
  * reading is earlier than one before the start. The base is a new anchor
  * at the count read with the tick's clocks, KVM's clock where its pages
@@ -476,8 +516,8 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     int kvm;
 
     mono = vclock_reference(&before, &after, &raw);
-    kvm = before.kvm && after.kvm;
-    if (kvm && (!before.stable || !after.stable || tsc_kvm_boot_withdrawn())) {
+    kvm = before.kvm && after.kvm && !vclock_tsc_over_kvm();
+    if (kvm && (!before.stable || !after.stable || kvmclock_boot_withdrawn())) {
         kvm_stopped = 1;
         return;
     }
@@ -485,6 +525,7 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     spin_lock(&vclock_lock);
     vclock_write_begin();
     data->mode = kvm ? VCLOCK_PVCLOCK : VCLOCK_TSC;
+    pv_counted = kvm;
     per_tick_used = vclock_counts_per_tick();
     vclock_rate(per_tick_used, &mult_measured, &data->shift);
     vclock_anchor(cycles, mono > *mono_ns ? mono : *mono_ns, raw > *raw_ns ? raw : *raw_ns);
@@ -496,7 +537,11 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     vclock_write_end();
     running = 1;
     kvm_stopped = 0;
-    watching = !kvm && tsc_counts_per_tick() == 0;
+    watch_kvm = !kvm && before.kvm && timer_tsc_kvm() == TSC_KVM_WATCHED;
+    watching = watch_kvm || (!kvm && tsc_counts_per_tick() == 0);
+    if (watch_kvm) {
+        watch_refined = 1; /* the rate is KVM's, as Linux's TSC_KNOWN_FREQ */
+    }
     watch_based = 0;
     watch_overruns = 0;
     watch_trial = 0;
@@ -578,9 +623,14 @@ void vclock_start(void)
         klog(KLOG_INFO, "vdso", "clock: the system call; %s", vclock_withdrawn_why);
         return;
     }
+    if (pv_counted) {
+        klog(KLOG_INFO, "vdso", "clock: kvm-clock, the tsc at %d counts a tick by kvm's pages",
+             (int)tsc_counts_per_tick());
+        return;
+    }
     if (watching) {
-        klog(KLOG_INFO, "vdso", "clock: the tsc, %d counts a tick, watched against the %s",
-             (int)tsc_clock_per_tick(), refclock_name());
+        klog(KLOG_INFO, "vdso", "clock: the tsc, %d counts a tick, watched against %s",
+             (int)tsc_clock_per_tick(), watch_kvm ? "kvm-clock" : refclock_name());
         return;
     }
     klog(KLOG_INFO, "vdso", "clock: the tsc, %d counts a tick", (int)tsc_counts_per_tick());
@@ -589,6 +639,13 @@ void vclock_start(void)
 int vclock_running(void)
 {
     return running;
+}
+
+uint32_t vclock_mode(void)
+{
+    struct vdso_data *page = data;
+
+    return page ? page->mode : VCLOCK_NONE;
 }
 
 uint32_t vclock_generation(void)
@@ -631,12 +688,13 @@ enum { WATCH_KEEP, WATCH_BEGUN, WATCH_REFINED, WATCH_PARTED, WATCH_EARLY };
 
 /**
  * The nanoseconds of the tick's raw clock in which its counter, the
- * HPET's or the PM timer's, wraps, 0 for none: a stretch with no tick
- * that long loses wraps from the tick's clock (../x86/pit.c).
+ * HPET's or the PM timer's, wraps, 0 for none, as for kvm-clock, whose 64
+ * bits of nanoseconds do not wrap: a stretch with no tick that long loses
+ * wraps from the tick's clock (../x86/pit.c).
  */
 static uint64_t vclock_ref_wrap_ns(void)
 {
-    uint32_t hz = refclock_hz();
+    uint32_t hz = watch_kvm ? 0u : refclock_hz();
 
     return hz ? tick_div64(((uint64_t)refclock_mask() + 1u) * NSEC_PER_SEC, hz, NULL) : 0;
 }
@@ -851,7 +909,7 @@ void vclock_watch_cpu(void)
  * monotonic clock, a step forward of it included.
  *
  * The boot processor's clock page, the one every reader tests
- * (`tsc_kvm_boot_withdrawn`), decides, as Linux's vDSO reads only that page
+ * (`kvmclock_boot_withdrawn`), decides, as Linux's vDSO reads only that page
  * while the bit holds (arch/x86/include/asm/vdso/gettimeofday.h:219): a
  * withdrawn stable bit there stops the clock, or keeps it from starting at
  * boot, and the bit set again starts it afresh from the tick's clocks, or
@@ -862,7 +920,9 @@ void vclock_watch_cpu(void)
  * that it reads the end even with its tick stopped in an idle wait, as
  * Linux's add_timer_on wakes the processor it puts the watchdog's timer
  * on (`vclock_watch_due`, `vclock_watch_cpu`); a span that parted stops
- * the clock at the next tick.
+ * the clock at the next tick, for good, or, where KVM's clock pages are
+ * kept, until the tick after starts it again on kvm-clock, as Linux takes
+ * its next clock source once the TSC is marked unstable.
  */
 void vclock_tick(void)
 {
@@ -875,20 +935,21 @@ void vclock_tick(void)
         if (kvm_stopped && !vclock_refusal()) {
             rtc_vclock_change(vclock_begin);
             if (running) {
-                klog(KLOG_INFO, "vdso", "clock: the tsc again, %d counts a tick",
-                     (int)tsc_counts_per_tick());
+                klog(KLOG_INFO, "vdso", "clock: %s again, %d counts a tick",
+                     pv_counted ? "kvm-clock" : "the tsc", (int)tsc_counts_per_tick());
             }
         }
         return;
     }
-    if (watch_parted) {
+    if (watching && watch_parted) {
         rtc_vclock_change(vclock_stop);
         vclock_kick();
-        klog(KLOG_WARN, "vdso", "clock: the system call; the tsc ran %lu ns in %lu ns of the %s",
-             (unsigned long)watch_ran_ns, (unsigned long)watch_span_ns, refclock_name());
+        klog(KLOG_WARN, "vdso", "clock: the system call; the tsc ran %lu ns in %lu ns of %s",
+             (unsigned long)watch_ran_ns, (unsigned long)watch_span_ns,
+             watch_kvm ? "kvm-clock" : refclock_name());
         return;
     }
-    if (tsc_kvm_boot_withdrawn()) {
+    if (pv_counted && kvmclock_boot_withdrawn()) {
         rtc_vclock_change(vclock_stop);
         vclock_kick();
         klog(KLOG_WARN, "vdso", "clock: the system call; %s", vclock_withdrawn_why);
@@ -949,7 +1010,7 @@ static void vclock_fields(int which, int64_t *sec, uint64_t *nsec, uint32_t *mul
  * (lib/vdso/gettimeofday.c:130-179, 218-242), and in VCLOCK_PVCLOCK the
  * count read as vread_pvclock reads it, the TSC converted through KVM's
  * page for the boot processor while that page has its stable bit
- * (`tsc_kvm_boot_read`; arch/x86/include/asm/vdso/gettimeofday.h:
+ * (`kvmclock_boot_read`; arch/x86/include/asm/vdso/gettimeofday.h:
  * 197-232). The base's seconds go into `*sec`, the nanoseconds since them,
  * which may pass a second, into `*ns`, and the TSC the count was read at
  * into `*cycles`, which a coarse reading leaves. VREAD_OK; VREAD_STOPPED
@@ -976,7 +1037,7 @@ static int vclock_pass(int which, int coarse, int64_t *sec, uint64_t *ns, uint64
             if (mode != VCLOCK_PVCLOCK) {
                 *cycles = tsc_ordered();
                 count = *cycles;
-            } else if (!tsc_kvm_boot_read(cycles, &count)) {
+            } else if (!kvmclock_boot_read(cycles, &count)) {
                 return VREAD_WITHDRAWN;
             }
             *ns += vclock_scale(vclock_since(count), mult, data->shift);
