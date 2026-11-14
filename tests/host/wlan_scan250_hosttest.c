@@ -11,8 +11,9 @@
 #include "wlan_scan_hosttest.c"
 #undef main
 
-/** A scan of the 13 channels, 11 active and 2 passive, takes 7 ticks on each
- * active one and 27 on each passive one, as IEEE80211_CHANNEL_TIME and
+/** A scan of the 13 channels, 11 active and 2 passive, takes 7 ticks before
+ * the probes and 7 after them on each active one and 27 on each passive one,
+ * as IEEE80211_PROBE_DELAY, IEEE80211_CHANNEL_TIME and
  * IEEE80211_PASSIVE_CHANNEL_TIME are at HZ=250, where 30 and 110 ms would
  * be 8 and 28. */
 static void dwells(void)
@@ -20,24 +21,30 @@ static void dwells(void)
     struct wlan_scan_request r;
     uint64_t t0;
 
-    CHECK(WLAN_SCAN_ACTIVE_TICKS == 7 && WLAN_SCAN_PASSIVE_TICKS == 27);
+    CHECK(WLAN_SCAN_PROBE_TICKS == 7 && WLAN_SCAN_ACTIVE_TICKS == 7);
+    CHECK(WLAN_SCAN_PASSIVE_TICKS == 27);
     CHECK(WLAN_SCAN_AWAY_TICKS == 31 && WLAN_SCAN_HOME_TICKS == 50);
     CHECK(WLAN_SCAN_FLUSH_TICKS == 25);
     setup(&soft_ops);
     make_request(&r, 1, "");
     t0 = now;
     CHECK(wlan_scan_start(&scan, &r) == 0);
-    advance(131);
+    advance(7);
+    CHECK(n_configs == 1 && n_tx == 0);
+    advance(1);
+    CHECK(n_configs == 1 && n_tx == 1);
+    advance(200);
     CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 0 && n_configs == 13);
     advance(1);
-    CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && now - t0 == 132);
+    CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && now - t0 == 209);
     CHECK(n_tx == 11 && scan.channels_tuned == 13);
 }
 
-/** An associated station's trips keep within 31 ticks: four active
- * channels, 21 ticks from the first tuning to the last, since a fifth would
- * end 35 ticks out; a passive channel goes alone or after active ones that
- * leave room for its 27 ticks, five trips in all. */
+/** An associated station's trips keep within 31 ticks, judged by the
+ * channel's time after its probes, as mac80211's decision does: two active
+ * channels, 14 ticks apart, since a third, tuned at 28 ticks, would end at
+ * 35; a passive channel goes alone or after active ones that leave room for
+ * its 27 ticks, eight trips in all. */
 static void trips(void)
 {
     unsigned i, n = 0;
@@ -49,7 +56,7 @@ static void trips(void)
     for (i = 0; i < ask_n; ++i) {
         n += ask_log[i] == 'B';
     }
-    CHECK(n == 5);
+    CHECK(n == 8);
 }
 
 /** Run the rows at 250 Hz. */

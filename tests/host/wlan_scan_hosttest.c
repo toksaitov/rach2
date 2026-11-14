@@ -528,11 +528,12 @@ static void full_scan(void)
     CHECK(wlan_scan_start(&scan, &r) == -EBUSY);
     advance(1);
     CHECK(n_events == 1 && events[0].type == WLAN_EVENT_SCAN_STARTED && events[0].cookie == 77);
-    advance(11 * WLAN_SCAN_ACTIVE_TICKS + 2 * WLAN_SCAN_PASSIVE_TICKS - 1);
+    advance(11 * (WLAN_SCAN_PROBE_TICKS + WLAN_SCAN_ACTIVE_TICKS) + 2 * WLAN_SCAN_PASSIVE_TICKS -
+            1);
     CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 0);
     advance(1);
     CHECK(n_events == 2 && events[1].type == WLAN_EVENT_SCAN_DONE && events[1].cookie == 77);
-    CHECK(now - t0 == 553 && !wlan_scan_running(&scan));
+    CHECK(now - t0 == 883 && !wlan_scan_running(&scan));
     CHECK(n_configs == 13);
     for (i = 0; i < 13 && i < n_configs; ++i) {
         CHECK(configs[i] == 2412 + 5 * i);
@@ -571,7 +572,7 @@ static void directed_scan(void)
     r.frequencies[0] = 2437;
     r.frequencies[1] = 2437;
     CHECK(wlan_scan_start(&scan, &r) == 0);
-    advance(WLAN_SCAN_ACTIVE_TICKS + 2);
+    advance(WLAN_SCAN_PROBE_TICKS + WLAN_SCAN_ACTIVE_TICKS + 2);
     CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1);
     CHECK(n_configs == 1 && configs[0] == 2437 && n_tx == 1);
     check_probe(0, "hidden", 2437);
@@ -618,7 +619,7 @@ static void abort_scan(void)
     make_request(&r, 1, "");
     CHECK(wlan_scan_abort(&scan) == -ENOENT);
     CHECK(wlan_scan_start(&scan, &r) == 0);
-    advance(100);
+    advance(4 * (WLAN_SCAN_PROBE_TICKS + WLAN_SCAN_ACTIVE_TICKS) - 20);
     CHECK(n_configs == 4 && tuned_filters == (WLAN_FILTER_CONTROL | WLAN_FILTER_OTHER_BSS));
     CHECK(wlan_scan_abort(&scan) == 0);
     advance(1);
@@ -765,7 +766,7 @@ static void away_scan(void)
         trips += ask_log[i] == 'B';
     }
     CHECK(trips >= 4 && trips < 13);
-    CHECK(now > t0 + 553);
+    CHECK(now > t0 + 883);
     CHECK(ask_log[ask_n - 1] == 'B');
 
     away_start(0, 1, 1);
@@ -803,9 +804,9 @@ static void away_home(void)
     r.n_frequencies = 1;
     t0 = now;
     CHECK(wlan_scan_start(&scan, &r) == 0);
-    advance(WLAN_SCAN_ACTIVE_TICKS + 2);
+    advance(WLAN_SCAN_PROBE_TICKS + WLAN_SCAN_ACTIVE_TICKS + 2);
     CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && !wlan_scan_running(&scan));
-    CHECK(now <= t0 + WLAN_SCAN_ACTIVE_TICKS + 2);
+    CHECK(now <= t0 + WLAN_SCAN_PROBE_TICKS + WLAN_SCAN_ACTIVE_TICKS + 2);
     CHECK(same(ask_log, "OH", 3) && n_tx == 1 && scan.channels_tuned == 1);
     CHECK(n_configs == 2 && configs[0] == 2437 && configs[1] == 2437);
     CHECK(tuned == &band.channels[5] && tuned_filters == WLAN_FILTER_CONTROL);

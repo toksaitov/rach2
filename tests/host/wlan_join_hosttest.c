@@ -759,6 +759,9 @@ static void row_scan(void)
     CHECK(rq_send() == 0);
     run_worker();
     CHECK(find_event(GROUP_SCAN, NL80211_CMD_TRIGGER_SCAN) != 0);
+    CHECK(drain() == 0); /* nothing before the probe delay */
+    now += WLAN_SCAN_PROBE_TICKS;
+    run_worker();
 
     len = take(f);
     CHECK(len >= 24 && f[0] == 0x40); /* a probe request */

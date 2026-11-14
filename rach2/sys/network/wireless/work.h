@@ -6,10 +6,13 @@
 #include "../../timer.h"
 
 /* How long a scan stays on a channel, in ticks, as mac80211's
- * IEEE80211_CHANNEL_TIME and IEEE80211_PASSIVE_CHANNEL_TIME count them: some
- * 30 ms for probe responses on an active channel, and some 111 ms, one
- * beacon at the usual interval of 102.4 ms, on a passive one. Like Linux's
- * HZ / 33 and HZ / 9, they round down: 7 and 27 ticks at 250 Hz. */
+ * IEEE80211_PROBE_DELAY, IEEE80211_CHANNEL_TIME and
+ * IEEE80211_PASSIVE_CHANNEL_TIME count them: on an active channel some 30 ms
+ * before the probe requests, which lets the medium's NAV settle, and as long
+ * after them for the responses; on a passive one some 111 ms, one beacon at
+ * the usual interval of 102.4 ms. Like Linux's HZ / 33 and HZ / 9, they
+ * round down: 7, 7 and 27 ticks at 250 Hz. */
+#define WLAN_SCAN_PROBE_TICKS   (TICK_HZ / 33)
 #define WLAN_SCAN_ACTIVE_TICKS  (TICK_HZ / 33)
 #define WLAN_SCAN_PASSIVE_TICKS (TICK_HZ / 9)
 /* While associated, as mac80211 does, in ticks: a trip off the channel
@@ -197,6 +200,7 @@ struct wlan_scan {
     uint64_t left;     /* the tick this trip left home */
     uint64_t flush_by; /* the tick a departure stops waiting */
     unsigned tries;    /* departures failed in a row */
+    int probe_due;     /* the active channel tuned waits for its probes */
 };
 
 /** Attach `scan` to its radio, its band after the regulatory rules and its

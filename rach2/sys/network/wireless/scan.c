@@ -96,6 +96,7 @@ static void scan_finish(struct wlan_scan *scan, int aborted)
     scan->state = WLAN_SCAN_IDLE;
     scan->start_pending = 0;
     scan->abort = 0;
+    scan->probe_due = 0;
     wlan_bss_expire(scan->table, tick_count(), MS_TO_TICKS(WLAN_BSS_EXPIRE_MS));
     scan_event(scan, aborted ? WLAN_EVENT_SCAN_ABORTED : WLAN_EVENT_SCAN_DONE);
 }
@@ -321,8 +322,10 @@ static int scan_may_tune(struct wlan_scan *scan, const struct wlan_channel *chan
     return 1;
 }
 
-/** A step of the scan on the worker: begin it, or tune to the next channel,
- * probe it if it is active and come back after its dwell, or finish. */
+/** A step of the scan on the worker: begin it, or tune to the next channel
+ * and come back after its dwell, or, on an active one, after the probe delay
+ * to probe it and again after its dwell, as mac80211's SCAN_SET_CHANNEL and
+ * SCAN_SEND_PROBE do; or finish. */
 static void scan_step(struct wlan_work *work)
 {
     struct wlan_scan *scan = ((struct wlan_scan_work *)work)->scan;
@@ -337,8 +340,15 @@ static void scan_step(struct wlan_work *work)
     if (scan->state != WLAN_SCAN_SOFTWARE) {
         return;
     }
-    if (scan->abort || scan->next >= scan->n_frequencies) {
+    if (scan->abort || (!scan->probe_due && scan->next >= scan->n_frequencies)) {
         scan_finish(scan, scan->abort);
+        return;
+    }
+    if (scan->probe_due) {
+        scan->probe_due = 0;
+        channel = scan_channel(scan, scan->frequencies[scan->next - 1]);
+        scan_send_probes(scan, channel);
+        scan_queue_step(scan, WLAN_SCAN_ACTIVE_TICKS);
         return;
     }
     channel = scan_channel(scan, scan->frequencies[scan->next]);
@@ -355,7 +365,9 @@ static void scan_step(struct wlan_work *work)
     scan->channels_tuned++;
     active = scan->request.n_ssids && !(channel->flags & WLAN_CHANNEL_PASSIVE);
     if (active) {
-        scan_send_probes(scan, channel);
+        scan->probe_due = 1;
+        scan_queue_step(scan, WLAN_SCAN_PROBE_TICKS);
+        return;
     }
     scan_queue_step(scan, scan_dwell(scan, channel));
 }
@@ -491,6 +503,7 @@ int wlan_scan_start(struct wlan_scan *scan, const struct wlan_scan_request *requ
     scan->tries = 0;
     scan->away = WLAN_SCAN_HOME;
     scan->off_home = 0;
+    scan->probe_due = 0;
     scan->start_pending = 1;
     scan_queue_step(scan, 0);
     return 0;
