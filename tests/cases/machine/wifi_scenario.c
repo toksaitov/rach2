@@ -1176,6 +1176,13 @@ static void robust_roam(struct wifi *w)
         w->port[2]);
     sta(w, NULL, "exec 3> /tmp/ssh.in; echo before >&3");
     ok = sta(w, NULL, "until grep -q before /tmp/ssh.out; do sleep 1; done") == 0;
+    /* wpa_supplicant roams to the channel its table gives the other access
+     * point, which may be the one it switched to before the restart: scan
+     * until the table has its own channel, 1 or 6. */
+    sta(w, NULL,
+        "until wpa_cli -i wlan0 bss %s | grep -q '^freq=%s$'; do "
+        "wpa_cli -i wlan0 scan > /dev/null; sleep 1; done",
+        strcmp(from, AP1) == 0 ? AP2 : AP1, strcmp(from, AP1) == 0 ? "2437" : "2412");
     n = log_count(w, "CTRL-EVENT-CONNECTED");
     sta(w, NULL, "wpa_cli -i wlan0 roam %s", strcmp(from, AP1) == 0 ? AP2 : AP1);
     n = n < 0 ? -1 : log_after(w, "CTRL-EVENT-CONNECTED", n);
