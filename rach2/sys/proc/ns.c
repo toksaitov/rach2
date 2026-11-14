@@ -1242,7 +1242,7 @@ fail:
 static int32_t ns_number(process_t *child, struct pidns *ns)
 {
     struct pidns *at;
-    int32_t rc = -ENOMEM;
+    int32_t rc;
 
     pid_held_prune(NULL);
     for (at = ns; at != &init_pidns; at = at->parent) {
