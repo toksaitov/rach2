@@ -145,6 +145,7 @@ static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 static int32_t dev_disk_rescan(fd_entry_t *e);
+static int32_t dev_disk_discard(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg);
 static int32_t dev_sector_size(fd_entry_t *e, uintptr_t arg);
 static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uintptr_t arg);
@@ -164,7 +165,10 @@ static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uintptr_t arg);
  * (`dev_getgeo`). `BLKROGET` (0x125E), `BLKRAGET` (0x1263) and `BLKBSZGET`
  * (`_IOR(0x12, 112, size_t)`) give whether the device is read-only, its
  * read-ahead in sectors and its block size, which util-linux's blockdev
- * reads for every device it reports.
+ * reads for every device it reports. `BLKDISCARD` (0x1277), `BLKZEROOUT`
+ * (0x127F) and `BLKSECDISCARD` (0x127D) discard or zero a range of a disk
+ * node (`dev_disk_discard`), and `BLKDISCARDZEROES` (0x127C) answers 0, as
+ * Linux has since 4.12.
  */
 static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
@@ -186,6 +190,9 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     }
     if (request == 0x125Fu) {
         return dev_disk_rescan(e);
+    }
+    if (request == 0x1277u || request == 0x127Fu || request == 0x127Du || request == 0x127Cu) {
+        return dev_disk_discard(e, request, arg);
     }
     if (request == 0x0301u) {
         return dev_getgeo(e, arg);
@@ -692,6 +699,65 @@ static int32_t dev_disk_rescan(fd_entry_t *e)
         return -ENOTTY;
     }
     return disk_rescan(node->disk);
+}
+
+/**
+ * `BLKDISCARD`, `BLKZEROOUT` and `BLKSECDISCARD` on a disk node, whose
+ * argument is a byte range, two 64-bit numbers, its start and its length,
+ * and `BLKDISCARDZEROES`, which answers 0 in its int, as Linux's
+ * `blk_ioctl_discard` and `blk_ioctl_zeroout` take them (block/ioctl.c):
+ * -EBADF for a descriptor not open for writing; the range, of whole
+ * sectors, not empty and within the node, else -EINVAL; a discard on a
+ * device that cannot discard, and every secure discard, -EOPNOTSUPP; a
+ * zeroing on a device that cannot write zeroes itself writes pages of them
+ * (`block_discard`). Either alters the medium as a write does, so it has a
+ * raw write's authority: a recovery build and a privileged caller, else
+ * -EPERM, and the writer reservation the descriptor's open took, which no
+ * mount's range is under. -ENOTTY for a descriptor of no disk node.
+ */
+static int32_t dev_disk_discard(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    const struct disk_node *node = disk_node_of_fd(e);
+    int zero = 0;
+
+    if (!node) {
+        return -ENOTTY;
+    }
+    if (request == 0x127Cu) {
+        return copy_to_user((void __user *)arg, &zero, sizeof(zero)) != 0 ? -EFAULT : 0;
+    }
+    if (!(e->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+#ifndef RACH2_RECOVERY
+    (void)arg;
+    return -EPERM;
+#else
+    {
+        struct disk_window *w = disk_node_window(node);
+        uint64_t range[2], total;
+
+        if (!current_proc || !proc_privileged(current_proc)) {
+            return -EPERM;
+        }
+        if (!w->present) {
+            return -ENXIO;
+        }
+        if (request == 0x127Du) {
+            return -EOPNOTSUPP;
+        }
+        if (copy_from_user(range, (const void __user *)arg, sizeof(range)) != 0) {
+            return -EFAULT;
+        }
+        total = w->part.device.sector_count * BLOCK_SECTOR_SIZE;
+        if (range[1] == 0 || ((range[0] | range[1]) & (BLOCK_SECTOR_SIZE - 1u)) != 0 ||
+            range[0] > total || range[1] > total - range[0]) {
+            return -EINVAL;
+        }
+        return block_discard(&w->part.device, range[0] / BLOCK_SECTOR_SIZE,
+                             range[1] / BLOCK_SECTOR_SIZE, request == 0x127Fu);
+    }
+#endif
 }
 
 /**

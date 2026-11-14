@@ -1214,6 +1214,118 @@ int block_flush(block_device_t *device)
     return flush_device(device);
 }
 
+/**
+ * One discard or write of zeroes of `count` sectors at `lba` of `device`,
+ * the submitter, as `flag` says (`BLOCK_REQ_DISCARD` or `BLOCK_REQ_ZEROES`):
+ * a request of a page, whose buffer the device does not touch, taken and
+ * waited for as a flush is (`flush_device`). Returns 0 or a negative errno.
+ */
+static int discard_one(block_device_t *device, uint64_t lba, uint32_t count, uint32_t flag)
+{
+    struct block_request *r;
+    uint32_t flags;
+    int status;
+
+    r = req_take(device, 1, lba, 1, NULL, &status);
+    if (!r) {
+        return status;
+    }
+    r->count = count;
+    r->flags = flag;
+    if (device->submit(device, r) != 0) {
+        flags = pool_lock();
+        req_refused(r);
+        pool_unlock(flags);
+        wq_wake_all(&pool_wq);
+        return -EIO;
+    }
+    req_wait(r);
+    flags = pool_lock();
+    if (r->state == BLOCK_REQ_QUARANTINED) {
+        release_total++;
+        release_tick = req_ticks;
+        req_let_go(r, 1);
+        pool_unlock(flags);
+        return -EIO;
+    }
+    status = r->status;
+    req_let_go(r, 1);
+    pool_unlock(flags);
+    wq_wake_all(&pool_wq);
+    return status;
+}
+
+/**
+ * Write zeroes over `count` sectors at `lba` of `device` with ordinary
+ * writes, as Linux's `__blkdev_issue_zero_pages` does on a device that
+ * cannot write zeroes itself: a zeroed buffer of up to 32 pages, from the
+ * heap, or a page when the heap has no run that long, written again and
+ * again, the last write durable.
+ */
+static int zero_pages(block_device_t *device, uint64_t lba, uint64_t count)
+{
+    uint32_t pages = count >= 256u ? 32u : (uint32_t)((count + 7u) / 8u);
+    uint8_t *buf = kalloc_pages_try(pages, 0);
+    int rc = 0;
+
+    if (!buf) {
+        pages = 1;
+        buf = kalloc_pages_try(1, 0);
+        if (!buf) {
+            return -ENOMEM;
+        }
+    }
+    k_memset(buf, 0, pages * PAGE_SIZE);
+    while (count > 0 && rc == 0) {
+        uint32_t n = count > pages * 8u ? pages * 8u : (uint32_t)count;
+
+        rc = block_request_flags(device, 1, lba, n, buf, count > n ? BLOCK_REQ_NOFLUSH : 0);
+        lba += n;
+        count -= n;
+    }
+    kfree_pages(buf, pages);
+    return rc;
+}
+
+int block_discard(block_device_t *device, uint64_t lba, uint64_t count, int zeroes)
+{
+    block_device_t *dev = block_submitter(device);
+    uint32_t most;
+    int rc;
+
+    if (!device || !dev || count == 0) {
+        return count == 0 ? 0 : -EIO;
+    }
+    if (lba >= device->sector_count || count > device->sector_count - lba) {
+        return -EIO;
+    }
+    most = zeroes ? dev->max_zeroes : dev->max_discard;
+    if (!dev->submit || most == 0 || (block_flags(dev) & BLOCK_FAULT_SAFE)) {
+        if (zeroes) {
+            return zero_pages(device, lba, count);
+        }
+        return -EOPNOTSUPP;
+    }
+    if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
+        return -EOPNOTSUPP;
+    }
+    lba = block_submitter_lba(device, lba);
+    while (count > 0) {
+        uint32_t n = count > most ? most : (uint32_t)count;
+
+        rc = discard_one(dev, lba, n, zeroes ? BLOCK_REQ_ZEROES : BLOCK_REQ_DISCARD);
+        if (rc == -EOPNOTSUPP && zeroes) {
+            return zero_pages(dev, lba, count); /* the device refused it after all */
+        }
+        if (rc != 0) {
+            return rc;
+        }
+        lba += n;
+        count -= n;
+    }
+    return 0;
+}
+
 struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
                                           uint32_t *generation)
 {

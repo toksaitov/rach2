@@ -140,6 +140,11 @@ struct block_device {
         uint32_t writes, write_sectors, write_ms;
         uint32_t in_flight, busy_ms;
     } stats;
+    /* The most sectors one request may discard (`BLOCK_REQ_DISCARD`) or
+     * write zeroes over (`BLOCK_REQ_ZEROES`) through `submit`; 0 for a
+     * device that takes no such request. */
+    uint32_t max_discard;
+    uint32_t max_zeroes;
 };
 
 /* How long a chain of backing devices may be: a loop device stands on a real
@@ -180,12 +185,12 @@ extern block_device_t *block0;
 /**
  * Bring up the disks and publish the first as `block0`.
  *
- * Runs the AHCI, NVMe and platform drivers (on a PC, ATA) in that order;
- * each registers the disks it finds, the first disk found is `block0`, and
- * every disk's partition table is then read. Under `rach2.nodisk` it probes
- * nothing. Returns 0 when a device answered and `block0` is set, or -1 when
- * none did. Polled and without interrupts, so it may run before the
- * scheduler does.
+ * Runs the AHCI, NVMe, virtio block and platform drivers (on a PC, ATA) in
+ * that order; each registers the disks it finds, the first disk found is
+ * `block0`, and every disk's partition table is then read. Under
+ * `rach2.nodisk` it probes nothing. Returns 0 when a device answered and
+ * `block0` is set, or -1 when none did. Polled and without interrupts, so
+ * it may run before the scheduler does.
  */
 int block_probe(void);
 
@@ -383,6 +388,11 @@ struct block_request {
  * ignores the first and never sees the second. */
 #define BLOCK_REQ_NOFLUSH 0x1u
 #define BLOCK_REQ_FLUSH   0x2u
+/* A request that moves no data: let the device forget `count` sectors at
+ * `lba`, which then read as anything, or write zeroes over them, each on a
+ * device whose `max_discard` or `max_zeroes` allows it (`block_discard`). */
+#define BLOCK_REQ_DISCARD 0x4u
+#define BLOCK_REQ_ZEROES  0x8u
 
 /* A request of a device whose `max_sectors` is 0: one page. */
 #define BLOCK_REQ_SECTORS     8u
@@ -492,6 +502,22 @@ void block_settle(block_device_t *device, uint64_t lba, uint64_t count);
  * wrote without flushing.
  */
 int block_flush(block_device_t *device);
+
+/**
+ * Discard the `count` sectors at `lba` of `device`, or with `zeroes` write
+ * zeroes over them, as Linux's `blkdev_issue_discard` and
+ * `blkdev_issue_zeroout` do for BLKDISCARD and BLKZEROOUT.
+ *
+ * The range goes to the device under any partition views in requests of at
+ * most its `max_discard` or `max_zeroes` sectors, each sleeping its caller
+ * as `block_request` does, from syscall context only. Writing zeroes on a
+ * device without `max_zeroes` writes pages of zeroes instead, as Linux's
+ * `__blkdev_issue_zero_pages` does without BLKDEV_ZERO_NOFALLBACK.
+ * @return 0; -EOPNOTSUPP to discard on a device without `max_discard` or
+ *         without `submit`; -EIO for a range past the device, a request
+ *         that failed or a stalled device; -ENOMEM.
+ */
+int block_discard(block_device_t *device, uint64_t lba, uint64_t count, int zeroes);
 
 /**
  * Start a read of at most a page without waiting for it.
