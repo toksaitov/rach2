@@ -4138,7 +4138,7 @@
     },
     {
       "case_id": "guest.default.vmamusl",
-      "behavior": "A process holds hundreds of anonymous mappings at once, and malloc maps enough groups to serve 8 MiB of small blocks.",
+      "behavior": "A process holds hundreds of anonymous mappings at once, malloc maps enough groups to serve 8 MiB of small blocks, and neighbouring regions merge as Linux merges them.",
       "units": ["default", "musl/vmamusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -4149,7 +4149,8 @@
         {"assertion_id": "mappings", "checks": "300 anonymous one-page mappings are granted one at a time.", "source": "program"},
         {"assertion_id": "readback", "checks": "After the last mapping, each of the 300 pages still has the two-byte index and the last byte written to it.", "source": "program"},
         {"assertion_id": "unmap", "checks": "Each of the 300 pages is unmapped without error.", "source": "program"},
-        {"assertion_id": "small-blocks", "checks": "1 KiB blocks from malloc, all held at once, reach 8 MiB before malloc fails.", "source": "program"}
+        {"assertion_id": "small-blocks", "checks": "1 KiB blocks from malloc, all held at once, reach 8 MiB before malloc fails.", "source": "program"},
+        {"assertion_id": "merges", "checks": "Between two guard pages, 32 pages mapped one at a time are one region; a page made read-only splits it in three and made writable again merges it back; a page unmapped leaves two regions and mapped again one; mremap shrinking and growing it in place leaves one; three brk calls leave one [heap]: Linux 6.18's counts.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
