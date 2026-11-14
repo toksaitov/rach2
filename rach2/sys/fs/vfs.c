@@ -33,6 +33,7 @@
 #include "pathbuf.h"
 #include "procfs.h"
 #include "synthfs.h"
+#include "sysfs.h"
 #include "tmpfs.h"
 #include "../ipc/mqueue.h"
 #include "debugfs.h"
@@ -1645,7 +1646,8 @@ static int walk_creates(int rc, int flags, const char *p)
  * type's `lookup_rest` gave with `rc`, whose /proc meaning is `vp`, before
  * the leaf of a parent walk (`parent`): WALK_REST_OBJECT to the object of a
  * /proc link, WALK_REST_THROUGH or WALK_REST_LINK through a link it
- * follows, or 0 when it stays at the node.
+ * follows, a link of /sys the type handed over among them, or 0 when it
+ * stays at the node.
  */
 static int walk_rest_kind(const struct vpath *vp, int rc, struct vfs_mount *mnt, void *found,
                           int parent, int flags)
@@ -1653,7 +1655,7 @@ static int walk_rest_kind(const struct vpath *vp, int rc, struct vfs_mount *mnt,
     if (walk_to_object(vp, rc, parent, flags)) {
         return WALK_REST_OBJECT;
     }
-    if (walk_rest_through(rc, mnt, found)) {
+    if (walk_rest_through(rc, mnt, found) || (rc == VFS_LINK && vp->kind == VNODE_SYS_LINK)) {
         return WALK_REST_THROUGH;
     }
     if (!parent && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(mnt, found)) {
@@ -4624,10 +4626,12 @@ static struct vfs_mount *mount_deep_at(struct vfs_mount *mnt, const char *text, 
 
 /**
  * Whether the part of a path classified so far, the `out` bytes of `full`,
- * names a link the walk follows, to its object (`synth_object_link`) or a
- * link made under /dev to its text, and more of the rest, from `p` to `end`,
- * comes after it: VFS_LINK with a new node of the link held in `*node`, 0
- * when it does not, or -ENOMEM. A node of /proc passed on the way whose
+ * names a link the walk follows, to its object (`synth_object_link`), or to
+ * its text: a link made under /dev, or a link of /sys a driver added whose
+ * directory lies outside the walk's root, the first `plen` bytes of `full`
+ * (`synth_sys_link_dir`); and more of the rest, from `p` to `end`, comes
+ * after it: VFS_LINK with a new node of the link held in `*node`, 0 when it
+ * does not, or -ENOMEM. A node of /proc passed on the way whose
  * inode keeps its owner, a process's fd, fdinfo or task directory or one of
  * its links among them, gets its current owner (`procfs_lookup_owner`), as
  * Linux's lookup_fast revalidates each component it reaches (Linux 6.12
@@ -4635,9 +4639,11 @@ static struct vfs_mount *mount_deep_at(struct vfs_mount *mnt, const char *text, 
  * tid_fd_revalidate (fs/proc/fd.c:145-161), before it follows a link and
  * even when a later lookup fails.
  */
-static int synth_link_part(char *full, uint32_t out, const char *p, const char *end, void **node)
+static int synth_link_part(char *full, uint32_t out, uint32_t plen, const char *p, const char *end,
+                           void **node)
 {
     struct vpath vp;
+    char dir[256];
 
     while (p < end && *p == '/') {
         p++;
@@ -4650,7 +4656,9 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
     synth_made(full, &vp);
     procfs_lookup_owner(&vp);
     if (!synth_object_link(&vp) && !synth_self_link(&vp) &&
-        !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0)) {
+        !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0) &&
+        !(vp.kind == VNODE_SYS_LINK &&
+          synth_sys_link_dir(full, (int)plen, dir, (int)sizeof(dir)) < 0)) {
         return 0;
     }
     return synth_take(&vp, node) != 0 ? -ENOMEM : VFS_LINK;
@@ -4658,10 +4666,11 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
 
 /**
  * The length of the path `full`, `out` bytes, after a `..`: its text's
- * parent, or, when it ends on a link of /sys a driver added, the parent of
- * the directory the link leads to (`synth_sys_link_dir`), written into
- * `full`, as Linux's walk climbs from a link's target, when that directory
- * lies below the first `plen` bytes, the root of the walk.
+ * parent, or, when it ends on a link of /sys a driver added whose directory
+ * lies below the first `plen` bytes, the root of the walk, the parent of
+ * that directory (`synth_sys_link_dir`), written into `full`, as Linux's
+ * walk climbs from a link's target. A link whose directory lies outside the
+ * root never gets here, since `synth_link_part` hands it to the VFS.
  */
 static uint32_t synth_dotdot(char *full, uint32_t out, uint32_t plen)
 {
@@ -4669,16 +4678,11 @@ static uint32_t synth_dotdot(char *full, uint32_t out, uint32_t plen)
     uint32_t len;
 
     full[out] = '\0';
-    if (!path_under(full, "sys", 3)) {
-        return text_parent(full, out);
-    }
-    if (!synth_sys_link_dir(full, dir, (int)sizeof(dir))) {
+    if (!path_under(full, "sys", 3) ||
+        synth_sys_link_dir(full, (int)plen, dir, (int)sizeof(dir)) != 1) {
         return text_parent(full, out);
     }
     len = (uint32_t)k_strlen(dir + 1);
-    if (!path_under(dir + 1, full, plen)) {
-        return text_parent(full, out);
-    }
     k_memcpy(full, dir + 1, len);
     return text_parent(full, len);
 }
@@ -4696,8 +4700,10 @@ static uint32_t synth_dotdot(char *full, uint32_t out, uint32_t plen)
  * A part that names a link the walk follows to its object and has more of
  * the rest after it returns VFS_LINK (`synth_link_part`), with a new node of
  * the link held and `*left` after its name, so that a `..` after the link
- * climbs from the object; a `..` after a link a driver added to /sys climbs
- * from the directory it leads to (`synth_dotdot`). Otherwise the whole path,
+ * climbs from the object; so does a link a driver added to /sys whose
+ * directory lies outside the walk's root, which the VFS follows by its text;
+ * a `..` after one whose directory lies inside climbs from that directory
+ * (`synth_dotdot`). Otherwise the whole path,
  * `prefix` and the rest without its `.` and `..`, is classified
  * (`synth_classify`): 0 with a new node held, -ENOENT, also for a
  * directory of /dev that is absent (`devfs_subdir_present`), -ENOTDIR for a
@@ -4764,7 +4770,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
             *left = p;
             return VFS_ENTER;
         }
-        kind = synth_link_part(full, out, p, end, node);
+        kind = synth_link_part(full, out, plen, p, end, node);
         if (kind != 0) {
             *left = p;
             return kind;
@@ -4927,7 +4933,8 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 
 /** The `readlink` of the synthetic types, the target of a link as text:
  * /proc/self's, the caller's visible pid; /dev/log's, fixed; a link's made
- * under /dev, as it was written;
+ * under /dev, as it was written; a link's a driver added to /sys, as
+ * kernfs writes it (`sysfs_link_text`);
  * /proc/<pid>/exe's, the path of the program the process
  * runs (`procfs_readlink_exe`); and /proc/<pid>/cwd's and root's, the paths
  * of its directories (`procfs_readlink_dir`). -ENOENT for a process that is
@@ -4945,6 +4952,9 @@ static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
         int n = devtree_readlink(sn->vp.syskey, buf, cap);
 
         return n > (int)cap ? (int)cap : n;
+    }
+    if (sn->vp.kind == VNODE_SYS_LINK && sn->vp.sysreg > 0) {
+        return sysfs_link_text(sn->vp.sysreg, buf, (int)cap);
     }
     if (sn->vp.kind == VNODE_DEV_LINK) {
         uint32_t n = (uint32_t)k_strlen(SYNTH_DEV_LOG_TARGET);

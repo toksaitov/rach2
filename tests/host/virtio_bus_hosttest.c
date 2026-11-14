@@ -315,11 +315,25 @@ static void row_bind(void)
     CHECK(chr > 0 && eq(text, "../../../virtio0"), "the card's device leads to virtio0");
     CHECK(synth_classify("sys/dev/char/226:0/device/subsystem", &vp) == VNODE_SYS_LINK,
           "the card's device has a subsystem link");
-    CHECK(synth_sys_link_dir("sys/dev/char/226:0/device", path, (int)sizeof(path)) == 1 &&
+    CHECK(synth_sys_link_dir("sys/dev/char/226:0/device", 3, path, (int)sizeof(path)) == 1 &&
               eq(path, "/sys/devices/pci0000:00/0000:00:02.0/virtio0"),
           "a .. after the card's device link climbs from virtio0, to the PCI function");
-    CHECK(synth_sys_link_dir("sys/dev/char/226:0/device/drm", path, (int)sizeof(path)) == 0,
+    CHECK(synth_sys_link_dir("sys/dev/char/226:0/device/drm", 3, path, (int)sizeof(path)) == 0,
           "a path that ends on a directory is climbed by its text");
+    CHECK(synth_sys_link_dir("sys/devices/pci0000:00/0000:00:02.0/virtio0/drm/card0/device",
+                             (int)k_strlen("sys/devices/pci0000:00/0000:00:02.0"), path,
+                             (int)sizeof(path)) == 1,
+          "below a bind of the PCI function, the card's device link stays inside it");
+    CHECK(synth_sys_link_dir("sys/bus/virtio/devices/virtio0",
+                             (int)k_strlen("sys/bus/virtio/devices"), path,
+                             (int)sizeof(path)) == -1 &&
+              eq(path, "/sys/devices/pci0000:00/0000:00:02.0/virtio0"),
+          "below a bind of /sys/bus/virtio/devices, virtio0's directory lies outside it, so the "
+          "walk follows the link's text, whose .. climbs out of the bind");
+    CHECK(synth_sys_link_dir("sys/devices/pci0000:00/0000:00:02.0/virtio0/drm/card0/device",
+                             (int)k_strlen("sys/devices/pci0000:00/0000:00:02"), path,
+                             (int)sizeof(path)) == -1,
+          "a root that ends inside a name of the target is no directory it lies below");
     virtio_driver_bound(&dev);
     CHECK(events == 2 && has(last_event, "bind@/devices/pci0000:00/0000:00:02.0/virtio0\n") &&
               has(last_event, "\nDRIVER=virtio_gpu\n"),

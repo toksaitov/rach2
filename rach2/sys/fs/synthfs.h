@@ -230,13 +230,20 @@ int synth_classify(const char *path, struct vpath *vp);
 
 /**
  * Whether `path`, as `synth_classify` takes it, ends on a link of /sys a
- * driver added (sysfs.h): 1 with the path of the directory it leads to,
- * "/sys/...", in `out` of `cap` bytes, else 0. The walk takes a `..` after
- * such a link from that directory, as Linux's walk takes it from the
- * link's target, so that libdrm's /sys/dev/char/226:N/device/.. is the
- * parent of the card's device.
+ * driver added (sysfs.h), for a walk whose root is the directory of the
+ * first `root` bytes of `path`, "sys" or the directory a bind of /sys
+ * shows: 1 with the path of the directory the link leads to, "/sys/...", in
+ * `out` of `cap` bytes, when that directory lies below the root; -1, with
+ * the same in `out`, when it does not; 0 for any other path. The walk takes
+ * a `..` after a link of 1 from that directory, as Linux's walk takes it
+ * from the link's target, so that libdrm's /sys/dev/char/226:N/device/.. is
+ * the parent of the card's device. A link of -1 the VFS follows by its text
+ * from the link's directory, through the mounts and the root above the
+ * bind, as Linux does: /sys/bus/virtio/devices bound at /mnt has no
+ * /mnt/virtio0/.., since its target, ../../../devices/..., climbs out of
+ * /mnt.
  */
-int synth_sys_link_dir(const char *path, char *out, int cap);
+int synth_sys_link_dir(const char *path, int root, char *out, int cap);
 
 /*
  * The owner the last lookup gave a node of /proc whose Linux inode keeps

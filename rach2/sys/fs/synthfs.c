@@ -2160,16 +2160,22 @@ static int synth_classify_proc(const struct comp *c, int n, struct vpath *vp)
     return synth_classify_pid(c + 1, n - 1, vp, 1);
 }
 
-int synth_sys_link_dir(const char *path, char *out, int cap)
+int synth_sys_link_dir(const char *path, int root, char *out, int cap)
 {
     struct vpath vp;
+    int i;
 
     synth_classify(path, &vp);
     if (vp.kind != VNODE_SYS_LINK || vp.sysreg <= 0) {
         return 0;
     }
     sysfs_node_path(sysfs_node_target(vp.sysreg), out, cap);
-    return 1;
+    for (i = 0; i < root; i++) {
+        if (out[i + 1] != path[i]) {
+            return -1;
+        }
+    }
+    return out[root + 1] == '/' ? 1 : -1;
 }
 
 int synth_classify(const char *path, struct vpath *vp)
