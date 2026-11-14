@@ -4407,9 +4407,19 @@ static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t
     return rc;
 }
 
+/** The throttle the KRFFS core calls inside a long write, fill or copy of
+ * the root's data, with the mount's lock held (`krffs_throttle`). */
+static void kfs_throttle(void)
+{
+    (void)pc_balance_dirty();
+}
+
 /** The `write` of the KRFFS root: `kfs_write_locked` under the lock, and
- * then the writer's throttle (`pc_balance_dirty`), with the lock let go, as
- * Linux's `generic_perform_write` calls `balance_dirty_pages_ratelimited`. */
+ * then the writer's throttle (`pc_balance_dirty`), as Linux's
+ * `generic_perform_write` calls `balance_dirty_pages_ratelimited` with the
+ * inode's lock held: a write through a description holds the mount's lock
+ * from `fd_ofd_lock` across both. A long write also throttles between its
+ * pieces (`krffs_throttle`). */
 static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                          uint64_t offset)
 {
@@ -4423,7 +4433,8 @@ static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, u
 }
 
 /** The `truncate` of the KRFFS root: `kfs_truncate_locked` under the lock,
- * and then the writer's throttle, as `kfs_write` does. */
+ * and then the writer's throttle, as `kfs_write` does; a long growth also
+ * throttles as it fills (`krffs_throttle`). */
 static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     int rc;
@@ -5442,6 +5453,7 @@ void vfs_init(void)
     mount_table_init();
     install(0, &vfs_krffs_type, "/", 0, 0);
     pc_on_failure(kfs_page_failed);
+    krffs_throttle = kfs_throttle;
     install_permanent();
 }
 

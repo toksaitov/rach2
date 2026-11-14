@@ -1285,7 +1285,9 @@ and
 .Pa vm/dirtytime_expire_seconds ,
 43200, which Linux reads for a mount with lazy times and nothing here
 reads, since no mount keeps times lazily, from 0 to 2147483647.
-The write-back goes without the disk's cache flush;
+The buffer cache's write-back goes without the disk's cache flush, while
+that of the page cache of a KRFFS root on a disk writes each run through
+the disk's durable write;
 .Xr fsync 2 ,
 .Xr sync 2 ,
 an unmount and a shutdown flush it; and

@@ -29,6 +29,7 @@
 #include "../lib/kerrno.h"
 
 krffs_file_system_t *krffs_fs = NULL;
+void (*krffs_throttle)(void);
 
 static krffs_file_system_t _krffs_fs_instance;
 
@@ -309,6 +310,38 @@ static int krffs_data_write(krffs_mount_t *mount, uint64_t offset, uint64_t at, 
     return mount->backend->write(mount->ctx, offset + sizeof(krffs_node_t) + at, buffer, size);
 }
 
+/** Call `krffs_throttle` on the boot root once `*since` has passed
+ * KRFFS_THROTTLE_BYTES, and start the count again. */
+static void krffs_throttle_after(krffs_mount_t *mount, uint32_t *since)
+{
+    if (*since >= KRFFS_THROTTLE_BYTES) {
+        *since = 0;
+        if (mount == &krffs_root_mount && krffs_throttle) {
+            krffs_throttle();
+        }
+    }
+}
+
+/** `krffs_data_write` in pieces of KRFFS_THROTTLE_BYTES, with the throttle
+ * between them; 0, or -1 if a write fails. */
+static int krffs_data_write_long(krffs_mount_t *mount, uint64_t offset, uint64_t at,
+                                 const char *buffer, uint32_t size)
+{
+    uint32_t done = 0, since;
+
+    while (done < size) {
+        since = size - done > KRFFS_THROTTLE_BYTES ? KRFFS_THROTTLE_BYTES : size - done;
+        if (krffs_data_write(mount, offset, at + done, buffer + done, since) != 0) {
+            return -1;
+        }
+        done += since;
+        if (done < size) {
+            krffs_throttle_after(mount, &since);
+        }
+    }
+    return 0;
+}
+
 /**
  * Fill `size` bytes of a node's data with `value`, `at` bytes into it.
  *
@@ -320,7 +353,7 @@ static int krffs_data_fill(krffs_mount_t *mount, uint64_t offset, uint64_t at, u
                            uint64_t size)
 {
     uint8_t block[64];
-    uint32_t i;
+    uint32_t i, since = 0;
 
     for (i = 0; i < sizeof(block); i++) {
         block[i] = value;
@@ -332,6 +365,8 @@ static int krffs_data_fill(krffs_mount_t *mount, uint64_t offset, uint64_t at, u
         }
         at += chunk;
         size -= chunk;
+        since += chunk;
+        krffs_throttle_after(mount, &since);
     }
     return 0;
 }
@@ -897,6 +932,7 @@ static int krffs_copy_data(krffs_mount_t *mount, uint64_t to, uint64_t from, uin
 {
     uint8_t block[256];
     uint64_t at = 0;
+    uint32_t since = 0;
 
     while (at < size) {
         uint32_t chunk =
@@ -906,6 +942,8 @@ static int krffs_copy_data(krffs_mount_t *mount, uint64_t to, uint64_t from, uin
             return -1;
         }
         at += chunk;
+        since += chunk;
+        krffs_throttle_after(mount, &since);
     }
     return 0;
 }
@@ -1290,7 +1328,8 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
         krffs_data_fill(mount, offset, old_data_size, 0, (uint64_t)at - old_data_size) != 0) {
         return KRFFS_EBAD;
     }
-    if (krffs_data_write(mount, offset, at, buffer, size) != 0 || krffs_sync_point(mount) != 0) {
+    if (krffs_data_write_long(mount, offset, at, buffer, size) != 0 ||
+        krffs_sync_point(mount) != 0) {
         return KRFFS_EBAD;
     }
     if (krffs_head(mount, offset, &head) != 0) {

@@ -654,6 +654,14 @@ uint32_t krffs_free_at(krffs_mount_t *mount);
 /* The boot root, or NULL before `init_krffs` succeeds. */
 extern krffs_file_system_t *krffs_fs;
 
+/* Called on the boot root after each KRFFS_THROTTLE_BYTES that a write, a
+ * fill or a copy of a node's data puts through the backend, with the
+ * caller's lock on the root held, so that a disk page cache whose dirty
+ * pages pass their limit writes them back before a fault must; NULL calls
+ * nothing. It may sleep. */
+extern void (*krffs_throttle)(void);
+#define KRFFS_THROTTLE_BYTES (128u * 1024u)
+
 /**
  * The node after `node` in the ring of `fs`, the root after the last.
  *
