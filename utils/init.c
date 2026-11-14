@@ -255,13 +255,11 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * The directories of settings files, NAME.conf in the same format, in the
  * order in which a file masks one of the same name in a directory after it,
  * as procps's `sysctl --system` and systemd-sysctl read them; the GNU root's
- * /usr/lib/sysctl.d has Debian's vm.max_map_count. `SYSCTL_FILES` bounds the
- * files taken.
+ * /usr/lib/sysctl.d has Debian's vm.max_map_count.
  */
 static const char *const sysctl_dirs[] = {"/etc/sysctl.d", "/run/sysctl.d",
                                           "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d",
                                           "/lib/sysctl.d"};
-#define SYSCTL_FILES 64
 
 /*
  * Each backlight's level is kept across a reboot, as systemd-backlight keeps
@@ -3026,16 +3024,21 @@ static int sysctl_file_order(const void *a, const void *b)
  * Apply the image's kernel settings as procps's `sysctl --system` does: each
  * file NAME.conf of `sysctl_dirs`, in the order of the names, where a name
  * found in an earlier directory masks the same name in a later one, and
- * then `SYSCTL_CONF`. A directory or file the image lacks is passed over.
+ * then `SYSCTL_CONF`. A name masks whatever it is, so a link to /dev/null
+ * masks the file and applies nothing: only a regular file is applied. A
+ * directory or file the image lacks is passed over. The list of names grows
+ * as needed; a name it has no memory for is reported and not applied.
  */
 static void apply_sysctl(void)
 {
-    static struct sysctl_file files[SYSCTL_FILES];
+    struct sysctl_file *files = NULL;
+    struct sysctl_file *grown;
     char path[PATH_MAX];
     struct dirent *e;
     struct stat st;
     size_t len;
     unsigned d;
+    int room = 0;
     int n = 0;
     int i;
     DIR *dir;
@@ -3055,15 +3058,15 @@ static void apply_sysctl(void)
             if (i < n) {
                 continue;
             }
-            if (snprintf(path, sizeof(path), "%s/%s", sysctl_dirs[d], e->d_name) >=
-                    (int)sizeof(path) ||
-                stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
-                continue;
-            }
-            if (n == SYSCTL_FILES) {
-                fprintf(stderr, "init: sysctl: more than %d files; %s not applied\n", SYSCTL_FILES,
-                        path);
-                continue;
+            if (n == room) {
+                grown = realloc(files, (size_t)(room ? 2 * room : 32) * sizeof(files[0]));
+                if (!grown) {
+                    fprintf(stderr, "init: sysctl: out of memory; %s/%s not applied\n",
+                            sysctl_dirs[d], e->d_name);
+                    continue;
+                }
+                files = grown;
+                room = room ? 2 * room : 32;
             }
             memcpy(files[n].name, e->d_name, len + 1);
             files[n].dir = (int)d;
@@ -3071,13 +3074,17 @@ static void apply_sysctl(void)
         }
         closedir(dir);
     }
-    qsort(files, (size_t)n, sizeof(files[0]), sysctl_file_order);
+    if (n > 0) {
+        qsort(files, (size_t)n, sizeof(files[0]), sysctl_file_order);
+    }
     for (i = 0; i < n; i++) {
         if (snprintf(path, sizeof(path), "%s/%s", sysctl_dirs[files[i].dir], files[i].name) <
-            (int)sizeof(path)) {
+                (int)sizeof(path) &&
+            stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
             apply_sysctl_file(path);
         }
     }
+    free(files);
     if (access(SYSCTL_CONF, R_OK) == 0) {
         apply_sysctl_file(SYSCTL_CONF);
     }

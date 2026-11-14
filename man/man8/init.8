@@ -435,6 +435,11 @@ and
 in the order of the names, a name in an earlier directory masking the same
 name in a later one, and then
 .Pa /etc/sysctl.conf .
+A name masks whatever it is: a link to
+.Pa /dev/null
+masks the file of that name and applies nothing, since only a regular file
+is applied.
+There is no limit on the number of files.
 It does so before the stable secret below, so a card restarted for the
 secret makes its addresses under them; a line sysctl cannot apply is
 reported and the rest applied.
