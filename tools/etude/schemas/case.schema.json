@@ -309,7 +309,7 @@
       "properties": {
         "machine_id": {"$ref": "#/$defs/id"},
         "qemu": {"$ref": "#/$defs/qemu"},
-        "console": {"enum": ["serial", "none"]},
+        "console": {"enum": ["serial", "virtio", "none"]},
         "helper": {"type": "boolean"},
         "qmp": {"type": "boolean"},
         "critical": {"$ref": "#/$defs/text"},

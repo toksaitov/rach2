@@ -4,9 +4,11 @@
  * the designated init's role, the console as their terminal or their
  * standard input, no HOME, or a clock reference on the host. Each case
  * boots the test image, runs its probe from the kernel's debug shell, as
- * that shell's transient init on the serial console, and judges the record
- * with which the kernel hands the shell back. The case `timing` judges the
- * kernel's record of its clock's period accounting at boot.
+ * that shell's transient init on the console, and judges the record with
+ * which the kernel hands the shell back. The console is a virtio console's
+ * port, as the cases' machines declare, so that the probes of the terminal
+ * run on it; the suite `console` reads the UART's. The case `timing` judges
+ * the kernel's record of its clock's period accounting at boot.
  */
 #include <stdio.h>
 #include <stdlib.h>

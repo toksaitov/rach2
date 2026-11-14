@@ -1827,6 +1827,96 @@ static void test_argv(void)
     test_disk_lines(&p, &site);
 }
 
+/**
+ * Check the console's device: a virtio console in the UART's place, after
+ * the profile's devices at a slot of its own, with the port named at the end
+ * of the boot line, which the launcher makes when the profile has none; the
+ * profiles a virtio console is refused on; and the console a case that names
+ * none is given.
+ */
+static void test_console_argv(void)
+{
+    static const struct etude_qemu_device devices[] = {{.model = "rtl8139"}, {0}};
+    static const char *const options[] = {"rach2.rescue", "quiet", NULL};
+    static const char *const uart[] = {"quiet", "console=ttyS0", NULL};
+    static const char *const other[] = {"netconsole=@/,6666@10.0.2.2/", "consoleblank=0", NULL};
+    static const char *const want =
+        "/q/i686 -accel tcg -nodefaults -display none -no-reboot -S "
+        "-cpu qemu64,rdrand=off,rdseed=off,xsave=off,avx=off -smp 1 -m 134217728B "
+        "-kernel /k/kernel -initrd /k/test.krffs -netdev user,id=net0 "
+        "-device rtl8139,netdev=net0 "
+#ifdef _WIN32
+        "-chardev socket,id=etude-console,host=127.0.0.1,port=27001 "
+#else
+        "-chardev socket,id=etude-console,path=/s/c "
+#endif
+        "-device virtio-serial-pci,addr=0x1d -device virtserialport,chardev=etude-console "
+#ifdef _WIN32
+        "-chardev socket,id=etude-qmp,host=127.0.0.1,port=27002 -mon "
+        "chardev=etude-qmp,mode=control "
+        "-no-shutdown "
+#else
+        "-chardev socket,id=etude-qmp,path=/s/q -mon chardev=etude-qmp,mode=control "
+#endif
+        "-append rach2.rescue quiet console=vport0p1";
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_profile p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096], line[4096];
+    size_t used = 0;
+    int i;
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = "i686";
+    p.kernel = "/k/kernel";
+    p.initrd = "/k/test.krffs";
+    p.cpu = "qemu64";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.console = ETUDE_CONSOLE_VIRTIO;
+    p.devices = devices;
+    p.boot_options = options;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "a virtio console's argv");
+    line[0] = '\0';
+    for (i = 0; argv[i] != NULL; i++)
+        used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s", i ? " " : "", argv[i]);
+    if (strcmp(line, want) != 0) {
+        printf("etude-qemu-test: fail: the command line is\n  %s\nnot\n  %s\n", line, want);
+        fails++;
+    }
+    p.boot_options = NULL;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0 &&
+              has_arg(argv, "-append", "console=vport0p1") &&
+              !has_arg(argv, "-serial", "chardev:etude-console"),
+          "a virtio console with no other option, and no UART");
+    p.boot_options = uart;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL,
+          "a virtio console beside an option that names a console");
+    p.console = ETUDE_CONSOLE_UART;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0 &&
+              has_arg(argv, "-serial", "chardev:etude-console") &&
+              has_arg(argv, "-append", "quiet console=ttyS0") &&
+              !has_arg(argv, "-device", "virtio-serial-pci,addr=0x1d"),
+          "the UART, with the boot line as the profile gives it");
+    p.console = (enum etude_console)7;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "an unknown console");
+    CHECK(etude_qemu_console_default("kernel", ETUDE_FIRMWARE_DIRECT, NULL) ==
+                  ETUDE_CONSOLE_VIRTIO &&
+              etude_qemu_console_default("kernel", ETUDE_FIRMWARE_DIRECT, options) ==
+                  ETUDE_CONSOLE_VIRTIO &&
+              etude_qemu_console_default("kernel", ETUDE_FIRMWARE_DIRECT, other) ==
+                  ETUDE_CONSOLE_VIRTIO,
+          "the tree's kernel, loaded directly with no console named, has the virtio console");
+    CHECK(etude_qemu_console_default("kernel", ETUDE_FIRMWARE_DIRECT, uart) == ETUDE_CONSOLE_UART &&
+              etude_qemu_console_default("recovery-kernel", ETUDE_FIRMWARE_DIRECT, NULL) ==
+                  ETUDE_CONSOLE_UART &&
+              etude_qemu_console_default(NULL, ETUDE_FIRMWARE_DIRECT, NULL) == ETUDE_CONSOLE_UART &&
+              etude_qemu_console_default("kernel", ETUDE_FIRMWARE_SEABIOS, NULL) ==
+                  ETUDE_CONSOLE_UART &&
+              etude_qemu_console_default("kernel", ETUDE_FIRMWARE_OVMF, NULL) == ETUDE_CONSOLE_UART,
+          "a named console, another kernel and a disk's boot keep the UART");
+}
+
 /** Find an argument after `option` whose whole value is `value`. */
 static int has_argument(char *const argv[], const char *option, const char *value)
 {
@@ -2721,6 +2811,7 @@ int main(int argc, char **argv)
         return 1;
     if (argc == 2 && strcmp(argv[1], "--argv-only") == 0) {
         test_argv();
+        test_console_argv();
     } else if (argc == 2 && strcmp(argv[1], "--memory-only") == 0) {
         test_memory();
     } else if (argc == 2 && strcmp(argv[1], "--host-only") == 0) {
@@ -2729,6 +2820,7 @@ int main(int argc, char **argv)
         test_real(1);
     } else {
         test_argv();
+        test_console_argv();
         test_network_argv();
         test_network_refused();
         test_hubs();

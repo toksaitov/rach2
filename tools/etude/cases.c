@@ -1328,6 +1328,44 @@ static void rule_faults(const struct rule *r)
     }
 }
 
+/**
+ * A machine whose console is a virtio console's port boots by direct
+ * firmware, where the launcher names the port to the kernel with a boot
+ * option, and has no boot option that names a console itself.
+ */
+static void rule_consoles(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    const char *case_id = json_text(r->c, "case_id");
+    size_t i, k;
+
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        const struct json *m = machines->item[i];
+        const struct json *qemu = json_member(m, "qemu");
+        const struct json *options = json_member(qemu, "boot_options");
+        const char *id = json_text(m, "machine_id");
+
+        if (!same(json_text(m, "console"), "virtio")) {
+            continue;
+        }
+        if (!same(json_text(qemu, "firmware"), "direct")) {
+            finding(r->file, m->line,
+                    "%s: the machine %s has a virtio console, which only a direct boot names "
+                    "to the kernel",
+                    case_id, id);
+        }
+        for (k = 0; options != NULL && k < options->count; k++) {
+            if (options->item[k]->string != NULL &&
+                strncmp(options->item[k]->string, "console=", 8) == 0) {
+                finding(r->file, m->line,
+                        "%s: the machine %s has a virtio console and a boot option that names "
+                        "a console",
+                        case_id, id);
+            }
+        }
+    }
+}
+
 /** A bound lies between its floor and ceiling, and inside the whole case's. */
 static void rule_bounds(const struct rule *r)
 {
@@ -1706,6 +1744,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_suspensions(&r);
     rule_networks(&r);
     rule_faults(&r);
+    rule_consoles(&r);
     rule_bounds(&r);
     rule_progress(&r);
     rule_resources(&r);

@@ -2149,10 +2149,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /pollprobe from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /pollprobe from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"}
@@ -2182,10 +2182,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /devprobe from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /devprobe from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"}
@@ -2215,10 +2215,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /jobprobe from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /jobprobe from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"}
@@ -2437,10 +2437,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /orphanprobe from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /orphanprobe from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"}
@@ -2635,10 +2635,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /survivorprobe from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /survivorprobe from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"}
@@ -3717,10 +3717,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /musl/clockmusl from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /musl/clockmusl from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"},
@@ -4244,10 +4244,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /musl/fdcallmusl from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /musl/fdcallmusl from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"}
@@ -7066,10 +7066,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /musl/threadmusl from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /musl/threadmusl from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"}
@@ -7099,10 +7099,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "default_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /musl/ishmusl from the debug shell as its transient init on the serial console, and end the machine"}
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image, run /musl/ishmusl from the debug shell as its transient init on the console, a virtio console's port, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the probe exited with status 0, and with no record that it was killed", "source": "scenario"}
@@ -7349,7 +7349,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the test image to the debug shell and read the kernel's timing record"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.rescue"]}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "timing", "checks": "the kernel's record timing: tick N Hz, before the debug shell starts, is at level 6, which it prints when its check of the clock's period accounting holds", "source": "scenario"}

@@ -85,6 +85,8 @@ struct machine_decl {
     const char *id;
     const struct eh_json *qemu;
     int console, qmp, helper;
+    int virtio;                     /* its console is the virtio console's
+                                       port, `"console": "virtio"` */
     unsigned boots;                 /* the boots begun so far */
     struct etude_case_machine *now; /* its latest boot, or NULL */
 };
@@ -580,7 +582,9 @@ static int load_steps(struct etude_case *c)
 
         c->decls[i].id = jtext(s, "machine_id");
         c->decls[i].qemu = eh_json_get(s, "qemu");
-        c->decls[i].console = console != NULL && strcmp(console, "serial") == 0;
+        c->decls[i].virtio = console != NULL && strcmp(console, "virtio") == 0;
+        c->decls[i].console =
+            c->decls[i].virtio || (console != NULL && strcmp(console, "serial") == 0);
         c->decls[i].qmp = jbool(s, "qmp") == 1;
         c->decls[i].helper = jbool(s, "helper") == 1;
         if (c->decls[i].id == NULL || c->decls[i].qemu == NULL) {
@@ -2105,6 +2109,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
         jtext(qp, "audio_input") != NULL ? etude_artifact(c, jtext(qp, "audio_input")) : NULL;
     p->devices = m->devices;
     p->boot_options = m->options;
+    p->console = m->decl->virtio ? ETUDE_CONSOLE_VIRTIO : ETUDE_CONSOLE_UART;
     p->smbios_vendor = jtext(qp, "smbios_vendor");
     p->display = jtext(qp, "display");
     p->acpi_table =

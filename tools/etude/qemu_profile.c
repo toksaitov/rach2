@@ -1093,11 +1093,12 @@ static void add_ahci(struct line *l, const struct etude_qemu_profile *p)
     }
 }
 
-/** Add one argument of the strings of `list` separated by spaces. */
-static void add_joined(struct line *l, const char *const *list)
+/** Add one argument of the strings of `list`, which may be NULL, and then
+ * of `last`, when it is not NULL, separated by spaces. */
+static void add_joined(struct line *l, const char *const *list, const char *last)
 {
     char *start = l->buf + l->used;
-    size_t i, len;
+    size_t i, n = count(list), len;
 
     if (l->error)
         return;
@@ -1105,15 +1106,17 @@ static void add_joined(struct line *l, const char *const *list)
         l->error = E2BIG;
         return;
     }
-    for (i = 0; list[i] != NULL; i++) {
-        len = strlen(list[i]);
+    for (i = 0; i < n + (last != NULL); i++) {
+        const char *piece = i < n ? list[i] : last;
+
+        len = strlen(piece);
         if (l->used + len + 2 > l->size) {
             l->error = E2BIG;
             return;
         }
         if (i > 0)
             l->buf[l->used++] = ' ';
-        memcpy(l->buf + l->used, list[i], len);
+        memcpy(l->buf + l->used, piece, len);
         l->used += len;
     }
     l->buf[l->used++] = '\0';
@@ -1201,6 +1204,51 @@ static int display_check(const struct etude_qemu_profile *p)
     return 0;
 }
 
+/** The boot option the launcher adds for a virtio console: port 1, where
+ * QEMU puts the first `virtserialport`, port 0 being a `virtconsole`'s. */
+#define CONSOLE_OPTION "console=vport0p1"
+
+/** The PCI slot of the virtio console, above those QEMU gives the devices
+ * of a profile in turn and below the q35 machine's own at 0x1f. */
+#define CONSOLE_SLOT "0x1d"
+
+/** Say whether one of `options` names a console, as `console=ttyS0`. */
+static int names_console(const char *const *options)
+{
+    size_t i;
+
+    for (i = 0; i < count(options); i++)
+        if (strncmp(options[i], "console=", 8) == 0)
+            return 1;
+    return 0;
+}
+
+enum etude_console etude_qemu_console_default(const char *kernel, enum etude_firmware firmware,
+                                              const char *const *boot_options)
+{
+    return firmware == ETUDE_FIRMWARE_DIRECT && kernel != NULL && strcmp(kernel, "kernel") == 0 &&
+                   !names_console(boot_options)
+               ? ETUDE_CONSOLE_VIRTIO
+               : ETUDE_CONSOLE_UART;
+}
+
+/**
+ * Check the console of profile `p`: the UART, or a virtio console on a
+ * machine whose kernel the launcher gives the boot line, and whose line
+ * names no other console.
+ *
+ * @return 0, or EINVAL.
+ */
+static int console_check(const struct etude_qemu_profile *p)
+{
+    if (p->console == ETUDE_CONSOLE_UART)
+        return 0;
+    return p->console == ETUDE_CONSOLE_VIRTIO && p->firmware == ETUDE_FIRMWARE_DIRECT &&
+                   !names_console(p->boot_options)
+               ? 0
+               : EINVAL;
+}
+
 /** Check what QEMU's command line cannot express or would ignore. */
 static int profile_check(const struct etude_qemu_profile *p)
 {
@@ -1227,7 +1275,7 @@ static int profile_check(const struct etude_qemu_profile *p)
         return EINVAL;
     if (p->smbios_vendor != NULL && !text(p->smbios_vendor, ETUDE_SMBIOS_VENDOR_MAX))
         return EINVAL;
-    if (display_check(p) != 0)
+    if (display_check(p) != 0 || console_check(p) != 0)
         return EINVAL;
     return firmware_check(p);
 }
@@ -1502,8 +1550,17 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
 #else
     add(&l, 1, "socket,id=etude-console,path=%s", console);
 #endif
-    add(&l, 0, "-serial");
-    add(&l, 0, "chardev:etude-console");
+    if (p->console == ETUDE_CONSOLE_VIRTIO) {
+        /* After the profile's devices, at a slot of its own, so that each
+         * of them has the slot it has beside a UART. */
+        add(&l, 0, "-device");
+        add(&l, 0, "virtio-serial-pci,addr=" CONSOLE_SLOT);
+        add(&l, 0, "-device");
+        add(&l, 0, "virtserialport,chardev=etude-console");
+    } else {
+        add(&l, 0, "-serial");
+        add(&l, 0, "chardev:etude-console");
+    }
     add(&l, 0, "-chardev");
 #ifdef _WIN32
     add(&l, 1, "socket,id=etude-qmp,host=127.0.0.1,port=%s", qmp);
@@ -1516,9 +1573,9 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     /* A Windows process that exits resets its sockets; see posix/qemu.c. */
     add(&l, 0, "-no-shutdown");
 #endif
-    if (count(p->boot_options) > 0) {
+    if (count(p->boot_options) > 0 || p->console == ETUDE_CONSOLE_VIRTIO) {
         add(&l, 0, "-append");
-        add_joined(&l, p->boot_options);
+        add_joined(&l, p->boot_options, p->console == ETUDE_CONSOLE_VIRTIO ? CONSOLE_OPTION : NULL);
     }
     return l.error;
 }

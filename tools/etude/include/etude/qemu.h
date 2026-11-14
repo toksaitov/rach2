@@ -29,6 +29,15 @@ enum etude_firmware {
     ETUDE_FIRMWARE_OVMF     /* the UEFI firmware boots from the disks */
 };
 
+/* The device that carries the machine's console, the launcher's first
+ * socket. */
+enum etude_console {
+    ETUDE_CONSOLE_UART,  /* the 16550 at COM1 */
+    ETUDE_CONSOLE_VIRTIO /* port 1 of a virtio console, a `virtserialport`,
+                            which the launcher names on the boot line as
+                            `console=vport0p1`; the machine then has no UART */
+};
+
 /* A forward of one of the case's local ports to a port of the guest: QEMU
  * listens on 127.0.0.1 at the local port and joins each connection, or each
  * datagram, to the port at the first address that DHCP gives on the card's
@@ -162,6 +171,8 @@ struct etude_qemu_profile {
     const char *audio;                   /* NULL, "hda" or "sb16", on the
                                             backend `audio_backend` names */
     enum etude_firmware firmware;
+    enum etude_console console;              /* ETUDE_CONSOLE_VIRTIO with the
+                                                direct firmware alone */
     const struct etude_qemu_device *devices; /* ended by a NULL model */
     const char *const *boot_options;         /* the kernel's command line, ended
                                                 by NULL; direct firmware alone */
@@ -294,7 +305,8 @@ struct etude_qemu_line {
  *         make, a capture of a card the profile lacks and an ACPI table
  *         whose path keeps a colon, and a display that is not one of
  *         `display`'s or that has another display device, a USB tablet or no
- *         8042 beside it; ENOENT for a
+ *         8042 beside it, and a virtio console without the direct firmware
+ *         or beside a boot option that names a console; ENOENT for a
  *         firmware the site lacks, E2BIG when `out` is too small; ENOTSUP for
  *         a lazy boundary profile the site has not enabled, and on Windows
  *         for the `virgl` and `venus` displays.
@@ -302,6 +314,20 @@ struct etude_qemu_line {
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
                     const struct etude_qemu_line *out);
+
+/**
+ * Choose the console of a case that names none: the virtio console's port
+ * for a machine whose direct firmware loads the tree's own kernel, the
+ * artifact `kernel`, with `boot_options` that name no console themselves;
+ * the UART for every other, among them a kernel of another build, which may
+ * have no driver for the port, and a boot line with `console=`, whose
+ * author chose.
+ *
+ * @param kernel the artifact's name in the case, or NULL
+ * @param boot_options the kernel's options, ended by NULL, or NULL
+ */
+enum etude_console etude_qemu_console_default(const char *kernel, enum etude_firmware firmware,
+                                              const char *const *boot_options);
 
 /**
  * Make QEMU's environment for profile `p` in `out`: the caller's `envp`

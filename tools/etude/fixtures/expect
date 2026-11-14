@@ -260,6 +260,10 @@
 1 manifest ./fault-rules.json | no-console: the machine smp ends in a fault whose records only a serial console shows
 1 manifest ./fault-rules.json | halt-no-qmp: the machine smp ends halted, which only its QMP monitor shows
 1 manifest ./fault-rules.json | no-report: the machine smp ends in a fault, and no assertion of the case is its scenario's
+1 manifest ./virtio-console.json | firmware: the machine smp has a virtio console, which only a direct boot names to the kernel
+1 manifest ./virtio-console.json | named: the machine smp has a virtio console and a boot option that names a console
+1 manifest ./virtio-console.json | fault: the machine smp ends in a fault whose records only a serial console shows
+1 manifest ./virtio-console.json | !direct: the machine
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited | the end exited takes a value of 0 to 255
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 256 | the end exited takes a value of 0 to 255
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 signaled -1 | the end signaled takes a value of 0 to 255
