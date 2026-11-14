@@ -141,11 +141,15 @@ request, as QEMU's
 .Cm invtsc
 does, Linux rates the counter above kvm-clock, and so does this kernel:
 the library reads the counter itself, as on a machine without KVM, and
-the kernel watches it against KVM's clock, unless the processor has
-.Dv IA32_TSC_ADJUST
-or
+the kernel watches it against KVM's clock, unless
 .Cm rach2.tscreliable
-is given, where Linux leaves the counter unwatched.
+is given, which like Linux's
+.Cm tsc=reliable
+leaves the counter unwatched and changes no rating.
+Linux also leaves the counter unwatched where the processor has
+.Dv IA32_TSC_ADJUST ,
+which it checks at each idle entry; this kernel keeps no such check, and
+goes on watching.
 A counter that parts from KVM's clock, or that two processors read
 differently as they start, leaves the library's clock to KVM's page.
 The boot options

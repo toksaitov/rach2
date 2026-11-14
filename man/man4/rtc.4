@@ -10,7 +10,7 @@
 The device is the machine's CMOS clock, which keeps the date and time while
 the machine is off and which the kernel reads once at boot to set the time;
 under KVM the boot takes the time from the wall clock KVM states instead,
-as Linux does, and reads the device only when asked.
+to its nanosecond, as Linux does, and reads the device only when asked.
 The kernel writes it only while an NTP daemon keeps the time synchronized,
 as
 .Xr adjtimex 2
