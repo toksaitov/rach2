@@ -407,10 +407,13 @@ static int ps2_wait_mouse_output(uint32_t limit_us)
 #ifndef RACH2_HOSTTEST
     uint32_t start = timer_now_us();
 #endif
-    uint32_t waited = 0, step;
+    uint32_t waited, step;
     int reads = 0;
     uint8_t status;
 
+#ifdef RACH2_HOSTTEST
+    waited = 0;
+#endif
     for (;;) {
         status = inb(PS2_STATUS_PORT);
         if (status & PS2_STATUS_OUTPUT_FULL) {
