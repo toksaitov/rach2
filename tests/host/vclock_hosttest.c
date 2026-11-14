@@ -67,10 +67,12 @@
  * while due passes its turn to the next, whose half second begins then; a
  * stretch of two seconds the whole machine spent stopped, between a turn's
  * first kick and its answer, ends no turn, and one after four unanswered
- * passes ends it but stops no clock; and while the second processor never
- * answers, a drift of the boot processor, the one of two left, is caught,
- * since the turn it takes back keeps until it measured its span, and so is
- * a third processor's.
+ * passes ends it but stops no clock; a stretch of 43.4 s with no tick,
+ * which the tick's clock reads a wrap of the HPET short and the TSC whole,
+ * begins the span again and stops no clock; and while the second processor
+ * never answers, a drift of the boot processor, the one of two left, is
+ * caught, since the turn it takes back keeps until it measured its span,
+ * and so is a third processor's.
  */
 
 #include "arch/x86_64/vclock.c"
@@ -1504,6 +1506,38 @@ static void watch_pause_rows(void)
           "a machine stopped two seconds after them keeps the clock, the turn lost");
 }
 
+/* A wrap of the HPET's 32 bits at 100 MHz, in nanoseconds. */
+#define HPET_WRAP_NS 42949672960ULL
+
+/**
+ * A stretch of 43.4 s with no tick, whose end the tick's clock reads a
+ * wrap of the HPET short, as one with no tick to count the wrap reads it,
+ * and the TSC whole: the span it falls in begins again, and the clock runs
+ * on and still catches a drift after.
+ */
+static void watch_stretch_rows(void)
+{
+    uint32_t ran;
+
+    watch_boot(1);
+    ran = watch_ticks(2u * TICK_HZ);
+    CHECK(ran == 2u * TICK_HZ && vclock_running() && watch_refined, "the rate is set");
+    tick_index += (uint32_t)((HPET_WRAP_NS + 450000000ULL) / TICK_NS);
+    tick_lag_ns = HPET_WRAP_NS;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(ran == 3u * TICK_HZ && vclock_running() && !watch_parted,
+          "a stretch of 43.4 s with no tick, which the tick's clock reads a wrap of the "
+          "HPET short, keeps the clock");
+    drift_ppm[0] = 1000;
+    drift_from_ns = 10000000000ULL + (uint64_t)tick_index * TICK_NS;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && ran <= TICK_HZ + 1u,
+          "and a TSC that drifts 1000 parts in a million after it stops the clock within "
+          "a second");
+    tick_lag_ns = 0;
+    drift_ppm[0] = 0;
+}
+
 /** A drift caught while another processor never answers, on the one
  * processor left that answers and on a third, and the model put back for
  * the rows after. */
@@ -1549,6 +1583,7 @@ static void watch_rows(void)
     watch_drift_rows();
     watch_turn_rows();
     watch_pause_rows();
+    watch_stretch_rows();
     watch_silent_rows();
 }
 

@@ -113,8 +113,13 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * no measure: it is read again, up to WATCH_READS times, as Linux's
  * cs_watchdog_read reads again a read of the HPET that was held up, and
  * where every one was held up the span keeps its start and the next tick
- * tries again. A span past twice its length begins again, as Linux skips a
- * long interval. A due span's processor that has not read its end once
+ * tries again. A span past twice its length, by the tick's clock or by
+ * the TSC, begins again unjudged, as Linux skips an interval that either
+ * clock found too long (the greater of cs_nsec and wd_nsec against
+ * WATCHDOG_INTERVAL_MAX_NS): a stretch of 43 s with no tick loses a wrap
+ * of the HPET's 32 bits at 100 MHz from the tick's clock, and leaves a
+ * span short by the tick's clock and long by the TSC, which is right. A
+ * due span's processor that has not read its end once
  * its turn has lasted both WATCH_ANSWER_NS of the raw clock and
  * WATCH_ANSWER_PASSES clock passes, having taken neither its tick nor
  * those passes' kicks, or having had every reading held up, loses its
@@ -634,12 +639,16 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
     if (span < need) {
         return WATCH_EARLY;
     }
-    /* A TSC behind the span's start ran none of it, and one past twice
-     * the counts the span should hold ran twice it, which bounds the
-     * products below: the span is under 2^31 ns, the rate under 2^32. */
-    most = 2u * tick_div64(span * tsc_clock_per_tick(), TICK_NS, NULL);
+    /* A TSC behind the span's start ran none of it; one past twice the
+     * span's length begins the span again, which bounds the products
+     * below: twice the span is under 2^31 ns, the rate under 2^32. */
+    most = tick_div64(2u * need * tsc_clock_per_tick(), TICK_NS, NULL);
     delta = tsc > watch_tsc ? tsc - watch_tsc : 0;
-    delta = delta < most ? delta : most;
+    if (delta > most) {
+        watch_tsc = tsc;
+        watch_raw = ref_raw;
+        return WATCH_KEEP;
+    }
     ran = vclock_scale(delta, mult_measured, data->shift);
     watch_tsc = tsc;
     watch_raw = ref_raw;
