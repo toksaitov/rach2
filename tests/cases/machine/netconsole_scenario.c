@@ -154,7 +154,9 @@ static void stop_case(struct net_case *u, struct net_boot *b)
  * own record reaches netconsole, so `panic: stopped` on the console comes
  * before any datagram. The panic writes its report records after that
  * delivery has sent them to the card, so the report's `build` line on the
- * console means the datagrams are in the capture. */
+ * console means the datagrams are in the capture. QEMU then ends while the
+ * report's later records are still written, so the console's last record may
+ * be cut short, which etude.kernel passes on a boot that panicked. */
 static void udp_case(struct net_case *u, struct net_boot *b)
 {
     static const char *const contract[] = {NULL};
