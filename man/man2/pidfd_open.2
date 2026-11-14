@@ -15,9 +15,10 @@
 .Ft int
 .Fn pidfd_getfd "int pidfd" "int targetfd" "unsigned int flags"
 .Sh DESCRIPTION
-A pidfd is a descriptor that names a process.
-Unlike a process ID, it never comes to name another process: once its own
-has been reaped and its number given to a new one, the pidfd names none.
+A pidfd is a descriptor that names a process, or one thread of it.
+Unlike a process ID, it never comes to name another process or thread:
+once its own has let the number go and the number is given to a new one,
+even to another thread of the same process, the pidfd names none.
 .Pp
 .Fn pidfd_open
 returns a new close-on-exec pidfd of the process
@@ -53,7 +54,10 @@ of its process may run on.
 Each is hung up as well once its thread has let its ID go: the process
 reaped, or a thread that does not lead its process freed, which happens at
 its end unless a tracer holds it.
-Both events wake a poller already waiting on the pidfd.
+Both events wake a poller already waiting on the pidfd, and the end of
+another thread of the process wakes none, so an edge-triggered
+.Xr epoll 2
+reports each change once.
 .Xr waitid 2
 with
 .Dv P_PIDFD
@@ -141,18 +145,18 @@ The kernel holds the pidfd's process across the copy and finds it again
 after, so a page fault during the copy cannot leave a stale target.
 .Pp
 .Fn pidfd_getfd
-returns a close-on-exec copy, in the caller's table, of the process's
-descriptor
-.Fa targetfd ,
-by a pidfd of the process or of the thread that leads it,
-which shares its open file description, as
+returns a close-on-exec copy, in the caller's table, of the descriptor
+.Fa targetfd
+of the pidfd's thread, the one that leads the process for a pidfd of a
+process, which shares its open file description, as
 .Xr dup 2
 makes a copy.
-The process must be the caller's own, or the caller must be one that may
-attach to it with
+The thread must be of the caller's own process, or the caller must be one
+that may attach to it with
 .Xr ptrace 2 :
 privileged, or with a real user ID and a real group ID equal to each of
-the process's three, while the process is dumpable and not privileged.
+the thread's three, while the process is dumpable and the thread not
+privileged.
 .Fa flags
 must be 0.
 .Ss System call interface
@@ -178,8 +182,8 @@ The default suite's
 .Pa tests/musl/pidfdmusl.c
 opens, polls, signals and waits on pidfds of processes and of threads,
 takes a pipe through
-.Fn pidfd_getfd ,
-and checks the refusals.
+.Fn pidfd_getfd
+by a pidfd of a process and of a thread, and checks the refusals.
 .Sh ERRORS
 .Bl -tag -width "[EMFILE]"
 .It Bq Er E2BIG
@@ -192,7 +196,7 @@ describes.
 .Fa pidfd
 is not an open pidfd, or
 .Fa targetfd
-is not open in the process, which has none once it has ended.
+is not open in the thread, which has none once it has ended.
 .It Bq Er EFAULT
 .Fa info
 cannot be read.
@@ -225,9 +229,7 @@ No thread has the ID
 the pidfd's process has been reaped or its thread has let its ID go, the
 process group
 .Dv PIDFD_SIGNAL_PROCESS_GROUP
-names has no members, which a later group given its ID does not change, or
-.Fn pidfd_getfd
-was given a pidfd of a thread that does not lead its process.
+names has no members, which a later group given its ID does not change.
 .El
 .Sh SEE ALSO
 .Xr fork 2 ,
