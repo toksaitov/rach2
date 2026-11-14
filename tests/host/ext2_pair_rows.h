@@ -14,7 +14,10 @@
  * layout B may instead sleep on the buffer of a block that A's request is
  * moving, which the cache holds for that one request (bcache.h), and on no
  * other buffer. An fsync beside an fsync may sleep on the other's list of
- * blocks being written, whose inode may share its table block.
+ * blocks being written, whose inode may share its table block. An fsync of
+ * a file, and a sync of any, may sleep on the lock of a node whose change
+ * is not yet stored, which each stores under that lock
+ * (`ext2_node_write_marked`, `nodes_settle`), while A holds it.
  *
  * The volume lives in memory (`ram_image`) and starts each run from one
  * copy, with the cache empty; the mount writes back, as a default mount
@@ -464,6 +467,17 @@ static int pair_list_wait(const struct pair_op *a, const struct pair_op *b)
            streq(pair_slept, "ext2 node state");
 }
 
+/** Whether B, an fsync of A's file or a sync, sleeps on the lock of a node
+ * A holds, to store its change (`ext2_node_write_marked`, `nodes_settle`):
+ * an fsync on one file, a sync on either layout, of A's file or directory. */
+static int pair_store_wait(const struct pair_op *a, const struct pair_op *b, int layout)
+{
+    int fsync_one = b->run == pair_fsync && layout == PAIR_ONE && (a->holds & PL_FILE);
+    int sync_any = b->run == pair_sync && (a->holds & (PL_FILE | PL_DIR));
+
+    return (fsync_one || sync_any) && !pair_ended && pair_slept && streq(pair_slept, "ext2 node");
+}
+
 /**
  * Run `a` against `b` on `layout` at each disk request of `a` in turn and
  * judge what B did at each against `want`: NULL for an end, or the kind of
@@ -490,7 +504,7 @@ static void pair_row(const struct pair_op *a, const struct pair_op *b, int layou
             check(0, what);
             good = 0;
         }
-        if (!pair_in_flight && !pair_list_wait(a, b) &&
+        if (!pair_in_flight && !pair_list_wait(a, b) && !pair_store_wait(a, b, layout) &&
             (want ? (pair_ended || !pair_slept || !streq(pair_slept, want)) : !pair_ended)) {
             snprintf(what, sizeof(what), "%s then %s %s at request %d, of block %lu: %s, not %s",
                      a->name, b->name, layouts[layout], k, (unsigned long)pair_block,
