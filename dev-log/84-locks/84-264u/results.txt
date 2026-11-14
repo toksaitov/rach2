@@ -1,0 +1,27 @@
+Proton's d3d9:device in the Debian 13 reference guest under KVM, 8 CPUs, 16 GiB,
+virtio-vga, lavapipe, one boot of ref244.sh: runs 1 and 2 on Debian's glibc
+2.41-12+deb13u4, runs 3 to 10 with Rach2's x86_64 glibc 2.44 bound over it.
+Columns: run, glibc, the unit's exit, unit.log lines, DXVK timeouts logged,
+device.c:6780 records.
+
+1   2.41 exit 5   lines 57177  timeout 1 6780 1
+2   2.41 exit 5   lines 57176  timeout 1 6780 1
+3   2.44 exit 5   lines 57178  timeout 1 6780 1
+4   2.44 exit 245 lines 19674  timeout 1 6780 0
+5   2.44 exit 5   lines 57175  timeout 1 6780 1
+6   2.44 exit 5   lines 57177  timeout 1 6780 1
+7   2.44 exit 245 lines 19674  timeout 1 6780 0
+8   2.44 exit 5   lines 57177  timeout 1 6780 1
+9   2.44 exit 245 lines 19674  timeout 1 6780 0
+10  2.44 exit 5   lines 57176  timeout 1 6780 1
+
+The last lines of run 4, a crash:
+info:  DXVK: Using 8 compiler threads
+device.c:6759: Expects 0x0000000104000000 samples.
+err:   DxvkSubmissionQueue: Timeout occured, GPU likely hung.
+
+Lines 19673 to 19676 of run 1, which survived:
+device.c:6759: Expects 0x0000000104000000 samples.
+err:   DxvkSubmissionQueue: Timeout occured, GPU likely hung.
+device.c:6780: Test failed: Got unexpected query result 0x0000000004000000.
+err:   DxvkSubmissionQueue: Command submission failed: VK_ERROR_DEVICE_LOST

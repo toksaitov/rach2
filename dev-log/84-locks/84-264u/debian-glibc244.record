@@ -1,0 +1,21 @@
+profile virtio-vga
+firmware seabios
+accelerator kvm
+cpu host,invtsc=on
+cpus 8
+memory_mib 16384
+qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+snapshot 20261108T000000Z
+claim debian-ref:toksaitov-a:2038344:1794678231
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 6.55 6.45 6.19
+host_claims 5
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=8
+env GRAPHICS_MEMORY_KIB=16382184
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
