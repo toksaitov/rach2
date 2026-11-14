@@ -28,7 +28,12 @@
  *   virtio device, as virtio-gpu's card has, its uevent's DRIVER and
  *   MODALIAS, its `device`, `vendor`, `modalias` and `driver`, and the same
  *   of the PCI function above it, reached through `device/..` as libdrm
- *   reaches it; for a platform device its uevent's DRIVER and MODALIAS.
+ *   reaches it; and with /sys/bus/virtio/devices bound at `sysdrm-bind` in
+ *   the working directory, the device's link there is a link to lstat and
+ *   reads as /sys gives it, and followed by stat or by an open of `link/.`
+ *   leads through the mounts above the bind, where its
+ *   ../../../devices is absent, to ENOENT, as on Linux; for a platform
+ *   device its uevent's DRIVER and MODALIAS.
  *   The device's `drm` directory lists the node, the node's `dev` gives its
  *   numbers and its uevent its DEVNAME, and /sys/class/drm links it. Not
  *   run on a machine with no DRM node.
@@ -92,6 +97,13 @@
 
 #define S_IFLNK 0120000
 
+#define ENOENT  2
+#define EEXIST  17
+#define MS_BIND 4096
+
+/* Where `cards` binds /sys/bus/virtio/devices, in the working directory. */
+#define BIND_DIR "sysdrm-bind"
+
 /* Linux's DRM_IOCTL_SET_MASTER and DRM_IOCTL_MODE_GETCONNECTOR, whose
  * struct drm_mode_get_connector is 80 bytes on both architectures. */
 #define DRM_IOCTL_SET_MASTER        0x641eul
@@ -140,6 +152,7 @@ static char bar_path[128];
 static char card_name[32];
 static char card_devpath[160];
 static char node_name[32];
+static int bind_made, bind_mounted; /* BIND_DIR made by the probe, and bound */
 
 /** Exit with `status`. */
 static void sys_exit(int status)
@@ -148,10 +161,24 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
+/** Unmount and remove BIND_DIR, as far as the probe made them. */
+static void bind_undo(void)
+{
+    if (bind_mounted) {
+        syscall2(SYS_UMOUNT2, (long)BIND_DIR, 0);
+        bind_mounted = 0;
+    }
+    if (bind_made) {
+        syscall1(SYS_RMDIR, (long)BIND_DIR);
+        bind_made = 0;
+    }
+}
+
 /** Say `what` failed, with `detail` after it, fail the current assertion
- * and exit 1. */
+ * and exit 1, with BIND_DIR gone. */
 static void fail2(const char *what, const char *detail)
 {
+    bind_undo();
     probe_line("SYSDRMPROBE FAIL: ", what, detail);
     report_stop(what);
     sys_exit(1);
@@ -663,10 +690,63 @@ static void card_pci(const char *dir, const char *node, int virtio)
     }
 }
 
+/**
+ * Check the virtio device `name`'s link with /sys/bus/virtio/devices bound
+ * at BIND_DIR, as Linux's walk takes it: lstat finds a link, readlink its
+ * text as /sys/bus/virtio/devices gives it, and stat and an open of `link/.`,
+ * which follow the text from BIND_DIR through the mounts above it, find no
+ * ../../../devices there. The bind goes before the check returns.
+ */
+static void bind_link(const char *name, const char *node)
+{
+    unsigned long long st[KSTAT_SIZE / 8 + 1];
+    char path[176], text[256], want[256];
+    long rc;
+
+    rc = syscall2(SYS_MKDIR, (long)BIND_DIR, 0755);
+    if (rc != 0 && rc != -EEXIST) {
+        fail2("no directory to bind /sys/bus/virtio/devices at for ", node);
+    }
+    bind_made = rc == 0;
+    if (syscall5(SYS_MOUNT, (long)"/sys/bus/virtio/devices", (long)BIND_DIR, 0, MS_BIND, 0) != 0) {
+        fail2("/sys/bus/virtio/devices not bound for ", node);
+    }
+    bind_mounted = 1;
+    join(path, sizeof(path), "/sys/bus/virtio/devices/", name, 0);
+    if (read_link(path, want, sizeof(want)) <= 0) {
+        fail2("no link in /sys/bus/virtio/devices of the virtio device of ", node);
+    }
+    join(path, sizeof(path), BIND_DIR "/", name, 0);
+    if (syscall2(SYS_LSTAT, (long)path, (long)st) != 0 ||
+        (*(unsigned *)((char *)st + KSTAT_MODE) & S_IFMT) != S_IFLNK) {
+        fail2("the virtio device's link under a bind is no link to lstat: ", node);
+    }
+    if (read_link(path, text, sizeof(text)) <= 0 || !str_eq(text, want)) {
+        fail2("the virtio device's link under a bind reads otherwise: ", node);
+    }
+    if (syscall2(SYS_STAT, (long)path, (long)st) != -ENOENT) {
+        fail2("stat of the virtio device's link under a bind did not climb out of it: ", node);
+    }
+    join(path, sizeof(path), BIND_DIR "/", name, "/.");
+    rc = syscall3(SYS_OPEN, (long)path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+    if (rc >= 0) {
+        syscall1(SYS_CLOSE, rc);
+    }
+    if (rc != -ENOENT) {
+        fail2("an open of the virtio device's link/. under a bind did not climb out of it: ", node);
+    }
+    if (syscall2(SYS_UMOUNT2, (long)BIND_DIR, 0) != 0) {
+        fail2("the bind of /sys/bus/virtio/devices not unmounted for ", node);
+    }
+    bind_mounted = 0;
+    bind_undo();
+}
+
 /** Check the virtio device of /sys/dev/char's `dir`, as Linux's virtio.c
  * shows it: its uevent's DRIVER and MODALIAS, `device` and `vendor` as
  * "0x%04x", the same in `modalias`, and a `driver` link; then its parent's
- * subsystem, which must be PCI, as libdrm reads it through `device/..`. */
+ * subsystem, which must be PCI, as libdrm reads it through `device/..`;
+ * then its link under a bind of /sys/bus/virtio/devices (`bind_link`). */
 static void card_virtio(const char *dir, const char *node)
 {
     char dev[160], path[176], text[512], device[16], vendor[16], head[32], alias[64];
@@ -704,6 +784,10 @@ static void card_virtio(const char *dir, const char *node)
         fail2("the virtio device's parent is not on the PCI bus: ", node);
     }
     card_pci(dir, node, 1);
+    if (read_link(dev, text, sizeof(text)) <= 0) {
+        fail2("no device link of ", node);
+    }
+    bind_link(base_name(text), node);
 }
 
 /** Check the DRM node `name` of /dev/dri as libdrm finds it, and keep the

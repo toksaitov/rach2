@@ -1642,6 +1642,20 @@ static int walk_creates(int rc, int flags, const char *p)
 }
 
 /**
+ * Whether the walk of `flags` stays at the link of /sys that a type's
+ * `lookup_rest` handed over with `rc`, whose meaning is `vp`, with `rest`
+ * the path after it: at the end of the path of a walk that does not follow
+ * its last link, so that lstat(2), readlink(2) and O_NOFOLLOW find the link
+ * itself. A parent walk never ends on one, since its leaf is not handed
+ * over.
+ */
+static int walk_sys_link_kept(const struct vpath *vp, int rc, int flags, const char *rest)
+{
+    return rc == VFS_LINK && vp->kind == VNODE_SYS_LINK && rest[0] == '\0' &&
+           (flags & VFS_WALK_NOFOLLOW);
+}
+
+/**
  * How the walk of `flags` goes on from the node `found` of `mnt` that a
  * type's `lookup_rest` gave with `rc`, whose /proc meaning is `vp`, before
  * the leaf of a parent walk (`parent`): WALK_REST_OBJECT to the object of a
@@ -2561,7 +2575,9 @@ begin:
             }
             p = rc == VFS_LINK ? left : p + rlen;
             vp = vfs_synth_vpath(cur.mnt, found);
-            kind = walk_rest_kind(vp, rc, cur.mnt, found, last_comp != 0, flags);
+            kind = walk_sys_link_kept(vp, rc, flags, p)
+                       ? 0
+                       : walk_rest_kind(vp, rc, cur.mnt, found, last_comp != 0, flags);
             rc = kind ? walk_link_ok(&rules, walk_magic(vp)) : 0;
             if (rc != 0) {
                 node_put(cur.mnt, found);
@@ -4626,12 +4642,16 @@ static struct vfs_mount *mount_deep_at(struct vfs_mount *mnt, const char *text, 
 
 /**
  * Whether the part of a path classified so far, the `out` bytes of `full`,
- * names a link the walk follows, to its object (`synth_object_link`), or to
- * its text: a link made under /dev, or a link of /sys a driver added whose
- * directory lies outside the walk's root, the first `plen` bytes of `full`
- * (`synth_sys_link_dir`); and more of the rest, from `p` to `end`, comes
- * after it: VFS_LINK with a new node of the link held in `*node`, 0 when it
- * does not, or -ENOMEM. A node of /proc passed on the way whose
+ * names a link the walk follows: to its object (`synth_object_link`) or to
+ * its text, a link made under /dev, when more of the rest, from `p` to
+ * `end`, comes after it; or by its text, whether or not more comes, a link of
+ * /sys a driver added whose directory lies outside the walk's root, the
+ * first `plen` bytes of `full` (`synth_sys_link_dir`), since the directory
+ * its text names is reached only through the mounts above the bind, as
+ * Linux's walk reaches it. VFS_LINK with a new node of the link held in
+ * `*node`, 0 when it names none, or -ENOMEM; the walk leaves a link of /sys
+ * at the end of the path to a walk that does not follow it
+ * (`walk_rest_kind`). A node of /proc passed on the way whose
  * inode keeps its owner, a process's fd, fdinfo or task directory or one of
  * its links among them, gets its current owner (`procfs_lookup_owner`), as
  * Linux's lookup_fast revalidates each component it reaches (Linux 6.12
@@ -4644,21 +4664,25 @@ static int synth_link_part(char *full, uint32_t out, uint32_t plen, const char *
 {
     struct vpath vp;
     char dir[256];
+    int more;
 
     while (p < end && *p == '/') {
         p++;
     }
-    if (p == end) {
+    more = p < end;
+    full[out] = '\0';
+    if (!more && !path_under(full, "sys", 3)) {
         return 0;
     }
-    full[out] = '\0';
     synth_classify(full, &vp);
     synth_made(full, &vp);
     procfs_lookup_owner(&vp);
-    if (!synth_object_link(&vp) && !synth_self_link(&vp) &&
-        !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0) &&
-        !(vp.kind == VNODE_SYS_LINK &&
-          synth_sys_link_dir(full, (int)plen, dir, (int)sizeof(dir)) < 0)) {
+    if (vp.kind == VNODE_SYS_LINK &&
+        synth_sys_link_dir(full, (int)plen, dir, (int)sizeof(dir)) < 0) {
+        return synth_take(&vp, node) != 0 ? -ENOMEM : VFS_LINK;
+    }
+    if (!more || (!synth_object_link(&vp) && !synth_self_link(&vp) &&
+                  !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0))) {
         return 0;
     }
     return synth_take(&vp, node) != 0 ? -ENOMEM : VFS_LINK;
