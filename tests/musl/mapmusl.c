@@ -10,9 +10,12 @@
  * truncation and a growth a write to the file is seen through the mapping. On
  * ext2 a cache-warmed private page and a shared writable alias both raise
  * SIGBUS after truncation, and regrowth preserves the prefix and has a zero
- * tail. On x86-64, truncating a file of 4 GiB and a page to 4 GiB cuts
- * only its last page from the mapping. A file or shared-memory mapping
- * of 16 TiB is EOVERFLOW and one of a page less is made; mprotect,
+ * tail; a private mapping of 4 MiB of an ext2 file without a hint reads
+ * the file, and in a 64-bit program on x86-64 starts on a 2 MiB boundary,
+ * as Linux's thp_get_unmapped_area places it. On x86-64, truncating a file
+ * of 4 GiB and a page to 4 GiB cuts only its last page from the mapping. A
+ * file or shared-memory mapping of 16 TiB is EOVERFLOW and one of a page
+ * less is made; mprotect,
  * getrusage, a shrink and a move each pass terabytes without pages in the
  * run's time and reach the page beyond them. mprotect makes a private mapping
  * of a file opened read-only writable, and not a shared one.
@@ -62,7 +65,7 @@
  * them; a failed check fails its assertion and leaves those after it not
  * run. The branch of the group `arch` is `x86-64`, with the assertions from
  * `wide-file` to `huge-move-munmap`, or `i686`, with none of its own; that
- * of `root` is `ext2`, with those from `ext2-mmap` to `ext2-reach-file`, or
+ * of `root` is `ext2`, with those from `ext2-mmap` to `ext2-thp`, or
  * `krffs`, with `krffs-enodev` and `krffs-readonly`, by the type of /tmp.
  * The child that checks its segments writes none.
  */
@@ -95,6 +98,15 @@ extern char **environ;
 #define EXE_PATH  "/tmp/mapmusl.exe"
 #define MOVED     "/tmp/mapmusl.moved"
 #define PAGE      4096
+#define HUGE_PAGE (2ul << 20)
+
+/* Whether a mapping of a file that holds a 2 MiB page is aligned to one:
+ * in a 64-bit program on x86-64, and in no 32-bit one, as on Linux. */
+#if defined __x86_64__
+#define THP_ALIGNS 1
+#else
+#define THP_ALIGNS 0
+#endif
 
 /*
  * A raw mapping at a file offset given in pages: i386's mmap2 takes the page
@@ -144,6 +156,7 @@ static const char *const assertion_id[] = {"private-file",
                                            "ext2-msync",
                                            "ext2-reach-file",
                                            "ext2-cached-truncate",
+                                           "ext2-thp",
                                            "krffs-enodev",
                                            "krffs-readonly",
                                            "trunc-file",
@@ -1096,6 +1109,42 @@ out:
 }
 
 /**
+ * Check that a private mapping of 4 MiB of `fd`, a file on ext2 that begins
+ * with "root", made without a hint, reads the file, and in a 64-bit program
+ * on x86-64 starts on a 2 MiB boundary, as Linux 6.12's ext2 and ext4 place
+ * a mapping of a file that holds a 2 MiB page (thp_get_unmapped_area); a
+ * 32-bit program's is not aligned, there or on Linux. The file is cut back
+ * to its two pages, and the check's row is reported. Returns 0, or 1 once
+ * the failure is reported.
+ */
+static int ext2_aligned(int fd)
+{
+    char *m;
+    int rc = 0;
+
+    if (ftruncate(fd, 2 * HUGE_PAGE) != 0) {
+        return fail("grow a file on the root to 4 MiB");
+    }
+    m = mmap(NULL, 2 * HUGE_PAGE, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (m == MAP_FAILED || memcmp(m, "root", 4) != 0) {
+        rc = fail("a private mapping of 4 MiB of a file on the root");
+    } else if (THP_ALIGNS && ((uintptr_t)m & (HUGE_PAGE - 1)) != 0) {
+        errno = 0;
+        rc = fail("a mapping of 4 MiB of a file on the root is not on a 2 MiB boundary");
+    }
+    if (m != MAP_FAILED) {
+        munmap(m, 2 * HUGE_PAGE);
+    }
+    if (rc == 0 && ftruncate(fd, 2 * PAGE) != 0) {
+        rc = fail("cut a file on the root back to two pages");
+    }
+    if (rc == 0) {
+        row_held();
+    }
+    return rc;
+}
+
+/**
  * Check that `m`, a shared mapping of two pages of `fd`, a file on ext2, maps
  * the file's pages: a child's store is seen, read and write see the mapping's
  * stores and it sees theirs, a readv's later buffer sees what its first
@@ -1186,6 +1235,9 @@ static int root_shared(void)
     row_held();
     m = mmap(NULL, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     rc = sfs.f_type == EXT2_MAGIC ? ext2_shared(fd, m) : krffs_shared(fd, m);
+    if (rc == 0 && sfs.f_type == EXT2_MAGIC) {
+        rc = ext2_aligned(fd);
+    }
     close(fd);
     unlink(FILE_PATH);
     return rc;
