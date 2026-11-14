@@ -1016,14 +1016,18 @@ static int32_t file_write_piece(const struct open_file *ofd, struct file_write_s
  * copies from `buf`
  * only while its pages are present (`vm_resident`), answering a short count
  * at the first that is not, since a fault under the lock could wait for
- * another file's lock. Once this call has moved a byte, in this piece or an
- * earlier vector element, it returns that prefix without releasing the lock.
- * Otherwise the lock goes while the buffer is brought in, and an append
- * reads the end again, where another writer may have moved it meanwhile:
- * the count is cut again to what RLIMIT_FSIZE lets through
- * (`fsize_fit`), and a write that finds the end at the limit stops there,
- * -EFBIG when it has moved no byte. An end that cannot be read again ends
- * the write with the bytes moved.
+ * another file's lock. The write then goes on from there, as Linux's
+ * generic_perform_write faults the buffer in and goes on (mm/filemap.c in
+ * 6.12): at once when the rest of the buffer is present by now, as a page
+ * another thread of the caller's brought in since the copy is, and else
+ * with the lock let go while the rest is brought in, up to WRITE_REFAULTS
+ * times with no byte moved between. A second short count of no bytes with
+ * the rest present is the type's own, and ends the write. An append reads
+ * the end again after the lock was let go, where another writer may have
+ * moved it meanwhile: the count is cut again to what RLIMIT_FSIZE lets
+ * through (`fsize_fit`), and a write that finds the end at the limit stops
+ * there, -EFBIG when it has moved no byte. An end that cannot be read
+ * again ends the write with the bytes moved.
  */
 static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *state,
                                  const char __user *buf, uint32_t count, uint64_t *pos)
@@ -1032,7 +1036,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
     uintptr_t from = (__force uintptr_t)buf;
     struct write_snap snap;
     uint32_t done = 0;
-    int refaults = 0;
+    int refaults = 0, stalls = 0;
     int32_t n;
 
     snap.buf = NULL;
@@ -1042,7 +1046,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
             done += (uint32_t)n;
             state->moved = 1;
             *pos += (uint64_t)n;
-            refaults = 0;
+            refaults = stalls = 0;
         }
         if (n < 0 || done == count) {
             break;
@@ -1050,12 +1054,14 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
         if (snap.next) {
             continue;
         }
-        if (!state->own || (!snap.absent && user_resident(from + done, count - done))) {
+        if (!state->own) {
             break;
         }
-        if (state->moved) {
-            n = -EFAULT;
-            break;
+        if (!snap.absent && user_resident(from + done, count - done)) {
+            if (n == 0 && ++stalls > 1) {
+                break;
+            }
+            continue;
         }
         vfs_node_unlock(&state->file);
         n = ++refaults <= WRITE_REFAULTS && vm_prefault_range(from + done, count - done, 0)
@@ -1090,8 +1096,8 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
  * Write with the description and the locks in `state` already held. Its
  * `own` says the type uses a file lock; `append` is the operation's final
  * end-placement choice, independent of the shared O_APPEND flag. The caller
- * has faulted in the buffer; a later fault ends a call that moved bytes,
- * or releases and reacquires the file lock through file_write_pieces.
+ * has faulted in the buffer; a later fault releases and reacquires the file
+ * lock through file_write_pieces.
  * Return bytes or a negative errno,
  * the getattr's error among them when the end of an append cannot be read.
  *
@@ -1196,8 +1202,8 @@ static long write_synced(fd_entry_t *entry, long written)
  * the offset says and whatever `at` asks for, as Linux's pwrite does. The
  * file system reads the user buffer directly, so its pages are range-checked
  * and faulted in first, and on a type that sets `file_locked` brought in
- * again with the file's lock let go when one goes before any bytes move;
- * a later fault returns the completed prefix (`file_write_pieces`). A file
+ * again with the file's lock let go when one goes, before or after bytes
+ * have moved, and the write goes on (`file_write_pieces`). A file
  * that backs a loop device is reached through that device and nowhere else,
  * since the file system mounted on it may not have its image change
  * underneath, and is -EBUSY: that is asked before the description is locked
