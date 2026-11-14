@@ -73,10 +73,11 @@ static int backing_read(uint32_t disk_off, void *page)
 }
 
 /** The backing's write, which keeps nothing and succeeds. */
-static int backing_write(uint32_t disk_off, const void *page)
+static int backing_write(uint32_t disk_off, const void *pages, uint32_t count)
 {
     (void)disk_off;
-    (void)page;
+    (void)pages;
+    (void)count;
     return 0;
 }
 

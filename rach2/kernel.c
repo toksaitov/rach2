@@ -2303,14 +2303,14 @@ static int krffs_stub_read(uint32_t off, void *page)
     return 0;
 }
 
-/** Write `page` into the module at `off`, the bytes past its end dropped.
- * Returns 0. */
-static int krffs_stub_write(uint32_t off, const void *page)
+/** Write the `count` pages at `pages` into the module at `off`, the bytes
+ * past its end dropped. Returns 0. */
+static int krffs_stub_write(uint32_t off, const void *pages, uint32_t count)
 {
     uint32_t i;
-    for (i = 0; i < PAGE_SIZE; ++i) {
+    for (i = 0; i < count * PAGE_SIZE; ++i) {
         if (off + i < _krffs_stub_size) {
-            _krffs_stub_base[off + i] = ((const uint8_t *)page)[i];
+            _krffs_stub_base[off + i] = ((const uint8_t *)pages)[i];
         }
     }
     return 0;
@@ -2629,11 +2629,35 @@ static int krffs_disk_read(uint32_t off, void *page)
                                         PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
 }
 
-/** As `krffs_disk_read`, writing the page. */
-static int krffs_disk_write(uint32_t off, const void *page)
+/**
+ * Write the `count` pages at `pages` to byte `off` of the KRFFS partition,
+ * in as few writes of the device as its limit allows, each of which is on
+ * the medium when it returns. Returns 0, or the device's error, after which
+ * the pages are in no known state.
+ */
+static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
 {
-    return _krffs_disk_part.device.write(&_krffs_disk_part.device, off / BLOCK_SECTOR_SIZE,
-                                         PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
+    block_device_t *dev = &_krffs_disk_part.device;
+    const uint8_t *from = (const uint8_t *)pages;
+    uint32_t most = block_max_sectors(dev) / (PAGE_SIZE / BLOCK_SECTOR_SIZE);
+    uint32_t chunk;
+    int rc;
+
+    if (most == 0) {
+        most = 1;
+    }
+    while (count > 0) {
+        chunk = count < most ? count : most;
+        rc =
+            dev->write(dev, off / BLOCK_SECTOR_SIZE, chunk * (PAGE_SIZE / BLOCK_SECTOR_SIZE), from);
+        if (rc != 0) {
+            return rc;
+        }
+        off += chunk * PAGE_SIZE;
+        from += chunk * PAGE_SIZE;
+        count -= chunk;
+    }
+    return 0;
 }
 
 /*

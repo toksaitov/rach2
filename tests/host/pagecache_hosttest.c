@@ -101,36 +101,44 @@ static int fake_read(uint32_t disk_off, void *page)
 }
 
 /**
- * The backing's write: store `page` at `disk_off` unless a fault fails it,
- * then call `fake_write_pause` before returning the status. Returns 0, or -1
- * for a failed write and past the disk.
+ * The backing's write: store the `count` pages at `pages` from `disk_off`
+ * unless a fault fails one of them, which fails the whole write and stores
+ * none, then call `fake_write_pause` with the first page before returning
+ * the status. Each page counts an attempt. Returns 0, or -1 for a failed
+ * write and past the disk.
  *
  * The pause stands for another process running during a sleeping write. It
  * is cleared before it is called, so a writeback it starts does not pause
  * again and the calls cannot recurse without end.
  */
-static int fake_write(uint32_t disk_off, const void *page)
+static int fake_write(uint32_t disk_off, const void *pages, uint32_t count)
 {
-    uint32_t p = disk_off / PC_PAGE_SIZE;
-    uint32_t i;
-    int failed;
+    uint32_t first = disk_off / PC_PAGE_SIZE;
+    uint32_t k, i;
+    int failed = fake_write_fail_all;
     void (*pause)(uint32_t, const void *);
 
-    if (p >= FAKE_PAGES) {
+    if (count == 0 || first >= FAKE_PAGES || count > FAKE_PAGES - first) {
         return -1;
     }
-    ++fake_attempts[p];
-    failed = fake_write_fail_all || p == fake_write_fail;
-    if (!failed) {
-        for (i = 0; i < PC_PAGE_SIZE; ++i) {
-            fake_disk[p][i] = ((const uint8_t *)page)[i];
+    for (k = 0; k < count; ++k) {
+        ++fake_attempts[first + k];
+        if (first + k == fake_write_fail) {
+            failed = 1;
         }
-        ++fake_writes[p];
+    }
+    if (!failed) {
+        for (k = 0; k < count; ++k) {
+            for (i = 0; i < PC_PAGE_SIZE; ++i) {
+                fake_disk[first + k][i] = ((const uint8_t *)pages)[k * PC_PAGE_SIZE + i];
+            }
+            ++fake_writes[first + k];
+        }
     }
     pause = fake_write_pause;
     fake_write_pause = 0;
     if (pause) {
-        pause(disk_off, page);
+        pause(disk_off, pages);
     }
     return failed ? -1 : 0;
 }
@@ -309,7 +317,7 @@ static void test_sleeping_writeback(void)
 static uint32_t sync_mounts;
 static uint32_t sync_blocks; /* waits that slept until the pin was let go */
 static uint32_t sync_quick;  /* waits a release during the pass ended */
-static int sync_heal;        /* a blocked wait also lets page 1's writes pass */
+static int sync_heal;        /* a blocked wait also lets page 2's writes pass */
 
 /** No file is mapped shared here, so the mapped pages have nothing to give
  *  the cache. */
@@ -351,12 +359,12 @@ void pc_wait_release(uint32_t seen)
     }
 }
 
-/** End the competing write of page 0 while the sync's write of page 1
+/** End the competing write of page 0 while the sync's write of page 2
  *  sleeps, after the sync has passed page 0's pin. */
 static void release_during_pass(uint32_t disk_off, const void *page)
 {
     (void)page;
-    CHECK(disk_off == PC_PAGE_SIZE);
+    CHECK(disk_off == 2u * PC_PAGE_SIZE);
     CHECK(pc_slots[0].pinned && pc_slots[0].waited);
     touch(0, 1, 0xE2u);
     pc_unpin(&pc_slots[0]);
@@ -391,18 +399,18 @@ static void test_sync_wait(void)
         init_pagecache();
         pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
         fake_disk[0][0] = 0;
-        fake_disk[1][0] = 1;
-        fake_attempts[0] = fake_attempts[1] = 0;
-        fake_writes[0] = fake_writes[1] = 0;
+        fake_disk[2][0] = 2;
+        fake_attempts[0] = fake_attempts[2] = 0;
+        fake_writes[0] = fake_writes[2] = 0;
         sync_blocks = sync_quick = sync_mounts = 0;
         sync_heal = row == 3;
         touch(0, 0, 0);
         pc_slots[0].pinned = (uint8_t)busy;
         if (failed || row == 4) {
-            touch(1, 1, 0xE1u);
+            touch(2, 1, 0xE1u);
         }
         if (failed) {
-            fake_write_fail = 1;
+            fake_write_fail = 2;
         }
         if (row == 4) {
             fake_write_pause = release_during_pass;
@@ -418,18 +426,18 @@ static void test_sync_wait(void)
         } else {
             CHECK(fake_attempts[0] == 0);
         }
-        CHECK(fake_attempts[1] == (row == 1                 ? 1u
+        CHECK(fake_attempts[2] == (row == 1                 ? 1u
                                    : (row == 2 || row == 3) ? 2u
                                    : row == 4               ? 1u
                                                             : 0u));
-        CHECK(pc_slots[1].dirty == (row == 1 || row == 2));
+        CHECK(pc_slots[1].dirty == (row == 1 || row == 2)); /* page 2's slot */
         CHECK(sys_sync(0) == 0);
         CHECK(sync_mounts == 1);
         if (failed) {
             fake_write_fail = FAKE_NO_FAIL;
             CHECK(sys_sync(0) == 0);
             CHECK(!pc_slots[1].dirty);
-            CHECK(fake_disk[1][0] == 0xE1u);
+            CHECK(fake_disk[2][0] == 0xE1u);
         }
     }
 }

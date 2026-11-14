@@ -108,6 +108,8 @@ struct pc_entry {
     uint8_t accessed; /* touched since the clock hand last passed */
     uint8_t pinned;   /* a fill or a writeback is in flight */
     uint8_t waited;   /* a sync passed it pinned and waits for its release */
+    uint8_t failed;   /* its last write failed: no other page's run takes it,
+                       * and a sync's pass tries it once (`pc_sync`) */
 };
 
 static struct pc_entry pc_slots[PC_SLOTS];
@@ -129,7 +131,15 @@ static int pc_unclaimed;
 
 static uint32_t pc_reads;
 static uint32_t pc_evicts;
-static uint32_t pc_writebacks;
+static uint32_t pc_writebacks; /* pages that writebacks which succeeded wrote */
+
+/* The pages of a run of more than one, copied one after another for the
+ * backing's one write (`pc_writeback`), and whether a writeback has them:
+ * a write that sleeps keeps them while another caller writes back, and that
+ * one writes its page alone. In the kernel's image, so its bytes are
+ * physically contiguous, as a device that is given their addresses needs. */
+static uint8_t pc_run_buf[PC_RUN_PAGES * PC_PAGE_SIZE] __attribute__((aligned(4096)));
+static int pc_run_busy;
 static uint32_t pc_resident_frames; /* slots holding a frame */
 /* The releases of pins a sync passed (`waited`), which `pc_sync_wait` waits
  * on; it wraps. */
@@ -308,23 +318,73 @@ static void pc_unpin(struct pc_entry *e)
 }
 
 /**
+ * Gather the run `pc_writeback` writes for the dirty page of `e`: the page
+ * and the resident pages next to it on the backing, back and forth, while
+ * each is dirty, not pinned and not one whose last write failed,
+ * PC_RUN_PAGES at most. `run` gets them in the backing's order; returns how
+ * many.
+ */
+static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run)
+{
+    struct pc_entry *before[PC_RUN_PAGES];
+    uint32_t back = 0, n = 0, off;
+    int32_t s;
+
+    for (off = e->disk_off; off >= PC_PAGE_SIZE && back + 1u < PC_RUN_PAGES;) {
+        off -= PC_PAGE_SIZE;
+        s = pc_hash_find(off);
+        if (s < 0 || !pc_slots[s].dirty || pc_slots[s].pinned || pc_slots[s].failed) {
+            break;
+        }
+        before[back++] = &pc_slots[s];
+    }
+    while (back > 0) {
+        run[n++] = before[--back];
+    }
+    run[n++] = e;
+    for (off = e->disk_off + PC_PAGE_SIZE; off < pc_fs_size && n < PC_RUN_PAGES;
+         off += PC_PAGE_SIZE) {
+        s = pc_hash_find(off);
+        if (s < 0 || !pc_slots[s].dirty || pc_slots[s].pinned || pc_slots[s].failed) {
+            break;
+        }
+        run[n++] = &pc_slots[s];
+    }
+    return n;
+}
+
+/**
  * Write the resident page of `e` back if it is dirty, with the slot pinned
  * meanwhile: 0 when it is clean or written, -1 when the slot is pinned or
  * the write fails, which leaves the page dirty.
  *
- * The pin is tested before the dirty mark, since a write in flight clears
- * the mark for its length. A system call switches processes only when it
- * yields or sleeps, and a page fault runs with interrupts off, so the pin
- * is taken before another caller can enter. The backing's write may sleep
- * with the pin held.
+ * The dirty pages beside it on the backing go in the same write, up to
+ * PC_RUN_PAGES (`pc_gather`), as Linux's writeback puts a file's contiguous
+ * dirty pages in one bio (mm/page-writeback.c, `write_cache_pages`): the
+ * ATA disk flushes its cache after each write, a synchronous write of the
+ * disk's image file under an emulator, and a lookup's walk of the ring
+ * that evicted a page at a time behind a copy of a 6 MB file made a flush
+ * for each of some 1500 pages, with interrupts off, for 23 s. A run of more
+ * than one page is copied into `pc_run_buf` while no other writeback has it,
+ * and a page alone is written from its frame.
  *
- * The page is mapped read-only and its mark cleared before the write, so a
- * store meanwhile faults and marks the page dirty again, and a successful
- * write leaves that mark set.
+ * The pins are tested before the dirty marks, since a write in flight
+ * clears the mark for its length. A system call switches processes only
+ * when it yields or sleeps, and a page fault runs with interrupts off, so
+ * the pins are taken before another caller can enter. The backing's write
+ * may sleep with the pins held.
+ *
+ * Each page is mapped read-only and its mark cleared before it is copied
+ * and written, so a store meanwhile faults and marks the page dirty again,
+ * and a successful write leaves that mark set. A write that fails leaves
+ * every page of the run dirty and marked `failed`.
  */
 static int pc_writeback(struct pc_entry *e)
 {
-    int rc;
+    struct pc_entry *run[PC_RUN_PAGES];
+    const void *from;
+    uint32_t n = 1, i;
+    int rc, copied = 0;
 
     if (e->pinned) {
         return -1;
@@ -332,23 +392,57 @@ static int pc_writeback(struct pc_entry *e)
     if (!e->dirty) {
         return 0;
     }
-    e->pinned = 1;
-    pc_platform_map(PCWIN_BASE + e->disk_off, e->phys, 0);
-    e->dirty = 0;
-    rc = pc_write(e->disk_off, e->page);
+    if (pc_run_busy) {
+        run[0] = e;
+    } else {
+        n = pc_gather(e, run);
+    }
+    for (i = 0; i < n; ++i) {
+        run[i]->pinned = 1;
+        pc_platform_map(PCWIN_BASE + run[i]->disk_off, run[i]->phys, 0);
+        run[i]->dirty = 0;
+    }
+    from = e->page;
+    if (n > 1) {
+        pc_run_busy = 1;
+        copied = 1;
+        for (i = 0; i < n; ++i) {
+            const uint8_t *src = (const uint8_t *)run[i]->page;
+            uint8_t *dst = pc_run_buf + i * PC_PAGE_SIZE;
+            uint32_t j;
+
+            for (j = 0; j < PC_PAGE_SIZE; ++j) {
+                dst[j] = src[j];
+            }
+        }
+        from = pc_run_buf;
+    }
+    rc = pc_write(run[0]->disk_off, from, n);
+    if (copied) {
+        pc_run_busy = 0;
+    }
     if (rc != 0) {
-        klog(KLOG_ERR, "pagecache", "writeback failed at disk offset 0x%X; the page stays dirty",
-             e->disk_off);
-        e->dirty = 1;
+        klog(KLOG_ERR, "pagecache",
+             "writeback failed at disk offset 0x%X, %u page(s); the pages stay dirty",
+             run[0]->disk_off, n);
+        for (i = 0; i < n; ++i) {
+            run[i]->dirty = 1;
+            run[i]->failed = 1;
+        }
         if (pc_failed) {
             pc_failed(rc);
         } else {
             pc_unclaimed = rc;
         }
     } else {
-        ++pc_writebacks;
+        pc_writebacks += n;
+        for (i = 0; i < n; ++i) {
+            run[i]->failed = 0;
+        }
     }
-    pc_unpin(e);
+    for (i = 0; i < n; ++i) {
+        pc_unpin(run[i]);
+    }
     return rc != 0 ? -1 : 0;
 }
 
@@ -464,6 +558,7 @@ int pc_fault(uintptr_t fault_address, int write)
     e->valid = 1;
     e->dirty = (uint8_t)(write ? 1 : 0);
     e->accessed = 1;
+    e->failed = 0;
     pc_hash_insert(disk_off, (uint32_t)slot);
     pc_platform_map(page_va, e->phys, write ? 1 : 0);
     pc_unpin(e);
@@ -533,6 +628,10 @@ void pc_wait_release(uint32_t seen)
  * can wait for the writes in flight without trying a failed write again for
  * ever. A failure does not stop the walk over the other slots. A busy slot
  * is marked `waited`, so that its release wakes the caller's wait.
+ *
+ * A pass tries each dirty page once: the marks of earlier failures are
+ * cleared first, and a page whose run failed in this pass is passed when
+ * its own slot comes, since a run's pages lie in any slots.
  */
 int pc_sync(void)
 {
@@ -540,8 +639,11 @@ int pc_sync(void)
     int result = 0;
 
     for (i = 0; i < PC_SLOTS; ++i) {
+        pc_slots[i].failed = 0;
+    }
+    for (i = 0; i < PC_SLOTS; ++i) {
         struct pc_entry *e = &pc_slots[i];
-        if (!e->valid) {
+        if (!e->valid || e->failed) {
             continue;
         }
         if (e->pinned) {
@@ -578,6 +680,7 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
             pc_slots[i].valid = 0;
             pc_slots[i].dirty = 0;
             pc_slots[i].accessed = 0;
+            pc_slots[i].failed = 0;
         }
     }
     pc_hash_rebuild();
@@ -654,6 +757,7 @@ void init_pagecache(void)
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
         pc_slots[i].waited = 0;
+        pc_slots[i].failed = 0;
     }
     pc_capacity = PC_SLOTS;
     pc_clock = 0;
@@ -745,6 +849,7 @@ void init_pagecache(void)
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
         pc_slots[i].waited = 0;
+        pc_slots[i].failed = 0;
     }
     pc_capacity =
         mem_cache_target() / 2u > PC_SLOTS ? PC_SLOTS : (uint32_t)(mem_cache_target() / 2u);

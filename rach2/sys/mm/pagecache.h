@@ -29,12 +29,22 @@
 #define PC_SLOTS 4096u
 #endif
 
+/* The most pages one writeback puts in one write of the backing: the page
+ * and the dirty pages beside it on the backing, so that a disk that flushes
+ * its cache after each write (ata.c) flushes once for the run. 32 pages are
+ * 128 KiB, a quarter of the most one ATA or AHCI write takes. */
+#define PC_RUN_PAGES 32u
+
 /*
- * The backing store, accessed one page at a time. `disk_off` is a page-aligned
- * byte offset into it. Both return 0 on success or a negative errno.
+ * The backing store. `disk_off` is a page-aligned byte offset into it. The
+ * read reads one page; the write writes `count` pages, 1 to PC_RUN_PAGES,
+ * that follow each other from `disk_off` and lie in `pages` one after
+ * another, and is on the medium when it returns 0, as one write of the
+ * block device is. Both return 0 on success or a negative errno; a write
+ * that fails promises nothing of any of its pages.
  */
 typedef int (*pc_read_fn)(uint32_t disk_off, void *page);
-typedef int (*pc_write_fn)(uint32_t disk_off, const void *page);
+typedef int (*pc_write_fn)(uint32_t disk_off, const void *pages, uint32_t count);
 
 /**
  * Size the window against the lowest device memory BAR inside it, make its
@@ -163,8 +173,8 @@ uint32_t pc_stat_reads(void);
 /** The pages evicted since `init_pagecache`, for the host tests. */
 uint32_t pc_stat_evictions(void);
 
-/** The writebacks that succeeded since `init_pagecache`, for the host
- * tests. */
+/** The pages that writebacks which succeeded wrote since `init_pagecache`,
+ * for the host tests. */
 uint32_t pc_stat_writebacks(void);
 
 #endif
