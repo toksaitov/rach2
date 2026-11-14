@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 14, 2026
 .Dt PROCESS_MRELEASE 2
 .Os
 .Sh NAME
@@ -57,7 +57,9 @@ is not 0, or the process is not dying, or shares its address space with
 a process that is not.
 .It Bq Er ESRCH
 The process has been reaped, or no thread of it has an address space
-left.
+left, or
+.Fa pidfd
+names a thread that does not lead its process.
 .El
 .Sh SEE ALSO
 .Xr kill 2 ,

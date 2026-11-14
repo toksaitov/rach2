@@ -5,7 +5,7 @@
 .Nm pidfd_open ,
 .Nm pidfd_send_signal ,
 .Nm pidfd_getfd
-.Nd descriptors that name a process
+.Nd descriptors that name a process or a thread
 .Sh SYNOPSIS
 .In sys/pidfd.h
 .Ft int
@@ -24,23 +24,43 @@ returns a new close-on-exec pidfd of the process
 .Fa pid
 leads, which may have ended and not yet been reaped.
 .Fa flags
-is 0 or
-.Dv PIDFD_NONBLOCK ,
-which makes the descriptor non-blocking.
+is 0 or either or both of:
+.Bl -tag -width "PIDFD_NONBLOCK"
+.It Dv PIDFD_NONBLOCK
+the descriptor is non-blocking;
+.It Dv PIDFD_THREAD
+the pidfd names the one thread whose ID is
+.Fa pid ,
+which need not lead its process.
+.Xr fcntl 2 Ns 's
+.Dv F_GETFL
+shows the flag as
+.Dv O_EXCL ,
+whose value it has, as on Linux 6.9 and later.
+.El
+.Pp
 .Xr fork 2 Ns 's
 .Dv CLONE_PIDFD
-makes one of the child as it is created.
+makes one of the child as it is created, a pidfd of the one thread with
+.Dv CLONE_THREAD .
 .Pp
 .Xr poll 2
 and
 .Xr epoll 2
-report a pidfd readable once every thread of its process has ended, and
-hung up as well once the process has been reaped.
+report a pidfd of a process readable once every thread of the process has
+ended, and a pidfd of a thread once that thread has ended, while the rest
+of its process may run on.
+Each is hung up as well once its thread has let its ID go: the process
+reaped, or a thread that does not lead its process freed, which happens at
+its end unless a tracer holds it.
 Both events wake a poller already waiting on the pidfd.
 .Xr waitid 2
 with
 .Dv P_PIDFD
-waits for the process, when it is a child of the caller's.
+waits for the process, when it is a child of the caller's, or for the
+thread as
+.Dv P_PID
+waits for its ID.
 A
 .Xr read 2
 or
@@ -61,19 +81,28 @@ where
 says, which is 0 or one of:
 .Bl -tag -width "PIDFD_SIGNAL_PROCESS_GROUP"
 .It Dv PIDFD_SIGNAL_THREAD
-the thread that leads the process alone, as
+the pidfd's thread alone, the one that leads the process for a pidfd of a
+process, as
 .Xr tgkill 2
 sends it;
 .It Dv PIDFD_SIGNAL_THREAD_GROUP
-the process, as
+the process of the pidfd's thread, as
 .Xr kill 2
-sends it to a process ID, which 0 also does;
+sends it to a process ID;
 .It Dv PIDFD_SIGNAL_PROCESS_GROUP
-each member of the process group whose ID is the process's, as
+each member of the process group whose ID is the pidfd's, as
 .Xr kill 2
 sends it to the negated ID, even once the process has been reaped, but
-never a group given that ID after the process's own group has gone.
+never a group given that ID after the process's own group has gone; a
+thread that does not lead its process leads no group.
 .El
+.Pp
+With 0 the signal goes where the pidfd names: to the thread alone for a
+pidfd of one thread, as
+.Dv PIDFD_SIGNAL_THREAD
+sends it, and to the process for a pidfd of a process, as
+.Dv PIDFD_SIGNAL_THREAD_GROUP
+sends it.
 .Pp
 A null
 .Fa info
@@ -95,7 +124,7 @@ as
 has it; a native caller's siginfo is read and refused as there when its
 code's layout is unknown and it has bytes past the kept fields.
 Signal 0 checks the permission and sends nothing, and a signal to a process
-whose threads have all ended, or to a leading thread that has ended, is
+whose threads have all ended, or to a thread that has ended, is
 discarded.
 The checks come in Linux's order:
 .Fa flags ,
@@ -104,8 +133,8 @@ after the reap, then the copy of
 .Fa info ,
 its
 .Va si_signo
-and its code, then whether the process has been reaped or the group is
-empty, and only then
+and its code, then whether the process has been reaped, the thread has let
+its ID go or the group is empty, and only then
 .Fa sig
 and the permission.
 The kernel holds the pidfd's process across the copy and finds it again
@@ -115,6 +144,7 @@ after, so a page fault during the copy cannot leave a stale target.
 returns a close-on-exec copy, in the caller's table, of the process's
 descriptor
 .Fa targetfd ,
+by a pidfd of the process or of the thread that leads it,
 which shares its open file description, as
 .Xr dup 2
 makes a copy.
@@ -146,7 +176,8 @@ The kernel returns the negative error number.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/musl/pidfdmusl.c
-opens, polls, signals and waits on pidfds, takes a pipe through
+opens, polls, signals and waits on pidfds of processes and of threads,
+takes a pipe through
 .Fn pidfd_getfd ,
 and checks the refusals.
 .Sh ERRORS
@@ -167,7 +198,9 @@ is not open in the process, which has none once it has ended.
 cannot be read.
 .It Bq Er EINVAL
 .Fa pid
-is not above 0 or names a thread that does not lead its process;
+is not above 0, or without
+.Dv PIDFD_THREAD
+names a thread that does not lead its process;
 .Fa flags
 has a bit not described above, or more than one of
 .Fn pidfd_send_signal Ns 's;
@@ -187,11 +220,14 @@ open file description.
 The caller may not signal the process or any member of the group, give it
 that siginfo code, or take its descriptors.
 .It Bq Er ESRCH
-No process has the ID
+No thread has the ID
 .Fa pid ,
-the pidfd's process has been reaped, or the process group
+the pidfd's process has been reaped or its thread has let its ID go, the
+process group
 .Dv PIDFD_SIGNAL_PROCESS_GROUP
-names has no members, which a later group given its ID does not change.
+names has no members, which a later group given its ID does not change, or
+.Fn pidfd_getfd
+was given a pidfd of a thread that does not lead its process.
 .El
 .Sh SEE ALSO
 .Xr fork 2 ,

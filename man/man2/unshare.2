@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 14, 2026
 .Dt UNSHARE 2
 .Os
 .Sh NAME
@@ -135,14 +135,15 @@ and must be the caller's own or below it.
 A mount namespace keeps the caller's root and working directories.
 .Pp
 .Fa fd
-may instead be a descriptor of a process, as
+may instead be a descriptor of a process or of a thread, as
 .Xr pidfd_open 2
 gives one, and
 .Fa nstype
 the
 .Dv CLONE_NEW
 flags of one or more kinds: the caller moves into each of those
-namespaces of the process, or into none of them.
+namespaces of the process's leading thread or of the thread, or into none
+of them.
 A user namespace is entered first, and the other kinds are then judged
 with the capabilities it gives; when one is refused, the caller keeps its
 own user namespace and capabilities.
@@ -222,7 +223,7 @@ in the user namespace that would own it or in one above.
 .It Bq Er EPERM
 The caller is not privileged where it must be.
 .It Bq Er ESRCH
-The process that
+The process or the thread that
 .Fa fd
 names has ended.
 .It Bq Er EUSERS

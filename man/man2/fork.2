@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 14, 2026
 .Dt FORK 2
 .Os
 .Sh NAME
@@ -211,11 +211,11 @@ which stores a pidfd of the child, as an int, at
 in the parent's memory before the child runs, a close-on-exec descriptor
 of the parent's that
 .Xr pidfd_open 2
-describes and the child does not have, and which takes neither
+describes and the child does not have, a pidfd of the new thread alone with
+.Dv CLONE_THREAD ,
+as on Linux 6.9 and later, and which takes neither
 .Dv CLONE_PARENT_SETTID ,
-whose address it uses,
-.Dv CLONE_THREAD
-nor
+whose address it uses, nor
 .Dv CLONE_DETACHED ;
 and
 .Dv CLONE_DETACHED
@@ -352,8 +352,6 @@ a descriptor
 refuses;
 .Dv CLONE_PIDFD
 with
-.Dv CLONE_THREAD
-or
 .Dv CLONE_DETACHED ,
 or with
 .Dv CLONE_PARENT_SETTID

@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 14, 2026
 .Dt PROCESS_MADVISE 2
 .Os
 .Sh NAME
@@ -91,7 +91,9 @@ A page of a range is not mapped.
 .It Bq Er EPERM
 The memory is another process's and the caller is not privileged.
 .It Bq Er ESRCH
-The process has been reaped, or has no address space.
+The process has been reaped, or has no address space, or
+.Fa pidfd
+names a thread that does not lead its process.
 .El
 .Sh SEE ALSO
 .Xr brk 2 ,
