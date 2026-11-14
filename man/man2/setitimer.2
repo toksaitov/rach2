@@ -59,8 +59,15 @@ The timers of processor time count each tick the timer interrupt charges
 to a thread of the process, in the mode it interrupted, as
 .Xr times 2
 counts them.
-A timer of processor time is armed again for its interval at the tick it
-runs out.
+A timer of processor time starts a tick longer than its
+.Va it_value ,
+as Linux's adds
+.Dv TICK_NSEC ,
+so a 10 ms timer starts with 14 ms left and expires at the fourth tick
+charged, and is armed again for its interval at the tick it runs out.
+Disarming it keeps the interval it was given, which
+.Fn getitimer
+reports, as on Linux.
 .Dv ITIMER_REAL
 stops when its
 .Dv SIGALRM

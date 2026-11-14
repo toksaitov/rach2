@@ -244,6 +244,15 @@ an expiration more, as Linux's
 .Fn bump_cpu_timer
 counts it; the expirations of the ticks before its signal is posted go
 into that signal's overrun.
+.Fn timer_settime
+reads the clock of the process or thread the timer was made for, whichever
+thread calls it, and an absolute time that clock has already reached
+expires during the call, however long the process then goes without
+running; a periodic timer counts each interval since that time and waits
+out the rest of the one in progress, so its expirations keep to the grid
+its time and interval make, as Linux's
+.Fn posix_cpu_timer_set
+fires such a timer at once.
 A timer on another process's clock keeps counting that process until it
 is deleted, and counts nothing once the process has ended.
 .Pp
@@ -275,6 +284,10 @@ is not a timer of the process, a flag is not
 .Fa new
 is NULL, or a time is negative or its nanoseconds are outside 0 to
 999999999.
+.It Er ESRCH
+.Fn timer_settime
+of a timer on a thread's clock of processor time after that thread has
+ended.
 .El
 .Sh SEE ALSO
 .Xr setitimer 2 ,
