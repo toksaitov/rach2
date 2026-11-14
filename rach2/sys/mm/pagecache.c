@@ -45,10 +45,12 @@ static void pc_platform_unmap(uintptr_t va)
 static void pc_platform_released(void)
 {}
 
-/* Linux's defaults for the background threshold, which the kernel keeps in
- * the buffer cache (bcache.c). */
+/* Linux's defaults for the background threshold and the dirty limit, which
+ * the kernel keeps in the buffer cache (bcache.c). */
 static int dirty_background_ratio = 10;
 static unsigned long dirty_background_bytes;
+static int vm_dirty_ratio = 20;
+static unsigned long vm_dirty_bytes;
 
 #else
 
@@ -114,8 +116,9 @@ struct pc_entry {
     uint8_t accessed; /* touched since the clock hand last passed */
     uint8_t pinned;   /* a fill or a writeback is in flight */
     uint8_t waited;   /* a sync passed it pinned and waits for its release */
-    uint8_t failed;   /* its last write failed: no other page's run takes it,
-                       * and a sync's pass tries it once (`pc_sync`) */
+    /* The pass whose write of the page failed, 0 for none: that pass's
+     * other runs leave it out, and a sync's pass tries it once. */
+    uint32_t failed_pass;
 };
 
 static struct pc_entry pc_slots[PC_SLOTS];
@@ -142,6 +145,7 @@ static uint32_t pc_dirty_pages; /* resident pages marked dirty */
 /* Who wakes the flusher when a page goes dirty at or past the background
  * threshold (`pc_set_flusher`), or NULL. */
 static void (*pc_kick)(void);
+static uint32_t pc_pass; /* the last pass given out (`pc_new_pass`) */
 
 /* The pages of a run of more than one, copied one after another for the
  * backing's one write (`pc_writeback`), and whether a writeback has them:
@@ -211,24 +215,62 @@ static void pc_slot_release(struct pc_entry *e)
 #endif
 }
 
+/** `bytes` in pages, rounded up, when it is not 0, else `ratio` per cent of
+ * the live capacity; at most the capacity and at least one page. The
+ * rounding divides first, since the sum would wrap a 32-bit long. */
+static uint32_t pc_share(unsigned long bytes, int ratio)
+{
+    unsigned long want;
+
+    if (bytes) {
+        want = bytes / PC_PAGE_SIZE + (bytes % PC_PAGE_SIZE != 0);
+    } else {
+        want = (unsigned long)(((uint64_t)pc_capacity * (uint32_t)ratio) / 100u);
+    }
+    if (want > pc_capacity) {
+        want = pc_capacity;
+    }
+    return want ? (uint32_t)want : 1u;
+}
+
+/** The dirty limit, past which a writer writes back itself
+ * (`pc_balance_dirty`): `vm_dirty_bytes` or `vm_dirty_ratio`, as
+ * `pc_share` takes them. */
+static uint32_t pc_limit(void)
+{
+    return pc_share(vm_dirty_bytes, vm_dirty_ratio);
+}
+
 /**
- * The dirty pages past which the flusher writes back: `dirty_background_bytes`
- * in pages when set, else `dirty_background_ratio` per cent of the live
- * capacity, as Linux's `domain_dirty_limits` takes the bytes when set; at
- * least one page.
+ * The dirty pages past which the flusher writes back:
+ * `dirty_background_bytes` or `dirty_background_ratio`, as `pc_share` takes
+ * them, and half the dirty limit when that is not above it, as in Linux's
+ * `domain_dirty_limits`.
  */
 static uint32_t pc_background(void)
 {
-    uint32_t n;
+    uint32_t bg = pc_share(dirty_background_bytes, dirty_background_ratio);
+    uint32_t limit = pc_limit();
 
-    if (dirty_background_bytes) {
-        unsigned long want = (dirty_background_bytes + PC_PAGE_SIZE - 1u) / PC_PAGE_SIZE;
-
-        n = want > pc_capacity ? pc_capacity : (uint32_t)want;
-    } else {
-        n = (uint32_t)(((uint64_t)pc_capacity * (uint32_t)dirty_background_ratio) / 100u);
+    if (bg >= limit) {
+        bg = limit / 2u ? limit / 2u : 1u;
     }
-    return n ? n : 1u;
+    return bg;
+}
+
+/** A pass's number for the marks of its failed writes, never 0. When the
+ * count wraps, every mark is cleared, so no old mark matches a new pass. */
+static uint32_t pc_new_pass(void)
+{
+    uint32_t i;
+
+    if (++pc_pass == 0) {
+        for (i = 0; i < PC_SLOTS; ++i) {
+            pc_slots[i].failed_pass = 0;
+        }
+        pc_pass = 1;
+    }
+    return pc_pass;
 }
 
 /** Mark the page of `e` dirty and count it; a page that goes dirty at or
@@ -373,11 +415,11 @@ static void pc_unpin(struct pc_entry *e)
 /**
  * Gather the run `pc_writeback` writes for the dirty page of `e`: the page
  * and the resident pages next to it on the backing, back and forth, while
- * each is dirty, not pinned and not one whose last write failed,
+ * each is dirty, not pinned and not one whose write failed in `pass`,
  * PC_RUN_PAGES at most. `run` gets them in the backing's order; returns how
  * many.
  */
-static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run)
+static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run, uint32_t pass)
 {
     struct pc_entry *before[PC_RUN_PAGES];
     uint32_t back = 0, n = 0, off;
@@ -386,7 +428,7 @@ static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run)
     for (off = e->disk_off; off >= PC_PAGE_SIZE && back + 1u < PC_RUN_PAGES;) {
         off -= PC_PAGE_SIZE;
         s = pc_hash_find(off);
-        if (s < 0 || !pc_slots[s].dirty || pc_slots[s].pinned || pc_slots[s].failed) {
+        if (s < 0 || !pc_slots[s].dirty || pc_slots[s].pinned || pc_slots[s].failed_pass == pass) {
             break;
         }
         before[back++] = &pc_slots[s];
@@ -398,7 +440,7 @@ static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run)
     for (off = e->disk_off + PC_PAGE_SIZE; off < pc_fs_size && n < PC_RUN_PAGES;
          off += PC_PAGE_SIZE) {
         s = pc_hash_find(off);
-        if (s < 0 || !pc_slots[s].dirty || pc_slots[s].pinned || pc_slots[s].failed) {
+        if (s < 0 || !pc_slots[s].dirty || pc_slots[s].pinned || pc_slots[s].failed_pass == pass) {
             break;
         }
         run[n++] = &pc_slots[s];
@@ -430,9 +472,10 @@ static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run)
  * Each page is mapped read-only and its mark cleared before it is copied
  * and written, so a store meanwhile faults and marks the page dirty again,
  * and a successful write leaves that mark set. A write that fails leaves
- * every page of the run dirty and marked `failed`.
+ * every page of the run dirty and marked as failed in `pass`, the caller's
+ * from `pc_new_pass`.
  */
-static int pc_writeback(struct pc_entry *e)
+static int pc_writeback(struct pc_entry *e, uint32_t pass)
 {
     struct pc_entry *run[PC_RUN_PAGES];
     const void *from;
@@ -448,7 +491,7 @@ static int pc_writeback(struct pc_entry *e)
     if (pc_run_busy) {
         run[0] = e;
     } else {
-        n = pc_gather(e, run);
+        n = pc_gather(e, run, pass);
     }
     for (i = 0; i < n; ++i) {
         run[i]->pinned = 1;
@@ -483,7 +526,7 @@ static int pc_writeback(struct pc_entry *e)
                 run[i]->dirty = 1;
                 ++pc_dirty_pages;
             }
-            run[i]->failed = 1;
+            run[i]->failed_pass = pass;
         }
         if (pc_failed) {
             pc_failed(rc);
@@ -493,7 +536,7 @@ static int pc_writeback(struct pc_entry *e)
     } else {
         pc_writebacks += n;
         for (i = 0; i < n; ++i) {
-            run[i]->failed = 0;
+            run[i]->failed_pass = 0;
         }
     }
     for (i = 0; i < n; ++i) {
@@ -503,23 +546,23 @@ static int pc_writeback(struct pc_entry *e)
 }
 
 /**
- * Write back the page of `slot` if it is dirty, as `pc_writeback` does, and
- * then unmap it and empty the slot, which keeps its frame. Returns 0 when
- * the slot is emptied or was empty, and -1, with the page kept, when the
- * slot is pinned, the writeback fails, or a store dirtied the page again
- * during the write.
+ * Write back the page of `slot` if it is dirty, as `pc_writeback` does in
+ * `pass`, and then unmap it and empty the slot, which keeps its frame.
+ * Returns 0 when the slot is emptied or was empty, and -1, with the page
+ * kept, when the slot is pinned, the writeback fails, or a store dirtied the
+ * page again during the write.
  *
  * The slot is emptied before its hash entry is removed, since the removal
  * may rebuild the hash from the valid slots.
  */
-static int pc_evict(uint32_t slot)
+static int pc_evict(uint32_t slot, uint32_t pass)
 {
     struct pc_entry *e = &pc_slots[slot];
 
     if (!e->valid) {
         return 0;
     }
-    if (pc_writeback(e) != 0 || e->dirty) {
+    if (pc_writeback(e, pass) != 0 || e->dirty) {
         return -1;
     }
     pc_platform_unmap(PCWIN_BASE + e->disk_off);
@@ -544,12 +587,13 @@ static int pc_evict(uint32_t slot)
  * with interrupts off, and a writeback there holds the processor for the
  * disk's write and flush, as Linux's direct reclaim leaves dirty file pages
  * to the flusher (mm/vmscan.c, `shrink_folio_list`). The flusher keeps the
- * dirty pages under the background threshold (`pc_write_background`).
+ * dirty pages near the background threshold (`pc_write_background`), and a
+ * writer keeps them under the dirty limit (`pc_balance_dirty`).
  */
 static int32_t pc_get_slot(void)
 {
     uint32_t i;
-    uint32_t scanned;
+    uint32_t scanned, pass = 0;
 
     for (i = 0; i < pc_capacity; ++i) {
         if (!pc_slots[i].valid && !pc_slots[i].pinned && PC_HAS_STORAGE(&pc_slots[i])) {
@@ -575,7 +619,10 @@ static int32_t pc_get_slot(void)
         if (pc_slots[v].dirty && scanned < pc_capacity * 2u) {
             continue;
         }
-        if (pc_evict(v) == 0) {
+        if (pc_slots[v].dirty && pass == 0) {
+            pass = pc_new_pass();
+        }
+        if (pc_evict(v, pass) == 0) {
             return (int32_t)v;
         }
     }
@@ -625,7 +672,7 @@ int pc_fault(uintptr_t fault_address, int write)
     e->valid = 1;
     e->dirty = 0;
     e->accessed = 1;
-    e->failed = 0;
+    e->failed_pass = 0;
     if (write) {
         pc_mark_dirty(e);
     }
@@ -639,7 +686,7 @@ int pc_fault(uintptr_t fault_address, int write)
 
 uint32_t pc_shrink(uint32_t want, int can_write, uint32_t *written)
 {
-    uint32_t got = 0;
+    uint32_t got = 0, id = pc_new_pass();
     int pass;
 
     for (pass = 0; pass < (can_write ? 2 : 1) && got < want; ++pass) {
@@ -657,7 +704,7 @@ uint32_t pc_shrink(uint32_t want, int can_write, uint32_t *written)
             if (e->valid && e->dirty) {
                 ++(*written);
             }
-            if (e->valid && pc_evict(i) != 0) {
+            if (e->valid && pc_evict(i, id) != 0) {
                 continue;
             }
             pc_slot_release(e);
@@ -695,6 +742,9 @@ void pc_wait_release(uint32_t seen)
 
 int pc_dirty_level(void)
 {
+    if (pc_dirty_pages >= pc_limit()) {
+        return 2;
+    }
     return pc_dirty_pages >= pc_background() ? 1 : 0;
 }
 
@@ -709,28 +759,45 @@ void pc_set_flusher(void (*kick)(void))
 }
 
 /**
- * Each dirty page that is not pinned and whose run has not failed in this
- * call starts a run (`pc_writeback`), which may sleep; a page that goes
- * dirty behind the walk waits for the next call.
+ * Write runs back until the dirty pages are fewer than `target`: each dirty
+ * page that is not pinned and whose run has not failed in this pass starts
+ * a run (`pc_writeback`), which may sleep; a page that goes dirty behind
+ * the walk waits for the next pass. Returns the pages written.
  */
-uint32_t pc_write_background(void)
+static uint32_t pc_write_down(uint32_t target)
 {
-    uint32_t i, written = 0, before;
+    uint32_t i, written = 0, before, pass = pc_new_pass();
 
-    for (i = 0; i < PC_SLOTS; ++i) {
-        pc_slots[i].failed = 0;
-    }
-    for (i = 0; i < PC_SLOTS && pc_dirty_pages >= pc_background(); ++i) {
+    for (i = 0; i < PC_SLOTS && pc_dirty_pages >= target; ++i) {
         struct pc_entry *e = &pc_slots[i];
 
-        if (!e->valid || !e->dirty || e->pinned || e->failed) {
+        if (!e->valid || !e->dirty || e->pinned || e->failed_pass == pass) {
             continue;
         }
         before = pc_writebacks;
-        (void)pc_writeback(e);
+        (void)pc_writeback(e, pass);
         written += pc_writebacks - before;
     }
     return written;
+}
+
+uint32_t pc_write_background(void)
+{
+    return pc_write_down(pc_background());
+}
+
+/** Linux's writer waits past the limit until the flusher brings the dirty
+ * pages under the midpoint of the threshold and the limit
+ * (`dirty_freerun_ceiling`); here the writer writes the runs itself, since
+ * the flusher may not run while it holds the processor. */
+uint32_t pc_balance_dirty(void)
+{
+    uint32_t limit = pc_limit();
+
+    if (pc_dirty_pages < limit) {
+        return 0;
+    }
+    return pc_write_down((pc_background() + limit) / 2u);
 }
 
 /**
@@ -739,27 +806,25 @@ uint32_t pc_write_background(void)
  * ever. A failure does not stop the walk over the other slots. A busy slot
  * is marked `waited`, so that its release wakes the caller's wait.
  *
- * A pass tries each dirty page once: the marks of earlier failures are
- * cleared first, and a page whose run failed in this pass is passed when
- * its own slot comes, since a run's pages lie in any slots.
+ * A pass tries each dirty page once: a page whose run failed in this pass
+ * is passed when its own slot comes, since a run's pages lie in any slots,
+ * and a mark another pass left, which may run meanwhile, is not this
+ * pass's, so the page is written again and a failure is this pass's too.
  */
 int pc_sync(void)
 {
-    uint32_t i;
+    uint32_t i, pass = pc_new_pass();
     int result = 0;
 
     for (i = 0; i < PC_SLOTS; ++i) {
-        pc_slots[i].failed = 0;
-    }
-    for (i = 0; i < PC_SLOTS; ++i) {
         struct pc_entry *e = &pc_slots[i];
-        if (!e->valid || e->failed) {
+        if (!e->valid || e->failed_pass == pass) {
             continue;
         }
         if (e->pinned) {
             e->waited = 1;
             result |= PC_SYNC_BUSY;
-        } else if (pc_writeback(e) != 0) {
+        } else if (pc_writeback(e, pass) != 0) {
             result |= PC_SYNC_FAILED;
         }
     }
@@ -790,7 +855,7 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
             pc_slots[i].valid = 0;
             pc_slots[i].dirty = 0;
             pc_slots[i].accessed = 0;
-            pc_slots[i].failed = 0;
+            pc_slots[i].failed_pass = 0;
         }
     }
     pc_hash_rebuild();
@@ -808,7 +873,7 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
 
 int pc_set_capacity(uint32_t slots)
 {
-    uint32_t i;
+    uint32_t i, pass = pc_new_pass();
     uint32_t stuck = 0;
     int rc = 0;
 
@@ -819,7 +884,7 @@ int pc_set_capacity(uint32_t slots)
         slots = PC_SLOTS;
     }
     for (i = slots; i < PC_SLOTS; ++i) {
-        if (pc_slots[i].valid && pc_evict(i) != 0) {
+        if (pc_slots[i].valid && pc_evict(i, pass) != 0) {
             stuck = i + 1;
             rc = -1;
         }
@@ -868,7 +933,7 @@ void init_pagecache(void)
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
         pc_slots[i].waited = 0;
-        pc_slots[i].failed = 0;
+        pc_slots[i].failed_pass = 0;
     }
     pc_capacity = PC_SLOTS;
     pc_clock = 0;
@@ -961,7 +1026,7 @@ void init_pagecache(void)
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
         pc_slots[i].waited = 0;
-        pc_slots[i].failed = 0;
+        pc_slots[i].failed_pass = 0;
     }
     pc_capacity =
         mem_cache_target() / 2u > PC_SLOTS ? PC_SLOTS : (uint32_t)(mem_cache_target() / 2u);

@@ -246,7 +246,7 @@ static void race_during_write(uint32_t disk_off, const void *page)
             touch(0, 1, 0xD2u);
         }
         if (race == RACE_EVICT_DIRTY) {
-            CHECK(pc_evict(0) == -1);
+            CHECK(pc_evict(0, pc_new_pass()) == -1);
         } else {
             CHECK(pc_sync() == PC_SYNC_BUSY);
         }
@@ -286,7 +286,7 @@ static void test_sleeping_writeback(void)
                 fake_write_fail_all = fail;
                 race_calls = 0;
                 fake_write_pause = race_during_write;
-                rc = evict ? pc_evict(0) : pc_sync();
+                rc = evict ? pc_evict(0, pc_new_pass()) : pc_sync();
                 CHECK(rc == (evict ? ((fail || dirty) ? -1 : 0) : (fail ? PC_SYNC_FAILED : 0)));
                 CHECK(race_calls == 1);
                 CHECK(!pc_slots[0].pinned);
@@ -301,7 +301,7 @@ static void test_sleeping_writeback(void)
                 fake_write_fail_all = 0;
                 CHECK(pc_sync() == 0);
                 CHECK(fake_disk[0][0] == marker);
-                CHECK(pc_evict(0) == 0);
+                CHECK(pc_evict(0, pc_new_pass()) == 0);
                 CHECK(pc_test_page(0) == 0);
                 touch(0, 0, 0);
                 page = pc_test_page(0);

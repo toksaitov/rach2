@@ -17,8 +17,12 @@
  * has a slot of its own; that a writeback while another run's write sleeps
  * writes its page alone, from the page's own frame; that a fault evicts a
  * clean page before a dirty one, and a dirty one, with its run, only when
- * every page is dirty; and that a page going dirty at the background
- * threshold wakes the flusher, whose writeback leaves the count under it.
+ * every page is dirty; that a page going dirty at the background
+ * threshold wakes the flusher, whose writeback leaves the count under it;
+ * that a writer at the dirty limit writes the count down to the midpoint of
+ * the threshold and the limit; that a byte count too large for the
+ * rounding is taken as the whole capacity; and that a sync whose page
+ * another pass failed meanwhile writes the page itself.
  *
  * Built with PAGECACHE_HOSTTEST and 128 slots, it includes pagecache.c
  * whole, over a model disk of 128 pages that logs each write.
@@ -233,7 +237,8 @@ static void test_evict_middle(void)
     for (p = 20; p < 30; ++p) {
         touch(p, 1, (uint8_t)(0x40u + p));
     }
-    check(pc_evict((uint32_t)(slot_of(25) - pc_slots)) == 0, "the eviction succeeds");
+    check(pc_evict((uint32_t)(slot_of(25) - pc_slots), pc_new_pass()) == 0,
+          "the eviction succeeds");
     check(log_n == 1 && log_first[0] == 20 && log_count[0] == 10,
           "the eviction writes the run from its first dirty page");
     check(pc_test_page(25 * PC_PAGE_SIZE) == 0, "the page evicted is gone");
@@ -325,7 +330,8 @@ static void writeback_during_run(void)
     uint8_t *page;
 
     check(pc_run_busy, "the run's buffer is taken during its write");
-    check(pc_writeback(slot_of(LONE_PAGE)) == 0, "a writeback during the run's write succeeds");
+    check(pc_writeback(slot_of(LONE_PAGE), pc_new_pass()) == 0,
+          "a writeback during the run's write succeeds");
     check(log_n == 2 && log_first[1] == LONE_PAGE && log_count[1] == 1, "it writes its page alone");
     check(log_n == 2 && log_from[1] == pc_test_page(LONE_PAGE * PC_PAGE_SIZE),
           "from the page's own frame");
@@ -351,7 +357,7 @@ static void test_busy_buffer(void)
     }
     touch(LONE_PAGE, 1, 0x77u);
     during_write = writeback_during_run;
-    check(pc_writeback(slot_of(40)) == 0, "the run's writeback succeeds");
+    check(pc_writeback(slot_of(40), pc_new_pass()) == 0, "the run's writeback succeeds");
     check(!pc_run_busy, "the buffer is free after the run");
     check(log_n == 2 && log_first[0] == 40 && log_count[0] == 8, "the run was pages 40 to 47");
     check(on_disk(LONE_PAGE, 0x77u), "the lone page is on the disk");
@@ -434,6 +440,87 @@ static void test_background(void)
     pc_set_flusher(0);
 }
 
+/**
+ * On 100 slots with ratios of 10 and 20 per cent, 19 dirty pages are under
+ * the limit and the throttle writes nothing; at 20, every other page so
+ * that each is a run of one, it writes six, which leaves 14, under the
+ * midpoint of 15.
+ */
+static void test_dirty_limit(void)
+{
+    uint32_t p;
+
+    fresh();
+    check(pc_set_capacity(100) == 0, "the capacity falls to 100");
+    for (p = 0; p < 38; p += 2) {
+        touch(p, 1, (uint8_t)p);
+    }
+    check(pc_dirty_level() == 1, "19 dirty pages are past the threshold, under the limit");
+    check(pc_balance_dirty() == 0 && log_n == 0, "under the limit the throttle writes nothing");
+    touch(38, 1, 38);
+    check(pc_dirty_level() == 2, "20 dirty pages are at the limit");
+    check(pc_balance_dirty() == 6 && log_n == 6, "the throttle writes six runs of one");
+    check(pc_dirty_count() == 14 && pc_dirty_level() == 1, "14 pages stay dirty");
+}
+
+/**
+ * A `dirty_background_bytes` whose rounding up would wrap is the whole
+ * capacity, which is past the limit, so the threshold is half the limit.
+ */
+static void test_huge_bytes(void)
+{
+    uint32_t p;
+
+    fresh();
+    check(pc_set_capacity(100) == 0, "the capacity falls to 100");
+    dirty_background_bytes = ~0ul;
+    for (p = 0; p < 9; ++p) {
+        touch(p, 1, (uint8_t)p);
+    }
+    check(pc_dirty_level() == 0, "nine dirty pages are under half the limit");
+    touch(9, 1, 9);
+    check(pc_dirty_level() == 1, "the tenth is at it");
+    dirty_background_bytes = 0;
+}
+
+static int fail_outer; /* fail the outer sync's write of page 60 too */
+
+/** Inside the outer sync's write of run 30-31: another sync, whose write of
+ * page 60 fails, as a pass that runs while the write sleeps. */
+static void sync_during_write(void)
+{
+    fail_next = 1;
+    check(pc_sync() == (PC_SYNC_BUSY | PC_SYNC_FAILED), "the inner sync fails page 60");
+    fail_next = fail_outer;
+}
+
+/**
+ * Pages 30 and 31, and 60 apart: while the outer sync writes 30-31, an
+ * inner one fails page 60. The outer sync then writes page 60 itself, and
+ * answers 0 when its write succeeds and PC_SYNC_FAILED when it fails too.
+ */
+static void test_other_pass_failure(void)
+{
+    int outer;
+
+    for (fail_outer = 0; fail_outer < 2; ++fail_outer) {
+        fresh();
+        touch(30, 1, 0x30u);
+        touch(31, 1, 0x31u);
+        touch(60, 1, 0x60u);
+        during_write = sync_during_write;
+        outer = pc_sync();
+        if (fail_outer) {
+            check(outer == PC_SYNC_FAILED, "the outer sync reports its own failure");
+            check(slot_of(60)->dirty, "page 60 stays dirty");
+        } else {
+            check(outer == 0, "the outer sync writes page 60 and succeeds");
+            check(on_disk(60, 0x60u) && !slot_of(60)->dirty, "page 60 is on the disk and clean");
+        }
+        check(log_n == 3 && log_first[2] == 60, "the outer sync wrote page 60 after the inner one");
+    }
+}
+
 /** Run the rows. Returns 0 when every check passed and 1 otherwise. */
 int main(void)
 {
@@ -444,6 +531,9 @@ int main(void)
     test_busy_buffer();
     test_clean_first();
     test_background();
+    test_dirty_limit();
+    test_huge_bytes();
+    test_other_pass_failure();
     if (fails == 0) {
         printf("pagecache_run_hosttest: ok\n");
     }

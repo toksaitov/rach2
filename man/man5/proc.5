@@ -1268,8 +1268,9 @@ but those the background threshold starts, each from 0 to 2147483647;
 10, and
 .Pa vm/dirty_ratio ,
 20, the per cent of the buffer cache's limit, the most memory dirty data
-can hold, past which the flusher writes back and past which a writer
-writes back itself, each from 0 to 100;
+can hold, and of the slots of the page cache of a KRFFS root on a disk,
+past which the flusher writes back and past which a writer writes back
+itself, each from 0 to 100;
 .Pa vm/dirty_background_bytes
 and
 .Pa vm/dirty_bytes ,

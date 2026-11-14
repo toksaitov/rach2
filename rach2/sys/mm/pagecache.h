@@ -168,13 +168,18 @@ uint32_t pc_window_size(void);
 int pc_set_capacity(uint32_t slots);
 
 /**
- * Where the dirty pages stand against the background threshold: 1 at or
- * past it, `dirty_background_bytes` in pages when that is set, else
- * `dirty_background_ratio` per cent of the live capacity, and 0 below. A
- * page that goes dirty at or past it wakes the flusher (`pc_set_flusher`),
- * which writes back until the count is under it (`pc_write_background`), as
- * Linux's background writeback does, so that a fault seldom finds only dirty
- * pages to evict, which it writes back with interrupts off.
+ * Where the dirty pages stand against Linux's thresholds, taken of the live
+ * capacity: 0 below the background threshold (`dirty_background_ratio` per
+ * cent, or `dirty_background_bytes` in pages when set), 1 at or past it,
+ * and 2 at or past the dirty limit (`vm_dirty_ratio` per cent, or
+ * `vm_dirty_bytes`). A background threshold not below the limit is half the
+ * limit. A page that goes dirty at or past the threshold wakes the flusher
+ * (`pc_set_flusher`), which writes back until the count is under it
+ * (`pc_write_background`), and past the limit a writer writes back itself
+ * (`pc_balance_dirty`), as Linux's background writeback and
+ * `balance_dirty_pages` do, so that the clock, which evicts a clean page
+ * before a dirty one, finds clean pages and a fault seldom writes back with
+ * interrupts off.
  */
 int pc_dirty_level(void);
 
@@ -194,6 +199,16 @@ void pc_set_flusher(void (*kick)(void));
  * may sleep. Returns the pages written.
  */
 uint32_t pc_write_background(void);
+
+/**
+ * A writer's throttle: at or past the dirty limit, write runs back until the
+ * dirty pages are under the midpoint of the background threshold and the
+ * limit, as Linux's `balance_dirty_pages` holds a writer; below the limit,
+ * nothing. A file system calls it after each change it makes through the
+ * window, from a system call, where the writes may sleep. Returns the pages
+ * written.
+ */
+uint32_t pc_balance_dirty(void);
 
 /** The pages read in since `init_pagecache`, for the host tests. */
 uint32_t pc_stat_reads(void);

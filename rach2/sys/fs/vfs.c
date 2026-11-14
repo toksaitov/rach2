@@ -4407,7 +4407,9 @@ static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t
     return rc;
 }
 
-/** The `write` of the KRFFS root: `kfs_write_locked` under the lock. */
+/** The `write` of the KRFFS root: `kfs_write_locked` under the lock, and
+ * then the writer's throttle (`pc_balance_dirty`), with the lock let go, as
+ * Linux's `generic_perform_write` calls `balance_dirty_pages_ratelimited`. */
 static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                          uint64_t offset)
 {
@@ -4416,10 +4418,12 @@ static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     vfs_ns_lock(mnt);
     rc = kfs_write_locked(mnt, handle, buf, count, offset);
     vfs_ns_unlock(mnt);
+    (void)pc_balance_dirty();
     return rc;
 }
 
-/** The `truncate` of the KRFFS root: `kfs_truncate_locked` under the lock. */
+/** The `truncate` of the KRFFS root: `kfs_truncate_locked` under the lock,
+ * and then the writer's throttle, as `kfs_write` does. */
 static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     int rc;
@@ -4427,6 +4431,7 @@ static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     vfs_ns_lock(mnt);
     rc = kfs_truncate_locked(mnt, handle, size);
     vfs_ns_unlock(mnt);
+    (void)pc_balance_dirty();
     return rc;
 }
 
