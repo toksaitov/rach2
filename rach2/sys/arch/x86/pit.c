@@ -333,20 +333,33 @@ static uint64_t tsc_now(void)
     return ((uint64_t)hi << 32) | lo;
 }
 
+/* The reads in a row that may find the TSC where it was before its wait
+ * gives up on it, as `refclock_wait_us` gives up on a counter. */
+#define TSC_STALL_READS 100000u
+
 /**
  * Wait `usec` microseconds on the TSC, 100 at a time so that the counts of a
  * step stay inside 32 bits at any rate below 42 GHz; each step waits the
  * counts that cover it at least. `k_udelay`'s wait once the TSC is the
- * reference, as Linux's `delay_tsc`.
+ * reference, as Linux's `delay_tsc`. A TSC that stops for TSC_STALL_READS
+ * reads ends the wait, which is bounded as `k_udelay` promises: a caller
+ * with interrupts off would otherwise spin for good.
  */
 static void tsc_wait_us(uint32_t usec)
 {
     while (usec > 0) {
         uint32_t step = usec > 100u ? 100u : usec;
         uint32_t want = (step * tsc_per_tick + US_PER_TICK - 1u) / US_PER_TICK;
-        uint64_t start = tsc_now();
+        uint64_t start = tsc_now(), last = start, now;
+        uint32_t still = 0;
 
-        while (tsc_now() - start < want) {
+        while ((now = tsc_now()) - start < want) {
+            if (now != last) {
+                last = now;
+                still = 0;
+            } else if (++still == TSC_STALL_READS) {
+                return;
+            }
             arch_relax();
         }
         usec -= step;

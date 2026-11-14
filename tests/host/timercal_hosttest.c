@@ -27,7 +27,8 @@
  * calibration gives no rate, never one 2% low, and with the first three
  * held, the rate of those after. Other rows check that a scale past 32
  * bits gives all ones, that a reference that stops gives no calibration,
- * when the TSC is measured at all, and that the clock follows KVM's clock
+ * when the TSC is measured at all, that `k_udelay` on a TSC that stops
+ * ends (`tsc_wait_rows`), and that the clock follows KVM's clock
  * pages (`kvm_rows`), with their stable bit and without it, whose time a
  * processor with a TSC ahead, a stop of the processor or a tick a minute
  * late does not move, with a platform counter and without one, and that
@@ -124,6 +125,14 @@ static uint64_t hr_stop_ns;
 static uint64_t tsc_base;
 static uint64_t tsc_khz;
 static int tsc_one_rate_bit;
+
+/* A TSC that stops: whether it reads `tsc_still_value`, and the reads made
+ * since it stopped. After TSC_STILL_GIVEUP of them it runs again, so that a
+ * wait with no escape ends, too late, and its row fails instead of hanging. */
+#define TSC_STILL_GIVEUP (4ul * TSC_STALL_READS)
+static int tsc_still;
+static uint64_t tsc_still_value;
+static unsigned long tsc_still_reads;
 
 /** One access to a device: the stop when this is the access it comes
  * before, then the access's own time. */
@@ -345,6 +354,13 @@ void host_tsc_read(uint32_t *lo, uint32_t *hi)
     elapse();
     mark();
     v = tsc_base + now_ns * tsc_khz / 1000000u;
+    if (tsc_still) {
+        if (++tsc_still_reads < TSC_STILL_GIVEUP) {
+            v = tsc_still_value;
+        } else {
+            tsc_still = 0;
+        }
+    }
     *lo = (uint32_t)v;
     *hi = (uint32_t)(v >> 32);
 }
@@ -1174,6 +1190,34 @@ static void kvm_alone_rows(void)
     kvm_tsc_ahead = 0;
 }
 
+/** `k_udelay` on the TSC: a wait as long as asked while the TSC runs, and
+ * one that ends after TSC_STALL_READS reads once it stops, which would
+ * otherwise spin for good with interrupts off. The model put back. */
+static void tsc_wait_rows(void)
+{
+    void (*saved_wait)(uint32_t) = udelay_wait;
+    uint32_t saved_per_tick = tsc_per_tick;
+    uint64_t from;
+
+    tsc_khz = 2893417u;
+    tsc_per_tick = (uint32_t)(tsc_khz * 1000u / TICK_HZ);
+    udelay_wait = tsc_wait_us;
+    stop_at = 0;
+    from = now_ns;
+    k_udelay(1000u);
+    CHECK(now_ns - from >= 1000000u, "a wait on a running TSC lasts as long as asked");
+
+    tsc_still_value = tsc_base + now_ns * tsc_khz / 1000000u;
+    tsc_still_reads = 0;
+    tsc_still = 1;
+    k_udelay(500000u);
+    CHECK(tsc_still && tsc_still_reads == TSC_STALL_READS + 1,
+          "a TSC that stops ends the wait on it after TSC_STALL_READS reads");
+    tsc_still = 0;
+    tsc_per_tick = saved_per_tick;
+    udelay_wait = saved_wait;
+}
+
 /** The rows of KVM's clock pages, and the model put back. */
 static void kvm_rows(void)
 {
@@ -1601,6 +1645,7 @@ int main(int argc, char **argv)
           "a second calibration gives the first's counts and reads nothing");
     marking = 0;
 
+    tsc_wait_rows();
     kvm_rows();
     hr_rows();
     idle_rows();
