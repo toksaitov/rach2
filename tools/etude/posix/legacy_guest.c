@@ -450,10 +450,38 @@ static void digest_of(const void *p, size_t n, char hex[65])
 }
 
 /**
+ * Give whether this host's own clock source is based on the TSC, from its
+ * /sys/devices/system/clocksource/clocksource0/current_clocksource: 1
+ * where it reads `tsc` or `hyperv_clocksource_tsc_page`, 0 where it reads
+ * another, and -1 where it cannot be read, as on a host with no such file.
+ * KVM sets the stable bit of a guest's kvm-clock page only where its host
+ * keeps time by the TSC, which Linux's gtod_is_based_on_tsc takes to
+ * include Hyper-V's TSC page, so a guest case takes that host fact from the
+ * runner, in ETUDE_KVM_STABLE, and not from the kernel under test.
+ */
+static int host_kvm_stable(void)
+{
+    const char *path = "/sys/devices/system/clocksource/clocksource0/current_clocksource";
+    char line[64];
+    FILE *f = fopen(path, "r");
+    char *got;
+
+    if (f == NULL)
+        return -1;
+    got = fgets(line, sizeof(line), f);
+    fclose(f);
+    if (got == NULL)
+        return -1;
+    line[strcspn(line, "\r\n")] = '\0';
+    return strcmp(line, "tsc") == 0 || strcmp(line, "hyperv_clocksource_tsc_page") == 0;
+}
+
+/**
  * Write the attempt's invocation (schemas/invocation.schema.json): the
  * case's program and arguments in the workspace, the case's identity, seed
- * and architecture, the architecture of the kernel it runs on and the
- * machine's accelerator in its environment, its scratch as TMPDIR, and its
+ * and architecture, the architecture of the kernel it runs on, the
+ * machine's accelerator and, where this host's clock source can be read,
+ * whether it is the TSC in its environment, its scratch as TMPDIR, and its
  * bound as the deadline; and its
  * digest and the attempt's token, the first digits of the digest of the
  * attempt's identity.
@@ -464,6 +492,7 @@ static void make_invocation(struct legacy_guest *g)
     struct jbuf b = {NULL, 0, 0};
     char num[64], hex[65];
     size_t i;
+    int stable = host_kvm_stable();
 
     digest_of(g->spec.attempt_id, strlen(g->spec.attempt_id), hex);
     snprintf(g->token, sizeof(g->token), "%.*s", ETUDE_FRAME_TOKEN_LEN, hex);
@@ -491,6 +520,8 @@ static void make_invocation(struct legacy_guest *g)
         put_member(&b, "ARCH", k->arch, 0);
     put_member(&b, "ETUDE_KERNEL", k->boot_arch, 0);
     put_member(&b, "ETUDE_ACCEL", g->spec.accel, 0);
+    if (stable >= 0)
+        put_member(&b, "ETUDE_KVM_STABLE", stable ? "1" : "0", 0);
     if (k->scratch)
         put_member(&b, "TMPDIR", "${WORKSPACE}", 0);
     jbuf_puts(&b, "},\"stdin\":null,\"role\":\"ordinary\",\"files\":[{");

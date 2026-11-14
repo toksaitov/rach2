@@ -210,11 +210,13 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # runs, and have no target here.
 # `tests/run kvmclock`: under KVM (`RACH2_QEMU_ACCEL=kvm`, as the release
 # runs it), with no clock option on two processors, /sys lists kvm-clock,
-# the x86-64 kernel's vDSO clock runs, and vdsomusl's clock calls make no
-# system call by /proc/stat's count, the vDSO reading KVM's clock page or a
-# TSC rated above it, while on i686 each is one; under an emulator no
+# and where the host keeps time by the TSC the x86-64 kernel's vDSO clock
+# runs and vdsomusl's clock calls make no system call by /proc/stat's
+# count, the vDSO reading KVM's clock page or a TSC rated above it, while
+# where it does not, and on i686, each is one; under an emulator no
 # kvm-clock is listed. vdsomusl takes which of these to require from the
-# accelerator the runner names, and not from the kernel. It is the case of
+# accelerator and the host's clock source the runner names, and not from
+# the kernel. It is the case of
 # tests/cases/guest.kvmclock.json, which etude runs, and has no target here.
 # `tests/run hvc`: the virtio console as a program sees it: on a guest
 # case's machine, whose console is the device's port 1 by the

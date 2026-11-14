@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "family_id": "guest.kvmclock",
-  "summary": "Under KVM the kernel keeps kvm-clock, and the x86-64 vDSO answers the clock calls from KVM's clock page or from a TSC rated above it without a system call, as Linux's does; the case boots the test image on two processors and runs vdsomusl, which takes what to require from the accelerator its runner names and not from the kernel",
+  "summary": "Under KVM the kernel keeps kvm-clock, and where the host keeps time by the TSC the x86-64 vDSO answers the clock calls from KVM's clock page or from a TSC rated above it without a system call, and where it does not each call is a system call, as Linux's are; the case boots the test image on two processors and runs vdsomusl, which takes what to require from the accelerator and the host's clock source its runner names and not from the kernel",
   "cases": [
     {
       "case_id": "guest.kvmclock.calls",
-      "behavior": "With no clock option, on two processors of the max profile, to which QEMU under KVM offers kvm-clock with its stable bit: under KVM, as ETUDE_ACCEL from the runner says, /sys lists kvm-clock and the clock source in use is kvm-clock, or the TSC while the vDSO's clock runs, as Linux picks a TSC it rates above kvm-clock; the x86-64 kernel's vDSO clock runs and the clock calls through musl make no system call by the kernel's count, and on the i686 kernel, which maps no vDSO, each is a system call; under any other accelerator no kvm-clock is listed",
+      "behavior": "With no clock option, on two processors of the max profile, to which QEMU under KVM offers kvm-clock: under KVM, as ETUDE_ACCEL from the runner says, /sys lists kvm-clock and the clock source in use is kvm-clock, or the TSC while the vDSO's clock runs, as Linux picks a TSC it rates above kvm-clock; where the host keeps time by the TSC, as ETUDE_KVM_STABLE from the runner says, the x86-64 kernel's vDSO clock runs and the clock calls through musl make no system call by the kernel's count, and where it does not, and on the i686 kernel, which maps no vDSO, each is a system call; with no ETUDE_KVM_STABLE the x86-64 kernel is judged by /proc/stat's vdso_tsc; under any other accelerator no kvm-clock is listed",
       "units": ["musl/vdsomusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -17,7 +17,7 @@
         {"assertion_id": "auxv", "checks": "AT_SYSINFO_EHDR gives the ELF header of a shared object of the program's class and machine, x86-64's or for an i686 program i386's", "source": "program"},
         {"assertion_id": "maps", "checks": "/proc/self/maps has [vvar], two r--p pages, just below AT_SYSINFO_EHDR and [vdso], one r-xp page, at it", "source": "program"},
         {"assertion_id": "symbols", "checks": "the image's hash and version tables give __vdso_clock_gettime, __vdso_gettimeofday, __vdso_time, __vdso_getcpu and __vdso_clock_getres of version LINUX_2.6, and the 32-bit image also __vdso_clock_gettime64 of LINUX_2.6 and __kernel_vsyscall, __kernel_sigreturn and __kernel_rt_sigreturn of LINUX_2.5", "source": "program"},
-        {"assertion_id": "source", "checks": "/proc/stat's vdso_tsc, 1 while the vDSO's clock runs, is 1 under KVM on the x86-64 kernel and 0 under KVM on the i686 kernel, and under another accelerator reads what it read at the program's start", "source": "program"},
+        {"assertion_id": "source", "checks": "/proc/stat's vdso_tsc, 1 while the vDSO's clock runs, is 1 under KVM on the x86-64 kernel where ETUDE_KVM_STABLE is 1 and 0 where it is 0 and under KVM on the i686 kernel, and with no ETUDE_KVM_STABLE, and under another accelerator, reads what it read at the program's start", "source": "program"},
         {"assertion_id": "agree", "checks": "real time, the monotonic, raw and boot clocks and the two coarse clocks read through the vDSO, and its gettimeofday and time, each lie between two readings by the system call", "source": "program"},
         {"assertion_id": "resolution", "checks": "the vDSO's clock_getres gives what the system call gives for clocks 0 to 7, and its clock_gettime and clock_getres give -EINVAL for clock 12", "source": "program"},
         {"assertion_id": "getcpu", "checks": "pinned to each processor in turn, the vDSO's getcpu and sched_getcpu give that processor, on node 0", "source": "program"},
@@ -25,8 +25,8 @@
         {"assertion_id": "write", "checks": "a child's mprotect makes [vdso] rwxp, a store there does not fault and its clock_gettime works, another child's write through /proc/self/mem reads back with the page still r-xp, and the parent's vDSO is unchanged, as Linux copies the page on a write", "source": "program"},
         {"assertion_id": "vvar", "checks": "a read of [vvar] through /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's [vvar] give EIO, process_vm_readv of it and a vmsplice of a byte of it into a pipe EFAULT, and mprotect of it with PROT_EXEC EACCES, as on Linux, whose get_user_pages refuses the region", "source": "program"},
         {"assertion_id": "sources", "checks": "clocksource0's current_clocksource in /sys is one of its available_clocksource; under KVM kvm-clock is listed, so the kernel gave KVM its clock pages, and the one in use is kvm-clock, or tsc with the vDSO's clock running; under another accelerator no kvm-clock is listed", "source": "program"},
-        {"assertion_id": "exitfree", "checks": "under KVM on the x86-64 kernel, 100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by fewer than 1,000: the vDSO reads KVM's clock page, or a TSC rated above kvm-clock, and makes no system call", "source": "program"},
-        {"assertion_id": "counted", "checks": "under KVM on the i686 kernel, which maps no vDSO, the 100,000 calls raise clock_calls by at least 100,000", "source": "program"},
+        {"assertion_id": "exitfree", "checks": "under KVM on the x86-64 kernel where ETUDE_KVM_STABLE is 1, or where it is absent and vdso_tsc read 1 at the start, 100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by fewer than 1,000: the vDSO reads KVM's clock page, or a TSC rated above kvm-clock, and makes no system call", "source": "program"},
+        {"assertion_id": "counted", "checks": "under KVM where ETUDE_KVM_STABLE is 0, or where it is absent and vdso_tsc read 0 at the start, and under KVM on the i686 kernel, which maps no vDSO, the 100,000 calls raise clock_calls by at least 100,000", "source": "program"},
         {"assertion_id": "unlisted", "checks": "under an accelerator other than KVM, as under QEMU's emulator, the 100,000 calls raise clock_calls by fewer than 1,000 where vdso_tsc is 1 and by at least 100,000 where it is 0", "source": "program"}
       ],
       "branches": [
@@ -45,7 +45,7 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "feature", "reason": "kvm-clock is a KVM guest's clock, and the Lenovo runs Rach2 on its own processor, where guest.vdso.tsc's native run covers the vDSO"},
-      "ia32": {"runs": true, "why": "the x86-64 kernel gives an i386 program the 32-bit vDSO, whose code reads KVM's clock page as the 64-bit one does; vdsomusl reports the group kernel from ETUDE_KERNEL, the kernel's architecture, and the group kvmclock from it and ETUDE_ACCEL, and checks the 32-bit image's own functions there"}
+      "ia32": {"runs": true, "why": "the x86-64 kernel gives an i386 program the 32-bit vDSO, whose code reads KVM's clock page as the 64-bit one does; vdsomusl reports the group kernel from ETUDE_KERNEL, the kernel's architecture, and the group kvmclock from it, ETUDE_ACCEL and ETUDE_KVM_STABLE, and checks the 32-bit image's own functions there"}
     }
   ]
 }

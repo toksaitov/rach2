@@ -65,12 +65,19 @@
  *
  * Under `clock=kvm` the runner's word decides what is required, and not
  * the kernel's: ETUDE_ACCEL is `kvm` where QEMU runs under KVM, which
- * offers its guest kvm-clock, with the stable bit on the processor profile
- * the case boots. The group `kvmclock` has the branch `vdso` under KVM on
- * the x86-64 kernel, `syscall` under KVM on the i686 kernel, which has no
- * vDSO, and `absent` under any other accelerator. `source` then requires
- * `vdso_tsc` to be 1 in the branch `vdso` and 0 in `syscall`, and takes it
- * as it reads in `absent`, and two rows take the place of `calls`.
+ * offers its guest kvm-clock. KVM sets the stable bit of its clock page
+ * only where the host keeps time by the TSC, which ETUDE_KVM_STABLE in
+ * the environment reports from the host's own clock source, 1 where it
+ * is the TSC and 0 where it is another; without the bit a guest's vDSO
+ * makes the clock system calls, as Linux's does. The group `kvmclock`
+ * has the branch `vdso` under KVM on the x86-64 kernel where
+ * ETUDE_KVM_STABLE is 1, `syscall` under KVM where it is 0 and on the
+ * i686 kernel, which has no vDSO, and `absent` under any other
+ * accelerator. With no ETUDE_KVM_STABLE, an x86-64 kernel under KVM
+ * takes its branch from /proc/stat's `vdso_tsc` as the `absent` branch
+ * does. `source` then requires `vdso_tsc` to be 1 in the branch `vdso`
+ * and 0 in `syscall`, and takes it as it reads in `absent`, and two rows
+ * take the place of `calls`.
  * `sources`: the clock source in use, clocksource0's `current_clocksource`
  * in /sys, is one of its `available_clocksource`; under KVM kvm-clock is
  * listed, which shows the kernel gave KVM its clock pages, and the one in
@@ -128,14 +135,18 @@
 #define CLOCK_NONE 12
 
 /* Whether the clock is to run from the TSC, as `clock=tsc` says, or under
- * `clock=kvm` as /proc/stat's `vdso_tsc` read at the start. */
+ * `clock=kvm` as ETUDE_KVM_STABLE says, or where the runner gave none as
+ * /proc/stat's `vdso_tsc` read at the start. */
 static int want_tsc;
 
 /* Under `clock=kvm`: whether the runner booted the machine under KVM, as
- * ETUDE_ACCEL says, and the clock sources /sys lists and the one in use. */
+ * ETUDE_ACCEL says, whether the host keeps time by the TSC, as
+ * ETUDE_KVM_STABLE says (1 or 0, -1 where the runner gave none), and the
+ * clock sources /sys lists and the one in use. */
 #define CLOCKSOURCE0 "/sys/devices/system/clocksource/clocksource0/"
 static int want_kvm;
 static int under_kvm;
+static int kvm_stable = -1;
 static const char *accel_name = "unknown";
 static char sources_listed[128];
 static char source_used[32];
@@ -301,18 +312,25 @@ static int listed(const char *list, const char *word)
 
 /**
  * Under `clock=kvm`, decide the branch from the runner's word before the
- * report is planned, and read the clock sources: under KVM the vDSO's
- * clock must run on the x86-64 kernel and cannot on i686's, and under
- * another accelerator it is as /proc/stat's `vdso_tsc` reads. Returns
- * NULL, or what could not be read.
+ * report is planned, and read the clock sources: under KVM on the x86-64
+ * kernel the vDSO's clock must run where the host keeps time by the TSC,
+ * as ETUDE_KVM_STABLE says, and make the system calls where it does not;
+ * on i686's kernel it cannot run; and under another accelerator, and
+ * under KVM where the runner gave no ETUDE_KVM_STABLE, it is as
+ * /proc/stat's `vdso_tsc` reads. Returns NULL, or what could not be read.
  */
 static const char *kvm_look(void)
 {
     const char *accel = getenv("ETUDE_ACCEL");
+    const char *stable = getenv("ETUDE_KVM_STABLE");
     unsigned long tsc;
 
     under_kvm = accel != NULL && strcmp(accel, "kvm") == 0;
-    want_tsc = under_kvm && kernel_x86_64;
+    kvm_stable = stable == NULL             ? -1
+                 : strcmp(stable, "1") == 0 ? 1
+                 : strcmp(stable, "0") == 0 ? 0
+                                            : -1;
+    want_tsc = under_kvm && kernel_x86_64 && kvm_stable == 1;
     if (accel == NULL) {
         return "ETUDE_ACCEL is not set, so nothing but the kernel says what to expect";
     }
@@ -324,7 +342,7 @@ static const char *kvm_look(void)
     if (first_line(CLOCKSOURCE0 "current_clocksource", source_used, sizeof(source_used)) != 0) {
         return "/sys has no current_clocksource";
     }
-    if (!under_kvm) {
+    if (!under_kvm || (kernel_x86_64 && kvm_stable < 0)) {
         if (stat_field("vdso_tsc", &tsc) != 0) {
             return "/proc/stat has no vdso_tsc line";
         }
@@ -333,17 +351,17 @@ static const char *kvm_look(void)
     return NULL;
 }
 
-/** The branch of the group `kvmclock`, by the accelerator and the kernel's
- * architecture as the runner gave them. */
+/** The branch of the group `kvmclock`, by the accelerator and by whether
+ * the vDSO's clock is to run, as the runner gave them. */
 static const char *kvm_branch(void)
 {
-    return !under_kvm ? "absent" : kernel_x86_64 ? "vdso" : "syscall";
+    return !under_kvm ? "absent" : want_tsc ? "vdso" : "syscall";
 }
 
 /** The id of the calls' row under `clock=kvm`, its branch's. */
 static const char *kvm_calls_id(void)
 {
-    return !under_kvm ? "unlisted" : kernel_x86_64 ? "exitfree" : "counted";
+    return !under_kvm ? "unlisted" : want_tsc ? "exitfree" : "counted";
 }
 
 /** Check the clock sources against the accelerator, under `clock=kvm`:
@@ -353,8 +371,8 @@ static int sources(void)
 {
     int kvm_listed = listed(sources_listed, "kvm-clock");
 
-    printf("vdsomusl: sources: %s of %s, accelerator %s\n", source_used, sources_listed,
-           accel_name);
+    printf("vdsomusl: sources: %s of %s, accelerator %s, ETUDE_KVM_STABLE %d\n", source_used,
+           sources_listed, accel_name, kvm_stable);
     if (!listed(sources_listed, source_used)) {
         return fail("the clock source in use is not among those listed");
     }
@@ -375,8 +393,8 @@ static int sources(void)
 }
 
 /** Check that /proc/stat's `vdso_tsc` is what `clock=` says, or under
- * `clock=kvm` what the accelerator and the kernel's architecture call
- * for. */
+ * `clock=kvm` what the accelerator, the host's clock source and the
+ * kernel's architecture call for. */
 static int source(void)
 {
     unsigned long tsc;
@@ -385,8 +403,10 @@ static int source(void)
         return fail("/proc/stat has no vdso_tsc line");
     }
     if (tsc != (unsigned long)want_tsc && want_kvm) {
-        return fail(want_tsc ? "under KVM the vDSO's clock does not run on the x86-64 kernel"
-                             : "the vDSO's clock runs on the i686 kernel, which has no vDSO");
+        return fail(!kernel_x86_64 ? "the vDSO's clock runs on the i686 kernel, which has no vDSO"
+                    : want_tsc     ? "under KVM the vDSO's clock does not run on the x86-64 kernel"
+                                   : "under KVM the vDSO's clock runs where the clock system "
+                                     "calls are expected on the x86-64 kernel");
     }
     if (tsc != (unsigned long)want_tsc) {
         return fail(want_tsc ? "the clock does not run from the TSC"
