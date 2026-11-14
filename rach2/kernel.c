@@ -5035,12 +5035,12 @@ void kernel_main(const struct boot_info *boot)
         }
     }
 
-    start_network();
-
     /* virtio-pci takes every virtio function before a driver looks for
-     * its own, as Linux's PCI core probes it, so that each has its virtioN
-     * whether a driver of its type exists or not. */
+     * its own, the network's and the display's, as Linux's PCI core probes
+     * it, so that each has its virtioN whether a driver of its type exists
+     * or not. */
     virtio_pci_probe();
+    start_network();
     drm_start();
     pstore_start();
     printk_params_start();

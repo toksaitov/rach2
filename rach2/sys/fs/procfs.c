@@ -6886,7 +6886,9 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
         ap_str(t, "0x0");
         break;
     case 5:
-        ap_str(t, !known || !nd->up ? "unknown" : link.full_duplex ? "full" : "half");
+        ap_str(t, !known || !nd->up || link.full_duplex < 0 ? "unknown"
+                  : link.full_duplex                        ? "full"
+                                                            : "half");
         break;
     case 6:
         ap_str(t, nd->loopback ? "0x9" : nd->up ? "0x1003" : "0x1002");
@@ -6902,7 +6904,7 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
         ap_str(t, !nd->up ? "down" : !known ? "unknown" : link.up ? "up" : "down");
         break;
     case 11:
-        if (known && nd->up && link.up) {
+        if (known && nd->up && link.up && link.mbps != 0) {
             ap_u32(t, link.mbps);
         } else {
             ap_str(t, "-1");

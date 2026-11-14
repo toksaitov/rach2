@@ -4,9 +4,10 @@
  *
  * The order of the table is the probe's order, and so the order of the
  * interfaces' names on a machine with cards of more than one kind: the
- * RTL8139, which rach2/qemu_devices.sh gives QEMU unless `NIC` names
- * another card; the e1000, which QEMU attaches when no card is named; and
- * the RTL8168GU, the Lenovo G50-70's card, which QEMU does not emulate.
+ * virtio network device, which rach2/qemu_devices.sh gives QEMU unless
+ * `NIC` names another card; the RTL8139; the e1000, which QEMU attaches
+ * when no card is named; and the RTL8168GU, the Lenovo G50-70's card, which
+ * QEMU does not emulate.
  */
 
 #include "../../idle_timer.h"
@@ -14,6 +15,7 @@
 #include "e1000.h"
 #include "rtl8139.h"
 #include "rtl8168.h"
+#include "virtio_net.h"
 #include "../net.h"
 #include "../../cmdline.h"
 #include "../../klog.h"
@@ -38,7 +40,8 @@ static int lo_ready;
  * has. */
 static const char *probe_error = "no supported network card";
 
-static const struct netdev_ops *const drivers[] = {&rtl8139_netdev, &e1000_netdev, &rtl8168_netdev};
+static const struct netdev_ops *const drivers[] = {&virtio_net_netdev, &rtl8139_netdev,
+                                                   &e1000_netdev, &rtl8168_netdev};
 
 #define NETDEV_COUNT ((int)(sizeof(drivers) / sizeof(drivers[0])))
 
@@ -429,7 +432,8 @@ int netdev_probe(void)
 int netdev_mtu_ok(const struct netdev *nd, uint32_t mtu)
 {
     return nd->loopback ? mtu == NETDEV_LOOPBACK_MTU
-                        : mtu >= NETDEV_ETH_MTU_MIN && mtu <= NETDEV_ETH_MTU_MAX;
+                        : mtu >= NETDEV_ETH_MTU_MIN &&
+                              mtu <= (nd->mtu_max ? nd->mtu_max : NETDEV_ETH_MTU_MAX);
 }
 
 int netdev_set_mtu(struct netdev *nd, uint32_t mtu)

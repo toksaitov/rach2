@@ -10,11 +10,11 @@
  *
  * A driver is a table of operations, `struct netdev_ops`, and every layer
  * above the drivers works with an interface, `struct netdev`, never with a
- * driver. The three drivers differ in how frames arrive: the RTL8139 and
- * the e1000 deliver from their interrupt handlers and have no `poll`; the
- * RTL8168GU delivers from its message handler where the machine routes its
- * messages, and from its `poll`, which the timer tick calls through
- * `netdev_poll`.
+ * driver. The four drivers differ in how frames arrive: the virtio network
+ * device, the RTL8139 and the e1000 deliver from their interrupt handlers
+ * and have no `poll`; the RTL8168GU delivers from its message handler where
+ * the machine routes its messages, and from its `poll`, which the timer
+ * tick calls through `netdev_poll`.
  */
 
 /* How many cards this kernel drives at once. Each card that comes up is an
@@ -42,11 +42,14 @@
  *
  * `up` is whether the link is up, which is the part a program asks about;
  * `mbps` and `full_duplex` are what was negotiated, and mean nothing when
- * `up` is zero.
+ * `up` is zero. A device that does not say, as a virtio network device
+ * without VIRTIO_NET_F_SPEED_DUPLEX, reports an `mbps` of 0 and a
+ * `full_duplex` of -1, which /sys/class/net shows as Linux shows an
+ * unknown speed and duplex, -1 and `unknown`.
  */
 struct netdev_link {
     int up;
-    uint16_t mbps;
+    uint32_t mbps;
     int full_duplex;
 };
 
@@ -293,6 +296,11 @@ struct netdev {
      * card, 1500 from the probe; NETDEV_LOOPBACK_MTU on `lo`. */
     uint32_t mtu;
 
+    /* The largest MTU the card takes when that is below NETDEV_ETH_MTU_MAX,
+     * as a virtio network device's VIRTIO_NET_F_MTU gives it, which its
+     * driver sets at bring-up; 0 for NETDEV_ETH_MTU_MAX. */
+    uint32_t mtu_max;
+
     /* The `naddr6` IPv6 addresses, kept in the order they were given; `lo`
      * has ::1 and a card its link-local address from the time it comes up
      * (netconf.c). */
@@ -320,7 +328,8 @@ struct netdev {
 #define NETDEV_ETH_MTU_MAX 1500
 
 /** Whether `nd` may take the MTU `mtu`: within NETDEV_ETH_MTU_MIN to
- * NETDEV_ETH_MTU_MAX on a card, and only NETDEV_LOOPBACK_MTU on `lo`. */
+ * NETDEV_ETH_MTU_MAX on a card, or to the card's own `mtu_max` when it has
+ * one, and only NETDEV_LOOPBACK_MTU on `lo`. */
 int netdev_mtu_ok(const struct netdev *nd, uint32_t mtu);
 
 /**
