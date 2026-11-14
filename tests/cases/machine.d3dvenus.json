@@ -1097,7 +1097,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
-      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1320000000, "ceiling_us": 3960000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 2700000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3960000000, "ceiling_us": 3960000000}, "gap": {"floor_us": 1000000, "initial_us": 2700000000, "ceiling_us": 2700000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
       "resources": {"cpu_millis": 8000, "cpu_ceiling_millis": 8000, "memory_bytes": 18253611008, "disk_bytes": 21474836480, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [{"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}, {"name": "kernel", "node": "rach2/kernel", "per_architecture": true}, {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true}, {"name": "d3d-data", "node": "tests/graphics/d3d/data.ext2", "per_architecture": false}, {"name": "d3d_scenario", "node": "tests/cases/machine/d3d_scenario", "per_architecture": false}],
       "timing": [],
