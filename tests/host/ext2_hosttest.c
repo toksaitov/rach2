@@ -5602,6 +5602,189 @@ static void regrow_rows(void)
     printf("ext2_hosttest: %d stops of regrowths walked\n", total);
 }
 
+/* ---- a raised count before a new name while the batch holds the file ---- */
+
+/* How a held-count row gives `src`, a synced file of one block with a write
+   of 10 bytes pending in the batch and its description open, a new name, by
+   its `way`: a link `twin`, and a rename to `moved`. */
+#define HELD_WAYS 2
+static const char *const held_ways[HELD_WAYS] = {"linked", "renamed"};
+
+/**
+ * Make a fresh volume, mount it so that it writes back, and give it `src`,
+ * a file of one block, synced. Returns 0, or the first error, with the
+ * volume unmounted.
+ */
+static int held_count_mount(void)
+{
+    void *n;
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    rc = mount_flags(0);
+    n = rc == 0 ? make_file(mnt.root, "src", &rc) : 0;
+    if (n) {
+        rc = write_at(n, pattern, 4096, 0);
+        OPS->put(&mnt, n);
+    }
+    if (rc == 0) {
+        rc = OPS->sync(&mnt);
+    }
+    if (rc != 0) {
+        printf("  rc %d\n", rc);
+        unmount_image();
+    }
+    return rc;
+}
+
+/**
+ * Overwrite the first 10 bytes of `src` through a description kept open, so
+ * that the batch holds the file, and give it a new name in `way`
+ * (`held_ways`); then close the description and sync the volume. Whether
+ * the write was left pending, no write made for it, in `*pending`. Returns
+ * 0, or the first error.
+ */
+static int held_count_run(int way, int *pending)
+{
+    void *n, *h = 0;
+    int32_t got;
+    int rc = 0, before;
+
+    *pending = 0;
+    n = walk("/src", &rc);
+    if (!n) {
+        return rc;
+    }
+    rc = OPS->open(&mnt, n, 1, &h);
+    if (rc == 0) {
+        before = writes_made;
+        got = OPS->write(&mnt, h, pattern + 4096, 10, 0);
+        rc = got == 10 ? 0 : (got < 0 ? got : -1);
+        *pending = rc == 0 && writes_made == before;
+    }
+    if (rc == 0 && way == 0) {
+        rc = OPS->link(&mnt, mnt.root, "twin", n);
+    } else if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "src", mnt.root, "moved");
+    }
+    if (h) {
+        OPS->release(&mnt, h);
+    }
+    OPS->put(&mnt, n);
+    return rc == 0 ? OPS->sync(&mnt) : rc;
+}
+
+/** Whether each of `src`, `twin` and `moved` that the root of `img` still
+ * lists names an inode its bitmap marks in use. */
+static int held_count_names_used(const char *img)
+{
+    static const char *const names[3] = {"src", "twin", "moved"};
+    char request[32];
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (!debugfs_lists(img, "/", names[i])) {
+            continue;
+        }
+        snprintf(request, sizeof request, "testi /%s", names[i]);
+        if (!debugfs_says(img, request, "is marked in use")) {
+            printf("  /%s names an inode its bitmap calls free\n", names[i]);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Drop the mount as a crash would after `src` was given a new name in
+ * `way` and stopped after write `k` of `n`, and judge the volume left:
+ * e2fsck run to its end asking only for the repairs of `removal_findings`
+ * a mount that writes back may leave, with no count below its names
+ * (`counts_kept`), no inode or block in use whose bit is clear, and each
+ * name left marked in use.
+ */
+static void held_count_judge(int way, int k, int n)
+{
+    unsigned count = sizeof(removal_findings) / sizeof(removal_findings[0]);
+    char what[240];
+    int ok;
+
+    drop_as_crash();
+    snprintf(what, sizeof what,
+             "a file with a pending write and an open description %s, stopped after write %d of "
+             "%d, leaves e2fsck counts, bitmaps and unnamed inodes to repair",
+             held_ways[way], k, n);
+    ok = fsck_judged(wimg) >= 0 && findings_among(removal_findings, count - 1);
+    check(ok, what);
+    if (!ok) {
+        ext2_fixture_head(fix_path("fsck.out"), 30);
+    }
+    snprintf(what, sizeof what,
+             "a file with a pending write and an open description %s, stopped after write %d of "
+             "%d, leaves no count below its names",
+             held_ways[way], k, n);
+    check(counts_kept(fix_path("fsck.out")), what);
+    snprintf(what, sizeof what,
+             "a file with a pending write and an open description %s, stopped after write %d of "
+             "%d, leaves no inode or block in use whose bit is clear",
+             held_ways[way], k, n);
+    check(inode_bits_kept(fix_path("fsck.out")) && block_bits_kept(fix_path("fsck.out")), what);
+    snprintf(what, sizeof what,
+             "a file with a pending write and an open description %s, stopped after write %d of "
+             "%d, leaves each name marked in use",
+             held_ways[way], k, n);
+    check(held_count_names_used(wimg), what);
+}
+
+/**
+ * On a mount that writes back, give a synced file whose overwrite waits in
+ * the batch, its description open, a second name by a link and a new one
+ * by a rename (`held_count_run`), once whole, counting the writes, and then
+ * once stopped after each of them, the sync's among them. The batch keeps
+ * a store of the file's inode for its drain (`ext2_writeback_keeps`), so
+ * the raised count reaches the table block only through a drain before the
+ * new name is written: no stop may leave two names and a count of one,
+ * which an unlink of either would take to 0 and free while the other names
+ * it. e2fsck must run to its end and ask only for the repairs of
+ * `removal_findings`, with no count below its names.
+ */
+static void held_count_rows(void)
+{
+    char what[240];
+    int way, k, n, pending, total = 0;
+
+    fill_pattern();
+    for (way = 0; way < HELD_WAYS; way++) {
+        if (held_count_mount() != 0) {
+            check(0, "the volume of the held-count rows mounts and takes its file");
+            return;
+        }
+        writes_made = 0;
+        snprintf(what, sizeof what,
+                 "on a mount that writes back, a file with a pending write and an open "
+                 "description is %s",
+                 held_ways[way]);
+        check(held_count_run(way, &pending) == 0, what);
+        check(pending, "and its write waited in the batch until the new name");
+        n = writes_made;
+        check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+        for (k = 0; k <= n; k++) {
+            if (held_count_mount() != 0) {
+                check(0, "the volume of the held-count rows mounts and takes its file");
+                return;
+            }
+            writes_made = 0;
+            stop_after = k;
+            (void)held_count_run(way, &pending);
+            held_count_judge(way, k, n);
+        }
+        total += n + 1;
+    }
+    printf("ext2_hosttest: %d stops of new names of held files walked\n", total);
+}
+
 /**
  * Run each of `sequences` on a fresh volume and judge it by the driver,
  * by e2fsck, by setidcheck's reader, and by the driver again after a
@@ -9896,6 +10079,7 @@ static const struct {
     {"--removal-only", removal_rows},
     {"--removal-remount-only", removal_remount_rows},
     {"--regrowth-only", regrow_rows},
+    {"--held-count-only", held_count_rows},
     {"--dir-commit-only", dir_commit_rows},
     {"--mark-only", mark_rows},
     {"--stop-only", stop_rows},
@@ -9906,8 +10090,8 @@ static const struct {
  * Make the native fixture tree using the prepared independent tools, and run
  * the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes and at 2
  * KiB, the 1 KiB levels, the failures, the write sequences, the types of
- * replaced entries, the removals and the frees beside growths stopped on a
- * mount that writes back, the
+ * replaced entries, the removals, the frees beside growths and the new names
+ * of files the batch holds stopped on a mount that writes back, the
  * directory's inode and a reused block before the next step, the marks of nodes
  * whose change is not stored, the error policy's stops beside them, the order
  * rows, the writer's failures, the dirty volumes, the read-only volumes, the
@@ -9956,6 +10140,7 @@ int main(int argc, char **argv)
     ftype_rows();
     removal_rows();
     regrow_rows();
+    held_count_rows();
     dir_commit_rows();
     mark_rows();
     stop_rows();
