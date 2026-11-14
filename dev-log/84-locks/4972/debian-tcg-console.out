@@ -1,0 +1,67 @@
+Debian GNU/Linux 13 debian-ref ttyS0
+
+debian-ref login: [  243.236497] INFO: task kworker/2:1:98 blocked for more than 120 seconds.
+[  243.243649]       Not tainted 6.12.115+deb13.1-amd64 #1 Debian 6.12.115-2
+[  243.244072] "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[  243.244883] task:kworker/2:1     state:D stack:0     pid:98    tgid:98    ppid:2      flags:0x00004000
+[  243.249146] Workqueue: events drm_fb_helper_damage_work [drm_kms_helper]
+[  243.249784] Call Trace:
+[  243.250082]  <TASK>
+[  243.250578]  __schedule+0x4ea/0xbe0
+[  243.251188]  schedule+0x27/0xc0
+[  243.251321]  virtio_gpu_queue_fenced_ctrl_buffer+0x204/0x590 [virtio_gpu]
+[  243.252154]  ? __pfx_autoremove_wake_function+0x10/0x10
+[  243.252431]  virtio_gpu_primary_plane_update+0x3a1/0x420 [virtio_gpu]
+[  243.252802]  drm_atomic_helper_commit_planes+0x112/0x320 [drm_kms_helper]
+[  243.253225]  drm_atomic_helper_commit_tail+0x48/0x90 [drm_kms_helper]
+[  243.253479]  commit_tail+0xd1/0x130 [drm_kms_helper]
+[  243.254017]  drm_atomic_helper_commit+0x11a/0x140 [drm_kms_helper]
+[  243.254225]  drm_atomic_commit+0xa9/0xe0 [drm]
+[  243.254566]  ? __pfx___drm_printfn_info+0x10/0x10 [drm]
+[  243.254811]  drm_atomic_helper_dirtyfb+0x1c6/0x2a0 [drm_kms_helper]
+[  243.255159]  drm_fbdev_shmem_helper_fb_dirty+0x4a/0xa0 [drm_shmem_helper]
+[  243.255691]  drm_fb_helper_damage_work+0x94/0x170 [drm_kms_helper]
+[  243.256144]  process_one_work+0x18b/0x340
+[  243.256360]  worker_thread+0x191/0x2f0
+[  243.256545]  ? __pfx_worker_thread+0x10/0x10
+[  243.256735]  kthread+0xd2/0x100
+[  243.256880]  ? __pfx_kthread+0x10/0x10
+[  243.257055]  ret_from_fork+0x34/0x50
+[  243.257211]  ? __pfx_kthread+0x10/0x10
+[  243.257449]  ret_from_fork_asm+0x1a/0x30
+[  243.257825]  </TASK>
+[  243.258137] INFO: task vulkaninfo:914 blocked for more than 120 seconds.
+[  243.258486]       Not tainted 6.12.115+deb13.1-amd64 #1 Debian 6.12.115-2
+[  243.258743] "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[  243.259053] task:vulkaninfo      state:D stack:0     pid:914   tgid:914   ppid:842    flags:0x00000002
+[  243.259709] Call Trace:
+[  243.259839]  <TASK>
+[  243.263068]  __schedule+0x4ea/0xbe0
+[  243.263264]  schedule+0x27/0xc0
+[  243.263588]  virtio_gpu_vram_mmap+0x19e/0x220 [virtio_gpu]
+[  243.263880]  ? __pfx_autoremove_wake_function+0x10/0x10
+[  243.264052]  drm_gem_mmap_obj+0x72/0x190 [drm]
+[  243.264314]  ? drm_vma_node_is_allowed+0x67/0x70 [drm]
+[  243.264743]  drm_gem_mmap+0x11c/0x1f0 [drm]
+[  243.265076]  __mmap_region+0x697/0xb10
+[  243.265284]  mmap_region+0x78/0xa0
+[  243.265425]  do_mmap+0x45d/0x630
+[  243.265615]  vm_mmap_pgoff+0xf8/0x1c0
+[  243.269197]  ksys_mmap_pgoff+0x144/0x1e0
+[  243.271898]  do_syscall_64+0x87/0x1b0
+[  243.274537]  ? do_fault+0x31a/0x550
+[  243.276954]  ? __handle_mm_fault+0x70d/0xf90
+[  243.278928]  ? __count_memcg_events+0x53/0xf0
+[  243.281110]  ? count_memcg_events.constprop.0+0x1a/0x30
+[  243.284429]  ? handle_mm_fault+0x1bb/0x2c0
+[  243.286765]  ? do_user_addr_fault+0x367/0x650
+[  243.289410]  ? arch_exit_to_user_mode_prepare.isra.0+0x16/0xa0
+[  243.291913]  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+[  243.293815] RIP: 0033:0x7f6fd2518b62
+[  243.295642] RSP: 002b:00007ffc31d015d8 EFLAGS: 00000246 ORIG_RAX: 0000000000000009
+[  243.298028] RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007f6fd2518b62
+[  243.300173] RDX: 0000000000000003 RSI: 00000000000200c4 RDI: 0000000000000000
+[  243.302273] RBP: 0000000000000001 R08: 0000000000000003 R09: 00000001003e8000
+[  243.304488] R10: 0000000000000001 R11: 0000000000000246 R12: 0000000000000001
+[  243.307215] R13: 00000000000200c4 R14: 00005628e7ddb180 R15: 00000000000200c4
+[  243.309233]  </TASK>

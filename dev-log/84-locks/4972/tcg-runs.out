@@ -1,0 +1,25 @@
+t4972.1.out:t4972: start 2026-11-14T09:53:46 at f2822dbbb
+t4972.1.out:t4972: run: venus: machine.venus.fraction-1: starting
+t4972.1.out:t4972: run: venus: machine.venus.fraction-1: evidence: /home/toksaitov-m/rach2/build/tests/failed/tests.x86_64.20261114T050459Z.1124017.machine.venus.fraction-1.r0
+t4972.1.out:t4972: run: venus: machine.venus.fraction-3: starting
+t4972.1.out:t4972: run: venus: machine.venus.fraction-3: evidence: /home/toksaitov-m/rach2/build/tests/failed/tests.x86_64.20261114T050459Z.1124017.machine.venus.fraction-3.r0
+t4972.1.out:t4972: run: venus: machine.venus.fraction-5: starting
+t4972.1.out:t4972: run: venus: machine.venus.fraction-5: evidence: /home/toksaitov-m/rach2/build/tests/failed/tests.x86_64.20261114T050459Z.1124017.machine.venus.fraction-5.r0
+t4972.1.out:t4972: run: venus: machine.venus.fraction-1 on x86_64: failure: ran failed: Rach2 SSH client: the machine or its transport was lost
+t4972.1.out:t4972: run: venus: machine.venus.fraction-3 on x86_64: failure: ran failed: Rach2 SSH client: the machine or its transport was lost
+t4972.1.out:t4972: run: venus: machine.venus.fraction-5 on x86_64: failure: ran failed: Rach2 SSH client: the machine or its transport was lost
+t4972.1.out:t4972: run: venus: FAIL in 582s
+t4972.1.out:t4972: run: result: failed: venus
+t4972.1.out:t4972: run: result: failed
+t4972.1.out:t4972: end 2026-11-14T10:16:53
+t4972.out:t4972: start 2026-11-14T10:17:47 at f2822dbbb
+t4972.out:t4972: run: venus: machine.venus.fraction-1: starting
+t4972.out:t4972: run: venus: machine.venus.fraction-1: evidence: /home/toksaitov-m/rach2/build/tests/failed/tests.x86_64.20261114T051753Z.1384035.machine.venus.fraction-1.r0
+t4972.out:t4972: run: venus: machine.venus.fraction-3: starting
+t4972.out:t4972: run: venus: machine.venus.fraction-3: evidence: /home/toksaitov-m/rach2/build/tests/failed/tests.x86_64.20261114T051753Z.1384035.machine.venus.fraction-3.r0
+t4972.out:t4972: run: venus: machine.venus.fraction-1 on x86_64: failure: ran failed: Rach2 SSH client: the machine or its transport was lost
+t4972.out:t4972: run: venus: machine.venus.fraction-3 on x86_64: failure: ran failed: Rach2 SSH client: the machine or its transport was lost
+t4972.out:t4972: run: venus: FAIL in 543s
+t4972.out:t4972: run: result: failed: venus
+t4972.out:t4972: run: result: failed
+t4972.out:t4972: end 2026-11-14T10:30:08

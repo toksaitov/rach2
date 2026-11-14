@@ -1,0 +1,40 @@
+2026-11-14T05:30:07.842046Z virtio_gpu_cmd_res_create_blob res 0x1b, size 4096
+2026-11-14T05:30:07.842974Z virtio_gpu_cmd_res_map_blob res 0x1b, vmr 0x595684156e80, mr 0x595684156eb0
+2026-11-14T05:30:07.843019Z virtio_gpu_cmd_res_create_blob res 0x17, size 65536
+2026-11-14T05:30:07.843489Z virtio_gpu_cmd_res_map_blob res 0x17, vmr 0x595683e09500, mr 0x595683e09530
+2026-11-14T05:30:07.849292Z virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x595683e09530, finish_unmapping 0
+2026-11-14T05:30:07.862767Z virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x595683e09530, finish_unmapping 1
+2026-11-14T05:30:07.862869Z virtio_gpu_cmd_res_unref res 0x17
+2026-11-14T05:30:07.882743Z virtio_gpu_cmd_res_create_blob res 0x17, size 65536
+2026-11-14T05:30:07.884081Z virtio_gpu_cmd_res_map_blob res 0x17, vmr 0x595683e09500, mr 0x595683e09530
+2026-11-14T05:30:07.887123Z virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x595683e09530, finish_unmapping 0
+2026-11-14T05:30:07.914720Z virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x595683e09530, finish_unmapping 1
+2026-11-14T05:30:07.914800Z virtio_gpu_cmd_res_unref res 0x17
+2026-11-14T05:30:07.918062Z virtio_gpu_cmd_res_create_blob res 0x17, size 65536
+2026-11-14T05:30:07.919073Z virtio_gpu_cmd_res_map_blob res 0x17, vmr 0x595683e09500, mr 0x595683e09530
+2026-11-14T05:30:07.923699Z virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x595683e09530, finish_unmapping 0
+2026-11-14T05:30:07.945393Z virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x595683e09530, finish_unmapping 1
+2026-11-14T05:30:07.945502Z virtio_gpu_cmd_res_unref res 0x17
+2026-11-14T05:30:07.948872Z virtio_gpu_cmd_res_create_blob res 0x19, size 65536
+2026-11-14T05:30:07.949475Z virtio_gpu_cmd_res_map_blob res 0x19, vmr 0x595683e09500, mr 0x595683e09530
+2026-11-14T05:30:07.953094Z virtio_gpu_cmd_res_unmap_blob res 0x19, mr 0x595683e09530, finish_unmapping 0
+2026-11-14T05:30:07.976089Z virtio_gpu_cmd_res_unmap_blob res 0x19, mr 0x595683e09530, finish_unmapping 1
+2026-11-14T05:30:07.976190Z virtio_gpu_cmd_res_unref res 0x19
+2026-11-14T05:30:07.981609Z virtio_gpu_cmd_res_create_blob res 0x17, size 65536
+2026-11-14T05:30:07.982829Z virtio_gpu_cmd_res_map_blob res 0x17, vmr 0x595683e09500, mr 0x595683e09530
+2026-11-14T05:30:07.986920Z virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x595683e09530, finish_unmapping 0
+2026-11-14T05:30:08.016938Z virtio_gpu_cmd_res_unmap_blob res 0x17, mr 0x595683e09530, finish_unmapping 1
+2026-11-14T05:30:08.016994Z virtio_gpu_cmd_res_unref res 0x17
+2026-11-14T05:30:08.017070Z virtio_gpu_cmd_res_unmap_blob res 0x15, mr 0x5956847143d0, finish_unmapping 0
+2026-11-14T05:30:08.047398Z virtio_gpu_cmd_res_unmap_blob res 0x15, mr 0x5956847143d0, finish_unmapping 1
+2026-11-14T05:30:08.047442Z virtio_gpu_cmd_res_unref res 0x15
+2026-11-14T05:30:08.047600Z virtio_gpu_cmd_res_create_blob res 0x17, size 2097152
+2026-11-14T05:30:08.048166Z virtio_gpu_cmd_res_map_blob res 0x17, vmr 0x5956847143a0, mr 0x5956847143d0
+2026-11-14T05:30:08.053686Z virtio_gpu_cmd_res_create_blob res 0x15, size 131072
+2026-11-14T05:30:08.054484Z virtio_gpu_cmd_res_map_blob res 0x15, vmr 0x595683e09500, mr 0x595683e09530
+2026-11-14T05:30:08.058055Z virtio_gpu_cmd_res_unmap_blob res 0x15, mr 0x595683e09530, finish_unmapping 0
+2026-11-14T05:30:08.088441Z virtio_gpu_cmd_res_unmap_blob res 0x15, mr 0x595683e09530, finish_unmapping 1
+2026-11-14T05:30:08.088550Z virtio_gpu_cmd_res_unref res 0x15
+2026-11-14T05:30:08.088658Z virtio_gpu_cmd_res_create_blob res 0x19, size 131072
+2026-11-14T05:30:08.089688Z virtio_gpu_cmd_res_map_blob res 0x19, vmr 0x595683e09500, mr 0x595683e09530
+2026-11-14T05:30:08.094232Z virtio_gpu_cmd_res_unmap_blob res 0x19, mr 0x595683e09530, finish_unmapping 0

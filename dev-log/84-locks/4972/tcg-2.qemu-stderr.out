@@ -1,0 +1,7 @@
+qemu-system-x86_64: system/physmem.c:760: iotlb_to_section: Assertion `section_index < d->map.sections_nb' failed.
+virgl_render_server[1541860]: vkr: destroying context 5 (deqp) with a valid instance
+virgl_render_server[1542100]: vkr: destroying context 4 (deqp) with a valid instance
+virgl_render_server[1542100]: vkr: destroying device with valid objects
+virgl_render_server[1541860]: vkr: destroying device with valid objects
+virgl_render_server[1541765]: vkr: destroying context 3 (deqp) with a valid instance
+virgl_render_server[1541765]: vkr: destroying device with valid objects
