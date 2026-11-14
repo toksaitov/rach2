@@ -141,22 +141,14 @@ static struct {
     uint16_t number, len;
 } udp_seen[UDP_SEEN_MAX];
 
-/* The processor's cycle counter as the drain reads it (`arch_cycles`), which
- * each UDP delivery moves by `udp_cost`, a microsecond a cycle while
- * `cycles_measured` is set, and no rate measured while it is clear. */
-static uint64_t fake_cycles, udp_cost;
-static int cycles_measured = 1;
+/* The clock under the tick as the drain reads it (`timer_now_us`), which
+ * each UDP delivery moves by `udp_cost` microseconds. */
+static uint32_t fake_us, udp_cost;
 
-/** Read the counter the deliveries move. */
-uint64_t arch_cycles(void)
+/** Read the clock the deliveries move. */
+uint32_t timer_now_us(void)
 {
-    return fake_cycles;
-}
-
-/** Give `cycles` as microseconds, one each, or 0 with no rate measured. */
-uint64_t timer_cycles_us(uint64_t cycles)
-{
-    return cycles_measured ? cycles : 0;
+    return fake_us;
 }
 
 /** Record and count a UDP datagram received; return 0. */
@@ -169,7 +161,7 @@ int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
         udp_seen[to_udp].len = len;
     }
     to_udp++;
-    fake_cycles += udp_cost;
+    fake_us += udp_cost;
     return 0;
 }
 
@@ -968,14 +960,13 @@ static void test_loop_echo_zero(void)
 /**
  * End a drain of costly deliveries on time.
  *
- * Each UDP delivery here moves the cycle counter by `udp_cost`
+ * Each UDP delivery here moves the clock under the tick by `udp_cost`
  * microseconds. As Linux's net_rx_action checks netdev_budget_usecs, the
  * drain ends after the first turn of 64 that ends past
  * `netdev_budget_usecs`, counts the squeeze, and marks the rest as the
  * current thread's work (WORK_LOOP), as Linux raises its softirq again. A
  * limit of 0 ends every drain after its first turn, a squeeze even when
- * that turn emptied the backlog, as Linux counts it. With no rate measured
- * only the budget of datagrams ends a drain.
+ * that turn emptied the backlog, as Linux counts it.
  */
 static void test_loop_time(void)
 {
@@ -1012,17 +1003,6 @@ static void test_loop_time(void)
     ip_loop_softnet(0, &sn);
     CHECK("a limit of 0 counts a squeeze after a turn that emptied the backlog",
           to_udp == 210 && sn.squeezed == 2 && !ip_loop_pending());
-    netdev_budget_usecs = 1000;
-    udp_cost = 100;
-    cycles_measured = 0;
-    for (i = 0; i < 200; i++) {
-        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
-    }
-    ip_loop_drain_from(IP_LOOP_FROM_TICK);
-    ip_loop_softnet(0, &sn);
-    CHECK("with no rate measured only the budget of datagrams ends a drain",
-          to_udp == 410 && sn.squeezed == 2 && !ip_loop_pending());
-    cycles_measured = 1;
     udp_cost = 0;
     netdev_budget_usecs = 2 * 1000000 / TICK_HZ;
     cpu_table[0].current = 0;
