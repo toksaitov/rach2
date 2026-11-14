@@ -3420,11 +3420,12 @@ static int dx_move(void)
 }
 
 /**
- * Make the directory at `path` indexed with `e2fsck -fyD`, mount the volume
- * writable, run `change`, and require that the directory is no longer
- * marked indexed and that the volume unmounts clean under `e2fsck -fn`,
- * which reads every entry and would find an index left stale. `after` is
- * the directory's path once `change` has run, `what` the row's claim.
+ * Make the directory at `path` indexed with `e2fsck -fyD`, open the image
+ * again with the cache emptied, since e2fsck changed it behind both, mount
+ * the volume writable, run `change`, and require that the directory is no
+ * longer marked indexed and that the volume unmounts clean under `e2fsck
+ * -fn`, which reads every entry and would find an index left stale. `after`
+ * is the directory's path once `change` has run, `what` the row's claim.
  */
 static void dir_index_change(const char *path, int (*change)(void), const char *after,
                              const char *what)
@@ -3435,6 +3436,7 @@ static void dir_index_change(const char *path, int (*change)(void), const char *
     snprintf(request, sizeof request, "stat %s", path);
     check(st >= 0 && st <= 1 && debugfs_says(wimg, request, "Flags: 0x1000"),
           "e2fsck -D indexes the directory");
+    use_image(wimg, wbytes);
     check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 && index_flag(path) == 1,
           "the dir_index volume mounts writable, the directory marked indexed");
     if (!mnt.root) {
@@ -3449,7 +3451,8 @@ static void dir_index_change(const char *path, int (*change)(void), const char *
  * feature is compatible: e2fsck -D indexes /many, of 300 entries, before
  * each change, and a create, a remove, a rename over a name and a move of
  * the directory each clear its index flag and leave the volume clean. The
- * names read back through debugfs and setidcheck's reader at the end.
+ * names read back through debugfs at the end; setidcheck's reader holds a
+ * volume to the build's features, which have no dir_index, and refuses it.
  */
 static void dir_index_row(void)
 {
@@ -3467,8 +3470,8 @@ static void dir_index_row(void)
               debugfs_lists(wimg, "/dir/many", "file9.txt") &&
               !debugfs_lists(wimg, "/dir/many", "file7.txt") &&
               !debugfs_lists(wimg, "/dir/many", "file8.txt") &&
-              debugfs_lists(wimg, "/dir/many", "file299.txt") && reader_walks(wimg),
-          "and debugfs and the reader see the changed names");
+              debugfs_lists(wimg, "/dir/many", "file299.txt"),
+          "and debugfs sees the changed names");
 }
 
 /* The volume block that holds /many's inode, whose first read the
