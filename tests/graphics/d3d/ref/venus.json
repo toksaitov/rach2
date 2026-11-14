@@ -1,5 +1,5 @@
 {
-  "source": "Debian 13 on Venus over the testing PC's lavapipe, Mesa 26.1.6's Venus driver, GE-Proton11-12, 8 CPUs, 16 GiB, udmabuf size_limit_mb 16384; probes and Proton units twice, WineD3D on Vulkan twice, vkd3d-proton once",
+  "source": "Debian 13 on Venus over the testing PC's lavapipe, Mesa 26.1.6's Venus driver, GE-Proton11-12, 8 CPUs, 16 GiB, udmabuf size_limit_mb 16384; probes and Proton units twice, WineD3D on Vulkan twice, vkd3d-proton once; Proton's d3d10core unit six times more on 2026-11-14, three to a boot, which ended with exit 5 three times, 245 twice and 1 once, at 1 to 146 test lines",
   "probe": {
     "proton/9": {
       "exit": 0,
@@ -70,10 +70,10 @@
         "max_skipped": 0
       },
       "d3d10core:d3d10core": {
-        "exit": 5,
+        "exit": null,
         "summary": false,
         "failures": 0,
-        "min_lines": 143
+        "min_lines": 1
       },
       "d3d11:d3d11": {
         "exit": 5,
