@@ -74,6 +74,7 @@ static int read_node(const char *node, int bytes)
     int fd = syscall3(SYS_OPEN, (long)node, O_RDONLY, 0);
     int done = 0;
 
+    buf[0] = 0; /* the read fills it through a cast cppcheck cannot follow */
     if (fd < 0) {
         return -1;
     }
@@ -323,6 +324,7 @@ static long check_pattern(int fd, unsigned long bytes, unsigned long zero, unsig
     static char buf[CHUNK];
     unsigned long off, k, at;
 
+    buf[0] = 0; /* the read fills it through a cast cppcheck cannot follow */
     if (syscall3(SYS_LSEEK, fd, 0, SEEK_SET) != 0) {
         return 0;
     }
