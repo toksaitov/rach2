@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 14, 2026
 .Dt PRCTL 2
 .Os
 .Sh NAME
@@ -63,6 +63,20 @@ bounding set, for good: no exec gives it again.
 The caller needs
 .Dv CAP_SETPCAP .
 A thread that holds the capability keeps it.
+.It Dv PR_SET_TIMERSLACK No (29)
+Set the calling thread's timer slack, how many nanoseconds past the time
+it asks for a
+.Xr nanosleep 2
+or
+.Fn clock_nanosleep
+of the thread lasts, to the second argument, or for 0 to the thread's
+default, the slack it had when it was created.
+The slack starts at 50000.
+A thread under a real-time or deadline policy has none, and the call
+changes nothing for it; a change of policy to one of those sets the slack
+to 0, and a change back gives the default back.
+.It Dv PR_GET_TIMERSLACK No (30)
+Return the calling thread's timer slack in nanoseconds.
 .It Dv PR_SET_CHILD_SUBREAPER No (36)
 Make the caller's process a child subreaper when the second argument is
 not 0, and clear the mark when it is 0.
@@ -109,8 +123,9 @@ keeps, so that the command it runs holds it.
 .Pp
 The attributes follow the process as on Linux.
 .Xr fork 2
-passes the dumpable flag and the no_new_privs bit to the child and not the
-parent-death signal or the child subreaper mark.
+passes the dumpable flag, the no_new_privs bit and the timer slack, which
+becomes the child's default, to the child and not the parent-death signal
+or the child subreaper mark.
 The mark belongs to the process, so every thread of it reads and sets the
 one mark, and
 .Xr execve 2
@@ -235,6 +250,7 @@ inheritable set.
 .Xr capget 2 ,
 .Xr execve 2 ,
 .Xr fork 2 ,
+.Xr nanosleep 2 ,
 .Xr seccomp 2 ,
 .Xr setuid 2 ,
 .Xr sigaction 2 ,

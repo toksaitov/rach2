@@ -1324,10 +1324,37 @@ static int sleep_time_come(void)
     return 0;
 }
 
-/* Policy: how long a sleep of zero lasts, Linux's default timer slack of a
- * thread that is not real-time, 50 us, to which a zero relative sleep's
- * timer may expire. */
-#define SLEEP_SLACK_NS 50000
+/* The seconds past which a sleep's time takes no slack: one that far away
+ * ends at its tick, centuries off, slack or not. */
+#define SLEEP_SLACK_MAX_SEC ((int64_t)1 << 40)
+
+/**
+ * Give in `*out` the time `*req` with the thread's timer slack added
+ * (`timer_slack_ns`), the latest expiry of the range Linux's
+ * hrtimer_nanosleep gives its timer and the one its clock event is armed
+ * for when no earlier timer comes due (kernel/time/hrtimer.c:2141,
+ * __hrtimer_next_event_base): a sleep of a thread that is not real-time
+ * thus lasts up to 50 us longer than asked, and a thread woken by an
+ * interrupt between ticks in that time does not end it sooner. A time at
+ * or past SLEEP_SLACK_MAX_SEC seconds is given as it is.
+ */
+static void sleep_slack(const struct kernel_timespec *req, struct kernel_timespec *out)
+{
+    uint64_t rest;
+    uint64_t sec = tick_div64(current_proc->timer_slack_ns, 1000000000u, &rest);
+    int64_t asked = req->tv_sec; /* a long, of 32 bits on i686 */
+
+    *out = *req;
+    if (asked < 0 || asked >= SLEEP_SLACK_MAX_SEC || sec >= (uint64_t)SLEEP_SLACK_MAX_SEC) {
+        return;
+    }
+    out->tv_sec += (long)sec;
+    out->tv_nsec += (long)rest;
+    if (out->tv_nsec >= 1000000000L) {
+        out->tv_sec++;
+        out->tv_nsec -= 1000000000L;
+    }
+}
 
 /**
  * `sec` seconds and `nsec` nanoseconds since boot as nanoseconds, for a
@@ -1603,11 +1630,12 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
  * clock showed it had lasted `req`. A sleep that `tick_span` cuts ends at
  * its tick.
  *
- * A zero interval blocks for SLEEP_SLACK_NS and ends between ticks, as
- * Linux arms a zero relative sleep's timer to expire within its default
- * slack (kernel/time/hrtimer.c:2141, init/init_task.c:142), so a caller can
- * give a woken thread time to run; where there is no interrupt between
- * ticks, it lasts to the first tick after that time.
+ * The end is the interval's with the thread's timer slack added
+ * (`sleep_slack`), as Linux's timer for the sleep expires at the end of its
+ * slack. A zero interval thus blocks for the slack, 50 us by default, and
+ * ends between ticks, so a caller can give a woken thread time to run;
+ * where there is no interrupt between ticks, it lasts to the first tick
+ * after that time.
  *
  * A signal's remainder is the time left to the end where the interrupt
  * between ticks ends the sleep, and otherwise to the deadline tick, so a
@@ -1618,38 +1646,34 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
  * completes writes none. A signal that runs no handler resumes the sleep to
  * the same deadline (`sleep_to`).
  */
-static int32_t sleep_for(const struct kernel_timespec *req)
+static int32_t sleep_for(const struct kernel_timespec *asked)
 {
-    struct kernel_timespec end;
+    struct kernel_timespec end, req;
     uint64_t now, ticks;
     uint32_t phase_ns, us;
-    int64_t sec, nsec, asked = req->tv_sec;
+    int64_t sec, nsec, late;
+    int zero = asked->tv_sec == 0 && asked->tv_nsec == 0;
 
     end.tv_sec = 0;
     end.tv_nsec = 0;
+    sleep_slack(asked, &req);
+    late = req.tv_sec;
     rtc_monotonic(&sec, &nsec);
-    /* Linux's do_nanosleep is __sched, so wchan shows its caller. */
-    if (req->tv_sec == 0 && req->tv_nsec == 0) {
-        nsec += SLEEP_SLACK_NS;
-        if (nsec >= 1000000000) {
-            nsec -= 1000000000;
-            sec++;
-        }
-        end.tv_sec = (long)sec;
-        end.tv_nsec = (long)nsec;
-        return sleep_to(tick_count() + 1u, &end, "hrtimer_nanosleep");
-    }
-    rtc_tick_phase(&now, &phase_ns);
-    us = phase_ns / 1000u + ((uint32_t)req->tv_nsec + 999u) / 1000u;
-    ticks = tick_span(req->tv_sec, 0) + (us + (TICK_US - 1u)) / TICK_US;
-    if (asked < ((int64_t)1 << 40)) {
-        end.tv_sec = (long)(sec + req->tv_sec);
-        end.tv_nsec = (long)nsec + req->tv_nsec;
+    if (late < SLEEP_SLACK_MAX_SEC) {
+        end.tv_sec = (long)(sec + req.tv_sec);
+        end.tv_nsec = (long)nsec + req.tv_nsec;
         if (end.tv_nsec >= 1000000000L) {
             end.tv_sec++;
             end.tv_nsec -= 1000000000L;
         }
     }
+    /* Linux's do_nanosleep is __sched, so wchan shows its caller. */
+    if (zero) {
+        return sleep_to(tick_count() + 1u, &end, "hrtimer_nanosleep");
+    }
+    rtc_tick_phase(&now, &phase_ns);
+    us = phase_ns / 1000u + ((uint32_t)req.tv_nsec + 999u) / 1000u;
+    ticks = tick_span(req.tv_sec, 0) + (us + (TICK_US - 1u)) / TICK_US;
     return sleep_to(now + ticks, &end, "hrtimer_nanosleep");
 }
 
@@ -1801,6 +1825,7 @@ long clock_nanosleep_core(int32_t clk, unsigned long flags, const struct kernel_
                           uintptr_t urem, int wide)
 {
     int absolute = (flags & TIMER_ABSTIME) != 0;
+    struct kernel_timespec late;
     struct kclock c;
     int32_t rc;
 
@@ -1836,7 +1861,8 @@ long clock_nanosleep_core(int32_t clk, unsigned long flags, const struct kernel_
     } else if (!absolute) {
         return sleep_for(req);
     } else {
-        rc = sleep_until_time(c.kind, req, "hrtimer_nanosleep");
+        sleep_slack(req, &late);
+        rc = sleep_until_time(c.kind, &late, "hrtimer_nanosleep");
     }
     if (sleep_cut_short(rc) == -EINTR) {
         /* An absolute sleep restarts with its own arguments. */
@@ -1852,8 +1878,11 @@ long clock_nanosleep_core(int32_t clk, unsigned long flags, const struct kernel_
  * Its arguments are clockid, flags, const struct timespec *req and struct
  * timespec *rem. Flags 0 makes `req` an interval, which sleeps as `nanosleep`
  * does; TIMER_ABSTIME makes it a time of the clock, reached as
- * `sleep_until_time` or
- * `sleep_until_cpu` describe, and returns at once for a time already past.
+ * `sleep_until_time` or `sleep_until_cpu` describe, and returns at once for
+ * a time already past. A sleep on real time, time since boot or boot time
+ * lasts to the time with the thread's timer slack added (`sleep_slack`),
+ * as Linux's does; one on a CPU clock takes none, as Linux's CPU timers
+ * have none.
  * Other flag bits are ignored, as Linux ignores them, and `rem` is written only
  * for an interval a signal cut short.
  *

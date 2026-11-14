@@ -2807,6 +2807,8 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->dl_deadline = parent->dl_deadline;
     child->dl_period = parent->dl_period;
     child->dl_flags = parent->dl_flags;
+    child->timer_slack_ns = parent->timer_slack_ns;
+    child->default_timer_slack_ns = parent->timer_slack_ns;
     if (parent->sched_reset) {
         /* SCHED_RESET_ON_FORK, as Linux's sched_fork: a real-time or
          * deadline policy becomes SCHED_OTHER at nice 0, a negative nice
@@ -10089,7 +10091,9 @@ static int32_t sched_check(const process_t *p, const struct sched_req *a, int po
 
 /** Store in `p` the parameters `a` gives `policy`: a deadline thread's
  * runtime, deadline, period and flags, or an ordinary thread's nice value
- * and slice, clamped to 0.1 to 100 ms; and the policy and priority. */
+ * and slice, clamped to 0.1 to 100 ms; and the policy and priority. A
+ * real-time or deadline policy has no timer slack, and a return from one
+ * restores the default, as Linux's __setscheduler_params does. */
 static void sched_store(process_t *p, const struct sched_req *a, int policy)
 {
     if (policy == SCHED_DEADLINE) {
@@ -10106,6 +10110,11 @@ static void sched_store(process_t *p, const struct sched_req *a, int policy)
     }
     p->sched_policy = (uint8_t)policy;
     p->rt_priority = (uint8_t)a->priority;
+    if (sched_policy_rt(policy) || policy == SCHED_DEADLINE) {
+        p->timer_slack_ns = 0;
+    } else if (p->timer_slack_ns == 0) {
+        p->timer_slack_ns = p->default_timer_slack_ns;
+    }
 }
 
 /**
@@ -10899,6 +10908,10 @@ long sys_sched_setaffinity(isr_params_t *params)
 
 #define PR_SET_SECCOMP 22
 
+#define PR_GET_TIMERSLACK 30
+
+#define PR_SET_TIMERSLACK 29
+
 #define PR_GET_NAME 16
 
 #define PR_SET_CHILD_SUBREAPER 36
@@ -11029,6 +11042,11 @@ static long prctl_bset(unsigned long option, unsigned long cap)
  * bounding set (`prctl_bset`), and PR_CAP_AMBIENT reads and changes the
  * ambient set (`prctl_ambient`).
  *
+ * PR_SET_TIMERSLACK sets the thread's timer slack to the second argument in
+ * nanoseconds, or with 0 to its default, the slack it had at fork, and
+ * changes nothing for a real-time or deadline thread, whose slack stays 0;
+ * PR_GET_TIMERSLACK returns the slack, as Linux's prctl does.
+ *
  * Returns 0 or the value asked for; -EINVAL for any other option, a signal
  * past 64, a dumpable value other than 0 and 1, or arguments not as above;
  * -EFAULT for a pointer that cannot be read or written.
@@ -11095,6 +11113,16 @@ long sys_prctl(isr_params_t *params)
         return prctl_bset(SC_ARG(params, 0), arg2);
     case PR_CAP_AMBIENT:
         return prctl_ambient(arg2, SC_ARG(params, 2), SC_ARG(params, 3) | SC_ARG(params, 4));
+    case PR_GET_TIMERSLACK:
+        return current_proc->timer_slack_ns > (uint64_t)(unsigned long)-1
+                   ? (long)(unsigned long)-1
+                   : (long)(unsigned long)current_proc->timer_slack_ns;
+    case PR_SET_TIMERSLACK:
+        if (!sched_policy_rt(current_proc->sched_policy) &&
+            current_proc->sched_policy != SCHED_DEADLINE) {
+            current_proc->timer_slack_ns = arg2 == 0 ? current_proc->default_timer_slack_ns : arg2;
+        }
+        return 0;
     default:
         return -EINVAL;
     }

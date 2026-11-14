@@ -820,6 +820,8 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     p->waiter.proc = p;
     p->cpu = (int)arch_cpu_id();
     p->affinity = ~(uint64_t)0;
+    p->timer_slack_ns = PROC_TIMER_SLACK_NS;
+    p->default_timer_slack_ns = PROC_TIMER_SLACK_NS;
 
     p->fs = dirs ? dirs : fs_new();
     if (!p->fs) {

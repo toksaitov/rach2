@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 14, 2026
 .Dt SCHED_SETSCHEDULER 2
 .Os
 .Sh NAME
@@ -81,6 +81,17 @@ A
 .Fa pid
 of 0 names the caller; any other names a process that has not been
 reaped.
+A change to
+.Dv SCHED_FIFO ,
+.Dv SCHED_RR
+or
+.Dv SCHED_DEADLINE
+sets the thread's timer slack to 0, so that its sleeps end at their time,
+and a change from one of them to another policy gives the thread its
+default slack back, as on Linux; see
+.Dv PR_SET_TIMERSLACK
+in
+.Xr prctl 2 .
 .Pp
 .Fn sched_getscheduler
 returns the thread's policy,
@@ -496,5 +507,6 @@ No process has the ID
 .Sh SEE ALSO
 .Xr fork 2 ,
 .Xr getpriority 2 ,
+.Xr prctl 2 ,
 .Xr proc 5 ,
 .Xr vdso 7

@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 14, 2026
 .Dt NANOSLEEP 2
 .Os
 .Sh NAME
@@ -22,10 +22,17 @@ field specifies seconds and
 specifies nanoseconds.
 Seconds must be nonnegative; nanoseconds must be from 0 through 999999999.
 .Pp
-The kernel ends a nonzero interval at its end, as Linux's high-resolution
-timers end one: the local APIC timer is armed to interrupt then when the
-sleep begins, so a sleep that no signal ends is never shorter than asked,
-up to the limit below, and longer only by the interrupt's latency.
+The sleep's end is the interval with the thread's timer slack added, 50
+microseconds unless
+.Xr prctl 2 Ns 's
+.Dv PR_SET_TIMERSLACK
+changed it, and none for a thread under a real-time or deadline policy, as
+Linux's high-resolution timer for the sleep expires at the end of its
+slack.
+The kernel ends the sleep at its end: the local APIC timer is armed to
+interrupt then when the sleep begins, so a sleep that no signal ends is
+never shorter than asked, up to the limit below, and longer than its end
+only by the interrupt's latency.
 The deadline tick is the first at or after the end, measured from where in
 the tick in progress the call is; where the local APIC timer is not the
 tick, or before a reference counter keeps the clock, the sleep lasts to
@@ -38,10 +45,10 @@ read at the call, has advanced by the interval: a tick the timer lost
 while the processor could not take it leaves the tick count behind that
 clock, which keeps its last reading, and the sleep then waits for the count
 to catch up.
-A zero relative interval blocks for 50 microseconds, Linux's default timer
-slack, within which Linux's zero sleep ends, and ends between ticks as
-above, giving other runnable threads time to execute; where there is no
+A zero relative interval thus blocks for the slack, and ends between ticks
+as above, giving other runnable threads time to execute; where there is no
 interrupt between ticks, it blocks until the first tick after that.
+With no slack it returns at once.
 .Pp
 Once the deadline tick has come, and the clock has advanced by the
 interval, the call returns 0 even if a signal is pending; a pending signal
@@ -86,10 +93,11 @@ With
 .Dv TIMER_ABSTIME
 .Pq 1 ,
 .Fa req
-is a time of the clock: the call returns when the clock reads that time,
-by the interrupt between ticks as above, or at the first tick at which it
-reads that time or later where there is none, and at once for a time
-already past.
+is a time of the clock: the call returns when the clock reads that time
+with the thread's timer slack added, by the interrupt between ticks as
+above, or at the first tick at which it reads that time or later where
+there is none, and at once for a time already past.
+A CPU clock's sleep takes no slack, as Linux's CPU timers have none.
 A signal that runs no handler restarts such a sleep with its own
 arguments, as Linux does, and one that runs a handler makes it fail with
 .Er EINTR .
@@ -137,9 +145,6 @@ and the calling thread's CPU clock,
 .Dv CLOCK_THREAD_CPUTIME_ID ,
 cannot be slept on, as on Linux.
 .Ss Differences from Linux
-Linux's remainder runs to its timer's latest expiry, the end and the
-thread's timer slack, 50 microseconds by default; here it runs to the end,
-where the sleep ends.
 Where there is no interrupt between ticks, the remainder counts whole 1 ms
 ticks, and a sleep begun again with it can end up to a tick early.
 Linux can also sleep on

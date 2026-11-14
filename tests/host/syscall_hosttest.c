@@ -1089,9 +1089,9 @@ static void sleeps_masked(void)
  * after a signal at every tick ends within four calls, no earlier than the
  * first sleep's deadline. The count of ticks is 64 bits wide: a sleep begun a
  * tick before 2^32 ticks blocks until its deadline past them, and one of
- * 2^62 s is cut at 2^40 s, which a signal a tick in leaves less that tick. A
- * sleep of zero blocks for Linux's 50 us of slack, and the interrupt between
- * ticks ends it then, within its tick.
+ * 2^62 s is cut at 2^40 s, which a signal a tick in leaves less that tick.
+ * The model's thread has no timer slack, as a real-time thread has none, so
+ * these sleeps end at their ticks.
  */
 static void sleep_edges(void)
 {
@@ -1161,7 +1161,23 @@ static void sleep_edges(void)
               rem.tv_sec == (long)(((int64_t)1 << 40) - 1) &&
               rem.tv_nsec == 1000000000 - TICKS_NS(1),
           "a sleep of 2^62 s is cut at 2^40 s");
+}
 
+/**
+ * The end of a sleep at its timer slack.
+ *
+ * With Linux's default of 50 us, a sleep of zero blocks for the slack, and
+ * one of 250 us for 300 us, and the interrupt between ticks ends each then,
+ * within its tick; with none, a sleep of zero does not block. The model's
+ * thread is left with no slack.
+ */
+static void sleep_slack_edges(void)
+{
+    isr_params_t p;
+    int64_t start;
+    int rc;
+
+    proc.timer_slack_ns = PROC_TIMER_SLACK_NS;
     ask_sleep(&p, 0, 0);
     model_at(0);
     wake_between = 1;
@@ -1169,6 +1185,22 @@ static void sleep_edges(void)
     rc = sleep_call(&p);
     CHECK(rc == 0 && blocks == 1 && kernel_ticks == 0 && blocked_ns == start + 50000,
           "a sleep of zero blocks for Linux's 50 us of slack and ends between ticks");
+
+    ask_sleep(&p, 0, 250000);
+    model_at(0);
+    wake_between = 1;
+    start = rtc_monotonic_ns();
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocks == 1 && kernel_ticks == 0 && blocked_ns == start + 300000,
+          "a sleep of 250 us ends at the end of its 50 us of slack, between ticks");
+    proc.timer_slack_ns = 0;
+
+    ask_sleep(&p, 0, 0);
+    model_at(0);
+    wake_between = 1;
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocks == 0 && kernel_ticks == 0,
+          "with no slack a sleep of zero returns without blocking");
     mono_phase_ns = 0;
 }
 
@@ -2407,6 +2439,7 @@ int main(void)
     realtime_steps();
     sleeps_masked();
     sleep_edges();
+    sleep_slack_edges();
     sleep_races();
     sleep_held_clock();
     sleep_between();

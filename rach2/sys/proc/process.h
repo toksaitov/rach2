@@ -20,6 +20,9 @@
  * limited. */
 #define PROC_COUNT_POLICY 4096
 
+/* The timer slack of the first thread, Linux's init_task.timer_slack_ns. */
+#define PROC_TIMER_SLACK_NS 50000u
+
 /* The states of a record. */
 typedef enum {
     PROC_UNUSED,  /* No process: fork building it, or a reaper freeing it */
@@ -772,6 +775,14 @@ struct process {
      * it changes, as do `wakeup_ns` and `rt_steps`, only under the run
      * queues' lock or by the thread itself (`proc_wait_set`). */
     int64_t wakeup_fired;
+    /* How late, in nanoseconds, a nanosleep may end past the time it asks
+     * for, which it then ends at, as Linux's hrtimer fires at the latest
+     * expiry of its range (`hrtimer_set_expires_range_ns`); 0 under a
+     * real-time or deadline policy. `default_timer_slack_ns` is what
+     * PR_SET_TIMERSLACK with 0, or a return to an ordinary policy, gives
+     * back: the parent's slack at fork, as Linux's copy_process sets it. */
+    uint64_t timer_slack_ns;
+    uint64_t default_timer_slack_ns;
     /* Nonzero while a fault from user mode runs with interrupts on; the
      * tick then leaves its switch for the fault's end, as in a system call
      * (`sched_preempt`). */
