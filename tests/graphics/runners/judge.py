@@ -1,7 +1,7 @@
 """judge.py: compare a graphics runner's result with the Debian reference's.
 
 Usage:
-  python3 -I judge.py webgl REF GOT [-x EXCLUSIONS]
+  python3 -I judge.py webgl REF GOT [FLAKES] [-x EXCLUSIONS]
   python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]
   python3 -I judge.py results REF GOT [SAMPLE [FLAKES]] [-l LIST] [-s SCOPE]
       [-x EXCLUSIONS]
@@ -18,7 +18,12 @@ since an omitted page passes no subtests and would otherwise match any
 page that passed none. Of the pages both ran, one is worse here when it
 does not pass and either passed in the reference or passed fewer of its
 subtests than the reference did. A page that fails in both with as many
-subtests passed, or that passes here alone, is as good.
+subtests passed, or that passes here alone, is as good. FLAKES names
+subtests that are not judged, `PATH ERE` a line, `#` beginning a comment:
+the page PATH's subtests whose message the extended regular expression ERE
+matches. Each such subtest that failed in the verdict's run here, as
+webgl.sh's `failures` file beside GOT names it, is counted as passed, and
+the page is judged on the rest; `judge: flake: ...` names the count.
 
 `video` compares two plays files of video.sh, a clip's, by its counted
 plays: as many as the reference's, none with a media error, each showing at
@@ -137,9 +142,44 @@ def report(worse, exclusions, name_of):
     return left
 
 
-def webgl(ref_path, got_path, exclusions_path=None):
+def webgl_flakes(flakes_path, got_path):
+    """The subtests of each page that FLAKES_PATH names and the verdict's run
+    here failed, by page index: the lines of the `failures` file beside
+    GOT_PATH, of each page's last run, whose message a page's expression
+    matches. Without FLAKES_PATH or that file, none."""
+    if not flakes_path:
+        return {}
+    patterns = collections.defaultdict(list)
+    with open(flakes_path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip() and not line.startswith("#"):
+                path, expr = line.strip().split(None, 1)
+                patterns[path].append(re.compile(expr))
+    failures_path = os.path.join(os.path.dirname(got_path), "failures")
+    if not os.path.exists(failures_path):
+        return {}
+    runs = collections.defaultdict(list)
+    with open(failures_path, encoding="utf-8") as f:
+        for line in f:
+            index, run, message = (line.rstrip("\n").split(" ", 2) + ["", ""])[:3]
+            runs[int(index), int(run)].append(message)
+    last = {}
+    for index, run in runs:
+        last[index] = max(run, last.get(index, 0))
+    got = {int(f[0]): f[7] for f in lines(got_path)}
+    flaky = {}
+    for index, run in last.items():
+        exprs = patterns.get(got.get(index), [])
+        n = sum(1 for m in runs[index, run] if any(e.search(m) for e in exprs))
+        if n:
+            flaky[index] = n
+    return flaky
+
+
+def webgl(ref_path, got_path, exclusions_path=None, flakes_path=None):
     ref = {int(f[0]): f for f in lines(ref_path)}
     got = {int(f[0]): f for f in lines(got_path)}
+    flaky = webgl_flakes(flakes_path, got_path)
     worse = []
     for i in sorted(ref):
         r = ref[i]
@@ -156,7 +196,13 @@ def webgl(ref_path, got_path, exclusions_path=None):
             continue
         if r[1] == "omitted":
             continue
-        if g[1] == "pass" or (r[1] != "pass" and int(g[2]) >= int(r[2])):
+        passed, failed = int(g[2]), int(g[3])
+        if g[1] == "fail" and i in flaky:
+            print("judge: flake: %s: %d failed subtests named, not judged" % (r[7], flaky[i]))
+            passed, failed = passed + flaky[i], failed - flaky[i]
+        if g[1] == "pass" or (g[1] == "fail" and failed == 0 and int(g[5]) == 0):
+            continue
+        if r[1] != "pass" and passed >= int(r[2]):
             continue
         if r[1] == "skip" and g[1] == "skip":
             continue
@@ -473,8 +519,8 @@ def main():
     kind = args[0] if args else ""
     if l and (kind != "results" or len(args) < 4):
         args = []
-    if len(args) == 3 and kind == "webgl" and not s:
-        ok = webgl(args[1], args[2], x)
+    if len(args) in (3, 4) and kind == "webgl" and not s:
+        ok = webgl(args[1], args[2], x, args[3] if len(args) == 4 else None)
     elif len(args) in (5, 6) and kind == "video" and not opts:
         ok = video(*args[1:])
     elif len(args) in (3, 4, 5) and kind == "results":
@@ -490,7 +536,7 @@ def main():
     elif len(args) == 3 and kind == "gate" and not opts:
         ok = gate(args[1], args[2])
     else:
-        sys.exit("usage: judge.py webgl REF GOT [-x EXCLUSIONS]"
+        sys.exit("usage: judge.py webgl REF GOT [FLAKES] [-x EXCLUSIONS]"
                  " | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]"
                  " | results REF GOT [SAMPLE [FLAKES]] [-l LIST] [-s SCOPE] [-x EXCLUSIONS]"
                  " | modes REF GOT [FAULTS] | glmark2 REF GOT"

@@ -1,0 +1,11 @@
+# webgl-virgl.flakes: the subtests of WebGL pages that judge.py webgl does
+# not judge in the virgl cases, `PATH ERE` a line, PATH as the suite's list
+# gives it and ERE an extended regular expression searched for in the
+# subtest's message.
+#
+# occlusion-query-scissor.html: an ANY_SAMPLES_PASSED query whose draws a
+# 0x0 scissor rectangle leaves empty reads 1 in 53 to 64 of the page's 65
+# such passes, which ones changing from run to run, in both browsers in the
+# Debian guest as on Rach2 (dev-log/84-locks/upstream.md); the page's 454
+# other subtests passed in every run and are judged.
+conformance2/query/occlusion-query-scissor.html ^pass [0-9]+, result: 1 === expected: 0$

@@ -84,13 +84,14 @@
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
 /* The virgl cases' references, the testing PC's: the renderer every record
  * names, glinfo's lines, piglit's results and its flakes, dEQP-GLES's
- * results by suite, the WebGL pages and what the reset left; and the WebGL
- * pages both guests leave out. */
+ * results by suite, the WebGL pages and what the reset left; the WebGL
+ * pages both guests leave out, and the WebGL subtests not judged. */
 #define VIRGL_REF          GRAPHICS_DIR "/ref/virgl-wsl"
 #define VIRGL_PIGLIT       GRAPHICS_DIR "/piglit-virgl.txt.gz"
 #define VIRGL_FLAKES       GRAPHICS_DIR "/piglit-virgl.flakes"
 #define VIRGL_DEQP         GRAPHICS_DIR "/deqp-gles-virgl.txt.gz"
 #define VIRGL_OMIT         GRAPHICS_DIR "/runners/webgl-virgl.omit"
+#define VIRGL_WEBGL_FLAKES GRAPHICS_DIR "/runners/webgl-virgl.flakes"
 /* The parts the release runs the lists in, each in a boot of its own, and
  * the sample, every VIRGL_SAMPLEth test, that one case runs. */
 #define VIRGL_PIGLIT_PARTS 16
@@ -857,7 +858,8 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
         else
             snprintf(command, size,
                      VIRGL_NAMED "python3 -I " GRAPHICS_DIR "/runners/judge.py webgl " VIRGL_REF
-                                 "/webgl-%s-%s/%s-%s-%s.pages " GRAPHICS_DIR "/out/%s-%s-%s.pages",
+                                 "/webgl-%s-%s/%s-%s-%s.pages " GRAPHICS_DIR
+                                 "/out/%s-%s-%s.pages " VIRGL_WEBGL_FLAKES,
                      s->browser, s->version, s->browser, s->version, s->chunk, s->browser,
                      s->version, s->chunk);
         break;
