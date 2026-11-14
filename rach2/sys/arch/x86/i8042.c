@@ -99,8 +99,8 @@ static int read_config_once(void)
 }
 
 /** Read and drop the bytes waiting in the output buffer, at most 16 of
- * them, Linux's i8042_flush. */
-static void ps2_drain(void)
+ * them, as Linux's i8042_flush does. */
+static void i8042_flush(void)
 {
     int drained;
 
@@ -149,7 +149,7 @@ int ps2_read_config(void)
         i8042_fail();
         return -1;
     }
-    ps2_drain();
+    i8042_flush();
     config = read_config_agreed();
     /* The controller runs its commands in order: once it has taken the
      * write-back's command and byte, it has answered every READ_CONFIG. */
@@ -159,7 +159,7 @@ int ps2_read_config(void)
     } else {
         (void)ps2_wait_input();
     }
-    ps2_drain();
+    i8042_flush();
     if (config < 0) {
         i8042_fail();
     }
