@@ -769,6 +769,7 @@ tools/etude/guest/wire.c:wire_encode params 10 the parameters are the fields of 
 tools/etude/guest/wire.c:wire_parse complexity 29 a parser over an external format, one check per field in the format's order
 
 tools/etude/ledger.c:etude_ledger_admit params 8 the resources and the limits are each an array with its count, as etude_ledger_reserve takes them
+tools/etude/ledger.c:etude_ledger_admit_for params 9 etude_ledger_admit's arguments and the forecast, which the ledger keeps with the claim
 
 tools/etude/sched.c:etude_sched_admit params 7 the jobs and the limits are each an array with its count, as etude_ledger_admit takes them
 

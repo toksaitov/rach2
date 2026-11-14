@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 #if defined(__linux__) || defined(__rach2__)
@@ -45,6 +46,14 @@
 
 /* The longest claim identity, as the history's identities. */
 #define ID_MAX 255
+
+/*
+ * A claim's forecast, kept as two lines of the resource form so that an
+ * older reader keeps them as resources that no limit names: the expected
+ * elapsed time, and the time of day of the admission, both in microseconds.
+ */
+#define FORECAST_RES "expected_us"
+#define ADMITTED_RES "admitted_utc_us"
 
 /* The operating system whose processes this ledger's process can see. */
 #if defined(_WIN32)
@@ -97,11 +106,15 @@ struct ask {
     const char *account; /* "" for etude_ledger_reserve */
     const struct etude_ledger_res *res, *cap;
     size_t nres, ncap;
-    int wait; /* a request refused for now waits in the ledger */
+    int wait;             /* a request refused for now waits in the ledger */
+    uint64_t forecast_us; /* its expected elapsed time; 0 when unknown */
+    uint64_t now;         /* the time of day in microseconds; 0 when unknown */
 };
 
 struct etude_ledger {
     char *dir;
+    uint64_t (*clock)(void *ctx); /* the time of day in microseconds; NULL for the system's */
+    void *clock_ctx;
     struct etude_authority *authority;
     char boot[BOOT_MAX];
     struct etude_pid self;
@@ -606,6 +619,26 @@ static int group_runs(long pgid)
 }
 
 #endif
+
+/** Give the time of day in microseconds since the epoch, or 0. */
+static uint64_t wall_us(void)
+{
+#ifdef _WIN32
+    FILETIME ft;
+    ULARGE_INTEGER u;
+
+    GetSystemTimeAsFileTime(&ft);
+    u.LowPart = ft.dwLowDateTime;
+    u.HighPart = ft.dwHighDateTime;
+    return u.QuadPart / 10u > 11644473600000000ull ? u.QuadPart / 10u - 11644473600000000ull : 0;
+#else
+    struct timeval tv;
+
+    if (gettimeofday(&tv, NULL) != 0 || tv.tv_sec < 0)
+        return 0;
+    return (uint64_t)tv.tv_sec * 1000000u + (uint64_t)tv.tv_usec;
+#endif
+}
 
 /**
  * Check process `id`: P_RUNS when the same process runs, P_GONE when it has
@@ -1342,10 +1375,107 @@ static int held(const struct etude_ledger *l, const struct table *t, const char 
 }
 
 /**
+ * Give the time of day, in microseconds, at which claim `c` is expected to
+ * end: its admission plus its expected elapsed time, or, once that has
+ * passed, `now` plus that time again, so that a claim running late still
+ * leaves a window ahead of it. A claim with no forecast, or uncertain, is
+ * taken never to end: UINT64_MAX.
+ */
+static uint64_t claim_end(const struct claim *c, uint64_t now)
+{
+    uint64_t span = amount_of(c->res, c->nres, FORECAST_RES);
+    uint64_t from = amount_of(c->res, c->nres, ADMITTED_RES);
+
+    if (span == 0 || from == 0 || strcmp(c->state, "uncertain") == 0)
+        return UINT64_MAX;
+    if (from <= now && span <= now - from)
+        return span > UINT64_MAX - now ? UINT64_MAX : now + span;
+    return from > UINT64_MAX - span ? UINT64_MAX : from + span;
+}
+
+/**
+ * Give in `*sum` how much of resource `name` the claims of `t` that are
+ * expected to run past time `at` hold, as claim_end judges at `now`.
+ *
+ * @return 0, or -1 when the sum overflows.
+ */
+static int held_after(const struct table *t, const char *name, uint64_t at, uint64_t now,
+                      uint64_t *sum)
+{
+    size_t i;
+
+    *sum = 0;
+    for (i = 0; i < t->n; i++) {
+        const struct claim *c = &t->c[i];
+
+        if (!is_request_state(c->state) && claim_end(c, now) > at &&
+            add(sum, amount_of(c->res, c->nres, name)) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+/**
+ * Say whether `extra`, when not NULL, and request `keep` fit within the
+ * limits of `a` beside the claims of `t` expected to run past time `at`;
+ * `extra` is counted only on the resources it takes.
+ */
+static int fits_at(const struct table *t, const struct ask *a, const struct claim *keep,
+                   const struct ask *extra, uint64_t at)
+{
+    const struct etude_ledger_res *cap = a->cap;
+    uint64_t sum, want;
+    size_t k;
+
+    for (k = 0; k < a->ncap; k++) {
+        want = extra != NULL ? amount_of(extra->res, extra->nres, cap[k].name) : 0;
+        if (extra != NULL && want == 0)
+            continue;
+        if (held_after(t, cap[k].name, at, a->now, &sum) != 0 || add(&sum, want) != 0 ||
+            add(&sum, amount_of(keep->res, keep->nres, cap[k].name)) != 0 || sum > cap[k].amount)
+            return 0;
+    }
+    return 1;
+}
+
+/**
+ * Say whether what `a` asks for, which fits now but takes what the protected
+ * request `keep` needs, may still be admitted beside it, so that the machine
+ * is used while `keep` waits without delaying it on the claims' forecasts.
+ *
+ * `keep` is expected to fit at the earliest time, now or a claim's expected
+ * end, by which the claims still running leave it room. `a` is admitted when
+ * it is expected to end by then, or when it fits beside `keep` and the claims
+ * expected to run past then. With no such time, as when `keep` waits for a
+ * claim that has no forecast, nothing is admitted beside it.
+ */
+static int backfills(const struct table *t, const struct ask *a, const struct claim *keep)
+{
+    uint64_t at = UINT64_MAX, end;
+    size_t i;
+
+    if (a->now == 0)
+        return 0;
+    for (i = 0; i <= t->n; i++) {
+        if (i < t->n && is_request_state(t->c[i].state))
+            continue;
+        end = i == t->n ? a->now : claim_end(&t->c[i], a->now);
+        if (end < at && fits_at(t, a, keep, NULL, end))
+            at = end;
+    }
+    if (at == UINT64_MAX)
+        return 0;
+    if (a->forecast_us != 0 && a->forecast_us <= at - a->now)
+        return 1;
+    return fits_at(t, a, keep, a, at);
+}
+
+/**
  * Say whether what `a` asks for fits beside the claims of `t` within the
  * limits, and leaves free, of each resource it takes, what request `keep`
- * needs of it. A resource that `a` does not take is not kept, so a request
- * blocked on memory does not hold back a claim that takes processors alone.
+ * needs of it, or else backfills beside `keep` as backfills() says. A
+ * resource that `a` does not take is not kept, so a request blocked on
+ * memory does not hold back a claim that takes processors alone.
  */
 static int fits(const struct etude_ledger *l, const struct table *t, const struct ask *a,
                 const struct claim *keep)
@@ -1353,6 +1483,7 @@ static int fits(const struct etude_ledger *l, const struct table *t, const struc
     const struct etude_ledger_res *cap = a->cap;
     uint64_t sum, want;
     size_t k;
+    int blocked = 0;
 
     for (k = 0; k < a->ncap; k++) {
         want = amount_of(a->res, a->nres, cap[k].name);
@@ -1360,9 +1491,9 @@ static int fits(const struct etude_ledger *l, const struct table *t, const struc
             return 0;
         if (keep != NULL && want > 0 &&
             (add(&sum, amount_of(keep->res, keep->nres, cap[k].name)) != 0 || sum > cap[k].amount))
-            return 0;
+            blocked = 1;
     }
-    return 1;
+    return !blocked || backfills(t, a, keep);
 }
 
 /**
@@ -1451,13 +1582,17 @@ static struct claim *protect(const struct etude_ledger *l, struct table *t,
     return p;
 }
 
-/** Say whether the `nres` resources `res` have names, each once. */
+/**
+ * Say whether the `nres` resources `res` have names, each once, none of them
+ * a name the ledger keeps for a claim's forecast.
+ */
 static int res_sound(const struct etude_ledger_res *res, size_t nres)
 {
     size_t i, j;
 
     for (i = 0; i < nres; i++) {
-        if (res[i].name == NULL || !is_name(res[i].name))
+        if (res[i].name == NULL || !is_name(res[i].name) ||
+            strcmp(res[i].name, FORECAST_RES) == 0 || strcmp(res[i].name, ADMITTED_RES) == 0)
             return 0;
         for (j = 0; j < i; j++)
             if (strcmp(res[i].name, res[j].name) == 0)
@@ -1513,11 +1648,41 @@ static struct claim *claim_new(const struct etude_ledger *l, struct table *t, co
     return c;
 }
 
+/** Give ledger `l`'s time of day in microseconds, or 0 when it has none. */
+static uint64_t ledger_now(const struct etude_ledger *l)
+{
+    return l->clock != NULL ? l->clock(l->clock_ctx) : wall_us();
+}
+
+void etude_ledger_clock(struct etude_ledger *l, uint64_t (*now)(void *ctx), void *ctx)
+{
+    l->clock = now;
+    l->clock_ctx = ctx;
+}
+
+/** Record on claim `c`, just admitted, the forecast of `a`; 0 or an error. */
+static int claim_forecast(struct claim *c, const struct ask *a)
+{
+    int e;
+
+    if (a->forecast_us == 0 || a->now == 0)
+        return 0;
+    e = claim_add_res(c, FORECAST_RES, a->forecast_us);
+    return e != 0 ? e : claim_add_res(c, ADMITTED_RES, a->now);
+}
+
 int etude_ledger_reserve(struct etude_ledger *l, const char *id, const struct etude_ledger_res *res,
                          size_t nres, const struct etude_ledger_res *cap, size_t ncap)
 {
-    const struct ask a = {
-        .id = id, .account = "", .res = res, .cap = cap, .nres = nres, .ncap = ncap, .wait = 0};
+    const struct ask a = {.id = id,
+                          .account = "",
+                          .res = res,
+                          .cap = cap,
+                          .nres = nres,
+                          .ncap = ncap,
+                          .wait = 0,
+                          .forecast_us = 0,
+                          .now = ledger_now(l)};
     struct claim *p;
     struct table t;
     char **gone;
@@ -1594,12 +1759,20 @@ static int admit_in(const struct etude_ledger *l, struct table *t, const struct 
     strcpy(c->state, "reserved");
     c->ticket = 0;
     *changed = 1;
-    return 0;
+    return claim_forecast(c, a);
 }
 
 int etude_ledger_admit(struct etude_ledger *l, const char *id, const char *account,
                        const struct etude_ledger_res *res, size_t nres,
                        const struct etude_ledger_res *cap, size_t ncap, int wait)
+{
+    return etude_ledger_admit_for(l, id, account, res, nres, cap, ncap, wait, 0);
+}
+
+int etude_ledger_admit_for(struct etude_ledger *l, const char *id, const char *account,
+                           const struct etude_ledger_res *res, size_t nres,
+                           const struct etude_ledger_res *cap, size_t ncap, int wait,
+                           uint64_t forecast_us)
 {
     const struct ask a = {.id = id,
                           .account = account,
@@ -1607,7 +1780,9 @@ int etude_ledger_admit(struct etude_ledger *l, const char *id, const char *accou
                           .cap = cap,
                           .nres = nres,
                           .ncap = ncap,
-                          .wait = wait};
+                          .wait = wait,
+                          .forecast_us = forecast_us,
+                          .now = ledger_now(l)};
     struct table t;
     char **gone;
     size_t n;

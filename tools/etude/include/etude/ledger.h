@@ -88,7 +88,9 @@ int etude_ledger_reserve(struct etude_ledger *l, const char *id, const struct et
  * withdrawn. One waiting request of the machine is protected: the claim is
  * admitted only when it fits beside every claim the ledger keeps and, of
  * each resource it takes, leaves free what the protected request needs, so
- * that the protected request is admitted once enough claims have ended. The
+ * that the protected request is admitted once enough claims have ended, or
+ * when it fits beside the protected request at that request's expected
+ * start, as etude_ledger_admit_for says; the claim itself has no forecast. The
  * protected request is chosen when there is none, from the requests that
  * could ever fit: the one whose account holds the fewest claims, and of
  * those the one that has waited longest. It stays protected until it is
@@ -107,6 +109,35 @@ int etude_ledger_reserve(struct etude_ledger *l, const char *id, const struct et
 int etude_ledger_admit(struct etude_ledger *l, const char *id, const char *account,
                        const struct etude_ledger_res *res, size_t nres,
                        const struct etude_ledger_res *cap, size_t ncap, int wait);
+
+/**
+ * Ask for claim `id` as etude_ledger_admit does, with `forecast_us`, the
+ * claim's expected elapsed time in microseconds, or 0 when it is unknown.
+ *
+ * An admitted claim keeps its forecast and the time of day of its admission,
+ * from which the ledger judges when it is expected to end: its admission
+ * plus its forecast, or, once that has passed, the present plus its forecast
+ * again. A claim that takes what the protected request needs is still
+ * admitted when the protected request has an expected start, the earliest
+ * time by which the claims expected to end leave it room, and the claim is
+ * expected to end by then, or fits beside the protected request and the
+ * claims expected to run past then. A claim with no forecast is taken never
+ * to end, so the protected request has no expected start while it waits for
+ * one, and nothing is admitted beside it on a forecast.
+ *
+ * @return as etude_ledger_admit.
+ */
+int etude_ledger_admit_for(struct etude_ledger *l, const char *id, const char *account,
+                           const struct etude_ledger_res *res, size_t nres,
+                           const struct etude_ledger_res *cap, size_t ncap, int wait,
+                           uint64_t forecast_us);
+
+/**
+ * Have ledger `l` read the time of day, in microseconds since the epoch,
+ * from `now` called with `ctx` in place of the system's clock, as a replay of
+ * a run's schedule does; a NULL `now` restores the system's clock.
+ */
+void etude_ledger_clock(struct etude_ledger *l, uint64_t (*now)(void *ctx), void *ctx);
 
 /**
  * Withdraw request `id` of this process, which waits for admission.

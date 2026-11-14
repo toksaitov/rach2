@@ -3522,9 +3522,10 @@ static int holds(const struct set *x, size_t i)
 
 /**
  * The time, on the clock of `posix_now_us`, at which member `i` is expected
- * to end: its start, or `now` when it has not started, plus its median elapsed
- * time from the history. A member that has run longer than that, or that has
- * no expected time, is taken to end at `now`.
+ * to end: its start, or `now` when it has not started, plus its expected
+ * elapsed time. A member that has run longer than that is taken to end at
+ * `now` plus that time again, so that backfill keeps a window while it runs
+ * late; one with no expected time is taken to end at `now`.
  */
 static uint64_t expected_end(const struct set *x, size_t i, uint64_t now)
 {
@@ -3532,7 +3533,7 @@ static uint64_t expected_end(const struct set *x, size_t i, uint64_t now)
     uint64_t from = c->state == RUNNING && c->started_us ? c->started_us : now;
     uint64_t span = x->mem[i].cost.elapsed_us;
 
-    return span && from + span > now ? from + span : now;
+    return !span ? now : from + span > now ? from + span : now + span;
 }
 
 /* The pool's reservation for the first member that does not fit in it. */
@@ -3891,14 +3892,17 @@ static void stop_on_suites(struct set *x)
 }
 
 /**
- * Ask the site's ledger for the processors of command `c`, its claim of the
- * run's own ledger held, waiting in the site's ledger as any request does.
+ * Ask the site's ledger for the processors of member `m`, its claim of the
+ * run's own ledger held, waiting in the site's ledger as any request does,
+ * with its expected time as the claim's forecast.
  *
  * @return 1 once they are held or the command needs none, 0 while the
- *         request waits, and -1 with the reason in `c` when it is refused.
+ *         request waits, and -1 with the reason in its command when it is
+ *         refused.
  */
-static int site_claim(struct set *x, struct command *c)
+static int site_claim(struct set *x, struct member *m)
 {
+    struct command *c = &m->c;
     struct etude_ledger_res cpu = {"cpu_millis", 0}, cap = {"cpu_millis", x->o->site_cpu};
     size_t i;
 
@@ -3910,7 +3914,8 @@ static int site_claim(struct set *x, struct command *c)
     if (cpu.amount == 0)
         return 1;
     c->site = 1;
-    if (etude_ledger_admit(x->site_l, c->site_id, x->o->account, &cpu, 1, &cap, 1, 1) == 0) {
+    if (etude_ledger_admit_for(x->site_l, c->site_id, x->o->account, &cpu, 1, &cap, 1, 1,
+                               m->cost.elapsed_us) == 0) {
         c->site = 2;
         return 1;
     }
@@ -3932,7 +3937,7 @@ static int site_claim(struct set *x, struct command *c)
 static int site_step(struct set *x, struct member *m)
 {
     struct command *c = &m->c;
-    int rc = site_claim(x, c);
+    int rc = site_claim(x, m);
 
     if (rc > 0)
         return 1;

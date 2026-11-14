@@ -100,7 +100,8 @@ int etude_sched_admit(struct etude_ledger *l, const char *account, struct etude_
         if (!j->ready || (j->state != ETUDE_JOB_PENDING && j->state != ETUDE_JOB_WAITING))
             continue;
         wait = have ? j->state == ETUDE_JOB_WAITING : 1;
-        if (etude_ledger_admit(l, j->id, account, j->res, j->nres, cap, ncap, wait) == 0) {
+        if (etude_ledger_admit_for(l, j->id, account, j->res, j->nres, cap, ncap, wait,
+                                   j->cost_us) == 0) {
             if (j->state == ETUDE_JOB_WAITING)
                 have = 0;
             j->state = ETUDE_JOB_ADMITTED;
