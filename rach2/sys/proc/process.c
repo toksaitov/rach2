@@ -773,7 +773,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     process_t *p;
     struct tgroup *group = NULL;
     struct fs_struct *dirs = NULL;
-    uint32_t tgid = 0, ruid = 0, pid;
+    uint32_t tgid = 0, ruid = 0, pid = 0;
     int fd;
 
     bkl_assert_held();
