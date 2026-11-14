@@ -625,12 +625,11 @@ static uint64_t wall_us(void)
 {
 #ifdef _WIN32
     FILETIME ft;
-    ULARGE_INTEGER u;
+    uint64_t us;
 
     GetSystemTimeAsFileTime(&ft);
-    u.LowPart = ft.dwLowDateTime;
-    u.HighPart = ft.dwHighDateTime;
-    return u.QuadPart / 10u > 11644473600000000ull ? u.QuadPart / 10u - 11644473600000000ull : 0;
+    us = ((uint64_t)ft.dwHighDateTime << 32 | ft.dwLowDateTime) / 10u;
+    return us > 11644473600000000ull ? us - 11644473600000000ull : 0;
 #else
     struct timeval tv;
 
@@ -1451,7 +1450,7 @@ static int fits_at(const struct table *t, const struct ask *a, const struct clai
  */
 static int backfills(const struct table *t, const struct ask *a, const struct claim *keep)
 {
-    uint64_t at = UINT64_MAX, end;
+    uint64_t at = UINT64_MAX, due;
     size_t i;
 
     if (a->now == 0)
@@ -1459,9 +1458,9 @@ static int backfills(const struct table *t, const struct ask *a, const struct cl
     for (i = 0; i <= t->n; i++) {
         if (i < t->n && is_request_state(t->c[i].state))
             continue;
-        end = i == t->n ? a->now : claim_end(&t->c[i], a->now);
-        if (end < at && fits_at(t, a, keep, NULL, end))
-            at = end;
+        due = i == t->n ? a->now : claim_end(&t->c[i], a->now);
+        if (due < at && fits_at(t, a, keep, NULL, due))
+            at = due;
     }
     if (at == UINT64_MAX)
         return 0;
