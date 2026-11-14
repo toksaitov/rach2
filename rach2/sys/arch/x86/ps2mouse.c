@@ -204,6 +204,13 @@ static int packet_size = 3;
 static int protocol = PROTO_PS2;
 static struct evdev *mouse_dev;
 
+/* serio1 has no driver: its reconnect failed while its `bind_mode` was
+ * manual, and Linux's serio core then finds it none. Its bytes are dropped,
+ * and the first after the mode is auto again asks for a reconnect, which
+ * probes the port anew, as Linux's serio_interrupt rescans a port with no
+ * driver. */
+static int aux_unbound;
+
 /* The settings of the auxiliary port; the device's vendor and model, as
  * Linux's `psmouse->vendor` and `psmouse->name` name it, one string, NULL
  * until a detect names it; and the event device's name built from them. */
@@ -1594,6 +1601,13 @@ static void mouse_irq_handler(isr_params_t *params)
     if (state == STATE_IGNORE || state == STATE_RESYNC) {
         return;
     }
+    if (aux_unbound) {
+        if (!evdev_sysfs_serio_manual(1)) {
+            state = STATE_IGNORE;
+            request_reconnect(RECONNECT_PORT);
+        }
+        return;
+    }
     now = (uint32_t)kernel_ticks;
     if ((bat_held || !packet_start()) && now - last_tick > MS_TO_TICKS(500)) {
         klog(KLOG_INFO, "mouse", "sync: lost: a pause inside a packet: resyncing");
@@ -1958,8 +1972,9 @@ void ps2mouse_change_end(int rc)
  * Set the guest up again after its touchpad's reconnect, or after it
  * announced itself anew, as Linux's serio core reconnects a pass-through
  * port: a guest found before is reconnected, and probed anew when that
- * fails; a port that had none is probed anew. The touchpad's reporting is
- * enabled after.
+ * fails; a port that had none is probed anew. A port whose `bind_mode` is
+ * manual is not probed, and is left without a driver. The touchpad's
+ * reporting is enabled after.
  */
 static void reconnect_guest(void)
 {
@@ -1967,7 +1982,7 @@ static void reconnect_guest(void)
         klog(KLOG_WARN, "mouse", "pass-through: the guest's reconnect failed: probing anew");
         guest_forget();
     }
-    if (!guest.dev) {
+    if (!guest.dev && !evdev_sysfs_serio_manual(EVDEV_SERIO_PASS_THROUGH)) {
         (void)ps2mouse_guest_connect(&synaptics_pt);
     }
     if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
@@ -2035,9 +2050,43 @@ static struct evdev *disconnect_protocol(void)
     return old;
 }
 
+/**
+ * Take the port's protocol away and find the device anew, as Linux's serio
+ * core does when psmouse's reconnect fails: serio_disconnect_port, then
+ * serio_find_driver, which binds psmouse again unless serio1's `bind_mode`
+ * is manual. Then the port is left without a driver (`aux_unbound`), its
+ * driver's and protocol's files gone, until the mode is auto again; a port
+ * already without one has nothing to take away.
+ */
+static void probe_port_anew(void)
+{
+    struct evdev *old = aux_unbound ? NULL : disconnect_protocol();
+
+    if (old) {
+        evdev_unregister(old);
+    }
+    if (evdev_sysfs_serio_manual(1)) {
+        if (!aux_unbound) {
+            klog(KLOG_WARN, "mouse", "reconnect: failed: serio1's bind mode is manual: unbound");
+        }
+        evdev_sysfs_serio_files(1, NULL);
+        evdev_sysfs_serio_driver(1, NULL);
+        aux_unbound = 1;
+        return;
+    }
+    klog(KLOG_WARN, "mouse", "reconnect: probing the port anew");
+    if (aux_unbound) {
+        aux_unbound = 0;
+        evdev_sysfs_serio_driver(1, aux_files);
+    }
+    connect_device();
+    if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
+        klog(KLOG_WARN, "mouse", "the device did not enable reporting");
+    }
+}
+
 void ps2mouse_reconnect(void)
 {
-    struct evdev *old;
     int what;
 
     ps2mouse_cmd_begin();
@@ -2045,9 +2094,11 @@ void ps2mouse_reconnect(void)
     reconnect_wanted &= ~what;
     bat_held = 0;
     if (what == RECONNECT_GUEST) {
-        if (touchpad == TOUCHPAD_SYNAPTICS && synaptics_has_pass_through()) {
+        if (!aux_unbound && touchpad == TOUCHPAD_SYNAPTICS && synaptics_has_pass_through()) {
             reconnect_guest();
         }
+    } else if (aux_unbound) {
+        probe_port_anew();
     } else if (touchpad == TOUCHPAD_SYNAPTICS && synaptics_reconnect() == 0) {
         (void)mouse_send_command(MOUSE_CMD_ENABLE);
         if (synaptics_has_pass_through()) {
@@ -2073,15 +2124,7 @@ void ps2mouse_reconnect(void)
         }
         klog(KLOG_INFO, "mouse", "reconnect: the mouse reports again");
     } else {
-        klog(KLOG_WARN, "mouse", "reconnect: probing the port anew");
-        old = disconnect_protocol();
-        if (old) {
-            evdev_unregister(old);
-        }
-        connect_device();
-        if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
-            klog(KLOG_WARN, "mouse", "the device did not enable reporting");
-        }
+        probe_port_anew();
     }
     bad_in_a_row = 0;
     ps2mouse_cmd_end();

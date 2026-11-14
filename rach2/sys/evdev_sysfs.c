@@ -108,14 +108,15 @@ static struct {
 } parents;
 
 /* Each serio port's firmware ID, NULL for none; whether its driver made it
- * without a device below it, which `evdev_sysfs_serio_add` says; the
- * functions that add its driver's own files to its directory, which stay
- * while the driver is bound, and its protocol's, which a change of protocol
- * replaces, NULL for none; and the entries each function made, 0 past the
- * last. */
+ * without a device below it, which `evdev_sysfs_serio_add` says; whether
+ * its `bind_mode` is manual; the functions that add its driver's own files
+ * to its directory, which stay while the driver is bound, and its
+ * protocol's, which a change of protocol replaces, NULL for none; and the
+ * entries each function made, 0 past the last. */
 #define SERIO_FILES_MAX 24
 static const char *serio_firmware[SERIO_PORTS];
 static int serio_wanted[SERIO_PORTS];
+static int serio_manual[SERIO_PORTS];
 static int (*serio_driver[SERIO_PORTS])(int dir);
 static int (*serio_files[SERIO_PORTS])(int dir);
 static int serio_driver_made[SERIO_PORTS][SERIO_FILES_MAX];
@@ -557,8 +558,9 @@ static void emit_serio_alias(struct emit *e, int port)
 
 /** A file of a serio port, as Linux's serio core writes it: its
  * description, modalias, bind mode, firmware ID, id/ files and uevent,
- * with the driver bound to it, atkbd or psmouse. The i8042's own uevent
- * with a `arg` of -1. */
+ * with the driver bound to it, atkbd, or psmouse while the mouse's driver
+ * has the port (`evdev_sysfs_serio_driver`). The i8042's own uevent with a
+ * `arg` of -1. */
 static int32_t show_serio(void *obj, int arg, char *buf, uint32_t cap)
 {
     int port, what;
@@ -587,10 +589,11 @@ static int32_t show_serio(void *obj, int arg, char *buf, uint32_t cap)
         emit_str(&e, "\n");
         break;
     case SERIO_BIND_MODE:
-        emit_str(&e, "auto\n");
+        emit_str(&e, serio_manual[port] ? "manual\n" : "auto\n");
         break;
     case SERIO_UEVENT:
-        emit_str(&e, port == 0 ? "DRIVER=atkbd\nSERIO_TYPE=" : "DRIVER=psmouse\nSERIO_TYPE=");
+        emit_str(&e, port == 0 ? "DRIVER=atkbd\n" : serio_driver[port] ? "DRIVER=psmouse\n" : "");
+        emit_str(&e, "SERIO_TYPE=");
         emit_hex(&e, serio_type(port), 2, 0);
         emit_str(&e, "\nSERIO_PROTO=00\nSERIO_ID=00\nSERIO_EXTRA=00\nMODALIAS=");
         emit_serio_alias(&e, port);
@@ -607,6 +610,30 @@ static int32_t show_serio(void *obj, int arg, char *buf, uint32_t cap)
         break;
     }
     return (int32_t)e.len;
+}
+
+/**
+ * A write of a serio port's `bind_mode`, as Linux's serio_set_bind_mode
+ * takes it: "manual" or "auto" compared over the `len` bytes written, as
+ * strncmp does, so that a prefix of either word counts and a newline
+ * after it does not; -EINVAL for anything else. A port in manual mode
+ * that loses its driver gets none back by itself (`evdev_sysfs_serio_manual`).
+ */
+static int32_t store_serio(void *obj, int arg, const char *buf, uint32_t len)
+{
+    static const char *const words[] = {"manual", "auto"};
+    uint32_t w, i;
+
+    (void)obj;
+    for (w = 0; w < 2u; w++) {
+        for (i = 0; i < len && buf[i] == words[w][i] && words[w][i] != '\0'; i++) {
+        }
+        if (i == len || (buf[i] == '\0' && words[w][i] == '\0')) {
+            serio_manual[arg >> 4] = w == 0u;
+            return (int32_t)len;
+        }
+    }
+    return -EINVAL;
 }
 
 /* The `arg` of a USB interface's files. */
@@ -837,7 +864,7 @@ static int serio_dir(int port)
 {
     static const struct sysfs_attr attrs[] = {{"description", 0444u, show_serio, NULL},
                                               {"modalias", 0444u, show_serio, NULL},
-                                              {"bind_mode", 0444u, show_serio, NULL}};
+                                              {"bind_mode", 0644u, show_serio, store_serio}};
     static const struct sysfs_attr firmware = {"firmware_id", 0444u, show_serio, NULL};
     static const struct sysfs_attr ids[] = {{"type", 0444u, show_serio, NULL},
                                             {"proto", 0444u, show_serio, NULL},
@@ -1192,6 +1219,7 @@ void evdev_sysfs_serio_remove(int port)
     parents.serio[port] = parents.serio_link[port] = 0;
     serio_firmware[port] = NULL;
     serio_wanted[port] = 0;
+    serio_manual[port] = 0;
     serio_driver[port] = NULL;
     serio_files[port] = NULL;
     k_memset(serio_driver_made[port], 0, sizeof(serio_driver_made[port]));
@@ -1212,6 +1240,11 @@ static void make_wanted_ports(void)
             klog(KLOG_WARN, "input", "serio%d: the port was not made", port);
         }
     }
+}
+
+int evdev_sysfs_serio_manual(int port)
+{
+    return port >= 0 && port < SERIO_PORTS && serio_manual[port];
 }
 
 void evdev_sysfs_serio_add(int port)

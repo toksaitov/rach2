@@ -458,6 +458,12 @@ void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
     (void)add;
 }
 
+int evdev_sysfs_serio_manual(int port)
+{
+    (void)port;
+    return 0;
+}
+
 unsigned int elantech_set_rate(unsigned int rate)
 {
     return rate;

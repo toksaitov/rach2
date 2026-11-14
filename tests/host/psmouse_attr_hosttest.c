@@ -738,6 +738,14 @@ void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
     }
 }
 
+/* The bind mode of each serio port, manual where set. */
+static int serio_manual[3];
+
+int evdev_sysfs_serio_manual(int port)
+{
+    return serio_manual[port];
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     drop_files(port, 1);
@@ -1351,6 +1359,37 @@ static void resetafter_rows(void)
     CHECK("twenty bad packets ask nothing", !reconnect_wanted && state == STATE_ACTIVE);
 }
 
+/** serio1 in manual bind mode: a reconnect that finds another protocol
+ * leaves the port without a driver, as Linux's serio core finds none for
+ * it; its bytes are dropped, another reconnect binds nothing, and the
+ * first byte after the mode is auto again probes the port anew. */
+static void bind_mode_rows(void)
+{
+    model_reset(KIND_MOUSE, 0);
+    CHECK("a mouse is brought up for the bind mode", init_mouse() == 0 && protocol == PROTO_PS2);
+    serio_manual[1] = 1;
+    aux_mouse.wheel = ID_IMEX;
+    reconnect_wanted = RECONNECT_PORT;
+    ps2mouse_reconnect();
+    CHECK("a failed reconnect in manual mode leaves serio1 without a driver",
+          aux_unbound && !mouse_dev && port_driver[1] == NULL && !file_of(1, "rate") &&
+              state == STATE_ACTIVE);
+    irq_byte(0x08);
+    CHECK("whose bytes are dropped, asking nothing", !reconnect_wanted && packet_index == 0);
+    reconnect_wanted = RECONNECT_PORT;
+    ps2mouse_reconnect();
+    CHECK("a reconnect in manual mode binds nothing", aux_unbound && !mouse_dev);
+    serio_manual[1] = 0;
+    irq_byte(0x08);
+    CHECK("the first byte in auto mode asks for a reconnect",
+          state == STATE_IGNORE && (reconnect_wanted & RECONNECT_PORT));
+    ps2mouse_reconnect();
+    CHECK("which binds psmouse with its files and the protocol found",
+          !aux_unbound && mouse_dev && protocol == PROTO_IMEX && port_driver[1] == aux_files &&
+              file_of(1, "rate") && state == STATE_ACTIVE);
+    aux_mouse.wheel = 0;
+}
+
 /** `resync_time`: the idle time after which a first byte begins a resync,
  * which polls the mouse, and a poll left unanswered, which asks for a
  * reconnect. */
@@ -1753,6 +1792,24 @@ static void guest_reconnect_rows(void)
     CHECK("a guest that answers again is bound with its files",
           guest.dev && port_made[EVDEV_SERIO_PASS_THROUGH] &&
               reads(EVDEV_SERIO_PASS_THROUGH, "protocol", "ImPS/2\n") && pt_mouse.reporting);
+    serio_manual[EVDEV_SERIO_PASS_THROUGH] = 1;
+    pt_present = 0;
+    reconnect_wanted = RECONNECT_GUEST;
+    ps2mouse_reconnect();
+    CHECK("a failed reconnect of a guest in manual mode leaves serio2 without a driver",
+          !guest.dev && port_driver[EVDEV_SERIO_PASS_THROUGH] == NULL &&
+              port_made[EVDEV_SERIO_PASS_THROUGH]);
+    pt_present = 1;
+    pt_mouse.id = 0;
+    reconnect_wanted = RECONNECT_GUEST;
+    ps2mouse_reconnect();
+    CHECK("and a guest that answers is not probed while the mode is manual",
+          !guest.dev && port_driver[EVDEV_SERIO_PASS_THROUGH] == NULL);
+    serio_manual[EVDEV_SERIO_PASS_THROUGH] = 0;
+    reconnect_wanted = RECONNECT_GUEST;
+    ps2mouse_reconnect();
+    CHECK("in auto mode it is bound again",
+          guest.dev && port_driver[EVDEV_SERIO_PASS_THROUGH] == guest_files);
 
     model_reset(KIND_MOUSE, 0);
     synaptics_answer = 1;
@@ -2002,6 +2059,7 @@ int main(void)
     resetafter_rows();
     resync_time_rows();
     resync_switch_rows();
+    bind_mode_rows();
     protocol_rows();
     switch_rows();
     fallback_name_rows();

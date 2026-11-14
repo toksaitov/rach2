@@ -569,6 +569,16 @@ void evdev_sysfs_serio_firmware_id(int port, const char *id);
 void evdev_sysfs_serio_remove(int port);
 
 /**
+ * Whether serio port `port`'s `bind_mode` is manual, as a write of it set:
+ * a driver then gives the port up when its reconnect fails, as Linux's
+ * serio core finds no driver for a port in manual mode, and takes it back
+ * once the mode is auto again. A port that is removed and made anew is in
+ * auto mode. Reads one word, so it may be called in interrupt context.
+ * Defined in evdev_sysfs.c.
+ */
+int evdev_sysfs_serio_manual(int port);
+
+/**
  * Make serio port `port` with no event device below it, as Linux's serio
  * core registers a port before any driver binds: at once when its parent,
  * serio1 for the pass-through port, is in /sys, else at the sync that

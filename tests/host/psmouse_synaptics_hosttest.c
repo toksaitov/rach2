@@ -581,6 +581,12 @@ void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
     }
 }
 
+int evdev_sysfs_serio_manual(int port)
+{
+    (void)port;
+    return 0;
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     drop_files(port, 1);
