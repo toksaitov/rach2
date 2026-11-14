@@ -285,6 +285,7 @@ static void leader_notty(void)
           "ignore SIGHUP after TIOCNOTTY");
     check(ioctl(0, TIOCGPGRP, &pgrp) == -ENOTTY, "after NOTTY, TIOCGPGRP -> -ENOTTY");
     check(ioctl(0, TIOCNOTTY, 0) == -ENOTTY, "TIOCNOTTY with no ctty -> -ENOTTY");
+    pgrp = getpgrp(); /* a negative number is EINVAL before the check */
     check(ioctl(0, TIOCSPGRP, &pgrp) == -ENOTTY, "TIOCSPGRP with no ctty -> -ENOTTY");
 }
 
