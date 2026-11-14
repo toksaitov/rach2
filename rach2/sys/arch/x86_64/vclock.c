@@ -120,10 +120,11 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 /*
  * The watch's state: whether the running clock reads a watched TSC, whether
  * the TSC parted from the tick's clock, whether the first span set the rate,
- * the TSC and the raw clock where the span in progress began, the TSC 0
- * for none, and for the log the span that parted or the rate set.
+ * whether a span is in progress, the TSC and the raw clock where it
+ * began, and for the log the span that parted or the rate set.
  */
 static int watching;
+static int watch_based;
 static int watch_parted;
 static int watch_refined;
 static uint64_t watch_tsc;
@@ -439,7 +440,7 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     running = 1;
     kvm_stopped = 0;
     watching = !kvm && tsc_counts_per_tick() == 0;
-    watch_tsc = 0;
+    watch_based = 0;
     *mono_ns = mono_base_ns;
     *raw_ns = raw_base_ns;
     spin_unlock(&vclock_lock);
@@ -574,17 +575,18 @@ enum { WATCH_KEEP, WATCH_REFINED, WATCH_PARTED };
 static int vclock_watch(const struct vclock_sample *before, const struct vclock_sample *after,
                         uint64_t ref_raw)
 {
-    uint64_t tsc, span, need, ran, delta, per_tick;
+    uint64_t tsc, span, need, ran, delta, most, per_tick;
 
     if (after->tsc < before->tsc ||
         vclock_scale(after->tsc - before->tsc, mult_measured, data->shift) > WATCH_SKEW_NS) {
-        watch_tsc = 0;
+        watch_based = 0;
         return WATCH_KEEP;
     }
     tsc = vclock_middle(before->tsc, after->tsc);
     need = watch_refined ? WATCH_SPAN_NS : WATCH_FIRST_NS;
     span = ref_raw - watch_raw;
-    if (watch_tsc == 0 || ref_raw <= watch_raw || span > 2u * need) {
+    if (!watch_based || ref_raw <= watch_raw || span > 2u * need) {
+        watch_based = 1;
         watch_tsc = tsc;
         watch_raw = ref_raw;
         return WATCH_KEEP;
@@ -592,7 +594,12 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
     if (span < need) {
         return WATCH_KEEP;
     }
+    /* A TSC behind the span's start ran none of it, and one past twice
+     * the counts the span should hold ran twice it, which bounds the
+     * products below: the span is under 2^31 ns, the rate under 2^32. */
+    most = 2u * tick_div64(span * tsc_clock_per_tick(), TICK_NS, NULL);
     delta = tsc > watch_tsc ? tsc - watch_tsc : 0;
+    delta = delta < most ? delta : most;
     ran = vclock_scale(delta, mult_measured, data->shift);
     watch_tsc = tsc;
     watch_raw = ref_raw;
