@@ -1422,6 +1422,9 @@ mac_wait()
         fi
         say "mac: the run $id ended without a status; starting another"
         mac_start
+        # mac_start marks the Mac done, and starts nothing, when its
+        # selection is empty.
+        [ "$(sed -n 's/^mac started //p' "$state/record" | tail -n 1)" != "$id" ] || return 0
     done
     if ! mac_forget; then
         say "mac: the run that $macdir/run names may still run; stop.sh lists it"
