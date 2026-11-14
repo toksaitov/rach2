@@ -137,6 +137,8 @@
 
 #define TIOCNOTTY 0x5422 /* Detach from the controlling terminal */
 
+#define TIOCGSID 0x5429 /* Get the session of the controlling terminal */
+
 /*
  * Audio ioctl request codes
  */
@@ -2186,18 +2188,23 @@ static int tty_pid_exists(uint32_t pid)
 }
 
 /** The session of a group, or of the thread whose PID is `pid` if no group
- * has that number, as Linux's session_of_pgrp permits for TIOCSPGRP.
- * Returns zero when neither exists. The caller holds the big kernel lock. */
-static uint32_t tty_pgrp_session(uint32_t pid)
+ * has that number, as Linux's session_of_pgrp permits for TIOCSPGRP, with
+ * the group's lifetime of the id in `*serial` (`pgrp_serial` in process.h):
+ * the group's, or the thread's process's own serial, which a group it
+ * later leads takes, as Linux keeps the struct pid of that thread. Returns
+ * zero when neither exists. The caller holds the big kernel lock. */
+static uint32_t tty_pgrp_session(uint32_t pid, uint64_t *serial)
 {
     const process_t *p;
 
     for (p = proc_list; p; p = p->next) {
         if (p->pgid == pid) {
+            *serial = p->pgrp_serial;
             return p->sid;
         }
     }
     p = get_process(pid);
+    *serial = p ? p->tg->serial : 0;
     return p ? p->sid : 0;
 }
 
@@ -2393,17 +2400,126 @@ static int32_t tty_job_gate(struct tty *t, uint32_t request)
 }
 
 /** TIOCSWINSZ: read the size at the user's `arg` whole and only then make
- * it `*ws`, as Linux's tiocswinsz copies before it changes the size; 0, or
- * -EFAULT with `*ws` as it was. */
-static int32_t tty_set_winsize(struct tty_winsize *ws, uintptr_t arg)
+ * it the size of `t` (`tty_resize`), as Linux's tiocswinsz copies before it
+ * changes the size; 0, or -EFAULT with the size as it was. */
+static int32_t tty_set_winsize(struct tty *t, uintptr_t arg)
 {
     struct tty_winsize in;
 
     if (!arg || copy_from_user(&in, (const void __user *)arg, sizeof(in)) != 0) {
         return -EFAULT;
     }
-    *ws = in;
+    tty_resize(t, &in);
     return 0;
+}
+
+/** TIOCSPGRP: give the foreground of `t` to the group whose number is the
+ * int at `arg` (`tty_session_ioctl`). */
+static int32_t tty_set_pgrp(struct tty *t, uintptr_t arg)
+{
+    int pgrp;
+    uint64_t serial;
+
+    if (!arg) {
+        return -EFAULT;
+    }
+    if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
+        return -EFAULT;
+    }
+    if (pgrp < 0) {
+        return -EINVAL;
+    }
+    if (t->sid == 0 || (int)current_proc->sid != t->sid) {
+        return -ENOTTY;
+    }
+    pgrp = (int)pid_named((uint32_t)pgrp);
+    if (!tty_pid_exists((uint32_t)pgrp)) {
+        return -ESRCH;
+    }
+    if (tty_pgrp_session((uint32_t)pgrp, &serial) != (uint32_t)t->sid) {
+        return -EPERM;
+    }
+    tty_set_foreground(t, pgrp, serial);
+    return 0;
+}
+
+/**
+ * The session and job-control ioctls of the tty `t`, which the console and
+ * a pty slave share, as `tty_common_ioctl` hands them on, with its
+ * `*handled` contract.
+ *
+ * TIOCGPGRP and TIOCGSID give the foreground group's number and the
+ * session's, and need the terminal to be the caller's controlling terminal
+ * (-ENOTTY), as on Linux. The terminal keeps its foreground group by its id
+ * and its lifetime of that id (`fg_serial`), so once the group has ended
+ * TIOCGPGRP still gives its number, as Linux's reference to the group's
+ * struct pid does, and no signal of the terminal reaches a later group
+ * given that number. A session's id cannot pass to another session while
+ * the terminal holds it, since the leader cannot leave its session and its
+ * end releases the terminal (`pty_release_leader`).
+ *
+ * TIOCSPGRP needs the caller's session to be the one the terminal controls,
+ * and a group in that session, or a thread in it when the number names no
+ * group (`tty_pgrp_session`, -EPERM). A negative number is EINVAL; one no
+ * thread, group or session holds is ESRCH. TIOCSCTTY lets a session leader
+ * take a terminal no other session controls, with the caller's group in the
+ * foreground; `tty_make_sole_ctty` publishes the session and the group and
+ * drops every other terminal the session controlled, the console and any
+ * other pty, in one step with interrupts off, so the console's drain in
+ * interrupt context never sees a torn or doubled controlling terminal, and
+ * /dev/tty resolves to `t`. TIOCNOTTY is -ENOTTY on a terminal that is not
+ * the caller's controlling terminal; from the session's leader it sends the
+ * foreground group SIGHUP and SIGCONT and gives the terminal up, as Linux's
+ * disassociate_ctty, and from another member it changes nothing, since a
+ * controlling terminal here is the session's and Linux would drop it for
+ * the caller alone.
+ */
+static int32_t tty_session_ioctl(struct tty *t, uint32_t request, uintptr_t arg, int *handled)
+{
+    int ours = t->sid != 0 && t->sid == (int)current_proc->sid;
+    int id;
+
+    *handled = 1;
+    switch (request) {
+    case TIOCGPGRP:
+    case TIOCGSID:
+        if (!ours) {
+            return -ENOTTY;
+        }
+        id = request == TIOCGSID ? t->sid : t->fg_pgid;
+        id = id > 0 ? (int)pid_seen((uint32_t)id) : 0;
+        if (!arg || copy_to_user((void __user *)arg, &id, sizeof(id)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+
+    case TIOCSPGRP:
+        return tty_set_pgrp(t, arg);
+
+    case TIOCSCTTY:
+        if ((int)current_proc->sid != (int)current_proc->tgid) {
+            return -EPERM; /* not a session leader */
+        }
+        if (t->sid != 0 && t->sid != (int)current_proc->sid) {
+            return -EPERM; /* owned by another session */
+        }
+        tty_make_sole_ctty(t, (int)current_proc->sid, (int)current_proc->pgid,
+                           current_proc->pgrp_serial);
+        return 0;
+
+    case TIOCNOTTY:
+        if (!ours) {
+            return -ENOTTY;
+        }
+        if (current_proc->sid == current_proc->tgid) {
+            tty_disassociate(t, 0);
+        }
+        return 0;
+
+    default:
+        *handled = 0;
+        return 0;
+    }
 }
 
 /**
@@ -2421,24 +2537,14 @@ static int32_t tty_set_winsize(struct tty_winsize *ws, uintptr_t arg)
  * counted as 0; `tty_inq` drains the input source first, so input that has
  * just arrived is counted. TCFLSH discards the queues (`tty_flush_at`), and
  * TCXONC stops and restarts output or sends VSTOP and VSTART (`tty_tcflow`).
+ * TIOCSWINSZ sends the foreground group SIGWINCH when the size changes
+ * (`tty_resize`). The session requests are `tty_session_ioctl`'s.
  *
  * A process of a background group of the session the terminal controls is
  * stopped with SIGTTOU before TCSETS and its kin, TCFLSH, TCXONC and
  * TIOCSPGRP, unless it blocks or ignores the signal (`tty_job_check`), as
  * Linux's tty_check_change; an orphaned group's call is EIO, and its
  * TIOCSPGRP ENOTTY, as Linux's tiocspgrp turns that EIO.
- *
- * TIOCSPGRP needs the caller's session to be the one the terminal controls,
- * and a group in that session, or a thread in it when the number names no
- * group (`tty_pgrp_session`, -EPERM). A negative number is EINVAL; one no
- * thread, group or session holds is ESRCH. TIOCSCTTY lets a session leader
- * take a terminal no other session controls, with the caller's group in the
- * foreground; `tty_make_sole_ctty` publishes the session and the group and
- * drops every other terminal the session controlled, the console and any
- * other pty, in one step with interrupts off, so the console's drain in
- * interrupt context never sees a torn or doubled controlling terminal, and
- * /dev/tty resolves to `t`. TIOCNOTTY gives the terminal up when the caller's
- * session controls it.
  */
 static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, int *handled)
 {
@@ -2489,63 +2595,10 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         return 0;
 
     case TIOCSWINSZ:
-        return tty_set_winsize(&t->winsize, arg);
-
-    case TIOCGPGRP: {
-        int pgrp = t->fg_pgid > 0 ? (int)pid_seen((uint32_t)t->fg_pgid) : 0;
-        if (!arg) {
-            return -EFAULT;
-        }
-        if (copy_to_user((void __user *)arg, &pgrp, sizeof(pgrp)) != 0) {
-            return -EFAULT;
-        }
-        return 0;
-    }
-
-    case TIOCSPGRP: {
-        int pgrp;
-        if (!arg) {
-            return -EFAULT;
-        }
-        if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
-            return -EFAULT;
-        }
-        if (pgrp < 0) {
-            return -EINVAL;
-        }
-        if (t->sid == 0 || (int)current_proc->sid != t->sid) {
-            return -ENOTTY;
-        }
-        pgrp = (int)pid_named((uint32_t)pgrp);
-        if (!tty_pid_exists((uint32_t)pgrp)) {
-            return -ESRCH;
-        }
-        if (tty_pgrp_session((uint32_t)pgrp) != (uint32_t)t->sid) {
-            return -EPERM;
-        }
-        t->fg_pgid = pgrp;
-        return 0;
-    }
-
-    case TIOCSCTTY:
-        if ((int)current_proc->sid != (int)current_proc->tgid) {
-            return -EPERM; /* not a session leader */
-        }
-        if (t->sid != 0 && t->sid != (int)current_proc->sid) {
-            return -EPERM; /* owned by another session */
-        }
-        tty_make_sole_ctty(t, (int)current_proc->sid, (int)current_proc->pgid);
-        return 0;
-
-    case TIOCNOTTY:
-        if (t->sid == (int)current_proc->sid) {
-            tty_set_session(t, 0, 0);
-        }
-        return 0;
+        return tty_set_winsize(t, arg);
 
     default:
-        *handled = 0;
-        return 0;
+        return tty_session_ioctl(t, request, arg, handled);
     }
 }
 

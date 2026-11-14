@@ -13,6 +13,7 @@
 #include "../fs/file.h"
 #include "../fs/krffs.h"
 #include "../proc/process.h"
+#include "../proc/ns.h"
 #include "../mm/usercopy.h"
 #include "../mm/kheap.h"
 #include "../io/poll.h"
@@ -27,6 +28,8 @@
 #define FIONREAD           0x541B
 #define TIOCGWINSZ         0x5413
 #define TIOCSWINSZ         0x5414
+#define TIOCGPGRP          0x540F     /* the slave's foreground group (arg int*) */
+#define TIOCGSID           0x5429     /* the slave's session (arg int*) */
 #define TIOCGPTN           0x80045430 /* master: get the slave index N (arg int*) */
 #define TIOCSPTLCK         0x40045431 /* master: set/clear the slave lock (arg int*, 0 = unlock) */
 #define TIOCPKT_FLUSHREAD  1
@@ -750,9 +753,13 @@ static int32_t ptm_packet(struct pty *p, uint32_t request, uintptr_t arg)
 
 /**
  * The master's ioctls: TIOCGPTN, TIOCSPTLCK, the window size (TIOCSWINSZ
- * sends SIGWINCH to the slave's foreground group), TIOCPKT and TIOCGPKT,
- * TCFLSH, TCXONC, and FIONREAD, the bytes of the ring not yet read. A bad user
- * pointer is -EFAULT, and any other request -ENOTTY.
+ * sends SIGWINCH to the slave's foreground group when the size changes,
+ * `tty_resize`), TIOCPKT and TIOCGPKT, TCFLSH, TCXONC, FIONREAD, the bytes of
+ * the ring not yet read, and the slave's foreground group and session,
+ * TIOCGPGRP and TIOCGSID, which Linux answers on the master without the
+ * caller's controlling terminal: the group's number, which stays once the
+ * group has ended, or 0 for none, and the session's, or -ENOTTY for none. A
+ * bad user pointer is -EFAULT, and any other request -ENOTTY.
  */
 static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
@@ -786,11 +793,21 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         if (copy_from_user(&ws, (const void __user *)arg, sizeof(ws)) != 0) {
             return -EFAULT;
         }
-        p->slave.winsize = ws;
-        if (p->slave.fg_pgid != 0) {
-            tty_signal_group(p->slave.fg_pgid, SIGWINCH);
-        }
+        tty_resize(&p->slave, &ws);
         return 0;
+    }
+    case TIOCGPGRP: {
+        int pgrp = p->slave.fg_pgid > 0 ? (int)pid_seen((uint32_t)p->slave.fg_pgid) : 0;
+
+        return copy_to_user((void __user *)arg, &pgrp, sizeof(pgrp)) != 0 ? -EFAULT : 0;
+    }
+    case TIOCGSID: {
+        int sid = (int)pid_seen((uint32_t)p->slave.sid);
+
+        if (p->slave.sid == 0) {
+            return -ENOTTY;
+        }
+        return copy_to_user((void __user *)arg, &sid, sizeof(sid)) != 0 ? -EFAULT : 0;
     }
     case TIOCPKT:
     case TIOCGPKT:
@@ -825,7 +842,7 @@ static void ptm_close(fd_entry_t *e)
     }
     p->master_open = 0;
     if (p->slave.fg_pgid != 0) {
-        tty_signal_group(p->slave.fg_pgid, SIGHUP);
+        tty_signal_group(p->slave.fg_pgid, p->slave.fg_serial, SIGHUP);
     }
     tty_hangup(&p->slave);
     if (p->slave_opens == 0) {
@@ -1212,7 +1229,8 @@ int pty_open_slave(int index, int flags)
     p->hung_up = 0;
     if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 && current_proc->sid == current_proc->tgid &&
         !session_has_ctty((int)current_proc->sid)) {
-        tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
+        tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid,
+                           current_proc->pgrp_serial);
     }
     fd_install(current_proc->fds, fd);
     return fd;
@@ -1283,7 +1301,7 @@ int pty_session_slave(int sid)
  * the session no longer uses. The function is in this file because
  * it reaches both console_tty and the list of ptys.
  */
-void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
+void tty_make_sole_ctty(struct tty *keep, int sid, int pgid, uint64_t serial)
 {
     uint32_t flags;
     struct pty *p;
@@ -1294,14 +1312,17 @@ void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
     flags = kirq_save();
     keep->sid = sid;
     keep->fg_pgid = pgid;
+    keep->fg_serial = serial;
     if (&console_tty != keep && console_tty.sid == sid) {
         console_tty.sid = 0;
         console_tty.fg_pgid = 0;
+        console_tty.fg_serial = 0;
     }
     for (p = ptys; p; p = p->next) {
         if (&p->slave != keep && p->slave.sid == sid) {
             p->slave.sid = 0;
             p->slave.fg_pgid = 0;
+            p->slave.fg_serial = 0;
         }
     }
     kirq_restore(flags);
@@ -1350,8 +1371,10 @@ int pty_slave_index(struct fd_entry *e)
 
 /**
  * POSIX releases a session leader's controlling terminal when the leader
- * exits. A pty has no interrupt-side drain, so the release here matters only
- * for a later claim of the same slave.
+ * exits, and Linux's disassociate_ctty sends the slave's foreground group
+ * SIGHUP then (`tty_disassociate`). A pty has no interrupt-side drain, so
+ * the release matters for a later claim of the same slave and for the
+ * identity of a later session given the leader's id.
  */
 void pty_release_leader(int sid, int pid)
 {
@@ -1362,7 +1385,7 @@ void pty_release_leader(int sid, int pid)
     }
     for (p = ptys; p; p = p->next) {
         if (p->slave.sid == sid) {
-            tty_set_session(&p->slave, 0, 0);
+            tty_disassociate(&p->slave, 1);
         }
     }
 }

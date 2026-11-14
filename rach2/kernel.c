@@ -953,12 +953,13 @@ static int32_t terminate_core(int32_t signo)
 /**
  * Release what the end of process `pid`, the current one, gives up beyond
  * its threads: the console its session leads, the pty slaves that session
- * controls, and the framebuffer it owns, so a later session can claim them.
+ * controls, each after SIGHUP to its foreground group (`tty_disassociate`),
+ * and the framebuffer it owns, so a later session can claim them.
  */
 static void terminate_release_session(uint32_t pid)
 {
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
-        tty_set_session(&console_tty, 0, 0);
+        tty_disassociate(&console_tty, 1);
     }
     pty_release_leader((int)current_proc->sid, (int)pid);
     fb_release_if_owner(pid);
@@ -1122,7 +1123,7 @@ static void kill_foreground_process(void)
 {
     console_puts("^C");
     if (console_tty.fg_pgid != 0) {
-        tty_signal_group(console_tty.fg_pgid, SIGINT);
+        tty_signal_group(console_tty.fg_pgid, console_tty.fg_serial, SIGINT);
     } else if (current_proc && current_proc->space_root != 0 &&
                (int)current_proc->sid == console_tty.sid) {
         signal_post(current_proc, SIGINT);
@@ -1971,7 +1972,8 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
     }
 
     if (!init_is_starting) {
-        tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
+        tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid,
+                        user_proc->pgrp_serial);
     }
 
     switch_page_directory(mm->dir);
@@ -4441,7 +4443,7 @@ void shell_reset_input(void)
     cmd_pos = 0;
     cmd_ready = false;
     stdin_waiting_proc = NULL;
-    tty_set_session(&console_tty, 0, 0);
+    tty_set_session(&console_tty, 0, 0, 0);
 }
 
 /**

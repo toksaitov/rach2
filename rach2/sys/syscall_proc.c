@@ -420,7 +420,8 @@ static void proc_end_others(void)
 /**
  * What a process's end releases beyond its threads: the framebuffer it owns,
  * the console its session leads, and the pty slaves that session controls,
- * so a later session can claim them. The console goes before the process is
+ * each after SIGHUP to its foreground group (`tty_disassociate`), so a later
+ * session can claim them. The console goes before the process is
  * published as a zombie while the teardown runs with interrupts on;
  * otherwise the timer-IRQ serial drain (tty_console_poll) keeps draining
  * COM1 against the vanishing session, dropping a ^C/^Z and stealing bytes
@@ -431,7 +432,7 @@ static void exit_release_session(void)
 {
     fb_release_if_owner(current_proc->tgid);
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->tgid)) {
-        tty_set_session(&console_tty, 0, 0);
+        tty_disassociate(&console_tty, 1);
     }
     pty_release_leader((int)current_proc->sid, (int)current_proc->tgid);
 }

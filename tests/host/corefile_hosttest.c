@@ -1020,11 +1020,12 @@ int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, co
 }
 
 /** No process of a row is in the background: 0. */
-int tty_is_background(struct tty *t, int sid, int pgid)
+int tty_is_background(struct tty *t, int sid, int pgid, uint64_t serial)
 {
     (void)t;
     (void)sid;
     (void)pgid;
+    (void)serial;
     return 0;
 }
 
@@ -1037,9 +1038,10 @@ int tty_job_check(struct tty *t, int signo)
 }
 
 /** No row signals a process group. */
-void tty_signal_group(int pgid, int signo)
+void tty_signal_group(int pgid, uint64_t serial, int signo)
 {
     (void)pgid;
+    (void)serial;
     (void)signo;
 }
 

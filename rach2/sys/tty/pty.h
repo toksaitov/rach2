@@ -117,15 +117,16 @@ int32_t pty_master_writev(struct fd_entry *e, const struct kernel_iovec *iov, in
 int pty_session_slave(int sid);
 
 /**
- * Make `keep` the sole controlling terminal of session `sid`, with `pgid` in
- * the foreground, and release every other terminal the session controls (the
+ * Make `keep` the sole controlling terminal of session `sid`, with `pgid` of
+ * the lifetime `serial` (`pgrp_serial` in process.h) in the foreground, and
+ * release every other terminal the session controls (the
  * console and any other pty slave), in one interrupts-off region. Does
  * nothing when `sid` is 0 or `keep` is NULL. The caller has authorized the
  * claim: TIOCSCTTY checks leadership and ownership, and the implicit claims
  * by a read or an open require the terminal to be free and the caller a
  * session leader.
  */
-void tty_make_sole_ctty(struct tty *keep, int sid, int pgid);
+void tty_make_sole_ctty(struct tty *keep, int sid, int pgid, uint64_t serial);
 
 /** The slave tty behind a FD_TYPE_PTS descriptor (for the shared tty ioctls),
  * or NULL if e is not a pty slave. */
@@ -162,7 +163,8 @@ struct tty *tty_session_tty(int sid);
 
 /**
  * Release every pty slave whose session is `sid` when `sid` is `pid`, a
- * session leader that is ending, so a later session can claim the same
+ * session leader that is ending, after SIGHUP to the slave's foreground
+ * group (`tty_disassociate`), so a later session can claim the same
  * /dev/pts/N with TIOCSCTTY instead of finding a dead owner. The exit paths
  * call it beside the console's release.
  */

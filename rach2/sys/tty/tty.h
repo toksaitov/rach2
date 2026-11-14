@@ -50,7 +50,13 @@ struct tty {
     void (*flow)(struct tty *t, int what);
     int sid;     /* the session whose controlling terminal this is; 0 = none */
     int fg_pgid; /* foreground process group (ISIG target); 0 = none */
-    int hungup;  /* tty_hangup ran: a read with nothing to take returns 0 */
+    /* The `pgrp_serial` (process.h) of the foreground group, which tells it
+     * from a later group given `fg_pgid`, as Linux's tty->ctrl.pgrp is a
+     * reference to one struct pid; 0 with `fg_pgid` 0. Once the group has
+     * ended, `fg_pgid` still reads as its number and no signal reaches any
+     * group. */
+    uint64_t fg_serial;
+    int hungup; /* tty_hangup ran: a read with nothing to take returns 0 */
     /* The vhangup(2)s of the terminal (`tty_vhangup`). A description opened
      * when the count was lower is hung up: its reads give 0, its writes and
      * ioctls EIO (`tty_desc_hung`). */
@@ -133,16 +139,39 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx);
  */
 void tty_console_init(void);
 
-/** Post `signo` to every live user process of process group `pgid`; a `pgid`
- * of 0 posts nothing. */
-void tty_signal_group(int pgid, int signo);
+/** Post `signo` to every live user process of process group `pgid` whose
+ * `pgrp_serial` (process.h) is `serial`, the lifetime of the id that the
+ * caller holds; a `pgid` of 0 posts nothing. */
+void tty_signal_group(int pgid, uint64_t serial, int signo);
 
 /**
- * Set `t`'s session and foreground group together, with interrupts off, so
- * the console's interrupt-side drain never runs between the two stores. Used
- * to claim the console (exec) and to release it (0, 0).
+ * Set `t`'s session and foreground group, the group `pgid` of the lifetime
+ * `serial`, together, with interrupts off, so the console's interrupt-side
+ * drain never runs between the stores. Used to claim the console (exec) and
+ * to release a terminal (0, 0, 0).
  */
-void tty_set_session(struct tty *t, int sid, int pgid);
+void tty_set_session(struct tty *t, int sid, int pgid, uint64_t serial);
+
+/**
+ * Give the foreground of `t` to the group `pgid` of the lifetime `serial`,
+ * with interrupts off, as TIOCSPGRP does.
+ */
+void tty_set_foreground(struct tty *t, int pgid, uint64_t serial);
+
+/**
+ * Set the window size of `t` to `*ws`, as Linux's tty_do_resize: when the
+ * size changes, the foreground group gets SIGWINCH.
+ */
+void tty_resize(struct tty *t, const struct tty_winsize *ws);
+
+/**
+ * Release `t` from the session it controls when that session's leader gives
+ * it up, as Linux's disassociate_ctty: its foreground group, if it has one,
+ * gets SIGHUP, and SIGCONT after it when `on_exit` is 0, which TIOCNOTTY
+ * passes and the leader's end does not; then the terminal has no session and
+ * no foreground group.
+ */
+void tty_disassociate(struct tty *t, int on_exit);
 
 /**
  * Whether (sid, pid) is the leader of the session whose controlling terminal
@@ -156,12 +185,13 @@ void tty_set_session(struct tty *t, int sid, int pgid);
 int tty_console_owned_by_leader(int sid, int pid);
 
 /**
- * Whether a process of session `sid` and group `pgid` is in the background on
- * `t`: `t` is its controlling terminal and another group is in the
- * foreground. The callers stop such a reader with SIGTTIN, and such a writer
- * with SIGTTOU under TOSTOP.
+ * Whether a process of session `sid` and group `pgid` of the lifetime
+ * `serial` is in the background on `t`: `t` is its controlling terminal and
+ * another group, or an ended one given the same id, is in the foreground, as
+ * Linux compares struct pids. The callers stop such a reader with SIGTTIN,
+ * and such a writer with SIGTTOU under TOSTOP.
  */
-int tty_is_background(struct tty *t, int sid, int pgid);
+int tty_is_background(struct tty *t, int sid, int pgid, uint64_t serial);
 
 /**
  * The job-control check of a background process on its controlling terminal

@@ -219,6 +219,12 @@ process_t *signal_process_target(process_t *p)
     return p->state != PROC_UNUSED && p->pid == p->tgid ? p : NULL;
 }
 
+/** No row has a PID namespace: the kernel's number, `kid`. */
+uint32_t pid_seen(uint32_t kid)
+{
+    return kid;
+}
+
 /** The test's pair, zeroed, for `pty_alloc`; a request of another size is
  * a failure. */
 void *kzalloc(size_t size)
@@ -668,7 +674,7 @@ static void latency_read(void)
     tty_console_init();
     CHECK(console_tty.winsize.ws_col == 85 && console_tty.winsize.ws_row == 24,
           "the console's window is the console's cells");
-    tty_set_session(&console_tty, 1, 1);
+    tty_set_session(&console_tty, 1, 1, 0);
     recording = 1;
     recorded_waits = read_stamps = serial_pos = serial_len = 0;
     scheduled_action = serial_action;
@@ -691,7 +697,7 @@ static void raw_serial(void)
 
     setup_pair();
     tty_console_init();
-    tty_set_session(&console_tty, 1, 1);
+    tty_set_session(&console_tty, 1, 1, 0);
     console_tty.ldisc.tio.c_lflag &= ~(ICANON | ECHO);
     console_raw = 1;
     serial_bytes = "ab\003";
@@ -1060,7 +1066,7 @@ static int timed_read(int console, int vmin, int vtime, char *out, int count,
     consumer.tgid = consumer.pid = consumer.pgid = 6;
     if (console) {
         tty_console_init();
-        tty_set_session(&console_tty, 5, 6);
+        tty_set_session(&console_tty, 5, 6, 0);
         serial_pos = serial_len = 0;
     }
     t->ldisc.tio.c_lflag &= ~(ICANON | ECHO | ISIG);
@@ -1197,7 +1203,7 @@ static void long_lines(void)
 
     setup_pair();
     tty_console_init();
-    tty_set_session(&console_tty, 1, 1);
+    tty_set_session(&console_tty, 1, 1, 0);
     serial_bytes = long_input;
     serial_pos = 0;
     serial_len = (int)sizeof(long_input);
@@ -1531,7 +1537,7 @@ static void console_silent_full(void)
     }
     CHECK(ld->stopped && ld->echo_tail - ld->echo_head == N_TTY_ECHO_MAX,
           "a stop holds a full buffer of keyboard echo");
-    tty_set_session(&console_tty, 1, 1);
+    tty_set_session(&console_tty, 1, 1, 0);
     serial_bytes = "q\021";
     serial_len = 2;
     irq_enabled = 0;
@@ -1541,7 +1547,7 @@ static void console_silent_full(void)
               ld->echo_tail - ld->echo_head == N_TTY_ECHO_MAX &&
               ld->echo_buf[ld->echo_head & (N_TTY_ECHO_MAX - 1)] == 'a',
           "COM1's silent byte and VSTART keep the full echo held, its oldest byte first");
-    tty_set_session(&console_tty, 0, 0);
+    tty_set_session(&console_tty, 0, 0, 0);
 }
 
 /**
@@ -1562,7 +1568,7 @@ static void console_silent_restart(void)
     tty_input_char(&console_tty, 'b');
     CHECK(ld->stopped && ld->echo_tail - ld->echo_head == 2,
           "keyboard echo typed during a stop is held");
-    tty_set_session(&console_tty, 1, 1);
+    tty_set_session(&console_tty, 1, 1, 0);
     serial_bytes = "\021";
     serial_len = 1;
     irq_enabled = 0;
@@ -1573,7 +1579,7 @@ static void console_silent_restart(void)
     CHECK(tty_write(&console_tty, (const unsigned char *)"x", 1) == 1 &&
               ld->echo_tail == ld->echo_head,
           "the next write gives the echo out first");
-    tty_set_session(&console_tty, 0, 0);
+    tty_set_session(&console_tty, 0, 0, 0);
     console_silent_full();
 }
 

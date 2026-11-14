@@ -66,16 +66,19 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->flow = NULL;
     t->sid = 0;
     t->fg_pgid = 0;
+    t->fg_serial = 0;
     t->hungup = 0;
     t->vhangups = 0;
 }
 
 /** Signal the processes of `pgid`, with the big lock held, from a call or
  * an interrupt, each through its leader, zombie or not, as Linux
- * 6.12.115's __kill_pgrp_info does (kernel/signal.c:1478-1479). A process
- * whose threads have all ended and a kernel thread take nothing; a
- * process's unfinished forks get the signal (`signal_post_multi`). */
-void tty_signal_group(int pgid, int signo)
+ * 6.12.115's __kill_pgrp_info does (kernel/signal.c:1478-1479). Only the
+ * group of the lifetime `serial` is taken, as Linux walks one struct pid's
+ * list, which stays empty once its group has ended. A process whose threads
+ * have all ended and a kernel thread take nothing; a process's unfinished
+ * forks get the signal (`signal_post_multi`). */
+void tty_signal_group(int pgid, uint64_t serial, int signo)
 {
     process_t *p;
     struct k_siginfo info;
@@ -88,7 +91,7 @@ void tty_signal_group(int pgid, int signo)
     for (p = proc_list; p; p = p->next) {
         process_t *target = signal_process_target(p);
 
-        if (target && (int)target->pgid == pgid) {
+        if (target && (int)target->pgid == pgid && target->pgrp_serial == serial) {
             signal_post_multi(target, signo, &info);
         }
     }
@@ -103,12 +106,13 @@ void tty_signal_group(int pgid, int signo)
  */
 static void tty_deliver_signal(struct tty *t, int signo)
 {
-    tty_signal_group(t->fg_pgid, signo);
+    tty_signal_group(t->fg_pgid, t->fg_serial, signo);
 }
 
-int tty_is_background(struct tty *t, int sid, int pgid)
+int tty_is_background(struct tty *t, int sid, int pgid, uint64_t serial)
 {
-    return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 && t->fg_pgid != pgid;
+    return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 &&
+           (t->fg_pgid != pgid || t->fg_serial != serial);
 }
 
 /**
@@ -165,7 +169,7 @@ int tty_job_check(struct tty *t, int signo)
 {
     process_t *self = current_proc;
 
-    if (!self || !tty_is_background(t, (int)self->sid, (int)self->pgid)) {
+    if (!self || !tty_is_background(t, (int)self->sid, (int)self->pgid, self->pgrp_serial)) {
         return 0;
     }
     if ((self->sig_blocked & KSIG_BIT(signo)) || self->sigacts[signo].handler == KSIG_IGN) {
@@ -174,25 +178,63 @@ int tty_job_check(struct tty *t, int signo)
     if (tty_pgrp_orphaned((int)self->pgid)) {
         return -EIO;
     }
-    tty_signal_group((int)self->pgid, signo);
+    tty_signal_group((int)self->pgid, self->pgrp_serial, signo);
     return -EINTR;
 }
 
 /**
  * The interrupt-side drain (tty_console_poll) drains the console only while
- * its sid is nonzero, and then delivers a signal to fg_pgid by value, so a
- * torn update (sid already set while fg_pgid is still 0) would send a serial
- * ^C or ^Z to group 0, which drops it. With interrupts off the two stores are
- * one step to that drain.
+ * its sid is nonzero, and then delivers a signal to fg_pgid and fg_serial by
+ * value, so a torn update (sid already set while fg_pgid is still 0) would
+ * send a serial ^C or ^Z to group 0, which drops it. With interrupts off the
+ * stores are one step to that drain.
  */
-void tty_set_session(struct tty *t, int sid, int pgid)
+void tty_set_session(struct tty *t, int sid, int pgid, uint64_t serial)
 {
     uint32_t flags;
 
     flags = kirq_save();
     t->sid = sid;
     t->fg_pgid = pgid;
+    t->fg_serial = serial;
     kirq_restore(flags);
+}
+
+void tty_set_foreground(struct tty *t, int pgid, uint64_t serial)
+{
+    uint32_t flags;
+
+    flags = kirq_save();
+    t->fg_pgid = pgid;
+    t->fg_serial = serial;
+    kirq_restore(flags);
+}
+
+void tty_resize(struct tty *t, const struct tty_winsize *ws)
+{
+    if (t->winsize.ws_row == ws->ws_row && t->winsize.ws_col == ws->ws_col &&
+        t->winsize.ws_xpixel == ws->ws_xpixel && t->winsize.ws_ypixel == ws->ws_ypixel) {
+        return;
+    }
+    t->winsize = *ws;
+    if (t->fg_pgid != 0) {
+        tty_signal_group(t->fg_pgid, t->fg_serial, SIGWINCH);
+    }
+}
+
+/** Linux 6.12's disassociate_ctty (drivers/tty/tty_jobctrl.c) for a pty, and
+ * the signal to the foreground group that its hangup of any other terminal
+ * sends when the session ends (tty_signal_session_leader); the hangup of the
+ * console's descriptors is not made here. */
+void tty_disassociate(struct tty *t, int on_exit)
+{
+    if (t->fg_pgid != 0) {
+        tty_signal_group(t->fg_pgid, t->fg_serial, SIGHUP);
+        if (!on_exit) {
+            tty_signal_group(t->fg_pgid, t->fg_serial, SIGCONT);
+        }
+    }
+    tty_set_session(t, 0, 0, 0);
 }
 
 /**
@@ -817,7 +859,7 @@ void tty_vhangup(struct tty *t)
             }
         }
     }
-    tty_set_session(t, 0, 0);
+    tty_set_session(t, 0, 0, 0);
     flags = kirq_save();
     t->vhangups++;
     t->ldisc.echo_head = t->ldisc.echo_tail;
