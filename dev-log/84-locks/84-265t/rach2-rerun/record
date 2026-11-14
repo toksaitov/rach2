@@ -1,0 +1,252 @@
+runner webgl
+system Rach2 1.0.0 with the GNU system
+kernel Linux 6.18.0-rach2
+cpus 8
+memory_kib 8367276
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.00 0.00 0.00
+processes start 46
+kernel_before cpu  17 0 368 4373 0 0 0 0 0 0
+kernel_before cpu0 1 0 173 548 0 0 0 0 0 0
+kernel_before cpu1 1 0 30 549 0 0 0 0 0 0
+kernel_before cpu2 0 0 30 549 0 0 0 0 0 0
+kernel_before cpu3 2 0 43 533 0 0 0 0 0 0
+kernel_before cpu4 1 0 19 556 0 0 0 0 0 0
+kernel_before cpu5 0 0 19 554 0 0 0 0 0 0
+kernel_before cpu6 0 0 28 544 0 0 0 0 0 0
+kernel_before cpu7 10 0 24 537 0 0 0 0 0 0
+kernel_before intr 11953
+kernel_before ctxt 19827
+kernel_before btime 1794692942
+kernel_before processes 134
+kernel_before sleeps_interrupted 0
+kernel_before process_pid_steps 12037
+kernel_before process_uid_steps 185
+kernel_before process_timer_steps 14784
+kernel_before process_timer_passes 2520
+kernel_before timer_passes_late 14
+kernel_before tlb_shootdowns 10
+kernel_before tlb_shootdown_ipis 10
+kernel_before scheduler_picks 30796
+kernel_before scheduler_steps 10776
+kernel_before vm_gap_steps 29476
+kernel_before clock_calls 0
+kernel_before vdso_tsc 1
+kernel_before bkl_wait_us 1601759
+kernel_before bkl_wait_max_us 122813
+kernel_before bkl_wait_max_holds 1
+kernel_before bkl_wait_max_hold take 0 497109
+kernel_before bkl_hold_max_us 497109
+kernel_before bkl_hold_max_entry take 0
+kernel_before bkl_hold_sample_us 684501
+kernel_before bkl_hold_sample_pc ffffffff80389ed3 ffffffff803983bc ffffffff8010865a ffffffff80378598 ffffffff801002d9
+kernel_before bkl_hold_max_mark 1 0
+kernel_before bkl_hold_max_mark 2 0
+kernel_before bkl_hold_max_mark 4 0
+kernel_before bkl_hold_max_mark 8 0
+kernel_before bkl_hold_max_mark 16 0
+kernel_before bkl_hold_entry vector 36 41 530939
+kernel_before bkl_hold_entry take 0 5 497109
+kernel_before bkl_hold_entry syscall 1 702 180016
+kernel_before bkl_hold_entry syscall 257 5010 114687
+kernel_before bkl_hold_entry take 1 3754 97749
+kernel_before bkl_hold_entry vector 0 10513 37981
+kernel_before bkl_hold_entry syscall 326 653 15220
+kernel_before bkl_hold_entry syscall 262 811 12516
+kernel_before bkl_hold_entry syscall 231 105 11918
+kernel_before bkl_hold_entry syscall 3 2755 11828
+kernel_before bkl_hold_entry syscall 56 106 10313
+kernel_before bkl_hold_entry vector 32 1957 8425
+kernel_before bkl_hold_entry syscall 61 357 8246
+kernel_before bkl_hold_entry syscall 82 280 8124
+kernel_before bkl_hold_entry syscall 59 127 6739
+kernel_before bkl_hold_entry syscall 41 77 5352
+kernel_before kvm_vms 0
+kernel_before kvm_vcpus 0
+kernel_before kvm_slots 0
+kernel_before kvm_tdp_pages 0
+kernel_before kvm_run_mappings 0
+kernel_before kvm_gpa_maps 0
+kernel_before kvm_gpa_map_pages 0
+kernel_before kvm_ioeventfd_signals 0
+kernel_before kvm_irqfd_raises 0
+kernel_before vfio_groups 0
+kernel_before vfio_devices 0
+kernel_before vfio_dma_mappings 0
+kernel_before vfio_dma_pages 0
+kernel_before vfio_dma_io_pages 0
+kernel_before kvm_exits 0
+kernel_before iommu_dma_faults 0
+kernel_before iommu_irq_faults 0
+kernel_before msi_vectors_free 170
+kernel_before virtio_gpu_copied_bytes 0
+kernel_before latency_timer_us 412607
+kernel_before latency_disk_us 176871
+kernel_before latency_diskwait_us 0
+kernel_before latency_console_us 99157
+kernel_before wlan_refused_tcp 0
+kernel_before wlan_refused_ack 0
+kernel_before wlan_refused_other 0
+kernel_before wlan_rx_held 0
+kernel_before wlan_rx_wait_most 0
+kernel_before wlan_tx_status_lost 0
+kernel_before wlan_rescue_key 0
+kernel_before wlan_rescue_message4 0
+kernel_before wlan_rescue_silent 0
+kernel_before wlan_rescue_saved 0
+kernel_before wlan_rx_old_far 0
+kernel_before loopback_dropped 0
+kernel_before loopback_peak 0
+kernel_before loopback_delivered_tick 0
+kernel_before loopback_delivered_idle 0
+kernel_before loopback_delivered_call 0
+kernel_before loopback_left_idle 0
+kernel_before namecache_hits 29747
+kernel_before namecache_misses 2217
+kernel_before namecache_entries 1186
+kernel_before namecache_negative 167
+kernel_before ext2_node_visits 7464
+kernel_before procs_running 2
+kernel_before procs_blocked 1
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=8
+env GRAPHICS_MEMORY_KIB=8367276
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case webgl chromium 2.0.1 chunk 4 of 250 pages
+warmup 0
+repetitions 1, and each page that does not pass once more
+suite /usr/share/webgl/sdk/tests
+omitted conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_video/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_video/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_video/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_video/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_blob/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_blob/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_blob/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_blob/tex-3d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb-float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-half_float.html,conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-float.html,conformance2/uniforms/incompatible-texture-type-for-sampler.html
+browser Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)
+switches --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-gpu-blocklist --disable-gpu-process-crash-limit --js-flags=--expose-gc --disable-background-timer-throttling --disable-renderer-backgrounding --disable-background-networking --disable-hang-monitor --autoplay-policy=no-user-gesture-required 
+compositor weston 14.0.2 (Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, xwm-emulated-mode, xwm-mapped-managed, pointer-constraint-view) headless gl kiosk no-config
+list 2.0.1 2865 pages sha256 9d7bddb435701ca417201b55f82c6b9f88933fbd175a3b346ddc4165917a380b
+renderer webgl WebKit WebGL; WebGL 1.0 (OpenGL ES 2.0 Chromium); unmasked ANGLE (Mesa, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), OpenGL ES 3.1); vendor Google Inc. (Mesa)
+renderer webgl2 WebKit WebGL; WebGL 2.0 (OpenGL ES 3.0 Chromium); unmasked ANGLE (Mesa, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), OpenGL ES 3.1); vendor Google Inc. (Mesa)
+list fetches failed 0
+load end 2.37 2.04 1.66
+busy 21.1%
+kernel_after cpu  229227 0 81990 1164078 0 0 0 176 0 0
+kernel_after cpu0 31326 0 9844 143366 0 0 0 25 0 0
+kernel_after cpu1 27489 0 11048 145860 0 0 0 22 0 0
+kernel_after cpu2 27823 0 9200 147374 0 0 0 20 0 0
+kernel_after cpu3 31550 0 12282 140564 0 0 0 20 0 0
+kernel_after cpu4 29364 0 9975 145053 0 0 0 22 0 0
+kernel_after cpu5 27453 0 10098 146840 0 0 0 21 0 0
+kernel_after cpu6 26461 0 10032 147898 0 0 0 20 0 0
+kernel_after cpu7 27757 0 9508 147122 0 0 0 22 0 0
+kernel_after intr 3224748
+kernel_after ctxt 16742235
+kernel_after btime 1794692942
+kernel_after processes 18811
+kernel_after sleeps_interrupted 2
+kernel_after process_pid_steps 394858
+kernel_after process_uid_steps 37539
+kernel_after process_timer_steps 108128565
+kernel_after process_timer_passes 1452744
+kernel_after timer_passes_late 16602
+kernel_after tlb_shootdowns 1119379
+kernel_after tlb_shootdown_ipis 1987626
+kernel_after scheduler_picks 21069027
+kernel_after scheduler_steps 11190237
+kernel_after vm_gap_steps 24538108
+kernel_after clock_calls 11140
+kernel_after vdso_tsc 1
+kernel_after bkl_wait_us 387916719
+kernel_after bkl_wait_max_us 166927
+kernel_after bkl_wait_max_holds 15
+kernel_after bkl_wait_max_hold take 1 166473
+kernel_after bkl_wait_max_hold 128 16 111
+kernel_after bkl_wait_max_hold 0 -1 46
+kernel_after bkl_wait_max_hold take 1 64
+kernel_after bkl_wait_max_hold 128 61 75
+kernel_after bkl_wait_max_hold 0 -1 2
+kernel_after bkl_wait_max_hold 128 9 1
+kernel_after bkl_wait_max_hold take 1 46
+kernel_after bkl_wait_max_hold 0 -1 51
+kernel_after bkl_wait_max_hold take 1 3
+kernel_after bkl_wait_max_hold 0 -1 1
+kernel_after bkl_wait_max_hold 128 61 9
+kernel_after bkl_wait_max_hold take 1 0
+kernel_after bkl_wait_max_hold 128 9 17
+kernel_after bkl_wait_max_hold 128 232 3
+kernel_after bkl_hold_max_us 497109
+kernel_after bkl_hold_max_entry take 0
+kernel_after bkl_hold_sample_us 684501
+kernel_after bkl_hold_sample_pc ffffffff80389ed3 ffffffff803983bc ffffffff8010865a ffffffff80378598 ffffffff801002d9
+kernel_after bkl_hold_max_mark 1 0
+kernel_after bkl_hold_max_mark 2 0
+kernel_after bkl_hold_max_mark 4 0
+kernel_after bkl_hold_max_mark 8 0
+kernel_after bkl_hold_max_mark 16 0
+kernel_after bkl_hold_entry syscall 16 723607 63549540
+kernel_after bkl_hold_entry syscall 202 9756208 54871791
+kernel_after bkl_hold_entry take 1 6274444 37098171
+kernel_after bkl_hold_entry syscall 28 1510906 15412231
+kernel_after bkl_hold_entry vector 0 5902754 13099671
+kernel_after bkl_hold_entry syscall 1 619679 11454530
+kernel_after bkl_hold_entry syscall 257 271960 7295360
+kernel_after bkl_hold_entry syscall 263 176184 6539929
+kernel_after bkl_hold_entry syscall 82 51908 5083109
+kernel_after bkl_hold_entry syscall 232 3135941 4489217
+kernel_after bkl_hold_entry syscall 61 83364 3858952
+kernel_after bkl_hold_entry vector 32 793804 3738507
+kernel_after bkl_hold_entry syscall 0 717094 2319303
+kernel_after bkl_hold_entry syscall 18 882181 2237245
+kernel_after bkl_hold_entry syscall 44 2793247 1788372
+kernel_after bkl_hold_entry syscall 9 430569 1733636
+kernel_after kvm_vms 0
+kernel_after kvm_vcpus 0
+kernel_after kvm_slots 0
+kernel_after kvm_tdp_pages 0
+kernel_after kvm_run_mappings 0
+kernel_after kvm_gpa_maps 0
+kernel_after kvm_gpa_map_pages 0
+kernel_after kvm_ioeventfd_signals 0
+kernel_after kvm_irqfd_raises 0
+kernel_after vfio_groups 0
+kernel_after vfio_devices 0
+kernel_after vfio_dma_mappings 0
+kernel_after vfio_dma_pages 0
+kernel_after vfio_dma_io_pages 0
+kernel_after kvm_exits 0
+kernel_after iommu_dma_faults 0
+kernel_after iommu_irq_faults 0
+kernel_after msi_vectors_free 170
+kernel_after virtio_gpu_copied_bytes 7423703368
+kernel_after latency_timer_us 412607
+kernel_after latency_disk_us 176871
+kernel_after latency_diskwait_us 30593
+kernel_after latency_console_us 99157
+kernel_after wlan_refused_tcp 0
+kernel_after wlan_refused_ack 0
+kernel_after wlan_refused_other 0
+kernel_after wlan_rx_held 0
+kernel_after wlan_rx_wait_most 0
+kernel_after wlan_tx_status_lost 0
+kernel_after wlan_rescue_key 0
+kernel_after wlan_rescue_message4 0
+kernel_after wlan_rescue_silent 0
+kernel_after wlan_rescue_saved 0
+kernel_after wlan_rx_old_far 0
+kernel_after loopback_dropped 0
+kernel_after loopback_peak 266
+kernel_after loopback_delivered_tick 38650
+kernel_after loopback_delivered_idle 321664
+kernel_after loopback_delivered_call 1232035
+kernel_after loopback_left_idle 0
+kernel_after namecache_hits 2744521
+kernel_after namecache_misses 112103
+kernel_after namecache_entries 3731
+kernel_after namecache_negative 550
+kernel_after ext2_node_visits 561141
+kernel_after procs_running 2
+kernel_after procs_blocked 0

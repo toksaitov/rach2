@@ -1,0 +1,14 @@
+judge: worse: deqp/functional/gles3/texturefiltering/2d_array_combinations_00.html: debian fail, 1500727 subtests passed; here fail, 1500713 passed
+judge: worse: deqp/functional/gles3/texturefiltering/2d_array_combinations_01.html: debian fail, 2076469 subtests passed; here fail, 2076327 passed
+judge: worse: deqp/functional/gles3/texturefiltering/2d_array_combinations_02.html: debian fail, 1656361 subtests passed; here fail, 1656325 passed
+judge: worse: deqp/functional/gles3/texturefiltering/2d_array_combinations_04.html: debian fail, 2592485 subtests passed; here fail, 2592257 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_03.html: debian fail, 886112 subtests passed; here fail, 876388 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_04.html: debian fail, 889610 subtests passed; here fail, 889236 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_05.html: debian fail, 889610 subtests passed; here fail, 889236 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_06.html: debian fail, 1258887 subtests passed; here fail, 1245033 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_07.html: debian fail, 1263069 subtests passed; here fail, 1262547 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_08.html: debian fail, 1263069 subtests passed; here fail, 1262547 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_09.html: debian fail, 1258887 subtests passed; here fail, 1245033 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_10.html: debian fail, 1263069 subtests passed; here fail, 1262547 passed
+judge: worse: deqp/functional/gles3/texturefiltering/3d_combinations_11.html: debian fail, 1263069 subtests passed; here fail, 1262547 passed
+judge: result: fail webgl 250 pages, 13 worse than Debian's

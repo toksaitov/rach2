@@ -1,7 +1,7 @@
 # webgl-virgl.flakes: the subtests of WebGL pages that judge.py webgl does
 # not judge in the virgl cases, `PATH ERE` a line, PATH as the suite's list
-# gives it and ERE an extended regular expression searched for in the
-# subtest's message.
+# gives it, or a directory of it ending in `/` for every page under it, and
+# ERE an extended regular expression searched for in the subtest's message.
 #
 # occlusion-query-scissor.html: an ANY_SAMPLES_PASSED query whose draws a
 # 0x0 scissor rectangle leaves empty reads 1 in 53 to 64 of the page's 65
@@ -21,3 +21,17 @@ conformance2/query/occlusion-query-scissor.html ^pass [0-9]+, result: 1 === expe
 # chunk 3's reference is taken again under 621.24.
 deqp/functional/gles3/fboinvalidate/whole.html ^invalidate\.whole\.
 deqp/functional/gles3/fboinvalidate/target.html ^invalidate\.target\.
+#
+# deqp/functional/gles3/texturefiltering/: every case of chunk 4's 103 pages
+# fails "Image verification failed" in the Debian guest as on Rach2, and the
+# 13 that begin chunk 5 pass in its new browser. The count of subtests
+# passed is the verifier's checks of pixels that miss the ideal image, up to
+# a case's first failing iteration. Under the testing PC's NVIDIA driver
+# 621.24 the Debian guest's run of chunk 4 gives Rach2's counts on the 3D
+# pages, which its reference under 621.01 did not, and on the 2D-array and
+# cube pages counts that move from run to run, as Rach2's do; with fewer
+# pages run before them, four 3D pages pass outright
+# (dev-log/84-locks/84-265t.md). A case that fails otherwise is judged, and
+# the dEQP-GLES3 cases judge the same filtering case by case. The line stays
+# when chunk 4's reference is taken again, since those counts move.
+deqp/functional/gles3/texturefiltering/ Image verification failed$

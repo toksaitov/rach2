@@ -1,0 +1,10 @@
+1230 fail 98393 8 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_03.html
+1231 fail 22764 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_04.html
+1232 fail 165330 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_05.html
+1233 fail 228676 8 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_06.html
+1234 fail 31438 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_07.html
+1235 fail 364432 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_08.html
+1236 pass 1027 0 0 0 pass deqp/functional/gles3/texturefiltering/3d_combinations_09.html
+1237 pass 1027 0 0 0 pass deqp/functional/gles3/texturefiltering/3d_combinations_10.html
+1238 pass 1027 0 0 0 pass deqp/functional/gles3/texturefiltering/3d_combinations_11.html
+1239 pass 1027 0 0 0 pass deqp/functional/gles3/texturefiltering/3d_combinations_12.html

@@ -1,0 +1,279 @@
+runner webgl
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 8
+memory_kib 8136936
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.24 0.05 0.02
+processes start 172
+kernel_before cpu  145 0 467 7228 287 0 37 0 0 0
+kernel_before cpu0 8 0 93 867 54 0 14 0 0 0
+kernel_before cpu1 19 0 43 925 33 0 6 0 0 0
+kernel_before cpu2 25 0 103 835 27 0 2 0 0 0
+kernel_before cpu3 9 0 49 917 43 0 4 0 0 0
+kernel_before cpu4 9 0 39 963 13 0 3 0 0 0
+kernel_before cpu5 17 0 63 878 33 0 3 0 0 0
+kernel_before cpu6 15 0 27 946 37 0 1 0 0 0
+kernel_before cpu7 39 0 47 893 42 0 2 0 0 0
+kernel_before intr 89959 48 9 0 0 371 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 354 226 476 435 262 589 312 249 0 967 613 0 0 6 0 121 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 35351
+kernel_before btime 1794695616
+kernel_before processes 898
+kernel_before procs_running 2
+kernel_before procs_blocked 0
+kernel_before softirq 13369 0 1070 4 1218 0 0 12 2808 0 8257
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=8
+env GRAPHICS_MEMORY_KIB=8136936
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case webgl chromium 2.0.1 chunk 123 of 10 pages
+warmup 0
+repetitions 1, and each page that does not pass once more
+suite /tmp/webgl
+omitted none
+browser Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)
+switches --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-gpu-blocklist --disable-gpu-process-crash-limit --js-flags=--expose-gc --disable-background-timer-throttling --disable-renderer-backgrounding --disable-background-networking --disable-hang-monitor --autoplay-policy=no-user-gesture-required 
+compositor weston 14.0.2 headless gl kiosk no-config
+list 2.0.1 2865 pages sha256 9d7bddb435701ca417201b55f82c6b9f88933fbd175a3b346ddc4165917a380b
+renderer webgl WebKit WebGL; WebGL 1.0 (OpenGL ES 2.0 Chromium); unmasked ANGLE (Mesa, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), OpenGL ES 3.1); vendor Google Inc. (Mesa)
+renderer webgl2 WebKit WebGL; WebGL 2.0 (OpenGL ES 3.0 Chromium); unmasked ANGLE (Mesa, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), OpenGL ES 3.1); vendor Google Inc. (Mesa)
+list fetches failed 0
+load end 0.95 0.24 0.08
+busy 17.3%
+kernel_after cpu  3637 0 1974 31878 519 0 591 1744 0 0
+kernel_after cpu0 269 0 269 4154 68 0 353 241 0 0
+kernel_after cpu1 400 0 221 4047 78 0 134 225 0 0
+kernel_after cpu2 546 0 280 3855 49 0 42 201 0 0
+kernel_after cpu3 849 0 265 3521 72 0 20 245 0 0
+kernel_after cpu4 321 0 261 4131 59 0 15 213 0 0
+kernel_after cpu5 333 0 237 4136 47 0 10 181 0 0
+kernel_after cpu6 508 0 216 3979 65 0 10 221 0 0
+kernel_after cpu7 407 0 222 4050 78 0 4 213 0 0
+kernel_after intr 407404 48 9 0 0 371 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 536 1016 997 839 1618 873 915 762 0 1754 949 0 0 10 0 5391 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 520391
+kernel_after btime 1794695616
+kernel_after processes 2551
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 87350 0 6782 8 11494 0 0 15 25701 0 43350
+guest profile virgl
+guest firmware seabios
+guest accelerator kvm
+guest cpu host,invtsc=on
+guest cpus 8
+guest memory_mib 8192
+guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+guest snapshot 20261108T000000Z
+guest claim debian-ref:toksaitov-s:515047:1794695386
+guest host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+guest host_load 6.02 6.69 8.04
+guest host_claims 9
+guest host_ledger etude-ledger 1
+guest host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:ports
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3710991 8722049 1
+guest host_ledger account ghrunner
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261114T204301Z.3932768:ports
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3932768 8893182 1
+guest host_ledger account toksaitov-a
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:machine.virgl.webgl-firefox-webgl2-04:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3710991 8722049 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger process keeper 497185 9582465 1
+guest host_ledger process case 497186 9582466 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:machine.virgl.webgl-firefox-webgl2-06:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3710991 8722049 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger process keeper 512466 9624849 1
+guest host_ledger process case 512467 9624849 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261114T204301Z.3932768:machine.virgl.webgl-chromium-webgl2-06:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3932768 8893182 1
+guest host_ledger account toksaitov-a
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger process keeper 515789 9643881 1
+guest host_ledger process case 515790 9643881 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:machine.virgl.webgl-firefox-webgl2-07:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 3710991 8722049 1
+guest host_ledger account ghrunner
+guest host_ledger state waiting
+guest host_ledger ticket 4
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-a:513348:1794695264
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 513348 9627088 1
+guest host_ledger account toksaitov-a
+guest host_ledger state blocked
+guest host_ledger ticket 5
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-a:513345:1794695264
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 513345 9627088 1
+guest host_ledger account toksaitov-a
+guest host_ledger state waiting
+guest host_ledger ticket 6
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-s:515047:1794695386
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 515047 9637337 1
+guest host_ledger account toksaitov-s
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 525830 9662013 1
+guest host_ledger process case 525831 9662013 1
+guest host_ledger end
+guest env GRAPHICS_CLASS=conformance
+guest env GRAPHICS_CPUS=8
+guest env GRAPHICS_MEMORY_KIB=8136936
+guest env LP_NUM_THREADS=0
+guest env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+guest env MESA_SHADER_CACHE_FILES=0
+guest env GRAPHICS_DONE=1
+guest env XVFB=-noreset
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 16.88 9.26 8.83
+host_claims 9
+host_ledger etude-ledger 1
+host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 3710991 8722049 1
+host_ledger account ghrunner
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261114T204301Z.3932768:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 3932768 8893182 1
+host_ledger account toksaitov-a
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:machine.virgl.webgl-firefox-webgl2-04:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 3710991 8722049 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 497185 9582465 1
+host_ledger process case 497186 9582466 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:machine.virgl.webgl-firefox-webgl2-06:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 3710991 8722049 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 512466 9624849 1
+host_ledger process case 512467 9624849 1
+host_ledger end
+host_ledger claim tests.x86_64.20261114T204301Z.3932768:machine.virgl.webgl-chromium-webgl2-06:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 3932768 8893182 1
+host_ledger account toksaitov-a
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 515789 9643881 1
+host_ledger process case 515790 9643881 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T200011Z.3710991:machine.virgl.webgl-firefox-webgl2-07:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 3710991 8722049 1
+host_ledger account ghrunner
+host_ledger state waiting
+host_ledger ticket 4
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger end
+host_ledger claim debian-ref:toksaitov-a:513348:1794695264
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 513348 9627088 1
+host_ledger account toksaitov-a
+host_ledger state blocked
+host_ledger ticket 5
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger end
+host_ledger claim debian-ref:toksaitov-a:513345:1794695264
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 513345 9627088 1
+host_ledger account toksaitov-a
+host_ledger state waiting
+host_ledger ticket 6
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger end
+host_ledger claim launch:c01f64daa514ba61c0bc97e4a44d13ee
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 547350 9667426 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource memory_bytes 35433480192
+host_ledger process keeper 547366 9667429 1
+host_ledger process case 547367 9667429 1
+host_ledger end
