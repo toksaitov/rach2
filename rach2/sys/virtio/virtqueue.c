@@ -281,6 +281,7 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
      * virtqueue_add_split does (virtio_ring.c:576-580). */
     vq->max_chain = vq->indirect && vq->ind_len > size ? vq->ind_len : size;
     vq->max_bytes = 0;
+    vq->max_seg = 0;
     r = d->ops->queue_enable(d, vq);
     if (r != 0) {
         virtqueue_free(d, vq, 1);
@@ -413,20 +414,23 @@ void virtio_put(struct virtio_dev *d)
 }
 
 /**
- * The run of segments of `sg` from `k` that one descriptor holds: those of
- * the same way, the first `out` read by the device, whose device addresses
- * follow each other, while the length stays within 32 bits. Returns the
- * index after the run, with its length in `*len`.
+ * The run of segments of `sg` from `k` that one descriptor of `vq` holds:
+ * those of the same way, the first `out` read by the device, whose device
+ * addresses follow each other, while the length stays within 32 bits and
+ * within the queue's `max_seg`, as Linux's block layer merges no segment
+ * past its queue's max_segment_size. Returns the index after the run, with
+ * its length in `*len`.
  */
-static unsigned virtqueue_run(const struct virtio_sg *sg, unsigned k, unsigned out, unsigned total,
-                              uint32_t *len)
+static unsigned virtqueue_run(const struct virtqueue *vq, const struct virtio_sg *sg, unsigned k,
+                              unsigned out, unsigned total, uint32_t *len)
 {
+    uint32_t most = vq->max_seg ? vq->max_seg : 0xFFFFFFFFu;
     uint64_t end = sg[k].addr + sg[k].len;
     uint32_t n = sg[k].len;
     unsigned j = k + 1u;
 
-    while (j < total && (j < out) == (k < out) && sg[j].addr == end &&
-           sg[j].len <= 0xFFFFFFFFu - n) {
+    while (j < total && (j < out) == (k < out) && sg[j].addr == end && n <= most &&
+           sg[j].len <= most - n) {
         n += sg[j].len;
         end += sg[j].len;
         j++;
@@ -437,8 +441,8 @@ static unsigned virtqueue_run(const struct virtio_sg *sg, unsigned k, unsigned o
 
 /** The descriptors a buffer takes once its runs are merged, with the bytes
  * of its longest way in `*most`. */
-static unsigned virtqueue_descs(const struct virtio_sg *sg, unsigned out, unsigned total,
-                                uint64_t *most)
+static unsigned virtqueue_descs(const struct virtqueue *vq, const struct virtio_sg *sg,
+                                unsigned out, unsigned total, uint64_t *most)
 {
     uint64_t bytes[2];
     unsigned k = 0, n = 0;
@@ -448,7 +452,7 @@ static unsigned virtqueue_descs(const struct virtio_sg *sg, unsigned out, unsign
     while (k < total) {
         int way = k >= out;
 
-        k = virtqueue_run(sg, k, out, total, &len);
+        k = virtqueue_run(vq, sg, k, out, total, &len);
         bytes[way] += len;
         n++;
     }
@@ -460,7 +464,7 @@ int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg,
                          unsigned in)
 {
     uint64_t most;
-    unsigned n = virtqueue_descs(sg, out, out + in, &most);
+    unsigned n = virtqueue_descs(vq, sg, out, out + in, &most);
 
     return n <= vq->max_chain && (vq->max_bytes == 0 || most <= vq->max_bytes);
 }
@@ -494,7 +498,7 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
     if (total == 0 || !token) {
         return -EINVAL;
     }
-    descs = virtqueue_descs(sg, out, total, &most);
+    descs = virtqueue_descs(vq, sg, out, total, &most);
     if (descs > vq->max_chain || (vq->max_bytes != 0 && most > vq->max_bytes)) {
         return -E2BIG;
     }
@@ -505,7 +509,7 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
         for (k = 0; k < total; k = j) {
             uint16_t next = vq->next[i];
 
-            j = virtqueue_run(sg, k, out, total, &len);
+            j = virtqueue_run(vq, sg, k, out, total, &len);
             virtqueue_fill(&vq->desc[i], &sg[k], k >= out, len, j < total, next);
             if (j < total) {
                 i = next;
@@ -530,7 +534,7 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
         tbl_addr = vq->ind_page_addr[t / vq->ind_per_page] + (uint64_t)at * VIRTQ_DESC_BYTES;
         d = 0;
         for (k = 0; k < total; k = j) {
-            j = virtqueue_run(sg, k, out, total, &len);
+            j = virtqueue_run(vq, sg, k, out, total, &len);
             virtqueue_fill(&tbl[d], &sg[k], k >= out, len, j < total, (uint16_t)(d + 1u));
             d++;
         }

@@ -151,8 +151,11 @@ struct virtqueue {
     uint16_t ind_pages;     /* the pages, each from dma_alloc */
     volatile struct virtq_desc *ind_page[VIRTQ_INDIRECT_TABLES];
     uint64_t ind_page_addr[VIRTQ_INDIRECT_TABLES];
-    uint16_t max_chain;             /* descriptors one chain may hold; the transport's */
-    uint32_t max_bytes;             /* bytes one chain may carry each way, 0 for any */
+    uint16_t max_chain; /* descriptors one chain may hold; the transport's */
+    uint32_t max_bytes; /* bytes one chain may carry each way, 0 for any */
+    /* The bytes one descriptor may describe, 0 for any; the driver's, set
+     * after virtio_queue_setup. */
+    uint32_t max_seg;
     uint16_t free_head;             /* the first free descriptor */
     uint16_t nfree;                 /* free descriptors */
     uint16_t avail_idx;             /* the driver's ring index as last published */
@@ -499,7 +502,8 @@ void virtio_put(struct virtio_dev *d);
  * Whether a buffer of `out` segments the device reads and `in` it writes,
  * in `sg`, fits one chain of `vq`: no more descriptors than `max_chain` and
  * no more bytes each way than `max_bytes`, once adjacent segments of the
- * same way are one descriptor, as virtqueue_add makes them.
+ * same way are one descriptor of at most `max_seg` bytes, as virtqueue_add
+ * makes them.
  */
 int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg, unsigned out,
                          unsigned in);
@@ -509,7 +513,8 @@ int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg,
  * segments it writes, all in `sg`, with `token`, which `done` is given back.
  * The buffer is published at once; virtqueue_kick tells the device.
  * Segments of the same way that are adjacent in the device's addresses go
- * in one descriptor.
+ * in one descriptor, of at most the queue's `max_seg` bytes where its
+ * driver sets one, as virtio-blk does for a device's `size_max`.
  *
  * A chain goes into the queue's descriptors when enough are free, and into
  * an indirect table when they are not, the feature was negotiated and a
