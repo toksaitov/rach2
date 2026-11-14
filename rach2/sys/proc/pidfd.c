@@ -23,12 +23,14 @@
 #define POLLHUP    0x010
 #define POLLRDNORM 0x040
 
-/* A pidfd: the thread group of its process, held by a reference, and the
- * process's kernel id, which its leader has, an exec by another thread
- * included. */
+/* A pidfd: the thread group of its process and the PID namespace the
+ * process has its number in, each held by a reference so that both outlast
+ * the reap, and the process's kernel id, which its leader has, an exec by
+ * another thread included. */
 struct pidfd {
     struct anon_obj anon;
     struct tgroup *tg;
+    struct pidns *ns;
     uint32_t pid;
 };
 
@@ -104,6 +106,7 @@ struct pidfd *pidfd_new(process_t *p)
         pf->anon.name = "[pidfd]";
         pf->tg = p->tg;
         pf->tg->refs++;
+        pf->ns = pidns_get(proc_pidns(p));
         pf->pid = p->tgid;
     }
     return pf;
@@ -127,6 +130,7 @@ void pidfd_free(struct pidfd *pf)
 {
     if (pf) {
         tgroup_put(pf->tg);
+        ns_put(&pf->ns->c);
         kfree(pf);
     }
 }
@@ -156,6 +160,7 @@ int32_t pidfd_ref_get(int fd, struct pidfd_ref *ref)
     pf = (const struct pidfd *)e->priv;
     ref->tg = pf->tg;
     ref->tg->refs++;
+    ref->ns = pidns_get(pf->ns);
     ref->pid = pf->pid;
     return 0;
 }
@@ -165,10 +170,17 @@ process_t *pidfd_ref_task(const struct pidfd_ref *ref)
     return group_task(ref->tg, ref->pid);
 }
 
+int pidfd_ref_seen(const struct pidfd_ref *ref)
+{
+    return pidns_seen(ref->ns);
+}
+
 void pidfd_ref_put(struct pidfd_ref *ref)
 {
     tgroup_put(ref->tg);
+    ns_put(&ref->ns->c);
     ref->tg = NULL;
+    ref->ns = NULL;
 }
 
 long sys_pidfd_open(struct isr_params *params)

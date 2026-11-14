@@ -270,6 +270,15 @@ process_t *proc_named(uint32_t pid);
 /** pid_seen for the viewer `viewer` in place of the current process. */
 uint32_t pid_seen_by(const process_t *viewer, uint32_t kid);
 
+/** Take a reference to the PID namespace `ns`, which the caller drops with
+ * `ns_put`, and return `ns`. */
+struct pidns *pidns_get(struct pidns *ns);
+
+/** Whether the PID namespace `ns` is the current process's or one below it,
+ * those whose processes the current process may name, as Linux's
+ * access_pidfd_pidns asks of a pidfd's namespace. */
+int pidns_seen(const struct pidns *ns);
+
 /**
  * The child `child` takes `parent`'s namespaces, and new ones for the
  * CLONE_NEW flags of `flags`, and its numbers in the PID namespaces it is

@@ -5275,15 +5275,17 @@ static int cred_may_signal(const process_t *target, int signo)
 }
 
 /** Post `signo` to every member of the process group `pgid` the caller may
- * signal, which kill(2) selects with a pid of 0 or below -1, as Linux
+ * signal, which kill(2) selects with a pid of 0 or below -1, and
+ * pidfd_send_signal(2) with PIDFD_SIGNAL_PROCESS_GROUP, as Linux
  * 6.12.115's __kill_pgrp_info does (kernel/signal.c:1478-1488): each
  * member through its leader (`signal_process_target`), whose credentials
- * the permission check reads. 0 if any member may be signalled, -EPERM if
- * members exist but none may be, -ESRCH if the group is empty. signo 0
- * only probes. A member that has ended and is not yet reaped counts and
- * discards the signal, as on Linux. A kernel thread is in no group of a
- * process. */
-static int32_t kill_group(int pgid, int signo)
+ * the permission check reads, with the siginfo `given`, or kill's when it
+ * is NULL. 0 if any member may be signalled, -ESRCH if the group is empty,
+ * -EINVAL if it is not and the signal is out of range, and -EPERM if
+ * members exist but none may be signalled. signo 0 only probes. A member
+ * that has ended and is not yet reaped counts and discards the signal, as
+ * on Linux. A kernel thread is in no group of a process. */
+static int32_t kill_group(int pgid, int signo, const struct k_siginfo *given)
 {
     int found = 0;
     int allowed = 0;
@@ -5296,19 +5298,26 @@ static int32_t kill_group(int pgid, int signo)
             continue;
         }
         found = 1;
-        if (!cred_may_signal(target, signo)) {
+        if (signo < 0 || signo > KSIG_MAX || !cred_may_signal(target, signo)) {
             continue;
         }
         allowed = 1;
         if (signo != 0) {
             struct k_siginfo info;
 
-            sender_info(&info, SI_USER, target);
+            if (given) {
+                info = *given;
+            } else {
+                sender_info(&info, SI_USER, target);
+            }
             signal_post_multi(target, signo, &info);
         }
     }
     if (!found) {
         return -ESRCH;
+    }
+    if (signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
     }
     return allowed ? 0 : -EPERM;
 }
@@ -5363,13 +5372,13 @@ static int32_t do_kill(int pid, int signo)
         return -EINVAL;
     }
     if (pid == 0) {
-        return current_proc ? kill_group((int)current_proc->pgid, signo) : -ESRCH;
+        return current_proc ? kill_group((int)current_proc->pgid, signo, NULL) : -ESRCH;
     }
     if (pid < -1) {
         if (pid == -2147483647 - 1) {
             return -ESRCH; /* INT_MIN: -pid would overflow */
         }
-        return pid_named((uint32_t)-pid) ? kill_group((int)pid_named((uint32_t)-pid), signo)
+        return pid_named((uint32_t)-pid) ? kill_group((int)pid_named((uint32_t)-pid), signo, NULL)
                                          : -ESRCH;
     }
     if (pid == -1) {
@@ -5391,10 +5400,26 @@ static int32_t do_kill(int pid, int signo)
 }
 
 /**
+ * Whether the thread `t` is one that tkill, tgkill and rt_tgsigqueueinfo
+ * cannot find: a free record, or a thread that has ended, does not lead its
+ * process and is not traced, whose record waits for `reap_threads` where
+ * Linux's release_task has already let its id go. An ended leader keeps its
+ * id until its parent reaps the process, and an ended traced thread until
+ * its tracer's wait, so each is found and checked and takes nothing, as
+ * Linux's do_send_specific finds a zombie.
+ */
+static int thread_gone(const process_t *t)
+{
+    return !t || t->state == PROC_UNUSED ||
+           (t->state == PROC_ZOMBIE && t->pid != t->tgid && !(t->ptrace & PT_TRACED));
+}
+
+/**
  * tkill and tgkill: send `signo` to the thread `tid` alone, which must be a
  * thread of the process `tgid` unless `tgid` is 0. Both ids are positive: a
  * thread id is never a kill(2) group selector, so a zero or negative one is
- * -EINVAL, not a group.
+ * -EINVAL, not a group. A thread that has ended but keeps its id
+ * (`thread_gone`) is checked and discards the signal.
  */
 static int32_t do_tkill(int tgid, int tid, int signo)
 {
@@ -5405,8 +5430,7 @@ static int32_t do_tkill(int tgid, int tid, int signo)
         return -EINVAL;
     }
     t = proc_named((uint32_t)tid);
-    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
-        (tgid != 0 && t->tgid != pid_named((uint32_t)tgid))) {
+    if (thread_gone(t) || (tgid != 0 && t->tgid != pid_named((uint32_t)tgid))) {
         return -ESRCH;
     }
     if (!cred_may_signal(t, signo)) {
@@ -5552,21 +5576,37 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
     return 0;
 }
 
+/* pidfd_send_signal's flags since Linux 6.9, at most one of which is given:
+ * the signal goes to the pidfd's thread, to its process, the default for a
+ * pidfd of a process, or to the process group whose id is the process's. */
+#define PIDFD_SIGNAL_THREAD        1u
+#define PIDFD_SIGNAL_THREAD_GROUP  2u
+#define PIDFD_SIGNAL_PROCESS_GROUP 4u
+#define PIDFD_SIGNAL_SCOPES \
+    (PIDFD_SIGNAL_THREAD | PIDFD_SIGNAL_THREAD_GROUP | PIDFD_SIGNAL_PROCESS_GROUP)
+
 /**
- * pidfd_send_signal takes a pidfd, a signal, a siginfo or 0, and flags,
- * which must be 0: the signal posted to the pidfd's process under kill's
- * permission, with the siginfo given, whose si_signo must be the signal,
- * or else kill's. Signal 0, and a signal to a process whose threads have
- * all ended, are checked and not posted. The checks run in the order of
- * Linux 6.12's pidfd_send_signal: -EINVAL for a flag; -EBADF for a
- * descriptor that is not a pidfd; -EINVAL for a process outside the
- * caller's PID namespace and those below it, while it is not reaped; then
- * the siginfo is copied (-EFAULT, -E2BIG), -EINVAL for a si_signo other
- * than the signal, and -EPERM for a code that only the kernel or tkill
- * gives (`queued_reserved`) unless the pidfd's process is led by the
- * calling thread, as Linux compares task_pid(current) with the pidfd's pid;
- * then -ESRCH for a process reaped, and only then -EINVAL for a signal out
- * of range and -EPERM from the permission, as kill_pid_info_type's
+ * pidfd_send_signal takes a pidfd, a signal, a siginfo or 0, and flags: the
+ * signal posted under kill's permission, with the siginfo given, whose
+ * si_signo must be the signal, or else kill's, SI_TKILL's for a thread. The
+ * flags choose where it goes: none or PIDFD_SIGNAL_THREAD_GROUP the pidfd's
+ * process, PIDFD_SIGNAL_THREAD the process's leader alone, as tgkill posts,
+ * and PIDFD_SIGNAL_PROCESS_GROUP each member of the process group whose id
+ * is the process's, as kill(2) of the negated id posts (`kill_group`), even
+ * once the process has been reaped. Signal 0, and a signal to a process
+ * whose threads have all ended or to a leader that has ended, are checked
+ * and not posted. The checks run in the order of Linux 6.12's
+ * pidfd_send_signal: -EINVAL for an unknown flag or more than one; -EBADF
+ * for a descriptor that is not a pidfd; -EINVAL for a process outside the
+ * caller's PID namespace and those below it, reaped or not, by the
+ * namespace the pidfd holds; then the siginfo is copied (-EFAULT, -E2BIG),
+ * -EINVAL for a si_signo other than the signal, and -EPERM for a code that
+ * only the kernel or tkill gives (`queued_reserved`) unless the pidfd's
+ * process is led by the calling thread and the signal goes to it or to its
+ * process, as Linux compares task_pid(current) with the pidfd's pid and
+ * the scope with PIDTYPE_TGID; then -ESRCH for a process reaped, or an
+ * empty group, and only then -EINVAL for a signal out of range and -EPERM
+ * from the permission, as kill_pid_info_type's and __kill_pgrp_info's
  * check_kill_permission tests them. The pidfd's process is held across the
  * copy, which may sleep while the descriptor is closed, and found again
  * after it, since it may have been reaped meanwhile.
@@ -5575,21 +5615,21 @@ long sys_pidfd_send_signal(isr_params_t *params)
 {
     int signo = (int)SC_ARG(params, 1);
     uintptr_t uinfo = SC_ARG(params, 2);
+    uint32_t flags = (uint32_t)SC_ARG(params, 3);
     struct pidfd_ref ref;
     process_t *target;
     struct k_siginfo info;
     int32_t given;
     int32_t rc;
 
-    if (SC_ARG(params, 3) != 0) {
+    if ((flags & ~PIDFD_SIGNAL_SCOPES) != 0 || (flags & (flags - 1u)) != 0) {
         return -EINVAL;
     }
     rc = pidfd_ref_get((int)SC_ARG(params, 0), &ref);
     if (rc != 0) {
         return rc;
     }
-    target = pidfd_ref_task(&ref);
-    if (target && pid_seen(target->tgid) == 0) {
+    if (!pidfd_ref_seen(&ref)) {
         rc = -EINVAL;
         goto out;
     }
@@ -5604,8 +5644,11 @@ long sys_pidfd_send_signal(isr_params_t *params)
         }
     }
     target = pidfd_ref_task(&ref);
-    if (uinfo && queued_reserved(&info) && target != current_proc) {
+    if (uinfo && queued_reserved(&info) &&
+        (target != current_proc || flags == PIDFD_SIGNAL_PROCESS_GROUP)) {
         rc = -EPERM;
+    } else if (flags == PIDFD_SIGNAL_PROCESS_GROUP) {
+        rc = kill_group((int)ref.pid, signo, uinfo ? &info : NULL);
     } else if (!target) {
         rc = -ESRCH;
     } else if (signo < 0 || signo > KSIG_MAX) {
@@ -5614,9 +5657,11 @@ long sys_pidfd_send_signal(isr_params_t *params)
         rc = -EPERM;
     } else {
         if (!uinfo) {
-            sender_info(&info, SI_USER, target);
+            sender_info(&info, flags == PIDFD_SIGNAL_THREAD ? SI_TKILL : SI_USER, target);
         }
-        if (signo != 0 && target->tg->live != 0) {
+        if (signo != 0 && flags == PIDFD_SIGNAL_THREAD) {
+            signal_post_thread(target, signo, &info);
+        } else if (signo != 0 && target->tg->live != 0) {
             signal_post_info(target, signo, &info);
         }
     }
@@ -5635,7 +5680,9 @@ out:
  * is looked for, as do_rt_tgsigqueueinfo has them; -ESRCH for no such
  * thread of that process; and only then -EINVAL for a signal out of range
  * and -EPERM from the permission, as do_send_specific's
- * check_kill_permission tests them.
+ * check_kill_permission tests them. A thread that has ended but keeps its
+ * id (`thread_gone`), an unreaped process's leader among them, is checked
+ * and discards the signal.
  */
 long sys_rt_tgsigqueueinfo(isr_params_t *params)
 {
@@ -5657,8 +5704,7 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
         return -EPERM;
     }
     t = proc_named((uint32_t)tid);
-    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
-        t->tgid != pid_named((uint32_t)tgid)) {
+    if (thread_gone(t) || t->tgid != pid_named((uint32_t)tgid)) {
         return -ESRCH;
     }
     if (signo < 0 || signo > KSIG_MAX) {

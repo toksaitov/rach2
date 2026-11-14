@@ -845,6 +845,22 @@ uint32_t pid_seen(uint32_t kid)
     return pid_seen_by(current_proc, kid);
 }
 
+struct pidns *pidns_get(struct pidns *ns)
+{
+    ns_get(&ns->c);
+    return ns;
+}
+
+int pidns_seen(const struct pidns *ns)
+{
+    const struct pidns *v = proc_pidns(current_proc);
+
+    while (ns && ns->level > v->level) {
+        ns = ns->parent;
+    }
+    return ns == v;
+}
+
 uint32_t pid_named(uint32_t pid)
 {
     const struct pidns *v = proc_pidns(current_proc);

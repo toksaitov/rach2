@@ -18,14 +18,16 @@
 struct isr_params;
 struct process;
 struct pidfd;
+struct pidns;
 struct tgroup;
 
 /* A hold on the process a pidfd names that outlasts the descriptor, for a
  * call that may sleep between finding the pidfd and acting on its process:
- * the pidfd's thread group, held by a reference, and its leader's kernel
- * id. */
+ * the pidfd's thread group and the process's PID namespace, each held by a
+ * reference, and its leader's kernel id. */
 struct pidfd_ref {
     struct tgroup *tg;
+    struct pidns *ns;
     uint32_t pid;
 };
 
@@ -60,7 +62,11 @@ int32_t pidfd_ref_get(int fd, struct pidfd_ref *ref);
  * reaped. */
 struct process *pidfd_ref_task(const struct pidfd_ref *ref);
 
-/** Let go of the thread group `ref` holds. */
+/** Whether the caller's PID namespace, or one above it, has the process
+ * `ref` holds, reaped or not, as Linux's access_pidfd_pidns asks. */
+int pidfd_ref_seen(const struct pidfd_ref *ref);
+
+/** Let go of the thread group and the namespace `ref` holds. */
 void pidfd_ref_put(struct pidfd_ref *ref);
 
 /** pidfd_open(2) takes a pid and the flag PIDFD_NONBLOCK: a close-on-exec
