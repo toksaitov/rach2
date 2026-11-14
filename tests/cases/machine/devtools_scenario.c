@@ -145,22 +145,31 @@ static const char units_line[] =
  * A program that reads an unsigned int out of a 64-bit register on x86-64.
  * The conditional expression leaves 0x100000001 in a register, and the cast
  * to unsigned int emits no code there, so a conversion to floating point
- * that read the whole register gave 4294967297 in place of 1. A row of a
- * variable-length array has an int size, and the pointer one row back moved
- * forward almost 4 GiB when the 64-bit add took the 32-bit product as
- * zero-extended. The program the i686 compiler makes prints the same line.
+ * that read the whole register gave 4294967297 in place of 1. The size of a
+ * row of a variable-length array is a size_t, and a pointer to a row steps
+ * by it: v steps from the last row of three back one, which an int size
+ * scaled in 32 bits moved forward almost 4 GiB, and w steps one row of 2 GiB
+ * forward in a mapping that reserves no memory, which an int size read back
+ * negative moved backward; the x86-64 step by the size of a pointer gave 16
+ * and 8. The program the i686 compiler makes prints the same line.
  */
 static const char wide1_line[] =
-    "printf '#include <stdio.h>\\ntypedef unsigned long long u64;\\n"
+    "printf '#include <stdio.h>\\n#include <sys/mman.h>\\ntypedef unsigned long long u64;\\n"
     "double d(u64 a,int c){return (unsigned)(c?a:0);}\\n' > /tmp/wide.c";
 static const char wide2_line[] = "printf 'float f(u64 a,int c){return (unsigned)(c?a:0);}\\n"
                                  "long double l(u64 a,int c){return (unsigned)(c?a:0);}\\n' >> "
                                  "/tmp/wide.c";
-static const char wide3_line[] = "printf 'long v(int n,int i){int a[2][n];return "
-                                 "(char*)(a+i)-(char*)a;}\\n' >> /tmp/wide.c";
-static const char wide4_line[] =
+static const char wide3_line[] = "printf 'long v(int n,int i){int a[3][n];int(*p)[n]=a+2;"
+                                 "return (char*)(p+i)-(char*)a;}\\n' >> /tmp/wide.c";
+static const char wide4_line[] = "printf 'unsigned long w(unsigned n){char*m=mmap(0,n,PROT_NONE,"
+                                 "MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE,-1,0);' >> /tmp/wide.c";
+static const char wide5_line[] =
+    "printf 'char(*p)[n]=(void*)m;if(m==MAP_FAILED)return 0;"
+    "return (unsigned long)(p+1)-(unsigned long)m;}\\n' >> /tmp/wide.c";
+static const char wide6_line[] =
     "printf 'int main(void){u64 a=0x100000001ULL;printf(\"WIDE\"\"NED %%lld %%lld %%lld "
-    "%%ld\\\\n\",(long long)d(a,1),(long long)f(a,1),(long long)l(a,1),v(3,-1));"
+    "%%ld %%lu\\\\n\",(long long)d(a,1),(long long)f(a,1),(long long)l(a,1),v(3,-1),"
+    "w(0x80000000u));"
     "return 0;}\\n' >> /tmp/wide.c";
 static const char wide_built_line[] = "tcc -static -o /tmp/wide /tmp/wide.c && echo WIDE\"\"BUILT";
 
@@ -265,13 +274,16 @@ static void compile(struct shell *s)
     type(s, wide2_line);
     type(s, wide3_line);
     type(s, wide4_line);
+    type(s, wide5_line);
+    type(s, wide6_line);
     type(s, "cat /tmp/wide.c");
     type(s, wide_built_line);
     has(s, "widen-built", "WIDEBUILT", "the compiler did not build the program of the widening");
     type(s, "/tmp/wide");
-    has(s, "widened", "WIDENED 1 1 1 -12",
+    has(s, "widened", "WIDENED 1 1 1 12 2147483648",
         "the compiler read the high half of a 64-bit register for an unsigned int it converted "
-        "to floating point, or took a negative index into a variable-length array as positive");
+        "to floating point, or scaled an index into a variable-length array by a size held in an "
+        "int");
 
     net_step(&s->u, "end");
     finish(s, "finished");
