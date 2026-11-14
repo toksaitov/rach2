@@ -80,6 +80,7 @@ static int absent(struct netdev *nd, int nth)
     return NETDEV_ABSENT;
 }
 
+const struct netdev_ops virtio_net_netdev = {"virtio_net", absent, 0, 0, 0, 0, 0, 0, 0, 0};
 const struct netdev_ops rtl8139_netdev = {"rtl8139", absent, 0, 0, 0, 0, 0, 0, 0, 0};
 const struct netdev_ops e1000_netdev = {"e1000", absent, 0, 0, 0, 0, 0, 0, 0, 0};
 const struct netdev_ops rtl8168_netdev = {"rtl8168", absent, 0, 0, 0, 0, 0, 0, 0, 0};

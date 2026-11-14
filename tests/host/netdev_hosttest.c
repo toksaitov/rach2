@@ -1,5 +1,5 @@
 /**
- * Test the walk of the driver table of sys/network/driver/netdev.c with three
+ * Test the walk of the driver table of sys/network/driver/netdev.c with
  * model drivers in place of the real ones.
  *
  * host-deps:
@@ -11,8 +11,9 @@
  * machine that has two cards; the other two need drivers that misbehave on
  * purpose, which is what this file supplies.
  *
- * The three drivers of the table are replaced by three models whose verdicts
- * the test sets. netdev.c is compiled against them, so what is under test is
+ * The table's drivers are replaced by models: the virtio driver, its first,
+ * by one with no card, and the three after it by three whose verdicts the
+ * test sets. netdev.c is compiled against them, so what is under test is
  * the walk itself: the order, the skip, the stop, and the binding.
  *
  * The test exits with the number of failed checks, at most 255.
@@ -62,8 +63,9 @@ static struct model m_first, m_second, m_third;
 static int refused_card = -1; /* the card rach2.nicfail names, or -1 */
 
 /* The order in which anything happened, so a check can say that the stop came
-   after the init that failed and that no later driver was ever asked: '1' to
-   '3' for a model's init, 'S', 'T' and 'U' for its stop. */
+   after the init that failed and that no later driver was ever asked: '0' for
+   the virtio model's init, '1' to '3' for the three models', and 'S', 'T' and
+   'U' for their stops. */
 #define TRACE_MAX 32
 static char trace[TRACE_MAX];
 static int trace_len;
@@ -220,9 +222,21 @@ static void nothing(void *dev)
     info_calls++;
 }
 
-/* The names netdev.c links against. The real ones live in the three driver
+/** Probe the virtio model, which has no card: the table's first driver is
+ * asked before the three, notes '0' and answers NETDEV_ABSENT. */
+static int virtio_init(struct netdev *nd, int nth)
+{
+    (void)nd;
+    (void)nth;
+    note('0');
+    return NETDEV_ABSENT;
+}
+
+/* The names netdev.c links against. The real ones live in the four driver
    files; here they are these models, which is what puts the walk under test
-   rather than any card. */
+   rather than any card. The virtio driver, first in the table, is a model
+   with no card, so the three after it are the ones the rows set. */
+const struct netdev_ops virtio_net_netdev = {"virtio", virtio_init, 0, 0, 0, 0, 0, 0};
 const struct netdev_ops rtl8139_netdev = {"first",    first_init, first_tx,    0,
                                           first_stop, first_link, first_error, nothing};
 const struct netdev_ops e1000_netdev = {"second",    second_init, second_tx,    second_poll,
@@ -333,7 +347,7 @@ static void injected_failure(void)
     refused_card = 0;
     CHECK(netdev_probe() == 1 && netdev_count() == 2,
           "cards after a refusal still become interfaces");
-    CHECK(m_second.inits == 2 && m_second.stops == 1 && same(trace, "12T23"),
+    CHECK(m_second.inits == 2 && m_second.stops == 1 && same(trace, "012T23"),
           "probing continues with the same driver and later drivers");
     CHECK(same(netdev_error(), "the card was refused on the boot line"),
           "successful cards preserve the refusal reason");
@@ -417,7 +431,7 @@ int main(void)
     CHECK(same(netdev_name(netdev_at(0)), "first"), "the first driver's card is the first");
     CHECK(same(netdev_name(netdev_at(1)), "second"), "the second driver's is next");
     CHECK(same(netdev_name(netdev_at(2)), "third"), "and the third driver's last");
-    CHECK(same(trace, "123"), "every driver is asked, in the table's order");
+    CHECK(same(trace, "0123"), "every driver is asked, in the table's order");
     CHECK(netdev_at(0)->index == 1 && netdev_at(1)->index == 2 && netdev_at(2)->index == 3,
           "and they are numbered from one, as a packet socket binds to them");
     CHECK(same(netdev_at(0)->name, "eth0") && same(netdev_at(1)->name, "eth1") &&
@@ -428,7 +442,7 @@ int main(void)
     CHECK(netdev_probe() == 1, "a machine whose first card is absent still brings up the rest");
     CHECK(netdev_count() == 2, "one interface for each card that was there");
     CHECK(same(netdev_name(netdev_first()), "second"), "the next driver's card is the first");
-    CHECK(same(trace, "123"), "the absent card is asked once and passed over");
+    CHECK(same(trace, "0123"), "the absent card is asked once and passed over");
     CHECK(m_first.stops == 0,
           "a card that is not in the machine is not silenced, having never started");
 
@@ -441,7 +455,7 @@ int main(void)
     CHECK(m_third.inits == 1, "the driver after the one that failed is still asked");
     CHECK(m_second.stops == 1,
           "the card that failed is silenced, because nothing will ever reach it again");
-    CHECK(same(trace, "12T3"), "it is silenced before the walk goes on");
+    CHECK(same(trace, "012T3"), "it is silenced before the walk goes on");
 
     reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_ABSENT);
     CHECK(netdev_probe() == 0, "a machine with no supported card binds nothing");
