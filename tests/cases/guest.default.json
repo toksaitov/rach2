@@ -2823,6 +2823,7 @@
         {"assertion_id": "smaps-sizes-flags", "checks": "/proc/self/smaps gives Rss and VmFlags", "source": "program"},
         {"assertion_id": "maps-pread-fresh", "checks": "/proc/self/maps read again with pread64 at offset 0 has a region mapped since the first read", "source": "program"},
         {"assertion_id": "maps-file-identity", "checks": "the program's lines of /proc/self/maps give its file's device and inode as stat gives them", "source": "program"},
+        {"assertion_id": "maps-bss-anonymous", "checks": "the program's bss past its file's pages has an anonymous line in /proc/self/maps, device 00:00, inode 0 and no path, as Linux's loader maps it", "source": "program"},
         {"assertion_id": "smaps-64tib-reserve", "checks": "a region of 64 TiB is reserved", "source": "program"},
         {"assertion_id": "smaps-64tib-size", "checks": "/proc/self/smaps gives it the size 68719476736 kB", "source": "program"},
         {"assertion_id": "smaps-64tib-unmap", "checks": "the region is unmapped", "source": "program"},

@@ -361,9 +361,10 @@ struct vm_space; /* mm/vm.h */
  * protection of its `p_flags`, a code region for one with PF_X and a data
  * region for another: an interpreter's, beside its program's. PF_W and PF_X
  * each grant read, which x86 paging cannot withhold from them. A segment
- * that maps the file has a region that maps it (`vm_insert_file`), and one
- * without, for its anonymous pages past the file's part. 0, or -1 when a
- * region could not be recorded. */
+ * that maps the file has a region that maps it (`vm_insert_file`) and an
+ * anonymous one (VM_ANON) for its pages past the file's part, as Linux's
+ * bss; a segment the loader copied has one region of the image's, with no
+ * file. 0, or -1 when a region could not be recorded. */
 int elf_add_vmas(struct vm_space *vm, const elf_image_t *img);
 
 /**

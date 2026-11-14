@@ -573,7 +573,10 @@ int elf_add_vmas(struct vm_space *vm, const elf_image_t *img)
             vm_insert_file(vm, seg->start, seg->file_end, prot, vt, img->file, seg->pgoff) != 0) {
             return -1;
         }
-        if (seg->end > seg->file_end && vm_insert(vm, seg->file_end, seg->end, prot, vt) != 0) {
+        /* The pages past a mapped file's part are anonymous, as Linux's
+         * vm_brk_flags makes them; a copied segment's stay the image's. */
+        if (seg->end > seg->file_end && vm_insert(vm, seg->file_end, seg->end, prot,
+                                                  seg->file_end > seg->start ? VM_ANON : vt) != 0) {
             return -1;
         }
     }

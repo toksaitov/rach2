@@ -2414,7 +2414,9 @@ for the vDSO's data page with KVM's clock page and its library on x86-64,
 both private, the first never writable and the library copied on a write
 .Pq Xr vdso 7 ,
 the program for the segments of its image, or the dynamic linker the
-program names for the segments of the linker's, by the present path of the
+program names for the segments of the linker's, but not for the anonymous
+pages of a segment's bss past its file's, which have no name, as on Linux,
+by the present path of the
 file exec opened, with
 .Ql " (deleted)"
 once its name is gone, as

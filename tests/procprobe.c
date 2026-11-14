@@ -294,6 +294,7 @@ static const struct row {
             {"smaps-sizes-flags", ROW_PLAIN},
             {"maps-pread-fresh", ROW_PLAIN},
             {"maps-file-identity", ROW_PLAIN},
+            {"maps-bss-anonymous", ROW_PLAIN},
             {"smaps-64tib-reserve", ROW_WIDE},
             {"smaps-64tib-size", ROW_WIDE},
             {"smaps-64tib-unmap", ROW_WIDE},
@@ -2179,6 +2180,57 @@ static void maps_fresh_rows(void)
           "and the program's lines give its file's device and inode, as stat gives them");
 }
 
+/* Three pages of the probe's bss: the last two lie past the page that holds
+ * the end of its data's file bytes, so no part of the file maps them. */
+static char bss_pages[3 * 4096];
+
+/** The line of the `n` bytes of maps text `b` whose range holds `addr`, or
+ * NULL; its length goes in `*len`, the newline left out. */
+static const char *maps_line_of(const char *b, int n, unsigned long addr, int *len)
+{
+    int i = 0;
+
+    while (i < n) {
+        unsigned long lo = 0, hi = 0;
+        int j = i, end = i;
+
+        while (end < n && b[end] != '\n') {
+            end++;
+        }
+        for (; j < end && b[j] != '-'; j++) {
+            lo = lo * 16u + (unsigned long)(b[j] <= '9' ? b[j] - '0' : b[j] - 'a' + 10);
+        }
+        for (j++; j < end && b[j] != ' '; j++) {
+            hi = hi * 16u + (unsigned long)(b[j] <= '9' ? b[j] - '0' : b[j] - 'a' + 10);
+        }
+        if (lo <= addr && addr < hi) {
+            *len = end - i;
+            return b + i;
+        }
+        i = end + 1;
+    }
+    return 0;
+}
+
+/** The program's bss past its file's pages is anonymous memory, as Linux's
+ * loader makes it with vm_brk_flags: its maps line has device 00:00, inode
+ * 0 and no path, as gdb and crashpad expect of it. */
+static void maps_bss_row(void)
+{
+    static char text[8192];
+    unsigned long at = (unsigned long)(bss_pages + 2 * 4096);
+    int n, len = 0;
+    const char *line;
+
+    bss_pages[2 * 4096] = 1;
+    n = slurp("/proc/self/maps", text, (int)sizeof(text));
+    line = maps_line_of(text, n, at, &len);
+    check("maps-bss-anonymous",
+          line != 0 && len >= 9 && contains(line, len, " rw-p ") && line[len - 9] == ' ' &&
+              contains(line + len - 9, 9, " 00:00 0 "),
+          "the bss past the program's file is anonymous, with no path");
+}
+
 /** /proc/self/smaps as BusyBox's pmap reads it: each region's maps line and
  * Linux's sizes for it. A region with no path ends its maps line at the
  * space after the inode, as on Linux, where pmap looks for that space. */
@@ -2202,6 +2254,7 @@ static void smaps_rows(void)
     check("smaps-sizes-flags", contains(buf, n, "\nRss:") && contains(buf, n, "\nVmFlags:"),
           "and gives its sizes and flags");
     maps_fresh_rows();
+    maps_bss_row();
 }
 
 #if defined __x86_64__
