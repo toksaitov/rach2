@@ -500,6 +500,22 @@ void pci_enable_memory_space(pci_device_t *dev)
     command_set(dev, PCI_CMD_MEMORY_SPACE);
 }
 
+/* No row here fails a bind; i915_pci_hosttest.c checks the claim a failed
+ * bind gives back. */
+const char *pci_owner(uint8_t b, uint8_t devfn)
+{
+    (void)b;
+    (void)devfn;
+    return 0;
+}
+
+void pci_unclaim(uint8_t b, uint8_t devfn, const char *who)
+{
+    (void)b;
+    (void)devfn;
+    (void)who;
+}
+
 bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_device_t *out)
 {
     if (bus && nth == 0 && bus->pci.vendor_id == vendor_id && bus->pci.device_id == device_id) {

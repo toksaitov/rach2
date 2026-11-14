@@ -44,9 +44,11 @@
  * the command word's decoding and mastering on, and the DRM device's identity
  * and features; the refusals of another function, an unset BAR 0, another
  * vendor and an unknown id; a machine without messages and a message that will
- * not enable; a registration that fails and leaves the device as found; the
- * unplug hook; and the boundary's accesses past its size and its bounded waits
- * on the model's clock.
+ * not enable; a registration that fails, a GTT without its scratch page and
+ * a driver link that cannot be shown, each leaving the device as found and
+ * without the kernel's claim the bind took; the unplug hook; and the
+ * boundary's accesses past its size and its bounded waits on the model's
+ * clock.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -87,6 +89,7 @@ static int cmdline_i915;       /* rach2.i915 given */
 static int cmdline_nomodeset;  /* nomodeset given */
 static int cmdline_modeset;    /* i915.modeset's value, -1 when not given */
 static int msi_ready = 1, msi_refuse, register_error;
+static const char *owner; /* the function's owner, as pci.c records it */
 static int vectors, vectors_freed, handlers, msi_enables, msi_disables;
 static long msi_enabled_at = -1;
 static int registered, released;
@@ -351,6 +354,25 @@ static void command_set(pci_device_t *dev, uint16_t bits)
     uint16_t c = pci_read_config16(dev->bus, dev->device, dev->function, PCI_COMMAND);
 
     pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, (uint16_t)(c | bits));
+    if (!owner) {
+        owner = PCI_OWNER_KERNEL;
+    }
+}
+
+const char *pci_owner(uint8_t b, uint8_t devfn)
+{
+    (void)b;
+    (void)devfn;
+    return owner;
+}
+
+void pci_unclaim(uint8_t b, uint8_t devfn, const char *who)
+{
+    (void)b;
+    (void)devfn;
+    if (owner && strcmp(owner, who) == 0) {
+        owner = 0;
+    }
 }
 
 void pci_enable_bus_master(pci_device_t *dev)
@@ -538,10 +560,15 @@ void i915_debugfs_register(struct drm_i915_private *i915)
 
 /* The release and the bring-up through /sys, i915_handoff.c, which
  * i915_handoff_hosttest.c tests; no row here unbinds the driver. */
+static int32_t link_error; /* what the next driver link fails with, or 0 */
+
 int32_t i915_handoff_link(struct drm_i915_private *i915)
 {
+    int32_t err = link_error;
+
     (void)i915;
-    return 0;
+    link_error = 0;
+    return err;
 }
 
 void i915_handoff_bound(struct drm_i915_private *i915)
@@ -609,6 +636,8 @@ static void fresh(struct i915_model *m)
     msi_ready = 1;
     msi_refuse = 0;
     register_error = 0;
+    link_error = 0;
+    owner = 0;
     vectors = vectors_freed = handlers = msi_enables = msi_disables = 0;
     msi_enabled_at = -1;
     registered = released = 0;
@@ -978,7 +1007,8 @@ static void row_register_fails(void)
           i915_model_config(&m, PCI_COMMAND, 2) == 0x0001u);
     CHECK("register fails: the message off and its vector back",
           msi_disables == 1 && vectors_freed == 1);
-    CHECK("register fails: the record released", released == 1);
+    CHECK("register fails: the record released and the kernel's claim given back",
+          released == 1 && owner == 0);
     CHECK("register fails: the GTT's scratch page given back", frames == 1 && frames_freed == 1);
     CHECK("register fails: every source masked",
           i915_model_peek(&m, DEIMR) == 0xffffffffu && i915_model_peek(&m, SDEIER) == 0);
@@ -1004,6 +1034,34 @@ static void row_gtt_fails(void)
     CHECK("gtt fails: the command word as found", i915_model_config(&m, PCI_COMMAND, 2) == command);
     CHECK("gtt fails: no window of the aperture mapped", aperture_maps == 0);
     CHECK("gtt fails: no frame kept, no record released", frames == 0 && released == 0);
+    CHECK("gtt fails: the kernel's claim given back", owner == 0);
+    done(&m);
+}
+
+/** A boot bind whose driver link cannot be shown fails before its card
+ * registers and gives back the kernel's claim it took, so that vfio-pci or
+ * a later bind may have the function; a claim it found is kept. */
+static void row_link_fails(void)
+{
+    struct i915_model m;
+
+    fresh(&m);
+    m.config[PCI_COMMAND] = 0x01; /* I/O only */
+    m.config[PCI_COMMAND + 1] = 0x00;
+    link_error = -ENOMEM;
+    CHECK("link fails: the link's error", i915_driver_bind(&m.pci, &m.hw) == -ENOMEM);
+    CHECK("link fails: no card, the command word as found and no owner",
+          registered == 0 && released == 1 && i915_model_config(&m, PCI_COMMAND, 2) == 0x0001u &&
+              owner == 0);
+    done(&m);
+
+    fresh(&m);
+    owner = PCI_OWNER_KERNEL;
+    link_error = -ENOMEM;
+    CHECK("link fails, owned before: the link's error", i915_driver_bind(&m.pci, &m.hw) == -ENOMEM);
+    CHECK("link fails, owned before: the claim it found kept",
+          owner && strcmp(owner, PCI_OWNER_KERNEL) == 0);
+    owner = 0;
     done(&m);
 }
 
@@ -1149,6 +1207,7 @@ int main(void)
     row_no_messages();
     row_register_fails();
     row_gtt_fails();
+    row_link_fails();
     row_boundary();
     free(map_buffer);
     free(gsm_buffer);

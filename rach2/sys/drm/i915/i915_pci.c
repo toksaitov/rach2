@@ -433,10 +433,11 @@ static void i915_registered(struct drm_i915_private *i915)
  * i915_driver_probe unwinds: forcewake's release timer, which no tick
  * serves for a device outside the table, the aperture's windows, the GTT,
  * the display power well's reference, the GTT's mapping, the VBT and the
- * OpRegion; put the command word back to `command` and free the record.
- * The registers' mapping is the caller's.
+ * OpRegion; put the command word back to `command`, give back the
+ * kernel's claim on the function when the bind took it (`claimed`), and
+ * free the record. The registers' mapping is the caller's.
  */
-static void bind_unwind(struct drm_i915_private *i915, uint16_t command)
+static void bind_unwind(struct drm_i915_private *i915, uint16_t command, int claimed)
 {
     const pci_device_t *pdev = &i915->pci;
 
@@ -450,6 +451,9 @@ static void bind_unwind(struct drm_i915_private *i915, uint16_t command)
     intel_bios_fini(&i915->vbt);
     intel_opregion_fini(&i915->opregion);
     pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
+    if (claimed) {
+        pci_unclaim(pdev->bus, (uint8_t)(pdev->device << 3 | pdev->function), PCI_OWNER_KERNEL);
+    }
     kfree(i915);
 }
 
@@ -475,9 +479,11 @@ static void i915_locks_init(struct drm_i915_private *i915)
  * Linux's driver core shows the binding before i915_pci_probe runs, so that
  * the card's uevent finds its parent's driver. 0, or the error of the link
  * or of the registration, with the bind undone in reverse, the command
- * word put back to `command` and the record put.
+ * word put back to `command`, the kernel's claim on the function given back
+ * when the bind took it (`claimed`), as Linux's pci_disable_device ends a
+ * failed probe, and the record put.
  */
-static int32_t i915_register(struct drm_i915_private *i915, uint16_t command)
+static int32_t i915_register(struct drm_i915_private *i915, uint16_t command, int claimed)
 {
     const pci_device_t *pdev = &i915->pci;
     int32_t err = i915_handoff_link(i915);
@@ -498,6 +504,9 @@ static int32_t i915_register(struct drm_i915_private *i915, uint16_t command)
         i915_gt_fini(i915);
         i915_uncore_fini(i915);
         pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
+        if (claimed) {
+            pci_unclaim(pdev->bus, (uint8_t)(pdev->device << 3 | pdev->function), PCI_OWNER_KERNEL);
+        }
         drm_dev_put(&i915->drm);
     }
     return err;
@@ -511,6 +520,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     uint8_t revision = pdev->revision;
     uint16_t command;
     int32_t err;
+    int claimed;
 
     if (hw->ops->config_read32) {
         struct i915_hw backend = *hw;
@@ -540,6 +550,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     i915->bsm = i915_hw_config32(&i915->hw, pdev, INTEL_BSM);
 
     command = pci_read_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND);
+    claimed = pci_owner(pdev->bus, (uint8_t)(pdev->device << 3 | pdev->function)) == NULL;
     pci_enable_memory_space(&i915->pci);
     pci_enable_bus_master(&i915->pci);
     i915_irq_reset(i915);
@@ -551,7 +562,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
         err = i915_devices_add(i915);
     }
     if (err < 0) {
-        bind_unwind(i915, command);
+        bind_unwind(i915, command, claimed);
         return err;
     }
     i915_msi_start(i915);
@@ -579,7 +590,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     i915->drm.driver_priv = i915;
     i915_ident(i915);
     i915_display_bringup(i915);
-    err = i915_register(i915, command);
+    err = i915_register(i915, command, claimed);
     if (err < 0) {
         return err;
     }
