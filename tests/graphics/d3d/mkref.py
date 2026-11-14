@@ -10,7 +10,10 @@ and the most skips, as linux.json keeps the discovery's runs. A Wine unit
 that ends before its summary keeps the fewest test lines it printed, and its
 exit only when every run gave the same one, since a unit that crashes ends
 with an exit that varies from run to run. SOURCE is the reference's own
-description of where it was taken.
+description of where it was taken. A vkd3d-proton test that "placement",
+below, does not name, whose runs failed two or more different nonzero
+numbers of checks, also keeps the source lines of the checks it failed in
+any run, `varying_lines`, by which run.py judges it in place of the count.
 
 -s names a unit, PATH/EXE:NAME of Wine's or a vkd3d-proton test, that its
 author saw stall in Linux's runs, its process alive and idle, and stopped:
@@ -41,6 +44,7 @@ PLACEMENT = ("test_suballocate_va_alignment",)
 SEGV = (-signal.SIGSEGV, 128 + signal.SIGSEGV)
 TEST_LINE = r"^\w+\.c:\d+: "
 VK_LINE = r"^test_\w+:\d+: "
+VK_FAILED = r"^%s:(\d+): Test failed: "
 
 
 def fail(text):
@@ -90,6 +94,7 @@ def main():
     source, output, dirs = args[0], Path(args[1]), args[2:]
     ref = {"source": source, "probe": {}, "wine": {}, "vkd3d": {}, "flakes": []}
     adapters = set()
+    failed_lines = {}
     for top in dirs:
         for row_dir in sorted(p for p in Path(top).iterdir() if p.is_dir()):
             env = json.loads((row_dir / "environment.json").read_text())
@@ -167,10 +172,16 @@ def main():
                             continue
                         fail("%s: %s ended with %s and no summary" % (row_dir, name, result["exit"]))
                     ref["vkd3d"][name] = merge_counts(ref["vkd3d"].get(name), counts[1], counts[0], counts[3])
+                    text = (row_dir / (name + ".log")).read_text(errors="replace")
+                    failed_lines.setdefault(name, set()).update(
+                        int(n) for n in re.findall(VK_FAILED % re.escape(name), text, re.M))
             else:
                 fail("%s: unknown family %s" % (row_dir, family))
     if len(adapters) != 1:
         fail("the records name the adapters %s, not one" % sorted(adapters))
+    for name, unit in ref["vkd3d"].items():
+        if name not in placement and len([n for n in unit.get("failures", []) if n]) > 1:
+            unit["varying_lines"] = sorted(failed_lines[name])
     for name in ref["flakes"]:
         # A test that crashed in every run is matched by its crash alone.
         ref["vkd3d"].setdefault(name, {"failures": [], "min_checks": 0, "max_skipped": 0})

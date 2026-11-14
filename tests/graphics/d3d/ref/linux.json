@@ -550,7 +550,7 @@
     "test_resolve_batch": {"failures": [0], "min_checks": 8, "max_skipped": 0},
     "test_resolve_subresource_depth": {"failures": [0], "min_checks": 34, "max_skipped": 0},
     "test_copy_subresource_depth_stencil_batch": {"failures": [0, 11], "min_checks": 8279, "max_skipped": 0},
-    "test_unused_attachments_mix_and_match": {"failures": [0, 1670, 1673, 1674, 1677], "min_checks": 5225, "max_skipped": 0},
+    "test_unused_attachments_mix_and_match": {"failures": [0, 1670, 1673, 1674, 1677], "min_checks": 5225, "max_skipped": 0, "varying_lines": [2888]},
     "test_deferred_clears": {"failures": [0], "min_checks": 331, "max_skipped": 0},
     "test_deferred_clears_dsv_layout": {"failures": [0], "min_checks": 1559, "max_skipped": 0},
     "test_render_pass_suspend_resume_opts_enabled": {"failures": [0], "min_checks": 577, "max_skipped": 0},

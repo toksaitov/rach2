@@ -20,6 +20,13 @@ WINE_SUMMARY = r"%s: (\d+) tests executed \((\d+) marked as todo, (\d+) as flaky
 # that ends before its summary.
 TEST_LINE = r"^\w+\.c:\d+: "
 VK_SUMMARY = r"(\d+) tests executed \((\d+) failures, (\d+) successful todo, (\d+) skipped, (\d+) todo, (\d+) bugs\)"
+# The source line of each check a vkd3d-proton test failed.
+VK_FAILED = r"^%s:(\d+): Test failed: "
+# The vkd3d-proton tests that run for many minutes, which a part starts
+# first, so that its other tests run beside them: on Linux,
+# test_unused_attachments_mix_and_match takes 900 s of one processor where
+# the others take a few seconds each.
+VK_LONG = ("test_unused_attachments_mix_and_match",)
 CHILDREN = set()
 
 
@@ -432,6 +439,7 @@ def main():
                 names = [row]
             else:
                 raise RuntimeError("unknown vkd3d part or test")
+            names = sorted(names, key=lambda n: n not in VK_LONG)
             jobs = min(4, cpus)
             def unit(name):
                 unit_env = env.copy()
@@ -455,11 +463,17 @@ def main():
                 ended = counts is not None and name + " end" in text
                 # A test that placement names is judged by its checks alone:
                 # its failure count follows where mmap put the driver's
-                # memory, as mkref.py records, so it has no fixed count.
+                # memory, as mkref.py records, so it has no fixed count. A
+                # test whose failures Linux's runs counted differently fails
+                # checks on the lines they failed on, as many as its run gives.
                 placed = name in ref.get("placement", ())
+                varying = expected.get("varying_lines")
+                failed = [int(n) for n in re.findall(VK_FAILED % re.escape(name), text, re.M)]
+                count = counts is not None and (
+                    placed or (len(failed) == counts[1] and set(failed) <= set(varying) if varying else
+                               counts[1] in expected["failures"]))
                 matched = (stopped or ended) if stop else flake or (counts is not None and name + " begin" in text and
-                                    name + " end" in text and rc in (0, 1) and
-                                    (placed or counts[1] in expected["failures"]) and
+                                    name + " end" in text and rc in (0, 1) and count and
                                     counts[0] >= expected["min_checks"] and
                                     counts[3] <= expected["max_skipped"] and (rc == 0) == (counts[1] == 0))
                 result = {"exit": rc, "summary": counts, "linux_flake": flake, "progress": stopped, "matched": matched}
