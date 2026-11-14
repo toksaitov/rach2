@@ -517,7 +517,10 @@ static void inventory(struct acceptance *a)
             lines(a, a->bootlog, "lapic: ready:", "interrupts: ");
         else
             message(a, 1, "the boot log says nothing about the local APIC");
-        if (strstr(a->bootlog, "lapic: timer:") != NULL)
+        /* Only platform.c's no-tick lines; apictimer.c's vector line shares
+         * the prefix. */
+        if (strstr(a->bootlog, "lapic: timer: no tick") != NULL ||
+            strstr(a->bootlog, "lapic: timer: still no tick") != NULL)
             message(a, 1, "the timer stopped when the APIC was enabled");
     }
     free(interrupts);

@@ -507,7 +507,9 @@ fi
 #      legacy lines is not broken, and what it did is the record. The
 #      failures are the timer's vector, 32, having taken nothing, a boot log
 #      with no line about the local APIC, and the kernel's own
-#      `lapic: timer:` line, which it logs when no tick arrives. ----
+#      `lapic: timer: no tick` or `lapic: timer: still no tick` line, which
+#      it logs when no tick arrives; its `lapic: timer: vector` line is
+#      not one. ----
 INTR="$(run 'cat /proc/interrupts 2>/dev/null')"
 if [ -z "$INTR" ]; then
     bad "/proc/interrupts is not there; this kernel does not provide it"
@@ -544,8 +546,9 @@ else
     else
         bad "the boot log says nothing about the local APIC; this kernel does not provide it"
     fi
-    if grep -q 'lapic: timer:' "$BOOTLOG_OUT" 2>/dev/null; then
-        bad "the timer stopped when the APIC was enabled: $(grep -m1 'lapic: timer:' "$BOOTLOG_OUT")"
+    notick='lapic: timer: (still )?no tick'
+    if grep -Eq "$notick" "$BOOTLOG_OUT" 2>/dev/null; then
+        bad "the timer stopped when the APIC was enabled: $(grep -E -m1 "$notick" "$BOOTLOG_OUT")"
     fi
 fi
 
