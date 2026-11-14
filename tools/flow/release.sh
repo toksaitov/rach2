@@ -1025,24 +1025,28 @@ install()
     if grep -q '^install started ' "$state/record" && [ -z "$started" ]; then
         fail install "the installer was started and its log is gone, so a reboot interrupted it; run rach2-install --console term --update by hand from recovery"
     fi
+    # The root goes compressed, since the GNU root is larger than the
+    # recovery system's RAM disk; rach2-install --update reads it through
+    # gzip -dc and checks it against root.ext2.sha256, the build's digest.
     root=$(digest images/os-real-gnu.ext2)
+    packed=$(shasum -a 256 "$files/os-real-gnu.ext2.gz" | cut -d ' ' -f 1)
     if [ -z "$started" ] && { ! done_ transfer ||
-        [ "$(lenovo 'sha256sum /dev/shm/root.ext2 /dev/shm/kernel 2> /dev/null' |
-            awk '{ printf "%s ", $1 }')" != "$root $(digest rach2/kernel) " ]; }; then
+        [ "$(lenovo 'sha256sum /dev/shm/root.ext2.gz /dev/shm/kernel 2> /dev/null' |
+            awk '{ printf "%s ", $1 }')" != "$packed $(digest rach2/kernel) " ]; }; then
         step=transfer
-        lenovo 'rm -f /dev/shm/kernel /dev/shm/root.ext2 /dev/shm/root.ext2.sha256' ||
+        lenovo 'rm -f /dev/shm/kernel /dev/shm/root.ext2 /dev/shm/root.ext2.gz /dev/shm/root.ext2.sha256' ||
             later "the machine does not answer"
         free=$(lenovo "df -k /dev/shm | awk 'NR == 2 { print \$4 }'")
-        need=$(($(gzip -dc "$files/os-real-gnu.ext2.gz" | wc -c) / 1024 + 262144))
+        need=$(($(wc -c < "$files/os-real-gnu.ext2.gz") / 1024 + 262144))
         [ "${free:-0}" -gt "$need" ] ||
-            fail transfer "/dev/shm has $free KiB free and the root needs $need"
+            fail transfer "/dev/shm has $free KiB free and the compressed root needs $need"
         send "$files/../rach2/kernel" /dev/shm/kernel
-        lenovo 'gzip -dc > /dev/shm/root.ext2' < "$files/os-real-gnu.ext2.gz" ||
+        lenovo 'cat > /dev/shm/root.ext2.gz' < "$files/os-real-gnu.ext2.gz" ||
             fail transfer "the root did not arrive"
-        [ "$(lenovo 'sha256sum /dev/shm/root.ext2' | cut -d ' ' -f 1)" = "$root" ] ||
-            fail transfer "the root on the machine does not hash as the build's"
+        [ "$(lenovo 'sha256sum /dev/shm/root.ext2.gz' | cut -d ' ' -f 1)" = "$packed" ] ||
+            fail transfer "the compressed root on the machine does not hash as the build's"
         lenovo "echo $root > /dev/shm/root.ext2.sha256" || fail transfer "no digest file"
-        mark transfer "kernel and root in /dev/shm"
+        mark transfer "kernel and compressed root in /dev/shm"
     fi
     if [ -z "$started" ]; then
         if ! done_ kernel; then
@@ -1063,7 +1067,7 @@ install()
         if i915; then
             install_words="$install_words --i915"
         fi
-        lenovo "setsid sh -c 'rach2-install $install_words --update /dev/shm/root.ext2 /dev/disk$disk \
+        lenovo "setsid sh -c 'rach2-install $install_words --update /dev/shm/root.ext2.gz /dev/disk$disk \
             > /dev/shm/install.log 2>&1; echo \$? > /dev/shm/install.status' \
             > /dev/null 2>&1 < /dev/null &" || fail install "the installer could not be started"
         say "install: rach2-install $install_words --update runs on the machine"

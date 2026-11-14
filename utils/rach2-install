@@ -139,6 +139,15 @@ die() {
 # nothing printed, when sha256sum fails or prints anything else: BusyBox's
 # sha256sum prints no digest for a file that does not read whole, and two
 # empty digests would compare equal.
+# Writes the update image's bytes to standard output, through gzip -dc for an
+# image whose name ends in .gz.
+image_bytes() {
+    case "$update_image" in
+        *.gz) gzip -dc < "$update_image" ;;
+        *) cat < "$update_image" ;;
+    esac
+}
+
 file_sha256() { # file_sha256 FILE
     sum_line=$(sha256sum < "$1") || return 1
     sum_hex=${sum_line%% *}
@@ -2662,7 +2671,17 @@ EOF
     start=$(grep "^part $target $root_entry " /proc/disk | head -1 | cut -d' ' -f4)
     count=$(grep "^part $target $root_entry " /proc/disk | head -1 | cut -d' ' -f5)
     [ -n "$start" ] && [ -n "$count" ] || die "the root partition's place could not be read"
-    bytes=$(stat -c %s "$update_image")
+    # A gzip-compressed image, IMAGE.gz, is read through gzip -dc each time,
+    # so that a root larger than the recovery system's RAM disk can still be
+    # sent to it; its digest file is IMAGE.sha256, the uncompressed image's.
+    update_sum=$update_image.sha256
+    case "$update_image" in
+        *.gz)
+            update_sum=${update_image%.gz}.sha256
+            bytes=$(image_bytes | wc -c | tr -d ' ') || die "$update_image could not be read whole"
+            ;;
+        *) bytes=$(stat -c %s "$update_image") ;;
+    esac
     at=$((start * 512))
     room=$((count * 512))
     [ "$bytes" -le "$room" ] ||
@@ -2675,13 +2694,17 @@ EOF
     # rather than with itself; and the first bytes of an ext2 file system are
     # read, since an image that is not one would leave a machine with no root
     # at all and nothing to say why.
-    want=$(file_sha256 "$update_image") || die "the image could not be read whole"
-    if [ -f "$update_image.sha256" ]; then
-        declared=$(cut -d' ' -f1 < "$update_image.sha256")
+    want=$(image_bytes | sha256sum | cut -d' ' -f1) || die "the image could not be read whole"
+    case "$want" in
+        "" | *[!0-9a-f]*) die "the image could not be read whole" ;;
+    esac
+    [ "${#want}" -eq 64 ] || die "the image could not be read whole"
+    if [ -f "$update_sum" ]; then
+        declared=$(cut -d' ' -f1 < "$update_sum")
         [ "$want" = "$declared" ] ||
-            die "the image hashes to $want and $update_image.sha256 says $declared"
+            die "the image hashes to $want and $update_sum says $declared"
     fi
-    magic=$(dd if="$update_image" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    magic=$(image_bytes 2>/dev/null | dd bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
     [ "$magic" = "53ef" ] ||
         die "$update_image does not begin with an ext2 file system"
 
@@ -2782,7 +2805,7 @@ EOF
     echo "$update_disk $root_entry" > "$keep/root-written" ||
         die "the copy of the configuration could not be marked; the root was not written"
     say "writing $bytes bytes into ${update_disk}p${root_entry}, at $at"
-    reflash -p "$update_disk" "$at" "$bytes" < "$update_image" ||
+    image_bytes | reflash -p "$update_disk" "$at" "$bytes" ||
         die "the root was not written"
     back=$(reflash --verify "$update_disk" "$at" "$bytes" | cut -d' ' -f3)
     [ "$back" = "$want" ] || die "what reached the root hashes to $back and the image to $want"

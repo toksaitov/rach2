@@ -333,6 +333,18 @@ With
 .Fl -update Ar IMAGE DISK ,
 .Nm
 writes a root file system image into an installed machine's root partition.
+An
+.Ar IMAGE
+whose name ends in
+.Pa .gz
+is read through
+.Ql gzip -dc ,
+so that a root larger than the recovery system's RAM disk can be sent to it
+compressed; its digest file is then the uncompressed image's, the name
+without
+.Pa .gz
+and with
+.Pa .sha256 .
 The partition table is changed only to grow that partition into the
 free space after it.
 The data partition is not moved, and the files on it are kept; the
