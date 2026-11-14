@@ -1,7 +1,8 @@
 /*
  * ext2_check.c: the check of an ext2 volume that was not unmounted cleanly, at
  * its writable mount, which repairs free counts, the bits of blocks a file
- * names and the entries a stopped create leaves, as e2fsck -p does.
+ * names, the entries a stopped create leaves and link counts, as e2fsck -p
+ * does.
  */
 
 #include "ext2_internal.h"
@@ -26,8 +27,12 @@
  * inode, which a stop leaves when a new name reached the disk before its
  * inode, is cleared, and an entry whose type byte disagrees with its live
  * inode's mode gets the inode's type, as `e2fsck -p` repairs both in its
- * pass 2; both are written only once the check ends without a fault.
- * Nothing else is repaired.
+ * pass 2. A link count that disagrees with the names the walk found, which
+ * a stop leaves when a name reached the disk before or after the count of
+ * its inode or of a new directory's parent, is set to those names, as
+ * `e2fsck -p` sets it in its pass 4, unless it is 0 or its inode is an
+ * orphan directory. All are written only once the check ends without a
+ * fault. Nothing else is repaired.
  * Lost blocks, orphans, regular files whose size or `i_blocks` disagrees
  * with their pointers, which a stop leaves when the pointers reached the
  * disk before the inode, and shared attribute blocks whose reference count
@@ -44,14 +49,15 @@
  * size or its `i_blocks`, an attribute block of the wrong form or named by
  * more inodes than its count, a directory with two parents or without its
  * parent, an orphan directory whose `..` names anything but the root or a
- * directory of an orphan tree, an entry of the wrong form, a link count
- * that does not match the entries of the live directories, a block of the
+ * directory of an orphan tree, an entry of the wrong form or naming a
+ * reserved inode, a link count of 0 that an entry names, an orphan
+ * directory's link count that does not match its entries, a block of the
  * volume's tables or a reached inode the bitmap calls free. So does one of
  * the check's own limits, below. A check that stops has not compared the
  * bitmaps with the blocks files name, and the faults it stops at are the
  * ones under which a free could take a block or an inode something else
  * still names: a block claimed twice, an attribute block's count below its
- * sharers, a link count below the names, an orphan directory's `..` naming
+ * sharers, a named inode with no link, an orphan directory's `..` naming
  * an inode that an unlink, an rmdir or a rename could free. So the volume
  * mounts read-only, and nothing is allocated, freed or reclaimed on it
  * before `e2fsck` has run or a later writable remount's check ends; a fault
@@ -74,14 +80,17 @@
 #define EXT2_CHECK_LINK_BUCKETS 512 /* the index, not a limit on linked files */
 #define EXT2_CHECK_ATTRS        512 /* the shared attribute blocks it counts */
 
-/* An entry the check repairs once it ends (`check_fixes`): the entry's byte
- * on the device, the inode it names and its directory, and the type byte to
- * write, or 0 to clear the entry's inode number. */
+/* An entry or a link count the check repairs once it ends (`check_fixes`):
+ * the byte on the device of the entry, or of the inode's link count; the
+ * inode the entry names, or whose count it is, and the entry's directory;
+ * the type byte to write, or 0 to clear the entry's inode number; and for a
+ * count, `links` nonzero, the count to write and the one found (`was`). */
 struct ext2_fix {
     struct ext2_fix *next;
     uint64_t at;
     uint32_t ino, dir;
     uint32_t ft;
+    uint32_t links, was;
 };
 
 /* An extended-attribute block whose header counts more than one reference:
@@ -428,6 +437,27 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
 static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int depth);
 
 /**
+ * Append a zeroed repair of byte `at` for inode `ino` to the check's list,
+ * written once the check ends (`check_fixes`). The record, or NULL with the
+ * check's limit recorded when the heap cannot hold it.
+ */
+static struct ext2_fix *check_fix_new(struct ext2_check *c, uint64_t at, uint32_t ino)
+{
+    struct ext2_fix *fix = kzalloc(sizeof(*fix));
+
+    if (!fix) {
+        (void)check_limit(c, ino, "no memory to record the entries it repairs");
+        return 0;
+    }
+    fix->at = at;
+    fix->ino = ino;
+    *c->fix_tail = fix;
+    c->fix_tail = &fix->next;
+    c->fixes++;
+    return fix;
+}
+
+/**
  * Record the repair of the entry at byte `at` of directory `dir`, which
  * names inode `ino`: its type byte set to `ft`, or with `ft` 0 its inode
  * number cleared, written once the check ends (`check_fixes`). 0, or -EIO
@@ -435,18 +465,42 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
  */
 static int check_fix_add(struct ext2_check *c, uint64_t at, uint32_t ino, uint32_t dir, uint32_t ft)
 {
-    struct ext2_fix *fix = kzalloc(sizeof(*fix));
+    struct ext2_fix *fix = check_fix_new(c, at, ino);
 
     if (!fix) {
-        return check_limit(c, ino, "no memory to record the entries it repairs");
+        return -EIO;
     }
-    fix->at = at;
-    fix->ino = ino;
     fix->dir = dir;
     fix->ft = ft;
-    *c->fix_tail = fix;
-    c->fix_tail = &fix->next;
-    c->fixes++;
+    return 0;
+}
+
+/**
+ * Record the repair of inode `ino`'s link count `was` to `links`, the names
+ * the walk found, written once the check ends (`check_fixes`), as `e2fsck
+ * -p` sets a count in its pass 4. A count of 0, which `e2fsck` reads as a
+ * deleted inode, and one past the 16 bits of `i_links_count` are faults. 0,
+ * or -EIO with the fault or the check's limit recorded.
+ */
+static int check_count_add(struct ext2_check *c, uint32_t ino, uint32_t was, uint32_t links)
+{
+    struct ext2_fix *fix;
+    uint64_t at;
+    int rc;
+
+    if (was == 0 || links > 0xFFFFu) {
+        return check_fault(c, ino, "a link count that does not match its names");
+    }
+    rc = ext2_slot_at(c->em, READ_QUIET, ino, &at);
+    if (rc != 0) {
+        return rc;
+    }
+    fix = check_fix_new(c, at + 26, ino);
+    if (!fix) {
+        return -EIO;
+    }
+    fix->links = links;
+    fix->was = was;
     return 0;
 }
 
@@ -525,20 +579,25 @@ static int check_link_add(struct ext2_check *c, const struct ext2_node *n)
 }
 
 /**
- * Require every remembered inode's expected count to match all its names,
- * those in the entries of orphan directories among them. An orphan no
- * entry named is kept for e2fsck, and an orphan directory an entry named
- * had its count judged by `check_dir`.
+ * Set every remembered inode's count that does not match all its names,
+ * those in the entries of orphan directories among them, to those names
+ * (`check_count_add`). An orphan no entry named is kept for e2fsck, and an
+ * orphan directory an entry named had its count judged by `check_dir`. 0,
+ * or -EIO with the fault or the check's limit recorded.
  */
 static int check_link_counts(struct ext2_check *c)
 {
     uint32_t i;
     struct ext2_link *link;
+    int rc;
 
     for (i = 0; i < EXT2_CHECK_LINK_BUCKETS; i++) {
         for (link = c->link[i]; link; link = link->next) {
             if (!link->orphan && !link->dir && link->expect != link->found) {
-                return check_fault(c, link->ino, "a link count that does not match its names");
+                rc = check_count_add(c, link->ino, link->expect, link->found);
+                if (rc != 0) {
+                    return rc;
+                }
             }
         }
     }
@@ -596,7 +655,8 @@ static int check_entry(struct ext2_check *c, const struct ext2_node *n, uint32_t
  * entry, which may clear it. A directory is walked once, counted in
  * `*subdirs`, and a second reach is a second parent; a file's blocks are
  * marked once, and a second name counts toward its link count in the
- * table. An orphan (`check_orphan`) that an entry of an orphan directory
+ * table, which `check_link_counts` compares once every name is found. An
+ * orphan (`check_orphan`) that an entry of an orphan directory
  * names is counted as named: a file's blocks were marked already, and a
  * directory is walked unless it was walked as an orphan already, in which
  * case its `..` must be `dir`. 0, or -EIO with the fault or a limit
@@ -650,13 +710,17 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_
             if (link->orphan) {
                 check_adopt(c, link);
             }
-            if (link->found >= link->expect) {
-                return check_fault(c, ino, "a link count that does not match its names");
-            }
             link->found++;
             return 0;
         }
-        return check_fault(c, ino, "named twice with one link");
+        if (ino < em->first_ino) {
+            return check_fault(c, ino, "an entry naming a reserved inode");
+        }
+        rc = check_link_add(c, n);
+        if (rc == 0) {
+            check_link_find(c, ino)->found++;
+        }
+        return rc;
     }
     seen_set(c, ino);
     rc = check_blocks(c, n, 0);
@@ -700,9 +764,11 @@ static int check_dots(struct ext2_check *c, uint32_t ino, uint32_t parent, uint3
  * Walk directory `ino`, loaded at `c->node[depth]`, whose parent is
  * `parent`: its blocks, every entry's form, `.` and `..` in their places,
  * each other entry's inode, and its link count against two plus its
- * subdirectories. A `parent` of 0 is an orphan directory's, whose `..` is
- * kept in its record and judged later (`check_dots`). 0, or
- * -EIO with the fault recorded or for a failed read.
+ * subdirectories, a count that differs set to that (`check_count_add`). A
+ * `parent` of 0 is an orphan directory's, whose `..` is kept in its record
+ * and judged later (`check_dots`), and whose count that differs is a
+ * fault, since no entry names it. 0, or -EIO with the fault recorded or
+ * for a failed read.
  */
 static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int depth)
 {
@@ -770,7 +836,10 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
         return check_fault(c, ino, "a directory without . and ..");
     }
     if (n->nlink != 2 + subdirs) {
-        return check_fault(c, ino, "a directory link count that does not match its entries");
+        if (parent == 0) {
+            return check_fault(c, ino, "a directory link count that does not match its entries");
+        }
+        return check_count_add(c, ino, n->nlink, 2 + subdirs);
     }
     return 0;
 }
@@ -1082,13 +1151,33 @@ static int check_bitmaps(struct ext2_check *c)
 }
 
 /**
- * Write the entry repairs a check without a fault recorded
- * (`check_fix_add`), in the order met, each in one write through the cache,
- * as the bitmaps' repairs are written, and log each: `ext2: check: SOURCE:
- * inode N: unused, its entry in directory D cleared` for an inode number
- * cleared, and `ext2: check: SOURCE: inode N: its entry in directory D of
- * another type, type set` for a type byte set. 0, or the -errno of a failed
- * write.
+ * Set the link count of inode `ino`'s node, when one is in memory, to
+ * `links`, the count the check wrote, so that a later store of the node
+ * does not write the old one back. Only a remount's check finds nodes in
+ * memory; it runs with admission closed, so no operation changes the
+ * count meanwhile. Takes `em->share_lock`, under which the hash changes.
+ */
+static void check_node_links(struct ext2_mount *em, uint32_t ino, uint32_t links)
+{
+    struct ext2_node *n;
+    uint32_t flags = spin_lock_irqsave(&em->share_lock);
+
+    n = ext2_node_find(em, ino);
+    if (n) {
+        n->nlink = links;
+    }
+    spin_unlock_irqrestore(&em->share_lock, flags);
+}
+
+/**
+ * Write the entry and link-count repairs a check without a fault recorded
+ * (`check_fix_add`, `check_count_add`), in the order met, each in one write
+ * through the cache, as the bitmaps' repairs are written, and log each:
+ * `ext2: check: SOURCE: inode N: unused, its entry in directory D cleared`
+ * for an inode number cleared, `ext2: check: SOURCE: inode N: its entry in
+ * directory D of another type, type set` for a type byte set, and `ext2:
+ * check: SOURCE: inode N: link count W, set to L` for a count. 0, or the
+ * -errno of a failed write.
  */
 static int check_fixes(struct ext2_check *c)
 {
@@ -1098,6 +1187,19 @@ static int check_fixes(struct ext2_check *c)
     int rc;
 
     for (fix = c->fix; fix; fix = fix->next) {
+        if (fix->links != 0) {
+            LE16_PUT(raw, fix->links);
+            rc = ext2_write_bytes(em, fix->at, raw, 2, WRITE_THROUGH | WRITE_KIND(READ_SLOT));
+            raw[0] = 0;
+            raw[1] = 0;
+            if (rc != 0) {
+                return rc;
+            }
+            check_node_links(em, fix->ino, fix->links);
+            klog(KLOG_WARN, "ext2", "check: %s: inode %d: link count %d, set to %d",
+                 em->mnt->source, (int)fix->ino, (int)fix->was, (int)fix->links);
+            continue;
+        }
         if (fix->ft == 0) {
             rc = ext2_write_bytes(em, fix->at, raw, 4, WRITE_THROUGH | WRITE_KIND(READ_DATA));
         } else {
