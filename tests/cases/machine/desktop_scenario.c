@@ -202,20 +202,32 @@ static void ev_keyboard(struct net_case *u, struct net_boot *b)
 }
 
 /** Move the mouse by 10 and 5, click, and turn the wheel up and down, each a
- * QMP command of its own so that each is a packet. */
+ * QMP command of its own so that each is a packet, sent once evprobe has
+ * printed that it read the packet of the one before, "EVPROBE: mouse: packet
+ * N read", and wait for the last's. QEMU's PS/2 mouse keeps a packet that
+ * does not fit its queue of 16 bytes, four of these four-byte packets, until
+ * the next event: the five sent together left the wheel's turn down unread
+ * on i686 under KVM. */
 static void ev_mouse(struct net_case *u, struct net_boot *b)
 {
-    events(u, b,
-           "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
-           "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]");
-    events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
-    events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]");
-    events(u, b,
-           "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-up\"}}, "
-           "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-up\"}}]");
-    events(u, b,
-           "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-down\"}}, "
-           "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-down\"}}]");
+    static const char *const moves[] = {
+        "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
+        "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]",
+        "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]",
+        "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]",
+        "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-up\"}}, "
+        "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-up\"}}]",
+        "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-down\"}}, "
+        "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-down\"}}]"};
+    char seen[64];
+    unsigned i;
+
+    for (i = 0; i < sizeof(moves) / sizeof(moves[0]); i++) {
+        events(u, b, moves[i]);
+        snprintf(seen, sizeof(seen), "EVPROBE: mouse: packet %u read", i + 1);
+        if (net_ok(u) && etude_guest_output_wait(b->m, seen) != ETUDE_OK)
+            net_fail(u, "evprobe mouse never printed \"%s\"", seen);
+    }
 }
 
 /** Check Weston on DRM with `renderer` and the device nodes udev gave the
