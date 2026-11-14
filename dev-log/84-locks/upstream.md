@@ -343,3 +343,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: run.py judges the test by the lines its failures are on (`varying_lines`), not by their count.
 * Status: unreported.
 * Next: run the test on a current Mesa and vkd3d-proton; find whether the NaN comes from the attachments the pipeline leaves unused or from the blend of a format the pass does not bind, with `LP_DEBUG` and a smaller copy of the test.
+
+## Mesa's Venus driver leaves its thread key's destructor registered after it is unloaded
+
+* Project: Mesa 26.1.6's Venus driver, Debian's `mesa-vulkan-drivers_26.1.6-1~bpo13+1_amd64.deb` (SHA-256 e2d4a843b8c55ed17c1e8856805f67b553b013b6ce5f15faeec4db7d4d38ff90), `usr/lib/x86_64-linux-gnu/venus/libvulkan_virtio.so`; Rach2 keeps no Mesa source.
+* Fails: the driver makes a thread-specific key with a destructor and never deletes it, so a thread that exits after the Vulkan loader has unloaded the driver calls a destructor that is no longer mapped, or is now some other code. The binary calls `pthread_key_create` from offset 0x36590, through a wrapper at 0x115f60, with the key at 0x1aa4b0 and the destructor at 0x363c0, and imports no `pthread_key_delete`. glibc's `__nptl_deallocate_tsd` calls the stale address at thread exit. The source function has not yet been read.
+* Found: 2026-11-14, the testing PC under QEMU's KVM with virtio-vga-gl's Venus, milestone 84, task 84-263l, when Proton's d3d10core and d3d11 units died with SIGSEGV on Rach2 and with Wine's access violation on Linux.
+* Reproduction: under Wine or Proton on Venus, have the Vulkan loader load, unload and load the driver again while other mappings move the gap it left, then end a thread that used the driver: the thread calls the first copy's base plus 0x363c0. Linux hides the fault as long as the second load lands at the first address, which its 2 MiB alignment of file and anonymous mappings makes the usual case. Not yet run on Linux with the address forced elsewhere.
+* Evidence: `dev-log/84-locks/84-263l.md`, with the two bases of the driver on Rach2 and the one base on Debian.
+* Rach2: `mmap_place` aligns 64-bit mappings of ext2 files and large anonymous memory to 2 MiB as Linux 6.12 does, so that the driver comes back to its address, in the commit "Align a 64-bit mapping of an ext2 file that holds a 2 MiB page, and private anonymous memory of a multiple of 2 MiB without a hint, to 2 MiB".
+* Status: unreported.
+* Next: find the `tss_create` or `pthread_key_create` call in Mesa 26.1.6's `src/virtio/vulkan` or `src/util`, see whether Mesa's main still lacks the matching delete when the driver is unloaded, and propose that the driver delete its key in a destructor of its own or link with `-z nodelete`.
