@@ -385,15 +385,40 @@ static uint32_t reply_step(uint32_t waited, uint32_t limit_us)
     return step < limit_us - waited ? step : limit_us - waited;
 }
 
+#ifdef RACH2_HOSTTEST
+/* A host test's clock for the reply's wait, in microseconds, which the
+ * wait's steps move unless a row stops it (`host_clock_still`); and the
+ * steps' time, which the model's mouse answers by. */
+static uint32_t host_clock_us;
+static uint32_t host_slept_us;
+static int host_clock_still;
+#endif
+
+/** The clock the wait for the mouse's reply reads: `timer_now_us`, or a
+ * host test's. */
+static uint32_t reply_clock(void)
+{
+#ifdef RACH2_HOSTTEST
+    return host_clock_us;
+#else
+    return timer_now_us();
+#endif
+}
+
 /**
  * Wait until the 8042 output buffer has a byte from the mouse, ready to
  * read, for at most `limit_us`, as Linux's ps2_command sleeps on the
  * interrupt for it: the status is read, then read again after
  * `reply_step`. Inside a run of commands a step of a tick sleeps, and a
  * shorter one lets another processor have the big lock first
- * (`wait_turn`). A host test's model has no clock, and its reads take no
- * time: there the wait ends once the steps add up to `limit_us`. Either
- * ends after PS2_TIMEOUT reads, more than the longest wait makes.
+ * (`wait_turn`).
+ *
+ * The time waited is the clock's, or, where that is less, the steps over
+ * which the clock stood still: a clock that stops, such as a TSC that pauses,
+ * leaves the steps to grow and to end the wait in the time it allows, not
+ * sooner. A clock that creeps is bounded by the reads: one more than
+ * `limit_us` / PS2_POLL_US, which the waits between them make at least
+ * `limit_us` long.
  *
  * During the bring-up a keyboard byte waiting in the buffer is read and
  * dropped: the buffer holds one byte, so the mouse's cannot arrive until the
@@ -404,16 +429,10 @@ static uint32_t reply_step(uint32_t waited, uint32_t limit_us)
  */
 static int ps2_wait_mouse_output(uint32_t limit_us)
 {
-#ifndef RACH2_HOSTTEST
-    uint32_t start = timer_now_us();
-#endif
-    uint32_t waited, step;
-    int reads = 0;
+    uint32_t start = reply_clock(), last = start, now;
+    uint32_t waited, still = 0, step = 0, reads = 0;
     uint8_t status;
 
-#ifdef RACH2_HOSTTEST
-    waited = 0;
-#endif
     for (;;) {
         status = inb(PS2_STATUS_PORT);
         if (status & PS2_STATUS_OUTPUT_FULL) {
@@ -424,23 +443,29 @@ static int ps2_wait_mouse_output(uint32_t limit_us)
                 inb(PS2_DATA_PORT);
             }
         }
-#ifndef RACH2_HOSTTEST
-        waited = timer_now_us() - start;
-#endif
-        if (waited >= limit_us || ++reads >= PS2_TIMEOUT) {
-            return -1; /* the reads' bound holds where the clock stood still */
+        now = reply_clock();
+        if (now == last) {
+            still += step;
+        }
+        last = now;
+        waited = now - start > still ? now - start : still;
+        if (waited >= limit_us || ++reads > limit_us / PS2_POLL_US) {
+            return -1;
         }
         step = reply_step(waited, limit_us);
-#ifdef RACH2_HOSTTEST
-        waited += step;
-#else
+#ifndef RACH2_HOSTTEST
         if (cmd_busy && step == TICK_US) {
             ps2mouse_msleep(TICK_US / 1000u);
             continue;
         }
 #endif
         wait_turn();
-#ifndef RACH2_HOSTTEST
+#ifdef RACH2_HOSTTEST
+        host_slept_us += step;
+        if (!host_clock_still) {
+            host_clock_us += step;
+        }
+#else
         k_udelay(step);
 #endif
     }
