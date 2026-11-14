@@ -4254,11 +4254,14 @@ long sys_waitid(isr_params_t *params)
  * a structure that cannot be written.
  *
  * The call runs without the big lock. RUSAGE_THREAD reads only the calling
- * thread's own counters, which only it and the tick on its own processor
- * write, and its space's peak, read without a lock as `mm_resident_peak`
- * says, as Linux 6.12.115's getrusage reads them under no lock
- * (kernel/sys.c:1825-1829). The other targets read the thread group's
- * threads and totals, and take the big lock for that.
+ * thread's own counters: its processor time under `timer_lock`, which every
+ * writer of it holds, debugfs's cputime_test on another processor among
+ * them, so that the i686 sees each 64-bit count whole (`thread_cpu_time`);
+ * its faults and switches, which only it writes, and its space's peak, read
+ * without a lock as `mm_resident_peak` says, as Linux 6.12.115's getrusage
+ * reads them under no lock (kernel/sys.c:1825-1829). The other targets
+ * read the thread group's threads and totals, and take the big lock for
+ * that.
  */
 long sys_getrusage(isr_params_t *params)
 {
@@ -4278,10 +4281,12 @@ long sys_getrusage(isr_params_t *params)
     }
     if (who == RUSAGE_SELF) {
         proc_cpu_time(current_proc, &user, &sys);
+    } else if (who == RUSAGE_THREAD) {
+        thread_cpu_time(current_proc, &user, &sys);
     } else {
         flags = kirq_save();
-        user = who == RUSAGE_CHILDREN ? current_proc->tg->cutime : current_proc->utime;
-        sys = who == RUSAGE_CHILDREN ? current_proc->tg->cstime : current_proc->stime;
+        user = current_proc->tg->cutime;
+        sys = current_proc->tg->cstime;
         kirq_restore(flags);
     }
     rusage_from_ticks(&ru, user, sys);

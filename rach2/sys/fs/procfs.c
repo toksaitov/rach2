@@ -1486,11 +1486,13 @@ static int procfs_gen_wchan(struct procfs_text *t, int pid)
 static int procfs_gen_schedstat(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
+    uint64_t user, sys;
 
     if (!p) {
         return -ENOENT;
     }
-    ap_u64(t, (p->utime + p->stime) * TICK_NS);
+    thread_cpu_time(p, &user, &sys);
+    ap_u64(t, (user + sys) * TICK_NS);
     ap_ch(t, ' ');
     ap_u64(t, p->run_delay);
     ap_ch(t, ' ');
