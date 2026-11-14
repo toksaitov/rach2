@@ -1278,6 +1278,8 @@ static const struct vfs_ops krffs_volume_ops = {
     0, /* read_frames */
     kv_handle_node,
     0, /* writeback */
+    0, /* lock_write */
+    0, /* unlock_write */
 };
 
 /**

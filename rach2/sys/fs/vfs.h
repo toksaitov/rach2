@@ -386,6 +386,18 @@ struct vfs_ops {
      * nothing was old enough, or -errno, which the type has recorded. NULL
      * for a type that keeps nothing dirty outside the cache. */
     int (*writeback)(struct vfs_mount *mnt, uint64_t before);
+    /* Take and give back the write lock of the held regular file `node`
+     * (sleeplock.h), for a type that sets `file_locked`: the lock that keeps
+     * the file's writes, truncations and fallocates in order, as Linux's
+     * `i_rwsem` keeps them, taken before the node's lock (`lock_node`) and
+     * held across a whole write, a vector's included, while the node's lock
+     * is let go around a fault on the writer's buffer. A fault on a mapping
+     * of a file takes that file's node lock and never a write lock, so a
+     * writer that holds one may fault. The holder takes it again by depth.
+     * NULL for any other type, whose description lock and namespace lock
+     * order its writes. */
+    void (*lock_write)(struct vfs_mount *mnt, void *node);
+    void (*unlock_write)(struct vfs_mount *mnt, void *node);
 };
 
 /* What cachestat(2) counts over a file's range of pages, in the order and
@@ -976,6 +988,20 @@ int vfs_file_locked(const struct vfs_mount *mnt);
 void vfs_node_lock(const struct vfs_ref *ref);
 /** Give back one take of the lock `vfs_node_lock` took for `ref`. */
 void vfs_node_unlock(const struct vfs_ref *ref);
+
+/**
+ * Take the write lock of the regular file `ref` (`vfs_ops.lock_write`) on a
+ * type that sets `file_locked`, and nothing on any other. A write, a
+ * truncation and a fallocate take it before the file's node lock
+ * (`vfs_node_lock`) and hold it to their end, so that one never sees
+ * another half done, even while the writer lets the node's lock go to
+ * bring its buffer in. It is taken with no node lock of a regular file
+ * held, and no fault takes it. Sleeps until it is free; a signal does not
+ * end the wait.
+ */
+void vfs_write_lock(const struct vfs_ref *ref);
+/** Give back one take of the lock `vfs_write_lock` took for `ref`. */
+void vfs_write_unlock(const struct vfs_ref *ref);
 
 /**
  * Hold and lock the node named `name` in the directory `dir`, whose lock

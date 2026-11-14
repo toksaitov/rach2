@@ -72,6 +72,24 @@ void vfs_node_unlock(const struct vfs_ref *ref)
     }
 }
 
+void vfs_write_lock(const struct vfs_ref *ref)
+{
+    struct vfs_mount *base = base_of(ref->mnt);
+
+    if (base->type->file_locked && base->type->ops->lock_write) {
+        base->type->ops->lock_write(base, ref_node(ref));
+    }
+}
+
+void vfs_write_unlock(const struct vfs_ref *ref)
+{
+    struct vfs_mount *base = base_of(ref->mnt);
+
+    if (base->type->file_locked && base->type->ops->unlock_write) {
+        base->type->ops->unlock_write(base, ref_node(ref));
+    }
+}
+
 int vfs_child_lock(const struct vfs_ref *dir, const char *name, struct vfs_ref *child)
 {
     struct vfs_mount *base = base_of(dir->mnt);

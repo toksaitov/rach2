@@ -4501,6 +4501,8 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* read_frames */
     0,                           /* handle_node */
     0,                           /* writeback */
+    0,                           /* lock_write */
+    0,                           /* unlock_write */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -5173,6 +5175,8 @@ static const struct vfs_ops devfs_vops = {
     0, /* read_frames */
     0, /* handle_node */
     0, /* writeback */
+    0, /* lock_write */
+    0, /* unlock_write */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -5219,6 +5223,8 @@ static const struct vfs_ops procfs_vops = {
     0, /* read_frames */
     0, /* handle_node */
     0, /* writeback */
+    0, /* lock_write */
+    0, /* unlock_write */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -5265,6 +5271,8 @@ static const struct vfs_ops sysfs_vops = {
     0, /* read_frames */
     0, /* handle_node */
     0, /* writeback */
+    0, /* lock_write */
+    0, /* unlock_write */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the

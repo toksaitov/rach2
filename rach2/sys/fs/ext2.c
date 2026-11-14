@@ -9,6 +9,7 @@
 #include "../mm/filemap.h"
 
 /* The kinds of ext2's locks, as `sleep_lock_records` lists them. */
+static struct sleep_lock_record write_record = SLEEP_LOCK_RECORD("ext2 write");
 static struct sleep_lock_record node_record = SLEEP_LOCK_RECORD("ext2 node");
 static struct sleep_lock_record batch_record = SLEEP_LOCK_RECORD("ext2 batch");
 static struct sleep_lock_record group_record = SLEEP_LOCK_RECORD("ext2 group");
@@ -169,6 +170,7 @@ struct ext2_node *ext2_node_make(void)
         n->state = N_LOADING;
         n->dirty_meta = 1;
         sleep_lock_init(&n->lock, &node_record, SLEEP_LOCK_FILE);
+        sleep_lock_init(&n->write_lock, &write_record, 0);
     }
     return n;
 }
@@ -3806,6 +3808,22 @@ static void ext2_unlock_node(struct vfs_mount *mnt, void *node)
     em_reap(ext2_em_of(mnt));
 }
 
+/** The `lock_write` of `vfs_ops`: take the write lock of the held node
+ * `node`, which a writer of the file holds across its whole call while it
+ * lets the node's lock go around a fault on its buffer. */
+static void ext2_lock_write(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    sleep_lock_take(&((struct ext2_node *)node)->write_lock);
+}
+
+/** The `unlock_write` of `vfs_ops`: give back a take of `ext2_lock_write`. */
+static void ext2_unlock_write(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    sleep_lock_give(&((struct ext2_node *)node)->write_lock);
+}
+
 /* ---- admission ---- */
 
 /** End an operation `em_enter` admitted, with the final puts it left. */
@@ -4279,6 +4297,8 @@ static const struct vfs_ops ext2_ops = {
     open_read_frames,
     open_node,
     ext2_writeback_old,
+    ext2_lock_write,
+    ext2_unlock_write,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1, 1, 1};

@@ -3334,6 +3334,8 @@ static const struct vfs_ops vfat_ops = {
     0,                           /* read_frames */
     0,                           /* handle_node */
     0,                           /* writeback */
+    0,                           /* lock_write */
+    0,                           /* unlock_write */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops, 0, 0, 0, 0, 0, 0, 0};

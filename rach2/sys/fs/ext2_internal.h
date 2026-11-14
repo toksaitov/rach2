@@ -261,10 +261,14 @@ struct ext2_node {
      * (`node_owes`) until it is dropped, at its last put without a store or
      * a free, even when unlinked. No store clears it. */
     int fenced;
-    int unlinked;                /* no name left; the inode and its blocks go at the last put */
-    int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
-    int load_error;              /* the -errno of a load that failed */
-    struct sleep_lock lock;      /* the node lock (`ext2_node_lock`) */
+    int unlinked;           /* no name left; the inode and its blocks go at the last put */
+    int state;              /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
+    int load_error;         /* the -errno of a load that failed */
+    struct sleep_lock lock; /* the node lock (`ext2_node_lock`) */
+    /* The write lock of a regular file (`vfs_ops.lock_write`), taken before
+     * `lock` and held across a whole write, truncation or fallocate; no
+     * fault and no reader takes it, so it does not count in `file_locks`. */
+    struct sleep_lock write_lock;
     int queued;                  /* on `em->reap`, which no thread is freeing yet */
     struct ext2_node *reap_next; /* the next node on `em->reap` */
     /* The blocks other files share that were dirtied for this inode since

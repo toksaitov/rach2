@@ -4460,6 +4460,8 @@ static const struct vfs_ops exfat_ops = {
     0,                         /* read_frames */
     0,                         /* handle_node */
     0,                         /* writeback */
+    0,                         /* lock_write */
+    0,                         /* unlock_write */
 };
 
 const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops, 0, 0, 0, 0, 0, 0, 0};

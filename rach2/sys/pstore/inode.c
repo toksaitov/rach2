@@ -338,6 +338,8 @@ static const struct vfs_ops pstore_vops = {
     0,                                     /* read_frames */
     0,                                     /* handle_node */
     0,                                     /* writeback */
+    0,                                     /* lock_write */
+    0,                                     /* unlock_write */
 };
 
 /** The constructor: every mount shows the one directory, as Linux's
