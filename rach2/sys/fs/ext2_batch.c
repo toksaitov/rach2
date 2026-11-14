@@ -788,6 +788,21 @@ static void drain_mark(struct bbuf *b, const struct ext2_image *im)
     }
 }
 
+/** The group whose block bitmap is the block of the image `im` of the
+ * allocation stage, or `em->groups` for an image of another block, such as
+ * a descriptor block. A group's bitmap lies in the group, as the mount
+ * checks. */
+static uint32_t drain_bitmap_group(const struct ext2_mount *em, const struct ext2_image *im)
+{
+    uint32_t g;
+
+    if (im->stage != WB_ALLOC || im->block < em->first_data) {
+        return em->groups;
+    }
+    g = (im->block - em->first_data) / em->bpg;
+    return g < em->groups && ext2_le32(em->gd + g * 32) == im->block ? g : em->groups;
+}
+
 /** Whether the calling thread has SIGKILL pending in its own set, where a
  * signal that ends its process puts one for every thread (`sig_group_end`):
  * Linux's `fatal_signal_pending`, which the core file's writer reads too
@@ -878,7 +893,11 @@ static void drain_inode_marks(struct ext2_mount *em, const struct ext2_image *im
  * and descriptors through the data, the pointer blocks and the superblock to
  * the inode tables, a file's data and pointer blocks tagged as its own and
  * each pointer block marked at its level after the blocks below it, so that
- * the cache writes it after them (`bcache_dirty_pointer`). No buffer is held
+ * the cache writes it after them (`bcache_dirty_pointer`). A block bitmap
+ * is copied under its group's lock, once a free's cleared bits in the
+ * cache's block are on the device (`ext2_bitmap_turn`), so that the set bits
+ * of the image are not marked `after`, behind the pointer and table blocks
+ * that name their blocks. No buffer is held
  * across a sync, which may reach a backing file. Changed inode fields are
  * kept in `inode_dirty`, a bit per node, across a failed drain; each mark is
  * published under `em->share_lock` only after its table image is dirty in
@@ -932,13 +951,23 @@ static int drain_stages(struct ext2_mount *em, struct ext2_node **held, int *hel
         }
         for (i = 0; i < count; i++) {
             struct ext2_image *im = &images[i];
+            uint32_t g = em->groups;
             struct bbuf *b;
 
             if (!im->dirty || im->stage != wb->stage) {
                 continue;
             }
+            if (wb->stage == WB_ALLOC && (g = drain_bitmap_group(em, im)) != em->groups) {
+                rc = ext2_bitmap_turn(em, g);
+                if (rc != 0) {
+                    goto fail;
+                }
+            }
             b = bcache_get_blank(em->dev, im->block);
             if (!b) {
+                if (g != em->groups) {
+                    ext2_group_unlock(em, g);
+                }
                 rc = -EIO;
                 goto fail;
             }
@@ -946,6 +975,9 @@ static int drain_stages(struct ext2_mount *em, struct ext2_node **held, int *hel
             drain_mark(b, im);
             drain_inode_marks(em, im);
             bcache_release(b);
+            if (g != em->groups) {
+                ext2_group_unlock(em, g);
+            }
             wrote = 1;
             if (++copied % EXT2_SERVICE_BLOCKS == 0) {
                 sched_service_point();

@@ -243,28 +243,32 @@ static int bitmap_reclaim(struct ext2_mount *em, uint32_t g, int which)
 }
 
 /**
- * The cache block of group `g`'s inode bitmap that holds bit `index`, when
- * a change of that bit to `value` must wait for the block's write, and 0
- * when it may be made now.
+ * The cache block of group `g`'s bitmap that `which` names, EXT2_BLOCK_BITMAP
+ * or EXT2_INODE_BITMAP, that holds bit `index`, when a change of that bit to
+ * `value` must wait for the block's write, and 0 when it may be made now.
  *
- * A free's cleared bit goes `after` the zeroed inode, which is `first`, so
- * that no inode on the disk is live while its bit is clear; an allocation's
- * set bit goes before the inode table block that names the new inode, which
- * the cache writes after every shared block dirtied before it but an
- * `after` one (`bcache_sync_last`). One block holds both, and the cache
- * keeps one image of it, so a bitmap with a set bit not yet on the device
- * cannot be marked `after`, and one marked `after` cannot take a set bit:
- * the table block would go before it. So under the group's lock, which
- * alone changes the inode bitmap, a dirty bitmap holds sets alone, with no
- * place, or clears alone, `after`, and a change of the other kind waits
- * until the block is written, by `bcache_sync_block`, which writes an
- * `after` behind the `first` blocks it follows. A strict mount writes each
- * change through, in order, and never waits here. The caller holds the
- * group's lock.
+ * A free's cleared bit goes `after` what named the inode or block, the
+ * zeroed inode or the cleared pointer, which are `first`, so that nothing
+ * on the disk names an inode or a block whose bit is clear; an
+ * allocation's set bit goes before what names the new inode or block, the
+ * inode table block, which the cache writes after every shared block
+ * dirtied before it but an `after` one (`bcache_sync_last`), or a file's
+ * pointer block, which waits for those shared blocks too
+ * (`bcache_dirty_pointer`). One block holds both, and the cache keeps one
+ * image of it, so a bitmap with a set bit not yet on the device cannot be
+ * marked `after`, and one marked `after` cannot take a set bit: what names
+ * the new one would go before it. So under the group's lock, which alone
+ * changes its bitmaps, a dirty bitmap holds sets alone, with no place, or
+ * clears alone, `after`, and a change of the other kind waits until the
+ * block is written, by `bcache_sync_block`, which writes an `after` behind
+ * the `first` blocks it follows. The file-write batch's drain keeps the
+ * same rule when it copies its image of a block bitmap into the cache
+ * (`ext2_bitmap_turn`). A strict mount writes each change through, in
+ * order, and never waits here. The caller holds the group's lock.
  */
-static uint32_t inode_bit_turn(struct ext2_mount *em, uint32_t g, uint32_t index, int value)
+static uint32_t bit_turn(struct ext2_mount *em, uint32_t g, int which, uint32_t index, int value)
 {
-    uint64_t at = (uint64_t)ext2_le32(em->gd + g * 32 + EXT2_INODE_BITMAP) * em->block_size;
+    uint64_t at = (uint64_t)ext2_le32(em->gd + g * 32 + which) * em->block_size;
     uint32_t blk = (uint32_t)((at + index / 8) >> BCACHE_BLOCK_SHIFT);
     int order;
 
@@ -276,6 +280,44 @@ static uint32_t inode_bit_turn(struct ext2_mount *em, uint32_t g, uint32_t index
         return 0;
     }
     return blk;
+}
+
+/**
+ * Take group `g`'s lock for a change of its bitmap that `which` names at bit
+ * `index` to `value`, once the bitmap's block holds no change of the other
+ * kind (`bit_turn`): such a block is written first, with the lock let go,
+ * and looked at again. The caller holds no group's lock. 0 with the lock
+ * taken, or the -errno of the write without it.
+ */
+static int bit_lock(struct ext2_mount *em, uint32_t g, int which, uint32_t index, int value)
+{
+    uint32_t turn;
+    int rc;
+
+    ext2_group_lock(em, g);
+    while ((turn = bit_turn(em, g, which, index, value)) != 0) {
+        ext2_group_unlock(em, g);
+        rc = bcache_sync_block(em->dev, turn);
+        if (rc != 0) {
+            return rc;
+        }
+        ext2_group_lock(em, g);
+    }
+    return 0;
+}
+
+/**
+ * Write group `g`'s block bitmap's block first when it holds a free's
+ * cleared bits and the file-write batch's drain is about to copy into it
+ * its image, which has set bits (`bit_turn`), and take the group's lock,
+ * which the caller holds until the copy is in the cache. A strict mount
+ * syncs each stage of the drain and never waits here. The caller holds
+ * `em->batch` and no group's lock. 0 with the lock held, or the -errno of
+ * the write without it.
+ */
+int ext2_bitmap_turn(struct ext2_mount *em, uint32_t g)
+{
+    return bit_lock(em, g, EXT2_BLOCK_BITMAP, 0, 1);
 }
 
 /** Whether the caller may take the blocks the superblock reserves: a
@@ -322,10 +364,12 @@ int ext2_block_refused(struct ext2_mount *em, uint32_t g, uint32_t bit)
  * stopped the mount's allocations (`ext2_allocates`), which is asked again
  * before the bit is set, since the bitmap's check (`bitmap_check`) may have
  * stopped them and found a block all the same. -ENOSPC when the group has
- * none, -EROFS, or -errno. The caller holds the group's lock.
+ * none, -EROFS, 1 with nothing taken and the bitmap's cache block in
+ * `*turn` when the bit must wait for that block's write (`bit_turn`), or
+ * -errno. The caller holds the group's lock.
  */
 static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t from, uint32_t count,
-                            uint32_t *bit)
+                            uint32_t *bit, uint32_t *turn)
 {
     uint8_t *gd = em->gd + g * 32;
     uint32_t i;
@@ -357,6 +401,10 @@ static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t from, ui
     if (!ext2_allocates(em)) {
         return -EROFS;
     }
+    *turn = bit_turn(em, g, EXT2_BLOCK_BITMAP, i, 1);
+    if (*turn != 0) {
+        return 1;
+    }
     rc = bit_put(em, g, EXT2_BLOCK_BITMAP, i, 1);
     if (rc != 0) {
         return rc;
@@ -384,11 +432,14 @@ static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t from, ui
  * first is a hint, as Linux's counter is. Under a plan (`ext2_volume_get`) a
  * bitmap the cache lacks is -EAGAIN, met before the first change, since
  * every read of the search and of the chosen bit's byte comes before its
- * write. The caller holds no group's lock.
+ * write. A bitmap holding a free's cleared bits not yet on the device is
+ * written first, with no lock held, and the group searched again
+ * (`bit_turn`), so that what names the new block waits for its bit. The
+ * caller holds no group's lock.
  */
 static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
 {
-    uint32_t g0, g, tried;
+    uint32_t g0, g, tried, turn = 0;
     uint32_t start_in;
     uint64_t free;
 
@@ -404,7 +455,7 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
     }
     g0 = (hint - em->first_data) / em->bpg;
     start_in = (hint - em->first_data) % em->bpg;
-    for (tried = 0; tried <= em->groups; tried++) {
+    for (tried = 0; tried <= em->groups;) {
         uint32_t i, count, base, from;
         uint8_t *gd;
         int rc;
@@ -418,18 +469,27 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
             count = start_in < count ? start_in : count;
         }
         if (ext2_le16(gd + 12) == 0) {
+            tried++;
             continue;
         }
         ext2_group_lock(em, g);
-        rc = group_take_block(em, g, from, count, &i);
+        rc = group_take_block(em, g, from, count, &i, &turn);
         ext2_group_unlock(em, g);
         if (rc == 0) {
             *out = base + i;
             return 0;
         }
+        if (rc == 1) {
+            rc = bcache_sync_block(em->dev, turn);
+            if (rc != 0) {
+                return rc;
+            }
+            continue;
+        }
         if (rc != -ENOSPC) {
             return rc;
         }
+        tried++;
     }
     return -ENOSPC;
 }
@@ -450,15 +510,24 @@ static void block_free_refused(struct ext2_mount *em, uint32_t b, int cleared)
     ext2_mark_error(em);
 }
 
-/** Free block `b`: its bit cleared and its group's count raised, as
- * `bit_put` and `ext2_gd_store` write them, under the group's lock, which
- * the caller may hold already. A block that may not hold data, or whose
- * bit is clear already, is refused (`block_free_refused`), and one whose
- * bitmap cannot be read, at the look or again at the clear, left taken
- * (`bitmap_reclaim`, `bit_clear`), the read reported. 0, -EIO for a block
- * out of range, or the -errno of a failed device. */
+/**
+ * Free block `b`: its bit cleared and its group's count raised, under the
+ * group's lock, which the caller may hold already, written through on a
+ * strict mount and on one that writes back dirtied `after`, so that they
+ * reach the device after the inode or pointer that named the block, which
+ * the caller cleared `first` or wrote. A bitmap holding a set bit not yet
+ * on the device is written first (`bit_turn`), with no lock held, by this
+ * call when the caller holds no group's lock (`bit_lock`) and by a caller
+ * that holds it before it took it (`ext2_attr_release`). A block that may
+ * not hold data, or whose bit is clear already, is refused
+ * (`block_free_refused`), and one whose bitmap cannot be read, at the look
+ * or again at the clear, left taken (`bitmap_reclaim`, `bit_clear`), the
+ * read reported. 0, -EIO for a block out of range, or the -errno of a
+ * failed device.
+ */
 static int block_free(struct ext2_mount *em, uint32_t b)
 {
+    int how = ext2_em_strict(em) ? WRITE_THROUGH : WRITE_AFTER;
     uint32_t g, i;
     uint8_t *gd;
     int rc;
@@ -470,12 +539,19 @@ static int block_free(struct ext2_mount *em, uint32_t b)
     g = (b - em->first_data) / em->bpg;
     i = (b - em->first_data) % em->bpg;
     gd = em->gd + g * 32;
-    ext2_group_lock(em, g);
+    if (ext2_group_held(em, g)) {
+        ext2_group_lock(em, g);
+    } else {
+        rc = bit_lock(em, g, EXT2_BLOCK_BITMAP, i, 0);
+        if (rc != 0) {
+            return rc;
+        }
+    }
     if (bitmap_reclaim(em, g, EXT2_BLOCK_BITMAP)) {
         ext2_group_unlock(em, g);
         return 0;
     }
-    rc = bit_clear(em, g, EXT2_BLOCK_BITMAP, i, WRITE_THROUGH);
+    rc = bit_clear(em, g, EXT2_BLOCK_BITMAP, i, how);
     if (rc > 0) {
         if (rc == 1) {
             block_free_refused(em, b, 1);
@@ -485,7 +561,7 @@ static int block_free(struct ext2_mount *em, uint32_t b)
     }
     if (rc == 0) {
         LE16_PUT(gd + 12, ext2_le16(gd + 12) + 1);
-        rc = gd_write_freed(em, g, WRITE_THROUGH);
+        rc = gd_write_freed(em, g, how);
     }
     if (rc == 0) {
         ext2_count_blocks(em, 1, 0);
@@ -499,7 +575,7 @@ static int block_free(struct ext2_mount *em, uint32_t b)
  * first whose bit is clear at or after `s_first_ino` and that the hash does
  * not hold. -ENOSPC when the group has none, -EAGAIN under a plan, 1 with
  * nothing changed and the bitmap's cache block in `*turn` when its bit must
- * wait for that block's write (`inode_bit_turn`), or -errno. The caller
+ * wait for that block's write (`bit_turn`), or -errno. The caller
  * holds the group's lock.
  */
 static int group_take_inode(struct ext2_mount *em, uint32_t g, int is_dir, struct ext2_node *n,
@@ -531,7 +607,7 @@ static int group_take_inode(struct ext2_mount *em, uint32_t g, int is_dir, struc
     if (i >= limit) {
         return -ENOSPC;
     }
-    *turn = inode_bit_turn(em, g, i, 1);
+    *turn = bit_turn(em, g, EXT2_INODE_BITMAP, i, 1);
     if (*turn != 0) {
         return 1;
     }
@@ -571,7 +647,7 @@ static int group_take_inode(struct ext2_mount *em, uint32_t g, int is_dir, struc
  * disk's cache to the flush of the descriptor's, which puts both on the
  * medium before the inode is written. On a mount that writes back, a bitmap
  * holding a free's cleared bit not yet on the device is written first, with
- * no lock held, and the group searched again (`inode_bit_turn`), so that the
+ * no lock held, and the group searched again (`bit_turn`), so that the
  * table block that names the new inode waits for its bit. Under a plan
  * (`ext2_volume_get`) a bitmap or descriptor block the cache lacks is
  * -EAGAIN, met before `n` is published and anything changes; from there the
@@ -628,14 +704,13 @@ int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, str
  * returns when `read_inode_bitmap` fails. On a mount that writes back the
  * cleared bit goes `after` the zeroed inode, which the caller dirtied
  * `first`, and a bitmap holding a set bit not yet on the device is written
- * first, with no lock held (`inode_bit_turn`). 0, or the -errno of a failed
+ * first, with no lock held (`bit_turn`). 0, or the -errno of a failed
  * device. */
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
 {
     uint32_t g = (ino - 1) / em->ipg;
     uint32_t i = (ino - 1) % em->ipg;
     uint8_t *gd = em->gd + g * 32;
-    uint32_t turn;
     int rc;
 
     if (ino < em->first_ino || ino > em->inodes) {
@@ -643,14 +718,9 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
         ext2_mark_error(em);
         return 0;
     }
-    ext2_group_lock(em, g);
-    while ((turn = inode_bit_turn(em, g, i, 0)) != 0) {
-        ext2_group_unlock(em, g);
-        rc = bcache_sync_block(em->dev, turn);
-        if (rc != 0) {
-            return rc;
-        }
-        ext2_group_lock(em, g);
+    rc = bit_lock(em, g, EXT2_INODE_BITMAP, i, 0);
+    if (rc != 0) {
+        return rc;
     }
     if (bitmap_reclaim(em, g, EXT2_INODE_BITMAP)) {
         ext2_group_unlock(em, g);
@@ -691,9 +761,12 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
  * reports each and goes on (fs/ext2/xattr.c:832-853). The count is read
  * and written under the lock of the block's group, which the free takes
  * again, so that two inodes that share the block and go at once each count
- * once, as Linux holds the block's buffer lock for it; a block that cannot
- * be read again for the write of the count, which the write reported
- * (READ_ATTR_FREE), is left as it is. 0, or the -errno of a failed device.
+ * once, as Linux holds the block's buffer lock for it, and the bitmap is
+ * written first when it holds a set bit not yet on the device, before the
+ * lock is taken (`bit_lock`), since the free's cleared bit goes `after` the
+ * zeroed inode (`block_free`); a block that cannot be read again for the
+ * write of the count, which the write reported (READ_ATTR_FREE), is left as
+ * it is. 0, or the -errno of a failed device.
  */
 int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
 {
@@ -706,7 +779,10 @@ int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
         return 0;
     }
     g = (b - em->first_data) / em->bpg;
-    ext2_group_lock(em, g);
+    rc = bit_lock(em, g, EXT2_BLOCK_BITMAP, (b - em->first_data) % em->bpg, 0);
+    if (rc != 0) {
+        return rc;
+    }
     rc = ext2_read_reclaim(em, READ_ATTR_FREE, ino, at, raw, sizeof(raw));
     if (rc == 1) {
         rc = 0;
@@ -802,8 +878,10 @@ int ext2_alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out)
  * fetched with no lock held, then under the group's lock each bit cleared and
  * the counts raised, the bitmap and descriptor dirtied `after`, so that they
  * reach the device after every pointer and inode dirtied `first`, and
- * listed among `n`'s shared blocks. The list is emptied. A block that may
- * not hold data, or whose bit is clear already, is skipped and reported
+ * listed among `n`'s shared blocks. A bitmap holding a set bit not yet on
+ * the device is written first, with no lock held (`bit_lock`). The list is
+ * emptied. A block that may not hold data, or whose bit is clear already,
+ * is skipped and reported
  * (`block_free_refused`), as Linux's `ext2_free_blocks` skips it, and so is
  * every block of a group whose bitmap cannot be read, which the reclaim
  * reader reports (`ext2_read_reclaim`) and which stay taken, as Linux's
@@ -821,7 +899,7 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
     while (list->count > 0) {
         uint32_t g, first = list->blocks[0];
         uint8_t *gd;
-        int freed = 0, left = 0, skip;
+        int freed = 0, left = 0, skip, err;
 
         if (!ext2_data_block_ok(em, first)) {
             block_free_refused(em, first, 0);
@@ -831,11 +909,13 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
         g = (first - em->first_data) / em->bpg;
         gd = em->gd + g * 32;
         ext2_group_fetch(em, first);
-        ext2_group_lock(em, g);
+        err = bit_lock(em, g, EXT2_BLOCK_BITMAP, (first - em->first_data) % em->bpg, 0);
+        if (err != 0) {
+            return rc != 0 ? rc : err;
+        }
         skip = bitmap_reclaim(em, g, EXT2_BLOCK_BITMAP);
         for (i = 0; i < list->count; i++) {
             uint32_t b = list->blocks[i];
-            int err;
 
             if (!ext2_data_block_ok(em, b) || (b - em->first_data) / em->bpg != g) {
                 list->blocks[left++] = b;
@@ -860,7 +940,7 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
         }
         list->count = left;
         if (freed) {
-            int err = gd_write_freed(em, g, WRITE_AFTER);
+            err = gd_write_freed(em, g, WRITE_AFTER);
 
             rc = rc != 0 ? rc : err;
             ext2_count_blocks(em, freed, 0);

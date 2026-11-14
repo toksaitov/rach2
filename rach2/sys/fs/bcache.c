@@ -1039,11 +1039,14 @@ static int follows(const struct bbuf *b)
  * `b`: a `first` before an `after`; before a block written last any block
  * it may name, one not of its class nor an `after`, shared or of an owner
  * the block names; and before a pointer block that is no `after` a block of
- * its owner below its level, of neither class.
+ * its owner below its level, of neither class, and before one of a file's
+ * tree a shared block that is no pointer block, such as the bitmap that
+ * took a block the pointer block names.
  *
- * Each rule leads to a higher rank: a pointer block's level, then the class
- * written last, then the `after` class. So a chain of waits has at most
- * six blocks and never comes back to one.
+ * Each rule leads to a higher rank: a shared block that names nothing, then
+ * a pointer block's level, then the class written last, then the `after`
+ * class. So a chain of waits has at most six blocks and never comes back to
+ * one.
  */
 static int must_precede(const struct bbuf *d, const struct bbuf *b, int last)
 {
@@ -1059,7 +1062,13 @@ static int must_precede(const struct bbuf *d, const struct bbuf *b, int last)
     if (last) {
         return d->owner == 0 || last_names(b, d->owner);
     }
-    return b->order != BCACHE_ORDER_AFTER && d->owner == b->owner && d->level < b->level;
+    if (b->order == BCACHE_ORDER_AFTER) {
+        return 0;
+    }
+    if (d->owner == b->owner) {
+        return d->level < b->level;
+    }
+    return d->owner == 0 && d->level == 0;
 }
 
 /** The earliest dirtied block of `list` that must reach the device before

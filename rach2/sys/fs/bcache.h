@@ -179,7 +179,10 @@ void bcache_dirty_owned(struct bbuf *b, uint64_t owner);
  * block of the same owner below its level that went dirty before its last
  * mark, unless that one is an `after` or of the class `bcache_sync_last`
  * names: a block's data before the pointer to it, and a pointer block
- * before the one above it. The file system marks the children first.
+ * before the one above it. A pointer block of an owner other than 0 waits
+ * in the same way for the shared blocks that are no pointer blocks, such as
+ * the bitmap that took a block it names. The file system marks the children
+ * and sets the bits first.
  * Eviction, the shrink, the reserve and a write after a failure treat it
  * as they treat a block written last. The level lasts until the write or a
  * later `bcache_dirty_owned`, which makes the block a leaf again. Panics

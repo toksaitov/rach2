@@ -706,6 +706,7 @@ int ext2_block_refused(struct ext2_mount *em, uint32_t g, uint32_t bit);
 int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n);
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir);
 int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b);
+int ext2_bitmap_turn(struct ext2_mount *em, uint32_t g);
 void ext2_group_fetch(struct ext2_mount *em, uint32_t hint);
 int ext2_alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out);
 void ext2_block_unwind(struct ext2_mount *em, uint32_t b);
