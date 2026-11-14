@@ -1745,12 +1745,6 @@ static int sysctl_read_live(void)
 #define SECRET_ONE "fe80:0000:0000:0000:0000:0000:0000:0001\n"
 #define SECRET_TWO "fe80:0000:0000:0000:0000:0000:0000:0002\n"
 
-/** The permission bits of the stat `st`. */
-static unsigned st_perm(const char *st)
-{
-    return *(const unsigned int *)(st + KSTAT_MODE) & 07777u;
-}
-
 /** The child of `secret_mode_ok`: takes uid 1000 and exits 0 when an open
  * of lo's stable_secret for reading is then EACCES, or with the number of
  * the step that went otherwise. */
@@ -1767,12 +1761,14 @@ static void secret_mode_child(void)
  * for reading. */
 static int secret_mode_ok(void)
 {
-    static char st[KSTAT_SIZE], fst[KSTAT_SIZE];
+    static unsigned char st[KSTAT_SIZE], fst[KSTAT_SIZE];
     int fd = syscall3(SYS_OPEN, (long)SYS_SECRET, O_RDONLY, 0);
     int status = -1, pid, ok;
 
-    ok = fd >= 0 && syscall3(SYS_FSTAT, fd, (long)fst, 0) == 0 && st_perm(fst) == 0600u &&
-         syscall3(SYS_STAT, (long)SYS_SECRET, (long)st, 0) == 0 && st_perm(st) == 0600u;
+    ok = fd >= 0 && syscall3(SYS_FSTAT, fd, (long)fst, 0) == 0 &&
+         (*(unsigned int *)(fst + KSTAT_MODE) & 07777u) == 0600u &&
+         syscall3(SYS_STAT, (long)SYS_SECRET, (long)st, 0) == 0 &&
+         (*(unsigned int *)(st + KSTAT_MODE) & 07777u) == 0600u;
     if (fd >= 0) {
         syscall1(SYS_CLOSE, fd);
     }

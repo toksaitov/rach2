@@ -1556,6 +1556,13 @@ int synth_sys_writable(int entry)
     return 0;
 }
 
+/** Each /proc/sys file is read-only: 0444. */
+unsigned synth_sys_mode(int entry)
+{
+    (void)entry;
+    return 0444;
+}
+
 /** No row remounts: -EINVAL. */
 int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
 {
