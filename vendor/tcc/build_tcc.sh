@@ -173,6 +173,8 @@ if ! grep -q "s1->seg_size = 64;" "$SRC/tccasm.c" ||
    ! grep -q "a VLA, or a pointer to one" "$SRC/tccgen.c" ||
    ! grep -q "^static void func_vla_params" "$SRC/tccgen.c" ||
    ! grep -q "^static void param_bound_replay" "$SRC/tccgen.c" ||
+   ! grep -q "^static void param_effect" "$SRC/tccgen.c" ||
+   ! grep -q "owns its bound's tokens" "$SRC/tccgen.c" ||
    ! grep -q "^static void ifunc_entry_code" "$SRC/tccelf.c" ||
    ! grep -q '"gnu_indirect_function"' "$SRC/tccasm.c" ||
    ! grep -q "movl r, r clears the high half, which fildll reads" "$SRC/x86_64-gen.c"; then

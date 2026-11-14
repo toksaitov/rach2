@@ -227,6 +227,24 @@ static const char star_line[] =
     "/tmp/vstar.c > /tmp/vs.out 2>&1; echo VS\"\"RC=$?; cat /tmp/vs.out";
 
 /*
+ * A bound whose only side effect is a volatile read, (*vp + 1, 3), folds to
+ * 3 but must still read *vp on entry; vp is a null pointer, so the read
+ * faults and the handler prints VOLATILEREAD. GCC's program does so on both
+ * targets. TinyCC took the bound for a constant and read nothing.
+ */
+static const char vread1_line[] =
+    "printf '#include <signal.h>\\n#include <unistd.h>\\nvolatile int *vp;\\n' > /tmp/vread.c";
+static const char vread2_line[] =
+    "printf 'void h(int s){write(1,\"VOLAT\"\"ILEREAD\\\\n\",13);_exit(0);}\\n' >> /tmp/vread.c";
+static const char vread3_line[] =
+    "printf 'int f(int a[(*vp+1,3)]){return 1;}\\nint main(void){int x[3];"
+    "signal(SIGSEGV,h);f(x);' >> /tmp/vread.c";
+static const char vread4_line[] =
+    "printf 'write(1,\"NOT\"\"READ\\\\n\",8);return 0;}\\n' >> /tmp/vread.c";
+static const char vread_built_line[] =
+    "tcc -static -o /tmp/vread /tmp/vread.c && echo VREAD\"\"BUILT";
+
+/*
  * A static program calling an IFUNC that TinyCC's assembler defines: pick is
  * a resolver that returns triple, so a call, a pointer taken at run time and
  * one in initialized data each reach triple, and the two pointers are equal.
@@ -302,6 +320,18 @@ static void language(struct shell *s)
     type(s, "/tmp/vbound");
     has(s, "vla-bounds", "VLABOUNDS 6 1207 48 9 1205",
         "an array parameter's bound did not give GCC's result");
+    type(s, vread1_line);
+    type(s, vread2_line);
+    type(s, vread3_line);
+    type(s, vread4_line);
+    type(s, "cat /tmp/vread.c");
+    type(s, vread_built_line);
+    has(s, "volatile-built", "VREADBUILT",
+        "the compiler did not build a program whose array parameter's bound reads a volatile "
+        "object");
+    type(s, "/tmp/vread");
+    has(s, "volatile-read", "VOLATILEREAD",
+        "an array parameter's bound did not read its volatile object on entry");
     type(s, star_line);
     refused(s, "star-refused", "VSRC=1", "star-reason", "'[*]' not allowed",
             "a [*] in a function definition");

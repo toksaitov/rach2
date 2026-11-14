@@ -20,10 +20,16 @@ too, in the order of its declarations. A bound inside a parameter list is
 read into a token string and typed with no code, since the parameter it
 names has no storage yet. An integer constant expression gives an array as
 before. Any other bound gives a VLA whose element symbol keeps the tokens:
-one that names a parameter, and one with a store or a call, int a[(n++,
-3)], which folds to a constant but whose side effects the function must
-have. A constant bound inside a VLA, the 3 of int a[][3][n], keeps its
-value. The parameter's type is adjusted to a pointer to the element, which
+one that names a parameter, and one with a store, a call or a read of a
+volatile object, int a[(n++, 3)] or int a[(v + 1, 3)], which folds to a
+constant but whose side effects the function must have. Such an effect
+counts only where the typing would generate code for it, at nocode_wanted
+1, so that sizeof (n++) and a skipped operand leave a constant. A read is
+counted where gv loads a volatile lvalue and where gen_cast takes one,
+since gen_op's cast drops the qualifier before the load. The element
+symbol owns the kept tokens, and sym_free frees them with it; the replay's
+begin_macro(..., 2) leaves them to their owner. A constant bound inside a
+VLA, the 3 of int a[][3][n], keeps its value. The parameter's type is adjusted to a pointer to the element, which
 for int a[n][m] is a VLA row, and convert_parameter_type now clears VT_VLA
 as it clears VT_ARRAY. On entry to the function, after gfunc_prolog has
 made the parameters locals, func_vla_params evaluates the saved bounds
@@ -68,10 +74,10 @@ index 17b46d6..67c229c 100644
  
  /* section definition */
 diff --git a/tccgen.c b/tccgen.c
-index 2a03937..144ae31 100644
+index 2a03937..5481a1b 100644
 --- a/tccgen.c
 +++ b/tccgen.c
-@@ -40,6 +40,17 @@ ST_DATA Sym *define_stack;
+@@ -40,6 +40,28 @@ ST_DATA Sym *define_stack;
  ST_DATA Sym *global_label_stack;
  ST_DATA Sym *local_label_stack;
  static int local_scope;
@@ -81,15 +87,26 @@ index 2a03937..144ae31 100644
 +static Sym *param_stack;
 +/* the parameters made visible so far in the innermost list being parsed */
 +static int param_seen;
-+/* stores and calls parsed, which make a parameter's bound one that is not
-+   an integer constant expression even when it folds to a constant */
++/* stores, calls and reads of a volatile object that the typing of a
++   parameter's bound would generate code for, which make the bound one that
++   is not an integer constant expression even when it folds to a constant */
 +static int param_effects;
 +/* the vla_bound of a [*] */
 +static TokenString vla_star;
++
++/* Count a side effect, a store, a call or a read of a volatile object, for
++   the typing of a parameter's bound, which runs at nocode_wanted 1: sizeof
++   and an operand that is skipped raise it, and the bound's evaluation on
++   entry generates no code for what they hold. */
++static void param_effect(void)
++{
++    if (nocode_wanted == 1)
++        param_effects++;
++}
  static int in_sizeof;
  static int section_sym;
  
-@@ -240,6 +251,9 @@ ST_FUNC int tccgen_compile(TCCState *s1)
+@@ -240,6 +262,9 @@ ST_FUNC int tccgen_compile(TCCState *s1)
      section_sym = 0;
      const_wanted = 0;
      nocode_wanted = 0x80000000;
@@ -99,7 +116,39 @@ index 2a03937..144ae31 100644
  
      /* define some often used types */
      int_type.t = VT_INT;
-@@ -2824,6 +2838,12 @@ static int compare_types(CType *type1, CType *type2, int unqualified)
+@@ -489,6 +514,10 @@ static inline Sym *sym_malloc(void)
+ 
+ ST_INLN void sym_free(Sym *sym)
+ {
++    /* the element symbol of a parameter's array owns its bound's tokens */
++    if (sym->vla_bound && sym->vla_bound != &vla_star)
++        tok_str_free(sym->vla_bound);
++    sym->vla_bound = NULL;
+ #ifndef SYM_DEBUG
+     sym->next = sym_free_first;
+     sym_free_first = sym;
+@@ -1309,6 +1338,9 @@ ST_FUNC int gv(int rc)
+             gbound();
+ #endif
+ 
++        /* a read of a volatile object is a side effect, as a store is */
++        if ((vtop->r & VT_LVAL) && (vtop->type.t & VT_VOLATILE))
++            param_effect();
+         r = vtop->r & VT_VALMASK;
+         rc2 = (rc & RC_FLOAT) ? RC_FLOAT : RC_INT;
+ #ifndef TCC_TARGET_ARM64
+@@ -2463,6 +2495,10 @@ static void gen_cast(CType *type)
+ {
+     int sbt, dbt, sf, df, c, p;
+ 
++    /* a read of a volatile object, whose qualifier the cast drops before
++       gv loads it, is a side effect, as a store is */
++    if ((vtop->r & VT_LVAL) && (vtop->type.t & VT_VOLATILE))
++        param_effect();
+     /* special delayed cast for char/short */
+     /* XXX: in some cases (multiple cascaded casts), it may still
+        be incorrect */
+@@ -2824,6 +2860,12 @@ static int compare_types(CType *type1, CType *type2, int unqualified)
          t1 &= ~VT_DEFSIGN;
          t2 &= ~VT_DEFSIGN;
      }
@@ -112,15 +161,15 @@ index 2a03937..144ae31 100644
      /* XXX: bitfields ? */
      if (t1 != t2)
          return 0;
-@@ -3083,6 +3103,7 @@ ST_FUNC void vstore(void)
+@@ -3083,6 +3125,7 @@ ST_FUNC void vstore(void)
  {
      int sbt, dbt, ft, r, t, size, align, bit_size, bit_pos, rc, delayed_cast;
  
-+    param_effects++;
++    param_effect();
      ft = vtop[-1].type.t;
      sbt = vtop->type.t & VT_BTYPE;
      dbt = ft & VT_BTYPE;
-@@ -3777,10 +3798,14 @@ static void struct_decl(CType *type, int u)
+@@ -3777,10 +3820,14 @@ static void struct_decl(CType *type, int u)
  {
      int v, c, size, align, flexible;
      int bit_size, bsize, bt;
@@ -135,7 +184,7 @@ index 2a03937..144ae31 100644
      memset(&ad, 0, sizeof ad);
      next();
      parse_attribute(&ad);
-@@ -3983,6 +4008,7 @@ do_decl:
+@@ -3983,6 +4030,7 @@ do_decl:
  	    struct_layout(type, &ad);
          }
      }
@@ -143,7 +192,7 @@ index 2a03937..144ae31 100644
  }
  
  static void sym_to_attr(AttributeDef *ad, Sym *s)
-@@ -4236,7 +4262,7 @@ static inline void convert_parameter_type(CType *pt)
+@@ -4236,7 +4284,7 @@ static inline void convert_parameter_type(CType *pt)
         to indicate a const function parameter */
      pt->t &= ~(VT_CONSTANT | VT_VOLATILE);
      /* array must be transformed to pointer according to ANSI C */
@@ -152,7 +201,7 @@ index 2a03937..144ae31 100644
      if ((pt->t & VT_BTYPE) == VT_FUNC) {
          mk_pointer(pt);
      }
-@@ -4265,18 +4291,81 @@ static int asm_label_instr(void)
+@@ -4265,18 +4313,81 @@ static int asm_label_instr(void)
      return v;
  }
  
@@ -235,7 +284,7 @@ index 2a03937..144ae31 100644
  	if (tok == ')')
  	  l = 0;
  	else if (parse_btype(&pt, &ad1))
-@@ -4294,7 +4383,9 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+@@ -4294,7 +4405,9 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                  if (l != FUNC_OLD) {
                      if ((pt.t & VT_BTYPE) == VT_VOID && tok == ')')
                          break;
@@ -245,7 +294,7 @@ index 2a03937..144ae31 100644
                      if ((pt.t & VT_BTYPE) == VT_VOID)
                          tcc_error("parameter declared as void");
                      arg_size += (type_size(&pt, &align) + PTR_SIZE - 1) / PTR_SIZE;
-@@ -4309,6 +4400,11 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+@@ -4309,6 +4422,11 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                  s = sym_push(n | SYM_FIELD, &pt, 0, 0);
                  *plast = s;
                  plast = &s->next;
@@ -257,7 +306,7 @@ index 2a03937..144ae31 100644
                  if (tok == ')')
                      break;
                  skip(',');
-@@ -4324,6 +4420,8 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+@@ -4324,6 +4442,8 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
              /* if no parameters, then old type prototype */
              l = FUNC_OLD;
          skip(')');
@@ -266,7 +315,7 @@ index 2a03937..144ae31 100644
          /* NOTE: const is ignored in returned type as it has a special
             meaning in gcc / C++ */
          type->t &= ~VT_CONSTANT; 
-@@ -4352,7 +4450,58 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+@@ -4352,7 +4472,59 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
              next();
          n = -1;
          t1 = 0;
@@ -307,9 +356,10 @@ index 2a03937..144ae31 100644
 +            nocode_wanted = saved_nocode_wanted;
 +            if (!is_integer_btype(vtop->type.t & VT_BTYPE))
 +                tcc_error("size of array should be an integer");
-+            /* A bound with a store or a call, (n++, 3), is no integer
-+               constant expression even when it folds to one: it keeps its
-+               tokens, whose side effects the function's entry has. */
++            /* A bound with a store, a call or a read of a volatile
++               object, (n++, 3) or (v + 1, 3), is no integer constant
++               expression even when it folds to one: it keeps its tokens,
++               whose side effects the function's entry has. */
 +            if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST &&
 +                !param_effects) {
 +                n = vtop->c.i;
@@ -326,7 +376,7 @@ index 2a03937..144ae31 100644
              if (!local_stack || (storage & VT_STATIC))
                  vpushi(expr_const());
              else {
-@@ -4380,7 +4529,13 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+@@ -4380,7 +4552,13 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
              tcc_error("declaration of an array of functions");
          t1 |= type->t & VT_VLA;
          
@@ -341,7 +391,7 @@ index 2a03937..144ae31 100644
              /* the size is a size_t, as GCC keeps it, so that the length
                 times the element's size neither wraps at 32 bits nor
                 reads back sign-extended */
-@@ -4394,13 +4549,15 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+@@ -4394,13 +4572,15 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
              vswap();
              vstore();
          }
@@ -358,15 +408,15 @@ index 2a03937..144ae31 100644
          type->t = (t1 ? VT_VLA : VT_ARRAY) | VT_PTR;
          type->ref = s;
      }
-@@ -5262,6 +5419,7 @@ ST_FUNC void unary(void)
+@@ -5262,6 +5442,7 @@ ST_FUNC void unary(void)
              if (sa)
                  tcc_error("too few arguments to function");
              skip(')');
-+            param_effects++;
++            param_effect();
              gfunc_call(nb_args);
  
              /* return value */
-@@ -7065,6 +7223,90 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
+@@ -7065,6 +7246,90 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
      nocode_wanted = saved_nocode_wanted;
  }
  
@@ -457,7 +507,7 @@ index 2a03937..144ae31 100644
  /* parse a function defined by symbol 'sym' and generate its code in
     'cur_text_section' */
  static void gen_function(Sym *sym)
-@@ -7086,6 +7328,7 @@ static void gen_function(Sym *sym)
+@@ -7086,6 +7351,7 @@ static void gen_function(Sym *sym)
      gfunc_prolog(&sym->type);
      local_scope = 0;
      rsym = 0;
@@ -465,7 +515,7 @@ index 2a03937..144ae31 100644
      block(NULL, NULL, 0);
      nocode_wanted = 0;
      gsym(rsym);
-@@ -7159,9 +7402,9 @@ ST_FUNC void free_inline_functions(TCCState *s)
+@@ -7159,9 +7425,9 @@ ST_FUNC void free_inline_functions(TCCState *s)
     if parsing old style parameter decl list (and FUNC_SYM is set then) */
  static int decl0(int l, int is_for_loop_init, Sym *func_sym)
  {
@@ -477,7 +527,7 @@ index 2a03937..144ae31 100644
      AttributeDef ad;
  
      while (1) {
-@@ -7228,8 +7471,19 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
+@@ -7228,8 +7494,19 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
                  /* if old style function prototype, we accept a
                     declaration list */
                  sym = type.ref;
@@ -498,7 +548,7 @@ index 2a03937..144ae31 100644
              }
  
              if (gnu_ext && (tok == TOK_ASM1 || tok == TOK_ASM2 || tok == TOK_ASM3)) {
-@@ -7317,6 +7571,7 @@ found:
+@@ -7317,6 +7594,7 @@ found:
  				  get_tok_str(v, NULL));
  		    convert_parameter_type(&type);
  		    sym->type = type;
