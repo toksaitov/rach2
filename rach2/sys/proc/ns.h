@@ -313,12 +313,14 @@ void ns_exec(process_t *p);
  * CAP_SYS_ADMIN controls namespace operations and global privilege
  * (`nocaps` in process.h); CAP_SYS_BOOT, held in the first user namespace,
  * controls KVM_CAP_VM_DISABLE_NX_HUGE_PAGES; CAP_SYS_TTY_CONFIG controls
- * vhangup. */
+ * vhangup; CAP_SYS_RAWIO, with CAP_SYS_ADMIN, both in the first user
+ * namespace, a write of an IOMMU group's type. */
 #define CAP_LAST_CAP        40
 #define CAP_HIGH_WORD       0x1FFu
 #define CAP_DAC_OVERRIDE    1
 #define CAP_DAC_READ_SEARCH 2
 #define CAP_SETPCAP         8
+#define CAP_SYS_RAWIO       17
 #define CAP_SYS_CHROOT      18
 #define CAP_SYS_ADMIN       21
 #define CAP_SYS_BOOT        22

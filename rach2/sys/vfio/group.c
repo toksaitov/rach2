@@ -18,6 +18,8 @@
 #include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
+#include "../proc/ns.h"
+#include "../proc/process.h"
 #include "../virtio/virtio.h"
 
 struct vfio_device vfio_devices[VFIO_DEVICES_MAX];
@@ -754,7 +756,80 @@ static int32_t store_remove_id(void *obj, int arg, const char *buf, uint32_t len
     return -ENODEV;
 }
 
-static const struct sysfs_attr attr_type = {"type", 0444u, show_type, NULL};
+/**
+ * Whether the write `buf`, `len` bytes, is the word `word`, as Linux's
+ * sysfs_streq compares them: the write ends at its first NUL, and either
+ * may have one newline more at its end.
+ */
+static int write_is(const char *buf, uint32_t len, const char *word)
+{
+    uint32_t i = 0;
+
+    while (i < len && buf[i] != '\0' && buf[i] == word[i]) {
+        i++;
+    }
+    if (i == len || buf[i] == '\0') {
+        return word[i] == '\0' || (word[i] == '\n' && word[i + 1] == '\0');
+    }
+    return buf[i] == '\n' && word[i] == '\0' && (i + 1 == len || buf[i + 1] == '\0');
+}
+
+/**
+ * Whether the group `g` has a DMA owner, Linux's owner_cnt, which a change
+ * of its type waits out: a function with a driver of the kernel, as
+ * really_probe makes every driver but vfio-pci one, or the group in a
+ * container, which VFIO_GROUP_SET_CONTAINER claims as Linux's
+ * iommu_group_claim_dma_owner does.
+ */
+static int group_owned(const struct vfio_group *g)
+{
+    int i;
+
+    if (g->container) {
+        return 1;
+    }
+    for (i = 0; i < g->ndev; i++) {
+        const struct vfio_device *d = &vfio_devices[g->devs[i]];
+
+        if (!d->bound && pci_owner(d->pci.bus, devfn_of(&d->pci)) != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * /sys/kernel/iommu_groups/N/type, written: the group's default domain, as
+ * Linux's iommu_group_store_type sets it. A writer without CAP_SYS_ADMIN
+ * and CAP_SYS_RAWIO in the first user namespace is -EACCES, and a word
+ * other than "identity", "DMA", "DMA-FQ" and "auto" -EINVAL. A group with
+ * no function or with a DMA owner (`group_owned`) is then -EPERM. The
+ * host's drivers keep physical DMA addresses, as under a Linux built
+ * without CONFIG_IOMMU_DMA, whose iommu_get_default_domain_type gives
+ * identity alone: "identity" and "auto" keep it, and "DMA" and "DMA-FQ"
+ * are -EINVAL.
+ */
+static int32_t store_type(void *obj, int arg, const char *buf, uint32_t len)
+{
+    const struct vfio_group *g = &vfio_groups[arg];
+    int keep;
+
+    (void)obj;
+    if (current_proc->userns || !cap_holds(current_proc, CAP_SYS_ADMIN) ||
+        !cap_holds(current_proc, CAP_SYS_RAWIO)) {
+        return -EACCES;
+    }
+    keep = write_is(buf, len, "identity") || write_is(buf, len, "auto");
+    if (!keep && !write_is(buf, len, "DMA") && !write_is(buf, len, "DMA-FQ")) {
+        return -EINVAL;
+    }
+    if (g->ndev == 0 || group_owned(g)) {
+        return -EPERM;
+    }
+    return keep ? (int32_t)len : -EINVAL;
+}
+
+static const struct sysfs_attr attr_type = {"type", 0644u, show_type, store_type};
 static const struct sysfs_attr attr_resv = {"reserved_regions", 0444u, show_resv, NULL};
 static const struct sysfs_attr attr_override = {"driver_override", 0644u, show_override,
                                                 store_override};
