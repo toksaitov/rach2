@@ -271,7 +271,7 @@ int suspend_lets_run(const struct process *p)
 }
 
 /** Nothing: no process has a POSIX timer on a clock of processor time. */
-void ptimer_cpu_tick(const struct process *p, int user)
+void ptimer_cpu_tick(struct process *p, int user)
 {
     (void)p;
     (void)user;
