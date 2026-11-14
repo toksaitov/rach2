@@ -36,12 +36,13 @@
  * The handler's rows read the packets it reports, of three bytes and of each
  * wheel's four. The rows of the waits count the reads of the status and the
  * waits asked of `k_udelay`, and the time of the waits for the mouse's reply,
- * whose clock (`host_clock_us`) a row may stop and whose mouse may answer
- * only after a time (`model_late_us`). The probes for a Synaptics, an ALPS
- * and an Elantech touchpad, which synaptics_hosttest.c, alps_hosttest.c and
- * elantech_hosttest.c test against touchpads, find none here, and the model
- * answers neither a ThinkingMouse's rates nor a Genius mouse's status
- * request as those mice do, so their probes find none either.
+ * whose clock (`host_clock_us`) a row may stop, whose delays may measure
+ * only a part of each step (`host_delay_cut`), and whose mouse may answer
+ * only after a time (`model_late_us`, `model_bat_late_us`). The probes for
+ * a Synaptics, an ALPS and an Elantech touchpad, which synaptics_hosttest.c,
+ * alps_hosttest.c and elantech_hosttest.c test against touchpads, find none
+ * here, and the model answers neither a ThinkingMouse's rates nor a Genius
+ * mouse's status request as those mice do, so their probes find none either.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -118,8 +119,10 @@ static int udelays;
 static uint32_t udelay_us;
 
 /* The time of the waits for the mouse's reply before which the output
- * buffer shows none of its bytes, as a mouse that answers late. */
+ * buffer shows none of its bytes, as a mouse that answers late, and before
+ * which it shows no 0xAA, as a mouse whose self-test takes that long. */
 static uint32_t model_late_us;
+static uint32_t model_bat_late_us;
 
 /* The mouse's wheel: the highest ID it answers, 0, ID_IMPS or ID_IMEX; the
  * ID it answers now; the command whose argument the next byte is, 0 for
@@ -205,9 +208,11 @@ static void model_reset(void)
     udelays = 0;
     udelay_us = 0;
     model_late_us = 0;
+    model_bat_late_us = 0;
     host_clock_us = 0; /* ps2mouse.c's, the reply wait's clock */
     host_slept_us = 0;
     host_clock_still = 0;
+    host_delay_cut = 0;
     mouse_wheel = 0;
     mouse_id = 0;
     mouse_arg_for = 0;
@@ -302,7 +307,8 @@ uint8_t inb(uint16_t port)
         status_reads++;
         if (ctl_output_stuck) {
             status = PS2_STATUS_OUTPUT_FULL;
-        } else if (model_count > 0 && host_slept_us >= model_late_us) {
+        } else if (model_count > 0 && host_slept_us >= model_late_us &&
+                   (model_data[model_head] != 0xAA || host_slept_us >= model_bat_late_us)) {
             status = model_status[model_head];
         }
         if (ctl_input_stuck) {
@@ -998,10 +1004,15 @@ static void wait_rows(void)
     CHECK("and after the next ACK, half a second",
           mouse_send_command(MOUSE_CMD_GET_ID) == MOUSE_ACK && ps2mouse_receive() == 0 &&
               ps2mouse_receive() == -1 && status_reads == 2 + 1 + 1 + reads && exact);
+}
 
-    /* A clock that stands still, as a TSC that pauses: the steps waited
-     * measure the wait instead, which neither ends sooner than its time
-     * nor goes on for good. */
+/** The wait for the mouse's reply on a clock that stands still, as a TSC
+ * that pauses: the delays waited measure the wait instead, which neither
+ * ends sooner than its time nor goes on for good. */
+static void still_clock_rows(void)
+{
+    int exact, reads;
+
     reads = reply_reads(REPLY_RESET_ACK_US, &exact);
     model_reset();
     host_clock_still = 1;
@@ -1020,6 +1031,31 @@ static void wait_rows(void)
     CHECK("and an unanswered reset fails after its second, in the reads of a running clock",
           mouse_send_command(MOUSE_CMD_RESET) == -1 && host_slept_us == REPLY_RESET_ACK_US &&
               status_reads == 2 + reads);
+
+    /* A stopped clock whose delays wait and measure a quarter of each step,
+     * as on a stopped TSC with no other counter: the wait counts what the
+     * delays measured, not what they were asked, so neither allowance ends
+     * before its time. */
+    model_reset();
+    host_clock_still = 1;
+    host_delay_cut = 4;
+    mouse_present = 1;
+    ctl_config = MOUSE_CONFIG;
+    model_late_us = 750000u;
+    model_bat_late_us = 1750000u;
+    CHECK("with delays short of their steps, an ACK after 750 ms and a self-test a second later "
+          "are read",
+          mouse_send_command(MOUSE_CMD_RESET) == MOUSE_ACK && ps2mouse_receive() == 0xAA &&
+              ps2mouse_receive() == 0x00 && host_slept_us >= 1750000u &&
+              host_slept_us < 750000u + REPLY_RESET_BAT_US && host_clock_us == 0);
+    model_reset();
+    host_clock_still = 1;
+    host_delay_cut = 4;
+    mouse_present = 1;
+    ctl_config = MOUSE_CONFIG;
+    mouse_silent_to = MOUSE_CMD_RESET;
+    CHECK("and an unanswered reset fails after a second of what they measured",
+          mouse_send_command(MOUSE_CMD_RESET) == -1 && host_slept_us == REPLY_RESET_ACK_US);
 }
 
 /** The mouse's commands, with keys pressed while they wait for the reply. */
@@ -1054,6 +1090,7 @@ static void command_rows(void)
     CHECK("which was sent twice", port_writes == 4 && !mouse_reporting);
 
     wait_rows();
+    still_clock_rows();
 
     /* Keys pressed between the bytes of the reset's reply. */
     model_reset();

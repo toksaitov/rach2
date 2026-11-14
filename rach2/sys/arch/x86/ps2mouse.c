@@ -387,11 +387,14 @@ static uint32_t reply_step(uint32_t waited, uint32_t limit_us)
 
 #ifdef RACH2_HOSTTEST
 /* A host test's clock for the reply's wait, in microseconds, which the
- * wait's steps move unless a row stops it (`host_clock_still`); and the
- * steps' time, which the model's mouse answers by. */
+ * wait's steps move unless a row stops it (`host_clock_still`); the steps'
+ * time, which the model's mouse answers by; and the divisor of each step
+ * that is waited and measured, rounded up, as `k_udelay_measured` on a
+ * stopped TSC with no other counter running, 0 or 1 for the whole step. */
 static uint32_t host_clock_us;
 static uint32_t host_slept_us;
 static int host_clock_still;
+static uint32_t host_delay_cut;
 #endif
 
 /** The clock the wait for the mouse's reply reads: `timer_now_us`, or a
@@ -405,6 +408,24 @@ static uint32_t reply_clock(void)
 #endif
 }
 
+/** Wait `usec` before the next read of the status: `k_udelay_measured`, or
+ * a host test's model of it; the microseconds measured. */
+static uint32_t reply_delay(uint32_t usec)
+{
+#ifdef RACH2_HOSTTEST
+    if (host_delay_cut > 1u) {
+        usec = (usec + host_delay_cut - 1u) / host_delay_cut;
+    }
+    host_slept_us += usec;
+    if (!host_clock_still) {
+        host_clock_us += usec;
+    }
+    return usec;
+#else
+    return k_udelay_measured(usec);
+#endif
+}
+
 /**
  * Wait until the 8042 output buffer has a byte from the mouse, ready to
  * read, for at most `limit_us`, as Linux's ps2_command sleeps on the
@@ -413,12 +434,14 @@ static uint32_t reply_clock(void)
  * shorter one lets another processor have the big lock first
  * (`wait_turn`).
  *
- * The time waited is the clock's, or, where that is less, the steps over
- * which the clock stood still: a clock that stops, such as a TSC that pauses,
- * leaves the steps to grow and to end the wait in the time it allows, not
- * sooner. A clock that creeps is bounded by the reads: one more than
- * `limit_us` / PS2_POLL_US, which the waits between them make at least
- * `limit_us` long.
+ * The time waited is the clock's, or, where that is less, what the delays
+ * over which the clock stood still measured (`k_udelay_measured`): a clock
+ * that stops, such as a TSC that pauses, leaves the delays to grow and to end
+ * the wait in the time it allows, not sooner, since a delay on a stopped TSC
+ * finishes on another counter and counts only what it waited. A clock that
+ * creeps is bounded by the reads: one more than `limit_us` / PS2_POLL_US,
+ * which the waits between them make at least `limit_us` long while any
+ * counter runs.
  *
  * During the bring-up a keyboard byte waiting in the buffer is read and
  * dropped: the buffer holds one byte, so the mouse's cannot arrive until the
@@ -430,7 +453,7 @@ static uint32_t reply_clock(void)
 static int ps2_wait_mouse_output(uint32_t limit_us)
 {
     uint32_t start = reply_clock(), last = start, now;
-    uint32_t waited, still = 0, step = 0, reads = 0;
+    uint32_t waited, still = 0, step = 0, slept = 0, reads = 0;
     uint8_t status;
 
     for (;;) {
@@ -445,7 +468,7 @@ static int ps2_wait_mouse_output(uint32_t limit_us)
         }
         now = reply_clock();
         if (now == last) {
-            still += step;
+            still += slept;
         }
         last = now;
         waited = now - start > still ? now - start : still;
@@ -456,18 +479,12 @@ static int ps2_wait_mouse_output(uint32_t limit_us)
 #ifndef RACH2_HOSTTEST
         if (cmd_busy && step == TICK_US) {
             ps2mouse_msleep(TICK_US / 1000u);
+            slept = step;
             continue;
         }
 #endif
         wait_turn();
-#ifdef RACH2_HOSTTEST
-        host_slept_us += step;
-        if (!host_clock_still) {
-            host_clock_us += step;
-        }
-#else
-        k_udelay(step);
-#endif
+        slept = reply_delay(step);
     }
 }
 
