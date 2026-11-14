@@ -1232,10 +1232,11 @@ as, which a write from 0 to 65535 sets;
 .Pa kernel/randomize_va_space ,
 whether
 .Xr execve 2
-places a new image at random addresses: 0 at fixed ones, 1 with its
-stack, mmap base and a position-independent program moved, and 2 with
-its heap moved as well; 2 on x86-64 and 0 on i386, where a value written
-moves nothing; a write from 0 to 2 sets it for the next exec;
+places a new image at random addresses: 0 at fixed ones, any other
+value with its stack, mmap base and a position-independent program
+moved, and 2 or more with its heap moved as well; 2 on x86-64 and 0 on
+i386, where a value written moves nothing; a write of any int sets it
+for the next exec;
 .Pa kernel/cap_last_cap ,
 40, the highest capability Linux 6.12 numbers,
 .Dv CAP_CHECKPOINT_RESTORE ,
@@ -1291,7 +1292,9 @@ defaults, which a privileged caller's write sets at once:
 writes it back, and
 .Pa vm/dirty_writeback_centisecs ,
 500, the hundredths of a second between the flusher's turns, 0 for none
-but those the background threshold starts, each from 0 to 2147483647;
+but those the background threshold starts, the first from 0 to
+2147483647 and the second any int, a negative one taken as unsigned, as
+Linux keeps it;
 .Pa vm/dirty_background_ratio ,
 10, and
 .Pa vm/dirty_ratio ,
@@ -1328,14 +1331,18 @@ where Linux would begin to forward.
 7200, and
 .Pa net/ipv4/tcp_keepalive_intvl ,
 75, the seconds before a TCP connection's first keepalive probe and between
-probes, each from 1 to 2147483,
+probes, each from -8589934 to 8589934, INT_MAX over the tick rate of 250,
+as Linux's
+.Fn proc_dointvec_jiffies
+takes them, 0 or less being due at once,
 .Pa net/ipv4/tcp_keepalive_probes ,
 9, the probes unanswered before the connection is reset, from 0 to 255,
 .Pa net/ipv4/tcp_retries2 ,
 15, the retransmissions whose time an open connection is given up after,
 from 0 to 255, and
 .Pa net/ipv4/tcp_mtu_probing ,
-1, the mode of black-hole detection, from 0 to 2, are the settings of
+1, the mode of black-hole detection, from 0 to 255, a mode past 2 acting
+as 2, are the settings of
 .Xr tcp 7 ,
 which a privileged caller's write sets for every connection at once.
 .Pa net/core/netdev_max_backlog ,
@@ -1353,8 +1360,9 @@ waits behind it, and an echo is answered at a limit of 0.
 ends, in turns of 64, the last of which may pass it, and
 .Pa net/core/netdev_budget_usecs ,
 8000, two ticks, the microseconds after which a drain ends at the end of
-its turn, timed by the processor's cycle counter, which runs while the
-drain holds interrupts off, are Linux's; a drain that ends on either is
+its turn, timed by the clock under the tick, which reads the HPET, the PM
+timer or a trusted TSC and so runs while the drain holds interrupts off,
+are Linux's; a drain that ends on either is
 counted in
 .Pa /proc/net/softnet_stat ,
 and what it leaves is delivered at the sender's next return to user mode,
@@ -1371,19 +1379,19 @@ and each interface, holds IPv6's settings of that interface, which
 gives an interface when it comes up, and which a privileged caller's
 write sets at once:
 .Pa accept_ra ,
-1, 0 to ignore routers' advertisements, 1 to take them unless
-forwarding and 2 always;
+1, 0 to ignore routers' advertisements, 2 to take them always and any
+other value to take them unless forwarding;
 .Pa autoconf ,
 1, whether a router's prefix makes an address;
 .Pa disable_ipv6 ,
-0, which at 1 takes every address of the interface away and stops its
+0, which when not 0 takes every address of the interface away and stops its
 IPv6, and set to 0 again starts it from its link-local address, making
 its addresses again;
 .Pa forwarding ,
-0, which at 1 makes the interface answer as a router and solicit none;
+0, which when not 0 makes the interface answer as a router and solicit none;
 .Pa ra_defrtr_metric ,
 1024, the metric of the default route each router's advertisement gives,
-from 1 up, which a write sets on the routes already learned as well as on
+from 1 to 4294967295, which a write sets on the routes already learned as well as on
 the next, where Linux waits for the next advertisement;
 .Pa use_tempaddr ,
 0, which above 0 makes a temporary address beside each made from a
@@ -1398,9 +1406,20 @@ which a read fails with
 while none is written, and always for
 .Ql all ;
 with none, the identifier is made from the station address.
-A boolean takes 0 or 1 and
-.Pa accept_ra
-0 to 2, and a write to
+Each but
+.Pa ra_defrtr_metric
+and
+.Pa stable_secret
+takes any int, as Linux's
+.Fn proc_dointvec
+does.
+A write to
+.Pa forwarding
+or
+.Pa disable_ipv6
+whose number is refused returns its whole count and stores the value
+the file had, as Linux's handlers of them do.
+A write to
 .Pa forwarding ,
 .Pa disable_ipv6
 or
@@ -1416,25 +1435,62 @@ write
 .Ql default Ns 's
 secret at start-up, from
 .Pa /var/lib/ipv6-stable-secret .
-A write to a file of a number takes it as
-.Xr strtol 3
-with base 0 does, and one out of the file's range, which is from 0 up
-unless this entry says otherwise, fails with
-.Er EINVAL .
-A file whose value is an int reads its write as Linux's
-.Fn proc_dointvec
-does, from its first 4095 bytes: spaces, then an optional minus, then a
-digit that begins the number, octal after a 0 and hexadecimal after 0x,
-of fewer than 21 characters with its sign and within an int's range, then
-a space, a tab, a newline or the end.
-A plus sign, any other byte after the number, an empty write and a write
-of spaces alone fail with
-.Er EINVAL .
-The write returns the bytes up to the end of the spaces after the number,
-and moves the file's offset by them; a write at an offset past 0 is taken
-whole and changes nothing, as Linux's
+.Pa kernel/hostname ,
+.Pa kernel/domainname ,
+.Pa kernel/random/boot_id ,
+.Pa kernel/random/uuid ,
+.Pa kernel/ostype ,
+.Pa kernel/osrelease ,
+.Pa kernel/core_pattern
+and
+.Pa stable_secret
+are strings, read on from any offset; every other file is a number,
+which a read at an offset past 0 gives nothing of, as on Linux, so a
+read after a write on one descriptor ends at once.
+An empty write changes nothing and returns 0, and a write to a number at
+an offset past 0 is taken whole and changes nothing, as Linux's
 .Pa kernel/sysctl_writes_strict
 of 1 has it.
+Otherwise a number is read from the write's first 4095 bytes as Linux's
+handler of the file reads it: spaces, then an optional minus, then a
+digit that begins the number, octal after a 0 and hexadecimal after 0x,
+of fewer than 21 characters with its sign, then a space, a tab, a
+newline or the end, and the spaces after it.
+A plus sign, any other byte after the number, a write of spaces alone
+and a number out of the file's range, which is from 0 up unless this
+entry says otherwise, fail with
+.Er EINVAL .
+A file of an int, read by Linux's
+.Fn proc_dointvec ,
+takes a minus, and a file of an unsigned long, read by
+.Fn proc_doulongvec_minmax ,
+.Pa fs/file-max ,
+.Pa fs/pipe-user-pages-hard ,
+.Pa fs/pipe-user-pages-soft ,
+.Pa fs/inotify/max_user_instances ,
+.Pa fs/inotify/max_user_watches ,
+.Pa kernel/hung_task_timeout_secs ,
+.Pa kernel/hung_task_check_interval_secs ,
+.Pa user/max_mnt_namespaces ,
+.Pa vm/dirty_background_bytes
+and
+.Pa vm/dirty_bytes ,
+refuses one, -0 among them; each returns the bytes up to the end of the
+spaces after the number, and every byte past the first 4095, and moves
+the file's offset by them.
+A file of an unsigned int, read by Linux's
+.Fn proc_douintvec
+or
+.Fn proc_dou8vec_minmax ,
+.Pa fs/pipe-max-size ,
+.Pa net/ipv4/tcp_keepalive_probes ,
+.Pa net/ipv4/tcp_mtu_probing ,
+.Pa net/ipv4/tcp_retries2
+and
+.Pa ra_defrtr_metric ,
+refuses a minus and more than 4294967295, returns the write's whole
+count and leaves the offset at 0, so a second write on one descriptor
+sets the file again.
 The writable files have mode 0644, and an open of one for writing
 by a caller without privilege fails with
 .Er EACCES .
