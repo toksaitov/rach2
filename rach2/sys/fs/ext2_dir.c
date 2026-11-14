@@ -1827,16 +1827,18 @@ int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 
 /**
  * The `mkdir` of `vfs_ops`: a new directory `name` in `dir`, with the
- * permission bits of `mode`. Its block is written with `.` and `..`, then its
- * inode with a count of two, then the parent's raised count, and the parent's
- * entry last; a stop before the inode leaves a set bit with nothing behind it.
- * On a mount that writes back the block and the inode reach the device before
- * the parent's entry names them (`shared_block_new`, `inode_commit`), as
- * Linux's `ext2_make_empty` writes both (fs/ext2/dir.c:650 in Linux 6.12.115),
- * and so does the parent's inode with its raised count, which Linux writes
- * after the entry (`ext2_mkdir` raises it before `ext2_add_link`, whose
- * `ext2_handle_dirsync` ends in `sync_inode_metadata`): before it, a stop
- * leaves the count above the names rather than below them.
+ * permission bits of `mode`. Its block is written with `.` and `..`, then the
+ * parent's raised count, then its inode with a count of two, and the
+ * parent's entry last; a stop before the inode leaves a set bit with nothing
+ * behind it. On a mount that writes back the block and the inode reach the
+ * device before the parent's entry names them (`shared_block_new`,
+ * `inode_commit`), as Linux's `ext2_make_empty` writes both (fs/ext2/dir.c:650
+ * in Linux 6.12.115), and the parent's inode with its raised count before the
+ * new inode, whose `..` e2fsck counts once the inode is live, named or not;
+ * Linux writes that count after the entry (`ext2_mkdir` raises it before
+ * `ext2_add_link`, whose `ext2_handle_dirsync` ends in
+ * `sync_inode_metadata`). So a stop leaves the count above the names rather
+ * than below them.
  * A failure frees the new inode (`inode_abandon`), and lowers the parent's
  * count again in memory when the entry was not written, which the parent's
  * mark has its next store write. The batch is drained first. The caller
@@ -1900,18 +1902,18 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         rc = shared_block_new(em, (uint64_t)b * em->block_size, head, 24);
     }
     if (rc == 0) {
-        ext2_node_size_set(n, em->block_size);
-        rc = ext2_inode_store(em, n);
-    }
-    if (rc == 0) {
-        rc = inode_commit(em, n);
-    }
-    if (rc == 0) {
         ext2_node_nlink_set(d, d->nlink + 1);
         ext2_stamp(d, T_MTIME | T_CTIME);
         rc = ext2_inode_store(em, d);
         if (rc == 0) {
             rc = inode_commit(em, d);
+        }
+        if (rc == 0) {
+            ext2_node_size_set(n, em->block_size);
+            rc = ext2_inode_store(em, n);
+        }
+        if (rc == 0) {
+            rc = inode_commit(em, n);
         }
         if (rc == 0) {
             rc = dir_add(em, d, name, n->ino, 2);
