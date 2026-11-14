@@ -684,7 +684,7 @@ static uint64_t timerfd_forward(struct ktimer *t, const struct reading *r)
  * each interval more that the tick's time past the expiry covers, which
  * the next time left is shortened by, as Linux's bump_cpu_timer moves the
  * expiry on by whole intervals and counts them in the overrun
- * (kernel/time/posix-cpu-timers.c:113-136). A one-shot timer is disarmed.
+ * (kernel/time/posix-cpu-timers.c:122-147). A one-shot timer is disarmed.
  * The caller holds `timer_lock`.
  */
 static void cpu_timer_charge(struct ktimer *t)
