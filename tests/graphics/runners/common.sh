@@ -315,10 +315,36 @@ runner_stop()
     RUNNER_BROWSER=
 }
 
+# runner_keep FILE...: name files whose ends a stopped run prints, the
+# evidence its case could not fetch once it was stopped.
+runner_keep()
+{
+    RUNNER_KEEP="${RUNNER_KEEP:-} $*"
+}
+
+# runner_stopped: print on stderr the last 400 lines of each file that
+# runner_keep named, then the kernel's loopback counts and softnet_stat. A
+# case past its bound is sent SIGTERM and is never asked for its output
+# directory; its standard error is kept. This runs before the browser is
+# ended, which can take the runner's whole grace period.
+runner_stopped()
+{
+    for f in ${RUNNER_KEEP:-}; do
+        [ -f "$f" ] || continue
+        echo "runner: $RUNNER_NAME: stopped: the last 400 lines of $f:" >&2
+        tail -n 400 "$f" >&2
+    done
+    echo "runner: $RUNNER_NAME: stopped: the kernel's counts:" >&2
+    grep '^loopback_' /proc/stat >&2 || true
+    sed 's/^/softnet_stat /' /proc/net/softnet_stat >&2 || true
+}
+
 # runner_cleanup: end the browser, Weston and the server, and remove the
-# work directory; installed as the runner's exit trap.
+# work directory; installed as the runner's exit trap. A run stopped by a
+# signal first prints its evidence (runner_stopped).
 runner_cleanup()
 {
+    [ -z "${RUNNER_SIGNAL:-}" ] || runner_stopped
     runner_stop
     for pid in $RUNNER_SERVER $RUNNER_WESTON; do
         kill -TERM "$pid" 2>/dev/null || true
@@ -333,13 +359,13 @@ runner_init()
 {
     RUNNER_NAME=$1
     RUNNER_OUT=$2
-    RUNNER_BROWSER='' RUNNER_SERVER='' RUNNER_WESTON=''
+    RUNNER_BROWSER='' RUNNER_SERVER='' RUNNER_WESTON='' RUNNER_KEEP='' RUNNER_SIGNAL=''
     mkdir -p "$RUNNER_OUT"
     RUNNER_WORK=$(mktemp -d "${TMPDIR:-/tmp}/$RUNNER_NAME.XXXXXX")
     trap runner_cleanup EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    trap 'RUNNER_SIGNAL=HUP; exit 129' HUP
+    trap 'RUNNER_SIGNAL=INT; exit 130' INT
+    trap 'RUNNER_SIGNAL=TERM; exit 143' TERM
 }
 
 # runner_host: the host's half of a run's record, which the side that boots

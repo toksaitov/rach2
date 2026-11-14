@@ -96,6 +96,8 @@ runner_browser_record "$browser"
 runner_weston
 runner_server "$suite" "webgl-runner.html=$RUNNER_DIR/webgl.html"
 events=$RUNNER_WORK/events
+runner_keep "$RUNNER_OUT/record" "$RUNNER_OUT/server.log" "$RUNNER_OUT/browser.log" \
+    "$RUNNER_WORK/attempt" "$events"
 lines=0
 count='' listsum=''
 
