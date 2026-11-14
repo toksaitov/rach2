@@ -430,11 +430,12 @@ host_compile() {
 }
 
 # host_links: link what compiles a changed kernel source. Each source is found
-# by its name in an include or a host-deps line.
+# by its name in an include or a host-deps line, its dot escaped, so that
+# `ns.c` does not match ` nsec`.
 host_links() {
     touched '^rach2/.*\.c$' || return 0
     [ -d "$TREE/tests/host" ] || return 0
-    sed -n 's|^rach2/.*/\([^/]*\.c\)$|\1|p' "$FILES" | sort -u >"$WORK/names"
+    sed -n 's|^rach2/.*/\([^/]*\)\.c$|\1\\.c|p' "$FILES" | sort -u >"$WORK/names"
     (cd "$TREE" && while IFS= read -r n; do
         grep -lE "[\"/ ]$n([\" ]|\$)" tests/host/*_hosttest.c tests/fuzz/*_fuzz.c 2>/dev/null
     done <"$WORK/names") | sort -u >"$WORK/hosts"
