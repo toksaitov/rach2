@@ -1,3 +1,10 @@
 # piglit-virgl.flakes: the tests and subtests of piglit-virgl.txt.gz that are
 # not judged, one extended regular expression a line, searched for in the
 # name.
+#
+# The 'volatile' memory barrier subtests of the geometry and tessellation
+# evaluation stages at modulus 64 read the second store before the first on
+# the testing PC's D3D12 virgl in both guests (dev-log/84-locks/upstream.md),
+# and the test's own row fails with them; its other subtests are judged.
+^spec@arb_shader_image_load_store@shader-mem-barrier$
+^spec@arb_shader_image_load_store@shader-mem-barrier@(geometry|tessellation evaluation) shader/'volatile' qualifier memory barrier test/modulus=64$
