@@ -717,30 +717,63 @@ static void cpu_timer_charge(struct ktimer *t)
  * The faults debugfs's cputime_test forces, for callsmusl's and smptlbmusl's
  * rows, under `timer_lock`: the settings of a timer of processor time still
  * to wait two ticks between their sample and their arming, and of those
- * that waited, the ones a tick was charged to the timer's clock in; and the
- * thread, by its `serial`, 0 for none, whose ticks write each count in two
- * halves with a wait between them where the upper half changes, as the
- * i686's add of 64 bits writes them, and how many such carries there were.
+ * that waited, the ones a tick came due in and was charged to the timer's
+ * clock by the arming's end; and the thread, by its `serial`, 0 for none,
+ * whose ticks write each count in two halves with a wait between them where
+ * the upper half changes, as the i686's add of 64 bits writes them, how
+ * many such carries there were, and in how many of them a read of a clock
+ * of processor time began while the halves were apart.
  */
 static uint32_t test_arm_waits, test_arm_landed;
+
+/* A setting's wait for cputime_test (`test_arm_wait`): whether a tick came
+ * due in it, and the sample of the clock it followed. */
+struct arm_test {
+    int waited;
+    uint64_t before;
+};
 static uint64_t test_split_serial;
-static uint32_t test_split_carries;
+static uint32_t test_split_carries, test_split_contested;
+
+/* Set without a lock while a forced torn write is between its halves
+ * (`split_add`), and set by a read of a clock of processor time that
+ * begins meanwhile (`ptimer_test_read`). */
+static volatile int test_split_open, test_split_reader;
 
 /** Add one to the count `count` of the thread `test_split_serial` names,
  * the lower half first and, where the upper half changes, the upper half
- * two milliseconds later, so that a reader of the count without
- * `timer_lock` on another processor would see the two halves apart. The
- * caller holds `timer_lock`. */
+ * once a read of a clock of processor time has begun on another processor,
+ * or 100 ms have passed, and a millisecond more, so that such a read
+ * without `timer_lock` would see the two halves apart; a carry that a read
+ * began in counts in `test_split_contested`. The caller holds `timer_lock`,
+ * on the tick, with interrupts off. */
 static void split_add(uint64_t *count)
 {
     volatile uint32_t *half = (volatile uint32_t *)count; /* x86: low half first */
     uint64_t v = *count + 1u;
+    uint32_t waited;
 
     half[0] = (uint32_t)v;
     if ((uint32_t)(v >> 32) != half[1]) {
-        k_udelay(2000u);
+        test_split_reader = 0;
+        test_split_open = 1;
+        for (waited = 0; !test_split_reader && waited < 100000u; waited += 10u) {
+            k_udelay(10u);
+        }
+        k_udelay(1000u);
         half[1] = (uint32_t)(v >> 32);
+        test_split_open = 0;
         test_split_carries++;
+        if (test_split_reader) {
+            test_split_contested++;
+        }
+    }
+}
+
+void ptimer_test_read(void)
+{
+    if (test_split_open) {
+        test_split_reader = 1;
     }
 }
 
@@ -1264,6 +1297,46 @@ static int32_t list_clock(struct ktimer *t, int base, int flags, const struct se
 }
 
 /**
+ * Wait two ticks right after the sample `now` a setting of a timer of
+ * processor time took, for debugfs's cputime_test, so that a tick comes due
+ * on this processor between that sample and the timer's arming. With
+ * interrupts off, as under `timer_lock`, the tick is held and charged once
+ * they come back on, after the arming; with them on, it is charged during
+ * the wait, before the arming. `a->before` takes the sample, and
+ * `a->waited` is 1 when a tick was charged on this processor during the
+ * wait or is owed to it at the wait's end (`sched_account_tick`), 0 when
+ * none came due. The caller is `cpu_time_left`, which holds `timer_lock`.
+ */
+static void test_arm_wait(uint64_t now, struct arm_test *a)
+{
+    int64_t counted = this_cpu()->accounted_ns, gap;
+
+    test_arm_waits--;
+    a->before = now;
+    k_udelay(2u * TICK_US);
+    gap = rtc_monotonic_ns() - this_cpu()->accounted_ns + (int64_t)(TICK_NS / 2u);
+    a->waited = this_cpu()->accounted_ns != counted || gap >= (int64_t)TICK_NS;
+}
+
+/** Count in `test_arm_landed` a setting of `t` whose wait `test_arm_wait`
+ * found a tick due in, when the clock read after the arming is past
+ * `before`, the sample the timer was armed from: the tick that came due
+ * between that sample and the arming was charged to the timer's clock.
+ * Takes `timer_lock`. */
+static void test_arm_check(const struct ktimer *t, uint64_t before)
+{
+    uint32_t irq = spin_lock_irqsave(&timer_lock);
+    uint64_t now;
+
+    if (clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_serial, t->cpu_thread, t->cpu_user, &now) ==
+            0 &&
+        now > before) {
+        test_arm_landed++;
+    }
+    spin_unlock_irqrestore(&timer_lock, irq);
+}
+
+/**
  * The time of processor time `t` waits for from the setting `s`, absolute
  * on its clock when `flags` has TFD_TIMER_ABSTIME, into `*left`, in
  * nanoseconds, or 0 for an absolute time already reached, with how far the
@@ -1274,10 +1347,12 @@ static int32_t list_clock(struct ktimer *t, int base, int flags, const struct se
  * (kernel/time/posix-cpu-timers.c:719-751). 0, or -ESRCH for a timer whose
  * thread or process has been reaped. The caller holds the big lock and
  * `timer_lock`, which the tick adds to the clock under (`ptimer_cpu_tick`),
- * so that no tick comes between the reading and the arming.
+ * so that no tick comes between the reading and the arming. A setting that
+ * arms the timer while debugfs's cputime_test asks waits right after the
+ * reading (`test_arm_wait`), which fills `*a`; `a->waited` is 0 otherwise.
  */
 static int32_t cpu_time_left(const struct ktimer *t, int flags, const struct setting *s,
-                             uint64_t *left, uint64_t *over)
+                             uint64_t *left, uint64_t *over, struct arm_test *a)
 {
     uint64_t now, v = ns_of(s->vsec, s->vnsec);
     int32_t rc =
@@ -1285,6 +1360,10 @@ static int32_t cpu_time_left(const struct ktimer *t, int flags, const struct set
 
     *left = v;
     *over = 0;
+    a->waited = 0;
+    if (rc == 0 && v != 0 && test_arm_waits != 0) {
+        test_arm_wait(now, a);
+    }
     if (rc != 0 || !(flags & TFD_TIMER_ABSTIME)) {
         return rc;
     }
@@ -1337,40 +1416,6 @@ static void cpu_arm(struct ktimer *t, const struct setting *s, uint64_t left, ui
 }
 
 /**
- * Wait two ticks between the sample a setting of the timer of processor
- * time `t` took and its arming, for debugfs's cputime_test, so that the
- * tick the processor holds meanwhile is charged once `timer_lock` is let
- * go; the clock as sampled into `*before`. 1 when it waited, 0 when the
- * target is gone. The caller holds `timer_lock`.
- */
-static int test_arm_wait(const struct ktimer *t, uint64_t *before)
-{
-    test_arm_waits--;
-    if (clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_serial, t->cpu_thread, t->cpu_user,
-                         before) != 0) {
-        return 0;
-    }
-    k_udelay(2u * TICK_US);
-    return 1;
-}
-
-/** Count in `test_arm_landed` a setting of `t` that `test_arm_wait` held
- * when its clock has moved past `before`, the sample it was armed from:
- * a tick came between that sample and the arming. Takes `timer_lock`. */
-static void test_arm_check(const struct ktimer *t, uint64_t before)
-{
-    uint32_t irq = spin_lock_irqsave(&timer_lock);
-    uint64_t now;
-
-    if (clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_serial, t->cpu_thread, t->cpu_user, &now) ==
-            0 &&
-        now > before) {
-        test_arm_landed++;
-    }
-    spin_unlock_irqrestore(&timer_lock, irq);
-}
-
-/**
  * Arm `t` from the setting `s`, absolute on its clock when `flags` has
  * TFD_TIMER_ABSTIME, or disarm it for a first expiration of zero, dropping
  * a timerfd's expirations not read. A POSIX timer first signals the
@@ -1410,27 +1455,24 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     int on = s->vsec != 0 || s->vnsec != 0;
     int base =
         t->clock == CLOCK_REALTIME && !(flags & TFD_TIMER_ABSTIME) ? CLOCK_MONOTONIC : t->clock;
-    uint64_t left = 0, over = 0, before = 0;
+    uint64_t left = 0, over = 0;
+    struct arm_test test = {0, 0};
     struct reading r = {0, 0, 0};
     int32_t rc = 0;
     uint32_t irq;
-    int waited = 0;
 
     if (s->vsec < 0 || s->vnsec < 0 || s->vnsec >= NS_PER_SEC) {
         return -EINVAL;
     }
     irq = spin_lock_irqsave(&timer_lock);
     if (t->cpu_tg) {
-        rc = cpu_time_left(t, flags, s, &left, &over);
+        rc = cpu_time_left(t, flags, s, &left, &over, &test);
     } else if (on) {
         rc = read_now(base, &r);
     }
     if (rc != 0) {
         spin_unlock_irqrestore(&timer_lock, irq);
         return rc;
-    }
-    if (on && t->cpu_tg && test_arm_waits != 0) {
-        waited = test_arm_wait(t, &before);
     }
     if (!t->tg) {
         set_cancel(t, t->clock == CLOCK_REALTIME && (flags & TFD_TIMER_ABSTIME) &&
@@ -1459,8 +1501,8 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         rc = list_clock(t, base, flags, s, &r);
     }
     timer_unlock(irq);
-    if (waited) {
-        test_arm_check(t, before);
+    if (test.waited) {
+        test_arm_check(t, test.before);
     }
     return rc;
 }
@@ -2323,13 +2365,14 @@ int32_t ptimer_test_show(void *data, char *buf, uint32_t cap)
 {
     uint32_t irq = spin_lock_irqsave(&timer_lock);
     uint32_t waits = test_arm_waits, landed = test_arm_landed, carries = test_split_carries;
-    uint32_t at = 0;
+    uint32_t contested = test_split_contested, at = 0;
 
     spin_unlock_irqrestore(&timer_lock, irq);
     (void)data;
     test_put(buf, cap, &at, waits, " ");
     test_put(buf, cap, &at, landed, " ");
-    test_put(buf, cap, &at, carries, "\n");
+    test_put(buf, cap, &at, carries, " ");
+    test_put(buf, cap, &at, contested, "\n");
     return (int32_t)at;
 }
 
@@ -2349,6 +2392,7 @@ static int32_t test_split(uint32_t tid)
     p->utime = ((uint64_t)1 << 32) - 25u;
     test_split_serial = p->serial;
     test_split_carries = 0;
+    test_split_contested = 0;
     spin_unlock_irqrestore(&timer_lock, irq);
     return 0;
 }

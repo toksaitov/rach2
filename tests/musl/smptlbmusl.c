@@ -25,11 +25,13 @@
  *
  * With two processors or more, a child's thread spins on processor 1 while
  * debugfs's cputime_test has set its user time 25 ticks short of 2^32 ticks
- * and has its ticks write the count's two halves 2 ms apart at the carry,
- * and the child's main thread on processor 0 reads the thread's clock and
- * the process's over and over until the count is past 2^32: each reading is
- * no less than the one before and no more than a second past it, as a count
- * read whole gives, and the carry happened.
+ * and has its tick at the carry write the count's lower half, wait for a
+ * read of a clock of processor time to begin, and write the upper half a
+ * millisecond later, and the child's main thread on processor 0 reads the
+ * thread's clock and the process's over and over until the count is past
+ * 2^32: each reading is no less than the one before and no more than a
+ * second past it, as a count read whole gives, and a read began while the
+ * halves were apart.
  *
  * Prints "SMPTLBMUSL OK" and exits 0, or "SMPTLBMUSL FAIL: " and the reason
  * and exits 1.
@@ -292,12 +294,12 @@ static int follows(long long before, long long now)
     return now >= before && now - before < 1000000000LL;
 }
 
-/** Read the carries of debugfs's cputime_test, the third of its numbers,
- * or -1. */
-static long carries(void)
+/** Read the carries of debugfs's cputime_test that a read of a clock
+ * began in, the fourth of its numbers, or -1. */
+static long contested(void)
 {
     char line[96];
-    long v[3];
+    long v[4];
     int fd = open("/sys/kernel/debug/cputime_test", O_RDONLY);
     ssize_t n = fd < 0 ? -1 : read(fd, line, sizeof line - 1);
 
@@ -308,15 +310,16 @@ static long carries(void)
         return -1;
     }
     line[n] = 0;
-    return sscanf(line, "%ld %ld %ld", &v[0], &v[1], &v[2]) == 3 ? v[2] : -1;
+    return sscanf(line, "%ld %ld %ld %ld", &v[0], &v[1], &v[2], &v[3]) == 4 ? v[3] : -1;
 }
 
 /**
  * The child of `untorn`: carry the count of a thread spinning on processor
  * 1 past 2^32 ticks and read its clock and the process's on processor 0
- * meanwhile. Exits 0 when every reading followed the one before and the
- * carry happened, 2 for a reading that did not, 3 when the count was not
- * seen past 2^32 within a minute of monotonic time, and 4 when the thread
+ * meanwhile. Exits 0 when every reading followed the one before and a read
+ * began while the carry's halves were apart, 2 for a reading that did not
+ * follow, 3 when the count was not seen past 2^32 within a minute of
+ * monotonic time or no read began inside the carry, and 4 when the thread
  * or cputime_test failed.
  */
 static void untorn_child(void)
@@ -364,7 +367,7 @@ static void untorn_child(void)
     if (torn) {
         _exit(2);
     }
-    _exit(thread_now >= end && carries() >= 1 ? 0 : 3);
+    _exit(thread_now >= end && contested() >= 1 ? 0 : 3);
 }
 
 /** Run `untorn_child` in a child, whose clocks it moves past 2^32 ticks,
@@ -384,9 +387,10 @@ static int untorn(void)
         return -1;
     }
     if (WEXITSTATUS(status) != 0) {
-        report_fail("untorn", WEXITSTATUS(status) == 2   ? "a CPU clock read a torn count"
-                              : WEXITSTATUS(status) == 3 ? "the count did not carry past 2^32"
-                                                         : "the thread or cputime_test failed");
+        report_fail("untorn", WEXITSTATUS(status) == 2 ? "a CPU clock read a torn count"
+                              : WEXITSTATUS(status) == 3
+                                  ? "the count did not carry past 2^32 under a read"
+                                  : "the thread or cputime_test failed");
         return -1;
     }
     report_pass("untorn");

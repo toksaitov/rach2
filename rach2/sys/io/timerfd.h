@@ -242,24 +242,32 @@ uint32_t ptimer_times_lock(void);
 void ptimer_times_unlock(uint32_t irq);
 
 /** Read debugfs's cputime_test: the settings still to wait, those of the
- * last `arm` whose wait a tick landed in, and the carries of the forced
- * torn write since the last `spl`, on one line, into `buf` of `cap` bytes;
- * the line's length. */
+ * last `arm` whose wait a tick came due in and was charged by the arming's
+ * end, the carries of the forced torn write since the last `spl`, and
+ * those of them a read of a clock of processor time began in, on one line,
+ * into `buf` of `cap` bytes; the line's length. */
 int32_t ptimer_test_show(void *data, char *buf, uint32_t cap);
 
 /**
  * Write debugfs's cputime_test, the faults callsmusl and smptlbmusl force:
  * `arm N` has the next N settings of a timer of processor time wait two
- * ticks between the sample of its clock and its arming, under `timer_lock`
- * with interrupts off, so that the tick held meanwhile is charged after the
- * arming, and counts each whose clock has moved by the arming's end; `spl
- * TID` sets the user time of the thread TID of the caller's process 25
- * ticks short of 2^32 ticks and has each of its ticks write the count's two
- * halves 2 ms apart where the upper half changes, under `timer_lock`, as no
- * reader that takes the lock sees. `len`, -ESRCH for no such thread, or
- * -EINVAL or -EFAULT.
+ * ticks right after the sample of its clock, before its arming, so that a
+ * tick comes due between them, and counts each whose wait a tick came due
+ * in and whose clock has moved by the arming's end; `spl TID` sets the user
+ * time of the thread TID of the caller's process 25 ticks short of 2^32
+ * ticks and has each of its ticks, where the upper half changes, write the
+ * count's lower half, wait until a read of a clock of processor time begins
+ * (`ptimer_test_read`) or 100 ms pass, and write the upper half a
+ * millisecond later, under `timer_lock`, as no reader that takes the lock
+ * sees. `len`, -ESRCH for no such thread, or -EINVAL or -EFAULT.
  */
 int32_t ptimer_test_store(void *data, const char __user *buf, uint32_t len);
+
+/** Note, for debugfs's cputime_test, a read of a clock of processor time
+ * that begins while a forced torn write is between its halves
+ * (`split_add`). Called first by each such read, before it takes any lock;
+ * reads and writes two words without one. */
+void ptimer_test_read(void);
 
 /** Add a tick to the processor time of the thread `p`, to its user time
  * when `user` and its system time otherwise, and count it against the POSIX

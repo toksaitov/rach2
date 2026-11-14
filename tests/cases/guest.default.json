@@ -6953,7 +6953,7 @@
         {"assertion_id": "itimer-first-tick", "checks": "ITIMER_PROF and ITIMER_VIRTUAL of 10 ms expire at the tick charged that passes 10 ms and a tick more, as Linux's set_cpu_itimer adds TICK_NSEC.", "source": "program"},
         {"assertion_id": "ptimer-past-due", "checks": "A POSIX timer of processor time set to an absolute time past expires during timer_settime while the process sleeps, with the intervals since that time as its overrun.", "source": "program"},
         {"assertion_id": "ptimer-other-thread", "checks": "timer_settime of a timer on another thread's clock of processor time counts an absolute time from that thread's time, not the caller's.", "source": "program"},
-        {"assertion_id": "ptimer-tick-at-arming", "checks": "A tick charged while timer_settime samples the clock of processor time and arms the timer is in the sample or taken off the time left: a one-shot timer set 25 times to a nanosecond past the process's clock, each setting held two ticks between its sample and its arming by debugfs's cputime_test, which counts a tick charged there in all 25, has expired whenever the clock read after the setting has reached that time.", "source": "program"},
+        {"assertion_id": "ptimer-tick-at-arming", "checks": "A tick charged while timer_settime samples the clock of processor time and arms the timer is in the sample or taken off the time left: a one-shot timer set 25 times to a nanosecond past the process's clock, each setting held two ticks right after its sample, before its arming, by debugfs's cputime_test, which counts in all 25 a tick that came due there and was charged by the arming's end, has expired whenever the clock read after the setting has reached that time.", "source": "program"},
         {"assertion_id": "ptimer-reused-tid", "checks": "A timer on a thread's clock of processor time, armed while the thread waits, reports nothing, fails a setting with ESRCH and posts no signal once the thread is reaped, while a thread that /proc/sys/kernel/ns_last_pid gives the same id spins for 60 ms of processor time, as Linux's timer keeps the struct pid.", "source": "program"},
         {"assertion_id": "ptimer-reaped-esrch", "checks": "A timer on a child's clock of processor time can be set while the child is a zombie; once the child is reaped timer_settime fails with ESRCH, a disarming one too, and timer_gettime reports nothing.", "source": "program"},
         {"assertion_id": "ptimer-zombie-leader", "checks": "A timer on the clock of processor time of a leader that called pthread_exit can be set from another thread while the leader is a zombie.", "source": "program"},
@@ -7571,7 +7571,7 @@
         },
         {
           "assertion_id": "untorn",
-          "checks": "a thread's clock of processor time and its process's, read over and over on processor 0 while the thread spins on processor 1 and its count, set by debugfs's cputime_test 25 ticks short of 2^32, carries past it with its two halves written 2 ms apart, never step back nor jump a second, and the carry happens",
+          "checks": "a thread's clock of processor time and its process's, read over and over on processor 0 while the thread spins on processor 1 and its count, set by debugfs's cputime_test 25 ticks short of 2^32, carries past it with its upper half written only once a read of a clock of processor time has begun and a millisecond later, never step back nor jump a second, and a read begins while the halves are apart",
           "source": "program"
         }
       ],

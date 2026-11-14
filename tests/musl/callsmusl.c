@@ -2618,9 +2618,10 @@ static int cputime_test_read(long v[3])
  * timer of SIGEV_NONE on the process's clock, set again and again to a
  * nanosecond past the clock, must have expired whenever the clock read after
  * the setting has reached that time. debugfs's cputime_test holds each of
- * ARM_WAITS settings for two ticks between its sample and its arming, so
- * that a tick is charged there, and counts those whose clock moved by the
- * arming's end, which must be all of them; the tick it held is charged as
+ * ARM_WAITS settings for two ticks right after its sample, before its
+ * arming, so that a tick comes due there wherever the sample is taken, and
+ * counts those whose wait a tick came due in and whose clock moved by the
+ * arming's end, which must be all of them; a tick held there is charged as
  * the setting lets the timers' lock go, so no later tick comes before the
  * clock is read. Returns 0, or 1 after the failure is printed.
  */
@@ -2670,7 +2671,8 @@ static int ptimer_tick_at_arming(void)
     }
     if (counts[0] != 0 || counts[1] != ARM_WAITS) {
         errno = 0;
-        return fail("cputime_test did not land a tick between each setting's sample and arming");
+        return fail("cputime_test did not have a tick come due between each setting's sample "
+                    "and arming and charged by its end");
     }
     return 0;
 }
