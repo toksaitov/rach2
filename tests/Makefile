@@ -37,7 +37,7 @@ PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe 
         usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe fsidprobe oldfsprobe openat2probe protectprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe vhangprobe ttyflowprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
-        idreport fdfull diskfull oomprobe limitprobe limitsprobe numaprobe restartprobe loadprobe conloadprobe partsprobe busprobe ahciprobe bigfileprobe blankprobe lenovoacpi watchdogprobe pstoreprobe \
+        idreport fdfull diskfull oomprobe limitprobe limitsprobe numaprobe restartprobe loadprobe conloadprobe partsprobe busprobe ahciprobe vblkprobe bigfileprobe blankprobe lenovoacpi watchdogprobe pstoreprobe \
         drmcapture
 
 # The probes of an interface only i386 has, built for i686 alone: tlsprobe

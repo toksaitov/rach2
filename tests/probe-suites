@@ -46,6 +46,7 @@ conloadprobe conload
 partsprobe parts
 busprobe bus
 ahciprobe queue
+vblkprobe vblk
 bigfileprobe large
 musl/creddisk cred-persist
 musl/saltnoent noentropy

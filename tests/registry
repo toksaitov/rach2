@@ -117,6 +117,7 @@ frag6|qemu|full
 load|qemu,mformat|full
 authority|qemu|core|authority-test*,authority.*,authority-*,authority/*,auth-test.*
 queue|qemu,mformat|core
+vblk|qemu|core
 subset|qemu|core
 bus|qemu,mformat,mtype|full
 exitline|qemu|full

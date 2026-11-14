@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.vblk",
+  "summary": "Reads, writes, flushes, discards and writes of zeros through the virtio-blk driver's queues, and what the kernel publishes of its disks; the program is tests/vblkprobe.c",
+  "cases": [
+    {
+      "case_id": "guest.vblk.read",
+      "behavior": "two virtio-blk disks on two processors each read by a process of its own complete through the queues' message-signalled interrupts, the second's serial and the first's discard limit read in sysfs, and BLKDISCARD is refused on the ordinary kernel",
+      "units": ["vblk", "vblkprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["read"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "vblk-a", "bus": "virtio", "discard": true, "size_bytes": 4194304}, {"name": "vblk-b", "bus": "virtio", "serial": "rach2vblk", "size_bytes": 4194304}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}},
+      "execution": {"program": "vblkprobe", "stdin": null, "role": "ordinary", "privileges": "root, which reads the disks' nodes", "isolation": [], "children": "reaped", "cleanup": "nothing; the readers are reaped, and the disks are the attempt's empty files"},
+      "assertions": [
+        {"assertion_id": "both-read", "checks": "a child reads 1 MiB of /dev/disk0 and another 1 MiB of /dev/disk1, in chunks of 32 KiB, and each exits 0", "source": "program"},
+        {"assertion_id": "interrupts", "checks": "the first device has two vectors or more in /proc/interrupts, and the two devices' vectors count at least 16 completions over the reads", "source": "program"},
+        {"assertion_id": "serial", "checks": "/sys/block/disk1/device/serial is rach2vblk, which the device answered to GET_ID", "source": "program"},
+        {"assertion_id": "discard-limit", "checks": "/sys/block/disk0/queue/discard_max_bytes is not 0", "source": "program"},
+        {"assertion_id": "refused", "checks": "BLKDISCARD on /dev/disk0 is EBADF on a descriptor opened for reading and EPERM on one opened for writing", "source": "program"},
+        {"assertion_id": "queues", "checks": "the driver says it moved the first device to its two queues' interrupts", "source": "executor", "record": "virtio-blk: virtio0: interrupts: 2 queues"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "vblkprobe", "node": "tests/vblkprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case's disks are virtio-blk devices of QEMU's, made for it"}
+    },
+    {
+      "case_id": "guest.vblk.write",
+      "behavior": "the recovery kernel writes a virtio-blk disk raw, flushes it, writes zeros and discards through the driver's queues, and refuses a secure discard and a range of no whole sectors",
+      "units": ["vblk", "vblkprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["write"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "vblk-w", "bus": "virtio", "discard": true, "size_bytes": 4194304}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}},
+      "execution": {"program": "vblkprobe", "stdin": null, "role": "ordinary", "privileges": "root, which writes the disk's node", "isolation": [], "children": "none", "cleanup": "nothing; the disk is the attempt's empty file"},
+      "assertions": [
+        {"assertion_id": "write-read", "checks": "1 MiB of a pattern written to /dev/disk0 and flushed by fsync reads back", "source": "program"},
+        {"assertion_id": "zeroout", "checks": "BLKZEROOUT of 128 KiB at 64 KiB returns 0, and those bytes then read as zeros and the rest as the pattern", "source": "program"},
+        {"assertion_id": "discard", "checks": "BLKDISCARD of 256 KiB at 512 KiB returns 0, and the bytes outside it still read as before", "source": "program"},
+        {"assertion_id": "discardzeroes", "checks": "BLKDISCARDZEROES answers 0", "source": "program"},
+        {"assertion_id": "secure", "checks": "BLKSECDISCARD is EOPNOTSUPP", "source": "program"},
+        {"assertion_id": "range", "checks": "BLKDISCARD is EINVAL for a range that starts inside a sector, an empty range and a range past the disk's end", "source": "program"},
+        {"assertion_id": "taken", "checks": "the device offers discard and write zeroes, and the driver takes them", "source": "executor", "record": "cache on, discard, write zeroes"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 8388608, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "vblkprobe", "node": "tests/vblkprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case's disk is a virtio-blk device of QEMU's, made for it"}
+    }
+  ]
+}
