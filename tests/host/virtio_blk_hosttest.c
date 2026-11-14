@@ -956,6 +956,7 @@ static void queued(void)
     static uint8_t buf[4096];
     static struct block_request r[3];
     struct model *m = &models[0];
+    int before, flushes_before;
 
     model_reset(1);
     (void)virtio_blk_init();
@@ -966,6 +967,8 @@ static void queued(void)
     check(disk0()->max_discard == 64 && disk0()->max_zeroes == 32,
           "the discard and zeroes limits are the configuration's");
     host_cpu = 2;
+    before = commands;
+    flushes_before = flush_counts;
     request_init(&r[0], 1, 100, 8, buf, BLOCK_REQ_NOFLUSH);
     check(disk0()->submit(disk0(), &r[0]) == 0, "a write is queued");
     check(m->notifies[2] == 1 && m->writes == 1 && r[0].state == 0,
@@ -981,6 +984,8 @@ static void queued(void)
     model_irq(m);
     check(r[1].state == 1 && r[1].status == 0 && m->flushed_writes == 2 && !disk0()->unflushed,
           "the durable write is answered once its flush is, which clears the mark");
+    check(commands == before + 3 && flush_counts == flushes_before + 1,
+          "the write, the durable write and its flush count three commands, one a flush");
     request_init(&r[2], 0, 0, 0, 0, BLOCK_REQ_FLUSH);
     check(disk0()->flush(disk0(), &r[2]) == 0, "a flush request is queued");
     model_irq(m);

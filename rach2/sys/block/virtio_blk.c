@@ -508,6 +508,7 @@ static int vblk_flush_half(struct vblk_queue *q, struct vblk_slot *s)
     rc = vblk_offer(q, s, &c);
     s->state = rc == 1 ? VBLK_FLUSH_DUE : VBLK_ISSUED;
     if (rc == 0) {
+        block_count_command();
         block_count_flush();
         q->unkicked = 1;
     }
