@@ -13,6 +13,16 @@
 # The virgl suite's references, its piglit, dEQP and WebGL pages among
 # them, were taken under KVM too: under TCG its Firefox chunks ran some
 # seven times as long as Debian's and passed the gap bound.
+# The rest of the graphics suites follow tests/graphics/Readme.md's rule,
+# Accelerators: under KVM where the reference was taken under KVM, where
+# the suite draws through Venus, or where llvmpipe or lavapipe in the guest
+# sets its time. d3d, d3d-wine and d3d-vkd3d draw on lavapipe against
+# Debian's references taken under KVM; d3dvenus, webgpu and vkpresent draw
+# through Venus; vgpu through Venus and virgl; the games-* suites draw on
+# virgl or llvmpipe; desktop and glmark2 on llvmpipe; igt, modetest and
+# piglit are judged against ref/debian, taken under KVM. i915fake and the
+# guest suites stay under TCG: they have no reference and draw nothing on
+# llvmpipe, and judge counts that the accelerator does not change.
 browser
 video
 webgl
@@ -22,3 +32,19 @@ kvm
 bed-shm
 venus
 virgl
+d3d
+d3d-wine
+d3d-vkd3d
+d3dvenus
+webgpu
+vkpresent
+vgpu
+games-wine
+games-wm
+games-umu
+games-native
+desktop
+glmark2
+igt
+modetest
+piglit
