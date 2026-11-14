@@ -40,6 +40,10 @@
  * empty. With the mark cleared, the orphans of a second M go to init: that
  * G's parent is not S, and S has no child left to wait for.
  *
+ * The timer slack reads Linux's default of 50000 ns, takes 1000 and reads it
+ * back, and goes back to its default for 0; a child forked with a slack of
+ * 2000 reads 2000, and that is the default its own 0 gives back.
+ *
  * The program runs itself in the modes `name`, `exe-moved`, `exe-ran`,
  * `exit-now` and `subreaper-kept`, named by its first argument. With none it
  * runs the checks, prints "PRCTLMUSL OK" and exits 0 on success, or prints
@@ -60,8 +64,9 @@
  * `subreaper-start`, `subreaper-set`, `subreaper-efault`, `subreaper-fork`,
  * `subreaper-exec`, `children-self-enoent`, `children-one`, `children-thread`,
  * `orphan-adopted`, `zombie-adopted`, `children-orphan`, `orphan-reaped`,
- * `orphan-usage`, `children-empty`, `subreaper-clear` and `orphan-to-init`. The
- * first failure fails its assertion and leaves the rest not run.
+ * `orphan-usage`, `children-empty`, `subreaper-clear`, `orphan-to-init`,
+ * `slack-default`, `slack-set`, `slack-reset` and `slack-fork`. The first
+ * failure fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -98,6 +103,11 @@ static int report_fd = -1;
 /* The tmpfs the exit row mounts, and the copy of the probe it runs there. */
 #define EXIT_MOUNT "/tmp/prctlmusl.mnt"
 #define EXIT_COPY  "/tmp/prctlmusl.mnt/prctlmusl"
+
+/* The timer slack a thread starts with when no ancestor changed it, Linux's
+ * init_task.timer_slack_ns, and the one the fork row gives its child. */
+#define SLACK_DEFAULT 50000
+#define SLACK_FORKED  2000
 
 /* The assertions of etude's report in the order they are checked, more than
  * probe_report.h's path holds, and how many are planned and reported. */
@@ -1133,6 +1143,60 @@ static int subreaper(void)
     return status != 0 ? fail(steps[status]) : 0;
 }
 
+/** In the child the slack row forks with a slack of SLACK_FORKED: it reads
+ * that slack, and PR_SET_TIMERSLACK of 0 gives it back as the default.
+ * Exits 0, 1 for another slack at the start and 2 for another after 0. */
+static int slack_child(void)
+{
+    if (prctl(PR_GET_TIMERSLACK, 0, 0, 0, 0) != SLACK_FORKED) {
+        return 1;
+    }
+    if (prctl(PR_SET_TIMERSLACK, 0, 0, 0, 0) != 0 ||
+        prctl(PR_GET_TIMERSLACK, 0, 0, 0, 0) != SLACK_FORKED) {
+        return 2;
+    }
+    return 0;
+}
+
+/**
+ * Check the timer slack that PR_SET_TIMERSLACK sets and PR_GET_TIMERSLACK
+ * reads: Linux's default at the start, a value set read back, the default
+ * given back for 0, and a fork that passes the slack on as the child's
+ * slack and default. Returns 0 when each holds, or the probe's failure.
+ */
+static int timer_slack(void)
+{
+    int status;
+
+    if (prctl(PR_GET_TIMERSLACK, 0, 0, 0, 0) != SLACK_DEFAULT) {
+        return fail("PR_GET_TIMERSLACK did not read Linux's default of 50000 ns");
+    }
+    held();
+    if (prctl(PR_SET_TIMERSLACK, 1000, 0, 0, 0) != 0 ||
+        prctl(PR_GET_TIMERSLACK, 0, 0, 0, 0) != 1000) {
+        return fail("PR_SET_TIMERSLACK of 1000 ns did not read back");
+    }
+    held();
+    if (prctl(PR_SET_TIMERSLACK, 0, 0, 0, 0) != 0 ||
+        prctl(PR_GET_TIMERSLACK, 0, 0, 0, 0) != SLACK_DEFAULT) {
+        return fail("PR_SET_TIMERSLACK of 0 did not give the default back");
+    }
+    held();
+    if (prctl(PR_SET_TIMERSLACK, SLACK_FORKED, 0, 0, 0) != 0) {
+        return fail("PR_SET_TIMERSLACK of 2000 ns failed");
+    }
+    status = in_child(slack_child);
+    (void)prctl(PR_SET_TIMERSLACK, 0, 0, 0, 0);
+    if (status != 0) {
+        return fail(
+            status == 2
+                ? "a child's PR_SET_TIMERSLACK of 0 did not give the slack it was forked with"
+                : "a child did not start with its parent's timer slack");
+    }
+    held();
+    return 0;
+}
+
 /** Plan each assertion of `ids`, `n` of them. */
 static void plan_rows(const char *const *ids, unsigned n)
 {
@@ -1149,22 +1213,54 @@ static void plan_rows(const char *const *ids, unsigned n)
  * checked. */
 static void plan(void)
 {
-    static const char *const ids[] = {
-        "name-basename",         "name-cut",          "name-stat",
-        "name-short-padded",     "name-exec",         "dumpable-start",
-        "dumpable-thread",       "dumpable-values",   "dumpable-einval",
-        "pdeath-start",          "pdeath-kept",       "pdeath-einval",
-        "pdeath-not-inherited",  "pdeath-uid-clears", "pdeath-gid-clears",
-        "pdeath-grandchild-set", "pdeath-delivered",  "nnp-start",
-        "nnp-get-einval",        "nnp-set-einval",    "nnp-suid-plain",
-        "unknown-option-einval", "exe-link-renamed",  "exe-exec-runs-copy",
-        "exe-name-removed",      "exe-open-unnamed",  "exit-copy-ends",
-        "exit-lets-go",          "subreaper-start",   "subreaper-set",
-        "subreaper-efault",      "subreaper-fork",    "subreaper-exec",
-        "children-self-enoent",  "children-one",      "children-thread",
-        "orphan-adopted",        "zombie-adopted",    "children-orphan",
-        "orphan-reaped",         "orphan-usage",      "children-empty",
-        "subreaper-clear",       "orphan-to-init"};
+    static const char *const ids[] = {"name-basename",
+                                      "name-cut",
+                                      "name-stat",
+                                      "name-short-padded",
+                                      "name-exec",
+                                      "dumpable-start",
+                                      "dumpable-thread",
+                                      "dumpable-values",
+                                      "dumpable-einval",
+                                      "pdeath-start",
+                                      "pdeath-kept",
+                                      "pdeath-einval",
+                                      "pdeath-not-inherited",
+                                      "pdeath-uid-clears",
+                                      "pdeath-gid-clears",
+                                      "pdeath-grandchild-set",
+                                      "pdeath-delivered",
+                                      "nnp-start",
+                                      "nnp-get-einval",
+                                      "nnp-set-einval",
+                                      "nnp-suid-plain",
+                                      "unknown-option-einval",
+                                      "exe-link-renamed",
+                                      "exe-exec-runs-copy",
+                                      "exe-name-removed",
+                                      "exe-open-unnamed",
+                                      "exit-copy-ends",
+                                      "exit-lets-go",
+                                      "subreaper-start",
+                                      "subreaper-set",
+                                      "subreaper-efault",
+                                      "subreaper-fork",
+                                      "subreaper-exec",
+                                      "children-self-enoent",
+                                      "children-one",
+                                      "children-thread",
+                                      "orphan-adopted",
+                                      "zombie-adopted",
+                                      "children-orphan",
+                                      "orphan-reaped",
+                                      "orphan-usage",
+                                      "children-empty",
+                                      "subreaper-clear",
+                                      "orphan-to-init",
+                                      "slack-default",
+                                      "slack-set",
+                                      "slack-reset",
+                                      "slack-fork"};
 
     report_begin(report_case(environ, "guest.default.prctlmusl"));
     PLAN(ids);
@@ -1190,7 +1286,7 @@ int main(int argc, char **argv)
     }
     plan();
     if (names() != 0 || dumpable() != 0 || parent_death() != 0 || no_new_privs() != 0 ||
-        exe_follows() != 0 || exit_lets_go() != 0 || subreaper() != 0) {
+        exe_follows() != 0 || exit_lets_go() != 0 || subreaper() != 0 || timer_slack() != 0) {
         return 1;
     }
     report_end();

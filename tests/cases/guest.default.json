@@ -5112,7 +5112,7 @@
     },
     {
       "case_id": "guest.default.prctlmusl",
-      "behavior": "The attributes prctl sets and reads, the program name, the dumpable flag, the parent-death signal, no_new_privs and the child subreaper mark, behave as Linux's, and /proc/self/exe reaches the program's file.",
+      "behavior": "The attributes prctl sets and reads, the program name, the dumpable flag, the parent-death signal, no_new_privs, the child subreaper mark and the timer slack, behave as Linux's, and /proc/self/exe reaches the program's file.",
       "units": ["default", "musl/prctlmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -5163,7 +5163,11 @@
         {"assertion_id": "orphan-usage", "checks": "The adopted orphan's processor time and memory show in S's RUSAGE_CHILDREN.", "source": "program"},
         {"assertion_id": "children-empty", "checks": "The children file is empty once every child is reaped.", "source": "program"},
         {"assertion_id": "subreaper-clear", "checks": "PR_SET_CHILD_SUBREAPER of 0 clears the mark.", "source": "program"},
-        {"assertion_id": "orphan-to-init", "checks": "With the mark cleared, the orphans of a second middle process go to init, not to S.", "source": "program"}
+        {"assertion_id": "orphan-to-init", "checks": "With the mark cleared, the orphans of a second middle process go to init, not to S.", "source": "program"},
+        {"assertion_id": "slack-default", "checks": "PR_GET_TIMERSLACK reads Linux's default timer slack, 50000 ns.", "source": "program"},
+        {"assertion_id": "slack-set", "checks": "PR_SET_TIMERSLACK of 1000 ns reads back as 1000.", "source": "program"},
+        {"assertion_id": "slack-reset", "checks": "PR_SET_TIMERSLACK of 0 gives the default, 50000 ns, back.", "source": "program"},
+        {"assertion_id": "slack-fork", "checks": "A child forked with a slack of 2000 ns reads 2000, and its PR_SET_TIMERSLACK of 0 gives 2000 back as its default.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
