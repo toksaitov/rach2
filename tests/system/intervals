@@ -56,6 +56,7 @@ tests/waitprobe.c: the child's state is read again every 10 ms
 tests/xsaveprobe.c: the processes switch while the registers are checked
 tests/musl/callsmusl.c: the blocked periodic timer of 20 ms runs for ten periods
 tests/musl/callsmusl.c: a process's state is looked at again every 10 ms
+tests/musl/callsmusl.c: the process sleeps, so no tick charges it processor time
 tests/musl/capmusl.c: the first thread's state is looked at again every 10 ms
 tests/musl/clockidmusl.c: the sleeps are the calls tested
 tests/musl/epollmusl.c: a process's state is looked at again every 10 ms

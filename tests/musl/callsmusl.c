@@ -91,6 +91,12 @@
  * a pipe with ESPIPE. setitimer's ITIMER_VIRTUAL and ITIMER_PROF post SIGVTALRM
  * and SIGPROF as the process spins, and getitimer reports the interval; so do
  * POSIX timers on the process's and the thread's clocks of processor time.
+ * ITIMER_PROF and ITIMER_VIRTUAL of 10 ms expire at the tick charged that
+ * passes 10 ms and a tick more, as Linux's do; a POSIX timer of processor
+ * time set to an absolute time past expires during the setting, though the
+ * process then sleeps, with the intervals since that time as its overrun;
+ * and one on another thread's clock counts an absolute time from that
+ * thread's time, whoever sets it.
  * /dev/mem reads the first megabyte and maps the local APIC, and fails with
  * EPERM for RAM and with EINVAL for a private mapping. klogctl gives the log
  * ring's size, its records whole, and after a clear none of those before;
@@ -136,7 +142,8 @@
  * `timer-si-timer`, `timer-overrun`, `timer-delete`, `sigqueue`,
  * `rt-sigqueueinfo`, `pty-nonblock-eagain`, `pty-writer-sleeps`, `pty-64k`,
  * `pty-whole-lines`, `signalfd-eagain`, `signalfd-read`, `itimer-interval`,
- * `itimer-signals`, `ptimer-gettime`, `ptimer-signals`, `devmem-low`,
+ * `itimer-signals`, `ptimer-gettime`, `ptimer-signals`, `itimer-first-tick`,
+ * `ptimer-past-due`, `ptimer-other-thread`, `devmem-low`,
  * `devmem-ram-eperm`, `devmem-private-einval`, `devmem-apic`, `klog-size`,
  * `klog-records`, `klog-clear`, `dev-log-link`, `rtc-alarm-range`,
  * `rtc-aie-on-past`, `rtc-alarm-readback`, `rtc-alarm-invalid`,
@@ -155,6 +162,7 @@
 #include <netinet/in.h>
 #include <dirent.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -2329,6 +2337,270 @@ static void spin_user(void)
     }
 }
 
+/** The processor time on `clock` in nanoseconds, or -1 when it cannot be
+ * read. */
+static long long cpu_ns(clockid_t clock)
+{
+    struct timespec ts;
+
+    if (clock_gettime(clock, &ts) != 0) {
+        return -1;
+    }
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+/** The process's user time in microseconds, as getrusage reports it. */
+static long long user_us(void)
+{
+    struct rusage ru;
+
+    getrusage(RUSAGE_SELF, &ru);
+    return (long long)ru.ru_utime.tv_sec * 1000000LL + ru.ru_utime.tv_usec;
+}
+
+/* The signals `on_first_tick` took, and the process's processor time in
+ * nanoseconds and its user time in microseconds at the first. */
+static volatile sig_atomic_t firsts;
+static volatile long long first_cpu_ns, first_user_us;
+
+/** Note the process's times at the first SIGPROF or SIGVTALRM. */
+static void on_first_tick(int signo)
+{
+    (void)signo;
+    if (firsts++ == 0) {
+        first_cpu_ns = cpu_ns(CLOCK_PROCESS_CPUTIME_ID);
+        first_user_us = user_us();
+    }
+}
+
+/** The process's processor time in nanoseconds, or for `virt` its user
+ * time, which ITIMER_VIRTUAL counts. */
+static long long itimer_time(int virt)
+{
+    return virt ? user_us() * 1000 : cpu_ns(CLOCK_PROCESS_CPUTIME_ID);
+}
+
+/**
+ * Check that ITIMER_PROF, or ITIMER_VIRTUAL for `virt`, set to 10 ms expires
+ * at the tick charged that passes 10 ms and a tick more, as Linux's
+ * set_cpu_itimer adds TICK_NSEC to the first value: at 250 Hz the fourth
+ * tick, where 10 ms alone is the third. `tick` is the length of a tick of
+ * processor time in nanoseconds. The ticks are counted in the time the
+ * timer counts, from a setting that no tick came during to the first
+ * signal, which comes at the return from the tick that ran the timer out;
+ * one more is allowed for a tick that came before the handler read the
+ * time. Returns 0, or 1 after the failure is printed.
+ */
+static int itimer_first(int virt, long long tick)
+{
+    struct itimerval once = {{0, 0}, {0, 10000}}, off = {{0, 0}, {0, 0}};
+    int which = virt ? ITIMER_VIRTUAL : ITIMER_PROF, signo = virt ? SIGVTALRM : SIGPROF;
+    long long want = (10000000LL + tick + tick - 1) / tick, before = 0, ticks;
+    int tries;
+    static char why[160];
+
+    signal(signo, on_first_tick);
+    for (tries = 0; tries < 100; tries++) {
+        firsts = 0;
+        before = itimer_time(virt);
+        if (setitimer(which, &once, NULL) != 0) {
+            return fail("setitimer of 10 ms");
+        }
+        if (itimer_time(virt) == before) {
+            break;
+        }
+        setitimer(which, &off, NULL);
+    }
+    while (firsts == 0 && itimer_time(virt) - before < 3000000000LL) {
+        spin_user();
+    }
+    setitimer(which, &off, NULL);
+    signal(signo, SIG_DFL);
+    ticks = ((virt ? first_user_us * 1000 : first_cpu_ns) - before) / tick;
+    if (tries == 100 || firsts == 0 || ticks < want || ticks > want + 1) {
+        snprintf(why, sizeof why, "%s of 10 ms expired after %lld ticks charged, not %lld",
+                 virt ? "ITIMER_VIRTUAL" : "ITIMER_PROF", firsts ? ticks : -1LL, want);
+        return fail(why);
+    }
+    return 0;
+}
+
+/**
+ * Check that a POSIX timer of the process's processor time set to an
+ * absolute time 35 ms past, with an interval of 10 ms, expires during
+ * timer_settime, though the process then only sleeps, and that its
+ * signal's overrun counts the intervals since that time: three, or more
+ * for ticks charged before the signal is taken; timer_gettime then reports
+ * no more than the interval left. Linux's posix_cpu_timer_set fires such a
+ * timer at once and bump_cpu_timer forwards it from its expiry. Returns 0,
+ * or 1 after the failure is printed.
+ */
+static int ptimer_past(void)
+{
+    struct itimerspec set = {{0, 10000000}, {0, 0}}, cur;
+    struct timespec nap = {0, 30000000}, zero = {0, 0};
+    struct sigevent ev;
+    sigset_t one, mask, pending;
+    siginfo_t info, rest;
+    timer_t timer;
+    long long now, at, after;
+    int got = -1;
+
+    sigemptyset(&one);
+    sigaddset(&one, SIGUSR1);
+    sigprocmask(SIG_BLOCK, &one, &mask);
+    memset(&ev, 0, sizeof ev);
+    ev.sigev_notify = SIGEV_SIGNAL;
+    ev.sigev_signo = SIGUSR1;
+    if (timer_create(CLOCK_PROCESS_CPUTIME_ID, &ev, &timer) != 0) {
+        return fail("timer_create on the process's clock of processor time");
+    }
+    do {
+        spin_user();
+        now = cpu_ns(CLOCK_PROCESS_CPUTIME_ID);
+    } while (now < 50000000LL);
+    at = now - 35000000LL;
+    set.it_value.tv_sec = (time_t)(at / 1000000000LL);
+    set.it_value.tv_nsec = (long)(at % 1000000000LL);
+    if (timer_settime(timer, TIMER_ABSTIME, &set, NULL) != 0) {
+        return fail("timer_settime of a time of processor time past");
+    }
+    /* interval: the process sleeps, so no tick charges it processor time */
+    nanosleep(&nap, NULL);
+    sigpending(&pending);
+    if (sigismember(&pending, SIGUSR1)) {
+        got = sigtimedwait(&one, &info, &zero);
+    }
+    after = cpu_ns(CLOCK_PROCESS_CPUTIME_ID);
+    if (timer_gettime(timer, &cur) != 0) {
+        return fail("timer_gettime of a timer set to a time past");
+    }
+    timer_delete(timer);
+    while (sigtimedwait(&one, &rest, &zero) == SIGUSR1) {
+    }
+    sigprocmask(SIG_SETMASK, &mask, NULL);
+    if (got != SIGUSR1) {
+        return fail("a timer of processor time set to a time past did not expire as the process "
+                    "slept");
+    }
+    if (info.si_code != SI_TIMER || info.si_overrun < (now - at) / 10000000LL ||
+        info.si_overrun > (after - at) / 10000000LL) {
+        return fail("the overrun of a timer set to a time past did not count its intervals since");
+    }
+    if (cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec <= 0 || cur.it_value.tv_nsec > 10000000) {
+        return fail("timer_gettime of a timer set to a time past reported more than its interval");
+    }
+    return 0;
+}
+
+/* The pipes `timer_thread` reports its timer on and waits on, and the timer
+ * it made, with whether it made one. */
+static int made_pipe[2], go_pipe[2];
+static timer_t made_timer;
+static int made_ok;
+
+/** Make a timer of SIGEV_NONE on this thread's clock of processor time,
+ * say so, and wait without running until told to end. */
+static void *timer_thread(void *arg)
+{
+    struct sigevent ev;
+    char c = 0;
+
+    (void)arg;
+    memset(&ev, 0, sizeof ev);
+    ev.sigev_notify = SIGEV_NONE;
+    made_ok = timer_create(CLOCK_THREAD_CPUTIME_ID, &ev, &made_timer) == 0;
+    if (write(made_pipe[1], &c, 1) != 1 || read(go_pipe[0], &c, 1) != 1) {
+        made_ok = 0;
+    }
+    return NULL;
+}
+
+/**
+ * Check that timer_settime of a timer on another thread's clock of
+ * processor time counts an absolute time from that thread's time, not the
+ * caller's, as Linux's posix_cpu_timer_set samples the timer's own task:
+ * with the caller past the time and the timer's thread, which only waits,
+ * short of it, timer_gettime reports what that thread has left. Returns 0,
+ * or 1 after the failure is printed.
+ */
+static int ptimer_other_thread(void)
+{
+    struct itimerspec set = {{0, 0}, {0, 0}}, cur;
+    pthread_t thread;
+    clockid_t clock;
+    long long mine, theirs, theirs_after, at, left;
+    char c = 0;
+    int bad;
+
+    if (pipe(made_pipe) != 0 || pipe(go_pipe) != 0) {
+        return fail("pipe for the timer's thread");
+    }
+    if (pthread_create(&thread, NULL, timer_thread, NULL) != 0) {
+        return fail("pthread_create of the timer's thread");
+    }
+    if (read(made_pipe[0], &c, 1) != 1 || !made_ok || pthread_getcpuclockid(thread, &clock) != 0) {
+        return fail("timer_create on another thread's clock of processor time");
+    }
+    do {
+        spin_user();
+        mine = cpu_ns(CLOCK_THREAD_CPUTIME_ID);
+    } while (mine < 100000000LL);
+    at = mine / 2;
+    theirs = cpu_ns(clock);
+    set.it_value.tv_sec = (time_t)(at / 1000000000LL);
+    set.it_value.tv_nsec = (long)(at % 1000000000LL);
+    bad = theirs < 0 || theirs >= at || timer_settime(made_timer, TIMER_ABSTIME, &set, NULL) != 0 ||
+          timer_gettime(made_timer, &cur) != 0;
+    theirs_after = cpu_ns(clock);
+    write(go_pipe[1], &c, 1);
+    pthread_join(thread, NULL);
+    timer_delete(made_timer);
+    close(made_pipe[0]);
+    close(made_pipe[1]);
+    close(go_pipe[0]);
+    close(go_pipe[1]);
+    if (bad) {
+        return fail("timer_settime of a time on another thread's clock of processor time");
+    }
+    left = (long long)cur.it_value.tv_sec * 1000000000LL + cur.it_value.tv_nsec;
+    if (left < at - theirs_after || left > at - theirs) {
+        return fail("timer_settime counted a time on another thread's clock from the caller's");
+    }
+    return 0;
+}
+
+/**
+ * The rows of a setting of a timer of processor time: ITIMER_PROF's and
+ * ITIMER_VIRTUAL's first expiry a tick later than asked (`itimer_first`),
+ * a POSIX timer set to a time past (`ptimer_past`), and one on another
+ * thread's clock (`ptimer_other_thread`). Returns 0, or 1 after the failure
+ * is printed.
+ */
+static int cpu_settings(void)
+{
+    struct timespec res;
+    long long tick;
+
+    if (clock_getres(CLOCK_PROCESS_CPUTIME_ID, &res) != 0 || res.tv_sec != 0 || res.tv_nsec <= 0) {
+        return fail("clock_getres of the process's clock of processor time");
+    }
+    tick = res.tv_nsec;
+    if (itimer_first(0, tick) != 0 || itimer_first(1, tick) != 0) {
+        return 1;
+    }
+    held();
+    if (ptimer_past() != 0) {
+        return 1;
+    }
+    held();
+    if (ptimer_other_thread() != 0) {
+        return 1;
+    }
+    held();
+    return 0;
+}
+
 /**
  * Check POSIX timers on the process's and the thread's clocks of processor
  * time: each posts its signal three times while the process spins for at
@@ -2382,7 +2654,7 @@ static int cpu_ptimers(void)
         return fail("the timers of processor time did not each post three signals");
     }
     held();
-    return 0;
+    return cpu_settings();
 }
 
 /**
@@ -2805,34 +3077,65 @@ static void plan_rows(const char *const *ids, unsigned n)
 #define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
 
 /* The rows checked after `adjtimex`, in their order. */
-static const char *const after_rows[] = {"clock-adjtime",        "listxattr",
-                                         "getxattr-absent",      "lsetxattr-enoent",
-                                         "readahead-fadvise",    "fadvise-espipe",
-                                         "noctty-session",       "maxrss-self",
-                                         "maxrss-child",         "udp-refused",
-                                         "setgid-file",          "setgid-dir",
-                                         "privacy-other-root",   "privacy-own-maps",
-                                         "privacy-kept-dirs",    "privacy-kept-opens",
-                                         "privacy-dumpable",     "privacy-kept-files",
-                                         "privacy-dev-list",     "privacy-kept-links",
-                                         "privacy-fchdir-owner", "privacy-fd-walk",
-                                         "privacy-link-walks",   "fd-size-reserved",
-                                         "timer-si-timer",       "timer-overrun",
-                                         "timer-delete",         "sigqueue",
-                                         "rt-sigqueueinfo",      "pty-nonblock-eagain",
-                                         "pty-writer-sleeps",    "pty-64k",
-                                         "pty-whole-lines",      "signalfd-eagain",
-                                         "signalfd-read",        "itimer-interval",
-                                         "itimer-signals",       "ptimer-gettime",
-                                         "ptimer-signals",       "devmem-low",
-                                         "devmem-ram-eperm",     "devmem-private-einval",
-                                         "devmem-apic",          "klog-size",
-                                         "klog-records",         "klog-clear",
-                                         "dev-log-link",         "rtc-alarm-range",
-                                         "rtc-aie-on-past",      "rtc-alarm-readback",
-                                         "rtc-alarm-invalid",    "rtc-read-af",
-                                         "rtc-wakealarm-empty",  "rtc-wakeup-enabled",
-                                         "power-state-mode",     "freeze-wakes",
+static const char *const after_rows[] = {"clock-adjtime",
+                                         "listxattr",
+                                         "getxattr-absent",
+                                         "lsetxattr-enoent",
+                                         "readahead-fadvise",
+                                         "fadvise-espipe",
+                                         "noctty-session",
+                                         "maxrss-self",
+                                         "maxrss-child",
+                                         "udp-refused",
+                                         "setgid-file",
+                                         "setgid-dir",
+                                         "privacy-other-root",
+                                         "privacy-own-maps",
+                                         "privacy-kept-dirs",
+                                         "privacy-kept-opens",
+                                         "privacy-dumpable",
+                                         "privacy-kept-files",
+                                         "privacy-dev-list",
+                                         "privacy-kept-links",
+                                         "privacy-fchdir-owner",
+                                         "privacy-fd-walk",
+                                         "privacy-link-walks",
+                                         "fd-size-reserved",
+                                         "timer-si-timer",
+                                         "timer-overrun",
+                                         "timer-delete",
+                                         "sigqueue",
+                                         "rt-sigqueueinfo",
+                                         "pty-nonblock-eagain",
+                                         "pty-writer-sleeps",
+                                         "pty-64k",
+                                         "pty-whole-lines",
+                                         "signalfd-eagain",
+                                         "signalfd-read",
+                                         "itimer-interval",
+                                         "itimer-signals",
+                                         "ptimer-gettime",
+                                         "ptimer-signals",
+                                         "itimer-first-tick",
+                                         "ptimer-past-due",
+                                         "ptimer-other-thread",
+                                         "devmem-low",
+                                         "devmem-ram-eperm",
+                                         "devmem-private-einval",
+                                         "devmem-apic",
+                                         "klog-size",
+                                         "klog-records",
+                                         "klog-clear",
+                                         "dev-log-link",
+                                         "rtc-alarm-range",
+                                         "rtc-aie-on-past",
+                                         "rtc-alarm-readback",
+                                         "rtc-alarm-invalid",
+                                         "rtc-read-af",
+                                         "rtc-wakealarm-empty",
+                                         "rtc-wakeup-enabled",
+                                         "power-state-mode",
+                                         "freeze-wakes",
                                          "freeze-holds"};
 
 /**
