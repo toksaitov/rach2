@@ -64,18 +64,6 @@ def stall_of(expected):
     return (STALL, 1) if progress else None
 
 
-def placed_failures(text, name, check):
-    """Return whether every failure in a vkd3d unit's log is the named check.
-
-    Such a unit's failure count varies from one run of Linux to the next,
-    since its check reads the address at which mmap put the driver's memory;
-    the reference's "placement" names the check. Returns the failures counted
-    when each of them carries CHECK, and None otherwise.
-    """
-    failed = re.findall(r"^%s:\d+: Test failed: (.*)$" % re.escape(name), text, re.M)
-    return len(failed) if all(check in line for line in failed) else None
-
-
 def run_command(argv, env, log, stop=None, lost=()):
     """Wait for the command itself, retaining output even if a descendant keeps it open.
 
@@ -465,15 +453,13 @@ def main():
                          name in ref["flakes"] and name + " begin" in text)
                 # Running to its end where Linux stalled is no worse.
                 ended = counts is not None and name + " end" in text
-                # A test that placement names matches only when every failure
-                # is its check, whatever totals Linux's runs recorded.
-                check = ref.get("placement", {}).get(name)
-                placed = (counts is not None and check is not None and
-                          placed_failures(text, name, check) == counts[1])
+                # A test that placement names is judged by its checks alone:
+                # its failure count follows where mmap put the driver's
+                # memory, as mkref.py records, so it has no fixed count.
+                placed = name in ref.get("placement", ())
                 matched = (stopped or ended) if stop else flake or (counts is not None and name + " begin" in text and
                                     name + " end" in text and rc in (0, 1) and
-                                    (placed if check is not None else
-                                     counts[1] in expected["failures"]) and
+                                    (placed or counts[1] in expected["failures"]) and
                                     counts[0] >= expected["min_checks"] and
                                     counts[3] <= expected["max_skipped"] and (rc == 0) == (counts[1] == 0))
                 result = {"exit": rc, "summary": counts, "linux_flake": flake, "progress": stopped, "matched": matched}

@@ -614,5 +614,5 @@
     "test_misaligned_root_desc_dxil": {"failures": [0], "min_checks": 417, "max_skipped": 0}
   },
   "flakes": ["test_raytracing_mismatch_global_rs_link", "test_fence_pending_signal_cpu_rewind_plain", "test_shader_eval_attribute_dxil", "test_scissor", "test_deferred_clears", "test_resolve_subresource_depth"],
-  "placement": {"test_suballocate_va_alignment": "Expected VA to be aligned"}
+  "placement": ["test_suballocate_va_alignment"]
 }

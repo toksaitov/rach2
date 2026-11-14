@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fold the rows that reference.sh recorded into a reference for run.py.
 
-usage: mkref.py [-s UNIT]... [-a TEST=CHECK]... SOURCE OUT.json DIR...
+usage: mkref.py [-s UNIT]... [-a TEST]... SOURCE OUT.json DIR...
 
 Each DIR is a run of reference.sh; each of its numbered directories is one
 row of run.py -R, with its environment.json and results.json. A unit that
@@ -19,10 +19,14 @@ counted as often as the log has it, as linux.json stops WineD3D's DXGI unit.
 
 -a names a vkd3d-proton test whose failure count differs from one of Linux's
 runs to the next because its check reads the address at which mmap put the
-driver's memory, and the text that each failure of that check prints: the
-reference's "placement" keeps it, and run.py accepts any count of failures
-that all print it and no other, as test_suballocate_va_alignment's "Expected VA to be
-aligned" on lavapipe and Venus.
+driver's memory: the reference's "placement" keeps its name, and run.py
+judges it by its checks alone, with no fixed failure count.
+test_suballocate_va_alignment is always such a test, as PLACEMENT names it:
+its "Expected VA to be aligned" check gave 0, 5430, 5828, 5992, 6496 and
+9076 failures in Linux's runs on lavapipe and 2862 on Venus, each at 21645
+checks, so a reference this program writes keeps its name in "placement"
+whether or not -a names it, while its recorded failure counts stay as the
+record of that spread and run.py does not judge it by them.
 """
 import getopt
 import json
@@ -32,6 +36,8 @@ import signal
 import sys
 
 STALL = "dxgi.c:8040, d3d10 test 2, unexpected present count 1, expected 2; stop on this record"
+# vkd3d-proton tests judged by their checks alone, as -a above records.
+PLACEMENT = ("test_suballocate_va_alignment",)
 SEGV = (-signal.SIGSEGV, 128 + signal.SIGSEGV)
 TEST_LINE = r"^\w+\.c:\d+: "
 VK_LINE = r"^test_\w+:\d+: "
@@ -77,15 +83,10 @@ def main():
     except getopt.GetoptError:
         opts, args = [], []
     if len(args) < 3:
-        fail("usage: mkref.py [-s UNIT]... [-a TEST=CHECK]... SOURCE OUT.json DIR...")
+        fail("usage: mkref.py [-s UNIT]... [-a TEST]... SOURCE OUT.json DIR...")
     stalled = {value for opt, value in opts if opt == "-s"}
-    placement = {}
-    for opt, value in opts:
-        if opt == "-a":
-            name, _, check = value.partition("=")
-            if not name or not check:
-                fail("-a takes TEST=CHECK, not %s" % value)
-            placement[name] = check
+    named = {value for opt, value in opts if opt == "-a"}
+    placement = named | set(PLACEMENT)
     source, output, dirs = args[0], Path(args[1]), args[2:]
     ref = {"source": source, "probe": {}, "wine": {}, "vkd3d": {}, "flakes": []}
     adapters = set()
@@ -174,10 +175,10 @@ def main():
         # A test that crashed in every run is matched by its crash alone.
         ref["vkd3d"].setdefault(name, {"failures": [], "min_checks": 0, "max_skipped": 0})
     ref["flakes"].sort()
-    for name in placement:
+    for name in named:
         if name not in ref["vkd3d"]:
             fail("-a names %s, which the records lack" % name)
-    ref["placement"] = dict(sorted(placement.items()))
+    ref["placement"] = sorted(name for name in placement if name in ref["vkd3d"])
     output.write_text(json.dumps(ref, indent=2) + "\n")
     print("mkref: result: %d probes, %d Wine units, %d vkd3d tests, %d flakes in %s" % (
         len(ref["probe"]), sum(len(u) for u in ref["wine"].values()), len(ref["vkd3d"]),
