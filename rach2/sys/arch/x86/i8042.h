@@ -66,10 +66,15 @@ int ps2_wait_output(void);
 int ps2_send_command(uint8_t cmd);
 
 /**
- * Read the controller's configuration byte, the bytes waiting in its output
- * buffer drained first, at most 16 of them, so that none is taken for it.
- * Returns the byte, or -1 when no controller answers or the read times out.
- * The caller keeps interrupts off, so that no handler takes the byte.
+ * Read the controller's configuration byte as Linux's i8042_controller_init
+ * reads it: the bytes waiting in the output buffer drained first, at most 16
+ * of them, then READ_CONFIG until two reads in a row agree, 50 us apart and
+ * at most 10 reads. A key or mouse byte that arrives after the drain answers
+ * one read and leaves the controller's byte for the next, so those two
+ * reads disagree and the reads go on.
+ * Returns the byte, or -1 when no controller answers, a read times out or
+ * no two reads agree. The caller keeps interrupts off, so that no handler
+ * takes the byte.
  */
 int ps2_read_config(void);
 

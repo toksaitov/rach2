@@ -10,7 +10,12 @@
 #include "../../lib/kstring.h"
 #ifndef RACH2_HOSTTEST
 #include "../../timer.h"
+#include "../../udelay.h"
 #endif
+
+/* The most reads of the configuration byte that may pass before two in a
+ * row agree, Linux's in i8042_controller_init. */
+#define PS2_CONFIG_READS 10
 
 uint32_t ps2_wait_begin(void)
 {
@@ -68,9 +73,21 @@ int ps2_send_command(uint8_t cmd)
     return 0;
 }
 
+/** Send READ_CONFIG and return the next byte of the output buffer, of
+ * whichever device, or -1 when the controller does not take the command or
+ * gives no byte. */
+static int read_config_once(void)
+{
+    if (ps2_send_command(PS2_CMD_READ_CONFIG) < 0 || ps2_wait_output() < 0) {
+        return -1;
+    }
+    return inb(PS2_DATA_PORT);
+}
+
 int ps2_read_config(void)
 {
-    int drained;
+    int config[2];
+    int drained, n;
 
     if (inb(PS2_STATUS_PORT) == 0xFF) {
         return -1;
@@ -79,10 +96,22 @@ int ps2_read_config(void)
          drained++) {
         inb(PS2_DATA_PORT);
     }
-    if (ps2_send_command(PS2_CMD_READ_CONFIG) < 0 || ps2_wait_output() < 0) {
-        return -1;
-    }
-    return inb(PS2_DATA_PORT);
+    n = 0;
+    do {
+        if (n >= PS2_CONFIG_READS) {
+            return -1;
+        }
+#ifndef RACH2_HOSTTEST
+        if (n != 0) {
+            k_udelay(50);
+        }
+#endif
+        config[n % 2] = read_config_once();
+        if (config[n++ % 2] < 0) {
+            return -1;
+        }
+    } while (n < 2 || config[0] != config[1]);
+    return config[0];
 }
 
 int ps2_kbd_write(uint8_t byte)
