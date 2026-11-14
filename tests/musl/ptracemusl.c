@@ -80,9 +80,16 @@
  * and uid or a band and a descriptor, and the bound, protection key, MCE and
  * perf fault layouts keep their fields, as they do through
  * PTRACE_SETSIGINFO and PTRACE_GETSIGINFO, which also gives back the
- * si_signo it was given. The waits of these rows end on the stop or
- * state they wait for, with no limit of their own, so a loaded host never
- * fails one and a stop that never comes holds it to the case's bound.
+ * si_signo it was given. SI_KERNEL and SI_TKILL may be queued only to the
+ * calling thread: a second thread is refused with EPERM toward the leading
+ * one by rt_sigqueueinfo, rt_tgsigqueueinfo and pidfd_send_signal, and so
+ * is rt_sigqueueinfo to pid -1. A native program's siginfo whose code has
+ * a layout Linux does not know and a byte past the kept union is refused
+ * with E2BIG by both queueing calls and by PTRACE_SETSIGINFO, before the
+ * latter's EINVAL at a stop without a siginfo. The waits of these rows end
+ * on the stop or state they wait for, with no limit of their own, so a
+ * loaded host never fails one and a stop that never comes holds it to the
+ * case's bound.
  *
  * The program takes no positional argument and runs every row. It prints
  * "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
@@ -130,11 +137,13 @@
  * `thread-group-event-siginfo`, `thread-resumed-interrupt`,
  * `thread-detach-stays-stopped`, `thread-detach-runs-on`,
  * `attach-group-stop-noinfo`, `attach-group-setsiginfo-efault`,
- * `queued-kernel-siginfo`, `queued-signo-replaced`,
- * `queued-fallback-layouts`, `queued-fault-payloads`,
- * `setsiginfo-fault-payloads`, `setsiginfo-signo-kept`, `tp-set-readback` and
- * `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`,
- * `setoptions-wide-einval`, `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
+ * `attach-group-setsiginfo-e2big`, `queued-kernel-siginfo`,
+ * `queued-signo-replaced`, `queued-fallback-layouts`,
+ * `queued-fault-payloads`, `setsiginfo-fault-payloads`,
+ * `setsiginfo-signo-kept`, `queued-code-own-thread`,
+ * `queued-unknown-extension`, `tp-set-readback` and `tp-tracee-runs`.
+ * x86-64 adds `dr7-bit32-einval`, `setoptions-wide-einval`,
+ * `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
  * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
  * `tp-arch-set-eperm`, `tp-pokeuser-eio`, `tp-setregs-eio`, `tp-setregset-eio`
  * and `tp-refused-kept`; i386 adds `tp-get-thread-area`, `tp-entries-unused`,
@@ -2292,14 +2301,21 @@ static int thread_detach_stop(void)
     return 0;
 }
 
+/* A byte of a siginfo_t past the union the kernel keeps on either ABI, 48
+ * bytes on x86-64 and 32 on i386. */
+#define SI_EXPANSION 64
+
 /**
  * Check that a group stop of a thread attached with PTRACE_ATTACH has no
  * siginfo, as Linux's do_jobctl_trap gives ptrace_stop none, so that
  * PTRACE_GETSIGINFO fails there with EINVAL, while the SIGSTOP's delivery
  * stop before it has SIGSTOP's; and that PTRACE_SETSIGINFO there fails with
  * EFAULT for a buffer it cannot read, which Linux copies before it looks
- * for a siginfo to replace, and with EINVAL for one it can. No wait has a
- * limit of its own. The child is killed either way. Returns 0, or 1 after
+ * for a siginfo to replace, and with EINVAL for one it can, but with E2BIG
+ * from a native tracer for a code whose layout Linux does not know with a
+ * byte past the kept union, which Linux's copy_siginfo_from_user refuses
+ * first; an i386 tracer's compat reader refuses nothing, so EINVAL. No wait
+ * has a limit of its own. The child is killed either way. Returns 0, or 1 after
  * the failure is printed.
  */
 static int attach_group_noinfo(void)
@@ -2340,6 +2356,19 @@ static int attach_group_noinfo(void)
                 "not fail with EFAULT") ||
         granted(c, ptrace(PTRACE_SETSIGINFO, c, NULL, &info) != -1 || errno != EINVAL,
                 "PTRACE_SETSIGINFO at a group stop not seized did not fail with EINVAL") ||
+        passed()) {
+        munmap(none, 4096);
+        return 1;
+    }
+    memset(&info, 0, sizeof(info));
+    info.si_signo = SIGTRAP;
+    info.si_code = 7;
+    ((unsigned char *)&info)[SI_EXPANSION] = 1;
+    if (granted(c,
+                ptrace(PTRACE_SETSIGINFO, c, NULL, &info) != -1 ||
+                    errno != (on_compat() ? EINVAL : E2BIG),
+                "PTRACE_SETSIGINFO of SIGTRAP code 7 with a byte past its union at a group stop "
+                "not seized did not fail with E2BIG, or EINVAL for an i386 tracer") ||
         passed()) {
         munmap(none, 4096);
         return 1;
@@ -2753,6 +2782,165 @@ static int setsiginfo_payloads(void)
         granted(c, ptrace(PTRACE_CONT, c, NULL, NULL), "PTRACE_CONT from SIGTRAP") ||
         granted(c, !exits_zero(c), "the child did not exit 0 after its stops")) {
         return 1;
+    }
+    held();
+    return 0;
+}
+
+/* pidfd_open and pidfd_send_signal, the same on i386 and x86-64, which an
+ * older musl may not name. */
+#ifndef SYS_pidfd_send_signal
+#define SYS_pidfd_send_signal 424
+#endif
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
+
+/* The second thread of `queued_own_thread`: the pidfd of this process, and
+ * what failed, or NULL. */
+struct sibling_queue {
+    int pidfd;
+    const char *failed;
+};
+
+/**
+ * The second thread of `queued_own_thread`, with SIGUSR2 blocked: queue
+ * SIGUSR2 with SI_KERNEL to the thread that leads the process, by
+ * rt_sigqueueinfo, rt_tgsigqueueinfo and pidfd_send_signal, and with
+ * SI_TKILL by rt_tgsigqueueinfo, each of which must fail with EPERM; then
+ * with SI_KERNEL to itself by rt_tgsigqueueinfo, which must post it, and
+ * take it back with sigwaitinfo.
+ */
+static void *sibling_queue(void *arg)
+{
+    struct sibling_queue *q = arg;
+    long pid = getpid();
+    siginfo_t si, got;
+    sigset_t set;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR2);
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGUSR2;
+    si.si_code = SI_KERNEL;
+    if (syscall(SYS_rt_sigqueueinfo, pid, (long)SIGUSR2, &si) != -1 || errno != EPERM) {
+        q->failed = "rt_sigqueueinfo of SI_KERNEL to the leading thread was not EPERM";
+        return NULL;
+    }
+    if (syscall(SYS_rt_tgsigqueueinfo, pid, pid, (long)SIGUSR2, &si) != -1 || errno != EPERM) {
+        q->failed = "rt_tgsigqueueinfo of SI_KERNEL to the leading thread was not EPERM";
+        return NULL;
+    }
+    if (syscall(SYS_pidfd_send_signal, (long)q->pidfd, (long)SIGUSR2, &si, 0L) != -1 ||
+        errno != EPERM) {
+        q->failed = "pidfd_send_signal of SI_KERNEL from a thread not leading was not EPERM";
+        return NULL;
+    }
+    si.si_code = SI_TKILL;
+    if (syscall(SYS_rt_tgsigqueueinfo, pid, pid, (long)SIGUSR2, &si) != -1 || errno != EPERM) {
+        q->failed = "rt_tgsigqueueinfo of SI_TKILL to the leading thread was not EPERM";
+        return NULL;
+    }
+    si.si_code = SI_KERNEL;
+    if (syscall(SYS_rt_tgsigqueueinfo, pid, syscall(SYS_gettid), (long)SIGUSR2, &si) != 0 ||
+        sigwaitinfo(&set, &got) != SIGUSR2 || got.si_code != SI_KERNEL) {
+        q->failed = "rt_tgsigqueueinfo of SI_KERNEL to the calling thread was not taken";
+    }
+    return NULL;
+}
+
+/**
+ * Check that a siginfo code only the kernel or tkill gives, SI_KERNEL or
+ * SI_TKILL, may be queued only to the calling thread, as Linux's
+ * do_rt_sigqueueinfo, do_rt_tgsigqueueinfo and pidfd_send_signal allow it:
+ * a second thread of this process is refused with EPERM toward the leading
+ * thread by each call (`sibling_queue`) and may send one to itself; the
+ * leading thread may send SI_KERNEL through its own pidfd; and
+ * rt_sigqueueinfo of SI_KERNEL to pid -1, which no thread has, is EPERM,
+ * since Linux compares the pid with the caller's before it looks for one.
+ * SIGUSR2 is blocked throughout, and whatever a faulty kernel posts is
+ * taken before it is unblocked. Returns 0, or 1 after the failure is
+ * printed.
+ */
+static int queued_own_thread(void)
+{
+    struct sibling_queue q;
+    const char *failed = NULL;
+    siginfo_t si, got;
+    sigset_t set, old, pending;
+    pthread_t th;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR2);
+    if (sigprocmask(SIG_BLOCK, &set, &old) != 0) {
+        return fail("blocking SIGUSR2");
+    }
+    q.pidfd = (int)syscall(SYS_pidfd_open, (long)getpid(), 0L);
+    q.failed = NULL;
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGUSR2;
+    si.si_code = SI_KERNEL;
+    if (q.pidfd < 0) {
+        failed = "pidfd_open of this process";
+    } else if (pthread_create(&th, NULL, sibling_queue, &q) != 0 || pthread_join(th, NULL) != 0) {
+        failed = "a second thread to queue from";
+    } else if (q.failed) {
+        failed = q.failed;
+    } else if (syscall(SYS_pidfd_send_signal, (long)q.pidfd, (long)SIGUSR2, &si, 0L) != 0 ||
+               sigwaitinfo(&set, &got) != SIGUSR2 || got.si_code != SI_KERNEL) {
+        failed = "pidfd_send_signal of SI_KERNEL from the leading thread was not taken";
+    } else if (syscall(SYS_rt_sigqueueinfo, -1L, (long)SIGUSR2, &si) != -1 || errno != EPERM) {
+        failed = "rt_sigqueueinfo of SI_KERNEL to pid -1 was not EPERM";
+    }
+    while (sigpending(&pending) == 0 && sigismember(&pending, SIGUSR2)) {
+        sigwaitinfo(&set, &got);
+    }
+    if (q.pidfd >= 0) {
+        close(q.pidfd);
+    }
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    if (failed) {
+        return fail(failed);
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check that a SIGTRAP with code 7, whose layout Linux does not know, and
+ * a byte past the kept union that is not zero is refused with E2BIG by
+ * rt_sigqueueinfo and rt_tgsigqueueinfo from a native program, as Linux's
+ * post_copy_siginfo_from_user refuses it, and taken from an i386 one on
+ * x86-64, whose compat reader keeps only the layout's fields; and that the
+ * same byte beside SI_QUEUE, a layout Linux knows, is taken by either ABI.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int queued_unknown_extension(void)
+{
+    char why[160];
+    siginfo_t si, got;
+    int thread, rc;
+
+    for (thread = 0; thread < 2; thread++) {
+        memset(&si, 0, sizeof(si));
+        si.si_signo = SIGTRAP;
+        si.si_code = 7;
+        si.si_pid = getpid();
+        si.si_uid = getuid();
+        ((unsigned char *)&si)[SI_EXPANSION] = 1;
+        errno = 0;
+        rc = queue_and_take(SIGTRAP, &si, thread, &got, NULL);
+        if (on_compat() ? rc != 0 || got.si_code != 7 : rc != -1 || errno != E2BIG) {
+            snprintf(why, sizeof(why), "%s of SIGTRAP code 7 with a byte past its union gave %d",
+                     thread ? "rt_tgsigqueueinfo" : "rt_sigqueueinfo", rc);
+            return fail(why);
+        }
+        si.si_code = SI_QUEUE;
+        if (queue_and_take(SIGTRAP, &si, thread, &got, NULL) != 0 || got.si_code != SI_QUEUE) {
+            snprintf(why, sizeof(why), "%s of SIGTRAP SI_QUEUE with a byte past its union",
+                     thread ? "rt_tgsigqueueinfo" : "rt_sigqueueinfo");
+            return fail(why);
+        }
     }
     held();
     return 0;
@@ -3319,7 +3507,7 @@ static int second_rows(void)
            tracer_gone_stop() || sigcont_detach() || thread_detach_stop() ||
            attach_group_noinfo() || queued_kernel_info() || queued_signo_replaced() ||
            queued_fallback_layouts() || queued_fault_payloads() || setsiginfo_payloads() ||
-           thread_pointer();
+           queued_own_thread() || queued_unknown_extension() || thread_pointer();
 }
 
 /* The assertions after `ended-mem-freed`, in the order they are checked. */
@@ -3426,12 +3614,15 @@ static const char *const later_rows[] = {
     "thread-detach-runs-on",
     "attach-group-stop-noinfo",
     "attach-group-setsiginfo-efault",
+    "attach-group-setsiginfo-e2big",
     "queued-kernel-siginfo",
     "queued-signo-replaced",
     "queued-fallback-layouts",
     "queued-fault-payloads",
     "setsiginfo-fault-payloads",
     "setsiginfo-signo-kept",
+    "queued-code-own-thread",
+    "queued-unknown-extension",
 #if defined __x86_64__
     "tp-arch-get-fs",
     "tp-peekuser-fs",
