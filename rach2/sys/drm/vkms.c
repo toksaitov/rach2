@@ -307,12 +307,31 @@ static void apply_lut(uint16_t *out, uint32_t w, const struct drm_color_lut *lut
     }
 }
 
+#ifndef RACH2_HOSTTEST
+/** Give way between two rows of a frame: the big lock to a processor that
+ * waits for it and this processor to a thread queued on it. */
+static void compose_give_way(void)
+{
+    sched_service_point();
+}
+#else
+/** The host tests have no big lock and no other thread. */
+static void compose_give_way(void)
+{}
+#endif
+
 /**
  * Compose the scene `s` row by row into Linux's pixel_argb_u16 on an opaque
  * black background, each plane blended over those below as premultiplied,
  * the gamma table applied, and return the CRC of the rows in `*crc`, as
  * Linux 6.12's blend and compose_active_planes do. 0, or -ENOMEM. May
  * sleep.
+ *
+ * A frame of 1024x768 takes some 14 ms, and in a guest more than a frame of
+ * 60 Hz, so a composer that kept the big lock for a whole frame would keep
+ * every ioctl of vkms, a legacy cursor move among them, waiting for one.
+ * Linux composes under no global lock; this composer gives way after each
+ * row, and what it reads stays held by `s`.
  */
 static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
 {
@@ -348,6 +367,9 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
     crc_init();
     *crc = 0;
     for (ry = 0; ry < s->height; ry++) {
+        if (ry > 0) {
+            compose_give_way();
+        }
         for (col = 0; col < w; col++) {
             out[4u * col] = 0xffffu;
             out[4u * col + 1u] = out[4u * col + 2u] = out[4u * col + 3u] = 0;
@@ -455,8 +477,9 @@ static int composer_ready(void *arg)
  * `setup_process_stack` sets), since a frame's last put of a framebuffer may
  * free an imported buffer through its exporter, virtio-gpu's among them; it
  * gives way where it sleeps and between frames, as Linux's vkms_composer_worker
- * runs on a workqueue whose kworker gives way only between works
- * (kernel/workqueue.c:3298-3299 in 6.12.115). */
+ * runs on a workqueue whose kworker gives way between works
+ * (kernel/workqueue.c:3298-3299 in 6.12.115), and between the rows of a frame
+ * (`vkms_compose`), since Linux's composer holds no global lock. */
 static void composer_main(void)
 {
     struct vkms_device *v = vkms_dev;
