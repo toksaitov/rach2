@@ -16,7 +16,7 @@ struct ktimex;
  * The time the kernel keeps and the calendar arithmetic are clock.c's. The
  * platform's clock driver defines the reading, the setting and the alarm
  * (arch/x86/cmos.c, the PC's MC146818 CMOS clock) and sets the anchor
- * through `rtc_anchor`.
+ * through `rtc_anchor` or `rtc_anchor_now`.
  */
 
 /* A time in calendar fields, in UTC: the full year, the month from 1 to 12,
@@ -36,6 +36,13 @@ int32_t rtc_days_in_month(int32_t year, int32_t month);
 /** Anchor real time: the clock read `seconds` since the epoch at uptime
  * second `uptime`. The platform's `rtc_init` calls it once. */
 void rtc_anchor(int64_t seconds, uint32_t uptime);
+
+/** Anchor real time whole: it is `seconds` since the epoch and
+ * `nanoseconds`, under a second, now, for a clock that states the fraction
+ * of its second, as KVM's wall clock does. The platform's `rtc_init` calls
+ * it once in `rtc_anchor`'s place, with interrupts off, right after it
+ * read the clock. */
+void rtc_anchor_now(int64_t seconds, uint32_t nanoseconds);
 
 /** Take the clock's alarm interrupt with `handler`, and route it to the
  * processor. */

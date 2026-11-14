@@ -4,7 +4,8 @@
  * (ntp.c), whose ticks are the kernel's tick count; and real time, the
  * monotonic clock plus an offset from one reading of the machine's clock at
  * boot (the anchor, which the platform's clock driver sets through
- * `rtc_anchor`), which only a setting or a leap second moves; with the
+ * `rtc_anchor` or `rtc_anchor_now`), which only a setting or a leap second
+ * moves; with the
  * calendar arithmetic the clock drivers and the clock calls share, and the
  * sequence count by which another processor reads the tick whole.
  */
@@ -577,6 +578,28 @@ static void rtc_mono_held(int64_t *seconds, int64_t *nanoseconds)
     spin_lock(&rtc_mono_lock);
     rtc_floor(seconds, nanoseconds, &rtc_mono_seconds, &rtc_mono_nanoseconds);
     spin_unlock(&rtc_mono_lock);
+}
+
+/**
+ * The offset becomes the time given less the monotonic clock now, read to
+ * its place within the tick, so that real time keeps the fraction of the
+ * second its source stated, as Linux at boot takes its persistent clock's
+ * nanoseconds less the time since boot
+ * (read_persistent_wall_and_boot_offset, kernel/time/timekeeping.c).
+ */
+void rtc_anchor_now(int64_t seconds, uint32_t nanoseconds)
+{
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
+    int64_t msec, mnsec;
+    int32_t ns, wall_nsec;
+
+    rtc_mono_held(&msec, &mnsec);
+    rtc_normalize(msec, mnsec, &msec, &ns);
+    rtc_normalize(seconds - msec, (int64_t)nanoseconds - ns, &rtc_wall_sec, &wall_nsec);
+    rtc_wall_nsec = wall_nsec;
+    rtc_anchored = 1;
+    vclock_set_wall(rtc_wall_sec, rtc_wall_nsec);
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
 /** Real time at the monotonic time `msec` and `mnsec`, whose nanoseconds

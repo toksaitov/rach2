@@ -778,9 +778,10 @@ static void anchor_rows(void)
 /**
  * The boot anchors real time to KVM's wall clock where KVM states one, and
  * chooses no register of the CMOS clock, each read of which is an exit
- * under KVM. 1790000000 is 2026-09-21 13:46:40 UTC. Uptime is 9 s when the
- * boot reads it, so real time 3 s later is 3 s past it. The anchor is then
- * taken back, for the rows after.
+ * under KVM. 1790000000 is 2026-09-21 13:46:40 UTC, and KVM states 0.8 s
+ * past it. The boot reads it 41 us into its tenth second, so real time 3 s
+ * later is 3 s past KVM's time with KVM's fraction, and not the uptime's.
+ * The offset is then put back to nothing, for the rows after.
  */
 static void kvm_wall_rows(void)
 {
@@ -790,18 +791,21 @@ static void kvm_wall_rows(void)
     cmos_index = 0x7F;
     kvm_wall_on = 1;
     kvm_wall_sec = 1790000000LL;
-    kvm_wall_nsec = 5u;
+    kvm_wall_nsec = 800000000u;
     kernel_uptime_seconds = 9;
     kernel_second_ticks = 0;
     count = pit_reload - 100u;
     status = 0x80;
     rtc_init();
     CHECK(cmos_index == 0x7F);
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 1790000000LL && ns == 800000000);
     kernel_uptime_seconds = 12;
     rtc_realtime(&sec, &ns);
-    CHECK(sec == 1790000003LL && ns == 41000);
+    CHECK(sec == 1790000003LL && ns == 800000000);
     kvm_wall_on = 0;
-    rtc_anchor(9 - 1790000000LL, 0u);
+    rtc_monotonic(&sec, &ns);
+    rtc_anchor_now(sec, (uint32_t)ns);
     rtc_forget_floors();
     rtc_realtime(&sec, &ns);
     CHECK(sec == 12 && ns == 41000);

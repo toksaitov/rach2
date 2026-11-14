@@ -6,6 +6,7 @@
 
 #include "portio.h"
 #include "../../klog.h"
+#include "../../lib/kirq.h"
 #include "cmos.h"
 #include "kvmclock.h"
 
@@ -333,7 +334,9 @@ static void rtc_log_time(const rtc_time_t *when)
  * as Linux under KVM reads its boot time from kvm-clock and not from the
  * CMOS clock (kvm_get_wallclock, arch/x86/kernel/kvmclock.c), each read
  * of which is an exit; the CMOS clock is still the one /dev/rtc reads and
- * sets.
+ * sets. KVM's time comes with its nanoseconds, and real time takes them
+ * (`rtc_anchor_now`), read and anchored with interrupts off, so that no
+ * tick comes between the two, where the CMOS clock gives whole seconds.
  *
  * The clock is sampled twice and the pair used only when the two agree,
  * because the registers advance while they are read: a sample that
@@ -354,12 +357,17 @@ void rtc_init(void)
     rtc_snapshot_t second;
     rtc_time_t when;
     int64_t seconds = 0;
-    uint32_t uptime, nsec;
-    int disposition;
+    uint32_t uptime, nsec, flags;
+    int disposition, kvm;
     int try;
 
-    if (kvmclock_wallclock(&seconds, &nsec) && rtc_time_of_seconds(seconds, &when) == 0) {
-        rtc_anchor(seconds, kernel_uptime_seconds);
+    flags = kirq_save();
+    kvm = kvmclock_wallclock(&seconds, &nsec) && rtc_time_of_seconds(seconds, &when) == 0;
+    if (kvm) {
+        rtc_anchor_now(seconds, nsec);
+    }
+    kirq_restore(flags);
+    if (kvm) {
         rtc_log_time(&when);
         return;
     }
