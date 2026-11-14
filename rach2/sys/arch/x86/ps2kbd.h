@@ -29,7 +29,8 @@ void kbd_init(void);
  * `kbd_init` bound one, and stop the LED command, the probe and the
  * handler, so that nothing more is written to the controller, as Linux's
  * i8042_probe, failing, registers no port. Called from `kbd_init`, and from
- * `platform_mouse_init` when the mouse's setup failed the controller.
+ * `init_mouse`, with interrupts off, when the mouse's setup failed the
+ * controller.
  */
 void kbd_stop(void);
 

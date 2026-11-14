@@ -534,9 +534,7 @@ void platform_mouse_init(void)
         input_mouse_found();
         ps2_waiting(IRQ_VECTOR(12), 1);
         klog(KLOG_DEBUG, "mouse", "ready");
-    } else if (i8042_failed()) {
-        kbd_stop();
-    } else {
+    } else if (!i8042_failed()) {
         klog(KLOG_WARN, "mouse", "absent: nothing answered the probe");
     }
 }

@@ -45,6 +45,7 @@
 #include "i8042.h"
 #include "portio.h"
 #include "elantech.h"
+#include "ps2kbd.h"
 #include "ps2mouse.h"
 #include "alps.h"
 #include "synaptics.h"
@@ -1700,6 +1701,22 @@ static void connect_device(void)
 }
 
 /**
+ * Fail the controller's setup (`i8042_fail`) at the mouse's bring-up and
+ * give up the keyboard (`kbd_stop`) while interrupts are still off, then
+ * turn them on again and return -1. Stopped first, neither IRQ 1's handler
+ * nor the LED tick can run in between: the tick's 0xED would become the
+ * configuration byte of a WRITE_CONFIG the controller took late, and a late
+ * READ_CONFIG's answer would reach the key decoder.
+ */
+static int fail_controller(void)
+{
+    i8042_fail();
+    kbd_stop();
+    arch_irq_enable();
+    return -1;
+}
+
+/**
  * Interrupts are off so that the handshake's bytes are not taken by a stray
  * IRQ 12. The output buffer is drained first of what the firmware left in
  * it, at most PS2_DRAIN_LIMIT bytes: the buffer is one byte deep and a
@@ -1709,8 +1726,8 @@ static void connect_device(void)
  * to read. A failed reset is tolerated because some emulators do not answer
  * it, and so is a refused default; a failed port enable, configuration byte
  * or reporting enable fails the bring-up. A timeout of the configuration
- * byte's read or write fails the controller's setup too (`i8042_fail`), as
- * Linux's i8042_probe fails when i8042_enable_aux_port cannot write the
+ * byte's read or write fails the controller's setup too (`fail_controller`),
+ * as Linux's i8042_probe fails when i8042_enable_aux_port cannot write the
  * CTR: a READ_CONFIG or WRITE_CONFIG the controller takes late would answer
  * IRQ 1 or take the next byte written for its configuration.
  */
@@ -1742,15 +1759,11 @@ int init_mouse(void)
 
     if (ps2_send_command(PS2_CMD_READ_CONFIG) < 0) {
         klog(KLOG_WARN, "mouse", "the configuration byte would not read");
-        i8042_fail();
-        arch_irq_enable();
-        return -1;
+        return fail_controller();
     }
     if (ps2_wait_output() < 0) {
         klog(KLOG_WARN, "mouse", "reading the configuration byte timed out");
-        i8042_fail();
-        arch_irq_enable();
-        return -1;
+        return fail_controller();
     }
     config = inb(PS2_DATA_PORT);
 
@@ -1759,9 +1772,7 @@ int init_mouse(void)
 
     if (ps2_write_config(config) < 0) {
         klog(KLOG_WARN, "mouse", "the configuration byte would not write");
-        i8042_fail();
-        arch_irq_enable();
-        return -1;
+        return fail_controller();
     }
 
     evdev_sysfs_serio_driver(1, aux_files);

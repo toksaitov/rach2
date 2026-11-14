@@ -626,6 +626,10 @@ void arch_irq_enable(void)
     irq_on = 1;
 }
 
+/** The keyboard, which a failed controller gives up; no row here has one. */
+void kbd_stop(void)
+{}
+
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     (void)vector;

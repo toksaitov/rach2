@@ -539,6 +539,10 @@ void arch_irq_disable(void)
 void arch_irq_enable(void)
 {}
 
+/** The keyboard, which a failed controller gives up; no row here has one. */
+void kbd_stop(void)
+{}
+
 uint32_t kirq_save(void)
 {
     return 0;

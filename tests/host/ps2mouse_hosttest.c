@@ -25,8 +25,11 @@
  * rates 200, 100 and 80, and an Explorer ID 4 after 200, 200 and 80, until
  * it is reset. A row can make the mouse lose its answer to one
  * command, or ask once for that command again with 0xFE, and can make the
- * controller lose the configuration byte, keep its input buffer full or keep
- * its output buffer full for good. The rows of the bring-up check the
+ * controller lose the configuration byte, keep its input buffer full, keep
+ * it full from a WRITE_CONFIG on, or keep its output buffer full for good;
+ * a row can have the controller answer late, as interrupts come on again,
+ * when the keyboard's IRQ 1 and LED tick run unless `kbd_stop` stopped the
+ * keyboard first. The rows of the bring-up check the
  * writes in order, the state the controller and the mouse are left in, the
  * protocol found and the event device registered for it, the vector of the
  * handler, and that interrupts are off for every port access and on again
@@ -87,7 +90,16 @@ static uint8_t ctl_config;
 static uint8_t ctl_next;
 static int ctl_loses_config;
 static int ctl_input_stuck;
+static int ctl_stalls_write_config;
 static int ctl_output_stuck;
+
+/* The keyboard on the controller's first port: whether `kbd_stop` stopped
+ * it and whether interrupts were on then, and whether the controller
+ * answers late and the keyboard wakes as interrupts come on again
+ * (`keyboard_wakes`). */
+static int kbd_stopped;
+static int kbd_stopped_with_irq_on;
+static int kbd_wakes;
 
 /* The mouse: whether one is there, a command it never answers and one it
  * first answers with MOUSE_RESEND (-1 for none), and whether it reports. */
@@ -167,7 +179,11 @@ static void model_reset(void)
     ctl_next = 0;
     ctl_loses_config = 0;
     ctl_input_stuck = 0;
+    ctl_stalls_write_config = 0;
     ctl_output_stuck = 0;
+    kbd_stopped = 0;
+    kbd_stopped_with_irq_on = 0;
+    kbd_wakes = 0;
     mouse_present = 0;
     mouse_silent_to = -1;
     mouse_resend_to = -1;
@@ -312,6 +328,9 @@ void outb(uint16_t port, uint8_t val)
             }
         } else if (val == PS2_CMD_WRITE_CONFIG || val == PS2_CMD_WRITE_MOUSE) {
             ctl_next = val;
+            if (val == PS2_CMD_WRITE_CONFIG && ctl_stalls_write_config) {
+                ctl_input_stuck = 1;
+            }
         }
     } else if (port == PS2_DATA_PORT) {
         ctl_next = 0;
@@ -328,9 +347,43 @@ void arch_irq_disable(void)
     irq_on = 0;
 }
 
+/**
+ * The controller answers late, as interrupts come on again: the input
+ * buffer it kept full empties, with a WRITE_CONFIG still taking the next
+ * byte, and the configuration byte it lost arrives. Then IRQ 1 and the LED
+ * tick run, unless `kbd_stop` has stopped the keyboard, as kbd_irq checks
+ * kbd.off and ps2kbd_tick leds.ready: the handler reads the keyboard's byte
+ * waiting, and the tick writes the LED command, 0xED.
+ */
+static void keyboard_wakes(void)
+{
+    if (ctl_loses_config) {
+        ctl_loses_config = 0;
+        model_put(KEYBOARD_BYTE, ctl_config);
+    }
+    ctl_input_stuck = 0;
+    if (kbd_stopped) {
+        return;
+    }
+    if (model_count > 0 && model_status[model_head] == KEYBOARD_BYTE) {
+        (void)inb(PS2_DATA_PORT);
+    }
+    outb(PS2_DATA_PORT, 0xED);
+}
+
 void arch_irq_enable(void)
 {
     irq_on = 1;
+    if (kbd_wakes) {
+        kbd_wakes = 0;
+        keyboard_wakes();
+    }
+}
+
+void kbd_stop(void)
+{
+    kbd_stopped = 1;
+    kbd_stopped_with_irq_on = irq_on;
 }
 
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
@@ -1005,6 +1058,7 @@ static void bringup_controller_rows(void)
     CHECK("the bring-up touches no port with interrupts on", ports_with_irq_on == 0);
     CHECK("the bring-up turns interrupts on again", irq_on);
     CHECK("a working controller logs no warning", warnings == 0);
+    CHECK("a working controller leaves the keyboard running", !kbd_stopped);
     CHECK("a plain mouse is PS/2 Generic Mouse, isa0060/serio1/input0",
           mouse_registrations == 1 && strcmp(registered_name, "PS/2 Generic Mouse") == 0 &&
               strcmp(registered_phys, "isa0060/serio1/input0") == 0);
@@ -1035,6 +1089,7 @@ static void bringup_controller_rows(void)
     CHECK("a stuck input buffer registers no handler", registrations == 0);
     CHECK("a stuck input buffer turns interrupts on again", irq_on);
     CHECK("a port that would not enable leaves the controller's setup standing", !i8042_failed());
+    CHECK("and the keyboard running", !kbd_stopped);
 
     /* A controller that loses the configuration byte. */
     model_reset();
@@ -1048,6 +1103,47 @@ static void bringup_controller_rows(void)
     CHECK("a lost configuration byte registers no handler", registrations == 0);
     CHECK("a lost configuration byte turns interrupts on again", irq_on);
     CHECK("a lost configuration byte fails the controller's setup", i8042_failed());
+    CHECK("a lost configuration byte stops the keyboard with interrupts off",
+          kbd_stopped && !kbd_stopped_with_irq_on);
+}
+
+/** `init_mouse` against a controller that answers late, as interrupts come
+ * on again, when the keyboard must already be stopped. */
+static void bringup_late_controller_rows(void)
+{
+    static const uint16_t lost_config_ports[] = {C, C};
+    static const uint8_t lost_config_values[] = {0xA8, 0x20};
+    static const uint16_t stalled_write_ports[] = {C, C, C};
+    static const uint8_t stalled_write_values[] = {0xA8, 0x20, 0x60};
+
+    /* The lost byte arrives as interrupts come on again. */
+    model_reset();
+    mouse_present = 1;
+    ctl_loses_config = 1;
+    kbd_wakes = 1;
+    CHECK("a late configuration byte fails the bring-up", init_mouse() == -1);
+    CHECK("a late configuration byte stops the keyboard with interrupts off",
+          kbd_stopped && !kbd_stopped_with_irq_on);
+    CHECK("a late configuration byte reaches no key handler",
+          model_count == 1 && model_data[model_head] == ctl_config);
+    CHECK("a late configuration byte draws no LED command",
+          writes_are(lost_config_ports, lost_config_values, 2));
+
+    /* A WRITE_CONFIG the controller takes late. */
+    model_reset();
+    mouse_present = 1;
+    ctl_stalls_write_config = 1;
+    kbd_wakes = 1;
+    CHECK("a stalled WRITE_CONFIG fails the bring-up", init_mouse() == -1);
+    CHECK("a stalled WRITE_CONFIG is reported", warned("the configuration byte would not write"));
+    CHECK("a stalled WRITE_CONFIG fails the controller's setup", i8042_failed());
+    CHECK("a stalled WRITE_CONFIG stops the keyboard with interrupts off",
+          kbd_stopped && !kbd_stopped_with_irq_on);
+    CHECK("a stalled WRITE_CONFIG is given no byte",
+          writes_are(stalled_write_ports, stalled_write_values, 3));
+    CHECK("no LED command becomes the configuration byte",
+          ctl_config == (FIRMWARE_CONFIG & ~PS2_CONFIG_MOUSE_CLK));
+    CHECK("a stalled WRITE_CONFIG turns interrupts on again", irq_on);
 }
 
 /** `init_mouse` against each fault of the mouse. */
@@ -1174,6 +1270,7 @@ int main(void)
     wheel_rows();
     command_rows();
     bringup_controller_rows();
+    bringup_late_controller_rows();
     bringup_mouse_rows();
     bringup_wheel_rows();
     if (fails == 0) {

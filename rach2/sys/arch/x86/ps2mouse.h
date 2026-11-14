@@ -22,10 +22,11 @@
  * event device, and its reporting, with the handler on vector 44. Returns
  * 0 once reporting is on, -1 with the reason in the log when the
  * controller or the mouse does not answer; a timeout of the configuration
- * byte's read or write also fails the controller's setup (`i8042_fail`),
- * for the caller to give up the keyboard too. Turns interrupts off for the
- * handshake and on again before it returns, whatever they were. Called
- * once, at boot, from `platform_mouse_init`.
+ * byte's read or write also fails the controller's setup (`i8042_fail`)
+ * and gives up the keyboard (`kbd_stop`) before interrupts come on again,
+ * so that neither IRQ 1 nor the LED tick reaches the controller in between.
+ * Turns interrupts off for the handshake and on again before it returns,
+ * whatever they were. Called once, at boot, from `platform_mouse_init`.
  */
 int init_mouse(void);
 
