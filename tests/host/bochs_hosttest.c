@@ -30,8 +30,10 @@
  * `nomodeset` or with less than 4 MiB, removes the firmware's framebuffer
  * from each memory BAR and maps both; the probe under boot lines of
  * `nomodeset` and `bochs.modeset`, which bind it or not as Linux's
- * drm_pci_register_driver_if_modeset decides; and a failed registration, which
- * releases the device whole.
+ * drm_pci_register_driver_if_modeset decides; the function shown bound to
+ * bochs-drm in /sys before its card registers, as Linux's driver core binds
+ * it; and a failed registration, which releases the device whole and leaves
+ * the function unbound.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -169,9 +171,16 @@ void drm_dev_init(struct drm_device *d, const struct drm_driver *driver)
     mutex_init(&d->mode_lock, "drm_mode_lock");
 }
 
-/** Registration: card 0, or the row's error. */
+/* The function shown bound in /sys, -1 for none, and its driver. */
+static int bound_key = -1;
+static const char *bound_driver = "";
+
+/** Registration: card 0, or the row's error. The function is shown bound
+ * to bochs-drm by then. */
 int32_t drm_dev_register(struct drm_device *d)
 {
+    CHECK(bound_key >= 0 && strcmp(bound_driver, "bochs-drm") == 0,
+          "the function is shown bound to bochs-drm before its card registers");
     if (register_rc != 0) {
         return register_rc;
     }
@@ -180,6 +189,22 @@ int32_t drm_dev_register(struct drm_device *d)
     last_dev = d;
     registered++;
     return 0;
+}
+
+/** Show `key` bound, as sysfs.c does. */
+int sysfs_pci_bind(int key, const char *driver)
+{
+    bound_key = key;
+    bound_driver = driver;
+    return 0;
+}
+
+/** Take the binding of `key` away. */
+void sysfs_pci_unbind(int key)
+{
+    if (key == bound_key) {
+        bound_key = -1;
+    }
 }
 
 /** Take a reference. */
@@ -968,8 +993,10 @@ static void row_register_fails(void)
     model_reset(1);
     register_rc = -ENOSPC;
     released = 0;
+    bound_key = -1;
     CHECK(bind() == -ENOSPC && released == 1 && allocations == base,
           "a failed registration releases the device and its EDID");
+    CHECK(bound_key == -1, "a failed registration leaves the function unbound");
     register_rc = 0;
 }
 

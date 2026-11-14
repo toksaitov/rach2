@@ -6,6 +6,7 @@
 
 #include "virtio.h"
 
+#include "../fs/sysfs.h"
 #include "../irq.h"
 #include "../klog.h"
 #include "../pci.h"
@@ -970,6 +971,10 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
             return -EIO;
         }
         vp->used = 1;
+        k = sysfs_pci_bind((int)p.bus << 8 | p.device << 3 | p.function, "virtio-pci");
+        if (k != 0) {
+            klog(KLOG_WARN, "virtio", "%s: driver link not added: error %d", vp->name, k);
+        }
         *out = &vp->dev;
         return 0;
     }

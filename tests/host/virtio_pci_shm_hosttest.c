@@ -17,6 +17,9 @@
  * and one valid. The rows read each region through the transport's table
  * and check that no window was mapped at a region's address.
  *
+ * Each function taken is shown bound to virtio-pci once, however often it
+ * is found.
+ *
  * The interrupt rows give every MSI-X entry a remapped message, release
  * them before vectors, and force vector and remapper allocation failures.
  *
@@ -36,6 +39,7 @@
 extern int printf(const char *format, ...);
 extern int vsnprintf(char *out, unsigned long size, const char *fmt, va_list ap);
 extern char *strstr(const char *haystack, const char *needle);
+extern int strcmp(const char *a, const char *b);
 
 static int failures;
 
@@ -277,6 +281,19 @@ void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flag
     (void)flags;
 }
 
+/* The bindings the transport showed in /sys: how many, and the last. */
+static int binds, bound_key = -1;
+static const char *bound_driver = "";
+
+/** Record a binding, as sysfs.c shows one. */
+int sysfs_pci_bind(int key, const char *driver)
+{
+    binds++;
+    bound_key = key;
+    bound_driver = driver;
+    return 0;
+}
+
 void virtio_interrupt_config(struct virtio_dev *d)
 {
     (void)d;
@@ -412,6 +429,8 @@ static void qemu_layout(void)
     add_cap(0, 8, 4, 1, 0, 4 * GIB);
     add_cap(0, 8, 4, 1, GIB, GIB);
     CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &d) == 0, "QEMU's virtio-gpu is taken");
+    CHECK(binds == 1 && bound_key == 0 && strcmp(bound_driver, "virtio-pci") == 0,
+          "the function is shown bound to virtio-pci, as Linux binds it");
     CHECK(d->ops->shm_region(d, 1, &addr, &len) == 0 && addr == hostmem && len == 4 * GIB,
           "shared memory 1 is the whole 4 GiB BAR at 14 TiB");
     CHECK(d->ops->shm_region(d, 0, &addr, &len) == -ENOENT, "no region 0");
@@ -460,6 +479,7 @@ static void interrupts(void)
     uint32_t *table = (uint32_t *)&windows[0][0x3000];
 
     CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &d) == 0, "reuse the first function");
+    CHECK(binds == 2, "a function found again is not bound again");
     msix_ready = 1;
     for (i = 0; i < 2; i++) {
         CHECK(d->ops->irq_setup(d, 2) == 0, "set up two queues and configuration");

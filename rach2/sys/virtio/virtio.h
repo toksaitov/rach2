@@ -486,8 +486,9 @@ void virtio_interrupt_config(struct virtio_dev *d);
 /**
  * Find the `nth` virtio-pci function of device type `id`, counting from
  * zero, read its capabilities, map them and log them, as
- * `virtio: found: 00:02.0 gpu: common bar 4+0x0 ...`. A second call for the
- * same function returns the same record.
+ * `virtio: found: 00:02.0 gpu: common bar 4+0x0 ...`, and show it in /sys
+ * bound to Linux's driver of the function, virtio-pci (`sysfs_pci_bind`). A
+ * second call for the same function returns the same record.
  *
  * @return 0 with `*out` set; -ENODEV when there is no such function, -EIO
  *         when it lacks a capability virtio 1.x requires or one cannot be
