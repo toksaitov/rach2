@@ -1048,7 +1048,11 @@ void tgroup_put(struct tgroup *tg)
 
 void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys)
 {
-    const struct tgroup *tg = p->tg;
+    tgroup_cpu_time(p->tg, user, sys);
+}
+
+void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
+{
     const process_t *t;
     uint32_t flags = kirq_save();
 

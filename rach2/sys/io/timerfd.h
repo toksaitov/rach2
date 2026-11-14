@@ -204,6 +204,16 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec);
  */
 int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *user_only);
 
+/**
+ * The clocks' part as well: the processor time, in nanoseconds, of the
+ * target `clock_cpu_target` gave, the process `tg`, or its thread `tid`
+ * when that is not 0, user time alone for `user_only`, as Linux's
+ * posix_cpu_timer_set samples the task a timer was made for and not the
+ * caller (kernel/time/posix-cpu-timers.c:719-751). 0, or -ESRCH when the
+ * thread has ended, as Linux's timer then has no task.
+ */
+int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t tid, int user_only, uint64_t *ns);
+
 /** Count a tick of processor time of the thread `p`, user time when `user`,
  * against the POSIX timers that count it, leaving each signal due for
  * `ptimer_post_due`; called from the timer tick of the processor that runs

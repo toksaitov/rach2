@@ -709,6 +709,28 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *us
     return 0;
 }
 
+int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t tid, int user_only, uint64_t *ns)
+{
+    uint64_t user, sys;
+
+    if (tid != 0) {
+        const process_t *p = get_process(tid);
+        uint32_t flags;
+
+        if (!p || p->tg != tg || p->state == PROC_ZOMBIE) {
+            return -ESRCH;
+        }
+        flags = kirq_save();
+        user = p->utime;
+        sys = p->stime;
+        kirq_restore(flags);
+    } else {
+        tgroup_cpu_time(tg, &user, &sys);
+    }
+    *ns = (user_only ? user : user + sys) * (uint64_t)TICK_NS;
+    return 0;
+}
+
 int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
 {
     struct kclock c;
@@ -1937,7 +1959,11 @@ static void itimer_read(int32_t which, struct kernel_itimerval *out)
  * Arm or disarm timer `which`, after `value` nanoseconds and then each
  * `interval`, or disarm it for zero value. Real time has its own event;
  * processor time is counted down by the ticks charged to the process's
- * threads (`cpu_timer_tick`).
+ * threads (`cpu_timer_tick`), from a first value a tick longer than asked,
+ * and keeps its interval even when disarmed, as Linux's set_cpu_itimer adds
+ * TICK_NSEC to a value that is not 0 and stores the interval whatever the
+ * value (kernel/time/itimer.c:175-188): at 250 Hz a 10 ms timer starts with
+ * 14 ms and expires at the fourth tick charged.
  * The caller has interrupts off and holds the big lock.
  */
 static void itimer_set(int32_t which, uint64_t value, uint64_t interval)
@@ -1946,9 +1972,12 @@ static void itimer_set(int32_t which, uint64_t value, uint64_t interval)
     process_t *p = tg->leader;
 
     if (which != ITIMER_REAL) {
+        if (value != 0) {
+            value = value > ~(uint64_t)0 - TICK_NS ? ~(uint64_t)0 : value + TICK_NS;
+        }
         spin_lock(&tg->cpu_lock);
         tg->cpu_left[which - 1] = value;
-        tg->cpu_interval[which - 1] = value != 0 ? interval : 0;
+        tg->cpu_interval[which - 1] = interval;
         spin_unlock(&tg->cpu_lock);
         return;
     }

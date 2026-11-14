@@ -1204,31 +1204,71 @@ static int32_t list_clock(struct ktimer *t, int base, int flags, const struct se
 /**
  * The time of processor time `t` waits for from the setting `s`, absolute
  * on its clock when `flags` has TFD_TIMER_ABSTIME, into `*left`, in
- * nanoseconds and at least one, so that a time already past or no time
- * expires at the next tick charged. 0, or `clock_now`'s error.
+ * nanoseconds, or 0 for an absolute time already reached, with how far the
+ * clock is past it in `*over`. The clock is that of the process or thread
+ * the timer was made for (`clock_cpu_sample`), whoever sets it, and is read
+ * for every setting, as Linux's posix_cpu_timer_set samples the timer's own
+ * task and fails when that has been reaped
+ * (kernel/time/posix-cpu-timers.c:719-751). 0, or -ESRCH for a timer of a
+ * thread that has ended.
  */
 static int32_t cpu_time_left(const struct ktimer *t, int flags, const struct setting *s,
-                             uint64_t *left)
+                             uint64_t *left, uint64_t *over)
 {
-    int64_t sec = s->vsec, now;
-    int32_t nsec = s->vnsec, at;
-    int32_t rc;
+    uint64_t now, v = ns_of(s->vsec, s->vnsec);
+    int32_t rc = clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_user, &now);
 
-    if (flags & TFD_TIMER_ABSTIME) {
-        rc = clock_now(t->clock, &now, &at);
-        if (rc != 0) {
-            return rc;
-        }
-        sec -= now;
-        nsec -= at;
-        if (nsec < 0) {
-            nsec += NS_PER_SEC;
-            sec--;
+    *left = v;
+    *over = 0;
+    if (rc != 0 || !(flags & TFD_TIMER_ABSTIME)) {
+        return rc;
+    }
+    if (v > now) {
+        *left = v - now;
+    } else {
+        *left = 0;
+        *over = now - v;
+    }
+    return 0;
+}
+
+/**
+ * Arm the timer of processor time `t`, which `arm` has disarmed, for the
+ * interval of the setting `s` and the time `left` that `cpu_time_left`
+ * found, or that 0 and the clock `over` nanoseconds past an absolute time.
+ * It keeps its time left and interval to the nanosecond, as Linux's
+ * posix-cpu-timers keep them, and expires at the tick charged that uses its
+ * time up (`cpu_timer_charge`). A time already reached expires here,
+ * however long the process then goes without running, and a periodic timer
+ * counts each interval since that time and waits out the rest of the one in
+ * progress, so that its expirations keep to the grid the time and interval
+ * make, as posix_cpu_timer_set fires such a timer at once and
+ * bump_cpu_timer forwards it from its expiry
+ * (kernel/time/posix-cpu-timers.c:122-147, 796-797); SIGEV_NONE's posts
+ * nothing, as Linux fires none. The caller holds the big lock and
+ * `timer_lock`.
+ */
+static void cpu_arm(struct ktimer *t, const struct setting *s, uint64_t left, uint64_t over)
+{
+    uint64_t rest, fresh = 0;
+
+    t->ins = ns_of(s->isec, s->insec);
+    if (left == 0) {
+        fresh = 1;
+        if (t->ins != 0) {
+            fresh += div64(over, t->ins, &rest);
+            left = t->ins - rest;
         }
     }
-    *left = sec < 0 ? 0 : ns_of(sec, nsec);
-    *left = *left != 0 ? *left : 1u;
-    return 0;
+    t->cpu_left = left;
+    if (left != 0) {
+        t->armed = 1;
+        t->next = cpu_armed;
+        cpu_armed = t;
+    }
+    if (fresh != 0) {
+        (void)ptimer_fire(t, fresh);
+    }
 }
 
 /**
@@ -1246,19 +1286,16 @@ static int32_t cpu_time_left(const struct ktimer *t, int flags, const struct set
  * 881-882); a notification that waits for another sender's signal stays,
  * with its own overrun and the setting it was posted for (`count_gen`),
  * since Linux leaves the timer's sigqueue queued across a setting; 0, -EINVAL
- * for a time out of range, or `clock_now`'s error. A timer of the clocks
- * keeps its time and interval to the nanosecond, as Linux's timerfd_setup
- * keeps them, and expires when its clock reaches its time, by the interrupt
- * between ticks (`arm_between`), as Linux's hrtimer does, or at the first
- * tick at which its clock has reached its time where there is none or the
- * timer is a POSIX timer left to the ticks (`set_due`, `expire`): never
- * early. Its clock and the tick are read under the timers' lock
- * (`read_now`). A time already past expires at once by that interrupt, or
- * at the next tick without it, with each interval since it counted. A
- * timer of processor time keeps its time left and interval to the
- * nanosecond too, as Linux's posix-cpu-timers keep them, and expires at the
- * tick charged that uses its time up (`cpu_timer_charge`); an absolute time
- * already past expires at the next one.
+ * for a time out of range, `clock_now`'s error, or `cpu_time_left`'s. A
+ * timer of the clocks keeps its time and interval to the nanosecond, as
+ * Linux's timerfd_setup keeps them, and expires when its clock reaches its
+ * time, by the interrupt between ticks (`arm_between`), as Linux's hrtimer
+ * does, or at the first tick at which its clock has reached its time where
+ * there is none or the timer is a POSIX timer left to the ticks (`set_due`,
+ * `expire`): never early. Its clock and the tick are read under the timers'
+ * lock (`read_now`). A time already past expires at once by that interrupt,
+ * or at the next tick without it, with each interval since it counted. A
+ * timer of processor time is armed by `cpu_arm`.
  *
  * A timerfd goes on `cancelable` or off it by `flags`, as Linux's
  * timerfd_settime does before it arms the timer, and one armed while
@@ -1273,7 +1310,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     int on = s->vsec != 0 || s->vnsec != 0;
     int base =
         t->clock == CLOCK_REALTIME && !(flags & TFD_TIMER_ABSTIME) ? CLOCK_MONOTONIC : t->clock;
-    uint64_t left = 0;
+    uint64_t left = 0, over = 0;
     struct reading r = {0, 0, 0};
     int32_t rc = 0;
     uint32_t irq;
@@ -1281,8 +1318,8 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     if (s->vsec < 0 || s->vnsec < 0 || s->vnsec >= NS_PER_SEC) {
         return -EINVAL;
     }
-    if (on && t->cpu_tg) {
-        rc = cpu_time_left(t, flags, s, &left);
+    if (t->cpu_tg) {
+        rc = cpu_time_left(t, flags, s, &left, &over);
         if (rc != 0) {
             return rc;
         }
@@ -1317,11 +1354,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         t->ins = ns_of(s->isec, s->insec);
     }
     if (on && t->cpu_tg) {
-        t->cpu_left = left;
-        t->ins = ns_of(s->isec, s->insec);
-        t->armed = 1;
-        t->next = cpu_armed;
-        cpu_armed = t;
+        cpu_arm(t, s, left, over);
     } else if (on) {
         rc = list_clock(t, base, flags, s, &r);
     }

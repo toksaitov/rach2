@@ -1086,6 +1086,10 @@ isr_params_t *proc_user_frame(const process_t *t);
  * thread's, those that have ended included, user and system. */
 void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys);
 
+/** The CPU time in ticks of the process `tg`, as `proc_cpu_time` counts it,
+ * which is this for the process of its thread. */
+void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys);
+
 /** The minor and major page faults of the whole process `p` is a thread of,
  * every thread's, those that have ended included. */
 void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major);

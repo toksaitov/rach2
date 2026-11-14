@@ -550,6 +550,13 @@ void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys)
     *sys = p->stime;
 }
 
+/** The CPU time of the model's process `tg`, whose one thread is `other`
+ * or this one. */
+void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
+{
+    proc_cpu_time(tg == other.tg ? &other : &proc, user, sys);
+}
+
 /** Find the model's processes: this one and pid 9. */
 process_t *get_process(uint32_t pid)
 {

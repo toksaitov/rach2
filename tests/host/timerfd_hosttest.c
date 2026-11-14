@@ -394,6 +394,16 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *us
     return -EINVAL;
 }
 
+/** Never called: no timer here counts processor time. */
+int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t tid, int user_only, uint64_t *ns)
+{
+    (void)tg;
+    (void)tid;
+    (void)user_only;
+    *ns = 0;
+    return -ESRCH;
+}
+
 /** Nothing: no timer holds a process. */
 void tgroup_put(struct tgroup *tg)
 {
