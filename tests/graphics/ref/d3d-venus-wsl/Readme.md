@@ -18,6 +18,8 @@ The reference was folded from the five runs, each archive unpacked in one direct
         tests/graphics/d3d/ref/venus.json \
         ref-proton ref-proton2 ref-wined3dvk ref-wined3dvk1 ref-vkd3d
 
+The fold gives Proton's `d3d9:visual` the stored runs' end, exit 245 before its summary after 384 test lines, where DXVK timed out in `stencil_cull_test`. That end follows the host's shader cache and load, and `venus.json` replaces it by hand with a stop at the unit's `visual.c:2412` record, the last before `z_range_test`, where the Debian guest's later runs timed out ([Direct3D on Venus](../../Readme.md#direct3d-on-venus)).
+
 The runs that took them, from the top of the tree, `ref-proton2` as `ref-proton` and `ref-wined3dvk1` as `ref-wined3dvk`:
 
     sh tests/graphics/d3d/reference.sh ref-proton \

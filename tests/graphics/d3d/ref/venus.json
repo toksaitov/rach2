@@ -29,10 +29,10 @@
   "wine": {
     "proton": {
       "d3d9:visual": {
-        "exit": 245,
-        "summary": false,
-        "failures": 0,
-        "min_lines": 384
+        "progress": {
+          "line": "visual.c:2412: Test failed: Untransformed vertex with vertex fog and z = 1.0 has color 00ff0000",
+          "count": 1
+        }
       },
       "d3d10:device": {
         "exit": 0,
