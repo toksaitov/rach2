@@ -674,7 +674,7 @@ tests/musl/pidfdmusl.c:file_info complexity 29 a test's rows, each a case, read 
 
 tests/musl/preadmusl.c:file_rows complexity 30 a test's rows, each a case, read as one table
 
-tests/musl/ptracemusl.c:memory_and_registers complexity 32 a test's rows, each a case, read as one table
+tests/musl/ptracemusl.c:memory_and_registers complexity 33 a test's rows, each a case, read as one table
 
 tests/musl/pwauthmusl.c:check_fork complexity 28 a test's rows, each a case, read as one table
 tests/musl/pwauthmusl.c:check_prompt lines 106 a test's rows, each a case, read as one table

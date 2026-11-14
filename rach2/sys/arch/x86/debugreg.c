@@ -17,16 +17,22 @@
 extern const char sysenter_entry[], sysenter_stepped[];
 #endif
 
-/* DR7: the enable bits of the four breakpoints, and the bits a tracer may
- * write: those, LE and GE, bit 10, which reads as one, and the conditions
- * and lengths. The rest are GD and reserved bits; on x86-64 a one in bits
- * 32 to 63 makes the write to DR7 fault. */
+/* DR7: the enable bits of the four breakpoints, and the bits the processor
+ * is given: those, LE and GE, bit 10, which reads as one, and the conditions
+ * and lengths. The rest are GD and reserved bits, which a tracer may write
+ * and reads back, as on Linux, but the processor never sees; on x86-64 a one
+ * in bits 32 to 63 makes the write to DR7 fault. */
 #define DR7_ENABLES  0x000000FFu
 #define DR7_WRITABLE 0xFFFF07FFul
 
-/* DR6: the four breakpoints' bits and the single-step bit. */
-#define DR6_HITS 0x0000000Fu
-#define DR6_BS   0x00004000u
+/* DR6: the four breakpoints' bits and the single-step bit; and the bits
+ * that read as one when no exception sets them, Linux's DR6_RESERVED. A
+ * thread's copy holds the first two with the reserved bits flipped to 0,
+ * Linux's `virtual_dr6`, so that a new thread's 0 reads as DR6's value
+ * after reset. */
+#define DR6_HITS     0x0000000Fu
+#define DR6_BS       0x00004000u
+#define DR6_RESERVED 0xFFFF0FF0ul
 
 /*
  * The debug registers, as bytes: TinyCC's assembler has no mnemonic for
@@ -66,7 +72,7 @@ void arch_debug_switch(const process_t *next)
         DR_WRITE(DR2_MODRM, v);
         v = next->debugreg[3];
         DR_WRITE(DR3_MODRM, v);
-        v = next->debugreg[7] | DR7_ONE;
+        v = (next->debugreg[7] & DR7_WRITABLE) | DR7_ONE;
         DR_WRITE(DR7_MODRM, v);
         dr7_live[cpu] = 1;
     } else if (dr7_live[cpu]) {
@@ -81,12 +87,18 @@ void arch_debug_switch(const process_t *next)
  * `debugreg_status` returns it: TRAP_HWBKPT, TRAP_TRACE, 0, or
  * DEBUGREG_STALE for a breakpoint the thread's saved enables no longer
  * have, after which the processor's DR7 is cleared. A tracer that ended may
- * have cleared them while this processor still had DR7 loaded.
+ * have cleared them while this processor still had DR7 loaded. The copy
+ * keeps the single-step bit and the bits of the breakpoints DR7 enables,
+ * as Linux's `exc_debug_user` and `ptrace_triggered` build `virtual_dr6`.
  */
 static int32_t debugreg_code(unsigned long dr6)
 {
     if (current_proc) {
-        current_proc->debugreg[6] = dr6;
+        unsigned long on = current_proc->debugreg[7];
+        unsigned long hits = (on | (on >> 1)) & 0x55u;
+
+        hits = (hits & 1u) | ((hits >> 1) & 2u) | ((hits >> 2) & 4u) | ((hits >> 3) & 8u);
+        current_proc->debugreg[6] = dr6 & (DR6_BS | hits);
     }
     if ((dr6 & DR6_HITS) && current_proc && !(current_proc->debugreg[7] & DR7_ENABLES)) {
         unsigned long v = DR7_ONE;
@@ -155,23 +167,19 @@ int debugreg_loaded(void)
 }
 
 /**
- * Whether the DR7 value `v` sets what a tracer may set with the addresses
- * `t` has in DR0 to DR3: no general-detect or reserved bit, and for each
- * breakpoint it enables an address aligned to its length whose bytes are
- * all user addresses, from USER_ADDR_MIN to the last below USER_ADDR_MAX, a
- * length of 1, 2 or 4 bytes (or 8 on x86-64), and an execute breakpoint of
- * length 1; an I/O breakpoint, which needs CR4.DE, is refused. The scheduler
- * loads what this accepts into the processor, where a breakpoint on a
- * kernel address would fire in the kernel's own code, an execute
- * breakpoint there at every return to it.
+ * Whether the DR7 value `v` sets what a tracer may set with the addresses `t`
+ * has in DR0 to DR3: for each breakpoint it enables an address aligned to its
+ * length whose bytes are all user addresses, from USER_ADDR_MIN to the last
+ * below USER_ADDR_MAX, a length of 1, 2 or 4 bytes (or 8 on x86-64), and an
+ * execute breakpoint of length 1; an I/O breakpoint, which needs CR4.DE, is
+ * refused. The scheduler loads what this accepts into the processor, where a
+ * breakpoint on a kernel address would fire in the kernel's own code, an
+ * execute breakpoint there at every return to it.
  */
 static int dr7_valid(const process_t *t, unsigned long v)
 {
     int i;
 
-    if ((v & ~DR7_WRITABLE) != 0) {
-        return 0;
-    }
     for (i = 0; i < 4; i++) {
         unsigned long rw = (v >> (16 + 4 * i)) & 3u;
         unsigned long len = (v >> (18 + 4 * i)) & 3u;
@@ -193,13 +201,20 @@ static int dr7_valid(const process_t *t, unsigned long v)
     return 1;
 }
 
+/** DR6 is the copy with its reserved bits flipped back to ones, and DR7 the
+ * value last written, as Linux's `ptrace_get_debugreg` reads them. */
 unsigned long debugreg_peek(const process_t *t, unsigned n)
 {
-    return n == 7 ? (t->debugreg[7] | DR7_ONE) : t->debugreg[n];
+    if (n == 6) {
+        return t->debugreg[6] ^ DR6_RESERVED;
+    }
+    return t->debugreg[n];
 }
 
 /** An address is checked against the DR7 the thread has, and a DR7 against
- * the addresses, so the pair is checked whichever is written first. */
+ * the addresses, so the pair is checked whichever is written first. DR6 is
+ * kept with its reserved bits flipped and DR7 as written, its bits outside
+ * DR7_WRITABLE ignored, as Linux's `ptrace_set_debugreg` keeps them. */
 int debugreg_poke(process_t *t, unsigned n, unsigned long v)
 {
     if (n == 4 || n == 5 || n > 7) {
@@ -215,9 +230,8 @@ int debugreg_poke(process_t *t, unsigned n, unsigned long v)
         }
         proc_work_set(t, WORK_DEBUGREG);
     } else if (n == 6) {
-        t->debugreg[6] = v;
+        t->debugreg[6] = v ^ DR6_RESERVED;
     } else {
-        v &= ~(unsigned long)DR7_ONE;
         if (!dr7_valid(t, v)) {
             return -EINVAL;
         }

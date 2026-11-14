@@ -2227,20 +2227,20 @@ static void exec_files(struct exec_state *s)
  * close-on-exec descriptors; takes the new ids, the saved ids becoming the new
  * effective ones, which is the POSIX rule for every exec and what lets an image
  * shed acquired authority and take it back, and the file-system ids the
- * effective ones again; resets what pointed into the old
- * image: caught signals' handlers (SIG_IGN, the blocked mask and the pending
- * signals are kept, as POSIX says), the alternate signal stack, the TLS base
- * and the floating-point state, and deletes the POSIX timers, as POSIX says,
- * with their pending signals (`ptimer_exec`), as Linux's posixtimer_exec
- * does (fs/exec.c:1220-1229).
- * Then it switches to the new address space and puts the old one, which the
- * parent of a vfork child keeps, lets that parent go, and points the return
- * frame at the entry with the stack pointer at argc. A fresh image has no TLS
- * until its libc calls set_thread_area, so the segment registers get the plain
- * user-data selector, as a new process gets it, in place of the old image's TLS
- * one. The general registers are cleared, since the System V entry has argc on
- * the stack, a register that holds an atexit hook or zero, and a frame pointer
- * of 0 marking the outermost frame (`arch_exec_frame`).
+ * effective ones again; resets what pointed into the old image: caught signals'
+ * handlers (SIG_IGN, the blocked mask and the pending signals are kept, as
+ * POSIX says), the alternate signal stack, the debug registers a tracer set,
+ * the TLS base and the floating-point state, and deletes the POSIX timers, as
+ * POSIX says, with their pending signals (`ptimer_exec`), as Linux's
+ * posixtimer_exec does (fs/exec.c:1220-1229). Then it switches to the new
+ * address space and puts the old one, which the parent of a vfork child keeps,
+ * lets that parent go, and points the return frame at the entry with the stack
+ * pointer at argc. A fresh image has no TLS until its libc calls
+ * set_thread_area, so the segment registers get the plain user-data selector,
+ * as a new process gets it, in place of the old image's TLS one. The general
+ * registers are cleared, since the System V entry has argc on the stack, a
+ * register that holds an atexit hook or zero, and a frame pointer of 0 marking
+ * the outermost frame (`arch_exec_frame`).
  */
 static void exec_commit(isr_params_t *params, struct exec_state *s)
 {
@@ -2287,6 +2287,10 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->altstack_sp = 0;
     current_proc->altstack_size = 0;
     current_proc->vma_reported = 0;
+    /* Linux's flush_ptrace_hw_breakpoint: a tracer's breakpoints, DR6 and
+     * DR7 go with the image they watched. */
+    k_memset(current_proc->debugreg, 0, sizeof(current_proc->debugreg));
+    proc_work_set(current_proc, WORK_DEBUGREG);
 
     current_proc->mm = s->mm;
     current_proc->space_root = s->mm->space_root;

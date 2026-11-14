@@ -4,15 +4,18 @@
  * A child that calls PTRACE_TRACEME and stops itself is reported stopped to its
  * parent. The parent reads and changes a word of the child's memory with
  * PEEKDATA and POKEDATA, and through /proc/PID/mem, where a read and a write
- * that run from a page into a hole do the bytes before the hole. It reads the
- * registers with GETREGS and the floating-point state with GETFPXREGS,
- * GETFPREGS on x86-64; steps one instruction with SINGLESTEP, which moves the
- * instruction pointer; plants a breakpoint with POKETEXT on a read-only text
- * page, continues to it, finds the child stopped by SIGTRAP just past it, puts
- * the text back, moves the instruction pointer back with SETREGS and continues.
- * A /proc/PID/mem descriptor keeps none of the memory of a child that has
- * ended: once a child that touched 16 MiB has ended, and before it is reaped, a
- * read through a descriptor of its memory returns 0 and the free memory
+ * that run from a page into a hole do the bytes before the hole. Both reach
+ * PROT_NONE pages, as Linux's forced access does: /proc/PID/mem reads a private
+ * anonymous page's bytes, an untouched page's zeros and a private file page's,
+ * and POKEDATA writes a private page of the child alone. It reads the registers
+ * with GETREGS and the floating-point state with GETFPXREGS, GETFPREGS on
+ * x86-64; steps one instruction with SINGLESTEP, which moves the instruction
+ * pointer; plants a breakpoint with POKETEXT on a read-only text page,
+ * continues to it, finds the child stopped by SIGTRAP just past it, puts the
+ * text back, moves the instruction pointer back with SETREGS and continues. A
+ * /proc/PID/mem descriptor keeps none of the memory of a child that has ended:
+ * once a child that touched 16 MiB has ended, and before it is reaped, a read
+ * through a descriptor of its memory returns 0 and the free memory
  * /proc/meminfo reports is back.
  *
  * PTRACE_SYSCALL stops the child at the entry and the exit of getpid, with the
@@ -20,25 +23,28 @@
  * on x86-64), and bit 0x80 on the stop signal with PTRACE_O_TRACESYSGOOD. At an
  * entry stop the tracer changes the call through orig_eax: getpid made getppid
  * returns the parent's id, and a write made -1 is not run and returns the eax
- * the tracer set; on x86-64 a DS selector the tracer sets there is the
- * child's at the next stop, and the kernel's data selector is refused. A
- * tracee that SIGKILL reaches at the entry stop of a write writes nothing. The
- * exit stop of a read a signal interrupted has -ERESTARTSYS, -512, in eax, as
- * Linux's, whose exit stop comes before signal delivery; -1 in orig_eax there
- * keeps the read from being restarted after a handler with SA_RESTART, and the
- * read returns the code the tracer left, errno 512.
- * PTRACE_O_TRACEEXEC stops the child after an execve with the exec event, which
- * waitid reports in si_status above the signal, and a /proc/PID/mem descriptor
- * opened before the execve reads nothing of the new image. A debug register set
- * through POKEUSER reads back through PEEKUSER, and DR7 enables a breakpoint on
- * a user address, the last of which a breakpoint may end at, and fails with
- * EINVAL for one below user space. PTRACE_ATTACH stops a running process, which
- * runs on after PTRACE_DETACH, and PTRACE_SEIZE stops for the tracer one that a
- * stop signal has already stopped, which stays stopped after PTRACE_DETACH
- * until SIGCONT. PTRACE_LISTEN keeps a seized tracee in the PTRACE_EVENT_STOP
- * of its group stop until the stop ends, whether the SIGCONT comes before the
- * listen or after it, and the end makes a new PTRACE_EVENT_STOP with SIGTRAP;
- * at a signal-delivery stop it fails with EIO. PTRACE_INTERRUPT stops a seized
+ * the tracer set; on x86-64 a DS selector the tracer sets there is the child's
+ * at the next stop, and the kernel's data selector is refused. A tracee that
+ * SIGKILL reaches at the entry stop of a write writes nothing. The exit stop of
+ * a read a signal interrupted has -ERESTARTSYS, -512, in eax, as Linux's, whose
+ * exit stop comes before signal delivery; -1 in orig_eax there keeps the read
+ * from being restarted after a handler with SA_RESTART, and the read returns
+ * the code the tracer left, errno 512. PTRACE_O_TRACEEXEC stops the child after
+ * an execve with the exec event, which waitid reports in si_status above the
+ * signal, and a /proc/PID/mem descriptor opened before the execve reads nothing
+ * of the new image. DR6 reads 0xFFFF0FF0 and DR7 0 before a tracer writes them
+ * and again after the execve, which drops the tracer's breakpoints. A debug
+ * register set through POKEUSER reads back through PEEKUSER, DR7's
+ * general-detect and reserved bits among them, which the tracee then runs with
+ * but the processor never gets, and DR7 enables a breakpoint on a user address,
+ * the last of which a breakpoint may end at, and fails with EINVAL for one
+ * below user space. PTRACE_ATTACH stops a running process, which runs on after
+ * PTRACE_DETACH, and PTRACE_SEIZE stops for the tracer one that a stop signal
+ * has already stopped, which stays stopped after PTRACE_DETACH until SIGCONT.
+ * PTRACE_LISTEN keeps a seized tracee in the PTRACE_EVENT_STOP of its group
+ * stop until the stop ends, whether the SIGCONT comes before the listen or
+ * after it, and the end makes a new PTRACE_EVENT_STOP with SIGTRAP; at a
+ * signal-delivery stop it fails with EIO. PTRACE_INTERRUPT stops a seized
  * tracee blocked in a read, which is restarted after. The child a seized tracee
  * forks under PTRACE_O_TRACEFORK first stops with PTRACE_EVENT_STOP and
  * SIGTRAP. A signal sent to a process whose first thread its tracer holds
@@ -113,12 +119,14 @@
  * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
  * assertion for each row in order, a setup step joined to the row after it:
  * `traced-stop`, `peekdata`, `pokedata`, `proc-mem-read`, `proc-mem-hole`,
- * `getregs`, `fpregs`, `singlestep`, `breakpoint-reached`, `breakpoint-ip`,
+ * `proc-mem-protnone`, `peek-poke-protnone`, `getregs`, `fpregs`,
+ * `singlestep`, `breakpoint-reached`, `breakpoint-ip`,
  * `breakpoint-restore`, `poked-word-read`, `ended-mem-live-read`,
  * `ended-mem-child-exits`, `ended-meminfo`, `ended-mem-read-zero`,
- * `ended-mem-freed`, `setoptions`, `debugreg-peekuser`, `dr7-kernel-einval`,
- * `dr7-last-user`, `dr7-bit12-einval`, `getpid-entry`, `getpid-exit`,
- * `exec-waitid`, `exec-event`, `exec-mem-empty`, `exec-runs`,
+ * `ended-mem-freed`, `setoptions`, `debugreg-initial`, `debugreg-peekuser`,
+ * `dr6-peekuser`, `dr7-kernel-einval`, `dr7-last-user`, `dr7-reserved-kept`,
+ * `getpid-entry`, `getpid-exit`, `exec-waitid`, `exec-event`,
+ * `exec-mem-empty`, `exec-debugreg-clear`, `exec-runs`,
  * `changes-getpid-entry`, `changes-entry-siginfo`, `changes-write-entry`,
  * `changes-exit`, `changes-getppid`, `changes-write-result`,
  * `changes-write-not-run`,
@@ -156,7 +164,7 @@
  * `queued-extension-unread`, `setsiginfo-extension-unread`,
  * `pidfd-send-signal-scope-order`, `zombie-thread-signal`,
  * `tp-set-readback` and `tp-tracee-runs`.
- * x86-64 adds `dr7-bit32-einval`, `setoptions-wide-einval`,
+ * x86-64 adds `setoptions-wide-einval`,
  * `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
  * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
  * `tp-arch-set-eperm`, `tp-pokeuser-eio`, `tp-setregs-eio`, `tp-setregset-eio`
@@ -245,7 +253,7 @@ static volatile long target = 1234;
 /* The assertions of etude's report in the order they are checked, more than
  * probe_report.h's path holds, and how many are planned and reported. A run
  * of one named row plans none. */
-static const char *rows[160];
+static const char *rows[176];
 static int rows_planned, rows_reported;
 
 /** Add the assertion `id` to the end of the planned rows. */
@@ -364,10 +372,102 @@ static int into_hole(const char *path, char *page)
 }
 
 /**
- * Check PEEKDATA, POKEDATA, /proc/PID/mem and the rows of `into_hole`,
- * GETREGS, the floating-point state, SINGLESTEP and a breakpoint planted with
- * POKETEXT, in a child that ends with 0 only when it reads the word the parent
- * wrote. Returns 0, or 1 after the failure is printed.
+ * Check reads through `path`, /proc/PID/mem of a child, of its PROT_NONE
+ * regions, which Linux's forced access reads as crashpad's handler does
+ * (mm/gup.c, check_vma_flags): `none`, two private anonymous pages, the first
+ * filled with 'n' and the second never touched, and `exe`, the first page of
+ * the program mapped privately. They read as 'n', zeros and "\177ELF".
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int protnone_read(const char *path, const char *none, const char *exe)
+{
+    static char in[4096];
+    int fd = open(path, O_RDONLY);
+    int i, ok = fd >= 0 && pread(fd, in, sizeof(in), (off_t)(uintptr_t)none) == sizeof(in);
+
+    for (i = 0; ok && i < 4096; i++) {
+        ok = in[i] == 'n';
+    }
+    ok = ok && pread(fd, in, sizeof(in), (off_t)(uintptr_t)(none + 4096)) == sizeof(in);
+    for (i = 0; ok && i < 4096; i++) {
+        ok = in[i] == 0;
+    }
+    ok = ok && pread(fd, in, 4, (off_t)(uintptr_t)exe) == 4 && memcmp(in, "\177ELF", 4) == 0;
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : fail("a read of a PROT_NONE region through /proc/PID/mem");
+}
+
+/**
+ * Check PEEKDATA and POKEDATA on the child `pid`'s PROT_NONE private page
+ * `none`, which Linux forces as it forces a write to read-only text: the
+ * word written reads back in the child, and the parent's own page, which
+ * the fork shared, keeps its 'n'. Returns 0, or 1 after the failure is
+ * printed.
+ */
+static int protnone_poke(pid_t pid, char *none)
+{
+    long word;
+    int ok;
+
+    errno = 0;
+    word = ptrace(PTRACE_PEEKDATA, pid, (void *)none, NULL);
+    ok = errno == 0 && memcmp(&word, "nnnnnnnn", sizeof(word)) == 0 &&
+         ptrace(PTRACE_POKEDATA, pid, (void *)none, (void *)0x5a5aL) == 0;
+    errno = 0;
+    ok = ok && ptrace(PTRACE_PEEKDATA, pid, (void *)none, NULL) == 0x5a5aL && errno == 0 &&
+         mprotect(none, 4096, PROT_READ) == 0 && none[0] == 'n' &&
+         mprotect(none, 4096, PROT_NONE) == 0;
+    return ok ? 0 : fail("PEEKDATA and POKEDATA of a PROT_NONE page");
+}
+
+/* The PROT_NONE regions `protnone_rows` reads in the child: `none`, two
+ * private anonymous pages, the first filled with 'n', and `exe`, the
+ * program's first page mapped privately; NULL where they could not be made. */
+struct protnone {
+    char *none;
+    char *exe;
+};
+
+/** Make the regions of `pn`, before the fork that gives them to the child. */
+static void protnone_map(struct protnone *pn)
+{
+    int self = open("/proc/self/exe", O_RDONLY);
+    char *none = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    char *exe = self < 0 ? MAP_FAILED : mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE, self, 0);
+
+    if (self >= 0) {
+        close(self);
+    }
+    if (none != MAP_FAILED) {
+        memset(none, 'n', 4096);
+    }
+    pn->none = none == MAP_FAILED || mprotect(none, 8192, PROT_NONE) != 0 ? NULL : none;
+    pn->exe = exe == MAP_FAILED ? NULL : exe;
+}
+
+/** The rows of `protnone_read`, through `path`, and of `protnone_poke`,
+ * for the stopped child `pid` and the regions of `pn`. Returns 0, or 1
+ * after the failure is printed. */
+static int protnone_rows(const char *path, pid_t pid, const struct protnone *pn)
+{
+    if (pn->none == NULL || pn->exe == NULL) {
+        return fail("PROT_NONE regions");
+    }
+    if (protnone_read(path, pn->none, pn->exe) != 0) {
+        return 1;
+    }
+    held();
+    return protnone_poke(pid, pn->none);
+}
+
+/**
+ * Check PEEKDATA, POKEDATA, /proc/PID/mem, the rows of `into_hole` and
+ * `protnone_rows`, GETREGS, the floating-point state,
+ * SINGLESTEP and a breakpoint planted with POKETEXT, in a child that ends
+ * with 0 only when it reads the word the parent wrote. Returns 0, or 1
+ * after the failure is printed.
  */
 static int memory_and_registers(void)
 {
@@ -377,12 +477,14 @@ static int memory_and_registers(void)
     long word;
     int status, fd;
     char *page = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    struct protnone pn;
     pid_t pid;
 
     if (page == MAP_FAILED || munmap(page + 4096, 4096) != 0) {
         return fail("a page with a hole after it");
     }
     memset(page, 'a', 4096);
+    protnone_map(&pn);
     pid = fork();
 
     if (pid == 0) {
@@ -413,6 +515,10 @@ static int memory_and_registers(void)
     held();
     close(fd);
     if (into_hole(path, page) != 0) {
+        return 1;
+    }
+    held();
+    if (protnone_rows(path, pid, &pn) != 0) {
         return 1;
     }
     held();
@@ -496,14 +602,37 @@ static long debug_set(pid_t pid, int n, unsigned long v)
                   (void *)v);
 }
 
+/** Debug register `n` of the stopped `pid` through PEEKUSER; errno says
+ * whether the read failed. */
+static unsigned long debug_get(pid_t pid, int n)
+{
+    struct user u;
+
+    errno = 0;
+    return (unsigned long)ptrace(
+        PTRACE_PEEKUSER, pid,
+        (void *)(offsetof(struct user, u_debugreg) + sizeof(u.u_debugreg[0]) * n), NULL);
+}
+
+/* DR7 as `debug_bounds` leaves it while the tracee runs on: an execute
+ * breakpoint on `target`, which no code reaches, with the general-detect
+ * bit 13 and reserved bit 12, and on x86-64 bit 32, which Linux keeps for a
+ * read and leaves out of what the processor is given. A context switch that
+ * loaded them would fault on bit 32 and trap every debug-register access
+ * on GD. */
+#if defined __x86_64__
+#define DR7_KEPT (0x1UL | 0x1000UL | 0x2000UL | 0x1UL << 32)
+#else
+#define DR7_KEPT (0x1UL | 0x1000UL | 0x2000UL)
+#endif
+
 /**
  * Check that DR7 enables a breakpoint only on user addresses: an execute
  * breakpoint at 0x1000 in DR0, which is below user space, fails with EINVAL,
  * and a 4-byte write breakpoint whose last byte is the last user address is
- * taken; DR7 is then cleared again. DR7 with reserved bit 12, or on x86-64 bit
- * 32, fails with EINVAL; the processor raises a general-protection fault when a
- * context switch loads DR7 with bit 32 set. Returns 0, or 1 after the failure
- * is printed.
+ * taken; DR7 is then cleared again. DR7_KEPT is taken and reads back as
+ * written, and stays set for the rows after. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int debug_bounds(pid_t pid)
 {
@@ -516,34 +645,40 @@ static int debug_bounds(pid_t pid)
         return fail("a breakpoint ending at the last user address was refused");
     }
     held();
-    if (debug_set(pid, 7, 0x1000) != -1 || errno != EINVAL) {
-        return fail("DR7 with reserved bit 12 was not refused");
+    if (debug_set(pid, 0, (unsigned long)(uintptr_t)&target) != 0 ||
+        debug_set(pid, 7, DR7_KEPT) != 0 || debug_get(pid, 7) != DR7_KEPT || errno != 0) {
+        return fail("DR7 with general-detect and reserved bits was not kept as written");
     }
     held();
-#if defined __x86_64__
-    if (debug_set(pid, 7, 0x1UL << 32) != -1 || errno != EINVAL) {
-        return fail("DR7 with reserved bit 32 was not refused");
-    }
-    held();
-#endif
     return 0;
 }
 
 /**
- * Check the stopped `pid`'s debug registers through POKEUSER and PEEKUSER, the
- * bounds of `debug_bounds`, and on x86-64 that PTRACE_SETOPTIONS fails with
- * EINVAL for an option bit past 32. Returns 0, or 1 after the failure is
- * printed.
+ * Check the stopped `pid`'s debug registers through POKEUSER and PEEKUSER:
+ * DR6 reads 0xFFFF0FF0 and DR7 0 before any is set, as Linux's
+ * `virtual_dr6` and `ptrace_dr7` of 0 read, DR0 and DR6 read back what was
+ * written; then the bounds of `debug_bounds`, and on x86-64 that
+ * PTRACE_SETOPTIONS fails with EINVAL for an option bit past 32. Returns 0,
+ * or 1 after the failure is printed.
  */
 static int debug_and_options(pid_t pid)
 {
     unsigned long dr = 0x1000;
 
+    if (debug_get(pid, 6) != 0xFFFF0FF0UL || errno != 0 || debug_get(pid, 7) != 0 || errno != 0) {
+        return fail("DR6 and DR7 before any write");
+    }
+    held();
     if (ptrace(PTRACE_POKEUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), (void *)dr) !=
             0 ||
         ptrace(PTRACE_PEEKUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), NULL) !=
             0x1000) {
         return fail("a debug register through POKEUSER and PEEKUSER");
+    }
+    held();
+    if (debug_set(pid, 6, 0xFFFF4FF1UL) != 0 || debug_get(pid, 6) != 0xFFFF4FF1UL ||
+        debug_set(pid, 6, 0xFFFF0FF0UL) != 0 || debug_get(pid, 6) != 0xFFFF0FF0UL) {
+        return fail("DR6 through POKEUSER and PEEKUSER");
     }
     held();
     if (debug_bounds(pid) != 0) {
@@ -627,6 +762,11 @@ static int syscalls_and_exec(void)
     }
     held();
     close(mem);
+    if (debug_get(pid, 0) != 0 || errno != 0 || debug_get(pid, 6) != 0xFFFF0FF0UL || errno != 0 ||
+        debug_get(pid, 7) != 0 || errno != 0) {
+        return fail("the debug registers after the exec");
+    }
+    held();
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 6) {
         return fail("the exec'd program");
@@ -3987,12 +4127,13 @@ static int second_rows(void)
 /* The assertions after `ended-mem-freed`, in the order they are checked. */
 static const char *const later_rows[] = {
     "setoptions",
+    "debugreg-initial",
     "debugreg-peekuser",
+    "dr6-peekuser",
     "dr7-kernel-einval",
     "dr7-last-user",
-    "dr7-bit12-einval",
+    "dr7-reserved-kept",
 #if defined __x86_64__
-    "dr7-bit32-einval",
     "setoptions-wide-einval",
 #endif
     "getpid-entry",
@@ -4000,6 +4141,7 @@ static const char *const later_rows[] = {
     "exec-waitid",
     "exec-event",
     "exec-mem-empty",
+    "exec-debugreg-clear",
     "exec-runs",
     "changes-getpid-entry",
     "changes-entry-siginfo",
@@ -4137,6 +4279,8 @@ static void plan(void)
         "pokedata",
         "proc-mem-read",
         "proc-mem-hole",
+        "proc-mem-protnone",
+        "peek-poke-protnone",
         "getregs",
         "fpregs",
         "singlestep",

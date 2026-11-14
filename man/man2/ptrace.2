@@ -637,9 +637,15 @@ tracee runs.
 DR7 may enable a breakpoint only on an address aligned to its length of
 1, 2 or 4 bytes, or 8 on x86-64, whose bytes are all user addresses, from
 0x04000000 to 0xbfffffff on i686 and from 0x10000 to 0x7fffffffefff on
-x86-64, an execute breakpoint only of length 1, and no I/O breakpoint,
-general-detect bit or reserved bit; a value against these is
+x86-64, an execute breakpoint only of length 1, and no I/O breakpoint; a
+value against these is
 .Er EINVAL .
+As on Linux, DR7 reads back as written, its general-detect and reserved
+bits among them, which the processor is never given, and DR6 reads
+0xffff0ff0 until a debug exception or the tracer sets a bit.
+An
+.Xr execve 2
+clears all of them.
 A breakpoint that fires sends
 .Dv SIGTRAP
 with

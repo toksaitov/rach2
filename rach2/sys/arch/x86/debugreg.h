@@ -12,18 +12,21 @@
  * runs (`arch_debug_switch`).
  */
 
-/* DR7's bits the processor keeps set, which a read shows and a write may
- * leave out. */
+/* DR7's bits the processor keeps set, which the scheduler adds to what it
+ * loads. */
 #define DR7_ONE 0x00000400u
 
-/** Debug register `n` of `t` as PTRACE_PEEKUSER reads it. */
+/** Debug register `n` of `t` as PTRACE_PEEKUSER reads it: DR6 0xFFFF0FF0
+ * until a debug exception or a tracer sets a bit, and DR7 as last written,
+ * 0 at first, as on Linux. */
 unsigned long debugreg_peek(const process_t *t, unsigned n);
 
 /** Set debug register `n` of `t`, a stopped thread, to `v` for
  * PTRACE_POKEUSER: 0, -EIO for DR4, DR5 and a number above 7, or -EINVAL,
- * with the register unchanged, for a DR7 the processor must not be given or
- * an address that an enabled breakpoint would then watch outside user
- * space. */
+ * with the register unchanged, for a DR7 that enables a breakpoint the
+ * processor must not be given or an address that an enabled breakpoint
+ * would then watch outside user space. DR7's general-detect and reserved
+ * bits are kept for a read but never loaded. */
 int debugreg_poke(process_t *t, unsigned n, unsigned long v);
 
 /* What `debugreg_status` returns for a breakpoint the current thread no
