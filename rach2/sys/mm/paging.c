@@ -717,7 +717,8 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
  * asked with the regions' lock let go, as for its share, and its pages are
  * mapped only while the region still maps the whole window of the file as
  * it did and no unmap of a truncated file's pages has come since; a page
- * another fault mapped meanwhile is left as it is. `hits` asks the file to
+ * another fault mapped meanwhile is left as it is, and a guard page
+ * (`vm_guarded`) is not mapped. `hits` asks the file to
  * count the pages it lends as found in memory (`struct vm_file`). Called
  * from `shared_fault` with the regions' lock held to read, which it lets go
  * and takes again. 1 when it mapped `page` itself, which with `hits`
@@ -774,7 +775,8 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
         lock = mm_ptl_lock(mm);
         table = mmu_user_table(mm->dir, from, 1);
         for (i = 0; table && i < n; i++) {
-            if (phys[i] && table[MMU_INDEX(from + i * PAGE_SIZE)] == 0) {
+            if (phys[i] && table[MMU_INDEX(from + i * PAGE_SIZE)] == 0 &&
+                !vm_guarded(&mm->vm, from + i * PAGE_SIZE)) {
                 table[MMU_INDEX(from + i * PAGE_SIZE)] =
                     PTE_ADDR((pte_t)phys[i]) | (flags & (pte_t)PTE_FLAGS);
                 mm_resident_add(mm->dir, 1);
@@ -1512,6 +1514,14 @@ int vm_prefault_held(uintptr_t addr, uintptr_t len, int write)
         return 1;
     }
     return prefault_locked(current_proc->mm, addr, end, write);
+}
+
+void paging_zap_note(struct mm *mm)
+{
+    uint32_t lock = mm_ptl_lock(mm);
+
+    mm->zaps++;
+    mm_ptl_unlock(mm, lock);
 }
 
 /**

@@ -602,12 +602,14 @@ which carries it with the pages; it ends with
 .Fn munmap ,
 a mapping over it, or
 .Dv MADV_GUARD_REMOVE
-(103), after which its pages read as zeros.
-Both take only anonymous private memory, of
-.Dv MAP_ANONYMOUS ,
-the heap or the stack, and
+(103), after which its pages read as zeros, or as the file in a mapping
+of one.
+Both take any mapping but a device object's and the vDSO's, as Linux 6.18
+takes file and shared mappings, and
 .Dv MADV_GUARD_INSTALL
-no locked mapping; the rest they refuse.
+no locked mapping and none of
+.Xr memfd_secret 2 ,
+which Linux maps locked; the rest they refuse.
 As on Linux 6.13 and later, a guard marks pages and splits no mapping, so
 .Pa /proc/ Ns Ar pid Ns Pa /maps
 shows the mapping whole and
@@ -906,8 +908,9 @@ over a locked mapping or a device object's, or
 .Dv MADV_GUARD_INSTALL
 or
 .Dv MADV_GUARD_REMOVE
-over memory that is not anonymous and private, or the first over a locked
-mapping;
+over a device object's mapping or the vDSO, or the first over a locked
+mapping or one of
+.Xr memfd_secret 2 ;
 for a device object's
 .Fn mmap ,
 a private mapping or a range the object refuses;

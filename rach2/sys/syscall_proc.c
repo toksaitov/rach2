@@ -9176,34 +9176,52 @@ static int madvise_known(uint32_t advice)
 }
 
 /**
- * Whether the region `r` may hold a guard, as Linux 6.13's
- * is_valid_guard_vma has it, or be wiped at a fork, as Linux's
- * MADV_WIPEONFORK takes it: anonymous and private, the memory of mmap's
- * MAP_ANONYMOUS, the heap or the stack, and not device memory; and for a
- * guard's `install` not locked, whose pages Linux will not drop.
+ * Whether the region `r` may be wiped at a fork, as Linux's MADV_WIPEONFORK
+ * takes it: anonymous and private, the memory of mmap's MAP_ANONYMOUS, the
+ * heap or the stack, and not device memory.
+ */
+static int madvise_wipe_allowed(const vma_t *r)
+{
+    return r->file == NULL && (r->type == VM_ANON || r->type == VM_HEAP || r->type == VM_STACK) &&
+           !(r->prot & VM_PROT_IO);
+}
+
+/**
+ * Whether the region `r` may hold guard pages, as Linux 6.18's
+ * is_valid_guard_vma has it: any but device memory and the vDSO's two
+ * regions, which Linux marks VM_SPECIAL, and for a guard's `install` none
+ * that is locked, whose pages Linux will not drop, memfd_secret's among
+ * them, which Linux maps locked.
  */
 static int madvise_guard_allowed(const vma_t *r, int install)
 {
-    return r->file == NULL && (r->type == VM_ANON || r->type == VM_HEAP || r->type == VM_STACK) &&
-           !(r->prot & VM_PROT_IO) && !(install && (r->prot & VM_PROT_LOCKED));
+    return !(r->prot & (VM_PROT_IO | VM_PROT_VVAR)) && !vdso_region_name(r->file) &&
+           !(install && (r->prot & (VM_PROT_LOCKED | VM_PROT_SECRET)));
 }
 
 int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice)
 {
     int drop = advice == MADV_DONTNEED || advice == MADV_FREE || advice == MADV_COLD ||
                advice == MADV_PAGEOUT;
-    int anon =
-        advice == MADV_GUARD_INSTALL || advice == MADV_GUARD_REMOVE || advice == MADV_WIPEONFORK;
+    int guard = advice == MADV_GUARD_INSTALL || advice == MADV_GUARD_REMOVE;
     uintptr_t at;
 
-    if (!drop && !anon && advice != MADV_DONTNEED_LOCKED && advice != MADV_DOFORK) {
+    if (!drop && !guard && advice != MADV_WIPEONFORK && advice != MADV_DONTNEED_LOCKED &&
+        advice != MADV_DOFORK) {
         return 0;
     }
     for (at = start; at < end; at = vm_find(vm, at)->end) {
         const vma_t *r = vm_find(vm, at);
+        int refused;
 
-        if (anon ? !madvise_guard_allowed(r, advice == MADV_GUARD_INSTALL)
-                 : (r->prot & VM_PROT_IO) || (drop && (r->prot & VM_PROT_LOCKED))) {
+        if (guard) {
+            refused = !madvise_guard_allowed(r, advice == MADV_GUARD_INSTALL);
+        } else if (advice == MADV_WIPEONFORK) {
+            refused = !madvise_wipe_allowed(r);
+        } else {
+            refused = (r->prot & VM_PROT_IO) || (drop && (r->prot & VM_PROT_LOCKED));
+        }
+        if (refused) {
             return 1;
         }
     }
@@ -9285,6 +9303,7 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
             return -ENOMEM;
         }
         if (advice == MADV_GUARD_INSTALL) {
+            paging_zap_note(current_proc->mm);
             mmn_notify(current_proc->mm, MMN_DROP, addr, end);
             unmap_user_range(_curr_dir, addr, end);
         }
@@ -9327,17 +9346,17 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
  * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
  * makes the range's pages guard pages (`vm_guard_set`, vm.h), which lose
  * their frames and whose every access is SIGSEGV with SEGV_MAPERR, and
- * MADV_GUARD_REMOVE makes them ordinary pages again, which read as zeros;
- * both are EINVAL over a region that may not hold a guard
- * (`madvise_guard_allowed`) and ENOMEM when the record of the guards has no
- * room. As Linux 6.13 and later mark guard pages in the page tables, no
- * region is split, so a guard adds nothing to /proc/PID/maps or to the count
- * vm.max_map_count bounds. Any other advice `madvise_known`
- * takes changes nothing, and the rest is EINVAL, as Linux refuses an advice it
- * does not define. A range with a page in no region is ENOMEM, as in Linux. A
- * range that runs past user space is EINVAL, judged by the length as given: a
- * length within a page of 4 GiB rounds up to 0, which would pass for an empty
- * range.
+ * MADV_GUARD_REMOVE makes them ordinary pages again, which read as zeros in
+ * anonymous memory and as the file in a mapping of one; both are EINVAL over
+ * a region that may not hold a guard (`madvise_guard_allowed`) and ENOMEM
+ * when the record of the guards has no room. As Linux 6.13 and later mark
+ * guard pages in the page tables, no region is split, so a guard adds
+ * nothing to /proc/PID/maps or to the count vm.max_map_count bounds. Any
+ * other advice `madvise_known` takes changes nothing, and the rest is
+ * EINVAL, as Linux refuses an advice it does not define. A range with a
+ * page in no region is ENOMEM, as in Linux. A range that runs past user
+ * space is EINVAL, judged by the length as given: a length within a page of
+ * 4 GiB rounds up to 0, which would pass for an empty range.
  */
 long sys_madvise(isr_params_t *params)
 {

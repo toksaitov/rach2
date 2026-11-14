@@ -345,6 +345,14 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write);
 int vm_ready_held(uintptr_t addr, uintptr_t len, int write);
 
 /**
+ * Move the count of zaps of `mm` (`struct mm`'s `zaps`) for a change made
+ * under its regions' lock held to write that takes pages away without
+ * changing a region, as MADV_GUARD_INSTALL does: a fault that let the lock
+ * go across a file's operation then maps nothing it found before.
+ */
+void paging_zap_note(struct mm *mm);
+
+/**
  * Bring in the pages of [start, end) of the current process's regions as
  * faults would, for mmap's MAP_POPULATE and for the locked regions of the
  * mlock calls: those of a private writable region for a write, the others

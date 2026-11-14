@@ -454,8 +454,9 @@ long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *
  * Whether madvise's `advice` over [start, end), which regions of `vm` cover
  * without a gap, is EINVAL for a region it meets: the dropping advice and
  * MADV_DOFORK over device memory; MADV_DONTNEED, MADV_FREE, MADV_COLD and
- * MADV_PAGEOUT over a locked region; and the guard advice over a region that
- * may not hold a guard. 1 or 0. madvise and process_madvise ask it;
+ * MADV_PAGEOUT over a locked region; MADV_WIPEONFORK over a region that is
+ * not private anonymous memory; and the guard advice over a region that may
+ * not hold a guard. 1 or 0. madvise and process_madvise ask it;
  * it is madvise(2)'s, in syscall_proc.c.
  */
 int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice);
@@ -647,7 +648,10 @@ int vm_guarded(const vm_space_t *vm, uintptr_t addr);
  * Make each page of [start, end), page-aligned, a guard page when `on`, as
  * MADV_GUARD_INSTALL does, or no longer one, as MADV_GUARD_REMOVE does; a
  * page that already is, or is not, stays so. The regions must cover the
- * range when `on`; none is split. The caller clears the range's entries.
+ * range when `on`; none is split. For an install the caller then moves the
+ * space's count of zaps (`paging_zap_note`), so that a fault that let the
+ * regions' lock go maps nothing over a new guard page, and clears the
+ * range's entries.
  * 0, or -1 with no room, with nothing changed.
  */
 int vm_guard_set(vm_space_t *vm, uintptr_t start, uintptr_t end, int on);
