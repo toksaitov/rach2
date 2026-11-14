@@ -94,6 +94,8 @@
 #define SIGKILL      9
 #define ESRCH        3
 #define ENOENT       2
+#define EPERM        1
+#define EACCES       13
 
 #if defined __x86_64__
 #define SYS_MEMFD_CREATE 319
@@ -272,6 +274,8 @@ static const struct row {
             {"sysctl-ranges", ROW_PLAIN},
             {"sysctl-forwarding-kept", ROW_PLAIN},
             {"sysctl-secret-refuse", ROW_PLAIN},
+            {"sysctl-perm-write", ROW_PLAIN},
+            {"sysctl-read-live", ROW_PLAIN},
             {"loop-drain-time", ROW_PLAIN},
             {"loop-drain-rest", ROW_PLAIN},
             {"rtc-open", ROW_PLAIN},
@@ -1651,6 +1655,74 @@ static int sysctl_uint_offset(void)
     return ok;
 }
 
+/**
+ * The child of `sysctl_perm_write`: opens net/core/netdev_max_backlog for
+ * writing as root, takes uid 1000, and exits 0 when its write through that
+ * descriptor is EPERM and a new open for writing EACCES, or with the number
+ * of the step that went otherwise.
+ */
+static void sysctl_perm_child(void)
+{
+    int fd = syscall3(SYS_OPEN, (long)SYS_BACKLOG, O_WRONLY, 0);
+
+    if (fd < 0) {
+        sys_exit(1);
+    }
+    if (syscall3(SYS_SETRESUID, probe_id(1000), probe_id(1000), probe_id(1000)) != 0) {
+        sys_exit(2);
+    }
+    if (syscall3(SYS_WRITE, fd, (long)"5\n", 2) != -EPERM) {
+        sys_exit(3);
+    }
+    if (write_file(SYS_BACKLOG, "5\n", 2) != -EACCES) {
+        sys_exit(4);
+    }
+    sys_exit(0);
+}
+
+/** Whether a /proc/sys descriptor root opened for writing refuses a write
+ * once its process has taken an unprivileged uid, as Linux checks
+ * sysctl_perm at each write; the value is put back in case it changed. */
+static int sysctl_perm_write(void)
+{
+    static char was[24];
+    int had = slurp(SYS_BACKLOG, was, (int)sizeof(was));
+    int status = -1;
+    int pid = syscall1(SYS_FORK, 0);
+
+    if (pid == 0) {
+        sysctl_perm_child();
+    }
+    if (pid < 0 || syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
+        return 0;
+    }
+    put_back(SYS_BACKLOG, was, had);
+    return status == 0 && had >= 2 && reads_as(SYS_BACKLOG, was);
+}
+
+/** Whether kernel/pid_max, opened for reading, reads the value another
+ * descriptor wrote after the open, as Linux reads it at each read; the
+ * value is put back as it was read. */
+static int sysctl_read_live(void)
+{
+    static const char pid_max[] = "/proc/sys/kernel/pid_max";
+    static char was[24], got[24];
+    int had = slurp(pid_max, was, (int)sizeof(was));
+    const char *want = same_str(was, "40000\n") ? "40001\n" : "40000\n";
+    int fd = syscall3(SYS_OPEN, (long)pid_max, O_RDONLY, 0);
+    int n, ok = had >= 2 && fd >= 0 && write_file(pid_max, want, 6) == 6;
+
+    n = fd >= 0 ? syscall3(SYS_READ, fd, (long)got, (int)sizeof(got) - 1) : -1;
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    if (n >= 0) {
+        got[n] = '\0';
+    }
+    put_back(pid_max, was, had);
+    return ok && n == 6 && same_str(got, want);
+}
+
 /** The /proc/sys files read and write as Linux 6.12's handler of each
  * does, as the tables above and the two functions before say. */
 static void sysctl_handler_rows(void)
@@ -1687,6 +1759,12 @@ static void sysctl_handler_rows(void)
               write_file("/proc/sys/net/ipv6/conf/default/stable_secret", "zz\n", 3) == -EIO,
           "ipv6's stable_secret refuses a write to all and text that is no address with EIO, as "
           "addrconf_sysctl_stable_secret does");
+    check("sysctl-perm-write", sysctl_perm_write(),
+          "a write to net/core/netdev_max_backlog through a descriptor root opened is EPERM "
+          "after setresuid to 1000, and a new open for writing EACCES");
+    check("sysctl-read-live", sysctl_read_live(),
+          "kernel/pid_max opened for reading reads a value written through another descriptor "
+          "after the open");
 }
 
 /**
