@@ -23,6 +23,11 @@ int nvme_init(void)
 {
     return -1;
 }
+/** No virtio block device. */
+int virtio_blk_init(void)
+{
+    return -1;
+}
 /** No platform disks. */
 void platform_disks_probe(void)
 {}

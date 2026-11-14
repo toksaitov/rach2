@@ -393,6 +393,11 @@ int nvme_init(void)
     return -1;
 }
 /** The host fixture supplies its devices directly. */
+int virtio_blk_init(void)
+{
+    return -1;
+}
+/** The host fixture supplies its devices directly. */
 void platform_disks_probe(void)
 {}
 /** There is no disk registry in this model. */

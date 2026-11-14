@@ -721,6 +721,12 @@ block_device_t *block_physical(block_device_t *dev)
     return dev;
 }
 
+/** The device that answers for `dev`: the fixture's disks are no views. */
+block_device_t *block_submitter(block_device_t *dev)
+{
+    return dev;
+}
+
 /** A block transfer, which no row makes. */
 int block_request(block_device_t *dev, int write, uint64_t lba, uint32_t count, void *buf)
 {
