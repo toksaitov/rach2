@@ -1747,7 +1747,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 230
+          "limit": 338
         }
       ],
       "bounds": {
