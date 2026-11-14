@@ -370,7 +370,8 @@ int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
  * `type`. The range must be non-empty, page-aligned at both ends and clear
  * of every region. The region has the default policy and is merged with a
  * neighbour it touches that has the same kind, protection and policy and
- * maps no file, or the same file without a gap. Returns 0, or -1, with
+ * maps no file, or the same file without a gap, through the same record or
+ * one its `same` accepts. Returns 0, or -1, with
  * nothing changed, for a range that breaks those rules, at
  * vm_max_map_count, or when no node can be allocated.
  */
