@@ -1836,10 +1836,10 @@ static void user_opened_child(const char *want)
         sys_exit(2);
     }
     n = syscall3(SYS_READ, fd, (long)got, (int)sizeof(got) - 1);
+    got[n > 0 ? n : 0] = '\0';
     if (n < 0) {
         sys_exit(3);
     }
-    got[n] = '\0';
     if (!same_str(got, want)) {
         sys_exit(4);
     }
