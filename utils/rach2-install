@@ -2678,6 +2678,8 @@ EOF
     case "$update_image" in
         *.gz)
             update_sum=${update_image%.gz}.sha256
+            [ -f "$update_sum" ] ||
+                die "$update_image needs $update_sum, the uncompressed image's digest, since a pipe hides gzip's failure"
             bytes=$(image_bytes | wc -c | tr -d ' ') || die "$update_image could not be read whole"
             ;;
         *) bytes=$(stat -c %s "$update_image") ;;

@@ -197,8 +197,9 @@
 #   recovery system again, which is then the build's. The old kernel and
 #   root stay as they were, so a recovery system that does not start leaves
 #   a machine that a power cycle returns to them.
-# * transfer: the kernel and the root go to the recovery system's /dev/shm,
-#   the root decompressed on the way, and each is checked by SHA-256.
+# * transfer: the kernel and the gzip-compressed root go to the recovery
+#   system's /dev/shm, each checked by SHA-256, with the uncompressed root's
+#   digest beside it in root.ext2.sha256.
 # * kernel and install: a build whose `rach2-install` has `--slots` moves a
 #   disk with kernel slots smaller than the build's to them first, since the
 #   build's bootctl refuses a kernel in a smaller slot; the move saves the
@@ -1072,16 +1073,19 @@ install()
             > /dev/null 2>&1 < /dev/null &" || fail install "the installer could not be started"
         say "install: rach2-install $install_words --update runs on the machine"
     fi
-    i=0
+    # Wait for as long as the installer's log exists, as a suite judges by
+    # what the machine reports and not by the clock: the 16 GiB root is read
+    # three times through gzip, and a reboot that removed the log ends it.
     while :; do
-        status=$(lenovo 'cat /dev/shm/install.status 2> /dev/null; true') ||
-            say "install: the machine did not answer; waiting"
+        status=$(lenovo 'cat /dev/shm/install.status 2> /dev/null ||
+            { test -e /dev/shm/install.log && echo running; } || echo gone') || status=
         case $status in
             0) break ;;
             [0-9]*) fail install "rach2-install ended $status: $(lenovo 'tail -n 5 /dev/shm/install.log' | tr '\n' ' ')" ;;
+            gone) fail install "the installer's log is gone, so a reboot interrupted it; run rach2-install --console term --update by hand from recovery" ;;
+            running) ;;
+            *) say "install: the machine did not answer; waiting" ;;
         esac
-        i=$((i + 1))
-        [ "$i" -lt 240 ] || fail install "rach2-install has not ended after an hour"
         sleep 15
     done
     lenovo 'cat /dev/shm/install.log' >> "$state/log" 2>&1
