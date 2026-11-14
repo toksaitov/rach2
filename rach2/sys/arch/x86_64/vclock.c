@@ -113,13 +113,16 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * no measure: it is read again, up to WATCH_READS times, as Linux's
  * cs_watchdog_read reads again a read of the HPET that was held up, and
  * where every one was held up the span keeps its start and the next tick
- * tries again. A span past twice its length, by the tick's clock or by
- * the TSC, begins again unjudged, as Linux skips an interval that either
- * clock found too long (the greater of cs_nsec and wd_nsec against
- * WATCHDOG_INTERVAL_MAX_NS): a stretch of 43 s with no tick loses a wrap
- * of the HPET's 32 bits at 100 MHz from the tick's clock, and leaves a
- * span short by the tick's clock and long by the TSC, which is right. A
- * due span's processor that has not read its end once
+ * tries again. A span past twice its length by the tick's clock begins
+ * again unjudged, as Linux skips an interval its watchdog clock found too
+ * long (wd_nsec past four WATCHDOG_INTERVALs). One that only the TSC ran
+ * past twice its length is judged, so that a TSC that runs fast parts from
+ * the clock, unless the TSC ran half a wrap of the tick's counter or more:
+ * a stretch that long with no tick loses wraps from the tick's clock, as
+ * one of 43 s loses a wrap of the HPET's 32 bits at 100 MHz and leaves a
+ * span short by the tick's clock and long by the TSC, which is right. That
+ * span begins again unjudged, up to WATCH_OVERRUNS times in a row, and is
+ * judged after. A due span's processor that has not read its end once
  * its turn has lasted both WATCH_ANSWER_NS of the raw clock and
  * WATCH_ANSWER_PASSES clock passes, having taken neither its tick nor
  * those passes' kicks, or having had every reading held up, loses its
@@ -140,8 +143,10 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * instead, as Linux's tsc_refine_calibration_work measures the TSC again a
  * second after boot (arch/x86/kernel/tsc.c: 1314-1406): the boot's measure
  * spans 20 ms. A first span that differs from the boot's rate by more than
- * a hundredth keeps that rate, as Linux's does, and the watch goes on from
- * there; a TSC that has not moved over a span parts from the clock.
+ * a hundredth is measured again, and its rate set only where two in a row
+ * agree (`vclock_watch_refine`), so that the watch never judges against a
+ * rate it found wrong; a TSC that has not moved over a span parts from the
+ * clock.
  */
 #define WATCH_SPAN_NS       500000000u /* WATCHDOG_INTERVAL */
 #define WATCH_FIRST_NS      1000000000u
@@ -150,6 +155,9 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 #define WATCH_READS         3       /* cs_watchdog_read's on 4 to 15 processors */
 #define WATCH_ANSWER_NS     WATCH_SPAN_NS
 #define WATCH_ANSWER_PASSES 4
+#define WATCH_OVERRUNS      3
+#define WATCH_TRIALS        3
+#define WATCH_TRIAL_PART    20u
 
 /*
  * The watch's state: whether the running clock reads a watched TSC, whether
@@ -160,7 +168,10 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * `watch_cpu` reads its end and clears it; the raw clock where that
  * processor's turn began and the clock passes since count toward its
  * deadline; each changes under `vclock_lock`, and `vclock_watch_cpu`
- * reads them first without it.
+ * reads them first without it. The spans begun again in a row because the
+ * TSC alone overran them, and, before the rate is set, the last first
+ * span's measure that differed from the boot's, in counts a tick, and the
+ * first spans measured so, change under `vclock_lock` alone.
  */
 static int watching;
 static int watch_based;
@@ -174,6 +185,9 @@ static volatile int watch_due;
 static volatile int watch_cpu;
 static uint64_t watch_turn_raw;
 static uint32_t watch_turn_passes;
+static uint32_t watch_overruns;
+static uint32_t watch_trial;
+static uint32_t watch_trials;
 
 /* The time zone settimeofday set, for a page built after it
  * (`vclock_set_tz`). */
@@ -484,6 +498,9 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     kvm_stopped = 0;
     watching = !kvm && tsc_counts_per_tick() == 0;
     watch_based = 0;
+    watch_overruns = 0;
+    watch_trial = 0;
+    watch_trials = 0;
     watch_due = 0;
     watch_cpu = (int)arch_cpu_id();
     *mono_ns = mono_base_ns;
@@ -613,19 +630,75 @@ static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns)
 enum { WATCH_KEEP, WATCH_BEGUN, WATCH_REFINED, WATCH_PARTED, WATCH_EARLY };
 
 /**
+ * The nanoseconds of the tick's raw clock in which its counter, the
+ * HPET's or the PM timer's, wraps, 0 for none: a stretch with no tick
+ * that long loses wraps from the tick's clock (../x86/pit.c).
+ */
+static uint64_t vclock_ref_wrap_ns(void)
+{
+    uint32_t hz = refclock_hz();
+
+    return hz ? tick_div64(((uint64_t)refclock_mask() + 1u) * NSEC_PER_SEC, hz, NULL) : 0;
+}
+
+/**
+ * The first span's measure of the rate, `delta` counts over `span` of the
+ * tick's raw clock, `ran` nanoseconds at the rate the clock runs at: set
+ * it where it is within a hundredth of that rate, as Linux's refinement
+ * keeps the boot's rate otherwise (arch/x86/kernel/tsc.c:1379-1381), or
+ * where it agrees within the watch's margin with the first span before,
+ * which also differed, since two spans of the tick's clock that agree
+ * outweigh a boot's measure of 20 ms. A measure more than
+ * 1/WATCH_TRIAL_PART from the clock's rate, which a boot's measure held
+ * within a part in 512 (../x86/pit.c) cannot explain, is no trial. A TSC
+ * whose WATCH_TRIALS first spans agree with neither parts from the clock,
+ * as one that disagrees by more than a hundredth would part from it at the
+ * next span. WATCH_REFINED, WATCH_BEGUN for a new first span, or
+ * WATCH_PARTED. Under `vclock_lock`.
+ */
+static int vclock_watch_refine(uint64_t delta, uint64_t span, uint64_t ran)
+{
+    uint64_t per_tick = 0, off = ran > span ? ran - span : span - ran, apart;
+
+    if (delta <= ~(uint64_t)0 / TICK_NS) {
+        per_tick = tick_div64(delta * TICK_NS, span, NULL);
+    }
+    if (per_tick == 0 || per_tick > 0xFFFFFFFFu || off > span / WATCH_TRIAL_PART) {
+        per_tick = 0;
+    } else if (off <= span / 100u) {
+        watch_refined = 1;
+    } else if (watch_trial != 0) {
+        apart = per_tick > watch_trial ? per_tick - watch_trial : watch_trial - per_tick;
+        watch_refined = apart * WATCH_SPAN_NS <= (uint64_t)watch_trial * WATCH_LIMIT_NS;
+    }
+    if (watch_refined) {
+        timer_tsc_watch_refine((uint32_t)per_tick);
+        return WATCH_REFINED;
+    }
+    watch_trial = (uint32_t)per_tick;
+    if (++watch_trials >= WATCH_TRIALS) {
+        watch_parted = 1;
+        watch_ran_ns = ran;
+        watch_span_ns = span;
+        return WATCH_PARTED;
+    }
+    return WATCH_BEGUN;
+}
+
+/**
  * Set the watched TSC against the tick's raw clock `ref_raw`, read between
  * the moments `*before` and `*after` on this processor, a reading not held
  * up (`vclock_watch_cpu`), as the comment at WATCH_SPAN_NS says: begin a
- * span, measure the rate over the first one, or test a later one, and
- * begin the next span where the measured one ended. WATCH_BEGUN where
- * there was no span to measure, or one it could not judge, and
- * WATCH_PARTED after it sets `watch_parted`, which the tick acts on. Under
- * `vclock_lock`.
+ * span, measure the rate over the first one (`vclock_watch_refine`), or
+ * test a later one, and begin the next span where the measured one ended.
+ * WATCH_BEGUN where there was no span to measure, or one it could not
+ * judge, and WATCH_PARTED after it sets `watch_parted`, which the tick acts
+ * on. Under `vclock_lock`.
  */
 static int vclock_watch(const struct vclock_sample *before, const struct vclock_sample *after,
                         uint64_t ref_raw)
 {
-    uint64_t tsc, span, need, ran, delta, most, per_tick;
+    uint64_t tsc, span, need, ran, delta, most, wrap;
 
     tsc = vclock_middle(before->tsc, after->tsc);
     need = watch_refined ? WATCH_SPAN_NS : WATCH_FIRST_NS;
@@ -639,32 +712,20 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
     if (span < need) {
         return WATCH_EARLY;
     }
-    /* A TSC behind the span's start ran none of it; one past twice the
-     * span's length begins the span again, which bounds the products
-     * below: twice the span is under 2^31 ns, the rate under 2^32. */
+    /* A TSC behind the span's start ran none of it. */
     most = tick_div64(2u * need * tsc_clock_per_tick(), TICK_NS, NULL);
     delta = tsc > watch_tsc ? tsc - watch_tsc : 0;
-    if (delta > most) {
-        watch_tsc = tsc;
-        watch_raw = ref_raw;
-        return WATCH_KEEP;
-    }
     ran = vclock_scale(delta, mult_measured, data->shift);
+    wrap = vclock_ref_wrap_ns();
     watch_tsc = tsc;
     watch_raw = ref_raw;
+    if (delta > most && wrap != 0 && ran >= wrap / 2u && watch_overruns < WATCH_OVERRUNS) {
+        watch_overruns++;
+        return WATCH_BEGUN;
+    }
+    watch_overruns = 0;
     if (!watch_refined) {
-        watch_refined = 1;
-        /* Within a hundredth of the boot's measure, as Linux's refinement
-         * keeps the boot's rate otherwise (arch/x86/kernel/tsc.c:1379-1381). */
-        if ((ran > span ? ran - span : span - ran) > span / 100u) {
-            return WATCH_KEEP;
-        }
-        per_tick = tick_div64(delta * TICK_NS, span, NULL);
-        if (per_tick == 0 || per_tick > 0xFFFFFFFFu) {
-            return WATCH_KEEP;
-        }
-        timer_tsc_watch_refine((uint32_t)per_tick);
-        return WATCH_REFINED;
+        return vclock_watch_refine(delta, span, ran);
     }
     if ((ran > span ? ran - span : span - ran) > WATCH_LIMIT_NS) {
         watch_parted = 1;

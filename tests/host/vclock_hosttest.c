@@ -69,10 +69,13 @@
  * first kick and its answer, ends no turn, and one after four unanswered
  * passes ends it but stops no clock; a stretch of 43.4 s with no tick,
  * which the tick's clock reads a wrap of the HPET short and the TSC whole,
- * begins the span again and stops no clock; and while the second processor
- * never answers, a drift of the boot processor, the one of two left, is
- * caught, since the turn it takes back keeps until it measured its span,
- * and so is a third processor's.
+ * begins the span again and stops no clock; a TSC at three times its rate
+ * stops the clock at its first span, and one at 99 times, half a wrap of
+ * the HPET in a span, at its fourth; a boot's rate 2% high is measured
+ * again and set, and the clock runs, where one 6% high stops it; and while
+ * the second processor never answers, a drift of the boot processor, the
+ * one of two left, is caught, since the turn it takes back keeps until it
+ * measured its span, and so is a third processor's.
  */
 
 #include "arch/x86_64/vclock.c"
@@ -113,6 +116,9 @@ static uint64_t drift_ppm[NR_CPUS];
 static uint64_t drift_from_ns;
 static int tsc_untrusted;
 static uint32_t watch_per_tick;
+/* The rate `timer_tsc_watch` measured at a row's boot, 0 for the TSC's own,
+ * 2 GHz. */
+static uint32_t boot_per_tick;
 
 /* The held reads of the tick's clock: in each tick whose count is
  * `hold_phase` modulo `hold_every`, the first `hold_reads` reads each take
@@ -228,6 +234,18 @@ void timer_tsc_watch_refine(uint32_t per_tick)
 const char *refclock_name(void)
 {
     return "hpet";
+}
+
+/** The HPET's rate, 100 MHz. */
+uint32_t refclock_hz(void)
+{
+    return 100000000u;
+}
+
+/** The HPET's main counter's 32 bits. */
+uint32_t refclock_mask(void)
+{
+    return 0xFFFFFFFFu;
 }
 
 /** tick.c's 64-bit division, which the host does itself. */
@@ -1298,7 +1316,7 @@ static void watch_boot(int cpus)
     tsc_ahead = 0;
     tsc_held = 0;
     tsc_untrusted = 1;
-    watch_per_tick = 2u * TICK_NS;
+    watch_per_tick = boot_per_tick ? boot_per_tick : 2u * TICK_NS;
     for (c = 0; c < NR_CPUS; c++) {
         cpu_table[c].online = c < cpus;
         drift_ppm[c] = 0;
@@ -1538,6 +1556,91 @@ static void watch_stretch_rows(void)
     drift_ppm[0] = 0;
 }
 
+/** Ticks until a span begins at one, at most a second of them; whether
+ * one did with the clock running. */
+static int watch_until_span(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < TICK_HZ; i++) {
+        if (!watch_tick()) {
+            return 0;
+        }
+        if (watch_based && watch_raw == now_ns) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * A TSC that runs at three times its rate once its rate is set, which the
+ * TSC alone finds past twice each span's length, stops the clock at the
+ * first span it runs fast through; one at 99 times, which runs half a wrap
+ * of the HPET in a span, has its span begun again three times, as a
+ * stretch with no tick would, and stops the clock at the fourth.
+ */
+static void watch_fast_rows(void)
+{
+    uint32_t ran;
+
+    watch_boot(1);
+    ran = watch_ticks(2u * TICK_HZ);
+    CHECK(ran == 2u * TICK_HZ && vclock_running() && watch_refined, "the rate is set");
+    CHECK(watch_until_span(), "a span begins");
+    drift_ppm[0] = 2000000;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && ran <= TICK_HZ / 2u + 1u,
+          "a TSC at three times its rate stops the clock within half a second");
+
+    watch_boot(1);
+    ran = watch_ticks(2u * TICK_HZ);
+    CHECK(ran == 2u * TICK_HZ && vclock_running() && watch_refined, "the rate is set");
+    CHECK(watch_until_span(), "a span begins");
+    drift_ppm[0] = 98000000;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(4u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && ran > 3u * TICK_HZ / 2u && ran <= 2u * TICK_HZ + 1u,
+          "a TSC at 99 times its rate, past half a wrap of the HPET in a span, stops the "
+          "clock at its fourth span");
+    drift_ppm[0] = 0;
+}
+
+/**
+ * A boot whose measure of the TSC is 2% high, as one whose every window
+ * against the HPET was held up would be: the first span differs by more
+ * than a hundredth and the second agrees with it, which sets the rate, and
+ * the clock runs on and still catches a drift after. One 6% high, which no
+ * measure of a twentieth explains, stops the clock at the third first span.
+ */
+static void watch_misrate_rows(void)
+{
+    uint32_t ran;
+
+    boot_per_tick = 2u * TICK_NS + 2u * TICK_NS / 50u;
+    watch_boot(1);
+    ran = watch_ticks(4u * TICK_HZ);
+    CHECK(ran == 4u * TICK_HZ && vclock_running() && watch_refined &&
+              watch_per_tick + 1u >= 2u * TICK_NS && watch_per_tick <= 2u * TICK_NS + 1u,
+          "a boot's rate 2% high is measured again and the TSC's set, and the clock runs");
+    drift_ppm[0] = 1000;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && ran <= TICK_HZ + 1u,
+          "and a TSC that drifts 1000 parts in a million after it stops the clock within "
+          "a second");
+    drift_ppm[0] = 0;
+
+    boot_per_tick = 2u * TICK_NS + 6u * TICK_NS / 50u;
+    watch_boot(1);
+    ran = watch_ticks(5u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && !watch_refined && ran > 3u * TICK_HZ &&
+              ran <= 4u * TICK_HZ,
+          "a boot's rate 6% high stops the clock at the third first span");
+    boot_per_tick = 0;
+}
+
 /** A drift caught while another processor never answers, on the one
  * processor left that answers and on a third, and the model put back for
  * the rows after. */
@@ -1584,6 +1687,8 @@ static void watch_rows(void)
     watch_turn_rows();
     watch_pause_rows();
     watch_stretch_rows();
+    watch_fast_rows();
+    watch_misrate_rows();
     watch_silent_rows();
 }
 
