@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "guest.vblk",
-  "summary": "Reads, writes, flushes, discards and writes of zeros through the virtio-blk driver's queues, and what the kernel publishes of its disks; the program is tests/vblkprobe.c",
+  "summary": "Reads, writes, flushes, discards and writes of zeros through the virtio-blk driver's queues, what the kernel publishes of its disks, and the device's reset at a restart; the program is tests/vblkprobe.c and the restart's scenario tests/cases/machine/vblk_scenario.c",
   "cases": [
     {
       "case_id": "guest.vblk.read",
@@ -65,6 +65,43 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "layout", "reason": "the case's disk is a virtio-blk device of QEMU's, made for it"}
+    },
+    {
+      "case_id": "guest.vblk.restart",
+      "behavior": "a restart from the debug shell of a machine with a virtio-blk disk has the driver reset the device, with no request in flight, before the kernel restarts the machine",
+      "units": ["vblk"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "vblk_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "restart", "stage": "execute", "machine": "fixture", "does": "boot to the debug shell on a machine with one virtio-blk disk, run reboot and wait for the machine to end"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "vblk-r", "bus": "virtio", "size_bytes": 4194304}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "brought-up", "checks": "the driver brought the disk up with its cache on", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after reboot is typed the driver says virtio-blk: NAME: shutdown: reset with no request in flight, which it says only when virtio_halt's reset of the device ended", "source": "scenario"},
+        {"assertion_id": "then-restart", "checks": "the kernel says reboot: restarting after that record, so the device is reset before the processors stop", "source": "scenario"},
+        {"assertion_id": "reset", "checks": "the machine ends by QEMU's SHUTDOWN event with the reason guest-reset", "source": "scenario"},
+        {"assertion_id": "none-lost", "checks": "the driver never says that requests were left unanswered", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "vblk_scenario", "node": "tests/cases/machine/vblk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case's disk is a virtio-blk device of QEMU's, made for it, and its machine ends by a reset"}
     }
   ]
 }

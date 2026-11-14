@@ -81,7 +81,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `load` (full tier; needs qemu, mformat; 128 MiB): the machine under load while six lines are typed at its console: every line read, no request quarantined by its deadline, and the longest delays it saw, from `/proc/stat`, printed.
 * `authority` (core tier; needs qemu; 128 MiB): which kernel may write the whole disk.
 * `queue` (core tier; needs qemu, mformat; 128 MiB): real AHCI reads, interrupts and fallback root faults beside raw reads; controlled host models test deadlines.
-* `vblk` (core tier; needs qemu; 128 MiB): reads through the virtio-blk queues' interrupts on two processors, a raw write, a flush, a discard and a write of zeros on the recovery kernel, and the serial and discard limit sysfs gives.
+* `vblk` (core tier; needs qemu; 128 MiB): reads through the virtio-blk queues' interrupts on two processors, a raw write, a flush, a discard and a write of zeros on the recovery kernel, the serial and discard limit sysfs gives, and the device's reset at a restart from the debug shell.
 * `subset` (core tier; needs qemu; 128 MiB): each optional device probe left out, and proved left out.
 * `bus` (full tier; needs qemu, mformat, mtype; 128 MiB): four IDE drives on both channels, an AHCI and an IDE disk together with the root on each in turn, and a disk past 128 GiB.
 * `exitline` (full tier; needs qemu; 128 MiB): the plain process-exit line is printed under the debug shell and nowhere else.

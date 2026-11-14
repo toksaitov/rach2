@@ -1984,9 +1984,10 @@ $(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
 # no target here.
 # `tests/run vblk`: reads through the virtio-blk queues' interrupts on two
 # processors, a raw write, a flush, a discard and a write of zeros on the
-# recovery kernel, and the serial and discard limit sysfs gives. It is the
-# cases of tests/cases/guest.vblk.json, which etude runs, and has no target
-# here; its disks are empty files of the attempt.
+# recovery kernel, the serial and discard limit sysfs gives, and the
+# device's reset at a restart from the debug shell. It is the cases of
+# tests/cases/guest.vblk.json, which etude runs, and has no target here; its
+# disks are empty files of the attempt.
 # `tests/run queue`: real AHCI reads, interrupts and fallback root faults
 # beside raw reads; controlled host models test deadlines. It is the cases of
 # tests/cases/guest.queue.json, which etude runs, and has no target here.
