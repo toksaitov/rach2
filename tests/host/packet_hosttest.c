@@ -27,7 +27,7 @@
  * path, with the fragments of a datagram past it, a driver's refusal, the
  * loopback backlog filled past its limit, an echo answered through it at a
  * limit of 0, its drain ended by its budgets of datagrams and of time
- * against a cycle counter the deliveries move, and the interface a broadcast
+ * against a clock the deliveries move, and the interface a broadcast
  * leaves by on a machine with two cards. `ipfrag.c` is compiled in too, and
  * the receive rows reassemble a datagram from its fragments.
  */
@@ -141,14 +141,30 @@ static struct {
     uint16_t number, len;
 } udp_seen[UDP_SEEN_MAX];
 
-/* The clock under the tick as the drain reads it (`timer_now_us`), which
- * each UDP delivery moves by `udp_cost` microseconds. */
-static uint32_t fake_us, udp_cost;
+/* The time each UDP delivery moves by `udp_cost` microseconds, which the
+ * drain's stopwatch reads (`timer_watch_us`); and the most `timer_now_us`
+ * reads of it, as the clock under the tick stops where the PM timer has
+ * wrapped since the last tick while interrupts stay off. */
+static uint32_t fake_us, udp_cost, now_cap = 0xFFFFFFFFu;
 
-/** Read the clock the deliveries move. */
+/** Read the clock under the tick, up to `now_cap`. */
 uint32_t timer_now_us(void)
 {
-    return fake_us;
+    return fake_us < now_cap ? fake_us : now_cap;
+}
+
+/** Start the stopwatch `w` at the time the deliveries move. */
+void timer_watch_start(struct timer_watch *w)
+{
+    w->last = fake_us;
+    w->us = 0;
+}
+
+/** The time the deliveries moved since `w` started, past `now_cap`. */
+uint32_t timer_watch_us(struct timer_watch *w)
+{
+    w->us = fake_us - (uint32_t)w->last;
+    return w->us;
 }
 
 /** Record and count a UDP datagram received; return 0. */
@@ -960,13 +976,16 @@ static void test_loop_echo_zero(void)
 /**
  * End a drain of costly deliveries on time.
  *
- * Each UDP delivery here moves the clock under the tick by `udp_cost`
- * microseconds. As Linux's net_rx_action checks netdev_budget_usecs, the
- * drain ends after the first turn of 64 that ends past
- * `netdev_budget_usecs`, counts the squeeze, and marks the rest as the
- * current thread's work (WORK_LOOP), as Linux raises its softirq again. A
- * limit of 0 ends every drain after its first turn, a squeeze even when
- * that turn emptied the backlog, as Linux counts it.
+ * Each UDP delivery here moves the time by `udp_cost` microseconds. As
+ * Linux's net_rx_action checks netdev_budget_usecs, the drain ends after
+ * the first turn of 64 that ends past `netdev_budget_usecs`, counts the
+ * squeeze, and marks the rest as the current thread's work (WORK_LOOP), as
+ * Linux raises its softirq again. A limit of 0 ends every drain after its
+ * first turn, a squeeze even when that turn emptied the backlog, as Linux
+ * counts it. A budget of 10 s ends a drain whose turns of 6.4 s each pass
+ * the 4.7 s at which the clock under the tick stops, as the PM timer wraps
+ * with interrupts off (`now_cap`), so that only the drain's stopwatch sees
+ * it end; the rest is delivered by the next drain.
  */
 static void test_loop_time(void)
 {
@@ -1003,6 +1022,23 @@ static void test_loop_time(void)
     ip_loop_softnet(0, &sn);
     CHECK("a limit of 0 counts a squeeze after a turn that emptied the backlog",
           to_udp == 210 && sn.squeezed == 2 && !ip_loop_pending());
+    netdev_budget_usecs = 10000000;
+    udp_cost = 100000;
+    for (i = 0; i < 200; i++) {
+        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
+    }
+    now_cap = fake_us + 4700000u;
+    thread.work = 0;
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    ip_loop_softnet(0, &sn);
+    CHECK("a drain of 10 s ends after its second turn of 6.4 s, past where the clock stops",
+          to_udp == 338 && sn.squeezed == 3 && loop_proc == 72 && (thread.work & WORK_LOOP) != 0);
+    udp_cost = 1;
+    ip_loop_drain_from(IP_LOOP_FROM_CALL);
+    ip_loop_softnet(0, &sn);
+    CHECK("and the next drain delivers the rest",
+          to_udp == 410 && sn.squeezed == 3 && !ip_loop_pending());
+    now_cap = 0xFFFFFFFFu;
     udp_cost = 0;
     netdev_budget_usecs = 2 * 1000000 / TICK_HZ;
     cpu_table[0].current = 0;

@@ -235,15 +235,16 @@ static void tsc_read(uint32_t *lo, uint32_t *hi)
 #endif
 }
 
-/** `n` divided by `d`, at most REF_DUE_MAX, with the remainder in `*rem`, or
- * 0 there when the quotient was cut to the bound. */
-static uint32_t ref_divide(uint64_t n, uint32_t d, uint32_t *rem)
+/** `n` divided by `d`, with the remainder in `*rem`; 0xFFFFFFFF, and 0 in
+ * `*rem`, when the quotient does not fit in 32 bits. One `divl` on i686,
+ * which has no 64-bit divide without libgcc. */
+static uint32_t long_divide(uint64_t n, uint32_t d, uint32_t *rem)
 {
     uint32_t q, r;
 
     if ((uint32_t)(n >> 32) >= d) {
         *rem = 0;
-        return REF_DUE_MAX; /* a quotient past 32 bits is past the bound too */
+        return 0xFFFFFFFFu;
     }
 #if defined(__x86_64__) || defined(RACH2_HOSTTEST)
     q = (uint32_t)(n / d);
@@ -254,11 +255,20 @@ static uint32_t ref_divide(uint64_t n, uint32_t d, uint32_t *rem)
             : "0"((uint32_t)n), "1"((uint32_t)(n >> 32)), "rm"(d)
             : "cc");
 #endif
+    *rem = r;
+    return q;
+}
+
+/** `n` divided by `d`, at most REF_DUE_MAX, with the remainder in `*rem`, or
+ * 0 there when the quotient was cut to the bound. */
+static uint32_t ref_divide(uint64_t n, uint32_t d, uint32_t *rem)
+{
+    uint32_t q = long_divide(n, d, rem);
+
     if (q > REF_DUE_MAX) {
         *rem = 0;
         return REF_DUE_MAX;
     }
-    *rem = r;
     return q;
 }
 
@@ -964,6 +974,108 @@ uint32_t timer_now_us(void)
     spin_unlock(&now_lock);
     kirq_restore(flags);
     return now;
+}
+
+/** The units of the reference `kind` that a stopwatch counts, `*per` of them
+ * in `*us` microseconds: the platform counter's rate in a second, the TSC's
+ * counts in a tick, KVM's nanoseconds, or the microseconds of
+ * `timer_now_us` before a reference starts. */
+static void watch_units(int kind, uint32_t *per, uint32_t *us)
+{
+    if (kind == REF_COUNTER) {
+        *per = refclock_hz();
+        *us = 1000000u;
+    } else if (kind == REF_TSC) {
+        *per = tsc_per_tick;
+        *us = US_PER_TICK;
+    } else if (kind == REF_KVM) {
+        *per = 1000u;
+        *us = 1u;
+    } else {
+        *per = 1u;
+        *us = 1u;
+    }
+}
+
+/** The reading of the reference `kind` a stopwatch counts from, in the units
+ * of `watch_units`: the platform counter in its own width, the TSC, KVM's
+ * clock, which keeps `last` when its page is gone, or `timer_now_us`. With
+ * interrupts off. */
+static uint64_t watch_read(int kind, uint64_t last)
+{
+    uint64_t tsc, ns;
+
+    if (kind == REF_COUNTER) {
+        return refclock_read();
+    }
+    if (kind == REF_TSC) {
+        return tsc_now();
+    }
+    if (kind == REF_KVM) {
+        return tsc_kvm_now(&tsc, &ns) ? ns : last;
+    }
+    return timer_now_us();
+}
+
+/** `a` plus `b`, at most 0xFFFFFFFF. */
+static uint32_t watch_sum(uint32_t a, uint64_t b)
+{
+    uint64_t sum = a + b;
+
+    return sum > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)sum;
+}
+
+void timer_watch_start(struct timer_watch *w)
+{
+    uint32_t flags = kirq_save();
+
+    w->kind = ref_kind;
+    w->last = watch_read(w->kind, 0);
+    w->carry = 0;
+    w->us = 0;
+    kirq_restore(flags);
+}
+
+/**
+ * Each reading adds the units the reference counted since the one before:
+ * the platform counter's within its width, so that readings closer than
+ * its wrap, 4.7 s for the 24-bit PM timer, extend it however long
+ * interrupts stay off, as `ref_count` extends it only from the last tick;
+ * and the TSC's or KVM's whole, past the minute `ref_due` counts. Whole
+ * groups of `watch_units` become microseconds and the rest stays in
+ * `carry`, so nothing is lost to rounding. A reference that changed since
+ * the last reading, at another processor's tick, starts counting from
+ * this one.
+ */
+uint32_t timer_watch_us(struct timer_watch *w)
+{
+    uint32_t flags = kirq_save();
+    int kind = ref_kind;
+    uint32_t per, us, whole;
+    uint64_t now, gone;
+
+    watch_units(w->kind, &per, &us);
+    if (kind != w->kind) {
+        w->us = watch_sum(w->us, refclock_scale(w->carry, us, per));
+        w->carry = 0;
+        w->kind = kind;
+        w->last = watch_read(kind, 0);
+        kirq_restore(flags);
+        return w->us;
+    }
+    now = watch_read(kind, w->last);
+    if (kind == REF_COUNTER) {
+        gone = ((uint32_t)now - (uint32_t)w->last) & refclock_mask();
+    } else if (kind == REF_NONE) {
+        gone = (uint32_t)now - (uint32_t)w->last;
+    } else {
+        gone = (now - w->last) >> 63 != 0 ? 0 : now - w->last;
+    }
+    w->last = now;
+    whole = long_divide(gone + w->carry, per, &w->carry);
+    w->us = watch_sum(w->us, (uint64_t)whole * us);
+    kirq_restore(flags);
+    return watch_sum(w->us, refclock_scale(w->carry, us, per));
 }
 
 uint32_t timer_resolution_ns(void)

@@ -863,10 +863,12 @@ static int loop_poll(unsigned cpu, int from, int quota)
  * The turns and their budgets are Linux's net_rx_action's: after each turn
  * the drain ends when `netdev_budget` is spent or `netdev_budget_usecs` have
  * passed since it began, and counts the end as a squeeze whether or not
- * datagrams are left. Its time is read from the clock under the tick
- * (`timer_now_us`), which reads the reference counter, the HPET, the PM
- * timer or a trusted TSC, and so runs while interrupts are off, as no tick
- * does, whether or not the processor's cycle counter has a measured rate.
+ * datagrams are left. Its time is a stopwatch's (`timer_watch_us`), which
+ * reads the reference that keeps the clock, the HPET, the PM timer, KVM's
+ * clock or a trusted TSC, and adds each turn's counts to the last, so that
+ * it runs on while interrupts are off, as no tick does, for as long as any
+ * budget `netdev_budget_usecs` takes, whether or not the processor's cycle
+ * counter has a measured rate.
  * What is left is marked as the current thread's work
  * (WORK_LOOP), as Linux raises NET_RX_SOFTIRQ again, so that its next
  * return to user mode, after the interrupts held off meanwhile, drains it,
@@ -876,17 +878,17 @@ void ip_loop_drain_from(int from)
 {
     int budget = netdev_budget;
     uint32_t usecs = netdev_budget_usecs < 0 ? 0u : (uint32_t)netdev_budget_usecs;
-    uint32_t start;
+    struct timer_watch watch;
     unsigned cpu = arch_cpu_id();
 
     if (loop_draining) {
         return;
     }
     loop_draining = 1;
-    start = timer_now_us();
+    timer_watch_start(&watch);
     while (loop_first) {
         budget -= loop_poll(cpu, from, LOOP_WEIGHT);
-        if (budget <= 0 || timer_now_us() - start >= usecs) {
+        if (budget <= 0 || timer_watch_us(&watch) >= usecs) {
             loop_softnet[cpu].squeezed++;
             break;
         }

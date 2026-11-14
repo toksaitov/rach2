@@ -21,10 +21,12 @@
  * Port stubs also drive the real-time reader across pending interrupts and
  * counter wraps, including one during its latch, without executing I/O; and a
  * reference counter the test keeps drives the ticks each interrupt counts and
- * the clocks it keeps, on the boot processor and on another. A model of the
- * vDSO's clock checks that the coarse clocks read no earlier after its stop
- * than before it. Each row of the clocks sets its own tick, and starts with
- * none of the floors an earlier row's readings raised (`rtc_forget_floors`).
+ * the clocks it keeps, on the boot processor and on another, and the
+ * stopwatch that counts on across the counter's wrap with no tick. A model
+ * of the vDSO's clock checks that the coarse clocks read no earlier after
+ * its stop than before it. Each row of the clocks sets its own tick, and
+ * starts with none of the floors an earlier row's readings raised
+ * (`rtc_forget_floors`).
  *
  * The answers are for a tick of 1000 Hz: a reload of 1193, sweeps of 499 us
  * and a reference tick of 1000 counts of the 1 MHz counter.
@@ -164,7 +166,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
  * only that row turns on. No row waits on the tick's sequence count. */
 unsigned int host_cpu;
 static int ref_on;
-static uint32_t ref_now;
+static uint32_t ref_now, ref_mask = 0xFFFFFFFFu;
 
 /** The reference counter's name, NULL while it is off. */
 const char *refclock_name(void)
@@ -172,11 +174,11 @@ const char *refclock_name(void)
     return ref_on ? "test" : 0;
 }
 
-/** The reference counter: `ref_now`. */
+/** The reference counter: `ref_now`, in `ref_mask`'s bits. */
 uint32_t refclock_read(void)
 {
     CHECK(ref_on);
-    return ref_now;
+    return ref_now & ref_mask;
 }
 
 /** The reference counter's rate, 1 MHz. */
@@ -186,11 +188,11 @@ uint32_t refclock_hz(void)
     return 1000000u;
 }
 
-/** The reference counter's width, 32 bits. */
+/** The reference counter's width, 32 bits but in `watch_rows`. */
 uint32_t refclock_mask(void)
 {
     CHECK(ref_on);
-    return 0xFFFFFFFFu;
+    return ref_mask;
 }
 
 /** `a` * `b` / `c` in 64 bits. */
@@ -538,6 +540,35 @@ static void reference_rows(void)
     CHECK(timer_tick_clock() == 60000u);
     CHECK(timer_tick_clock() == 10003u);
     CHECK(!irq_disabled);
+    ref_on = 0;
+}
+
+/**
+ * The stopwatch of a stretch with interrupts off (`timer_watch_us`) once
+ * the reference counter keeps the clock, here 1 MHz in 24 bits, the PM
+ * timer's width, which wrap every 16.8 s: from 4 Ki counts short of the
+ * wrap, readings 10 s apart with no tick between them count 10 s each, 70 s
+ * in all, past both the wrap and the minute `timer_now_us` counts without
+ * a tick, and 123 counts more 123 us more.
+ */
+static void watch_rows(void)
+{
+    struct timer_watch w;
+    uint32_t i;
+
+    ref_on = 1;
+    ref_mask = 0xFFFFFFu;
+    ref_now = 0xFFF000u;
+    timer_watch_start(&w);
+    CHECK(timer_watch_us(&w) == 0u);
+    for (i = 1; i <= 7; i++) {
+        ref_now += 10000000u;
+        CHECK(timer_watch_us(&w) == i * 10000000u);
+    }
+    ref_now += 123u;
+    CHECK(timer_watch_us(&w) == 70000123u);
+    CHECK(!irq_disabled);
+    ref_mask = 0xFFFFFFFFu;
     ref_on = 0;
 }
 
@@ -921,6 +952,7 @@ int main(void)
     monotonic_rows();
     clock_write_rows();
     reference_rows();
+    watch_rows();
     coarse_rows();
     return fails > 100 ? 100 : fails;
 }

@@ -139,6 +139,30 @@ uint64_t tick_count(void);
  */
 uint32_t timer_now_us(void);
 
+/* A stopwatch for a stretch that may keep interrupts off throughout,
+ * which `timer_now_us` measures only up to the reference counter's wrap or
+ * a minute without a tick (`timer_watch_us`). */
+struct timer_watch {
+    int kind;       /* the reference the last reading read */
+    uint64_t last;  /* that reading, in the reference's units */
+    uint32_t carry; /* units counted since and not yet in `us` */
+    uint32_t us;    /* microseconds counted, at most 0xFFFFFFFF */
+};
+
+/** Start the stopwatch `w` at 0, from a reading of the reference that keeps
+ * the clock. Any context. */
+void timer_watch_start(struct timer_watch *w);
+
+/**
+ * The microseconds since `timer_watch_start` started `w`, at most
+ * 0xFFFFFFFF, about 71 minutes, exact however long interrupts have been off
+ * as long as the readings of one stopwatch come closer together than the
+ * reference counter wraps, 4.7 s for the PM timer, or, before a reference
+ * starts, a period of the counter under the tick. One processor reads `w`.
+ * Any context; interrupts are left as they were.
+ */
+uint32_t timer_watch_us(struct timer_watch *w);
+
 /**
  * The resolution of the place within the tick, in nanoseconds, which the
  * real-time and monotonic clocks are read to: a period of the reference,
