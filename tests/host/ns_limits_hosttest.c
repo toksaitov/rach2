@@ -180,6 +180,16 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     (void)info;
 }
 
+uint32_t proc_last_pid(void)
+{
+    return 0;
+}
+
+void proc_set_last_pid(uint32_t pid)
+{
+    (void)pid;
+}
+
 /** A mount made by the current process in slot `slot`, active and seen by
  * its namespace alone, as `mount_alloc` makes one. */
 static struct vfs_mount *mount_in(int slot)
