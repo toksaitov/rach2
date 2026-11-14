@@ -511,7 +511,7 @@ tests/host/nl80211_hosttest.c:join_wpa2 lines 147 a test's rows, each a case, re
 tests/host/nl80211_hosttest.c:keys lines 135 a test's rows, each a case, read as one table
 tests/host/nl80211_hosttest.c:connect_row lines 115 a test's rows, each a case, read as one table
 
-tests/host/packet_hosttest.c:main lines 173 a test's rows, each a case, read as one table
+tests/host/packet_hosttest.c:main lines 176 a test's rows, each a case, read as one table
 
 tests/host/partition_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
 tests/host/partition_hosttest.c:main lines 165 a test's rows, each a case, read as one table

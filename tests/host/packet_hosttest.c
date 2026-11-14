@@ -25,7 +25,9 @@
  *
  * The send rows run `ip_tx` against the same recorders: the MTU on every
  * path, with the fragments of a datagram past it, a driver's refusal, the
- * loopback backlog filled past its limit, and the interface a broadcast
+ * loopback backlog filled past its limit, an echo answered through it at a
+ * limit of 0, its drain ended by its budgets of datagrams and of time
+ * against a cycle counter the deliveries move, and the interface a broadcast
  * leaves by on a machine with two cards. `ipfrag.c` is compiled in too, and
  * the receive rows reassemble a datagram from its fragments.
  */
@@ -40,6 +42,8 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 #include "../../rach2/sys/network/ethernet/ethernet.h"
 #include "../../rach2/sys/network/driver/netdev.h"
 #include "../../rach2/sys/network/ip/ip.h"
+#include "../../rach2/sys/arch/arch.h"
+#include "../../rach2/sys/timer.h"
 
 /* ---- what the layers under the parsers record ---- */
 
@@ -85,15 +89,32 @@ void ip6_loop_rx(int ifindex, const uint8_t *data, uint32_t len)
     ip6_rx(0, data, (uint16_t)len);
 }
 
-/** Count an ICMP message received. */
+/* While `echo_back` is set, an echo request received is answered through
+ * `ip_tx`, as icmp.c answers one, and each echo reply received is counted. */
+static int echo_back;
+static unsigned echo_replies;
+
+int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl);
+
+/** Count an ICMP message received, and answer an echo request while
+ * `echo_back` is set. */
 void icmp_rx(uint32_t src, uint32_t dst, uint8_t ttl, const uint8_t *data, uint16_t len)
 {
+    uint8_t reply[64];
+    unsigned i;
+
     (void)ttl;
     (void)dst;
-    (void)src;
-    (void)data;
-    (void)len;
     to_icmp++;
+    if (echo_back && len >= 8 && len <= sizeof(reply) && data[0] == 8) {
+        for (i = 0; i < len; i++) {
+            reply[i] = data[i];
+        }
+        reply[0] = 0;
+        (void)ip_tx(src, IP_PROTO_ICMP, reply, len, IP_TTL_DEFAULT);
+    } else if (echo_back && len >= 8 && data[0] == 0) {
+        echo_replies++;
+    }
 }
 
 /** Send no ICMP destination-unreachable message. */
@@ -120,6 +141,24 @@ static struct {
     uint16_t number, len;
 } udp_seen[UDP_SEEN_MAX];
 
+/* The processor's cycle counter as the drain reads it (`arch_cycles`), which
+ * each UDP delivery moves by `udp_cost`, a microsecond a cycle while
+ * `cycles_measured` is set, and no rate measured while it is clear. */
+static uint64_t fake_cycles, udp_cost;
+static int cycles_measured = 1;
+
+/** Read the counter the deliveries move. */
+uint64_t arch_cycles(void)
+{
+    return fake_cycles;
+}
+
+/** Give `cycles` as microseconds, one each, or 0 with no rate measured. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles_measured ? cycles : 0;
+}
+
 /** Record and count a UDP datagram received; return 0. */
 int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
 {
@@ -130,6 +169,7 @@ int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
         udp_seen[to_udp].len = len;
     }
     to_udp++;
+    fake_cycles += udp_cost;
     return 0;
 }
 
@@ -525,7 +565,7 @@ static void loop_reset(void)
         kfree(d);
     }
     loop_last = 0;
-    loop_qlen = loop_peak = 0;
+    loop_qlen = loop_proc = loop_peak = 0;
     memset(loop_softnet, 0, sizeof(loop_softnet));
     the_lo.rx_packets = the_lo.rx_bytes = the_lo.rx_dropped = 0;
     the_lo.tx_packets = the_lo.tx_bytes = 0;
@@ -788,9 +828,7 @@ static void test_tx_errors(void)
  * kernel log and lose the boot record. Every datagram has its own number in
  * its first two bytes, so the drain shows that the backlog delivers the
  * datagrams it took, in the order they were sent, and none it dropped. A
- * negative limit drops nothing, since Linux compares it as unsigned. A drain
- * delivers at most 300, Linux's netdev_budget, and counts the squeeze when
- * more wait.
+ * negative limit drops nothing, since Linux compares it as unsigned.
  */
 static void test_loop_full(void)
 {
@@ -846,20 +884,148 @@ static void test_loop_full(void)
         (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
     }
     CHECK("a negative limit drops nothing", loop_qlen == 20 && ip_loop_dropped() == 0);
-    loop_reset();
     netdev_max_backlog = 1000;
+    loop_reset();
+}
+
+/**
+ * Drain the loopback backlog past its budget.
+ *
+ * A drain delivers in turns of 64, Linux's dev_rx_weight, and ends after
+ * the turn that spends its budget of 300, Linux's netdev_budget, counting
+ * the squeeze; what it left is on the process queue, and the limit holds
+ * the input queue alone, as Linux's enqueue_to_backlog judges
+ * input_pkt_queue.
+ */
+static void test_loop_budget(void)
+{
+    uint8_t payload[16] = {0};
+    unsigned i, sent;
+    struct ip_softnet sn;
+
+    loop_reset();
     reset();
-    for (i = 0; i < LOOP_BUDGET + 1; i++) {
+    for (i = 0; i < 400; i++) {
         (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
     }
     ip_loop_drain_from(IP_LOOP_FROM_TICK);
     ip_loop_softnet(0, &sn);
-    CHECK("a drain delivers at most its budget and counts the squeeze",
-          to_udp == LOOP_BUDGET && loop_qlen == 1 && sn.squeezed == 1);
+    CHECK("a drain ends after the turn of 64 that spends its budget of 300 and counts the squeeze",
+          to_udp == 320 && sn.squeezed == 1);
+    CHECK("and leaves the rest on the process queue", loop_proc == 80 && loop_qlen == 0);
+    netdev_max_backlog = 8;
+    sent = 0;
+    for (i = 0; i < 10; i++) {
+        sent += ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0;
+    }
+    CHECK("the limit holds the input queue alone, whatever the process queue holds",
+          sent == 10 && loop_qlen == 9 && loop_proc == 80 && ip_loop_dropped() == 1);
+    netdev_max_backlog = 1000;
     ip_loop_drain_from(IP_LOOP_FROM_TICK);
     ip_loop_softnet(0, &sn);
-    CHECK("and the next drain delivers the rest",
-          to_udp == LOOP_BUDGET + 1 && !ip_loop_pending() && sn.squeezed == 1);
+    CHECK("and the next drain delivers the rest, the process queue first",
+          to_udp == 409 && !ip_loop_pending() && sn.squeezed == 1);
+    loop_reset();
+}
+
+/**
+ * Answer an echo request through the loopback backlog with
+ * `netdev_max_backlog` at 0.
+ *
+ * Linux's process_backlog moves the input queue onto the process queue
+ * before it delivers from it, so the request being delivered is not on the
+ * input queue that the limit judges, and its reply finds that queue empty
+ * and is taken. A second request sent while the first waits is dropped.
+ */
+static void test_loop_echo_zero(void)
+{
+    uint8_t request[16] = {8};
+    struct ip_softnet sn;
+    unsigned sent;
+
+    reset();
+    loop_reset();
+    netdev_max_backlog = 0;
+    echo_back = 1;
+    echo_replies = 0;
+    sent = ip_tx(net_ip_addr, IP_PROTO_ICMP, request, sizeof(request), IP_TTL_DEFAULT) == 0;
+    CHECK("a limit of 0 takes an echo request onto an empty backlog", sent && loop_qlen == 1);
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    ip_loop_softnet(0, &sn);
+    CHECK("and its reply, sent while it is delivered, is taken and delivered",
+          echo_replies == 1 && to_icmp == 2 && sn.dropped == 0 && sn.processed == 2 &&
+              !ip_loop_pending());
+    (void)ip_tx(net_ip_addr, IP_PROTO_ICMP, request, sizeof(request), IP_TTL_DEFAULT);
+    (void)ip_tx(net_ip_addr, IP_PROTO_ICMP, request, sizeof(request), IP_TTL_DEFAULT);
+    CHECK("a second request while one waits is dropped", loop_qlen == 1 && ip_loop_dropped() == 1);
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    CHECK("and the one taken is answered", echo_replies == 2);
+    echo_back = 0;
+    netdev_max_backlog = 1000;
+    loop_reset();
+}
+
+/**
+ * End a drain of costly deliveries on time.
+ *
+ * Each UDP delivery here moves the cycle counter by `udp_cost`
+ * microseconds. As Linux's net_rx_action checks netdev_budget_usecs, the
+ * drain ends after the first turn of 64 that ends past
+ * `netdev_budget_usecs`, counts the squeeze, and marks the rest as the
+ * current thread's work (WORK_LOOP), as Linux raises its softirq again. A
+ * limit of 0 ends every drain after its first turn, a squeeze even when
+ * that turn emptied the backlog, as Linux counts it. With no rate measured
+ * only the budget of datagrams ends a drain.
+ */
+static void test_loop_time(void)
+{
+    static process_t thread;
+    uint8_t payload[16] = {0};
+    struct ip_softnet sn;
+    unsigned i;
+
+    reset();
+    loop_reset();
+    cpu_table[0].current = &thread;
+    netdev_budget_usecs = 1000;
+    udp_cost = 100;
+    for (i = 0; i < 200; i++) {
+        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
+    }
+    thread.work = 0;
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    ip_loop_softnet(0, &sn);
+    CHECK("a drain of deliveries of 100 us ends after its first turn past 1000 us",
+          to_udp == 64 && sn.squeezed == 1 && loop_proc == 136);
+    CHECK("and marks the rest as the thread's work", (thread.work & WORK_LOOP) != 0);
+    udp_cost = 1;
+    thread.work = 0;
+    ip_loop_drain_from(IP_LOOP_FROM_CALL);
+    ip_loop_softnet(0, &sn);
+    CHECK("a drain within its time delivers the rest and counts no squeeze",
+          to_udp == 200 && sn.squeezed == 1 && !ip_loop_pending() && thread.work == 0);
+    netdev_budget_usecs = 0;
+    for (i = 0; i < 10; i++) {
+        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
+    }
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    ip_loop_softnet(0, &sn);
+    CHECK("a limit of 0 counts a squeeze after a turn that emptied the backlog",
+          to_udp == 210 && sn.squeezed == 2 && !ip_loop_pending());
+    netdev_budget_usecs = 1000;
+    udp_cost = 100;
+    cycles_measured = 0;
+    for (i = 0; i < 200; i++) {
+        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
+    }
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    ip_loop_softnet(0, &sn);
+    CHECK("with no rate measured only the budget of datagrams ends a drain",
+          to_udp == 410 && sn.squeezed == 2 && !ip_loop_pending());
+    cycles_measured = 1;
+    udp_cost = 0;
+    netdev_budget_usecs = 2 * 1000000 / TICK_HZ;
+    cpu_table[0].current = 0;
     loop_reset();
 }
 
@@ -1001,6 +1167,9 @@ int main(void)
     test_tx_hold();
     test_tx_hold_fragments();
     test_loop_full();
+    test_loop_budget();
+    test_loop_echo_zero();
+    test_loop_time();
     test_loop_left_idle();
     test_loop_big();
     test_broadcast_iface();

@@ -299,12 +299,17 @@ void ip_hold_forget(struct netdev *nd)
  * whole into a block of its own on the heap and delivered in the order sent
  * by `ip_loop_drain_from`, from the timer tick, the idle wait, or the return
  * to user mode of a thread that put one there (WORK_LOOP). It is Linux's
- * backlog, the queue that loopback_xmit fills through __netif_rx
- * (net/core/dev.c, enqueue_to_backlog), kept once for the machine, since
- * the big lock orders every producer and the drain. A datagram that finds
- * more than `netdev_max_backlog` waiting is dropped and counted, and its
- * sender is told nothing, as loopback_xmit ignores the drop; TCP sends the
- * segment again when it finds it lost. */
+ * backlog, the queues that loopback_xmit fills through __netif_rx
+ * (net/core/dev.c, enqueue_to_backlog) and process_backlog empties, kept
+ * once for the machine, since the big lock orders every producer and the
+ * drain. One list holds both of Linux's queues: its first `loop_proc`
+ * datagrams are the process queue, which a drain has taken and delivers
+ * from, and the `loop_qlen` after them the input queue, which a sender
+ * appends to. A datagram that finds more than `netdev_max_backlog` on the
+ * input queue is dropped and counted, and its sender is told nothing, as
+ * loopback_xmit ignores the drop; TCP sends the segment again when it finds
+ * it lost. The datagram being delivered is on the process queue, so a reply
+ * it sends is judged by what waits behind it alone. */
 struct loop_dgram {
     struct loop_dgram *next;
     const struct netns *ns; /* the namespace it is delivered in, `ip_ns` when put */
@@ -312,18 +317,23 @@ struct loop_dgram {
     uint32_t len;           /* its bytes, which follow; 0 once `ip_loop_ns_gone` dropped it */
 };
 static struct loop_dgram *loop_first, *loop_last;
-/* The datagrams on the backlog, the one being delivered among them. */
+/* The datagrams on the input queue, Linux's input_pkt_queue. */
 static uint32_t loop_qlen;
+/* The datagrams on the process queue, Linux's process_queue, the one being
+ * delivered among them. */
+static uint32_t loop_proc;
 
-/* The most datagrams one drain delivers, Linux's netdev_budget, so that a
- * chain of replies cannot hold the timer; the rest wait for the next. */
-#define LOOP_BUDGET 300u
+/* The most datagrams one turn of a drain delivers before it checks its
+ * budgets, Linux's dev_rx_weight, the backlog's NAPI weight. */
+#define LOOP_WEIGHT 64
 
 int netdev_max_backlog = 1000;
+int netdev_budget = 300;
+int netdev_budget_usecs = 2 * 1000000 / TICK_HZ;
 
 /* Each processor's counts, as Linux's softnet_data keeps them: the
  * datagrams its drains delivered, those it put on a full backlog, and its
- * drains that stopped at LOOP_BUDGET with datagrams left. */
+ * drains that ended on either budget. */
 static struct {
     uint32_t processed;
     uint32_t dropped;
@@ -441,8 +451,8 @@ int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload,
         lo->tx_packets++;
         lo->tx_bytes += total_len;
     }
-    if (loop_qlen > loop_peak) {
-        loop_peak = loop_qlen;
+    if (loop_qlen + loop_proc > loop_peak) {
+        loop_peak = loop_qlen + loop_proc;
     }
     return 0;
 }
@@ -746,9 +756,10 @@ void ip_loop_softnet(int cpu, struct ip_softnet *out)
     out->squeezed = loop_softnet[cpu].squeezed;
 }
 
-uint32_t ip_loop_qlen(void)
+void ip_loop_qlens(uint32_t *input, uint32_t *process)
 {
-    return loop_qlen;
+    *input = loop_qlen;
+    *process = loop_proc;
 }
 
 int ip_loop_pending(void)
@@ -766,7 +777,7 @@ static uint32_t loop_left_idle;
 
 void ip_loop_count_idle(void)
 {
-    loop_left_idle += loop_qlen;
+    loop_left_idle += loop_qlen + loop_proc;
 }
 
 uint32_t ip_loop_left_idle(void)
@@ -783,54 +794,104 @@ uint32_t ip_loop_delivered(int from)
 }
 
 /**
+ * Deliver the datagram at the head of the process queue and free it,
+ * counting it on processor `cpu` and under `from`.
+ */
+static void loop_deliver(unsigned cpu, int from)
+{
+    struct loop_dgram *d = loop_first;
+    const uint8_t *dg = (const uint8_t *)(d + 1);
+    struct netdev *lo;
+
+    ip_ns = d->ns;
+    lo = d->len == 0 ? 0 : ip_ns ? ip_ns->lo : netdev_loopback();
+    if (lo) {
+        lo->rx_packets++;
+        lo->rx_bytes += d->len;
+    }
+    if (d->len == 0) {
+        /* dropped when its namespace ended */
+    } else if ((dg[0] >> 4) == 6) {
+        ip6_loop_rx(d->ifindex, dg, d->len);
+    } else if (d->len <= 0xFFFFu) {
+        ip_rx(dg, (uint16_t)d->len, 1);
+    }
+    ip_ns = 0;
+    loop_first = d->next;
+    if (!loop_first) {
+        loop_last = 0;
+    }
+    loop_proc--;
+    kfree(d);
+    loop_softnet[cpu].processed++;
+    if (from >= 0 && from < 3) {
+        loop_delivered[from]++;
+    }
+}
+
+/**
+ * Deliver up to `quota` datagrams, as Linux's process_backlog does: from
+ * the process queue, and once it is empty from the whole input queue moved
+ * onto it, until both are empty. Returns the datagrams delivered.
+ */
+static int loop_poll(unsigned cpu, int from, int quota)
+{
+    int work = 0;
+
+    for (;;) {
+        while (loop_proc != 0) {
+            loop_deliver(cpu, from);
+            if (++work >= quota) {
+                return work;
+            }
+        }
+        if (loop_qlen == 0) {
+            return work;
+        }
+        loop_proc = loop_qlen;
+        loop_qlen = 0;
+    }
+}
+
+/**
  * Each caller has interrupts off and has left any `net_lock` bracket of its
  * own, so every delivery finds the stack at rest, as a card's interrupt
  * does. A delivery may itself send onto the backlog (an acknowledgement, an
- * echo reply), behind the datagram being read, which leaves the queue only
- * after `ip_rx` returns.
+ * echo reply), behind the datagram being read, which leaves the process
+ * queue only after `ip_rx` returns.
+ *
+ * The turns and their budgets are Linux's net_rx_action's: after each turn
+ * the drain ends when `netdev_budget` is spent or `netdev_budget_usecs` have
+ * passed since it began, and counts the end as a squeeze whether or not
+ * datagrams are left. Its time is read from the processor's cycle counter
+ * (`arch_cycles`), which runs while interrupts are off, as no tick does;
+ * without a measured rate (`timer_cycles_us`) only a limit of 0 ends a
+ * drain on time. What is left is marked as the current thread's work
+ * (WORK_LOOP), as Linux raises NET_RX_SOFTIRQ again, so that its next
+ * return to user mode, after the interrupts held off meanwhile, drains it,
+ * if the idle wait or the tick does not first.
  */
 void ip_loop_drain_from(int from)
 {
-    unsigned budget = LOOP_BUDGET;
+    int budget = netdev_budget;
+    uint64_t usecs = netdev_budget_usecs < 0 ? 0 : (uint64_t)netdev_budget_usecs;
+    uint64_t start;
     unsigned cpu = arch_cpu_id();
 
     if (loop_draining) {
         return;
     }
     loop_draining = 1;
+    start = arch_cycles();
     while (loop_first) {
-        struct loop_dgram *d = loop_first;
-        const uint8_t *dg = (const uint8_t *)(d + 1);
-        struct netdev *lo;
-
-        if (budget-- == 0) {
+        budget -= loop_poll(cpu, from, LOOP_WEIGHT);
+        if (budget <= 0 || timer_cycles_us(arch_cycles() - start) >= usecs) {
             loop_softnet[cpu].squeezed++;
             break;
         }
-        ip_ns = d->ns;
-        lo = d->len == 0 ? 0 : ip_ns ? ip_ns->lo : netdev_loopback();
-        if (lo) {
-            lo->rx_packets++;
-            lo->rx_bytes += d->len;
-        }
-        if (d->len == 0) {
-            /* dropped when its namespace ended */
-        } else if ((dg[0] >> 4) == 6) {
-            ip6_loop_rx(d->ifindex, dg, d->len);
-        } else if (d->len <= 0xFFFFu) {
-            ip_rx(dg, (uint16_t)d->len, 1);
-        }
-        ip_ns = 0;
-        loop_first = d->next;
-        if (!loop_first) {
-            loop_last = 0;
-        }
-        loop_qlen--;
-        kfree(d);
-        loop_softnet[cpu].processed++;
-        if (from >= 0 && from < 3) {
-            loop_delivered[from]++;
-        }
+    }
+    if (loop_first) {
+        proc_work_set(current_proc, WORK_LOOP);
     }
     loop_draining = 0;
 }

@@ -426,6 +426,10 @@ int synth_sys_count(void);
  * namespace (`pidns_last_pid` in proc/ns.h), which anyone may open and
  * only a writer privileged over the namespace may write, as on Linux. */
 #define SYNTH_SYS_NS_LAST_PID            87
+/* The entries of net/core/netdev_budget and net/core/netdev_budget_usecs,
+ * whose values are ip.h's `netdev_budget` and `netdev_budget_usecs`. */
+#define SYNTH_SYS_NETDEV_BUDGET          88
+#define SYNTH_SYS_NETDEV_BUDGET_USECS    89
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

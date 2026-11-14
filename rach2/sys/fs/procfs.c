@@ -5700,9 +5700,9 @@ static int procfs_gen_netipv6route(struct procfs_text *t)
  * it dropped on a full backlog and its drains cut short at their budget,
  * then zeros where Linux keeps fields no longer counted and what RPS and the
  * flow limit count, the backlog's length, the processor's number, and the
- * backlog's length again in two parts, the queue still to take and the one
- * being processed. The one backlog is the machine's, and its length is
- * shown on the boot processor's line, as all of it waiting to be taken.
+ * backlog's length again in two parts, its input queue and its process
+ * queue. The one backlog is the machine's, and its lengths are shown on
+ * the boot processor's line.
  */
 static int procfs_gen_softnet(struct procfs_text *t)
 {
@@ -5710,11 +5710,14 @@ static int procfs_gen_softnet(struct procfs_text *t)
 
     for (c = 0; c < NR_CPUS; c++) {
         struct ip_softnet sn;
-        uint32_t qlen = c == 0 ? ip_loop_qlen() : 0;
+        uint32_t input = 0, process = 0;
         uint32_t v[15];
 
         if (!cpu_table[c].online) {
             continue;
+        }
+        if (c == 0) {
+            ip_loop_qlens(&input, &process);
         }
         ip_loop_softnet(c, &sn);
         for (f = 0; f < 15; f++) {
@@ -5723,9 +5726,10 @@ static int procfs_gen_softnet(struct procfs_text *t)
         v[0] = sn.processed;
         v[1] = sn.dropped;
         v[2] = sn.squeezed;
-        v[11] = qlen;
+        v[11] = input + process;
         v[12] = (uint32_t)c;
-        v[13] = qlen;
+        v[13] = input;
+        v[14] = process;
         for (f = 0; f < 15; f++) {
             ap_xlow(t, v[f], 8);
             ap_ch(t, f < 14 ? ' ' : '\n');
@@ -8725,9 +8729,10 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
 
 /* The /proc/sys files whose values are their owners' variables, and the
  * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one;
- * kernel/panic, kernel/panic_on_oops, kernel/lock_stat and
- * net/core/netdev_max_backlog take any int, as Linux's `proc_dointvec` does
- * (kernel/sysctl.c, kernel/locking/lockdep.c, net/core/sysctl_net_core.c).
+ * kernel/panic, kernel/panic_on_oops, kernel/lock_stat,
+ * net/core/netdev_max_backlog and net/core/netdev_budget take any int, as
+ * Linux's `proc_dointvec` does (kernel/sysctl.c, kernel/locking/lockdep.c,
+ * net/core/sysctl_net_core.c).
  */
 static const struct {
     int entry;
@@ -8774,7 +8779,9 @@ static const struct {
     {SYNTH_SYS_DIRTY_WRITEBACK, &dirty_writeback_interval, 0, 0x7FFFFFFF},
     {SYNTH_SYS_DIRTYTIME_EXPIRE, &dirtytime_expire_interval, 0, 0x7FFFFFFF},
     {SYNTH_SYS_LOCK_STAT, &sleep_lock_stat, -0x7FFFFFFF - 1, 0x7FFFFFFF},
-    {SYNTH_SYS_NETDEV_MAX_BACKLOG, &netdev_max_backlog, -0x7FFFFFFF - 1, 0x7FFFFFFF}};
+    {SYNTH_SYS_NETDEV_MAX_BACKLOG, &netdev_max_backlog, -0x7FFFFFFF - 1, 0x7FFFFFFF},
+    {SYNTH_SYS_NETDEV_BUDGET, &netdev_budget, -0x7FFFFFFF - 1, 0x7FFFFFFF},
+    {SYNTH_SYS_NETDEV_BUDGET_USECS, &netdev_budget_usecs, 0, 0x7FFFFFFF}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)

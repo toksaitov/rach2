@@ -171,9 +171,9 @@ when the heap has no room for them, and
 .Er EMFILE
 only at the descriptor limit.
 These allocations are outside the resource-limit table.
-The loopback backlog holds one datagram more than
+The loopback backlog's input queue holds one datagram more than
 .Pa /proc/sys/net/core/netdev_max_backlog ,
-1001 by default.
+1001 by default, beside those a drain has taken.
 Other fixed capacities are the USB device table, sixteen records, and the
 disk registry, eight records.
 A user namespace may be nested 7 deep below the first, and so may a PID

@@ -250,11 +250,12 @@ void ip_loop_ns_gone(const struct netns *ns);
  * Put the datagram of `total_len` bytes at `dgram`, IPv4 or IPv6, on the
  * loopback backlog, counted as `lo`'s traffic, as Linux counts it, and
  * marked with `ip_ns`, the namespace it is delivered in. Returns 0 when it
- * is queued and also when more than `netdev_max_backlog` datagrams wait,
- * which drops it, counts the drop on this processor and as `lo`'s receive
- * drop and logs the first, as Linux's loopback_xmit ignores the drop of
- * enqueue_to_backlog; -EMSGSIZE past `lo`'s MTU, NETDEV_LOOPBACK_MTU; or
- * -ENOBUFS when no memory holds the datagram. Called with interrupts off.
+ * is queued and also when more than `netdev_max_backlog` datagrams wait on
+ * the input queue, those no drain has taken yet, which drops it, counts the
+ * drop on this processor and as `lo`'s receive drop and logs the first, as
+ * Linux's loopback_xmit ignores the drop of enqueue_to_backlog; -EMSGSIZE
+ * past `lo`'s MTU, NETDEV_LOOPBACK_MTU; or -ENOBUFS when no memory holds
+ * the datagram. Called with interrupts off.
  */
 int ip_loop_put(const uint8_t *dgram, uint32_t total_len);
 
@@ -283,10 +284,12 @@ void ip_loop_drain(void);
 
 /**
  * Deliver the datagrams on the loopback backlog through `ip_rx`, or `ip6_rx`
- * for an IPv6 datagram, in the order sent and at most 300 in one call, as
- * Linux's netdev_budget, counting them under `from`, an `IP_LOOP_FROM_*`
- * value, and on this processor; a call that stops at the budget with more
- * waiting is counted as a squeeze.
+ * for an IPv6 datagram, in the order sent, counting them under `from`, an
+ * `IP_LOOP_FROM_*` value, and on this processor. As Linux's net_rx_action,
+ * it delivers in turns of up to 64 and ends after the turn that spends
+ * `netdev_budget` datagrams or ends `netdev_budget_usecs` after it began,
+ * counting that end as a squeeze, and leaves the rest to the current
+ * thread's return to user mode (WORK_LOOP), the idle wait or the tick.
  *
  * Called with interrupts off, after the caller has finished with the stack,
  * since a delivery runs the receive path and may transmit: from the tick,
@@ -322,25 +325,39 @@ uint32_t ip_loop_dropped(void);
 /** The most datagrams the loopback backlog has held at once. */
 uint32_t ip_loop_peak(void);
 
-/** The most datagrams the loopback backlog holds before it drops one, less
- * one: Linux's net.core.netdev_max_backlog, 1000 unless written through
- * /proc/sys/net/core/netdev_max_backlog. A negative value drops nothing,
- * since Linux compares it as unsigned. */
+/** The most datagrams the loopback backlog's input queue holds before it
+ * drops one, less one: Linux's net.core.netdev_max_backlog, 1000 unless
+ * written through /proc/sys/net/core/netdev_max_backlog. A negative value
+ * drops nothing, since Linux compares it as unsigned. */
 extern int netdev_max_backlog;
+
+/** The datagrams a drain of the loopback backlog delivers before it ends,
+ * which its last turn of 64 may pass: Linux's net.core.netdev_budget, 300
+ * unless written through /proc/sys/net/core/netdev_budget. A value of 0 or
+ * less ends a drain after its first turn. */
+extern int netdev_budget;
+
+/** The microseconds after which a drain of the loopback backlog ends at the
+ * end of its turn: Linux's net.core.netdev_budget_usecs, two ticks, 8000,
+ * unless written through /proc/sys/net/core/netdev_budget_usecs, which
+ * takes 0 or more. */
+extern int netdev_budget_usecs;
 
 /* A processor's counts of the loopback backlog, the first three columns of
  * Linux's /proc/net/softnet_stat. */
 struct ip_softnet {
     uint32_t processed; /* datagrams its drains delivered */
     uint32_t dropped;   /* datagrams it put on a full backlog */
-    uint32_t squeezed;  /* drains it stopped at their budget with more waiting */
+    uint32_t squeezed;  /* drains it ended on their budget of datagrams or time */
 };
 
 /** Copy processor `cpu`'s counts, below NR_CPUS, into `*out`. */
 void ip_loop_softnet(int cpu, struct ip_softnet *out);
 
-/** The datagrams on the loopback backlog now. */
-uint32_t ip_loop_qlen(void);
+/** The datagrams on the loopback backlog now: in `*input` those on its
+ * input queue, which no drain has taken yet, and in `*process` those on its
+ * process queue, which a drain has taken and not yet delivered. */
+void ip_loop_qlens(uint32_t *input, uint32_t *process);
 
 /**
  * The Internet checksum of the `len` bytes at `buf`: the one's complement of

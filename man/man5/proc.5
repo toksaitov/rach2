@@ -748,12 +748,16 @@ One line for each processor online, of fifteen eight-digit hexadecimal
 fields, as Linux 6.12 writes it: the datagrams the processor's drains of
 the loopback backlog delivered, those it dropped because more than
 .Pa /proc/sys/net/core/netdev_max_backlog
-datagrams waited, and its drains that stopped at their budget of 300 with
-more waiting; then zeros in the six fields Linux no longer counts and in
+datagrams waited on its input queue, and its drains that ended on
+.Pa /proc/sys/net/core/netdev_budget
+or
+.Pa /proc/sys/net/core/netdev_budget_usecs ;
+then zeros in the six fields Linux no longer counts and in
 the counts of RPS and the flow limit; the backlog's length; the
-processor's number; and the backlog's length again as the queue still to
-take and the one being processed, the second always 0.
-The backlog is the machine's, so its length is shown on the boot
+processor's number; and the backlog's length again as its input queue,
+which no drain has taken yet, and its process queue, which a drain has
+taken and not yet delivered.
+The backlog is the machine's, so its lengths are shown on the boot
 processor's line alone.
 .It Pa /proc/net/wireless
 Wireless station quality, signal, noise and discard counters; see
@@ -1327,12 +1331,28 @@ from 0 to 255, and
 .Xr tcp 7 ,
 which a privileged caller's write sets for every connection at once.
 .Pa net/core/netdev_max_backlog ,
-1000, the datagrams the loopback backlog holds before it drops the next,
-less one, as Linux's: a send to this machine past it still succeeds and
-its datagram is lost, counted in
+1000, the datagrams the loopback backlog's input queue holds before it
+drops the next, less one, as Linux's: a send to this machine past it
+still succeeds and its datagram is lost, counted in
 .Pa /proc/net/softnet_stat ;
 a privileged caller's write of any int sets it, and a negative one drops
 nothing, as Linux compares it unsigned.
+A drain takes the whole input queue onto its process queue before it
+delivers, so a reply sent while a datagram is delivered finds only what
+waits behind it, and an echo is answered at a limit of 0.
+.Pa net/core/netdev_budget ,
+300, the datagrams a drain of the loopback backlog delivers before it
+ends, in turns of 64, the last of which may pass it, and
+.Pa net/core/netdev_budget_usecs ,
+8000, two ticks, the microseconds after which a drain ends at the end of
+its turn, timed by the processor's cycle counter, which runs while the
+drain holds interrupts off, are Linux's; a drain that ends on either is
+counted in
+.Pa /proc/net/softnet_stat ,
+and what it leaves is delivered at the sender's next return to user mode,
+the idle wait or the tick.
+A privileged caller's write of any int sets the first, and of 0 or more
+the second.
 .Pa net/ipv6/conf/ Ns Ar NAME ,
 for
 .Ar NAME
