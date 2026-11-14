@@ -73,7 +73,8 @@ static uint32_t process_sleeps_cut_short(void);
 static void process_count_sleep_cut_short(void);
 static void process_count_fork(void);
 static struct process *alloc_process(void);
-static struct process *alloc_process_fork(const struct process *parent, int thread, int share_fs);
+static struct process *alloc_process_fork(const struct process *parent, int thread, int share_fs,
+                                          int32_t *error);
 static void free_process(struct process *proc);
 static struct process *get_process(uint32_t pid);
 static void reparent_children(uint32_t dead_pid);

@@ -3,6 +3,7 @@
  * reparenting.
  */
 #include "process.h"
+#include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../fs/fd.h"
 #include "../fs/pathbuf.h"
@@ -27,8 +28,14 @@ process_t *proc_list;
 process_t *proc_idle;
 static process_t *proc_tail; /* the last record of proc_list */
 
-/* The pid hash doubles before its load exceeds one record per bucket. */
+/* The pid hash doubles before its load exceeds one record per bucket. The
+ * hashes by process group and by session have as many buckets and come in
+ * the same allocation, after it: they keep the ids that groups and
+ * sessions hold, as Linux's struct pid keeps its tasks by type, so that
+ * neither the allocator nor setsid walks every record. */
 static process_t **pid_table;
+static process_t **pgid_table;
+static process_t **sid_table;
 static uint32_t pid_capacity, pid_records;
 #define USER_BUCKETS 256
 struct proc_user_count {
@@ -79,6 +86,67 @@ static void pid_insert(process_t *p)
     pid_table[slot] = p;
 }
 
+/** Insert a record in the buckets of its process group and its session. */
+static void group_insert(process_t *p)
+{
+    uint32_t g = p->pgid & (pid_capacity - 1);
+    uint32_t s = p->sid & (pid_capacity - 1);
+
+    p->pgid_next = pgid_table[g];
+    pgid_table[g] = p;
+    p->sid_next = sid_table[s];
+    sid_table[s] = p;
+}
+
+/** Remove an indexed record before changing its group or session or
+ * freeing it. */
+static void group_remove(process_t *p)
+{
+    process_t **link = &pgid_table[p->pgid & (pid_capacity - 1)];
+
+    while (*link != p) {
+        link = &(*link)->pgid_next;
+    }
+    *link = p->pgid_next;
+    link = &sid_table[p->sid & (pid_capacity - 1)];
+    while (*link != p) {
+        link = &(*link)->sid_next;
+    }
+    *link = p->sid_next;
+}
+
+void proc_set_group(process_t *p, uint32_t sid, uint32_t pgid)
+{
+    uint32_t flags = kirq_save();
+
+    group_remove(p);
+    p->sid = sid;
+    p->pgid = pgid;
+    group_insert(p);
+    kirq_restore(flags);
+}
+
+int proc_group_held(uint32_t id, int sessions, int unused, const process_t *gone)
+{
+    const process_t *p;
+
+    bkl_assert_held();
+    if (!pid_capacity) {
+        return 0;
+    }
+    for (p = pgid_table[id & (pid_capacity - 1)]; p; p = p->pgid_next) {
+        if (p->pgid == id && p != gone && (unused || p->state != PROC_UNUSED)) {
+            return 1;
+        }
+    }
+    for (p = sessions ? sid_table[id & (pid_capacity - 1)] : NULL; p; p = p->sid_next) {
+        if (p->sid == id && p != gone && (unused || p->state != PROC_UNUSED)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Grow the pid index for one more record; -1 leaves the old index intact. */
 static int pid_reserve(void)
 {
@@ -90,20 +158,23 @@ static int pid_reserve(void)
     if (pid_records < pid_capacity) {
         return 0;
     }
-    if (capacity <= pid_capacity || capacity > (uint32_t)(~(size_t)0 / sizeof(*table))) {
+    if (capacity <= pid_capacity || capacity > (uint32_t)(~(size_t)0 / (3 * sizeof(*table)))) {
         return -1;
     }
-    table = kzalloc(capacity * sizeof(*table));
+    table = kzalloc(3 * capacity * sizeof(*table));
     if (!table) {
         return -1;
     }
     flags = kirq_save();
     old = pid_table;
     pid_table = table;
+    pgid_table = table + capacity;
+    sid_table = table + 2 * capacity;
     pid_capacity = capacity;
     for (p = proc_list; p; p = p->next) {
         work_count[0]++;
         pid_insert(p);
+        group_insert(p);
     }
     kirq_restore(flags);
     kfree(old);
@@ -518,6 +589,8 @@ static uint32_t last_pid;
 /* The `serial` of the last record made. */
 static uint64_t last_serial;
 
+int pid_max = PID_MAX_LIMIT;
+
 uint32_t proc_last_pid(void)
 {
     return last_pid;
@@ -571,39 +644,37 @@ void process_count_fork(void)
     ++_forks_since_boot;
 }
 
-/** Whether a record has `pid` as its process group or its session, which
- * keeps the id from a new record after its own record is freed. */
-static int pid_held_as_group(uint32_t pid)
+/**
+ * Give out the next pid for a new record in `*pid`: the first from
+ * `next_pid` up that no record has as its id, its group or its session,
+ * below `pid_max`, then from RESERVED_PIDS, or from 1 before the cursor
+ * has passed it, as Linux 6.12's alloc_pid takes its number by
+ * idr_alloc_cyclic (kernel/pid.c), so that the pids in use stay unique.
+ * The ids held are at most three for each record, so a free one comes
+ * within that many tries but one when the range has room; one lap of the
+ * range ends the search when it has none. 0, or -EAGAIN when every id is
+ * held, as alloc_pid turns the IDR's -ENOSPC. The caller holds the big
+ * kernel lock.
+ */
+static int32_t pid_next(uint32_t *pid)
 {
-    const process_t *p;
+    uint32_t max = (uint32_t)pid_max;
+    uint32_t min = next_pid > RESERVED_PIDS ? RESERVED_PIDS : 1u;
+    uint32_t candidate = next_pid;
+    uint32_t tries;
 
-    for (p = proc_list; p; p = p->next) {
-        if (p->pgid == pid || p->sid == pid) {
-            return 1;
+    for (tries = 0; tries <= max - min; tries++, candidate++) {
+        if (candidate >= max) {
+            candidate = min;
+        }
+        if (get_process(candidate) == NULL && !proc_group_held(candidate, 1, 1, NULL)) {
+            next_pid = candidate + 1u;
+            last_pid = candidate;
+            *pid = candidate;
+            return 0;
         }
     }
-    return 0;
-}
-
-/** The next pid for a new record: `next_pid`, kept in the positive int range,
- * since the /proc path layer has a pid as an int, and skipping a pid still in
- * use, as a record's id, group or session, so that the pids in use stay
- * unique, as Linux's alloc_pid gives no number whose struct pid a task
- * still has; the wrap comes only after two thousand million records, or
- * after a write of ns_last_pid (`proc_set_last_pid`). The caller holds the
- * big kernel lock. */
-static uint32_t pid_next(void)
-{
-    uint32_t candidate;
-
-    do {
-        if (next_pid >= 2000000000u) {
-            next_pid = 1;
-        }
-        candidate = next_pid++;
-    } while (get_process(candidate) != NULL || pid_held_as_group(candidate));
-    last_pid = candidate;
-    return candidate;
+    return -EAGAIN;
 }
 
 /**
@@ -624,12 +695,16 @@ void proc_reclaim_boot_pids(void)
     if (p && p->tgid == 1 && !p->page_dir && !p->space_root) {
         flags = kirq_save();
         pid_remove(p);
+        group_remove(p);
         next_pid = 2;
-        p->pid = pid_next();
+        if (pid_next(&p->pid) != 0) {
+            k_panic("process: no pid for a boot thread that holds pid 1");
+        }
         p->tgid = p->pid;
         p->sid = p->pid;
         p->pgid = p->pid;
         pid_insert(p);
+        group_insert(p);
         kirq_restore(flags);
     }
     next_pid = 1;
@@ -666,22 +741,47 @@ static struct fs_struct *fs_new(void)
     return fs;
 }
 
+/** Put the new record `p` at the end of the list and in the indexes, and
+ * count it as a fork. */
+static void proc_publish(process_t *p)
+{
+    p->prev = proc_tail;
+    p->next = NULL;
+    if (proc_tail) {
+        proc_tail->next = p;
+    } else {
+        proc_list = p;
+    }
+    proc_tail = p;
+    pid_insert(p);
+    group_insert(p);
+    pid_records++;
+    process_count_fork();
+}
+
 /** Allocate a standalone record or an unfinished child of parent.
  * thread and share_fs reuse the parent's group and directories, and are
  * ignored without a parent. The child has no files yet; a standalone record
  * has stdio. NULL on allocation failure, with no record published. The
- * caller holds the big kernel lock. The pid is `pid_next`'s. fork gives the
- * child the parent's session and process group in place of its own.
+ * caller holds the big kernel lock. The pid is `pid_next`'s, and when
+ * every id is in use the result is NULL with `*error` -EAGAIN; any other
+ * failure sets it to -ENOMEM. fork gives the child the parent's session
+ * and process group in place of its own (`proc_set_group`).
  */
-static process_t *process_alloc(const process_t *parent, int thread, int share_fs)
+static process_t *process_alloc(const process_t *parent, int thread, int share_fs, int32_t *error)
 {
     process_t *p;
     struct tgroup *group = NULL;
     struct fs_struct *dirs = NULL;
-    uint32_t tgid = 0, ruid = 0;
+    uint32_t tgid = 0, ruid = 0, pid;
     int fd;
 
     bkl_assert_held();
+    *error = pid_reserve() != 0 ? -ENOMEM : pid_next(&pid);
+    if (*error != 0) {
+        return NULL;
+    }
+    *error = -ENOMEM;
     p = kmalloc(sizeof(*p));
     if (!p) {
         return NULL;
@@ -709,7 +809,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
         group->refs++;
     }
     p->sigacts = p->tg->action;
-    p->pid = pid_next();
+    p->pid = pid;
     p->serial = ++last_serial;
     p->tgid = group ? tgid : p->pid;
     p->state = parent ? PROC_UNUSED : PROC_READY;
@@ -741,21 +841,11 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
             goto fail_parts;
         }
     }
-    if (pid_reserve() != 0 || proc_set_ruid(p, ruid) != 0) {
+    if (proc_set_ruid(p, ruid) != 0) {
         goto fail_parts;
     }
-    p->prev = proc_tail;
-    p->next = NULL;
-    if (proc_tail) {
-        proc_tail->next = p;
-    } else {
-        proc_list = p;
-    }
-    proc_tail = p;
-
-    pid_insert(p);
-    pid_records++;
-    process_count_fork();
+    proc_publish(p);
+    *error = 0;
     return p;
 
 fail_parts:
@@ -777,13 +867,15 @@ fail_parts:
 /** Allocate a standalone record with its own group, directories and stdio. */
 process_t *alloc_process(void)
 {
-    return process_alloc(NULL, 0, 0);
+    int32_t error;
+
+    return process_alloc(NULL, 0, 0, &error);
 }
 
 /** Allocate an unfinished child, sharing the parts its flags select. */
-process_t *alloc_process_fork(const process_t *parent, int thread, int share_fs)
+process_t *alloc_process_fork(const process_t *parent, int thread, int share_fs, int32_t *error)
 {
-    return process_alloc(parent, thread, share_fs);
+    return process_alloc(parent, thread, share_fs, error);
 }
 
 void free_process(process_t *proc)
@@ -800,6 +892,7 @@ void free_process(process_t *proc)
     (void)tick_post_unlink(proc);
     spin_unlock_irqrestore(&tick_post_lock, flags);
     pid_remove(proc);
+    group_remove(proc);
     if (proc->tg) {
         pidfd_id_gone(proc);
     }

@@ -2795,8 +2795,7 @@ static int32_t fork_nproc(const process_t *parent)
  */
 static void fork_ids(process_t *child, const process_t *parent)
 {
-    child->sid = parent->sid;
-    child->pgid = parent->pgid;
+    proc_set_group(child, parent->sid, parent->pgid);
     child->pgrp_serial = parent->pgrp_serial;
     child->nice = parent->nice;
     child->ioprio = parent->ioprio;
@@ -3095,10 +3094,9 @@ static process_t *fork_build(process_t *parent, const struct fork_req *req, int3
     uintptr_t child_kstack_base;
     int32_t rc;
 
-    child =
-        alloc_process_fork(parent, (req->flags & CLONE_THREAD) != 0, (req->flags & CLONE_FS) != 0);
+    child = alloc_process_fork(parent, (req->flags & CLONE_THREAD) != 0,
+                               (req->flags & CLONE_FS) != 0, error);
     if (!child) {
-        *error = -ENOMEM;
         return NULL;
     }
 
@@ -6893,8 +6891,7 @@ static void group_set_ids(const process_t *p, uint32_t sid, uint32_t pgid, uint6
 
     for (t = proc_list; t; t = t->next) {
         if (t->tg == p->tg) {
-            t->sid = sid;
-            t->pgid = pgid;
+            proc_set_group(t, sid, pgid);
             t->pgrp_serial = serial;
         }
     }
@@ -6918,9 +6915,12 @@ static uint64_t pgrp_serial_in_session(uint32_t pgid, uint32_t sid)
  * Create a new session (setsid(2)).
  *
  * The caller becomes the leader of a new session and of a new process group,
- * both numbered with its pid. Fails with -EPERM if the caller already leads
- * a process group (a group leader cannot take its group into a new
- * session). Returns the new session id (the caller's pid).
+ * both numbered with its pid. Fails with -EPERM while any process, the
+ * caller or another, has the caller's pid as its process group, as Linux's
+ * ksys_setsid refuses while pid_task(sid, PIDTYPE_PGID) finds one: a
+ * leader cannot take its group into a new session, and a leader that left
+ * its group for another while members stayed in it cannot make a second
+ * group of that id. Returns the new session id (the caller's pid).
  */
 long sys_setsid(isr_params_t *params)
 {
@@ -6929,7 +6929,7 @@ long sys_setsid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (current_proc->pgid == current_proc->tgid) {
+    if (proc_group_held(current_proc->tgid, 0, 1, NULL)) {
         return -EPERM;
     }
     group_set_ids(current_proc, current_proc->tgid, current_proc->tgid, current_proc->tg->serial);

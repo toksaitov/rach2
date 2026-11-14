@@ -583,6 +583,7 @@ static void child_allocations(void)
     process_t *parent = alloc_process();
     process_t *child;
     int before = allocations, fail;
+    int32_t error = 0;
     uint32_t forks = process_forks_since_boot();
 
     check(parent != NULL, "parent for child allocation");
@@ -591,14 +592,15 @@ static void child_allocations(void)
     }
     for (fail = 0; fail < 2; fail++) {
         fail_after = fail;
-        child = alloc_process_fork(parent, 1, 1);
+        child = alloc_process_fork(parent, 1, 1, &error);
         fail_after = -1;
-        check(!child && allocations == before, "failed child frees its allocations");
+        check(!child && allocations == before && error == -ENOMEM,
+              "failed child frees its allocations");
         check(parent->tg->refs == 1 && parent->tg->live == 1 && parent->fs->refs == 1,
               "failed child keeps parent reference counts");
         check(process_forks_since_boot() == forks, "failed child is not counted");
     }
-    child = alloc_process_fork(parent, 1, 1);
+    child = alloc_process_fork(parent, 1, 1, &error);
     check(child != NULL, "child allocation");
     if (child) {
         check(child->state == PROC_UNUSED && !child->fds, "child starts unfinished without stdio");

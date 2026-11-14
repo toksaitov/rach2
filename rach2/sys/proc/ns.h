@@ -179,6 +179,11 @@ struct ipcns *proc_ipcns(const process_t *p);
  */
 int ns_privileged(const process_t *p, const struct userns *ns);
 
+/** Whether `p` holds the capability `cap` in the user namespace `ns`, NULL
+ * for the first, as Linux's `cap_capable` answers: as `ns_privileged`
+ * says for CAP_SYS_ADMIN, with `cap` in place of it. */
+int ns_capable(const process_t *p, const struct userns *ns, uint32_t cap);
+
 /** Whether `p` has privilege over the namespace `c`: privilege in the user
  * namespace that owns it, the first for none. */
 int ns_owner_privileged(const process_t *p, const struct ns_common *c);
@@ -287,9 +292,10 @@ uint32_t pidns_last_pid(void);
 /** Make `pid` the last number of the current process's PID namespace, so
  * that its next process takes the first free number above it, as a write
  * of Linux 6.12's ns_last_pid does (kernel/pid_namespace.c,
- * pid_ns_ctl_handler): 0, -EPERM unless the caller is privileged over the
- * namespace, or -EINVAL for a number below 0 or above pid_max,
- * 2000000000. */
+ * pid_ns_ctl_handler): 0, -EPERM unless the caller holds CAP_SYS_ADMIN or
+ * CAP_CHECKPOINT_RESTORE in the user namespace that owns the namespace, as
+ * checkpoint_restore_ns_capable asks, or -EINVAL for a number below 0 or
+ * above `pid_max` (process.h). */
 int32_t pidns_set_last_pid(int32_t pid);
 
 /**
@@ -336,17 +342,19 @@ void ns_exec(process_t *p);
  * (`nocaps` in process.h); CAP_SYS_BOOT, held in the first user namespace,
  * controls KVM_CAP_VM_DISABLE_NX_HUGE_PAGES; CAP_SYS_TTY_CONFIG controls
  * vhangup; CAP_SYS_RAWIO, with CAP_SYS_ADMIN, both in the first user
- * namespace, a write of an IOMMU group's type. */
-#define CAP_LAST_CAP        40
-#define CAP_HIGH_WORD       0x1FFu
-#define CAP_DAC_OVERRIDE    1
-#define CAP_DAC_READ_SEARCH 2
-#define CAP_SETPCAP         8
-#define CAP_SYS_RAWIO       17
-#define CAP_SYS_CHROOT      18
-#define CAP_SYS_ADMIN       21
-#define CAP_SYS_BOOT        22
-#define CAP_SYS_TTY_CONFIG  26
+ * namespace, a write of an IOMMU group's type; CAP_CHECKPOINT_RESTORE, as
+ * CAP_SYS_ADMIN does, a write of kernel/ns_last_pid. */
+#define CAP_LAST_CAP           40
+#define CAP_HIGH_WORD          0x1FFu
+#define CAP_DAC_OVERRIDE       1
+#define CAP_DAC_READ_SEARCH    2
+#define CAP_SETPCAP            8
+#define CAP_SYS_RAWIO          17
+#define CAP_SYS_CHROOT         18
+#define CAP_SYS_ADMIN          21
+#define CAP_SYS_BOOT           22
+#define CAP_SYS_TTY_CONFIG     26
+#define CAP_CHECKPOINT_RESTORE 40
 
 /**
  * Whether `p`'s ids give it the capabilities it has not lost: its

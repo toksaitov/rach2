@@ -29,9 +29,6 @@
  * and the others are numbered upward from NS_FIRST_DYNAMIC. */
 #define NS_FIRST_DYNAMIC 0xF0000100u
 
-/* The highest number a PID namespace other than the first gives out. */
-#define NS_PID_MAX 32768u
-
 /* The highest user.max_mnt_namespaces: INT_MAX, which a user namespace
  * other than the first starts with. */
 #define NS_LIMIT_MAX 0x7FFFFFFF
@@ -661,14 +658,7 @@ int ns_setgroups_denied(const process_t *p)
 
 /* ---- privilege ---- */
 
-/** Whether `p` has privilege in its own user namespace: whether it holds
- * CAP_SYS_ADMIN there (`cap_word`). */
-static int own_privileged(const process_t *p)
-{
-    return cap_holds(p, CAP_SYS_ADMIN);
-}
-
-int ns_privileged(const process_t *p, const struct userns *ns)
+int ns_capable(const process_t *p, const struct userns *ns, uint32_t cap)
 {
     const struct userns *own = proc_userns(p);
 
@@ -677,7 +667,7 @@ int ns_privileged(const process_t *p, const struct userns *ns)
     }
     for (;;) {
         if (ns == own) {
-            return own_privileged(p);
+            return cap_holds(p, cap);
         }
         if (ns->level <= own->level) {
             return 0;
@@ -687,6 +677,11 @@ int ns_privileged(const process_t *p, const struct userns *ns)
         }
         ns = ns->parent;
     }
+}
+
+int ns_privileged(const process_t *p, const struct userns *ns)
+{
+    return ns_capable(p, ns, CAP_SYS_ADMIN);
 }
 
 int ns_owner_privileged(const process_t *p, const struct ns_common *c)
@@ -743,14 +738,7 @@ static uint32_t pid_in(const process_t *p, const struct pidns *v)
  * group or its session. */
 static int pid_held_by_group(uint32_t kid, const process_t *gone)
 {
-    const process_t *p;
-
-    for (p = proc_list; p; p = p->next) {
-        if (p != gone && p->state != PROC_UNUSED && (p->pgid == kid || p->sid == kid)) {
-            return 1;
-        }
-    }
-    return 0;
+    return proc_group_held(kid, 1, 0, gone);
 }
 
 /** Release one allocated PID in `ns` and each ancestor below the first,
@@ -861,11 +849,13 @@ uint32_t pidns_last_pid(void)
 int32_t pidns_set_last_pid(int32_t pid)
 {
     struct pidns *ns = proc_pidns(current_proc);
+    const struct userns *owner = ns->c.owner ? ns->c.owner : &init_userns;
 
-    if (!ns_owner_privileged(current_proc, &ns->c)) {
+    if (!ns_capable(current_proc, owner, CAP_SYS_ADMIN) &&
+        !ns_capable(current_proc, owner, CAP_CHECKPOINT_RESTORE)) {
         return -EPERM;
     }
-    if (pid < 0 || pid > 2000000000) {
+    if (pid < 0 || pid > pid_max) {
         return -EINVAL;
     }
     if (ns == &init_pidns) {
@@ -915,31 +905,46 @@ process_t *proc_named(uint32_t pid)
     return kid != 0 ? get_process(kid) : NULL;
 }
 
-/** The next free number of the PID namespace `ns`: 1 for its first
- * process, then upward, past the numbers its records have, forks still
- * being built included, from 2 again after NS_PID_MAX; 0 when every number
- * is held. */
+/** Whether a record, forks still being built included, or a kept group's
+ * numbers have the number `n` in the PID namespace `ns`. */
+static int pidns_held(const struct pidns *ns, uint32_t n)
+{
+    const struct pid_held *h;
+    const process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p->pidns && pid_in(p, ns) == n) {
+            return 1;
+        }
+    }
+    for (h = pids_held; h; h = h->next) {
+        if (pid_number(h->ns, h->nr, h->kid, ns) == n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** The next free number of the PID namespace `ns`: the first above its
+ * last that is not held, below `pid_max`, then from RESERVED_PIDS, or from
+ * 1 before the namespace has given out RESERVED_PIDS, as Linux 6.12's
+ * alloc_pid takes its number by idr_alloc_cyclic (kernel/pid.c), so its
+ * first process takes 1 and a write of ns_last_pid above any earlier
+ * number is followed; 0 when one lap of the range finds every number
+ * held. */
 static uint32_t pidns_alloc(struct pidns *ns)
 {
+    uint32_t max = (uint32_t)pid_max;
+    uint32_t min = ns->last >= RESERVED_PIDS ? RESERVED_PIDS : 1u;
+    uint32_t n = ns->last + 1u;
     uint32_t tries;
 
-    for (tries = 0; tries < NS_PID_MAX; tries++) {
-        const struct pid_held *h;
-        const process_t *p;
-        uint32_t n = ns->last >= NS_PID_MAX ? 2u : ns->last + 1u;
-
-        ns->last = n;
-        for (p = proc_list; p; p = p->next) {
-            if (p->pidns && pid_in(p, ns) == n) {
-                break;
-            }
+    for (tries = 0; tries <= max - min; tries++, n++) {
+        if (n >= max) {
+            n = min;
         }
-        for (h = pids_held; !p && h; h = h->next) {
-            if (pid_number(h->ns, h->nr, h->kid, ns) == n) {
-                break;
-            }
-        }
-        if (!p && !h) {
+        if (!pidns_held(ns, n)) {
+            ns->last = n;
             return n;
         }
     }
@@ -1230,20 +1235,24 @@ fail:
  * first's child, reserving number 1 for the first process without making
  * it the reaper yet (`ns_fork_commit`). Allocation stays open while that
  * first fork is built, as Linux 6.12.115's alloc_pid tests PIDNS_ADDING
- * (kernel/pid.c:277-285). 0, or -ENOMEM when a namespace is full or closed,
+ * (kernel/pid.c:277-285). 0, -EAGAIN when a namespace is full, as
+ * alloc_pid turns the IDR's -ENOSPC, or -ENOMEM when one is closed,
  * with partial numbers cleared and an empty new namespace's cursor reset
  * as alloc_pid does (kernel/pid.c:294-303). The big lock is held; no sleep. */
 static int32_t ns_number(process_t *child, struct pidns *ns)
 {
     struct pidns *at;
+    int32_t rc = -ENOMEM;
 
     pid_held_prune(NULL);
     for (at = ns; at != &init_pidns; at = at->parent) {
         if (!at->adding) {
+            rc = -ENOMEM;
             goto fail;
         }
         child->nspid[at->level] = pidns_alloc(at);
         if (child->nspid[at->level] == 0) {
+            rc = -EAGAIN;
             goto fail;
         }
     }
@@ -1257,7 +1266,7 @@ fail:
         ns->last = 0;
     }
     k_memset(child->nspid, 0, sizeof(child->nspid));
-    return -ENOMEM;
+    return rc;
 }
 
 int32_t ns_fork_commit(process_t *child)

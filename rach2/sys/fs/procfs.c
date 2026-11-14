@@ -8860,6 +8860,7 @@ static const struct {
     int min;
     int max;
 } sysctl_ints[] = {
+    {SYNTH_SYS_PID_MAX, &pid_max, PID_MAX_MIN, PID_MAX_LIMIT},
     {SYNTH_SYS_INOTIFY_QUEUED, &inotify_max_queued_events, 0, 0x7FFFFFFF},
     {SYNTH_SYS_INOTIFY_INSTANCES, &inotify_max_user_instances, 0, 0x7FFFFFFF},
     {SYNTH_SYS_INOTIFY_WATCHES, &inotify_max_user_watches, 0, 0x7FFFFFFF},
@@ -9967,13 +9968,17 @@ static int procfs_open_irq(const struct vpath *vp, int flags)
 }
 
 /**
- * Open a writable /proc/sys file for writing, or for reading and writing, which
+ * Open a writable /proc/sys file for writing, or for reading and writing,
+ * or kernel/ns_last_pid for any access, which
  * needs a privileged caller, as the file's mode, 0644 and owned by root, says;
  * the names of the UTS namespace need privilege over it, and a limit of
  * /proc/sys/user privilege in the caller's user namespace, whose limit it
  * is, as Linux lets the root of a user namespace write its own;
  * kernel/ns_last_pid, whose mode is 0666 as on Linux, opens for anyone and
- * checks its writer at each write (`pidns_set_last_pid`). O_CREAT and
+ * checks its writer at each write (`pidns_set_last_pid`); each read gives
+ * the cursor of the reader's PID namespace at that read, as Linux's
+ * pid_ns_ctl_handler reads it, even through a descriptor another process
+ * opened. O_CREAT and
  * O_TRUNC are taken as they are for a file that exists, which is what a
  * shell's redirection and BusyBox's `sysctl -w` ask for. Each read and
  * write reaches the value as it is then.
@@ -10011,7 +10016,7 @@ static int procfs_open_sysctl(int entry, int flags)
     e->ops = &procfs_sysctl_ops;
     e->priv = f;
     e->ofd->offset = 0;
-    e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
@@ -10373,7 +10378,8 @@ static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid,
 /**
  * Open the file `vp` names, of process `pid` when it is one of a process,
  * through the open of its own when it has one: oom_score_adj, a write of an
- * ID map or comm, mem, a write of a /proc/sys file, the ACPI call file, a
+ * ID map or comm, mem, a write of a /proc/sys file or any open of
+ * kernel/ns_last_pid, the ACPI call file, a
  * PCI function's config and BAR files, and a write of a /sys attribute.
  * Returns 1 with the open's answer in `*fd`, or 0 for a file with none.
  */
@@ -10390,7 +10396,8 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
         *fd = procfs_open_idmap(vp, vp->procfile, pid, flags);
     } else if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
         *fd = procfs_open_mem(vp, pid, flags);
-    } else if (vp->kind == VNODE_PROC_SYS_FILE && synth_sys_writable(vp->sysent) && acc != 0) {
+    } else if (vp->kind == VNODE_PROC_SYS_FILE && ((synth_sys_writable(vp->sysent) && acc != 0) ||
+                                                   vp->sysent == SYNTH_SYS_NS_LAST_PID)) {
         *fd = procfs_open_sysctl(vp->sysent, flags);
     } else if (vp->kind == VNODE_PROC_ACPI_CALL) {
         *fd = procfs_open_acpicall(flags);

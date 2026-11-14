@@ -331,6 +331,8 @@ int synth_dev_dir_find(const char *name, int len);
 int synth_sys_count(void);
 /* The entries of kernel/hostname and domainname, whose texts are the names
  * of the moment, which procfs reads, and not the table's. */
+/* The entry of kernel/pid_max, whose value is proc/process.h's `pid_max`. */
+#define SYNTH_SYS_PID_MAX                9
 #define SYNTH_SYS_HOSTNAME               11
 #define SYNTH_SYS_DOMAINNAME             12
 /* The entry of net/ipv4/ip_forward, which takes a write of 0. */

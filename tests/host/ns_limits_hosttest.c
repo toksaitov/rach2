@@ -180,6 +180,17 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     (void)info;
 }
 
+int pid_max = PID_MAX_LIMIT;
+
+int proc_group_held(uint32_t id, int sessions, int unused, const process_t *gone)
+{
+    (void)id;
+    (void)sessions;
+    (void)unused;
+    (void)gone;
+    return 0;
+}
+
 uint32_t proc_last_pid(void)
 {
     return 0;

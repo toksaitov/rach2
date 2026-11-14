@@ -268,7 +268,7 @@ static const struct {
                {0, "kernel", 0},
                {6, "ostype", "Linux\n"},
                {6, "osrelease", "6.18.0-rach2\n"},
-               {6, "pid_max", "2000000000\n"},
+               {6, "pid_max", ""},
                {6, "core_pattern", "core\n"},
                {6, "hostname", ""},
                {6, "domainname", ""},
@@ -381,14 +381,21 @@ int synth_sys_ipv6(int entry, const char **dir, int *key)
 }
 
 /* The entries outside a range of `synth_sys_writable`'s that take a write. */
-static const int sys_writable_lone[] = {
-    SYNTH_SYS_HOSTNAME,           SYNTH_SYS_DOMAINNAME,
-    SYNTH_SYS_IP_FORWARD,         SYNTH_SYS_NR_OPEN,
-    SYNTH_SYS_FILE_MAX,           SYNTH_SYS_RANDOMIZE_VA_SPACE,
-    SYNTH_SYS_MAX_MNT_NAMESPACES, SYNTH_SYS_PANIC,
-    SYNTH_SYS_PANIC_ON_OOPS,      SYNTH_SYS_LOCK_STAT,
-    SYNTH_SYS_NETDEV_MAX_BACKLOG, SYNTH_SYS_NS_LAST_PID,
-    SYNTH_SYS_NETDEV_BUDGET,      SYNTH_SYS_NETDEV_BUDGET_USECS};
+static const int sys_writable_lone[] = {SYNTH_SYS_HOSTNAME,
+                                        SYNTH_SYS_DOMAINNAME,
+                                        SYNTH_SYS_IP_FORWARD,
+                                        SYNTH_SYS_NR_OPEN,
+                                        SYNTH_SYS_FILE_MAX,
+                                        SYNTH_SYS_RANDOMIZE_VA_SPACE,
+                                        SYNTH_SYS_MAX_MNT_NAMESPACES,
+                                        SYNTH_SYS_PANIC,
+                                        SYNTH_SYS_PANIC_ON_OOPS,
+                                        SYNTH_SYS_LOCK_STAT,
+                                        SYNTH_SYS_NETDEV_MAX_BACKLOG,
+                                        SYNTH_SYS_NS_LAST_PID,
+                                        SYNTH_SYS_NETDEV_BUDGET,
+                                        SYNTH_SYS_NETDEV_BUDGET_USECS,
+                                        SYNTH_SYS_PID_MAX};
 
 int synth_sys_writable(int entry)
 {

@@ -713,8 +713,11 @@ struct process {
     /* Ready-list links, owned by sched.c; current and idle tasks are absent. */
     struct process *ready_prev, *ready_next;
     int ready_linked;
-    /* Index links, owned by process.c under the big kernel lock. */
+    /* Index links, owned by process.c under the big kernel lock: by pid,
+     * by process group and by session (`proc_set_group`). */
     struct process *pid_next;
+    struct process *pgid_next;
+    struct process *sid_next;
     struct proc_user_count *user_count;
     /* Active timed waits and real alarms only; timer_linked marks
      * membership. Under the timer list's spinlock in process.c. */
@@ -879,6 +882,17 @@ extern process_t *proc_list;
  * for the shell's tests of preemption, which it runs. */
 extern process_t *proc_idle;
 
+/* The ids a PID namespace gives out are below `pid_max`, which
+ * /proc/sys/kernel/pid_max sets from PID_MAX_MIN to PID_MAX_LIMIT, as
+ * Linux 6.12's kernel/pid.c has it; the largest is kept in the positive
+ * int range, since the /proc path layer has a pid as an int. An allocator
+ * that has given out ids above RESERVED_PIDS starts again from it, not
+ * from 1, after reaching pid_max. */
+#define PID_MAX_LIMIT 2000000000
+#define RESERVED_PIDS 300
+#define PID_MAX_MIN   (RESERVED_PIDS + 1)
+extern int pid_max;
+
 /** The last process ID given out, 0 before the first. */
 uint32_t proc_last_pid(void);
 
@@ -887,6 +901,17 @@ uint32_t proc_last_pid(void);
  * /proc/sys/kernel/ns_last_pid in the first PID namespace sets its
  * allocator's cursor. The caller holds the big kernel lock. */
 void proc_set_last_pid(uint32_t pid);
+
+/** Make `sid` and `pgid` the session and the process group of the record
+ * `p`, keeping the index by group and by session (`proc_group_held`). The
+ * caller holds the big kernel lock. */
+void proc_set_group(process_t *p, uint32_t sid, uint32_t pgid);
+
+/** Whether a record other than `gone`, and in a state other than
+ * PROC_UNUSED unless `unused` is nonzero, has `id` as its process group,
+ * or as its session when `sessions` is nonzero. Records still being built
+ * are PROC_UNUSED. The caller holds the big kernel lock. */
+int proc_group_held(uint32_t id, int sessions, int unused, const process_t *gone);
 
 /* The running process, `current_proc`, is the running processor's
  * (percpu.h). */
@@ -907,7 +932,7 @@ void init_proc(void);
 void proc_reclaim_boot_pids(void);
 
 /** A new record from the heap, at the end of the list and READY: the next
- * pid not in use, below 2000000000, the leader of a thread group, a session
+ * pid not in use, below `pid_max`, the leader of a thread group, a session
  * and a process group of its own, the default limits, a descriptor table
  * with the standard descriptions, the working directory /, the umask 022,
  * every processor in its affinity, and this processor as its last CPU.
@@ -922,9 +947,11 @@ process_t *alloc_process(void);
  * directories when share_fs is nonzero. A shared group gains a reference
  * but no live thread until fork_signals commits the child. The caller
  * installs shared or copied files and completes its context before making
- * it ready; free_process unwinds an unfinished record. NULL on allocation
- * failure. The caller holds the big kernel lock. */
-process_t *alloc_process_fork(const process_t *parent, int thread, int share_fs);
+ * it ready; free_process unwinds an unfinished record. NULL with
+ * `*error` -EAGAIN when every id below `pid_max` is in use, as Linux's
+ * alloc_pid returns, or -ENOMEM on allocation failure. The caller holds
+ * the big kernel lock. */
+process_t *alloc_process_fork(const process_t *parent, int thread, int share_fs, int32_t *error);
 
 /* The bytes of a kernel stack: a process's, an idle task's, and the boot
  * stack loader.s reserves, which is as large. */
