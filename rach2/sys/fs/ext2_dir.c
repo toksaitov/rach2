@@ -969,8 +969,9 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
  *
  * As in Linux, the disk's cache is not flushed. Linux next writes the
  * directory's inode; here `inode_commit` writes it where a later step
- * depends on it, and otherwise it writes back, since a stop that loses
- * what is left, its times or its link count, loses no name.
+ * depends on it and when a mkdir raised its count, and otherwise it writes
+ * back, since a stop that loses what is left, its times or another count,
+ * loses no name, and the mount's check sets a count to its names.
  */
 static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
 {
@@ -997,16 +998,17 @@ static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
  * `sync_inode_metadata` (fs/ext2/dir.c:440-447 in Linux 6.12.115), for a
  * step that depends on the inode: a grown directory's new pointer, size and
  * `i_blocks` before a name in the new block lets another go, a cleared
- * index flag before the entries change, and a new directory before its
- * parent names it. The cache writes the block after the dirty blocks it may
- * name (`bcache_sync_last`, `table_names`): the shared blocks dirtied
- * before its last mark that are not `after`, such as bitmaps, descriptors
- * and directory and pointer blocks, and the blocks of a regular file beside
- * it in the table block that allocated or freed since its last write.
- * Those are what the write costs past its own request: a directory's own
- * blocks were written as they changed (`dir_commit`). A strict mount wrote
- * the inode through already. 0; -EROFS without a write once a write on the
- * device has failed; or the write's -errno, with the block still dirty.
+ * index flag before the entries change, and a new directory and its
+ * parent's raised count before the parent names it. The cache writes the
+ * block after the dirty blocks it may name (`bcache_sync_last`,
+ * `table_names`): the shared blocks dirtied before its last mark that are
+ * not `after`, such as bitmaps, descriptors and directory and pointer
+ * blocks, and the blocks of a regular file beside it in the table block
+ * that allocated or freed since its last write. Those are what the write
+ * costs past its own request: a directory's own blocks were written as
+ * they changed (`dir_commit`). A strict mount wrote the inode through
+ * already. 0; -EROFS without a write once a write on the device has
+ * failed; or the write's -errno, with the block still dirty.
  */
 static int inode_commit(struct ext2_mount *em, const struct ext2_node *n)
 {
@@ -1819,7 +1821,11 @@ int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
  * entry last; a stop before the inode leaves a set bit with nothing behind it.
  * On a mount that writes back the block and the inode reach the device before
  * the parent's entry names them (`shared_block_new`, `inode_commit`), as
- * Linux's `ext2_make_empty` writes both (fs/ext2/dir.c:650 in Linux 6.12.115).
+ * Linux's `ext2_make_empty` writes both (fs/ext2/dir.c:650 in Linux 6.12.115),
+ * and so does the parent's inode with its raised count, which Linux writes
+ * after the entry (`ext2_mkdir` raises it before `ext2_add_link`, whose
+ * `ext2_handle_dirsync` ends in `sync_inode_metadata`): before it, a stop
+ * leaves the count above the names rather than below them.
  * A failure frees the new inode (`inode_abandon`), and lowers the parent's
  * count again in memory when the entry was not written, which the parent's
  * mark has its next store write. The batch is drained first. The caller
@@ -1893,6 +1899,9 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         ext2_node_nlink_set(d, d->nlink + 1);
         ext2_stamp(d, T_MTIME | T_CTIME);
         rc = ext2_inode_store(em, d);
+        if (rc == 0) {
+            rc = inode_commit(em, d);
+        }
         if (rc == 0) {
             rc = dir_add(em, d, name, n->ino, 2);
         }
