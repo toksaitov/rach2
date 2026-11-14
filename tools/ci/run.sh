@@ -149,10 +149,13 @@ run_set() { # run_set NAME ARGS...
 # Set RACH2_CASES to the identities of RACH2_RERUN_CASES that belong to the
 # suites of WORDS, SUITE or ARCH:SUITE, a case identity's second part being
 # its suite, when they name at least one case of each; otherwise unset it, so
-# that the suites run whole.
+# that the suites run whole. The ia32 profile runs its suites whole, since
+# the identities do not say which architecture's run failed and etude refuses
+# a chosen case that does not run under the profile.
 rerun_cases() { # rerun_cases WORD...
     unset RACH2_CASES
     [ -n "${RACH2_RERUN_CASES:-}" ] || return 0
+    [ "${RACH2_KERNEL:-}" != ia32 ] || return 0
     rc_ids=""
     for w in "$@"; do
         # shellcheck disable=SC2086 # the identities are words
