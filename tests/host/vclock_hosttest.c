@@ -172,6 +172,28 @@ uint32_t tsc_clock_per_tick(void)
     return tsc_counts_per_tick();
 }
 
+/** tick.c's 64-bit division, which the host does itself. */
+uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    if (rem) {
+        *rem = n % d;
+    }
+    return n / d;
+}
+
+/** The watch's refinement of the TSC's rate, which the model does not
+ * keep. */
+void timer_tsc_watch_refine(uint32_t per_tick)
+{
+    (void)per_tick;
+}
+
+/** The reference clock's name in the records. */
+const char *refclock_name(void)
+{
+    return "hpet";
+}
+
 /** Every processor's TSC agreed at its start. */
 int tsc_synced(int *cpu, uint64_t *behind)
 {
