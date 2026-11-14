@@ -1,0 +1,27 @@
+sysctl: go on after a value the kernel refuses
+
+sysctl_act_on_setting writes a value with xwrite_str, which exits the
+applet when write fails, so a value the kernel refuses in a file given to
+-p, such as vm.max_map_count = bad, keeps every later line of that file
+from being applied. procps reports the line and goes on with the rest. The
+write is now checked: a refused value is reported as an open failure is,
+and fails that setting alone.
+
+--- a/procps/sysctl.c
++++ b/procps/sysctl.c
+@@ -191,7 +191,14 @@
+ 
+ 	if (writing) {
+ //TODO: procps 3.2.7 writes "value\n", note trailing "\n"
+-		xwrite_str(fd, value);
++		/* A value the kernel refuses fails this setting alone, as
++		 * in procps, so that -p goes on with the file's other lines. */
++		if (full_write(fd, value, strlen(value)) != (ssize_t)strlen(value)) {
++			bb_perror_msg("error setting key '%s'", outname);
++			close(fd);
++			retval = EXIT_FAILURE;
++			goto end;
++		}
+ 		close(fd);
+ 		if (!(option_mask32 & FLAG_QUIET)) {
+ 			if (option_mask32 & FLAG_SHOW_KEYS)

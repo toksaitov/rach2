@@ -277,3 +277,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the AP guest's dnsmasq no longer uses bind-dynamic; it listens on the wildcard address and answers what arrives on br0 and wlan2, in 084887f08. `machine.wifi.robust` asks 192.168.71.1 for the endpoint by name at each check of its routes, in 4f9638268, so a lost socket is named in its report.
 * Status: unreported.
 * Next: confirm the candidate with `netstat -lnt` beside `-lnu` (a TCP listener on 192.168.71.1:53 with no UDP one) and `log-debug`'s `listening on` and `stopped listening on` lines; reproduce on a plain Linux; read upstream's git after 2.92 and Alpine's patches for a change to `create_listeners` or the bind-dynamic path.
+
+## BusyBox sysctl -p stops a file at a value the kernel refuses
+
+* Project: BusyBox 1.36.1, `busybox-1.36.1.tar.bz2`, SHA-256 `b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314`.
+* Fails: `sysctl -p FILE` exits at the first line whose value the kernel refuses, and applies none of the file's later lines. `sysctl_act_on_setting` in `procps/sysctl.c` (line 194) writes the value with `xwrite_str`, which calls `bb_perror_msg_and_die` when `write` fails; `sysctl_handle_preload_file` (lines 274-309) calls it for each line in turn. procps's `sysctl` reports the line and goes on with the rest. An unknown key does not stop the file, since a failed `open` returns from the function.
+* Found: 2026-11-14, by Codex's review of milestone 84's mapping-limit work, reading init's application of `/etc/sysctl.d` and its peers (task 84-263q).
+* Reproduction: on Linux, write `vm.max_map_count = bad` and then `vm.swappiness = 10` to a file and run BusyBox 1.36.1's `sysctl -p` on it as root: the first write fails with EINVAL, the applet exits, and `vm.swappiness` is left as it was. Not yet run on Linux.
+* Evidence: `vendor/busybox/patches/0010-sysctl-go-on-after-a-refused-value.patch`.
+* Rach2: the patch checks the write with `full_write`, reports `error setting key 'NAME'` and fails that setting alone.
+* Status: unreported.
+* Next: read `procps/sysctl.c` in BusyBox's master to see whether the write is still `xwrite_str`, then send the patch to the BusyBox list.
