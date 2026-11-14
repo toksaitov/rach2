@@ -6899,7 +6899,7 @@
         {"assertion_id": "devmem-ram-eperm", "checks": "/dev/mem refuses a frame of RAM with EPERM.", "source": "program"},
         {"assertion_id": "devmem-private-einval", "checks": "A private mapping of /dev/mem is EINVAL.", "source": "program"},
         {"assertion_id": "devmem-apic", "checks": "A mapping of /dev/mem reads the local APIC's version.", "source": "program"},
-        {"assertion_id": "klog-size", "checks": "klogctl gives the size of the log ring.", "source": "program"},
+        {"assertion_id": "klog-size", "checks": "klogctl gives the size of the log ring, Linux's default 131072 bytes.", "source": "program"},
         {"assertion_id": "klog-records", "checks": "klogctl's read of the whole ring gives whole records.", "source": "program"},
         {"assertion_id": "klog-clear", "checks": "After a clear, klogctl's read gives no record from before it.", "source": "program"},
         {"assertion_id": "dev-log-link", "checks": "/dev/log is a link to /var/run/log.", "source": "program"},

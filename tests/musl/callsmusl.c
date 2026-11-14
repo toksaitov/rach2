@@ -2463,9 +2463,10 @@ static int devmems(void)
 }
 
 /**
- * Check the kernel's log through syslog(2): the ring's size, the whole ring
- * read as records that begin with a priority, after a clear nothing of what
- * came before, and /dev/log a link to the syslog daemon's socket.
+ * Check the kernel's log through syslog(2): the ring's size, Linux's default
+ * 131072 bytes, the last 16 KiB of the ring read as records that begin with
+ * a priority, after a clear nothing of what came before, and /dev/log a link
+ * to the syslog daemon's socket.
  * Returns 0, or 1 after the failure is printed.
  */
 static int klogs(void)
@@ -2474,7 +2475,7 @@ static int klogs(void)
     char link[32];
     int n;
 
-    if (klogctl(10, NULL, 0) != 16384) {
+    if (klogctl(10, NULL, 0) != 131072) {
         return fail("klogctl's size of the ring");
     }
     held();
