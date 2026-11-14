@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.tcc.compile",
-      "behavior": "The installed system, as the test account at the console, compiles a C program with tcc and runs it; refuses -run, -shared, a link without -static and a raw-image link, each with its reason and with no output left; compiles an object; builds this project's cat, which agrees with BusyBox's over a 21 KB binary file and over two files; links ping from two sources; runs a program in which the x86-64 compiler must clear the high half of an unsigned int it converts to floating point, and scale a negative index and a row of 2 GiB of an array of variable length in the pointer's width; runs a program whose array parameters are sized by earlier parameters, and one whose bounds have side effects, earlier bindings, inner constants and an old-style declaration list, and one whose bound reads a volatile object on entry, and one whose bounds and statements throw away volatile reads that must still be made, and gets GCC's results; refuses [*] in a definition; runs a static program calling an IFUNC its assembler defines and gets GCC's result; and the kernel's trace of missing system calls names none that tcc asked for",
+      "behavior": "The installed system, as the test account at the console, compiles a C program with tcc and runs it; refuses -run, -shared, a link without -static and a raw-image link, each with its reason and with no output left; compiles an object; builds this project's cat, which agrees with BusyBox's over a 21 KB binary file and over two files; links ping from two sources; runs a program in which the x86-64 compiler must clear the high half of an unsigned int it converts to floating point, and scale a negative index and a row of 2 GiB of an array of variable length in the pointer's width; runs a program whose array parameters are sized by earlier parameters, and one whose bounds have side effects, earlier bindings, inner constants and an old-style declaration list, and one whose bound reads a volatile object on entry, and one whose bounds and statements throw away volatile reads that must still be made, and one whose statement expression must read a volatile object before the declaration after it, and one that counts each volatile access, and gets GCC's results; refuses [*] in a definition; runs a static program calling an IFUNC its assembler defines and gets GCC's result; and the kernel's trace of missing system calls names none that tcc asked for",
       "units": [
         "tcc"
       ],
@@ -101,7 +101,7 @@
           "step_id": "vla-bounds",
           "stage": "execute",
           "machine": "fixture",
-          "does": "write /tmp/vbound.c with printf, compile it with tcc -static and run it, write /tmp/vread.c with printf, compile it with tcc -static and run it, write /tmp/vdisc.c with printf, compile it with tcc -static and run it, and compile a definition with int a[*] with tcc -c, printing its status and what tcc said"
+          "does": "write /tmp/vbound.c with printf, compile it with tcc -static and run it, write /tmp/vread.c with printf, compile it with tcc -static and run it, write /tmp/vdisc.c with printf, compile it with tcc -static and run it, write /tmp/vorder.c with printf, compile it with tcc -static and run it, write /tmp/vcount.c with printf, compile it with tcc -static and run it, and compile a definition with int a[*] with tcc -c, printing its status and what tcc said"
         },
         {
           "step_id": "ifunc",
@@ -279,6 +279,26 @@
         {
           "assertion_id": "volatile-discard",
           "checks": "the program prints VDISCARD 111111, as GCC's does: each of the three bounds on entry and each of the three statements reads *vp although its value is thrown away, and each read of address 0 reaches the program's SIGSEGV handler, which jumps back for the next case",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "order-built",
+          "checks": "tcc -static builds /tmp/vorder from /tmp/vorder.c, whose statement expression ({*vp;int x=(w=1);x;}) throws away a read of *vp with vp a null pointer to a volatile int",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "volatile-order",
+          "checks": "the program prints VORDER 0, as GCC's does: the statement expression reads *vp before the declaration's initializer stores 1 in w, and the read of address 0 reaches the program's SIGSEGV handler, which jumps out before the store",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "count-built",
+          "checks": "tcc -static builds /tmp/vcount from /tmp/vcount.c, whose SIGSEGV handler counts each access to a page without access and lets it run once under the trap flag",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "volatile-count",
+          "checks": "the program prints VCOUNT 1121111000010, as GCC's does at -O0: (void)*vp, *vp, x=(*vp,4), *vp=1, x=({*vp;}), a statement expression whose read a declaration follows and the parameter bound (*vp,3) each access *vp once and *vp,*vp twice, and x=sizeof(*vp), the skipped operands of 0?*vp:1, 1?1:*vp and 0&&*vp and the parameter bound sizeof(*vp) access it never",
           "source": "scenario"
         },
         {

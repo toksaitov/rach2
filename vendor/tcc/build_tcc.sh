@@ -176,6 +176,7 @@ if ! grep -q "s1->seg_size = 64;" "$SRC/tccasm.c" ||
    ! grep -q "^static void param_bound_replay" "$SRC/tccgen.c" ||
    ! grep -q "^static void param_effect" "$SRC/tccgen.c" ||
    ! grep -q "^static void vpop_discard" "$SRC/tccgen.c" ||
+   ! grep -q "declaration's initializer; a declaration that ends the" "$SRC/tccgen.c" ||
    ! grep -q "owns its bound's tokens" "$SRC/tccgen.c" ||
    ! grep -q "^static void ifunc_entry_code" "$SRC/tccelf.c" ||
    ! grep -q "|| type == R_IRELATIVE" "$SRC/tccelf.c" ||

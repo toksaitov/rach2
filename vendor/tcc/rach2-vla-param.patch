@@ -53,9 +53,13 @@ make the read, and so does GCC. gv_volatile now loads a volatile scalar
 where a cast takes it, and vpop_discard where an expression statement, an
 earlier statement of a statement expression, the first or third
 expression of a for, the left operand of a comma or a parameter's
-outermost bound throws its value away. The value of an assignment to a
-bit-field, which stays an lvalue, drops the qualifier, so that s.b = 1;
-reads s.b only to store into it. A parameter's bound thus counts the read
+outermost bound throws its value away. A statement expression throws
+away the value of a statement that a declaration follows before it makes
+the declaration's code, where it did so after the initializer, so that
+({ v; int x = (v = 1); 0; }) reads v before it stores 1; a declaration
+that ends a statement expression leaves it void, as GCC does. The value
+of an assignment to a bit-field, which stays an lvalue, drops the
+qualifier, so that s.b = 1; reads s.b only to store into it. A parameter's bound thus counts the read
 of int a[((void)v, 3)] and keeps its tokens.
 
 compare_types took an array of variable length and an array of fixed size
@@ -87,7 +91,7 @@ index 17b46d6..67c229c 100644
  
  /* section definition */
 diff --git a/tccgen.c b/tccgen.c
-index 2a03937..bd9ef6b 100644
+index 2a03937..c177beb 100644
 --- a/tccgen.c
 +++ b/tccgen.c
 @@ -40,6 +40,28 @@ ST_DATA Sym *define_stack;
@@ -486,8 +490,23 @@ index 2a03937..bd9ef6b 100644
          next();
      }
  }
-@@ -5986,7 +6201,7 @@ static void block(int *bsym, int *csym, int is_expr)
+@@ -5982,11 +6197,21 @@ static void block(int *bsym, int *csym, int is_expr)
+         while (tok != '}') {
+ 	    if ((a = is_label()))
+ 		unget_tok(a);
+-	    else
++	    else {
++                /* the value of the statement before a declaration is
++                   thrown away, and its read made, before the code of the
++                   declaration's initializer; a declaration that ends the
++                   statement expression leaves it void, as GCC does */
++                if (is_expr) {
++                    vpop_discard();
++                    vpushi(0);
++                    vtop->type.t = VT_VOID;
++                }
  	        decl(VT_LOCAL);
++            }
              if (tok != '}') {
                  if (is_expr)
 -                    vpop();
@@ -495,7 +514,7 @@ index 2a03937..bd9ef6b 100644
                  block(bsym, csym, is_expr);
              }
          }
-@@ -6055,7 +6270,7 @@ static void block(int *bsym, int *csym, int is_expr)
+@@ -6055,7 +6280,7 @@ static void block(int *bsym, int *csym, int is_expr)
              if (!decl0(VT_LOCAL, 1, NULL)) {
                  /* no, regular for-loop init expr */
                  gexpr();
@@ -504,7 +523,7 @@ index 2a03937..bd9ef6b 100644
              }
          }
          skip(';');
-@@ -6074,7 +6289,7 @@ static void block(int *bsym, int *csym, int is_expr)
+@@ -6074,7 +6299,7 @@ static void block(int *bsym, int *csym, int is_expr)
              c = ind;
              vla_sp_restore();
              gexpr();
@@ -513,7 +532,7 @@ index 2a03937..bd9ef6b 100644
              gjmp_addr(d);
              gsym(e);
          }
-@@ -6230,18 +6445,18 @@ static void block(int *bsym, int *csym, int is_expr)
+@@ -6230,18 +6455,18 @@ static void block(int *bsym, int *csym, int is_expr)
                  tcc_warning("deprecated use of label at end of compound statement");
              } else {
                  if (is_expr)
@@ -535,7 +554,7 @@ index 2a03937..bd9ef6b 100644
                  }
              }
              skip(';');
-@@ -7065,6 +7280,90 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
+@@ -7065,6 +7290,90 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
      nocode_wanted = saved_nocode_wanted;
  }
  
@@ -626,7 +645,7 @@ index 2a03937..bd9ef6b 100644
  /* parse a function defined by symbol 'sym' and generate its code in
     'cur_text_section' */
  static void gen_function(Sym *sym)
-@@ -7086,6 +7385,7 @@ static void gen_function(Sym *sym)
+@@ -7086,6 +7395,7 @@ static void gen_function(Sym *sym)
      gfunc_prolog(&sym->type);
      local_scope = 0;
      rsym = 0;
@@ -634,7 +653,7 @@ index 2a03937..bd9ef6b 100644
      block(NULL, NULL, 0);
      nocode_wanted = 0;
      gsym(rsym);
-@@ -7159,9 +7459,9 @@ ST_FUNC void free_inline_functions(TCCState *s)
+@@ -7159,9 +7469,9 @@ ST_FUNC void free_inline_functions(TCCState *s)
     if parsing old style parameter decl list (and FUNC_SYM is set then) */
  static int decl0(int l, int is_for_loop_init, Sym *func_sym)
  {
@@ -646,7 +665,7 @@ index 2a03937..bd9ef6b 100644
      AttributeDef ad;
  
      while (1) {
-@@ -7228,8 +7528,19 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
+@@ -7228,8 +7538,19 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
                  /* if old style function prototype, we accept a
                     declaration list */
                  sym = type.ref;
@@ -667,7 +686,7 @@ index 2a03937..bd9ef6b 100644
              }
  
              if (gnu_ext && (tok == TOK_ASM1 || tok == TOK_ASM2 || tok == TOK_ASM3)) {
-@@ -7317,6 +7628,7 @@ found:
+@@ -7317,6 +7638,7 @@ found:
  				  get_tok_str(v, NULL));
  		    convert_parameter_type(&type);
  		    sym->type = type;

@@ -262,8 +262,8 @@ Faults this milestone found in another project's code, one section each, in the 
 * Fails: the statements `v;`, `(void)v;` and `(int)v;` and the left operand of `(v, 3)`, with `v` a volatile scalar, emit no load, where C99 6.3.2.1p2 and 6.3.2.2 and GCC make the read. `gexpr` pops the left operand of a comma with `vpop` (`tccgen.c` line 5684) and `block` pops an expression statement's value the same way (line 6227), and neither loads an lvalue; `gen_cast` (line 2459) keeps a cast to the same type as the lvalue and drops the qualifier, and a cast to `void` loads nothing either.
 * Found: 2026-11-14, Codex's third review of the TinyCC work of task 84-262c, milestone 84, which named `((int)v,3)`, `(void)v` and `(v,3)` in an array parameter's bound; task 84-262k found that the statements have the same fault, on the owner's Mac with an x86-64 and an i386 TinyCC built from the tarball and Rach2's patches.
 * Reproduction: compile `volatile int *vp; void g(void) { (void)*vp; *vp; (int)*vp; (*vp, 3); }` with TinyCC 0.9.27 and read the object: `g` loads `vp` and never reads through it, where GCC's object reads `*vp` four times at -O0 and -O2. Rach2's kernel built by TinyCC skips the read in `(void)mmio_read32(r->entry)` of `rach2/sys/pci.c`, which flushes the write of an MSI-X entry.
-* Evidence: `vendor/tcc/rach2-vla-param.patch`; the `discard-built` and `volatile-discard` assertions of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
-* Rach2: `vendor/tcc/rach2-vla-param.patch` loads a volatile scalar where a cast takes it and where an expression statement, an earlier statement of a statement expression, the first or third expression of a `for`, the left operand of a comma or a parameter's outermost bound throws its value away, and does not read again the value of an assignment to a bit-field, task 84-262k.
+* Evidence: `vendor/tcc/rach2-vla-param.patch`; the `discard-built`, `volatile-discard`, `order-built`, `volatile-order`, `count-built` and `volatile-count` assertions of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
+* Rach2: `vendor/tcc/rach2-vla-param.patch` loads a volatile scalar where a cast takes it and where an expression statement, an earlier statement of a statement expression, the first or third expression of a `for`, the left operand of a comma or a parameter's outermost bound throws its value away, and does not read again the value of an assignment to a bit-field, task 84-262k. Task 84-262z makes the read of a statement of a statement expression that a declaration follows before the declaration's code, where it came after the initializer.
 * Status: unreported.
 * Next: read the mob branch's `gexpr`, `block` and `gen_cast` to see whether a discarded volatile read is made there, and report it with the reproduction if not.
 
@@ -288,3 +288,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the patch checks the write with `full_write`, reports `error setting key 'NAME'` and fails that setting alone.
 * Status: unreported.
 * Next: read `procps/sysctl.c` in BusyBox's master to see whether the write is still `xwrite_str`, then send the patch to the BusyBox list.
+
+## TinyCC gives a statement expression that ends in a declaration the value of the statement before it
+
+* Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccgen.c`.
+* Fails: `({ 5; int y = 2; })` has the value 5 and `int z = ({ 5; int y = 2; });` compiles, where GCC's manual gives a statement expression whose last statement is not an expression the type `void`, and GCC refuses the assignment. `block` pops the value of a statement of a statement expression only before the statement after it, after `decl` (`tccgen.c` line 5970) has parsed any declaration between them, so a value is still on the stack when the declarations end the block.
+* Found: 2026-11-14, the testing PC's WSL, milestone 84, task 84-262z, while moving the pop of that value ahead of the declaration so that a volatile read the statement throws away is made before the declaration's initializer.
+* Reproduction: `int g(void) { int z = ({ 1; int y = 2; }); return z; }` compiles with the tarball's unpatched `x86_64-tcc -c`, and in a program built by the x86-64 TinyCC with Rach2's patches before task 84-262z, whose `block` is the same here, `g` returns 1. GCC says `void value not ignored as it ought to be`.
+* Evidence: `vendor/tcc/rach2-vla-param.patch`.
+* Rach2: `vendor/tcc/rach2-vla-param.patch` throws the value away before a declaration and leaves `void` in its place, so the case is refused as GCC refuses it, task 84-262z.
+* Status: unreported.
+* Next: read the mob branch's `block` to see whether the value is still kept across a declaration, and report it with the reproduction if so.

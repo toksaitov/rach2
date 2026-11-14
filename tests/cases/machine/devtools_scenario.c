@@ -273,6 +273,73 @@ static const char vdisc_built_line[] =
     "tcc -static -o /tmp/vdisc /tmp/vdisc.c && echo VDISC\"\"BUILT";
 
 /*
+ * A statement expression must make the read of a statement whose value it
+ * throws away before the code of the declaration after it: in
+ * ({*vp;int x=(w=1);x;}), vp a null pointer, the read faults, and the
+ * handler jumps out before w is stored. GCC's program prints VORDER 0 on
+ * both targets. TinyCC read *vp only after the initializer had stored 1 in
+ * w, and printed VORDER 1.
+ */
+static const char vorder1_line[] =
+    "printf '#include <setjmp.h>\\n#include <signal.h>\\n#include <stdio.h>\\nvolatile int "
+    "*vp;volatile int w;sigjmp_buf j;\\nvoid h(int s){siglongjmp(j,1);}\\n' > /tmp/vorder.c";
+static const char vorder2_line[] =
+    "printf 'int main(void){signal(SIGSEGV,h);if(!sigsetjmp(j,1))({*vp;int x=(w=1);x;});\\n' >> "
+    "/tmp/vorder.c";
+static const char vorder3_line[] =
+    "printf 'printf(\"VOR\"\"DER %%d\\\\n\",w);return 0;}\\n' >> /tmp/vorder.c";
+static const char vorder_built_line[] =
+    "tcc -static -o /tmp/vorder /tmp/vorder.c && echo VORDER\"\"BUILT";
+
+/*
+ * Each volatile access must be made exactly once, and none where its operand
+ * is not evaluated. vp points to a page without access: the SIGSEGV handler
+ * counts the access, opens the page and sets the trap flag, so the access
+ * runs again and the SIGTRAP after it closes the page. Cases c0 to c12 make
+ * (void)*vp, *vp, *vp,*vp, x=(*vp,4), *vp=1, x=({*vp;}), a statement
+ * expression whose read a declaration follows, x=sizeof(*vp), the skipped
+ * operands of 0?*vp:1, 1?1:*vp and 0&&*vp, and the parameter bounds
+ * (*vp,3) and sizeof(*vp) on entry. GCC's program at -O0 prints VCOUNT
+ * 1121111000010 on both targets; TinyCC before it read a volatile value it
+ * throws away printed VCOUNT 0000110000000.
+ */
+static const char vcount1_line[] =
+    "printf '#define _GNU_SOURCE\\n#include <signal.h>\\n#include <stdio.h>\\n#include "
+    "<sys/mman.h>\\nvolatile int *vp;int n,x;char *pg;\\n' > /tmp/vcount.c";
+static const char vcount2_line[] =
+    "printf 'void sv(int s,siginfo_t *i,void *c){ucontext_t "
+    "*u=c;n++;mprotect(pg,4096,3);u->uc_mcontext.gregs[REG_EFL]|=256;}\\n' >> /tmp/vcount.c";
+static const char vcount3_line[] =
+    "printf 'void tr(int s,siginfo_t *i,void *c){ucontext_t "
+    "*u=c;mprotect(pg,4096,0);u->uc_mcontext.gregs[REG_EFL]&=~256;}\\n' >> /tmp/vcount.c";
+static const char vcount4_line[] =
+    "printf 'void c0(void){(void)*vp;}void c1(void){*vp;}void c2(void){*vp,*vp;}void "
+    "c3(void){x=(*vp,4);}\\n' >> /tmp/vcount.c";
+static const char vcount5_line[] =
+    "printf 'void c4(void){*vp=1;}void c5(void){x=({*vp;});}void c6(void){({*vp;int y=2;y;});}void "
+    "c7(void){x=sizeof(*vp);}\\n' >> /tmp/vcount.c";
+static const char vcount6_line[] = "printf 'void c8(void){x=0?*vp:1;}void c9(void){x=1?1:*vp;}void "
+                                   "c10(void){x=0&&*vp;}\\n' >> /tmp/vcount.c";
+static const char vcount7_line[] = "printf 'int f11(int a[(*vp,3)]){return 0;}int f12(int "
+                                   "a[sizeof(*vp)]){return 0;}\\n' >> /tmp/vcount.c";
+static const char vcount8_line[] =
+    "printf 'void c11(void){int y[3];f11(y);}void c12(void){int y[4];f12(y);}\\n' >> /tmp/vcount.c";
+static const char vcount9_line[] =
+    "printf 'void (*c[])(void)={c0,c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12};\\nint "
+    "main(void){struct sigaction a={0};int i;\\n' >> /tmp/vcount.c";
+static const char vcount10_line[] =
+    "printf 'pg=mmap(0,4096,0,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);vp=(int "
+    "*)pg;a.sa_flags=SA_SIGINFO;\\n' >> /tmp/vcount.c";
+static const char vcount11_line[] = "printf "
+                                    "'a.sa_sigaction=sv;sigaction(SIGSEGV,&a,0);a.sa_sigaction=tr;"
+                                    "sigaction(SIGTRAP,&a,0);\\n' >> /tmp/vcount.c";
+static const char vcount12_line[] = "printf 'printf(\"VCO\"\"UNT "
+                                    "\");for(i=0;i<13;i++){n=0;c[i]();printf(\"%%d\",n);}printf("
+                                    "\"\\\\n\");return 0;}\\n' >> /tmp/vcount.c";
+static const char vcount_built_line[] =
+    "tcc -static -o /tmp/vcount /tmp/vcount.c && echo VCOUNT\"\"BUILT";
+
+/*
  * A static program calling an IFUNC that TinyCC's assembler defines: pick is
  * a resolver that returns triple, so a call, a pointer taken at run time and
  * one in initialized data each reach triple, and the two pointers are equal.
@@ -313,6 +380,73 @@ static void refused(struct shell *s, const char *id, const char *status, const c
 }
 
 /**
+ * Run the programs of step `vla-bounds` that read volatile objects: a bound
+ * that reads one on entry, bounds and statements that throw such a read
+ * away, a statement expression that must make one before the declaration
+ * after it, and a count of each access, each against GCC's result.
+ */
+static void volatile_reads(struct shell *s)
+{
+    type(s, vread1_line);
+    type(s, vread2_line);
+    type(s, vread3_line);
+    type(s, vread4_line);
+    type(s, "cat /tmp/vread.c");
+    type(s, vread_built_line);
+    has(s, "volatile-built", "VREADBUILT",
+        "the compiler did not build a program whose array parameter's bound reads a volatile "
+        "object");
+    type(s, "/tmp/vread");
+    has(s, "volatile-read", "VOLATILEREAD",
+        "an array parameter's bound did not read its volatile object on entry");
+    type(s, vdisc1_line);
+    type(s, vdisc2_line);
+    type(s, vdisc3_line);
+    type(s, vdisc4_line);
+    type(s, vdisc5_line);
+    type(s, vdisc6_line);
+    type(s, vdisc7_line);
+    type(s, "cat /tmp/vdisc.c");
+    type(s, vdisc_built_line);
+    has(s, "discard-built", "VDISCBUILT",
+        "the compiler did not build a program that throws away volatile reads");
+    type(s, "/tmp/vdisc");
+    has(s, "volatile-discard", "VDISCARD 111111",
+        "a volatile read whose value is thrown away was not made");
+    type(s, vorder1_line);
+    type(s, vorder2_line);
+    type(s, vorder3_line);
+    type(s, "cat /tmp/vorder.c");
+    type(s, vorder_built_line);
+    has(s, "order-built", "VORDERBUILT",
+        "the compiler did not build a program whose statement expression reads a volatile "
+        "object before a declaration");
+    type(s, "/tmp/vorder");
+    has(s, "volatile-order", "VORDER 0",
+        "a statement expression's discarded volatile read came after the next declaration's "
+        "store");
+    type(s, vcount1_line);
+    type(s, vcount2_line);
+    type(s, vcount3_line);
+    type(s, vcount4_line);
+    type(s, vcount5_line);
+    type(s, vcount6_line);
+    type(s, vcount7_line);
+    type(s, vcount8_line);
+    type(s, vcount9_line);
+    type(s, vcount10_line);
+    type(s, vcount11_line);
+    type(s, vcount12_line);
+    type(s, "cat /tmp/vcount.c");
+    type(s, vcount_built_line);
+    has(s, "count-built", "VCOUNTBUILT",
+        "the compiler did not build a program that counts its volatile accesses");
+    type(s, "/tmp/vcount");
+    has(s, "volatile-count", "VCOUNT 1121111000010",
+        "a volatile object was not accessed exactly as often as GCC accesses it");
+}
+
+/**
  * Run the steps of case `compile` that compile array parameters of variable
  * length and an IFUNC, each against GCC's result for the same program.
  */
@@ -348,32 +482,7 @@ static void language(struct shell *s)
     type(s, "/tmp/vbound");
     has(s, "vla-bounds", "VLABOUNDS 6 1207 48 9 1205",
         "an array parameter's bound did not give GCC's result");
-    type(s, vread1_line);
-    type(s, vread2_line);
-    type(s, vread3_line);
-    type(s, vread4_line);
-    type(s, "cat /tmp/vread.c");
-    type(s, vread_built_line);
-    has(s, "volatile-built", "VREADBUILT",
-        "the compiler did not build a program whose array parameter's bound reads a volatile "
-        "object");
-    type(s, "/tmp/vread");
-    has(s, "volatile-read", "VOLATILEREAD",
-        "an array parameter's bound did not read its volatile object on entry");
-    type(s, vdisc1_line);
-    type(s, vdisc2_line);
-    type(s, vdisc3_line);
-    type(s, vdisc4_line);
-    type(s, vdisc5_line);
-    type(s, vdisc6_line);
-    type(s, vdisc7_line);
-    type(s, "cat /tmp/vdisc.c");
-    type(s, vdisc_built_line);
-    has(s, "discard-built", "VDISCBUILT",
-        "the compiler did not build a program that throws away volatile reads");
-    type(s, "/tmp/vdisc");
-    has(s, "volatile-discard", "VDISCARD 111111",
-        "a volatile read whose value is thrown away was not made");
+    volatile_reads(s);
     type(s, star_line);
     refused(s, "star-refused", "VSRC=1", "star-reason", "'[*]' not allowed",
             "a [*] in a function definition");
