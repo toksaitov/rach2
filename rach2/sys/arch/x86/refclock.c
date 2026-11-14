@@ -228,25 +228,33 @@ uint32_t refclock_counts_at_least(uint32_t usec)
  * wrap of 4.7 seconds. Each step waits the counts that cover it at least
  * (`refclock_counts_at_least`). A counter that stops for STALL_READS reads
  * ends the wait, which is bounded as `k_udelay` promises.
+ *
+ * @return the microseconds waited: `usec`, or, when the counter stopped,
+ * the steps before and the whole counts of the last but one, since `n`
+ * counts between two reads span more than `n` - 1 of them; 0 with no
+ * counter.
  */
-void refclock_wait_us(uint32_t usec)
+uint32_t refclock_wait_us(uint32_t usec)
 {
-    if (source == SOURCE_NONE) {
-        return;
-    }
-    while (usec > 0) {
-        uint32_t step = usec > 1000u ? 1000u : usec;
-        uint32_t want = refclock_counts_at_least(step);
-        uint32_t start = refclock_read(), last = start, now, still = 0;
+    uint32_t done = 0;
 
-        while ((((now = refclock_read()) - start) & mask) < want) {
+    if (source == SOURCE_NONE) {
+        return 0;
+    }
+    while (done < usec) {
+        uint32_t step = usec - done > 1000u ? 1000u : usec - done;
+        uint32_t want = refclock_counts_at_least(step);
+        uint32_t start = refclock_read(), last = start, now, still = 0, gone;
+
+        while ((gone = ((now = refclock_read()) - start) & mask) < want) {
             if (now != last) {
                 last = now;
                 still = 0;
             } else if (++still == STALL_READS) {
-                return;
+                return gone == 0 ? done : done + refclock_scale(gone - 1u, 1000000u, hz);
             }
         }
-        usec -= step;
+        done += step;
     }
+    return usec;
 }

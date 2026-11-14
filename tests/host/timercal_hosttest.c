@@ -28,7 +28,8 @@
  * held, the rate of those after. Other rows check that a scale past 32
  * bits gives all ones, that a reference that stops gives no calibration,
  * when the TSC is measured at all, that `k_udelay` on a TSC that stops
- * ends (`tsc_wait_rows`), and that the clock follows KVM's clock
+ * ends and finishes on the PM timer or the 8254, and returns what the
+ * counters measured (`tsc_wait_rows`), and that the clock follows KVM's clock
  * pages (`kvm_rows`), with their stable bit and without it, whose time a
  * processor with a TSC ahead, a stop of the processor or a tick a minute
  * late does not move, with a platform counter and without one, and that
@@ -126,13 +127,20 @@ static uint64_t tsc_base;
 static uint64_t tsc_khz;
 static int tsc_one_rate_bit;
 
-/* A TSC that stops: whether it reads `tsc_still_value`, and the reads made
- * since it stopped. After TSC_STILL_GIVEUP of them it runs again, so that a
- * wait with no escape ends, too late, and its row fails instead of hanging. */
+/* A TSC that stops at the count `tsc_still_value`: whether it does, and the
+ * reads that found it there, which take no time, since a read of the TSC
+ * takes nanoseconds against a port's microsecond. After TSC_STILL_GIVEUP of
+ * them it runs again, so that a wait with no escape ends, too late, and its
+ * row fails instead of hanging. */
 #define TSC_STILL_GIVEUP (4ul * TSC_STALL_READS)
 static int tsc_still;
 static uint64_t tsc_still_value;
 static unsigned long tsc_still_reads;
+
+/* An 8254 that stops: whether its count stays where it was at `pit_still_ns`
+ * of the clock. */
+static int pit_still;
+static uint64_t pit_still_ns;
 
 /** One access to a device: the stop when this is the access it comes
  * before, then the access's own time. */
@@ -220,7 +228,7 @@ int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
  * counts. */
 static uint64_t pit_fallen(void)
 {
-    return now_ns * (2u * 1193182u) / 1000000000u;
+    return (pit_still ? pit_still_ns : now_ns) * (2u * 1193182u) / 1000000000u;
 }
 
 /** Channel 0's count at the clock: it falls by `pit_reload` in each sweep
@@ -346,15 +354,17 @@ uint32_t lapic_timer_current(void)
     return gone >= apic_initial ? 0 : apic_initial - (uint32_t)gone;
 }
 
-/** The TSC's count at the clock, in halves. */
+/** The TSC's count at the clock, in halves, or where it stopped. */
 void host_tsc_read(uint32_t *lo, uint32_t *hi)
 {
-    uint64_t v;
+    uint64_t v = tsc_base + now_ns * tsc_khz / 1000000u;
 
-    elapse();
-    mark();
-    v = tsc_base + now_ns * tsc_khz / 1000000u;
-    if (tsc_still) {
+    if (!tsc_still || v < tsc_still_value) {
+        elapse();
+        mark();
+        v = tsc_base + now_ns * tsc_khz / 1000000u;
+    }
+    if (tsc_still && v >= tsc_still_value) {
         if (++tsc_still_reads < TSC_STILL_GIVEUP) {
             v = tsc_still_value;
         } else {
@@ -1202,30 +1212,70 @@ static void kvm_alone_rows(void)
     kvm_tsc_ahead = 0;
 }
 
-/** `k_udelay` on the TSC: a wait as long as asked while the TSC runs, and
- * one that ends after TSC_STALL_READS reads once it stops, which would
- * otherwise spin for good with interrupts off. The model put back. */
+/** `k_udelay_measured` of 4 ms on a TSC that stops 1.5 ms into it: what the
+ * wait returned, and the model's time it took in `*gone`. */
+static uint32_t tsc_stop_wait(uint64_t *gone)
+{
+    uint64_t from = now_ns;
+    uint32_t got;
+
+    tsc_still_value = tsc_base + (now_ns + 1500000u) * tsc_khz / 1000000u;
+    tsc_still_reads = 0;
+    tsc_still = 1;
+    got = k_udelay_measured(4000u);
+    CHECK(tsc_still, "the stopped TSC is not waited for until it runs again");
+    tsc_still = 0;
+    *gone = now_ns - from;
+    return got;
+}
+
+/**
+ * `k_udelay` on the TSC: a wait as long as asked while the TSC runs, and one
+ * that leaves the TSC after TSC_STALL_READS reads once it stops, which would
+ * otherwise spin for good with interrupts off, and finishes on the PM timer,
+ * or the 8254 where there is none; with the 8254 stopped too, it returns what
+ * the TSC measured, which is less than asked and no more than the time that
+ * passed. The model put back.
+ */
 static void tsc_wait_rows(void)
 {
-    void (*saved_wait)(uint32_t) = udelay_wait;
-    uint32_t saved_per_tick = tsc_per_tick;
-    uint64_t from;
+    uint32_t (*saved_wait)(uint32_t) = udelay_wait;
+    uint32_t saved_per_tick = tsc_per_tick, got;
+    uint64_t from, gone;
 
     tsc_khz = 2893417u;
     tsc_per_tick = (uint32_t)(tsc_khz * 1000u / TICK_HZ);
     udelay_wait = tsc_wait_us;
     stop_at = 0;
+    reference(1);
     from = now_ns;
-    k_udelay(1000u);
-    CHECK(now_ns - from >= 1000000u, "a wait on a running TSC lasts as long as asked");
+    got = k_udelay_measured(1000u);
+    CHECK(now_ns - from >= 1000000u && got == 1000u,
+          "a wait on a running TSC lasts as long as asked");
 
     tsc_still_value = tsc_base + now_ns * tsc_khz / 1000000u;
     tsc_still_reads = 0;
     tsc_still = 1;
+    from = now_ns;
     k_udelay(500000u);
-    CHECK(tsc_still && tsc_still_reads == TSC_STALL_READS + 1,
-          "a TSC that stops ends the wait on it after TSC_STALL_READS reads");
+    CHECK(tsc_still && tsc_still_reads == TSC_STALL_READS + 1 && now_ns - from >= 500000000u,
+          "a TSC that stops is left after TSC_STALL_READS reads, and the PM timer waits the rest");
     tsc_still = 0;
+
+    got = tsc_stop_wait(&gone);
+    CHECK(got == 4000u && gone >= 4000000u,
+          "a TSC that stops 1.5 ms into a wait of 4 ms leaves the rest to the PM timer");
+    reference(0);
+    got = tsc_stop_wait(&gone);
+    CHECK(got == 4000u && gone >= 4000000u, "or, with no PM timer, to the 8254");
+    pit_still = 1;
+    pit_still_ns = now_ns;
+    got = tsc_stop_wait(&gone);
+    pit_still = 0;
+    CHECK(got >= 1000u && got < 1500u && (uint64_t)got * 1000u <= gone,
+          "and with the 8254 stopped too, the wait returns the TSC's part, at most the time "
+          "that passed");
+    reference(1);
     tsc_per_tick = saved_per_tick;
     udelay_wait = saved_wait;
 }
@@ -1233,7 +1283,7 @@ static void tsc_wait_rows(void)
 /** The rows of KVM's clock pages, and the model put back. */
 static void kvm_rows(void)
 {
-    void (*saved_wait)(uint32_t) = udelay_wait;
+    uint32_t (*saved_wait)(uint32_t) = udelay_wait;
 
     reference(1);
     now_floor = 0;

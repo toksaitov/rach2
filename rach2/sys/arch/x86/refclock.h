@@ -45,8 +45,9 @@ uint32_t refclock_mask(void);
 uint32_t refclock_counts_at_least(uint32_t usec);
 
 /** Wait at least `usec` microseconds by the counter; a counter that stops
- * ends the wait. */
-void refclock_wait_us(uint32_t usec);
+ * ends the wait. Returns the microseconds waited, `usec` unless the counter
+ * stopped, and then what it counted, at most the time that passed. */
+uint32_t refclock_wait_us(uint32_t usec);
 
 /** For a host test: the HPET's registers at `regs`, which `map_mmio`
  * cannot give a host program, in place of the table's address; NULL maps

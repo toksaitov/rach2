@@ -56,7 +56,7 @@
  * `refclock_wait_us` here when channel 0 does not count and the HPET or the
  * PM timer does, and the reference's start the TSC's when the TSC keeps the
  * clock. */
-void (*udelay_wait)(uint32_t usec);
+uint32_t (*udelay_wait)(uint32_t usec);
 
 /**
  * Sample channel 0's current count without disturbing it.
@@ -113,27 +113,41 @@ uint32_t pit_wait_counts(uint32_t counts)
     return seen;
 }
 
-/** Wait `usec` microseconds, which must be at most `PIT_WINDOW_USEC`. */
-static void udelay_window(uint32_t usec)
+/** Wait `usec` microseconds, which must be at most `PIT_WINDOW_USEC`:
+ * `usec`, or 0 when the counter stopped first. */
+static uint32_t udelay_window(uint32_t usec)
 {
     uint32_t want = (usec * PIT_COUNTS_PER_SEC + 999999u) / 1000000u;
 
-    (void)pit_wait_counts(want == 0 ? 1u : want);
+    return pit_wait_counts(want == 0 ? 1u : want) != 0 ? usec : 0u;
 }
 
-/** A wait longer than `PIT_WINDOW_USEC` is a run of windows and a last
- * shorter one. */
+/**
+ * Wait `usec` microseconds on channel 0, a run of windows and a last
+ * shorter one. A window whose counter stops ends the wait, and the windows
+ * waited before it are what the wait returns; the part of that window is
+ * not counted, so the return never exceeds the time waited.
+ */
+uint32_t pit_wait_us(uint32_t usec)
+{
+    uint32_t done = 0, step;
+
+    while (done < usec) {
+        step = usec - done > PIT_WINDOW_USEC ? PIT_WINDOW_USEC : usec - done;
+        if (udelay_window(step) == 0) {
+            break;
+        }
+        done += step;
+    }
+    return done;
+}
+
+uint32_t k_udelay_measured(uint32_t usec)
+{
+    return udelay_wait ? udelay_wait(usec) : pit_wait_us(usec);
+}
+
 void k_udelay(uint32_t usec)
 {
-    if (udelay_wait) {
-        udelay_wait(usec);
-        return;
-    }
-    while (usec > PIT_WINDOW_USEC) {
-        udelay_window(PIT_WINDOW_USEC);
-        usec -= PIT_WINDOW_USEC;
-    }
-    if (usec > 0) {
-        udelay_window(usec);
-    }
+    (void)k_udelay_measured(usec);
 }

@@ -354,7 +354,21 @@ uint32_t pit_wait_counts(uint32_t counts)
 
 /* The wait pit.c gives `k_udelay` once the TSC keeps the clock, which no row
  * reaches. */
-void (*udelay_wait)(uint32_t usec);
+uint32_t (*udelay_wait)(uint32_t usec);
+
+/** The waits on another counter that the TSC's wait falls back to, which no
+ * row reaches; a call fails the test. */
+uint32_t pit_wait_us(uint32_t usec)
+{
+    CHECK(0);
+    return usec;
+}
+
+uint32_t refclock_wait_us(uint32_t usec)
+{
+    CHECK(0);
+    return usec;
+}
 
 void host_tsc_read(uint32_t *lo, uint32_t *hi)
 {

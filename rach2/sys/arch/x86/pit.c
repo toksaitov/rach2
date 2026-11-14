@@ -338,17 +338,34 @@ static uint64_t tsc_now(void)
 #define TSC_STALL_READS 100000u
 
 /**
+ * Wait `usec` microseconds on a counter apart from the TSC: the HPET or the
+ * PM timer where the platform found one, else the 8254's channel 0. The
+ * microseconds that counter measured, `usec` unless it stops too.
+ */
+static uint32_t tsc_other_wait_us(uint32_t usec)
+{
+    return refclock_name() ? refclock_wait_us(usec) : pit_wait_us(usec);
+}
+
+/**
  * Wait `usec` microseconds on the TSC, 100 at a time so that the counts of a
  * step stay inside 32 bits at any rate below 42 GHz; each step waits the
  * counts that cover it at least. `k_udelay`'s wait once the TSC is the
  * reference, as Linux's `delay_tsc`. A TSC that stops for TSC_STALL_READS
- * reads ends the wait, which is bounded as `k_udelay` promises: a caller
- * with interrupts off would otherwise spin for good.
+ * reads hands what is left of the wait to another counter
+ * (`tsc_other_wait_us`), so that a caller with interrupts off neither spins
+ * for good nor returns early.
+ *
+ * @return the microseconds waited: `usec` while the TSC or the other counter
+ * runs, else what the two measured, the TSC's part of its last step in the
+ * whole microseconds of its counts but one.
  */
-static void tsc_wait_us(uint32_t usec)
+static uint32_t tsc_wait_us(uint32_t usec)
 {
-    while (usec > 0) {
-        uint32_t step = usec > 100u ? 100u : usec;
+    uint32_t done = 0, rem;
+
+    while (done < usec) {
+        uint32_t step = usec - done > 100u ? 100u : usec - done;
         uint32_t want = (step * tsc_per_tick + US_PER_TICK - 1u) / US_PER_TICK;
         uint64_t start = tsc_now(), last = start, now;
         uint32_t still = 0;
@@ -358,12 +375,16 @@ static void tsc_wait_us(uint32_t usec)
                 last = now;
                 still = 0;
             } else if (++still == TSC_STALL_READS) {
-                return;
+                if (now != start) {
+                    done += long_divide((now - start - 1u) * US_PER_TICK, tsc_per_tick, &rem);
+                }
+                return done + tsc_other_wait_us(usec - done);
             }
             arch_relax();
         }
-        usec -= step;
+        done += step;
     }
+    return usec;
 }
 
 /** Make `kind`, REF_TSC, REF_KVM or REF_COUNTER, the reference, with its

@@ -86,6 +86,13 @@ uint32_t pit_period_us(void);
  */
 uint32_t pit_wait_counts(uint32_t counts);
 
+/**
+ * Wait `usec` microseconds on channel 0, and return the microseconds
+ * waited: `usec`, or, when the counter stops, what it measured before then.
+ * `k_udelay`'s wait where `udelay_wait` is NULL. Defined in udelay.c.
+ */
+uint32_t pit_wait_us(uint32_t usec);
+
 /** The TSC's counts in a tick, as `timer_calibrate` measured them or KVM
  * stated them, or 0 when there is no rate: no invariant TSC, no rate from
  * KVM and no `rach2.tscreliable`, or `rach2.notsc`. */
@@ -131,8 +138,9 @@ int timer_tsc_kvm(void);
  * The wait `k_udelay` makes instead of counting channel 0, or NULL to count
  * it: set by the platform on a machine with no 8254, where it is the HPET's
  * or the PM timer's (refclock.c), and by pit.c to the TSC's once the TSC
- * keeps the clock. Defined in udelay.c.
+ * keeps the clock. It returns the microseconds it measured, as
+ * `k_udelay_measured` does. Defined in udelay.c.
  */
-extern void (*udelay_wait)(uint32_t usec);
+extern uint32_t (*udelay_wait)(uint32_t usec);
 
 #endif
