@@ -390,10 +390,13 @@ address cannot be written.
 .Dv CLONE_PIDFD
 found no free descriptor below the caller's limit.
 .It Bq Er EAGAIN
-The number of threads with the parent's real user ID has reached the
+Every process ID below
+.Pa /proc/sys/kernel/pid_max
+is in use, in the first PID namespace or in the child's or one above it;
+the number of threads with the parent's real user ID has reached the
 parent's soft
 .Dv RLIMIT_NPROC
-limit, or
+limit; or
 .Fn clone
 was given
 .Dv CLONE_FS

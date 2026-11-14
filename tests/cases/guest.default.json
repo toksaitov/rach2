@@ -4996,7 +4996,12 @@
         {"assertion_id": "thread-poll", "checks": "The second thread's pidfd polls readable and hung up once the thread has ended while the process's pidfd does not poll readable, and pidfd_open of its id and pidfd_send_signal on its pidfd are then ESRCH.", "source": "program"},
         {"assertion_id": "leader-thread-poll", "checks": "A child's leading thread that ends while another runs has a thread pidfd that polls readable and not hung up while the process pidfd does not poll readable; once the child is killed and reaped both poll hung up.", "source": "program"},
         {"assertion_id": "thread-id-reused", "checks": "Once a thread has ended and a new thread of the process is given its id through /proc/sys/kernel/ns_last_pid, the ended thread's pidfd is ESRCH to pidfd_send_signal and polls readable and hung up.", "source": "program"},
-        {"assertion_id": "thread-edge", "checks": "An edge-triggered epoll of a thread's pidfd reports the thread's end once, and the end of a sibling, whose own pidfd then polls readable, gives it no second event.", "source": "program"}
+        {"assertion_id": "thread-edge", "checks": "An edge-triggered epoll of a thread's pidfd reports the thread's end once, and the end of a sibling, whose own pidfd then polls readable, gives it no second event.", "source": "program"},
+        {"assertion_id": "setsid-left-group", "checks": "A child that led a group and joined its parent's while a member stayed in its own is refused setsid with EPERM, and makes its session once the member is reaped.", "source": "program"},
+        {"assertion_id": "last-pid-above", "checks": "In a new PID namespace a write of 40000 to ns_last_pid makes the next child 40001.", "source": "program"},
+        {"assertion_id": "last-pid-read", "checks": "A descriptor of ns_last_pid opened in the first PID namespace reads 40001 in the new one, and one opened before a fork reads the fork's number.", "source": "program"},
+        {"assertion_id": "last-pid-checkpoint", "checks": "A write of ns_last_pid with CAP_CHECKPOINT_RESTORE alone is taken, and one with no capability is EPERM.", "source": "program"},
+        {"assertion_id": "fork-eagain", "checks": "With pid_max at 301 forks come to EAGAIN within 301 tries, and fork works again once pid_max is set back.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

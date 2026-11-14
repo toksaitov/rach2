@@ -73,7 +73,9 @@ The group's original leader need not still be alive.
 .Fn setsid
 creates a session and a process group, both with the caller's process ID.
 The caller's process, every thread of it, becomes the leader of both.
-A caller that already leads a process group cannot create a session.
+No session is made while any process has the caller's process ID as its
+process group: a caller that leads a group, or one that has left the
+group it led for another while a member stayed in it.
 The console session and controlling terminal are described in
 .Xr console 4 .
 .Pp
@@ -158,7 +160,8 @@ is a session leader or a child in another session, or the destination
 is neither its own process ID nor an existing group in its session.
 For
 .Fn setsid ,
-the caller already leads a process group.
+some process, the caller or another, has the caller's process ID as its
+process group.
 .It Bq Er ESRCH
 There is no current process, or the process requested by
 .Fn getpgid ,

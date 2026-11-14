@@ -75,6 +75,19 @@
  * epoll of a thread's pidfd reports its end once, and a sibling's end,
  * which its own pidfd polls readable after, gives it no second event.
  *
+ * A child that led a group, left it for its parent's while a member of its
+ * own stayed in it, is refused setsid with EPERM, and is let make its
+ * session once the member is reaped, as Linux refuses while any process
+ * has the caller's id as its group. In a new PID namespace, a write of
+ * 40000 to ns_last_pid makes the next child 40001, above Linux's old
+ * 32768, as the namespace allocates up to pid_max; a descriptor of
+ * ns_last_pid opened in the first namespace and read in the new one reads
+ * 40001, and one opened before a fork reads the fork's number, as each read
+ * gives the reader's namespace at that read; with CAP_CHECKPOINT_RESTORE
+ * alone the write is taken, and with no capability it is EPERM. With
+ * /proc/sys/kernel/pid_max at 301, its least, forks come to EAGAIN within
+ * 301 tries, and fork works again once pid_max is back.
+ *
  * Touching 64 new pages raises getrusage's ru_minflt by at least 64; a
  * mapping of 64 pages made with MAP_POPULATE raises it by at least 64 in the
  * mmap call and by fewer than 64 when they are then written. A child that
@@ -94,9 +107,11 @@
  * `scope-process-group`, `scope-group-reaped`, `scope-group-reused`,
  * `reaped-namespace`, `tkill-order`, `thread-open`, `thread-refusals`,
  * `thread-signal`, `leader-thread-signal`, `thread-poll`,
- * `leader-thread-poll`, `thread-id-reused` and `thread-edge`. The first
- * failure fails its assertion and leaves the rest not run. The program runs
- * as root, which the write of ns_last_pid needs.
+ * `leader-thread-poll`, `thread-id-reused`, `thread-edge`,
+ * `setsid-left-group`, `last-pid-above`, `last-pid-read`,
+ * `last-pid-checkpoint` and `fork-eagain`. The first failure fails its
+ * assertion and leaves the rest not run. The program runs as root, which
+ * the writes of ns_last_pid and pid_max need.
  */
 
 #define _GNU_SOURCE
@@ -151,6 +166,11 @@
 /* Namespaces for clone, which an older musl may not name. */
 #define CLONE_NEWUSER_FLAG 0x10000000L
 #define CLONE_NEWPID_FLAG  0x20000000L
+
+/* _LINUX_CAPABILITY_VERSION_3, whose data is two words of each set, and
+ * CAP_CHECKPOINT_RESTORE, bit 8 of the second. */
+#define CAP_VERSION_3          0x20080522u
+#define CAP_CHECKPOINT_RESTORE 40
 
 /* The pages the fault rows touch. */
 #define PAGES 64
@@ -1391,6 +1411,207 @@ static int threads(void)
     return rc != 0 ? rc : thread_edge();
 }
 
+/** A child that leads a group, joins its parent's group while a member
+ * stays in its own, and calls setsid: 0 when it is EPERM and succeeds once
+ * the member is reaped, or the step that failed. */
+static int left_group_child(void)
+{
+    pid_t self = getpid(), member;
+
+    if (setpgid(0, 0) != 0) {
+        return 2;
+    }
+    member = pausing_child();
+    if (member < 0) {
+        return 3;
+    }
+    if (setpgid(0, getpgid(getppid())) != 0 || getpgid(member) != self) {
+        return 4;
+    }
+    if (setsid() != -1 || errno != EPERM) {
+        return 5;
+    }
+    kill(member, SIGKILL);
+    if (!reaped_killed(member)) {
+        return 6;
+    }
+    return setsid() == self ? 0 : 7;
+}
+
+/** setsid by a former leader whose group still has a member. */
+static int setsid_left_group(void)
+{
+    pid_t pid = fork();
+    int st;
+
+    if (pid == 0) {
+        _exit(left_group_child());
+    }
+    if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+        return fail("setsid was not EPERM while a member stayed in the caller's old group, or "
+                    "failed once it was reaped");
+    }
+    report_held();
+    return 0;
+}
+
+/** The number a read of the descriptor `fd` of ns_last_pid gives from its
+ * start, or -1. */
+static long last_pid_at(int fd)
+{
+    char text[24];
+    ssize_t n;
+
+    if (lseek(fd, 0, SEEK_SET) != 0) {
+        return -1;
+    }
+    n = read(fd, text, sizeof(text) - 1);
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = '\0';
+    return atol(text);
+}
+
+/** A child that exits at once, reaped: its pid, or -1. */
+static pid_t forked_and_reaped(void)
+{
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        _exit(0);
+    }
+    return pid > 0 && waitpid(pid, NULL, 0) == pid ? pid : -1;
+}
+
+/** Make the effective and permitted sets `low` and `high`, the capabilities
+ * 0 to 31 and 32 to 40, with none inheritable: capset's result. */
+static int keep_caps(unsigned low, unsigned high)
+{
+    unsigned h[2] = {CAP_VERSION_3, 0};
+    unsigned d[6];
+
+    d[0] = d[1] = low;
+    d[3] = d[4] = high;
+    d[2] = d[5] = 0;
+    return (int)syscall(SYS_capset, h, d);
+}
+
+/** The first process of a new PID namespace, with `outer` a descriptor of
+ * ns_last_pid opened in the first one: 0 when the rows hold, or 1, 2 or 3
+ * for the first that fails, `last-pid-above`, `last-pid-read` and
+ * `last-pid-checkpoint`. */
+static int last_pid_child(int outer)
+{
+    int fd;
+    long v;
+
+    if (set_last_pid(40000) != 0 || forked_and_reaped() != 40001) {
+        return 1;
+    }
+    fd = open("/proc/sys/kernel/ns_last_pid", O_RDONLY);
+    if (last_pid_at(outer) != 40001 || fd < 0 || forked_and_reaped() != 40002) {
+        return 2;
+    }
+    v = last_pid_at(fd);
+    close(fd);
+    if (v != 40002) {
+        return 2;
+    }
+    if (keep_caps(0, 1u << (CAP_CHECKPOINT_RESTORE - 32)) != 0 || set_last_pid(50000) != 0) {
+        return 3;
+    }
+    fd = keep_caps(0, 0) == 0 ? open("/proc/sys/kernel/ns_last_pid", O_WRONLY) : -1;
+    if (fd < 0 || write(fd, "1\n", 2) != -1 || errno != EPERM) {
+        return 3;
+    }
+    close(fd);
+    return 0;
+}
+
+/** ns_last_pid in a new PID namespace: the range, the read and the
+ * capability. */
+static int last_pid_rows(void)
+{
+    static const char *const why[] = {
+        "a write of 40000 to a new PID namespace's ns_last_pid did not make the next child 40001",
+        "ns_last_pid did not read the reader's namespace at the read",
+        "ns_last_pid did not take CAP_CHECKPOINT_RESTORE alone, or took a writer with no "
+        "capability"};
+    int outer = open("/proc/sys/kernel/ns_last_pid", O_RDONLY);
+    pid_t pid;
+    int st, code, i;
+
+    if (outer < 0) {
+        return fail("open of ns_last_pid for reading");
+    }
+    pid = (pid_t)syscall(SYS_clone, CLONE_NEWPID_FLAG | (long)SIGCHLD, 0L, 0L, 0L, 0L);
+    if (pid == 0) {
+        _exit(last_pid_child(outer));
+    }
+    close(outer);
+    code = pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    for (i = 1; i <= 3; i++) {
+        if (code == i || code > 3) {
+            return fail(why[i - 1]);
+        }
+        report_held();
+    }
+    return 0;
+}
+
+/** Write the text `text` to /proc/sys/kernel/pid_max: 0, or -1. */
+static int write_pid_max(const char *text)
+{
+    int fd = open("/proc/sys/kernel/pid_max", O_WRONLY);
+    int ok = fd >= 0 && write(fd, text, strlen(text)) == (ssize_t)strlen(text);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : -1;
+}
+
+/** Forks with pid_max at 301 come to EAGAIN, and fork works once it is
+ * back; the children pause until they are killed. */
+static int fork_eagain(void)
+{
+    pid_t kids[302];
+    char old[24];
+    int fd, n, tries, err = 0;
+
+    fd = open("/proc/sys/kernel/pid_max", O_RDONLY);
+    n = fd >= 0 ? (int)read(fd, old, sizeof(old) - 1) : -1;
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n <= 0 || write_pid_max("301\n") != 0) {
+        return fail("pid_max could not be read or set to 301");
+    }
+    old[n] = '\0';
+    for (tries = 0; tries < 302; tries++) {
+        kids[tries] = pausing_child();
+        if (kids[tries] < 0) {
+            err = errno;
+            break;
+        }
+    }
+    n = write_pid_max(old);
+    while (tries-- > 0 && kids[tries] > 0) {
+        kill(kids[tries], SIGKILL);
+        waitpid(kids[tries], NULL, 0);
+    }
+    if (n != 0) {
+        return fail("pid_max could not be set back");
+    }
+    if (err != EAGAIN || forked_and_reaped() < 0) {
+        return fail("fork did not come to EAGAIN with every pid below pid_max in use, or failed "
+                    "once pid_max was back");
+    }
+    report_held();
+    return 0;
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
@@ -1408,7 +1629,9 @@ static void plan(void)
         "scope-group-reaped", "scope-group-reused",   "reaped-namespace",
         "tkill-order",        "thread-open",          "thread-refusals",
         "thread-signal",      "leader-thread-signal", "thread-poll",
-        "leader-thread-poll", "thread-id-reused",     "thread-edge"};
+        "leader-thread-poll", "thread-id-reused",     "thread-edge",
+        "setsid-left-group",  "last-pid-above",       "last-pid-read",
+        "last-pid-checkpoint", "fork-eagain"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.pidfdmusl"));
@@ -1422,7 +1645,8 @@ int main(void)
     plan();
     if (clones() != 0 || opens() != 0 || getfds() != 0 || faults() != 0 || hangup_wakes() != 0 ||
         file_info() != 0 || queued_checks() != 0 || scopes() != 0 || process_groups() != 0 ||
-        namespaces() != 0 || tkill_order() != 0 || threads() != 0) {
+        namespaces() != 0 || tkill_order() != 0 || threads() != 0 || setsid_left_group() != 0 ||
+        last_pid_rows() != 0 || fork_eagain() != 0) {
         return 1;
     }
     report_end();
