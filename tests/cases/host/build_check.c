@@ -13,6 +13,7 @@ static int run_check(struct fixture *f, const char *id)
                   {"gnu_host_checks_key", build_host_checks},
                   {"check_asm", build_asm},
                   {"check_ldscript", build_ldscript},
+                  {"check_ifunc", build_ifunc},
                   {"prereq", build_prereq},
                   {"together", build_together},
                   {"host_suite", build_suite}};

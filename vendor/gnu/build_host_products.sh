@@ -46,5 +46,12 @@ case "$RACH2_ARCH" in i686) cpu=i386 ;; *) cpu=x86_64 ;; esac
 ./configure --cross-prefix="$GNU_OUT/cross/bin/$GNU_TARGET-" --cpu="$cpu" \
     --extra-cflags="--sysroot=$GNU_OUT/root" --extra-ldflags="--sysroot=$GNU_OUT/root"
 make i386-tcc x86_64-tcc
+# A driver of TinyCC's library for each target, for the host check of an
+# exported IFUNC, which only a link without -static reaches and which tcc's
+# command line refuses.
+for target in I386:i386 X86_64:x86_64; do
+    $compiler --sysroot="$GNU_OUT/root" -DONE_SOURCE=1 -DTCC_TARGET_${target%%:*} -I. \
+        -o "${target##*:}-tcc-dynlink" "$repo/vendor/tcc/ifunc-test/dynlink.c" -lm -ldl
+done
 mkdir -p "$out/tcc"
-cp i386-tcc x86_64-tcc "$out/tcc/"
+cp i386-tcc x86_64-tcc i386-tcc-dynlink x86_64-tcc-dynlink "$out/tcc/"

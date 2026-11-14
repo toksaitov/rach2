@@ -28,6 +28,12 @@ fill_local_got_entries gives it the resolver's address, as the addend on
 x86-64 and in the entry on i386. The loader calls the resolver and stores
 what it returns, as it does for GNU ld's executable; a resolver runs while
 the executable is relocated, before the entries after its own are filled.
+An IFUNC that the executable exports, with -rdynamic or to a shared
+library that refers to it, was exported as STT_GNU_IFUNC at the resolver,
+so dlsym gave the function the resolver returns while the executable's
+own references took the stub. ifunc_stub now exports it as STT_FUNC at
+the stub, as GNU ld does, and the IRELATIVE relocation keeps the
+resolver's address.
 
 A static executable has no loader. ifunc_entry_code writes into .iplt code
 that calls each resolver and stores what it returns in its entry, keeping
@@ -82,10 +88,10 @@ index c20f3c2..709791d 100644
                  tcc_warning("change type of '%s' from 0x%x to '%s' ignored", 
                      get_tok_str(sym->v, NULL), sym->type.t, newtype);
 diff --git a/tccelf.c b/tccelf.c
-index ffa2480..0088499 100644
+index ffa2480..50fa643 100644
 --- a/tccelf.c
 +++ b/tccelf.c
-@@ -1014,13 +1014,199 @@ static struct sym_attr * put_got_entry(TCCState *s1, int dyn_reloc_type,
+@@ -1014,13 +1014,216 @@ static struct sym_attr * put_got_entry(TCCState *s1, int dyn_reloc_type,
      return attr;
  }
  
@@ -136,15 +142,20 @@ index ffa2480..0088499 100644
 +}
 +
 +/* Return the index of the local symbol of the stub of the IFUNC
-+   'sym_index', making the stub and the IFUNC's GOT entry if need be. */
++   'sym_index', making the stub and the IFUNC's GOT entry if need be.  A
++   dynamic executable that exports the IFUNC exports it as a function at
++   its stub, as GNU ld does, so that dlsym gives the address that the
++   executable's own references take; the resolver's address stays in the
++   IRELATIVE relocation. */
 +static int ifunc_stub(TCCState *s1, int sym_index)
 +{
-+    ElfW(Sym) *sym;
++    ElfW(Sym) *sym, *esym;
 +    struct sym_attr *attr;
 +    Section *iplt;
 +    unsigned char *p;
 +    unsigned off;
-+    int got_sym;
++    int got_sym, dyn_index;
++    const char *name;
 +
 +    sym = &((ElfW(Sym) *)symtab_section->data)[sym_index];
 +    if (s1->dynsym) {
@@ -180,6 +191,18 @@ index ffa2480..0088499 100644
 +#endif
 +    p[6] = 0x90;
 +    p[7] = 0x90;
++    if (s1->dynsym) {
++        sym = &((ElfW(Sym) *)symtab_section->data)[sym_index];
++        name = (char *)symtab_section->link->data + sym->st_name;
++        dyn_index = find_elf_sym(s1->dynsym, name);
++        if (dyn_index) {
++            esym = &((ElfW(Sym) *)s1->dynsym->data)[dyn_index];
++            esym->st_info = ELFW(ST_INFO)(ELFW(ST_BIND)(esym->st_info),
++                                          STT_FUNC);
++            esym->st_value = off;
++            esym->st_shndx = iplt->sh_num;
++        }
++    }
 +    attr->plt_sym = put_elf_sym(symtab_section, off, 8,
 +                                ELFW(ST_INFO)(STB_LOCAL, STT_FUNC), 0,
 +                                iplt->sh_num, NULL);
@@ -286,7 +309,7 @@ index ffa2480..0088499 100644
      struct sym_attr *attr;
  
      for(i = 1; i < s1->nb_sections; i++) {
-@@ -1042,6 +1228,28 @@ ST_FUNC void build_got_entries(TCCState *s1)
+@@ -1042,6 +1245,28 @@ ST_FUNC void build_got_entries(TCCState *s1)
                  continue;
              }
  
@@ -315,7 +338,7 @@ index ffa2480..0088499 100644
              /* Automatically create PLT/GOT [entry] if it is an undefined
  	       reference (resolved at runtime), or the symbol is absolute,
  	       probably created by tcc_add_symbol, and thus on 64-bit
-@@ -1379,15 +1587,23 @@ ST_FUNC void fill_got(TCCState *s1)
+@@ -1379,15 +1604,23 @@ ST_FUNC void fill_got(TCCState *s1)
  static void fill_local_got_entries(TCCState *s1)
  {
      ElfW_Rel *rel;
@@ -341,7 +364,7 @@ index ffa2480..0088499 100644
  #if SHT_RELX == SHT_RELA
  	    rel->r_addend = sym->st_value;
  #else
-@@ -2989,6 +3205,10 @@ static int elf_output_file(TCCState *s1, const char *filename)
+@@ -2989,6 +3222,10 @@ static int elf_output_file(TCCState *s1, const char *filename)
              ld_declare_symbols(ls);
          }
          build_got_entries(s1);
@@ -353,7 +376,7 @@ index ffa2480..0088499 100644
  
      /* we add a section for symbols */
 diff --git a/tccgen.c b/tccgen.c
-index 5481a1b..e0f551e 100644
+index bd9ef6b..5b97a72 100644
 --- a/tccgen.c
 +++ b/tccgen.c
 @@ -337,6 +337,8 @@ ST_FUNC void update_storage(Sym *sym)

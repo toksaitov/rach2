@@ -1,5 +1,6 @@
 /* Compare prepared TinyCC with GNU binutils, retaining byte and layout rows. */
 #include "build_support.h"
+#include <elf.h>
 #include <stdint.h>
 
 static const char *tcc(struct fixture *f, int bits)
@@ -324,5 +325,195 @@ int build_ldscript(struct fixture *f)
         return 0;
     layout(f, "tcc.elf", "tccg.elf");
     layout(f, "gnu.elf", "gnu.elf");
+    return !f->failed;
+}
+
+/* A section header of either ELF class. */
+struct elf_section {
+    unsigned type, link;
+    unsigned long long addr, offset, size;
+};
+/* An ELF file read whole; wide is 1 for ELFCLASS64. */
+struct elf_file {
+    unsigned char *b;
+    size_t n;
+    int wide;
+};
+
+/** Return the little-endian value of `bytes` bytes at `p`. */
+static unsigned long long le_value(const unsigned char *p, int bytes)
+{
+    unsigned long long v = 0;
+    while (bytes--)
+        v = v << 8 | p[bytes];
+    return v;
+}
+
+/** Read the ELF file `path` whole into `e`; return 0 if it cannot be read. */
+static int elf_read(const char *path, struct elf_file *e)
+{
+    FILE *in = fopen(path, "rb");
+    long n;
+    memset(e, 0, sizeof(*e));
+    if (!in)
+        return 0;
+    if (fseek(in, 0, SEEK_END) == 0 && (n = ftell(in)) > EI_NIDENT && fseek(in, 0, SEEK_SET) == 0 &&
+        (e->b = malloc((size_t)n)) && fread(e->b, 1, (size_t)n, in) == (size_t)n)
+        e->n = (size_t)n;
+    fclose(in);
+    if (!e->n || memcmp(e->b, ELFMAG, SELFMAG))
+        return 0;
+    e->wide = e->b[EI_CLASS] == ELFCLASS64;
+    return 1;
+}
+
+/** Fill `s` with section `i` of `e`; return 0 past the last section. */
+static int elf_section_at(const struct elf_file *e, unsigned i, struct elf_section *s)
+{
+    if (e->wide) {
+        Elf64_Ehdr h;
+        Elf64_Shdr sh;
+        memcpy(&h, e->b, sizeof(h));
+        if (i >= h.e_shnum || h.e_shoff + (unsigned long long)(i + 1) * sizeof(sh) > e->n)
+            return 0;
+        memcpy(&sh, e->b + h.e_shoff + (size_t)i * sizeof(sh), sizeof(sh));
+        *s = (struct elf_section){sh.sh_type, sh.sh_link, sh.sh_addr, sh.sh_offset, sh.sh_size};
+    } else {
+        Elf32_Ehdr h;
+        Elf32_Shdr sh;
+        memcpy(&h, e->b, sizeof(h));
+        if (i >= h.e_shnum || h.e_shoff + (unsigned long long)(i + 1) * sizeof(sh) > e->n)
+            return 0;
+        memcpy(&sh, e->b + h.e_shoff + (size_t)i * sizeof(sh), sizeof(sh));
+        *s = (struct elf_section){sh.sh_type, sh.sh_link, sh.sh_addr, sh.sh_offset, sh.sh_size};
+    }
+    return s->offset + s->size <= e->n || s->type == SHT_NOBITS;
+}
+
+/**
+ * Find `name` in the dynamic symbol table of `e` and give its value and
+ * ELF type; return 0 if it is not there.
+ */
+static int elf_dynsym(const struct elf_file *e, const char *name, unsigned long long *value,
+                      int *type)
+{
+    struct elf_section s, str;
+    size_t size = e->wide ? sizeof(Elf64_Sym) : sizeof(Elf32_Sym);
+    for (unsigned i = 1; elf_section_at(e, i, &s); i++) {
+        if (s.type != SHT_DYNSYM || !elf_section_at(e, s.link, &str))
+            continue;
+        for (unsigned long long at = s.offset; at + size <= s.offset + s.size; at += size) {
+            unsigned name_at;
+            unsigned char info;
+            if (e->wide) {
+                Elf64_Sym y;
+                memcpy(&y, e->b + at, sizeof(y));
+                name_at = y.st_name, info = y.st_info, *value = y.st_value;
+            } else {
+                Elf32_Sym y;
+                memcpy(&y, e->b + at, sizeof(y));
+                name_at = y.st_name, info = y.st_info, *value = y.st_value;
+            }
+            if (name_at < str.size &&
+                !strncmp((const char *)e->b + str.offset + name_at, name, str.size - name_at)) {
+                *type = ELF64_ST_TYPE(info);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Read the word of `bytes` bytes at address `addr` of `e` into `v`. */
+static int elf_word(const struct elf_file *e, unsigned long long addr, int bytes,
+                    unsigned long long *v)
+{
+    struct elf_section s;
+    for (unsigned i = 1; elf_section_at(e, i, &s); i++)
+        if (s.type == SHT_PROGBITS && s.addr && addr >= s.addr && addr + bytes <= s.addr + s.size) {
+            *v = le_value(e->b + s.offset + (addr - s.addr), bytes);
+            return 1;
+        }
+    return 0;
+}
+
+/**
+ * Give the address that the IRELATIVE relocation of `e` passes to the loader
+ * as the resolver: the addend on x86-64, the word it relocates on i386.
+ * Return 0 unless there is exactly one.
+ */
+static int elf_irelative(const struct elf_file *e, unsigned long long *resolver)
+{
+    struct elf_section s;
+    int found = 0;
+    for (unsigned i = 1; elf_section_at(e, i, &s); i++) {
+        if (e->wide && s.type == SHT_RELA) {
+            for (unsigned long long at = s.offset; at + sizeof(Elf64_Rela) <= s.offset + s.size;
+                 at += sizeof(Elf64_Rela)) {
+                Elf64_Rela r;
+                memcpy(&r, e->b + at, sizeof(r));
+                if (ELF64_R_TYPE(r.r_info) == R_X86_64_IRELATIVE)
+                    found++, *resolver = (unsigned long long)r.r_addend;
+            }
+        } else if (!e->wide && s.type == SHT_REL) {
+            for (unsigned long long at = s.offset; at + sizeof(Elf32_Rel) <= s.offset + s.size;
+                 at += sizeof(Elf32_Rel)) {
+                Elf32_Rel r;
+                memcpy(&r, e->b + at, sizeof(r));
+                if (ELF32_R_TYPE(r.r_info) == R_386_IRELATIVE &&
+                    elf_word(e, r.r_offset, 4, resolver))
+                    found++;
+            }
+        }
+    }
+    return found == 1;
+}
+
+/**
+ * Link vendor/tcc/ifunc-test/export.c into a dynamic executable with the
+ * `bits`-bit TinyCC's library and check what it exports: pick, an IFUNC the
+ * executable points to, must be a function at the address of the pointer
+ * fp, as GNU ld exports it, so that dlsym gives what the executable's own
+ * references take, while the IRELATIVE relocation still names its resolver.
+ */
+static void ifunc_export(struct fixture *f, int bits)
+{
+    char exe[64], what[160];
+    struct elf_file e;
+    unsigned long long pick = 0, fp = 0, fp_value = 0, resolver = 0, irelative = 0;
+    int pick_type = 0, fp_type = 0, resolver_type = 0;
+    snprintf(exe, sizeof(exe), "export%d.elf", bits);
+    const char *link[] = {
+        product_path(f, bits == 32 ? "tcc/i386-tcc-dynlink" : "tcc/x86_64-tcc-dynlink"), exe,
+        bp(f->tree, "vendor/tcc/ifunc-test/export.c"), NULL};
+    if (!command(f, link))
+        return;
+    snprintf(what, sizeof(what), "%d-bit executable %s is an ELF", bits, exe);
+    if (!fx_check(f, elf_read(bp(f->work, exe), &e), what)) {
+        free(e.b);
+        return;
+    }
+    int ok = elf_dynsym(&e, "pick", &pick, &pick_type) && elf_dynsym(&e, "fp", &fp, &fp_type) &&
+             elf_dynsym(&e, "pick_resolver", &resolver, &resolver_type) &&
+             elf_word(&e, fp, bits / 8, &fp_value);
+    snprintf(what, sizeof(what), "%d-bit executable exports pick, pick_resolver and fp", bits);
+    if (fx_check(f, ok, what)) {
+        snprintf(what, sizeof(what), "%d-bit executable exports its IFUNC pick as a function",
+                 bits);
+        fx_check(f, pick_type == STT_FUNC, what);
+        snprintf(what, sizeof(what), "%d-bit executable exports pick at the address fp holds",
+                 bits);
+        fx_check(f, pick == fp_value, what);
+        snprintf(what, sizeof(what), "%d-bit IRELATIVE relocation names pick's resolver", bits);
+        fx_check(f, elf_irelative(&e, &irelative) && irelative == resolver && resolver != pick,
+                 what);
+    }
+    free(e.b);
+}
+
+int build_ifunc(struct fixture *f)
+{
+    ifunc_export(f, 32);
+    ifunc_export(f, 64);
     return !f->failed;
 }

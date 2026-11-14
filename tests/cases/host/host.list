@@ -43,6 +43,7 @@ fakeapi|the fake API server's unordered and repeated steps
 install_accounts|the installer's kept image accounts
 check_asm|TinyCC's assemblers against GNU as
 check_ldscript|TinyCC's linker script reader against GNU ld
+check_ifunc|TinyCC's dynamic executable exports its IFUNC as a function at its stub, as GNU ld does
 together|the makers of several fixture files run once for a parallel request of their files
 tooling_image|the GNU root's tooling job leaves no stage and no lock when a signal stops it
 gnu_cmake_jobs|the cmake port's bootstrap runs no more jobs at once than its make allows

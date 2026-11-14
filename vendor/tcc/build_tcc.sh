@@ -179,6 +179,7 @@ if ! grep -q "s1->seg_size = 64;" "$SRC/tccasm.c" ||
    ! grep -q "owns its bound's tokens" "$SRC/tccgen.c" ||
    ! grep -q "^static void ifunc_entry_code" "$SRC/tccelf.c" ||
    ! grep -q "|| type == R_IRELATIVE" "$SRC/tccelf.c" ||
+   ! grep -q "dynamic executable that exports the IFUNC" "$SRC/tccelf.c" ||
    ! grep -q '"gnu_indirect_function"' "$SRC/tccasm.c" ||
    ! grep -q "movl r, r clears the high half, which fildll reads" "$SRC/x86_64-gen.c"; then
     echo "tcc: the kernel's assembler, linker, runtime or code generation changes are not in the source it is about to build" >&2
