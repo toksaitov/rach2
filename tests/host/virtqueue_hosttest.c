@@ -857,6 +857,75 @@ static void event_index(void)
     virtio_teardown(d);
 }
 
+static int nbatch;
+
+/** Count a reap that took buffers. */
+static void batch(struct virtqueue *vq)
+{
+    (void)vq;
+    nbatch++;
+}
+
+/**
+ * A queue's `batch` runs once after a reap that took buffers and not after
+ * one that took none; and `virtqueue_irq` keeps the device from
+ * interrupting: with EVENT_IDX by a `used_event` one behind the last
+ * buffer reaped, which a reap leaves alone, and without it by
+ * VIRTQ_AVAIL_F_NO_INTERRUPT. Turning the interrupt on again points
+ * `used_event` at the next buffer and reports one returned meanwhile.
+ */
+static void quiet_and_batch(void)
+{
+    struct virtio_dev *d = model_reset();
+    struct virtqueue *vq = 0;
+    struct virtio_sg sg[1];
+    uint16_t *avail;
+    int i;
+
+    m.qmax[0] = 8;
+    m.offered |= VIRTIO_BIT(VIRTIO_F_EVENT_IDX);
+    check(virtio_init(d, 0, 1) == 0 && virtio_queue_setup(d, 0, done, 0, &vq) == 0,
+          "a queue of 8 with EVENT_IDX");
+    data = (uint8_t *)virtio_dma_alloc(d, 4096, &data_addr);
+    virtio_ready(d);
+    avail = (uint16_t *)(void *)dev_ptr(m.q[0].avail, 6u + 2u * 8u);
+    vq->batch = batch;
+    nbatch = 0;
+    sg[0] = piece(0, 8);
+    virtqueue_add(vq, sg, 1, 0, (void *)0x10);
+    virtqueue_add(vq, sg, 1, 0, (void *)0x11);
+    check(model_run(0, 8, 0) == 2 && virtqueue_reap(vq) == 2 && nbatch == 1,
+          "a reap of two buffers runs the batch once");
+    check(virtqueue_reap(vq) == 0 && nbatch == 1, "a reap of none does not");
+    check(virtqueue_irq(vq, 0) == 0 && avail != 0 && avail[2 + 8] == 1,
+          "a quiet queue's used_event is one behind the last buffer reaped");
+    for (i = 0; i < 3; i++) {
+        virtqueue_add(vq, sg, 1, 0, (void *)(uintptr_t)(0x20 + i));
+    }
+    i = (int)m.q[0].raised;
+    check(model_run(0, 8, 0) == 3 && (int)m.q[0].raised == i, "three returns raise no interrupt");
+    check(virtqueue_reap(vq) == 3 && avail[2 + 8] == 1, "a reap leaves used_event where it was");
+    virtqueue_add(vq, sg, 1, 0, (void *)0x30);
+    check(model_run(0, 8, 0) == 1 && (int)m.q[0].raised == i, "nor does a fourth");
+    check(virtqueue_irq(vq, 1) == 1 && avail[2 + 8] == 5,
+          "turning the interrupt on reports the buffer that waits");
+    check(virtqueue_reap(vq) == 1 && virtqueue_irq(vq, 1) == 0, "and none once it is reaped");
+    virtqueue_add(vq, sg, 1, 0, (void *)0x31);
+    check(model_run(0, 8, 0) == 1 && (int)m.q[0].raised == i + 1, "the next return interrupts");
+    virtio_dma_free(d, data, 4096);
+    virtio_teardown(d);
+
+    d = model_reset();
+    m.qmax[0] = 8;
+    check(virtio_init(d, 0, 1) == 0 && virtio_queue_setup(d, 0, done, 0, &vq) == 0,
+          "a queue of 8 without EVENT_IDX");
+    avail = (uint16_t *)(void *)dev_ptr(m.q[0].avail, 6u + 2u * 8u);
+    check(virtqueue_irq(vq, 0) == 0 && avail != 0 && avail[0] == VIRTQ_AVAIL_F_NO_INTERRUPT,
+          "without EVENT_IDX a quiet queue sets VIRTQ_AVAIL_F_NO_INTERRUPT");
+    check(virtqueue_irq(vq, 1) == 0 && avail[0] == 0, "and clears it again");
+    virtio_teardown(d);
+}
+
 /** The device's flags, a bad device and a done that adds a buffer. */
 static void device_faults(void)
 {
@@ -989,13 +1058,13 @@ int main(void)
     fill_wrap_drain();
     indirect();
     event_index();
+    quiet_and_batch();
     device_faults();
     config_and_interrupts();
     if (!failures) {
         printf("virtqueue-hosttest: result: pass: negotiation, refusals, queue setup, fill, "
-               "wrap and drain, a stuck reset, indirect tables, event index, device faults, "
-               "configuration "
-               "and interrupts\n");
+               "wrap and drain, a stuck reset, indirect tables, event index, quiet queues and "
+               "batches, device faults, configuration and interrupts\n");
     }
     return failures != 0;
 }

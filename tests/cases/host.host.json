@@ -1626,13 +1626,18 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "virtio_net",
+          "checks": "tests/host/virtio_net_hosttest.c runs the virtio network driver over the virtio core against a model device: the features taken without an offload, the receive queue kept full and told of in batches, frames across mergeable buffers, sends without an interrupt, the link, the MTU, the control queue, stop, a failed bring-up at each allocation, unbind and bind, and a polled device, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "virtio_pci_shm",
           "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of five functions, shows each function bound with its virtio device and one bind uevent, takes a non-GPU function, leaves a refused function and a failed bus registration unbound, unmapped, with their command word and no number, runs no reset that does not finish with bus mastering on, and has a child whose reset does not finish free its buffers only with bus mastering off, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
           "assertion_id": "virtqueue",
-          "checks": "tests/host/virtqueue_hosttest.c runs the virtio core against a model device, which fails any free made while a device whose reset has not ended may reach memory, under ASan and UBSan and exits 0",
+          "checks": "tests/host/virtqueue_hosttest.c runs the virtio core against a model device, which fails any free made while a device whose reset has not ended may reach memory, with a queue kept from interrupting and a reap's batch, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1767,7 +1772,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 342
+          "limit": 343
         }
       ],
       "bounds": {
