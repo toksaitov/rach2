@@ -61,11 +61,14 @@
  * the watch's first, the watch keeps its span, sets the rate and keeps a
  * TSC that keeps time, and stops one that drifts 1000 parts in a million,
  * where a span begun again at each held read never ends. An online
- * processor that answers neither its tick nor the kick stops the clock half
- * a second after its turn began; one that goes offline while due passes
- * its turn to the next, whose half second begins then; and a stretch of two
- * seconds the whole machine spent stopped, between a turn's first kick and
- * its answer, ends no turn.
+ * processor that answers neither its tick nor the kick loses its turn half
+ * a second after it began, unjudged, to the next, and the clock runs on;
+ * one that answers after that keeps the clock too; one that goes offline
+ * while due passes its turn to the next, whose half second begins then; a
+ * stretch of two seconds the whole machine spent stopped, between a turn's
+ * first kick and its answer, ends no turn, and one after four unanswered
+ * passes ends it but stops no clock; and a third processor whose TSC
+ * drifts 500 parts in a million is caught while the second never answers.
  */
 
 #include "arch/x86_64/vclock.c"
@@ -1368,11 +1371,11 @@ static uint32_t watch_ticks(uint32_t ticks)
 
 /**
  * The watch of every online processor, and its span kept through held
- * reads of the tick's clock, as the comment at the head of this file says.
+ * reads of the tick's clock: a drift caught on the second processor and on
+ * the boot processor alone.
  */
-static void watch_rows(void)
+static void watch_drift_rows(void)
 {
-    uint64_t turn;
     uint32_t ran;
 
     watch_boot(2);
@@ -1407,19 +1410,53 @@ static void watch_rows(void)
     CHECK(!vclock_running() && watch_parted,
           "and a TSC that drifts 1000 parts in a million then stops it");
     CHECK(ran <= TICK_HZ + 1u, "within a second");
+}
+
+/** Ticks while processor `cpu`'s due turn lasts and the clock runs, for
+ * at most twice its deadline; how long the turn lasted, in nanoseconds. */
+static uint64_t watch_turn_lasts(int cpu)
+{
+    uint64_t turn = now_ns;
+
+    while (watch_tick() && watch_due && watch_cpu == cpu && now_ns - turn < 2u * WATCH_ANSWER_NS) {
+    }
+    return now_ns - turn;
+}
+
+/**
+ * A turn that goes unanswered, answered late or passed on by a processor
+ * gone offline, which ends in time and stops no clock.
+ */
+static void watch_turn_rows(void)
+{
+    uint64_t lasted;
+    uint32_t ran;
 
     watch_boot(3);
     deaf[2] = 1;
     CHECK(watch_until_turn(2, 4u * TICK_HZ) && woken[1] == 1,
           "with three processors the third's turn comes after the second read its span");
-    turn = now_ns;
-    ran = watch_ticks(2u * TICK_HZ);
-    CHECK(!vclock_running() && watch_parted && watch_lost_cpu == 2,
-          "an online processor that never answers its kick stops the clock");
-    CHECK(watch_lost_ns >= WATCH_ANSWER_NS && watch_lost_ns < WATCH_ANSWER_NS + 2u * TICK_NS &&
-              now_ns - turn <= WATCH_ANSWER_NS + 2u * TICK_NS,
-          "at the deadline half a second after its turn began, and the tick after");
-    CHECK(data->mode == VCLOCK_NONE, "and the vDSO makes the system call");
+    lasted = watch_turn_lasts(2);
+    CHECK(vclock_running() && !watch_parted && !(watch_due && watch_cpu == 2),
+          "an online processor that never answers its kick loses its turn, and the clock runs");
+    CHECK(lasted >= WATCH_ANSWER_NS && lasted <= WATCH_ANSWER_NS + 2u * TICK_NS,
+          "at the deadline half a second after its turn began");
+    ran = watch_ticks(4u * TICK_HZ);
+    CHECK(ran == 4u * TICK_HZ && vclock_running() && !watch_parted && woken[1] >= 2,
+          "and the others' turns go on while it stays silent");
+
+    watch_boot(3);
+    deaf[1] = 1;
+    CHECK(watch_until_turn(1, 4u * TICK_HZ), "the second processor's turn comes");
+    (void)watch_turn_lasts(1);
+    deaf[1] = 0;
+    host_cpu = 1;
+    vclock_watch_cpu();
+    host_cpu = 0;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(ran == 3u * TICK_HZ && vclock_running() && !watch_parted && woken[1] >= 1 &&
+              woken[2] >= 1,
+          "a processor that answers its turn after half a second keeps the clock");
 
     watch_boot(3);
     deaf[1] = 1;
@@ -1429,28 +1466,73 @@ static void watch_rows(void)
     CHECK(vclock_running() && !watch_parted && watch_cpu == 1,
           "and goes unanswered short of its deadline");
     cpu_table[1].online = 0;
-    turn = now_ns;
-    ran = watch_ticks(2u * TICK_HZ);
-    CHECK(!vclock_running() && watch_parted && watch_lost_cpu == 2,
-          "a processor that goes offline while due passes its turn to the next, which never "
-          "answers and stops the clock");
-    CHECK(now_ns - turn >= WATCH_ANSWER_NS && now_ns - turn <= WATCH_ANSWER_NS + 2u * TICK_NS,
+    lasted = watch_turn_lasts(2);
+    CHECK(vclock_running() && !watch_parted && !(watch_due && watch_cpu == 2),
+          "a processor that goes offline while due passes its turn to the next, which "
+          "never answers and loses it, the clock running");
+    CHECK(lasted >= WATCH_ANSWER_NS && lasted <= WATCH_ANSWER_NS + 2u * TICK_NS,
           "half a second after the turn passed, as a turn begun anew");
+}
+
+/** A stretch the whole machine spent stopped, before and after a turn's
+ * four passes. */
+static void watch_pause_rows(void)
+{
+    uint32_t ran;
 
     watch_boot(2);
     deaf[1] = 1;
     CHECK(watch_until_turn(1, 4u * TICK_HZ), "the second processor's turn comes, unanswered");
     tick_index += 2u * TICK_HZ;
     deaf[1] = 0;
-    ran = watch_ticks(TICK_HZ);
-    CHECK(ran == TICK_HZ && vclock_running() && !watch_parted && woken[1] >= 1,
-          "a machine stopped two seconds before the kick was taken keeps the clock, the "
-          "turn's passes short of their count");
+    ran = watch_ticks(1);
+    CHECK(ran == 1 && vclock_running() && !watch_parted && woken[1] == 1 && !watch_due,
+          "a machine stopped two seconds before the kick was taken keeps the turn, its "
+          "passes short of their count, and the processor reads its span");
+
+    watch_boot(2);
+    deaf[1] = 1;
+    CHECK(watch_until_turn(1, 4u * TICK_HZ), "the second processor's turn comes, unanswered");
+    ran = watch_ticks(WATCH_ANSWER_PASSES);
+    CHECK(ran == WATCH_ANSWER_PASSES && watch_due && watch_cpu == 1, "for four passes");
+    tick_index += 2u * TICK_HZ;
+    deaf[1] = 0;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(ran == 3u * TICK_HZ && vclock_running() && !watch_parted && woken[1] >= 1,
+          "a machine stopped two seconds after them keeps the clock, the turn lost");
+}
+
+/** A drift caught while another processor never answers, and the model
+ * put back for the rows after. */
+static void watch_silent_rows(void)
+{
+    uint32_t ran;
+
+    watch_boot(3);
+    deaf[1] = 1;
+    ran = watch_ticks(4u * TICK_HZ);
+    CHECK(ran == 4u * TICK_HZ && vclock_running() && woken[1] == 0 && woken[2] >= 1,
+          "with the second processor silent the third's turns go on");
+    drift_ppm[2] = 500;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(6u * TICK_HZ);
+    CHECK(!vclock_running() && vclock_refusal() == vclock_parted_why,
+          "and a third processor's TSC drifting 500 parts in a million stops the clock");
     tsc_untrusted = 0;
     deaf[1] = 0;
     deaf[2] = 0;
     hold_every = 0;
     drift_ppm[0] = 0;
+    drift_ppm[2] = 0;
+}
+
+/** The watch's rows, as the comment at the head of this file says. */
+static void watch_rows(void)
+{
+    watch_drift_rows();
+    watch_turn_rows();
+    watch_pause_rows();
+    watch_silent_rows();
 }
 
 /** Run the rows: 0 when every check passes, 1 otherwise. */
