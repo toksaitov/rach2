@@ -390,12 +390,17 @@ static int elf_section_at(const struct elf_file *e, unsigned i, struct elf_secti
     return s->offset + s->size <= e->n || s->type == SHT_NOBITS;
 }
 
+/** A dynamic symbol's value, size and ELF type. */
+struct elf_symbol {
+    unsigned long long value, size;
+    int type;
+};
+
 /**
- * Find `name` in the dynamic symbol table of `e` and give its value and
- * ELF type; return 0 if it is not there.
+ * Find `name` in the dynamic symbol table of `e` and fill `y` with it;
+ * return 0 if it is not there.
  */
-static int elf_dynsym(const struct elf_file *e, const char *name, unsigned long long *value,
-                      int *type)
+static int elf_dynsym(const struct elf_file *e, const char *name, struct elf_symbol *y)
 {
     struct elf_section s, str;
     size_t size = e->wide ? sizeof(Elf64_Sym) : sizeof(Elf32_Sym);
@@ -406,17 +411,17 @@ static int elf_dynsym(const struct elf_file *e, const char *name, unsigned long 
             unsigned name_at;
             unsigned char info;
             if (e->wide) {
-                Elf64_Sym y;
-                memcpy(&y, e->b + at, sizeof(y));
-                name_at = y.st_name, info = y.st_info, *value = y.st_value;
+                Elf64_Sym w;
+                memcpy(&w, e->b + at, sizeof(w));
+                name_at = w.st_name, info = w.st_info, y->value = w.st_value, y->size = w.st_size;
             } else {
-                Elf32_Sym y;
-                memcpy(&y, e->b + at, sizeof(y));
-                name_at = y.st_name, info = y.st_info, *value = y.st_value;
+                Elf32_Sym w;
+                memcpy(&w, e->b + at, sizeof(w));
+                name_at = w.st_name, info = w.st_info, y->value = w.st_value, y->size = w.st_size;
             }
             if (name_at < str.size &&
                 !strncmp((const char *)e->b + str.offset + name_at, name, str.size - name_at)) {
-                *type = ELF64_ST_TYPE(info);
+                y->type = ELF64_ST_TYPE(info);
                 return 1;
             }
         }
@@ -470,22 +475,46 @@ static int elf_irelative(const struct elf_file *e, unsigned long long *resolver)
 }
 
 /**
- * Link vendor/tcc/ifunc-test/export.c into a dynamic executable with the
- * `bits`-bit TinyCC's library and check what it exports: pick, an IFUNC the
- * executable points to, must be a function at the address of the pointer
- * fp, as GNU ld exports it, so that dlsym gives what the executable's own
- * references take, while the IRELATIVE relocation still names its resolver.
+ * Assemble vendor/tcc/ifunc-test/pickBITS.s with GNU as into pickBITS.o, the
+ * IFUNC pick as GCC's output defines one, with the size of its resolver;
+ * return 0 if as fails.
+ */
+static int ifunc_pick(struct fixture *f, int bits)
+{
+    char source[64], object[64];
+    snprintf(source, sizeof(source), "vendor/tcc/ifunc-test/pick%d.s", bits);
+    snprintf(object, sizeof(object), "pick%d.o", bits);
+    const char *as[] = {"as",   bits == 32 ? "--32" : "--64", "-o",
+                        object, bp(f->tree, source),          NULL};
+    return command(f, as);
+}
+
+/** Return the `bits`-bit driver of TinyCC's library. */
+static const char *dynlink(struct fixture *f, int bits)
+{
+    return product_path(f, bits == 32 ? "tcc/i386-tcc-dynlink" : "tcc/x86_64-tcc-dynlink");
+}
+
+/**
+ * Link vendor/tcc/ifunc-test/export.c and pickBITS.o into a dynamic
+ * executable with the `bits`-bit TinyCC's library and check what it
+ * exports: pick, an IFUNC the executable points to, must be a function of
+ * size 0 at the address of the pointer fp, as GNU ld exports it, so that
+ * dlsym gives what the executable's own references take, while the
+ * IRELATIVE relocation still names its resolver, whose size is not 0.
  */
 static void ifunc_export(struct fixture *f, int bits)
 {
-    char exe[64], what[160];
+    char exe[64], object[64], what[160];
     struct elf_file e;
-    unsigned long long pick = 0, fp = 0, fp_value = 0, resolver = 0, irelative = 0;
-    int pick_type = 0, fp_type = 0, resolver_type = 0;
+    struct elf_symbol pick, fp, resolver;
+    unsigned long long fp_value = 0, irelative = 0;
+    if (!ifunc_pick(f, bits))
+        return;
     snprintf(exe, sizeof(exe), "export%d.elf", bits);
-    const char *link[] = {
-        product_path(f, bits == 32 ? "tcc/i386-tcc-dynlink" : "tcc/x86_64-tcc-dynlink"), exe,
-        bp(f->tree, "vendor/tcc/ifunc-test/export.c"), NULL};
+    snprintf(object, sizeof(object), "pick%d.o", bits);
+    const char *link[] = {dynlink(f, bits), exe, bp(f->tree, "vendor/tcc/ifunc-test/export.c"),
+                          object, NULL};
     if (!command(f, link))
         return;
     snprintf(what, sizeof(what), "%d-bit executable %s is an ELF", bits, exe);
@@ -493,27 +522,72 @@ static void ifunc_export(struct fixture *f, int bits)
         free(e.b);
         return;
     }
-    int ok = elf_dynsym(&e, "pick", &pick, &pick_type) && elf_dynsym(&e, "fp", &fp, &fp_type) &&
-             elf_dynsym(&e, "pick_resolver", &resolver, &resolver_type) &&
-             elf_word(&e, fp, bits / 8, &fp_value);
+    int ok = elf_dynsym(&e, "pick", &pick) && elf_dynsym(&e, "fp", &fp) &&
+             elf_dynsym(&e, "pick_resolver", &resolver) &&
+             elf_word(&e, fp.value, bits / 8, &fp_value);
     snprintf(what, sizeof(what), "%d-bit executable exports pick, pick_resolver and fp", bits);
     if (fx_check(f, ok, what)) {
         snprintf(what, sizeof(what), "%d-bit executable exports its IFUNC pick as a function",
                  bits);
-        fx_check(f, pick_type == STT_FUNC, what);
+        fx_check(f, pick.type == STT_FUNC, what);
         snprintf(what, sizeof(what), "%d-bit executable exports pick at the address fp holds",
                  bits);
-        fx_check(f, pick == fp_value, what);
+        fx_check(f, pick.value == fp_value, what);
+        snprintf(what, sizeof(what),
+                 "%d-bit executable exports pick with size 0, not its resolver's %llu", bits,
+                 resolver.size);
+        fx_check(f, pick.size == 0 && resolver.size != 0, what);
         snprintf(what, sizeof(what), "%d-bit IRELATIVE relocation names pick's resolver", bits);
-        fx_check(f, elf_irelative(&e, &irelative) && irelative == resolver && resolver != pick,
+        fx_check(f,
+                 elf_irelative(&e, &irelative) && irelative == resolver.value &&
+                     resolver.value != pick.value,
                  what);
     }
     free(e.b);
+}
+
+/**
+ * Link vendor/tcc/ifunc-test/ref.c into a shared library with the `bits`-bit
+ * TinyCC's library and, for x86-64, the GNU helper's own architecture, link
+ * vendor/tcc/ifunc-test/run.c and pick64.o against its C library and run
+ * it: dlsym, the library's reference to pick and the executable's own
+ * pointers to it must give one address, which reaches triple. The helper
+ * has no i386 loader, so the i386 library is linked and not loaded.
+ */
+static void ifunc_run(struct fixture *f, int bits)
+{
+    char what[160];
+    const char *lib = bits == 32 ? "libref32.so" : "libref.so";
+    const char *shared[] = {dynlink(f, bits), "-shared", lib,
+                            bp(f->tree, "vendor/tcc/ifunc-test/ref.c"), NULL};
+    if (!command(f, shared))
+        return;
+    struct elf_file e;
+    snprintf(what, sizeof(what), "%d-bit shared library %s is an ELF", bits, lib);
+    fx_check(f, elf_read(bp(f->work, lib), &e), what);
+    free(e.b);
+    if (bits == 32)
+        return;
+    const char *link[] = {dynlink(f, 64),
+                          "run64.elf",
+                          bp(f->tree, "vendor/tcc/ifunc-test/run.c"),
+                          "pick64.o",
+                          "/lib64/ld-linux-x86-64.so.2",
+                          "/lib/libc.so.6",
+                          NULL};
+    const char *run[] = {"./run64.elf", NULL};
+    if (!command(f, link) || !command(f, run))
+        return;
+    fx_check(f, f->out && !strcmp(f->out, "IFUNCRUN 1 1 1\n"),
+             "64-bit dlsym, the library's reference and the executable's pointers to pick are "
+             "one address that reaches triple");
 }
 
 int build_ifunc(struct fixture *f)
 {
     ifunc_export(f, 32);
     ifunc_export(f, 64);
+    ifunc_run(f, 32);
+    ifunc_run(f, 64);
     return !f->failed;
 }
