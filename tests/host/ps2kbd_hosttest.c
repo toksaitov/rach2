@@ -24,6 +24,11 @@
  * fails unbinds the keyboard, whose event device goes, and in auto mode
  * probes serio0 again as a connect, which binds a new one; in manual mode
  * serio0 stays without a driver and drops its bytes until the mode is auto.
+ * A BAT during an LED command waits for that command's end; a byte the
+ * controller refuses counts no try, and one refused for 500 ms fails; a
+ * translated port on a portable chassis skips GETID, as Linux's
+ * atkbd_skip_getid; and a connect that finds no event device free leaves
+ * serio0 without a driver.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DTICK_HZ=1000
@@ -53,10 +58,13 @@ static int fails;
 
 /* The model 8042: the status the row sets, the byte waiting in the data
  * port, the count of data port reads and of any port write, and the bytes
- * written to the data port, the first MAX_WRITES of them. */
-#define MAX_WRITES 128
+ * written to the data port, the first MAX_WRITES of them. A read of the
+ * configuration byte puts `model_config` in the data port. */
+#define MAX_WRITES 256
 static uint8_t model_status;
 static uint8_t model_data;
+static uint8_t model_config = 0x45;
+static int config_due;
 static int data_reads;
 static int port_writes;
 static uint8_t data_writes[MAX_WRITES];
@@ -69,10 +77,14 @@ static uint8_t last_key;
 uint8_t inb(uint16_t port)
 {
     if (port == PS2_STATUS_PORT) {
-        return model_status;
+        return config_due ? PS2_STATUS_OUTPUT_FULL : model_status;
     }
     if (port == PS2_DATA_PORT) {
         data_reads++;
+        if (config_due) {
+            config_due = 0;
+            return model_config;
+        }
         return model_data;
     }
     return 0xFF;
@@ -81,6 +93,9 @@ uint8_t inb(uint16_t port)
 void outb(uint16_t port, uint8_t val)
 {
     port_writes++;
+    if (port == PS2_CMD_PORT && val == PS2_CMD_READ_CONFIG) {
+        config_due = 1;
+    }
     if (port == PS2_DATA_PORT && n_data_writes < MAX_WRITES) {
         data_writes[n_data_writes++] = val;
     }
@@ -107,11 +122,33 @@ void klog(int level, const char *subsystem, const char *format, ...)
 }
 
 /* serio0's bind mode, manual when set; whether the driver marked it
- * unbound; and the keyboard's attaches and detaches. */
+ * unbound; the keyboard's attaches and detaches; whether every event device
+ * is taken, so that an attach registers none; and the chassis type the
+ * firmware gives. */
 static int serio0_manual;
 static int serio0_unbound;
 static int attaches;
 static int detaches;
+static int no_nodes;
+static const char *chassis;
+
+/** The chassis type alone, or NULL. */
+const char *dmi_field(int field)
+{
+    return field == DMI_CHASSIS_TYPE ? chassis : 0;
+}
+
+/** No interrupts to mask. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** Nothing to put back. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
 
 int evdev_sysfs_serio_manual(int port)
 {
@@ -128,7 +165,7 @@ void evdev_sysfs_serio_unbound(int port, int unbound)
 /** Count the detach; the keys released are the input layer's. */
 void input_keyboard_detach(struct input_keyboard *kb)
 {
-    (void)kb;
+    kb->dev = NULL;
     detaches++;
 }
 
@@ -140,12 +177,16 @@ void input_set1_event(struct input_keyboard *kb, uint8_t code)
     last_key = code;
 }
 
-/** No event device: `input_set1_event` is a model. */
+/* What an attached keyboard's `dev` points at. */
+static int node;
+
+/** An event device that is a token, or none while `no_nodes` is set:
+ * `input_set1_event` is a model. */
 void input_keyboard_attach(struct input_keyboard *kb, const char *name, const char *phys,
                            uint16_t bustype, uint16_t vendor, uint16_t product)
 {
     attaches++;
-    (void)kb;
+    kb->dev = no_nodes ? NULL : (struct evdev *)(void *)&node;
     (void)name;
     (void)phys;
     (void)bustype;
@@ -251,6 +292,8 @@ static void leds_rows(void)
 
     CHECK("no command before kbd_init", tick_at(T(100)) == 0);
     kbd_init();
+    CHECK("kbd_init reads the controller's translation", kbd.translated && !config_due);
+    CHECK("and a chassis that names no type is not portable", !kbd.portable);
 
     /* The first command, at once, with the LEDs dark. */
     CHECK("first tick writes 0xED", tick_at(T(100)) == 1 && last_write() == 0xED);
@@ -432,6 +475,187 @@ static void auto_again_rows(void)
     CHECK("its keys reach the decoder", answer_at(T(1500), 0x1E) == 0 && keys == 1);
 }
 
+/** Step the tick at `ticks` with the controller's input buffer full, and
+ * return the number of bytes written to the data port. */
+static int tick_full(uint32_t ticks)
+{
+    int before = n_data_writes;
+
+    model_status = PS2_STATUS_INPUT_FULL;
+    kernel_ticks = ticks;
+    ps2kbd_tick();
+    return n_data_writes - before;
+}
+
+/** Give the keyboard's BAT at `ticks` with the controller's input buffer
+ * full, and return the number of bytes written. */
+static int bat_full(uint32_t ticks)
+{
+    int before = n_data_writes;
+
+    kernel_ticks = ticks;
+    model_status = KEYBOARD_BYTE | PS2_STATUS_INPUT_FULL;
+    model_data = 0xAA;
+    kbd_irq(0);
+    return n_data_writes - before;
+}
+
+/** Answer at `ticks` a probe whose GETID is out as a keyboard does: ACK and
+ * ID, RESET_DIS's ACK and ENABLE's ACK, which end it. */
+static int probe_answered(uint32_t ticks)
+{
+    return answers_at(ticks, id, 3) == 1 && last_write() == 0xF5 && answer_at(ticks, 0xFA) == 1 &&
+           last_write() == 0xF4 && answer_at(ticks, 0xFA) == 0 && kbd.job == JOB_NONE;
+}
+
+/** Send the LEDs at `ticks` and answer both bytes. */
+static int leds_sent(uint32_t ticks)
+{
+    return tick_at(ticks) == 1 && last_write() == 0xED && answer_at(ticks + 1, 0xFA) == 1 &&
+           answer_at(ticks + 2, 0xFA) == 0 && leds.stage == LEDS_IDLE;
+}
+
+/** A BAT while an LED command is under way: the reconnect waits for that
+ * command's end, its answers or its last wait, as Linux's atkbd_reconnect
+ * waits for the LED work, so that a late ACK is not taken for GETID's. */
+static void leds_bat_rows(void)
+{
+    int a = attaches, d = detaches;
+
+    CHECK("the new binding's LEDs start", tick_at(T(1600)) == 1 && last_write() == 0xED);
+    keys = 0;
+    CHECK("a BAT while 0xED is out writes no GETID", answer_at(T(1601), 0xAA) == 0 && kbd.due);
+    CHECK("a key while the reconnect is due is dropped",
+          answer_at(T(1601), 0x1E) == 0 && keys == 0);
+    CHECK("no tick starts the probe meanwhile", tick_at(T(1602)) == 0);
+    CHECK("0xED's late ACK writes the LED byte",
+          answer_at(T(1603), 0xFA) == 1 && last_write() == 0x02);
+    CHECK("whose ACK ends the command and writes GETID",
+          answer_at(T(1604), 0xFA) == 1 && last_write() == 0xF2 && !kbd.due);
+    CHECK("GETID's own ACK and ID then find the keyboard", probe_answered(T(1605)));
+    CHECK("which keeps the binding", attaches == a && detaches == d && !serio0_unbound);
+    CHECK("the LEDs are sent again", leds_sent(T(1606)));
+
+    wanted_leds = 0x04;
+    CHECK("a command no answer ends", tick_at(T(1700)) == 1 && last_write() == 0xED);
+    CHECK("a BAT during it writes nothing", answer_at(T(1701), 0xAA) == 0);
+    CHECK("0xED again at 100 ms", tick_at(T(1700) + WAIT) == 1 && last_write() == 0xED);
+    CHECK("and a third time", tick_at(T(1700) + 2 * WAIT) == 1 && last_write() == 0xED);
+    CHECK("the command given up writes GETID",
+          tick_at(T(1700) + 3 * WAIT) == 1 && last_write() == 0xF2);
+    CHECK("which finds the keyboard", probe_answered(T(1800)));
+    CHECK("whose LEDs follow", leds_sent(T(1801)));
+}
+
+/** A full input buffer during a probe: a byte refused counts no try, and
+ * one refused for 500 ms fails, as Linux's i8042_wait_write gives up. */
+static void busy_rows(void)
+{
+    uint32_t t = T(1900);
+
+    CHECK("a BAT into a full buffer writes nothing", bat_full(t) == 0 && kbd.job == JOB_RECONNECT);
+    CHECK("ticks of a full buffer write nothing", tick_full(t + 1) == 0 && tick_full(t + 2) == 0 &&
+                                                      tick_full(t + 3) == 0 &&
+                                                      tick_full(t + 4) == 0);
+    CHECK("and count no try: GETID once the buffer empties",
+          tick_at(t + 5) == 1 && last_write() == 0xF2 && kbd.tries == 1);
+    CHECK("which finds the keyboard", probe_answered(t + 6));
+    CHECK("whose LEDs follow", leds_sent(t + 7));
+
+    t = T(2000);
+    CHECK("another BAT into a full buffer", bat_full(t) == 0 && kbd.step == PROBE_GETID);
+    CHECK("GETID refused for less than 500 ms is not failed",
+          tick_full(t + WRITE_WAIT_TICKS - 1) == 0 && kbd.step == PROBE_GETID);
+    CHECK("refused for 500 ms it fails, as a GETID unanswered",
+          tick_full(t + WRITE_WAIT_TICKS) == 0 && kbd.step == PROBE_LEDS);
+    CHECK("the LED command once the buffer empties",
+          tick_at(t + WRITE_WAIT_TICKS + 1) == 1 && last_write() == 0xED);
+    CHECK("whose ACK writes the LEDs off",
+          answer_at(t + WRITE_WAIT_TICKS + 2, 0xFA) == 1 && last_write() == 0x00);
+    CHECK("then ENABLE", answer_at(t + WRITE_WAIT_TICKS + 3, 0xFA) == 1 && last_write() == 0xF4);
+    CHECK("whose ACK keeps the binding",
+          answer_at(t + WRITE_WAIT_TICKS + 4, 0xFA) == 0 && !serio0_unbound);
+    CHECK("whose LEDs follow", leds_sent(t + WRITE_WAIT_TICKS + 5));
+}
+
+/** A portable chassis: with the controller translating, a BAT's probe
+ * skips GETID for RESET_DIS, as Linux's atkbd_skip_getid, and a keyboard
+ * that answers nothing stays bound; without translation GETID is asked. */
+static void portable_rows(void)
+{
+    static const char *const yes[] = {"8", "9", "10", "14", "31", "32"};
+    static const char *const no[] = {"1", "3", "100", "", "93", "3"};
+    int i, a, d, w, k;
+
+    for (i = 0; i < 6; i++) {
+        chassis = yes[i];
+        CHECK("Linux's portable chassis types are portable", portable_chassis());
+        chassis = no[i];
+        CHECK("other chassis types are not", !portable_chassis());
+    }
+    chassis = "9";
+    kbd.portable = portable_chassis();
+    kbd.translated = 0;
+    CHECK("a portable machine without translation asks GETID",
+          answer_at(T(2200), 0xAA) == 1 && last_write() == 0xF2);
+    CHECK("which finds the keyboard", probe_answered(T(2201)));
+    CHECK("whose LEDs follow", leds_sent(T(2202)));
+
+    kbd.translated = 1;
+    a = attaches;
+    d = detaches;
+    w = warnings;
+    CHECK("with translation a BAT writes RESET_DIS",
+          answer_at(T(2300), 0xAA) == 1 && last_write() == 0xF5);
+    CHECK("again after 100 ms", tick_at(T(2300) + WAIT) == 1 && last_write() == 0xF5);
+    CHECK("and a third time", tick_at(T(2300) + 2 * WAIT) == 1 && last_write() == 0xF5);
+    CHECK("then ENABLE", tick_at(T(2300) + 3 * WAIT) == 1 && last_write() == 0xF4);
+    CHECK("written three times", tick_at(T(2300) + 4 * WAIT) == 1 &&
+                                     tick_at(T(2300) + 5 * WAIT) == 1 && last_write() == 0xF4);
+    CHECK("then the reconnect ends with a warning",
+          tick_at(T(2300) + 6 * WAIT) == 0 && kbd.job == JOB_NONE && warnings == w + 1);
+    CHECK("and the keyboard that answered nothing stays bound",
+          attaches == a && detaches == d && !serio0_unbound);
+    k = keys;
+    CHECK("its keys flow", answer_at(T(2900), 0x1E) == 0 && keys == k + 1);
+    CHECK("whose LEDs follow", leds_sent(T(2901)));
+
+    CHECK("a keyboard that answers is probed from RESET_DIS",
+          answer_at(T(3000), 0xAA) == 1 && last_write() == 0xF5 && answer_at(T(3001), 0xFA) == 1 &&
+              last_write() == 0xF4 && answer_at(T(3002), 0xFA) == 0 && kbd.job == JOB_NONE);
+    CHECK("whose LEDs follow", leds_sent(T(3003)));
+    kbd.portable = 0;
+    chassis = 0;
+}
+
+/** Every event device taken: a connect that finds the keyboard binds
+ * nothing and leaves serio0 without a driver, and a byte in auto mode once
+ * a node is free binds it. */
+static void nodes_rows(void)
+{
+    int a = attaches, d = detaches, w = warnings;
+
+    no_nodes = 1;
+    CHECK("a BAT writes GETID", answer_at(T(3100), 0xAA) == 1 && last_write() == 0xF2);
+    CHECK("an ID that is no keyboard's probes anew",
+          answers_at(T(3101), not_id, 2) == 1 && last_write() == 0xF2 && detaches == d + 1);
+    CHECK("the connect finds the keyboard",
+          answers_at(T(3102), id, 3) == 1 && answer_at(T(3103), 0xFA) == 1 && last_write() == 0xF4);
+    CHECK("but with no event device free",
+          answer_at(T(3104), 0xFA) == 0 && attaches == a + 1 && detaches == d + 2);
+    CHECK("serio0 is left without a driver, with a warning",
+          serio0_unbound && kbd.unbound && !ps2_keyboard.dev && warnings > w);
+    CHECK("and its LEDs are not sent", tick_at(T(3200)) == 0);
+    no_nodes = 0;
+    keys = 0;
+    CHECK("a byte in auto mode probes again",
+          answer_at(T(3300), 0x1E) == 1 && last_write() == 0xF2 && keys == 0);
+    CHECK("and binds the keyboard with a node free",
+          probe_answered(T(3301)) && attaches == a + 2 && !serio0_unbound && ps2_keyboard.dev);
+    CHECK("whose keys flow", answer_at(T(3302), 0x1E) == 0 && keys == 1);
+    CHECK("and whose LEDs follow", leds_sent(T(3303)));
+}
+
 int main(void)
 {
     /* A mouse byte, the first of a packet. */
@@ -462,6 +686,10 @@ int main(void)
     unbind_rows();
     manual_rows();
     auto_again_rows();
+    leds_bat_rows();
+    busy_rows();
+    portable_rows();
+    nodes_rows();
 
     if (fails == 0) {
         printf("ps2kbd-test: pass\n");

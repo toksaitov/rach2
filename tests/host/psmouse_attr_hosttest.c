@@ -1880,14 +1880,15 @@ static void parked_protocol_write(void)
 }
 
 /** A write of serio1's protocol parked behind a reconnect that fails in
- * manual mode, which unbinds psmouse, and then behind one that binds it
- * again: the write finds the binding it was made for gone and registers
+ * manual mode, which unbinds psmouse, then behind one that binds it again,
+ * and behind a reconnect that fails in auto mode, which binds psmouse anew
+ * at once: the write finds the binding it was made for gone and registers
  * no device. */
 static void aux_parked_rows(void)
 {
     int done, rebind;
 
-    for (rebind = 0; rebind < 2; rebind++) {
+    for (rebind = 0; rebind < 3; rebind++) {
         model_reset(KIND_MOUSE, 0);
         CHECK("the parked row brings a mouse up", init_mouse() == 0 && mouse_dev);
         parked_file = *file_of(1, "protocol");
@@ -1895,11 +1896,16 @@ static void aux_parked_rows(void)
         CHECK("the reconnect takes the command lock", ps2mouse_change_begin() == 0);
         done = park_run(parked_protocol_write);
         CHECK("serio1's write waits for it", done == 0 && cmd_busy);
-        serio_manual[1] = 1;
-        probe_port_anew();
-        CHECK("the failed reconnect in manual mode unbinds psmouse", aux_unbound && !mouse_dev);
-        serio_manual[1] = 0;
-        if (rebind) {
+        if (rebind == 2) {
+            probe_port_anew();
+            CHECK("a failed reconnect in auto mode binds psmouse anew", !aux_unbound && mouse_dev);
+        } else {
+            serio_manual[1] = 1;
+            probe_port_anew();
+            CHECK("the failed reconnect in manual mode unbinds psmouse", aux_unbound && !mouse_dev);
+            serio_manual[1] = 0;
+        }
+        if (rebind == 1) {
             probe_port_anew();
             CHECK("a probe in auto mode binds psmouse again", !aux_unbound && mouse_dev);
         }
