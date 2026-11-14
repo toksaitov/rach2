@@ -1484,8 +1484,7 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
         proc_wait_set(0, armed, kind == KCLOCK_REAL ? steps : 0, fresh);
         fresh = 0;
         rc = sleep_until(base + (due - now), 0, wchan);
-        proc_wait_set(0, 0, 0, 0);
-        if (rc >= 0 && armed != 0 && current_proc->wakeup_fired == armed) {
+        if (proc_wait_set(0, 0, 0, 0) == armed && rc >= 0 && armed != 0) {
             return 0;
         }
     } while (rc == 0 || rc == 1);

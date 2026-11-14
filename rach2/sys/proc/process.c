@@ -994,9 +994,10 @@ void proc_wake_due(void)
     timer_pass(PASS_TIME, tick_count());
 }
 
-void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
+int64_t proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
 {
     uint32_t flags = sched_lock_take();
+    int64_t fired;
 
     current_proc->wakeup_tick = tick;
     current_proc->wakeup_ns = ns;
@@ -1004,7 +1005,9 @@ void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
     if (fresh) {
         current_proc->wakeup_fired = 0;
     }
+    fired = current_proc->wakeup_fired;
     sched_lock_give(flags);
+    return fired;
 }
 
 uint64_t proc_alarm_at(uint64_t now, uint64_t ticks)

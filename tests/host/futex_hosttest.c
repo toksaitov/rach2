@@ -157,8 +157,13 @@ static uint32_t armed_steps;
  * wait, or in the next fault at `step_at`; 0 for none. With `step_after_fire`,
  * the next wait of the lag rows reaches its time of the monotonic clock, the
  * timer's pass records the expiry (`wakeup_fired`), and the clock is then
- * set by that many seconds before the thread runs. */
-static int64_t step_in_wait, step_in_fault, step_after_fire;
+ * set by that many seconds before the thread runs; with `fire_late` too,
+ * the pass tests the time before the setting and holds its record
+ * (`late_fired`) until the thread ends its timed wait, as a pass on another
+ * processor that holds the run queues' lock between its test and its
+ * record does. */
+static int64_t step_in_wait, step_in_fault, step_after_fire, late_fired;
+static int fire_late;
 static uint32_t step_at;
 static struct futex_q waiter;
 static struct futex_sleeper waiter_s; /* the model's waiter's sleep */
@@ -483,7 +488,11 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     armed_steps = current_proc->rt_steps;
     if (step_after_fire != 0 && rt_ticking && armed_ns != 0 && !cond(arg)) {
         model_reach(armed_ns);
-        current_proc->wakeup_fired = armed_ns;
+        if (fire_late) {
+            late_fired = armed_ns;
+        } else {
+            current_proc->wakeup_fired = armed_ns;
+        }
         model_step(step_after_fire);
         step_after_fire = 0;
     } else if (step_in_wait != 0) {
@@ -509,15 +518,23 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 }
 
 /** Set the thread's timed wait as the kernel does, under no lock, since the
- * model has one processor and no timer pass runs beside the thread. */
-void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
+ * model has one processor and no timer pass runs beside the thread, and
+ * return the expiry record. A record a pass still holds (`late_fired`) is
+ * stored first, as the pass that holds the run queues' lock stores it
+ * before the change can take that lock. */
+int64_t proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
 {
+    if (late_fired != 0) {
+        current_proc->wakeup_fired = late_fired;
+        late_fired = 0;
+    }
     current_proc->wakeup_tick = tick;
     current_proc->wakeup_ns = ns;
     current_proc->rt_steps = steps;
     if (fresh) {
         current_proc->wakeup_fired = 0;
     }
+    return current_proc->wakeup_fired;
 }
 
 /** A named wait, which the model takes as `wq_wait_event`. */
@@ -968,14 +985,8 @@ static int32_t rt_wait(uint32_t now, int32_t at)
  * already past, the wait sleeps to the time; forward, past the time, it
  * ends without a sleep. A wait on real time that a signal cut short files
  * the time, and its restart counts the tick from the clock as set then, not
- * from the tick it was first given. A wait whose tick comes while the clock
- * read then is still short of the time counts again and sleeps on, since
- * Linux's hrtimer never expires before its clock reaches its time; where
- * the interrupt between ticks comes, it ends the wait in one sleep, when
- * the monotonic clock reaches the time real time reaches it at; and a step
- * back of the clock after that wake, before the thread runs, leaves it
- * ended, as Linux's hrtimer_wakeup clears the sleeper's task and
- * futex_wait returns -ETIMEDOUT.
+ * from the tick it was first given. `realtime_lag` has the rows of a clock
+ * that lags its tick.
  */
 static void realtime_steps(void)
 {
@@ -1020,7 +1031,22 @@ static void realtime_steps(void)
               !self.restart.fn,
           "the resumed wait on real time counts its tick from the clock as set");
     rt_sec = 100;
+}
 
+/**
+ * A wait on real time whose tick comes while the clock read then is still
+ * short of the time counts again and sleeps on, since Linux's hrtimer never
+ * expires before its clock reaches its time; where the interrupt between
+ * ticks comes, it ends the wait in one sleep, when the monotonic clock
+ * reaches the time real time reaches it at; and a step back of the clock
+ * after that wake, before the thread runs, leaves it ended, as Linux's
+ * hrtimer_wakeup clears the sleeper's task and futex_wait returns
+ * -ETIMEDOUT, also when the pass tested the time before the step and
+ * recorded the expiry after it.
+ */
+static void realtime_lag(void)
+{
+    rt_sec = 100;
     rt_ticking = 1;
     rt_lag_ns = 3 * TICK_NS / 2;
     CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 2 && armed == 2003u + TICK_HZ,
@@ -1035,6 +1061,14 @@ static void realtime_steps(void)
     CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 1 &&
               model_mono_ns() == 2000LL * TICK_NS + 1000000000,
           "a step back after the timer ended the wait at its time leaves it ended");
+    rt_sec = 100;
+    step_after_fire = -1;
+    fire_late = 1;
+    CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 1 && late_fired == 0 &&
+              model_mono_ns() == 2000LL * TICK_NS + 1000000000,
+          "a step back between the pass's test of the time and its record leaves the "
+          "wait ended");
+    fire_late = 0;
     step_after_fire = 0;
     rt_ticking = 0;
     rt_lag_ns = 0;
@@ -1191,6 +1225,7 @@ int main(void)
     deadline_fixed();
     restarts();
     realtime_steps();
+    realtime_lag();
     bucket_rows();
     fault_rows();
     bkl_rows();

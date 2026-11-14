@@ -52,10 +52,15 @@ static uint32_t mono_phase_ns;
 static int fine_wakes;
 /* With `step_after_fire`, the next wait reaches its time, where the timer's
  * pass records the expiry (`wakeup_fired`), and the clock is then set by
- * that many seconds before the thread runs; with `signal_in_wait`, a caught
- * signal is posted at that time. Whether a signal the process acts on is
- * pending, and the big lock's depth and takes. */
-static int64_t step_after_fire;
+ * that many seconds before the thread runs; with `fire_late` too, the pass
+ * tests the time before the setting and holds its record (`late_fired`)
+ * until the thread ends its timed wait, as a pass on another processor that
+ * holds the run queues' lock between its test and its record does; with
+ * `signal_in_wait`, a caught signal is posted at that time. Whether a
+ * signal the process acts on is pending, and the big lock's depth and
+ * takes. */
+static int64_t step_after_fire, late_fired;
+static int fire_late;
 static int signal_in_wait;
 static int sig_pending;
 static int bkl_depth, bkl_takes;
@@ -194,15 +199,23 @@ int in_compat_syscall(void)
 }
 
 /** Set the thread's timed wait as the kernel does, under no lock, since the
- * model has one processor and no timer pass runs beside the thread. */
-void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
+ * model has one processor and no timer pass runs beside the thread, and
+ * return the expiry record. A record a pass still holds (`late_fired`) is
+ * stored first, as the pass that holds the run queues' lock stores it
+ * before the change can take that lock. */
+int64_t proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
 {
+    if (late_fired != 0) {
+        current_proc->wakeup_fired = late_fired;
+        late_fired = 0;
+    }
     current_proc->wakeup_tick = tick;
     current_proc->wakeup_ns = ns;
     current_proc->rt_steps = steps;
     if (fresh) {
         current_proc->wakeup_fired = 0;
     }
+    return current_proc->wakeup_fired;
 }
 
 /**
@@ -228,7 +241,11 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     armed_steps = current_proc->rt_steps;
     if (step_after_fire != 0 && armed_ns != 0) {
         model_reach(armed_ns);
-        current_proc->wakeup_fired = armed_ns;
+        if (fire_late) {
+            late_fired = armed_ns;
+        } else {
+            current_proc->wakeup_fired = armed_ns;
+        }
         model_step(step_after_fire);
         step_after_fire = 0;
     } else if (step_in_wait != 0) {
@@ -470,6 +487,16 @@ static void realtime_steps(void)
     CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 1 &&
               model_mono_ns() == 2000LL * TICK_NS + 1000000000,
           "a step back after the timer ended the wait at its time leaves it ended");
+    rt_sec = 100;
+    deadline(&w, 101);
+    w.q = &q;
+    step_after_fire = -1;
+    fire_late = 1;
+    CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 1 && late_fired == 0 &&
+              model_mono_ns() == 2000LL * TICK_NS + 1000000000,
+          "a step back between the pass's test of the time and its record leaves the "
+          "wait ended");
+    fire_late = 0;
     step_after_fire = 0;
     mono_phase_ns = 0;
 }

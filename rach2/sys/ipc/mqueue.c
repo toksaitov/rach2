@@ -608,21 +608,21 @@ static void mq_count(struct mq_wait *w)
 
 /**
  * Whether `w`'s deadline has expired: the timer's pass found the monotonic
- * clock at its time `ns` when it woke the sleep (`wakeup_fired`), or the
- * clock has reached that time with no step of real time since it was
- * counted, the step count read after the clock, which is then recorded the
- * same way. The record holds across a later step, which counts `ns` again,
- * as Linux's hrtimer_wakeup clears the sleeper's task and
- * schedule_hrtimeout_range_clock then returns 0 to wq_sleep
- * (kernel/time/hrtimer.c, ipc/mqueue.c). Never for a deadline without a
- * time; called by the waiting thread.
+ * clock at its time `ns` when it woke the sleep, which the expiry record
+ * `fired` (`wakeup_fired`) then names, or the clock has reached that time
+ * with no step of real time since it was counted, the step count read after
+ * the clock, which is then recorded the same way. The record holds across a
+ * later step, which counts `ns` again, as Linux's hrtimer_wakeup clears the
+ * sleeper's task and schedule_hrtimeout_range_clock then returns 0 to
+ * wq_sleep (kernel/time/hrtimer.c, ipc/mqueue.c). Never for a deadline
+ * without a time; called by the waiting thread.
  */
-static int mq_fired(const struct mq_wait *w)
+static int mq_fired(const struct mq_wait *w, int64_t fired)
 {
     if (!w->timed || w->ns == 0) {
         return 0;
     }
-    if (current_proc->wakeup_fired == w->ns) {
+    if (fired == w->ns) {
         return 1;
     }
     if (rtc_monotonic_ns() < w->ns || w->steps != rtc_step_count()) {
@@ -639,7 +639,7 @@ static int mq_wait_done(void *arg)
 {
     const struct mq_wait *w = arg;
 
-    return w->q->gen != w->from || mq_fired(w) ||
+    return w->q->gen != w->from || mq_fired(w, current_proc->wakeup_fired) ||
            (w->timed && (tick_count() >= w->target || w->steps != rtc_step_count()));
 }
 
@@ -679,7 +679,13 @@ static int mq_signal_pending(void)
  * before its clock reaches its time. The sleep ends with -ETIMEDOUT when
  * the monotonic clock reaches the time `ns`, by the interrupt between
  * ticks, as that hrtimer ends it, and not at the tick; once it has
- * (`mq_fired`), a later step does not count the time again.
+ * (`mq_fired`), a later step does not count the time again. The expiry is
+ * judged by the record the end of the timed wait reads under the run
+ * queues' lock (`proc_wait_set`), since a pass on another processor may
+ * hold that lock between its test of the time and its record of the expiry
+ * while a step of the clock lets the thread leave its wait, as Linux's
+ * schedule_hrtimeout_range_clock cancels its hrtimer, waiting out a running
+ * callback, before it reads whether the timer expired.
  */
 static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 {
@@ -694,8 +700,7 @@ static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
                       w->timed ? w->steps : 0, fresh);
         fresh = 0;
         rc = wq_wait_event(&q->wq, mq_wait_done, w);
-        fired = mq_fired(w);
-        proc_wait_set(0, 0, 0, 0);
+        fired = mq_fired(w, proc_wait_set(0, 0, 0, 0));
         if (q->gen != w->from) {
             return 0;
         }

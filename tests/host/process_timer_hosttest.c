@@ -57,6 +57,10 @@
  * keeps the new wait's deadline: the wake tests the record again. One that
  * starts a new wait between the wake's test of its time and its record of
  * the expiry is not marked expired, since the record is the time tested.
+ * A step of the clock between the wake's test and its record, which lets
+ * the thread leave its wait, finds the pass holding the run queues' lock,
+ * and the end of the wait (`proc_wait_set`), which takes that lock, reads
+ * the expiry the pass recorded, so the wait ends at its time.
  */
 #include "lib/kint.h"
 #include "compat/waketime_none.h"
@@ -108,7 +112,7 @@ static int failures;
 static process_t sleeper, runner, follower;
 static process_t crowd[20];
 static int sleeper_posts, runner_posts, follower_posts, vtalrm_posts, prof_posts;
-static int sched_takes;
+static int sched_takes, sched_held;
 
 #define CHECK(c, detail)                                          \
     do {                                                          \
@@ -138,6 +142,7 @@ uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
 uint32_t sched_lock_take(void)
 {
     sched_takes++;
+    sched_held++;
     return 0;
 }
 
@@ -145,6 +150,7 @@ uint32_t sched_lock_take(void)
 void sched_lock_give(uint32_t flags)
 {
     (void)flags;
+    sched_held--;
 }
 
 /** The tick's wake, which tests the record again as the kernel's does under
@@ -218,6 +224,10 @@ static uint32_t step_count = 1;
 static process_t *rearm;
 static int rearm_reads;
 
+/* The clock is stepped just after the step count's reading this many
+ * readings on, and whether the run queues' lock was held then. */
+static int step_reads, step_held;
+
 /** The model's step count of the real-time clock (`rtc_step_count`). */
 uint32_t rtc_step_count(void)
 {
@@ -226,6 +236,10 @@ uint32_t rtc_step_count(void)
         rearm->wakeup_ns = restart_ns;
         rearm->wakeup_fired = 0;
         rearm = NULL;
+    }
+    if (step_reads > 0 && --step_reads == 0) {
+        step_held = sched_held > 0;
+        return step_count++;
     }
     return step_count;
 }
@@ -588,6 +602,47 @@ static void rearm_rows(void)
     proc_timer_update(&sleeper);
 }
 
+/** A step of the clock back after the pass tested a sleeper's time and read
+ * the step count, and before it records the expiry, lets the thread leave
+ * its wait; the thread's end of the wait takes the run queues' lock, which
+ * the pass holds until its record is made, and reads that record, the
+ * wait's own time, so the wait ends expired and does not count its time
+ * again from the stepped clock. The pass reads the step count once for the
+ * pass and once more at the wake, after its test; the clock is stepped
+ * just after the second reading. */
+static void late_record_rows(void)
+{
+    int64_t t = 6001 * (int64_t)TICK_NS + (int64_t)TICK_NS / 4;
+    int64_t fired;
+
+    sleeper.state = PROC_BLOCKED;
+    sleeper.woken = 0;
+    sleeper.wakeup_cpu = 0;
+    sleeper.rt_steps = step_count;
+    sleeper.wakeup_fired = 0;
+    sleeper.wakeup_tick = 6003;
+    sleeper.wakeup_ns = t;
+    proc_timer_update(&sleeper);
+    step_reads = 2;
+    step_held = 0;
+    clock_ns = t + 1000;
+    proc_wake_due();
+    CHECK(step_reads == 0 && step_held && sleeper.rt_steps != step_count,
+          "the clock is stepped after the pass's test, while it holds the run queues' lock");
+    CHECK(sleeper.state == PROC_READY && sleeper.wakeup_fired == t,
+          "the pass ends the wait and records the time it tested");
+    cpu_table[0].current = &sleeper;
+    fired = proc_wait_set(0, 0, 0, 0);
+    cpu_table[0].current = NULL;
+    CHECK(fired == t && sched_held == 0,
+          "the end of the wait reads the expiry recorded across the step, so the wait ends");
+    CHECK(sleeper.wakeup_tick == 0 && sleeper.wakeup_ns == 0 && sleeper.rt_steps == 0,
+          "the end of the wait clears its time");
+    sleeper.state = PROC_RUNNING;
+    sleeper.wakeup_fired = 0;
+    proc_timer_update(&sleeper);
+}
+
 /** A remote pass expires a due sleep but rearms no other CPU's future event. */
 static void event_owner_rows(void)
 {
@@ -676,6 +731,7 @@ int main(int argc, char **argv)
     between_rows();
     restart_rows();
     rearm_rows();
+    late_record_rows();
     event_owner_rows();
     if (failures) {
         return 1;

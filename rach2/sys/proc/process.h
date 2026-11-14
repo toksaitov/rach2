@@ -1213,10 +1213,15 @@ void proc_wake_due(void);
  * timer's pass holds from its test of a sleeper's deadline to its record of
  * the expiry (`timer_wake`), so that the pass records only a deadline it
  * tested, as Linux's sleeper waits for its timer's callback to finish
- * (`hrtimer_cancel` in `do_nanosleep`) before it sleeps again. The caller
- * holds no spinlock that comes after `sched_lock`.
+ * (`hrtimer_cancel` in `do_nanosleep`) before it sleeps again. Returns the
+ * expiry record as it stands after the change, read under the same lock:
+ * once a wait has ended its time so, no pass records an expiry for it, so
+ * a wait decides whether its time expired by this value and not by a
+ * reading taken before the end, which a pass held between its test and its
+ * record would leave short. The caller holds no spinlock that comes after
+ * `sched_lock`.
  */
-void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh);
+int64_t proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh);
 
 /**
  * Post `signo` to the process `target` is a thread of, with a siginfo whose

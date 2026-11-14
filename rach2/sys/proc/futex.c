@@ -331,20 +331,20 @@ static int futex_ns_come(const struct futex_sleeper *s)
 
 /**
  * Whether `s`'s deadline has expired: the timer's pass found the monotonic
- * clock at its time `ns` when it woke the sleep (`wakeup_fired`), or the
- * clock has reached that time with no step of real time since it was
- * counted, the step count read after the clock, which is then recorded the
- * same way. The record holds across a later step, which counts `ns` again,
- * as Linux's hrtimer_wakeup clears the sleeper's task and futex_wait then
- * returns -ETIMEDOUT (kernel/futex/waitwake.c). Called by the waiting
- * thread.
+ * clock at its time `ns` when it woke the sleep, which the expiry record
+ * `fired` (`wakeup_fired`) then names, or the clock has reached that time
+ * with no step of real time since it was counted, the step count read after
+ * the clock, which is then recorded the same way. The record holds across a
+ * later step, which counts `ns` again, as Linux's hrtimer_wakeup clears the
+ * sleeper's task and futex_wait then returns -ETIMEDOUT
+ * (kernel/futex/waitwake.c). Called by the waiting thread.
  */
-static int futex_fired(const struct futex_sleeper *s)
+static int futex_fired(const struct futex_sleeper *s, int64_t fired)
 {
     if (!s->timed || s->ns == 0) {
         return 0;
     }
-    if (current_proc->wakeup_fired == s->ns) {
+    if (fired == s->ns) {
         return 1;
     }
     if (rtc_monotonic_ns() < s->ns || (s->rt && s->steps != rtc_step_count())) {
@@ -465,8 +465,8 @@ static int futex_sleeper_done(void *arg)
 {
     const struct futex_sleeper *s = (const struct futex_sleeper *)arg;
 
-    return s->woken || (s->timed && tick_count() >= s->target) || futex_fired(s) ||
-           (s->rt && s->steps != rtc_step_count());
+    return s->woken || (s->timed && tick_count() >= s->target) ||
+           futex_fired(s, current_proc->wakeup_fired) || (s->rt && s->steps != rtc_step_count());
 }
 
 /** Sleep on `s` until `futex_sleeper_done`, the tick waking the sleep once
@@ -476,11 +476,18 @@ static int futex_sleeper_done(void *arg)
  * ticks, as Linux's hrtimer ends the wait (kernel/futex/waitwake.c:356-357),
  * and not at the tick; once it has (`futex_fired`), a step of real time
  * does not count it again, and a signal does not end the wait, as Linux's
- * futex_wait tests the timer before the signal. Returns as
- * `wq_wait_event_as` does, and 0 for a deadline that expired. */
+ * futex_wait tests the timer before the signal. The expiry is judged by the
+ * record the end of the timed wait reads under the run queues' lock
+ * (`proc_wait_set`), since a pass on another processor may hold that lock
+ * between its test of the time and its record of the expiry while a step
+ * of the clock, which takes no such lock, lets the thread leave its wait;
+ * in Linux the hrtimer's callback and clock_was_set's retrigger both run
+ * under the clock base's lock, so a step never falls between a callback's
+ * test and its wake. Returns as `wq_wait_event_as` does, and 0 for a
+ * deadline that expired. */
 static int futex_sleep(struct futex_sleeper *s, const char *wchan)
 {
-    int rc, fired, fresh = 1;
+    int rc, fresh = 1;
 
     (void)futex_rt_count(s);
     for (;;) {
@@ -488,9 +495,7 @@ static int futex_sleep(struct futex_sleeper *s, const char *wchan)
                       s->rt ? s->steps : 0, fresh);
         fresh = 0;
         rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, wchan);
-        fired = futex_fired(s);
-        proc_wait_set(0, 0, 0, 0);
-        if (fired) {
+        if (futex_fired(s, proc_wait_set(0, 0, 0, 0))) {
             return 0;
         }
         if (rc != 0 || s->woken || !futex_rt_count(s)) {
