@@ -1,7 +1,8 @@
 /*
  * sigframe32.c: the signal frames of i386 handlers on the x86-64 kernel,
  * Linux's `sigframe_ia32` and `rt_sigframe_ia32` with their 32-bit
- * floating-point state, the returns from them, and the i386 siginfo.
+ * floating-point state, and the returns from them; the i386 siginfo the rt
+ * frame holds is proc/siginfo.c's.
  *
  * A handler gets these frames when its action was installed by an i386
  * call, which marks it SA_IA32_ABI (`signal_action`), as Linux decides by
