@@ -114,7 +114,16 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * cs_watchdog_read reads again a read of the HPET that was held up, and
  * where every one was held up the span keeps its start and the next tick
  * tries again. A span past twice its length begins again, as Linux skips a
- * long interval. The first span, of at least WATCH_FIRST_NS, read on one
+ * long interval. A due span's processor that has not read its end once
+ * its turn has lasted both WATCH_ANSWER_NS of the raw clock and
+ * WATCH_ANSWER_PASSES clock passes, having taken neither its tick nor
+ * those passes' kicks, or having had every reading held up, parts the TSC
+ * from the clock as a drift does, since its TSC goes unchecked while it is
+ * silent, as Linux marks a clocksource unstable when its watchdog cannot
+ * read it. A turn that passes to the next processor, as when its own goes
+ * offline, begins anew. The passes keep a stretch the whole machine spent
+ * stopped, as a guest its host did not run, from ending a turn in one
+ * pass. The first span, of at least WATCH_FIRST_NS, read on one
  * processor, sets the rate instead, as Linux's tsc_refine_calibration_work
  * measures the TSC again a second after boot (arch/x86/kernel/tsc.c:
  * 1314-1406): the boot's measure spans 20 ms. A first span that differs
@@ -122,11 +131,13 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * Linux's does, and the watch goes on from there; a TSC that has not moved
  * over a span parts from the clock.
  */
-#define WATCH_SPAN_NS  500000000u /* WATCHDOG_INTERVAL */
-#define WATCH_FIRST_NS 1000000000u
-#define WATCH_LIMIT_NS 248000u /* 4 * WATCHDOG_MAX_SKEW */
-#define WATCH_SKEW_NS  124000u /* 2 * WATCHDOG_MAX_SKEW */
-#define WATCH_READS    3       /* cs_watchdog_read's on 4 to 15 processors */
+#define WATCH_SPAN_NS       500000000u /* WATCHDOG_INTERVAL */
+#define WATCH_FIRST_NS      1000000000u
+#define WATCH_LIMIT_NS      248000u /* 4 * WATCHDOG_MAX_SKEW */
+#define WATCH_SKEW_NS       124000u /* 2 * WATCHDOG_MAX_SKEW */
+#define WATCH_READS         3       /* cs_watchdog_read's on 4 to 15 processors */
+#define WATCH_ANSWER_NS     WATCH_SPAN_NS
+#define WATCH_ANSWER_PASSES 4
 
 /*
  * The watch's state: whether the running clock reads a watched TSC, whether
@@ -134,7 +145,10 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * whether a span is in progress, the TSC and the raw clock where it
  * began, and for the log the span that parted or the rate set. The tick
  * sets `watch_due` once the span is long enough, and the processor
- * `watch_cpu` reads its end and clears it; each changes under
+ * `watch_cpu` reads its end and clears it; the raw clock where that
+ * processor's turn began and the clock passes since count toward its
+ * deadline, and `watch_lost_cpu`, -1 until then, names one that missed it,
+ * `watch_lost_ns` how long it was silent, for the log; each changes under
  * `vclock_lock`, and `vclock_watch_cpu` reads them first without it.
  */
 static int watching;
@@ -147,6 +161,10 @@ static uint64_t watch_ran_ns;
 static uint64_t watch_span_ns;
 static volatile int watch_due;
 static volatile int watch_cpu;
+static uint64_t watch_turn_raw;
+static uint32_t watch_turn_passes;
+static int watch_lost_cpu = -1;
+static uint64_t watch_lost_ns;
 
 /* The time zone settimeofday set, for a page built after it
  * (`vclock_set_tz`). */
@@ -383,6 +401,10 @@ static const char vclock_withdrawn_why[] = "kvm's clock page withdrew its stable
  * (`vclock_watch`). */
 static const char vclock_parted_why[] = "the tsc parted from the tick's clock";
 
+/* The refusal for good of a watched TSC whose span a processor did not read
+ * by its deadline (`vclock_watch_due`). */
+static const char vclock_unanswered_why[] = "a processor did not answer the tsc's watch";
+
 /** Why the clock cannot run from the TSC, for the log, or NULL when it
  * can: `vclock_withdrawn_why` where only the boot processor's KVM clock
  * page, which may set its stable bit again, stands in the way. */
@@ -392,7 +414,7 @@ static const char *vclock_refusal(void)
     int cpu;
 
     if (watch_parted) {
-        return vclock_parted_why;
+        return watch_lost_cpu >= 0 ? vclock_unanswered_why : vclock_parted_why;
     }
     if (tsc_clock_per_tick() == 0) {
         return "no tsc was measured";
@@ -459,6 +481,7 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     watch_based = 0;
     watch_due = 0;
     watch_cpu = (int)arch_cpu_id();
+    watch_lost_cpu = -1;
     *mono_ns = mono_base_ns;
     *raw_ns = raw_base_ns;
     spin_unlock(&vclock_lock);
@@ -661,9 +684,12 @@ static int vclock_next_cpu(int cpu)
  * `ref_raw`: one not yet begun, or as long as it must be by a reading
  * later than its start, which a processor that read the start after the
  * tick read `ref_raw` may have put past it. A due span whose
- * processor is no longer online passes to the next. The processor to kick
- * so that it reads the span's end, or -1 where that is this one, which
- * reads it at this tick. Under `vclock_lock`.
+ * processor is no longer online passes to the next, whose turn begins at
+ * `ref_raw`; one whose processor has let its turn pass WATCH_ANSWER_NS and
+ * WATCH_ANSWER_PASSES unread sets `watch_parted`, which the next tick acts
+ * on, as the comment at WATCH_SPAN_NS says. The processor to kick so that
+ * it reads the span's end, or -1 where that is this one, which reads it at
+ * this tick, or where the TSC parted. Under `vclock_lock`.
  */
 static int vclock_watch_due(uint64_t ref_raw)
 {
@@ -671,12 +697,24 @@ static int vclock_watch_due(uint64_t ref_raw)
 
     if (!watch_due && (!watch_based || (ref_raw > watch_raw && ref_raw - watch_raw >= need))) {
         watch_due = 1;
+        watch_turn_raw = ref_raw;
+        watch_turn_passes = 0;
     }
-    if (!watch_due) {
+    if (!watch_due || watch_parted) {
         return -1;
     }
     if (!cpu_table[watch_cpu].online) {
         watch_cpu = vclock_next_cpu(watch_cpu);
+        watch_turn_raw = ref_raw;
+        watch_turn_passes = 0;
+    }
+    if (watch_turn_passes < WATCH_ANSWER_PASSES) {
+        watch_turn_passes++;
+    } else if (ref_raw > watch_turn_raw && ref_raw - watch_turn_raw >= WATCH_ANSWER_NS) {
+        watch_parted = 1;
+        watch_lost_cpu = watch_cpu;
+        watch_lost_ns = ref_raw - watch_turn_raw;
+        return -1;
     }
     return watch_cpu != (int)arch_cpu_id() ? watch_cpu : -1;
 }
@@ -748,8 +786,8 @@ void vclock_watch_cpu(void)
  * A watched TSC's span that is due to end has its processor kicked, so
  * that it reads the end even with its tick stopped in an idle wait, as
  * Linux's add_timer_on wakes the processor it puts the watchdog's timer
- * on (`vclock_watch_due`, `vclock_watch_cpu`); a span that parted stops
- * the clock at the next tick.
+ * on (`vclock_watch_due`, `vclock_watch_cpu`); a span that parted, or
+ * whose processor missed its deadline, stops the clock at the next tick.
  */
 void vclock_tick(void)
 {
@@ -771,8 +809,15 @@ void vclock_tick(void)
     if (watch_parted) {
         rtc_vclock_change(vclock_stop);
         vclock_kick();
-        klog(KLOG_WARN, "vdso", "clock: the system call; the tsc ran %lu ns in %lu ns of the %s",
-             (unsigned long)watch_ran_ns, (unsigned long)watch_span_ns, refclock_name());
+        if (watch_lost_cpu >= 0) {
+            klog(KLOG_WARN, "vdso",
+                 "clock: the system call; cpu%d did not read the tsc's span in %lu ms of the %s",
+                 watch_lost_cpu, (unsigned long)(watch_lost_ns / 1000000u), refclock_name());
+        } else {
+            klog(KLOG_WARN, "vdso",
+                 "clock: the system call; the tsc ran %lu ns in %lu ns of the %s",
+                 (unsigned long)watch_ran_ns, (unsigned long)watch_span_ns, refclock_name());
+        }
         return;
     }
     if (tsc_kvm_boot_withdrawn()) {

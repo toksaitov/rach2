@@ -60,7 +60,12 @@
  * 25th tick's reads of the tick's clock held up 200 us, the tick's own and
  * the watch's first, the watch keeps its span, sets the rate and keeps a
  * TSC that keeps time, and stops one that drifts 1000 parts in a million,
- * where a span begun again at each held read never ends.
+ * where a span begun again at each held read never ends. An online
+ * processor that answers neither its tick nor the kick stops the clock half
+ * a second after its turn began; one that goes offline while due passes
+ * its turn to the next, whose half second begins then; and a stretch of two
+ * seconds the whole machine spent stopped, between a turn's first kick and
+ * its answer, ends no turn.
  */
 
 #include "arch/x86_64/vclock.c"
@@ -1260,6 +1265,11 @@ static void boot_rows(void)
           "and it reads the tick's clock");
 }
 
+/* The kicks that woke each processor (`watch_tick`), and the processors,
+ * online, that take neither their ticks nor the kicks. */
+static int woken[NR_CPUS];
+static int deaf[NR_CPUS];
+
 /** A boot without KVM's pages, with a TSC no rate vouches for and
  * `cpus` processors online, at second 10 of the machine's clock; the
  * clock's and the watch's state cleared. */
@@ -1285,6 +1295,8 @@ static void watch_boot(int cpus)
     for (c = 0; c < NR_CPUS; c++) {
         cpu_table[c].online = c < cpus;
         drift_ppm[c] = 0;
+        deaf[c] = 0;
+        woken[c] = 0;
     }
     drift_from_ns = 0;
     hold_every = 0;
@@ -1294,20 +1306,18 @@ static void watch_boot(int cpus)
     vclock_start();
 }
 
-/* The kicks that woke processor 1 (`watch_tick`). */
-static int woken_1;
-
 /**
  * The machine's next tick, at its own time: the boot processor's, whose
  * clock pass runs `vclock_tick` and whose tick then runs
- * `vclock_watch_cpu`, and processor 1's, online, which runs it only when
- * the tick kicked it alone, as one idle with its tick stopped; the stop's
- * kick of every processor is no watch's. Whether the clock
- * still runs.
+ * `vclock_watch_cpu`, and each other processor's, online and not deaf,
+ * which runs it only when the tick kicked it alone, as one idle with its
+ * tick stopped; the stop's kick of every processor is no watch's. Whether
+ * the clock still runs.
  */
 static int watch_tick(void)
 {
     int sent = kicks;
+    unsigned int c;
 
     tick_index++;
     held = 0;
@@ -1315,13 +1325,32 @@ static int watch_tick(void)
     host_cpu = 0;
     vclock_tick();
     vclock_watch_cpu();
-    if (cpu_table[1].online && kicks != sent && kicked_cpus == 2u) {
-        host_cpu = 1;
-        woken_1++;
-        vclock_watch_cpu();
-        host_cpu = 0;
+    for (c = 1; c < NR_CPUS; c++) {
+        if (cpu_table[c].online && !deaf[c] && kicks != sent && kicked_cpus == (uint64_t)1 << c) {
+            host_cpu = c;
+            woken[c]++;
+            vclock_watch_cpu();
+            host_cpu = 0;
+        }
     }
     return vclock_running();
+}
+
+/** Ticks until processor `cpu`'s turn to read a due span begins, at most
+ * `ticks` of them; whether it began with the clock running. */
+static int watch_until_turn(int cpu, uint32_t ticks)
+{
+    uint32_t i;
+
+    for (i = 0; i < ticks; i++) {
+        if (!watch_tick()) {
+            return 0;
+        }
+        if (watch_due && watch_cpu == cpu) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /** `ticks` ticks, or until the clock stops; how many ran. */
@@ -1343,6 +1372,7 @@ static uint32_t watch_ticks(uint32_t ticks)
  */
 static void watch_rows(void)
 {
+    uint64_t turn;
     uint32_t ran;
 
     watch_boot(2);
@@ -1350,15 +1380,14 @@ static void watch_rows(void)
           "a TSC no rate vouches for runs the clock, watched");
     drift_ppm[1] = 500;
     drift_from_ns = now_ns;
-    woken_1 = 0;
     ran = watch_ticks(TICK_HZ + 1u);
-    CHECK(ran == TICK_HZ + 1u && watch_refined && watch_per_tick == 2u * TICK_NS && woken_1 == 0,
+    CHECK(ran == TICK_HZ + 1u && watch_refined && watch_per_tick == 2u * TICK_NS && woken[1] == 0,
           "the boot processor's first span of a second sets the rate");
     ran = watch_ticks(3u * TICK_HZ);
     CHECK(!vclock_running() && watch_parted,
           "a second processor's TSC drifting 500 parts in a million while the boot "
           "processor's keeps time stops the clock");
-    CHECK(woken_1 == 1 && ran <= TICK_HZ + 2u,
+    CHECK(woken[1] == 1 && ran <= TICK_HZ + 2u,
           "at the kick of its first span, the second after the rate's, and the tick after");
     CHECK(data->mode == VCLOCK_NONE, "and the vDSO makes the system call");
 
@@ -1378,7 +1407,48 @@ static void watch_rows(void)
     CHECK(!vclock_running() && watch_parted,
           "and a TSC that drifts 1000 parts in a million then stops it");
     CHECK(ran <= TICK_HZ + 1u, "within a second");
+
+    watch_boot(3);
+    deaf[2] = 1;
+    CHECK(watch_until_turn(2, 4u * TICK_HZ) && woken[1] == 1,
+          "with three processors the third's turn comes after the second read its span");
+    turn = now_ns;
+    ran = watch_ticks(2u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && watch_lost_cpu == 2,
+          "an online processor that never answers its kick stops the clock");
+    CHECK(watch_lost_ns >= WATCH_ANSWER_NS && watch_lost_ns < WATCH_ANSWER_NS + 2u * TICK_NS &&
+              now_ns - turn <= WATCH_ANSWER_NS + 2u * TICK_NS,
+          "at the deadline half a second after its turn began, and the tick after");
+    CHECK(data->mode == VCLOCK_NONE, "and the vDSO makes the system call");
+
+    watch_boot(3);
+    deaf[1] = 1;
+    deaf[2] = 1;
+    CHECK(watch_until_turn(1, 4u * TICK_HZ), "the second processor's turn comes");
+    ran = watch_ticks(TICK_HZ / 2u - 10u);
+    CHECK(vclock_running() && !watch_parted && watch_cpu == 1,
+          "and goes unanswered short of its deadline");
+    cpu_table[1].online = 0;
+    turn = now_ns;
+    ran = watch_ticks(2u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && watch_lost_cpu == 2,
+          "a processor that goes offline while due passes its turn to the next, which never "
+          "answers and stops the clock");
+    CHECK(now_ns - turn >= WATCH_ANSWER_NS && now_ns - turn <= WATCH_ANSWER_NS + 2u * TICK_NS,
+          "half a second after the turn passed, as a turn begun anew");
+
+    watch_boot(2);
+    deaf[1] = 1;
+    CHECK(watch_until_turn(1, 4u * TICK_HZ), "the second processor's turn comes, unanswered");
+    tick_index += 2u * TICK_HZ;
+    deaf[1] = 0;
+    ran = watch_ticks(TICK_HZ);
+    CHECK(ran == TICK_HZ && vclock_running() && !watch_parted && woken[1] >= 1,
+          "a machine stopped two seconds before the kick was taken keeps the clock, the "
+          "turn's passes short of their count");
     tsc_untrusted = 0;
+    deaf[1] = 0;
+    deaf[2] = 0;
     hold_every = 0;
     drift_ppm[0] = 0;
 }
