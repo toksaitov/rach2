@@ -584,7 +584,8 @@ static void vnet_print_info(void *dev)
         return;
     }
     klog(KLOG_INFO, "virtio_net", "%s: rx %d, tx %d buffers%s%s%s%s", v->vdev->name,
-         (int)v->rx->size, (int)v->tx->size, v->mrg ? ", mergeable" : "",
+         v->rx->size < VNET_RX_BUFS ? (int)v->rx->size : VNET_RX_BUFS,
+         v->tx->size < VNET_TX_BUFS ? (int)v->tx->size : VNET_TX_BUFS, v->mrg ? ", mergeable" : "",
          virtio_has(v->vdev, VIRTIO_F_EVENT_IDX) ? ", event index" : "",
          v->ctrl ? ", control queue" : "", v->polled ? ", polled" : "");
     if (!v->link_up) {
