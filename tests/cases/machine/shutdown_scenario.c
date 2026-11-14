@@ -129,22 +129,34 @@ static void refused(struct lc *l)
 }
 
 /**
- * Run the case of init killed on four processors: the kernel says init
- * exited and stops all four, halted with their interrupts off, and the copy
- * stays dirty.
+ * Run the case of init ending on four processors. A SIGKILL sent to init
+ * from inside its namespace leaves it alive, as on Linux, so the first
+ * boot only shows that and leaves a program that exits at once, mixer, as
+ * the copy's /sbin/init; on the next boot pid 1 exits by itself, the
+ * kernel says so and stops all four processors, halted with their
+ * interrupts off, and the copy stays dirty.
  */
 static void init_death(struct lc *l)
 {
     struct etude_case_machine *m;
+    struct etude_termination end;
     uint64_t at = 0, online = 0;
 
-    if (lc_step(l, "kill") && (m = lc_boot(l, "fixture")) != NULL &&
+    if (lc_step(l, "replace") && (m = lc_boot(l, "fixture")) != NULL &&
         lc_wait(l, m, prompt, &at, NULL) &&
         lc_wait(l, m, "smp: processors: 4 online of 4", &online, "four-online") &&
-        lc_type(l, m, "kill -KILL $PPID\r") &&
-        lc_wait(l, m, "init (pid 1) exited; halting", &at, "init-died")) {
-        lc_halted(l, m, 4, "four-halted");
-        lc_quit(l, m, "ended-by-quit");
+        lc_type(l, m, "kill -KILL 1; echo STILL\"\"HERE\r") &&
+        lc_wait(l, m, "STILLHERE", &at, "init-survives-kill") &&
+        lc_type(l, m,
+                "cp /bin/mixer /sbin/init.new; mv /sbin/init.new /sbin/init; "
+                "poweroff -n -f\r") &&
+        lc_end(l, m, &end)) {
+        at = 0;
+        if (lc_step(l, "exit") && (m = lc_boot(l, "fixture")) != NULL &&
+            lc_wait(l, m, "init (pid 1) exited; halting", &at, "init-died")) {
+            lc_halted(l, m, 4, "four-halted");
+            lc_quit(l, m, "ended-by-quit");
+        }
     }
     if (lc_step(l, "fsck"))
         lc_fsck(l, disk, 1, "fsck-dirty");
@@ -167,8 +179,9 @@ int etude_scenario(struct etude_case *c)
                                         "no-answer",        "fsck-clean",    NULL};
     static const char *const refusals[] = {"still-here",  "not-permitted", "ended-by-quit",
                                            "no-shutdown", "fsck-dirty",    NULL};
-    static const char *const deaths[] = {"four-online",   "init-died",  "four-halted",
-                                         "ended-by-quit", "fsck-dirty", NULL};
+    static const char *const deaths[] = {"four-online", "init-survives-kill", "init-died",
+                                         "four-halted", "ended-by-quit",      "fsck-dirty",
+                                         NULL};
     const char *name = case_name(c);
     struct lc l;
 

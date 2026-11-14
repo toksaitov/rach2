@@ -313,15 +313,16 @@
     },
     {
       "case_id": "machine.shutdown.init-death",
-      "behavior": "a SIGKILL to init on four processors halts all four with interrupts off and leaves the disk dirty",
+      "behavior": "a SIGKILL to init from inside its namespace leaves it alive, and on the next boot of the copy a pid 1 that exits by itself halts all four processors with interrupts off and leaves the disk dirty",
       "units": ["shutdown"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"command": "kill -KILL $PPID"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"command": "kill -KILL 1; echo STILLHERE; cp /bin/mixer /sbin/init.new; mv /sbin/init.new /sbin/init; poweroff -n -f"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "shutdown_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["shutdown-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
       "steps": [
-        {"step_id": "kill", "stage": "execute", "machine": "fixture", "does": "boot the copy on four processors, kill init, look at the processors and end the machine with QMP's quit"},
+        {"step_id": "replace", "stage": "execute", "machine": "fixture", "does": "boot the copy on four processors, run kill -KILL 1 and echo STILLHERE, put mixer in place of /sbin/init on the copy and power the machine off"},
+        {"step_id": "exit", "stage": "execute", "machine": "fixture", "does": "boot the same copy again, wait for the kernel to say init exited, look at the processors and end the machine with QMP's quit"},
         {"step_id": "fsck", "stage": "execute", "does": "run fsck.krffs on the copy, which must be dirty"}
       ],
       "machines": [
@@ -329,6 +330,7 @@
       ],
       "assertions": [
         {"assertion_id": "four-online", "checks": "the kernel says smp: processors: 4 online of 4", "source": "scenario"},
+        {"assertion_id": "init-survives-kill", "checks": "the shell goes on after the SIGKILL to init and prints STILLHERE", "source": "scenario"},
         {"assertion_id": "init-died", "checks": "the kernel says init (pid 1) exited; halting", "source": "scenario"},
         {"assertion_id": "four-halted", "checks": "QEMU says that the machine runs, and all four processors have halted with interrupts off", "source": "scenario"},
         {"assertion_id": "ended-by-quit", "checks": "the machine runs until QMP's quit ends it", "source": "scenario"},
@@ -337,7 +339,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2},
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3},
         {"witness_id": "fsck", "kind": "quiet", "means": "fsck.krffs has ended", "limit": null, "bound": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}
       ],
       "bounds": {
