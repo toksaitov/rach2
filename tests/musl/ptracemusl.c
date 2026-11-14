@@ -73,7 +73,14 @@
  * plain system call stop has SIGTRAP as its code and the thread's own ID,
  * with its user ID for a native tracer and as si_addr for an i386 one on
  * x86-64, and a SIGSEGV a process queues to itself with SI_KERNEL keeps
- * only its pid and uid there. The waits of these rows end on the stop or
+ * only its pid and uid there. A siginfo queued to the process itself is read
+ * by the call's signal, whatever its si_signo, and by the layout Linux's
+ * siginfo_layout gives the signal and code, alike in sigwaitinfo's siginfo
+ * and a signalfd's record: a code past its signal's own has a sender's pid
+ * and uid or a band and a descriptor, and the bound, protection key, MCE and
+ * perf fault layouts keep their fields, as they do through
+ * PTRACE_SETSIGINFO and PTRACE_GETSIGINFO, which also gives back the
+ * si_signo it was given. The waits of these rows end on the stop or
  * state they wait for, with no limit of their own, so a loaded host never
  * fails one and a stop that never comes holds it to the case's bound.
  *
@@ -123,7 +130,9 @@
  * `thread-group-event-siginfo`, `thread-resumed-interrupt`,
  * `thread-detach-stays-stopped`, `thread-detach-runs-on`,
  * `attach-group-stop-noinfo`, `attach-group-setsiginfo-efault`,
- * `queued-kernel-siginfo`, `tp-set-readback` and
+ * `queued-kernel-siginfo`, `queued-signo-replaced`,
+ * `queued-fallback-layouts`, `queued-fault-payloads`,
+ * `setsiginfo-fault-payloads`, `setsiginfo-signo-kept`, `tp-set-readback` and
  * `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`,
  * `setoptions-wide-einval`, `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
  * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
@@ -149,6 +158,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
+#include <sys/signalfd.h>
 #include <sys/syscall.h>
 #include <sys/times.h>
 #include <sys/uio.h>
@@ -2384,6 +2394,370 @@ static int queued_kernel_info(void)
     return 0;
 }
 
+/* The fault codes with layouts of their own, which an older musl may not
+ * name. */
+#ifndef SEGV_BNDERR
+#define SEGV_BNDERR 3
+#endif
+#ifndef SEGV_PKUERR
+#define SEGV_PKUERR 4
+#endif
+#ifndef BUS_MCEERR_AR
+#define BUS_MCEERR_AR 4
+#endif
+#ifndef BUS_MCEERR_AO
+#define BUS_MCEERR_AO 5
+#endif
+#ifndef TRAP_PERF
+#define TRAP_PERF 6
+#endif
+
+/* Where a siginfo_t's union begins, after si_code on i386 and after the
+ * padding that aligns it on x86-64, and the bytes of a pointer or a long
+ * in it. */
+#define SI_AT   ((unsigned)(sizeof(long) == 8 ? 16 : 12))
+#define SI_LONG ((unsigned)sizeof(long))
+
+/* One field of a siginfo's union: its offset from the union's start, its
+ * bytes and its value. */
+struct si_field {
+    unsigned off, size;
+    unsigned long v;
+};
+
+/* A siginfo of `sig` and `code` with up to four fields of its union, a
+ * zero size ending them. */
+struct si_case {
+    int sig, code;
+    const char *name;
+    struct si_field f[4];
+};
+
+/*
+ * The fault layouts with more than an address, at the offsets Linux's
+ * union __sifields gives them in each ABI: SEGV_BNDERR's lower and upper
+ * bounds, SEGV_PKUERR's key, BUS_MCEERR_AR's and _AO's si_addr_lsb, and
+ * TRAP_PERF's data, type and flags.
+ */
+static const struct si_case fault_cases[] = {
+    {SIGSEGV,
+     SEGV_BNDERR,
+     "SEGV_BNDERR",
+     {{0, SI_LONG, 0x12340000ul},
+      {2 * SI_LONG, SI_LONG, 0x12341000ul},
+      {3 * SI_LONG, SI_LONG, 0x12342000ul}}},
+    {SIGSEGV, SEGV_PKUERR, "SEGV_PKUERR", {{0, SI_LONG, 0x12343000ul}, {2 * SI_LONG, 4, 5}}},
+    {SIGBUS, BUS_MCEERR_AR, "BUS_MCEERR_AR", {{0, SI_LONG, 0x12344000ul}, {SI_LONG, 2, 12}}},
+    {SIGBUS, BUS_MCEERR_AO, "BUS_MCEERR_AO", {{0, SI_LONG, 0x12345000ul}, {SI_LONG, 2, 21}}},
+    {SIGTRAP,
+     TRAP_PERF,
+     "TRAP_PERF",
+     {{0, SI_LONG, 0x12346000ul},
+      {SI_LONG, SI_LONG, 0xA1ul},
+      {2 * SI_LONG, 4, 0xB2ul},
+      {2 * SI_LONG + 4, 4, 0xC3ul}}},
+};
+
+/** Make `si` the siginfo of `c`, with `signo` as its si_signo. */
+static void si_build(siginfo_t *si, const struct si_case *c, int signo)
+{
+    unsigned char *b = (unsigned char *)si;
+    unsigned i;
+
+    memset(si, 0, sizeof(*si));
+    si->si_signo = signo;
+    si->si_code = c->code;
+    for (i = 0; i < 4 && c->f[i].size != 0; i++) {
+        memcpy(b + SI_AT + c->f[i].off, &c->f[i].v, c->f[i].size);
+    }
+}
+
+/** Return 1 when `si` has the code and every field of `c`, and 0 otherwise. */
+static int si_matches(const siginfo_t *si, const struct si_case *c)
+{
+    const unsigned char *b = (const unsigned char *)si;
+    unsigned long v;
+    unsigned i;
+
+    if (si->si_code != c->code) {
+        return 0;
+    }
+    for (i = 0; i < 4 && c->f[i].size != 0; i++) {
+        v = 0;
+        memcpy(&v, b + SI_AT + c->f[i].off, c->f[i].size);
+        if (v != c->f[i].v) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Queue `si` to this process with `sig` blocked, by rt_sigqueueinfo or, with
+ * `thread`, rt_tgsigqueueinfo to this thread, and take it back into `got`
+ * with sigwaitinfo, or into `sfd` from a signalfd when that is nonnull,
+ * leaving `got` as it was. Returns 0, or -1 when a call failed.
+ */
+static int queue_and_take(int sig, const siginfo_t *si, int thread, siginfo_t *got,
+                          struct signalfd_siginfo *sfd)
+{
+    sigset_t set, old;
+    int rc = -1, fd = -1;
+
+    sigemptyset(&set);
+    sigaddset(&set, sig);
+    if (sigprocmask(SIG_BLOCK, &set, &old) != 0) {
+        return -1;
+    }
+    if (sfd) {
+        fd = signalfd(-1, &set, SFD_CLOEXEC);
+    }
+    if (!sfd || fd >= 0) {
+        if (thread) {
+            rc = (int)syscall(SYS_rt_tgsigqueueinfo, getpid(), syscall(SYS_gettid), sig, si);
+        } else {
+            rc = (int)syscall(SYS_rt_sigqueueinfo, getpid(), sig, si);
+        }
+    }
+    if (rc == 0 && sfd) {
+        memset(sfd, 0, sizeof(*sfd));
+        rc = read(fd, sfd, sizeof(*sfd)) == (ssize_t)sizeof(*sfd) ? 0 : -1;
+    } else if (rc == 0) {
+        memset(got, 0, sizeof(*got));
+        rc = sigwaitinfo(&set, got) == sig ? 0 : -1;
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    return rc;
+}
+
+/**
+ * Check that a siginfo queued to this process is read by the call's signal,
+ * whatever its si_signo says, as Linux's __copy_siginfo_from_user sets
+ * si_signo to the call's signal before it reads the rest: a SIGSEGV with
+ * si_signo 0 and SEGV_MAPERR keeps its address, through rt_sigqueueinfo
+ * and rt_tgsigqueueinfo, where an i386 program's union read as signal 0's
+ * would lose it. Returns 0, or 1 after the failure is printed.
+ */
+static int queued_signo_replaced(void)
+{
+    static const struct si_case c = {
+        SIGSEGV, SEGV_MAPERR, "SEGV_MAPERR", {{0, SI_LONG, 0x12347000ul}}};
+    char why[160];
+    siginfo_t si, got;
+    int thread;
+
+    for (thread = 0; thread < 2; thread++) {
+        si_build(&si, &c, 0);
+        if (queue_and_take(SIGSEGV, &si, thread, &got, NULL) != 0) {
+            return fail("queueing SIGSEGV with si_signo 0 to this process");
+        }
+        if (got.si_signo != SIGSEGV || !si_matches(&got, &c)) {
+            snprintf(why, sizeof(why), "a SIGSEGV queued by %s with si_signo 0: code %d address %p",
+                     thread ? "rt_tgsigqueueinfo" : "rt_sigqueueinfo", got.si_code, got.si_addr);
+            return fail(why);
+        }
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check the layouts that a code past its signal's own takes, as Linux's
+ * siginfo_layout gives them, alike in sigwaitinfo's siginfo and a
+ * signalfd's record: SIGTRAP with code 7 has a sender's pid and uid
+ * (SIL_KILL), and SIGBUS with code 6 a band and a descriptor (SIL_POLL),
+ * where a fault's address alone would lose them. Returns 0, or 1 after the
+ * failure is printed.
+ */
+static int queued_fallback_layouts(void)
+{
+    char why[200];
+    struct signalfd_siginfo sfd;
+    siginfo_t si, got;
+
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGTRAP;
+    si.si_code = 7;
+    si.si_pid = getpid();
+    si.si_uid = getuid();
+    if (queue_and_take(SIGTRAP, &si, 0, &got, NULL) != 0 ||
+        queue_and_take(SIGTRAP, &si, 0, &got, &sfd) != 0) {
+        return fail("queueing SIGTRAP with code 7 to this process");
+    }
+    if (got.si_code != 7 || got.si_pid != getpid() || got.si_uid != getuid() || sfd.ssi_code != 7 ||
+        sfd.ssi_pid != (uint32_t)getpid() || sfd.ssi_uid != getuid() || sfd.ssi_addr != 0) {
+        snprintf(why, sizeof(why),
+                 "SIGTRAP with code 7: pid %d uid %d, signalfd pid %u uid %u addr %#llx",
+                 (int)got.si_pid, (int)got.si_uid, sfd.ssi_pid, sfd.ssi_uid,
+                 (unsigned long long)sfd.ssi_addr);
+        return fail(why);
+    }
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGBUS;
+    si.si_code = 6;
+    si.si_band = -16;
+    si.si_fd = 9;
+    if (queue_and_take(SIGBUS, &si, 0, &got, NULL) != 0 ||
+        queue_and_take(SIGBUS, &si, 0, &got, &sfd) != 0) {
+        return fail("queueing SIGBUS with code 6 to this process");
+    }
+    if (got.si_code != 6 || got.si_band != -16 || got.si_fd != 9 || sfd.ssi_code != 6 ||
+        sfd.ssi_band != 0xFFFFFFF0u || sfd.ssi_fd != 9 || sfd.ssi_addr != 0) {
+        snprintf(why, sizeof(why),
+                 "SIGBUS with code 6: band %ld fd %d, signalfd band %#x fd %d addr %#llx",
+                 (long)got.si_band, got.si_fd, sfd.ssi_band, sfd.ssi_fd,
+                 (unsigned long long)sfd.ssi_addr);
+        return fail(why);
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check that each fault layout with more than an address keeps its fields
+ * through rt_sigqueueinfo and sigwaitinfo (`fault_cases`), and that a
+ * signalfd's record has an MCE's address and address bits. Returns 0, or 1
+ * after the failure is printed.
+ */
+static int queued_fault_payloads(void)
+{
+    char why[160];
+    struct signalfd_siginfo sfd;
+    siginfo_t si, got;
+    unsigned i;
+
+    for (i = 0; i < sizeof(fault_cases) / sizeof(fault_cases[0]); i++) {
+        si_build(&si, &fault_cases[i], fault_cases[i].sig);
+        if (queue_and_take(fault_cases[i].sig, &si, 0, &got, NULL) != 0) {
+            snprintf(why, sizeof(why), "queueing %s to this process", fault_cases[i].name);
+            return fail(why);
+        }
+        if (got.si_signo != fault_cases[i].sig || !si_matches(&got, &fault_cases[i])) {
+            snprintf(why, sizeof(why), "a queued %s lost a field of its layout",
+                     fault_cases[i].name);
+            return fail(why);
+        }
+    }
+    si_build(&si, &fault_cases[2], SIGBUS);
+    if (queue_and_take(SIGBUS, &si, 0, &got, &sfd) != 0) {
+        return fail("queueing BUS_MCEERR_AR to a signalfd");
+    }
+    if (sfd.ssi_code != BUS_MCEERR_AR || sfd.ssi_addr != fault_cases[2].f[0].v ||
+        sfd.ssi_addr_lsb != fault_cases[2].f[1].v) {
+        snprintf(why, sizeof(why), "a signalfd's BUS_MCEERR_AR: address %#llx lsb %u",
+                 (unsigned long long)sfd.ssi_addr, (unsigned)sfd.ssi_addr_lsb);
+        return fail(why);
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Set each siginfo of `fault_cases` with signal `sig` at the tracee `c`'s
+ * delivery stop of `sig` with PTRACE_SETSIGINFO and read it back with
+ * PTRACE_GETSIGINFO, which keeps every field of the layout. Returns 0, or 1
+ * after the child is killed and the failure is printed.
+ */
+static int set_get_faults(pid_t c, int sig)
+{
+    char why[160];
+    siginfo_t si, got;
+    unsigned i;
+
+    for (i = 0; i < sizeof(fault_cases) / sizeof(fault_cases[0]); i++) {
+        if (fault_cases[i].sig != sig) {
+            continue;
+        }
+        si_build(&si, &fault_cases[i], sig);
+        memset(&got, 0, sizeof(got));
+        if (ptrace(PTRACE_SETSIGINFO, c, NULL, &si) != 0 ||
+            ptrace(PTRACE_GETSIGINFO, c, NULL, &got) != 0) {
+            snprintf(why, sizeof(why), "PTRACE_SETSIGINFO and GETSIGINFO of %s",
+                     fault_cases[i].name);
+            return abandon(c, why);
+        }
+        if (got.si_signo != sig || !si_matches(&got, &fault_cases[i])) {
+            snprintf(why, sizeof(why), "PTRACE_GETSIGINFO lost a field of the %s set",
+                     fault_cases[i].name);
+            return abandon(c, why);
+        }
+    }
+    return 0;
+}
+
+/**
+ * Check, at a child's delivery stops of SIGSEGV, SIGBUS and SIGTRAP, that
+ * PTRACE_SETSIGINFO then PTRACE_GETSIGINFO keeps each fault layout's fields
+ * (`set_get_faults`), and SIGTRAP code 7's pid and uid; and that a siginfo
+ * set with another si_signo, SIGUSR1 with SI_QUEUE and a value, comes back
+ * with that si_signo and its value, as Linux keeps last_siginfo whole. The
+ * child is resumed without a signal from each stop and exits 0. Returns 0,
+ * or 1 after the failure is printed.
+ */
+static int setsiginfo_payloads(void)
+{
+    siginfo_t si, got;
+    pid_t c = fork();
+
+    if (c == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0) {
+            _exit(2);
+        }
+        raise(SIGSEGV);
+        raise(SIGBUS);
+        raise(SIGTRAP);
+        _exit(0);
+    }
+    if (c < 0) {
+        return fail("fork for PTRACE_SETSIGINFO's layouts");
+    }
+    if (granted(c, !stops_with(c, SIGSEGV), "no SIGSEGV delivery stop") ||
+        set_get_faults(c, SIGSEGV) ||
+        granted(c, ptrace(PTRACE_CONT, c, NULL, NULL), "PTRACE_CONT from SIGSEGV") ||
+        granted(c, !stops_with(c, SIGBUS), "no SIGBUS delivery stop") ||
+        set_get_faults(c, SIGBUS) ||
+        granted(c, ptrace(PTRACE_CONT, c, NULL, NULL), "PTRACE_CONT from SIGBUS") ||
+        granted(c, !stops_with(c, SIGTRAP), "no SIGTRAP delivery stop") ||
+        set_get_faults(c, SIGTRAP)) {
+        return 1;
+    }
+    memset(&si, 0, sizeof(si));
+    memset(&got, 0, sizeof(got));
+    si.si_signo = SIGTRAP;
+    si.si_code = 7;
+    si.si_pid = getpid();
+    si.si_uid = getuid();
+    if (granted(c,
+                ptrace(PTRACE_SETSIGINFO, c, NULL, &si) != 0 ||
+                    ptrace(PTRACE_GETSIGINFO, c, NULL, &got) != 0 || got.si_code != 7 ||
+                    got.si_pid != getpid() || got.si_uid != getuid(),
+                "PTRACE_GETSIGINFO lost SIGTRAP code 7's pid and uid") ||
+        passed()) {
+        return 1;
+    }
+    memset(&si, 0, sizeof(si));
+    memset(&got, 0, sizeof(got));
+    si.si_signo = SIGUSR1;
+    si.si_code = SI_QUEUE;
+    si.si_pid = getpid();
+    si.si_uid = getuid();
+    si.si_value.sival_int = 0x5a5a;
+    if (granted(c,
+                ptrace(PTRACE_SETSIGINFO, c, NULL, &si) != 0 ||
+                    ptrace(PTRACE_GETSIGINFO, c, NULL, &got) != 0 || got.si_signo != SIGUSR1 ||
+                    got.si_code != SI_QUEUE || got.si_value.sival_int != 0x5a5a,
+                "PTRACE_GETSIGINFO did not give the si_signo PTRACE_SETSIGINFO set") ||
+        granted(c, ptrace(PTRACE_CONT, c, NULL, NULL), "PTRACE_CONT from SIGTRAP") ||
+        granted(c, !exits_zero(c), "the child did not exit 0 after its stops")) {
+        return 1;
+    }
+    held();
+    return 0;
+}
+
 /**
  * Check that PTRACE_SINGLESTEP over a system call instruction stops at
  * step_return with the call's result and TRAP_TRACE, before the increment of
@@ -2943,7 +3317,9 @@ static int second_rows(void)
            killed_tracee() || step_system_call() || entry_system_call() || watched_copy() ||
            watched_poll() || watched_sigwait() || listen_user_return() || listen_sigcont() ||
            tracer_gone_stop() || sigcont_detach() || thread_detach_stop() ||
-           attach_group_noinfo() || queued_kernel_info() || thread_pointer();
+           attach_group_noinfo() || queued_kernel_info() || queued_signo_replaced() ||
+           queued_fallback_layouts() || queued_fault_payloads() || setsiginfo_payloads() ||
+           thread_pointer();
 }
 
 /* The assertions after `ended-mem-freed`, in the order they are checked. */
@@ -3051,6 +3427,11 @@ static const char *const later_rows[] = {
     "attach-group-stop-noinfo",
     "attach-group-setsiginfo-efault",
     "queued-kernel-siginfo",
+    "queued-signo-replaced",
+    "queued-fallback-layouts",
+    "queued-fault-payloads",
+    "setsiginfo-fault-payloads",
+    "setsiginfo-signo-kept",
 #if defined __x86_64__
     "tp-arch-get-fs",
     "tp-peekuser-fs",
