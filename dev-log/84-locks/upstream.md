@@ -201,6 +201,17 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: fixed upstream on TinyCC's mob branch, in no release: 9a7edb20 of 2025-12-30 ("Add pic/pie support to i386") makes an `R_386_PLT32` or `R_386_PC32` call to a function an executable defines PC-relative.
 * Next: nothing to report; drop the change when Rach2 moves to a TinyCC release that has the commit.
 
+## TinyCC links a static executable's references to an IFUNC to its resolver
+
+* Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccelf.c` and `tccasm.c`.
+* Fails: a static executable's call to an `STT_GNU_IFUNC` it defines runs the resolver, which returns the function's address, and never the function. `build_got_entries` (`tccelf.c` line 1018) treats an IFUNC as any defined function: a PC-relative or absolute reference takes the symbol's value, the resolver's address (line 1073), and a GOT entry is filled with it (`fill_got_entry`, line 1323). TinyCC writes no `IRELATIVE` relocation, which a dynamic loader, or glibc's static startup, would apply, and musl's startup applies none. The assembler ignores `.type sym, @gnu_indirect_function` (`tccasm.c` line 810), so TinyCC cannot make an IFUNC at all; one comes from an object of GCC's.
+* Found: 2026-11-14, Codex's review of the static-link fix of task 84-261n, milestone 84, which named the direct call to a defined IFUNC; task 84-261u confirmed it on the owner's Mac with an x86-64 and an i386 TinyCC built from the tarball and Rach2's patches, running the programs on the testing PC's WSL.
+* Reproduction: assemble `.globl pick; .type pick,@gnu_indirect_function; pick: leaq triple(%rip),%rax; ret` with GNU as, link it with `int triple(int x) { return x * 3; } int main(void) { return pick(7); }` by `tcc -static` against musl: the program exits with the low byte of `triple`'s address, where GCC's exits with 21.
+* Evidence: `vendor/tcc/rach2-ifunc.patch`; the `ifunc-built` and `ifunc-call` assertions of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
+* Rach2: `vendor/tcc/rach2-ifunc.patch` takes the type in the assembler, gives each IFUNC of a static executable a GOT entry and a stub that every reference takes, and puts before the entry point code that stores what each resolver returns in its entry.
+* Status: unreported.
+* Next: read the mob branch's `build_got_entries` and `tccasm.c` for IFUNC support in a static link, and report it with the reproduction if it is missing.
+
 ## virgl on Mesa's D3D12 driver shows a geometry or tessellation shader's image stores out of order across memoryBarrier
 
 * Project: virglrenderer 1.2.0, Ubuntu 26.04's 1.2.0-2ubuntu2, in QEMU 10.2.1 (1:10.2.1+ds-1ubuntu3.3), drawing on Mesa 26.0.8's D3D12 gallium driver (26.0.8-1ubuntu0.3) under WSL2 on an NVIDIA GeForce RTX 4080 SUPER; the guests' Mesa is Debian's 25.0.7-2+deb13u1 and their piglit Debian's 0.0~git20250409.af62c0dea-2. Which of virglrenderer, Mesa's driver, Direct3D 12 and NVIDIA's driver is at fault was not traced.
