@@ -3880,7 +3880,8 @@ static void batch_rows_under(uint32_t buffers)
 }
 
 /** A one-terabyte sparse file visits only its allocated map branches.
- * Pending data is counted before sync; a cold map is never fetched. */
+ * Pending data is counted before sync, on a mount without `dirsync`, which
+ * leaves it dirty in the cache; a cold map is never fetched. */
 static void cache_sparse_row(void)
 {
     struct vfs_cachestat cs;
@@ -3890,7 +3891,10 @@ static void cache_sparse_row(void)
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     use_image(wimg, wbytes);
-    check(mount_rw() == 0, "the sparse cache volume mounts");
+    rw_flags = 0;
+    rc = mount_rw();
+    rw_flags = VFS_MS_DIRSYNC;
+    check(rc == 0, "the sparse cache volume mounts without dirsync");
     node = make_file(mnt.root, "sparse-cache", &rc);
     check(node && OPS->open(&mnt, node, 2, &handle) == 0, "the sparse cache file opens");
     if (!node || !handle) {
@@ -3905,8 +3909,8 @@ static void cache_sparse_row(void)
     check(cs.cache == 1 && cs.dirty == 1, "the pending sparse page counts once and dirty");
     check(current_proc->disk_waits == waits && bcache_stat_visits() - visits < 16384,
           "the sparse query reads no disk and visits no logical-hole range");
-    check(OPS->fsync(&mnt, handle) == 0, "the sparse file syncs before cache eviction");
-    bcache_invalidate(&dev);
+    check(OPS->fsync(&mnt, handle) == 0 && OPS->sync(&mnt) == 0 && bcache_invalidate(&dev) == 0,
+          "the sparse file and the volume sync and leave the cache");
     memset(&cs, 0, sizeof(cs));
     waits = current_proc->disk_waits;
     OPS->cachestat(&mnt, node, 0, 0xFFFFFFFFu, &cs);
