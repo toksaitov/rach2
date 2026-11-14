@@ -1,4 +1,4 @@
-.Dd November 12, 2026
+.Dd November 14, 2026
 .Dt SYSFS 5
 .Os
 .Sh NAME
@@ -1149,6 +1149,9 @@ the counter that keeps the clock, by Linux's name:
 while the clock is read from the time-stamp counter, as the x86-64
 .Xr vdso 7
 reads it,
+.Ql kvm-clock
+under KVM, where the kernel keeps KVM's clock and the time-stamp counter
+is not read in its place,
 .Ql hpet ,
 .Ql acpi_pm ,
 or
@@ -1156,7 +1159,11 @@ or
 when the tick alone keeps it; and
 .Pa available_clocksource ,
 the counters there are, best first as Linux rates them, each followed by
-a space.
+a space:
+.Ql kvm-clock
+before
+.Ql tsc
+unless the processor reports a time-stamp counter that runs at one rate.
 Neither may be written.
 .It Pa /sys/class/dmi/id
 The firmware's SMBIOS fields, a file for each that its table holds, as

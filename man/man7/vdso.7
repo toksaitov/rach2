@@ -1,4 +1,4 @@
-.Dd November 12, 2026
+.Dd November 14, 2026
 .Dt VDSO 7
 .Os
 .Sh NAME
@@ -101,7 +101,7 @@ the return a signal frame's restorer names.
 The library has no names without the prefix, as Linux's has none.
 .Ss The clock from the TSC
 The clock functions answer without the kernel only where it keeps its clock from
-the processor's time-stamp counter.
+the processor's time-stamp counter, or under KVM from KVM's clock.
 At boot it measures the counter against the reference that keeps the
 clock, the HPET or the PM timer, or the 8254 on a machine with neither,
 where
@@ -111,20 +111,49 @@ says the counter runs at one rate whatever the processor's clock does, or
 on the command line says to take it as one that does, as QEMU's emulator
 needs; never under
 .Cm rach2.notsc .
-Elsewhere, where the HPET or the PM timer keeps the clock and KVM states
-no rate, as under QEMU's emulator, the kernel measures the counter against
+Elsewhere, where the HPET or the PM timer keeps the clock and the kernel
+keeps no clock page of KVM's, as under QEMU's emulator, it measures the
+counter against
 that reference for the vDSO alone and watches it, as Linux's clocksource
 watchdog watches a TSC that nothing vouches for: a second after the clock
 starts it measures the rate again over that second, and at each half
 second after, a counter that has parted from the reference by more than
 248 microseconds, 500 parts in a million, turns the TSC clock off for
 good.
-Under KVM, where KVM offers its stable clock and its clock page says the
-counter is one clock on every processor, the kernel takes the counter's
-rate from that page instead of measuring it, and the clock counts KVM's
-clock, the counter converted through the page by its rate and system
-time, as Linux's kvm-clock does, so that a change KVM makes to its clock
-moves this one with it.
+.Ss The clock under KVM
+Under KVM the kernel keeps KVM's clock as Linux keeps kvm-clock: each
+processor gives KVM a clock page, the kernel takes the counter's rate
+from the boot processor's instead of measuring it, and its own clock
+counts KVM's clock, the counter converted through the running
+processor's page by its rate and system time, with no read of the HPET
+or the PM timer, each of which is an exit.
+KVM marks a page stable when its clock is one clock on every processor.
+The library reads KVM's clock only while the boot processor's page is
+marked so, as Linux's does; while it is not, every clock call is a system
+call, which the kernel answers from KVM's clock with no exit, holding
+each reading to the latest one any processor gave.
+A change KVM makes to its clock moves this one with it.
+.Pp
+Where
+.Ic cpuid
+says the counter runs at one rate, which a host gives its guest only on
+request, as QEMU's
+.Cm invtsc
+does, Linux rates the counter above kvm-clock, and so does this kernel:
+the library reads the counter itself, as on a machine without KVM, and
+the kernel watches it against KVM's clock, unless the processor has
+.Dv IA32_TSC_ADJUST
+or
+.Cm rach2.tscreliable
+is given, where Linux leaves the counter unwatched.
+A counter that parts from KVM's clock, or that two processors read
+differently as they start, leaves the library's clock to KVM's page.
+The boot options
+.Cm no-kvmclock ,
+which keeps no clock page of KVM's, and
+.Cm no-kvmclock-vsyscall ,
+which keeps the library from KVM's page, read as Linux's do.
+.Pp
 Each reading converts through the boot processor's clock page itself and
 checks its stable bit, as Linux's vDSO does, and enters the kernel the
 moment the bit is clear, without waiting for the tick; the kernel then
@@ -133,13 +162,17 @@ reading it gives, so that neither a later reading nor one the library
 makes once the bit is set again is behind it, until the tick stops the
 clock, and starts it again once the bit is back, as it does when the bit
 was clear at boot.
+.Ss The clock in use
 As each further processor starts, it and the boot processor read the
 counter in turn for two ticks, and a reading behind the other's turns the
-TSC clock off.
+TSC clock off, or under KVM leaves the clock to KVM's page.
 The boot log says which clock the vDSO reads:
 .Bd -literal -offset indent
 vdso: clock: the tsc, 4192065 counts a tick
 vdso: clock: the tsc, 16768176 counts a tick, watched against the hpet
+vdso: clock: the tsc, 8000000 counts a tick, watched against kvm-clock
+vdso: clock: kvm-clock, the tsc at 8000000 counts a tick by kvm's pages
+vdso: clock: the system call; kvm's clock page withdrew its stable bit
 vdso: clock: the system call; no tsc was measured
 vdso: clock: the system call; the tsc ran 500312000 ns in 500000000 ns of the hpet
 .Ed
@@ -206,9 +239,17 @@ or
 .Pa /proc/PID/mem
 to set a breakpoint, copies the page into that process alone; every other
 process keeps the kernel's.
+.It Pa /sys/devices/system/clocksource/clocksource0/current_clocksource
+The clock source in use by Linux's name,
+.Ql kvm-clock
+or
+.Ql tsc
+under KVM
+.Pq Xr sysfs 5 .
 .It Pa /proc/stat
 .Li vdso_tsc ,
-1 where the vDSO reads the TSC and 0 where it makes the system call, and
+1 where the vDSO reads the TSC or KVM's clock page and 0 where it makes
+the system call, and
 .Li clock_calls ,
 the system calls of the clock made since boot:
 .Fn clock_gettime ,
@@ -228,7 +269,8 @@ $ grep clock_calls /proc/stat; date; grep clock_calls /proc/stat
 .Xr mprotect 2 ,
 .Xr ptrace 2 ,
 .Xr sched_setscheduler 2 ,
-.Xr proc 5
+.Xr proc 5 ,
+.Xr sysfs 5
 .Sh BUGS
 The library has no unwind tables, so a debugger cannot step out of its
 functions by them.

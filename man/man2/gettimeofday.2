@@ -1,4 +1,4 @@
-.Dd November 12, 2026
+.Dd November 14, 2026
 .Dt GETTIMEOFDAY 2
 .Os
 .Sh NAME
@@ -120,12 +120,12 @@ ID 1.
 Time since boot: the 4 ms ticks of the timer counted at the length
 .Xr adjtimex 2
 gives each, with the place within the current tick added from the
-reference that keeps the clock, the HPET, the PM timer, the TSC or the
-8254, at the same rate.
-Where the kernel keeps the clock from the TSC, as
+reference that keeps the clock, the HPET, the PM timer, the TSC, under
+KVM KVM's clock, or the 8254, at the same rate.
+Where the kernel keeps the clock from the TSC or from KVM's clock page, as
 .Xr vdso 7
-describes, it is the TSC's count at the rate the kernel measured, steered
-toward the ticks.
+describes, it is the TSC's count at the rate the kernel measured, or KVM's
+clock, steered toward the ticks.
 A reading is never earlier than the one before it, and setting the real
 time does not move it.
 .It Dv CLOCK_MONOTONIC_RAW
@@ -192,8 +192,9 @@ On x86-64, musl and glibc call
 and
 .Fn clock_getres
 through the vDSO, which answers the six clocks above that are not CPU
-clocks without entering the kernel where it keeps the clock from the TSC,
-and makes the system call otherwise
+clocks without entering the kernel where it keeps the clock from the TSC
+or, under KVM, from a clock page KVM marks stable, and makes the system
+call otherwise
 .Pq Xr vdso 7 .
 The line
 .Li clock_calls

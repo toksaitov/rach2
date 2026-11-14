@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 14, 2026
 .Dt LOCKUP 7
 .Os
 .Sh NAME
@@ -15,6 +15,9 @@ seconds, 20 by default, a loop in the kernel with interrupts on:
 .Bd -literal -offset indent
 watchdog: BUG: soft lockup - CPU#0 stuck for 22s! [name:pid]
 .Ed
+.Pp
+Under KVM, a stretch the host kept the guest stopped, which KVM marks on
+the processor's clock page, is not reported, as on Linux.
 .It hard lockup
 A processor whose timer interrupts have stopped for
 .Va watchdog_thresh
