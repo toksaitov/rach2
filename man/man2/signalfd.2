@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 14, 2026
 .Dt SIGNALFD 2
 .Os
 .Sh NAME
@@ -40,20 +40,48 @@ the process's, as
 .Xr sigtimedwait 2
 takes them, as many as fit, each a 128-byte
 .Vt struct signalfd_siginfo :
-the number, the code, and a sender's pid and uid and the value in
-.Va ssi_int ,
-a child's in
-.Va ssi_pid ,
-.Va ssi_uid
+the number,
+.Va ssi_errno ,
+the code, and the fields of the layout Linux's
+.Fn siginfo_layout
+gives the signal and code, as Linux's
+.Fn signalfd_copyinfo
+fills them: a sender's pid and uid in
+.Va ssi_pid
 and
+.Va ssi_uid ,
+with a queued signal's value in
+.Va ssi_ptr
+and its low word in
+.Va ssi_int ;
+a child's pid, uid, status and times in
+.Va ssi_pid ,
+.Va ssi_uid ,
 .Va ssi_status ,
+.Va ssi_utime
+and
+.Va ssi_stime ;
 a timer's id, overrun and value in
 .Va ssi_tid ,
-.Va ssi_overrun
+.Va ssi_overrun ,
+.Va ssi_ptr
 and
-.Va ssi_int ,
-or a fault's address in
-.Va ssi_addr .
+.Va ssi_int ;
+a band and a descriptor in
+.Va ssi_band
+and
+.Va ssi_fd ;
+a fault's address in
+.Va ssi_addr ,
+with an MCE's address bits in
+.Va ssi_addr_lsb ;
+or a seccomp
+.Dv SIGSYS Ns 's
+call address, number and architecture in
+.Va ssi_call_addr ,
+.Va ssi_syscall
+and
+.Va ssi_arch .
 With none pending it waits for one, or fails with
 .Er EAGAIN
 when non-blocking.

@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 14, 2026
 .Dt PTRACE 2
 .Os
 .Sh NAME
@@ -485,6 +485,24 @@ Linux copies its thread ID and user ID whole to a native tracer, and an
 i386 tracer on x86-64 reads the union as a fault's, with the thread ID in
 .Fa si_addr
 and no user ID.
+.Dv PTRACE_SETSIGINFO
+replaces the siginfo whole, its
+.Fa si_signo
+too, which
+.Dv PTRACE_GETSIGINFO
+then gives, and which the signal the tracee is resumed with must match for
+the siginfo to go with it, as on Linux; another signal goes with
+.Dv SI_USER
+and the tracer's pid and uid.
+The fields after
+.Fa si_code
+are kept as the tracer's ABI lays them out and read by the layout Linux's
+.Fn siginfo_layout
+gives the given
+.Fa si_signo
+and code, as
+.Xr rt_sigqueueinfo 2
+describes.
 A group stop of a tracee that was not seized has none, and both requests
 fail there with
 .Er EINVAL ,

@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 14, 2026
 .Dt RT_SIGQUEUEINFO 2
 .Os
 .Sh NAME
@@ -18,12 +18,44 @@ calls, sends
 .Fa sig
 to the process
 .Fa pid
-with the code of
-.Fa info
-and the three words after it, the sender's pid and uid and the value,
-which a handler and
+with the code and the fields of
+.Fa info ,
+which a handler,
 .Xr sigtimedwait 2
+and
+.Xr signalfd 2
 are given.
+The fields are read by the layout Linux's
+.Fn siginfo_layout
+gives
+.Fa sig
+and the code, whatever
+.Fa si_signo
+says, as Linux sets it to
+.Fa sig
+first: a sender's pid and uid; those and a value; a timer's id, overrun
+and value; a band and a descriptor; a child's pid, uid, status and times;
+a fault's address, with the lower and upper bounds of
+.Dv SEGV_BNDERR ,
+the key of
+.Dv SEGV_PKUERR ,
+the address bits of
+.Dv BUS_MCEERR_AR
+and
+.Dv BUS_MCEERR_AO ,
+or the data, type and flags of
+.Dv TRAP_PERF ;
+or a seccomp
+.Dv SIGSYS Ns 's
+call address, number and architecture.
+A code above 0 and below
+.Dv SI_KERNEL
+past the last of its signal's own codes has a band and a descriptor up to
+6 and a sender's pid and uid above.
+A native caller's siginfo keeps every byte of its fields, as Linux keeps
+it, and a native receiver gets them all back; an i386 caller's on x86-64 keeps the
+fields of its layout alone, and an i386 receiver gets those fields with
+pointers and values cut to 32 bits.
 .Fn rt_tgsigqueueinfo ,
 number 335 on i386 and 297 on x86-64, sends it to the thread
 .Fa tid
