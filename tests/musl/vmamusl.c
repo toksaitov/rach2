@@ -44,7 +44,9 @@
  * SEGV_MAPERR, write(2) from one fails with EFAULT, and the page beside them
  * keeps what was written to it; a fork's child has the same guards, and
  * mremap carries them with the mapping it moves; after MADV_GUARD_REMOVE the
- * pages read as zeros.
+ * pages read as zeros. A guard page in a private and in a shared mapping of
+ * a memfd faults the same way, in a fork's child too, while the pages beside
+ * it read the file, and after MADV_GUARD_REMOVE it reads the file again.
  *
  * Prints `VMAMUSL OK` and exits 0 on success, and prints
  * `VMAMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -445,6 +447,65 @@ static int guards_in_place(const char *base, long pg)
 }
 
 /**
+ * Check guard pages in a private and in a shared mapping of a memfd whose
+ * every byte is 7, as Linux 6.18 takes them: the guard faults with
+ * SEGV_MAPERR in the process and in a fork's child, the pages beside it read
+ * the file, and after MADV_GUARD_REMOVE it reads the file. Returns 0, or 1
+ * with what differed in `detail`.
+ */
+static int check_file_guards(char *detail, size_t size)
+{
+    static const char *const kinds[] = {"a private", "a shared"};
+    long pg = sysconf(_SC_PAGESIZE);
+    char buf[256];
+    char *m;
+    int fd, k, ok, status;
+    long at;
+    pid_t child;
+
+    fd = memfd_create("vmamusl-guard", 0);
+    if (fd < 0 || ftruncate(fd, 3 * pg) != 0) {
+        snprintf(detail, size, "the memfd for file guards could not be made");
+        return 1;
+    }
+    memset(buf, 7, sizeof(buf));
+    for (at = 0; at < 3 * pg; at += (long)sizeof(buf)) {
+        if (pwrite(fd, buf, sizeof(buf), at) != (ssize_t)sizeof(buf)) {
+            close(fd);
+            snprintf(detail, size, "the memfd for file guards could not be written");
+            return 1;
+        }
+    }
+    for (k = 0; k < 2; k++) {
+        m = mmap(0, 3 * (size_t)pg, PROT_READ | PROT_WRITE, k ? MAP_SHARED : MAP_PRIVATE, fd, 0);
+        ok = m != MAP_FAILED && madvise(m + pg, (size_t)pg, MADV_GUARD_INSTALL) == 0 &&
+             touch(m) == 7 && touch(m + pg) == -1 && touch(m + 2 * pg) == 7;
+        if (ok) {
+            fflush(stdout);
+            child = fork();
+            if (child == 0) {
+                _exit(touch(m + pg) == -1 && touch(m) == 7 ? 0 : 1);
+            }
+            ok = child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+                 WEXITSTATUS(status) == 0 && madvise(m + pg, (size_t)pg, MADV_GUARD_REMOVE) == 0 &&
+                 touch(m + pg) == 7;
+        }
+        if (m != MAP_FAILED) {
+            munmap(m, 3 * (size_t)pg);
+        }
+        if (!ok) {
+            close(fd);
+            snprintf(detail, size, "a guard page in %s mapping of a memfd differed from Linux's",
+                     kinds[k]);
+            return 1;
+        }
+    }
+    close(fd);
+
+    return 0;
+}
+
+/**
  * Run the fourth half's calls and check each against Linux 6.18. Returns 0,
  * or 1 with what differed in `detail`.
  */
@@ -535,7 +596,7 @@ static int check_guards(char *detail, size_t size)
     }
     munmap(away, 2 * span);
 
-    return 0;
+    return check_file_guards(detail, size);
 }
 
 /** Report one failed check, which fails the step under way and ends the
