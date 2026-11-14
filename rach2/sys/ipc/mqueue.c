@@ -25,6 +25,7 @@
 
 #include "../irq.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 #include "../proc/tgroup.h"
 #include "../proc/ns.h"
 #include "../proc/wait_queue.h"
@@ -605,43 +606,87 @@ static void mq_count(struct mq_wait *w)
     }
 }
 
-/** Whether the monotonic clock has reached the time `w` ends at, `ns`;
- * never for a deadline without one. */
-static int mq_time_come(const struct mq_wait *w)
+/**
+ * Whether `w`'s deadline has expired: the timer's pass found the monotonic
+ * clock at its time `ns` when it woke the sleep (`wakeup_fired`), or the
+ * clock has reached that time with no step of real time since it was
+ * counted, the step count read after the clock, which is then recorded the
+ * same way. The record holds across a later step, which counts `ns` again,
+ * as Linux's hrtimer_wakeup clears the sleeper's task and
+ * schedule_hrtimeout_range_clock then returns 0 to wq_sleep
+ * (kernel/time/hrtimer.c, ipc/mqueue.c). Never for a deadline without a
+ * time; called by the waiting thread.
+ */
+static int mq_fired(const struct mq_wait *w)
 {
-    return w->timed && w->ns != 0 && rtc_monotonic_ns() >= w->ns;
+    if (!w->timed || w->ns == 0) {
+        return 0;
+    }
+    if (current_proc->wakeup_fired == w->ns) {
+        return 1;
+    }
+    if (rtc_monotonic_ns() < w->ns || w->steps != rtc_step_count()) {
+        return 0;
+    }
+    current_proc->wakeup_fired = w->ns;
+    return 1;
 }
 
 /** The wait condition of the `struct mq_wait` at `arg`: a change, the
- * deadline's tick or time (`mq_time_come`), or a setting of the clock
- * since it was counted. */
+ * deadline's tick or time (`mq_fired`), or a setting of the clock since it
+ * was counted. */
 static int mq_wait_done(void *arg)
 {
     const struct mq_wait *w = arg;
 
-    return w->q->gen != w->from || mq_time_come(w) ||
+    return w->q->gen != w->from || mq_fired(w) ||
            (w->timed && (tick_count() >= w->target || w->steps != rtc_step_count()));
+}
+
+/** Whether a signal the process acts on is pending, judged under the big
+ * lock, which `signal_pending` needs and which is taken here when the
+ * caller runs without it; at once 0 while no post has marked the thread
+ * (`sig_woken`). An ignored signal is discarded there. */
+static int mq_signal_pending(void)
+{
+    int big, pending;
+
+    if (!*(volatile uint32_t *)&current_proc->sig_woken) {
+        return 0;
+    }
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
+    pending = signal_pending();
+    if (big) {
+        bkl_exit();
+    }
+    return pending;
 }
 
 /**
  * Sleep on `q` for what `w` waits for: 0 for a change, -ETIMEDOUT at the
- * deadline, -EINTR for a signal. A step of the real-time clock, a setting
- * or a leap second, wakes the sleep at the next tick (`rt_steps`), which
- * counts the deadline's tick again from the clock as it then is and sleeps
- * on while the time is still to come, as Linux's wq_sleep waits on an
- * hrtimer of CLOCK_REALTIME that clock_was_set moves (ipc/mqueue.c:728-729,
- * kernel/time/hrtimer.c:951-987); so does the deadline's tick when the
- * clock, read within the tick, has not reached the time by it, since
- * Linux's hrtimer never expires before its clock reaches its time. The
- * sleep ends with -ETIMEDOUT when the monotonic clock reaches the time
- * `ns`, by the interrupt between ticks, as that hrtimer ends it, and not
- * at the tick.
+ * deadline, -EINTR for a signal, also one pending at the deadline, as
+ * Linux's wq_sleep tests signal_pending before the timeout (ipc/mqueue.c).
+ * A step of the real-time clock, a setting or a leap second, wakes the
+ * sleep at the next tick (`rt_steps`), which counts the deadline's tick
+ * again from the clock as it then is and sleeps on while the time is still
+ * to come, as Linux's wq_sleep waits on an hrtimer of CLOCK_REALTIME that
+ * clock_was_set moves (ipc/mqueue.c:728-729, kernel/time/hrtimer.c:
+ * 951-987); so does the deadline's tick when the clock, read within the
+ * tick, has not reached the time by it, since Linux's hrtimer never expires
+ * before its clock reaches its time. The sleep ends with -ETIMEDOUT when
+ * the monotonic clock reaches the time `ns`, by the interrupt between
+ * ticks, as that hrtimer ends it, and not at the tick; once it has
+ * (`mq_fired`), a later step does not count the time again.
  */
 static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 {
-    int rc;
+    int rc, fired;
 
     w->from = q->gen;
+    current_proc->wakeup_fired = 0;
     for (;;) {
         if (w->timed && w->steps != rtc_step_count()) {
             mq_count(w);
@@ -650,19 +695,20 @@ static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
         current_proc->wakeup_ns = w->timed ? w->ns : 0;
         current_proc->rt_steps = w->timed ? w->steps : 0;
         rc = wq_wait_event(&q->wq, mq_wait_done, w);
+        fired = mq_fired(w);
         current_proc->wakeup_tick = 0;
         current_proc->wakeup_ns = 0;
         current_proc->rt_steps = 0;
         if (q->gen != w->from) {
             return 0;
         }
-        if (rc != 0) {
+        if (rc != 0 || mq_signal_pending()) {
             return -EINTR;
         }
+        if (fired) {
+            return -ETIMEDOUT;
+        }
         if (w->steps == rtc_step_count()) {
-            if (mq_time_come(w)) {
-                return -ETIMEDOUT;
-            }
             mq_count(w);
             if (tick_count() >= w->target) {
                 return -ETIMEDOUT;

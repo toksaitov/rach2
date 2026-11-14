@@ -740,6 +740,13 @@ struct process {
      * sleep that ends at its tick: the interrupt `timer_wake_at` arms makes
      * it ready then (`proc_wake_sleepers`). */
     int64_t wakeup_ns;
+    /* The `wakeup_ns` the monotonic clock was found to have reached, by a
+     * pass of the timer that woke the sleep or by the sleeper, with no step
+     * of real time since `rt_steps`; 0 for none. It is the expiry of
+     * Linux's hrtimer, whose callback clears the sleeper's task
+     * (`hrtimer_wakeup`, kernel/time/hrtimer.c), and a wait keeps it across
+     * a later step of the clock. The wait clears it before it sleeps. */
+    int64_t wakeup_fired;
     /* Nonzero while a fault from user mode runs with interrupts on; the
      * tick then leaves its switch for the fault's end, as in a system call
      * (`sched_preempt`). */

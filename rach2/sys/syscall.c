@@ -1281,7 +1281,9 @@ static int32_t sleep_cut_short(int32_t rc)
  * clock decides, not the tick count, which runs behind it by up to half a
  * tick, and, while the boot processor runs with interrupts off, by the
  * ticks until another processor makes the clock's pass (`timer_pass_late`,
- * kernel.c). The process is marked blocked, and interrupts are off.
+ * kernel.c). A time come with no step of real time since `rt_steps` is
+ * recorded as expired (`wakeup_fired`). The process is marked blocked, and
+ * interrupts are off.
  */
 static int sleep_time_come(void)
 {
@@ -1292,6 +1294,9 @@ static int sleep_time_come(void)
     }
     now = rtc_monotonic_ns();
     if (now >= want) {
+        if (current_proc->rt_steps == 0 || current_proc->rt_steps == rtc_step_count()) {
+            current_proc->wakeup_fired = want;
+        }
         return 1;
     }
     proc_timer_update(current_proc);
@@ -1443,17 +1448,22 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
  * (hrtimer.c:1814-1815): a sleep whose tick has come while the clock, which
  * the TSC's clock may keep up to a millisecond behind the tick
  * (arch/x86_64/vclock.c), still reads short of it, sleeps a tick more and
- * looks again. Returns 0, or -EINTR when a signal the process acts on comes
- * first. `wchan` names the sleep, as for `sleep_until`.
+ * looks again. A sleep whose time the timer's pass, or the sleep itself,
+ * found the monotonic clock had reached with no step since it was counted
+ * (`wakeup_fired`) is over, and a step back after that does not revive it,
+ * as Linux's do_nanosleep ends once hrtimer_wakeup has cleared its task
+ * (kernel/time/hrtimer.c). Returns 0, or -EINTR when a signal the process
+ * acts on comes first. `wchan` names the sleep, as for `sleep_until`.
  */
 static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when,
                                 const char *wchan)
 {
     uint32_t seconds32, ticks32, steps;
     uint64_t now, base, due;
-    int64_t sec;
+    int64_t sec, armed;
     int32_t rc, nsec;
 
+    current_proc->wakeup_fired = 0;
     do {
         steps = rtc_step_count();
         if (time_reached(kind, when)) {
@@ -1471,10 +1481,14 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
             due = now + 1u;
         }
         current_proc->rt_steps = kind == KCLOCK_REAL ? steps : 0;
-        current_proc->wakeup_ns = sleep_ns(sec, nsec);
+        armed = sleep_ns(sec, nsec);
+        current_proc->wakeup_ns = armed;
         rc = sleep_until(base + (due - now), 0, wchan);
         current_proc->wakeup_ns = 0;
         current_proc->rt_steps = 0;
+        if (rc >= 0 && armed != 0 && current_proc->wakeup_fired == armed) {
+            return 0;
+        }
     } while (rc == 0 || rc == 1);
     return rc;
 }

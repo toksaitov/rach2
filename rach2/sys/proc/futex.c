@@ -302,11 +302,17 @@ static int64_t futex_ns_of(int64_t sec, int64_t nsec)
  * The time of the monotonic clock `sec` seconds and `nsec` nanoseconds from
  * now, as `futex_ns_of` gives it, for a relative timeout, which Linux's
  * futex_init_timeout adds to ktime_get (kernel/futex/syscalls.c:175-186).
+ * Seconds past what the sum can hold are 0 before the nanoseconds carry
+ * into them, as Linux's timespec64_to_ktime and ktime_add_safe saturate at
+ * KTIME_MAX; a timeout of LLONG_MAX seconds would otherwise overflow.
  */
 static int64_t futex_ns_from_now(int64_t sec, int64_t nsec)
 {
     int64_t now_sec, now_nsec;
 
+    if (sec >= 9223372036ll) {
+        return 0;
+    }
     rtc_monotonic(&now_sec, &now_nsec);
     nsec += now_nsec;
     if (nsec >= 1000000000) {
@@ -321,6 +327,31 @@ static int64_t futex_ns_from_now(int64_t sec, int64_t nsec)
 static int futex_ns_come(const struct futex_sleeper *s)
 {
     return s->timed && s->ns != 0 && rtc_monotonic_ns() >= s->ns;
+}
+
+/**
+ * Whether `s`'s deadline has expired: the timer's pass found the monotonic
+ * clock at its time `ns` when it woke the sleep (`wakeup_fired`), or the
+ * clock has reached that time with no step of real time since it was
+ * counted, the step count read after the clock, which is then recorded the
+ * same way. The record holds across a later step, which counts `ns` again,
+ * as Linux's hrtimer_wakeup clears the sleeper's task and futex_wait then
+ * returns -ETIMEDOUT (kernel/futex/waitwake.c). Called by the waiting
+ * thread.
+ */
+static int futex_fired(const struct futex_sleeper *s)
+{
+    if (!s->timed || s->ns == 0) {
+        return 0;
+    }
+    if (current_proc->wakeup_fired == s->ns) {
+        return 1;
+    }
+    if (rtc_monotonic_ns() < s->ns || (s->rt && s->steps != rtc_step_count())) {
+        return 0;
+    }
+    current_proc->wakeup_fired = s->ns;
+    return 1;
 }
 
 /**
@@ -428,13 +459,13 @@ static int futex_rt_count(struct futex_sleeper *s)
 }
 
 /** The wait's condition: a waiter was woken, the deadline has come, by its
- * tick or by the monotonic clock (`futex_ns_come`), or the real-time clock
+ * tick or by the monotonic clock (`futex_fired`), or the real-time clock
  * was set since a deadline on it was counted (`futex_rt_count`). */
 static int futex_sleeper_done(void *arg)
 {
     const struct futex_sleeper *s = (const struct futex_sleeper *)arg;
 
-    return s->woken || (s->timed && tick_count() >= s->target) || futex_ns_come(s) ||
+    return s->woken || (s->timed && tick_count() >= s->target) || futex_fired(s) ||
            (s->rt && s->steps != rtc_step_count());
 }
 
@@ -443,20 +474,28 @@ static int futex_sleeper_done(void *arg)
  * again and sleep on while that leaves it to come. A deadline with a time
  * of the monotonic clock (`ns`) ends at that time, by the interrupt between
  * ticks, as Linux's hrtimer ends the wait (kernel/futex/waitwake.c:356-357),
- * and not at the tick. Returns as `wq_wait_event_as` does. */
+ * and not at the tick; once it has (`futex_fired`), a step of real time
+ * does not count it again, and a signal does not end the wait, as Linux's
+ * futex_wait tests the timer before the signal. Returns as
+ * `wq_wait_event_as` does, and 0 for a deadline that expired. */
 static int futex_sleep(struct futex_sleeper *s, const char *wchan)
 {
-    int rc;
+    int rc, fired;
 
+    current_proc->wakeup_fired = 0;
     (void)futex_rt_count(s);
     for (;;) {
         current_proc->wakeup_tick = s->timed ? (s->target != 0 ? s->target : 1u) : 0;
         current_proc->wakeup_ns = s->timed ? s->ns : 0;
         current_proc->rt_steps = s->rt ? s->steps : 0;
         rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, wchan);
+        fired = futex_fired(s);
         current_proc->wakeup_tick = 0;
         current_proc->wakeup_ns = 0;
         current_proc->rt_steps = 0;
+        if (fired) {
+            return 0;
+        }
         if (rc != 0 || s->woken || !futex_rt_count(s)) {
             return rc;
         }

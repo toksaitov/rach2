@@ -838,28 +838,33 @@ static int timer_due(const process_t *p, int why, uint64_t now, uint32_t steps, 
  * lateness read at the wake, and not taken from the pass's one reading,
  * which it shares with the sleepers before `p` (`waketime_expire_late`); and
  * at a setting of the real-time clock, with no record, the wait then
- * counting its tick again from the clock as set. The test is made again
- * here, next to the clear of `wakeup_tick`, since `p` may have left the
- * wait collected and started another since, whose deadline the clear would
- * otherwise take; Linux's timer callback never reaches a sleeper's next
- * sleep, which waits for it (`hrtimer_cancel` in `do_nanosleep`,
- * kernel/time/hrtimer.c:2096, 1501-1512). Returns the processor to
- * interrupt, or -1. The caller holds the run queues' lock.
+ * counting its tick again from the clock as set. A sleep whose time of the
+ * monotonic clock has come, with no step of real time since it was counted,
+ * is marked expired (`wakeup_fired`), the step count read after the clock,
+ * whatever woke it, so that a step after the wake does not revive it. The
+ * test is made again here, next to the clear of `wakeup_tick`, since `p`
+ * may have left the wait collected and started another since, whose
+ * deadline the clear would otherwise take; Linux's timer callback never
+ * reaches a sleeper's next sleep, which waits for it (`hrtimer_cancel` in
+ * `do_nanosleep`, kernel/time/hrtimer.c:2096, 1501-1512). Returns the
+ * processor to interrupt, or -1. The caller holds the run queues' lock.
  */
 static int timer_wake(process_t *p, int why, uint64_t now, uint32_t steps, int64_t clock)
 {
+    int64_t late;
+
     if (!timer_due(p, why, now, steps, clock)) {
         return -1;
+    }
+    late = p->wakeup_ns != 0 ? rtc_monotonic_ns() - p->wakeup_ns : -1;
+    if (late >= 0 && (p->rt_steps == 0 || p->rt_steps == rtc_step_count())) {
+        p->wakeup_fired = p->wakeup_ns;
     }
     if (now >= p->wakeup_tick) {
         return sched_wake_due_locked(p, now);
     }
-    if (p->wakeup_ns != 0) {
-        int64_t late = rtc_monotonic_ns() - p->wakeup_ns;
-
-        if (late >= 0) {
-            waketime_expire_late(p, late);
-        }
+    if (late >= 0) {
+        waketime_expire_late(p, late);
     }
     return sched_wake_time_locked(p);
 }
