@@ -466,8 +466,10 @@ static int protnone_rows(const char *path, pid_t pid, const struct protnone *pn)
  * Check PEEKDATA, POKEDATA, /proc/PID/mem, the rows of `into_hole` and
  * `protnone_rows`, GETREGS, the floating-point state,
  * SINGLESTEP and a breakpoint planted with POKETEXT, in a child that ends
- * with 0 only when it reads the word the parent wrote. Returns 0, or 1
- * after the failure is printed.
+ * with 0 only when it reads the word the parent wrote. The hole is made
+ * after the regions of `protnone_map`, since a later page-long mapping takes
+ * the highest free range, the hole, as Linux places it.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int memory_and_registers(void)
 {
@@ -476,15 +478,16 @@ static int memory_and_registers(void)
     char path[32];
     long word;
     int status, fd;
-    char *page = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    char *page;
     struct protnone pn;
     pid_t pid;
 
+    protnone_map(&pn);
+    page = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (page == MAP_FAILED || munmap(page + 4096, 4096) != 0) {
         return fail("a page with a hole after it");
     }
     memset(page, 'a', 4096);
-    protnone_map(&pn);
     pid = fork();
 
     if (pid == 0) {
