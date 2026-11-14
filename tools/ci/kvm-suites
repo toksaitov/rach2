@@ -23,6 +23,8 @@
 # piglit are judged against ref/debian, taken under KVM. i915fake and the
 # guest suites stay under TCG: they have no reference and draw nothing on
 # llvmpipe, and judge counts that the accelerator does not change.
+# The kvmclock suite judges the clock a KVM guest keeps, kvm-clock, which
+# an emulator does not give (tests/cases/guest.kvmclock.json).
 browser
 video
 webgl
@@ -48,3 +50,4 @@ glmark2
 igt
 modetest
 piglit
+kvmclock

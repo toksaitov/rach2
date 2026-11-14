@@ -208,6 +208,13 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # `rach2.notsc` each makes one, as every clock call does on i686, which maps
 # no vDSO. They are the cases of tests/cases/guest.vdso.json, which etude
 # runs, and have no target here.
+# `tests/run kvmclock`: under KVM (`RACH2_QEMU_ACCEL=kvm`, as the release
+# runs it), with no clock option on two processors, the kernel keeps
+# kvm-clock, and vdsomusl's clock calls make no system call by /proc/stat's
+# count while the vDSO reads KVM's clock page or a TSC rated above it, and
+# one each while the page lacks its stable bit, as on Linux, and on i686;
+# under an emulator no kvm-clock is listed. It is the case of
+# tests/cases/guest.kvmclock.json, which etude runs, and has no target here.
 # `tests/run ia32`: an i386 and an x86-64 program on the x86-64 kernel exec
 # each other, pass descriptors, share a futex, trace each other, run under
 # each other's seccomp filters and queue signals to each other, each in its

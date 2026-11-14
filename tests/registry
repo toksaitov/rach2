@@ -142,6 +142,7 @@ screen|qemu|core
 fpu|qemu|core
 limits|qemu|core
 vdso|qemu|core
+kvmclock|qemu|full
 ia32|qemu|full
 dmabuf|qemu|core||512
 socket|qemu|core

@@ -5,7 +5,9 @@
  * Given `clock=tsc`, the machine must keep its clock from the TSC, as an
  * x86-64 kernel does under `rach2.tscreliable` on QEMU's emulator; given
  * `clock=syscall`, from its other reference, as under `rach2.notsc`, where
- * the vDSO's functions make the system call themselves.
+ * the vDSO's functions make the system call themselves; given `clock=kvm`,
+ * it takes the clock as the machine keeps it and checks what KVM's clock,
+ * kvm-clock, then calls for.
  *
  * What it checks follows the kernel, whose architecture ETUDE_KERNEL in the
  * environment names, or the program's own where it is unset. On the x86-64
@@ -61,11 +63,27 @@
  * clock's system calls, by fewer than 1,000 under `clock=tsc`, the other
  * processes' share, and by at least 100,000 under `clock=syscall`.
  *
+ * Under `clock=kvm`, `source` is what /proc/stat's `vdso_tsc` read at the
+ * start, and two rows take the place of `calls`. `sources`: the clock
+ * source in use, clocksource0's `current_clocksource` in /sys, is one of
+ * its `available_clocksource`; where kvm-clock is listed, as under KVM, it
+ * is kvm-clock, or tsc while the vDSO's clock runs, as Linux picks a TSC
+ * it rates above kvm-clock. Then the same 100,000 calls, under the id of
+ * the branch of the group `kvmclock`: `exitfree`, branch `vdso`, where
+ * kvm-clock is listed and the vDSO's clock runs, fewer than 1,000 system
+ * calls, since the vDSO reads KVM's page or the TSC; `counted`, branch
+ * `syscall`, where kvm-clock is listed and the vDSO's clock does not run,
+ * as on Linux while KVM's page lacks its stable bit, and on the i686
+ * kernel, at least 100,000; and `unlisted`, branch `absent`, where no
+ * kvm-clock is listed, as under an emulator, either count as `vdso_tsc`
+ * says.
+ *
  * It prints "VDSOMUSL OK" and exits 0 on success, or prints "VDSOMUSL FAIL
  * (detail)" and exits 1 at the first failure. etude's report
- * (probe_report.h), for the case ETUDE_CASE names, or guest.vdso.tsc or
- * guest.vdso.syscall as `clock=` says, has the assertions above in their
- * order, with the branch of the group `kernel`, `x86-64` or `i686`.
+ * (probe_report.h), for the case ETUDE_CASE names, or guest.vdso.tsc,
+ * guest.vdso.syscall or guest.kvmclock.calls as `clock=` says, has the
+ * assertions above in their order, with the branch of the group `kernel`,
+ * `x86-64` or `i686`.
  */
 
 #define _GNU_SOURCE
@@ -104,8 +122,17 @@
 #define CLOCK_LAST 7
 #define CLOCK_NONE 12
 
-/* Whether the clock is to run from the TSC, as `clock=tsc` says. */
+/* Whether the clock is to run from the TSC, as `clock=tsc` says, or under
+ * `clock=kvm` as /proc/stat's `vdso_tsc` read at the start. */
 static int want_tsc;
+
+/* Under `clock=kvm`: the clock sources /sys lists and the one in use, and
+ * whether kvm-clock is listed. */
+#define CLOCKSOURCE0 "/sys/devices/system/clocksource/clocksource0/"
+static int want_kvm;
+static char sources_listed[128];
+static char source_used[32];
+static int kvm_listed;
 
 /* Whether the kernel is x86-64's, as ETUDE_KERNEL says, or where it is unset
  * the program's own architecture. */
@@ -226,6 +253,87 @@ static int calls(void)
     }
     if (!want_tsc && delta < (unsigned long)CALLS) {
         return fail("fewer system calls of the clock than calls where the vDSO has no TSC");
+    }
+    report_held();
+    return 0;
+}
+
+/** Read the first line of the file `path` into `line` of `size` bytes,
+ * without its newline: 0, or -1 when there is no such file or line. */
+static int first_line(const char *path, char *line, size_t size)
+{
+    FILE *f = fopen(path, "r");
+    char *got;
+
+    if (f == NULL) {
+        return -1;
+    }
+    got = fgets(line, (int)size, f);
+    fclose(f);
+    if (got == NULL) {
+        return -1;
+    }
+    line[strcspn(line, "\n")] = '\0';
+    return 0;
+}
+
+/** Whether `word` is one of the words of `list`, which spaces part. */
+static int listed(const char *list, const char *word)
+{
+    size_t n = strlen(word);
+    const char *at = list;
+
+    while ((at = strstr(at, word)) != NULL) {
+        if ((at == list || at[-1] == ' ') && (at[n] == ' ' || at[n] == '\0')) {
+            return 1;
+        }
+        at += n;
+    }
+    return 0;
+}
+
+/**
+ * Under `clock=kvm`, read what decides the branch before the report is
+ * planned: the clock sources listed and the one in use, and whether the
+ * vDSO's clock runs. Returns NULL, or what could not be read.
+ */
+static const char *kvm_look(void)
+{
+    unsigned long tsc;
+
+    if (first_line(CLOCKSOURCE0 "available_clocksource", sources_listed, sizeof(sources_listed)) !=
+        0) {
+        return "/sys has no available_clocksource";
+    }
+    if (first_line(CLOCKSOURCE0 "current_clocksource", source_used, sizeof(source_used)) != 0) {
+        return "/sys has no current_clocksource";
+    }
+    if (stat_field("vdso_tsc", &tsc) != 0) {
+        return "/proc/stat has no vdso_tsc line";
+    }
+    want_tsc = tsc != 0;
+    kvm_listed = listed(sources_listed, "kvm-clock");
+    return NULL;
+}
+
+/** The branch of the group `kvmclock` that `kvm_look` found. */
+static const char *kvm_branch(void)
+{
+    return !kvm_listed ? "absent" : want_tsc ? "vdso" : "syscall";
+}
+
+/** Check the clock source in use against those listed, under `clock=kvm`. */
+static int sources(void)
+{
+    printf("vdsomusl: sources: %s of %s, vdso_tsc %d\n", source_used, sources_listed, want_tsc);
+    if (!listed(sources_listed, source_used)) {
+        return fail("the clock source in use is not among those listed");
+    }
+    if (kvm_listed && strcmp(source_used, "kvm-clock") != 0 && strcmp(source_used, "tsc") != 0) {
+        return fail("kvm-clock is listed and neither it nor the TSC is the clock source");
+    }
+    if (kvm_listed && strcmp(source_used, "tsc") == 0 && !want_tsc) {
+        return fail("the TSC is the clock source over kvm-clock and the vDSO's clock is off");
     }
     report_held();
     return 0;
@@ -827,7 +935,8 @@ static int absent_rows(void)
 }
 
 /** Begin the report, with the branch of the kernel's architecture, and plan
- * its assertions in the order they are checked. */
+ * its assertions in the order they are checked: `calls` last, or under
+ * `clock=kvm` `sources` and the calls' row by the name of its branch. */
 static void plan(void)
 {
     static const char *const with[] = {"auxv",  "maps",       "symbols", "source",
@@ -839,10 +948,21 @@ static void plan(void)
         kernel_x86_64 ? sizeof(with) / sizeof(with[0]) : sizeof(without) / sizeof(without[0]);
     unsigned i;
 
-    report_begin(report_case(environ, want_tsc ? "guest.vdso.tsc" : "guest.vdso.syscall"));
+    report_begin(report_case(environ, want_kvm   ? "guest.kvmclock.calls"
+                                      : want_tsc ? "guest.vdso.tsc"
+                                                 : "guest.vdso.syscall"));
     report_branch("kernel", kernel_x86_64 ? "x86-64" : "i686");
-    for (i = 0; i < n; i++) {
+    if (want_kvm) {
+        report_branch("kvmclock", kvm_branch());
+    }
+    for (i = 0; i + 1 < n; i++) {
         report_plan(ids[i]);
+    }
+    if (want_kvm) {
+        report_plan("sources");
+        report_plan(!kvm_listed ? "unlisted" : want_tsc ? "exitfree" : "counted");
+    } else {
+        report_plan(ids[n - 1]);
     }
 }
 
@@ -850,10 +970,15 @@ int main(int argc, char **argv)
 {
     const char *mode;
     const char *kernel;
+    const char *unread = NULL;
 
     probe_args(argc, argv);
     mode = probe_arg("clock", "syscall");
     want_tsc = strcmp(mode, "tsc") == 0;
+    want_kvm = strcmp(mode, "kvm") == 0;
+    if (want_kvm) {
+        unread = kvm_look();
+    }
     kernel = getenv("ETUDE_KERNEL");
 #if defined __x86_64__
     kernel_x86_64 = kernel == NULL || strcmp(kernel, "x86_64") == 0;
@@ -861,10 +986,14 @@ int main(int argc, char **argv)
     kernel_x86_64 = kernel != NULL && strcmp(kernel, "x86_64") == 0;
 #endif
     plan();
-    if (!want_tsc && strcmp(mode, "syscall") != 0) {
-        return fail("clock= is neither tsc nor syscall");
+    if (unread != NULL) {
+        return fail(unread);
     }
-    if ((kernel_x86_64 ? vdso_rows() : absent_rows()) != 0 || calls() != 0) {
+    if (!want_tsc && !want_kvm && strcmp(mode, "syscall") != 0) {
+        return fail("clock= is none of tsc, syscall and kvm");
+    }
+    if ((kernel_x86_64 ? vdso_rows() : absent_rows()) != 0 || (want_kvm && sources() != 0) ||
+        calls() != 0) {
         return 1;
     }
     report_end();
