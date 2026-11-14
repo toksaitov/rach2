@@ -339,7 +339,11 @@ enum etude_console etude_qemu_console_default(const char *kernel, enum etude_fir
  * sets GALLIUM_DRIVER=d3d12 and MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA in
  * place of the caller's, which put QEMU's GL on the testing PC's GPU; under
  * `venus`, GALLIUM_DRIVER=llvmpipe, VK_DRIVER_FILES naming lavapipe and
- * LD_PRELOAD naming libm, for Venus over the host's lavapipe.
+ * LD_PRELOAD naming libm, for Venus over the host's lavapipe. Under either,
+ * when `envp` names the tree in ETUDE_TREE and sets no MESA_SHADER_CACHE_DIR,
+ * it sets MESA_SHADER_CACHE_DIR to the tree's `build/cache/mesa-host`, where
+ * Mesa keeps the shaders of QEMU's GL and of Venus's render server between
+ * runs in place of the home directory's `.cache`.
  * `input` is the profile's `audio_input` as the QEMU that runs names it.
  *
  * @return 0, or an error number: EINVAL for audio etude_qemu_argv refuses

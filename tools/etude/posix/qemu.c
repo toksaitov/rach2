@@ -659,7 +659,7 @@ static int launch_env(const struct etude_machine_spec *spec, char ***out)
 {
     const char *input = spec->profile->audio_input;
     struct etude_qemu_line line;
-    size_t i, n = 0, size = 128;
+    size_t i, n = 0, size = 256;
     char **v;
     int e = 0;
 #ifdef _WIN32
@@ -672,13 +672,13 @@ static int launch_env(const struct etude_machine_spec *spec, char ***out)
         size += strlen(spec->envp[i]) + 1;
     if (input != NULL)
         size += strlen(input);
-    v = malloc((n + 4) * sizeof(*v) + size);
+    v = malloc((n + 8) * sizeof(*v) + size);
     if (v == NULL)
         e = ENOMEM;
     if (e == 0) {
         line.argv = v;
-        line.max = n + 4;
-        line.buf = (char *)(v + n + 4);
+        line.max = n + 8;
+        line.buf = (char *)(v + n + 8);
         line.size = size;
         e = etude_qemu_env(spec->profile, spec->envp, input, &line);
     }

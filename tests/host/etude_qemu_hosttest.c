@@ -1270,6 +1270,41 @@ static void test_audio_env(void)
           "audio environment of a refused profile");
 }
 
+/**
+ * Check Mesa's shader cache in QEMU's environment under a GL display: the
+ * tree's `build/cache/mesa-host` when the caller names the tree, the
+ * caller's own cache when it sets one, and none without a GL display.
+ */
+static void test_gl_cache_env(void)
+{
+    static char *const tree[] = {"PATH=/bin", "ETUDE_TREE=/t", NULL};
+    static char *const own[] = {"ETUDE_TREE=/t", "MESA_SHADER_CACHE_DIR=/c", NULL};
+    static char *const bare[] = {"PATH=/bin", NULL};
+    struct etude_qemu_profile p = {0};
+    char *envp[16], buf[512];
+    struct etude_qemu_line out = {envp, 16, buf, sizeof(buf)};
+
+    p.display = "venus";
+    CHECK(etude_qemu_env(&p, tree, NULL, &out) == 0 &&
+              has_env(envp, "MESA_SHADER_CACHE_DIR=/t/build/cache/mesa-host") &&
+              env_count(envp, "MESA_SHADER_CACHE_DIR=") == 1,
+          "venus keeps Mesa's cache in the tree");
+    CHECK(etude_qemu_env(&p, own, NULL, &out) == 0 && has_env(envp, "MESA_SHADER_CACHE_DIR=/c") &&
+              env_count(envp, "MESA_SHADER_CACHE_DIR=") == 1,
+          "venus keeps the caller's cache");
+    CHECK(etude_qemu_env(&p, bare, NULL, &out) == 0 &&
+              env_count(envp, "MESA_SHADER_CACHE_DIR=") == 0,
+          "venus without a tree sets no cache");
+    p.display = "virgl";
+    CHECK(etude_qemu_env(&p, tree, NULL, &out) == 0 &&
+              has_env(envp, "MESA_SHADER_CACHE_DIR=/t/build/cache/mesa-host"),
+          "virgl keeps Mesa's cache in the tree");
+    p.display = "virtio-vga";
+    CHECK(etude_qemu_env(&p, tree, NULL, &out) == 0 &&
+              env_count(envp, "MESA_SHADER_CACHE_DIR=") == 0,
+          "a display without GL sets no cache");
+}
+
 /** Check isolated recordings, their lifetime, and refusal to replace a file. */
 static void test_audio(void)
 {
@@ -2832,6 +2867,7 @@ int main(int argc, char **argv)
         test_audio_argv();
         test_audio_backend_argv();
         test_audio_env();
+        test_gl_cache_env();
         test_audio();
         test_audio_backends();
         test_usb();

@@ -75,6 +75,12 @@ static const char *const venus_env[] = {
     NULL,
 };
 
+/* Where Mesa keeps the shaders that QEMU's GL and Venus's render server
+ * compile under a GL display, below the tree that ETUDE_TREE names, so that
+ * they stay between runs and out of the home directory, where Mesa would put
+ * them. */
+#define MESA_HOST_CACHE "/build/cache/mesa-host"
+
 /* A display profile: the device it attaches and, for one whose frames the
  * host's GL draws through QEMU's egl-headless display, QEMU's environment. */
 struct display {
@@ -1599,6 +1605,17 @@ static int env_variable(const char *const *env, const char *entry)
     return 0;
 }
 
+/** The value that `envp` gives variable `name`, or NULL. */
+static const char *env_value(char *const *envp, const char *name)
+{
+    size_t i, n = strlen(name);
+
+    for (i = 0; envp != NULL && envp[i] != NULL; i++)
+        if (strncmp(envp[i], name, n) == 0 && envp[i][n] == '=')
+            return envp[i] + n + 1;
+    return NULL;
+}
+
 int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const char *input,
                    const struct etude_qemu_line *out)
 {
@@ -1610,6 +1627,7 @@ int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const 
     struct line l = {out->argv, 0, out->max, out->buf, 0, out->size, 0};
     size_t i;
     const char *const *gl;
+    const char *tree;
     int e;
 
     if ((e = audio_check(p, "wav")) != 0)
@@ -1623,6 +1641,10 @@ int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const 
             add(&l, 0, "%s", envp[i]);
     for (i = 0; gl != NULL && gl[i] != NULL; i++)
         add(&l, 0, "%s", gl[i]);
+    tree = env_value(envp, "ETUDE_TREE");
+    if (gl != NULL && tree != NULL && *tree != '\0' &&
+        env_value(envp, "MESA_SHADER_CACHE_DIR") == NULL)
+        add(&l, 0, "MESA_SHADER_CACHE_DIR=%s" MESA_HOST_CACHE, tree);
     if (p->audio != NULL && strcmp(audio_backend(p), "sdl") == 0) {
         if (input == NULL || *input == '\0')
             return EINVAL;
