@@ -64,6 +64,7 @@
 #include "sys/block/block.h"
 #include "sys/block/ahci.h"
 #include "sys/block/nvme.h"
+#include "sys/block/virtio_blk.h"
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
 #include "sys/audio/hda.h"
@@ -5015,6 +5016,7 @@ void kernel_main(const struct boot_info *boot)
 
     ahci_start();
     nvme_start();
+    virtio_blk_start();
 
     publish_disks();
 

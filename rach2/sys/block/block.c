@@ -9,6 +9,7 @@
 #include "../platform.h"
 #include "ahci.h"
 #include "nvme.h"
+#include "virtio_blk.h"
 #include "disk.h"
 #include "../serial.h"
 
@@ -159,6 +160,7 @@ int block_probe(void)
     block0 = 0;
     (void)ahci_init();
     (void)nvme_init();
+    (void)virtio_blk_init();
     platform_disks_probe();
     if (!block0) {
         return -1;
