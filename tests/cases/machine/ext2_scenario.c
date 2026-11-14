@@ -929,14 +929,14 @@ static void lost(struct lc *l)
 }
 
 /**
- * Say whether `text` has the kernel's record that its check found a link
- * count the names do not match, `ext2: check: inode N: a link count that
- * does not match its names`.
+ * Say whether `text` has the kernel's record that its check found a file
+ * it reached free in the inode bitmap, `ext2: check: inode N: a reached
+ * inode the bitmap calls free`.
  */
-static int miscounted(const char *text)
+static int unmarked(const char *text)
 {
-    static const char head[] = "ext2: check: inode ", tail[] = ": a link count that does not "
-                                                               "match its names";
+    static const char head[] = "ext2: check: inode ", tail[] = ": a reached inode the bitmap "
+                                                               "calls free";
     const char *p = text, *q;
 
     while ((p = strstr(p, head)) != NULL) {
@@ -950,12 +950,12 @@ static int miscounted(const char *text)
 }
 
 /**
- * The fault of case `repair`: with the link count of /etc/hostname above
- * its names, the check stops, names the fault, sets the error bit and
- * leaves the root read-only for e2fsck, so that the boot's writes allocate
- * and free nothing on it. Its bytes before the damage are kept as evidence
- * `hostname.before` for `repair-kept`. Assertions `fault-readonly`,
- * `fault-record`, `fault-reason` and `fault-error-bit`.
+ * The fault of case `repair`: with the inode bit of /etc/hostname clear,
+ * which only damage leaves, the check stops, names the fault, sets the
+ * error bit and leaves the root read-only for e2fsck, so that the boot's
+ * writes allocate and free nothing on it. Its bytes before the damage are
+ * kept as evidence `hostname.before` for `repair-kept`. Assertions
+ * `fault-readonly`, `fault-record`, `fault-reason` and `fault-error-bit`.
  */
 static void fault(struct lc *l)
 {
@@ -964,15 +964,15 @@ static void fault(struct lc *l)
 
     if (!lc_step(l, "damage") || !volume(l, "root-disk", PART1, vol, sizeof(vol)) ||
         !debugfs(l, 0, "cat /etc/hostname", vol, "hostname.before") ||
-        !debugfs(l, 1, "sif /etc/hostname links_count 3", vol, "sif") || !lc_step(l, "fault") ||
+        !debugfs(l, 1, "freei /etc/hostname", vol, "freei") || !lc_step(l, "fault") ||
         !start(l, "root", 5, &b))
         return;
     expect(l, &b, "cat /proc/mounts; echo MOUNTS\"\"END\r", "MOUNTSEND", "fault-readonly", ro_line);
     free(poweroff(l, &b));
     if ((w = window(l, b.console, 0, b.at)) == NULL)
         return;
-    lc_assert(l, "fault-record", miscounted(w),
-              "the kernel did not name the link count that does not match its names");
+    lc_assert(l, "fault-record", unmarked(w),
+              "the kernel did not name the reached inode the bitmap calls free");
     seen(l, w, "fault-reason", "ext2: /dev/disk0p1: read-only with errors, run e2fsck");
     free(w);
     state(l, "fault-error-bit", 2);
