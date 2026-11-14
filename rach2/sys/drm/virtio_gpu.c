@@ -285,7 +285,8 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
         cmd->segments[cmd->nout].addr = cmd->addr + VIRTIO_GPU_RESP_OFF;
         cmd->segments[cmd->nout].len = PAGE_SIZE - VIRTIO_GPU_RESP_OFF;
     }
-    big = !virtqueue_chain_fits(cmd->vq, cmd->segments, cmd->nout, cmd->nin);
+    /* A dead device's queues are freed (`vgpu_kill`). */
+    big = !vg->dead && !virtqueue_chain_fits(cmd->vq, cmd->segments, cmd->nout, cmd->nin);
     if (big) {
         klog(KLOG_WARN, "virtio_gpu", "command 0x%x: refused: %u segments do not fit one chain",
              cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type, (unsigned)(cmd->nout + cmd->nin));
@@ -988,6 +989,9 @@ int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_objec
         e->length = PAGE_SIZE;
         e->padding = 0;
         (*n)++;
+    }
+    if (cmd->vg->dead) {
+        return -ENODEV;
     }
     if (cmd->nextra + 2 > (uint32_t)cmd->vq->size) {
         return -E2BIG;

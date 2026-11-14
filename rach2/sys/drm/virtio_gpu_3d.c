@@ -12,7 +12,8 @@
  * transport gives more than a page at once (`dma_max`), and a page each
  * otherwise; either way each page is freed alone. The virtqueue's
  * descriptor count bounds a single chain, including its header and
- * response; larger commands return E2BIG. Process context. */
+ * response; larger commands return E2BIG, and every command of a dead
+ * device, whose queues are freed, ENODEV. Process context. */
 int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response)
 {
     uint32_t n, i, left = bytes, off = 0, here;
@@ -24,6 +25,9 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
     n = bytes / PAGE_SIZE + (bytes % PAGE_SIZE != 0);
     if (!n) {
         return 0;
+    }
+    if (cmd->vg->dead) {
+        return -ENODEV;
     }
     if (n > 1 && vdev->dma_max / PAGE_SIZE >= n) {
         block = (uint8_t *)virtio_dma_alloc(vdev, n * PAGE_SIZE, &addr);
