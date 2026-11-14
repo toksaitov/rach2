@@ -21,7 +21,7 @@ counted as often as the log has it, as linux.json stops WineD3D's DXGI unit.
 runs to the next because its check reads the address at which mmap put the
 driver's memory, and the text that each failure of that check prints: the
 reference's "placement" keeps it, and run.py accepts any count of failures
-that all print it, as test_suballocate_va_alignment's "Expected VA to be
+that all print it and no other, as test_suballocate_va_alignment's "Expected VA to be
 aligned" on lavapipe and Venus.
 """
 import getopt

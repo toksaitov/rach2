@@ -461,12 +461,15 @@ def main():
                          name in ref["flakes"] and name + " begin" in text)
                 # Running to its end where Linux stalled is no worse.
                 ended = counts is not None and name + " end" in text
+                # A test that placement names matches only when every failure
+                # is its check, whatever totals Linux's runs recorded.
                 check = ref.get("placement", {}).get(name)
                 placed = (counts is not None and check is not None and
                           placed_failures(text, name, check) == counts[1])
                 matched = (stopped or ended) if stop else flake or (counts is not None and name + " begin" in text and
                                     name + " end" in text and rc in (0, 1) and
-                                    (counts[1] in expected["failures"] or placed) and
+                                    (placed if check is not None else
+                                     counts[1] in expected["failures"]) and
                                     counts[0] >= expected["min_checks"] and
                                     counts[3] <= expected["max_skipped"] and (rc == 0) == (counts[1] == 0))
                 result = {"exit": rc, "summary": counts, "linux_flake": flake, "progress": stopped, "matched": matched}
