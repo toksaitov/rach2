@@ -766,45 +766,98 @@ static void case_enterprise(struct wifi *w)
 
 /* ---- the robust case (16d) ---- */
 
-/** Say whether the station's default routes and servers are network A's,
- * or B's with `b`, alone, with the address, and give the text. */
-static int routed(struct wifi *w, int b, char **text)
+/* The room for a list of what a row lacks: an assertion's detail holds 160
+ * bytes, too few for the console's text. */
+#define LACK_MAX 112
+
+/** Add `what` to the list `lack` of LACK_MAX bytes, after a comma when it is
+ * not the first. */
+static void lack_add(char *lack, const char *what)
+{
+    size_t n = strlen(lack);
+
+    snprintf(lack + n, LACK_MAX - n, "%s%s", n > 0 ? ", " : "", what);
+}
+
+/**
+ * Say whether the station's default routes and servers are network A's, or
+ * B's with `b`, alone, and add to the list `lack`, of LACK_MAX bytes, each
+ * thing that is not so: the network's default route on wlan0, a single
+ * default route, the network's server, and no server of the other network
+ * or of the cable.
+ */
+static int routed(struct wifi *w, int b, char *lack)
 {
     const char *gw = b ? GW_B : GW_A;
-    char want[96];
+    char want[96], *text = NULL;
+    size_t was = strlen(lack);
+    unsigned routes;
 
-    sta(w, text, "route -n; cat /etc/resolv.conf");
+    if (sta(w, &text, "route -n; cat /etc/resolv.conf") != 0 || text == NULL) {
+        lack_add(lack, "the shell's answer to route");
+        free(text);
+        return 0;
+    }
     snprintf(want, sizeof(want), "0.0.0.0*%s*0.0.0.0*UG*600*wlan0", gw);
-    return net_find(*text, want) != NULL && net_count(*text, " UG ") == 1 &&
-           has(*text, b ? "nameserver " GW_B : "nameserver " GW_A) &&
-           !has(*text, b ? "nameserver " GW_A : "nameserver " GW_B) &&
-           !has(*text, "nameserver 10.0.2.3");
+    if (net_find(text, want) == NULL) {
+        snprintf(want, sizeof(want), "the default route through %s", gw);
+        lack_add(lack, want);
+    }
+    if ((routes = net_count(text, " UG ")) != 1) {
+        snprintf(want, sizeof(want), "one default route, not %u", routes);
+        lack_add(lack, want);
+    }
+    snprintf(want, sizeof(want), "nameserver %s", gw);
+    if (!has(text, want)) {
+        snprintf(want, sizeof(want), "the server %s", gw);
+        lack_add(lack, want);
+    }
+    if (has(text, b ? "nameserver " GW_A : "nameserver " GW_B))
+        lack_add(lack, b ? "no server of A" : "no server of B");
+    if (has(text, "nameserver 10.0.2.3"))
+        lack_add(lack, "no server of the cable");
+    free(text);
+    return strlen(lack) == was;
+}
+
+/** Say whether an echo to the endpoint came back whole, and add "the echo"
+ * to the list `lack` when it did not. */
+static int echoed_lack(struct wifi *w, char *lack)
+{
+    if (echoed(w, ENDPOINT))
+        return 1;
+    lack_add(lack, "the echo");
+    return 0;
 }
 
 /**
  * Wait for the station's next CTRL-EVENT-CONNECTED after `connected` of
  * them, and for its lease of network A, or B with `b`, and say whether the
  * routes, servers and an echo to the endpoint are right then: assertion
- * `id`, `why` saying what was done.
+ * `id`, `why` saying what was done, whose report lists what the station
+ * lacked.
  */
 static void rejoined(struct wifi *w, const char *id, long connected, int b, const char *why)
 {
-    char *text = NULL;
+    char lack[LACK_MAX] = "", join[64];
     long now;
 
     now = connected < 0 ? -1 : log_after(w, "CTRL-EVENT-CONNECTED", connected);
     lease(w, b);
-    net_assert(&w->u, id, now > connected && routed(w, b, &text) && echoed(w, ENDPOINT),
-               "after %s the station did not come back with its routes, servers and an echo: %s",
-               why, text != NULL ? text : "");
-    free(text);
+    if (now <= connected) {
+        snprintf(join, sizeof(join), "a CTRL-EVENT-CONNECTED past %ld (read %ld)", connected, now);
+        lack_add(lack, join);
+    }
+    routed(w, b, lack);
+    echoed_lack(w, lack);
+    net_assert(&w->u, id, lack[0] == '\0', "after %s the station lacked %s", why, lack);
 }
 
 /** The robust case's first steps: the join of network A, and a group key
  * the access point makes anew, which reaches the station. */
 static void robust_join(struct wifi *w)
 {
-    char *text = NULL;
+    char *text = NULL, lack[LACK_MAX] = "";
     long rekeys;
     int ok;
 
@@ -813,11 +866,12 @@ static void robust_join(struct wifi *w)
     ok = join_psk(w, NET_A, PSK_A, &text) == 0;
     free(text);
     text = NULL;
+    if (!ok)
+        lack_add(lack, "the join");
     lease(w, 0);
-    net_assert(&w->u, "join", ok && routed(w, 0, &text) && echoed(w, ENDPOINT),
-               "the first join failed: %s", text != NULL ? text : "");
-    free(text);
-    text = NULL;
+    routed(w, 0, lack);
+    echoed_lack(w, lack);
+    net_assert(&w->u, "join", lack[0] == '\0', "the first join lacked %s", lack);
 
     /* A group key the access point makes anew reaches the station: the
      * guest's ARP request for the station, broadcast under it, is
@@ -1043,7 +1097,7 @@ static void robust_busy(struct wifi *w)
  * which the station follows with its lease and traffic. */
 static void robust_switch(struct wifi *w)
 {
-    char *text = NULL, *console = NULL, *routes = NULL;
+    char *text = NULL, *console = NULL, lack[LACK_MAX] = "";
     long n, left;
     uint64_t mark;
 
@@ -1076,13 +1130,12 @@ static void robust_switch(struct wifi *w)
                    net_find(console, "wlan: wlan0: switched: 02:00:00:00:0*: to channel #") !=
                        NULL &&
                    !has(console, "wlan: wlan0: left:") && !has(console, "net: wlan0: IPv4 none") &&
-                   routed(w, 0, &routes) && echoed(w, ENDPOINT),
+                   routed(w, 0, lack) && echoed_lack(w, lack),
                "the station did not follow its access point's channel switch with its lease and "
-               "traffic: %s %s",
-               text != NULL ? text : "", console != NULL ? console : "");
+               "traffic: %s; %s %s",
+               lack, text != NULL ? text : "", console != NULL ? console : "");
     free(text);
     free(console);
-    free(routes);
 }
 
 /** The robust case's loss of network A, its return, and a roam between
@@ -1143,7 +1196,7 @@ static void robust_roam(struct wifi *w)
  * and out beside Wi-Fi. */
 static void robust_move(struct wifi *w)
 {
-    char *text = NULL;
+    char *text = NULL, lack[LACK_MAX] = "";
     long n;
     int ok;
 
@@ -1153,11 +1206,12 @@ static void robust_move(struct wifi *w)
     ok = join_psk(w, NET_B, PSK_B, &text) == 0;
     free(text);
     text = NULL;
+    if (!ok)
+        lack_add(lack, "the join");
     lease(w, 1);
-    net_assert(&w->u, "joined-b", ok && routed(w, 1, &text) && echoed(w, ENDPOINT),
-               "the join of network B failed: %s", text != NULL ? text : "");
-    free(text);
-    text = NULL;
+    routed(w, 1, lack);
+    echoed_lack(w, lack);
+    net_assert(&w->u, "joined-b", lack[0] == '\0', "the join of network B lacked %s", lack);
     n = log_count(w, "CTRL-EVENT-CONNECTED");
     ap(w, NULL, "wifiap stop b");
     rejoined(w, "moved", n, 0, "network B went, with A known");
@@ -1181,11 +1235,13 @@ static void robust_move(struct wifi *w)
              "while route -n | grep -q eth0 || grep -q '^nameserver 10.0.2.3$' /etc/resolv.conf; "
              "do sleep 1; done") == 0;
     free(text);
-    text = NULL;
-    net_assert(&w->u, "cable-out", ok && routed(w, 0, &text) && echoed(w, ENDPOINT),
-               "with the cable out the routes and servers were not Wi-Fi's alone: %s",
-               text != NULL ? text : "");
-    free(text);
+    lack[0] = '\0';
+    if (!ok)
+        lack_add(lack, "the end of the cable's route and server");
+    routed(w, 0, lack);
+    echoed_lack(w, lack);
+    net_assert(&w->u, "cable-out", lack[0] == '\0', "with the cable out the station lacked %s",
+               lack);
 }
 
 /** The robust case: one session through rekeys, restarts, a channel switch,
