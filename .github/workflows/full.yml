@@ -126,7 +126,11 @@ jobs:
               "$program" prepare retention --policy "${ETUDE_RETENTION:?native retention policy is absent}" --site "${ETUDE_SITE:?native site is absent}" allocate --reference "${ETUDE_REFERENCE:?native reference is absent}" --github-env "$GITHUB_ENV"
               echo "ETUDE=$program" >> "$GITHUB_ENV"
           else
-              out=$(mktemp -d "$RUNNER_TEMP/full-results.XXXXXX")
+              # The runner empties RUNNER_TEMP when the job ends; the
+              # copy's build/runs keeps the kept consoles and disks for
+              # the failures' tasks until sweep.sh's two weeks.
+              mkdir -p build/runs
+              out=$(mktemp -d "$PWD/build/runs/full-results.$GITHUB_RUN_ID.XXXXXX")
               echo "ETUDE_RESULTS=$out" >> "$GITHUB_ENV"
           fi
 
