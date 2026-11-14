@@ -173,6 +173,28 @@ static const char wide6_line[] =
     "return 0;}\\n' >> /tmp/wide.c";
 static const char wide_built_line[] = "tcc -static -o /tmp/wide /tmp/wide.c && echo WIDE\"\"BUILT";
 
+/*
+ * A program whose array parameters are sized by earlier parameters, as C99
+ * allows: f sums int a[n]; g weights the rows of int a[n][m] and adds
+ * sizeof a[0], the row's 12 bytes, which a[i][j] steps by; h is declared
+ * with int a[*] before main calls it and defined after with int a[n].
+ * GCC's program prints VLAPARAM 46 3612 40 on both targets. TinyCC 0.9.27
+ * stopped at f with 'n' undeclared.
+ */
+static const char vla1_line[] =
+    "printf '#include <stdio.h>\\nlong f(int n,int a[n]){long s=0;int i;"
+    "for(i=0;i<n;i++)s+=a[i];return s;}\\n' > /tmp/vparm.c";
+static const char vla2_line[] = "printf 'long g(int n,int m,int a[n][m]){long s=0;int i,j;"
+                                "for(i=0;i<n;i++)for(j=0;j<m;j++)' >> /tmp/vparm.c";
+static const char vla3_line[] = "printf 's+=a[i][j]*(i+1);return s*100+sizeof a[0];}\\n"
+                                "void h(int n,int a[*]);\\n' >> /tmp/vparm.c";
+static const char vla4_line[] = "printf 'int main(void){int x[4]={1,2,3,4};"
+                                "int y[2][3]={{1,2,3},{4,5,6}};h(4,x);' >> /tmp/vparm.c";
+static const char vla5_line[] = "printf 'printf(\"VLA\"\"PARAM %%ld %%ld %%d\\\\n\",f(4,x),"
+                                "g(2,3,y),x[3]);return 0;}\\n' >> /tmp/vparm.c";
+static const char vla6_line[] = "printf 'void h(int n,int a[n]){a[n-1]=n*10;}\\n' >> /tmp/vparm.c";
+static const char vla_built_line[] = "tcc -static -o /tmp/vparm /tmp/vparm.c && echo VLA\"\"BUILT";
+
 /**
  * Report a refusal of the compiler, which the last line asked for: assertion
  * `id` that the status `status` was reported, and `reason_id` that the
@@ -284,6 +306,22 @@ static void compile(struct shell *s)
         "the compiler read the high half of a 64-bit register for an unsigned int it converted "
         "to floating point, or scaled an index into a variable-length array by a size held in an "
         "int");
+
+    net_step(&s->u, "vla-param");
+    type(s, vla1_line);
+    type(s, vla2_line);
+    type(s, vla3_line);
+    type(s, vla4_line);
+    type(s, vla5_line);
+    type(s, vla6_line);
+    type(s, "cat /tmp/vparm.c");
+    type(s, vla_built_line);
+    has(s, "vla-built", "VLABUILT",
+        "the compiler did not build a program whose array parameters are sized by earlier "
+        "parameters");
+    type(s, "/tmp/vparm");
+    has(s, "vla-param", "VLAPARAM 46 3612 40",
+        "an array parameter sized by an earlier parameter did not give GCC's result");
 
     net_step(&s->u, "end");
     finish(s, "finished");
