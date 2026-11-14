@@ -196,14 +196,35 @@ int ptrace_group_stop(int signo)
 }
 
 /**
- * Request a new PTRACE_EVENT_STOP of the seized thread `t`. A thread that
+ * Mark signal work for the traced thread `t`, whose stop has just been
+ * requested (`PT_INTERRUPT`), and wake it if it sleeps, as Linux 6.12's
+ * ptrace_signal_wake_up sets TIF_SIGPENDING before signal_wake_up_state's
+ * wake (include/linux/sched/signal.h, kernel/signal.c:759-773). A
+ * wait without the big lock ends only on the flag (`sig_woken`), and asks
+ * `signal_pending`, which answers yes for the request, only once it is set;
+ * a wake without it finds the wait's condition false and sleeps again. The
+ * work's barrier comes between the flag and the read of the state, which a
+ * sleeper sets before it tests the flag. The big lock is held.
+ */
+static void ptrace_signal_wake(process_t *t)
+{
+    t->sig_woken = 1;
+    proc_work_set(t, WORK_SIGNAL);
+    if (t->state == PROC_BLOCKED) {
+        sched_wake_signal(t);
+    }
+}
+
+/**
+ * Request a new PTRACE_EVENT_STOP of the seized thread `t`, and wake it if
+ * it sleeps, as Linux's ptrace_trap_notify does. A thread that
  * PTRACE_LISTEN keeps in its stop is let out of it at once, so that it
  * makes the new one.
  */
 static void ptrace_restop(process_t *t)
 {
     t->ptrace |= PT_INTERRUPT;
-    proc_work_set(t, WORK_SIGNAL);
+    ptrace_signal_wake(t);
     if ((t->ptrace & PT_LISTEN) && t->ptrace_status != 0) {
         t->ptrace &= ~PT_LISTEN;
         t->ptrace_signo = 0;
@@ -944,10 +965,7 @@ long sys_ptrace(isr_params_t *params)
         }
         if (t->ptrace_status == 0) {
             t->ptrace |= PT_INTERRUPT;
-            proc_work_set(t, WORK_SIGNAL);
-            if (t->state == PROC_BLOCKED) {
-                sched_wake_signal(t);
-            }
+            ptrace_signal_wake(t);
         } else if (t->ptrace & PT_LISTEN) {
             ptrace_restop(t);
         }
