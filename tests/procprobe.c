@@ -262,6 +262,16 @@ static const struct row {
             {"sysctl-int-refuse", ROW_PLAIN},
             {"sysctl-int-offset", ROW_PLAIN},
             {"loop-echo-backlog-0", ROW_PLAIN},
+            {"sysctl-empty-write", ROW_PLAIN},
+            {"sysctl-read-offset", ROW_PLAIN},
+            {"sysctl-uint-offset", ROW_PLAIN},
+            {"sysctl-uint-take", ROW_PLAIN},
+            {"sysctl-uint-refuse", ROW_PLAIN},
+            {"sysctl-ulong-sign", ROW_PLAIN},
+            {"sysctl-ranges", ROW_PLAIN},
+            {"sysctl-forwarding-kept", ROW_PLAIN},
+            {"loop-drain-time", ROW_PLAIN},
+            {"loop-drain-rest", ROW_PLAIN},
             {"rtc-open", ROW_PLAIN},
             {"rtc-read", ROW_PLAIN},
             {"rtc-time-of-day", ROW_PLAIN},
@@ -1406,6 +1416,348 @@ static void sysctl_int_rows(void)
     }
 }
 
+/* sendmmsg(2), which procprobe sends a burst of datagrams with. */
+#ifndef SYS_SENDMMSG
+#if defined __x86_64__
+#define SYS_SENDMMSG 307
+#else
+#define SYS_SENDMMSG 345
+#endif
+#endif
+#define O_RDWR       2
+#define MSG_DONTWAIT 0x40
+
+/* The datagrams of the burst `loop_drain_rows` sends to 127.0.0.1: more
+ * than a drain's turn of 64, and few enough for a socket's receive budget. */
+#define LOOP_BURST 128
+
+/* A struct iovec, msghdr and mmsghdr, as the kernel reads them; the
+ * mmsghdr's count follows the whole msghdr, its padding included. */
+struct probe_iovec {
+    void *base;
+    unsigned long len;
+};
+struct probe_msghdr {
+    void *name;
+    unsigned int namelen;
+    struct probe_iovec *iov;
+    unsigned long iovlen;
+    void *control;
+    unsigned long controllen;
+    int flags;
+};
+struct probe_mmsghdr {
+    struct probe_msghdr hdr;
+    unsigned int len;
+};
+
+/** The sum of /proc/net/softnet_stat's third column over its lines, the
+ * drains that ended on a budget, or ~0ul when it cannot be read. */
+static unsigned long softnet_squeezed(void)
+{
+    static char text[2048];
+    int n = slurp("/proc/net/softnet_stat", text, (int)sizeof(text)), i, col = 0;
+    unsigned long sum = 0, v = 0;
+
+    if (n <= 0) {
+        return ~0ul;
+    }
+    for (i = 0; i < n; i++) {
+        if (text[i] == ' ' || text[i] == '\n') {
+            sum += col == 2 ? v : 0;
+            v = 0;
+            col = text[i] == '\n' ? 0 : col + 1;
+            continue;
+        }
+        v = v * 16u + (unsigned long)(text[i] >= 'a' ? text[i] - 'a' + 10 : text[i] - '0');
+    }
+    return sum;
+}
+
+/** Whether the file `name` reads exactly `text`. */
+static int reads_as(const char *name, const char *text)
+{
+    static char got[96];
+
+    return slurp(name, got, (int)sizeof(got)) >= 0 && same_str(got, text);
+}
+
+/** Whether `text` written to `name` through a new descriptor returns `ret`
+ * and the file then reads `reads`. */
+static int takes(const char *name, const char *text, int ret, const char *reads)
+{
+    return write_file(name, text, (int)strlen(text)) == ret && reads_as(name, reads);
+}
+
+/** Put back the text `was`, of `had` bytes, that `name` read before a row
+ * wrote it. */
+static void put_back(const char *name, const char *was, int had)
+{
+    if (had >= 2) {
+        write_file(name, was, had);
+    }
+}
+
+/* A write of `text` to the /proc/sys file `file` and what it gives: the
+ * write's result `ret`, and what the file then reads, `reads`, or NULL for
+ * the text it had. */
+struct sysctl_try {
+    const char *file;
+    const char *text;
+    int ret;
+    const char *reads;
+};
+
+#define SYSCTL_TRIES(t) (int)(sizeof(t) / sizeof((t)[0]))
+
+/** Whether each of the `n` tries at `t` gives what it says, through a new
+ * descriptor; each file is put back as it was read before its try. */
+static int sysctl_tries(const struct sysctl_try *t, int n)
+{
+    static char was[80];
+    int i, had, ok = 1;
+
+    for (i = 0; ok && i < n; i++) {
+        had = slurp(t[i].file, was, (int)sizeof(was));
+        ok = had >= 2 && takes(t[i].file, t[i].text, t[i].ret, t[i].reads ? t[i].reads : was);
+        put_back(t[i].file, was, had);
+    }
+    return ok;
+}
+
+#define SYS_BACKLOG "/proc/sys/net/core/netdev_max_backlog"
+#define SYS_HOST    "/proc/sys/kernel/hostname"
+#define SYS_PROBES  "/proc/sys/net/ipv4/tcp_keepalive_probes"
+#define SYS_METRIC  "/proc/sys/net/ipv6/conf/default/ra_defrtr_metric"
+#define SYS_KTIME   "/proc/sys/net/ipv4/tcp_keepalive_time"
+
+/* An empty write changes nothing and returns 0. */
+static const struct sysctl_try sysctl_empty[] = {{SYS_BACKLOG, "", 0, 0}, {SYS_HOST, "", 0, 0}};
+
+/* What net/ipv4/tcp_keepalive_probes, of `proc_dou8vec_minmax`, and
+ * net/ipv6/conf/default/ra_defrtr_metric, of `proc_douintvec_minmax`,
+ * take, each write returning its whole count. */
+static const struct sysctl_try sysctl_uint_takes[] = {
+    {SYS_PROBES, "7 junk\n", 7, "7\n"},
+    {SYS_PROBES, "255", 3, "255\n"},
+    {SYS_METRIC, "4294967295\n", 11, "4294967295\n"},
+    {SYS_METRIC, "1\n", 2, "1\n"}};
+
+/* What they refuse with EINVAL: a minus, -0 among them, and a number past
+ * their ranges. */
+static const struct sysctl_try sysctl_uint_refusals[] = {{SYS_PROBES, "256\n", -EINVAL, 0},
+                                                         {SYS_PROBES, "-0\n", -EINVAL, 0},
+                                                         {SYS_PROBES, "-1\n", -EINVAL, 0},
+                                                         {SYS_METRIC, "0\n", -EINVAL, 0},
+                                                         {SYS_METRIC, "4294967296\n", -EINVAL, 0}};
+
+/* fs/pipe-user-pages-soft, of `proc_doulongvec_minmax`, refuses -0 and
+ * counts a write to the end of the spaces after its number. */
+static const struct sysctl_try sysctl_ulong[] = {
+    {"/proc/sys/fs/pipe-user-pages-soft", "-0\n", -EINVAL, 0},
+    {"/proc/sys/fs/pipe-user-pages-soft", "0x10  junk\n", 6, "16\n"}};
+
+/* Linux 6.12's ranges: randomize_va_space any int; tcp_keepalive_time and
+ * _intvl, of `proc_dointvec_jiffies`, 0 and negative seconds within
+ * INT_MAX / HZ; tcp_mtu_probing 0 to 255; IPv6's accept_ra and autoconf
+ * any int; netdev_budget_usecs 0 up. */
+static const struct sysctl_try sysctl_ranges[] = {
+    {"/proc/sys/kernel/randomize_va_space", "5\n", 2, "5\n"},
+    {"/proc/sys/kernel/randomize_va_space", "-1\n", 3, "-1\n"},
+    {SYS_KTIME, "-5\n", 3, "-5\n"},
+    {SYS_KTIME, "0\n", 2, "0\n"},
+    {SYS_KTIME, "8589934\n", 8, "8589934\n"},
+    {SYS_KTIME, "8589935\n", -EINVAL, 0},
+    {SYS_KTIME, "-8589935\n", -EINVAL, 0},
+    {"/proc/sys/net/ipv4/tcp_keepalive_intvl", "0\n", 2, "0\n"},
+    {"/proc/sys/net/ipv4/tcp_mtu_probing", "255\n", 4, "255\n"},
+    {"/proc/sys/net/ipv4/tcp_mtu_probing", "256\n", -EINVAL, 0},
+    {"/proc/sys/net/ipv6/conf/default/accept_ra", "5\n", 2, "5\n"},
+    {"/proc/sys/net/ipv6/conf/default/accept_ra", "-3\n", 3, "-3\n"},
+    {"/proc/sys/net/ipv6/conf/default/autoconf", "7\n", 2, "7\n"},
+    {"/proc/sys/net/core/netdev_budget_usecs", "0\n", 2, "0\n"},
+    {"/proc/sys/net/core/netdev_budget_usecs", "-1\n", -EINVAL, 0}};
+
+/* A refused number written to IPv6's forwarding, or an empty write,
+ * returns its whole count and changes nothing, as Linux's
+ * `addrconf_sysctl_forward` stores the value it had. */
+static const struct sysctl_try sysctl_forwarding[] = {
+    {"/proc/sys/net/ipv6/conf/default/forwarding", "x\n", 2, 0},
+    {"/proc/sys/net/ipv6/conf/default/forwarding", "", 0, 0}};
+
+/** Whether a read of `first` bytes through `fd` gives `first`, and a read
+ * of the rest then `rest`; closes `fd` when it is open. */
+static int reads_split(int fd, int first, int rest)
+{
+    static char got[96];
+    int ok = fd >= 0 && syscall3(SYS_READ, fd, (long)got, first) == first &&
+             syscall3(SYS_READ, fd, (long)got, sizeof(got)) == rest;
+
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    return ok;
+}
+
+/** Whether a write of `text` through `fd` takes all of it and a read after
+ * it gives nothing; closes `fd` when it is open. */
+static int write_then_eof(int fd, const char *text)
+{
+    int ok = fd >= 0 && syscall3(SYS_WRITE, fd, (long)text, (int)strlen(text)) == (int)strlen(text);
+
+    return reads_split(fd, 0, 0) && ok;
+}
+
+/**
+ * A numeric /proc/sys file reads nothing past offset 0, as Linux's numeric
+ * handlers read: net/core/netdev_max_backlog at 3 gives a reader of one
+ * byte the 3 and then nothing, and after a write of 5 on a descriptor
+ * opened for reading and writing a read there gives nothing; kernel/hostname,
+ * a string, reads on. The value is put back as it was read.
+ */
+static int sysctl_read_offset(void)
+{
+    static char was[24], host[96];
+    int had = slurp(SYS_BACKLOG, was, (int)sizeof(was));
+    int h_host = slurp(SYS_HOST, host, (int)sizeof(host));
+    int ok = had >= 2 && h_host >= 2 && write_file(SYS_BACKLOG, "3\n", 2) == 2;
+
+    ok = reads_split(syscall3(SYS_OPEN, (long)SYS_BACKLOG, O_RDONLY, 0), 1, 0) && ok;
+    ok = write_then_eof(syscall3(SYS_OPEN, (long)SYS_BACKLOG, O_RDWR, 0), "5") && ok;
+    ok = ok && reads_as(SYS_BACKLOG, "5\n");
+    ok = reads_split(syscall3(SYS_OPEN, (long)SYS_HOST, O_RDONLY, 0), 1, h_host - 1) && ok;
+    put_back(SYS_BACKLOG, was, had);
+    return ok;
+}
+
+/** Whether two writes of 3 and 4 on one descriptor of
+ * net/ipv4/tcp_keepalive_probes each return 2 and leave 4, as Linux's
+ * `proc_dou8vec_minmax` leaves the offset at 0; the value is put back. */
+static int sysctl_uint_offset(void)
+{
+    static char was[24];
+    int had = slurp(SYS_PROBES, was, (int)sizeof(was));
+    int fd = syscall3(SYS_OPEN, (long)SYS_PROBES, O_WRONLY | O_TRUNC, 0);
+    int ok = had >= 2 && fd >= 0 && syscall3(SYS_WRITE, fd, (long)"3\n", 2) == 2 &&
+             syscall3(SYS_WRITE, fd, (long)"4\n", 2) == 2;
+
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    ok = ok && reads_as(SYS_PROBES, "4\n");
+    put_back(SYS_PROBES, was, had);
+    return ok;
+}
+
+/** The /proc/sys files read and write as Linux 6.12's handler of each
+ * does, as the tables above and the two functions before say. */
+static void sysctl_handler_rows(void)
+{
+    check("sysctl-empty-write", sysctl_tries(sysctl_empty, SYSCTL_TRIES(sysctl_empty)),
+          "an empty write to net/core/netdev_max_backlog or kernel/hostname returns 0 and "
+          "changes nothing");
+    check("sysctl-read-offset", sysctl_read_offset(),
+          "a numeric /proc/sys file reads nothing past offset 0, after a byte or a write on one "
+          "descriptor, and kernel/hostname reads on");
+    check("sysctl-uint-offset", sysctl_uint_offset(),
+          "two writes on one descriptor of net/ipv4/tcp_keepalive_probes each return their "
+          "count and the second's value stays, as proc_dou8vec_minmax leaves the offset at 0");
+    check("sysctl-uint-take", sysctl_tries(sysctl_uint_takes, SYSCTL_TRIES(sysctl_uint_takes)),
+          "tcp_keepalive_probes takes 255 and text after its number's spaces, returning the "
+          "whole count, and ipv6's ra_defrtr_metric takes 1 and 4294967295");
+    check("sysctl-uint-refuse",
+          sysctl_tries(sysctl_uint_refusals, SYSCTL_TRIES(sysctl_uint_refusals)),
+          "tcp_keepalive_probes refuses 256 and a minus, -0 among them, and ra_defrtr_metric 0 "
+          "and 4294967296, with EINVAL");
+    check("sysctl-ulong-sign", sysctl_tries(sysctl_ulong, SYSCTL_TRIES(sysctl_ulong)),
+          "fs/pipe-user-pages-soft refuses -0 and counts a write to the end of the spaces after "
+          "its number, as proc_doulongvec_minmax does");
+    check("sysctl-ranges", sysctl_tries(sysctl_ranges, SYSCTL_TRIES(sysctl_ranges)),
+          "randomize_va_space takes any int, tcp_keepalive_time and _intvl 0 and negative "
+          "seconds within INT_MAX / HZ, tcp_mtu_probing 255, ipv6's accept_ra and autoconf any "
+          "int and netdev_budget_usecs 0, as Linux 6.12's handlers do");
+    check("sysctl-forwarding-kept",
+          sysctl_tries(sysctl_forwarding, SYSCTL_TRIES(sysctl_forwarding)),
+          "a refused number written to ipv6's forwarding returns the whole count and changes "
+          "nothing, as addrconf_sysctl_forward does");
+}
+
+/**
+ * A drain of the loopback backlog ends on its time budget whether or not
+ * the processor's cycle counter has a measured rate, as on i686 and under
+ * QEMU's emulator: with net/core/netdev_budget at 1000000 and
+ * netdev_budget_usecs at 1, a burst of LOOP_BURST datagrams that one
+ * sendmmsg puts on the backlog is drained in more than one go, each
+ * counted in /proc/net/softnet_stat's third column, and every datagram
+ * still reaches its socket at a later return to user mode. Both budgets
+ * are put back as they were read.
+ */
+static void loop_drain_rows(void)
+{
+    static const char budget[] = "/proc/sys/net/core/netdev_budget";
+    static const char usecs[] = "/proc/sys/net/core/netdev_budget_usecs";
+    static char w_budget[24], w_usecs[24], payload[16], got[32];
+    static unsigned char sa[16];
+    static struct probe_iovec iov;
+    static struct probe_mmsghdr msgs[LOOP_BURST];
+    int h_budget = slurp(budget, w_budget, (int)sizeof(w_budget));
+    int h_usecs = slurp(usecs, w_usecs, (int)sizeof(w_usecs));
+    unsigned long args[6], before, after;
+    int rfd, sfd, i, sent = -1, taken = 0, ok;
+
+    for (i = 0; i < 16; i++) {
+        sa[i] = 0;
+    }
+    sa[0] = AF_INET;
+    put_port(sa, 8083);
+    sa[4] = 127;
+    sa[7] = 1;
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    rfd = sock_call(SC_SOCKET, args);
+    sfd = sock_call(SC_SOCKET, args);
+    args[0] = (unsigned int)rfd;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    ok = h_budget >= 2 && h_usecs >= 2 && rfd >= 0 && sfd >= 0 && sock_call(SC_BIND, args) == 0 &&
+         takes(budget, "1000000\n", 8, "1000000\n") && takes(usecs, "1\n", 2, "1\n");
+    iov.base = payload;
+    iov.len = sizeof(payload);
+    for (i = 0; i < LOOP_BURST; i++) {
+        msgs[i].hdr.name = sa;
+        msgs[i].hdr.namelen = 16;
+        msgs[i].hdr.iov = &iov;
+        msgs[i].hdr.iovlen = 1;
+    }
+    before = softnet_squeezed();
+    if (ok) {
+        sent = syscall4(SYS_SENDMMSG, sfd, (long)msgs, LOOP_BURST, 0);
+    }
+    after = softnet_squeezed();
+    check("loop-drain-time",
+          ok && sent == LOOP_BURST && before != ~0ul && after != ~0ul && after > before,
+          "with netdev_budget_usecs at 1 a drain of a burst of 128 datagrams to 127.0.0.1 ends "
+          "on time and is counted in /proc/net/softnet_stat");
+    args[0] = (unsigned int)rfd;
+    args[1] = (unsigned long)got;
+    args[2] = sizeof(got);
+    args[3] = MSG_DONTWAIT;
+    for (i = 0; ok && taken < LOOP_BURST && i < 100 * LOOP_BURST; i++) {
+        taken += sock_call(SC_RECV, args) == (long)sizeof(payload);
+    }
+    check("loop-drain-rest", ok && taken == LOOP_BURST,
+          "and every datagram of the burst reaches its socket at later returns to user mode");
+    put_back(budget, w_budget, h_budget);
+    put_back(usecs, w_usecs, h_usecs);
+    if (rfd >= 0) {
+        syscall1(SYS_CLOSE, rfd);
+    }
+    if (sfd >= 0) {
+        syscall1(SYS_CLOSE, sfd);
+    }
+}
+
 /** /proc/sys/kernel/hostname takes a write as sethostname does, the text
  * before its newline; /proc/version gives the kernel's name and release; and
  * net/ipv4/ip_forward takes 0 and refuses forwarding, which the stack does
@@ -1436,6 +1788,8 @@ static void sysctl_rows(void)
           "/proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL");
     panic_rows();
     sysctl_int_rows();
+    sysctl_handler_rows();
+    loop_drain_rows();
 }
 
 /** /dev/rtc0: the CMOS clock as hwclock reads it, the time of day of
