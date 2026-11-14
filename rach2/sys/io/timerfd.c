@@ -720,9 +720,10 @@ static void cpu_timer_charge(struct ktimer *t)
  * that waited, the ones a tick came due in and was charged to the timer's
  * clock by the arming's end; and the thread, by its `serial`, 0 for none,
  * whose ticks write each count in two halves with a wait between them where
- * the upper half changes, as the i686's add of 64 bits writes them, how
- * many such carries there were, and in how many of them a read of a clock
- * of processor time began while the halves were apart.
+ * the upper half changes, as the i686's add of 64 bits writes them, and its
+ * process, how many such carries there were, and in how many of them a
+ * read of that thread's clock or its process's began while the halves were
+ * apart.
  */
 static uint32_t test_arm_waits, test_arm_landed;
 
@@ -733,20 +734,21 @@ struct arm_test {
     uint64_t before;
 };
 static uint64_t test_split_serial;
+static const struct tgroup *test_split_tg;
 static uint32_t test_split_carries, test_split_contested;
 
 /* Set without a lock while a forced torn write is between its halves
- * (`split_add`), and set by a read of a clock of processor time that
- * begins meanwhile (`ptimer_test_read`). */
+ * (`split_add`), and set by a read of the tested thread's clock or its
+ * process's that begins meanwhile (`ptimer_test_read`). */
 static volatile int test_split_open, test_split_reader;
 
 /** Add one to the count `count` of the thread `test_split_serial` names,
  * the lower half first and, where the upper half changes, the upper half
- * once a read of a clock of processor time has begun on another processor,
- * or 100 ms have passed, and a millisecond more, so that such a read
- * without `timer_lock` would see the two halves apart; a carry that a read
- * began in counts in `test_split_contested`. The caller holds `timer_lock`,
- * on the tick, with interrupts off. */
+ * once a read of that thread's clock or its process's has begun on another
+ * processor, or 100 ms have passed, and a millisecond more, so that such a
+ * read without `timer_lock` would see the two halves apart; a carry that
+ * such a read began in counts in `test_split_contested`. The caller holds
+ * `timer_lock`, on the tick, with interrupts off. */
 static void split_add(uint64_t *count)
 {
     volatile uint32_t *half = (volatile uint32_t *)count; /* x86: low half first */
@@ -770,9 +772,10 @@ static void split_add(uint64_t *count)
     }
 }
 
-void ptimer_test_read(void)
+void ptimer_test_read(const process_t *p, int thread)
 {
-    if (test_split_open) {
+    /* split_add holds timer_lock while open, so the target is not moving. */
+    if (test_split_open && (thread ? p->serial == test_split_serial : p->tg == test_split_tg)) {
         test_split_reader = 1;
     }
 }
@@ -2391,6 +2394,7 @@ static int32_t test_split(uint32_t tid)
     irq = spin_lock_irqsave(&timer_lock);
     p->utime = ((uint64_t)1 << 32) - 25u;
     test_split_serial = p->serial;
+    test_split_tg = p->tg;
     test_split_carries = 0;
     test_split_contested = 0;
     spin_unlock_irqrestore(&timer_lock, irq);

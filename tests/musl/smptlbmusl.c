@@ -26,12 +26,12 @@
  * With two processors or more, a child's thread spins on processor 1 while
  * debugfs's cputime_test has set its user time 25 ticks short of 2^32 ticks
  * and has its tick at the carry write the count's lower half, wait for a
- * read of a clock of processor time to begin, and write the upper half a
- * millisecond later, and the child's main thread on processor 0 reads the
- * thread's clock and the process's over and over until the count is past
- * 2^32: each reading is no less than the one before and no more than a
- * second past it, as a count read whole gives, and a read began while the
- * halves were apart.
+ * read of that thread's clock or its process's to begin, and write the
+ * upper half a millisecond later, and the child's main thread on processor
+ * 0 reads the thread's clock and the process's over and over until the
+ * count is past 2^32: each reading is no less than the one before and no
+ * more than a second past it, as a count read whole gives, and one of
+ * those reads, not another process's, began while the halves were apart.
  *
  * Prints "SMPTLBMUSL OK" and exits 0, or "SMPTLBMUSL FAIL: " and the reason
  * and exits 1.
@@ -294,8 +294,9 @@ static int follows(long long before, long long now)
     return now >= before && now - before < 1000000000LL;
 }
 
-/** Read the carries of debugfs's cputime_test that a read of a clock
- * began in, the fourth of its numbers, or -1. */
+/** Read the carries of debugfs's cputime_test that a read of the carried
+ * thread's clock or its process's began in, the fourth of its numbers, or
+ * -1; a read of another process's clock counts for nothing. */
 static long contested(void)
 {
     char line[96];

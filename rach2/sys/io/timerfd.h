@@ -256,18 +256,21 @@ int32_t ptimer_test_show(void *data, char *buf, uint32_t cap);
  * in and whose clock has moved by the arming's end; `spl TID` sets the user
  * time of the thread TID of the caller's process 25 ticks short of 2^32
  * ticks and has each of its ticks, where the upper half changes, write the
- * count's lower half, wait until a read of a clock of processor time begins
- * (`ptimer_test_read`) or 100 ms pass, and write the upper half a
- * millisecond later, under `timer_lock`, as no reader that takes the lock
- * sees. `len`, -ESRCH for no such thread, or -EINVAL or -EFAULT.
+ * count's lower half, wait until a read of that thread's clock or its
+ * process's begins (`ptimer_test_read`) or 100 ms pass, and write the
+ * upper half a millisecond later, under `timer_lock`, as no reader that
+ * takes the lock sees. `len`, -ESRCH for no such thread, or -EINVAL or
+ * -EFAULT.
  */
 int32_t ptimer_test_store(void *data, const char __user *buf, uint32_t len);
 
-/** Note, for debugfs's cputime_test, a read of a clock of processor time
- * that begins while a forced torn write is between its halves
- * (`split_add`). Called first by each such read, before it takes any lock;
- * reads and writes two words without one. */
-void ptimer_test_read(void);
+/** Note, for debugfs's cputime_test, a read of the clock of processor time
+ * of the thread `p`, when `thread`, or of its process otherwise, that
+ * begins while a forced torn write is between its halves (`split_add`);
+ * only a read of the tested thread's clock or of its process's counts.
+ * Called first by each such read, before it takes any lock; reads and
+ * writes two words without one. */
+void ptimer_test_read(const struct process *p, int thread);
 
 /** Add a tick to the processor time of the thread `p`, to its user time
  * when `user` and its system time otherwise, and count it against the POSIX

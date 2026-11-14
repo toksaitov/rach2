@@ -476,7 +476,8 @@ still to wait, those of the last
 whose wait a tick came due in and whose clock moved by the arming's end,
 the carries into the upper half of the forced write since the last
 .Ql spl ,
-and those of them a reading of a clock of processor time began in.
+and those of them a reading of that thread's clock or its process's began
+in.
 A write of
 .Ql arm N
 has the next N settings of a timer of processor time
@@ -487,8 +488,9 @@ A write of
 .Ql spl TID
 sets the user time of the thread TID of the writer's process to 25 ticks
 short of 2^32 ticks and has each of its ticks, where the upper half
-changes, write the count's lower half, wait until a reading of a clock of
-processor time begins or 100 ms pass, and write the upper half a
+changes, write the count's lower half, wait until a reading of the
+thread's clock or its process's begins or 100 ms pass, and write the
+upper half a
 millisecond later, which no reading of the clock may see; it fails with
 .Er ESRCH
 for a thread of another process.

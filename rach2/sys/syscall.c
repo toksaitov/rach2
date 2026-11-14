@@ -603,14 +603,14 @@ static int32_t clock_resolve(int32_t clk, struct kclock *out)
 
 /** A CPU clock's reading in ticks: the thread's own, or every thread's of
  * the process, each read under the lock the tick adds to it under. A read
- * that begins inside debugfs's forced torn write is noted for it
- * (`ptimer_test_read`). */
+ * of the tested thread's clock or its process's that begins inside
+ * debugfs's forced torn write is noted for it (`ptimer_test_read`). */
 static uint64_t clock_cpu_ticks(const struct kclock *c)
 {
     uint64_t user;
     uint64_t sys;
 
-    ptimer_test_read();
+    ptimer_test_read(c->proc, c->thread);
     if (c->thread) {
         thread_cpu_time(c->proc, &user, &sys);
     } else {
