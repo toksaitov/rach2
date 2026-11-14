@@ -18,7 +18,7 @@ int etude_scenario(struct etude_case *c)
     struct net_boot b;
     struct net_run r;
     char password[128], mode[16], exe[32], unit[64];
-    char family[16], row[128], command[1024], marker[192], path[16], n[16];
+    char family[16], row[128], command[2048], marker[192], path[16], n[16];
     const char *id = etude_case_id(c), *tail = strrchr(id, '.');
     const char *argv[] = {"/bin/bash", "-c", command, NULL};
     const char *adapter = "lavapipe";
@@ -67,10 +67,19 @@ int etude_scenario(struct etude_case *c)
     net_seen(&b, "rach2 login");
     if (net_login(&b, "root", password, "# ") == ETUDE_OK && etude_guest_open(b.m) != ETUDE_OK)
         net_fail(&u, "the GNU guest command channel did not open");
+    /* The row runs as test in video and render alone, the groups of the
+     * Debian account that took the references. test is also in kvm, whose
+     * /dev/udmabuf gives lavapipe sync files and so Proton the keyed mutex
+     * the references were taken without; BusyBox su would give every group. */
     snprintf(command, sizeof(command),
              "mkdir -p /tmp/d3d /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix && "
              "mount -t ext2 -o ro /dev/disk1 /tmp/d3d && "
-             "su -s /bin/bash test -c 'python3 /tmp/d3d/run.py -a %s %s %s /tmp/d3d-results'",
+             "python3 -c 'import grp, os, pwd, sys; u = pwd.getpwnam(\"test\"); "
+             "os.setgroups([grp.getgrnam(g).gr_gid for g in (\"video\", \"render\")]); "
+             "os.setgid(u.pw_gid); os.setuid(u.pw_uid); "
+             "os.environ.update(HOME=u.pw_dir, SHELL=u.pw_shell, USER=u.pw_name, "
+             "LOGNAME=u.pw_name); os.execvp(sys.argv[1], sys.argv[1:])' "
+             "python3 /tmp/d3d/run.py -a %s %s %s /tmp/d3d-results",
              adapter, family, row);
     if (net_step(&u, "row") == ETUDE_OK &&
         net_guest(&u, b.m, argv, NULL, NULL, "direct3d", &r) == ETUDE_OK) {
