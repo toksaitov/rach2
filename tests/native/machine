@@ -46,6 +46,7 @@ musl/sandboxmusl pivot_root, whose new root is a mount's root, as the test image
 musl/ndwatchmusl router advertisements sent on the card, eth0, and a second ndwatch on it, on a link of its own
 musl/procfilesmusl the os-real applets with a held host connection and a known image size
 watchdogprobe the q35 watchdog case requires QMP watchdog pause; the Lenovo expiry has its own trial boot in task 78-1b
+vnetprobe QEMU's virtio network device, which the Lenovo does not have, let go of and bound again
 vgpuprobe QEMU virtio-vga-gl with a virgl renderer and a destructive reset of that virtual GPU
 vgshmprobe the test bed's VM serving virtio-gpu over a shared region under Rach2's KVM, which it then kills
 i915gemprobe QEMU's edu device standing in for the HD 4400 by rach2.i915fake, which no installed machine has

@@ -701,6 +701,15 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 # can see what it costs. The other suites are about disks, accounts and
 # building, and running them again on a second card would cost minutes and
 # show nothing.
+# `tests/run virtionet`: the virtio network driver on QEMU's virtio-net-pci in
+# each form the device takes, the cases of tests/cases/machine.virtionet.json,
+# each a boot of its own.
+#
+# The device as QEMU makes it; without MSI-X vectors; without mergeable
+# buffers, the event index and the control queue; with a speed, a duplex and
+# a largest MTU; and beside an RTL8139. vnetprobe reads the interface's link
+# files, lets the driver go and binds it again through /sys, with a ping
+# before, between and after, and one case pulls the cable through QMP.
 # `tests/run reset`: each reset mechanism on its own. The kernel tries three,
 # most of the machine first, and each case of tests/cases/machine.reset.json
 # boots the kernel and the test image with the ones before it left out, so

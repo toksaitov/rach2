@@ -134,6 +134,7 @@ style|cppcheck,shellcheck,clang,clang-format,python3|full
 dgram|qemu|core
 diskdiag|qemu,ssh|full
 e1000|qemu|core
+virtionet|qemu|core
 grub|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|core
 disk-q35|qemu|full|disk-q35-test*,disk-q35.*,disk-q35/*
 doom|qemu|full

@@ -1022,6 +1022,7 @@ include tests/system/fakeapi/native.mk
 # The network, process and disk scenarios that read a probe's console
 # report.
 NETPROBE_SCENARIOS = build/tests/cases/machine/netif_scenario \
+                     build/tests/cases/machine/virtionet_scenario \
                      build/tests/cases/machine/login_scenario build/tests/cases/machine/account_scenario \
                      build/tests/cases/machine/procfiles_scenario build/tests/cases/machine/credpersist_scenario \
                      build/tests/cases/machine/bootpart_scenario
