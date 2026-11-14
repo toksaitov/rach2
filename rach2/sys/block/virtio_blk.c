@@ -990,13 +990,19 @@ static uint64_t vblk_capacity_set(struct vblk *vb, uint64_t sectors)
     uint64_t was = vb->bdev.sector_count;
     struct disk *d = vb->disk;
 
+    int window = d && d->whole.present;
+
     if (sectors > was) {
         vb->bdev.sector_count = sectors;
+        if (window) {
+            d->whole.part.device.sector_count = sectors;
+        }
+    } else if (sectors < was) {
+        if (window) {
+            d->whole.part.device.sector_count = sectors;
+        }
+        vb->bdev.sector_count = sectors;
     }
-    if (sectors != was && d && d->whole.present) {
-        d->whole.part.device.sector_count = sectors;
-    }
-    vb->bdev.sector_count = sectors;
     return was;
 }
 
