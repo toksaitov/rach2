@@ -68,9 +68,14 @@
  * stop. Every PTRACE_EVENT_STOP has the siginfo Linux gives it, SIGTRAP or
  * the stop signal with that signal | PTRACE_EVENT_STOP << 8 as the code and
  * the thread's own ID and user ID, and a group stop of a thread attached with
- * PTRACE_ATTACH has none, so that PTRACE_GETSIGINFO fails with EINVAL. The
- * waits of these rows are bounded, so a stop or state that never comes fails
- * the row at once.
+ * PTRACE_ATTACH has none, so that PTRACE_GETSIGINFO fails with EINVAL there,
+ * while PTRACE_SETSIGINFO fails with EFAULT for a buffer it cannot read. A
+ * plain system call stop has SIGTRAP as its code and the thread's own ID,
+ * with its user ID for a native tracer and as si_addr for an i386 one on
+ * x86-64, and a SIGSEGV a process queues to itself with SI_KERNEL keeps
+ * only its pid and uid there. The waits of these rows end on the stop or
+ * state they wait for, with no limit of their own, so a loaded host never
+ * fails one and a stop that never comes holds it to the case's bound.
  *
  * The program takes no positional argument and runs every row. It prints
  * "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
@@ -90,8 +95,9 @@
  * `ended-mem-freed`, `setoptions`, `debugreg-peekuser`, `dr7-kernel-einval`,
  * `dr7-last-user`, `dr7-bit12-einval`, `getpid-entry`, `getpid-exit`,
  * `exec-waitid`, `exec-event`, `exec-mem-empty`, `exec-runs`,
- * `changes-getpid-entry`, `changes-write-entry`, `changes-exit`,
- * `changes-getppid`, `changes-write-result`, `changes-write-not-run`,
+ * `changes-getpid-entry`, `changes-entry-siginfo`, `changes-write-entry`,
+ * `changes-exit`, `changes-getppid`, `changes-write-result`,
+ * `changes-write-not-run`,
  * `kill-entry-stop`, `kill-entry-sigkill`, `kill-entry-no-write`,
  * `restart-read-entry`, `restart-read-eintr`, `restart-signal`,
  * `restart-cancelled`, `attach-stops`, `detach`, `detach-runs-on`,
@@ -116,7 +122,8 @@
  * `resumed-sigcont-event-stop`, `resumed-sigcont-detach-runs`,
  * `thread-group-event-siginfo`, `thread-resumed-interrupt`,
  * `thread-detach-stays-stopped`, `thread-detach-runs-on`,
- * `attach-group-stop-noinfo`, `tp-set-readback` and
+ * `attach-group-stop-noinfo`, `attach-group-setsiginfo-efault`,
+ * `queued-kernel-siginfo`, `tp-set-readback` and
  * `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`,
  * `setoptions-wide-einval`, `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
  * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
@@ -131,7 +138,6 @@
 
 #define _GNU_SOURCE
 #include <elf.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -140,7 +146,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
@@ -148,6 +153,7 @@
 #include <sys/times.h>
 #include <sys/uio.h>
 #include <sys/user.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -206,7 +212,7 @@ static volatile long target = 1234;
 /* The assertions of etude's report in the order they are checked, more than
  * probe_report.h's path holds, and how many are planned and reported. A run
  * of one named row plans none. */
-static const char *rows[128];
+static const char *rows[160];
 static int rows_planned, rows_reported;
 
 /** Add the assertion `id` to the end of the planned rows. */
@@ -612,9 +618,51 @@ static int syscall_entry(pid_t pid, long nr, struct user_regs_struct *regs)
     return 0;
 }
 
+/** Return 1 for an i386 program on an x86-64 kernel, whose siginfo the
+ * kernel converts as Linux's compat layer does, and 0 otherwise. */
+static int on_compat(void)
+{
+    struct utsname u;
+
+    return sizeof(long) == 4 && uname(&u) == 0 && strcmp(u.machine, "x86_64") == 0;
+}
+
+/**
+ * Check the siginfo PTRACE_GETSIGINFO gives at the plain system call stop
+ * of the tracee `pid`, one without PTRACE_O_TRACESYSGOOD, as Linux's
+ * ptrace_do_notify makes it: SIGTRAP, the code SIGTRAP, which is also a
+ * fault's TRAP_UNK, and the union with the thread's own ID and real user ID,
+ * which Linux copies whole to a native tracer; an i386 tracer on x86-64
+ * reads the union as a fault's, with the ID as the address, si_pid's bytes,
+ * and no user ID. Returns 0, or 1 after the child is killed and the failure
+ * is printed.
+ */
+static int plain_stop_info(pid_t pid)
+{
+    char why[160];
+    siginfo_t info;
+    uid_t uid = on_compat() ? 0 : getuid();
+
+    memset(&info, 0, sizeof(info));
+    if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0) {
+        snprintf(why, sizeof(why), "PTRACE_GETSIGINFO at a plain system call stop");
+    } else if (info.si_signo != SIGTRAP || info.si_code != SIGTRAP || info.si_pid != pid ||
+               info.si_uid != uid) {
+        snprintf(why, sizeof(why),
+                 "a plain system call stop's siginfo: signo %d code %d pid %d uid %d",
+                 info.si_signo, info.si_code, (int)info.si_pid, (int)info.si_uid);
+    } else {
+        return 0;
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    return fail(why);
+}
+
 /**
  * Check that at a system call's entry stop the tracer may change the call
- * through orig_eax: getpid made getppid returns the parent's id, and a write
+ * through orig_eax, after its siginfo (`plain_stop_info`): getpid made
+ * getppid returns the parent's id, and a write
  * made -1 is not run and returns what the tracer left in eax, so the pipe
  * stays empty. On x86-64 SETREGS fails with EIO for the kernel's data
  * selector in DS, and takes the user data selector, which DS still has at
@@ -644,6 +692,10 @@ static int syscall_changes(void)
     close(p[1]);
     if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_getpid, &regs) != 0) {
         return fail("the entry stop of getpid");
+    }
+    held();
+    if (plain_stop_info(pid) != 0) {
+        return 1;
     }
     held();
 #if defined __x86_64__
@@ -985,32 +1037,25 @@ static int sleeping(pid_t pid, pid_t t)
     return stat_state(path) == 'S';
 }
 
-/* The looks a bounded wait takes, 10 ms apart, before it judges that the
- * stop or state it waits for will not come. The kernel makes each at once,
- * so a thousand looks are far more than any needs, and a missing one fails
- * its row instead of holding it to the case's bound. */
-#define LOOKS 1000
-
 /**
  * Wait for the stat file at `path` to give the state `want`, looking every
- * 10 ms, at most LOOKS times. Returns the state the wait ends at: `want`; Z
- * when the thread ends first; 0 when the file is gone; or the last state seen
- * when the looks run out.
+ * 10 ms with no limit of its own, so that a state that never comes holds the
+ * row to the case's bound and a loaded host never fails it. Returns the
+ * state the wait ends at: `want`; Z when the thread ends first; or 0 when
+ * the file is gone.
  */
 static char await_stat(const char *path, char want)
 {
-    char state = 0;
-    int i;
+    char state;
 
-    for (i = 0; i < LOOKS; i++) {
+    for (;;) {
         state = stat_state(path);
         if (state == want || state == 'Z' || state == 0) {
-            break;
+            return state;
         }
         /* interval: a process's state is looked at again every 10 ms */
         usleep(10000);
     }
-    return state;
 }
 
 /**
@@ -1039,48 +1084,42 @@ static char await_task(pid_t pid, pid_t t, char want)
 }
 
 /**
- * Wait for the child or tracee `t` to change state, looking every 10 ms, at
- * most LOOKS times, with waitpid's `__WALL`. Returns what waitpid returned,
- * with the status in `*status`: `t`, -1 with errno, or 0 when the looks ran
- * out with no change.
+ * Wait for the child or tracee `t` to change state, with waitpid's `__WALL`
+ * and no limit of its own: the change is an event the kernel reports, so a
+ * stop that never comes holds the row to the case's bound. Returns what
+ * waitpid returned, with the status in `*status`: `t`, or -1 with errno.
  */
-static pid_t bounded_wait(pid_t t, int *status)
+static pid_t event_wait(pid_t t, int *status)
 {
-    pid_t r = 0;
-    int i;
+    pid_t r;
 
-    for (i = 0; i < LOOKS; i++) {
-        r = waitpid(t, status, WNOHANG | __WALL);
-        if (r != 0) {
-            break;
-        }
-        /* interval: a process's state is looked at again every 10 ms */
-        usleep(10000);
-    }
+    do {
+        r = waitpid(t, status, __WALL);
+    } while (r < 0 && errno == EINTR);
     return r;
 }
 
 /**
- * Wait, as `bounded_wait` does, for the thread `t` to stop with `want` as
- * its status shifted right by 8 bits. Returns 1 when it did, and 0 when it
- * stopped otherwise, ended, or did not change.
+ * Wait, as `event_wait` does, for the thread `t` to stop with `want` as its
+ * status shifted right by 8 bits. Returns 1 when it did, and 0 when it
+ * stopped otherwise or ended.
  */
 static int stops_with(pid_t t, int want)
 {
     int status = 0;
 
-    return bounded_wait(t, &status) == t && WIFSTOPPED(status) && status >> 8 == want;
+    return event_wait(t, &status) == t && WIFSTOPPED(status) && status >> 8 == want;
 }
 
 /**
- * Wait, as `bounded_wait` does, for the child `pid` to end, and return 1
- * when it exited with 0, and 0 otherwise.
+ * Wait, as `event_wait` does, for the child `pid` to end, and return 1 when
+ * it exited with 0, and 0 otherwise.
  */
 static int exits_zero(pid_t pid)
 {
     int status = 0;
 
-    return bounded_wait(pid, &status) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return event_wait(pid, &status) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 /**
@@ -1874,8 +1913,8 @@ static int listen_user_return(void)
  * PTRACE_EVENT_STOP with SIGTRAP and then, resumed, the SIGCONT's own
  * signal-delivery stop. Both event stops have the siginfo Linux's
  * ptrace_do_notify gives them (`event_info`). The waits after the SIGCONT
- * are bounded, so a stop that never comes fails at once. The child is killed
- * either way. Returns 0, or 1 after the failure is printed.
+ * have no limit of their own (`stops_with`). The child is killed either
+ * way. Returns 0, or 1 after the failure is printed.
  */
 static int listen_sigcont(void)
 {
@@ -1921,9 +1960,9 @@ static int listen_sigcont(void)
  * its process with SIGSTOP, let the stop's signal-delivery stop through to
  * the group stop's PTRACE_EVENT_STOP, check that stop's siginfo
  * (`event_info_bad`), resume it in the stop, which leaves it to sleep in its
- * read again, and see it asleep. Every wait is bounded. Returns 0, for the
- * caller to end without PTRACE_O_EXITKILL, or the number of the step that
- * failed.
+ * read again, and see it asleep. No wait has a limit of its own. Returns 0,
+ * for the caller to end without PTRACE_O_EXITKILL, or the number of the step
+ * that failed.
  */
 static int stop_resumer(pid_t c)
 {
@@ -1955,8 +1994,8 @@ static int stop_resumer(pid_t c)
  * PTRACE_O_EXITKILL, as Linux's __ptrace_unlink makes the stop pending again
  * and wakes it: a second child traces the first (`stop_resumer`) and ends;
  * the first is then seen stopped (T), and after SIGCONT reads the byte
- * written to it and ends with 0. Every wait is bounded. Returns 0, or 1
- * after the failure is printed.
+ * written to it and ends with 0. No wait has a limit of its own. Returns 0,
+ * or 1 after the failure is printed.
  */
 static int tracer_gone_stop(void)
 {
@@ -1983,7 +2022,7 @@ static int tracer_gone_stop(void)
         close(p[1]);
         _exit(stop_resumer(c));
     }
-    if (x < 0 || bounded_wait(x, &status) != x || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (x < 0 || event_wait(x, &status) != x || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         if (x > 0) {
             kill(x, SIGKILL);
             waitpid(x, NULL, 0);
@@ -2017,7 +2056,8 @@ static int tracer_gone_stop(void)
  * which gives a PTRACE_EVENT_STOP with SIGTRAP and its siginfo, as Linux's
  * ptrace_trap_notify does, and detaches it there; the child then reads the
  * byte written to it and exits 0, where a stop it still owed would hold it.
- * Every wait is bounded. Returns 0, or 1 after the failure is printed.
+ * No wait has a limit of its own. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int sigcont_detach(void)
 {
@@ -2065,49 +2105,53 @@ static int sigcont_detach(void)
 }
 
 /* The read end of the pipe whose byte the second thread of a
- * `thread_detach_stop` child waits for. */
-static int reader_fd = -1;
+ * `thread_detach_stop` child waits for, and the write end of the pipe it
+ * gives its thread ID on before its read. */
+static int reader_fd = -1, reader_tid_fd = -1;
 
-/** Read one byte from `reader_fd`, and return non-null when it was 'g'. */
+/** Give this thread's ID on `reader_tid_fd`, then read one byte from
+ * `reader_fd`, and return non-null when it was 'g'. */
 static void *pipe_reader(void *arg)
 {
+    pid_t me = (pid_t)syscall(SYS_gettid);
     char ch;
 
     (void)arg;
+    if (write(reader_tid_fd, &me, sizeof(me)) != sizeof(me)) {
+        return NULL;
+    }
     return read(reader_fd, &ch, 1) == 1 && ch == 'g' ? (void *)pipe_reader : NULL;
 }
 
 /**
- * Return the ID of the thread of process `pid` other than its first, from
- * /proc/PID/task, once that thread is asleep, looking every 10 ms at most
- * LOOKS times; -1 when none is seen asleep.
+ * Return the ID of the second thread of process `pid`, which the thread
+ * gives on the pipe `fd` (`pipe_reader`), once it and the first thread are
+ * asleep, looking every 10 ms with no limit of its own; -1 when the ID does
+ * not come or either thread ends first.
  */
-static pid_t second_thread(pid_t pid)
+static pid_t second_thread(pid_t pid, int fd)
 {
-    char path[64];
-    struct dirent *e;
+    char path[64], first[64];
     pid_t t = -1;
-    DIR *d;
-    int i;
+    char a, b;
 
-    snprintf(path, sizeof(path), "/proc/%d/task", (int)pid);
-    for (i = 0; i < LOOKS; i++) {
-        d = opendir(path);
-        while (d && (e = readdir(d)) != NULL) {
-            if (e->d_name[0] != '.' && atoi(e->d_name) != pid) {
-                t = atoi(e->d_name);
-            }
-        }
-        if (d) {
-            closedir(d);
-        }
-        if (t > 0 && sleeping(pid, t) && sleeping(pid, pid)) {
+    if (read(fd, &t, sizeof(t)) != sizeof(t) || t <= 0) {
+        return -1;
+    }
+    snprintf(path, sizeof(path), "/proc/%d/task/%d/stat", (int)pid, (int)t);
+    snprintf(first, sizeof(first), "/proc/%d/task/%d/stat", (int)pid, (int)pid);
+    for (;;) {
+        a = stat_state(path);
+        b = stat_state(first);
+        if (a == 'S' && b == 'S') {
             return t;
         }
-        /* interval: the second thread's state is looked at again every 10 ms */
+        if (a == 'Z' || a == 0 || b == 'Z' || b == 0) {
+            return -1;
+        }
+        /* interval: the two threads' states are looked at again every 10 ms */
         usleep(10000);
     }
-    return -1;
 }
 
 /**
@@ -2181,12 +2225,12 @@ static const char *threads_detached(pid_t c, pid_t t)
  * the second resumed and interrupted in the stop, and both detached, after
  * which both are stopped (T), as Linux's __ptrace_unlink makes the stop
  * pending again for each; after SIGCONT the second reads the byte written
- * to it and the child exits 0. Every wait is bounded. Returns 0, or 1 after
- * the failure is printed.
+ * to it and the child exits 0. No wait has a limit of its own. Returns 0, or
+ * 1 after the failure is printed.
  */
 static int thread_detach_stop(void)
 {
-    int p[2];
+    int p[2], q[2];
     const char *why;
     pthread_t th;
     void *r;
@@ -2195,21 +2239,31 @@ static int thread_detach_stop(void)
     if (pipe(p) != 0) {
         return fail("pipe");
     }
+    if (pipe(q) != 0) {
+        close(p[0]);
+        close(p[1]);
+        return fail("pipe");
+    }
     c = fork();
     if (c == 0) {
         close(p[1]);
+        close(q[0]);
         reader_fd = p[0];
+        reader_tid_fd = q[1];
         if (pthread_create(&th, NULL, pipe_reader, NULL) != 0 || pthread_join(th, &r) != 0) {
             _exit(2);
         }
         _exit(r ? 0 : 1);
     }
     close(p[0]);
+    close(q[1]);
     if (c < 0) {
+        close(q[0]);
         close(p[1]);
         return fail("fork of the two-thread reader");
     }
-    t = second_thread(c);
+    t = second_thread(c, q[0]);
+    close(q[0]);
     if (t < 0) {
         close(p[1]);
         return abandon(c, "the reader's second thread was never seen asleep");
@@ -2232,14 +2286,24 @@ static int thread_detach_stop(void)
  * Check that a group stop of a thread attached with PTRACE_ATTACH has no
  * siginfo, as Linux's do_jobctl_trap gives ptrace_stop none, so that
  * PTRACE_GETSIGINFO fails there with EINVAL, while the SIGSTOP's delivery
- * stop before it has SIGSTOP's. Every wait is bounded. The child is killed
- * either way. Returns 0, or 1 after the failure is printed.
+ * stop before it has SIGSTOP's; and that PTRACE_SETSIGINFO there fails with
+ * EFAULT for a buffer it cannot read, which Linux copies before it looks
+ * for a siginfo to replace, and with EINVAL for one it can. No wait has a
+ * limit of its own. The child is killed either way. Returns 0, or 1 after
+ * the failure is printed.
  */
 static int attach_group_noinfo(void)
 {
     siginfo_t info;
     int status;
-    pid_t c = fork();
+    void *none;
+    pid_t c;
+
+    none = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (none == MAP_FAILED) {
+        return fail("mmap of a page no read reaches");
+    }
+    c = fork();
 
     if (c == 0) {
         for (;;) {
@@ -2260,11 +2324,63 @@ static int attach_group_noinfo(void)
         granted(c, !stops_with(c, SIGSTOP), "the attached thread made no group stop") ||
         granted(c, ptrace(PTRACE_GETSIGINFO, c, NULL, &info) != -1 || errno != EINVAL,
                 "PTRACE_GETSIGINFO at a group stop not seized did not fail with EINVAL") ||
+        passed() ||
+        granted(c, ptrace(PTRACE_SETSIGINFO, c, NULL, none) != -1 || errno != EFAULT,
+                "PTRACE_SETSIGINFO from an unreadable buffer at a group stop not seized did "
+                "not fail with EFAULT") ||
+        granted(c, ptrace(PTRACE_SETSIGINFO, c, NULL, &info) != -1 || errno != EINVAL,
+                "PTRACE_SETSIGINFO at a group stop not seized did not fail with EINVAL") ||
         passed()) {
+        munmap(none, 4096);
         return 1;
     }
+    munmap(none, 4096);
     kill(c, SIGKILL);
     waitpid(c, &status, 0);
+    return 0;
+}
+
+/**
+ * Check that a SIGSEGV this process queues to itself with SI_KERNEL keeps
+ * its pid and uid, and that the word after them, si_status, is kept for a
+ * native program, whose siginfo Linux copies whole, and cleared for an i386
+ * one on x86-64, as Linux's compat layer reads and writes only the fields
+ * of SI_KERNEL's layout, SIL_KILL. The signal is blocked and taken with
+ * sigwaitinfo. Returns 0, or 1 after the failure is printed.
+ */
+static int queued_kernel_info(void)
+{
+    char why[160];
+    siginfo_t info, got;
+    sigset_t set, old;
+    int want = on_compat() ? 0 : 0x5a5a;
+    int sig;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGSEGV);
+    if (sigprocmask(SIG_BLOCK, &set, &old) != 0) {
+        return fail("blocking SIGSEGV");
+    }
+    memset(&info, 0, sizeof(info));
+    memset(&got, 0, sizeof(got));
+    info.si_signo = SIGSEGV;
+    info.si_code = SI_KERNEL;
+    info.si_pid = getpid();
+    info.si_uid = getuid();
+    info.si_status = 0x5a5a;
+    sig =
+        syscall(SYS_rt_sigqueueinfo, getpid(), SIGSEGV, &info) == 0 ? sigwaitinfo(&set, &got) : -1;
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    if (sig != SIGSEGV) {
+        return fail("queueing SIGSEGV with SI_KERNEL to this process");
+    }
+    if (got.si_code != SI_KERNEL || got.si_pid != getpid() || got.si_uid != getuid() ||
+        got.si_status != want) {
+        snprintf(why, sizeof(why), "a queued SI_KERNEL siginfo: code %d pid %d uid %d status %#x",
+                 got.si_code, (int)got.si_pid, (int)got.si_uid, (unsigned int)got.si_status);
+        return fail(why);
+    }
+    held();
     return 0;
 }
 
@@ -2827,7 +2943,7 @@ static int second_rows(void)
            killed_tracee() || step_system_call() || entry_system_call() || watched_copy() ||
            watched_poll() || watched_sigwait() || listen_user_return() || listen_sigcont() ||
            tracer_gone_stop() || sigcont_detach() || thread_detach_stop() ||
-           attach_group_noinfo() || thread_pointer();
+           attach_group_noinfo() || queued_kernel_info() || thread_pointer();
 }
 
 /* The assertions after `ended-mem-freed`, in the order they are checked. */
@@ -2848,6 +2964,7 @@ static const char *const later_rows[] = {
     "exec-mem-empty",
     "exec-runs",
     "changes-getpid-entry",
+    "changes-entry-siginfo",
 #if defined __x86_64__
     "ds-kernel-eio",
 #endif
@@ -2932,6 +3049,8 @@ static const char *const later_rows[] = {
     "thread-detach-stays-stopped",
     "thread-detach-runs-on",
     "attach-group-stop-noinfo",
+    "attach-group-setsiginfo-efault",
+    "queued-kernel-siginfo",
 #if defined __x86_64__
     "tp-arch-get-fs",
     "tp-peekuser-fs",

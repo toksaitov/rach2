@@ -67,6 +67,7 @@ tests/musl/lockstressmusl.c: the call is asleep when its descriptor goes
 tests/musl/pselectmusl.c: the probe's state is looked at again every 10 ms
 tests/musl/ptracemusl.c: a process's state is looked at again every 10 ms
 tests/musl/ptracemusl.c: the second thread's state is looked at again every 10 ms
+tests/musl/ptracemusl.c: the two threads' states are looked at again every 10 ms
 tests/musl/pwauthmusl.c: a nap waits between reads, or for what must not come
 tests/musl/pwauthmusl.c: the state and the pipe are looked at again every 10 ms
 tests/musl/pwauthmusl.c: the file is looked at again every 10 ms
