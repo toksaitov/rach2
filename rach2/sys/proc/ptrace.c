@@ -682,7 +682,8 @@ process_t *ptrace_tracee(uint32_t pid)
 /**
  * PTRACE_PEEKTEXT and friends: read the `len` bytes at `addr` of the stopped
  * thread `t`'s memory into `word`, or with `write` write them there: a word
- * of the caller's ABI, 4 bytes for an i386 tracer on x86-64. The
+ * of the caller's ABI, 4 bytes for an i386 tracer on x86-64, forced as
+ * Linux's ptrace_access_vm forces it (`paging_access`). The
  * address space has a reference of the caller's while it is used, since
  * bringing a page in may sleep, and the thread may end and drop its own
  * meanwhile; nothing of `t` is read after the access.
@@ -702,7 +703,8 @@ static int32_t tracee_memory(process_t *t, uintptr_t addr, void *word, uint32_t 
         return -EIO;
     }
     mm_get(mm);
-    rc = paging_access(mm, addr, word, len, write);
+    rc =
+        paging_access(mm, addr, word, len, PAGING_ACCESS_FORCE | (write ? PAGING_ACCESS_WRITE : 0));
     mm_put(mm);
     return rc;
 }

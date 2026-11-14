@@ -693,21 +693,28 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
 
 struct mm;
 
+/* The flags of `paging_access`: a write, not a read; and Linux's FOLL_FORCE,
+ * which ptrace and /proc/PID/mem give and nothing else. */
+#define PAGING_ACCESS_WRITE 1
+#define PAGING_ACCESS_FORCE 2
+
 /**
  * Read or write `len` bytes at `addr` of the address space `mm`, which need
- * not be the one in use, for ptrace and /proc/PID/mem: missing pages are
- * brought in as a fault would bring them, and a write reaches a read-only
- * private page, a breakpoint in the program's text, through a copy of its
- * own, as Linux's FOLL_FORCE does. An address outside user space, a page of
- * no region, of a PROT_NONE one, of a guard, of device memory, of
- * memfd_secret or of the vDSO's data pages, [vvar], a page that cannot be
- * backed, and a page of a read-only shared region for a write are -EIO, as
- * Linux's get_user_pages refuses them.
+ * not be the one in use, a write when `flags` has PAGING_ACCESS_WRITE:
+ * missing pages are brought in as a fault would bring them, and a write
+ * reaches a read-only private page, a breakpoint in the program's text,
+ * through a copy of its own. With PAGING_ACCESS_FORCE, as Linux's
+ * FOLL_FORCE (mm/gup.c, check_vma_flags), a page of a PROT_NONE region is
+ * reached too, for a write only in a private one; without it such a page is
+ * -EIO. An address outside user space, a page of no region, of a guard, of
+ * device memory, of memfd_secret or of the vDSO's data pages, [vvar], a
+ * page that cannot be backed, and a page of a read-only shared region for a
+ * write are -EIO, as Linux's get_user_pages refuses them.
  * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free. It may
  * sleep, bringing a page in or releasing a file a region let go of
  * meanwhile, and looks each page up again after a sleep.
  */
-int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int write);
+int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int flags);
 
 /**
  * Test switch: with `rach2.framefail` on the boot line, `/dev/framefail`

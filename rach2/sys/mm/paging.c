@@ -530,6 +530,22 @@ static void table_refused(void)
     }
 }
 
+/** Whether the protection `prot` allows no access, PROT_NONE's. */
+#define PROT_NO_ACCESS(prot) (((prot) & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) == 0)
+
+/** The entry bits `flags`, which a fault computed for a page of a region of
+ * protection `prot`, as the entry must hold them: a region with no access,
+ * which only a forced access backs (`paging_access`), gets the PROT_NONE
+ * entry `protect_page` makes, holding the frame where no access reaches it,
+ * as Linux's fault maps a page with the region's PAGE_NONE protection. */
+static pte_t entry_for(uint32_t prot, pte_t flags)
+{
+    if (PROT_NO_ACCESS(prot)) {
+        return (flags & ~(pte_t)(PTE_P | PTE_U | PTE_W)) | PTE_NONE;
+    }
+    return flags;
+}
+
 /**
  * Install `phys` at the user page `page` of `mm` with the entry bits
  * `flags`, the second phase of a fault, whose frame was had, filled and
@@ -682,8 +698,9 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
         frame_make_anon(phys);
     }
     if (rc == 1) {
-        rc = install_new(mm, page, phys,
-                         PTE_P | PTE_U | (write ? PTE_W : PTE_COW) | paging_prot_bits(prot));
+        rc = install_new(
+            mm, page, phys,
+            entry_for(prot, PTE_P | PTE_U | (write ? PTE_W : PTE_COW) | paging_prot_bits(prot)));
         if (rc == 0) {
             fault_count(filled > 0);
             return 1;
@@ -848,9 +865,10 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
     uint32_t seq = mm->zaps;
     uintptr_t phys = 0;
     int notify = !private && (prot & VM_PROT_WRITE) && f->mkwrite;
-    pte_t flags = PTE_P | PTE_U |
+    pte_t flags = entry_for(
+        prot, PTE_P | PTE_U |
                   (private ? PTE_COW : ((prot & VM_PROT_WRITE) && (write || !notify) ? PTE_W : 0)) |
-                  paging_prot_bits(prot);
+                  paging_prot_bits(prot));
     int got, bkl, rc = 1;
 
     vm_file_get(f);
@@ -1206,8 +1224,8 @@ static int anon_fault(struct mm *mm, uintptr_t page, uint32_t prot, int write)
         return 0;
     }
     rc = install_new(mm, page, phys,
-                     PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
-                         (write ? 0 : PTE_ZEROFILL) | paging_prot_bits(prot));
+                     entry_for(prot, PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
+                                         (write ? 0 : PTE_ZEROFILL) | paging_prot_bits(prot)));
     if (rc != 0) {
         free_frame(phys);
         return rc > 0 ? -1 : 0;
@@ -1216,10 +1234,35 @@ static int anon_fault(struct mm *mm, uintptr_t page, uint32_t prot, int write)
     return 1;
 }
 
+/** Whether an access at `addr` in `vma` may be resolved: the region allows
+ * it, or `force` reads a region with no access that is not a guard. */
+static int access_legal(const struct mm *mm, const vma_t *vma, uintptr_t addr, int write, int force)
+{
+    return region_allows(mm, vma, addr, write) ||
+           (force && !write && PROT_NO_ACCESS(vma->prot) && !vm_guarded(&mm->vm, addr));
+}
+
+/** Back the missing page at `addr` of the region `vma`: a device's, a
+ * file's or an anonymous one. As `vm_resolve_once` returns. */
+static int back_missing(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
+{
+    if (vma->prot & VM_PROT_IO) {
+        return vma->file && vma->file->device ? device_fault(mm, vma, addr) : 0;
+    }
+    if (vma->file) {
+        return vma->file->share ? shared_fault(mm, vma, addr, write)
+                                : file_fault(mm, vma, addr, write);
+    }
+    return anon_fault(mm, addr & ~(PAGE_SIZE - 1), vma->prot, write);
+}
+
 /**
  * One try at `vm_resolve_in`: 1 when the page is present and allows the
  * access, 0 when the access is illegal or no frame could be had, and -1
- * when the regions or the entry changed while a lock was let go.
+ * when the regions or the entry changed while a lock was let go. With
+ * `force`, a read of a region with no access is legal too, as Linux's
+ * FOLL_FORCE reads a PROT_NONE region (mm/gup.c, check_vma_flags), and
+ * its page is backed with a PROT_NONE entry (`entry_for`).
  *
  * A page that is there and allows the access needs nothing. Any other needs
  * a frame, or a copy-on-write copy, so the caches give frames back first
@@ -1231,7 +1274,7 @@ static int anon_fault(struct mm *mm, uintptr_t page, uint32_t prot, int write)
  * thread (`fault_count`).
  */
 static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit,
-                           int *balanced)
+                           int *balanced, int force)
 {
     page_dir_t *dir = mm->dir;
     vm_space_t *vm = &mm->vm;
@@ -1253,30 +1296,23 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     if (!vma) {
         return grow_fault(mm, page, as_limit);
     }
-    if (!region_allows(mm, vma, addr, write)) {
+    if (!access_legal(mm, vma, addr, write, force)) {
         return 0;
     }
-    if (pte_present(dir, addr)) {
-        if (!write || pte_writable(dir, addr)) {
-            return 1;
-        }
-        if (vma->type == VM_SHARED && vma->file && vma->file->mkwrite) {
-            return shared_mkwrite(mm, vma, addr);
-        }
-        rc = cow_fault(mm, addr);
-        if (rc > 0) {
-            fault_count(0);
-        }
-        return rc;
+    if (!pte_present(dir, addr)) {
+        return back_missing(mm, vma, addr, write);
     }
-    if (vma->prot & VM_PROT_IO) {
-        return vma->file && vma->file->device ? device_fault(mm, vma, addr) : 0;
+    if (!write || pte_writable(dir, addr)) {
+        return 1;
     }
-    if (vma->file) {
-        return vma->file->share ? shared_fault(mm, vma, addr, write)
-                                : file_fault(mm, vma, addr, write);
+    if (vma->type == VM_SHARED && vma->file && vma->file->mkwrite) {
+        return shared_mkwrite(mm, vma, addr);
     }
-    return anon_fault(mm, page, vma->prot, write);
+    rc = cow_fault(mm, addr);
+    if (rc > 0) {
+        fault_count(0);
+    }
+    return rc;
 }
 
 /**
@@ -1321,7 +1357,19 @@ static int vm_resolve_in(struct mm *mm, uintptr_t addr, int write, uintptr_t as_
     int rc, balanced = 0;
 
     do {
-        rc = vm_resolve_once(mm, addr, write, as_limit, &balanced);
+        rc = vm_resolve_once(mm, addr, write, as_limit, &balanced, 0);
+    } while (rc < 0);
+    return rc;
+}
+
+/** `vm_resolve_in` for a read that `paging_access` forces: the page of a
+ * region with no access is backed too (`vm_resolve_once`). */
+static int vm_resolve_forced(struct mm *mm, uintptr_t addr)
+{
+    int rc, balanced = 0;
+
+    do {
+        rc = vm_resolve_once(mm, addr, 0, (uintptr_t)RLIM_INFINITY, &balanced, 1);
     } while (rc < 0);
     return rc;
 }
@@ -2016,57 +2064,22 @@ static int access_write(struct mm *mm, const vma_t *vma, uintptr_t addr)
     return vma->file && vma->file->mkwrite ? shared_mkwrite(mm, vma, addr) : 1;
 }
 
-/** One page's part of `paging_access`: `len` bytes at `addr`, within one
- * page, to or from `p`; 0, -EIO or -ENOMEM as `paging_access` says. A
- * device region's bytes go through `access_device`, and a region of
- * memfd_secret and the vDSO's data page are -EIO, as Linux's
- * get_user_pages refuses both. The resolution and, for a write, the
- * balance of memory before a copy may sleep with `mm`'s regions' lock let
- * go, so the region is looked up again after them, and the page must still
- * be present in a region that allows some access. A shared file's frame is
- * held and validated by `mkwrite` before every kernel store, even when the
- * entry already allows writes, so writeback includes the copied bytes. */
-static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
+/** Whether `paging_access` refuses the page at `addr` of the region `vma`,
+ * NULL for none, with -EIO: memfd_secret's, the vDSO's data, a guard, or a
+ * region with no access unless `force`. */
+static int access_refused(const struct mm *mm, const vma_t *vma, uintptr_t addr, int force)
 {
-    const vma_t *vma;
-    uint8_t *map;
-    int rc;
+    return vma == NULL || (!force && PROT_NO_ACCESS(vma->prot)) ||
+           (vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) || vm_guarded(&mm->vm, addr);
+}
 
-retry:
-    vma = vm_find(&mm->vm, addr);
-    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
-        !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) || vm_guarded(&mm->vm, addr)) {
-        return -EIO;
-    }
-    if (vm_device_object(vma->file)) {
-        return access_device(vma, addr, p, len, write);
-    }
-    if (vma->prot & VM_PROT_IO) {
-        return -EIO;
-    }
-    if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {
-        return -EIO;
-    }
-    if (write && mem_short() && mmap_may_drop(mm)) {
-        balance_unlocked(mm);
-    }
-    vma = vm_find(&mm->vm, addr);
-    if (vma == NULL || !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_SECRET | VM_PROT_VVAR)) || vm_guarded(&mm->vm, addr) ||
-        !pte_present(mm->dir, addr)) {
-        return -EIO;
-    }
-    if (write) {
-        rc = access_write(mm, vma, addr);
-        if (rc < 0) {
-            goto retry;
-        }
-        if (rc == 0) {
-            return -EIO;
-        }
-    }
-    map = kmap_temp(paging_user_phys(mm->dir, addr) & ~(uintptr_t)(PAGE_SIZE - 1));
+/** Copy `len` bytes between `p` and the present page at `addr` of `mm`,
+ * into the page when `write`. 0, or -ENOMEM when no temporary mapping was
+ * free. */
+static int access_copy(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
+{
+    uint8_t *map = kmap_temp(paging_user_phys(mm->dir, addr) & ~(uintptr_t)(PAGE_SIZE - 1));
+
     if (!map) {
         return -ENOMEM;
     }
@@ -2079,7 +2092,70 @@ retry:
     return 0;
 }
 
-int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int write)
+/** One page's part of `paging_access`: `len` bytes at `addr`, within one
+ * page, to or from `p`, a write when `flags` has PAGING_ACCESS_WRITE; 0,
+ * -EIO or -ENOMEM as `paging_access` says. A device region's bytes go
+ * through `access_device`, and a region of memfd_secret and the vDSO's data
+ * page are -EIO, as Linux's get_user_pages refuses both. A region with no
+ * access is -EIO unless `flags` has PAGING_ACCESS_FORCE: then a read of a
+ * page of private anonymous memory that has none gives zeros, as Linux's
+ * zero page does, and any other page is backed with a PROT_NONE entry
+ * (`vm_resolve_forced`). The resolution and, for a write, the balance of
+ * memory before a copy may sleep with `mm`'s regions' lock let go, so the
+ * region is looked up again after them, and the page must still be present
+ * in a region that allows some access, or with the force any. A shared
+ * file's frame is held and validated by `mkwrite` before every kernel
+ * store, even when the entry already allows writes, so writeback includes
+ * the copied bytes. */
+static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int flags)
+{
+    const vma_t *vma;
+    int write = (flags & PAGING_ACCESS_WRITE) != 0;
+    int force = (flags & PAGING_ACCESS_FORCE) != 0;
+    int rc;
+
+retry:
+    vma = vm_find(&mm->vm, addr);
+    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || access_refused(mm, vma, addr, force)) {
+        return -EIO;
+    }
+    if (vm_device_object(vma->file)) {
+        return access_device(vma, addr, p, len, write);
+    }
+    if (vma->prot & VM_PROT_IO) {
+        return -EIO;
+    }
+    if (!pte_present(mm->dir, addr)) {
+        if (PROT_NO_ACCESS(vma->prot) && !write && !vma->file) {
+            k_memset(p, 0, len);
+            return 0;
+        }
+        if (PROT_NO_ACCESS(vma->prot) ? !vm_resolve_forced(mm, addr)
+                                      : !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {
+            return -EIO;
+        }
+    }
+    if (write && mem_short() && mmap_may_drop(mm)) {
+        balance_unlocked(mm);
+    }
+    vma = vm_find(&mm->vm, addr);
+    if (access_refused(mm, vma, addr, force) || (vma->prot & VM_PROT_IO) ||
+        !pte_present(mm->dir, addr)) {
+        return -EIO;
+    }
+    if (write) {
+        rc = access_write(mm, vma, addr);
+        if (rc < 0) {
+            goto retry;
+        }
+        if (rc == 0) {
+            return -EIO;
+        }
+    }
+    return access_copy(mm, addr, p, len, write);
+}
+
+int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int flags)
 {
     uint8_t *p = buf;
     int rc = 0;
@@ -2091,7 +2167,7 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int wr
         if (chunk > len) {
             chunk = len;
         }
-        rc = access_page(mm, addr, p, chunk, write);
+        rc = access_page(mm, addr, p, chunk, flags);
         addr += chunk;
         p += chunk;
         len -= chunk;

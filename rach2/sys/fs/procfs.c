@@ -7993,8 +7993,10 @@ static struct mm *procfs_mem_mm(const struct procfs_file *f)
  * Read or write `count` bytes of /proc/<pid>/mem at the descriptor's offset,
  * which is the address, through the address space the open allowed
  * (`procfs_mem_mm`), and move the offset past them, as GDB reads and writes
- * the memory of a tracee with pread64 and pwrite64. A write reaches
- * read-only program text, as a tracer's does. A transfer goes no further
+ * the memory of a tracee with pread64 and pwrite64. The access is forced,
+ * as Linux's mem_rw forces it: a write reaches read-only program text, as a
+ * tracer's does, and a PROT_NONE region is read (`paging_access`). A
+ * transfer goes no further
  * than a page at a time, and all of a page or none of it is done, so one
  * that meets an address no region allows has done every byte before it:
  * those are returned and the offset moves past them. When none could be,
@@ -8031,9 +8033,9 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *dst, const char __u
                 rc = -EFAULT;
                 break;
             }
-            rc = paging_access(mm, addr, buf, n, 1);
+            rc = paging_access(mm, addr, buf, n, PAGING_ACCESS_FORCE | PAGING_ACCESS_WRITE);
         } else {
-            rc = paging_access(mm, addr, buf, n, 0);
+            rc = paging_access(mm, addr, buf, n, PAGING_ACCESS_FORCE);
             if (rc == 0 && copy_to_user(dst + done, buf, n) != 0) {
                 rc = -EFAULT;
             }

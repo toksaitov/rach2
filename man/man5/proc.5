@@ -2940,11 +2940,17 @@ is the address, as GDB uses it through
 .Xr pread 2
 and
 .Xr pwrite 2 .
-An address no region allows, or one in the vDSO's data pages,
+An address of no region, of a guard region, or in the vDSO's data pages,
 .Li [vvar] ,
 is
-.Er EIO ,
-and a write reaches read-only program text, as a tracer's does.
+.Er EIO .
+The access is forced, as a tracer's is and as on Linux: a
+.Dv PROT_NONE
+region is read, an untouched page of private anonymous memory as zeros,
+and a write reaches a private one and read-only program text, though not a
+read-only or
+.Dv PROT_NONE
+shared one.
 A transfer that runs into such an address returns the bytes it did
 before it, as on Linux, and moves the offset past them.
 The file has mode 0600, and opening it needs the owner's access or
