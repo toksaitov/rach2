@@ -49,8 +49,8 @@ typedef int32_t (*sysfs_show_t)(void *obj, int arg, char *buf, uint32_t cap);
 
 /**
  * Take a write of `len` bytes at `buf`, a kernel copy that ends in no NUL:
- * return `len`, or -errno. The caller has checked that the writer is
- * privileged.
+ * return `len`, or -errno. The open has checked the writer against the
+ * file's mode, as Linux's generic_permission does.
  */
 typedef int32_t (*sysfs_store_t)(void *obj, int arg, const char *buf, uint32_t len);
 

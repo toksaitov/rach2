@@ -7541,15 +7541,15 @@ static const struct file_ops procfs_pciconfig_ops = {procfs_pciconfig_read,
                                                      0};
 
 /**
- * Whether the caller may open a PCI function's file, root's with the mode
- * bits `mode`, for access `acc` (0 read, 1 write, 2 both), as Linux's
+ * Whether the caller may open a /sys file, root's with the mode bits
+ * `mode`, for access `acc` (0 read, 1 write, 2 both), as Linux's
  * generic_permission judges a sysfs file: by the owner's bits when its
  * file-system user id is root's, else by the others' bits, which
  * CAP_DAC_OVERRIDE passes, and for a read CAP_DAC_READ_SEARCH, while root's
  * ids are mapped in its user namespace. Root's group is no help, since
  * these files give it no more than the others.
  */
-static int pci_file_may(uint32_t mode, int acc)
+static int sysfs_file_may(uint32_t mode, int acc)
 {
     uint32_t want = acc == 0 ? 4u : acc == 1 ? 2u : 6u;
 
@@ -7567,7 +7567,7 @@ static int pci_file_may(uint32_t mode, int acc)
 }
 
 /** Open raw PCI config, root's with mode 0644 as Linux's, which any caller
- * reads and a write needs `pci_file_may` to allow. Each access reaches the
+ * reads and a write needs `sysfs_file_may` to allow. Each access reaches the
  * current registers, including a read at a nonzero offset. */
 static int procfs_open_pciconfig(const struct vpath *vp, int flags)
 {
@@ -7575,7 +7575,7 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || !pci_file_may(0644, acc)) {
+    if (acc == 3 || !sysfs_file_may(0644, acc)) {
         return -EACCES;
     }
     if (!sysfs_pci_present(vp->syskey)) {
@@ -7822,7 +7822,7 @@ static const struct file_ops procfs_pcibar_ops = {
     procfs_close,       procfs_pcibar_mmap,  NULL,        0};
 
 /** Open a resourceN or resourceN_wc file, root's with mode 0600 as
- * Linux's, for the access `pci_file_may` allows. -EACCES for another caller,
+ * Linux's, for the access `sysfs_file_may` allows. -EACCES for another caller,
  * -ENOENT for a BAR without a length or a function that is not there,
  * -ENOMEM, or the descriptor's error. */
 static int procfs_open_pcibar(const struct vpath *vp, int flags)
@@ -7831,7 +7831,7 @@ static int procfs_open_pcibar(const struct vpath *vp, int flags)
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || !pci_file_may(0600, acc)) {
+    if (acc == 3 || !sysfs_file_may(0600, acc)) {
         return -EACCES;
     }
     if (!sysfs_pci_attr_present(vp->syskey, vp->procfile)) {
@@ -9384,9 +9384,11 @@ static int32_t procfs_sysattr_store(const struct procfs_file *f, char *text, uin
  * Write a writable /sys attribute, as Linux's kernfs writes a sysfs file:
  * the first PAGE_SIZE bytes at most of the `count` at `buf` go to the
  * attribute's store (`procfs_sysattr_store`), NUL-terminated, so that a
- * longer write is taken in part. An empty write is 0 with no store
- * called, as Linux's sysfs_kf_write answers it. The count taken, or
- * -EFAULT, -ENOMEM or the store's error.
+ * longer write is taken in part, and the description's offset moves past
+ * the count the store took, as kernfs_fop_write_iter moves it, so that a
+ * read through the same descriptor starts there. An empty write is 0 with
+ * no store called, as Linux's sysfs_kf_write answers it. The count taken,
+ * or -EFAULT, -ENOMEM or the store's error.
  */
 static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -9410,6 +9412,9 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
         rc = procfs_sysattr_store((const struct procfs_file *)e->priv, text, count);
     }
     kfree(text);
+    if (rc > 0) {
+        e->ofd->offset += (uint32_t)rc;
+    }
     return rc;
 }
 
@@ -9424,11 +9429,13 @@ static const struct file_ops procfs_sysattr_ops = {procfs_sysattr_read,
 
 /**
  * Open the writable attribute `attr` of the /sys directory `node` of the
- * device `key` for writing, or for reading and writing, which needs a
- * privileged caller, as its mode, 0644 and owned by root, says. Each read
- * and write reaches the value as it is then. The descriptor is a sysfs one,
- * with the node and the attribute in `origin_task` and the key in
- * `origin_pid`, as a snapshot of a /sys file has them.
+ * device `key` for writing, or for reading and writing, as
+ * `sysfs_file_may` judges the access against its mode, owned by root: a
+ * registered attribute's own (`sysfs_node_mode`), and 0644 for a fixed
+ * one's, as `procfs_fd_writable` reports them. Each read and write reaches
+ * the value as it is then. The descriptor is a sysfs one, with the node and
+ * the attribute in `origin_task` and the key in `origin_pid`, as a snapshot
+ * of a /sys file has them.
  */
 static int procfs_open_sysattr(int node, int key, int attr, int flags)
 {
@@ -9437,7 +9444,7 @@ static int procfs_open_sysattr(int node, int key, int attr, int flags)
     int acc = flags & 3;
     int fd;
 
-    if (acc == 3 || !proc_privileged(current_proc)) {
+    if (acc == 3 || !sysfs_file_may(node == SYSFS_REG ? sysfs_node_mode(key) : 0644u, acc)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
