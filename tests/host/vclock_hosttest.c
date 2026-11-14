@@ -3,7 +3,6 @@
  * vclock.c, built, started, ticked and stopped against a model machine.
  *
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
- * host-deps: rach2/sys/tick.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  * host-inputs: rach2/sys/arch/x86_64/vdsocode.s
  * host-inputs: rach2/sys/arch/x86_64/vdso32code.s
@@ -226,19 +225,6 @@ uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
         *rem = n % d;
     }
     return n / d;
-}
-
-/** The watch's refinement of the TSC's rate, which the model does not
- * keep. */
-void timer_tsc_watch_refine(uint32_t per_tick)
-{
-    (void)per_tick;
-}
-
-/** The reference clock's name in the records. */
-const char *refclock_name(void)
-{
-    return "hpet";
 }
 
 /** Every processor's TSC agreed at its start. */
