@@ -1041,9 +1041,14 @@ An unsupported bit, or a request after creating a vCPU, is EINVAL.
 .Pp
 .Pa /sys/module/kvm/parameters/enable_pmu
 reads Y or N according to the host PMU probe.
-.Pa /sys/module/kvm/parameters/force_emulation_prefix
-reads 0.
-Both are read-only.
+It is read-only.
+.Pa /sys/module/kvm/parameters/force_emulation_prefix ,
+.Pa eager_page_split
+and
+.Pa ignore_msrs
+are writable by root, as
+.Xr sysfs 5
+describes.
 .Sh FILES
 .Bl -tag -width /sys/module/kvm/parameters
 .It Pa /dev/kvm

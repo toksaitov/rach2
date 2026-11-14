@@ -348,7 +348,25 @@ gives as
 .Pa /dev/vfio/N .
 .Pa type
 reads
-.Ql identity ;
+.Ql identity ,
+and has mode 0644: a write of
+.Ql identity
+or
+.Ql auto ,
+with or without a newline, keeps the group's domain, as Linux's does when
+the default is already identity;
+.Ql DMA
+and
+.Ql DMA-FQ
+are
+.Er EINVAL ,
+as on a Linux kernel without CONFIG_IOMMU_DMA, and so is any other word.
+A caller without CAP_SYS_ADMIN and CAP_SYS_RAWIO in the first user
+namespace gets
+.Er EACCES ,
+and a group with no function, one a container holds or one with a
+function a driver other than vfio-pci has gets
+.Er EPERM ;
 .Pa reserved_regions
 has a line for each range the group's functions may not map, its start
 and end as
@@ -517,7 +535,18 @@ for the mouse's and
 .Ql serio:ty05pr00id00ex00
 for the pass-through port;
 .Pa bind_mode ,
-.Ql auto ;
+.Ql auto
+or
+.Ql manual ,
+mode 0644, which takes a write of either word or a prefix of one, compared
+over the bytes written as Linux's serio core compares them, so that
+.Ql manual
+with a newline is
+.Er EINVAL ;
+a mouse port in manual mode whose device is lost and does not answer the
+reconnect keeps no driver, its input device goes and its uevent names no
+.Ev DRIVER ,
+and once the mode is auto again, the port's next byte probes it anew;
 .Pa firmware_id ,
 the device's ACPI PNP IDs as Linux's i8042 writes them,
 .Ql PNP: LEN0036 PNP0f13
@@ -700,10 +729,16 @@ left; see
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent sent.
 .It Pa /sys/module/kvm/parameters
-On a processor with VMX or SVM, the read-only parameters of KVM that
-Linux's KVM selftests and kvm-unit-tests read, each a value and a newline:
+On a processor with VMX or SVM, the parameters of KVM that Linux's KVM
+selftests and kvm-unit-tests read, each a value and a newline:
 .Pa force_emulation_prefix ,
-.Ql 0 ;
+.Ql 0 ,
+which when not 0 lets a guest's
+.Ql ud2
+followed by
+.Ql kvm
+run the next instruction in KVM's emulator, and with bit 1 set also
+clear RFLAGS.RF;
 .Pa enable_pmu ,
 .Ql Y
 when the host has usable performance counters and
@@ -712,11 +747,55 @@ otherwise;
 .Pa tdp_mmu ,
 .Ql Y ;
 .Pa eager_page_split ,
-.Ql N ;
+.Ql N ,
+where Linux's is
+.Ql Y ,
+which when
+.Ql Y
+keeps a slot's mappings, split to 4 KiB pages and write-protected, when
+its dirty log is turned on;
 and
 .Pa ignore_msrs ,
 .Ql N ,
-since a guest's access to an MSR KVM does not have raises #GP.
+under which a guest's access to an MSR KVM does not have raises #GP, and
+which when
+.Ql Y
+makes such a read give 0 and such a write do nothing.
+.Pa force_emulation_prefix ,
+.Pa eager_page_split
+and
+.Pa ignore_msrs
+have mode 0644 and take a write from root: an integer as
+.Xr strtol 3
+reads it with base 0 for the first, and for the others a boolean whose
+first character is
+.Ql y ,
+.Ql t
+or
+.Ql 1
+for true and
+.Ql n ,
+.Ql f
+or
+.Ql 0
+for false, or whose first two are
+.Ql on
+or
+.Ql off ,
+in either case, as Linux's
+.Fn param_set_bool
+reads it;
+anything else is
+.Er EINVAL ,
+and an integer outside the range of an int is
+.Er ERANGE .
+The boot options
+.Cm kvm.force_emulation_prefix= ,
+.Cm kvm.eager_page_split=
+and
+.Cm kvm.ignore_msrs=
+set them at boot.
+The others are read-only.
 Beside it,
 .Pa /sys/module/kvm_intel/parameters
 has
@@ -1110,9 +1189,9 @@ and absent when the firmware gives 0xFF for both; the chassis type is
 in decimal; the UUID is in lowercase with its dashes, with its first
 three fields' bytes reversed from SMBIOS 2.6 on, and absent when it is
 all zeros or all ones.
-The serial numbers and the UUID have mode 0400, and are
-.Er EACCES
-to a caller that is not privileged.
+The serial numbers and the UUID have mode 0400, owner root, and an open
+of one is judged by that mode and the caller's file-system user ID and
+capabilities, as any file's.
 .Pa modalias
 is
 .Ql dmi: ,
