@@ -400,6 +400,14 @@ vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
     return 0;
 }
 
+/** 0: no page of the rows is a guard page. */
+int vm_guarded(const vm_space_t *vm, uintptr_t addr)
+{
+    (void)vm;
+    (void)addr;
+    return 0;
+}
+
 /** 0: no stack grows. */
 int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
 {
