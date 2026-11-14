@@ -28,9 +28,9 @@
      VIRTIO_BIT(VIRTIO_F_EVENT_IDX) | VIRTIO_BIT(VIRTIO_F_ACCESS_PLATFORM) | \
      VIRTIO_BIT(VIRTIO_F_ORDER_PLATFORM))
 
-/* The bytes of an indirect table page. */
-#define VIRTQ_INDIRECT_BYTES \
-    ((uint32_t)(VIRTQ_INDIRECT_TABLES * VIRTQ_INDIRECT_LEN * sizeof(struct virtq_desc)))
+/* The bytes of a page of indirect tables, and of one descriptor. */
+#define VIRTQ_PAGE_BYTES 4096u
+#define VIRTQ_DESC_BYTES ((uint32_t)sizeof(struct virtq_desc))
 
 /** Add `bits` to the device's status. */
 static void virtio_status_add(struct virtio_dev *d, uint8_t bits)
@@ -116,13 +116,87 @@ int virtio_has(const struct virtio_dev *d, unsigned bit)
     return bit < 64 && (d->features & VIRTIO_BIT(bit)) != 0;
 }
 
+uint64_t virtio_offered(struct virtio_dev *d)
+{
+    return d->ops->get_features(d);
+}
+
+int virtio_halt(struct virtio_dev *d)
+{
+    if (virtio_reset(d) == 0) {
+        return 0;
+    }
+    if (d->ops->dma_enable) {
+        d->ops->dma_enable(d, 0);
+        klog(KLOG_WARN, "virtio", "stopped: %s: its memory access turned off", d->name);
+    }
+    return -ETIMEDOUT;
+}
+
+/** The bytes of each page of `vq`'s indirect tables: the tables a page
+ * holds, which is all of them when they take less than a page. */
+static uint32_t virtqueue_ind_bytes(const struct virtqueue *vq)
+{
+    uint32_t n = vq->ind_tables < vq->ind_per_page ? vq->ind_tables : vq->ind_per_page;
+
+    return n * vq->ind_len * VIRTQ_DESC_BYTES;
+}
+
+/**
+ * Give `vq` the indirect tables its device asks for (`indirect_len` and
+ * `indirect_tables`), a page of them at a time from dma_alloc. A page that
+ * cannot be had leaves the tables before it, and none when the first
+ * cannot. The lengths are cut to a power of two within their bounds.
+ */
+static void virtqueue_ind_setup(struct virtio_dev *d, struct virtqueue *vq)
+{
+    uint16_t len = d->indirect_len ? d->indirect_len : VIRTQ_INDIRECT_LEN;
+    uint16_t tables = d->indirect_tables ? d->indirect_tables : VIRTQ_INDIRECT_TABLES;
+    uint16_t want, p;
+
+    if (len > VIRTQ_INDIRECT_MAX) {
+        len = VIRTQ_INDIRECT_MAX;
+    }
+    while (len & (len - 1u)) {
+        len &= (uint16_t)(len - 1u);
+    }
+    if (len < VIRTQ_INDIRECT_LEN) {
+        len = VIRTQ_INDIRECT_LEN;
+    }
+    if (tables > VIRTQ_INDIRECT_TABLES) {
+        tables = VIRTQ_INDIRECT_TABLES;
+    }
+    vq->ind_len = len;
+    vq->ind_per_page = (uint16_t)(VIRTQ_PAGE_BYTES / (len * VIRTQ_DESC_BYTES));
+    vq->ind_tables = tables;
+    want = (uint16_t)((tables + vq->ind_per_page - 1u) / vq->ind_per_page);
+    for (p = 0; p < want; p++) {
+        vq->ind_page[p] = (volatile struct virtq_desc *)d->ops->dma_alloc(
+            d, virtqueue_ind_bytes(vq), &vq->ind_page_addr[p]);
+        if (!vq->ind_page[p]) {
+            break;
+        }
+        vq->ind_pages++;
+    }
+    if (vq->ind_pages < want) {
+        vq->ind_tables = (uint16_t)(vq->ind_pages * vq->ind_per_page);
+    }
+    if (vq->ind_tables > 0) {
+        vq->indirect = vq->ind_page[0];
+        vq->indirect_addr = vq->ind_page_addr[0];
+        vq->indirect_free = (uint32_t)((1ul << vq->ind_tables) - 1u);
+    }
+}
+
 /** Free `vq`'s record, and its memory when `device_stopped` says the device
  * no longer reads it. */
 static void virtqueue_free(struct virtio_dev *d, struct virtqueue *vq, int device_stopped)
 {
+    uint16_t p;
+
     if (device_stopped) {
-        if (vq->indirect) {
-            d->ops->dma_free(d, (void *)(uintptr_t)vq->indirect, VIRTQ_INDIRECT_BYTES);
+        for (p = 0; p < vq->ind_pages; p++) {
+            d->ops->dma_free(d, (void *)(uintptr_t)vq->ind_page[p], virtqueue_ind_bytes(vq));
         }
         if (vq->ring_mem) {
             d->ops->dma_free(d, vq->ring_mem, vq->ring_bytes);
@@ -194,11 +268,7 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     vq->avail_addr = vq->desc_addr + avail_off;
     vq->used_addr = vq->desc_addr + used_off;
     if (virtio_has(d, VIRTIO_F_INDIRECT_DESC)) {
-        vq->indirect = (volatile struct virtq_desc *)d->ops->dma_alloc(d, VIRTQ_INDIRECT_BYTES,
-                                                                       &vq->indirect_addr);
-        if (vq->indirect) {
-            vq->indirect_free = (uint32_t)((1ul << VIRTQ_INDIRECT_TABLES) - 1u);
-        }
+        virtqueue_ind_setup(d, vq);
     }
     for (i = 0; i < size; i++) {
         vq->next[i] = (uint16_t)(i + 1u);
@@ -209,7 +279,7 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     vq->nfree = size;
     /* An indirect table holds a chain longer than the ring, as Linux's
      * virtqueue_add_split does (virtio_ring.c:576-580). */
-    vq->max_chain = vq->indirect && VIRTQ_INDIRECT_LEN > size ? VIRTQ_INDIRECT_LEN : size;
+    vq->max_chain = vq->indirect && vq->ind_len > size ? vq->ind_len : size;
     vq->max_bytes = 0;
     r = d->ops->queue_enable(d, vq);
     if (r != 0) {
@@ -445,16 +515,19 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
         vq->nfree = (uint16_t)(vq->nfree - descs);
         vq->chain[head] = (uint16_t)descs;
         vq->table[head] = -1;
-    } else if (vq->indirect && vq->indirect_free != 0 && vq->nfree > 0 &&
-               descs <= VIRTQ_INDIRECT_LEN) {
+    } else if (vq->indirect && vq->indirect_free != 0 && vq->nfree > 0 && descs <= vq->ind_len) {
         volatile struct virtq_desc *tbl;
+        uint64_t tbl_addr;
+        uint32_t at;
 
         t = 0;
         while (!(vq->indirect_free & (1u << t))) {
             t++;
         }
         vq->indirect_free &= ~(1u << t);
-        tbl = vq->indirect + t * VIRTQ_INDIRECT_LEN;
+        at = (uint32_t)(t % vq->ind_per_page) * vq->ind_len;
+        tbl = vq->ind_page[t / vq->ind_per_page] + at;
+        tbl_addr = vq->ind_page_addr[t / vq->ind_per_page] + (uint64_t)at * VIRTQ_DESC_BYTES;
         d = 0;
         for (k = 0; k < total; k = j) {
             j = virtqueue_run(sg, k, out, total, &len);
@@ -462,9 +535,8 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
             d++;
         }
         vq->free_head = vq->next[head];
-        vq->desc[head].addr =
-            vq->indirect_addr + (uint64_t)t * VIRTQ_INDIRECT_LEN * sizeof(struct virtq_desc);
-        vq->desc[head].len = (uint32_t)(descs * sizeof(struct virtq_desc));
+        vq->desc[head].addr = tbl_addr;
+        vq->desc[head].len = (uint32_t)(descs * VIRTQ_DESC_BYTES);
         vq->desc[head].flags = VIRTQ_DESC_F_INDIRECT;
         vq->nfree--;
         vq->chain[head] = 1;

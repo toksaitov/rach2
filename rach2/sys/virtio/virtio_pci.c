@@ -75,7 +75,7 @@
 
 /* The interrupt slots the devices share, the shared memory regions kept
  * for each, and the most of a window that is mapped. */
-#define VP_SLOTS   16
+#define VP_SLOTS   32
 #define VP_SHM     4
 #define VP_MAP_MAX 0x10000u
 
@@ -436,10 +436,28 @@ VP_SLOT_HANDLER(12)
 VP_SLOT_HANDLER(13)
 VP_SLOT_HANDLER(14)
 VP_SLOT_HANDLER(15)
+VP_SLOT_HANDLER(16)
+VP_SLOT_HANDLER(17)
+VP_SLOT_HANDLER(18)
+VP_SLOT_HANDLER(19)
+VP_SLOT_HANDLER(20)
+VP_SLOT_HANDLER(21)
+VP_SLOT_HANDLER(22)
+VP_SLOT_HANDLER(23)
+VP_SLOT_HANDLER(24)
+VP_SLOT_HANDLER(25)
+VP_SLOT_HANDLER(26)
+VP_SLOT_HANDLER(27)
+VP_SLOT_HANDLER(28)
+VP_SLOT_HANDLER(29)
+VP_SLOT_HANDLER(30)
+VP_SLOT_HANDLER(31)
 
 static const isr_handler_t vp_slot_handler[VP_SLOTS] = {
-    vp_slot0, vp_slot1, vp_slot2,  vp_slot3,  vp_slot4,  vp_slot5,  vp_slot6,  vp_slot7,
-    vp_slot8, vp_slot9, vp_slot10, vp_slot11, vp_slot12, vp_slot13, vp_slot14, vp_slot15};
+    vp_slot0,  vp_slot1,  vp_slot2,  vp_slot3,  vp_slot4,  vp_slot5,  vp_slot6,  vp_slot7,
+    vp_slot8,  vp_slot9,  vp_slot10, vp_slot11, vp_slot12, vp_slot13, vp_slot14, vp_slot15,
+    vp_slot16, vp_slot17, vp_slot18, vp_slot19, vp_slot20, vp_slot21, vp_slot22, vp_slot23,
+    vp_slot24, vp_slot25, vp_slot26, vp_slot27, vp_slot28, vp_slot29, vp_slot30, vp_slot31};
 
 /** The INTx line, which several devices may share: each device on it reads
  * its ISR status, which says whether it raised the line and why. */
@@ -612,6 +630,7 @@ static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
 
     vp_msix_free(vp);
     vp->mode = VP_IRQ_NONE;
+    d->polled = 0;
     if (entries >= (uint32_t)want && vp_slots_free() >= want) {
         vp->mode = VP_IRQ_MSIX;
         if (vp_msix_take(vp, want) == 0) {
@@ -638,6 +657,7 @@ static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
     vp_w16(vp, VP_CONFIG_MSIX_VECTOR, VIRTIO_NO_VECTOR);
     if (vp->pci.irq == 0 || vp->pci.irq >= 16) {
         vp->mode = VP_IRQ_POLLED;
+        d->polled = 1;
         vp_intx_disable(vp, 1);
         klog(KLOG_INFO, "virtio", "interrupts: %s: polled, no msi-x and no interrupt line",
              vp->dev.name);

@@ -88,13 +88,17 @@ struct virtq_used_elem {
 #define VIRTQ_MAX_SIZE 128
 
 /*
- * Indirect tables (VIRTIO_F_INDIRECT_DESC): one page per queue, cut into
- * VIRTQ_INDIRECT_TABLES tables of VIRTQ_INDIRECT_LEN descriptors. A buffer
- * of more segments than the queue has free descriptors goes into one when
- * the device offered the feature and a table is free.
+ * Indirect tables (VIRTIO_F_INDIRECT_DESC): VIRTQ_INDIRECT_TABLES tables of
+ * VIRTQ_INDIRECT_LEN descriptors per queue, in one page, unless the driver
+ * asks for others (`indirect_len` and `indirect_tables` of the device): up
+ * to VIRTQ_INDIRECT_TABLES tables of up to VIRTQ_INDIRECT_MAX descriptors,
+ * as many to a page as fit. A buffer of more segments than the queue has
+ * free descriptors goes into one when the device offered the feature and a
+ * table is free.
  */
 #define VIRTQ_INDIRECT_TABLES 16
 #define VIRTQ_INDIRECT_LEN    16
+#define VIRTQ_INDIRECT_MAX    256
 
 /* The queues a device may have set up at once. */
 #define VIRTIO_MAX_QUEUES 8
@@ -138,9 +142,15 @@ struct virtqueue {
     uint64_t desc_addr, avail_addr, used_addr; /* as the device reads them */
     void *ring_mem;
     uint32_t ring_bytes;
-    volatile struct virtq_desc *indirect; /* the tables, or NULL */
+    volatile struct virtq_desc *indirect; /* the first page of tables, or NULL */
     uint64_t indirect_addr;
-    uint32_t indirect_free;         /* a bit for each free table */
+    uint32_t indirect_free; /* a bit for each free table */
+    uint16_t ind_len;       /* descriptors in a table */
+    uint16_t ind_tables;    /* the tables */
+    uint16_t ind_per_page;  /* tables in one page of them */
+    uint16_t ind_pages;     /* the pages, each from dma_alloc */
+    volatile struct virtq_desc *ind_page[VIRTQ_INDIRECT_TABLES];
+    uint64_t ind_page_addr[VIRTQ_INDIRECT_TABLES];
     uint16_t max_chain;             /* descriptors one chain may hold; the transport's */
     uint32_t max_bytes;             /* bytes one chain may carry each way, 0 for any */
     uint16_t free_head;             /* the first free descriptor */
@@ -318,6 +328,18 @@ struct virtio_dev {
      * thread, so a driver may make it without the big lock; set by the
      * transport, as virtio-pci sets it. */
     int notify_unlocked;
+    /* The indirect tables each queue set up after this has: descriptors in
+     * a table, a power of two from VIRTQ_INDIRECT_LEN to VIRTQ_INDIRECT_MAX,
+     * and tables, 1 to VIRTQ_INDIRECT_TABLES; 0 takes VIRTQ_INDIRECT_LEN
+     * and VIRTQ_INDIRECT_TABLES. Set by the driver, as virtio-blk asks for
+     * tables long enough for a request of its largest size, as Linux's
+     * virtio_ring allocates each table at the chain's length. */
+    uint16_t indirect_len;
+    uint16_t indirect_tables;
+    /* The transport gives the queues no interrupt and the driver reaps
+     * them by polling (`virtqueue_reap`); set by irq_setup, as virtio-pci
+     * sets it for a function with neither MSI-X nor a line. */
+    int polled;
     struct virtqueue *queues[VIRTIO_MAX_QUEUES];
     uint32_t config_events;
     /* The device on the virtio bus in /sys (virtio_bus.c), each a handle of
@@ -370,6 +392,24 @@ int virtio_init(struct virtio_dev *d, uint64_t wanted, uint16_t nqueues);
 
 /** Whether feature bit `bit` was negotiated. */
 int virtio_has(const struct virtio_dev *d, unsigned bit);
+
+/**
+ * The 64 feature bits the device offers, read before virtio_init, for a
+ * driver whose queue count depends on them, as virtio-blk's on
+ * VIRTIO_BLK_F_MQ: Linux has them in `dev->features` before its driver's
+ * probe asks for its queues (drivers/virtio/virtio.c:310-330).
+ */
+uint64_t virtio_offered(struct virtio_dev *d);
+
+/**
+ * Reset `d` and, when the reset does not finish, stop it from reaching
+ * memory (`dma_enable`), freeing nothing: for a driver that gives up on a
+ * device from a context that may not free, or while another processor may
+ * still be polling its queues. 0 when the reset finished; -ETIMEDOUT when
+ * it did not, with the device's memory access turned off on a transport
+ * that has `dma_enable`. virtio_teardown frees the queues later.
+ */
+int virtio_halt(struct virtio_dev *d);
 
 /**
  * Set up queue `index`, below the `nqueues` given to virtio_init, with
