@@ -3377,15 +3377,18 @@ static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
  * whose sequence starts empty, as Linux's new inode's does (fs/inode.c:209);
  * then the blocks of a regular file, a directory or a long symbolic link
  * from the end (`ext2_punch`), then the inode written zeroed with its
- * deletion time, then its reference to its extended-attribute block
- * (`ext2_attr_release`), then its bit and counts, these two under their
- * groups' locks with the blocks they read fetched first, so that a lock
- * waits on the disk only for a block evicted again. Once the slot is
- * written zeroed the node's `unstored` mark is cleared, since nothing of it
- * is left to store, and the `unlinked` mark before the bit is freed. Each
- * step reads through the reclaim reader (`ext2_read_reclaim`), which
- * reports a damaged or unread block and leaves what it holds taken, so a
- * step returns only a failed write, after which nothing further would land.
+ * deletion time, through on a strict mount and `first` on one that writes
+ * back, so that it reaches the device before its cleared bit, which goes
+ * `after` it (`ext2_inode_bit_free`), then its reference to its
+ * extended-attribute block (`ext2_attr_release`), then its bit and counts,
+ * these two under their groups' locks with the blocks they read fetched
+ * first, so that a lock waits on the disk only for a block evicted again.
+ * Once the slot is written zeroed the node's `unstored` mark is cleared,
+ * since nothing of it is left to store, and the `unlinked` mark before the
+ * bit is freed. Each step reads through the reclaim reader
+ * (`ext2_read_reclaim`), which reports a damaged or unread block and leaves
+ * what it holds taken, so a step returns only a failed write, after which
+ * nothing further would land.
  * A fenced node (`n->fenced`) is -EIO before any step on the disk, since its
  * pointers and its attribute block may name another file's blocks. 0, or
  * -errno.
@@ -3412,7 +3415,8 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
         k_memset(raw, 0, sizeof(raw));
         LE32_PUT(raw + 20, now_seconds()); /* i_dtime */
         rc = ext2_write_bytes(em, ext2_inode_offset(em, n->ino), raw, sizeof(raw),
-                              WRITE_THROUGH | WRITE_KIND(READ_SLOT));
+                              (ext2_em_strict(em) ? WRITE_THROUGH : WRITE_FIRST) |
+                                  WRITE_KIND(READ_SLOT));
     }
     if (rc != 0) {
         return rc;

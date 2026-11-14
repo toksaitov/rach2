@@ -326,6 +326,15 @@ int bcache_state(block_device_t *dev, uint64_t block)
     return block < TEST_BLOCKS && uncached[block] ? 0 : 1;
 }
 
+/** Return -1, clean: the model writes every block at once, so an inode's
+ * bit never waits for its bitmap's write. */
+int bcache_order(block_device_t *dev, uint64_t block)
+{
+    (void)dev;
+    (void)block;
+    return -1;
+}
+
 /** No row reads a file into page frames, which `read_frames` alone does. */
 int block_read_frames(block_device_t *dev, uint64_t lba, uint32_t count, const uintptr_t *frames)
 {
