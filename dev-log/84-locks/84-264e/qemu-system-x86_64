@@ -1,0 +1,27 @@
+#!/bin/sh
+# qemu-system-x86_64: 84-264e's QEMU wrapper, put first on PATH. A KVM run
+# gets a second QMP socket, from which poll.py reads KVM's statistics, and,
+# with EXITS_TRACE set, QEMU's device-access trace events, which count.awk
+# counts; EXITS_SPLIT moves the PIT and PIC into QEMU. Each run's files go
+# to a new directory under EXITS_OUT. Any other run is the real QEMU's.
+real=/usr/bin/qemu-system-x86_64
+here=$(cd "$(dirname "$0")" && pwd)
+case " $* " in
+    *" -accel kvm "*|*"accel=kvm"*|*" -enable-kvm "*) ;;
+    *) exec "$real" "$@" ;;
+esac
+out=${EXITS_OUT:-$here/out}
+mkdir -p "$out"
+d=$(mktemp -d "$out/q.XXXXXX")
+for a in "$@"; do printf '%s\n' "$a"; done > "$d/args"
+date +%s.%N > "$d/start"
+env > "$d/env"
+[ -z "${EXITS_SPLIT:-}" ] || set -- "$@" -machine kernel-irqchip=split
+set -- "$@" -qmp "unix:$d/s,server=on,wait=off"
+if [ -n "${EXITS_TRACE:-}" ]; then
+    mkfifo "$d/fifo"
+    setsid mawk -v out="$d/access.txt" -f "$here/count.awk" < "$d/fifo" > "$d/awk.log" 2>&1 &
+    set -- "$@" -trace "events=$here/events" -D "$d/fifo"
+fi
+setsid python3 -I "$here/poll.py" "$d" > "$d/poll.log" 2>&1 < /dev/null &
+exec "$real" "$@"
