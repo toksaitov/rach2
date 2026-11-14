@@ -310,9 +310,10 @@ typedef struct vm_space {
 } vm_space_t;
 
 /* kernel.randomize_va_space, read at each exec (`exec_layout`): 0 places a
- * new image at the fixed addresses of the architecture's cpu.h; 1 moves its
- * stack, its mmap base and a position-independent program by random
- * offsets; 2 moves its heap's start as well. It starts at 2 where the
+ * new image at the fixed addresses of the architecture's cpu.h; any other
+ * value moves its stack, its mmap base and a position-independent program
+ * by random offsets, and 2 or more moves its heap's start as well, as
+ * Linux reads the int its `proc_dointvec` takes. It starts at 2 where the
  * architecture draws offsets and at 0 where it draws none (ASLR_MMAP_PAGES
  * 0), and there a value written changes no address. */
 extern int randomize_va_space;

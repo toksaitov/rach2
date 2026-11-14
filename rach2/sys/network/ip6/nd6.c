@@ -288,12 +288,13 @@ int nd6_prefer_temp(const struct netdev *nd)
     return ni && ni->conf.v[ND6_USE_TEMPADDR] >= 2;
 }
 
-/** Whether `nd` takes router advertisements: accept_ra 1 on a host, or 2. */
+/** Whether `nd` takes router advertisements: accept_ra not 0 on a host,
+ * or 2 on a router, as Linux's `ipv6_accept_ra`. */
 static int accepts_ra(const struct nd6_if *ni)
 {
     int32_t ra = ni->conf.v[ND6_ACCEPT_RA];
 
-    return ra == 2 || (ra == 1 && !ni->conf.v[ND6_FORWARDING]);
+    return ni->conf.v[ND6_FORWARDING] ? ra == 2 : ra != 0;
 }
 
 int nd6_conf_get(int which, int key, int32_t *value)
@@ -315,8 +316,10 @@ static void solicit_routers(struct netdev *nd, struct nd6_if *ni);
 
 /**
  * Put in force on the interface `nd` the change of `key` to `value`: the
- * write itself and what it changes. Called with interrupts on, from a
- * system call.
+ * write itself and what it changes. disable_ipv6 and forwarding act only
+ * when their truth changes, as Linux's `addrconf_disable_ipv6` and
+ * `addrconf_fixup_forwarding` do. Called with interrupts on, from a system
+ * call.
  */
 static void if_set(struct netdev *nd, int key, int32_t value)
 {
@@ -326,7 +329,7 @@ static void if_set(struct netdev *nd, int key, int32_t value)
     int i;
 
     ni->conf.v[key] = value;
-    if (old == value) {
+    if (old == value || ((key == ND6_DISABLE_IPV6 || key == ND6_FORWARDING) && !old == !value)) {
         return;
     }
     if (key == ND6_DISABLE_IPV6 && value) {
@@ -381,12 +384,7 @@ int nd6_conf_set(int which, int key, int32_t value)
     if (!c) {
         return -ENODEV;
     }
-    if ((key == ND6_DISABLE_IPV6 || key == ND6_AUTOCONF || key == ND6_FORWARDING) && value != 0 &&
-        value != 1) {
-        return -EINVAL;
-    }
-    if ((key == ND6_ACCEPT_RA && (value < 0 || value > 2)) ||
-        (key == ND6_RA_DEFRTR_METRIC && value < 1)) {
+    if (key == ND6_RA_DEFRTR_METRIC && value == 0) {
         return -EINVAL;
     }
     if (which >= 1) {

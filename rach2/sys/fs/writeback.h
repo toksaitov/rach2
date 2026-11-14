@@ -35,8 +35,10 @@
 /* /proc/sys/vm's dirty_expire_centisecs and dirty_writeback_centisecs, in
  * hundredths of a second, and dirtytime_expire_seconds, which Linux reads
  * for lazytime mounts and which nothing here does, since no mount keeps
- * times lazily. A writeback interval of 0 stops the periodic write-back;
- * the background threshold still wakes the thread. */
+ * times lazily. A writeback interval of 0 stops the periodic write-back,
+ * and a negative one, which Linux keeps as unsigned, is that many
+ * hundredths as an unsigned int; the background threshold still wakes the
+ * thread. */
 extern int dirty_expire_interval;
 extern int dirty_writeback_interval;
 extern int dirtytime_expire_interval;

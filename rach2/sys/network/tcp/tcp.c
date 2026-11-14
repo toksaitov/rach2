@@ -469,7 +469,8 @@ static uint32_t tcp_ms_ticks(uint32_t ms)
  * SYN did.
  *
  * The segment size is also the largest the search for a larger one may
- * return to (`mss_max`); with `tcp_mtu_probing` 2 the connection starts at
+ * return to (`mss_max`); with `tcp_mtu_probing` 2 or more, as Linux's
+ * `tcp_mtup_init` reads it, the connection starts at
  * TCP_BASE_MSS, or the floor when that is larger, and probes upward.
  */
 static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_len)
@@ -508,7 +509,7 @@ static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_
     tcb->snd_mss = mss;
     tcb->mss_max = mss;
     tcb->mss_hi = mss;
-    if (tcp_mtu_probing == 2) {
+    if (tcp_mtu_probing >= 2) {
         uint16_t base = TCP_BASE_MSS < tcp_mss_floor(tcb) ? tcp_mss_floor(tcb) : TCP_BASE_MSS;
 
         tcb->mtup_on = 1;
@@ -2127,6 +2128,15 @@ static int tcp_rto_expire(struct tcb *tcb)
     return 0;
 }
 
+/** The ticks of a keepalive time or interval of `secs` seconds, none for
+ * 0 or less: /proc/sys/net/ipv4's tcp_keepalive_time and _intvl take
+ * either sign, as Linux's `proc_dointvec_jiffies` does, and Linux's timer
+ * set that far takes a time already past as due. */
+static uint32_t tcp_keep_ticks(int secs)
+{
+    return secs > 0 ? (uint32_t)secs * TICK_HZ : 0u;
+}
+
 /**
  * Run the keepalive of `tcb` for a tick (TCP_KEEPIDLE_DEFAULT). It is armed
  * from the tick that finds SO_KEEPALIVE set on the socket, which counts as
@@ -2169,8 +2179,8 @@ static void tcp_keepalive(struct tcb *tcb)
         tcb->snd_una != tcb->snd_nxt || tcb->send_tail != tcb->send_head) {
         return;
     }
-    idle = (uint32_t)(s->keepidle ? s->keepidle : tcp_keepalive_time) * TICK_HZ;
-    intvl = (uint32_t)(s->keepintvl ? s->keepintvl : tcp_keepalive_intvl) * TICK_HZ;
+    idle = tcp_keep_ticks(s->keepidle ? s->keepidle : tcp_keepalive_time);
+    intvl = tcp_keep_ticks(s->keepintvl ? s->keepintvl : tcp_keepalive_intvl);
     cnt = (uint32_t)(s->keepcnt ? s->keepcnt : tcp_keepalive_probes);
     if (now - tcb->ka_since < idle || (tcb->ka_probes > 0 && now - tcb->ka_probe_at < intvl)) {
         return;
@@ -4389,8 +4399,8 @@ static uint32_t tcp_idle_keepalive(const struct tcb *tcb, uint32_t now)
         tcb->snd_una != tcb->snd_nxt || tcb->send_tail != tcb->send_head) {
         return wait;
     }
-    idle = (uint32_t)(s->keepidle ? s->keepidle : tcp_keepalive_time) * TICK_HZ;
-    intvl = (uint32_t)(s->keepintvl ? s->keepintvl : tcp_keepalive_intvl) * TICK_HZ;
+    idle = tcp_keep_ticks(s->keepidle ? s->keepidle : tcp_keepalive_time);
+    intvl = tcp_keep_ticks(s->keepintvl ? s->keepintvl : tcp_keepalive_intvl);
     IDLE_TIMER_MIN(wait, tcb->ka_probes ? tcb->ka_probe_at + intvl : tcb->ka_since + idle, now);
     return wait;
 }

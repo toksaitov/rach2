@@ -90,12 +90,12 @@ struct nd6_row {
 #define ND6_CONF_ALL     (-1) /* `which` for `all` */
 #define ND6_CONF_DEFAULT 0    /* `which` for `default`; an ifindex otherwise */
 
-#define ND6_DISABLE_IPV6     0 /* 1: no IPv6 on the interface, its addresses gone */
-#define ND6_ACCEPT_RA        1 /* 0 ignore, 1 when not forwarding, 2 always */
-#define ND6_AUTOCONF         2 /* 1: SLAAC addresses from prefixes advertised */
-#define ND6_FORWARDING       3 /* 1: a router: no solicitations, R set in answers */
+#define ND6_DISABLE_IPV6     0 /* not 0: no IPv6 on the interface, its addresses gone */
+#define ND6_ACCEPT_RA        1 /* 0 ignore, 2 always, any other when not forwarding */
+#define ND6_AUTOCONF         2 /* not 0: SLAAC addresses from prefixes advertised */
+#define ND6_FORWARDING       3 /* not 0: a router: no solicitations, R set in answers */
 #define ND6_USE_TEMPADDR     4 /* <= 0 none, 1 make temporary addresses, 2 prefer them */
-#define ND6_RA_DEFRTR_METRIC 5 /* the metric of a router's default route, 1024 */
+#define ND6_RA_DEFRTR_METRIC 5 /* unsigned: a router's default route's metric, 1024 */
 #define ND6_CONF_KEYS        6
 
 /**
@@ -105,9 +105,11 @@ struct nd6_row {
 int nd6_conf_get(int which, int key, int32_t *value);
 
 /**
- * Write the setting `key` of `which`. The booleans take 0 or 1, accept_ra 0 to
- * 2, ra_defrtr_metric 1 or more and use_tempaddr any value; -EINVAL otherwise,
- * or -ENODEV. What a write changes happens at once: disabling IPv6 takes every
+ * Write the setting `key` of `which`. Every setting takes any int, as Linux's
+ * `proc_dointvec` does, but ra_defrtr_metric, an unsigned 1 to UINT_MAX in
+ * `value`'s bits; -EINVAL for a metric of 0, or -ENODEV. A boolean is true
+ * when it is not 0, and disable_ipv6 and forwarding act only when their truth
+ * changes. What a write changes happens at once: disabling IPv6 takes every
  * address of the interface away, `lo`'s ::1 among them, and enabling it again
  * gives back ::1 or a card's link-local address and solicits routers;
  * forwarding on stops the solicitations and joins ff02::2; a new

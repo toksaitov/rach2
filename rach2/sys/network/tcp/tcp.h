@@ -154,7 +154,8 @@
  * lowers the top of the search. A search that has closed to within
  * TCP_MTU_PROBE_THRESH bytes starts again from the top after
  * TCP_PROBE_INTERVAL, as does one TCP_PROBE_INTERVAL after a timeout
- * lowered the size. Mode 2 starts every connection at TCP_BASE_MSS and
+ * lowered the size. Mode 2, or any mode above it, as Linux's
+ * `tcp_mtup_init` reads it, starts every connection at TCP_BASE_MSS and
  * probes upward.
  */
 #define TCP_MTU_PROBING_DEFAULT 0
@@ -455,9 +456,11 @@ struct tcb {
 
 /*
  * The /proc/sys/net/ipv4 settings: tcp_keepalive_time and
- * tcp_keepalive_intvl in seconds, tcp_keepalive_probes, tcp_retries2 and
- * tcp_mtu_probing, read by each connection when it needs them, so that a
- * write applies to the connections open as well as to new ones.
+ * tcp_keepalive_intvl in seconds, of either sign, a time of 0 or less
+ * being due at once, as on Linux; tcp_keepalive_probes, tcp_retries2 and
+ * tcp_mtu_probing, from 0 to 255; each read by each connection when it
+ * needs it, so that a write applies to the connections open as well as to
+ * new ones.
  */
 extern int tcp_keepalive_time;
 extern int tcp_keepalive_intvl;
