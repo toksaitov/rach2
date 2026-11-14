@@ -67,8 +67,10 @@
  * while due passes its turn to the next, whose half second begins then; a
  * stretch of two seconds the whole machine spent stopped, between a turn's
  * first kick and its answer, ends no turn, and one after four unanswered
- * passes ends it but stops no clock; and a third processor whose TSC
- * drifts 500 parts in a million is caught while the second never answers.
+ * passes ends it but stops no clock; and while the second processor never
+ * answers, a drift of the boot processor, the one of two left, is caught,
+ * since the turn it takes back keeps until it measured its span, and so is
+ * a third processor's.
  */
 
 #include "arch/x86_64/vclock.c"
@@ -1502,11 +1504,26 @@ static void watch_pause_rows(void)
           "a machine stopped two seconds after them keeps the clock, the turn lost");
 }
 
-/** A drift caught while another processor never answers, and the model
- * put back for the rows after. */
+/** A drift caught while another processor never answers, on the one
+ * processor left that answers and on a third, and the model put back for
+ * the rows after. */
 static void watch_silent_rows(void)
 {
     uint32_t ran;
+
+    watch_boot(2);
+    deaf[1] = 1;
+    ran = watch_ticks(4u * TICK_HZ);
+    CHECK(ran == 4u * TICK_HZ && vclock_running() && watch_refined && woken[1] == 0,
+          "with the second of two processors silent the clock runs, its rate set");
+    drift_ppm[0] = 1000;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(4u * TICK_HZ);
+    CHECK(!vclock_running() && vclock_refusal() == vclock_parted_why,
+          "and the boot processor's TSC drifting 1000 parts in a million stops it, the "
+          "turn it takes back from the silent one kept until it measured its span");
+    CHECK(ran <= 2u * TICK_HZ, "within two seconds");
+    drift_ppm[0] = 0;
 
     watch_boot(3);
     deaf[1] = 1;
