@@ -18,8 +18,10 @@
  * plane, composed with the cursor's opaque, clear and half-covered pixels
  * blended, the CRC equal to the test's own of the frame it expects
  * (76-12.1). Vblanks from the tick at the mode's rate over the model's
- * clock, none before their time, at most eight for a tick that comes
- * late, and the timer off five seconds after the last holder (76-12.2).
+ * clock, none before their time, each stamped with the end of its frame
+ * however late its tick, the next deadline published, at most eight for a
+ * tick that comes late, and the timer off five seconds after the last
+ * holder (76-12.2).
  * Equal frames with equal CRCs and consecutive frame numbers, a composer
  * that fell behind entering each frame, a flip that changes the CRC and
  * one back that restores it, a gamma table of zeros that makes the frame
@@ -45,6 +47,15 @@ uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
 }
 
 extern int strncmp(const char *a, const char *b, unsigned long n);
+
+/* The fine service deadline vkms last published, in monotonic ns. */
+static int64_t wake_at_ns;
+
+/** Keep the deadline, which the rows compare with the timer's. */
+void timer_service_wake_at(int64_t ns)
+{
+    wake_at_ns = ns;
+}
 
 /* ---- the kernel around the driver ---- */
 
@@ -692,6 +703,8 @@ static void row_vblank(void)
     model_now_ns = next;
     vkms_tick();
     CHECK(v->crtc.vblank.count == count + 1 && v->next_ns == next + period, "one at its time");
+    CHECK(v->crtc.vblank.time_ns == next && wake_at_ns == v->next_ns,
+          "stamped with its frame's end; the next deadline published");
     count = v->crtc.vblank.count;
     start = model_now_ns;
     for (i = 0; i < 1000; i++) {
@@ -700,6 +713,11 @@ static void row_vblank(void)
     }
     CHECK(v->crtc.vblank.count == count + (uint64_t)((model_now_ns - start) / period),
           "a second of ticks: one vblank each frame");
+    next = v->next_ns;
+    model_now_ns = next + 3000000;
+    vkms_tick();
+    CHECK(v->crtc.vblank.time_ns == next && wake_at_ns == next + period,
+          "a tick 3 ms late: the vblank stamped with its frame's end, not the tick's time");
     count = v->crtc.vblank.count;
     model_now_ns += 1000000000ll;
     vkms_tick();

@@ -1,8 +1,9 @@
 /*
  * vkms.c: Linux's vkms, a display in software for IGT's tests: one CRTC
  * with a primary plane, a cursor plane and, when asked, eight overlay
- * planes, a virtual connector, vblanks from the kernel's tick at the mode's
- * rate, and a CRC of each frame composed in memory. `rach2.vkms` starts it.
+ * planes, a virtual connector, vblanks at the mode's rate from a fine
+ * service deadline, each stamped with the time its frame ends, and a CRC of
+ * each frame composed in memory. `rach2.vkms` starts it.
  */
 
 #include "../idle_timer.h"
@@ -68,7 +69,10 @@ struct vkms_scene {
  * primary, the overlays and the cursor, in the order Linux makes them,
  * which is their order from the bottom up. `timer_on`, `period_ns` and
  * `next_ns` are the vblank timer: on while the core holds vblanks, a frame
- * of the mode long, firing at `next_ns` of CLOCK_MONOTONIC. `scene` is what
+ * of the mode long, firing at `next_ns` of CLOCK_MONOTONIC, which the tick
+ * moves on by a period before it handles the vblank, as Linux's
+ * hrtimer_forward does, so that the vblank being handled ended at
+ * `next_ns - period_ns`. `scene` is what
  * the last commit programmed. While `composer_enabled`, the CRC source is
  * on: each vblank asks for the frames from `frame_start` to `frame_end`
  * (`crc_pending`), which the composer thread composes and enters. The tick
@@ -557,6 +561,30 @@ void vkms_tick(void)
         v->next_ns += v->period_ns;
         vkms_vblank(v);
     }
+    if (v->timer_on) {
+        timer_service_wake_at(v->next_ns);
+    }
+}
+
+/**
+ * The time of the latest vblank, Linux's vkms_get_vblank_timestamp: while
+ * the vblanks are on, the timer's expiry less a frame, since the tick moves
+ * the expiry on before it handles the vblank, so that each vblank is
+ * stamped with the end of its period and not with the time the tick ran,
+ * which a tick of 4 ms puts 16 or 20 ms apart for a frame of 16.67 ms;
+ * otherwise the clock now. Under the device's `vbl_lock`. Answers 1.
+ */
+static int vkms_get_vblank_timestamp(struct drm_crtc *crtc, int64_t *time_ns, int in_vblank_irq)
+{
+    struct vkms_device *v = to_vkms(crtc->dev);
+
+    (void)in_vblank_irq;
+    if (!crtc->vblank.enabled || !v->timer_on) {
+        *time_ns = vkms_now();
+        return 1;
+    }
+    *time_ns = v->next_ns - v->period_ns;
+    return 1;
 }
 
 /**
@@ -592,6 +620,7 @@ static int32_t vkms_enable_vblank(struct drm_crtc *crtc)
     v->next_ns = vkms_now() + period;
     v->timer_on = 1;
     kirq_restore(flags);
+    timer_service_wake_at(v->next_ns);
     return 0;
 }
 
@@ -787,7 +816,7 @@ static const struct drm_crtc_funcs vkms_crtc_funcs = {NULL,
                                                       vkms_verify_crc_source,
                                                       vkms_get_crc_sources,
                                                       NULL,
-                                                      NULL};
+                                                      vkms_get_vblank_timestamp};
 static const struct drm_connector_funcs vkms_connector_funcs = {NULL, vkms_get_modes, NULL, NULL};
 
 /** Make the next plane, of DRM_PLANE_TYPE_* `type`, as Linux's

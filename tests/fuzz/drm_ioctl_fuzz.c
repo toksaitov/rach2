@@ -292,6 +292,12 @@ uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
     return n / d;
 }
 
+/** No service timer: the harness runs the vblanks when it moves the clock. */
+void timer_service_wake_at(int64_t ns)
+{
+    (void)ns;
+}
+
 void wait_queue_init(wait_queue_t *wq)
 {
     (void)wq;
