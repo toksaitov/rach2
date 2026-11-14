@@ -1920,6 +1920,12 @@ int sysfs_attr_private(int node, int attr)
     (void)attr;
     return 0;
 }
+
+/** The mode stat(2) gives a fixed attribute, as synthfs.c's. */
+uint32_t sysfs_attr_mode(int node, int attr)
+{
+    return sysfs_attr_writable(node, attr) ? 0644u : sysfs_attr_private(node, attr) ? 0400u : 0444u;
+}
 /** No device of /sys has a key: -1. */
 int sysfs_device_key(int node, int n)
 {

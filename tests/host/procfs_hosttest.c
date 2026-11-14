@@ -224,12 +224,19 @@ int sysfs_file_writable(int node, int key, int attr)
                              : node == SYSFS_THP && attr != SYSFS_THP_PMD_SIZE;
 }
 
-/** No file these rows open is a private DMI field. */
+/** The DMI fields that are root's alone, mode 0400, as synthfs.c has them. */
 int sysfs_attr_private(int node, int attr)
 {
-    (void)node;
-    (void)attr;
-    return 0;
+    return node == SYSFS_DMI_ID && (attr == DMI_PRODUCT_SERIAL || attr == DMI_PRODUCT_UUID ||
+                                    attr == DMI_BOARD_SERIAL || attr == DMI_CHASSIS_SERIAL);
+}
+
+/** A fixed attribute's mode, as synthfs.c gives it. */
+uint32_t sysfs_attr_mode(int node, int attr)
+{
+    return sysfs_file_writable(node, 0, attr) ? 0644u
+           : sysfs_attr_private(node, attr)   ? 0400u
+                                              : 0444u;
 }
 
 /* The length of the text the last backlight or radio switch store was
@@ -3668,9 +3675,9 @@ static int reg_file_open(int h, int flags)
     return procfs_open_sysattr(SYSFS_REG, h, 0, flags);
 }
 
-/** Whether a read open of the registered attribute `h` is refused, as
- * `procfs_open` asks before it renders the file. */
-static int reg_read_refused(int h)
+/** Whether a read open of the registered attribute `h` with `flags` is
+ * refused, as `procfs_open` asks before it renders the file. */
+static int reg_open_refused(int h, int flags)
 {
     struct vpath vp;
 
@@ -3678,7 +3685,79 @@ static int reg_read_refused(int h)
     vp.kind = VNODE_SYS_FILE;
     vp.sysent = SYSFS_REG;
     vp.syskey = h;
-    return sysfs_read_refused(&vp);
+    return sysfs_read_refused(&vp, flags);
+}
+
+/** `reg_open_refused` of an O_RDONLY open. */
+static int reg_read_refused(int h)
+{
+    return reg_open_refused(h, 0);
+}
+
+/** Whether a read open of the DMI field `attr` with `flags` is refused. */
+static int dmi_open_refused(int attr, int flags)
+{
+    struct vpath vp;
+
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = SYSFS_DMI_ID;
+    vp.procfile = attr;
+    return sysfs_read_refused(&vp, flags);
+}
+
+/**
+ * O_TRUNC, which Linux's build_open_flags adds MAY_WRITE for, on a read
+ * open: a user may not open a 0644 attribute with O_RDONLY | O_TRUNC, nor
+ * a 0444 one, while root may by its owner's bits or CAP_DAC_OVERRIDE, and
+ * uid 0 without capabilities only where the owner's bits write. The DMI
+ * fields of mode 0400 are judged by the mode and the file-system user id:
+ * root reads them with no capability left, a user holding
+ * CAP_DAC_READ_SEARCH too, and not root after setfsuid(1000).
+ */
+static void sysattr_trunc_rows(void)
+{
+    static const struct sysfs_attr rw = {"rw", 0644u, show_flag, store_flag};
+    static const struct sysfs_attr ro = {"ro", 0444u, show_flag, NULL};
+    int dir = sysfs_add_dir(sysfs_anchor(SYSFS_KERNEL, 0), "trunc_rows");
+    int hw = sysfs_add_attr(dir, &rw, NULL, 0), hr = sysfs_add_attr(dir, &ro, NULL, 0);
+
+    check(dir > 0 && hw > 0 && hr > 0, "a 0644 and a 0444 attribute are made");
+    process.euid = 1000;
+    process.fsuid = 1000;
+    check(!reg_read_refused(hw) && reg_open_refused(hw, PROCFS_O_TRUNC),
+          "a user reads the 0644 one, and O_RDONLY | O_TRUNC needs the write it lacks");
+    check(reg_open_refused(hr, PROCFS_O_TRUNC) && !dmi_open_refused(DMI_PRODUCT_NAME, 0) &&
+              dmi_open_refused(DMI_PRODUCT_NAME, PROCFS_O_TRUNC),
+          "as on a 0444 one, registered or fixed");
+    check(dmi_open_refused(DMI_PRODUCT_SERIAL, 0) && dmi_open_refused(DMI_PRODUCT_UUID, 0),
+          "a user may not read the 0400 serial and UUID");
+    process.amb_granted = 1;
+    check(!dmi_open_refused(DMI_PRODUCT_SERIAL, 0) && !reg_open_refused(hr, PROCFS_O_TRUNC),
+          "but may holding CAP_DAC_READ_SEARCH, and with CAP_DAC_OVERRIDE truncate a 0444 file");
+    process.amb_granted = 0;
+    process.euid = 0;
+    process.fsuid = 0;
+    check(!reg_open_refused(hw, PROCFS_O_TRUNC) && !reg_open_refused(hr, PROCFS_O_TRUNC) &&
+              !dmi_open_refused(DMI_PRODUCT_SERIAL, PROCFS_O_TRUNC),
+          "root opens either with O_TRUNC, by its bits or CAP_DAC_OVERRIDE");
+    process.cap_lost[0] = 0xFFFFFFFFu;
+    process.cap_lost[1] = CAP_HIGH_WORD;
+    process.nocaps = 1;
+    check(!dmi_open_refused(DMI_BOARD_SERIAL, 0) && !reg_open_refused(hw, PROCFS_O_TRUNC),
+          "uid 0 with no capability reads a 0400 field and truncates a 0644 file as owner");
+    check(reg_open_refused(hr, PROCFS_O_TRUNC) &&
+              dmi_open_refused(DMI_CHASSIS_SERIAL, PROCFS_O_TRUNC),
+          "but not a file whose owner's bits do not write");
+    process.cap_lost[0] = process.cap_lost[1] = 0;
+    process.nocaps = 0;
+    process.fsuid = 1000;
+    process.fs_own = PROC_FSUID_OWN | PROC_FSCAPS_OFF;
+    check(dmi_open_refused(DMI_PRODUCT_SERIAL, 0),
+          "effective root after setfsuid(1000) may not read the 0400 serial");
+    process.fsuid = 0;
+    process.fs_own = 0;
+    sysfs_remove(dir);
 }
 
 /**
@@ -3795,6 +3874,7 @@ static void sysattr_file_rows(void)
     process.fsuid = 0;
     sysfs_remove(dir);
     sysattr_direction_rows();
+    sysattr_trunc_rows();
 }
 
 /** Whether the uevent of the PCI function `key` begins with `first`. */
@@ -4251,6 +4331,21 @@ static void input_unbound_port_rows(void)
     check(dir > 0 && child(dir, "description") > 0 &&
               sysfs_node_target(child(bus, "serio2")) == dir,
           "a port asked for without a device is made at once below serio1");
+    check(reg_is(child(dir, "bind_mode"), "auto\n") &&
+              sysfs_node_mode(child(dir, "bind_mode")) == 0644u,
+          "its bind_mode reads auto, mode 0644 as Linux's");
+    check(sysfs_node_store(child(dir, "bind_mode"), "manual", 6) == 6 &&
+              reg_is(child(dir, "bind_mode"), "manual\n") &&
+              evdev_sysfs_serio_manual(EVDEV_SERIO_PASS_THROUGH),
+          "and takes manual");
+    check(sysfs_node_store(child(dir, "bind_mode"), "manual\n", 7) == -EINVAL &&
+              sysfs_node_store(child(dir, "bind_mode"), "x", 1) == -EINVAL,
+          "refusing manual with its newline, as strncmp over the bytes written, and x");
+    check(sysfs_node_store(child(dir, "bind_mode"), "a", 1) == 1 &&
+              !evdev_sysfs_serio_manual(EVDEV_SERIO_PASS_THROUGH) &&
+              sysfs_node_store(child(dir, "bind_mode"), "man", 3) == 3 &&
+              evdev_sysfs_serio_manual(EVDEV_SERIO_PASS_THROUGH),
+          "while a prefix of either word counts");
     guest->gen++;
     input_present[1] = 1;
     evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, add_guest_protocol);
@@ -4268,6 +4363,8 @@ static void input_unbound_port_rows(void)
     evdev_sysfs_sync();
     check(!child(parent, "serio2") && !child(bus, "serio2"),
           "its removal ends the request, and a sync does not make it again");
+    check(!evdev_sysfs_serio_manual(EVDEV_SERIO_PASS_THROUGH),
+          "and a port made anew will be in auto mode");
 }
 
 /** Publish, remove and recreate a pass-through port through the real

@@ -41,8 +41,22 @@
 #include "mm/pin.h"
 #include "mm/usercopy.h"
 #include "mm/vm.h"
+#include "proc/ns.h"
+#include "proc/percpu.h"
+#include "proc/process.h"
 
 extern int printf(const char *format, ...);
+
+/* The writer of /sys: root in the first user namespace, less the
+ * capabilities a row takes away, by number below 32. */
+static process_t writer;
+struct percpu cpu_table[NR_CPUS] = {{.current = &writer}};
+static uint32_t writer_caps_lost;
+
+int cap_holds(const process_t *p, uint32_t cap)
+{
+    return p->euid == 0 && (cap >= 32u || !(writer_caps_lost & (1u << cap)));
+}
 extern void *malloc(unsigned long n);
 extern void *calloc(unsigned long n, unsigned long size);
 extern void free(void *p);
@@ -1204,6 +1218,7 @@ static struct vfio_device *vdev(const char *name)
 /** The groups and their entries of /sys and /dev, and binding. */
 static void group_rows(void)
 {
+    static struct vfio_container owner; /* stands for a container that holds group 0 */
     char buf[256];
     int groups, g0, gpu, kernel;
 
@@ -1225,6 +1240,22 @@ static void group_rows(void)
     groups = child(sysfs_anchor(SYSFS_KERNEL, 0), "iommu_groups");
     g0 = child(groups, "0");
     CHECK(strcmp(show(child(g0, "type"), buf, sizeof(buf)), "identity\n") == 0, "type");
+    CHECK(snodes[child(g0, "type")].attr->mode == 0644u, "type is 0644, as Linux's");
+    CHECK(store(child(g0, "type"), "identity\n") == 9 && store(child(g0, "type"), "auto") == 4,
+          "a group with no driver takes identity and auto, which keep its domain");
+    CHECK(store(child(g0, "type"), "DMA") == -EINVAL &&
+              store(child(g0, "type"), "DMA-FQ\n") == -EINVAL,
+          "and refuses DMA and DMA-FQ, which a host without IOMMU DMA cannot give");
+    CHECK(store(child(g0, "type"), "blocked") == -EINVAL &&
+              store(child(g0, "type"), "DMA\n\n") == -EINVAL,
+          "and a word it does not know, with sysfs_streq's one newline at most");
+    writer_caps_lost = 1u << CAP_SYS_RAWIO;
+    CHECK(store(child(g0, "type"), "identity") == -EACCES,
+          "a writer without CAP_SYS_RAWIO is EACCES");
+    writer_caps_lost = 1u << CAP_SYS_ADMIN;
+    CHECK(store(child(g0, "type"), "bogus") == -EACCES,
+          "and one without CAP_SYS_ADMIN, before the word");
+    writer_caps_lost = 0;
     CHECK(strcmp(show(child(g0, "reserved_regions"), buf, sizeof(buf)),
                  "0x00000000a0000000 0x00000000a1ffffff direct-relaxable\n"
                  "0x00000000fee00000 0x00000000feefffff msi\n") == 0,
@@ -1251,6 +1282,16 @@ static void group_rows(void)
           "a group with a kernel driver's function is not");
     CHECK(vfio_group_viable(&vfio_groups[6]) && vfio_group_viable(&vfio_groups[3]),
           "a bridge with a kernel driver keeps its group viable");
+    k_itoa(vdev("0000:00:1f.0")->group, buf, sizeof(buf), 'd', false);
+    CHECK(store(child(child(groups, buf), "type"), "identity") == -EPERM &&
+              store(child(child(groups, buf), "type"), "DMA") == -EPERM,
+          "a group whose function a kernel driver has is EPERM, as Linux's owner_cnt");
+    CHECK(store(child(child(groups, buf), "type"), "bogus") == -EINVAL, "after the word is read");
+    CHECK(store(child(g0, "type"), "identity") == 8,
+          "vfio-pci's function leaves its group's type writable, as driver_managed_dma");
+    vfio_groups[0].container = &owner;
+    CHECK(store(child(g0, "type"), "identity") == -EPERM, "a group in a container is EPERM");
+    vfio_groups[0].container = NULL;
 }
 
 /** new_id, remove_id, unbind and drivers_probe. */

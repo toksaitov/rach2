@@ -299,6 +299,101 @@ int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugf
     return 0;
 }
 
+/* kvm.c's parameters read the boot line and take writes through these;
+ * the stubs read a write as Linux's kstrtobool and kstrtoll do, for the
+ * numbers within a long long that the rows write, and give a boot line
+ * with no parameter. */
+int kcmdline_parse_bool(const char *text, int *out)
+{
+    char c = text[0], d = c ? text[1] : 0;
+
+    if (c == 'y' || c == 'Y' || c == 't' || c == 'T' || c == '1') {
+        *out = 1;
+        return 0;
+    }
+    if (c == 'n' || c == 'N' || c == 'f' || c == 'F' || c == '0') {
+        *out = 0;
+        return 0;
+    }
+    if ((c == 'o' || c == 'O') && (d == 'n' || d == 'N' || d == 'f' || d == 'F')) {
+        *out = d == 'n' || d == 'N';
+        return 0;
+    }
+    return -1;
+}
+
+int kcmdline_param_bool(const char *key, int dflt)
+{
+    (void)key;
+    return dflt;
+}
+
+int kcmdline_param_int(const char *key, int dflt)
+{
+    (void)key;
+    return dflt;
+}
+
+int k_strtoll(const char *s, size_t len, long long *out)
+{
+    unsigned long long v = 0, base = 10, d;
+    size_t i = 0, start;
+    int neg = 0;
+
+    if (len > 0 && s[len - 1] == '\n') {
+        len--;
+    }
+    if (i < len && (s[i] == '-' || s[i] == '+')) {
+        neg = s[i++] == '-';
+    }
+    if (i + 1 < len && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+        base = 16;
+        i += 2;
+    } else if (i < len && s[i] == '0') {
+        base = 8;
+    }
+    for (start = i; i < len; i++) {
+        d = s[i] >= '0' && s[i] <= '9'   ? (unsigned long long)(s[i] - '0')
+            : s[i] >= 'a' && s[i] <= 'f' ? (unsigned long long)(s[i] - 'a' + 10)
+            : s[i] >= 'A' && s[i] <= 'F' ? (unsigned long long)(s[i] - 'A' + 10)
+                                         : 99u;
+        if (d >= base) {
+            return -EINVAL;
+        }
+        v = v * base + d;
+    }
+    if (i == start) {
+        return -EINVAL;
+    }
+    *out = neg ? -(long long)v : (long long)v;
+    return 0;
+}
+
+size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force_sign)
+{
+    char digits[12];
+    unsigned int u = input < 0 ? 0u - (unsigned int)input : (unsigned int)input;
+    size_t n = 0, i = 0;
+
+    (void)radix;
+    (void)force_sign;
+    do {
+        digits[n++] = (char)('0' + u % 10u);
+        u /= 10u;
+    } while (u);
+    if (n + (input < 0) + 1u > buffer_size) {
+        return 0;
+    }
+    if (input < 0) {
+        buffer[i++] = '-';
+    }
+    while (n) {
+        buffer[i++] = digits[--n];
+    }
+    buffer[i] = '\0';
+    return i + 1u;
+}
+
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
 {
     (void)parent;
@@ -3325,6 +3420,106 @@ static void feature_msr_rows(void)
     fdclose(vm);
 }
 
+/** The index of KVM's parameter `name` in `kvm_params`. */
+static int param_index(const char *name)
+{
+    int i;
+
+    for (i = 0; strcmp(kvm_params[i].name, name) != 0; i++) {
+    }
+    return i;
+}
+
+/** The length of `text`. */
+static uint32_t text_len(const char *text)
+{
+    uint32_t n = 0;
+
+    while (text[n]) {
+        n++;
+    }
+    return n;
+}
+
+/** Whether the parameter `name` reads `text`. */
+static int param_reads(const char *name, const char *text)
+{
+    char buf[16];
+    int32_t n = param_show(NULL, param_index(name), buf, sizeof(buf)), i;
+
+    if (n != (int32_t)text_len(text)) {
+        return 0;
+    }
+    for (i = 0; i < n && buf[i] == text[i]; i++) {
+    }
+    return i == n;
+}
+
+/** A write of `text` to the parameter `name`: the store's answer. */
+static int32_t param_write(const char *name, const char *text)
+{
+    return param_store(NULL, param_index(name), text, text_len(text));
+}
+
+/**
+ * KVM's three writable parameters, as Linux's param_set_bool and
+ * param_set_int take a write, and ignore_msrs, under which an MSR KVM does
+ * not have reads 0 and takes any write, the guest's and the caller's, as
+ * Linux's kvm_do_msr_access answers KVM_MSR_RET_UNSUPPORTED, while a value
+ * an MSR refuses stays refused.
+ */
+static void param_rows(void)
+{
+    struct kvm_vcpu *v;
+    uint64_t value = 5;
+    int vm, fd;
+
+    CHECK(param_reads("ignore_msrs", "N\n") && param_reads("eager_page_split", "N\n") &&
+              param_reads("force_emulation_prefix", "0\n"),
+          "ignore_msrs and eager_page_split read N and force_emulation_prefix 0");
+    CHECK(param_write("ignore_msrs", "Y\n") == 2 && kvm_ignore_msrs == 1 &&
+              param_reads("ignore_msrs", "Y\n"),
+          "ignore_msrs takes Y and a newline");
+    CHECK(param_write("ignore_msrs", "off") == 3 && kvm_ignore_msrs == 0 &&
+              param_write("ignore_msrs", "x") == -EINVAL && kvm_ignore_msrs == 0,
+          "off, and refuses x with EINVAL, as kstrtobool");
+    CHECK(param_write("eager_page_split", "1") == 1 && kvm_eager_page_split == 1 &&
+              param_write("eager_page_split", "n") == 1 && kvm_eager_page_split == 0,
+          "eager_page_split takes 1 and n");
+    CHECK(param_write("force_emulation_prefix", "0x3\n") == 4 && kvm_force_emulation_prefix == 3 &&
+              param_reads("force_emulation_prefix", "3\n"),
+          "force_emulation_prefix takes 0x3 in base 0 and reads 3");
+    CHECK(param_write("force_emulation_prefix", "-1") == 2 &&
+              param_reads("force_emulation_prefix", "-1\n"),
+          "and -1, an int");
+    CHECK(param_write("force_emulation_prefix", "2147483648") == -ERANGE &&
+              param_write("force_emulation_prefix", "1 2") == -EINVAL &&
+              kvm_force_emulation_prefix == -1,
+          "refusing a number past an int with ERANGE and text with EINVAL, the value kept");
+    CHECK(param_write("force_emulation_prefix", "0") == 1 && kvm_force_emulation_prefix == 0,
+          "and takes 0 back");
+
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    CHECK(kvm_msr_get(v, 0x4B564DFFu, &value, 0) == KVM_MSR_UNKNOWN && value == 0,
+          "an MSR KVM does not have is unsupported, its read 0");
+    CHECK(kvm_msr_set(v, 0x4B564DFFu, 7, 0) == KVM_MSR_UNKNOWN, "as is its write");
+    kvm_ignore_msrs = 1;
+    value = 5;
+    CHECK(kvm_msr_get(v, 0x4B564DFFu, &value, 0) == 0 && value == 0 &&
+              kvm_msr_set(v, 0x4B564DFFu, 7, 0) == 0,
+          "under ignore_msrs the guest reads it as 0 and writes it");
+    value = 5;
+    CHECK(get_msr(fd, 0x4B564DFFu, &value) == 1 && value == 0 && set_msr(fd, 0x4B564DFFu, 7) == 1,
+          "and so does the caller, through KVM_GET_MSRS and KVM_SET_MSRS");
+    CHECK(kvm_msr_set(v, 0xC0010015u, 1ull << 30, 0) == KVM_MSR_INVAL,
+          "a value HWCR refuses stays refused");
+    kvm_ignore_msrs = 0;
+    fdclose(fd);
+    fdclose(vm);
+}
+
 /** SVM's IA32_DEBUGCTL and last-branch MSRs, as the caller reaches them:
  * Linux's SVM without lbrv reads each as 0, takes and ignores any write
  * of DEBUGCTL, and takes only the caller's 0 of the others, whose guest
@@ -4399,6 +4594,7 @@ static void selftest_rows(void)
     cr4_rows();
     vm_cap_rows();
     feature_msr_rows();
+    param_rows();
     svm_debugctl_rows();
     svm_sfmask_rows();
     spec_rows();

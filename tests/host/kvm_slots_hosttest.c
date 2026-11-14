@@ -78,6 +78,9 @@ static void unlock_hook(struct spinlock *lock, uint32_t flags);
 #include "host_threads.h"
 
 extern int printf(const char *format, ...);
+
+/* kvm.c's eager_page_split, which `eager_rows` sets. */
+int kvm_eager_page_split;
 extern int sched_yield(void);
 extern void *malloc(unsigned long n);
 extern void free(void *p);
@@ -1246,6 +1249,57 @@ static void dirty_rows(void)
     CHECK(set(3, 0, 0, 0, 0) == 0, "deleted");
 }
 
+/** eager_page_split: a slot whose log starts keeps what was mapped, its
+ * 2 MiB leaf split into 512 read-only 4 KiB leaves of the same frames and
+ * its 4 KiB leaves write-protected, flushed, with the count moved, so that
+ * the next write faults and is logged; without it the leaves go. */
+static void eager_rows(void)
+{
+    uintptr_t a = HVA + 2 * MIB2;
+    uint64_t e, block = 0x400000 / 4096u, seq, bits[8];
+    int level;
+
+    fill_block(a, phys_of(ram));
+    CHECK(set(3, 0, 0x400000, MIB2, a) == 0 && kvm_tdp_fault(&vm, block + 17, 1) == 0 &&
+              leaf_of(block + 300, &level) != 0 && level == 2,
+          "a slot mapped by a writable 2 MiB leaf");
+    kvm_eager_page_split = 1;
+    flushed();
+    seq = vm.mmu_seq;
+    CHECK(set(3, KVM_MEM_LOG_DIRTY_PAGES, 0x400000, MIB2, a) == 0, "its log turned on");
+    e = leaf_of(block + 300, &level);
+    CHECK(level == 1 && !(e & 2) && (e & ept.addr) == phys_of(ram) + 300u * 4096u,
+          "under eager_page_split leaves 4 KiB leaves of the frames, read-only");
+    CHECK(vm.stat[KVM_VM_STAT_PAGES_2M] == 0 && vm.stat[KVM_VM_STAT_PAGES_4K] == 512 && flushed() &&
+              vm.mmu_seq != seq,
+          "512 of them counted, flushed, with mmu_seq moved");
+    CHECK(kvm_tdp_fault(&vm, block + 300, 1) == 0 && (leaf_of(block + 300, &level) & 2) &&
+              get_dirty(3, bits) == 0 && bits[4] == (1ull << 44),
+          "a write faults, is logged and maps the page writable");
+    CHECK(set(3, 0, 0x400000, MIB2, a) == 0 && leaf_of(block + 300, &level) == 0,
+          "logging off drops the leaves");
+    CHECK(kvm_tdp_fault(&vm, block + 5, 1) == 0 && leaf_of(block + 5, &level) != 0 && level == 2,
+          "and a write maps 2 MiB again");
+    CHECK(set(3, 0, 0, 0, 0) == 0, "deleted");
+
+    region(a, 4, 1);
+    CHECK(set(3, 0, 0x400000, 4 * 4096u, a) == 0 && kvm_tdp_fault(&vm, block + 1, 1) == 0 &&
+              (leaf_of(block + 1, &level) & 2) && level == 1,
+          "a slot of 4 KiB pages, one mapped writable");
+    CHECK(set(3, KVM_MEM_LOG_DIRTY_PAGES, 0x400000, 4 * 4096u, a) == 0 &&
+              leaf_of(block + 1, &level) != 0 && !(leaf_of(block + 1, &level) & 2) && flushed(),
+          "keeps its leaf under eager_page_split, write-protected");
+    CHECK(set(3, 0, 0x400000, 4 * 4096u, a) == 0 && kvm_tdp_fault(&vm, block + 1, 1) == 0,
+          "logging off, the page written again");
+    kvm_eager_page_split = 0;
+    CHECK(set(3, KVM_MEM_LOG_DIRTY_PAGES, 0x400000, 4 * 4096u, a) == 0 &&
+              leaf_of(block + 1, &level) == 0,
+          "without eager_page_split, logging on drops it");
+    CHECK(set(3, 0, 0, 0, 0) == 0 && vm.stat[KVM_VM_STAT_PAGES_2M] == 0 &&
+              vm.stat[KVM_VM_STAT_PAGES_4K] == 0,
+          "deleted, with no leaf counted");
+}
+
 /** kvm_tdp_write_nofault, the steal time's write from inside `schedule`:
  * it writes only a present, writable page of a slot of the caller's that
  * was already stored into, of RAM, within one page, while the tables'
@@ -1839,6 +1893,7 @@ int main(int argc, char **argv)
     pre_fault_rows();
     device_rows();
     dirty_rows();
+    eager_rows();
     write_nofault_rows();
     zap_batch_rows();
     stale_rows();

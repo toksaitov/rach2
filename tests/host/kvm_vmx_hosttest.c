@@ -338,6 +338,101 @@ int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugf
     return 0;
 }
 
+/* kvm.c's parameters read the boot line and take writes through these;
+ * the stubs read a write as Linux's kstrtobool and kstrtoll do, for the
+ * numbers within a long long that the rows write, and give a boot line
+ * with no parameter. */
+int kcmdline_parse_bool(const char *text, int *out)
+{
+    char c = text[0], d = c ? text[1] : 0;
+
+    if (c == 'y' || c == 'Y' || c == 't' || c == 'T' || c == '1') {
+        *out = 1;
+        return 0;
+    }
+    if (c == 'n' || c == 'N' || c == 'f' || c == 'F' || c == '0') {
+        *out = 0;
+        return 0;
+    }
+    if ((c == 'o' || c == 'O') && (d == 'n' || d == 'N' || d == 'f' || d == 'F')) {
+        *out = d == 'n' || d == 'N';
+        return 0;
+    }
+    return -1;
+}
+
+int kcmdline_param_bool(const char *key, int dflt)
+{
+    (void)key;
+    return dflt;
+}
+
+int kcmdline_param_int(const char *key, int dflt)
+{
+    (void)key;
+    return dflt;
+}
+
+int k_strtoll(const char *s, size_t len, long long *out)
+{
+    unsigned long long v = 0, base = 10, d;
+    size_t i = 0, start;
+    int neg = 0;
+
+    if (len > 0 && s[len - 1] == '\n') {
+        len--;
+    }
+    if (i < len && (s[i] == '-' || s[i] == '+')) {
+        neg = s[i++] == '-';
+    }
+    if (i + 1 < len && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+        base = 16;
+        i += 2;
+    } else if (i < len && s[i] == '0') {
+        base = 8;
+    }
+    for (start = i; i < len; i++) {
+        d = s[i] >= '0' && s[i] <= '9'   ? (unsigned long long)(s[i] - '0')
+            : s[i] >= 'a' && s[i] <= 'f' ? (unsigned long long)(s[i] - 'a' + 10)
+            : s[i] >= 'A' && s[i] <= 'F' ? (unsigned long long)(s[i] - 'A' + 10)
+                                         : 99u;
+        if (d >= base) {
+            return -EINVAL;
+        }
+        v = v * base + d;
+    }
+    if (i == start) {
+        return -EINVAL;
+    }
+    *out = neg ? -(long long)v : (long long)v;
+    return 0;
+}
+
+size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force_sign)
+{
+    char digits[12];
+    unsigned int u = input < 0 ? 0u - (unsigned int)input : (unsigned int)input;
+    size_t n = 0, i = 0;
+
+    (void)radix;
+    (void)force_sign;
+    do {
+        digits[n++] = (char)('0' + u % 10u);
+        u /= 10u;
+    } while (u);
+    if (n + (input < 0) + 1u > buffer_size) {
+        return 0;
+    }
+    if (input < 0) {
+        buffer[i++] = '-';
+    }
+    while (n) {
+        buffer[i++] = digits[--n];
+    }
+    buffer[i] = '\0';
+    return i + 1u;
+}
+
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
 {
     (void)parent;
@@ -4606,6 +4701,28 @@ static void ud_rows(int fd)
           "which then runs at the same RIP and is answered");
 }
 
+/** The forced emulation prefix, ud2 and "kvm", as Linux's handle_ud reads
+ * it: UD2's #UD while force_emulation_prefix is 0, and with it set the
+ * instruction behind it emulated, whatever it is. */
+static void fep_rows(int fd)
+{
+    uint32_t ud = UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+
+    emul_start(fd, "\x0f\x0bkvm\x89\xd8", 7, 0, 0x1234, 0);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001 &&
+              regs_of(fd).rax == 0,
+          "the forced emulation prefix is UD2's #UD while force_emulation_prefix is 0");
+    kvm_force_emulation_prefix = 1;
+    emul_start(fd, "\x0f\x0bkvm\x89\xd8", 7, 0, 0x1234, 0);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1008 &&
+              regs_of(fd).rax == 0x1234,
+          "and with it set, the MOV behind it, not one EmulateOnUD names, is emulated");
+    emul_start(fd, "\x0f\x0bkvx\x89\xd8", 7, 0, 0x1234, 0);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
+          "while UD2 and other bytes are UD2's #UD");
+    kvm_force_emulation_prefix = 0;
+}
+
 /** MMX and SSE moves with their memory operand on device memory. */
 static void simd_rows(int fd)
 {
@@ -4853,6 +4970,7 @@ static void ts_rows(int vm)
     ts_fault_rows(fd);
     emul_rows(fd);
     ud_rows(fd);
+    fep_rows(fd);
     simd_rows(fd);
     db_rows(fd);
     fdclose(fd);
