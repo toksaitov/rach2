@@ -355,6 +355,18 @@ and when none is free there, the lowest free range over the whole space
 below the same stack gap, including a range crossing that base, so the ranges
 .Fn munmap
 frees are used again.
+In a 64-bit call on x86-64, a mapping of a file on ext2 that holds a whole
+2 MiB page of the file, and private anonymous memory with no
+.Fa addr
+whose length is a multiple of 2 MiB, start on a 2 MiB boundary, as Linux's
+.Fn thp_get_unmapped_area
+places them on ext2 and ext4: the kernel finds a free range 2 MiB longer
+than the mapping, unless the hint's range of that length is free and taken
+as given, and places the mapping at the first address in it that matches
+its file offset modulo 2 MiB, or 2 MiB up when the range's start already
+does.
+Shared anonymous memory, files on other file systems and every 32-bit call
+are placed as above without it.
 .Pp
 .Dv MAP_32BIT ,
 0x40, asks a 64-bit program on x86-64 for a mapping in the first 2 GiB,

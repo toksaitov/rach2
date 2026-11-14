@@ -8102,14 +8102,31 @@ static char *fd_path_copy(int fd)
     return copy;
 }
 
+/* How a new mapping is aligned to a 2 MiB huge page, as Linux 6.12's
+ * get_unmapped_area aligns it (`mmap_thp_pad`): not at all; by its file
+ * offset, for a file whose file system gives `thp_get_unmapped_area`, as
+ * ext2 and ext4 do; or as offset 0, for private anonymous memory, which
+ * Linux aligns when it has no hint and its length is a multiple of 2 MiB.
+ * Shared anonymous memory, tmpfs, /dev/zero and devices are not aligned,
+ * as Linux leaves them with tmpfs's huge pages off. */
+#define MAP_THP_NONE 0u
+#define MAP_THP_FILE 1u
+#define MAP_THP_ANON 2u
+
+/* Linux's HPAGE_PMD_SIZE on x86-64, the alignment of MAP_THP_FILE and
+ * MAP_THP_ANON. */
+#define MAP_THP_SIZE ((uintptr_t)2u << 20)
+
 /* What a new mapping maps, which `mmap_backing` finds: the file or shared
  * memory, NULL for private anonymous memory; the region kind; the file's
- * page at the region's start; and the region's protection. */
+ * page at the region's start; the region's protection; and its alignment,
+ * a MAP_THP_ value. */
 struct map_source {
     struct vm_file *file;
     vm_type_t type;
     uint32_t pgoff;
     uint32_t prot;
+    uint32_t thp;
 };
 
 /** 0 when the descriptor `e` may be mapped, shared or not, with the
@@ -8170,7 +8187,8 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * not open for writing, is given VM_PROT_NOWRITE, so that mprotect cannot
  * make it writable later. A file of memfd_secret maps as `mmap_secret`
  * says. The file's path is built at each reading of /proc/PID/maps
- * (`procfs_maps_names`), as Linux's d_path at that read.
+ * (`procfs_maps_names`), as Linux's d_path at that read. A file on ext2 is
+ * aligned as MAP_THP_FILE, as Linux's ext2 and ext4 align theirs.
  */
 static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
 {
@@ -8202,6 +8220,7 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
                 : disk  ? filemap_disk_shared(e)
                         : filemap_new(e);
     src->type = shared && (sh || disk) ? VM_SHARED : VM_FILE;
+    src->thp = disk ? MAP_THP_FILE : MAP_THP_NONE;
     return src->file ? 0 : -ENOMEM;
 }
 
@@ -8256,8 +8275,10 @@ static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, str
  * anonymous memory (VM_SHARED), or NULL for private anonymous memory
  * (VM_ANON). /dev/zero maps as anonymous memory.
  * Anonymous memory has its pages from its own first on, so its offset is
- * set to 0, as Linux ignores it. It may sleep, finding the path of an
- * object that maps itself.
+ * set to 0, as Linux ignores it. The alignment is MAP_THP_ANON for private
+ * anonymous memory but /dev/zero's, `mmap_file`'s for a file, and
+ * MAP_THP_NONE for any other. It may sleep, finding the path of an object
+ * that maps itself.
  */
 static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_source *src)
 {
@@ -8266,6 +8287,7 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
 
     src->file = NULL;
     src->type = VM_ANON;
+    src->thp = MAP_THP_NONE;
     if (!(flags & MAP_ANONYMOUS)) {
         e = fd_get(current_proc->fds, fd);
         if (!e) {
@@ -8283,6 +8305,9 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
         src->file = filemap_anon_shared();
         src->type = VM_SHARED;
         return src->file ? 0 : -ENOMEM;
+    }
+    if (flags & MAP_ANONYMOUS) {
+        src->thp = MAP_THP_ANON;
     }
     return 0;
 }
@@ -8329,24 +8354,81 @@ static uintptr_t mmap_free(vm_space_t *vm, uintptr_t len)
 }
 
 /**
- * Where a new mapping of `len` bytes goes, in `*base`: `addr` itself under
- * MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for a range in
- * use and with ENOMEM for one past the address space's end (`task_size`);
- * otherwise the hint rounded down to its page when that range is free
- * below the stack's growth window and guard gap, and without one the range
- * `mmap_free` finds, so the ranges munmap frees are used again. MAP_32BIT in
- * a 64-bit call, as on Linux, rounds the hint up, takes it only when its
- * range ends by 2 GiB, and otherwise takes the highest free range from
- * 1 GiB to 2 GiB; a 32-bit call ignores it, its every address being below
- * 4 GiB. RLIMIT_AS counts the range, less what a fixed mapping replaces. 0,
- * -ENOMEM or -EEXIST. Nothing here sleeps, so the range is still as it was
- * found when the caller inserts the region straight after.
+ * The padding a search for a new mapping of `len` bytes from `src` at the
+ * hint `addr` takes, so that the mapping can then be aligned to a 2 MiB huge
+ * page, or 0 for none, as Linux 6.12's `__thp_get_unmapped_area` pads it: in
+ * a 64-bit call, MAP_THP_SIZE for a MAP_THP_FILE file when the mapping holds
+ * MAP_THP_SIZE bytes from the first boundary of that size at or past its
+ * file offset, and for MAP_THP_ANON memory with no hint whose length is a
+ * multiple of it. Linux aligns nothing in a 32-bit kernel or call.
+ */
+static uintptr_t mmap_thp_pad(const struct map_source *src, uintptr_t addr, uintptr_t len)
+{
+    uintptr_t off, aligned;
+
+    if (sizeof(void *) <= 4u || in_compat_syscall()) {
+        return 0;
+    }
+    if (src->thp == MAP_THP_ANON) {
+        return addr == 0 && (len & (MAP_THP_SIZE - 1u)) == 0 ? MAP_THP_SIZE : 0;
+    }
+    if (src->thp != MAP_THP_FILE) {
+        return 0;
+    }
+    off = (uintptr_t)src->pgoff << PAGE_SHIFT;
+    aligned = (off + MAP_THP_SIZE - 1u) & ~(MAP_THP_SIZE - 1u);
+    return off + len > aligned && off + len - aligned >= MAP_THP_SIZE ? MAP_THP_SIZE : 0;
+}
+
+/**
+ * The free range of `len` bytes for a mapping without MAP_FIXED, or 0: the
+ * page-aligned hint `addr` when its range is free and ends by `top`, and
+ * otherwise the range `mmap_free` finds, or with `low`, for MAP_32BIT, the
+ * highest free range from 1 GiB to 2 GiB.
+ */
+static uintptr_t mmap_search(vm_space_t *vm, uintptr_t addr, uintptr_t len, uintptr_t top, int low)
+{
+    if (addr != 0 && addr >= USER_ADDR_MIN && len <= top && addr <= top - len &&
+        !vm_overlaps(vm, addr, addr + len)) {
+        return addr;
+    }
+    return low ? vm_find_free(vm, len, MAP_32BIT_LO, MAP_32BIT_HI) : mmap_free(vm, len);
+}
+
+/**
+ * Where a new mapping of `len` bytes from `src` goes, in `*base`: `addr`
+ * itself under MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for
+ * a range in use and with ENOMEM for one past the address space's end
+ * (`task_size`); otherwise the hint rounded down to its page when that range
+ * is free below the stack's growth window and guard gap, and without one the
+ * range `mmap_free` finds, so the ranges munmap frees are used again.
+ * MAP_32BIT in a 64-bit call, as on Linux, rounds the hint up, takes it only
+ * when its range ends by 2 GiB, and otherwise takes the highest free range
+ * from 1 GiB to 2 GiB; a 32-bit call ignores it, its every address being
+ * below 4 GiB.
+ *
+ * A mapping that `mmap_thp_pad` pads is aligned as Linux 6.12's
+ * `__thp_get_unmapped_area` aligns it: the search is for the padded length,
+ * and unless it gave the hint as it was passed, the mapping is moved up in
+ * the range found to the first address congruent to its file offset modulo
+ * 2 MiB, or to the top of the range when the range's start already is, as
+ * Linux's top-down layout takes it; with no padded range free, the search
+ * is made again for the length alone. Libraries of 2 MiB or more so start
+ * on 2 MiB boundaries and leave holes above them as on Linux, which decides
+ * where the libraries loaded after them go and whether a library loaded
+ * again comes back to its first address.
+ *
+ * RLIMIT_AS counts the range, less what a fixed mapping replaces. 0, -ENOMEM
+ * or -EEXIST. Nothing here sleeps, so the range is still as it was found
+ * when the caller inserts the region straight after.
  */
 static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_t flags,
-                          uintptr_t *base)
+                          const struct map_source *src, uintptr_t *base)
 {
     unsigned long limit = current_proc->rlim[RLIM_AS].cur;
     uintptr_t top = vm->stack_limit > VM_STACK_GUARD_GAP ? vm->stack_limit - VM_STACK_GUARD_GAP : 0;
+    uintptr_t hint = addr;
+    uintptr_t pad, sub;
     int low = 0;
 
     if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
@@ -8359,19 +8441,24 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
         *base = addr;
         return vm_total(vm) - vm_covered(vm, addr, addr + len) + len > limit ? -ENOMEM : 0;
     }
+    pad = mmap_thp_pad(src, addr, len);
     if ((flags & MAP_32BIT) && sizeof(void *) > 4u && !in_compat_syscall()) {
         low = 1;
         top = top < MAP_32BIT_HI ? top : MAP_32BIT_HI;
         addr = PAGE_UP(addr);
     }
-    *base = 0;
     addr &= ~(uintptr_t)(PAGE_SIZE - 1);
-    if (addr != 0 && addr >= USER_ADDR_MIN && len <= top && addr <= top - len &&
-        !vm_overlaps(vm, addr, addr + len)) {
-        *base = addr;
+    *base = 0;
+    if (pad != 0 && len <= (uintptr_t)-1 - pad) {
+        *base = mmap_search(vm, addr, len + pad, top, low);
+        if (*base != 0 && *base != hint) {
+            sub = ((src->thp == MAP_THP_FILE ? (uintptr_t)src->pgoff << PAGE_SHIFT : 0u) - *base) &
+                  (MAP_THP_SIZE - 1u);
+            *base += sub != 0 ? sub : MAP_THP_SIZE;
+        }
     }
     if (*base == 0) {
-        *base = low ? vm_find_free(vm, len, MAP_32BIT_LO, MAP_32BIT_HI) : mmap_free(vm, len);
+        *base = mmap_search(vm, addr, len, top, low);
     }
     return *base == 0 || vm_total(vm) + len > limit ? -ENOMEM : 0;
 }
@@ -8396,7 +8483,7 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, uint32_t
     struct mm *mm = regions_begin();
     vm_space_t *vm = &mm->vm;
     uintptr_t base = 0;
-    int32_t rc = mmap_place(vm, addr, len, flags, &base);
+    int32_t rc = mmap_place(vm, addr, len, flags, src, &base);
 
     src->prot |= mmap_key(mprot);
     if (rc == 0 && (flags & MAP_FIXED) && vm_sealed_at(vm, base, base + len) < base + len) {
@@ -8587,6 +8674,7 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
     src.prot = vm_prot_of(prot) | ((prot & PROT_WRITE) ? 0u : VM_PROT_NOWRITE);
     src.pgoff = 0;
     src.type = VM_SHARED;
+    src.thp = MAP_THP_NONE;
     src.file = filemap_shared(&e, tmpfs_shmem(ofd->vnode));
     if (!src.file) {
         kfree(path);
@@ -8621,6 +8709,7 @@ long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *
     src.type = vma.type;
     src.prot = vma.prot;
     src.pgoff = vma.pgoff;
+    src.thp = MAP_THP_NONE;
     mem_balance();
     return mmap_install(0, PAGE_UP(len), MAP_SHARED, 0, &src);
 }
