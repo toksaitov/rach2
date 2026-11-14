@@ -1626,6 +1626,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "virtio_console",
+          "checks": "tests/host/virtio_console_hosttest.c runs the virtio console driver with the serial console's line and the virtio core against a model of QEMU's virtio-serial device, with and without VIRTIO_F_EVENT_IDX: the handshake of the control queues, the console on hvc0 and on vport0p1, the console= words, output that loses no byte to a device that takes late or a host that stops reading, input held back by a full ring, a port and a device removed and bound again, the emergency write of a panic, and each allocation failing in turn, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "virtio_net",
           "checks": "tests/host/virtio_net_hosttest.c runs the virtio network driver over the virtio core against a model device: the features taken without an offload, the receive queue kept full and told of in batches, frames across mergeable buffers, sends without an interrupt, the link, the MTU, the control queue, stop, a failed bring-up at each allocation, unbind and bind, and a polled device, under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1772,7 +1777,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 343
+          "limit": 344
         }
       ],
       "bounds": {

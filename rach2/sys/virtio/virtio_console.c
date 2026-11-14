@@ -563,11 +563,11 @@ static void vcon_resize(const struct vcon_port *p)
  * buffers made and given to the device, the device told the port is open,
  * and the line attached to the console (`serial_line_attach`). While the
  * boot binds the device, on a machine without a UART, the line is then
- * given every record
- * of the log's ring, as Linux's register_console gives a console that no
- * boot console preceded the buffer; with a UART the records so far went
- * there, and the line takes the log from here on. Under the big lock with
- * interrupts off. Returns 0, or -ENOMEM with nothing changed.
+ * given every record of the log's ring, as Linux's register_console gives
+ * a console that no boot console preceded the buffer; with a UART the
+ * records so far went there, and the line takes the log from here on.
+ * Under the big lock with interrupts off. Returns 0, or -ENOMEM with
+ * nothing changed.
  */
 static int vcon_attach(struct vcon_port *p)
 {
@@ -880,11 +880,13 @@ static int vcon_setup(void)
     if (!vcon.ctl_rx || !vcon.ctl_tx) {
         return -ENOMEM;
     }
-    if (vcon_port_queues(1, 4) != 0) {
+    r = vcon_port_queues(1, 4);
+    if (r == -ENOENT) {
         /* A device of one port: its port 1 has no queues. */
         vcon.port[1].rxq = vcon.port[1].txq = 0;
+        r = 0;
     }
-    return 0;
+    return r;
 }
 
 /** Give the control queue its receive buffers, tell the device the driver
@@ -906,8 +908,13 @@ static void vcon_ports_start(void)
     virtqueue_kick(vcon.ctl_rxq);
     vcon_ctl_send(VIRTIO_CONSOLE_BAD_ID, VIRTIO_CONSOLE_DEVICE_READY, 1);
     start = arch_cycles();
-    while (vcon_boot && vcon_want[0] != '\0' && !vcon.line) {
+    while (vcon_boot && vcon_want[0] != '\0') {
+        /* The reap that makes the port the line may itself take long: the
+         * line is given the log's ring in it. */
         (void)virtqueue_reap(vcon.ctl_rxq);
+        if (vcon.line) {
+            break;
+        }
         if (arch_cycles() - start >= limit) {
             klog(KLOG_WARN, "console", "waiting: %s: %s has not announced it in %d ms", vcon_want,
                  vcon.vdev->name, (int)VCON_BOOT_WAIT_MS);
