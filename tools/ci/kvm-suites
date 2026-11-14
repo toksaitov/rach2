@@ -10,6 +10,9 @@
 # The Venus suite's references were taken under KVM, and under TCG QEMU
 # 10.2's iotlb_to_section aborts while its dEQP processes map and unmap
 # blobs (dev-log/84-locks/upstream.md); KVM never takes that path.
+# The virgl suite's references, its piglit, dEQP and WebGL pages among
+# them, were taken under KVM too: under TCG its Firefox chunks ran some
+# seven times as long as Debian's and passed the gap bound.
 browser
 video
 webgl
@@ -18,3 +21,4 @@ bed-forward
 kvm
 bed-shm
 venus
+virgl
