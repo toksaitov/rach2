@@ -52,6 +52,7 @@
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
 #include "block/usbdisk.h"
+#include "block/virtio_blk.h"
 #include "fs/procfs.h"
 #include "mm/paging.h"
 #include "mm/pressure.h"
@@ -3667,8 +3668,9 @@ static void syscall_futex_unlock(void)
  * for the epilogue, which restores the trapframe, and the return to user
  * mode restores the caller's interrupt flag. Before the dispatch,
  * `usbdisk_service` publishes the USB sticks that arrived and reclaims those
- * that left, work that waits for a process context; it returns at once when
- * there is none.
+ * that left, and `virtio_blk_service` lets go of a removed virtio disk whose
+ * last holder has gone, work that waits for a process context; each returns
+ * at once when there is none.
  *
  * A tracer's stop at the entry may change the call through orig_nr, as
  * Linux's `syscall_trace_enter` lets it: the number is read again after the
@@ -3724,6 +3726,7 @@ static void _syscall_handler(isr_params_t *params)
     if (!p) {
         arch_irq_enable();
         usbdisk_service();
+        virtio_blk_service();
         if (syscall_num < size && table[syscall_num]) {
             ret = table[syscall_num](params);
         } else {
@@ -3742,6 +3745,7 @@ static void _syscall_handler(isr_params_t *params)
 
     if (p->bkl_frames & 1u) {
         usbdisk_service();
+        virtio_blk_service();
     }
     if (p->work & WORK_ENTRY) {
         if (p->ptrace & PT_SYSCALL) {

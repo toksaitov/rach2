@@ -10,7 +10,9 @@
  * QEMU's virtio-blk answers every request, offers what its options give and
  * keeps 512-byte blocks. A boot cannot make on demand a device that refuses
  * a feature, has blocks of 4096 bytes, answers a command with an error,
- * never answers one, changes its capacity or goes away. The test includes
+ * never answers one, keeps a cache it cannot flush, changes its capacity,
+ * goes away while its disk is open or is there at the machine's stop. The
+ * test includes
  * virtio_blk.c and links the real core, virtqueue.c; the model fills the
  * core's table of operations as a transport does, and walks each chain the
  * core published, direct or through an indirect table, reading the request
@@ -198,10 +200,20 @@ int block_device_holds(block_device_t *device)
     return 0;
 }
 
+/* What holds a disk beside its open nodes: the mounts on a view and the
+ * buffer cache's held or dirty blocks of one, as a row sets them. */
+static int mounts, cached_blocks;
+
 int vfs_device_holds(block_device_t *dev)
 {
     (void)dev;
-    return 0;
+    return mounts;
+}
+
+int bcache_device_holds(block_device_t *dev)
+{
+    (void)dev;
+    return cached_blocks;
 }
 
 static int gone_views;
@@ -262,6 +274,17 @@ int disk_scan(struct disk *d, block_device_t *backing)
     return 0;
 }
 
+static int publishes;
+
+/** Publish the whole-disk window of `d`, `/dev/diskN`, at the disk's
+ * size, as devfs does. */
+void devfs_disk_publish(struct disk *d)
+{
+    d->whole.part.device.sector_count = d->dev->sector_count;
+    d->whole.present = 1;
+    publishes++;
+}
+
 const char diskcmd_policy_banner[] = "the test's read-only policy";
 
 /** The test's policy: everything, or under `policy_ro` the reads and
@@ -290,6 +313,7 @@ struct model {
     int notifies[VIRTIO_MAX_QUEUES];
     int polled;      /* the transport gives no interrupt */
     int stuck_reset; /* a write of 0 to the status does not reset it */
+    int stuck_cache; /* a write of the configuration is not taken */
     int dma_on;
     int hold;   /* tell of no chain: leave each unanswered */
     int answer; /* the status byte the next request of `fail_type` gets */
@@ -298,6 +322,10 @@ struct model {
     char serial[VBLK_ID_BYTES + 1];
     uint8_t *disk;
     int reads, writes, flushes, discards, zeroes, ids, longest;
+    int widest;          /* the bytes of the longest piece of data */
+    int refused_flushes; /* flushes answered UNSUPP, FLUSH not taken */
+    int cap_reads;       /* reads of the capacity alone */
+    int uncounted_reads; /* those whose reader the device did not count */
     int dirty;           /* writes answered since the last flush */
     int flushed_writes;  /* writes a flush made durable */
     uint64_t last_range; /* the last discard's or write of zeroes' sector */
@@ -356,16 +384,27 @@ static uint32_t m_generation(struct virtio_dev *d)
     return 0;
 }
 
-/** Read the device's configuration. */
+/** Read the device's configuration. A read of the capacity alone, which
+ * the driver makes after a change, is counted, and whether its reader was
+ * counted in the device, which is what a removal waits for. */
 static void m_config_read(struct virtio_dev *d, uint32_t offset, void *buf, uint32_t len)
 {
-    k_memcpy(buf, mod(d)->cfg + offset, len);
+    struct model *m = mod(d);
+
+    check(m->puts == 0, "the configuration is not read once the device is given back");
+    if (offset == VBLK_CFG_CAPACITY && len == 8) {
+        m->cap_reads++;
+        m->uncounted_reads += !d->priv || ((struct vblk *)d->priv)->pollers == 0;
+    }
+    k_memcpy(buf, m->cfg + offset, len);
 }
 
-/** Write the device's configuration. */
+/** Write the device's configuration, unless it takes no write. */
 static void m_config_write(struct virtio_dev *d, uint32_t offset, const void *buf, uint32_t len)
 {
-    k_memcpy(mod(d)->cfg + offset, buf, len);
+    if (!mod(d)->stuck_cache) {
+        k_memcpy(mod(d)->cfg + offset, buf, len);
+    }
 }
 
 /** The entries each queue may have. */
@@ -576,9 +615,15 @@ static int model_request(struct model *m, struct seg *s, int n, uint32_t *wrote)
 {
     uint32_t type = (uint32_t)le(s[0].p, 4);
     uint64_t sector = le(s[0].p + 8, 8);
+    int k;
 
     if (n - 2 > m->longest) {
         m->longest = n - 2;
+    }
+    for (k = 1; k < n - 1 && (type == VBLK_T_IN || type == VBLK_T_OUT); k++) {
+        if ((int)s[k].len > m->widest) {
+            m->widest = (int)s[k].len;
+        }
     }
     if ((int)type == m->fail_type) {
         m->fail_type = -1;
@@ -595,6 +640,10 @@ static int model_request(struct model *m, struct seg *s, int n, uint32_t *wrote)
         (void)model_data(m, s, n, sector, 1);
         return VBLK_S_OK;
     case VBLK_T_FLUSH:
+        if (!(m->taken & VIRTIO_BIT(VBLK_F_FLUSH))) {
+            m->refused_flushes++;
+            return VBLK_S_UNSUPP;
+        }
         m->flushes++;
         m->flushed_writes += m->dirty;
         m->dirty = 0;
@@ -780,6 +829,7 @@ static void model_reset(int n)
         m->dev.transport = m;
         m->dev.id = VIRTIO_ID_BLOCK;
         m->dev.name = i == 0 ? "virtio0" : "virtio1";
+        m->dev.config_atomic = 1; /* register reads, as virtio-pci's */
         m->offered = qemu_features();
         m->qsize = 128;
         m->fail_type = -1;
@@ -803,6 +853,9 @@ static void model_reset(int n)
     cmdline_poll = 0;
     policy_ro = 0;
     host_cpu = 0;
+    mounts = 0;
+    cached_blocks = 0;
+    vblk_waiting = 0;
     log_clear();
 }
 
@@ -895,22 +948,78 @@ static void polled_rw(void)
     check(disk0()->read(disk0(), DISK_SECTORS - 1, 2, buf) == -EIO, "a read past the end");
 }
 
-/** A device without a cache, one that is read-only, one of 4096-byte
- * blocks, one with a single queue, and one whose transport polls. */
+/**
+ * The cache mode, as Linux's virtblk_get_cache_mode gives it: the
+ * `writeback` byte under CONFIG_WCE, and FLUSH without it. A device whose
+ * cache is on and that has no FLUSH is set to writethrough, and one that
+ * keeps its cache all the same has every durable write and every flush
+ * fail, where the old driver called it cacheless and its writes durable.
+ */
+static void cache_modes(void)
+{
+    static uint8_t buf[4096];
+    static struct block_request r[3];
+    struct model *m = &models[0];
+
+    model_reset(1);
+    m->offered &= ~(F(VBLK_F_FLUSH) | F(VBLK_F_CONFIG_WCE));
+    check(virtio_blk_init() == 0 && !vblks[0].cache && !(disk0()->flags & BLOCK_WRITE_THROUGH),
+          "a device with neither FLUSH nor CONFIG_WCE has no cache");
+    check(disk0()->write(disk0(), 0, 1, buf) == 0 && m->flushes + m->refused_flushes == 0,
+          "and no flush follows its write");
+    model_reset(1);
+    m->offered &= ~F(VBLK_F_CONFIG_WCE);
+    m->cfg[VBLK_CFG_WRITEBACK] = 0;
+    check(virtio_blk_init() == 0 && vblks[0].cache, "FLUSH without CONFIG_WCE is a cache");
+    model_reset(1);
+    m->cfg[VBLK_CFG_WRITEBACK] = 0;
+    check(virtio_blk_init() == 0 && !vblks[0].cache, "CONFIG_WCE with writethrough is no cache");
+
+    model_reset(1);
+    m->offered &= ~F(VBLK_F_FLUSH);
+    check(virtio_blk_init() == 0 && m->cfg[VBLK_CFG_WRITEBACK] == 0,
+          "a cache that is on with no FLUSH is set to writethrough");
+    check(!vblks[0].cache && !(disk0()->flags & BLOCK_WRITE_THROUGH) &&
+              logged("virtio0: cache: set to writethrough") && logged("cache off"),
+          "and the disk then has no cache");
+    check(disk0()->write(disk0(), 0, 1, buf) == 0 && m->flushes + m->refused_flushes == 0,
+          "so its write is durable with no flush");
+
+    model_reset(1);
+    m->offered &= ~F(VBLK_F_FLUSH);
+    m->stuck_cache = 1;
+    check(virtio_blk_init() == 0 && vblks[0].cache && (disk0()->flags & BLOCK_WRITE_THROUGH),
+          "a device that keeps its cache on with no FLUSH is driven with a cache");
+    check(logged("virtio0: cache: on with no flush") && logged("cache on"), "which the log says");
+    check(disk0()->write(disk0(), 0, 1, buf) == -EIO && m->writes == 1 && m->refused_flushes == 1,
+          "its polled write fails, since the flush it needs is refused");
+    check(disk0()->unflushed, "and marks the disk unflushed");
+    virtio_blk_start();
+    request_init(&r[0], 1, 8, 8, buf, 0);
+    check(disk0()->submit(disk0(), &r[0]) == 0, "a durable write is queued on it");
+    model_drain(m);
+    check(r[0].state == 1 && r[0].status == -EIO && m->refused_flushes == 2,
+          "and fails with EIO when its flush is refused");
+    request_init(&r[1], 1, 16, 8, buf, BLOCK_REQ_NOFLUSH);
+    (void)disk0()->submit(disk0(), &r[1]);
+    model_drain(m);
+    check(r[1].state == 1 && r[1].status == 0 && disk0()->unflushed,
+          "a NOFLUSH write is answered and leaves the disk marked");
+    request_init(&r[2], 0, 0, 0, 0, BLOCK_REQ_FLUSH);
+    check(disk0()->flush(disk0(), &r[2]) == 0, "a flush is queued on it");
+    model_drain(m);
+    check(r[2].state == 1 && r[2].status == -EIO && disk0()->unflushed && m->flushes == 0,
+          "and fails with EIO, the mark kept: nothing was reported durable");
+}
+
+/** A device that is read-only, one of 4096-byte blocks, one with a single
+ * queue, and one whose transport polls. */
 static void refusals(void)
 {
     static uint8_t buf[512];
     struct model *m = &models[0];
     int before;
 
-    model_reset(1);
-    m->offered &= ~F(VBLK_F_FLUSH);
-    check(virtio_blk_init() == 0 && !vblks[0].cache && !(disk0()->flags & BLOCK_WRITE_THROUGH),
-          "a device without FLUSH has no cache");
-    check(disk0()->write(disk0(), 0, 1, buf) == 0 && m->flushes == 0, "and no flush follows");
-    model_reset(1);
-    m->cfg[VBLK_CFG_WRITEBACK] = 0;
-    check(virtio_blk_init() == 0 && !vblks[0].cache, "CONFIG_WCE with writethrough is no cache");
     model_reset(1);
     m->offered |= F(VBLK_F_RO);
     check(virtio_blk_init() == 0 && (disk0()->flags & BLOCK_READ_ONLY), "RO is read-only");
@@ -1021,11 +1130,15 @@ static void full_queue(void)
     check(done && m->writes == 24, "every request is answered in turn");
 }
 
-/** A discard and a write of zeroes, each one range, and a range longer
- * than the device takes split by the block layer's limit. */
+/**
+ * A discard and a write of zeroes, each one range. On a disk with a cache
+ * a write of zeroes follows a write's rules: durable only after its flush,
+ * or, with NOFLUSH, marking the disk; and a discard marks the disk, so
+ * that the flush after either is sent and not skipped.
+ */
 static void discard(void)
 {
-    static struct block_request r[2];
+    static struct block_request r[6];
     struct model *m = &models[0];
 
     model_reset(1);
@@ -1038,12 +1151,41 @@ static void discard(void)
     check(r[0].state == 1 && r[0].status == 0 && m->discards == 1 && m->last_range == 8 &&
               m->last_num == 16,
           "a discard carries its range");
-    request_init(&r[1], 1, 40, 8, 0, BLOCK_REQ_ZEROES);
-    check(disk0()->submit(disk0(), &r[1]) == 0, "a write of zeroes is queued");
+    check(disk0()->unflushed && m->flushes == 0, "a discard marks the disk unflushed");
+    request_init(&r[1], 0, 0, 0, 0, BLOCK_REQ_FLUSH);
+    (void)disk0()->flush(disk0(), &r[1]);
     model_irq(m);
-    check(r[1].state == 1 && m->zeroes == 1 && m->disk[40 * 512] == 0 && m->disk[48 * 512] == 0x55,
+    check(r[1].state == 1 && r[1].status == 0 && m->flushes == 1 && !disk0()->unflushed,
+          "which the next flush clears");
+
+    request_init(&r[2], 1, 40, 8, 0, BLOCK_REQ_ZEROES);
+    check(disk0()->submit(disk0(), &r[2]) == 0, "a write of zeroes is queued");
+    model_irq(m);
+    check(m->zeroes == 1 && m->disk[40 * 512] == 0 && m->disk[48 * 512] == 0x55,
           "a write of zeroes zeroes its range alone");
-    check(m->flushes == 0, "neither is flushed");
+    check(r[2].state == 0 && m->flushes == 2, "its answer issues its flush, as a write's does");
+    model_irq(m);
+    check(r[2].state == 1 && r[2].status == 0 && !disk0()->unflushed,
+          "and it is answered once the flush is");
+
+    request_init(&r[3], 1, 48, 8, 0, BLOCK_REQ_ZEROES | BLOCK_REQ_NOFLUSH);
+    (void)disk0()->submit(disk0(), &r[3]);
+    model_irq(m);
+    check(r[3].state == 1 && r[3].status == 0 && m->flushes == 2 && disk0()->unflushed,
+          "a NOFLUSH write of zeroes is answered unflushed and marks the disk");
+    request_init(&r[4], 0, 0, 0, 0, BLOCK_REQ_FLUSH);
+    (void)disk0()->flush(disk0(), &r[4]);
+    model_irq(m);
+    check(r[4].state == 1 && r[4].status == 0 && m->flushes == 3 && !disk0()->unflushed,
+          "so the flush after it is sent");
+
+    m->fail_type = VBLK_T_FLUSH;
+    m->answer = VBLK_S_IOERR;
+    request_init(&r[5], 1, 56, 8, 0, BLOCK_REQ_ZEROES);
+    (void)disk0()->submit(disk0(), &r[5]);
+    model_drain(m);
+    check(r[5].state == 1 && r[5].status == -EIO && disk0()->unflushed,
+          "a write of zeroes whose flush fails is EIO and leaves the disk marked");
 }
 
 /** An error and an unsupported request, each answered with its errno. */
@@ -1113,40 +1255,331 @@ static void unanswered(void)
     m->status = 0;
 }
 
-/** A configuration change, read at the next submit, and the removal of
- * the device, which fails what it held and gives everything back. */
-static void change_and_removal(void)
+/**
+ * A capacity change, read apart from any request as Linux's configuration
+ * work reads it: in the configuration's interrupt, into the disk and into
+ * the whole-disk window that `/dev/diskN` is, with its reader counted in
+ * the device; in a polled transfer of a device that has no interrupt; and
+ * from a process on a transport whose configuration a handler cannot read.
+ */
+static void capacity(void)
 {
     static uint8_t buf[512];
-    static struct block_request r[2];
+    static struct block_request r;
     struct model *m = &models[0];
+    block_device_t *whole = &disks[0].whole.part.device;
+    int reads;
 
     model_reset(1);
     (void)virtio_blk_init();
     virtio_blk_start();
+    devfs_disk_publish(&disks[0]);
     put_le(m->cfg + VBLK_CFG_CAPACITY, 2 * DISK_SECTORS, 8);
     virtio_interrupt_config(&m->dev);
-    check(disk0()->sector_count == DISK_SECTORS, "a change is not read in the interrupt");
-    request_init(&r[0], 0, 0, 1, buf, 0);
-    (void)disk0()->submit(disk0(), &r[0]);
-    model_irq(m);
     check(disk0()->sector_count == 2 * DISK_SECTORS && logged("capacity: 8 MiB, was 4 MiB"),
-          "the next submit reads the new capacity");
-    put_le(m->cfg + VBLK_CFG_CAPACITY, DISK_SECTORS, 8);
+          "the configuration's interrupt reads the new capacity");
+    check(whole->sector_count == 2 * DISK_SECTORS, "and /dev/disk0 has the new size");
+    check(m->cap_reads == 1 && m->uncounted_reads == 0,
+          "the reader is counted in the device, which a removal waits for");
+    reads = m->cap_reads;
+    request_init(&r, 0, 0, 1, buf, 0);
+    (void)disk0()->submit(disk0(), &r);
+    model_irq(m);
+    check(r.state == 1 && r.status == 0 && m->cap_reads == reads,
+          "a submit reads no configuration");
+    put_le(m->cfg + VBLK_CFG_CAPACITY, DISK_SECTORS / 2, 8);
+    virtio_interrupt_config(&m->dev);
+    check(disk0()->sector_count == DISK_SECTORS / 2 && whole->sector_count == DISK_SECTORS / 2,
+          "a disk that shrinks does too, with its window");
+    request_init(&r, 0, DISK_SECTORS / 2, 1, buf, 0);
+    check(disk0()->submit(disk0(), &r) == -EIO, "and a request past its new end is refused");
+
+    model_reset(1);
+    cmdline_poll = 1;
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    devfs_disk_publish(&disks[0]);
+    put_le(m->cfg + VBLK_CFG_CAPACITY, DISK_SECTORS / 2, 8);
+    virtio_interrupt_config(&m->dev);
+    check(!disk0()->submit && disk0()->sector_count == DISK_SECTORS / 2 &&
+              whole->sector_count == DISK_SECTORS / 2,
+          "a disk polled under rach2.vblkpoll takes the change from the interrupt");
+
+    model_reset(1);
+    m->polled = 1;
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    devfs_disk_publish(&disks[0]);
+    put_le(m->cfg + VBLK_CFG_CAPACITY, DISK_SECTORS / 2, 8);
+    reads = m->reads;
+    check(disk0()->read(disk0(), DISK_SECTORS / 2, 1, buf) == -EIO && m->reads == reads,
+          "a device with no interrupt has its capacity read at a polled transfer");
+    check(disk0()->sector_count == DISK_SECTORS / 2 && whole->sector_count == DISK_SECTORS / 2 &&
+              m->uncounted_reads == 0,
+          "which gives the disk and its window the new size");
+    check(disk0()->read(disk0(), DISK_SECTORS / 2 - 1, 1, buf) == 0, "and a read inside it goes");
+
+    model_reset(1);
+    m->dev.config_atomic = 0;
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    devfs_disk_publish(&disks[0]);
+    put_le(m->cfg + VBLK_CFG_CAPACITY, 2 * DISK_SECTORS, 8);
+    virtio_interrupt_config(&m->dev);
+    check(disk0()->sector_count == DISK_SECTORS && m->cap_reads == 0,
+          "a transport whose configuration a handler cannot read is not read in the interrupt");
+    virtio_blk_service();
+    check(disk0()->sector_count == 2 * DISK_SECTORS && whole->sector_count == 2 * DISK_SECTORS &&
+              m->cap_reads == 1 && m->uncounted_reads == 0,
+          "the next process to enter the kernel reads it");
+    virtio_blk_service();
+    check(m->cap_reads == 1, "once");
+}
+
+/**
+ * The removal of the device: what it held fails, everything is given
+ * back, and nothing reads the configuration of a device that has gone: not
+ * a submit after a change whose read was still due, a polled transfer, nor
+ * the process that would have read it.
+ */
+static void removal(void)
+{
+    static uint8_t buf[512];
+    static struct block_request r[2];
+    struct model *m = &models[0];
+    int was;
+
+    model_reset(1);
+    (void)virtio_blk_init();
+    virtio_blk_start();
     m->hold = 1;
     request_init(&r[1], 0, 0, 1, buf, 0);
     (void)disk0()->submit(disk0(), &r[1]);
+    was = released;
     m->dev.removed(&m->dev);
     check(r[1].state == 1 && r[1].status == -EIO, "removal fails the request in flight");
     check(m->status == 0 && pages_held == 0 && unbinds >= 1 && m->puts == 1,
           "the device is reset, its pages freed, unbound and given back");
-    check(disks[0].released && gone_views >= 1 && logged("disk0: released"),
+    check(disks[0].released && released == was + 1 && gone_views >= 1 && logged("disk0: released"),
           "the disk's views are gone and its number released");
     check(m->dev.priv == 0 && m->dev.removed == 0, "the device names the driver no more");
+
+    model_reset(1);
+    m->dev.config_atomic = 0;
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    disks[0].opens = 1;
+    put_le(m->cfg + VBLK_CFG_CAPACITY, 2 * DISK_SECTORS, 8);
+    virtio_interrupt_config(&m->dev); /* its read is due when the device goes */
+    m->dev.removed(&m->dev);
+    request_init(&r[0], 0, 0, 1, buf, 0);
+    check(disk0()->submit(disk0(), &r[0]) == -EIO,
+          "a submit after the removal fails and reads no configuration");
+    check(disk0()->read(disk0(), 0, 1, buf) == -EIO, "and so does a polled read");
+    virtio_blk_service();
+    check(m->cap_reads == 0 && disk0()->sector_count == DISK_SECTORS,
+          "the change that was due is never read from the device that has gone");
+    disks[0].opens = 0;
 }
 
-/** Two devices: the second is disk 1, a later bind through the
- * registered probe is published too, and the queue count is the lesser of
+/**
+ * A disk that is open, mounted or has blocks in the buffer cache when its
+ * device is removed stays, answering EIO, and is let go when its last
+ * holder is: the old driver looked once, at the removal, and kept such a
+ * disk and its record for ever.
+ */
+static void held_removal(void)
+{
+    static uint8_t buf[512];
+    struct model *m = &models[0];
+    int was, k;
+
+    for (k = 0; k < 3; k++) {
+        model_reset(2);
+        ndevs = 1;
+        (void)virtio_blk_init();
+        virtio_blk_start();
+        disks[0].opens = k == 0;
+        mounts = k == 1;
+        cached_blocks = k == 2;
+        was = released;
+        m->dev.removed(&m->dev);
+        check(released == was && !disks[0].released && !disks[0].present && vblks[0].used,
+              "a held disk keeps its number at the removal, its nodes hidden");
+        check(m->puts == 1 && pages_held == 0, "the device itself is given back");
+        check(logged("disk0: held"), "the log says the disk is held");
+        check(disk0()->read(disk0(), 0, 1, buf) == -EIO, "the held disk answers EIO");
+        virtio_blk_service();
+        check(released == was && vblks[0].used, "while it is held, a process's entry keeps it");
+        disks[0].opens = 0;
+        mounts = 0;
+        cached_blocks = 0;
+        virtio_blk_service();
+        check(released == was + 1 && disks[0].released && !vblks[0].used &&
+                  logged("disk0: released"),
+              k == 0   ? "the close of its last descriptor lets the disk go"
+              : k == 1 ? "its unmount lets the disk go"
+                       : "its last cached block lets the disk go");
+        virtio_blk_service();
+        check(released == was + 1, "once");
+        check(probe_fn(&models[1].dev) == 0 && vblks[0].dev == &models[1].dev && disks[0].present &&
+                  !disks[0].released,
+              "and a device bound later takes the record and the number");
+    }
+
+    model_reset(2);
+    ndevs = 1;
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    disks[0].opens = 1;
+    m->dev.removed(&m->dev);
+    disks[0].opens = 0;
+    was = released;
+    check(probe_fn(&models[1].dev) == 0 && released == was + 1 && vblks[0].dev == &models[1].dev,
+          "a bind finds a disk let go since its removal and takes its record");
+}
+
+/**
+ * A device bound after the boot has its whole-disk window published,
+ * `/dev/diskN`, as the boot publishes every disk's, and at once works by
+ * interrupts.
+ */
+static void late_bind(void)
+{
+    int was;
+
+    model_reset(2);
+    ndevs = 1;
+    check(virtio_blk_init() == 0 && probe_fn != 0, "the driver registers its probe");
+    virtio_blk_start();
+    was = publishes;
+    check(probe_fn(&models[1].dev) == 0 && disks[1].present && vblks[1].up,
+          "a device bound after the boot is brought up and registered");
+    check(publishes == was + 1 && disks[1].whole.present &&
+              disks[1].whole.part.device.sector_count == DISK_SECTORS,
+          "and its whole-disk window is published at the disk's size");
+    check(vblks[1].bdev.submit != 0 && vblks[1].bdev.flush != 0, "on its interrupts");
+    check(!disks[0].whole.present, "the boot's disk is left to the boot's own publish");
+}
+
+/**
+ * A device whose `size_max` is 512 bytes: every piece of data is cut to
+ * it, and the core joins no two of them back into a longer descriptor,
+ * though they follow each other in memory, with indirect tables and
+ * without.
+ */
+static void size_max(void)
+{
+    static uint8_t page[3 * 4096] __attribute__((aligned(4096)));
+    static struct block_request r;
+    struct model *m = &models[0];
+    int i, k, ok;
+
+    for (k = 0; k < 2; k++) {
+        model_reset(1);
+        m->offered |= F(VBLK_F_SIZE_MAX);
+        if (k == 1) {
+            m->offered &= ~F(VIRTIO_F_INDIRECT_DESC);
+        }
+        put_le(m->cfg + VBLK_CFG_SIZE_MAX, 512, 4);
+        check(virtio_blk_init() == 0 && vblks[0].seg_bytes == 512 &&
+                  disk0()->max_sectors == (126 / 8) * 8,
+              "size_max of 512 cuts a piece to 512 bytes and a request to 15 pages");
+        for (i = 0; i < 4096; i++) {
+            page[i] = (uint8_t)(i * 7 + 3);
+        }
+        check(disk0()->write(disk0(), 16, 8, page) == 0, "a polled write of a page");
+        check(m->longest == 8 && m->widest == 512,
+              k == 0 ? "is eight pieces of 512 bytes in an indirect table"
+                     : "is eight pieces of 512 bytes in the queue's own descriptors");
+        for (i = 0, ok = 1; i < 4096; i++) {
+            ok &= m->disk[16 * 512 + i] == (uint8_t)(i * 7 + 3);
+        }
+        check(ok, "and reaches the disk whole");
+        virtio_blk_start();
+        m->longest = 0;
+        request_init(&r, 0, 16, 16, page + 4096, 0);
+        check(disk0()->submit(disk0(), &r) == 0, "a queued read of two pages");
+        model_drain(m);
+        check(r.state == 1 && r.status == 0 && m->longest == 16 && m->widest == 512,
+              "is sixteen pieces of 512 bytes");
+        for (i = 0, ok = 1; i < 4096; i++) {
+            ok &= page[4096 + i] == (uint8_t)(i * 7 + 3);
+        }
+        check(ok, "and reads the data back");
+    }
+    model_reset(1);
+    (void)virtio_blk_init();
+    check(disk0()->write(disk0(), 16, 8, page) == 0 && m->longest == 1 && m->widest == 4096,
+          "a device with no size_max takes a page as one piece");
+}
+
+/**
+ * The machine's stop: each disk refuses new commands, finishes the writes
+ * and the flushes under way, flushes a cache still marked unflushed and is
+ * reset, so that it reaches no memory while the machine restarts; a device
+ * that does not answer is reset after a bounded wait.
+ */
+static void shutdown(void)
+{
+    static uint8_t buf[4096];
+    static struct block_request r[3];
+    struct model *m = &models[0];
+    int resets, i;
+
+    model_reset(1);
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    for (i = 0; i < 4096; i++) {
+        buf[i] = (uint8_t)(i + 1);
+    }
+    request_init(&r[0], 1, 24, 8, buf, 0);
+    check(disk0()->submit(disk0(), &r[0]) == 0 && r[0].state == 0,
+          "a durable write is with the device at the stop, its interrupt not yet taken");
+    resets = m->resets;
+    virtio_blk_shutdown();
+    check(r[0].state == 1 && r[0].status == 0 && m->writes == 1 && m->flushes == 1 &&
+              m->dirty == 0 && m->disk[24 * 512 + 1] == 2,
+          "the shutdown finishes the write and its flush");
+    check(m->resets == resets + 1 && m->status == 0, "and then resets the device");
+    check(logged("virtio0: shutdown: reset with no request in flight"), "which the log records");
+    check(pages_held > 0 && m->puts == 0, "it frees nothing and keeps the device");
+    request_init(&r[1], 0, 0, 1, buf, 0);
+    check(disk0()->submit(disk0(), &r[1]) == -EIO && disk0()->read(disk0(), 0, 1, buf) == -EIO,
+          "every later command answers EIO");
+    virtio_blk_shutdown();
+    check(m->resets == resets + 1, "a second shutdown does nothing");
+
+    model_reset(1);
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    request_init(&r[0], 1, 24, 8, buf, BLOCK_REQ_NOFLUSH);
+    (void)disk0()->submit(disk0(), &r[0]);
+    model_irq(m);
+    check(disk0()->unflushed && m->flushes == 0, "a disk is marked unflushed at the stop");
+    virtio_blk_shutdown();
+    check(m->flushes == 1 && m->dirty == 0 && !disk0()->unflushed && m->status == 0,
+          "the shutdown flushes its cache before the reset");
+
+    model_reset(2);
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    m->hold = 1;
+    request_init(&r[0], 1, 24, 8, buf, 0);
+    (void)disk0()->submit(disk0(), &r[0]);
+    irq_on = 0;
+    delays = 0;
+    virtio_blk_shutdown();
+    irq_on = 1;
+    check(delays >= VBLK_CMD_STEPS_MASKED - 1, "a device that does not answer is waited for");
+    check(r[0].state == 1 && r[0].status == -EIO && m->status == 0,
+          "and then reset, its request failed");
+    check(logged("virtio0: shutdown: reset, 1 requests unanswered"), "which the log records");
+    check(models[1].status == 0 && logged("virtio1: shutdown: reset with no request in flight"),
+          "and the other disk is reset as well");
+}
+
+/** Two devices: the second is disk 1, and the queue count is the lesser of
  * the offer and VIRTIO_MAX_QUEUES. */
 static void two_devices(void)
 {
@@ -1163,13 +1596,19 @@ int main(void)
 {
     bring_up();
     polled_rw();
+    cache_modes();
     refusals();
     queued();
     full_queue();
     discard();
     errors();
     unanswered();
-    change_and_removal();
+    capacity();
+    removal();
+    held_removal();
+    late_bind();
+    size_max();
+    shutdown();
     two_devices();
     model_reset(0);
     if (failures) {

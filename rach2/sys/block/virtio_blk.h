@@ -40,4 +40,28 @@ int virtio_blk_init(void);
  */
 void virtio_blk_start(void);
 
+/**
+ * Do the work that waited for a process: let go of each removed disk that
+ * was held at its removal and that nothing holds any more, so that its
+ * number is free again, and read the capacity after a configuration change
+ * whose interrupt could not read it. Returns at once when there is none.
+ * In process context under the big lock, at the entry of a system call, as
+ * `usbdisk_service` is called.
+ */
+void virtio_blk_service(void);
+
+/**
+ * Stop every disk for the machine's stop, as Linux's virtio bus resets
+ * each device at shutdown (virtio_dev_shutdown, drivers/virtio/virtio.c):
+ * refuse new commands, finish the writes and the flushes the device has
+ * and those that wait, flush a cache still marked unflushed, and reset the
+ * device (`virtio_halt`), so that it reads no ring and writes into no
+ * buffer while the machine restarts. Each disk logs
+ * `virtio-blk: NAME: shutdown: reset with no request in flight`, or what
+ * was left unanswered. Every later command answers EIO. Called from
+ * `kernel_shutdown` once the file systems are unmounted, before the
+ * processors stop.
+ */
+void virtio_blk_shutdown(void);
+
 #endif

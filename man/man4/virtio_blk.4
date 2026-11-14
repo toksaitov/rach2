@@ -1,4 +1,4 @@
-.Dd November 14, 2026
+.Dd November 15, 2026
 .Dt VIRTIO_BLK 4
 .Os
 .Sh NAME
@@ -61,13 +61,25 @@ The device keeps polling when the kernel command line has
 and when the transport could give it no interrupt.
 .Pp
 Virtio has no force unit access.
-When the device has a write cache, which it reports with
-.Dv VIRTIO_BLK_F_FLUSH
-and its writeback setting, a write is followed by a
+The device has a write cache when its writeback setting says so, where it
+offers
+.Dv VIRTIO_BLK_F_CONFIG_WCE ,
+and otherwise when it offers
+.Dv VIRTIO_BLK_F_FLUSH ,
+as Linux decides it.
+A write to such a device, of data or of zeros, is followed by a
 .Dv VIRTIO_BLK_T_FLUSH
 command before it returns, so it is on the medium when it returns.
 A file system that writes several blocks and flushes once after them
-sends them without the flush, and its flush is the device's.
+sends them without the flush, and its flush is the device's; a discard is
+on the medium after the next flush too.
+A device whose cache is on and that offers no flush is set to writethrough
+through its writeback setting.
+One that keeps its cache on all the same fails every flush, and so every
+write that must be on the medium and every
+.Xr fsync 2 ,
+with
+.Er EIO .
 .Pp
 .Dv BLKDISCARD
 and
@@ -83,15 +95,32 @@ configuration allows;
 .Pa /sys/block/diskN/queue/discard_max_bytes
 gives that size.
 A device without write zeroes has the zeros written as data.
+The device's
+.Va size_max ,
+where it offers one, bounds every piece of data it is given.
 .Pp
-When the device's configuration changes, the next transfer reads its
-capacity again.
+When the device's capacity changes, the driver reads it at once, and
+.Pa /dev/diskN
+and its size have the new capacity; the partitions keep their ranges until
+the table is read again.
+A device bound after the boot, by a write of its function to
+.Pa /sys/bus/pci/drivers/virtio-pci/bind ,
+has its
+.Pa /dev/diskN
+as a disk found at boot has.
 When the transport lets the device go, as a write of its function to
 .Pa /sys/bus/pci/drivers/virtio-pci/unbind
 does, the disk goes out of use as a stick that is pulled: its nodes go,
 its mounts read and write nothing more, and every transfer in flight fails
 with
 .Er EIO .
+A disk that was open or mounted then keeps its number until its last
+descriptor is closed and its last mount is gone, and the number is then
+free for a new disk.
+.Pp
+When the machine halts, powers off or restarts, each device finishes the
+writes and the flushes it has, is flushed if anything in its cache is not
+yet on the medium, and is reset, so that a restarted machine finds it idle.
 .Pp
 The metal kernel's read-only policy, which
 .Xr disk 7
@@ -133,6 +162,24 @@ every transfer it held fails with
 and so does every later one.
 .It Ql virtio-blk: virtioN: capacity: S MiB, was R MiB
 The device's capacity changed.
+.It Ql virtio-blk: virtioN: cache: set to writethrough, since it has no flush
+The device's cache was on and it offers no flush; the driver turned the
+cache off.
+.It Ql virtio-blk: virtioN: cache: on with no flush, and it stays on; durable writes will fail
+The device kept its cache on; its flushes fail with
+.Er EIO .
+.It Ql virtio-blk: diskN: held: released when its last holder lets go
+The device was removed while its disk was open or mounted.
+.It Ql virtio-blk: diskN: released
+The disk's number is free again.
+.It Ql virtio-blk: virtioN: shutdown: reset with no request in flight
+The device was reset at the machine's stop, with nothing left to answer.
+.It Ql virtio-blk: virtioN: shutdown: reset, N requests unanswered
+The device did not answer N requests within the wait at the machine's
+stop; it was reset, or kept from reaching memory when the line says the
+reset did not end.
+.It Ql virtio-blk: virtioN: shutdown: the last flush failed
+The flush of the device's cache at the machine's stop failed.
 .It Ql virtio-blk: virtioN: interrupts: Q queues
 The device was moved to its queues' interrupts.
 .It Ql virtio-blk: virtioN: polled: reason

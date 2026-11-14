@@ -16,6 +16,7 @@
 #include "../arch/arch.h"
 #include "../cmdline.h"
 #include "../fs/bcache.h"
+#include "../fs/devfs.h"
 #include "../fs/vfs.h"
 #include "../klog.h"
 #include "../latency.h"
@@ -154,26 +155,37 @@ struct vblk_queue {
 /**
  * A virtio block device and the disk it is. `lock`, taken with interrupts
  * off inside a queue's lock or alone, covers `wseq`, the disk's
- * `unflushed` and `pollers`; `dead` is set once, under it, and read
- * anywhere. The record is never freed: a disk that has gone keeps
- * answering EIO to whatever still names it.
+ * `unflushed`, `pollers`, the capacity and `disk`; `dead` and `closed` are
+ * set once, under it, and read anywhere. `dev` is the transport's record
+ * until the removal lets it go: a caller reaches it under a queue's lock
+ * with the disk not dead, or counted in `pollers`, which the removal waits
+ * for. The record is never freed: a disk that has gone keeps answering EIO
+ * to whatever still names it, and the record serves a new device once
+ * nothing holds the disk.
  */
 struct vblk {
     struct spinlock lock;
     struct virtio_dev *dev;
-    int number;  /* the place among the devices this driver took */
-    int used;    /* the record belongs to a device, or to a disk still held */
-    int up;      /* brought up and registered */
-    int started; /* on its interrupts */
-    int gone;    /* removed from the transport */
+    char name[16]; /* the device's name on the virtio bus, for the log */
+    int number;    /* the place among the devices this driver took */
+    int used;      /* the record belongs to a device, or to a disk still held */
+    int up;        /* brought up and registered */
+    int started;   /* on its interrupts */
+    int gone;      /* removed from the transport */
     volatile int dead;
-    volatile int config_dirty; /* the configuration changed; read it again */
-    uint32_t pollers;          /* polled callers inside the device's queues */
+    volatile int closed;       /* shutting down: no new command is taken */
+    volatile int config_dirty; /* the configuration changed, and its read
+                                * waits for a process (`virtio_blk_service`) */
+    int config_poll;           /* no interrupt tells of a change: a polled
+                                * transfer reads the capacity first */
+    uint32_t pollers;          /* callers inside the device: polled commands
+                                * and readers of its configuration */
     uint32_t wseq;             /* writes answered without a flush, counted */
     int cache;                 /* a volatile write cache, which FLUSH empties */
     int ro;
     uint32_t seg_max;   /* data pieces one chain may carry */
     uint32_t seg_bytes; /* the bytes one piece may hold */
+    uint32_t size_max;  /* the device's `size_max`, or 0 for a device with none */
     uint16_t nqueues;
     block_device_t bdev;
     struct disk *disk;
@@ -195,6 +207,11 @@ struct vblk_cmd {
 
 static struct vblk vblks[VBLK_DISKS];
 static int vblk_registered; /* the driver is registered for later devices */
+
+/* Work waits for a process: a removed disk that something still held, or a
+ * configuration change its interrupt could not read. Set anywhere, and
+ * cleared by `virtio_blk_service` before it looks. */
+static volatile int vblk_waiting;
 
 /* Why the last bring-up step failed, for the line that reports it. */
 static const char *vblk_why = "";
@@ -357,7 +374,7 @@ static int vblk_build(struct vblk_queue *q, struct vblk_slot *s, const struct vb
     int limit = (int)vb->seg_max + 1, n = 1, first_in;
 
     if (!diskcmd_allowed(vblk_policy_command(c->type))) {
-        klog(KLOG_WARN, "virtio-blk", "%s: refused: request type %u: %s", vb->dev->name,
+        klog(KLOG_WARN, "virtio-blk", "%s: refused: request type %u: %s", vb->name,
              (unsigned)c->type, diskcmd_policy_banner);
         return -EPERM;
     }
@@ -445,16 +462,17 @@ static void vblk_slot_free(struct vblk_slot *s)
 }
 
 /*
- * The write cache. A device whose cache is on (VIRTIO_BLK_F_FLUSH, and
- * `writeback` set where VIRTIO_BLK_F_CONFIG_WCE lets the driver read it)
- * answers a write once the write is in its cache, and has no FUA: a write
- * is durable after a FLUSH that follows its answer, as Linux's block layer
- * makes a FUA write on a queue without FUA a write and a flush
- * (block/blk-flush.c).
+ * The write cache. A device whose cache is on (`vblk_cache_mode`) answers
+ * a write, of data or of zeroes, once the write is in its cache, and has no
+ * FUA: a write is durable after a FLUSH that follows its answer, as Linux's
+ * block layer makes a FUA write on a queue without FUA a write and a flush
+ * (block/blk-flush.c). A discard the cache holds is on the medium after the
+ * next FLUSH, which Linux sends at each fsync; `block_flush` sends one only
+ * to a disk marked unflushed, so a discard marks the disk too.
  */
 
-/** A write was answered without a flush: the disk is marked, and the count
- * of such writes moves on. */
+/** A write or a discard was answered without a flush, or the flush after
+ * it failed: the disk is marked, and the count of such answers moves on. */
 static void vblk_unflushed(struct vblk *vb)
 {
     uint32_t flags = spin_lock_irqsave(&vb->lock);
@@ -585,6 +603,7 @@ static void vblk_start_next(struct vblk_queue *q)
             goto kick;
         }
         if (rc < 0) {
+            vblk_unflushed(vb);
             vblk_end(s, -EIO);
         }
     }
@@ -614,7 +633,7 @@ static void vblk_start_next(struct vblk_queue *q)
         if (rc < 0) {
             if (rc == -E2BIG) {
                 klog(KLOG_WARN, "virtio-blk", "%s: refused: a request of more than %u pieces",
-                     vb->dev->name, (unsigned)vb->seg_max);
+                     vb->name, (unsigned)vb->seg_max);
             }
             vblk_slot_free(s);
             block_request_complete(r, r->generation, -EIO);
@@ -637,20 +656,24 @@ kick:
 
 /**
  * The device has answered slot `s` with `status`. A polled command is
- * marked done for its caller, who frees the slot. A request is answered:
- * a write whose request has `BLOCK_REQ_NOFLUSH` marks the disk; any other
- * write that succeeded, on a disk with a cache, has its flush offered in
- * its slot first; a flush that succeeded clears the mark (`vblk_flushed`).
- * `q`'s lock is held.
+ * marked done for its caller, who frees the slot. A request is answered.
+ * On a disk with a cache, a write of data or of zeroes whose request has
+ * `BLOCK_REQ_NOFLUSH` marks the disk, and so does a discard; any other
+ * write that succeeded has its flush offered in its slot first, and is
+ * answered with that flush. A flush that succeeded clears the mark
+ * (`vblk_flushed`); one that fails or cannot be offered, a write's or a
+ * flush request's, answers EIO and marks the disk, since what the cache
+ * holds is on no medium. `q`'s lock is held.
  */
 static void vblk_answer(struct vblk_queue *q, struct vblk_slot *s, int status)
 {
     struct vblk *vb = q->vb;
     struct block_request *r = s->request;
     int rc = status == VBLK_S_OK ? 0 : status == VBLK_S_UNSUPP ? -EOPNOTSUPP : -EIO;
+    int wrote = s->type == VBLK_T_OUT || s->type == VBLK_T_WRITE_ZEROES;
 
     if (status != VBLK_S_OK) {
-        klog(KLOG_WARN, "virtio-blk", "%s: request type %u failed: status %d", vb->dev->name,
+        klog(KLOG_WARN, "virtio-blk", "%s: request type %u failed: status %d", vb->name,
              (unsigned)s->type, status);
     }
     if (!r) {
@@ -658,19 +681,22 @@ static void vblk_answer(struct vblk_queue *q, struct vblk_slot *s, int status)
         s->done = 1;
         return;
     }
-    if (rc == 0 && s->type == VBLK_T_OUT && (r->flags & BLOCK_REQ_NOFLUSH)) {
-        if (vb->cache) {
-            vblk_unflushed(vb);
-        }
-    } else if (rc == 0 && s->type == VBLK_T_OUT && vb->cache) {
-        int f = vblk_flush_half(q, s);
-
-        if (f >= 0) {
+    if (rc == 0 && vb->cache &&
+        (s->type == VBLK_T_DISCARD || (wrote && (r->flags & BLOCK_REQ_NOFLUSH)))) {
+        vblk_unflushed(vb);
+    } else if (rc == 0 && wrote && vb->cache) {
+        if (vblk_flush_half(q, s) >= 0) {
             return; /* answered with the flush, or offered by vblk_start_next */
         }
+        vblk_unflushed(vb);
         rc = -EIO;
-    } else if (rc == 0 && s->type == VBLK_T_FLUSH) {
-        vblk_flushed(vb, s->fseq);
+    } else if (s->type == VBLK_T_FLUSH) {
+        if (rc == 0) {
+            vblk_flushed(vb, s->fseq);
+        } else {
+            vblk_unflushed(vb);
+            rc = -EIO; /* UNSUPP too: what the cache holds is on no medium */
+        }
     }
     vblk_end(s, rc);
 }
@@ -693,7 +719,7 @@ static void vblk_vq_done(struct virtqueue *vq, void *token, uint32_t len)
     flags = spin_lock_irqsave(&q->lock);
     if (s->state != VBLK_ISSUED) {
         spin_unlock_irqrestore(&q->lock, flags);
-        klog(KLOG_WARN, "virtio-blk", "%s: a buffer returned for no command", q->vb->dev->name);
+        klog(KLOG_WARN, "virtio-blk", "%s: a buffer returned for no command", q->vb->name);
         return;
     }
     status = s->mem[VBLK_STATUS];
@@ -712,12 +738,16 @@ static void vblk_reap(struct vblk_queue *q)
  * Polled commands, for the boot and for a caller that cannot sleep.
  */
 
-/** Count a polled caller in, so that a removal waits for it; 0, or -EIO
- * for a disk out of use. */
+/**
+ * Count a caller into the device, a polled command or a reader of its
+ * configuration, so that a removal waits for it before it lets the
+ * transport go, and a shutdown before it resets the device; 0, or -EIO for
+ * a disk out of use or shutting down. From any context.
+ */
 static int vblk_poller_in(struct vblk *vb)
 {
     uint32_t flags = spin_lock_irqsave(&vb->lock);
-    int rc = vb->dead ? -EIO : 0;
+    int rc = vb->dead || vb->closed ? -EIO : 0;
 
     if (rc == 0) {
         vb->pollers++;
@@ -726,7 +756,7 @@ static int vblk_poller_in(struct vblk *vb)
     return rc;
 }
 
-/** Count a polled caller out. */
+/** Count a caller out. */
 static void vblk_poller_out(struct vblk *vb)
 {
     uint32_t flags = spin_lock_irqsave(&vb->lock);
@@ -777,24 +807,20 @@ static int vblk_polled_end(struct vblk_queue *q, struct vblk_slot *s, const stru
  * not answered within the bound, or a queue with no room for that long,
  * takes the disk out of use (`vblk_kill`): Linux's virtio_blk has no
  * timeout and waits for ever, which a caller with interrupts off cannot.
+ * The caller is counted in the device (`vblk_poller_in`).
  */
-static int vblk_polled(struct vblk *vb, const struct vblk_cmd *c)
+static int vblk_polled_counted(struct vblk *vb, const struct vblk_cmd *c)
 {
-    struct vblk_queue *q;
+    struct vblk_queue *q = vblk_queue_here(vb);
     struct vblk_slot *s = 0;
     uint32_t steps = vblk_cmd_steps(), flags;
-    int rc = vblk_poller_in(vb);
+    int rc;
 
-    if (rc != 0) {
-        return rc;
-    }
-    q = vblk_queue_here(vb);
     for (;;) {
         flags = spin_lock_irqsave(&q->lock);
         if (vb->dead) {
             spin_unlock_irqrestore(&q->lock, flags);
-            rc = -EIO;
-            goto out;
+            return -EIO;
         }
         s = vblk_slot_take(q);
         if (s) {
@@ -811,45 +837,55 @@ static int vblk_polled(struct vblk *vb, const struct vblk_cmd *c)
             vblk_slot_free(s);
             if (rc < 0) {
                 spin_unlock_irqrestore(&q->lock, flags);
-                goto out;
+                return rc;
             }
         }
         spin_unlock_irqrestore(&q->lock, flags);
         vblk_reap(q);
         if (--steps == 0) {
             vblk_kill(vb, "its queue had no room for thirty seconds");
-            rc = -EIO;
-            goto out;
+            return -EIO;
         }
         vblk_poll_step();
     }
     for (;;) {
         vblk_reap(q);
         if (vblk_polled_end(q, s, c, &rc)) {
-            goto out;
+            return rc;
         }
         if (steps-- == 0) {
             break;
         }
         vblk_poll_step();
     }
-    klog(KLOG_WARN, "virtio-blk", "%s: request type %u failed: %s", vb->dev->name,
-         (unsigned)c->type,
+    klog(KLOG_WARN, "virtio-blk", "%s: request type %u failed: %s", vb->name, (unsigned)c->type,
          kirq_enabled() ? "no answer in thirty seconds"
                         : "no answer in five seconds with interrupts off");
     vblk_kill(vb, "a command was not answered");
     if (!vblk_polled_end(q, s, c, &rc)) {
         rc = -EIO; /* not reached: the kill marks every polled slot done */
     }
-out:
-    vblk_poller_out(vb);
+    return rc;
+}
+
+/** `vblk_polled_counted` for a caller not yet counted in the device: -EIO
+ * at once for a disk out of use or shutting down. */
+static int vblk_polled(struct vblk *vb, const struct vblk_cmd *c)
+{
+    int rc = vblk_poller_in(vb);
+
+    if (rc == 0) {
+        rc = vblk_polled_counted(vb, c);
+        vblk_poller_out(vb);
+    }
     return rc;
 }
 
 /** Flush the disk's cache by polling, clearing the unflushed mark as a
  * queued flush clears it. The count of unflushed writes is read before the
- * flush is issued, so the flush covers at least those. */
-static int vblk_flush_polled(struct vblk *vb)
+ * flush is issued, so the flush covers at least those. `counted` says the
+ * caller is counted in the device already, as the shutdown is. */
+static int vblk_flush_polled(struct vblk *vb, int counted)
 {
     struct vblk_cmd c;
     uint32_t fseq = vblk_wseq(vb);
@@ -857,19 +893,24 @@ static int vblk_flush_polled(struct vblk *vb)
 
     k_memset(&c, 0, sizeof(c));
     c.type = VBLK_T_FLUSH;
-    rc = vblk_polled(vb, &c);
+    rc = counted ? vblk_polled_counted(vb, &c) : vblk_polled(vb, &c);
     if (rc == 0) {
         vblk_flushed(vb, fseq);
     }
-    return rc == -EPERM || rc == -E2BIG ? -EIO : rc;
+    return rc != 0 ? -EIO : 0;
 }
+
+static void vblk_config_work(struct vblk *vb);
 
 /**
  * A polled transfer of `count` sectors at `lba`, from `src` for a write or
  * into `dst` for a read, in commands of at most the disk's `max_sectors`,
  * halved down to a sector when a buffer's pages need more pieces than a
  * chain carries. A write on a disk with a cache is followed by a flush, so
- * it is on the medium when it returns.
+ * it is on the medium when it returns; when the flush fails, or the write
+ * fails after a part of it reached the cache, the write fails with EIO and
+ * the disk is marked unflushed. A device whose transport gives it no
+ * interrupt has its capacity read first (`config_poll`).
  */
 static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const void *src, void *dst)
 {
@@ -877,8 +918,11 @@ static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const v
     const uint8_t *at = dst ? (const uint8_t *)dst : (const uint8_t *)src;
     uint32_t most = device->max_sectors;
     struct vblk_cmd c;
-    int rc;
+    int rc, cached = 0;
 
+    if (vb->config_poll) {
+        vblk_config_work(vb);
+    }
     if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
         return -EIO;
     }
@@ -897,14 +941,19 @@ static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const v
             continue;
         }
         if (rc != 0) {
+            if (cached) {
+                vblk_unflushed(vb);
+            }
             return rc == -EOPNOTSUPP ? rc : -EIO;
         }
+        cached = src && vb->cache;
         lba += c.count;
         at += c.count * BLOCK_SECTOR_SIZE;
         count -= c.count;
     }
-    if (src && vb->cache) {
-        return vblk_flush_polled(vb);
+    if (cached && vblk_flush_polled(vb, 0) != 0) {
+        vblk_unflushed(vb);
+        return -EIO;
     }
     return 0;
 }
@@ -922,47 +971,108 @@ static int vblk_write(block_device_t *device, uint64_t lba, uint32_t count, cons
 }
 
 /*
- * The interrupt-driven path.
+ * Configuration changes.
  */
 
 /**
- * Read the capacity again after the device said its configuration
- * changed, as Linux's virtblk_config_changed_work does from its work item
- * (drivers/block/virtio_blk.c:1090-1100). The interrupt only marks the
- * change, since a transport's configuration read is not an interrupt's to
- * make; the next submit, in process context, reads it.
+ * Give the disk the capacity `sectors`, read from the configuration, when
+ * it differs from the one it has: the device's count and the whole-disk
+ * window's, which `/dev/diskN` and the size ioctls read, as Linux's
+ * virtblk_update_capacity gives it to the disk with
+ * set_capacity_and_notify (drivers/block/virtio_blk.c). The partition views
+ * keep their ranges, as Linux's partitions do until their table is read
+ * again. A disk that grows gets its count before its window and one that
+ * shrinks after it, so that the window never passes the disk. Returns the
+ * capacity it had. `vb`'s lock is held.
  */
-static void vblk_config_reread(struct vblk *vb)
+static uint64_t vblk_capacity_set(struct vblk *vb, uint64_t sectors)
 {
-    uint8_t cap[8];
-    uint64_t sectors;
+    uint64_t was = vb->bdev.sector_count;
+    struct disk *d = vb->disk;
 
-    vb->config_dirty = 0;
-    virtio_config_read(vb->dev, VBLK_CFG_CAPACITY, cap, sizeof(cap));
-    sectors = vblk_le(cap, 8);
-    if (sectors != vb->bdev.sector_count) {
-        klog(KLOG_INFO, "virtio-blk", "%s: capacity: %u MiB, was %u MiB", vb->dev->name,
-             (unsigned)(sectors >> 11), (unsigned)(vb->bdev.sector_count >> 11));
+    if (sectors > was) {
         vb->bdev.sector_count = sectors;
     }
+    if (sectors != was && d && d->whole.present) {
+        d->whole.part.device.sector_count = sectors;
+    }
+    vb->bdev.sector_count = sectors;
+    return was;
 }
 
-/** The device's configuration changed: mark it, from the interrupt. */
+/**
+ * Read the capacity again after the configuration may have changed, as
+ * Linux's virtblk_config_changed_work does from its work item, apart from
+ * any request (drivers/block/virtio_blk.c). The reader is counted in the
+ * device for the read (`vblk_poller_in`), so a removal waits for it before
+ * the transport goes, and a disk out of use or shutting down is not read.
+ * On a transport whose configuration is register reads (`config_atomic`)
+ * the read is under `vb`'s lock, so that two readers give the disk their
+ * capacities in the order they read them; any other transport's read is a
+ * process's, which the big lock orders. From the configuration's interrupt
+ * or a polled transfer on such a transport, and from a process otherwise.
+ */
+static void vblk_config_work(struct vblk *vb)
+{
+    uint8_t cap[8];
+    uint64_t now, was;
+    uint32_t flags;
+    int atomic;
+
+    if (vblk_poller_in(vb) != 0) {
+        return;
+    }
+    atomic = vb->dev->config_atomic;
+    if (atomic) {
+        flags = spin_lock_irqsave(&vb->lock);
+        virtio_config_read(vb->dev, VBLK_CFG_CAPACITY, cap, sizeof(cap));
+    } else {
+        virtio_config_read(vb->dev, VBLK_CFG_CAPACITY, cap, sizeof(cap));
+        flags = spin_lock_irqsave(&vb->lock);
+    }
+    now = vblk_le(cap, 8);
+    was = vblk_capacity_set(vb, now);
+    spin_unlock_irqrestore(&vb->lock, flags);
+    if (now != was) {
+        klog(KLOG_INFO, "virtio-blk", "%s: capacity: %u MiB, was %u MiB", vb->name,
+             (unsigned)(now >> 11), (unsigned)(was >> 11));
+    }
+    vblk_poller_out(vb);
+}
+
+/**
+ * The device's `config_changed`, from its interrupt: read the capacity
+ * where the transport lets a handler read the configuration, and otherwise
+ * leave the read to the next process that enters the kernel
+ * (`virtio_blk_service`).
+ */
 static void vblk_config_changed(struct virtio_dev *d)
 {
     struct vblk *vb = (struct vblk *)d->priv;
 
-    if (vb) {
+    if (!vb) {
+        return;
+    }
+    if (d->config_atomic) {
+        vblk_config_work(vb);
+    } else {
         vb->config_dirty = 1;
+        vblk_waiting = 1;
     }
 }
+
+/*
+ * The interrupt-driven path.
+ */
 
 /**
  * The device's `submit`: queue `r` on this processor's queue and offer
  * what the queue has room for, under the queue's lock, as Linux's
  * virtio_queue_rq adds the request under its queue's lock
  * (drivers/block/virtio_blk.c:456-482). Returns 0, or -EIO for a range
- * past the disk, a write to a read-only disk or a disk out of use.
+ * past the disk, a write to a read-only disk or a disk out of use or
+ * shutting down. It reaches the transport only under the queue's lock with
+ * the disk not dead, which a removal's `vblk_kill` waits for.
  */
 static int vblk_submit(block_device_t *device, struct block_request *r)
 {
@@ -970,19 +1080,21 @@ static int vblk_submit(block_device_t *device, struct block_request *r)
     struct vblk_queue *q;
     uint32_t flags;
 
-    if (vb->config_dirty) {
-        vblk_config_reread(vb);
-    }
     if (!(r->flags & BLOCK_REQ_FLUSH) && (r->count == 0 || r->lba > device->sector_count ||
                                           r->count > device->sector_count - r->lba)) {
         return -EIO;
     }
-    if (vb->dead || (vb->ro && (r->write || (r->flags & (BLOCK_REQ_DISCARD | BLOCK_REQ_ZEROES))))) {
+    if (vb->dead || vb->closed ||
+        (vb->ro && (r->write || (r->flags & (BLOCK_REQ_DISCARD | BLOCK_REQ_ZEROES))))) {
         return -EIO;
     }
     r->queued = 0;
     q = vblk_queue_here(vb);
     flags = spin_lock_irqsave(&q->lock);
+    if (vb->closed) {
+        spin_unlock_irqrestore(&q->lock, flags);
+        return -EIO;
+    }
     if (q->tail) {
         q->tail->queued = r;
     } else {
@@ -999,7 +1111,7 @@ static int vblk_submit(block_device_t *device, struct block_request *r)
 static int vblk_flush_submit(block_device_t *device, struct block_request *r)
 {
     if (!r) {
-        return vblk_flush_polled((struct vblk *)device->drvdata);
+        return vblk_flush_polled((struct vblk *)device->drvdata, 0);
     }
     r->flags |= BLOCK_REQ_FLUSH;
     return vblk_submit(device, r);
@@ -1009,29 +1121,34 @@ static int vblk_flush_submit(block_device_t *device, struct block_request *r)
  * Failure and removal.
  */
 
-/**
- * Take `vb` out of use, from any context, without freeing anything: reset
- * the device, or stop it from reaching memory when the reset does not end
- * (`virtio_halt`), so that it writes into no buffer it was given again;
- * then answer every request in a slot or waiting with EIO and mark every
- * polled command done, whose caller frees its slot. Every later command
- * answers EIO. Linux's virtio_blk resets the device the same way before it
- * fails its requests at removal (virtblk_remove, virtio_blk.c:1606-1630).
- */
-static void vblk_kill(struct vblk *vb, const char *why)
+/** Mark `vb` out of use; 1 when this call did, 0 when it already was. */
+static int vblk_mark_dead(struct vblk *vb)
 {
     uint32_t flags = spin_lock_irqsave(&vb->lock);
-    int i, k, was = vb->dead;
+    int was = vb->dead;
 
     vb->dead = 1;
     spin_unlock_irqrestore(&vb->lock, flags);
-    if (was) {
-        return;
-    }
-    klog(KLOG_ERR, "virtio-blk", "%s: out of use: %s", vb->dev->name, why);
-    (void)virtio_halt(vb->dev);
+    return !was;
+}
+
+/**
+ * Stop the device of `vb`, which is marked out of use, from any context
+ * and without freeing anything: reset it, or stop it from reaching memory
+ * when the reset does not end (`virtio_halt`), so that it writes into no
+ * buffer it was given again; then answer every request in a slot or
+ * waiting with EIO and mark every polled command done, whose caller frees
+ * its slot. Returns `virtio_halt`'s result, and counts in `*lost`, when it
+ * is not NULL, the commands the device had not answered.
+ */
+static int vblk_halt(struct vblk *vb, int *lost)
+{
+    uint32_t flags;
+    int i, k, n = 0, rc = virtio_halt(vb->dev);
+
     for (i = 0; i < vb->nqueues; i++) {
         struct vblk_queue *q = &vb->q[i];
+        struct block_request *r;
 
         flags = spin_lock_irqsave(&q->lock);
         for (k = 0; k < VBLK_SLOTS; k++) {
@@ -1040,6 +1157,7 @@ static void vblk_kill(struct vblk *vb, const char *why)
             if (s->state == VBLK_FREE || s->done) {
                 continue;
             }
+            n++;
             if (s->request) {
                 vblk_end(s, -EIO);
             } else {
@@ -1047,14 +1165,36 @@ static void vblk_kill(struct vblk *vb, const char *why)
                 s->done = 1;
             }
         }
+        for (r = q->head; r; r = r->queued) {
+            n++;
+        }
         vblk_start_next(q);
         spin_unlock_irqrestore(&q->lock, flags);
+    }
+    if (lost) {
+        *lost = n;
+    }
+    return rc;
+}
+
+/**
+ * Take `vb` out of use, from any context: every later command answers
+ * EIO, and the device is stopped and its commands answered as `vblk_halt`
+ * says. Linux's virtio_blk resets the device the same way before it fails
+ * its requests at removal (virtblk_remove, virtio_blk.c:1606-1630).
+ */
+static void vblk_kill(struct vblk *vb, const char *why)
+{
+    if (vblk_mark_dead(vb)) {
+        klog(KLOG_ERR, "virtio-blk", "%s: out of use: %s", vb->name, why);
+        (void)vblk_halt(vb, 0);
     }
 }
 
 /**
  * Whether anything still holds `vb`'s disk: a node open, a request the
- * device may answer, or a mount or loop device on one of its views.
+ * device may answer, or a mount, a loop device or a held or dirty block of
+ * the buffer cache on one of its views, as `usbdisk_holds` counts a stick's.
  */
 static int vblk_disk_held(struct vblk *vb)
 {
@@ -1066,9 +1206,36 @@ static int vblk_disk_held(struct vblk *vb)
     }
     held = d->opens + block_device_holds(&vb->bdev);
     for (k = -1; k < d->table.count; k++) {
-        held += vfs_device_holds(k < 0 ? &d->whole.part.device : &d->views[k].part.device);
+        block_device_t *view = k < 0 ? &d->whole.part.device : &d->views[k].part.device;
+
+        held += vfs_device_holds(view) + bcache_device_holds(view) + block_device_holds(view);
     }
     return held;
+}
+
+/**
+ * Let go of the disk of `vb`, whose device has gone, once nothing holds
+ * it: its number is free again and the record serves a new device. 1 when
+ * the record is free, 0 while something holds the disk. In process
+ * context, under the big lock.
+ */
+static int vblk_reclaim(struct vblk *vb)
+{
+    struct disk *d = vb->disk;
+    uint32_t flags;
+
+    if (d && vblk_disk_held(vb)) {
+        return 0;
+    }
+    if (d) {
+        klog(KLOG_INFO, "virtio-blk", "disk%d: released", d->number);
+        disk_release(d);
+    }
+    flags = spin_lock_irqsave(&vb->lock);
+    vb->disk = 0;
+    spin_unlock_irqrestore(&vb->lock, flags);
+    vb->used = 0;
+    return 1;
 }
 
 /** Give back the pages of `vb`'s queues, once the device no longer reads
@@ -1089,9 +1256,12 @@ static void vblk_free_pages(struct vblk *vb)
  * Linux's virtblk_remove runs (virtio_blk.c:1606-1630). The disk goes out
  * of use, its nodes are hidden, and the loop devices and the buffer cache
  * are told each of its views has gone, as when a stick is pulled; once no
- * polled caller is inside its queues, the queues are freed and the device
- * given back. The disk's number is freed now when nothing holds it, and
- * stays taken otherwise. In process context, under the big lock.
+ * polled caller and no reader of the configuration is inside the device,
+ * as Linux's removal first ends its configuration work, the queues are
+ * freed and the device given back. The disk's number is freed now when
+ * nothing holds it; otherwise the disk stays, answering EIO, until its
+ * last holder lets it go (`virtio_blk_service`). In process context, under
+ * the big lock.
  */
 static void vblk_removed(struct virtio_dev *d)
 {
@@ -1124,16 +1294,113 @@ static void vblk_removed(struct virtio_dev *d)
     d->priv = 0;
     d->removed = 0;
     d->config_changed = 0;
+    flags = spin_lock_irqsave(&vb->lock);
+    vb->dev = 0;
+    vb->config_dirty = 0;
     vb->gone = 1;
     vb->up = 0;
-    if (vb->disk && !vblk_disk_held(vb)) {
-        klog(KLOG_INFO, "virtio-blk", "disk%d: released", vb->disk->number);
-        disk_release(vb->disk);
-        vb->disk = 0;
-        vb->used = 0;
+    spin_unlock_irqrestore(&vb->lock, flags);
+    if (!vblk_reclaim(vb)) {
+        klog(KLOG_INFO, "virtio-blk", "disk%d: held: released when its last holder lets go",
+             vb->disk->number);
+        vblk_waiting = 1;
     }
-    vb->dev = 0;
     virtio_put(d);
+}
+
+void virtio_blk_service(void)
+{
+    int i;
+
+    if (!vblk_waiting) {
+        return;
+    }
+    vblk_waiting = 0;
+    for (i = 0; i < VBLK_DISKS; i++) {
+        struct vblk *vb = &vblks[i];
+
+        if (!vb->used) {
+            continue;
+        }
+        if (vb->gone) {
+            if (!vblk_reclaim(vb)) {
+                vblk_waiting = 1;
+            }
+        } else if (vb->config_dirty) {
+            vb->config_dirty = 0;
+            vblk_config_work(vb);
+        }
+    }
+}
+
+/**
+ * Stop `vb`'s device for the machine's stop. New commands are refused, the
+ * commands the device has and the requests that wait are finished, a write
+ * with its flush, a cache still marked unflushed is flushed, and the
+ * device is reset (`vblk_halt`), with a record of what the reset found.
+ * The wait for the device is bounded as a polled command's is, so that a
+ * device that never answers cannot keep the machine up.
+ */
+static void vblk_shutdown_one(struct vblk *vb)
+{
+    uint32_t steps = vblk_cmd_steps(), flags;
+    int i, k, busy, lost = 0, rc;
+
+    flags = spin_lock_irqsave(&vb->lock);
+    if (vb->dead || vb->closed) {
+        spin_unlock_irqrestore(&vb->lock, flags);
+        return;
+    }
+    vb->closed = 1;
+    vb->pollers++; /* this caller, for the flush below */
+    spin_unlock_irqrestore(&vb->lock, flags);
+    do {
+        busy = 0;
+        for (i = 0; i < vb->nqueues; i++) {
+            struct vblk_queue *q = &vb->q[i];
+
+            vblk_reap(q);
+            flags = spin_lock_irqsave(&q->lock);
+            busy += q->head != 0;
+            for (k = 0; k < VBLK_SLOTS; k++) {
+                busy += q->slots[k].state != VBLK_FREE;
+            }
+            spin_unlock_irqrestore(&q->lock, flags);
+        }
+        flags = spin_lock_irqsave(&vb->lock);
+        busy += vb->pollers != 1;
+        spin_unlock_irqrestore(&vb->lock, flags);
+        if (busy) {
+            vblk_poll_step();
+        }
+    } while (busy && !vb->dead && --steps != 0);
+    if (!busy && vb->cache && vb->bdev.unflushed && vblk_flush_polled(vb, 1) != 0) {
+        klog(KLOG_WARN, "virtio-blk", "%s: shutdown: the last flush failed", vb->name);
+    }
+    vblk_poller_out(vb);
+    if (!vblk_mark_dead(vb)) {
+        return; /* a command went unanswered, and the disk was reset for it */
+    }
+    rc = vblk_halt(vb, &lost);
+    if (rc == 0 && lost == 0) {
+        klog(KLOG_INFO, "virtio-blk", "%s: shutdown: reset with no request in flight", vb->name);
+    } else {
+        klog(KLOG_WARN, "virtio-blk", "%s: shutdown: %s, %d requests unanswered", vb->name,
+             rc == 0 ? "reset" : "the reset did not end", lost);
+    }
+}
+
+void virtio_blk_shutdown(void)
+{
+    int i;
+
+    for (i = 0; i < VBLK_DISKS; i++) {
+        struct vblk *vb = &vblks[i];
+
+        if (vb->used && vb->up && !vb->gone) {
+            vblk_shutdown_one(vb);
+        }
+    }
 }
 
 /*
@@ -1163,10 +1430,46 @@ static uint16_t vblk_queue_count(struct virtio_dev *d)
 }
 
 /**
+ * Whether `d`'s write cache is on, as Linux's virtblk_get_cache_mode reads
+ * it (drivers/block/virtio_blk.c): the configuration's `writeback` byte,
+ * `writeback` here, when VIRTIO_BLK_F_CONFIG_WCE was taken, and otherwise
+ * on exactly when the device has FLUSH. A cache that is on in a device
+ * without FLUSH could never be emptied, so the device is switched to
+ * writethrough through that byte, which CONFIG_WCE lets the driver write
+ * (virtio 1.2, 5.2.6.2), and the byte is read back. A device that keeps
+ * its cache on all the same is driven with the cache on: the FLUSH each
+ * durable write needs is sent as Linux sends it, the device answers
+ * UNSUPP, and the write fails with EIO instead of being reported durable.
+ */
+static int vblk_cache_mode(struct virtio_dev *d, uint8_t writeback)
+{
+    uint8_t off = 0;
+
+    if (!virtio_has(d, VBLK_F_CONFIG_WCE)) {
+        return virtio_has(d, VBLK_F_FLUSH);
+    }
+    if (writeback == 0 || virtio_has(d, VBLK_F_FLUSH)) {
+        return writeback != 0;
+    }
+    virtio_config_write(d, VBLK_CFG_WRITEBACK, &off, 1);
+    virtio_config_read(d, VBLK_CFG_WRITEBACK, &writeback, 1);
+    if (writeback == 0) {
+        klog(KLOG_INFO, "virtio-blk", "%s: cache: set to writethrough, since it has no flush",
+             d->name);
+        return 0;
+    }
+    klog(KLOG_WARN, "virtio-blk",
+         "%s: cache: on with no flush, and it stays on; durable writes will fail", d->name);
+    return 1;
+}
+
+/**
  * Take `vb`'s limits from its configuration `cfg`: refuse a block size
  * other than 512, which the block layer cannot count in, as NVMe refuses a
  * namespace of 4096-byte blocks; then whether it is read-only, whether its
- * write cache is on, and the pieces and bytes a chain may carry. 0, or -1.
+ * write cache is on (`vblk_cache_mode`), and the pieces and bytes a chain
+ * may carry: `size_max` bounds every piece, as Linux makes it the queue's
+ * largest segment. 0, or -1.
  */
 static int vblk_limits(struct vblk *vb, const uint8_t *cfg)
 {
@@ -1183,23 +1486,24 @@ static int vblk_limits(struct vblk *vb, const uint8_t *cfg)
         return -1;
     }
     vb->ro = virtio_has(d, VBLK_F_RO);
-    vb->cache = virtio_has(d, VBLK_F_FLUSH) &&
-                (!virtio_has(d, VBLK_F_CONFIG_WCE) || cfg[VBLK_CFG_WRITEBACK] != 0);
+    vb->cache = vblk_cache_mode(d, cfg[VBLK_CFG_WRITEBACK]);
     vb->seg_max = VBLK_SEGS;
     if (virtio_has(d, VBLK_F_SEG_MAX) && seg_max != 0 && seg_max < vb->seg_max) {
         vb->seg_max = seg_max;
     }
+    vb->size_max = virtio_has(d, VBLK_F_SIZE_MAX) ? size_max : 0;
     vb->seg_bytes = VBLK_PAGE;
-    if (virtio_has(d, VBLK_F_SIZE_MAX) && size_max != 0 && size_max < vb->seg_bytes) {
-        vb->seg_bytes = size_max;
+    if (vb->size_max != 0 && vb->size_max < vb->seg_bytes) {
+        vb->seg_bytes = vb->size_max;
     }
     return 0;
 }
 
 /**
  * Set up `vb`'s `nqueues` queues: each its page of slots and its
- * virtqueue, whose chain may cut the pieces a command carries. 0, or -1
- * with `vblk_why` set.
+ * virtqueue, whose chain may cut the pieces a command carries and whose
+ * descriptors describe `size_max` bytes at most each (`max_seg`), so that
+ * the core joins no two pieces past it. 0, or -1 with `vblk_why` set.
  */
 static int vblk_queues(struct vblk *vb)
 {
@@ -1227,6 +1531,7 @@ static int vblk_queues(struct vblk *vb)
             vblk_why = "a queue was refused";
             return -1;
         }
+        q->vq->max_seg = vb->size_max;
         if (q->vq->max_chain >= 3 && (uint32_t)q->vq->max_chain - 2u < vb->seg_max) {
             vb->seg_max = (uint32_t)q->vq->max_chain - 2u;
         }
@@ -1296,6 +1601,8 @@ static int vblk_bring_up(struct vblk *vb)
     struct virtio_dev *d = vb->dev;
     uint8_t cfg[VBLK_CFG_BYTES];
 
+    k_strncpy(vb->name, d->name, sizeof(vb->name) - 1);
+    vb->name[sizeof(vb->name) - 1] = '\0';
     vb->nqueues = vblk_queue_count(d);
     d->priv = vb;
     d->irq_unlocked = 1;
@@ -1307,6 +1614,7 @@ static int vblk_bring_up(struct vblk *vb)
         vblk_why = "its features or its interrupts were refused";
         return -1;
     }
+    vb->config_poll = d->polled && d->config_atomic;
     virtio_config_read(d, 0, cfg, sizeof(cfg));
     if (vblk_limits(vb, cfg) != 0 || vblk_queues(vb) != 0) {
         goto fail;
@@ -1359,18 +1667,19 @@ static void vblk_publish(struct vblk *vb)
     }
     vb->disk = disk_register(&vb->bdev, "virtio", vb->number, words);
     if (!vb->disk) {
-        klog(KLOG_WARN, "virtio-blk", "%s: the registry is full", vb->dev->name);
+        klog(KLOG_WARN, "virtio-blk", "%s: the registry is full", vb->name);
     }
 }
 
-/** A record for a new device: one never used, or one whose disk was
- * released; NULL when all eight are taken. */
+/** A record for a new device: one never used, or one whose device has gone
+ * and whose disk nothing holds, which is released here if it was not yet;
+ * NULL when all eight are taken. */
 static struct vblk *vblk_record(void)
 {
     int i;
 
     for (i = 0; i < VBLK_DISKS; i++) {
-        if (!vblks[i].used) {
+        if (!vblks[i].used || (vblks[i].gone && vblk_reclaim(&vblks[i]))) {
             k_memset(&vblks[i], 0, sizeof(vblks[i]));
             spin_lock_init(&vblks[i].lock, "vblk_lock");
             vblks[i].number = i;
@@ -1385,12 +1694,11 @@ static struct vblk *vblk_record(void)
 static void vblk_start_one(struct vblk *vb)
 {
     if (kcmdline_has("rach2.vblkpoll")) {
-        klog(KLOG_INFO, "virtio-blk", "%s: polled: rach2.vblkpoll", vb->dev->name);
+        klog(KLOG_INFO, "virtio-blk", "%s: polled: rach2.vblkpoll", vb->name);
         return;
     }
     if (vb->dev->polled) {
-        klog(KLOG_INFO, "virtio-blk", "%s: polled: the transport gives it no interrupt",
-             vb->dev->name);
+        klog(KLOG_INFO, "virtio-blk", "%s: polled: the transport gives it no interrupt", vb->name);
         return;
     }
     vb->bdev.flags &= ~BLOCK_FAULT_SAFE;
@@ -1410,15 +1718,17 @@ static void vblk_start_one(struct vblk *vb)
         vb->bdev.max_zeroes = vblk_le(v, 4) ? (uint32_t)vblk_le(v, 4) : 0xFFFFFFFFu;
     }
     vb->started = 1;
-    klog(KLOG_INFO, "virtio-blk", "%s: interrupts: %d queues", vb->dev->name, (int)vb->nqueues);
+    klog(KLOG_INFO, "virtio-blk", "%s: interrupts: %d queues", vb->name, (int)vb->nqueues);
 }
 
 /**
  * Take device `d`, which the transport took after the boot's probe, as a
  * write to virtio-pci's `bind` gives it: the driver's probe of
  * `virtio_driver_register`. The disk is brought up, registered and its
- * table read, and goes to its interrupts at once, since the boot's
- * `virtio_blk_start` has run. 0, or -errno with `d` given back.
+ * table read, goes to its interrupts at once, since the boot's
+ * `virtio_blk_start` has run, and then has its whole-disk window
+ * published, `/dev/diskN`, as the boot publishes every disk's after their
+ * start. 0, or -errno with `d` given back.
  */
 static int32_t vblk_probe(struct virtio_dev *d)
 {
@@ -1451,6 +1761,9 @@ static int32_t vblk_probe(struct virtio_dev *d)
         (void)disk_scan(vb->disk, &vb->bdev);
     }
     vblk_start_one(vb);
+    if (vb->disk) {
+        devfs_disk_publish(vb->disk);
+    }
     virtio_driver_bound(d);
     return 0;
 }

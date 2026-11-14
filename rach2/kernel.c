@@ -2628,7 +2628,11 @@ static int shutdown_never(void *arg)
  * silenced, so the goodbye line is sent and not only queued, and the records
  * `power_stop` raises after it reach the port and the ring only. Stopping the
  * cards inside `power_stop` would put knowledge of the subsystems in the one
- * file that has none.
+ * file that has none. The virtio disks are stopped last, with the file
+ * systems unmounted and nothing left to write: `virtio_blk_shutdown`
+ * finishes what each device still has and resets it, as Linux's virtio bus
+ * resets its devices at shutdown, so that a warm restart finds no device
+ * still reading the rings of the kernel that stopped.
  */
 void kernel_shutdown(int how)
 {
@@ -2681,6 +2685,7 @@ void kernel_shutdown(int how)
             netdev_stop(netdev_at(i));
         }
     }
+    virtio_blk_shutdown();
     power_stop(how);
 }
 
