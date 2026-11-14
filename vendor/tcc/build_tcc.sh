@@ -125,8 +125,8 @@ mkdir -p "$WORK"
 tar xf "$TARBALL" -C "$WORK"
 
 # The changes this project makes to somebody else's compiler: it refuses the
-# output kinds this system cannot run; on x86-64 it links a static executable
-# whose PLT and GOT TinyCC 0.9.27 leaves unfilled; and so that it builds the
+# output kinds this system cannot run; it links a static executable whose PLT
+# and GOT TinyCC 0.9.27 leaves unfilled; and so that it builds the
 # kernel on the machine, it assembles 16-bit and 32-bit code and the 64-bit
 # system instructions, links by a GNU ld script, knows GCC's name for
 # offsetof, and gives the x86-64 runtime's va_arg no call of abort(); and on
@@ -139,7 +139,7 @@ tar xf "$TARBALL" -C "$WORK"
 # repository. A patch that does not apply is a build that stops: silently
 # shipping an unpatched compiler would ship one that accepts `-run` and dies
 # strangely, or one whose x86-64 programs fault before main.
-echo "tcc: applying the output policy, the x86-64 static link and the kernel's needs"
+echo "tcc: applying the output policy, the static link and the kernel's needs"
 for p in rach2-output-policy.patch rach2-x86_64-static-link.patch \
          rach2-x86-asm.patch rach2-linker-script.patch \
          rach2-builtin-offsetof.patch rach2-va-list-trap.patch \
@@ -150,8 +150,9 @@ for p in rach2-output-policy.patch rach2-x86_64-static-link.patch \
     fi
 done
 if ! grep -q "sym->st_shndx != SHN_UNDEF))) {" "$SRC/tccelf.c" ||
+   ! grep -q "rel->r_info = ELFW(R_INFO)(sym_index, R_386_PC32);" "$SRC/tccelf.c" ||
    ! grep -q "so it is filled before" "$SRC/tccelf.c"; then
-    echo "tcc: the x86-64 static link is not in the source it is about to build" >&2
+    echo "tcc: the static link is not in the source it is about to build" >&2
     exit 1
 fi
 if ! grep -q "must be linked with -static" "$SRC/tcc.c" ||

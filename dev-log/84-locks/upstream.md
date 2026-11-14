@@ -189,6 +189,17 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: fixed upstream on TinyCC's mob branch, in no release: ec5d9429 of 2022-03-01 makes the parameters visible to the bounds, 313855c2 of 2022-03-21 evaluates a saved bound on entry to the function, and 0244320b of 2022-03-24 with a5588501 of 2022-04-12 allows `int a[][m]`. The mob branch at f830a169, built for x86-64, compiles the program of `machine.tcc` and passes `int arr[2][3]` for `int a[n][m]` with no warning. The commits do not apply to 0.9.27, whose parser they postdate.
 * Next: nothing to report; drop the patch when Rach2 moves to a TinyCC release that has these commits.
 
+## TinyCC leaves an i386 static executable's PLT slots and GOT unfilled
+
+* Project: TinyCC 0.9.27, i386 target, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccelf.c`, `i386-link.c` and `lib/Makefile`.
+* Fails: an i386 static executable that converts a floating value to an integer faults. `lib/Makefile` (line 26) builds the runtime `libtcc1.a` with GCC and `-fPIC`, so `__fixdfdi`, `__fixsfdi` and `__fixxfdi` call `__fixunsdfdi`, `__fixunssfdi` and `__fixunsxfdi` by `R_386_PLT32`. `gotplt_entry_type` gives every `R_386_PLT32` a PLT slot (`i386-link.c` line 82), whose `jmp *n` keeps the GOT entry's offset n as an absolute address in a static link, and `fill_got` (`tccelf.c` line 1330) runs after `tidy_section_headers` (line 2215) has dropped the relocation sections it reads, so the GOT stays 0 as well. It is the fault of milestone 57's entry for x86-64, on the other target; Rach2's patch fixed only x86-64.
+* Found: 2026-11-14, the owner's Mac, milestone 84, task 84-261n, running `machine.tcc.compile` on i686 alone: the program of the `widened` assertion faulted, `vm: fault: killing pid 32: bad read at 0x14 (err 0x5)`.
+* Reproduction: on i686 Rach2, compile `int main(int c, char **v) { double x = c + 0.5; return (long)x; }` with `tcc -static` and run it: it faults reading 0x14, and with `long double` 0x18. The disassembly of the executable shows `__fixdfdi`'s call to a PLT slot `jmp *0x14` and a GOT of zeros.
+* Evidence: `vendor/tcc/rach2-x86_64-static-link.patch`; the `widened` assertion of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
+* Rach2: `vendor/tcc/rach2-x86_64-static-link.patch` now also makes an `R_386_PLT32` call to a function the executable defines a plain `R_386_PC32` call, and fills the entries of `R_386_GOT32` and `R_386_GOT32X` before the relocation sections are dropped.
+* Status: fixed upstream on TinyCC's mob branch, in no release: 9a7edb20 of 2025-12-30 ("Add pic/pie support to i386") makes an `R_386_PLT32` or `R_386_PC32` call to a function an executable defines PC-relative.
+* Next: nothing to report; drop the change when Rach2 moves to a TinyCC release that has the commit.
+
 ## virgl on Mesa's D3D12 driver shows a geometry or tessellation shader's image stores out of order across memoryBarrier
 
 * Project: virglrenderer 1.2.0, Ubuntu 26.04's 1.2.0-2ubuntu2, in QEMU 10.2.1 (1:10.2.1+ds-1ubuntu3.3), drawing on Mesa 26.0.8's D3D12 gallium driver (26.0.8-1ubuntu0.3) under WSL2 on an NVIDIA GeForce RTX 4080 SUPER; the guests' Mesa is Debian's 25.0.7-2+deb13u1 and their piglit Debian's 0.0~git20250409.af62c0dea-2. Which of virglrenderer, Mesa's driver, Direct3D 12 and NVIDIA's driver is at fault was not traced.

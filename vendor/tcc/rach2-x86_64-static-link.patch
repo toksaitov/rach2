@@ -1,5 +1,5 @@
-Link a static x86-64 executable whose calls and GOT TinyCC 0.9.27 leaves
-unfilled.
+Link a static x86-64 or i386 executable whose calls and GOT TinyCC 0.9.27
+leaves unfilled.
 
 Two faults, each fatal before main.
 
@@ -22,13 +22,23 @@ the section table, so fill_got found none and every entry stayed 0. The
 second change fills the GOT before, and the call after then finds nothing
 more to fill.
 
-Both are under TCC_TARGET_X86_64, so the i386 compiler, built from the same
-source, is unchanged: its calls are R_386_PC32 unless written `@PLT`, and its
-code reaches data by absolute address.
+The i386 compiler has the same two faults. Its own code calls by
+R_386_PC32 and reaches data by absolute address, but its runtime, libtcc1.a,
+is built by GCC with the -fPIC of lib/Makefile, and a call from one runtime
+function to another is R_386_PLT32. Its slot, `jmp *n`, kept the GOT
+entry's offset n as an absolute address, so every conversion of a floating
+value to a 64-bit or a 32-bit integer, which calls __fixdfdi, __fixsfdi or
+__fixxfdi and they __fixunsdfdi and its kind, faulted reading 0x14 or 0x18.
+The first change makes such a call a plain R_386_PC32 call, and the second
+fills the entries of R_386_GOT32 and R_386_GOT32X, which PIC code reads
+data through, before the relocation sections are dropped. The x86-64
+relocation types fill_got lists are other relocations on i386, where
+R_386_GOTOFF has the number of R_X86_64_GOTPCREL, so each target lists its
+own.
 
 --- a/tccelf.c
 +++ b/tccelf.c
-@@ -1081,7 +1081,9 @@
+@@ -1081,10 +1081,22 @@ ST_FUNC void build_got_entries(TCCState *s1)
  #ifdef TCC_TARGET_X86_64
              if ((type == R_X86_64_PLT32 || type == R_X86_64_PC32) &&
                  (ELFW(ST_VISIBILITY)(sym->st_other) != STV_DEFAULT ||
@@ -39,11 +49,42 @@ code reaches data by absolute address.
                  rel->r_info = ELFW(R_INFO)(sym_index, R_X86_64_PC32);
                  continue;
              }
-@@ -2212,6 +2214,14 @@
++#endif
++#ifdef TCC_TARGET_I386
++            if (type == R_386_PLT32 &&
++                (ELFW(ST_VISIBILITY)(sym->st_other) != STV_DEFAULT ||
++                 ELFW(ST_BIND)(sym->st_info) == STB_LOCAL ||
++                 (s1->output_type == TCC_OUTPUT_EXE &&
++                  sym->st_shndx != SHN_UNDEF))) {
++                rel->r_info = ELFW(R_INFO)(sym_index, R_386_PC32);
++                continue;
++            }
+ #endif
+             if (code_reloc(type)) {
+             jmp_slot:
+@@ -1342,11 +1354,17 @@ ST_FUNC void fill_got(TCCState *s1)
+             continue;
+         for_each_elem(s, 0, rel, ElfW_Rel) {
+             switch (ELFW(R_TYPE) (rel->r_info)) {
++#ifdef TCC_TARGET_I386
++                case R_386_GOT32:
++                case R_386_GOT32X:
++                case R_386_PLT32:
++#else
+                 case R_X86_64_GOT32:
+                 case R_X86_64_GOTPCREL:
+ 		case R_X86_64_GOTPCRELX:
+ 		case R_X86_64_REX_GOTPCRELX:
+                 case R_X86_64_PLT32:
++#endif
+                     fill_got_entry(s1, rel);
+                     break;
+             }
+@@ -2212,6 +2230,14 @@ static int elf_output_file(TCCState *s1, const char *filename)
          ret = final_sections_reloc(s1);
          if (ret)
              goto the_end;
-+#ifdef TCC_TARGET_X86_64
++#if defined TCC_TARGET_X86_64 || defined TCC_TARGET_I386
 +        /* A static executable's GOT is filled from the relocations of the
 +           sections that refer to it, which tidy_section_headers drops from
 +           the section table, so it is filled before; the call below then
