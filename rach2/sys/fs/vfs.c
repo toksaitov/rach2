@@ -4657,6 +4657,33 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
 }
 
 /**
+ * The length of the path `full`, `out` bytes, after a `..`: its text's
+ * parent, or, when it ends on a link of /sys a driver added, the parent of
+ * the directory the link leads to (`synth_sys_link_dir`), written into
+ * `full`, as Linux's walk climbs from a link's target, when that directory
+ * lies below the first `plen` bytes, the root of the walk.
+ */
+static uint32_t synth_dotdot(char *full, uint32_t out, uint32_t plen)
+{
+    char dir[256];
+    uint32_t len;
+
+    full[out] = '\0';
+    if (!path_under(full, "sys", 3)) {
+        return text_parent(full, out);
+    }
+    if (!synth_sys_link_dir(full, dir, (int)sizeof(dir))) {
+        return text_parent(full, out);
+    }
+    len = (uint32_t)k_strlen(dir + 1);
+    if (!path_under(dir + 1, full, plen)) {
+        return text_parent(full, out);
+    }
+    k_memcpy(full, dir + 1, len);
+    return text_parent(full, len);
+}
+
+/**
  * The rest of a path through a synthetic namespace whose root directory
  * `prefix` names, "dev", "proc" or "sys", its first `restlen` bytes. A `..`
  * inside it is resolved by the text, since the namespace is a table
@@ -4669,7 +4696,8 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
  * A part that names a link the walk follows to its object and has more of
  * the rest after it returns VFS_LINK (`synth_link_part`), with a new node of
  * the link held and `*left` after its name, so that a `..` after the link
- * climbs from the object. Otherwise the whole path,
+ * climbs from the object; a `..` after a link a driver added to /sys climbs
+ * from the directory it leads to (`synth_dotdot`). Otherwise the whole path,
  * `prefix` and the rest without its `.` and `..`, is classified
  * (`synth_classify`): 0 with a new node held, -ENOENT, also for a
  * directory of /dev that is absent (`devfs_subdir_present`), -ENOTDIR for a
@@ -4721,7 +4749,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
                 *left = comp;
                 return VFS_CLIMB;
             }
-            out = text_parent(full, out);
+            out = synth_dotdot(full, out, plen);
             continue;
         }
         if (out + 1 + len + 1 > sizeof(full)) {
