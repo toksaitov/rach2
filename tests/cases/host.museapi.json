@@ -242,7 +242,7 @@
             "disks": [
               {
                 "name": "gnu-disk",
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -502,7 +502,7 @@
             "disks": [
               {
                 "name": "gnu-disk",
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",

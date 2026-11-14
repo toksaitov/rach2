@@ -51,7 +51,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -89,13 +89,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -268,7 +268,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -306,13 +306,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -485,7 +485,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -523,13 +523,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -702,7 +702,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -740,13 +740,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -919,7 +919,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -957,13 +957,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -1136,7 +1136,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -1174,13 +1174,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -1353,7 +1353,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -1391,13 +1391,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -1570,7 +1570,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -1608,13 +1608,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -1787,7 +1787,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -1825,13 +1825,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -2004,7 +2004,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -2042,13 +2042,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -2221,7 +2221,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -2259,13 +2259,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -2438,7 +2438,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -2476,13 +2476,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -2655,7 +2655,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -2693,13 +2693,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -2872,7 +2872,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -2910,13 +2910,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -3089,7 +3089,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -3127,13 +3127,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -3306,7 +3306,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -3344,13 +3344,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -3523,7 +3523,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -3561,13 +3561,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -3740,7 +3740,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -3778,13 +3778,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -3957,7 +3957,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -3995,13 +3995,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -4180,7 +4180,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -4218,13 +4218,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -4397,7 +4397,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -4435,13 +4435,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -4614,7 +4614,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -4652,13 +4652,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -4831,7 +4831,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -4869,13 +4869,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -5048,7 +5048,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -5086,13 +5086,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -5265,7 +5265,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -5303,13 +5303,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -5482,7 +5482,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -5520,13 +5520,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -5699,7 +5699,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -5737,13 +5737,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -5916,7 +5916,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -5954,13 +5954,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -6133,7 +6133,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -6171,13 +6171,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -6350,7 +6350,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -6388,13 +6388,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -6567,7 +6567,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -6605,13 +6605,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -6784,7 +6784,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -6822,13 +6822,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -7001,7 +7001,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -7039,13 +7039,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -7218,7 +7218,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -7256,13 +7256,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -7435,7 +7435,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -7473,13 +7473,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -7653,7 +7653,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -7691,13 +7691,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -7871,7 +7871,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -7909,13 +7909,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -8089,7 +8089,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -8127,13 +8127,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -8307,7 +8307,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -8345,13 +8345,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -8525,7 +8525,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -8563,13 +8563,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -8743,7 +8743,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -8781,13 +8781,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -8961,7 +8961,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -8999,13 +8999,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -9179,7 +9179,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -9217,13 +9217,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -9397,7 +9397,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -9435,13 +9435,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -9615,7 +9615,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -9653,13 +9653,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -9833,7 +9833,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -9871,13 +9871,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -10051,7 +10051,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -10089,13 +10089,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -10269,7 +10269,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -10307,13 +10307,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -10487,7 +10487,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -10525,13 +10525,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -10705,7 +10705,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -10743,13 +10743,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -10923,7 +10923,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -10961,13 +10961,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -11141,7 +11141,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -11179,13 +11179,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -11359,7 +11359,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -11397,13 +11397,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -11577,7 +11577,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -11615,13 +11615,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -11795,7 +11795,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -11833,13 +11833,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -12013,7 +12013,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -12051,13 +12051,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -12231,7 +12231,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -12269,13 +12269,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -12449,7 +12449,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -12487,13 +12487,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -12667,7 +12667,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -12705,13 +12705,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -12885,7 +12885,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -12923,13 +12923,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -13103,7 +13103,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -13141,13 +13141,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -13321,7 +13321,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -13359,13 +13359,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -13539,7 +13539,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -13577,13 +13577,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -13757,7 +13757,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -13795,13 +13795,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -13975,7 +13975,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -14013,13 +14013,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -14193,7 +14193,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -14231,13 +14231,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -14411,7 +14411,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -14449,13 +14449,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -14625,7 +14625,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -14663,13 +14663,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "graphics-payload",
                 "base": "graphics-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",

@@ -35,7 +35,7 @@
           "qemu": {
             "kernel": "kernel",
             "initrd": null,
-            "disks": [{"name": "gnu-disk", "bus": "ahci"}],
+            "disks": [{"name": "gnu-disk", "bus": "virtio"}],
             "cpu": "max",
             "processors": 1,
             "memory_bytes": 1073741824,

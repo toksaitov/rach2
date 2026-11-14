@@ -87,13 +87,13 @@
                 "name": "gnu-disk",
                 "base": "browser-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "browser-payload",
                 "base": "browser-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -299,13 +299,13 @@
                 "name": "gnu-disk",
                 "base": "browser-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "browser-payload",
                 "base": "browser-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",

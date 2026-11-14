@@ -47,7 +47,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with an edu device, rach2.root=ext2 and rach2.i915fake, wait for the driver's line that edu stands in for 8086:0a16, log in as root and open the guest command channel"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk with an edu device, rach2.root=ext2 and rach2.i915fake, wait for the driver's line that edu stands in for 8086:0a16, log in as root and open the guest command channel"
         },
         {
           "step_id": "probe",
@@ -67,7 +67,7 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",

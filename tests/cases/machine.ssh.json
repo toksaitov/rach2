@@ -71,7 +71,7 @@
       ],
       "machines": [
         {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
-         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "virtio"}],
          "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
          "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
          "console": "serial", "qmp": true, "helper": true},

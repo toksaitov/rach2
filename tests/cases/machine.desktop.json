@@ -62,7 +62,7 @@
                 "name": "gnu-disk",
                 "base": "desktop-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -267,7 +267,7 @@
                 "name": "gnu-disk",
                 "base": "desktop-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -485,7 +485,7 @@
                 "name": "gnu-disk",
                 "base": "desktop-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -699,7 +699,7 @@
                 "name": "gnu-disk",
                 "base": "desktop-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",

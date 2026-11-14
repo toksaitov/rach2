@@ -54,7 +54,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
         },
         {
           "step_id": "row",
@@ -74,13 +74,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "games-payload",
                 "base": "games-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -245,7 +245,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
         },
         {
           "step_id": "row",
@@ -265,13 +265,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "games-payload",
                 "base": "games-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
@@ -436,7 +436,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
         },
         {
           "step_id": "row",
@@ -456,13 +456,13 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               },
               {
                 "name": "games-payload",
                 "base": "games-data",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",

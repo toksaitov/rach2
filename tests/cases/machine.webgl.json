@@ -13,14 +13,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 1.0.4 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -55,14 +55,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 1.0.4 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -97,14 +97,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 1.0.4 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -139,14 +139,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 1.0.4 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -181,14 +181,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -223,14 +223,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -265,14 +265,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -307,14 +307,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -349,14 +349,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 04 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -391,14 +391,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 05 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -433,14 +433,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 06 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -475,14 +475,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 07 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -517,14 +517,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 08 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -559,14 +559,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 09 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -601,14 +601,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 10 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -643,14 +643,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 11 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -685,14 +685,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 1.0.4 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -727,14 +727,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 1.0.4 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -769,14 +769,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 1.0.4 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -811,14 +811,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 1.0.4 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -853,14 +853,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -895,14 +895,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -937,14 +937,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -979,14 +979,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1021,14 +1021,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 04 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1063,14 +1063,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 05 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1105,14 +1105,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 06 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1147,14 +1147,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 07 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1189,14 +1189,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 08 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1231,14 +1231,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 09 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1273,14 +1273,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 10 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1315,14 +1315,14 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
       "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment and the Debian references, owned by the test account"},
         {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 11 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
         {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
         {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}, {"name": "graphics-payload", "base": "graphics-data", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [

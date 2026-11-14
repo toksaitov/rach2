@@ -15,18 +15,18 @@
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
          "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "keys", "stage": "execute", "machine": "gnu", "does": "run id -u and ls /etc/ssh over ssh as root by the demo key, and id -u as the test account by its key"},
         {"step_id": "passwords", "stage": "execute", "machine": "gnu", "does": "log in under ptydrive as the test account with its password, and as root with root's password"},
         {"step_id": "transfer", "stage": "execute", "machine": "gnu", "does": "put the rows' script at /tmp/gnu/rows.sh with scp, fetch it back with sftp, and compare the two"}
       ],
       "machines": [
         {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
-         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "virtio"}],
          "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
          "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
          "console": "serial", "qmp": true, "helper": true},
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -71,12 +71,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh names ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -108,12 +108,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh game_launcher ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -145,12 +145,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh glibc ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -182,12 +182,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh openssl ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -219,12 +219,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh openssh ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -256,12 +256,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh ncurses ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -293,12 +293,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh less ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -330,12 +330,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh vim ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -367,12 +367,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh perl ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -404,12 +404,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh curl ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -441,12 +441,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh git ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -478,12 +478,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh coreutils ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -515,12 +515,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh bash ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -552,12 +552,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh grep ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -589,12 +589,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh sed ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -626,12 +626,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh gawk ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -663,12 +663,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh findutils ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -700,12 +700,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh diffutils ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -737,12 +737,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh patch ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -774,12 +774,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh tar ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -811,12 +811,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh xz ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -848,12 +848,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh file ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -885,12 +885,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh iproute2 ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -922,12 +922,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh loopctl ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -959,12 +959,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh losetup ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -996,12 +996,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh e2fsprogs ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1033,12 +1033,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh pkgconf ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1070,12 +1070,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh procps ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1107,12 +1107,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh utillinux ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1144,12 +1144,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh bwrapns ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1181,12 +1181,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh zstd ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1218,12 +1218,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh rsync ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1255,12 +1255,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh nano ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1292,12 +1292,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh texinfo ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1329,12 +1329,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh strace ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1366,12 +1366,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh lsof ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1403,12 +1403,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh tmux ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1440,12 +1440,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh acpid ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1477,12 +1477,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh cron ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1514,12 +1514,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh zip ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1551,12 +1551,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh htop ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1588,12 +1588,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh dosfstools ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1625,12 +1625,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh uname ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1662,12 +1662,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh ttygroup ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1699,12 +1699,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh disknode ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1736,12 +1736,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh fallocate ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1773,12 +1773,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh chattr ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1810,12 +1810,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh filecache ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1847,12 +1847,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh shadow ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1884,12 +1884,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh chawan ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1921,12 +1921,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh python ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1958,12 +1958,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh gnupg ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -1995,12 +1995,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh autoreconf ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2032,12 +2032,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh bison ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2069,12 +2069,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh flex ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2106,12 +2106,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh jq ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2143,12 +2143,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh screen ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2180,12 +2180,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh sudo ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2217,12 +2217,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh cmake ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2254,12 +2254,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh dig ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2291,12 +2291,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh make ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2328,12 +2328,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel, with GNU sed's tarball beside it"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh autotools ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2366,12 +2366,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh gcc ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2403,12 +2403,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh gdb ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2440,12 +2440,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh js ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2477,12 +2477,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh dbus ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2514,12 +2514,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh chromium ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2551,12 +2551,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh ia32 ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 4294967296, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 4, "memory_bytes": 4294967296, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2588,12 +2588,12 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and the SNTP server and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel, with clockmusl beside it, and start the SNTP server"},
         {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh ntpd ARCH through the framed guest channel as root"}
       ],
       "machines": [
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [
         {"service_id": "sntp", "program": "sntpserver", "ready": "sntpserver: port", "does": "serve SNTP and the clock reference on the case's second port, with a time that starts at 2030-01-01 00:00:00 UTC and advances at the host's rate"}
@@ -2633,17 +2633,17 @@
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
          "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
-        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "console", "stage": "execute", "machine": "gnu", "does": "log in as root at the serial console with root's password and echo a marker"},
         {"step_id": "tmux", "stage": "execute", "machine": "gnu", "does": "type tmux at the console and echo a marker in its pane, then end the tmux server over ssh as root"}
       ],
       "machines": [
         {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
-         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "virtio"}],
          "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
          "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
          "console": "serial", "qmp": true, "helper": true},
-        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [],
       "assertions": [
@@ -2710,7 +2710,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"
+          "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"
         },
         {
           "step_id": "stage",
@@ -2736,7 +2736,7 @@
                 "name": "gnu-disk",
                 "base": "gnu-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "virtio"
               }
             ],
             "cpu": "max",
