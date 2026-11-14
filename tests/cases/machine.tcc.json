@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.tcc.compile",
-      "behavior": "The installed system, as the test account at the console, compiles a C program with tcc and runs it; refuses -run, -shared, a link without -static and a raw-image link, each with its reason and with no output left; compiles an object; builds this project's cat, which agrees with BusyBox's over a 21 KB binary file and over two files; links ping from two sources; runs a program in which the x86-64 compiler must clear the high half of an unsigned int it converts to floating point, and scale a negative index and a row of 2 GiB of an array of variable length in the pointer's width; runs a program whose array parameters are sized by earlier parameters and gets GCC's results; and the kernel's trace of missing system calls names none that tcc asked for",
+      "behavior": "The installed system, as the test account at the console, compiles a C program with tcc and runs it; refuses -run, -shared, a link without -static and a raw-image link, each with its reason and with no output left; compiles an object; builds this project's cat, which agrees with BusyBox's over a 21 KB binary file and over two files; links ping from two sources; runs a program in which the x86-64 compiler must clear the high half of an unsigned int it converts to floating point, and scale a negative index and a row of 2 GiB of an array of variable length in the pointer's width; runs a program whose array parameters are sized by earlier parameters, and one whose bounds have side effects, earlier bindings, inner constants and an old-style declaration list, and gets GCC's results; refuses [*] in a definition; runs a static program calling an IFUNC its assembler defines and gets GCC's result; and the kernel's trace of missing system calls names none that tcc asked for",
       "units": [
         "tcc"
       ],
@@ -96,6 +96,18 @@
           "stage": "execute",
           "machine": "fixture",
           "does": "write /tmp/vparm.c with printf, compile it with tcc -static and run it"
+        },
+        {
+          "step_id": "vla-bounds",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "write /tmp/vbound.c with printf, compile it with tcc -static and run it, and compile a definition with int a[*] with tcc -c, printing its status and what tcc said"
+        },
+        {
+          "step_id": "ifunc",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "write /tmp/ifunc.c with printf, compile it with tcc -static and run it"
         },
         {
           "step_id": "end",
@@ -240,6 +252,36 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "bounds-built",
+          "checks": "tcc -static builds /tmp/vbound from /tmp/vbound.c, whose functions take int a[(k++,3)], int a[][n] before the parameter n, int a[][3][k], and int a[k][m] in an old-style declaration list",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vla-bounds",
+          "checks": "the program prints VLABOUNDS 6 1207 48 9 1205, as GCC's does: f(5, x) returns k incremented by its bound (k++,3) on entry; g(y, 7) gives sizeof a[0] of the global n's 3 ints, 12, and the parameter n; t(4, z) gives sizeof a[0] of int[3][4], 48, and stores 9 in z[1][2][3]; and r(2, 3, y) gives sizeof a[0], 12, and y[1][2], 5",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "star-refused",
+          "checks": "tcc -c of void q(int a[*]){} exits with status 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "star-reason",
+          "checks": "tcc says '[*]' not allowed for the definition with int a[*]",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ifunc-built",
+          "checks": "tcc -static builds /tmp/ifunc from /tmp/ifunc.c, whose assembly defines pick with .type pick,@gnu_indirect_function as a resolver returning triple",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ifunc-call",
+          "checks": "the program prints IFUNCCALL 21 15 6 1, as GCC's does: pick(7), a pointer to pick taken at run time called with 5 and one in initialized data called with 2 each reach triple, and the two pointers are equal",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "finished",
           "checks": "sync returns and the shell comes back after the last line",
           "source": "scenario"
@@ -260,7 +302,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a step of the manifest has ended",
-          "limit": 9
+          "limit": 11
         }
       ],
       "bounds": {

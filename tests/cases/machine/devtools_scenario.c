@@ -197,6 +197,58 @@ static const char vla5_line[] = "printf 'printf(\"VLA\"\"PARAM %%ld %%ld %%d\\\\
 static const char vla6_line[] = "printf 'void h(int n,int a[n]){a[n-1]=n*10;}\\n' >> /tmp/vparm.c";
 static const char vla_built_line[] = "tcc -static -o /tmp/vparm /tmp/vparm.c && echo VLA\"\"BUILT";
 
+/*
+ * Array parameters whose bounds are harder: f's bound (k++, 3) folds to 3
+ * but must still increment k on entry; g's bound n is the global, 3, since
+ * the parameter n comes after it; t's 3 is a constant bound inside a row of
+ * variable length, int a[][3][k], whose sizeof a[0] is 48 for k of 4; and r
+ * is an old-style definition whose declaration list sizes int a[k][m] by
+ * the parameters declared before it. GCC's program prints VLABOUNDS 6 1207
+ * 48 9 1205 on both targets. A [*] in a definition is refused, as GCC does.
+ */
+static const char bound1_line[] =
+    "printf '#include <stdio.h>\\nint n=3;\\nint f(int k,int a[(k++,3)]){return k;}\\n' "
+    "> /tmp/vbound.c";
+static const char bound2_line[] = "printf 'int g(int a[][n],int n){return sizeof a[0]*100+n;}\\n"
+                                  "long t(int k,int a[][3][k]){a[1][2][k-1]=9;' >> /tmp/vbound.c";
+static const char bound3_line[] =
+    "printf 'return sizeof a[0];}\\nlong r(k,m,a)int k,m;"
+    "int a[k][m];{return sizeof a[0]*100+a[1][2];}\\n' >> /tmp/vbound.c";
+static const char bound4_line[] =
+    "printf 'int main(void){int x[3],y[2][3]={{0}},z[2][3][4]={{{0}}};"
+    "long s;y[1][2]=5;s=t(4,z);\\n' >> /tmp/vbound.c";
+static const char bound5_line[] =
+    "printf 'printf(\"VLA\"\"BOUNDS %%d %%d %%ld %%d %%ld\\\\n\",f(5,x),g(y,7),s,"
+    "z[1][2][3],r(2,3,y));return 0;}\\n' >> /tmp/vbound.c";
+static const char bound_built_line[] =
+    "tcc -static -o /tmp/vbound /tmp/vbound.c && echo BOUNDS\"\"BUILT";
+static const char star_line[] =
+    "printf 'void q(int a[*]){}\\n' > /tmp/vstar.c; tcc -c -o /tmp/vstar.o "
+    "/tmp/vstar.c > /tmp/vs.out 2>&1; echo VS\"\"RC=$?; cat /tmp/vs.out";
+
+/*
+ * A static program calling an IFUNC that TinyCC's assembler defines: pick is
+ * a resolver that returns triple, so a call, a pointer taken at run time and
+ * one in initialized data each reach triple, and the two pointers are equal.
+ * GCC's program prints IFUNCCALL 21 15 6 1. TinyCC 0.9.27 ignored the type
+ * and called the resolver, which returned triple's address.
+ */
+static const char ifunc1_line[] = "printf '#include <stdio.h>\\nint triple(int x){return x*3;}\\n"
+                                  "#ifdef __x86_64__\\n' > /tmp/ifunc.c";
+static const char ifunc2_line[] =
+    "printf '__asm__(\".text\\\\n.globl pick\\\\n.type pick,@gnu_indirect_function\\\\n"
+    "pick:\\\\nleaq triple(%%rip),%%rax\\\\nret\\\\n\");\\n#else\\n' >> /tmp/ifunc.c";
+static const char ifunc3_line[] =
+    "printf '__asm__(\".text\\\\n.globl pick\\\\n.type pick,@gnu_indirect_function\\\\n"
+    "pick:\\\\nmovl $triple,%%eax\\\\nret\\\\n\");\\n#endif\\n' >> /tmp/ifunc.c";
+static const char ifunc4_line[] = "printf 'extern int pick(int);int (*fp)(int)=pick;\\n"
+                                  "int main(void){int (*p)(int)=pick;' >> /tmp/ifunc.c";
+static const char ifunc5_line[] =
+    "printf 'printf(\"IFUNC\"\"CALL %%d %%d %%d %%d\\\\n\",pick(7),p(5),fp(2),p==fp);"
+    "return 0;}\\n' >> /tmp/ifunc.c";
+static const char ifunc_built_line[] =
+    "tcc -static -o /tmp/ifunc /tmp/ifunc.c && echo IFUNC\"\"BUILT";
+
 /**
  * Report a refusal of the compiler, which the last line asked for: assertion
  * `id` that the status `status` was reported, and `reason_id` that the
@@ -212,6 +264,60 @@ static void refused(struct shell *s, const char *id, const char *status, const c
     has(s, id, status, why);
     snprintf(why, sizeof(why), "%s was refused without saying why", what);
     has(s, reason_id, reason, why);
+}
+
+/**
+ * Run the steps of case `compile` that compile array parameters of variable
+ * length and an IFUNC, each against GCC's result for the same program.
+ */
+static void language(struct shell *s)
+{
+    net_step(&s->u, "vla-param");
+    type(s, vla1_line);
+    type(s, vla2_line);
+    type(s, vla3_line);
+    type(s, vla4_line);
+    type(s, vla5_line);
+    type(s, vla6_line);
+    type(s, "cat /tmp/vparm.c");
+    type(s, vla_built_line);
+    has(s, "vla-built", "VLABUILT",
+        "the compiler did not build a program whose array parameters are sized by earlier "
+        "parameters");
+    type(s, "/tmp/vparm");
+    has(s, "vla-param", "VLAPARAM 46 3612 40",
+        "an array parameter sized by an earlier parameter did not give GCC's result");
+
+    net_step(&s->u, "vla-bounds");
+    type(s, bound1_line);
+    type(s, bound2_line);
+    type(s, bound3_line);
+    type(s, bound4_line);
+    type(s, bound5_line);
+    type(s, "cat /tmp/vbound.c");
+    type(s, bound_built_line);
+    has(s, "bounds-built", "BOUNDSBUILT",
+        "the compiler did not build a program whose array parameters have bounds with side "
+        "effects, earlier bindings, inner constants and an old-style declaration list");
+    type(s, "/tmp/vbound");
+    has(s, "vla-bounds", "VLABOUNDS 6 1207 48 9 1205",
+        "an array parameter's bound did not give GCC's result");
+    type(s, star_line);
+    refused(s, "star-refused", "VSRC=1", "star-reason", "'[*]' not allowed",
+            "a [*] in a function definition");
+
+    net_step(&s->u, "ifunc");
+    type(s, ifunc1_line);
+    type(s, ifunc2_line);
+    type(s, ifunc3_line);
+    type(s, ifunc4_line);
+    type(s, ifunc5_line);
+    type(s, "cat /tmp/ifunc.c");
+    type(s, ifunc_built_line);
+    has(s, "ifunc-built", "IFUNCBUILT", "the compiler did not build a program with an IFUNC");
+    type(s, "/tmp/ifunc");
+    has(s, "ifunc-call", "IFUNCCALL 21 15 6 1",
+        "a call to an IFUNC did not reach the function its resolver returns");
 }
 
 /**
@@ -320,21 +426,7 @@ static void compile(struct shell *s)
         "to floating point, or scaled an index into a variable-length array by a size held in an "
         "int");
 
-    net_step(&s->u, "vla-param");
-    type(s, vla1_line);
-    type(s, vla2_line);
-    type(s, vla3_line);
-    type(s, vla4_line);
-    type(s, vla5_line);
-    type(s, vla6_line);
-    type(s, "cat /tmp/vparm.c");
-    type(s, vla_built_line);
-    has(s, "vla-built", "VLABUILT",
-        "the compiler did not build a program whose array parameters are sized by earlier "
-        "parameters");
-    type(s, "/tmp/vparm");
-    has(s, "vla-param", "VLAPARAM 46 3612 40",
-        "an array parameter sized by an earlier parameter did not give GCC's result");
+    language(s);
 
     net_step(&s->u, "end");
     finish(s, "finished");
