@@ -3123,7 +3123,8 @@ static int32_t proc_fd_reopen(const struct open_file *src, int flags)
  * description, with a reference, which takes the place of any the
  * reservation made, the object behind it with its vtable, a socket's
  * reference, and `src`'s flags with FD_CLOEXEC as `cloexec` says and none
- * of its closing state. The caller then publishes `dst` (`fd_install`).
+ * of its closing state. The caller then publishes `dst` (`fd_install`), or
+ * puts it in a slot (`fd_dup_swap`).
  */
 static void dup_fill(fd_entry_t *dst, const fd_entry_t *src, int cloexec)
 {
@@ -6178,6 +6179,22 @@ static int32_t close_fd(int fd)
 }
 
 /**
+ * Release the entries dup2 replaced that the calling thread keeps and no
+ * other call does (`fd_gone_claim`), each with every backing it held
+ * (`fd_teardown`); may sleep.
+ */
+static void fd_gone_release(void)
+{
+    fd_table_t *table;
+    fd_entry_t *e;
+    int fd;
+
+    while ((fd = fd_gone_claim(&table, &e)) >= 0) {
+        fd_teardown(table, fd, e);
+    }
+}
+
+/**
  * An entry whose release another thread has begun (FD_FLAG_RELEASING) is
  * left to it: two threads whose calls end while one of them sleeps in a
  * release would otherwise both find the entry closing and held by nobody,
@@ -6186,7 +6203,6 @@ static int32_t close_fd(int fd)
  */
 void fd_holds_release(void)
 {
-    fd_table_t *table;
     fd_entry_t *e;
     int fd = 0;
 
@@ -6194,9 +6210,7 @@ void fd_holds_release(void)
         fd_teardown(current_proc->fds, fd, e);
         fd++;
     }
-    while ((fd = fd_gone_claim(&table, &e)) >= 0) {
-        fd_teardown(table, fd, e);
-    }
+    fd_gone_release();
 }
 
 #define CLOSE_RANGE_UNSHARE 0x2u
@@ -8275,30 +8289,29 @@ long sys_dup(isr_params_t *params)
 }
 
 /**
- * Take slot `fd` for dup2 and dup3 to put a copy in, closing the
- * descriptor there if there is one, as Linux's do_dup2 does
- * (fs/file.c:1205-1248): the table's record locks on its file go, and the
- * entry is released with every backing it held (`fd_teardown`), which may
- * sleep, or, while a call of another thread sharing the table holds it, a
- * close left it to such a call or a release of it is under way, kept for
- * those to end with, the number leading to a new entry meanwhile
- * (`fd_dup_target`). The slot's entry is reserved under the table's lock,
- * so no other sharer's open takes it between. 0, -EBUSY when an open has
- * reserved the slot and not yet filled it, which is when Linux's dup2
- * answers EBUSY, or -ENOMEM when the heap has no room for the new entry.
+ * Put `nw`, a copy the caller made with its references, in slot `fd` for
+ * dup2 and dup3, closing the descriptor there if there is one, as Linux's
+ * do_dup2 does (fs/file.c:1205-1248): the copy takes the slot's place in
+ * one step under the table's lock (`fd_dup_swap`), so that no lookup by
+ * another sharer finds the number empty between, and the old entry then
+ * loses the table's record locks on its file and is released with every
+ * backing it held, which may sleep, unless a call of another thread sharing
+ * the table holds it, a close left it to such a call or a release of it is
+ * under way, which then ends with it. 0, -EBUSY when an open has reserved
+ * the slot and not yet filled it, which is when Linux's dup2 answers EBUSY,
+ * or -ENOMEM when the heap has no room for the entry that replaces an open
+ * one; on an error `nw` is still the caller's.
  */
-static int32_t dup_clear(int fd)
+static int32_t dup_clear(int fd, const fd_entry_t *nw)
 {
-    fd_table_t *table = current_proc->fds;
     fd_entry_t *e;
-    int rc;
+    int rc = fd_dup_swap(current_proc->fds, fd, nw, &e);
 
-    while ((rc = fd_dup_target(table, fd, &e)) == 1) {
-        fd_close_locks(e);
-        fd_teardown(table, fd, e);
-    }
     if (rc == 0 && e) {
         fd_close_locks(e);
+    }
+    if (rc == 0) {
+        fd_gone_release();
     }
     return rc;
 }
@@ -8310,23 +8323,21 @@ static int32_t dup_clear(int fd)
  * negative or past the process's limit, is -EBADF, and when the two are
  * equal the call checks `oldfd` and changes nothing. A `newfd` past the
  * end of the table grows it, and a heap with no room for that or for the
- * entry that replaces a held one is -ENOMEM; a slot an open has reserved
+ * entry that replaces an open one is -ENOMEM; a slot an open has reserved
  * and not yet filled is -EBUSY (`dup_clear`).
  *
  * The copy shares the open file description, and with it the offset, as
  * POSIX has it, and the object behind it with its vtable; a socket gains a
- * reference.
- *
- * The replacement of an open `newfd` may sleep (`dup_clear`), and another
- * thread may close `oldfd` meanwhile. The call holds `oldfd`, so the close
- * leaves it to the call, and the copy is made of what the call looked up, as
- * Linux's dup2 installs the file it looked up; the copy is an open
- * descriptor of its own, with none of the source's closing state, and is
- * published whole, with its FD_CLOEXEC.
+ * reference. It is made whole, with its FD_CLOEXEC and none of the
+ * source's closing state, from what the call looked up, as Linux's dup2
+ * installs the file it looked up: the call holds `oldfd`, so a close of it
+ * by another thread leaves it to the call. Then it is published in one
+ * step (`dup_clear`), and a reference it took goes back when it is not.
  */
 static long dup_to(int oldfd, int newfd, int cloexec)
 {
     fd_entry_t *old_entry;
+    fd_entry_t nw;
     int32_t rc;
 
     if (!current_proc) {
@@ -8346,12 +8357,13 @@ static long dup_to(int oldfd, int newfd, int cloexec)
     if (rc != 0) {
         return rc;
     }
-    rc = dup_clear(newfd);
+    k_memset(&nw, 0, sizeof(nw));
+    dup_fill(&nw, old_entry, cloexec);
+    rc = dup_clear(newfd, &nw);
     if (rc != 0) {
+        fd_peek_drop(&nw);
         return rc;
     }
-    dup_fill(fd_slot(current_proc->fds, newfd), old_entry, cloexec);
-    fd_install(current_proc->fds, newfd);
     return newfd;
 }
 

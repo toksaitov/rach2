@@ -551,7 +551,7 @@ void fd_free_after(fd_table_t *table, int fd, fd_entry_t *e);
  * `__fget_files` (fs/file.c:1006) takes a reference: a close by another
  * sharer then leaves the slot and what it names in place until the call
  * ends (`fd_holds_claim`), and a dup2 by one leaves the entry where it is
- * for the call and gives the number another (`fd_dup_target`), so the
+ * for the call and gives the number another (`fd_dup_swap`), so the
  * entry may be read through the address for the length of the call, sleeps
  * included, and only its flags change meanwhile, under the lock
  * (`fd_set_flags`). The entry is not copied, since a copy would not be one
@@ -598,21 +598,21 @@ int fd_held_elsewhere(fd_table_t *table, int fd);
 int fd_close_claim(fd_table_t *table, int fd, fd_entry_t **e);
 
 /**
- * Take slot `fd` of `table` for dup2 under its lock: 0 when the slot's
- * number now leads to an entry reserved and held by the call, for the
- * caller to fill and publish (`fd_install`): the free entry it had, or a
- * spare in place of an entry that calls of other sharers hold or that is
- * closing, which those calls, or the release under way, keep until they
- * end, as Linux's dup2 replaces a file other calls still use. `*e` is
- * then the replaced entry when it was open, whose record locks the caller
- * drops, and which the caller's call holds until it ends, or NULL. 1 when
- * the entry is open and no call holds it, marked closing and releasing,
- * with `*e` the entry, for the caller to release and clear before it asks
- * again. -EBUSY when an open has reserved the slot and not yet published
- * it, as Linux's dup2 answers; -ENOMEM when the heap has no room for the
- * spare; -EBADF when `fd` is outside the table.
+ * Put `nw`, a whole entry the caller made for dup2 with its references
+ * taken, in slot `fd` of `table` in one step under its lock, as Linux's
+ * do_dup2 swaps the file in the slot, so that a lookup by another sharer
+ * finds the old entry or the new one and never an empty slot. 0 when it is
+ * in: in the free entry the number had, or in a spare that takes the place
+ * of an entry that was open or closing, which the calls that hold it, the
+ * release under way or the caller keep until they end (`fd_gone_claim`).
+ * `*e` is then the replaced entry when it was open, whose record locks the
+ * caller drops and which the caller's call keeps until it ends or it
+ * releases it, or NULL. -EBUSY when an open has reserved the slot and not
+ * yet published it, as Linux's dup2 answers; -ENOMEM when the heap has no
+ * room for the spare; -EBADF when `fd` is outside the table. On an error
+ * nothing changed and `nw` is still the caller's.
  */
-int fd_dup_target(fd_table_t *table, int fd, fd_entry_t **e);
+int fd_dup_swap(fd_table_t *table, int fd, const fd_entry_t *nw, fd_entry_t **e);
 
 /**
  * Let go of the calling thread's holds from descriptor `from` up, and

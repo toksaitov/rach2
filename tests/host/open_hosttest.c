@@ -3483,18 +3483,23 @@ static void open_last_slot(void)
 }
 
 /** While a close's release sleeps, its descriptor is closed to a lookup,
- * and a dup2 onto it gives the number a new entry and leaves the entry to
- * the release, as Linux's dup2 finds the slot empty once a close has taken
- * the file out. The new entry is given back unfilled. */
+ * and a dup2 onto it gives the number a new entry holding the copy and
+ * leaves the entry to the release, as Linux's dup2 finds the slot empty
+ * once a close has taken the file out. The copy, which names no
+ * description, is closed again. */
 static void release_closed(void)
 {
     fd_entry_t *was = fd_slot(proc.fds, releasing);
+    fd_entry_t copy;
 
+    k_memset(&copy, 0, sizeof(copy));
+    copy.type = FD_TYPE_CONSOLE;
     check(fd_get(proc.fds, releasing) == NULL && (was->flags & FD_FLAG_RELEASING),
           "a descriptor being released is closed to lookups");
-    check(dup_clear(releasing) == 0 && fd_slot(proc.fds, releasing) != was &&
-              fd_slot(proc.fds, releasing)->pending && was->type == FD_TYPE_FILE,
-          "dup2 onto a descriptor being released reserves a new entry");
+    check(dup_clear(releasing, &copy) == 0 && fd_slot(proc.fds, releasing) != was &&
+              fd_get(proc.fds, releasing) == fd_slot(proc.fds, releasing) &&
+              fd_slot(proc.fds, releasing)->type == FD_TYPE_CONSOLE && was->type == FD_TYPE_FILE,
+          "dup2 onto a descriptor being released publishes the copy in a new entry");
     fd_free(proc.fds, releasing);
 }
 
@@ -4110,10 +4115,14 @@ static void orphan_close(void)
     check(close_fd(orphan_fd) == 0, "the close of the orphan's descriptor");
 }
 
-/** Clear the orphan's descriptor as a dup2 onto it does (`dup_clear`). */
+/** Replace the orphan's descriptor as a dup2 onto it does (`dup_clear`),
+ * with an empty copy, so that the slot is free once the release ends. */
 static void orphan_dup2(void)
 {
-    check(dup_clear(orphan_fd) == 0, "a dup2 onto the orphan's descriptor");
+    fd_entry_t copy;
+
+    k_memset(&copy, 0, sizeof(copy));
+    check(dup_clear(orphan_fd, &copy) == 0, "a dup2 onto the orphan's descriptor");
 }
 
 /** The release a table's end makes of each descriptor (`release_fd_table`),

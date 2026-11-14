@@ -767,11 +767,11 @@ static void dup2_calls_end(process_t *first, process_t *second, int fd, fd_entry
 
 /**
  * A dup2 onto a descriptor another sharer's call holds, as Linux's do_dup2
- * replaces a file another thread's call still uses: the number leads to a
- * new entry reserved for the dup2, the held entry stays where the call reads
- * it, closing, and is released at the end of the last call that keeps it,
- * the dup2's and the holder's; once the new entry is closed too, the number
- * leads back to the slot's own entry.
+ * replaces a file another thread's call still uses: the number leads at
+ * once to a new entry holding the copy, the held entry stays where the call
+ * reads it, closing, and is released at the end of the last call that keeps
+ * it, the dup2's and the holder's; once the new entry is closed too, the
+ * number leads back to the slot's own entry.
  */
 static void shared_dup2(void)
 {
@@ -780,6 +780,7 @@ static void shared_dup2(void)
     fd_entry_t *held, *spare, *was = 0, *claimed = 0;
     fd_table_t *table = 0;
     struct open_file *ofd;
+    fd_entry_t copy;
     int i, fd;
 
     check(first && second, "two processes for the dup2");
@@ -806,18 +807,18 @@ static void shared_dup2(void)
     current_proc = second;
     check(fd_get(second->fds, fd) == held, "the second sharer's call holds the descriptor");
     current_proc = first;
-    check(fd_dup_target(first->fds, fd, &was) == 0 && was == held &&
-              (held->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING,
-          "a dup2 onto it keeps it, closing, and reserves the number");
-    spare = fd_table_entry(first->fds, fd);
-    check(spare != held && spare->pending && fd_slot(first->fds, fd) == spare &&
-              fd_in_table(first->fds, spare) && fd_gone_entry(first->fds, 0) == held &&
-              !fd_gone_entry(first->fds, 1),
-          "the number leads to a new entry of the table");
-    spare->type = FD_TYPE_CONSOLE;
-    spare->ofd = ofd;
+    k_memset(&copy, 0, sizeof(copy));
+    copy.type = FD_TYPE_CONSOLE;
+    copy.ofd = ofd;
     fd_ofd_ref(ofd);
-    fd_install(first->fds, fd);
+    check(fd_dup_swap(first->fds, fd, &copy, &was) == 0 && was == held &&
+              (held->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING,
+          "a dup2 onto it keeps it, closing, and puts the copy in its place");
+    spare = fd_table_entry(first->fds, fd);
+    check(spare != held && !spare->pending && spare->type == FD_TYPE_CONSOLE && spare->ofd == ofd &&
+              fd_slot(first->fds, fd) == spare && fd_in_table(first->fds, spare) &&
+              fd_gone_entry(first->fds, 0) == held && !fd_gone_entry(first->fds, 1),
+          "the number leads to a new entry of the table that holds the copy");
     check(fd_holds_claim(0, &claimed) == -1 && fd_gone_claim(&table, &claimed) == -1 &&
               !first->fd_gone,
           "the end of the dup2's call releases nothing the holder keeps");
@@ -827,6 +828,75 @@ static void shared_dup2(void)
     free_process(second);
     close_process(first);
     check(!proc_list && !allocations, "the dup2 leaves nothing allocated");
+}
+
+/**
+ * A dup2 onto an open descriptor of a shared table that no call holds, as
+ * Linux's do_dup2 swaps the file in the slot and closes the old one after:
+ * a lookup by the other sharer finds the copy as soon as the dup2 has put it
+ * in, before the old entry's release, and never an empty or reserved slot;
+ * the dup2's own call then claims that release.
+ */
+static void shared_dup2_open(void)
+{
+    process_t *first = alloc_process();
+    process_t *second = alloc_process();
+    fd_entry_t *old, *was = 0, *claimed = 0;
+    fd_table_t *table = 0;
+    struct open_file *ofd;
+    fd_entry_t copy;
+    int i, fd;
+
+    check(first && second, "two processes for the dup2 onto an open descriptor");
+    if (!first || !second) {
+        return;
+    }
+    for (i = FD_STDIN; i <= FD_STDERR; i++) {
+        fd_free(second->fds, i);
+    }
+    fd_table_delete(second->fds);
+    second->fds = 0;
+    check(fd_table_share(first->fds, second) == 0, "the table is shared");
+    current_proc = first;
+    fd = fd_alloc(first->fds);
+    check(fd == 3, "the first sharer opens descriptor 3");
+    if (fd != 3) {
+        return;
+    }
+    old = fd_slot(first->fds, fd);
+    old->type = FD_TYPE_CONSOLE;
+    ofd = old->ofd;
+    fd_install(first->fds, fd);
+    check(fd_holds_claim(0, &claimed) == -1, "the open's call ends");
+    k_memset(&copy, 0, sizeof(copy));
+    copy.type = FD_TYPE_CONSOLE;
+    copy.ofd = ofd;
+    fd_ofd_ref(ofd);
+    check(fd_dup_swap(first->fds, fd, &copy, &was) == 0 && was == old &&
+              (old->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING,
+          "a dup2 onto it keeps it, closing, and puts the copy in its place");
+    current_proc = second;
+    check(fd_get(second->fds, fd) == fd_table_entry(first->fds, fd) &&
+              fd_get(second->fds, fd) != old && fd_get(second->fds, fd)->ofd == ofd,
+          "the other sharer finds the copy before the old entry is released");
+    check(fd_holds_claim(0, &claimed) == -1, "the other sharer's call ends");
+    current_proc = first;
+    check(fd_gone_claim(&table, &claimed) == fd && claimed == old && table == first->fds &&
+              (old->flags & FD_FLAG_RELEASING) && !first->fd_gone,
+          "the dup2's call claims the release of the old entry");
+    check(fd_ofd_unref_unless_last(ofd) == 1, "the old entry's reference goes");
+    fd_free_after(table, fd, old);
+    check(old->type == FD_TYPE_NONE && !fd_gone_entry(first->fds, 0) &&
+              fd_table_entry(first->fds, fd) != old,
+          "the old entry is cleared and the number keeps the copy");
+    check(fd_free(first->fds, fd) == 0 && fd_table_entry(first->fds, fd) == old &&
+              !first->fds->spares && !first->fds->gone,
+          "a close of the copy leads the number back to the slot's own entry");
+    current_proc = 0;
+    check(!first->fds->lock.locked, "every call lets the table's lock go");
+    free_process(second);
+    close_process(first);
+    check(!proc_list && !allocations, "the dup2 onto an open descriptor leaves nothing allocated");
 }
 
 /**
@@ -1138,6 +1208,7 @@ int main(void)
     description_watch();
     shared_closes();
     shared_dup2();
+    shared_dup2_open();
     table_chunks();
     description_last();
     remount_writers();

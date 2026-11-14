@@ -666,8 +666,8 @@ static int chunk_size(int k)
 }
 
 /*
- * An entry dup2 put in place of one that calls of other sharers held
- * (`fd_dup_target`): the number's entry until it is free and the slot's own
+ * An entry dup2 put in place of one that was open or closing
+ * (`fd_dup_swap`): the number's entry until it is free and the slot's own
  * entry is no longer kept, on its table's `spares`. The entry is the first
  * member, so that its address is the spare's.
  */
@@ -1281,18 +1281,21 @@ static void gone_push(process_t *t, struct fd_gone *g, struct fd_gone_hold *h, f
 }
 
 /**
- * Put a spare in place of `old`, the entry of `fd`, for dup2, and keep `old`
- * for the calls that hold it: each sharer whose call holds `fd` lets the
- * number go and keeps `old` instead, its `fd_slot` still leading there, and
- * the caller keeps it too when it was open, so that it may drop its record
- * locks after the table's lock goes, or when no call or release would end
- * it otherwise. An entry whose release is under way is that release's
- * alone: the calls that hold it let the number go and keep nothing. The
- * spare is reserved and held by the caller. Everything is taken from the
- * heap first, under the lock, which the heap allows. 0, or -ENOMEM with
- * nothing changed. The caller holds the lock.
+ * Put a spare holding `nw` in place of `old`, the entry of `fd`, for dup2,
+ * in one step, and keep `old` for the calls that hold it: each sharer whose
+ * call holds `fd` lets the number go and keeps `old` instead, its `fd_slot`
+ * still leading there, and the caller keeps it too when it was open, so
+ * that it may drop its record locks after the table's lock goes and release
+ * it (`fd_gone_claim`), or when no call or release would end it otherwise.
+ * An entry whose release is under way is that release's alone: the calls
+ * that hold it let the number go and keep nothing. A lookup finds `old`
+ * before the step and the copy after it, never a slot that is empty or
+ * reserved, as Linux's do_dup2 swaps the file in the slot under the
+ * table's lock. Everything is taken from the heap first, under the lock,
+ * which the heap allows. 0, or -ENOMEM with nothing changed. The caller
+ * holds the lock.
  */
-static int gone_make(fd_table_t *table, int fd, fd_entry_t *old)
+static int gone_make(fd_table_t *table, int fd, fd_entry_t *old, const fd_entry_t *nw)
 {
     process_t *self = current_proc;
     int first, k = chunk_of(fd, &first);
@@ -1364,16 +1367,18 @@ static int gone_make(fd_table_t *table, int fd, fd_entry_t *old)
     }
     g->next = table->gone;
     table->gone = g;
-    sp->entry.pending = 1;
+    sp->entry = *nw;
     sp->next = table->spares;
     table->spares = sp;
     k_barrier();
     *(fd_entry_t *volatile *)(void *)&table->moved[k][fd - first] = &sp->entry;
-    fd_hold(table, fd);
+    if (self && self->fd_gone) {
+        gone_shadow(table, fd);
+    }
     return 0;
 }
 
-int fd_dup_target(fd_table_t *table, int fd, fd_entry_t **was)
+int fd_dup_swap(fd_table_t *table, int fd, const fd_entry_t *nw, fd_entry_t **was)
 {
     uint32_t flags = fd_table_lock(table);
     fd_entry_t *e;
@@ -1386,23 +1391,20 @@ int fd_dup_target(fd_table_t *table, int fd, fd_entry_t **was)
     }
     e = fd_table_entry(table, fd);
     if (entry_free(e)) {
-        e->pending = 1;
-        fd_hold(table, fd);
+        *e = *nw;
+        if (current_proc && current_proc->fd_gone) {
+            gone_shadow(table, fd);
+        }
         rc = 0;
     } else if (slot_unready(e)) {
         rc = -EBUSY;
-    } else if ((e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd) ||
-               (current_proc && table == current_proc->fds && held_by(current_proc, fd))) {
+    } else {
         int open = !(e->flags & FD_FLAG_CLOSING);
 
-        rc = gone_make(table, fd, e);
+        rc = gone_make(table, fd, e, nw);
         if (rc == 0 && open) {
             *was = e;
         }
-    } else {
-        e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
-        *was = e;
-        rc = 1;
     }
     fd_table_unlock(table, flags);
     return rc;

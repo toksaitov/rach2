@@ -37,7 +37,12 @@ onto
 .Fa newfd .
 If
 .Fa newfd
-is open, the kernel closes it first; close errors are ignored.
+is open, the copy takes its place in one step and the file it named is
+then closed; close errors are ignored.
+Another thread that looks
+.Fa newfd
+up meanwhile finds the old file or the copy, never a closed descriptor,
+as on Linux.
 A call of another thread sharing the descriptor table that uses the
 descriptor there, or one a close left to such a call, keeps the file it
 began with until it ends, and so does a close in another thread that is
@@ -47,14 +52,9 @@ names the copy at once, as on Linux.
 The destination is busy, and the call fails with
 .Er EBUSY ,
 while an
-.Xr open 2 ,
-or a
-.Fn dup2
-or
-.Fn dup3 ,
-in another thread has reserved it and not yet filled it; Linux gives
-.Er EBUSY
-for the open alone, and musl's
+.Xr open 2
+in another thread has reserved it and not yet filled it, as on Linux, and
+musl's
 .Fn dup2
 makes the call again for as long as it fails so.
 If both arguments are equal and valid, and below the current descriptor
@@ -158,8 +158,8 @@ has no free descriptor below the limit.
 The kernel heap has no room for a larger descriptor table, for the
 open file description
 .Fn dup
-makes, or for the entry that takes the place of a descriptor another
-thread's call keeps.
+makes, or for the entry that takes the place of an open
+.Fa newfd .
 .It Bq Er ESRCH
 There is no current process.
 .El
