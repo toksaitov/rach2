@@ -79,6 +79,9 @@ int virtio_init(struct virtio_dev *d, uint64_t wanted, uint16_t nqueues)
     if (r != 0) {
         return r;
     }
+    if (d->ops->dma_enable) {
+        d->ops->dma_enable(d, 1);
+    }
     virtio_status_add(d, VIRTIO_STATUS_ACKNOWLEDGE);
     virtio_status_add(d, VIRTIO_STATUS_DRIVER);
     offered = d->ops->get_features(d);
@@ -236,6 +239,11 @@ void virtio_teardown(struct virtio_dev *d)
     int stopped = virtio_reset(d) == 0;
     int i;
 
+    if (!stopped && d->ops->dma_enable) {
+        d->ops->dma_enable(d, 0);
+        klog(KLOG_WARN, "virtio", "stopped: %s: its memory access turned off", d->name);
+        stopped = 1;
+    }
     d->ops->irq_release(d);
     for (i = 0; i < VIRTIO_MAX_QUEUES; i++) {
         if (d->queues[i]) {

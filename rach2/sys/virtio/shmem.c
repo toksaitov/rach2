@@ -1151,16 +1151,19 @@ static void vs_put(struct virtio_dev *d)
     }
 }
 
-static const struct virtio_ops vshm_ops = {
-    "vgpu-shm",      vs_get_status,      vs_set_status,
-    vs_get_features, vs_set_features,    vs_config_generation,
-    vs_config_read,  vs_config_write,    vs_queue_max,
-    vs_queue_enable, vs_notify,          vs_irq_setup,
-    vs_irq_start,    vs_irq_release,     vs_dma_alloc,
-    vs_dma_free,     vs_shm_region,      vs_ring_alloc,
-    vs_backing_fill, vs_backing_release, vs_dma_addr,
-    vs_put,          vs_map_pages,       vs_map_frame,
-    vs_map_free};
+static const struct virtio_ops vshm_ops = {"vgpu-shm",      vs_get_status,
+                                           vs_set_status,   vs_get_features,
+                                           vs_set_features, vs_config_generation,
+                                           vs_config_read,  vs_config_write,
+                                           vs_queue_max,    vs_queue_enable,
+                                           vs_notify,       vs_irq_setup,
+                                           vs_irq_start,    vs_irq_release,
+                                           vs_dma_alloc,    vs_dma_free,
+                                           vs_shm_region,   vs_ring_alloc,
+                                           vs_backing_fill, vs_backing_release,
+                                           vs_dma_addr,     vs_put,
+                                           vs_map_pages,    vs_map_frame,
+                                           vs_map_free,     NULL};
 
 /* ------------------------------------------------------------------------
  * The doorbells the device rings

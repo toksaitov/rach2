@@ -734,6 +734,20 @@ static void vp_put(struct virtio_dev *d)
     }
 }
 
+/** Turn the function's bus mastering on or off; `dma_enable` of virtio.h.
+ * Off, the function can start no memory access, its MSI-X messages among
+ * them, as Linux's pci_clear_master leaves it. */
+static void vp_dma_enable(struct virtio_dev *d, int on)
+{
+    struct virtio_pci *vp = vp_of(d);
+
+    if (on) {
+        pci_enable_bus_master(&vp->pci);
+    } else {
+        pci_disable_bus_master(&vp->pci);
+    }
+}
+
 static const struct virtio_ops vp_ops = {"virtio-pci",
                                          vp_get_status,
                                          vp_set_status,
@@ -758,7 +772,8 @@ static const struct virtio_ops vp_ops = {"virtio-pci",
                                          vp_put,
                                          NULL,
                                          NULL,
-                                         NULL};
+                                         NULL,
+                                         vp_dma_enable};
 
 /** The device type of virtio-pci function `p`, or 0 when it is none. */
 static uint16_t vp_type(const pci_device_t *p)
@@ -974,8 +989,9 @@ static void vp_detach(struct virtio_pci *vp)
 }
 
 /** Read, check and map the capabilities of the function `vp->pci`, and turn
- * on its memory decoding and bus mastering, which makes the kernel the
- * function's owner when it had none (`claimed`). Returns 0, or -EIO with
+ * on its memory decoding, which makes the kernel the function's owner when
+ * it had none (`claimed`); bus mastering waits for a reset that finished
+ * (`vp_acknowledge`). Returns 0, or -EIO with
  * the reason in the log and every window it mapped given back
  * (`vp_detach`). */
 static int vp_attach(struct virtio_pci *vp)
@@ -999,7 +1015,6 @@ static int vp_attach(struct virtio_pci *vp)
     }
     vp->claimed = pci_owner(vp->pci.bus, (uint8_t)(vp->pci.device << 3 | vp->pci.function)) == NULL;
     pci_enable_memory_space(&vp->pci);
-    pci_enable_bus_master(&vp->pci);
     vp_intx_disable(vp, 1);
     return 0;
 }
@@ -1050,8 +1065,11 @@ static struct virtio_pci *vp_record(const pci_device_t *p)
  * Reset the device of `vp` and set ACKNOWLEDGE, as Linux's
  * register_virtio_device does before it publishes a device, whether a
  * driver of its type exists or not, so that no DRIVER_OK or queue a
- * previous owner left stands. 0, or -ETIMEDOUT with a record when the
- * reset did not finish.
+ * previous owner left stands, and turn on bus mastering, as Linux's
+ * virtio_pci_probe does, only once the reset has finished, so that a
+ * device still working through what an earlier binding gave it cannot
+ * reach memory freed since. 0, or -ETIMEDOUT with a record when the reset
+ * did not finish.
  */
 static int vp_acknowledge(struct virtio_pci *vp)
 {
@@ -1062,6 +1080,7 @@ static int vp_acknowledge(struct virtio_pci *vp)
              vp->pci.bus, vp->pci.device, vp->pci.function, k);
         return k;
     }
+    pci_enable_bus_master(&vp->pci);
     vp_set_status(&vp->dev, VIRTIO_STATUS_ACKNOWLEDGE);
     return 0;
 }
@@ -1153,10 +1172,11 @@ static int vp_key(const pci_device_t *p)
  * device reset, its interrupts released, its virtio device taken off the
  * bus, which gives its number back, the record taken off `vp_list`, its
  * windows and PCI claim given back with its command word less bus
- * mastering, as pci_disable_device leaves it, and the function shown
- * unbound with its "unbind" uevent. The record is freed now, or at the
- * driver's virtio_put while one still holds it. May sleep, in the child's
- * removal.
+ * mastering, as pci_disable_device leaves it, so that putting the word back
+ * cannot turn on the mastering that the child's teardown turned off after a
+ * reset that did not finish (`dma_enable`), and the function shown unbound
+ * with its "unbind" uevent. The record is freed now, or at the driver's
+ * virtio_put while one still holds it. May sleep, in the child's removal.
  */
 static void vp_unbind(struct virtio_pci *vp)
 {
@@ -1178,8 +1198,8 @@ static void vp_unbind(struct virtio_pci *vp)
             break;
         }
     }
+    vp->command &= (uint16_t)~PCI_CMD_BUS_MASTER;
     vp_detach(vp);
-    pci_disable_bus_master(&pdev);
     vp->gone = 1;
     sysfs_pci_unbind(key);
     (void)sysfs_pci_uevent(key, "unbind");

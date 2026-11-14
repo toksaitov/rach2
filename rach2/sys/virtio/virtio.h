@@ -244,6 +244,14 @@ struct virtio_map;
  * map_frame: the frame of page `i` of `m`, or 0 once it is taken back.
  * map_free: let go of `m` and its frames, without its `revoke`, once
  *     nothing uses them.
+ *
+ * dma_enable: let the device reach memory (`on` 1) or stop it from reaching
+ *     any (`on` 0), as clearing bus mastering stops a PCI function; on
+ *     return from an `on` of 0 the device can write nothing the driver
+ *     frees. The core turns it on after each reset that finished and off
+ *     after one that did not, before anything is freed. A transport whose
+ *     reset can time out must have it; NULL is for one whose reset always
+ *     finishes, as the shared region's does.
  */
 struct virtio_ops {
     const char *name;
@@ -272,6 +280,7 @@ struct virtio_ops {
                      void (*revoke)(void *owner), void *owner, struct virtio_map **out);
     uintptr_t (*map_frame)(struct virtio_map *m, uint64_t i);
     void (*map_free)(struct virtio_map *m);
+    void (*dma_enable)(struct virtio_dev *d, int on);
 };
 
 /*
@@ -342,7 +351,8 @@ struct virtio_dev {
 int virtio_reset(struct virtio_dev *d);
 
 /**
- * Reset `d`, acknowledge it, and negotiate its features: the device's own
+ * Reset `d`, let it reach memory once the reset has finished
+ * (`dma_enable`), acknowledge it, and negotiate its features: the device's own
  * bits in `wanted` that it offers, with VIRTIO_F_VERSION_1, which it must
  * offer, and the ring and platform bits the core handles
  * (VIRTIO_F_INDIRECT_DESC, VIRTIO_F_ACCESS_PLATFORM,
@@ -381,10 +391,13 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
 int virtio_ready(struct virtio_dev *d);
 
 /**
- * Reset `d`, stop its interrupts, and free its queues. Memory the device
- * was given is freed only when the reset finished; otherwise it is kept,
- * since a device that did not reset may still write into it. The device can
- * be brought up again with virtio_init.
+ * Reset `d`, stop its interrupts, and free its queues. When the reset does
+ * not finish, the device is first stopped from reaching memory
+ * (`dma_enable`), so that neither the queues nor any buffer the driver
+ * frees after the call can be written by it, as Linux never frees memory
+ * under a device that has not reset; on a transport without `dma_enable`
+ * the queues' memory is then kept. The device can be brought up again with
+ * virtio_init, whose reset lets it reach memory again.
  */
 void virtio_teardown(struct virtio_dev *d);
 
