@@ -1,7 +1,7 @@
 /*
  * serial.c: the PC's serial console, a 16550 UART at COM1, as serial.h
  * describes it: a polled transmit, and a receive ring that the port's
- * interrupt and the tick fill.
+ * interrupt and the tick fill, or a line attached in the UART's place.
  */
 #include "portio.h"
 #include "../arch.h"
@@ -74,6 +74,25 @@ static unsigned char _rx_scan_set[3];
  * that would reach the port return at once instead.
  */
 static int _serial_port_exists = 0;
+
+/*
+ * The line that carries the console beside the UART or in its place
+ * (`serial_line_attach`), or NULL. `_line_input` says the ring is the
+ * line's, `_line_uart` that the UART still sends, and `_line_waits` that a
+ * feed found the ring too full, so that the line is told when it has room.
+ * The pointer is read without a lock by a processor that writes a report;
+ * the rest are written under the console's lock.
+ */
+static const struct serial_line *volatile _line;
+static int _line_input;
+static int _line_uart;
+static int _line_waits;
+
+/** Whether the ring has a source: the UART, or a line that feeds it. */
+static int _rx_source(void)
+{
+    return _serial_port_exists || _line_input;
+}
 
 /**
  * Read the line status, counting an overrun. Every read of the line status
@@ -200,8 +219,15 @@ static int _serial_stuck; /* the last byte timed out; reset by one sent */
 
 void serial_out(char c)
 {
+    const struct serial_line *line = _line;
     uint64_t start, limit;
 
+    if (line) {
+        line->out(c);
+        if (!_line_uart) {
+            return;
+        }
+    }
     if (!_serial_port_exists) {
         return;
     }
@@ -225,7 +251,7 @@ int serial_rx_service(int budget)
     uint32_t flags;
     int moved = 0;
 
-    if (!_serial_port_exists) {
+    if (!_serial_port_exists || _line_input) {
         return 0;
     }
     flags = console_lock();
@@ -288,6 +314,9 @@ static void _serial_rx_handler(isr_params_t *params)
     int pass;
 
     (void)params;
+    if (_line_input) {
+        return; /* the ring is a line's, and the UART's interrupt is off */
+    }
     _rx.irq_services++;
     for (pass = 0; pass < SERIAL_RX_PASSES; pass++) {
         _rx.irq_bytes += (uint32_t)serial_rx_service(64);
@@ -309,17 +338,19 @@ void serial_enable_rx_irq(void)
     set_isr_handler(SERIAL_VECTOR, &_serial_rx_handler, "com1");
     pic_unmask_irq(SERIAL_IRQ);
     _rx_irq_wanted = 1;
-    outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
+    if (!_line_input) {
+        outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
+    }
 }
 
 int serial_rx_irq_on(void)
 {
-    return _rx_irq_wanted;
+    return _line_input || _rx_irq_wanted;
 }
 
 int serial_rx_line_high(void)
 {
-    return _rx_line_high;
+    return !_line_input && _rx_line_high;
 }
 
 void serial_set_rx_notify(void (*notify)(void))
@@ -329,7 +360,27 @@ void serial_set_rx_notify(void (*notify)(void))
 
 int serial_data_available(void)
 {
-    return _serial_port_exists && _rx_count() > 0;
+    return _rx_source() && _rx_count() > 0;
+}
+
+/**
+ * After bytes left the ring, with the console's lock held: turn the UART's
+ * receive interrupt back on when a full ring masked it and the ring is
+ * below half, and return the line to tell that the ring has room, when one
+ * waits for it and the ring is below half or `emptied`, or NULL. The caller
+ * calls the line's `rx_room` once it has let the lock go.
+ */
+static const struct serial_line *_rx_room(int emptied)
+{
+    if (_rx_irq_masked && !_line_input && (emptied || _rx_count() < SERIAL_RX_SIZE / 2)) {
+        outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
+        _rx_irq_masked = 0;
+    }
+    if (_line_input && _line_waits && (emptied || _rx_count() < SERIAL_RX_SIZE / 2)) {
+        _line_waits = 0;
+        return _line;
+    }
+    return NULL;
 }
 
 uint32_t serial_rx_pending(void)
@@ -339,10 +390,11 @@ uint32_t serial_rx_pending(void)
 
 int serial_rx_take(void)
 {
+    const struct serial_line *room;
     uint32_t flags;
     int c = -1;
 
-    if (!_serial_port_exists) {
+    if (!_rx_source()) {
         return -1;
     }
     flags = console_lock();
@@ -350,11 +402,11 @@ int serial_rx_take(void)
         c = _rx_ring[_rx_head & (SERIAL_RX_SIZE - 1)];
         _rx_advance(1);
     }
-    if (_rx_irq_masked && _rx_count() < SERIAL_RX_SIZE / 2) {
-        outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
-        _rx_irq_masked = 0;
-    }
+    room = _rx_room(0);
     console_unlock(flags);
+    if (room) {
+        room->rx_room();
+    }
     return c;
 }
 
@@ -429,29 +481,39 @@ int serial_rx_looked(void)
 
 void serial_rx_discard(int count)
 {
+    const struct serial_line *room = NULL;
     uint32_t flags = console_lock();
 
     if ((uint32_t)count > _rx_count()) {
         count = (int)_rx_count();
     }
     _rx_advance((uint32_t)count);
+    if (_line_input) {
+        room = _rx_room(0);
+    }
     console_unlock(flags);
+    if (room) {
+        room->rx_room();
+    }
 }
 
 void serial_rx_flush(void)
 {
+    const struct serial_line *line;
     uint32_t flags = console_lock();
 
     _rx_advance(_rx_count());
-    if (_serial_port_exists) {
+    line = _line_input ? _line : NULL;
+    if (_serial_port_exists && !line) {
         /* The bytes a full ring left in the UART are input too. */
         outb(SERIAL_COM1 + SERIAL_FIFO_CTRL, 0xC7 | 0x02); /* FIFO on, receiver cleared */
     }
-    if (_rx_irq_masked) {
-        outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
-        _rx_irq_masked = 0;
-    }
+    (void)_rx_room(1);
     console_unlock(flags);
+    if (line) {
+        /* The bytes a full ring left with the line are input too. */
+        line->rx_discard();
+    }
 }
 
 void serial_rx_counters(struct serial_rx_counters *out)
@@ -460,4 +522,83 @@ void serial_rx_counters(struct serial_rx_counters *out)
 
     *out = _rx;
     console_unlock(flags);
+}
+
+void serial_line_attach(const struct serial_line *line, int input, int uart)
+{
+    uint32_t flags = console_lock();
+
+    _line_uart = uart;
+    _line_waits = 0;
+    _line_input = input;
+    if (_serial_port_exists && _rx_irq_wanted) {
+        outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, input ? 0x00 : SERIAL_IER_RDA);
+        _rx_irq_masked = 0;
+    }
+    _line = line;
+    console_unlock(flags);
+}
+
+void serial_line_detach(const struct serial_line *line)
+{
+    uint32_t flags = console_lock();
+
+    if (_line == line) {
+        _line = NULL;
+        _line_input = 0;
+        _line_uart = 0;
+        _line_waits = 0;
+        if (_serial_port_exists && _rx_irq_wanted) {
+            outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
+            _rx_irq_masked = 0;
+        }
+    }
+    console_unlock(flags);
+}
+
+int serial_rx_feed(const unsigned char *buf, int n)
+{
+    uint32_t flags = console_lock();
+    int taken = 0;
+
+    if (!_line_input) {
+        console_unlock(flags);
+        return 0;
+    }
+    while (taken < n && _rx_count() < SERIAL_RX_SIZE) {
+        _rx_ring[_rx_tail & (SERIAL_RX_SIZE - 1)] = buf[taken++];
+        _rx_tail++;
+    }
+    _rx.bytes += (uint32_t)taken;
+    if (_rx_count() > _rx.ring_max) {
+        _rx.ring_max = _rx_count();
+    }
+    if (taken < n) {
+        _rx.ring_full++;
+        _line_waits = 1;
+    }
+    console_unlock(flags);
+    return taken;
+}
+
+void serial_rx_fed(void)
+{
+    if (_rx_notify && _rx_count() > 0) {
+        _rx.irq_services++;
+        _rx_notify();
+    }
+}
+
+void serial_flush(void)
+{
+    const struct serial_line *line = _line;
+
+    if (line) {
+        line->flush();
+    }
+}
+
+int serial_uart_found(void)
+{
+    return _serial_port_exists;
 }

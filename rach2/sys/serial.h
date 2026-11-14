@@ -1,7 +1,9 @@
 /*
  * serial.h: the serial console. The kernel's log and the debug shell go out
  * on it, and what it receives reaches the console's readers. A platform's
- * UART driver defines it: arch/x86/serial.c on a PC, COM1's 16550.
+ * UART driver defines it: arch/x86/serial.c on a PC, COM1's 16550. Another
+ * device may carry the console beside the UART or in its place, as a virtio
+ * console's port does under `console=hvc0` (`struct serial_line`).
  */
 #ifndef _SERIAL_H_
 #define _SERIAL_H_
@@ -130,5 +132,63 @@ int serial_data_available(void);
  * what they took is `polled_bytes`.
  */
 int serial_try_getc(void);
+
+/*
+ * A line that carries the console beside the UART or in its place: the port
+ * of a virtio console (virtio/virtio_console.c). The record outlives its
+ * attachment, since a processor that writes a report without the big lock
+ * may be in `out` when the line is detached; a line that has no device then
+ * discards what it is given.
+ *
+ * out: take one byte to send. Called with interrupts on or off, from a
+ *     handler, during a panic, and by a processor without the big lock.
+ * flush: send what `out` took and wait, a bounded time, until the device
+ *     has it, so that a reset or a power off that follows loses none.
+ * rx_room: the ring has room again after a `serial_rx_feed` that it could
+ *     not take whole: feed what the line held back. Not called from
+ *     `serial_rx_feed`.
+ * rx_discard: drop what the line holds back: a flush of the console's input.
+ */
+struct serial_line {
+    void (*out)(char c);
+    void (*flush)(void);
+    void (*rx_room)(void);
+    void (*rx_discard)(void);
+};
+
+/**
+ * Make `line` the console's line. `serial_out` then gives it every byte,
+ * and the UART too when `uart` is nonzero. With `input` nonzero the receive
+ * ring holds what the line feeds (`serial_rx_feed`), the UART is no longer
+ * read and its receive interrupt is off; otherwise the line's input is
+ * not the console's and the UART's still is. A second attach replaces the
+ * first. Under the big lock.
+ */
+void serial_line_attach(const struct serial_line *line, int input, int uart);
+
+/** Give the console back to the UART when `line` is the console's line:
+ * its output, its input and its receive interrupt as they were. Under the
+ * big lock. */
+void serial_line_detach(const struct serial_line *line);
+
+/**
+ * Put `n` bytes a line received at the ring's tail, as many as it has room
+ * for, under the console's lock. When it takes fewer than `n`, the line's
+ * `rx_room` is called once the ring is below half full or flushed. Returns
+ * the count taken: 0 while the line is not the console's input.
+ */
+int serial_rx_feed(const unsigned char *buf, int n);
+
+/** Run the function `serial_set_rx_notify` gave when the ring holds a
+ * byte, as the UART's interrupt does after its service. Interrupts off,
+ * under the big lock, from the line's interrupt. */
+void serial_rx_fed(void);
+
+/** Send what a line has taken and not yet sent (`flush` of the line);
+ * nothing on the UART, which sends each byte as it is written. */
+void serial_flush(void);
+
+/** Whether `serial_init` found a UART at COM1. */
+int serial_uart_found(void);
 
 #endif
