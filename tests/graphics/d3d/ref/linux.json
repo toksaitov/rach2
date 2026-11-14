@@ -1,9 +1,9 @@
 {
   "source": "run 2, step 3, Debian 13, Mesa 25.0.7-2+deb13u1, GE-Proton11-12; cold and warm 8-CPU runs",
-  "coverage_source": "Completed summaries of the discovery: Wine at 2, 4 and 8 CPUs; vkd3d at 2 and 4 jobs in 8 GiB, 8 jobs in 16 GiB, and the 16-GiB crash probe; killed units excluded",
+  "coverage_source": "Completed summaries of the discovery: Wine at 2, 4 and 8 CPUs; vkd3d at 2 and 4 jobs in 8 GiB, 8 jobs in 16 GiB, and the 16-GiB crash probe; killed units excluded; d3d9:d3d9ex on both paths also from an 8-CPU run under KVM on 2026-11-14",
   "wine": {
     "proton": {
-      "d3d9:d3d9ex": {"exit": 98, "summary": true, "failures": 98, "min_checks": 2585, "max_skipped": 2},
+      "d3d9:d3d9ex": {"exit": 98, "summary": true, "failures": 98, "min_checks": 2583, "max_skipped": 2},
       "d3d9:device": {"exit": 5, "summary": false, "failures": 0},
       "d3d9:stateblock": {"exit": 0, "summary": true, "failures": 0, "min_checks": 14738, "max_skipped": 0},
       "d3d9:visual": {"exit": 245, "summary": false, "failures": 0},
@@ -18,7 +18,7 @@
       "dxgi:dxgi": {"exit": 5, "summary": false, "failures": 0}
     },
     "wined3d": {
-      "d3d9:d3d9ex": {"exit": 0, "summary": true, "failures": 0, "min_checks": 2766, "max_skipped": 2},
+      "d3d9:d3d9ex": {"exit": 0, "summary": true, "failures": 0, "min_checks": 2764, "max_skipped": 2},
       "d3d9:device": {"exit": 2, "summary": true, "failures": 2, "min_checks": 60590, "max_skipped": 10},
       "d3d9:stateblock": {"exit": 0, "summary": true, "failures": 0, "min_checks": 14738, "max_skipped": 0},
       "d3d9:visual": {"exit": 5, "summary": true, "failures": 5, "min_checks": 210458, "max_skipped": 17},
