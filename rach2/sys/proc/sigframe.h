@@ -56,6 +56,12 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask);
 /* The bytes of a `siginfo_t`, on every architecture. */
 #define SIGINFO_SIZE 128
 
+/* The bytes of the native `siginfo_t` that Linux's kernel_siginfo keeps:
+ * signo, errno and code, then the union at 12 on i386 and 16 on x86-64; 32
+ * on i686 and 48 on x86-64. The rest is the extension, which a siginfo of a
+ * layout Linux does not know must leave zero. */
+#define SIGINFO_KEPT ((sizeof(uintptr_t) == 8 ? 16u : 12u) + SIGINFO_UNION_SIZE)
+
 /* The layouts of a siginfo's union, Linux 6.12's enum siginfo_layout
  * (include/linux/signal.h), but SIL_FAULT_TRAPNO, which only the codes of
  * alpha and sparc have. */
@@ -95,10 +101,17 @@ void siginfo_pack(struct k_siginfo *info, int layout);
  * on i386 and 16 on x86-64, kept whole or built by the layout (siginfo.c). */
 void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
 
+/** Whether Linux 6.12 knows the layout of `signo`'s code `code`, as its
+ * known_siginfo_layout does; a native siginfo of any other code is read
+ * whole, its extension included, which must be zero (siginfo.c). */
+int siginfo_known(int signo, int32_t code);
+
 /** Read the native `siginfo_t` at `in` into `info`, its union whole, for a
  * signal `signo`, whose layout gives the members the rest of the kernel
  * reads, for rt_sigqueueinfo and PTRACE_SETSIGINFO: 0, or -E2BIG for a code
- * of a layout Linux does not know with bytes past the union (siginfo.c). */
+ * of a layout Linux does not know (`siginfo_known`) with bytes past the
+ * union (siginfo.c). `in` has SIGINFO_SIZE bytes, of which only the first
+ * SIGINFO_KEPT are read for a known layout. */
 int32_t sigframe_take_siginfo(const uint8_t *in, int signo, struct k_siginfo *info);
 
 /** Write the 128-byte `struct signalfd_siginfo` of `signo` with `info` at
@@ -113,12 +126,21 @@ void signalfd_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
  * syscall_proc.c. */
 void siginfo_to_caller(uint8_t *out, int signo, const struct k_siginfo *info);
 
-/** Read a `siginfo_t` the calling system call passed, in its ABI's layout,
- * as `siginfo_to_caller` chooses it, as one of the signal `signo`: 0, or
- * the native reader's -E2BIG; the i386 one, as Linux's
- * post_copy_siginfo_from_user32, refuses nothing. Defined in
- * syscall_proc.c. */
-int32_t siginfo_from_caller(const uint8_t *in, int signo, struct k_siginfo *info);
+/**
+ * Copy and read the `siginfo_t` at the user address `from`, in the calling
+ * system call's ABI's layout, as `siginfo_to_caller` chooses it. With
+ * `given` NULL the union is read by the layout of the call's signal
+ * `signo`, whatever si_signo says, as Linux's __copy_siginfo_from_user
+ * reads it; otherwise `*given` gets si_signo and the union is read by its
+ * layout, as copy_siginfo_from_user reads it. A native siginfo is copied as
+ * Linux copies it: the SIGINFO_KEPT bytes of kernel_siginfo, and the
+ * extension after them only for a layout Linux does not know, so that an
+ * unreadable extension is no fault for a known one; an i386 one is copied
+ * whole, as copy_siginfo_from_user32 copies it. Returns 0, -EFAULT, or the
+ * native reader's -E2BIG; the i386 reader refuses nothing. This may sleep
+ * on a user page fault. Defined in syscall_proc.c.
+ */
+int32_t siginfo_from_caller(uintptr_t from, int signo, int32_t *given, struct k_siginfo *info);
 
 #if defined(IA32_SYSCALL_TABLE_SIZE)
 /* The bytes of an i386 `siginfo_t` through si_status, which waitid writes

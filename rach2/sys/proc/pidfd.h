@@ -18,6 +18,16 @@
 struct isr_params;
 struct process;
 struct pidfd;
+struct tgroup;
+
+/* A hold on the process a pidfd names that outlasts the descriptor, for a
+ * call that may sleep between finding the pidfd and acting on its process:
+ * the pidfd's thread group, held by a reference, and its leader's kernel
+ * id. */
+struct pidfd_ref {
+    struct tgroup *tg;
+    uint32_t pid;
+};
 
 /** A pidfd of the process `p` leads, holding its thread group, not yet
  * given a descriptor; NULL when the heap has no room. */
@@ -39,6 +49,19 @@ void pidfd_free(struct pidfd *pf);
  * is not open or is not a pidfd.
  */
 int32_t pidfd_lookup(int fd, struct process **out, int *nonblock);
+
+/** Hold in `*ref` the process the caller's descriptor `fd` names, until
+ * `pidfd_ref_put`, whatever happens to the descriptor meanwhile: 0, or
+ * -EBADF for a descriptor that is not open or is not a pidfd, which holds
+ * nothing. */
+int32_t pidfd_ref_get(int fd, struct pidfd_ref *ref);
+
+/** The leader of the process `ref` holds, or NULL once it has been
+ * reaped. */
+struct process *pidfd_ref_task(const struct pidfd_ref *ref);
+
+/** Let go of the thread group `ref` holds. */
+void pidfd_ref_put(struct pidfd_ref *ref);
 
 /** pidfd_open(2) takes a pid and the flag PIDFD_NONBLOCK: a close-on-exec
  * pidfd of the process, -EINVAL for a pid not above zero, another flag or a

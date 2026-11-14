@@ -494,12 +494,14 @@ void siginfo_to_caller(uint8_t *buf, int sig, const struct k_siginfo *info)
     (void)info;
 }
 
-/** Nothing: no row reads a siginfo from the user. */
-void siginfo_from_caller(const uint8_t *buf, int sig, struct k_siginfo *info)
+/** 0: no row reads a siginfo from the user. */
+int32_t siginfo_from_caller(uintptr_t from, int sig, int32_t *given, struct k_siginfo *info)
 {
-    (void)buf;
+    (void)from;
     (void)sig;
+    (void)given;
     (void)info;
+    return 0;
 }
 
 /** Nothing: the tracee's address space is static. */

@@ -5453,40 +5453,40 @@ void siginfo_to_caller(uint8_t *out, int signo, const struct k_siginfo *info)
     sigframe_fill_siginfo(out, signo, info);
 }
 
-int32_t siginfo_from_caller(const uint8_t *in, int signo, struct k_siginfo *info)
-{
-#if defined(IA32_SYSCALL_TABLE_SIZE)
-    if (in_compat_syscall()) {
-        ia32_take_siginfo(in, signo, info);
-        return 0;
-    }
-#endif
-    return sigframe_take_siginfo(in, signo, info);
-}
-
-/**
- * Copy and decode a queued signal's siginfo, in the caller's layout
- * (`siginfo_from_caller`), before resolving its target. With `given` NULL
- * the union is read by the layout of the call's signal `signo`, whatever
- * si_signo says, as Linux's __copy_siginfo_from_user sets si_signo to the
- * call's signal before it reads the rest; otherwise `given` gets si_signo
- * and the union is read by its layout, as Linux's copy_siginfo_from_user
- * reads pidfd_send_signal's, whose caller refuses a si_signo other than
- * `signo`. Returns 0, -EFAULT, or -E2BIG from the native reader. This may
- * sleep on a user page fault.
- */
-static int32_t queued_info(uintptr_t u, int signo, struct k_siginfo *info, int32_t *given)
+int32_t siginfo_from_caller(uintptr_t from, int signo, int32_t *given, struct k_siginfo *info)
 {
     uint8_t buf[SIGINFO_SIZE];
+    uint32_t head = SIGINFO_KEPT;
+    int32_t code;
+    int compat = 0;
 
-    if (copy_from_user(buf, (const void __user *)u, sizeof(buf)) != 0) {
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    compat = in_compat_syscall();
+    if (compat) {
+        head = SIGINFO_SIZE;
+    }
+#endif
+    k_memset(buf, 0, sizeof(buf));
+    if (copy_from_user(buf, (const void __user *)from, head) != 0) {
         return -EFAULT;
     }
     if (given) {
         k_memcpy(given, buf, sizeof(*given));
         signo = (int)*given;
     }
-    return siginfo_from_caller(buf, signo, info);
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (compat) {
+        ia32_take_siginfo(buf, signo, info);
+        return 0;
+    }
+#endif
+    (void)compat;
+    k_memcpy(&code, buf + 8, sizeof(code));
+    if (!siginfo_known(signo, code) &&
+        copy_from_user(buf + head, (const void __user *)(from + head), SIGINFO_SIZE - head) != 0) {
+        return -EFAULT;
+    }
+    return sigframe_take_siginfo(buf, signo, info);
 }
 
 /**
@@ -5512,12 +5512,14 @@ static int named_self(int pid)
  * posted to the process with that siginfo, under kill's permission. The kernel
  * keeps one pending instance of each signal, so a real-time signal sent again
  * while pending is merged, where Linux queues it. Signal 0, and a signal to a
- * process whose threads have all ended, are checked and not posted. A code
- * that only the kernel or tkill gives (`queued_reserved`) is -EPERM unless
- * pid is the calling thread's own, whether or not pid exists, as Linux's
- * do_rt_sigqueueinfo compares them first. -EINVAL for a signal out of range,
- * -ESRCH for no such process, and -EFAULT, -E2BIG or -EPERM from the
- * siginfo or the permission.
+ * process whose threads have all ended, are checked and not posted. The
+ * checks run in the order of Linux 6.12's rt_sigqueueinfo: the siginfo is
+ * copied first, read as one of the call's signal, valid or not (-EFAULT,
+ * -E2BIG); a code that only the kernel or tkill gives (`queued_reserved`)
+ * is then -EPERM unless pid is the calling thread's own, whether or not pid
+ * exists, as do_rt_sigqueueinfo compares them; then -ESRCH for no such
+ * process, and only then -EINVAL for a signal out of range and -EPERM from
+ * the permission, as group_send_sig_info's check_kill_permission tests them.
  */
 long sys_rt_sigqueueinfo(isr_params_t *params)
 {
@@ -5527,10 +5529,7 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
     struct k_siginfo info;
     int32_t rc;
 
-    if (signo < 0 || signo > KSIG_MAX) {
-        return -EINVAL;
-    }
-    rc = queued_info(SC_ARG(params, 2), signo, &info, NULL);
+    rc = siginfo_from_caller(SC_ARG(params, 2), signo, NULL, &info);
     if (rc != 0) {
         return rc;
     }
@@ -5540,6 +5539,9 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
     target = pid > 0 ? proc_named((uint32_t)pid) : NULL;
     if (!target || target->state == PROC_UNUSED) {
         return -ESRCH;
+    }
+    if (signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
     }
     if (!cred_may_signal(target, signo)) {
         return -EPERM;
@@ -5554,65 +5556,87 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
  * pidfd_send_signal takes a pidfd, a signal, a siginfo or 0, and flags,
  * which must be 0: the signal posted to the pidfd's process under kill's
  * permission, with the siginfo given, whose si_signo must be the signal,
- * or else kill's. A process outside the caller's PID namespace and those
- * below it is EINVAL. A siginfo's code that only the kernel or tkill gives
- * (`queued_reserved`) is -EPERM unless the pidfd's process is led by the
- * calling thread, reaped or not, as Linux compares task_pid(current) with
- * the pidfd's pid. Signal 0, and a signal to a process whose threads have
- * all ended, are checked and not posted. -EINVAL, -EBADF for a descriptor
- * that is not a pidfd, -ESRCH for a process reaped, -EFAULT, -E2BIG or
- * -EPERM.
+ * or else kill's. Signal 0, and a signal to a process whose threads have
+ * all ended, are checked and not posted. The checks run in the order of
+ * Linux 6.12's pidfd_send_signal: -EINVAL for a flag; -EBADF for a
+ * descriptor that is not a pidfd; -EINVAL for a process outside the
+ * caller's PID namespace and those below it, while it is not reaped; then
+ * the siginfo is copied (-EFAULT, -E2BIG), -EINVAL for a si_signo other
+ * than the signal, and -EPERM for a code that only the kernel or tkill
+ * gives (`queued_reserved`) unless the pidfd's process is led by the
+ * calling thread, as Linux compares task_pid(current) with the pidfd's pid;
+ * then -ESRCH for a process reaped, and only then -EINVAL for a signal out
+ * of range and -EPERM from the permission, as kill_pid_info_type's
+ * check_kill_permission tests them. The pidfd's process is held across the
+ * copy, which may sleep while the descriptor is closed, and found again
+ * after it, since it may have been reaped meanwhile.
  */
 long sys_pidfd_send_signal(isr_params_t *params)
 {
     int signo = (int)SC_ARG(params, 1);
     uintptr_t uinfo = SC_ARG(params, 2);
+    struct pidfd_ref ref;
     process_t *target;
     struct k_siginfo info;
     int32_t given;
     int32_t rc;
 
-    if (SC_ARG(params, 3) != 0 || signo < 0 || signo > KSIG_MAX) {
+    if (SC_ARG(params, 3) != 0) {
         return -EINVAL;
     }
-    if (uinfo) {
-        rc = queued_info(uinfo, signo, &info, &given);
-        if (rc != 0) {
-            return rc;
-        }
-        if (given != signo) {
-            return -EINVAL;
-        }
-    }
-    rc = pidfd_lookup((int)SC_ARG(params, 0), &target, NULL);
+    rc = pidfd_ref_get((int)SC_ARG(params, 0), &ref);
     if (rc != 0) {
         return rc;
     }
+    target = pidfd_ref_task(&ref);
     if (target && pid_seen(target->tgid) == 0) {
-        return -EINVAL;
+        rc = -EINVAL;
+        goto out;
     }
+    if (uinfo) {
+        rc = siginfo_from_caller(uinfo, signo, &given, &info);
+        if (rc != 0) {
+            goto out;
+        }
+        if (given != signo) {
+            rc = -EINVAL;
+            goto out;
+        }
+    }
+    target = pidfd_ref_task(&ref);
     if (uinfo && queued_reserved(&info) && target != current_proc) {
-        return -EPERM;
+        rc = -EPERM;
+    } else if (!target) {
+        rc = -ESRCH;
+    } else if (signo < 0 || signo > KSIG_MAX) {
+        rc = -EINVAL;
+    } else if (!cred_may_signal(target, signo)) {
+        rc = -EPERM;
+    } else {
+        if (!uinfo) {
+            sender_info(&info, SI_USER, target);
+        }
+        if (signo != 0 && target->tg->live != 0) {
+            signal_post_info(target, signo, &info);
+        }
     }
-    if (!target) {
-        return -ESRCH;
-    }
-    if (!cred_may_signal(target, signo)) {
-        return -EPERM;
-    }
-    if (!uinfo) {
-        sender_info(&info, SI_USER, target);
-    }
-    if (signo != 0 && target->tg->live != 0) {
-        signal_post_info(target, signo, &info);
-    }
-    return 0;
+out:
+    pidfd_ref_put(&ref);
+    return rc;
 }
 
-/** rt_tgsigqueueinfo takes tgid, tid, signal and the siginfo, posted to the
- * thread alone, as tgkill posts. A code that only the kernel or tkill gives
- * (`queued_reserved`) is -EPERM unless tid is the calling thread's, checked
- * before the thread is looked for, as Linux's do_rt_tgsigqueueinfo does. */
+/**
+ * rt_tgsigqueueinfo takes tgid, tid, signal and the siginfo, posted to the
+ * thread alone, as tgkill posts. The checks run in the order of Linux
+ * 6.12's rt_tgsigqueueinfo: the siginfo is copied first, read as one of the
+ * call's signal, valid or not (-EFAULT, -E2BIG); then -EINVAL for a tgid or
+ * tid not above zero; -EPERM for a code that only the kernel or tkill gives
+ * (`queued_reserved`) unless tid is the calling thread's, before the thread
+ * is looked for, as do_rt_tgsigqueueinfo has them; -ESRCH for no such
+ * thread of that process; and only then -EINVAL for a signal out of range
+ * and -EPERM from the permission, as do_send_specific's
+ * check_kill_permission tests them.
+ */
 long sys_rt_tgsigqueueinfo(isr_params_t *params)
 {
     int tgid = (int)SC_ARG(params, 0);
@@ -5622,12 +5646,12 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
     struct k_siginfo info;
     int32_t rc;
 
-    if (tgid <= 0 || tid <= 0 || signo < 0 || signo > KSIG_MAX) {
-        return -EINVAL;
-    }
-    rc = queued_info(SC_ARG(params, 3), signo, &info, NULL);
+    rc = siginfo_from_caller(SC_ARG(params, 3), signo, NULL, &info);
     if (rc != 0) {
         return rc;
+    }
+    if (tgid <= 0 || tid <= 0) {
+        return -EINVAL;
     }
     if (queued_reserved(&info) && !named_self(tid)) {
         return -EPERM;
@@ -5636,6 +5660,9 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
     if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
         t->tgid != pid_named((uint32_t)tgid)) {
         return -ESRCH;
+    }
+    if (signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
     }
     if (!cred_may_signal(t, signo)) {
         return -EPERM;

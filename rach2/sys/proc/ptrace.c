@@ -714,8 +714,10 @@ static int32_t tracee_memory(process_t *t, uintptr_t addr, void *word, uint32_t 
  * for a thread gone from its stop during the copy in. PTRACE_SETSIGINFO
  * copies and reads its siginfo before it looks for one to replace, so that
  * a bad pointer is -EFAULT, and a code of a layout Linux does not know with
- * bytes past the kept union -E2BIG (`sigframe_take_siginfo`), at any stop,
- * as Linux's copy_siginfo_from_user runs before ptrace_setsiginfo. */
+ * bytes past the kept union -E2BIG (`siginfo_from_caller`), at any stop,
+ * as Linux's copy_siginfo_from_user runs before ptrace_setsiginfo; a
+ * native siginfo of a known layout is read only as far as the kept union,
+ * so its extension may lie on a page the tracer cannot read. */
 static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[SIGINFO_SIZE];
@@ -730,11 +732,7 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
         siginfo_to_caller(buf, t->ptrace_info_signo, &t->ptrace_info);
         return copy_to_user((void __user *)data, buf, sizeof(buf)) == 0 ? 0 : -EFAULT;
     }
-    if (copy_from_user(buf, (const void __user *)data, sizeof(buf)) != 0) {
-        return -EFAULT;
-    }
-    k_memcpy(&signo, buf, sizeof(signo));
-    rc = siginfo_from_caller(buf, signo, &info);
+    rc = siginfo_from_caller(data, 0, &signo, &info);
     if (rc != 0) {
         return rc;
     }

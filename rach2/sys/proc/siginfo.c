@@ -170,7 +170,7 @@ int siginfo_layout(int signo, int32_t code)
  * siginfo a program gives with any other code must have nothing past the
  * union the kernel keeps, since that union is all a later read gives back.
  */
-static int siginfo_known(int signo, int32_t code)
+int siginfo_known(int signo, int32_t code)
 {
     int32_t last;
 
@@ -354,7 +354,7 @@ int32_t sigframe_take_siginfo(const uint8_t *in, int signo, struct k_siginfo *in
     unsigned int i;
 
     if (!siginfo_known(signo, code)) {
-        for (i = UNION_AT + SIGINFO_UNION_SIZE; i < SIGINFO_SIZE; i++) {
+        for (i = SIGINFO_KEPT; i < SIGINFO_SIZE; i++) {
             if (in[i] != 0) {
                 return -E2BIG;
             }

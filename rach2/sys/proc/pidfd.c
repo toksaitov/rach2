@@ -32,14 +32,21 @@ struct pidfd {
     uint32_t pid;
 };
 
-/** The leader of `pf`'s process, or NULL once the process has been reaped:
- * the record of its id must be a thread of its group, since the id may have
- * been given to another process since. */
+/** The leader of the process of the thread group `tg` whose leader's id is
+ * `pid`, or NULL once the process has been reaped: the record of its id
+ * must be a thread of its group, since the id may have been given to
+ * another process since. */
+static process_t *group_task(const struct tgroup *tg, uint32_t pid)
+{
+    process_t *p = get_process(pid);
+
+    return p && p->tg == tg && p->state != PROC_UNUSED ? p : NULL;
+}
+
+/** The leader of `pf`'s process, or NULL once the process has been reaped. */
 static process_t *pidfd_task(const struct pidfd *pf)
 {
-    process_t *p = get_process(pf->pid);
-
-    return p && p->tg == pf->tg && p->state != PROC_UNUSED ? p : NULL;
+    return group_task(pf->tg, pf->pid);
 }
 
 /** A read or a write of a pidfd, which has no data: EINVAL, as on Linux. */
@@ -136,6 +143,32 @@ int32_t pidfd_lookup(int fd, process_t **out, int *nonblock)
         *nonblock = e->ofd && (e->ofd->status_flags & OFD_NONBLOCK) != 0;
     }
     return 0;
+}
+
+int32_t pidfd_ref_get(int fd, struct pidfd_ref *ref)
+{
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    const struct pidfd *pf;
+
+    if (!e || e->ops != &pidfd_ops) {
+        return -EBADF;
+    }
+    pf = (const struct pidfd *)e->priv;
+    ref->tg = pf->tg;
+    ref->tg->refs++;
+    ref->pid = pf->pid;
+    return 0;
+}
+
+process_t *pidfd_ref_task(const struct pidfd_ref *ref)
+{
+    return group_task(ref->tg, ref->pid);
+}
+
+void pidfd_ref_put(struct pidfd_ref *ref)
+{
+    tgroup_put(ref->tg);
+    ref->tg = NULL;
 }
 
 long sys_pidfd_open(struct isr_params *params)
