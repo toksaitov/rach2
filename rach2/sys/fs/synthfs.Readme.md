@@ -141,6 +141,7 @@ A file of `/proc/sys` is read and written as Linux 6.12's handler of it reads an
 | `kernel/hung_task_check_count` | `proc_dointvec_minmax` | 0 to INT_MAX |
 | `kernel/hung_task_timeout_secs`, `hung_task_check_interval_secs` | `proc_dohung_task_timeout_secs`, of `proc_doulongvec_minmax` | 0 to LONG_MAX / HZ (Limits) |
 | `kernel/hung_task_warnings` | `proc_dointvec_minmax` | -1 to INT_MAX |
+| `kernel/pid_max` | `proc_dointvec_minmax` | 301 to 2000000000, `PID_MAX_MIN` to `PID_MAX_LIMIT` of proc/process.h |
 | `kernel/ns_last_pid` | `pid_ns_ctl_handler`, of `proc_dointvec_minmax` | 0 to pid_max, `EPERM` without privilege over the namespace |
 | `user/max_mnt_namespaces` | `proc_doulongvec_minmax` | 0 to INT_MAX |
 | `vm/max_map_count`, `dirty_expire_centisecs`, `dirtytime_expire_seconds` | `proc_dointvec_minmax` | 0 to INT_MAX |
@@ -156,7 +157,7 @@ A file of `/proc/sys` is read and written as Linux 6.12's handler of it reads an
 | `net/ipv6/conf/*/accept_ra`, `autoconf`, `use_tempaddr` | `proc_dointvec` | any int |
 | `net/ipv6/conf/*/forwarding`, `disable_ipv6` | `addrconf_sysctl_forward`, `addrconf_sysctl_disable`, of `proc_dointvec` | any int |
 | `net/ipv6/conf/*/ra_defrtr_metric` | `proc_douintvec_minmax` | 1 to UINT_MAX |
-| `kernel/pid_max`, `msgmax`, `msgmnb`, `msgmni`, `sem`, `shmall`, `shmmax`, `shmmni`, `cap_last_cap`, `fs/mqueue/*`, `vm/overcommit_memory`, `swappiness`, `crypto/fips_enabled` | numeric handlers, read only | |
+| `kernel/msgmax`, `msgmnb`, `msgmni`, `sem`, `shmall`, `shmmax`, `shmmni`, `cap_last_cap`, `fs/mqueue/*`, `vm/overcommit_memory`, `swappiness`, `crypto/fips_enabled` | numeric handlers, read only | |
 
 HZ is the kernel's tick rate, 250.
 
