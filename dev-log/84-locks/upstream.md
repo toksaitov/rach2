@@ -281,11 +281,11 @@ Faults this milestone found in another project's code, one section each, in the 
 ## BusyBox sysctl -p stops a file at a value the kernel refuses
 
 * Project: BusyBox 1.36.1, `busybox-1.36.1.tar.bz2`, SHA-256 `b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314`.
-* Fails: `sysctl -p FILE` exits at the first line whose value the kernel refuses, and applies none of the file's later lines. `sysctl_act_on_setting` in `procps/sysctl.c` (line 194) writes the value with `xwrite_str`, which calls `bb_perror_msg_and_die` when `write` fails; `sysctl_handle_preload_file` (lines 274-309) calls it for each line in turn. procps's `sysctl` reports the line and goes on with the rest. An unknown key does not stop the file, since a failed `open` returns from the function.
+* Fails: `sysctl -p FILE` exits at the first line whose value the kernel refuses, and applies none of the file's later lines. `sysctl_act_on_setting` in `procps/sysctl.c` (line 194) writes the value with `xwrite_str`, which calls `bb_perror_msg_and_die` when `write` fails; `sysctl_handle_preload_file` (lines 274-309) calls it for each line in turn and ignores what it returns and returns 0, and `sysctl_main`'s `-p` path returns 0 for every file. procps 4.0.4's `sysctl` reports the line, goes on with every later line and every later file and exits with failure when any setting was refused. An unknown key does not stop the file, since a failed `open` returns from the function.
 * Found: 2026-11-14, by Codex's review of milestone 84's mapping-limit work, reading init's application of `/etc/sysctl.d` and its peers (task 84-263q).
 * Reproduction: on Linux, write `vm.max_map_count = bad` and then `vm.swappiness = 10` to a file and run BusyBox 1.36.1's `sysctl -p` on it as root: the first write fails with EINVAL, the applet exits, and `vm.swappiness` is left as it was. Not yet run on Linux.
 * Evidence: `vendor/busybox/patches/0010-sysctl-go-on-after-a-refused-value.patch`.
-* Rach2: the patch checks the write with `full_write`, reports `error setting key 'NAME'` and fails that setting alone.
+* Rach2: the patch checks the write with `full_write`, reports `error setting key 'NAME'` and fails that setting alone; `sysctl_handle_preload_file` returns failure when any setting in its file failed and `sysctl_main` returns `EXIT_FAILURE` when any `-p` file did, so the exit status now matches procps 4.0.4.
 * Status: unreported.
 * Next: read `procps/sysctl.c` in BusyBox's master to see whether the write is still `xwrite_str`, then send the patch to the BusyBox list.
 

@@ -3,9 +3,12 @@ sysctl: go on after a value the kernel refuses
 sysctl_act_on_setting writes a value with xwrite_str, which exits the
 applet when write fails, so a value the kernel refuses in a file given to
 -p, such as vm.max_map_count = bad, keeps every later line of that file
-from being applied. procps reports the line and goes on with the rest. The
-write is now checked: a refused value is reported as an open failure is,
-and fails that setting alone.
+from being applied. The write is now checked with full_write: a refused
+value is reported as an open failure is and fails that setting alone, and
+-p goes on with every later line and every later file.
+sysctl_handle_preload_file returns failure when any setting in its file
+failed and sysctl_main returns EXIT_FAILURE when any -p file did, as
+procps 4.0.4 does.
 
 --- a/procps/sysctl.c
 +++ b/procps/sysctl.c
@@ -25,3 +28,39 @@ and fails that setting alone.
  		close(fd);
  		if (!(option_mask32 & FLAG_QUIET)) {
  			if (option_mask32 & FLAG_SHOW_KEYS)
+@@ -274,6 +281,7 @@
+ static int sysctl_handle_preload_file(const char *filename)
+ {
+ 	char *token[2];
+ 	parser_t *parser;
+ 	int parse_flags;
++	int retval = 0;
+ 
+@@ -302,8 +310,8 @@
+ 		overlapping_strcpy(tp, token[1]);
+ 
+-		sysctl_act_on_setting(token[0]);
++		retval |= sysctl_act_on_setting(token[0]);
+ 	}
+ 	if (ENABLE_FEATURE_CLEAN_UP)
+ 		config_close(parser);
+-	return 0;
++	return retval;
+ }
+@@ -322,13 +330,14 @@
+ 	if (opt & FLAG_PRELOAD_FILE) {
+ 		int cur_dir_fd;
++		retval = 0;
+ 		option_mask32 |= FLAG_WRITE;
+ 		if (!*argv)
+ 			*--argv = (char*)"/etc/sysctl.conf";
+ 		cur_dir_fd = xopen(".", O_RDONLY | O_DIRECTORY);
+ 		do {
+ 			/* xchdir("/proc/sys") is inside */
+-			sysctl_handle_preload_file(*argv);
++			retval |= sysctl_handle_preload_file(*argv);
+ 			xfchdir(cur_dir_fd); /* files can be relative, must restore cwd */
+ 		} while (*++argv);
+-		return 0; /* procps-ng 3.3.10 does not flag parse errors */
++		return retval;
+ 	}
