@@ -7474,7 +7474,7 @@
     },
     {
       "case_id": "guest.default.smptlbmusl",
-      "behavior": "With a second thread running on another processor, pages faulted in cost no TLB shootdown and an unmap or an mprotect costs one, as Linux 6.12 gives; and while one processor holds the big lock in fork copies, futex and timerfd timeouts on another end by their deadlines, with timer passes made off the boot processor.",
+      "behavior": "With a second thread running on another processor, pages faulted in cost no TLB shootdown and an unmap or an mprotect costs one, as Linux 6.12 gives; while one processor holds the big lock in fork copies, futex and timerfd timeouts on another end by their deadlines, with timer passes made off the boot processor; and a clock of processor time read on one processor while another carries its thread's 64-bit count reads it whole.",
       "units": [
         "default",
         "musl/smptlbmusl"
@@ -7546,6 +7546,11 @@
         {
           "assertion_id": "timeouts",
           "checks": "200 futex waits and 200 timerfd reads of 2 ms on processor 2 each end by the timeout while processor 1 forks a process of 64 MiB of pages over and over",
+          "source": "program"
+        },
+        {
+          "assertion_id": "untorn",
+          "checks": "a thread's clock of processor time and its process's, read over and over on processor 0 while the thread spins on processor 1 and its count, set by debugfs's cputime_test 25 ticks short of 2^32, carries past it with its two halves written 2 ms apart, never step back nor jump a second, and the carry happens",
           "source": "program"
         }
       ],

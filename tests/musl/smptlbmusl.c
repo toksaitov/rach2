@@ -23,6 +23,14 @@
  * the most a wait overran its deadline, which are the machine's and not
  * judged.
  *
+ * With two processors or more, a child's thread spins on processor 1 while
+ * debugfs's cputime_test has set its user time 25 ticks short of 2^32 ticks
+ * and has its ticks write the count's two halves 2 ms apart at the carry,
+ * and the child's main thread on processor 0 reads the thread's clock and
+ * the process's over and over until the count is past 2^32: each reading is
+ * no less than the one before and no more than a second past it, as a count
+ * read whole gives, and the carry happened.
+ *
  * Prints "SMPTLBMUSL OK" and exits 0, or "SMPTLBMUSL FAIL: " and the reason
  * and exits 1.
  */
@@ -246,6 +254,145 @@ static int tlb_rows(int smp)
     return failed ? -1 : 0;
 }
 
+/* The id of the thread whose count `untorn` carries, once it runs, and
+ * the word that tells it to stop. */
+static volatile pid_t carry_tid;
+static volatile int carry_stop;
+
+/** Spin in user mode on processor 1, with this thread's id in `carry_tid`,
+ * until told to stop. */
+static void *carrier(void *arg)
+{
+    (void)arg;
+    if (pin(1) != 0) {
+        return &thread_failed;
+    }
+    carry_tid = (pid_t)syscall(SYS_gettid);
+    while (!carry_stop) {
+        __asm__ __volatile__("" ::: "memory");
+    }
+    return NULL;
+}
+
+/** The clock `clock` in nanoseconds, or -1. */
+static long long clock_ns(clockid_t clock)
+{
+    struct timespec ts;
+
+    if (clock_gettime(clock, &ts) != 0) {
+        return -1;
+    }
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+/** Whether the reading `now` of a clock of processor time follows `before`
+ * as a count read whole does: no less, and no more than a second past. */
+static int follows(long long before, long long now)
+{
+    return now >= before && now - before < 1000000000LL;
+}
+
+/** Read the carries of debugfs's cputime_test, the third of its numbers,
+ * or -1. */
+static long carries(void)
+{
+    char line[96];
+    long v[3];
+    int fd = open("/sys/kernel/debug/cputime_test", O_RDONLY);
+    ssize_t n = fd < 0 ? -1 : read(fd, line, sizeof line - 1);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n <= 0) {
+        return -1;
+    }
+    line[n] = 0;
+    return sscanf(line, "%ld %ld %ld", &v[0], &v[1], &v[2]) == 3 ? v[2] : -1;
+}
+
+/**
+ * The child of `untorn`: carry the count of a thread spinning on processor
+ * 1 past 2^32 ticks and read its clock and the process's on processor 0
+ * meanwhile. Exits 0 when every reading followed the one before and the
+ * carry happened, 2 for a reading that did not, 3 when the count was not
+ * seen past 2^32 within a minute of monotonic time, and 4 when the thread
+ * or cputime_test failed.
+ */
+static void untorn_child(void)
+{
+    struct timespec res, start, at;
+    long long tick, end, thread_before = 0, process_before = 0, thread_now, process_now;
+    clockid_t clock;
+    pthread_t carry;
+    char line[32];
+    int fd, len, torn = 0;
+
+    if (clock_getres(CLOCK_PROCESS_CPUTIME_ID, &res) != 0 || pin(0) != 0 ||
+        pthread_create(&carry, NULL, carrier, NULL) != 0 ||
+        pthread_getcpuclockid(carry, &clock) != 0) {
+        _exit(4);
+    }
+    tick = res.tv_nsec;
+    end = (((long long)1 << 32) + 10) * tick;
+    while (carry_tid == 0) {
+        sched_yield();
+    }
+    len = snprintf(line, sizeof line, "spl %d\n", (int)carry_tid);
+    fd = open("/sys/kernel/debug/cputime_test", O_WRONLY);
+    if (fd < 0 || write(fd, line, (size_t)len) != len) {
+        _exit(4);
+    }
+    close(fd);
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    do {
+        thread_now = clock_ns(clock);
+        process_now = clock_ns(CLOCK_PROCESS_CPUTIME_ID);
+        if ((thread_before != 0 && !follows(thread_before, thread_now)) ||
+            (process_before != 0 && !follows(process_before, process_now))) {
+            printf("smptlbmusl: untorn: thread %lld after %lld, process %lld after %lld\n",
+                   thread_now, thread_before, process_now, process_before);
+            torn = 1;
+            break;
+        }
+        thread_before = thread_now;
+        process_before = process_now;
+        clock_gettime(CLOCK_MONOTONIC, &at);
+    } while (thread_now < end && ns_between(&start, &at) < 60000000000LL);
+    carry_stop = 1;
+    pthread_join(carry, NULL);
+    if (torn) {
+        _exit(2);
+    }
+    _exit(thread_now >= end && carries() >= 1 ? 0 : 3);
+}
+
+/** Run `untorn_child` in a child, whose clocks it moves past 2^32 ticks,
+ * and report the row `untorn`; 0 when it held. */
+static int untorn(void)
+{
+    pid_t child;
+    int status;
+
+    fflush(stdout);
+    child = fork();
+    if (child == 0) {
+        untorn_child();
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
+        report_fail("untorn", "the child did not run to its end");
+        return -1;
+    }
+    if (WEXITSTATUS(status) != 0) {
+        report_fail("untorn", WEXITSTATUS(status) == 2   ? "a CPU clock read a torn count"
+                              : WEXITSTATUS(status) == 3 ? "the count did not carry past 2^32"
+                                                         : "the thread or cputime_test failed");
+        return -1;
+    }
+    report_pass("untorn");
+    return 0;
+}
+
 /** Run the rows; 0 when each held. */
 int main(void)
 {
@@ -303,6 +450,11 @@ int main(void)
                 report_pass("timeouts");
             }
         }
+    }
+    if (!smp) {
+        report_notrun("untorn", "one processor");
+    } else {
+        failed |= untorn();
     }
     report_end();
     puts(failed ? "SMPTLBMUSL FAIL: a row failed" : "SMPTLBMUSL OK");
