@@ -689,6 +689,8 @@ static int tty_take(struct tty *t, unsigned char *kbuf, int count)
     return n;
 }
 
+static void tty_echo_serve(struct tty *t, uint32_t vhangups);
+
 /**
  * After a wake the readiness test and the copy run in one interrupts-off
  * step, so an input IRQ cannot change the queue mid-read. A vhangup since
@@ -700,7 +702,10 @@ static int tty_take(struct tty *t, unsigned char *kbuf, int count)
  * would then return 0, which means end of file; such a reader waits again.
  * A wait that ended for its timer to restart is armed and waits again too.
  * Every read that returns input or end of file, blocking or not, ends the
- * console latency span (`tty_take`).
+ * console latency span (`tty_take`), and on a terminal that defers its echo
+ * first writes the echo held (`tty_echo_serve`), as Linux's n_tty_read
+ * flushes echoes before it returns, so that a reader that exits at once
+ * leaves no echo for its hangup to discard.
  *
  * While the USB latency record is on, a reader about to park logs `latency:
  * reader waiting`, and a console reader arms the record, under the same
@@ -738,6 +743,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock, uint32
         if (tty_wait_ready(&w)) {
             n = tty_take(t, kbuf, count);
             kirq_restore(flags);
+            tty_echo_serve(t, w.vhangups);
             usb_stamp_read();
             return n;
         }
@@ -771,6 +777,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock, uint32
         if (!hungup && tty_wait_ready(&w)) {
             n = tty_take(t, kbuf, count);
             kirq_restore(flags);
+            tty_echo_serve(t, w.vhangups);
             usb_stamp_read();
             return n;
         }
@@ -872,6 +879,29 @@ static void tty_echo_step(struct tty *t)
         console_write_end();
     }
     sched_service_point();
+}
+
+/**
+ * Write the echo held for `t`'s `echo_kick` a batch at a time with a
+ * service point after each (`tty_echo_step`), while output runs and no
+ * vhangup has come since `vhangups`, the count the read belongs to: the
+ * echo behind a hangup is the next session's. Process context, interrupts
+ * on, outside a wait's predicate, as a writer gives the echo first.
+ */
+static void tty_echo_serve(struct tty *t, uint32_t vhangups)
+{
+    uint32_t flags;
+    int due;
+
+    for (;;) {
+        flags = kirq_save();
+        due = t->vhangups == vhangups && tty_echo_due(t);
+        kirq_restore(flags);
+        if (!due) {
+            return;
+        }
+        tty_echo_step(t);
+    }
 }
 
 int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, int nonblock,

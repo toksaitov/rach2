@@ -323,8 +323,11 @@ int tty_wait_output(struct tty *t, int nonblock, const uint32_t *opened);
  * for a description no hangup reaches. Once `t`'s count differs, the read
  * drains and takes nothing and returns 0, even with a later session's input
  * queued, as Linux's hung-up file reads end of file and its hangup aborts
- * every reader. Thread context, with a current process; it takes interrupts
- * off itself.
+ * every reader. A read that takes input or end of file from a terminal that
+ * defers its echo (`echo_kick`) first writes the echo held, a batch at a
+ * time with a service point after each, until none is held, output stops or
+ * a vhangup comes, as Linux's n_tty_read flushes echoes. Thread context,
+ * with a current process and interrupts on; it takes interrupts off itself.
  */
 int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock, uint32_t opened);
 

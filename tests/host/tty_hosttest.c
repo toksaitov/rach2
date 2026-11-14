@@ -2325,11 +2325,14 @@ static void echo_setup(void)
 #define WAIT_SELECT 2 /* a select poller's record, for reading and writing */
 #define WAIT_READ   3 /* a blocking read */
 
-/** A line from COM1 at the tick, the blocked reader's producer: the ring
- * is empty and nothing echoed before the reader runs. */
+/* The line `echo_tick_action` types on COM1. */
+static const char *echo_line;
+
+/** A line from COM1 at the tick, `echo_line`, the blocked reader's
+ * producer: the ring is empty and nothing echoed before the reader runs. */
 static void echo_tick_action(void)
 {
-    serial_bytes = "ab\n";
+    serial_bytes = echo_line;
     serial_pos = 0;
     serial_len = 3;
     tty_console_poll();
@@ -2338,18 +2341,67 @@ static void echo_tick_action(void)
 }
 
 /**
+ * Type the three bytes of `line` on COM1 while the console's reader waits as
+ * `how` says, the tick receiving them with their echo held, and read them
+ * into `out`, of `size` bytes; return the read's result.
+ */
+static int echo_read_line(int how, const char *line, unsigned char *out, int size)
+{
+    static const char *const names[] = {"an epoll registration", "a poll(2) poller",
+                                        "a select poller", "a blocking reader"};
+    static char detail[160];
+    struct wq_waiter epoll_rec;
+    wait_queue_t *wq = NULL;
+    short events = how == WAIT_SELECT ? (short)(POLLIN | POLLOUT) : (short)POLLIN;
+    int n;
+
+    clear(&epoll_rec, sizeof(epoll_rec));
+    epoll_rec.func = hup_rec_wake;
+    if (how == WAIT_READ) {
+        echo_line = line;
+        scheduled_action = echo_tick_action;
+        wake_detail = "COM1's line wakes the blocked console reader";
+        return tty_read(&console_tty, out, size, 0, console_tty.vhangups);
+    }
+    if (how == WAIT_EPOLL) {
+        wq_entry_add(&console_tty.input_wq, &epoll_rec);
+    } else {
+        CHECK(tty_poll(&console_tty, events, &wq) == (events & POLLOUT),
+              "the console has no input to report before the line");
+        poller.waiter.func = hup_rec_wake;
+        poller.state = PROC_BLOCKED;
+        wq_poll_add(&console_tty.input_wq, &poller.waiter);
+    }
+    hup_wakes = 0;
+    hup_serial(line);
+    snprintf(detail, sizeof(detail),
+             "the tick drains COM1 and writes no echo while %s waits, and wakes it", names[how]);
+    CHECK(serial_pos == serial_len && console_bytes == 0 && hup_wakes > 0, detail);
+    CHECK((tty_poll(&console_tty, events, &wq) & POLLIN) != 0, "the rescan finds the line");
+    n = tty_read(&console_tty, out, size, 1, console_tty.vhangups);
+    if (how == WAIT_EPOLL) {
+        wq_entry_remove(&epoll_rec);
+    } else {
+        wq_poll_remove(&console_tty.input_wq, &poller.waiter);
+    }
+    return n;
+}
+
+/**
  * A line typed on COM1 while the console's reader waits as `how` says is
  * received at the tick, with its echo held, so that the ring is empty when
- * the reader scans or runs; the reader reads the line, and the line's echo
- * reaches the screen exactly once, however often the reader scans and reads
- * and the echo thread runs after it.
+ * the reader scans or runs; the reader reads the line, the line's echo is
+ * written before the read returns, as Linux's n_tty_read flushes echoes,
+ * and it reaches the screen exactly once, however often the reader scans
+ * and reads and the echo thread runs after it. A session leader that reads
+ * a line and ends at once, before the echo thread runs, leaves the line's
+ * echo written, not discarded by its hangup.
  */
 static void echo_once(int how)
 {
     static const char *const names[] = {"an epoll registration", "a poll(2) poller",
                                         "a select poller", "a blocking reader"};
     static char detail[160];
-    struct wq_waiter epoll_rec;
     process_t *saved = proc_list;
     wait_queue_t *wq = NULL;
     short events = how == WAIT_SELECT ? (short)(POLLIN | POLLOUT) : (short)POLLIN;
@@ -2357,32 +2409,12 @@ static void echo_once(int how)
     int n;
 
     echo_setup();
-    clear(&epoll_rec, sizeof(epoll_rec));
-    epoll_rec.func = hup_rec_wake;
-    if (how == WAIT_READ) {
-        scheduled_action = echo_tick_action;
-        wake_detail = "COM1's line wakes the blocked console reader";
-        n = tty_read(&console_tty, out, sizeof(out), 0, console_tty.vhangups);
-    } else {
-        if (how == WAIT_EPOLL) {
-            wq_entry_add(&console_tty.input_wq, &epoll_rec);
-        } else {
-            CHECK(tty_poll(&console_tty, events, &wq) == (events & POLLOUT),
-                  "the console has no input to report before the line");
-            poller.waiter.func = hup_rec_wake;
-            poller.state = PROC_BLOCKED;
-            wq_poll_add(&console_tty.input_wq, &poller.waiter);
-        }
-        hup_serial("ab\n");
-        snprintf(detail, sizeof(detail),
-                 "the tick drains COM1 and writes no echo while %s waits, and wakes it",
-                 names[how]);
-        CHECK(serial_pos == serial_len && console_bytes == 0 && hup_wakes > 0, detail);
-        CHECK((tty_poll(&console_tty, events, &wq) & POLLIN) != 0, "the rescan finds the line");
-        n = tty_read(&console_tty, out, sizeof(out), 1, console_tty.vhangups);
-    }
+    n = echo_read_line(how, "ab\n", out, sizeof(out));
     snprintf(detail, sizeof(detail), "%s reads COM1's line", names[how]);
     CHECK(n == 3 && out[0] == 'a' && out[1] == 'b' && out[2] == '\n', detail);
+    snprintf(detail, sizeof(detail), "%s writes its line's echo before its read returns",
+             names[how]);
+    CHECK(console_said("ab\r\n"), detail);
     console_echo_work();
     (void)tty_poll(&console_tty, events, &wq);
     CHECK(tty_read(&console_tty, out, sizeof(out), 1, console_tty.vhangups) == -EAGAIN,
@@ -2391,11 +2423,17 @@ static void echo_once(int how)
     console_echo_work();
     snprintf(detail, sizeof(detail), "the line read by %s is echoed exactly once", names[how]);
     CHECK(console_said("ab\r\n"), detail);
-    if (how == WAIT_EPOLL) {
-        wq_entry_remove(&epoll_rec);
-    } else if (how != WAIT_READ) {
-        wq_poll_remove(&console_tty.input_wq, &poller.waiter);
-    }
+
+    console_bytes = 0;
+    n = echo_read_line(how, "cd\n", out, sizeof(out));
+    signals_expected = 1;
+    tty_vhangup_session(&console_tty);
+    signals_expected = 0;
+    console_echo_work();
+    snprintf(detail, sizeof(detail),
+             "a leader that reads a line by %s and ends at once leaves its echo written",
+             names[how]);
+    CHECK(n == 3 && out[0] == 'c' && console_said("cd\r\n"), detail);
     tty_set_session(&console_tty, 0, 0, 0);
     proc_list = saved;
 }
