@@ -8819,9 +8819,8 @@ static int32_t sysctl_dointvec(const char *s, uint32_t len, int32_t *v)
  * (`sysctl_dointvec`) from its first SYSCTL_WRITE_MAX bytes. Returns what
  * the write returns, as Linux counts it: the bytes up to the end of the
  * spaces after the number, and every byte past those read, with the value
- * in `*v`; 0 for
- * a write at an offset past 0, which Linux takes whole and ignores, as
- * `sysctl_writes_strict` is 1; -EINVAL, -EFAULT or -ENOMEM.
+ * in `*v`; 0 for a write at an offset past 0, which Linux takes whole and
+ * ignores, as `sysctl_writes_strict` is 1; -EINVAL, -EFAULT or -ENOMEM.
  */
 static int32_t sysctl_int_text(fd_entry_t *e, const char __user *buf, uint32_t count, int32_t *v)
 {
