@@ -1211,6 +1211,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "printk",
+          "checks": "tests/host/printk_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "process_timer",
           "checks": "tests/host/process_timer_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

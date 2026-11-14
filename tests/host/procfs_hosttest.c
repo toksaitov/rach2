@@ -6,8 +6,9 @@
  * process's arguments while the process is reaped, oom_score_adj, the
  * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
  * and uevents of a DRM device and of a driver's own attributes, links, PCI
- * identity and resources, a PCI function's resourceN files, and those of a
- * PS/2 keyboard and a USB mouse (evdev_sysfs.c).
+ * identity and resources, a writable attribute's offset and the mode its
+ * open is judged by, a PCI function's resourceN files, and those of a PS/2
+ * keyboard and a USB mouse (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
@@ -2599,10 +2600,13 @@ static void system_rows(void)
 static int32_t thp_write(int attr, const char *text, uint32_t count)
 {
     struct procfs_file file;
+    struct open_file ofd;
     fd_entry_t entry;
 
     k_memset(&file, 0, sizeof(file));
     k_memset(&entry, 0, sizeof(entry));
+    k_memset(&ofd, 0, sizeof(ofd));
+    entry.ofd = &ofd;
     file.origin_file = SYNTH_SYS_UEVENT;
     file.origin_task = SYSFS_THP << 8 | attr;
     entry.priv = &file;
@@ -2655,10 +2659,13 @@ static void thp_long_writes(void)
 static int32_t sysattr_write(int node, int attr, const char *text, uint32_t count)
 {
     struct procfs_file file;
+    struct open_file ofd;
     fd_entry_t entry;
 
     k_memset(&file, 0, sizeof(file));
     k_memset(&entry, 0, sizeof(entry));
+    k_memset(&ofd, 0, sizeof(ofd));
+    entry.ofd = &ofd;
     file.origin_task = node << 8 | attr;
     entry.priv = &file;
     return procfs_sysattr_write(&entry, (const char __user *)text, count);
@@ -3603,6 +3610,111 @@ static void sysfs_reg_rows(void)
     check(!sysfs_device_exists(SYSFS_PCI_DEVICE, 0xA0), "a withdrawn function is gone");
 }
 
+/* The value of the attribute of `sysattr_file_rows`, 'Y' or 'N'. */
+static char flag_value = 'Y';
+
+/** The attribute's text, its value and a newline, as a module parameter's
+ * file reads. */
+static int32_t show_flag(void *obj, int arg, char *buf, uint32_t cap)
+{
+    (void)obj;
+    (void)arg;
+    if (cap >= 2u) {
+        buf[0] = flag_value;
+        buf[1] = '\n';
+    }
+    return 2;
+}
+
+/** Take the first byte of a write as the value, and the whole count. */
+static int32_t store_flag(void *obj, int arg, const char *buf, uint32_t len)
+{
+    (void)obj;
+    (void)arg;
+    flag_value = buf[0];
+    return (int32_t)len;
+}
+
+/** Open the registered attribute `h` with `flags` as descriptor 0, its
+ * description's offset at 0, as `bar_file_open` opens a BAR's file. */
+static int reg_file_open(int h, int flags)
+{
+    fd_entry_t *e = &entries[0];
+
+    process.fds = &table;
+    table.chunks[0] = entries;
+    table.cap = 1;
+    k_memset(e, 0, sizeof(*e));
+    k_memset(&mem_ofd, 0, sizeof(mem_ofd));
+    e->ofd = &mem_ofd;
+    return procfs_open_sysattr(SYSFS_REG, h, 0, flags);
+}
+
+/**
+ * A writable attribute of mode 0644, as /sys/module/printk/parameters has
+ * them, through its descriptor, as Linux's kernfs gives it: a write moves
+ * the offset past the count taken, so that a read through an O_RDWR
+ * descriptor after `N\n` starts at 2 and finds the end, and a write past a
+ * page moves it a page; and the open is judged by the mode and the
+ * file-system user id, so that root after setfsuid(1000) is refused and
+ * uid 0 without CAP_SYS_ADMIN, or a user whose file-system id is root's,
+ * writes it as its owner.
+ */
+static void sysattr_file_rows(void)
+{
+    static const struct sysfs_attr attr = {"flag", 0644u, show_flag, store_flag};
+    static char text[PAGE_SIZE + 3];
+    fd_entry_t *e = &entries[0];
+    char out[4];
+    int dir = sysfs_add_dir(sysfs_anchor(SYSFS_KERNEL, 0), "flag_rows");
+    int h = sysfs_add_attr(dir, &attr, NULL, 0);
+
+    check(dir > 0 && h > 0 && reg_file_open(h, 2) == 0,
+          "root opens a 0644 attribute to read and write");
+    check(procfs_sysattr_write(e, (const char __user *)"N\n", 2) == 2 && flag_value == 'N' &&
+              mem_ofd.offset == 2,
+          "a write of N and a newline moves the offset to 2, as kernfs_fop_write_iter");
+    check(procfs_sysattr_read(e, (char __user *)out, sizeof(out)) == 0 && mem_ofd.offset == 2,
+          "and a read through the same descriptor starts there, at the end");
+    mem_ofd.offset = 0;
+    check(procfs_sysattr_read(e, (char __user *)out, sizeof(out)) == 2 && out[0] == 'N',
+          "while one from offset 0 reads the value written");
+    k_memset(text, 'Y', sizeof(text));
+    check(procfs_sysattr_write(e, (const char __user *)text, sizeof(text)) == (int32_t)PAGE_SIZE &&
+              mem_ofd.offset == 2u + PAGE_SIZE,
+          "a write past a page is taken in part and moves the offset by the page taken");
+    procfs_close(e);
+
+    process.euid = 0;
+    process.fsuid = 1000;
+    process.fs_own = PROC_FSUID_OWN | PROC_FSCAPS_OFF;
+    check(reg_file_open(h, 1) == -EACCES,
+          "effective root is refused once setfsuid(1000) takes its file-system id");
+    process.fsuid = 0;
+    process.fs_own = 0;
+    process.cap_lost[0] = 1u << CAP_SYS_ADMIN;
+    process.nocaps = 1;
+    check(reg_file_open(h, 2) == 0, "uid 0 without CAP_SYS_ADMIN opens it as its owner, by mode");
+    procfs_close(e);
+    process.cap_lost[0] = 0xFFFFFFFFu;
+    process.cap_lost[1] = CAP_HIGH_WORD;
+    check(reg_file_open(h, 1) == 0, "and so it does with every capability dropped");
+    procfs_close(e);
+    process.cap_lost[0] = process.cap_lost[1] = 0;
+    process.nocaps = 0;
+    process.euid = 1000;
+    process.fsuid = 0;
+    process.fs_own = PROC_FSUID_OWN;
+    check(reg_file_open(h, 1) == 0, "and a user whose file-system id is root's");
+    procfs_close(e);
+    process.fsuid = 1000;
+    process.fs_own = 0;
+    check(reg_file_open(h, 1) == -EACCES, "while another user is refused");
+    process.euid = 0;
+    process.fsuid = 0;
+    sysfs_remove(dir);
+}
+
 /** Whether the uevent of the PCI function `key` begins with `first`. */
 static int pci_uevent_begins(int key, const char *first)
 {
@@ -4317,6 +4429,7 @@ int main(int argc, char **argv)
     pci_bar_clip_rows();
     pci_uevent_rows();
     sysfs_reg_rows();
+    sysattr_file_rows();
     sysfs_bound_rows();
     input_publish_rows();
     input_file_rows();
