@@ -1112,9 +1112,11 @@ static int kvm_sources_are(const char *current, const char *first, const char *s
  * TSC that `cpuid` says runs at one rate, kvm-clock is rated above the TSC
  * and is the one in use; with one, the TSC is rated above kvm-clock, which
  * watches it, and is the one in use while the vDSO's clock counts it,
- * kvm-clock once that clock left it; with IA32_TSC_ADJUST as well, or
- * under `rach2.tscreliable`, the TSC goes unwatched. KVM's pages vouch for
- * the TSC's rate either way, so no watch measures it against the PM timer.
+ * kvm-clock once that clock left it. IA32_TSC_ADJUST changes none of it,
+ * since the kernel keeps no check of that register as Linux does, and
+ * `rach2.tscreliable`, as Linux's `tsc=reliable`, only leaves a TSC rated
+ * above kvm-clock unwatched and rates nothing. KVM's pages vouch for the
+ * TSC's rate either way, so no watch measures it against the PM timer.
  */
 static void kvm_source_rows(void)
 {
@@ -1144,12 +1146,22 @@ static void kvm_source_rows(void)
 
     tsc_adjust_bit = 1;
     tsc_kvm_rank = -1;
-    CHECK(timer_tsc_kvm() == TSC_KVM_RELIABLE, "with IA32_TSC_ADJUST it goes unwatched");
-    tsc_one_rate_bit = 0;
+    CHECK(timer_tsc_kvm() == TSC_KVM_WATCHED &&
+              kvm_sources_are("kvm-clock", "tsc", "kvm-clock", "acpi_pm"),
+          "with IA32_TSC_ADJUST, which nothing here checks, kvm-clock still watches it");
     tsc_adjust_bit = 0;
     tsc_kvm_rank = -1;
     cmdline_flag = "rach2.tscreliable";
-    CHECK(timer_tsc_kvm() == TSC_KVM_RELIABLE, "as it does under rach2.tscreliable");
+    CHECK(timer_tsc_kvm() == TSC_KVM_RELIABLE &&
+              kvm_sources_are("kvm-clock", "tsc", "kvm-clock", "acpi_pm"),
+          "under rach2.tscreliable it goes unwatched, rated as before");
+    tsc_one_rate_bit = 0;
+    tsc_adjust_bit = 1;
+    tsc_kvm_rank = -1;
+    CHECK(timer_tsc_kvm() == TSC_KVM_BELOW &&
+              kvm_sources_are("kvm-clock", "kvm-clock", "tsc", "acpi_pm"),
+          "and rach2.tscreliable rates no TSC above kvm-clock that has not one rate");
+    tsc_adjust_bit = 0;
     cmdline_flag = NULL;
     tsc_kvm_rank = -1;
     CHECK(timer_tsc_trusted(), "KVM's pages vouch for the TSC's rate");

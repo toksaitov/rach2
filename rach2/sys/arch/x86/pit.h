@@ -118,13 +118,13 @@ int timer_tsc_trusted(void);
  * (`timer_tsc_kvm`). */
 #define TSC_KVM_BELOW    0 /* kvm-clock is the clock: no TSC at one rate */
 #define TSC_KVM_WATCHED  1 /* the TSC is, with kvm-clock its watchdog */
-#define TSC_KVM_RELIABLE 2 /* the TSC is, unwatched */
+#define TSC_KVM_RELIABLE 2 /* the TSC is, unwatched: `rach2.tscreliable` */
 
 /** How the TSC rates against kvm-clock, a TSC_KVM_ value, as Linux rates
- * the two clock sources and decides whether its clocksource watchdog
- * keeps the TSC: by the processor's invariant TSC bit, its IA32_TSC_ADJUST
- * and `rach2.tscreliable`. The same on every processor and at every
- * call. */
+ * the two clock sources, by the processor's invariant TSC bit alone, and
+ * whether kvm-clock watches a TSC rated above it: always, IA32_TSC_ADJUST
+ * or not, but under `rach2.tscreliable`. The same on every processor and
+ * at every call. */
 int timer_tsc_kvm(void);
 
 /*

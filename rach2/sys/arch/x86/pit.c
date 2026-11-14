@@ -672,32 +672,28 @@ static int tsc_kvm_rank = -1;
 /**
  * Linux rates kvm-clock 299, below the TSC's 300, where the processor
  * reports a TSC that runs at one rate, CONSTANT_TSC and NONSTOP_TSC, and
- * 400 elsewhere (kvmclock_init, arch/x86/kernel/kvmclock.c); and it
- * leaves such a TSC without a watchdog where the processor also has
- * IA32_TSC_ADJUST (`cpuid` leaf 7, EBX bit 1), which shows a write of the
- * counter (check_system_tsc_reliable, arch/x86/kernel/tsc.c), or under
- * `tsc=reliable`, for which `rach2.tscreliable` stands here. Read once,
- * since in a guest `cpuid` is an exit.
+ * 400 elsewhere (kvmclock_init, arch/x86/kernel/kvmclock.c), whatever
+ * `tsc=reliable` says: the option, for which `rach2.tscreliable` stands
+ * here, only leaves a TSC without the clocksource watchdog (tsc_init,
+ * arch/x86/kernel/tsc.c), and so it does here for a TSC rated above
+ * kvm-clock. Linux leaves such a TSC unwatched with IA32_TSC_ADJUST as
+ * well (check_system_tsc_reliable), since it reads that register at each
+ * idle entry and writes back a value that changed (tsc_verify_tsc_adjust,
+ * arch/x86/kernel/tsc_sync.c); Rach2 keeps no such check, so there
+ * kvm-clock goes on watching the TSC. Read once, since in a guest `cpuid`
+ * is an exit.
  */
 int timer_tsc_kvm(void)
 {
-    uint32_t a = 0, b = 0, c = 0, d = 0;
-
     if (tsc_kvm_rank >= 0) {
         return tsc_kvm_rank;
     }
-    if (kcmdline_has("rach2.tscreliable")) {
-        tsc_kvm_rank = TSC_KVM_RELIABLE;
-    } else if (!tsc_one_rate()) {
+    if (!tsc_one_rate()) {
         tsc_kvm_rank = TSC_KVM_BELOW;
+    } else if (kcmdline_has("rach2.tscreliable")) {
+        tsc_kvm_rank = TSC_KVM_RELIABLE;
     } else {
-        kcpu_id(0, &a, &b, &c, &d);
-        if (a >= 7) {
-            kcpu_id_sub(7, 0, &a, &b, &c, &d);
-        } else {
-            b = 0;
-        }
-        tsc_kvm_rank = (b & (1u << 1)) ? TSC_KVM_RELIABLE : TSC_KVM_WATCHED;
+        tsc_kvm_rank = TSC_KVM_WATCHED;
     }
     return tsc_kvm_rank;
 }

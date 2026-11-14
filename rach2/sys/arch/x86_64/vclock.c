@@ -497,7 +497,7 @@ static const char *vclock_refusal(void)
  * the boot processor's page has the stable bit (kvm_setup_vsyscall_timeinfo,
  * kvmclock.c:241-262), unless the TSC rates above kvm-clock
  * (`vclock_tsc_over_kvm`), where the clock is VCLOCK_TSC, watched against
- * kvm-clock unless Linux would leave such a TSC unwatched (`timer_tsc_kvm`):
+ * kvm-clock unless `rach2.tscreliable` leaves it unwatched (`timer_tsc_kvm`):
  * at clock.c's floors, `*mono_ns` and `*raw_ns`,
  * where a clock stopped before is still ahead of the tick's, so that no
  * reading is earlier than one before the start. The base is a new anchor
