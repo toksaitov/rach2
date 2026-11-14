@@ -3013,8 +3013,11 @@ static int cpu_settings(void)
 /**
  * Check POSIX timers on the process's and the thread's clocks of processor
  * time: each posts its signal three times while the process spins for at
- * most three seconds of processor time, and timer_gettime reports no more
- * left than its interval. Returns 0, or 1 after the failure is printed.
+ * most three seconds of processor time, and timer_gettime reports its
+ * interval and no more left than that, as Linux's posix_cpu_timer_get
+ * reports the time to the next expiry. A failure prints timer_gettime's
+ * result and both times it read. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int cpu_ptimers(void)
 {
@@ -3024,6 +3027,7 @@ static int cpu_ptimers(void)
     timer_t proc_timer, thread_timer;
     clock_t used;
     sigset_t both, mask;
+    int rc;
 
     sigemptyset(&both);
     sigaddset(&both, SIGUSR1);
@@ -3049,8 +3053,17 @@ static int cpu_ptimers(void)
         spin_user();
         times(&t);
     } while ((usr1s < 3 || usr2s < 3) && t.tms_utime + t.tms_stime - used < 300);
-    if (timer_gettime(proc_timer, &cur) != 0 || cur.it_interval.tv_nsec != 10000000 ||
+    memset(&cur, 0, sizeof cur);
+    rc = timer_gettime(proc_timer, &cur);
+    if (rc != 0 || cur.it_interval.tv_sec != 0 || cur.it_interval.tv_nsec != 10000000 ||
         cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec > 10000000) {
+        printf("callsmusl: ptimer-gettime: timer_gettime returned %d, interval %lld.%09ld, "
+               "value %lld.%09ld\n",
+               rc, (long long)cur.it_interval.tv_sec, (long)cur.it_interval.tv_nsec,
+               (long long)cur.it_value.tv_sec, (long)cur.it_value.tv_nsec);
+        if (rc == 0) {
+            errno = 0;
+        }
         return fail("timer_gettime of a timer of processor time");
     }
     held();
