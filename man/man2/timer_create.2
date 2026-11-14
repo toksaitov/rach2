@@ -231,10 +231,19 @@ has none.
 A timer on a clock of processor time counts the ticks the timer interrupt
 charges to the process's threads, or to the one thread, as
 .Xr times 2
-counts them, user ticks alone for a clock of user time; its time left and
-its interval are in ticks, and it expires at the tick that uses up the
-last of its time and is armed again at that tick; the expirations of the
-ticks before its signal is posted go into that signal's overrun.
+counts them, user ticks alone for a clock of user time, each tick as its
+length in nanoseconds; its time left and its interval are kept to the
+nanosecond, as
+.Fn timer_settime
+gave them and
+.Fn timer_gettime
+reports them, and it expires at the tick that uses up the last of its
+time and is armed again at that tick for its interval less the part of
+the tick past the expiry, each whole interval that part covers counted as
+an expiration more, as Linux's
+.Fn bump_cpu_timer
+counts it; the expirations of the ticks before its signal is posted go
+into that signal's overrun.
 A timer on another process's clock keeps counting that process until it
 is deleted, and counts nothing once the process has ended.
 .Pp

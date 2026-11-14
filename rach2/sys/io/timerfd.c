@@ -43,29 +43,29 @@
 #define SIGEV_NONE      1
 #define SIGEV_THREAD_ID 4
 
-/* Format: the kernel's ticks in a second, and nanoseconds in a tick. A
- * timer of the clocks keeps its time and interval in nanoseconds, as the
- * call gives them, and its next tick; one of processor time keeps whole
- * seconds and ticks below a second, and counts ticks. */
-#define TICKS_PER_SEC ((uint32_t)TICK_HZ)
-#define NS_PER_TICK   ((int32_t)TICK_NS)
-#define NS_PER_SEC    1000000000
+/* Format: nanoseconds in a tick. A timer keeps its time and interval in
+ * nanoseconds, as the call gives them: one of the clocks with its next tick,
+ * and one of processor time as the time left, which each tick charged takes
+ * NS_PER_TICK off. */
+#define NS_PER_TICK ((int32_t)TICK_NS)
+#define NS_PER_SEC  1000000000
 /* Policy: the most seconds a setting keeps, about 136 years: a longer time
  * is taken as that, as Linux takes one past its own limit, about 292
  * years. */
-#define TIME_MAX      0xFFFFFFFFu
+#define TIME_MAX    0xFFFFFFFFu
 /* Policy: the latest time a timer of the clocks keeps, in nanoseconds on its
  * clock, about the year 2255: a later one is taken as that, as Linux takes
  * one past KTIME_MAX, in 2262. */
-#define END_MAX       9000000000000000000ll
+#define END_MAX     9000000000000000000ll
 
 /* A timer: a timerfd's, read through its descriptor (`anon` and `wq`), or a
  * POSIX timer's, which `tg` names and whose expirations post a signal. A
  * timer of the clocks expires when `base` reaches `end`, which the tick
  * checks from the tick `due` on. A POSIX timer on a clock of processor time
  * counts the ticks charged to `cpu_tg`'s threads, or to its thread `cpu_tid`
- * alone, user ticks alone for `cpu_user`: `due` is then the ticks left, and
- * its interval is `isec` and `isub`. */
+ * alone, user ticks alone for `cpu_user`, each as TICK_NS: `cpu_left` is
+ * then the time left, and its interval is `ins`, both to the nanosecond, as
+ * Linux's posix-cpu-timers keep them. */
 struct ktimer {
     struct anon_obj anon;
     struct ktimer *next; /* the list of armed timers the tick walks */
@@ -83,8 +83,8 @@ struct ktimer {
                              * (`set_due`): a wake is late by the time past the
                              * later of the two */
     uint64_t ins;           /* the interval in nanoseconds, 0 for none */
-    uint32_t isec;          /* processor time's interval, 0 and 0 for none: whole */
-    uint32_t isub;          /* seconds, and ticks below a second */
+    uint64_t cpu_left;      /* a timer of processor time: the nanoseconds of it
+                             * left before the next expiration */
     uint64_t count;         /* a timerfd's expirations not yet read; a POSIX
                              * timer's notification that waits for another
                              * sender's signal of its number to be taken, as its
@@ -289,12 +289,6 @@ static void set_cancel(struct ktimer *t, int on)
         *link = t->cnext;
     }
     t->on_cancel = on;
-}
-
-/** `sec` seconds and `sub` ticks as ticks. */
-static uint64_t ticks_of(uint32_t sec, uint32_t sub)
-{
-    return (uint64_t)sec * TICKS_PER_SEC + sub;
 }
 
 static int ptimer_fire(struct ktimer *t, uint64_t fresh);
@@ -683,13 +677,32 @@ static uint64_t timerfd_forward(struct ktimer *t, const struct reading *r)
     return n;
 }
 
-/** `sec` seconds and `sub` ticks as ticks, at least one, so that a timer
- * of processor time armed for no time expires at the next tick charged. */
-static uint64_t cpu_ticks_of(uint32_t sec, uint32_t sub)
+/**
+ * Take a tick, TICK_NS, off the time left of the timer of processor time
+ * `t`, and when that runs out leave its expirations for a holder of the big
+ * lock to signal (`ptimer_fire_later`): the one, and for a periodic timer
+ * each interval more that the tick's time past the expiry covers, which
+ * the next time left is shortened by, as Linux's bump_cpu_timer moves the
+ * expiry on by whole intervals and counts them in the overrun
+ * (kernel/time/posix-cpu-timers.c:113-136). A one-shot timer is disarmed.
+ * The caller holds `timer_lock`.
+ */
+static void cpu_timer_charge(struct ktimer *t)
 {
-    uint64_t ticks = ticks_of(sec, sub);
+    uint64_t over, rest, n = 1;
 
-    return ticks != 0 ? ticks : 1u;
+    if (t->cpu_left > (uint64_t)NS_PER_TICK) {
+        t->cpu_left -= (uint64_t)NS_PER_TICK;
+        return;
+    }
+    over = (uint64_t)NS_PER_TICK - t->cpu_left;
+    if (t->ins != 0) {
+        n += div64(over, t->ins, &rest);
+        t->cpu_left = t->ins - rest;
+    } else {
+        disarm(t);
+    }
+    ptimer_fire_later(t, n);
 }
 
 void ptimer_cpu_tick(const process_t *p, int user)
@@ -702,13 +715,8 @@ void ptimer_cpu_tick(const process_t *p, int user)
         struct ktimer *next = t->next;
 
         if (t->cpu_tg == p->tg && (t->cpu_tid == 0 || t->cpu_tid == p->pid) &&
-            (user || !t->cpu_user) && --t->due == 0) {
-            if (t->isec != 0 || t->isub != 0) {
-                t->due = cpu_ticks_of(t->isec, t->isub);
-            } else {
-                disarm(t);
-            }
-            ptimer_fire_later(t, 1);
+            (user || !t->cpu_user)) {
+            cpu_timer_charge(t);
         }
         t = next;
     }
@@ -879,31 +887,6 @@ void timerfd_clock_was_set(void)
         }
     }
     spin_unlock_irqrestore(&timer_lock, irq);
-}
-
-/**
- * A time of `sec` seconds and `nsec` nanoseconds, below a second, as whole
- * seconds and ticks below a second, rounded up to a tick, for a timer of
- * processor time, which counts ticks. A negative time is none, and a time
- * past TIME_MAX seconds is that.
- */
-static void to_wait(int64_t sec, int32_t nsec, uint32_t *s, uint32_t *sub)
-{
-    *s = 0;
-    *sub = 0;
-    if (sec < 0) {
-        return;
-    }
-    if (sec >= (int64_t)TIME_MAX) {
-        *s = TIME_MAX;
-        return;
-    }
-    *s = (uint32_t)sec;
-    *sub = ((uint32_t)nsec + NS_PER_TICK - 1u) / NS_PER_TICK;
-    if (*sub == TICKS_PER_SEC) {
-        *s += 1u;
-        *sub = 0;
-    }
 }
 
 /** Whether `t`'s next read or setting fails with ECANCELED, as Linux's
@@ -1132,7 +1115,6 @@ static void current_setting(struct ktimer *t, struct setting *s)
     uint32_t irq = spin_lock_irqsave(&timer_lock);
     struct reading r = {0, 0, 0};
     int32_t rc = 0;
-    uint32_t rest;
 
     k_memset(s, 0, sizeof(*s));
     if (t->armed && !t->cpu_tg) {
@@ -1152,10 +1134,12 @@ static void current_setting(struct ktimer *t, struct setting *s)
     }
     t->expired = 0;
     if (t->armed && t->cpu_tg) {
-        s->vsec = (int64_t)tick_div(t->due, TICKS_PER_SEC, &rest);
-        s->vnsec = (int32_t)rest * NS_PER_TICK;
-        s->isec = t->isec;
-        s->insec = (int32_t)t->isub * NS_PER_TICK;
+        uint64_t ns;
+
+        s->vsec = (int64_t)div64(t->cpu_left, NS_PER_SEC, &ns);
+        s->vnsec = (int32_t)ns;
+        s->isec = (int64_t)div64(t->ins, NS_PER_SEC, &ns);
+        s->insec = (int32_t)ns;
     } else if (t->armed || !t->tg) {
         int64_t left;
         uint64_t ns;
@@ -1218,6 +1202,36 @@ static int32_t list_clock(struct ktimer *t, int base, int flags, const struct se
 }
 
 /**
+ * The time of processor time `t` waits for from the setting `s`, absolute
+ * on its clock when `flags` has TFD_TIMER_ABSTIME, into `*left`, in
+ * nanoseconds and at least one, so that a time already past or no time
+ * expires at the next tick charged. 0, or `clock_now`'s error.
+ */
+static int32_t cpu_time_left(const struct ktimer *t, int flags, const struct setting *s,
+                             uint64_t *left)
+{
+    int64_t sec = s->vsec, now;
+    int32_t nsec = s->vnsec, at;
+    int32_t rc;
+
+    if (flags & TFD_TIMER_ABSTIME) {
+        rc = clock_now(t->clock, &now, &at);
+        if (rc != 0) {
+            return rc;
+        }
+        sec -= now;
+        nsec -= at;
+        if (nsec < 0) {
+            nsec += NS_PER_SEC;
+            sec--;
+        }
+    }
+    *left = sec < 0 ? 0 : ns_of(sec, nsec);
+    *left = *left != 0 ? *left : 1u;
+    return 0;
+}
+
+/**
  * Arm `t` from the setting `s`, absolute on its clock when `flags` has
  * TFD_TIMER_ABSTIME, or disarm it for a first expiration of zero, dropping
  * a timerfd's expirations not read. A POSIX timer first signals the
@@ -1240,7 +1254,11 @@ static int32_t list_clock(struct ktimer *t, int base, int flags, const struct se
  * timer is a POSIX timer left to the ticks (`set_due`, `expire`): never
  * early. Its clock and the tick are read under the timers' lock
  * (`read_now`). A time already past expires at once by that interrupt, or
- * at the next tick without it, with each interval since it counted.
+ * at the next tick without it, with each interval since it counted. A
+ * timer of processor time keeps its time left and interval to the
+ * nanosecond too, as Linux's posix-cpu-timers keep them, and expires at the
+ * tick charged that uses its time up (`cpu_timer_charge`); an absolute time
+ * already past expires at the next one.
  *
  * A timerfd goes on `cancelable` or off it by `flags`, as Linux's
  * timerfd_settime does before it arms the timer, and one armed while
@@ -1255,9 +1273,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     int on = s->vsec != 0 || s->vnsec != 0;
     int base =
         t->clock == CLOCK_REALTIME && !(flags & TFD_TIMER_ABSTIME) ? CLOCK_MONOTONIC : t->clock;
-    int64_t wsec = s->vsec;
-    int32_t wnsec = s->vnsec;
-    uint32_t sec, sub, isec, isub;
+    uint64_t left = 0;
     struct reading r = {0, 0, 0};
     int32_t rc = 0;
     uint32_t irq;
@@ -1265,23 +1281,12 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     if (s->vsec < 0 || s->vnsec < 0 || s->vnsec >= NS_PER_SEC) {
         return -EINVAL;
     }
-    if (on && t->cpu_tg && (flags & TFD_TIMER_ABSTIME)) {
-        int64_t now;
-        int32_t nsec;
-
-        rc = clock_now(t->clock, &now, &nsec);
+    if (on && t->cpu_tg) {
+        rc = cpu_time_left(t, flags, s, &left);
         if (rc != 0) {
             return rc;
         }
-        wsec = s->vsec - now;
-        wnsec = s->vnsec - nsec;
-        if (wnsec < 0) {
-            wnsec += NS_PER_SEC;
-            wsec--;
-        }
     }
-    to_wait(wsec, wnsec, &sec, &sub);
-    to_wait(s->isec, s->insec, &isec, &isub);
     irq = spin_lock_irqsave(&timer_lock);
     if (on && !t->cpu_tg) {
         rc = read_now(base, &r);
@@ -1312,9 +1317,8 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         t->ins = ns_of(s->isec, s->insec);
     }
     if (on && t->cpu_tg) {
-        t->due = cpu_ticks_of(sec, sub);
-        t->isec = isec;
-        t->isub = isub;
+        t->cpu_left = left;
+        t->ins = ns_of(s->isec, s->insec);
         t->armed = 1;
         t->next = cpu_armed;
         cpu_armed = t;
@@ -1738,7 +1742,7 @@ void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info)
     irq = spin_lock_irqsave(&timer_lock);
     timer_wake_hold();
     for (t = tg->timers; t; t = t->in_group) {
-        int periodic = t->cpu_tg ? t->isec != 0 || t->isub != 0 : t->ins != 0;
+        int periodic = t->ins != 0;
 
         if (t->notify == SIGEV_NONE || t->signo != signo || info->code != SI_TIMER ||
             info->timer_key != t->key || info->timer_gen != t->gen) {
