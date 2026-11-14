@@ -1420,6 +1420,53 @@ static void bss_aging(void)
     CHECK(table.count == 1 && wlan_bss_find(&table, held->bssid, 0) == held);
 }
 
+/**
+ * An authentication started during a scan to an entry of the table past its
+ * expiry, and to the AP the station has joined, whose last hold the
+ * disconnection gives up: the scan's cancel expires what nobody holds, but
+ * the target is held through it and keeps the new connection's one hold.
+ */
+static void auth_expired(void)
+{
+    struct wlan_mlme_auth req;
+    struct wlan_bss *bss;
+    uint8_t frame[256];
+    unsigned len, i;
+
+    for (i = 0; i < 2; ++i) {
+        away_start(0, 1, 0);
+        mlme_joined(WLAN_STA_ASSOCIATED);
+        len = raw_beacon(frame, 7, 11);
+        CHECK(deliver_raw(frame, len, 2462, -50) == 0);
+        bss = wlan_bss_find(&table, frame + 16, 2462);
+        CHECK(bss != 0 && now > WLAN_BSS_EXPIRE_MS + 1);
+        if (!bss) {
+            return;
+        }
+        bss->seen = now - WLAN_BSS_EXPIRE_MS - 1;
+        if (i == 1) {
+            mlme_bss[0].refs = 0;
+            mlme.bss = bss;
+            wlan_bss_hold(bss);
+            mlme.channel = &band.channels[10];
+        }
+        advance(1);
+        CHECK(scan.away == WLAN_SCAN_AWAY && wlan_scan_running(&scan));
+        k_memset(&req, 0, sizeof(req));
+        req.bss = bss;
+        req.algorithm = WLAN_AUTH_OPEN;
+        CHECK(wlan_mlme_authenticate(&mlme, &req) == 0);
+        CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && !wlan_scan_running(&scan));
+        CHECK(wlan_bss_find(&table, frame + 16, 2462) == bss);
+        CHECK(mlme.bss == bss && bss->refs == 1 && mlme_bss[0].refs == 0);
+        CHECK(n_mlme_tx == 1 && mlme_sent_on(2462));
+        wlan_mlme_stop(&mlme);
+        CHECK(bss->refs == 0);
+        wlan_bss_expire(&table, now, WLAN_BSS_EXPIRE_MS);
+        CHECK(!wlan_bss_find(&table, frame + 16, 0));
+    }
+}
+
 int main(void)
 {
     queue_order();
@@ -1441,6 +1488,7 @@ int main(void)
     hardware_scan();
     bss_fields();
     bss_aging();
+    auth_expired();
     wlan_bss_destroy(&table);
     if (failures) {
         printf("wlan_scan_hosttest: %u failures\n", failures);
