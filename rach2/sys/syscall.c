@@ -1208,25 +1208,22 @@ static void sleep_begin(uintptr_t urem, int wide)
 /**
  * End a sleep a signal cut short before its deadline, the tick `target`: the
  * process runs again, and with `rem` the time left goes where the call asked
- * (`sleep_rem_put`). The time left is to the sleep's end (`wakeup_ns`) by
- * the monotonic clock where the sleep would end then, by the interrupt
- * between ticks (`timer_wakes_between`), as Linux reports the time left to
- * its hrtimer's expiry (kernel/time/hrtimer.c:2106-2114); otherwise it is to
- * that tick, less how far into the tick in progress the timer is
- * (`rtc_tick_phase`). Returns -EINTR, or -EFAULT when the remainder cannot
- * be written, as Linux answers; 0 when a remainder was asked for and none
- * is left, by the clock or by the tick, as Linux's do_nanosleep returns 0
- * for a remainder of 0 or less (kernel/time/hrtimer.c:2107-2111). The
- * caller counts the sleep as cut short when it returns -EINTR or -EFAULT
- * (`sleep_cut_short`).
+ * (`sleep_rem_put`). The time left is to the sleep's end, `end`, the
+ * `wakeup_ns` it slept with, by the monotonic clock where the sleep would
+ * end then, by the interrupt between ticks (`timer_wakes_between`), as
+ * Linux reports the time left to its hrtimer's expiry
+ * (kernel/time/hrtimer.c:2106-2114); otherwise it is to that tick, less how
+ * far into the tick in progress the timer is (`rtc_tick_phase`). Returns
+ * -EINTR, or -EFAULT when the remainder cannot be written, as Linux
+ * answers; 0 when a remainder was asked for and none is left, by the clock
+ * or by the tick, as Linux's do_nanosleep returns 0 for a remainder of 0 or
+ * less (kernel/time/hrtimer.c:2107-2111). The caller counts the sleep as
+ * cut short when it returns -EINTR or -EFAULT (`sleep_cut_short`).
  */
-static int32_t nanosleep_interrupted(int rem, uint64_t target)
+static int32_t nanosleep_interrupted(int rem, uint64_t target, int64_t end)
 {
-    int64_t end = current_proc->wakeup_ns;
     struct kernel_timespec left;
 
-    current_proc->wakeup_tick = 0;
-    current_proc->state = PROC_RUNNING;
     if (!rem) {
         return -EINTR;
     }
@@ -1338,7 +1335,14 @@ static int64_t sleep_ns(int64_t sec, int64_t nsec)
  * pending before then, ends the sleep through `nanosleep_interrupted`, which
  * with `rem` writes the remainder and returns -EINTR, or -EFAULT when the
  * write fails; a wake by one it does not act on sends it back to sleep with
- * the deadline stored again.
+ * the deadline stored again. A sleep with a time of the monotonic clock
+ * (`wakeup_ns`) first ends its timed wait under the run queues' lock
+ * (`proc_wait_set`), and returns 0, with no remainder, when the timer's pass
+ * on another processor recorded its expiry (`wakeup_fired`) between the
+ * sleep's look at the clock and its look for a signal: Linux's do_nanosleep
+ * cancels its hrtimer, which waits for a callback under way, and returns 0
+ * when the callback cleared its task, before it looks at the signal
+ * (`do_nanosleep`, kernel/time/hrtimer.c).
  *
  * A sleep whose `rt_steps` the caller set, to an absolute time of real time,
  * returns 1 once the clock has been set since (`rtc_step_count`), for the
@@ -1375,10 +1379,15 @@ static int32_t sleep_until(uint64_t target, int rem, const char *wchan)
             break;
         }
         if (signal_pending()) {
+            int64_t end = current_proc->wakeup_ns;
+
             current_proc->wakeup_tick = 0;
             current_proc->state = PROC_RUNNING;
             kirq_restore(flags);
-            return nanosleep_interrupted(rem, target);
+            if (end != 0 && proc_wait_set(0, 0, 0, 0) == end) {
+                return 0;
+            }
+            return nanosleep_interrupted(rem, target, end);
         }
         kirq_restore(flags);
         schedule(); /* yield to any other READY process; the timer wakes us */
@@ -1484,7 +1493,7 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
         proc_wait_set(0, armed, kind == KCLOCK_REAL ? steps : 0, fresh);
         fresh = 0;
         rc = sleep_until(base + (due - now), 0, wchan);
-        if (proc_wait_set(0, 0, 0, 0) == armed && rc >= 0 && armed != 0) {
+        if (proc_wait_set(0, 0, 0, 0) == armed && armed != 0) {
             return 0;
         }
     } while (rc == 0 || rc == 1);
@@ -1518,9 +1527,7 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
     int64_t sec, nsec;
     int32_t rc;
 
-    if (end->tv_sec != 0 || end->tv_nsec != 0) {
-        proc_wait_set(0, sleep_ns(end->tv_sec, end->tv_nsec), 0, 0);
-    }
+    proc_wait_set(0, sleep_ns(end->tv_sec, end->tv_nsec), 0, 1);
     rc = sleep_until(target, 1, wchan);
     proc_wait_set(0, 0, 0, 0);
     if (rc == 0 && (end->tv_sec != 0 || end->tv_nsec != 0)) {
