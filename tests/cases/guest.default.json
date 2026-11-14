@@ -5000,7 +5000,7 @@
         {"assertion_id": "setsid-left-group", "checks": "A child that led a group and joined its parent's while a member stayed in its own is refused setsid with EPERM, and makes its session once the member is reaped.", "source": "program"},
         {"assertion_id": "last-pid-above", "checks": "In a new PID namespace a write of 40000 to ns_last_pid makes the next child 40001.", "source": "program"},
         {"assertion_id": "last-pid-read", "checks": "A descriptor of ns_last_pid opened in the first PID namespace reads 40001 in the new one, and one opened before a fork reads the fork's number.", "source": "program"},
-        {"assertion_id": "last-pid-checkpoint", "checks": "A write of ns_last_pid with CAP_CHECKPOINT_RESTORE alone is taken, and one with no capability is EPERM.", "source": "program"},
+        {"assertion_id": "last-pid-cap", "checks": "A write of ns_last_pid with CAP_CHECKPOINT_RESTORE alone is taken, and one with no capability is EPERM.", "source": "program"},
         {"assertion_id": "fork-eagain", "checks": "With pid_max at 301 forks come to EAGAIN within 301 tries, and fork works again once pid_max is set back.", "source": "program"}
       ],
       "branches": [],

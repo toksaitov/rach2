@@ -109,7 +109,7 @@
  * `thread-signal`, `leader-thread-signal`, `thread-poll`,
  * `leader-thread-poll`, `thread-id-reused`, `thread-edge`,
  * `setsid-left-group`, `last-pid-above`, `last-pid-read`,
- * `last-pid-checkpoint` and `fork-eagain`. The first failure fails its
+ * `last-pid-cap` and `fork-eagain`. The first failure fails its
  * assertion and leaves the rest not run. The program runs as root, which
  * the writes of ns_last_pid and pid_max need.
  */
@@ -1500,7 +1500,7 @@ static int keep_caps(unsigned low, unsigned high)
 /** The first process of a new PID namespace, with `outer` a descriptor of
  * ns_last_pid opened in the first one: 0 when the rows hold, or 1, 2 or 3
  * for the first that fails, `last-pid-above`, `last-pid-read` and
- * `last-pid-checkpoint`. */
+ * `last-pid-cap`. */
 static int last_pid_child(int outer)
 {
     int fd;
@@ -1631,7 +1631,7 @@ static void plan(void)
         "thread-signal",      "leader-thread-signal", "thread-poll",
         "leader-thread-poll", "thread-id-reused",     "thread-edge",
         "setsid-left-group",  "last-pid-above",       "last-pid-read",
-        "last-pid-checkpoint", "fork-eagain"};
+        "last-pid-cap",       "fork-eagain"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.pidfdmusl"));
