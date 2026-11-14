@@ -1095,13 +1095,13 @@ static int device_fault(struct mm *mm, const vma_t *vma, uintptr_t addr)
     return 1;
 }
 
-/** Whether the region `vma` allows the access: a write needs write, and a
- * read needs read, which mmap and the ELF loader give every region with
- * write or execute; a guard allows none. */
-static int region_allows(const vma_t *vma, int write)
+/** Whether the region `vma` of `mm` allows the access at `addr`: a write
+ * needs write, and a read needs read, which mmap and the ELF loader give
+ * every region with write or execute; a guard page allows none
+ * (`vm_guarded`). */
+static int region_allows(const struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
-    return (vma->prot & (write ? VM_PROT_WRITE : VM_PROT_READ)) != 0 &&
-           !(vma->prot & VM_PROT_GUARD);
+    return (vma->prot & (write ? VM_PROT_WRITE : VM_PROT_READ)) != 0 && !vm_guarded(&mm->vm, addr);
 }
 
 /**
@@ -1237,7 +1237,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
     int rc;
 
-    if (vma && region_allows(vma, write) && pte_present(dir, addr) &&
+    if (vma && region_allows(mm, vma, addr, write) && pte_present(dir, addr) &&
         (!write || pte_writable(dir, addr))) {
         return 1;
     }
@@ -1251,7 +1251,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     if (!vma) {
         return grow_fault(mm, page, as_limit);
     }
-    if (!region_allows(vma, write)) {
+    if (!region_allows(mm, vma, addr, write)) {
         return 0;
     }
     if (pte_present(dir, addr)) {
@@ -1363,7 +1363,7 @@ static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
     for (page = start & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
         const vma_t *vma = vm_find(&mm->vm, page);
 
-        if (!vma || !region_allows(vma, write) || !pkey_allows(mm, vma, write) ||
+        if (!vma || !region_allows(mm, vma, page, write) || !pkey_allows(mm, vma, write) ||
             !pte_present(mm->dir, page) || (write && !pte_writable(mm->dir, page))) {
             return 0;
         }
@@ -1518,9 +1518,10 @@ int vm_prefault_held(uintptr_t addr, uintptr_t len, int write)
  * A region that is private and writable has its pages brought in for a write,
  * which gives each its own frame now, as Linux's populate breaks the sharing
  * of copy-on-write pages; any other for a read, so that a shared page is not
- * made dirty for nothing. A region with no access, a guard, device memory
- * or memfd_secret's is passed over, as Linux's populate passes over a VM_IO
- * region and one its get_user_pages refuses. Each
+ * made dirty for nothing. A region with no access, device memory or
+ * memfd_secret's is passed over, as Linux's populate passes over a VM_IO
+ * region and one its get_user_pages refuses, and a guard page stops the
+ * populate with -2, as Linux's get_user_pages fails on one. Each
  * page brought in counts as a fault (`fault_count`), as Linux counts its
  * populate's. The regions' lock is taken to read, as Linux's __mm_populate
  * takes it after the change that asked for the pages has let it go
@@ -1542,9 +1543,12 @@ int vm_populate(uintptr_t start, uintptr_t end)
         const vma_t *vma = vm_find(&mm->vm, page);
         int write;
 
-        if (!vma || !(vma->prot & VM_PROT_READ) ||
-            (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
+        if (!vma || !(vma->prot & VM_PROT_READ) || (vma->prot & (VM_PROT_IO | VM_PROT_SECRET))) {
             continue;
+        }
+        if (vm_guarded(&mm->vm, page)) {
+            rc = -2;
+            break;
         }
         write = (vma->prot & VM_PROT_WRITE) && vma->type != VM_SHARED;
         if (!vm_resolve(page, write)) {
@@ -1586,7 +1590,7 @@ static int pin_allows(struct mm *mm, uintptr_t page, uint32_t flags)
     int write = (flags & PIN_WRITE) != 0;
 
     return vma && ((flags & PIN_IO) || !(vma->prot & VM_PROT_IO)) &&
-           !(vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) && region_allows(vma, write) &&
+           !(vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) && region_allows(mm, vma, page, write) &&
            (write || pin_read_allows(mm, vma, page, (flags & PIN_SLOW) != 0)) &&
            pkey_allows(mm, vma, write);
 }
@@ -2022,7 +2026,7 @@ retry:
     vma = vm_find(&mm->vm, addr);
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
         !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_GUARD | VM_PROT_SECRET | VM_PROT_VVAR))) {
+        (vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) || vm_guarded(&mm->vm, addr)) {
         return -EIO;
     }
     if (vm_device_object(vma->file)) {
@@ -2039,7 +2043,7 @@ retry:
     }
     vma = vm_find(&mm->vm, addr);
     if (vma == NULL || !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET | VM_PROT_VVAR)) ||
+        (vma->prot & (VM_PROT_IO | VM_PROT_SECRET | VM_PROT_VVAR)) || vm_guarded(&mm->vm, addr) ||
         !pte_present(mm->dir, addr)) {
         return -EIO;
     }
@@ -2261,7 +2265,7 @@ static int fault_resolve(isr_params_t *params, uintptr_t addr, int write, int *k
     resolved = *key < 0 && !fetch_refused(addr, params) &&
                vm_resolve_in(mm, addr, write, current_proc->rlim[RLIM_AS].cur);
     vma = vm_find(&mm->vm, addr);
-    *mapped = vma && !(vma->prot & VM_PROT_GUARD);
+    *mapped = vma && !vm_guarded(&mm->vm, addr);
     mmap_unlock(mm);
     mm_reap();
     kirq_restore(irq);
@@ -3108,10 +3112,13 @@ uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr
     for (addr = va; addr < end; addr += PAGE_SIZE, got++) {
         if (!vma || addr >= vma->end) {
             vma = vm_find(&mm->vm, addr);
-            if (!vma || !region_allows(vma, 1) ||
-                (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
+            if (!vma || !(vma->prot & VM_PROT_WRITE) ||
+                (vma->prot & (VM_PROT_IO | VM_PROT_SECRET))) {
                 break;
             }
+        }
+        if (vm_guarded(&mm->vm, addr)) {
+            break;
         }
         if (!table || addr >= next) {
             table = user_span(mm->dir, addr, end, &next);

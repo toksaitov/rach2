@@ -590,11 +590,15 @@ from a system call.
 The guard stays through
 .Fn mprotect ,
 .Fn mlock ,
+whose bringing in of the pages stops at it with
+.Er ENOMEM ,
 .Dv MADV_DONTNEED ,
-.Xr fork 2
+.Xr fork 2 ,
+unless the mapping has
+.Dv MADV_WIPEONFORK ,
 and a move by
 .Fn mremap ,
-and ends with
+which carries it with the pages; it ends with
 .Fn munmap ,
 a mapping over it, or
 .Dv MADV_GUARD_REMOVE
@@ -604,12 +608,11 @@ Both take only anonymous private memory, of
 the heap or the stack, and
 .Dv MADV_GUARD_INSTALL
 no locked mapping; the rest they refuse.
-Linux marks a guard's pages in its page tables and splits no mapping;
-this kernel splits the mapping the range cuts, as
-.Fn mprotect
-does, so a guard shows in
+As on Linux 6.13 and later, a guard marks pages and splits no mapping, so
 .Pa /proc/ Ns Ar pid Ns Pa /maps
-as an area of its own with the protection it was cut with.
+shows the mapping whole and
+.Pa /proc/sys/vm/max_map_count
+counts it once.
 .Pp
 Over a sealed mapping of anonymous private memory without write, the
 advice that would discard its pages,
@@ -955,7 +958,8 @@ or cannot obtain a VMA entry, or a fixed mapping lies outside user
 space.
 Unmapping, or
 .Fn madvise Ns 's
-fork or guard advice, cannot obtain an entry needed to split an area.
+fork advice, cannot obtain an entry needed to split an area, or its
+guard advice cannot obtain room for the guard's record.
 A page of an
 .Fn mprotect ,
 .Fn madvise
@@ -974,8 +978,9 @@ and
 without
 .Dv MLOCK_ONFAULT
 meet a mapping of
-.Xr memfd_secret 2 ,
-whose pages Linux cannot bring in for them, after locking the range.
+.Xr memfd_secret 2
+or a guard page, whose pages Linux cannot bring in for them, after
+locking the range.
 Musl also rejects mapping lengths at least
 .Dv PTRDIFF_MAX
 and every public

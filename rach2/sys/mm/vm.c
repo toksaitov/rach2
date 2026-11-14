@@ -5,6 +5,7 @@
 #include "../arch/arch.h"
 #include "../lib/kdef.h"
 #include "../lib/kerrno.h"
+#include "../lib/kstring.h"
 #include "../lib/spinlock.h"
 #include "kheap.h"
 
@@ -364,11 +365,202 @@ static int vm_nodes_reserve(vm_space_t *vm, uint32_t n)
     return 0;
 }
 
+/* The most runs of guard pages a space may hold, which keeps the size of
+ * their array within a size_t on either architecture. */
+#define VM_GUARDS_MAX (0x40000000u / sizeof(struct vm_guard))
+
+/** The index of the first run of guard pages of `vm` whose end is above
+ * `addr`, or `nguards` when there is none. */
+static uint32_t guard_lower(const vm_space_t *vm, uintptr_t addr)
+{
+    uint32_t lo = 0, hi = vm->nguards;
+
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+
+        if (vm->guards[mid].end <= addr) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+int vm_guarded(const vm_space_t *vm, uintptr_t addr)
+{
+    uint32_t i;
+
+    if (vm->nguards == 0) {
+        return 0;
+    }
+    i = guard_lower(vm, addr);
+    return i < vm->nguards && vm->guards[i].start <= addr;
+}
+
+/** Make room in `vm` for `n` more runs of guard pages; 0, or -1 with no
+ * memory or past VM_GUARDS_MAX, with nothing changed. */
+static int guard_room(vm_space_t *vm, uint32_t n)
+{
+    struct vm_guard *g;
+    uint32_t cap;
+
+    if (vm->guard_cap - vm->nguards >= n) {
+        return 0;
+    }
+    if (n > VM_GUARDS_MAX - vm->nguards) {
+        return -1;
+    }
+    cap = vm->guard_cap ? vm->guard_cap : 8u;
+    while (cap - vm->nguards < n) {
+        cap = cap > VM_GUARDS_MAX / 2 ? VM_GUARDS_MAX : cap * 2;
+    }
+    g = kmalloc(cap * sizeof(*g));
+    if (!g) {
+        return -1;
+    }
+    if (vm->nguards) {
+        k_memcpy(g, vm->guards, vm->nguards * sizeof(*g));
+    }
+    kfree(vm->guards);
+    vm->guards = g;
+    vm->guard_cap = cap;
+    return 0;
+}
+
+/** Whether taking [start, end) out of the guard pages of `vm` splits a run
+ * in two, which takes room for one more. */
+static int guard_splits(const vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    uint32_t i;
+
+    if (vm->nguards == 0) {
+        return 0;
+    }
+    i = guard_lower(vm, start);
+    return i < vm->nguards && vm->guards[i].start < start && vm->guards[i].end > end;
+}
+
+/** Take [start, end) out of the guard pages of `vm`; the room a split takes
+ * (`guard_splits`) is had. */
+static void guard_cut(vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    struct vm_guard *g = vm->guards;
+    uint32_t n = vm->nguards;
+    uint32_t i, j;
+
+    if (start >= end || n == 0) {
+        return;
+    }
+    i = guard_lower(vm, start);
+    if (i >= n || g[i].start >= end) {
+        return;
+    }
+    if (g[i].start < start && g[i].end > end) {
+        k_memmove(&g[i + 2], &g[i + 1], (n - i - 1) * sizeof(*g));
+        g[i + 1].start = end;
+        g[i + 1].end = g[i].end;
+        g[i].end = start;
+        vm->nguards = n + 1;
+        return;
+    }
+    if (g[i].start < start) {
+        g[i].end = start;
+        i++;
+    }
+    for (j = i; j < n && g[j].end <= end; j++) {
+    }
+    if (j < n && g[j].start < end) {
+        g[j].start = end;
+    }
+    k_memmove(&g[i], &g[j], (n - j) * sizeof(*g));
+    vm->nguards = n - (j - i);
+}
+
+/** Add [start, end), not empty, to the guard pages of `vm`, joining the
+ * runs it meets or touches; room for one more run is had. */
+static void guard_add(vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    struct vm_guard *g = vm->guards;
+    uint32_t n = vm->nguards;
+    uint32_t i = guard_lower(vm, start), j;
+
+    if (i > 0 && g[i - 1].end == start) {
+        i--;
+    }
+    for (j = i; j < n && g[j].start <= end; j++) {
+    }
+    if (j == i) {
+        k_memmove(&g[i + 1], &g[i], (n - i) * sizeof(*g));
+        g[i].start = start;
+        g[i].end = end;
+        vm->nguards = n + 1;
+        return;
+    }
+    if (g[i].start > start) {
+        g[i].start = start;
+    }
+    g[i].end = g[j - 1].end > end ? g[j - 1].end : end;
+    k_memmove(&g[i + 1], &g[j], (n - j) * sizeof(*g));
+    vm->nguards = n - (j - i - 1);
+}
+
+int vm_guard_set(vm_space_t *vm, uintptr_t start, uintptr_t end, int on)
+{
+    if (start >= end) {
+        return 0;
+    }
+    if (on) {
+        if (guard_room(vm, 1) != 0) {
+            return -1;
+        }
+        guard_add(vm, start, end);
+        return 0;
+    }
+    if (guard_splits(vm, start, end) && guard_room(vm, 1) != 0) {
+        return -1;
+    }
+    guard_cut(vm, start, end);
+    return 0;
+}
+
+int vm_guard_copy(vm_space_t *vm, uintptr_t from, uintptr_t len, uintptr_t to)
+{
+    uintptr_t at, end = from + len;
+    uint32_t i, k = 0;
+
+    for (i = guard_lower(vm, from); i < vm->nguards && vm->guards[i].start < end; i++) {
+        k++;
+    }
+    if (vm->nguards && guard_room(vm, k + 1u) != 0) {
+        return -1;
+    }
+    /* Found by address each time, since a run added below shifts them. */
+    for (at = from; at < end;) {
+        const struct vm_guard *g;
+        uintptr_t s, e;
+
+        i = guard_lower(vm, at);
+        if (i >= vm->nguards || vm->guards[i].start >= end) {
+            break;
+        }
+        g = &vm->guards[i];
+        s = g->start > at ? g->start : at;
+        e = g->end < end ? g->end : end;
+        guard_add(vm, s - from + to, e - from + to);
+        at = e;
+    }
+    return 0;
+}
+
 int vm_reserve(vm_space_t *vm, uint32_t n)
 {
     uint32_t limit = vm_max_map_count > 0 ? (uint32_t)vm_max_map_count : 0;
 
     if (n && (vm->count > limit || n > limit - vm->count)) {
+        return -1;
+    }
+    if (n && vm->nguards && guard_room(vm, n) != 0) {
         return -1;
     }
     return vm_nodes_reserve(vm, n);
@@ -560,6 +752,7 @@ void vm_init(vm_space_t *vm)
     vm->root = vm->first = vm->last = NULL;
     vm->count = 0;
     vm->total = 0;
+    vm->nguards = 0;
     vm->gap_len = 0;
     vm->heap_start = vm->brk = vm->stack_limit = vm->mmap_base = 0;
     vm->def_prot = 0;
@@ -577,6 +770,47 @@ void vm_free(vm_space_t *vm)
     vm->chunks = NULL;
     vm->spare = NULL;
     vm->cap = 0;
+    kfree(vm->guards);
+    vm->guards = NULL;
+    vm->guard_cap = 0;
+}
+
+/** Whether a fork's copy of the region `r` keeps its guard pages: it is
+ * copied, and with its pages (`vm_copy`). */
+static int guard_forks(const vma_t *r)
+{
+    return !(r->prot & (VM_PROT_DONTFORK | VM_PROT_WIPEONFORK));
+}
+
+/** Give `dst` the guard pages of `src` in the regions whose copies keep
+ * them (`guard_forks`); 0, or -1 with no memory. */
+static int guard_fork(vm_space_t *dst, const vm_space_t *src)
+{
+    uint32_t i, k = 0;
+    int pass;
+
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < src->nguards; i++) {
+            const struct vm_guard *g = &src->guards[i];
+            const vma_t *r;
+
+            for (r = vm_lower(src, g->start); r && r->start < g->end; r = vm_next(r)) {
+                if (!guard_forks(r)) {
+                    continue;
+                }
+                if (pass == 0) {
+                    k++;
+                } else {
+                    guard_add(dst, r->start > g->start ? r->start : g->start,
+                              r->end < g->end ? r->end : g->end);
+                }
+            }
+        }
+        if (pass == 0 && k && guard_room(dst, k) != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int vm_copy(vm_space_t *dst, const vm_space_t *src)
@@ -587,6 +821,8 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
     *dst = *src;
     dst->root = dst->first = dst->last = dst->spare = dst->detached = NULL;
     dst->chunks = NULL;
+    dst->guards = NULL;
+    dst->nguards = dst->guard_cap = 0;
     dst->count = dst->cap = dst->held = 0;
     dst->total = 0;
     dst->gap_len = 0;
@@ -602,6 +838,10 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
             copy->policy = vm_policy_get(r->policy);
             copy->anon = (r->prot & VM_PROT_WIPEONFORK) ? 0 : r->anon;
         }
+    }
+    if (guard_fork(dst, src) != 0) {
+        vm_free(dst);
+        return -1;
     }
     return 0;
 }
@@ -691,16 +931,21 @@ int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end)
     if (start >= end) {
         return 0;
     }
+    if (guard_splits(vm, start, end) && guard_room(vm, 1) != 0) {
+        return -1;
+    }
     r = vm_lower(vm, start);
     if (r && r->start < start && r->end > end) {
         if (vm_reserve(vm, 1) != 0) {
             return -1;
         }
+        guard_cut(vm, start, end);
         (void)vm_split(vm, r, end);
         vm->total -= r->end - start;
         r->end = start;
         return 0;
     }
+    guard_cut(vm, start, end);
     while (r && r->start < end) {
         next = vm_next(r);
         if (start <= r->start && end >= r->end) {
@@ -860,8 +1105,7 @@ int vm_protect_key(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
 
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear)
 {
-    uint32_t mask =
-        (set | clear) & (VM_PROT_DONTFORK | VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_WIPEONFORK);
+    uint32_t mask = (set | clear) & (VM_PROT_DONTFORK | VM_PROT_SEALED | VM_PROT_WIPEONFORK);
 
     return vm_change(vm, start, end, mask, set & mask, 0);
 }
@@ -1064,13 +1308,6 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
     growth = r->start - page;
     if (vm->total > as_limit || growth > as_limit - vm->total) {
         return 0;
-    }
-    if (r->prot & VM_PROT_GUARD) {
-        /* Linux's guard marks pages, not the region: the growth is stack. */
-        vma_t like = *r;
-
-        like.prot &= ~(uint32_t)VM_PROT_GUARD;
-        return vm_insert_like(vm, page, r->start, &like, 0) == 0;
     }
     vm->total += growth;
     r->start = page;

@@ -63,13 +63,6 @@
 #define VM_PROT_LOCKED      0x200u
 #define VM_PROT_LOCKONFAULT 0x400u
 #define VM_PROT_LOCKS       (VM_PROT_LOCKED | VM_PROT_LOCKONFAULT)
-/* Kept the same way: the region is a guard, as MADV_GUARD_INSTALL makes
- * one and MADV_GUARD_REMOVE takes away. It has no pages, and an access to
- * it, the kernel's on the process's behalf too, is refused as one outside
- * every region is: SIGSEGV with SEGV_MAPERR, or EFAULT. mprotect, mlock, a
- * fork and mremap keep it, MADV_DONTNEED leaves it, and munmap or a mapping
- * over it ends it. */
-#define VM_PROT_GUARD       0x800u
 /* Kept the same way: the region is sealed, as mseal makes it and Linux's
  * VM_SEALED: munmap, mremap, mprotect, a mapping over it, and the madvise
  * kinds that discard pages of anonymous memory it may not write fail
@@ -134,8 +127,8 @@
 /* The bits a change of the access bits keeps. */
 #define VM_PROT_KEPT                                                                             \
     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
-     VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY |       \
-     VM_PROT_ACCOUNT | VM_PROT_NORESERVE | VM_PROT_VVAR)
+     VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY | VM_PROT_ACCOUNT |     \
+     VM_PROT_NORESERVE | VM_PROT_VVAR)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -289,6 +282,13 @@ typedef struct vma {
 
 struct vm_chunk;
 
+/* A run of guard pages, [start, end), page-aligned, that MADV_GUARD_INSTALL
+ * made. */
+struct vm_guard {
+    uintptr_t start;
+    uintptr_t end;
+};
+
 /* The regions of an address space, with its break, its stack's limit and
  * its mmap base, which exec chooses and a fork's child keeps. */
 typedef struct vm_space {
@@ -311,6 +311,14 @@ typedef struct vm_space {
      * mlockall's MCL_FUTURE sets and munlockall clears; 0 in a new space
      * and in a fork's copy, as Linux's def_flags. */
     uint32_t def_prot;
+    /* The guard pages, as Linux 6.13 and later mark them in the page
+     * tables and not in the regions: `nguards` runs in address order, none
+     * empty and no two touching, each inside the regions, in an array of
+     * `guard_cap` that the space owns. An access to one is refused as one
+     * outside every region is (`vm_guarded`), a region that holds one is
+     * split and merged as any other, and its count is the regions' alone. */
+    struct vm_guard *guards;
+    uint32_t nguards, guard_cap;
     /* Gap search proof: above gap_top, no hole fits gap_len in [gap_lo,gap_hi).
      * A zero gap_len is invalid; removing coverage clears it. */
     uintptr_t gap_top, gap_len, gap_lo, gap_hi;
@@ -345,8 +353,10 @@ void vm_free(vm_space_t *vm);
 /** Make `dst`, which owns no nodes, a copy of `src` without its regions
  * marked VM_PROT_DONTFORK, whose regions take a reference each to the files
  * they map and to their policies and lose their locks, as a fork's child
- * does not inherit them, and whose `def_prot` is 0; 0, or -1 with no
- * memory, with `dst` left empty. */
+ * does not inherit them, and whose `def_prot` is 0. The copy keeps the
+ * guards of the regions it copies but those marked VM_PROT_WIPEONFORK, as
+ * Linux's fork copies the page tables, and their guard markers, of every
+ * region but those. 0, or -1 with no memory, with `dst` left empty. */
 int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
 /** The region that holds `addr` (`start <= addr < end`), or NULL. */
@@ -495,8 +505,9 @@ void vm_file_reap(void);
 /**
  * Take [start, end) out of every region it meets, as munmap does: a region
  * it covers goes, one it overlaps at one end is trimmed, and one that holds
- * it is split in two. An empty range changes nothing. 0, or -1 when the
- * split has no room, with nothing changed.
+ * it is split in two. The guard pages of the range go with it. An empty
+ * range changes nothing. 0, or -1 when the split of a region or of a run of
+ * guard pages has no room, with nothing changed.
  *
  * A region that goes keeps its reference to the file it maps, on the
  * space's detached list, until `vm_release_detached`, which the caller runs
@@ -548,7 +559,7 @@ int vm_protect_key(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
 
 /**
  * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK,
- * VM_PROT_GUARD, VM_PROT_SEALED and VM_PROT_WIPEONFORK in the protection of
+ * VM_PROT_SEALED and VM_PROT_WIPEONFORK in the protection of
  * each region of [start, end), which regions must cover without a gap,
  * splitting and merging as `vm_protect` does. Returns 0; -1 for a gap; -2 when
  * a split has no room. An error leaves the regions as they were.
@@ -597,8 +608,9 @@ uintptr_t vm_protect_stop(const vm_space_t *vm, uintptr_t start, uintptr_t end, 
  * meets the range. */
 uintptr_t vm_sealed_at(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 
-/** Make room for `n` more regions now, so the changes after cannot fail;
- * 0 ok, -1 at the limit or with no memory. */
+/** Make room for `n` more regions now, and for `n` more runs of guard
+ * pages when the space has any, so the changes after cannot fail; 0 ok, -1
+ * at the limit or with no memory. */
 int vm_reserve(vm_space_t *vm, uint32_t n);
 
 /** The start of the highest free range of `len` bytes inside [lo, hi), or 0
@@ -623,9 +635,32 @@ uintptr_t vm_total(const vm_space_t *vm);
  * (RLIMIT_AS) as a mapping does; and the new span must be clear of every
  * other region, so that a segment or a mapping placed in the stack's room
  * is not taken into the stack. The pages between are backed as they are
- * touched. Below a guard (VM_PROT_GUARD) the growth is a region of its own,
- * which is no guard.
+ * touched.
  */
 int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit);
+
+/** Whether the page at `addr` is a guard page (`vm_space_t`'s `guards`):
+ * 1 or 0. The caller holds the regions' lock, to read or to write. */
+int vm_guarded(const vm_space_t *vm, uintptr_t addr);
+
+/**
+ * Make each page of [start, end), page-aligned, a guard page when `on`, as
+ * MADV_GUARD_INSTALL does, or no longer one, as MADV_GUARD_REMOVE does; a
+ * page that already is, or is not, stays so. The regions must cover the
+ * range when `on`; none is split. The caller clears the range's entries.
+ * 0, or -1 with no room, with nothing changed.
+ */
+int vm_guard_set(vm_space_t *vm, uintptr_t start, uintptr_t end, int on);
+
+/**
+ * Give [to, to + len), which holds no guard page, the guard pages of
+ * [from, from + len) at the same offsets, for mremap's move of a mapping,
+ * whose guards go with its pages as Linux's move_page_tables carries the
+ * markers; and make room for the cut of a run of guard pages, which the
+ * `vm_detach` of the source that follows may need, so that it cannot fail.
+ * The two ranges do not overlap. 0, or -1 with no room, with nothing
+ * changed.
+ */
+int vm_guard_copy(vm_space_t *vm, uintptr_t from, uintptr_t len, uintptr_t to);
 
 #endif /* _VM_H_ */

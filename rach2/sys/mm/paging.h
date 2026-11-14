@@ -348,11 +348,12 @@ int vm_ready_held(uintptr_t addr, uintptr_t len, int write);
  * Bring in the pages of [start, end) of the current process's regions as
  * faults would, for mmap's MAP_POPULATE and for the locked regions of the
  * mlock calls: those of a private writable region for a write, the others
- * for a read; a region with no access, a guard or device memory is passed
- * over.
+ * for a read; a region with no access or device memory is passed over.
  * It stops at the first page that cannot be had, since a populate that
- * falls short leaves the rest to be faulted in later: 0, or -1 when it
- * stopped short, which mmap ignores and mlock answers with EAGAIN. It takes
+ * falls short leaves the rest to be faulted in later: 0; -1 when it
+ * stopped short, which mmap ignores and mlock answers with EAGAIN; or -2
+ * at a guard page (`vm_guarded`), which Linux's populate refuses with
+ * EFAULT and its mlock answers with ENOMEM. It takes
  * the regions' lock to read, so the caller holds none, and may sleep.
  */
 int vm_populate(uintptr_t start, uintptr_t end);

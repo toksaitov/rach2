@@ -8919,8 +8919,9 @@ long sys_mprotect(isr_params_t *params)
 #define MREMAP_DONTUNMAP 4
 
 /** Give [addr, addr + len), which lies in the region `r`, a region at `to`
- * of `new_len` bytes, moving the resident pages there. Returns `to`, or
- * -ENOMEM with no room for the regions or a page table. The file the region
+ * of `new_len` bytes, moving the resident pages and the guard pages there
+ * (`vm_guard_copy`). Returns `to`, or -ENOMEM with no room for the regions,
+ * the guards or a page table. The file the region
  * maps and its policy, which the new region keeps as Linux's copy_vma keeps
  * it, are held across the move, which removes the old region's holds before
  * the new region takes its own. */
@@ -8938,7 +8939,11 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
         vma_exhausted("mremap");
         return -ENOMEM;
     }
+    if (vm_guard_copy(vm, addr, moved, to) != 0) {
+        return -ENOMEM;
+    }
     if (paging_move_range(_curr_dir, addr, to, moved) != 0) {
+        (void)vm_guard_set(vm, to, to + moved, 0);
         return -ENOMEM;
     }
     mmn_notify(current_proc->mm, MMN_UNMAP, addr, addr + len);
@@ -8952,6 +8957,7 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
     vm_file_put(like.file);
     vm_policy_put(like.policy);
     if (rc != 0) {
+        (void)vm_guard_set(vm, to, to + moved, 0);
         unmap_user_range(_curr_dir, to, to + moved);
         return -ENOMEM;
     }
@@ -9235,7 +9241,7 @@ static uintptr_t madvise_sealed_at(vm_space_t *vm, uintptr_t start, uintptr_t en
 
 /** The mark of a region (vm.h) that `advice` sets or clears: VM_PROT_DONTFORK
  * for MADV_DONTFORK and MADV_DOFORK, VM_PROT_WIPEONFORK for MADV_WIPEONFORK
- * and MADV_KEEPONFORK, VM_PROT_GUARD for the two of guards, or 0. */
+ * and MADV_KEEPONFORK, or 0. */
 static uint32_t madvise_mark_bit(uint32_t advice)
 {
     switch (advice) {
@@ -9245,9 +9251,6 @@ static uint32_t madvise_mark_bit(uint32_t advice)
     case MADV_WIPEONFORK:
     case MADV_KEEPONFORK:
         return VM_PROT_WIPEONFORK;
-    case MADV_GUARD_INSTALL:
-    case MADV_GUARD_REMOVE:
-        return VM_PROT_GUARD;
     default:
         return 0;
     }
@@ -9276,19 +9279,23 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
     if (madvise_refused(vm, addr, end, advice)) {
         return -EINVAL;
     }
-    if (madvise_mark_bit(advice) != 0) {
-        uint32_t bit = madvise_mark_bit(advice);
-        int set =
-            advice == MADV_DONTFORK || advice == MADV_GUARD_INSTALL || advice == MADV_WIPEONFORK;
-
+    if (advice == MADV_GUARD_INSTALL || advice == MADV_GUARD_REMOVE) {
         mm_note_anon(current_proc->mm, addr, end);
-        if (vm_advise(vm, addr, end, set ? bit : 0u, set ? 0u : bit) != 0) {
-            vma_exhausted("madvise");
+        if (vm_guard_set(vm, addr, end, advice == MADV_GUARD_INSTALL) != 0) {
             return -ENOMEM;
         }
         if (advice == MADV_GUARD_INSTALL) {
             mmn_notify(current_proc->mm, MMN_DROP, addr, end);
             unmap_user_range(_curr_dir, addr, end);
+        }
+    } else if (madvise_mark_bit(advice) != 0) {
+        uint32_t bit = madvise_mark_bit(advice);
+        int set = advice == MADV_DONTFORK || advice == MADV_WIPEONFORK;
+
+        mm_note_anon(current_proc->mm, addr, end);
+        if (vm_advise(vm, addr, end, set ? bit : 0u, set ? 0u : bit) != 0) {
+            vma_exhausted("madvise");
+            return -ENOMEM;
         }
     } else if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
         mm_note_anon(current_proc->mm, addr, end);
@@ -9318,13 +9325,14 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
  * MADV_KEEPONFORK clears the mark (VM_PROT_WIPEONFORK, vm.h); WIPEONFORK is
  * EINVAL over a region that is not private anonymous memory, as on Linux,
  * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
- * makes the range a guard (VM_PROT_GUARD, vm.h), whose pages go and whose every
- * access is SIGSEGV with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard,
- * leaving pages that read as zeros; both are EINVAL over a region that may not
- * hold a guard (`madvise_guard_allowed`) and ENOMEM when a region cannot be
- * split. Linux marks a guard's pages in its page tables and splits no region,
- * so a guard shows in /proc/PID/maps here as a region of its own, with the
- * protection of the region it was cut from. Any other advice `madvise_known`
+ * makes the range's pages guard pages (`vm_guard_set`, vm.h), which lose
+ * their frames and whose every access is SIGSEGV with SEGV_MAPERR, and
+ * MADV_GUARD_REMOVE makes them ordinary pages again, which read as zeros;
+ * both are EINVAL over a region that may not hold a guard
+ * (`madvise_guard_allowed`) and ENOMEM when the record of the guards has no
+ * room. As Linux 6.13 and later mark guard pages in the page tables, no
+ * region is split, so a guard adds nothing to /proc/PID/maps or to the count
+ * vm.max_map_count bounds. Any other advice `madvise_known`
  * takes changes nothing, and the rest is EINVAL, as Linux refuses an advice it
  * does not define. A range with a page in no region is ENOMEM, as in Linux. A
  * range that runs past user space is EINVAL, judged by the length as given: a
@@ -10527,7 +10535,7 @@ static int32_t lock_range(uintptr_t addr, uintptr_t len, uintptr_t *start, uintp
  * refuses one with EFAULT. With `go_on` 0, the first failure ends the walk,
  * the regions before it brought in; otherwise the walk goes on past each,
  * as mm_populate does for mlockall. 0, -1 when a page could not be had, or
- * -2 at a region of memfd_secret.
+ * -2 at a region of memfd_secret or a guard page (`vm_populate`).
  */
 static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
 {
@@ -10555,8 +10563,8 @@ static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
         mmap_unlock(mm);
         if ((prot & VM_PROT_SECRET) && !(prot & VM_PROT_LOCKONFAULT)) {
             got = -2;
-        } else if ((prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
-            got = -1;
+        } else if ((prot & VM_PROT_LOCKS) == VM_PROT_LOCKED) {
+            got = vm_populate(at, stop);
         }
         if (got != 0 && rc == 0) {
             rc = got;
@@ -10606,7 +10614,8 @@ static int32_t mlock_change(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint3
  * the range locked. -ENOMEM for a gap, when a split has no room, or, with
  * the rest of the range locked, for a region of memfd_secret, which is left
  * unlocked and uncounted: Linux's mlock_fixup passes such a region over and
- * its populate then fails on it. An unlock leaves such a region as it is.
+ * its populate then fails on it, and for a guard page, which the populate
+ * stops at, the range locked. An unlock leaves such a region as it is.
  */
 static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
 {
