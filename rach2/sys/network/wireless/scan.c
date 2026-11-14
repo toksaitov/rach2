@@ -538,6 +538,25 @@ int wlan_scan_abort(struct wlan_scan *scan)
     return 0;
 }
 
+void wlan_scan_cancel(struct wlan_scan *scan)
+{
+    struct wlan_radio *radio = scan->radio;
+
+    if (!wlan_scan_running(scan)) {
+        return;
+    }
+    scan_cancel_steps(scan);
+    wlan_cancel_work(&scan->done.work);
+    if (scan->state == WLAN_SCAN_HARDWARE && !scan->hw_done && radio->ops->scan_cancel) {
+        radio->ops->scan_cancel(radio);
+    }
+    if (scan->state == WLAN_SCAN_SOFTWARE) {
+        (void)scan_return(scan);
+    }
+    scan->off_home = 0;
+    scan_finish(scan, 1);
+}
+
 void wlan_scan_set_home(struct wlan_scan *scan, const struct wlan_channel *channel,
                         unsigned filters)
 {

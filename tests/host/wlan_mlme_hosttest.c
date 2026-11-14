@@ -136,6 +136,12 @@ void wlan_scan_retuned(struct wlan_scan *s)
     (void)s;
 }
 
+/** No scan runs here, so none is cancelled. */
+void wlan_scan_cancel(struct wlan_scan *s)
+{
+    (void)s;
+}
+
 /** Keep the event and a copy of its borrowed frame. */
 static void iface_event(struct wlan *wlan, const struct wlan_event *event)
 {

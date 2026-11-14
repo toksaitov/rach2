@@ -240,6 +240,19 @@ int wlan_scan_start(struct wlan_scan *scan, const struct wlan_scan_request *requ
  * called outside the worker. Returns 0, or -ENOENT when no scan runs. */
 int wlan_scan_abort(struct wlan_scan *scan);
 
+/**
+ * End the running scan now, for a caller that is about to send on a channel
+ * of its own, as mac80211's ieee80211_scan_cancel does for
+ * ieee80211_prep_connection. The software scan's steps are cancelled; it
+ * returns the radio to the home channel when one is set, and otherwise leaves
+ * the radio for the caller to tune, and a trip away ends with the station
+ * back. The radio's own scan is cancelled through `scan_cancel`. Either way
+ * WLAN_EVENT_SCAN_ABORTED is reported before the call returns, and nothing
+ * the scan queued tunes the radio later. Worker only; does nothing when no
+ * scan runs.
+ */
+void wlan_scan_cancel(struct wlan_scan *scan);
+
 /** Whether a scan is accepted and not yet finished. */
 int wlan_scan_running(const struct wlan_scan *scan);
 

@@ -1691,6 +1691,12 @@ void wlan_scan_retuned(struct wlan_scan *s)
     (void)s;
 }
 
+/** No scan runs here, so none is cancelled. */
+void wlan_scan_cancel(struct wlan_scan *s)
+{
+    (void)s;
+}
+
 /** Take a management frame; the rows script the AP's answers. */
 static int mon_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, unsigned flags)
 {

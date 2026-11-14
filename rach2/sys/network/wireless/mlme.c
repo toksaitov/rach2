@@ -304,7 +304,9 @@ static void auth_build(struct wlan_mlme *m, const struct wlan_mlme_auth *req)
 /**
  * Leave whatever came before and take req->bss on its channel in state
  * AUTHENTICATING. An association ends as mac80211's does for a new
- * authentication: reported, its frame not sent.
+ * authentication: reported, its frame not sent. A running scan is then
+ * cancelled before the radio is tuned, as ieee80211_prep_connection does, so
+ * that no step of it tunes the radio away from the AP.
  */
 static int auth_begin(struct wlan_mlme *m, const struct wlan_mlme_auth *req)
 {
@@ -318,9 +320,9 @@ static int auth_begin(struct wlan_mlme *m, const struct wlan_mlme_auth *req)
         disconnect(m, IEEE80211_STYPE_DEAUTH, WLAN_REASON_UNSPECIFIED, 0);
     else if (m->state != WLAN_STA_NONE)
         drop(m);
-    err = m->radio->ops->config(m->radio, ch, 0);
     if (m->scan)
-        wlan_scan_retuned(m->scan);
+        wlan_scan_cancel(m->scan);
+    err = m->radio->ops->config(m->radio, ch, 0);
     if (err)
         return err;
     m->bss = req->bss;
@@ -360,6 +362,8 @@ int wlan_mlme_authenticate(struct wlan_mlme *m, const struct wlan_mlme_auth *req
         err = auth_begin(m, req);
         if (err)
             return err;
+    } else if (m->scan) {
+        wlan_scan_cancel(m->scan);
     }
     auth_build(m, req);
     m->tries = 0;
@@ -624,6 +628,8 @@ int wlan_mlme_associate(struct wlan_mlme *m, const struct wlan_mlme_assoc *req)
     err = assoc_build(m, req);
     if (err)
         return err;
+    if (m->scan)
+        wlan_scan_cancel(m->scan);
     m->mfp = req->mfp != 0;
     m->assoc_flags = req->flags;
     err = set_state(m, WLAN_STA_ASSOCIATING);

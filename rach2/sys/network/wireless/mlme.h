@@ -212,15 +212,19 @@ void wlan_mlme_stop(struct wlan_mlme *m);
  * Start or continue an authentication. An association with another BSS
  * ends first, reported as a local deauthentication with no frame sent. A
  * second SAE request to the BSS being authenticated continues the exchange.
- * Returns 0, -EINVAL for a bad request, -EOPNOTSUPP for another algorithm,
- * -EMSGSIZE when the frame would not fit, or the radio's error.
+ * A running scan is cancelled and reported aborted before the frame goes out,
+ * as mac80211's ieee80211_prep_connection cancels it. Returns 0, -EINVAL
+ * for a bad request, -EOPNOTSUPP for another algorithm, -EMSGSIZE when the
+ * frame would not fit, or the radio's error.
  */
 int wlan_mlme_authenticate(struct wlan_mlme *m, const struct wlan_mlme_auth *req);
 
 /**
  * Send an association request, a reassociation request when prev_bssid is
- * set. Returns 0, -ENOLINK unless authenticated with req->bss, -EINVAL,
- * -EMSGSIZE, or the radio's error; on an error the state is unchanged.
+ * set. A running scan is cancelled first, as for an authentication, and the
+ * radio is back on the AP's channel before the request goes out. Returns 0,
+ * -ENOLINK unless authenticated with req->bss, -EINVAL, -EMSGSIZE, or the
+ * radio's error; on an error the state is unchanged.
  */
 int wlan_mlme_associate(struct wlan_mlme *m, const struct wlan_mlme_assoc *req);
 
