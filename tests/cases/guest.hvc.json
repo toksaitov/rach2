@@ -1,0 +1,271 @@
+{
+ "schema_version": 1,
+ "family_id": "guest.hvc",
+ "summary": "The virtio console as a program sees it: with one of its ports as the kernel's console, as on every guest case's machine, and its absence when the boot line names the UART; each case boots the test image and runs hvcmusl",
+ "cases": [
+  {
+   "case_id": "guest.hvc.port",
+   "behavior": "A guest case's machine has a virtio console and no UART, and the kernel takes the device's port 1 as its console by the console=vport0p1 that etude adds to the boot line: the device is bound to virtio_console, /dev/vport0p1 is the console terminal, and the log names the port",
+   "units": [
+    "musl/hvcmusl"
+   ],
+   "domain": "guest",
+   "architectures": [
+    "i686",
+    "x86_64"
+   ],
+   "workload": {
+    "arguments": [
+     "vport0p1"
+    ],
+    "inputs": {},
+    "repetitions": 1,
+    "seed": null
+   },
+   "requirements": {
+    "host_api": "c",
+    "tools": [],
+    "features": {},
+    "qemu": {
+     "kernel": "kernel",
+     "initrd": "test-image",
+     "disks": [],
+     "cpu": "max",
+     "processors": 1,
+     "memory_bytes": 134217728,
+     "firmware": "direct",
+     "devices": [
+      "virtio-net-pci"
+     ],
+     "boot_options": []
+    }
+   },
+   "execution": {
+    "program": "hvcmusl",
+    "stdin": null,
+    "role": "ordinary",
+    "privileges": "any",
+    "isolation": [],
+    "children": "reaped",
+    "cleanup": "nothing to remove"
+   },
+   "assertions": [
+    {
+     "assertion_id": "named",
+     "checks": "/proc/cmdline has the word console=vport0p1.",
+     "source": "program"
+    },
+    {
+     "assertion_id": "bound",
+     "checks": "One device of /sys/bus/virtio has DRIVER=virtio_console in its uevent.",
+     "source": "program"
+    },
+    {
+     "assertion_id": "node",
+     "checks": "/dev/vport0p1 is the character device 245:1, and /dev/hvc0, a console port's node, does not exist.",
+     "source": "program"
+    },
+    {
+     "assertion_id": "listed",
+     "checks": "/dev lists vport0p1 once and hvc0 never.",
+     "source": "program"
+    },
+    {
+     "assertion_id": "terminal",
+     "checks": "An open of /dev/vport0p1 is a terminal with the modes and the size of /dev/console.",
+     "source": "program"
+    },
+    {
+     "assertion_id": "log",
+     "checks": "The kernel's log has the driver's record of its binding and the console's record of the port, console: enabled: vport0p1, port 1 of the device.",
+     "source": "program"
+    }
+   ],
+   "branches": [],
+   "termination": {
+    "end": "exited",
+    "value": 0
+   },
+   "progress": [],
+   "bounds": {
+    "case": {
+     "floor_us": 1000000,
+     "initial_us": 300000000,
+     "ceiling_us": 900000000
+    },
+    "gap": {
+     "floor_us": 1000000,
+     "initial_us": 120000000,
+     "ceiling_us": 600000000
+    },
+    "stages": {
+     "boot": {
+      "floor_us": 1000000,
+      "initial_us": 120000000,
+      "ceiling_us": 600000000
+     }
+    }
+   },
+   "resources": {
+    "cpu_millis": 1000,
+    "cpu_ceiling_millis": 1000,
+    "memory_bytes": 268435456,
+    "disk_bytes": 0,
+    "locks": [],
+    "ports": 0,
+    "loop_devices": 0
+   },
+   "prepare": [
+    {
+     "name": "hvcmusl",
+     "node": "tests/musl/hvcmusl",
+     "per_architecture": true
+    },
+    {
+     "name": "kernel",
+     "node": "rach2/kernel",
+     "per_architecture": true
+    },
+    {
+     "name": "etude-guest",
+     "node": "tools/etude/guest/etude-guest",
+     "per_architecture": true
+    },
+    {
+     "name": "test-image",
+     "node": "images/test.krffs",
+     "per_architecture": true
+    }
+   ],
+   "timing": [],
+   "native": {
+    "plan": "none",
+    "class": "QEMU",
+    "reason": "the port is a device of QEMU's, which etude gives a guest case's machine, and the Lenovo has no virtio console"
+   }
+  },
+  {
+   "case_id": "guest.hvc.uart",
+   "behavior": "A guest case whose boot options name a console keeps the UART, and its machine has no virtio console: with console=ttyS0 neither /dev/vport0p1 nor /dev/hvc0 exists, no device is bound to virtio_console, and the log names no port as the console",
+   "units": [
+    "musl/hvcmusl"
+   ],
+   "domain": "guest",
+   "architectures": [
+    "i686",
+    "x86_64"
+   ],
+   "workload": {
+    "arguments": [
+     "ttyS0"
+    ],
+    "inputs": {},
+    "repetitions": 1,
+    "seed": null
+   },
+   "requirements": {
+    "host_api": "c",
+    "tools": [],
+    "features": {},
+    "qemu": {
+     "kernel": "kernel",
+     "initrd": "test-image",
+     "disks": [],
+     "cpu": "max",
+     "processors": 1,
+     "memory_bytes": 134217728,
+     "firmware": "direct",
+     "devices": [
+      "virtio-net-pci"
+     ],
+     "boot_options": [
+      "console=ttyS0"
+     ]
+    }
+   },
+   "execution": {
+    "program": "hvcmusl",
+    "stdin": null,
+    "role": "ordinary",
+    "privileges": "any",
+    "isolation": [],
+    "children": "reaped",
+    "cleanup": "nothing to remove"
+   },
+   "assertions": [
+    {
+     "assertion_id": "named",
+     "checks": "/proc/cmdline has the word console=ttyS0 and no console=vport0p1.",
+     "source": "program"
+    },
+    {
+     "assertion_id": "absent",
+     "checks": "/dev/vport0p1 and /dev/hvc0 do not exist, by name or in /dev's listing; no device of /sys/bus/virtio is bound to virtio_console; and the log has no record of a port as the console.",
+     "source": "program"
+    }
+   ],
+   "branches": [],
+   "termination": {
+    "end": "exited",
+    "value": 0
+   },
+   "progress": [],
+   "bounds": {
+    "case": {
+     "floor_us": 1000000,
+     "initial_us": 300000000,
+     "ceiling_us": 900000000
+    },
+    "gap": {
+     "floor_us": 1000000,
+     "initial_us": 120000000,
+     "ceiling_us": 600000000
+    },
+    "stages": {
+     "boot": {
+      "floor_us": 1000000,
+      "initial_us": 120000000,
+      "ceiling_us": 600000000
+     }
+    }
+   },
+   "resources": {
+    "cpu_millis": 1000,
+    "cpu_ceiling_millis": 1000,
+    "memory_bytes": 268435456,
+    "disk_bytes": 0,
+    "locks": [],
+    "ports": 0,
+    "loop_devices": 0
+   },
+   "prepare": [
+    {
+     "name": "hvcmusl",
+     "node": "tests/musl/hvcmusl",
+     "per_architecture": true
+    },
+    {
+     "name": "kernel",
+     "node": "rach2/kernel",
+     "per_architecture": true
+    },
+    {
+     "name": "etude-guest",
+     "node": "tools/etude/guest/etude-guest",
+     "per_architecture": true
+    },
+    {
+     "name": "test-image",
+     "node": "images/test.krffs",
+     "per_architecture": true
+    }
+   ],
+   "timing": [],
+   "native": {
+    "plan": "none",
+    "class": "QEMU",
+    "reason": "the case is the other half of guest.hvc.port, a machine of QEMU's without the virtio console; the Lenovo's UART is the console of every native run"
+   }
+  }
+ ]
+}

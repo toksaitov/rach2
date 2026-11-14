@@ -216,6 +216,13 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # kvm-clock is listed. vdsomusl takes which of these to require from the
 # accelerator the runner names, and not from the kernel. It is the case of
 # tests/cases/guest.kvmclock.json, which etude runs, and has no target here.
+# `tests/run hvc`: the virtio console as a program sees it: on a guest
+# case's machine, whose console is the device's port 1 by the
+# console=vport0p1 that etude adds, the device is bound to virtio_console,
+# /dev/vport0p1 is the console terminal and the log names the port, by
+# hvcmusl; and a boot whose options name ttyS0 keeps the UART and has no
+# virtio console. They are the cases of tests/cases/guest.hvc.json, which
+# etude runs, and have no target here.
 # `tests/run ia32`: an i386 and an x86-64 program on the x86-64 kernel exec
 # each other, pass descriptors, share a futex, trace each other, run under
 # each other's seccomp filters and queue signals to each other, each in its

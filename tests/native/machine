@@ -53,3 +53,4 @@ i915gemprobe QEMU's edu device standing in for the HD 4400 by rach2.i915fake, wh
 gpucompatprobe an i386 program's GPU requests on the x86-64 kernel, under QEMU virgl or the edu i915 fault backend
 i915execprobe QEMU's edu device standing in for the HD 4400 by rach2.i915fake, which no installed machine has
 i915resetprobe QEMU's edu device standing in for the HD 4400 by rach2.i915fake, which no installed machine has
+musl/hvcmusl a virtio console, which QEMU gives the machine and the Lenovo lacks, and a boot line that names its port or the UART
