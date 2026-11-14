@@ -13,6 +13,9 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../proc/percpu.h"
+#include "../proc/process.h"
+#include "../klog.h"
+#include "../rtc.h"
 
 #define MSR_IA32_P5_MC_ADDR    0x000u
 #define MSR_IA32_P5_MC_TYPE    0x001u
@@ -165,7 +168,10 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_UCODE_REV,
                                       MSR_TSC_AUX};
 
-static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV, 0x345u}; /* PERF_CAPABILITIES */
+/* KVM_GET_MSR_FEATURE_INDEX_LIST, in Linux's order of
+ * msr_based_features_all_except_vmx: the microcode revision,
+ * PERF_CAPABILITIES and PLATFORM_INFO. */
+static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV, 0x345u, MSR_PLATFORM_INFO};
 
 #define N_INDEX   (sizeof(index_list) / sizeof(index_list[0]))
 #define N_FEATURE (sizeof(feature_list) / sizeof(feature_list[0]))
@@ -353,41 +359,179 @@ void kvm_virt_ssbd_switch(const struct kvm_vcpu *v, int cpu, int in)
     }
 }
 
-const uint32_t *kvm_msr_list(int feature, uint32_t *n)
-{
-    static uint32_t list[N_INDEX + 40u];
-    uint64_t probe;
-    uint32_t i;
+/* The room `index_msrs` needs: the index list and the MSRs it adds. */
+#define N_LIST (N_INDEX + 40u)
 
-    if (feature) {
-        *n = N_FEATURE;
-        return feature_list;
-    }
-    *n = (uint32_t)N_INDEX - (host_rdtscp() ? 0u : 1u);
-    for (i = 0; i < *n; i++) {
+/** KVM_GET_MSR_INDEX_LIST into `list`, of N_LIST entries: the count. */
+static uint32_t index_msrs(uint32_t *list)
+{
+    uint64_t probe;
+    uint32_t i, n;
+
+    n = (uint32_t)N_INDEX - (host_rdtscp() ? 0u : 1u);
+    for (i = 0; i < n; i++) {
         list[i] = index_list[i];
     }
     /* Linux saves DEBUGCTL among msrs_to_save_base (arch/x86/kvm/x86.c:323)
      * wherever the host reads it, as every host with VMX or SVM does, and
      * the four last-branch MSRs beside it (x86.c:324-325) wherever AMD's
      * host has them. */
-    list[(*n)++] = MSR_IA32_DEBUGCTL;
+    list[n++] = MSR_IA32_DEBUGCTL;
     /* SPEC_CTRL where the host has it, as Linux's kvm_probe_msr_to_save,
      * and SVM's VIRT_SPEC_CTRL among the emulated MSRs (x86.c:313, 403). */
     if (kcpu_rdmsr_safe(MSR_IA32_SPEC_CTRL, &probe) == 0) {
-        list[(*n)++] = MSR_IA32_SPEC_CTRL;
+        list[n++] = MSR_IA32_SPEC_CTRL;
     }
     if (kvm_backend == &kvm_svm) {
-        list[(*n)++] = MSR_AMD64_VIRT_SPEC;
+        list[n++] = MSR_AMD64_VIRT_SPEC;
     }
     for (i = 0; kvm_backend == &kvm_svm && i < N_LASTBRANCH; i++) {
-        list[(*n)++] = MSR_LASTBRANCH_FROM + i;
+        list[n++] = MSR_LASTBRANCH_FROM + i;
     }
-    *n += kvm_pmu_msr_list(list + *n);
+    return n + kvm_pmu_msr_list(list + n);
+}
+
+const uint32_t *kvm_msr_list(int feature, uint32_t *n)
+{
+    static uint32_t list[N_LIST];
+
+    if (feature) {
+        *n = N_FEATURE;
+        return feature_list;
+    }
+    *n = index_msrs(list);
     return list;
 }
 
-int kvm_msr_feature(uint32_t index, uint64_t *value)
+/** Whether KVM_GET_MSR_INDEX_LIST names `index`, as Linux's
+ * kvm_is_advertised_msr looks in msrs_to_save and emulated_msrs. */
+static int msr_advertised(uint32_t index)
+{
+    uint32_t list[N_LIST];
+    uint32_t i, n = index_msrs(list);
+
+    for (i = 0; i < n; i++) {
+        if (list[i] == index) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Linux's kvm_pr_unimpl rate-limits its lines by printk's default state,
+ * DEFAULT_RATELIMIT_BURST lines in each DEFAULT_RATELIMIT_INTERVAL, 10 in
+ * 5 seconds (include/linux/ratelimit_types.h, lines 9 and 10). */
+#define IGNORED_LOG_BURST     10u
+#define IGNORED_LOG_WINDOW_MS 5000u
+
+/* That state: when the window opened, by the raw monotonic clock in
+ * milliseconds, whether one has, and the lines logged and held back in
+ * it. */
+static struct spinlock ignored_rs_lock = SPINLOCK_INIT_NAMED("kvm_ignored_rs");
+static uint32_t ignored_rs_begin, ignored_rs_printed, ignored_rs_missed;
+static int ignored_rs_open;
+
+/**
+ * Whether an ignored access's line may be logged now, as Linux's
+ * ___ratelimit answers (lib/ratelimit.c, lines 27 to 75): 1 for the first
+ * IGNORED_LOG_BURST lines of a window, 0 for the rest, which are counted.
+ * The first line asked for after a window ends opens the next, and
+ * `*missed` is then the count the last one held back, for the caller to
+ * log first; otherwise 0. A caller that finds the state taken is held back
+ * uncounted, as ___ratelimit's trylock holds it back.
+ */
+static int ignored_ratelimit(uint32_t *missed)
+{
+    int64_t sec, nsec;
+    uint32_t now;
+    int ok;
+
+    rtc_raw_monotonic(&sec, &nsec);
+    now = (uint32_t)sec * 1000u + (uint32_t)nsec / 1000000u;
+    *missed = 0;
+    if (!spin_trylock(&ignored_rs_lock)) {
+        return 0;
+    }
+    if (!ignored_rs_open) {
+        ignored_rs_open = 1;
+        ignored_rs_begin = now;
+    }
+    if (now - ignored_rs_begin > IGNORED_LOG_WINDOW_MS) {
+        *missed = ignored_rs_missed;
+        ignored_rs_missed = 0;
+        ignored_rs_begin = now;
+        ignored_rs_printed = 0;
+    }
+    ok = ignored_rs_printed < IGNORED_LOG_BURST;
+    if (ok) {
+        ignored_rs_printed++;
+    } else {
+        ignored_rs_missed++;
+    }
+    spin_unlock(&ignored_rs_lock);
+    return ok;
+}
+
+/** Log, as Linux's kvm_pr_unimpl in kvm_do_msr_access, the access of
+ * `index` that `ignore_msrs` let succeed, a write when `write` is set,
+ * with the value read or written, under the rate limit. */
+static void report_ignored(uint32_t index, int write, uint64_t value)
+{
+    char hex[17];
+    uint32_t missed;
+    int i = 16, digit;
+
+    if (!ignored_ratelimit(&missed)) {
+        return;
+    }
+    if (missed != 0) {
+        klog(KLOG_ERR, "kvm", "ignored msrs: %u lines suppressed", (unsigned int)missed);
+    }
+    hex[i] = '\0';
+    do {
+        digit = (int)(value & 0xFu);
+        hex[--i] = (char)(digit < 10 ? '0' + digit : 'a' + digit - 10);
+        value >>= 4;
+    } while (value != 0);
+    klog(KLOG_ERR, "kvm", "ignored %s: 0x%x data 0x%s, process %u", write ? "wrmsr" : "rdmsr",
+         (unsigned int)index, hex + i, current_proc ? (unsigned int)current_proc->tgid : 0u);
+}
+
+/**
+ * The answer to an access of the MSR `index` whose handler answered `r`,
+ * with `*value` the value read, or written when `write` is set, as Linux's
+ * kvm_do_msr_access judges it. A failed read gives 0, so that nothing of
+ * an earlier value reaches the guest or the caller. An MSR KVM does not
+ * have (KVM_MSR_UNKNOWN) is then the caller's to read, and to write 0 to,
+ * when KVM_GET_MSR_INDEX_LIST names it; otherwise it fails, unless
+ * `ignore_msrs` is set, under which the access succeeds and, while
+ * `report_ignored_msrs` is set, is logged. A refused value or access
+ * stays refused.
+ */
+static int msr_access(uint32_t index, int r, int write, uint64_t *value, int host)
+{
+    if (r != 0 && !write) {
+        *value = 0;
+    }
+    if (r != KVM_MSR_UNKNOWN) {
+        return r;
+    }
+    if (host && *value == 0 && msr_advertised(index)) {
+        return 0;
+    }
+    if (!kvm_ignore_msrs) {
+        return r;
+    }
+    if (kvm_report_ignored_msrs) {
+        report_ignored(index, write, *value);
+    }
+    return 0;
+}
+
+/** Read the feature MSR `index` into `*value`, as Linux's
+ * kvm_get_feature_msr: 0, or KVM_MSR_UNKNOWN for one not on the feature
+ * list. */
+static int feature_get(uint32_t index, uint64_t *value)
 {
     uint32_t lo = 0, hi = 0;
 
@@ -398,7 +542,16 @@ int kvm_msr_feature(uint32_t index, uint64_t *value)
         *value = ((uint64_t)hi << 32) | lo;
         return 0;
     }
-    return kvm_pmu_feature(index, value);
+    if (index == MSR_PLATFORM_INFO) {
+        *value = PLATFORM_INFO_CPUID_FAULT;
+        return 0;
+    }
+    return kvm_pmu_feature(index, value) == 0 ? 0 : KVM_MSR_UNKNOWN;
+}
+
+int kvm_msr_feature(uint32_t index, uint64_t *value)
+{
+    return msr_access(index, feature_get(index, value), 0, value, 1);
 }
 
 /** Whether `t` is a memory type an MTRR or PAT may name: UC, WC, WT, WP
@@ -1022,27 +1175,17 @@ static int msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
     return 0;
 }
 
-/* A read that fails gives 0, so that nothing of an earlier value reaches
- * the guest or the caller, and an MSR KVM does not have is then read as 0
- * under `ignore_msrs`, as Linux's kvm_do_msr_access answers
- * KVM_MSR_RET_UNSUPPORTED; a value refused stays refused. */
+/* The handler's answer, as `msr_access` judges it. */
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
 {
-    int r = msr_get(v, index, value, host);
-
-    if (r != 0) {
-        *value = 0;
-    }
-    return r == KVM_MSR_UNKNOWN && kvm_ignore_msrs ? 0 : r;
+    return msr_access(index, msr_get(v, index, value, host), 0, value, host);
 }
 
-/* An MSR KVM does not have takes any write, and keeps nothing, under
- * `ignore_msrs`, as Linux's kvm_do_msr_access. */
+/* The handler's answer, as `msr_access` judges it; an ignored write keeps
+ * nothing. */
 int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
 {
-    int r = msr_set(v, index, value, host);
-
-    return r == KVM_MSR_UNKNOWN && kvm_ignore_msrs ? 0 : r;
+    return msr_access(index, msr_set(v, index, value, host), 1, &value, host);
 }
 
 /* ---- the filter and the caller's exits ---- */

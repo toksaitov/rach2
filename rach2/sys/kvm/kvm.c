@@ -326,8 +326,9 @@ static int32_t get_msr_list(uintptr_t arg, int feature)
 }
 
 /** KVM_GET_MSRS of /dev/kvm: the feature MSRs the caller names, read in
- * order until one is not a feature MSR. The count read, -E2BIG for
- * KVM_MAX_MSR_ENTRIES or more, -ENOMEM or -EFAULT. */
+ * order until one fails, as `kvm_msr_feature` judges it, whose entry reads
+ * 0. The count read, -E2BIG for KVM_MAX_MSR_ENTRIES or more, -ENOMEM or
+ * -EFAULT. */
 static int32_t get_feature_msrs(uintptr_t arg)
 {
     struct kvm_msrs head;
@@ -916,19 +917,19 @@ static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl,
 static struct devfs_node kvm_node = {"kvm", 10, 232, 0666, &dev_ops, NULL, NULL};
 
 int kvm_ignore_msrs;
+int kvm_report_ignored_msrs = 1;
 int kvm_force_emulation_prefix;
-int kvm_eager_page_split;
+int kvm_eager_page_split = 1;
 
 /*
  * The module parameters Linux's KVM selftests read, as Linux's files under
  * /sys/module give them, with what Rach2's KVM does: host-dependent
  * performance counters, the guest-physical tables always (EPT or nested
  * paging, with the unrestricted guest on VMX), which are read-only, and the
- * three Linux lets root write, 0644: `force_emulation_prefix`, 0, and
- * `ignore_msrs` and `eager_page_split`, N, whose effects kvm.h describes.
- * Linux's `eager_page_split` is Y; Rach2's N keeps the dropping of a slot's
- * leaves that dirty logging has always had. Every selftest reads
- * `force_emulation_prefix` before its main and skips without it.
+ * four Linux lets root write, 0644, with Linux's defaults:
+ * `force_emulation_prefix`, 0, `ignore_msrs`, N, and `report_ignored_msrs`
+ * and `eager_page_split`, Y, whose effects kvm.h describes. Every selftest
+ * reads `force_emulation_prefix` before its main and skips without it.
  */
 static const char *const kvm_modules[] = {"kvm", "kvm_intel", "kvm_amd"};
 
@@ -949,6 +950,7 @@ static const struct kvm_param {
                   {0, "tdp_mmu", 'Y', PARAM_FIXED, NULL},
                   {0, "eager_page_split", 0, PARAM_BOOL, &kvm_eager_page_split},
                   {0, "ignore_msrs", 0, PARAM_BOOL, &kvm_ignore_msrs},
+                  {0, "report_ignored_msrs", 0, PARAM_BOOL, &kvm_report_ignored_msrs},
                   {1, "ept", 'Y', PARAM_FIXED, NULL},
                   {1, "unrestricted_guest", 'Y', PARAM_FIXED, NULL},
                   {2, "npt", 'Y', PARAM_FIXED, NULL},
@@ -1062,12 +1064,14 @@ static int params_start(int backend)
     return 0;
 }
 
-/** Take kvm.ignore_msrs, kvm.force_emulation_prefix and
- * kvm.eager_page_split from the boot line, as Linux's parse_args gives a
- * built-in module's parameters theirs. */
+/** Take kvm.ignore_msrs, kvm.report_ignored_msrs,
+ * kvm.force_emulation_prefix and kvm.eager_page_split from the boot line,
+ * as Linux's parse_args gives a built-in module's parameters theirs. */
 static void params_boot(void)
 {
     kvm_ignore_msrs = kcmdline_param_bool("kvm.ignore_msrs", kvm_ignore_msrs);
+    kvm_report_ignored_msrs =
+        kcmdline_param_bool("kvm.report_ignored_msrs", kvm_report_ignored_msrs);
     kvm_eager_page_split = kcmdline_param_bool("kvm.eager_page_split", kvm_eager_page_split);
     kvm_force_emulation_prefix =
         kcmdline_param_int("kvm.force_emulation_prefix", kvm_force_emulation_prefix);

@@ -355,14 +355,17 @@ extern const struct kvm_backend *kvm_backend;
 
 /* KVM's writable module parameters, /sys/module/kvm/parameters, which root
  * sets as Linux's: `ignore_msrs`, under which an MSR KVM does not have
- * reads 0 and takes any write (`kvm_msr_get`); `force_emulation_prefix`,
- * under which the bytes ud2 and "kvm" before an instruction have the
- * emulator run it (`kvm_emul_ud`), bit 1 clearing RFLAGS.RF first; and
- * `eager_page_split`, under which turning a slot's dirty log on splits its
- * 2 MiB leaves and takes the write right from its leaves in place of
- * dropping them (`kvm_tdp_split_protect`). Each is read where it acts, so
- * that a write counts from the next access, exit or change of a slot. */
+ * reads 0 and takes any write (`kvm_msr_get`); `report_ignored_msrs`,
+ * under which each such access is logged, at most ten lines in five
+ * seconds; `force_emulation_prefix`, under which the bytes ud2 and "kvm"
+ * before an instruction have the emulator run it (`kvm_emul_ud`), bit 1
+ * clearing RFLAGS.RF first; and `eager_page_split`, under which turning a
+ * slot's dirty log on splits its 2 MiB leaves and takes the write right
+ * from its leaves in place of dropping them (`kvm_tdp_split_protect`).
+ * Each is read where it acts, so that a write counts from the next access,
+ * exit or change of a slot. */
 extern int kvm_ignore_msrs;
+extern int kvm_report_ignored_msrs;
 extern int kvm_force_emulation_prefix;
 extern int kvm_eager_page_split;
 
@@ -1027,8 +1030,11 @@ int kvm_pv_has(const struct kvm_vcpu *v, int bit);
  * list for `feature`. */
 const uint32_t *kvm_msr_list(int feature, uint32_t *n);
 
-/** The value of the feature MSR `index` into `*value`: 0, or -1 for an
- * MSR not on the feature list. */
+/** The value of the feature MSR `index` into `*value`, KVM_GET_MSRS of
+ * /dev/kvm, as Linux's do_get_feature_msr: 0, or KVM_MSR_UNKNOWN for an
+ * MSR not on the feature list, with `*value` 0. One that is not reads 0
+ * with success when KVM_GET_MSR_INDEX_LIST names it, or under
+ * `kvm_ignore_msrs`, as `kvm_msr_get` judges one. */
 int kvm_msr_feature(uint32_t index, uint64_t *value);
 
 /** Give `v` the MSRs of a vCPU at power-on. */
@@ -1082,14 +1088,17 @@ uint64_t kvm_spec_ctrl_host(int cpu);
 /** Read the MSR `index` of `v`, as the caller of KVM_GET_MSRS when `host`
  * is set and as the guest otherwise, which Linux's host_initiated tells
  * apart: 0, KVM_MSR_INVAL or KVM_MSR_UNKNOWN, with `*value` 0 on a failure.
- * Under `kvm_ignore_msrs` an MSR KVM does not have reads 0 with success. */
+ * An MSR KVM does not have reads 0 with success for the caller when
+ * KVM_GET_MSR_INDEX_LIST names it, and for either under
+ * `kvm_ignore_msrs`, logged while `kvm_report_ignored_msrs` is set, as
+ * Linux's kvm_do_msr_access. */
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host);
 
 /** Write the MSR `index` of `v`, as `kvm_msr_get` reads it, with the
  * checks Linux makes of a write from the host or from the guest: 0,
- * KVM_MSR_INVAL or KVM_MSR_UNKNOWN. Marks KVM_PART_MSRS dirty. Under
- * `kvm_ignore_msrs` a write of an MSR KVM does not have succeeds and keeps
- * nothing. */
+ * KVM_MSR_INVAL or KVM_MSR_UNKNOWN. Marks KVM_PART_MSRS dirty. A write of
+ * an MSR KVM does not have succeeds and keeps nothing where `kvm_msr_get`
+ * lets its read succeed, the caller's only when it writes 0. */
 int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host);
 
 /** Whether the guest of `v` may access the MSR `index`, a write when
