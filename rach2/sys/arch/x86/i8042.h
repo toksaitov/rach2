@@ -62,8 +62,21 @@ int ps2_wait_input(void);
 int ps2_wait_output(void);
 
 /** Write `cmd` to the controller's command port once its input buffer is
- * empty. Returns 0, or -1 when the buffer never empties. */
+ * empty, after the configuration byte a WRITE_CONFIG still owes it, when
+ * `ps2_write_config` left one owed. Returns 0, or -1 when the buffer never
+ * empties. */
 int ps2_send_command(uint8_t cmd);
+
+/**
+ * Write `config` as the controller's configuration byte: WRITE_CONFIG, and
+ * the byte once the controller has taken the command. Returns 0, or -1
+ * when the controller does not take the command or the byte cannot be
+ * written. When the command went out but was not taken, the controller may
+ * still take it and wait for its byte: the byte is then owed, and the next
+ * `ps2_send_command` or `ps2_kbd_write` writes it first, so that no other
+ * byte becomes the configuration. The caller keeps interrupts off.
+ */
+int ps2_write_config(uint8_t config);
 
 /**
  * Read the controller's configuration byte as Linux's i8042_controller_init
@@ -76,9 +89,12 @@ int ps2_send_command(uint8_t cmd);
  * its CTR, and once the controller has taken it, and so has answered every
  * READ_CONFIG, the bytes left are drained again, as Linux's i8042_flush ends
  * its setup, so that no handler takes one for a device's byte.
- * Returns the byte, or -1 when no controller answers, a read times out or
- * no two reads agree. The caller keeps interrupts off, so that no handler
- * takes the byte.
+ * Returns the byte, or -1 when no controller answers, a read times out, no
+ * two reads agree or the write-back fails, as Linux's setup fails. A
+ * write-back the controller took the command of late leaves the agreed
+ * byte owed, with translation on as the caller takes it after a failure,
+ * and the next byte written settles it (`ps2_write_config`). The caller
+ * keeps interrupts off, so that no handler takes the byte.
  */
 int ps2_read_config(void);
 
@@ -86,7 +102,8 @@ int ps2_read_config(void);
  * Write `byte` to the keyboard, on the controller's first port, only when
  * the input buffer is empty now: it does not wait, so a timer or interrupt
  * handler may call it. Returns 0 when the byte went out, and -1 when the
- * buffer was full or no controller answers, for the caller to try again.
+ * buffer was full, no controller answers, or the configuration byte that a
+ * WRITE_CONFIG owed went out in its place, for the caller to try again.
  */
 int ps2_kbd_write(uint8_t byte);
 

@@ -1751,17 +1751,11 @@ int init_mouse(void)
     config |= PS2_CONFIG_MOUSE_IRQ;  /* enable IRQ12 */
     config &= ~PS2_CONFIG_MOUSE_CLK; /* clear the clock-disable bit */
 
-    if (ps2_send_command(PS2_CMD_WRITE_CONFIG) < 0) {
+    if (ps2_write_config(config) < 0) {
         klog(KLOG_WARN, "mouse", "the configuration byte would not write");
         arch_irq_enable();
         return -1;
     }
-    if (ps2_wait_input() < 0) {
-        klog(KLOG_WARN, "mouse", "writing the configuration byte timed out");
-        arch_irq_enable();
-        return -1;
-    }
-    outb(PS2_DATA_PORT, config);
 
     evdev_sysfs_serio_driver(1, aux_files);
     booting = 1;

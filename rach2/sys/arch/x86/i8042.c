@@ -17,6 +17,13 @@
  * row agree, Linux's in i8042_controller_init. */
 #define PS2_CONFIG_READS 10
 
+/* The configuration byte a WRITE_CONFIG still owes the controller, or -1:
+ * the command went out and the controller had not taken it when the wait
+ * ran out, so it may take it late and then take the next byte written to
+ * the data port for its configuration. Every later write gives it this
+ * byte first, so that no command or keyboard byte becomes it. */
+static int config_owed = -1;
+
 uint32_t ps2_wait_begin(void)
 {
 #ifndef RACH2_HOSTTEST
@@ -66,10 +73,30 @@ int ps2_wait_output(void)
 
 int ps2_send_command(uint8_t cmd)
 {
+    if (config_owed >= 0) {
+        if (ps2_wait_input() < 0) {
+            return -1;
+        }
+        outb(PS2_DATA_PORT, (uint8_t)config_owed);
+        config_owed = -1;
+    }
     if (ps2_wait_input() < 0) {
         return -1;
     }
     outb(PS2_CMD_PORT, cmd);
+    return 0;
+}
+
+int ps2_write_config(uint8_t config)
+{
+    if (ps2_send_command(PS2_CMD_WRITE_CONFIG) < 0) {
+        return -1;
+    }
+    if (ps2_wait_input() < 0) {
+        config_owed = config;
+        return -1;
+    }
+    outb(PS2_DATA_PORT, config);
     return 0;
 }
 
@@ -125,13 +152,20 @@ static int read_config_agreed(void)
  * writes its CTR before i8042_flush, and wait for the controller to take
  * the command and the byte. The controller runs its commands in order, so
  * once it takes WRITE_CONFIG the last READ_CONFIG's answer is in the output
- * buffer. Without a byte to write, wait for it to take the last command. */
-static void ps2_sync(int config)
+ * buffer. Without a byte to write, wait for it to take the last command.
+ * Returns 0, or -1 when WRITE_CONFIG fails, as Linux's i8042_command fails
+ * and its setup with it. A failed read leaves kbd_init taking translation
+ * to be on, so a byte left owed is the agreed one with translation on. */
+static int ps2_sync(int config)
 {
-    if (config >= 0 && ps2_send_command(PS2_CMD_WRITE_CONFIG) == 0 && ps2_wait_input() == 0) {
-        outb(PS2_DATA_PORT, (uint8_t)config);
+    if (config >= 0 && ps2_write_config((uint8_t)config) < 0) {
+        if (config_owed >= 0) {
+            config_owed |= PS2_CONFIG_TRANSLATE;
+        }
+        return -1;
     }
     (void)ps2_wait_input();
+    return 0;
 }
 
 int ps2_read_config(void)
@@ -143,7 +177,9 @@ int ps2_read_config(void)
     }
     ps2_drain();
     config = read_config_agreed();
-    ps2_sync(config);
+    if (ps2_sync(config) < 0) {
+        config = -1;
+    }
     ps2_drain();
     return config;
 }
@@ -153,6 +189,11 @@ int ps2_kbd_write(uint8_t byte)
     uint8_t status = inb(PS2_STATUS_PORT);
 
     if (status == 0xFF || (status & PS2_STATUS_INPUT_FULL) != 0) {
+        return -1;
+    }
+    if (config_owed >= 0) {
+        outb(PS2_DATA_PORT, (uint8_t)config_owed);
+        config_owed = -1;
         return -1;
     }
     outb(PS2_DATA_PORT, byte);
