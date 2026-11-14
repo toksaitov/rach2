@@ -50,6 +50,13 @@ struct tty {
      * a pty's packet status, the console's Scroll Lock LED; NULL for
      * nothing. Called with interrupts off, from an interrupt as well. */
     void (*flow)(struct tty *t, int what);
+    /* Set for a terminal whose echo is held at receipt, which may be in an
+     * interrupt, and given to the sink later from a thread: by a reader,
+     * writer, poller or FIONREAD of the terminal, or by the thread this
+     * wakes, the console's echo thread. Called with interrupts off, from an
+     * interrupt as well, while echo is held and output runs. NULL for a
+     * terminal whose receipt gives its echo to the sink, a pty slave's. */
+    void (*echo_kick)(struct tty *t);
     int sid;     /* the session whose controlling terminal this is; 0 = none */
     int fg_pgid; /* foreground process group (ISIG target); 0 = none */
     /* The `pgrp_serial` (process.h) of the foreground group, which tells it
@@ -141,10 +148,20 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx);
 /**
  * Initialize console_tty, once at boot: output to the screen and the serial
  * port, the serial ring as its pump, the text console's size as its window,
- * and its receive notify registered with the serial driver; then the
- * screen's blanking and backlights (`blank_init`).
+ * its echo held at receipt for its echo thread (`echo_kick`), and its
+ * receive notify registered with the serial driver; then the screen's
+ * blanking and backlights (`blank_init`).
  */
 void tty_console_init(void);
+
+/**
+ * Start the console's echo thread, `kconsoled`, which gives the echo held
+ * to the screen and COM1 when no reader, writer or poller of the console
+ * does, as Linux's n_tty echoes from its receive worker. Process context,
+ * once init has its pid, as the kernel's other threads start; before it,
+ * the echo waits for the console's next reader, writer or poller.
+ */
+void tty_console_thread_start(void);
 
 /** Post `signo` to every live user process of process group `pgid` whose
  * `pgrp_serial` (process.h) is `serial`, the lifetime of the id that the
@@ -230,16 +247,17 @@ int tty_job_check(struct tty *t, int signo);
  * console's serial port, from the boot processor's timer tick with
  * interrupts off; the port's interrupt services the port alone. Servicing
  * it moves the UART's bytes to the ring, at every tick while the receive
- * interrupt is off and every fifth of a second while it is on, then wakes
- * a reader or poller waiting on the console, or, with none waiting and a
- * session owning the console, drains the ring into the discipline without
- * echo.
+ * interrupt is off and every fifth of a second while it is on, then, while
+ * a session owns the console, drains at most 64 bytes of the ring into the
+ * discipline with their echo held for later, and wakes a reader or poller
+ * waiting on the console.
  */
 void tty_console_poll(void);
 
 /**
  * Feed one input byte from an interrupt or a polled source: run it through
- * the discipline (editing, and echo through the sink), wake a waiting reader
+ * the discipline (editing, and echo through the sink, or held for later
+ * where `echo_kick` is set, whose call it then makes), wake a waiting reader
  * once a line or byte is ready, and post the signal of a signal character to
  * the foreground process group. A signal character without NOFLSH also
  * discards the output queued (`flush`, TTY_FLUSH_IN and TTY_FLUSH_OUT) before
@@ -262,7 +280,8 @@ void tty_input_looked(struct tty *t, unsigned char c);
  * VSTART under IXON (`n_tty_lookahead`), as Linux looks ahead in the bytes
  * its discipline cannot take yet. A restart with `echo` nonzero gives the
  * echo held to the sink, as far as its room allows, as Linux's VSTART runs
- * process_echoes; with `echo` 0 the echo waits for the next input or write.
+ * process_echoes; with `echo` 0 the echo waits for the next input or write,
+ * or for `echo_kick`'s thread.
  * The byte is later fed with `tty_input_looked`. Returns nonzero when the
  * byte stopped or restarted output. Takes interrupts off itself.
  */

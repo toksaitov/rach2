@@ -137,14 +137,10 @@ void n_tty_hold_echo(struct n_tty *t, unsigned char c)
 }
 
 /** Give the echo byte `c` to `out`, or hold it behind the echo already held
- * or, with `hold` nonzero or output stopped, for later; drop it while
- * `echo_muted` is set. */
+ * or, with `hold` nonzero, output stopped or `echo_defer` set, for later. */
 static void put_echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c, int hold)
 {
-    if (t->echo_muted) {
-        return;
-    }
-    if (hold || t->stopped || t->echo_tail != t->echo_head) {
+    if (hold || t->stopped || t->echo_defer || t->echo_tail != t->echo_head) {
         n_tty_hold_echo(t, c);
     } else {
         out(ctx, c);
@@ -379,7 +375,7 @@ void n_tty_init(struct n_tty *t)
     t->tco_stopped = 0;
     t->echo_head = 0;
     t->echo_tail = 0;
-    t->echo_muted = 0;
+    t->echo_defer = 0;
 }
 
 /** Whether `c` is the VSTART or VSTOP of `t`, a disabled (zero) one

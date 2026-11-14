@@ -91,8 +91,10 @@ struct ktermios {
 #define N_TTY_READ_MAX 8192
 #define N_TTY_READ_CHUNK \
     1024 /* what one read() copies through its stack bounce; the caller loops */
-/* The echo held while output is stopped: a power of two, Linux's echo
- * buffer's size. When it is full the oldest byte gives way. */
+/* The echo held while output is stopped or until a later write: a power of
+ * two, Linux's echo buffer's size. When it is full the oldest byte gives
+ * way, as Linux's __process_echoes discards the oldest echo of a buffer near
+ * full; it may be half of a ^X or of a CR LF. */
 #define N_TTY_ECHO_MAX 4096
 
 /* What the discipline did with its input, for `/proc/console`: the bytes
@@ -128,14 +130,16 @@ struct n_tty {
      * echo is held in `echo_buf` until it restarts. */
     int stopped;
     int tco_stopped; /* TCOOFF stopped it, and only TCOON restarts it */
-    /* Echo not yet given to the sink: held while output is stopped, and a
-     * signal character's own echo, which follows its flush of the output. */
+    /* Echo not yet given to the sink: held while output is stopped, while
+     * `echo_defer` is set, and a signal character's own echo, which follows
+     * its flush of the output. */
     unsigned char echo_buf[N_TTY_ECHO_MAX];
     unsigned int echo_head; /* monotonic; slot = head & (SIZE-1) */
     unsigned int echo_tail;
-    /* Nonzero while a drain that shows no echo feeds a byte: its echo is
-     * dropped before it can reach `echo_buf`, so the echo held stays whole. */
-    int echo_muted;
+    /* Nonzero while a byte is received whose echo is all held, for the
+     * caller to give to the sink later (`n_tty_echo_flush`), as the
+     * console's receipt in an interrupt has it. */
+    int echo_defer;
     struct n_tty_counters counters;
 };
 
@@ -162,7 +166,8 @@ void n_tty_default_termios(struct ktermios *tio);
  * characters, then IXANY, then the input flags IGNCR, ICRNL and INLCR, then
  * either canonical line editing (ERASE, WERASE, KILL, EOF, newline and EOL)
  * or, in raw mode, queues the byte: Linux's order. Echo and any output go
- * through `out`, or wait in `echo_buf` while output is stopped (`stopped`).
+ * through `out`, or wait in `echo_buf` while output is stopped (`stopped`)
+ * or the caller defers them (`echo_defer`).
  * `*signo` is set to an NTTY_SIG* code when a signal character fires, else 0.
  *
  * Under IXON, VSTOP stops output and VSTART restarts it, unless TCOOFF

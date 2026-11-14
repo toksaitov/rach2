@@ -51,8 +51,9 @@
  * The echo held goes out ahead of a slave write only as far as the master's
  * ring has room, and the write waits for the rest instead of losing its
  * bytes; a master write goes on after the last slave closes; a VSTART from
- * COM1 drained with no reader keeps the keyboard echo held during the stop,
- * a full buffer of it whole behind a byte that drain takes;
+ * COM1 drained with no reader keeps the keyboard echo held during the stop
+ * for the next write, and a byte that drain takes behind a full buffer of it
+ * holds its echo there, the oldest byte giving way;
  * a nonblocking master write behind a full slave counts the flow characters
  * it acts on, and its VSTART gives out the echo held, and writes of data
  * that end in a flow character feed no more than the read queue stores and
@@ -66,10 +67,19 @@
  *
  * At the end of the console's session leader, a reader asleep across it
  * takes none of the next session's line though that line came before the
- * reader ran, a writer whose copy from the user spans it writes nothing
- * more, and a poller that asked for no events is woken. Serial input and a
- * Ctrl-C that come while the console's only waiter is such a poller, or an
- * epoll registration, reach the discipline and the foreground group.
+ * reader ran, nor in the rest of a line it reads after its copy; a writer
+ * whose copy from the user, service point or wait for stopped output spans
+ * it writes nothing more; and a poller that asked for no events is woken.
+ * Serial input, a Ctrl-C and a Ctrl-Z that come while the console's only
+ * waiter is such a poller, or an epoll registration, reach the discipline
+ * and the foreground group at the tick, before any scan.
+ *
+ * The console's echo is held at receipt and written once from a thread: by
+ * a reader that waits in epoll, poll, select or a blocking read, whose line
+ * the tick has already drained, by a write, or, with nobody reading, by the
+ * echo thread, whose pass the rows run (`console_echo_work`). A burst past
+ * the tick's budget is echoed whole; a Ctrl-C discards the echo held before
+ * it unless NOFLSH; and a hangup discards the echo not yet written.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -80,6 +90,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 #include "tty/pty.c"
 
 extern int printf(const char *format, ...);
+extern int snprintf(char *str, size_t size, const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 
 struct percpu cpu_table[NR_CPUS];
@@ -350,9 +361,20 @@ int usb_stamp_recording(void)
     return recording;
 }
 
-/** Nothing: the rows run one process at a time. */
+/* What the next service point does, once, as another thread would while
+ * the caller gives way there; NULL for nothing. */
+static void (*service_action)(void);
+
+/** Run `service_action` once: the rows run one process at a time. */
 void sched_service_point(void)
-{}
+{
+    void (*action)(void) = service_action;
+
+    service_action = NULL;
+    if (action) {
+        action();
+    }
+}
 
 /** Count completed console reads. */
 void usb_stamp_read(void)
@@ -370,13 +392,20 @@ void klog(int level, const char *subsystem, const char *format, ...)
     recorded_waits++;
 }
 
-/* The bytes the console's sink wrote, and the last of them. */
+/* The bytes the console's sink wrote since a row last cleared
+ * `console_bytes`, the last of them, and the first CONSOLE_TEXT_MAX. */
+#define CONSOLE_TEXT_MAX 256
 static int console_bytes;
 static char console_last;
+static char console_text[CONSOLE_TEXT_MAX];
 
-/** Count a byte of the console's output and keep it as the last. */
+/** Count a byte of the console's output, keep it as the last, and keep
+ * it in `console_text` while there is room. */
 void console_putc_raw(char c)
 {
+    if (console_bytes < CONSOLE_TEXT_MAX) {
+        console_text[console_bytes] = c;
+    }
     console_bytes++;
     console_last = c;
 }
@@ -551,6 +580,7 @@ static void setup_pair(void)
     pending_signal = switches = recording = copy_calls = copy_failure = spans = 0;
     signals_expected = signals_posted = last_signo = 0;
     copy_action = NULL;
+    service_action = NULL;
     irq_enabled = 1;
     pty_init_pool();
     CHECK(pty_alloc() == &pair, "production allocation initializes the pair");
@@ -1551,11 +1581,32 @@ static void master_after_close(void)
     CHECK(ptm_read(&master, out, sizeof(out)) == -EIO, "the master's read still fails with EIO");
 }
 
+/* The wakes `hup_rec_wake` has been called for. */
+static int hup_wakes;
+
+/** The function of a record that stays on its queue through every wake, a
+ * poll(2) poller's or an epoll registration's: count the wake and make the
+ * record's thread ready, when it has one. */
+static int hup_rec_wake(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus)
+{
+    (void)nest;
+    if (kinds & WQ_FREE) {
+        return 0;
+    }
+    hup_wakes++;
+    return w->proc ? wq_ready_deferred(w->proc, cpus) : 0;
+}
+
+/* A record on the echo thread's queue, which counts its wakes in
+ * `hup_wakes` in place of the thread. */
+static struct wq_waiter kick_rec;
+
 /**
- * A full buffer of keyboard echo held during a stop stays whole, its oldest
- * byte first, when COM1's drain that shows no echo takes an ordinary byte,
- * which leaves the discipline without room for a line, and its look ahead
- * acts on the VSTART behind it.
+ * A full buffer of keyboard echo held during a stop takes the echo of an
+ * ordinary byte COM1's interrupt drains, its oldest byte giving way, as
+ * Linux's echo buffer discards its oldest; the byte leaves the discipline
+ * without room for a line, and the look ahead acts on the VSTART behind it,
+ * whose restart wakes the echo thread, which writes the buffer once.
  */
 static void console_silent_full(void)
 {
@@ -1573,22 +1624,35 @@ static void console_silent_full(void)
     CHECK(ld->stopped && ld->echo_tail - ld->echo_head == N_TTY_ECHO_MAX,
           "a stop holds a full buffer of keyboard echo");
     tty_set_session(&console_tty, 1, 1, 0);
+    clear(&kick_rec, sizeof(kick_rec));
+    kick_rec.func = hup_rec_wake;
+    wq_entry_add(&echo_wq, &kick_rec);
+    hup_wakes = 0;
+    console_bytes = 0;
     serial_bytes = "q\021";
     serial_len = 2;
     irq_enabled = 0;
     tty_console_poll();
     irq_enabled = 1;
-    CHECK(!ld->stopped && serial_pos == 1 && serial_looked == 2 &&
+    CHECK(!ld->stopped && serial_pos == 1 && serial_looked == 2 && console_bytes == 0 &&
               ld->echo_tail - ld->echo_head == N_TTY_ECHO_MAX &&
-              ld->echo_buf[ld->echo_head & (N_TTY_ECHO_MAX - 1)] == 'a',
-          "COM1's silent byte and VSTART keep the full echo held, its oldest byte first");
+              ld->echo_buf[ld->echo_head & (N_TTY_ECHO_MAX - 1)] == 'b' &&
+              ld->echo_buf[(ld->echo_tail - 1) & (N_TTY_ECHO_MAX - 1)] == 'q',
+          "COM1's byte holds its echo behind a full buffer, whose oldest byte gives way");
+    CHECK(hup_wakes > 0, "COM1's VSTART wakes the echo thread for the echo held");
+    console_echo_work();
+    console_echo_work();
+    CHECK(console_bytes == N_TTY_ECHO_MAX && console_text[0] == 'b' && console_last == 'q' &&
+              ld->echo_tail == ld->echo_head,
+          "the echo thread writes the full buffer once");
+    wq_entry_remove(&kick_rec);
     tty_set_session(&console_tty, 0, 0, 0);
 }
 
 /**
  * Keyboard echo typed while the console's output is stopped stays held when
- * a VSTART from COM1 restarts output in the drain that shows no echo, with
- * no reader waiting, and the next write gives it out first.
+ * a VSTART from COM1 restarts output in the interrupt's drain, which writes
+ * no echo, with no reader waiting, and the next write gives it out first.
  */
 static void console_silent_restart(void)
 {
@@ -2066,22 +2130,6 @@ static void hangup_poll_no_events(void)
     tty_set_session(&console_tty, 0, 0, 0);
 }
 
-/* The wakes `hup_rec_wake` has been called for. */
-static int hup_wakes;
-
-/** The function of a record that stays on its queue through every wake, a
- * poll(2) poller's or an epoll registration's: count the wake and make the
- * record's thread ready, when it has one. */
-static int hup_rec_wake(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus)
-{
-    (void)nest;
-    if (kinds & WQ_FREE) {
-        return 0;
-    }
-    hup_wakes++;
-    return w->proc ? wq_ready_deferred(w->proc, cpus) : 0;
-}
-
 /** Put `text` in COM1's ring and run the console's tick, with interrupts
  * off as the tick has them. */
 static void hup_serial(const char *text)
@@ -2095,20 +2143,24 @@ static void hup_serial(const char *text)
 }
 
 /**
- * Serial input and a Ctrl-C that come while the console's only waiter
- * waits for the hangup alone reach the discipline and the foreground group.
- * A poll(2) poller's record, which stays on the queue through the wake,
- * leaves the ring to the scan the wake brings, which drains it; an epoll
- * registration, which has no thread, has the tick drain it.
+ * Serial input, a Ctrl-C and a Ctrl-Z that come while the console's only
+ * waiter waits for the hangup alone reach the discipline and the foreground
+ * group at the tick, before any scan, whether the waiter is a poll(2)
+ * poller's record, which stays on the queue through the wake, or an epoll
+ * registration, which has no thread; the end of the session's leader then
+ * wakes the poller's record, and its description reads as hung up, which
+ * poll(2) reports as POLLHUP.
  */
 static void hangup_poller_drains(void)
 {
     struct wq_waiter epoll_rec;
     wait_queue_t *wq = NULL;
     process_t *saved = proc_list;
+    uint32_t opened;
 
     setup_pair();
     tty_console_init();
+    opened = console_tty.vhangups;
     proc_list = &producer;
     producer.next = NULL;
     producer.tgid = producer.pgid = 2;
@@ -2122,17 +2174,24 @@ static void hangup_poller_drains(void)
     poller.state = PROC_BLOCKED;
     wq_poll_add(&console_tty.input_wq, &poller.waiter);
     hup_serial("ab\n");
+    CHECK(serial_pos == serial_len && n_tty_readable(&console_tty.ldisc),
+          "the tick drains COM1 into the discipline while a poller for no events waits");
     CHECK(poller.state == PROC_READY && wq_active(&console_tty.input_wq),
           "serial input wakes a poller for no events, which stays on the queue");
-    CHECK(tty_poll(&console_tty, 0, &wq) == 0 && serial_pos == serial_len &&
-              n_tty_readable(&console_tty.ldisc),
-          "the scan of a poller for no events drains COM1 into the discipline");
-    poller.state = PROC_BLOCKED;
     hup_serial("\003");
-    CHECK(poller.state == PROC_READY && tty_poll(&console_tty, 0, &wq) == 0 &&
-              signals_posted == 1 && last_signo == SIGINT,
-          "a COM1 Ctrl-C reaches the foreground group through a poller for no events");
+    CHECK(serial_pos == serial_len && signals_posted == 1 && last_signo == SIGINT,
+          "a COM1 Ctrl-C reaches the foreground group before a poller for no events scans");
+    hup_serial("\032");
+    CHECK(serial_pos == serial_len && signals_posted == 2 && last_signo == SIGTSTP,
+          "a COM1 Ctrl-Z reaches the foreground group before a poller for no events scans");
+    CHECK(tty_poll(&console_tty, 0, &wq) == 0, "the scan of a poller for no events reports none");
+    poller.state = PROC_BLOCKED;
+    tty_vhangup_session(&console_tty);
+    CHECK(poller.state == PROC_READY && tty_desc_hung(&console_tty, opened),
+          "the leader's end wakes the poller's record and hangs up its description");
     wq_poll_remove(&console_tty.input_wq, &poller.waiter);
+    tty_set_session(&console_tty, 1, 2, 0);
+    signals_posted = 0;
 
     clear(&epoll_rec, sizeof(epoll_rec));
     epoll_rec.func = hup_rec_wake;
@@ -2142,11 +2201,328 @@ static void hangup_poller_drains(void)
     CHECK(serial_pos == serial_len && n_tty_readable(&console_tty.ldisc) && hup_wakes == 1,
           "the tick drains COM1 while only an epoll registration waits, and wakes it");
     hup_serial("\003");
-    CHECK(serial_pos == serial_len && signals_posted == 2 && last_signo == SIGINT,
+    CHECK(serial_pos == serial_len && signals_posted == 1 && last_signo == SIGINT,
           "a COM1 Ctrl-C reaches the foreground group while only an epoll registration waits");
     wq_entry_remove(&epoll_rec);
     tty_set_session(&console_tty, 0, 0, 0);
     proc_list = saved;
+}
+
+/** Whether the console's sink wrote `text` and nothing more since the row
+ * last cleared `console_bytes`. */
+static int console_said(const char *text)
+{
+    int i, n = length(text);
+
+    if (console_bytes != n || n > CONSOLE_TEXT_MAX) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (console_text[i] != text[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Make the console's terminal fresh, canonical with echo, owned by session
+ * 1 with process 2's group in the foreground, with COM1's ring empty and
+ * no console output counted. The caller restores `proc_list`. */
+static void echo_setup(void)
+{
+    setup_pair();
+    tty_console_init();
+    proc_list = &producer;
+    producer.next = NULL;
+    producer.tgid = producer.pgid = 2;
+    tty_set_session(&console_tty, 1, 2, 0);
+    serial_pos = serial_len = serial_looked = 0;
+    console_bytes = 0;
+    hup_wakes = 0;
+}
+
+/* How the console's reader waits in `echo_once`. */
+#define WAIT_EPOLL  0 /* an epoll registration, which has no thread */
+#define WAIT_POLL   1 /* a poll(2) poller's record, for POLLIN */
+#define WAIT_SELECT 2 /* a select poller's record, for reading and writing */
+#define WAIT_READ   3 /* a blocking read */
+
+/** A line from COM1 at the tick, the blocked reader's producer: the ring
+ * is empty and nothing echoed before the reader runs. */
+static void echo_tick_action(void)
+{
+    serial_bytes = "ab\n";
+    serial_pos = 0;
+    serial_len = 3;
+    tty_console_poll();
+    CHECK(serial_pos == serial_len && console_bytes == 0,
+          "the tick drains a blocked reader's line and writes no echo");
+}
+
+/**
+ * A line typed on COM1 while the console's reader waits as `how` says is
+ * received at the tick, with its echo held, so that the ring is empty when
+ * the reader scans or runs; the reader reads the line, and the line's echo
+ * reaches the screen exactly once, however often the reader scans and reads
+ * and the echo thread runs after it.
+ */
+static void echo_once(int how)
+{
+    static const char *const names[] = {"an epoll registration", "a poll(2) poller",
+                                        "a select poller", "a blocking reader"};
+    static char detail[160];
+    struct wq_waiter epoll_rec;
+    process_t *saved = proc_list;
+    wait_queue_t *wq = NULL;
+    short events = how == WAIT_SELECT ? (short)(POLLIN | POLLOUT) : (short)POLLIN;
+    unsigned char out[16];
+    int n;
+
+    echo_setup();
+    clear(&epoll_rec, sizeof(epoll_rec));
+    epoll_rec.func = hup_rec_wake;
+    if (how == WAIT_READ) {
+        scheduled_action = echo_tick_action;
+        wake_detail = "COM1's line wakes the blocked console reader";
+        n = tty_read(&console_tty, out, sizeof(out), 0, console_tty.vhangups);
+    } else {
+        if (how == WAIT_EPOLL) {
+            wq_entry_add(&console_tty.input_wq, &epoll_rec);
+        } else {
+            CHECK(tty_poll(&console_tty, events, &wq) == (events & POLLOUT),
+                  "the console has no input to report before the line");
+            poller.waiter.func = hup_rec_wake;
+            poller.state = PROC_BLOCKED;
+            wq_poll_add(&console_tty.input_wq, &poller.waiter);
+        }
+        hup_serial("ab\n");
+        snprintf(detail, sizeof(detail),
+                 "the tick drains COM1 and writes no echo while %s waits, and wakes it",
+                 names[how]);
+        CHECK(serial_pos == serial_len && console_bytes == 0 && hup_wakes > 0, detail);
+        CHECK((tty_poll(&console_tty, events, &wq) & POLLIN) != 0, "the rescan finds the line");
+        n = tty_read(&console_tty, out, sizeof(out), 1, console_tty.vhangups);
+    }
+    snprintf(detail, sizeof(detail), "%s reads COM1's line", names[how]);
+    CHECK(n == 3 && out[0] == 'a' && out[1] == 'b' && out[2] == '\n', detail);
+    console_echo_work();
+    (void)tty_poll(&console_tty, events, &wq);
+    CHECK(tty_read(&console_tty, out, sizeof(out), 1, console_tty.vhangups) == -EAGAIN,
+          "nothing more is read");
+    (void)tty_inq(&console_tty);
+    console_echo_work();
+    snprintf(detail, sizeof(detail), "the line read by %s is echoed exactly once", names[how]);
+    CHECK(console_said("ab\r\n"), detail);
+    if (how == WAIT_EPOLL) {
+        wq_entry_remove(&epoll_rec);
+    } else if (how != WAIT_READ) {
+        wq_poll_remove(&console_tty.input_wq, &poller.waiter);
+    }
+    tty_set_session(&console_tty, 0, 0, 0);
+    proc_list = saved;
+}
+
+/**
+ * With no reader, part of a line typed on COM1 and at the keyboard holds
+ * its echo at receipt and wakes the echo thread, which writes it once;
+ * with ECHO off the input holds no echo and the thread writes nothing.
+ */
+static void echo_no_reader(void)
+{
+    process_t *saved = proc_list;
+    int due;
+
+    echo_setup();
+    clear(&kick_rec, sizeof(kick_rec));
+    kick_rec.func = hup_rec_wake;
+    wq_entry_add(&echo_wq, &kick_rec);
+    hup_serial("ab");
+    tty_input_char(&console_tty, 'c');
+    irq_enabled = 0;
+    due = console_echo_due(NULL);
+    irq_enabled = 1;
+    CHECK(serial_pos == serial_len && console_bytes == 0 && due && hup_wakes > 0,
+          "a partial line from COM1 and the keyboard holds its echo and wakes the echo thread");
+    console_echo_work();
+    console_echo_work();
+    CHECK(console_said("abc"), "the echo thread writes the echo of a partial line once");
+    console_tty.ldisc.tio.c_lflag &= ~(unsigned int)ECHO;
+    hup_wakes = 0;
+    hup_serial("de");
+    tty_input_char(&console_tty, 'f');
+    console_echo_work();
+    CHECK(console_said("abc") && hup_wakes == 0 &&
+              console_tty.ldisc.echo_head == console_tty.ldisc.echo_tail,
+          "with ECHO off the input holds no echo and the thread writes nothing");
+    wq_entry_remove(&kick_rec);
+    tty_set_session(&console_tty, 0, 0, 0);
+    proc_list = saved;
+}
+
+/* A burst from COM1 longer than the tick's budget: 99 bytes and a newline. */
+static char burst[101];
+
+/**
+ * The echo held at the console's receipt: a burst longer than the tick's
+ * budget is echoed whole, across the tick, a reader's drain and the echo
+ * thread; a Ctrl-C discards the echo held before it, unless NOFLSH, and its
+ * own echo follows; and the end of the session's leader discards the echo
+ * not yet written.
+ */
+static void echo_lifecycle(void)
+{
+    process_t *saved = proc_list;
+    unsigned char out[128];
+    int i;
+
+    echo_setup();
+    for (i = 0; i < 99; i++) {
+        burst[i] = 'x';
+    }
+    burst[99] = '\n';
+    burst[100] = 0;
+    hup_serial(burst);
+    CHECK(serial_pos == TTY_PUMP_BUDGET && console_bytes == 0,
+          "the tick drains its budget of a burst and writes no echo");
+    CHECK(tty_read(&console_tty, out, sizeof(out), 1, console_tty.vhangups) == 100,
+          "a reader drains the rest of the burst and reads its line");
+    console_echo_work();
+    console_echo_work();
+    CHECK(console_bytes == 101 && console_text[0] == 'x' && console_text[98] == 'x' &&
+              console_text[99] == '\r' && console_text[100] == '\n',
+          "a burst longer than the tick's budget is echoed whole, once");
+
+    echo_setup();
+    signals_expected = 1;
+    tty_input_char(&console_tty, 'a');
+    tty_input_char(&console_tty, 'b');
+    CHECK(console_bytes == 0, "keyboard input writes no echo at receipt");
+    tty_input_char(&console_tty, 003);
+    console_echo_work();
+    CHECK(signals_posted == 1 && last_signo == SIGINT && console_said("^C"),
+          "a Ctrl-C discards the echo held before it, and its own echo follows");
+    console_tty.ldisc.tio.c_lflag |= NOFLSH;
+    console_bytes = 0;
+    tty_input_char(&console_tty, 'a');
+    tty_input_char(&console_tty, 'b');
+    tty_input_char(&console_tty, 003);
+    console_echo_work();
+    CHECK(signals_posted == 2 && console_said("ab^C"),
+          "under NOFLSH a Ctrl-C keeps the echo held before its own");
+
+    echo_setup();
+    signals_expected = 1;
+    tty_input_char(&console_tty, 'a');
+    hup_serial("b");
+    tty_vhangup_session(&console_tty);
+    console_echo_work();
+    CHECK(console_bytes == 0 && console_tty.ldisc.echo_head == console_tty.ldisc.echo_tail,
+          "the leader's end discards the echo not yet written");
+    tty_set_session(&console_tty, 0, 0, 0);
+    proc_list = saved;
+}
+
+/**
+ * A console reader whose line outlasts its buffer, as the read's copy to
+ * the user sees it, takes none of the next session's line in the rest it
+ * reads after the end of its session's leader.
+ */
+static void hangup_read_rest(void)
+{
+    unsigned char out[4];
+    uint32_t opened;
+    const char *line = "abcdef\n";
+    int i;
+
+    setup_pair();
+    tty_console_init();
+    tty_set_session(&console_tty, 1, 1, 0);
+    serial_pos = serial_len = 0;
+    signals_expected = 1;
+    opened = console_tty.vhangups;
+    for (i = 0; line[i]; i++) {
+        tty_input_char(&console_tty, (unsigned char)line[i]);
+    }
+    CHECK(tty_read(&console_tty, out, 2, 1, opened) == 2 && out[0] == 'a' &&
+              n_tty_line_open(&console_tty.ldisc),
+          "a console read takes the start of a line longer than its buffer");
+    next_session_action();
+    CHECK(tty_read_rest(&console_tty, out, sizeof(out), opened) == 0,
+          "the rest a reader reads after its leader's end is none of the next session's line");
+    CHECK(tty_read(&console_tty, out, sizeof(out), 1, console_tty.vhangups) == 2 && out[0] == 'n',
+          "the next session's reader reads its line");
+    tty_set_session(&console_tty, 0, 0, 0);
+}
+
+/** Stop the console's output by a ^S from the keyboard. */
+static void stop_console_action(void)
+{
+    tty_input_char(&console_tty, 023);
+}
+
+/** Arm `stop_console_action` for the next copy from the user. */
+static void stop_next_copy(void)
+{
+    copy_action = stop_console_action;
+}
+
+/** End the console's session leader, then restart its output by a ^Q. */
+static void hangup_restart_action(void)
+{
+    tty_vhangup_session(&console_tty);
+    tty_input_char(&console_tty, 021);
+}
+
+/**
+ * A console writer of a description the end of the session's leader hangs
+ * up, at the service point between two pieces or while the writer waits
+ * for stopped output, writes nothing more and returns the bytes written
+ * before, or -EIO when there are none. A writer of the console's own
+ * description waits for output to restart and writes the rest.
+ */
+static void hangup_writer_waits(void)
+{
+    uint32_t opened;
+
+    setup_pair();
+    tty_console_init();
+    tty_set_session(&console_tty, 1, 1, 0);
+    signals_expected = 1;
+    opened = console_tty.vhangups;
+    console_bytes = 0;
+    service_action = hangup_copy_action;
+    CHECK(tty_write_user(&console_tty, bytes, 300, 0, &opened) == 256 && console_bytes == 256,
+          "a console writer whose leader ends at the service point returns its first piece");
+
+    tty_set_session(&console_tty, 1, 1, 0);
+    opened = console_tty.vhangups;
+    console_bytes = 0;
+    copy_action = stop_next_copy;
+    scheduled_action = hangup_copy_action;
+    wake_detail = "the leader's end wakes a writer that waits for stopped output";
+    CHECK(tty_write_user(&console_tty, bytes, 300, 0, &opened) == 256 && console_bytes == 256,
+          "a console writer that waits for stopped output across its leader's end returns its "
+          "first piece");
+    tty_input_char(&console_tty, 021);
+
+    tty_set_session(&console_tty, 1, 1, 0);
+    opened = console_tty.vhangups;
+    console_bytes = 0;
+    stop_console_action();
+    scheduled_action = hangup_copy_action;
+    CHECK(tty_write_user(&console_tty, bytes, 10, 0, &opened) == -EIO && console_bytes == 0,
+          "a console writer that waits for stopped output from its start gets EIO at its "
+          "leader's end");
+    tty_input_char(&console_tty, 021);
+
+    tty_set_session(&console_tty, 1, 1, 0);
+    console_bytes = 0;
+    stop_console_action();
+    scheduled_action = hangup_restart_action;
+    wake_detail = "the restart wakes a writer of the console's own description";
+    CHECK(tty_write_user(&console_tty, bytes, 10, 0, NULL) == 10 && console_bytes == 10,
+          "a writer of the console's own description waits across the leader's end and writes");
+    tty_set_session(&console_tty, 0, 0, 0);
 }
 
 int main(void)
@@ -2193,6 +2569,14 @@ int main(void)
     hangup_writer();
     hangup_poll_no_events();
     hangup_poller_drains();
+    echo_once(WAIT_EPOLL);
+    echo_once(WAIT_POLL);
+    echo_once(WAIT_SELECT);
+    echo_once(WAIT_READ);
+    echo_no_reader();
+    echo_lifecycle();
+    hangup_read_rest();
+    hangup_writer_waits();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }
