@@ -145,6 +145,7 @@ struct vblk_queue {
     int index;
     struct vblk_slot slots[VBLK_SLOTS];
     struct block_request *head, *tail; /* waiting, oldest first */
+    int unkicked;                      /* a chain was added that the device was not told of */
     volatile uint8_t *page;
     uint64_t page_addr;
     struct virtio_sg sg[VBLK_SEGS + 2];
@@ -492,8 +493,9 @@ static void vblk_flushed(struct vblk *vb, uint32_t fseq)
 /**
  * Offer the flush that makes the write in slot `s`, which the device has
  * answered, durable: 0, 1 when the queue has no room yet, which leaves the
- * slot VBLK_FLUSH_DUE for `vblk_start_next`, or a negative errno.
- * `q`'s lock is held.
+ * slot VBLK_FLUSH_DUE for `vblk_start_next`, or a negative errno. An offer
+ * marks `q` unkicked, and `vblk_start_next`, which every answer is
+ * followed by, tells the device. `q`'s lock is held.
  */
 static int vblk_flush_half(struct vblk_queue *q, struct vblk_slot *s)
 {
@@ -507,6 +509,7 @@ static int vblk_flush_half(struct vblk_queue *q, struct vblk_slot *s)
     s->state = rc == 1 ? VBLK_FLUSH_DUE : VBLK_ISSUED;
     if (rc == 0) {
         block_count_flush();
+        q->unkicked = 1;
     }
     return rc;
 }
@@ -549,13 +552,14 @@ static void vblk_request_cmd(const struct block_request *r, struct vblk_cmd *c)
 /**
  * Offer what waits on `q` while it has room and slots: first the flush
  * halves that found no room, then the waiting requests, oldest first, and
- * then tell the device once. A dead disk answers each waiting request with
- * EIO. `q`'s lock is held.
+ * then tell the device once of what was offered since it was last told,
+ * the flush halves an answer offered among them. A dead disk answers each
+ * waiting request with EIO. `q`'s lock is held.
  */
 static void vblk_start_next(struct vblk_queue *q)
 {
     struct vblk *vb = q->vb;
-    int i, offered = 0;
+    int i;
 
     if (vb->dead) {
         while (q->head) {
@@ -581,8 +585,6 @@ static void vblk_start_next(struct vblk_queue *q)
         }
         if (rc < 0) {
             vblk_end(s, -EIO);
-        } else {
-            offered++;
         }
     }
     while (q->head) {
@@ -623,10 +625,11 @@ static void vblk_start_next(struct vblk_queue *q)
         block_count_command();
         s->request = r;
         s->generation = r->generation;
-        offered++;
+        q->unkicked = 1;
     }
 kick:
-    if (offered) {
+    if (q->unkicked) {
+        q->unkicked = 0;
         virtqueue_kick(q->vq);
     }
 }
