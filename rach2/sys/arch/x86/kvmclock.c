@@ -76,13 +76,15 @@ typedef char kvmclock_room_fits[NR_CPUS * sizeof(struct kvmclock_page) <= PAGE_S
 static struct kvmclock_wall wall_record __attribute__((aligned(16)));
 
 /*
- * The clock as the kernel follows it: whether the pages are kept,
- * registered on each processor; the MSRs KVM offers, 0 for none; whether
- * a page's stable bit counts, Linux's valid_flags; the rate and stable bit
- * the tick last took from a page; and the rate at the first reading, which
+ * The clock as the kernel follows it: whether the boot has decided on it
+ * (`kvmclock_counts_per_tick`); whether the pages are kept, registered on
+ * each processor; the MSRs KVM offers, 0 for none; whether a page's stable
+ * bit counts, Linux's valid_flags; the rate and stable bit the tick last
+ * took from a page; and the rate at the first reading, which
  * `kvmclock_counts_per_tick` keeps. Each processor registers its own page
  * before it counts a tick.
  */
+static int asked;
 static int kept;
 static uint32_t msr_system_time;
 static uint32_t msr_wall_clock;
@@ -258,7 +260,6 @@ static uint64_t kvmclock_hold(uint64_t ns)
  */
 uint32_t kvmclock_counts_per_tick(void)
 {
-    static int asked;
     struct kvmclock_sample s;
     uint32_t features, version;
 
