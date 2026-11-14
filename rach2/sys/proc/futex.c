@@ -698,10 +698,12 @@ static long futex_wait_restart(isr_params_t *params)
     s.timed = 1;
     s.rt = 0;
     s.target = b->tick;
-    s.ns = b->sec != 0 || b->nsec != 0 ? futex_ns_of(b->sec, b->nsec) : 0;
+    s.ns = 0;
     ticks = s.target > now ? s.target - now : 0;
     if (b->flags & FUTEX_CLOCK_REALTIME) {
         ticks = futex_rt_deadline(&s, b->sec, (uint32_t)b->nsec);
+    } else if (b->sec != 0 || b->nsec != 0) {
+        s.ns = futex_ns_of(b->sec, b->nsec);
     }
     return futex_wait_until(b->uaddr, b->val, b->bitset, (int)b->flags, &s, ticks);
 }
