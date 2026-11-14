@@ -51,7 +51,7 @@ The kernel mounts one root, as the command line chooses. By default it is the fi
 
 ### The first program
 
-`boot_init_process` starts `/sbin/init` as process 1, on the boot stack and with no fork: `exec_program` loads the ELF file into a new address space, lays out its arguments on the stack, and enters ring 3. On x86-64 this startup path also runs a static i386 program, with its 32-bit stack, vDSO and code segment, as `execve` starts one. When init ends, the kernel stops the other processors and halts (`panic_init_died`), since nothing is left to reap orphans or to offer a login.
+`boot_init_process` starts `/sbin/init` as process 1, on the boot stack and with no fork: `exec_program` loads the ELF file into a new address space, its segments mapping the file as `execve` maps them (`exec_map_file`), lays out its arguments on a stack whose region and growth window are `execve`'s under the default RLIMIT_STACK (`exec_stack_span`), and enters ring 3; the debug shell's `exec` starts a program the same way. On x86-64 this startup path also runs a static i386 program, with its 32-bit stack, vDSO and code segment, as `execve` starts one. When init ends, the kernel stops the other processors and halts (`panic_init_died`), since nothing is left to reap orphans or to offer a login.
 
 Under `rach2.rescue`, or on a root with no `/sbin/init` such as the test image, the debug shell takes init's place and runs each program it is given as a transient init ([run.Readme.md](run.Readme.md) lists its commands). The shell authenticates nobody, so a boot that mounted no root, cannot read its init, or has `rach2.nodisk` with a disk root halts unless `rach2.rescue` asks for the shell.
 
