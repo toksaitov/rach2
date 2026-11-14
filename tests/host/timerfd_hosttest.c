@@ -410,6 +410,12 @@ int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t tid, uint64_t serial,
     return -ESRCH;
 }
 
+/** Never called: no row forces cputime_test's wait. */
+void k_udelay(uint32_t usec)
+{
+    (void)usec;
+}
+
 /** Nothing: no timer holds a process. */
 void tgroup_put(struct tgroup *tg)
 {

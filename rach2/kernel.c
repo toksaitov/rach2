@@ -4633,6 +4633,9 @@ static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
 static const struct debugfs_text_ops bkl_long_ops = {smp_long_show, smp_long_store};
 static const struct debugfs_text_ops bkl_tick_ops = {smp_tick_show, smp_tick_store};
+/* debugfs's cputime_test, the faults the CPU-time rows of the suites force
+ * (io/timerfd.c). */
+static const struct debugfs_text_ops cputime_test_ops = {ptimer_test_show, ptimer_test_store};
 #ifdef RACH2_LOCKDEP
 /* debugfs's lockdep/inject, which makes the checker's two reports on
  * demand (lib/lockdep.c). */
@@ -4643,8 +4646,8 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
 /** Start the processors past the first (`smp_start`), the lockup
  * detectors on all of them (`watchdog_init`) and the flusher
  * (`writeback_init`), then register bkl/calls, bkl/profile, bkl/long,
- * bkl/tick and, with the checker, lockdep/inject in debugfs; a failure
- * there is logged. */
+ * bkl/tick, cputime_test and, with the checker, lockdep/inject in
+ * debugfs; a failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4656,6 +4659,9 @@ static void start_processors(void)
         debugfs_create_text("bkl/long", 0644u, &bkl_long_ops, NULL) != 0 ||
         debugfs_create_text("bkl/tick", 0644u, &bkl_tick_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
+    }
+    if (debugfs_create_text("cputime_test", 0600u, &cputime_test_ops, NULL) != 0) {
+        klog(KLOG_WARN, "cputime", "debugfs: cputime_test not registered");
     }
 #ifdef RACH2_LOCKDEP
     if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {

@@ -467,6 +467,31 @@ while one sleeps with
 .Er EBUSY .
 Linux has no such file; its lib/test_lockup.c is a module that takes the
 same choices as parameters.
+.It Pa cputime_test
+Mode 0600; a Rach2 file with no Linux counterpart, the faults the suites'
+rows on processor time force.
+Reads three numbers on a line: the settings of a timer of processor time
+still to wait, those of the last
+.Ql arm
+whose clock moved while they waited, and the carries into the upper half
+of the forced write since the last
+.Ql spl .
+A write of
+.Ql arm N
+has the next N settings of a timer of processor time
+.Pq Xr timer_settime 2
+wait two ticks with interrupts off between the reading of the clock and
+the arming, so that the tick held meanwhile is charged after the arming.
+A write of
+.Ql spl TID
+sets the user time of the thread TID of the writer's process to 25 ticks
+short of 2^32 ticks and has each of its ticks write the count's two
+halves 2 ms apart where the upper half changes, which no reading of the
+clock may see; it fails with
+.Er ESRCH
+for a thread of another process.
+Another text fails with
+.Er EINVAL .
 .It Pa exits
 Mode 0444, on a PC booted with
 .Ql rach2.exits ,

@@ -2,6 +2,7 @@
 #define _TIMERFD_H_
 
 #include "../lib/kint.h"
+#include "../lib/kuser.h"
 
 /*
  * timerfd: a timer read through a descriptor. timerfd_settime arms it with a
@@ -239,6 +240,26 @@ uint32_t ptimer_times_lock(void);
 
 /** Let go of what `ptimer_times_lock` took. */
 void ptimer_times_unlock(uint32_t irq);
+
+/** Read debugfs's cputime_test: the settings still to wait, those of the
+ * last `arm` whose wait a tick landed in, and the carries of the forced
+ * torn write since the last `spl`, on one line, into `buf` of `cap` bytes;
+ * the line's length. */
+int32_t ptimer_test_show(void *data, char *buf, uint32_t cap);
+
+/**
+ * Write debugfs's cputime_test, the faults callsmusl and smptlbmusl force:
+ * `arm N` has the next N settings of a timer of processor time wait two
+ * ticks between the sample of its clock and its arming, under `timer_lock`
+ * with interrupts off, so that the tick held meanwhile is charged after the
+ * arming, and counts each whose clock has moved by the arming's end; `spl
+ * TID` sets the user time of the thread TID of the caller's process 25
+ * ticks short of 2^32 ticks and has each of its ticks write the count's two
+ * halves 2 ms apart where the upper half changes, under `timer_lock`, as no
+ * reader that takes the lock sees. `len`, -ESRCH for no such thread, or
+ * -EINVAL or -EFAULT.
+ */
+int32_t ptimer_test_store(void *data, const char __user *buf, uint32_t len);
 
 /** Add a tick to the processor time of the thread `p`, to its user time
  * when `user` and its system time otherwise, and count it against the POSIX
