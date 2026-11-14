@@ -84,19 +84,25 @@ static int read_config_once(void)
     return inb(PS2_DATA_PORT);
 }
 
-int ps2_read_config(void)
+/** Read and drop the bytes waiting in the output buffer, at most 16 of
+ * them, Linux's i8042_flush. */
+static void ps2_drain(void)
 {
-    int config[2];
-    int drained, n;
+    int drained;
 
-    if (inb(PS2_STATUS_PORT) == 0xFF) {
-        return -1;
-    }
     for (drained = 0; drained < 16 && (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0;
          drained++) {
         inb(PS2_DATA_PORT);
     }
-    n = 0;
+}
+
+/** Send READ_CONFIG until two answers in a row agree, 50 us apart: the
+ * byte, or -1 when a read fails or ten pass without agreement. */
+static int read_config_agreed(void)
+{
+    int config[2];
+    int n = 0;
+
     do {
         if (n >= PS2_CONFIG_READS) {
             return -1;
@@ -112,6 +118,19 @@ int ps2_read_config(void)
         }
     } while (n < 2 || config[0] != config[1]);
     return config[0];
+}
+
+int ps2_read_config(void)
+{
+    int config;
+
+    if (inb(PS2_STATUS_PORT) == 0xFF) {
+        return -1;
+    }
+    ps2_drain();
+    config = read_config_agreed();
+    ps2_drain();
+    return config;
 }
 
 int ps2_kbd_write(uint8_t byte)

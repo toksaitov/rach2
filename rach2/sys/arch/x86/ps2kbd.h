@@ -13,10 +13,12 @@
  * Register the keyboard's event device, take its interrupt, vector 33, and
  * unmask IRQ 1, which `init_pic` left masked. The controller's configuration
  * byte is read first, with interrupts off, for its translation, which on a
- * portable chassis has every probe of the keyboard skip GETID; the bytes the
- * firmware left waiting are drained by that read. With no event device free
- * serio0 is left without a driver. Called once, at boot, from
- * `platform_keyboard_init`, after the firmware's tables are found.
+ * portable chassis has every probe of the keyboard skip GETID, and which a
+ * failed read takes to be on, the firmware's default; the bytes waiting
+ * before and after that read are drained by it, before IRQ 1 is unmasked.
+ * With no event device free serio0 is left without a driver. Called once,
+ * at boot, from `platform_keyboard_init`, after the firmware's tables are
+ * found.
  */
 void kbd_init(void);
 

@@ -568,7 +568,12 @@ void kbd_init(void)
     int config = ps2_read_config();
 
     kirq_restore(flags);
-    kbd.translated = config >= 0 && (config & PS2_CONFIG_TRANSLATE) != 0;
+    /* A failed read keeps translation, the firmware's default, so that a
+     * portable machine never sends GETID. */
+    kbd.translated = config < 0 || (config & PS2_CONFIG_TRANSLATE) != 0;
+    if (config < 0) {
+        klog(KLOG_WARN, "kbd", "configuration: unreadable: taking translation as on");
+    }
     kbd.portable = portable_chassis();
     if (kbd_bind() < 0) {
         klog(KLOG_WARN, "kbd", "no event device is free: unbound");
