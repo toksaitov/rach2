@@ -1364,15 +1364,15 @@ static const char *const sysctl_int_refusals[] = {
  */
 static void sysctl_int_rows(void)
 {
-    static const char path[] = "/proc/sys/net/core/netdev_max_backlog";
+    static const char knob[] = "/proc/sys/net/core/netdev_max_backlog";
     static char was[24], got[32];
     unsigned long args[1];
-    int had = slurp(path, was, (int)sizeof(was));
+    int had = slurp(knob, was, (int)sizeof(was));
     int i, n, fd, ok = had >= 2;
 
     for (i = 0; ok && i < (int)(sizeof(sysctl_int_takes) / sizeof(sysctl_int_takes[0])); i++) {
-        n = write_file(path, sysctl_int_takes[i].text, sysctl_int_takes[i].len);
-        ok = n == sysctl_int_takes[i].ret && slurp(path, got, (int)sizeof(got)) > 0 &&
+        n = write_file(knob, sysctl_int_takes[i].text, sysctl_int_takes[i].len);
+        ok = n == sysctl_int_takes[i].ret && slurp(knob, got, (int)sizeof(got)) > 0 &&
              same_str(got, sysctl_int_takes[i].reads);
     }
     check("sysctl-int-take", ok,
@@ -1381,28 +1381,28 @@ static void sysctl_int_rows(void)
     ok = had >= 2;
     for (i = 0; ok && i < (int)(sizeof(sysctl_int_refusals) / sizeof(sysctl_int_refusals[0]));
          i++) {
-        ok = write_file(path, sysctl_int_refusals[i], (int)strlen(sysctl_int_refusals[i])) ==
+        ok = write_file(knob, sysctl_int_refusals[i], (int)strlen(sysctl_int_refusals[i])) ==
                  -EINVAL &&
-             slurp(path, got, (int)sizeof(got)) > 0 && same_str(got, "12\n");
+             slurp(knob, got, (int)sizeof(got)) > 0 && same_str(got, "12\n");
     }
     check("sysctl-int-refuse", ok,
           "net/core/netdev_max_backlog refuses a plus, trailing bytes, a number past an int and "
           "21 digits with EINVAL, as proc_dointvec does");
-    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_TRUNC, 0);
+    fd = syscall3(SYS_OPEN, (long)knob, O_WRONLY | O_TRUNC, 0);
     ok = fd >= 0 && syscall3(SYS_WRITE, fd, (long)"3\n", 2) == 2 &&
          syscall3(SYS_WRITE, fd, (long)"4\n", 2) == 2;
     if (fd >= 0) {
         syscall1(SYS_CLOSE, fd);
     }
-    check("sysctl-int-offset", ok && slurp(path, got, (int)sizeof(got)) > 0 && same_str(got, "3\n"),
+    check("sysctl-int-offset", ok && slurp(knob, got, (int)sizeof(got)) > 0 && same_str(got, "3\n"),
           "a second write to net/core/netdev_max_backlog on one descriptor is taken whole and "
           "ignored");
     args[0] = 0x7F000001ul;
-    ok = write_file(path, "0\n", 2) == 2 && sock_call(SC_PING, args) >= 0;
+    ok = write_file(knob, "0\n", 2) == 2 && sock_call(SC_PING, args) >= 0;
     check("loop-echo-backlog-0", ok,
           "an echo to 127.0.0.1 is answered with net/core/netdev_max_backlog at 0");
     if (had >= 2) {
-        write_file(path, was, had);
+        write_file(knob, was, had);
     }
 }
 
