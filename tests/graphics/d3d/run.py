@@ -307,6 +307,12 @@ def main():
         # Mesa's X11 WSI presents a GPU's images only over DRI3, which Xvfb
         # lacks; sw presents through the CPU, as it does for lavapipe.
         env["MESA_VK_WSI_DEBUG"] = "sw"
+        if family == "vkd3d":
+            # Venus aborts a wait on the host past 895 s (Mesa 26.1.6,
+            # vn_relax); a cold or loaded host's lavapipe can take that long
+            # for one wait of test_unused_attachments_mix_and_match. A ring
+            # the host marks fatal still aborts.
+            env["VN_DEBUG"] = "no_abort"
     work = None
     xvfb = None
     server = None
@@ -346,7 +352,7 @@ def main():
             "uname": list(os.uname()), "family": family, "row": row,
             "adapter": adapter, "mode": mode or None, "reference": None if record else reference,
             "environment": {k: v for k, v in env.items() if k.startswith((
-                "VK", "DXVK", "PROTON", "LP_", "MESA_", "GALLIUM", "GRAPHICS"))},
+                "VK", "VN_", "DXVK", "PROTON", "LP_", "MESA_", "GALLIUM", "GRAPHICS"))},
             "display": ("the caller's " + env["DISPLAY"] if adapter == "host" else
                         "Xvfb -noreset 1280x800x24"), "cache": "empty private directory",
             "iommu": Path("/proc/cmdline").read_text(),
