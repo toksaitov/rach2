@@ -72,7 +72,13 @@ static int fails;
  * first. READ_CONFIG queues `stray`, when it is not -1, and then
  * `model_config`: a device byte that came after the drain and before the
  * controller's answer, the mouse's when `stray_mouse` is set. The stray
- * byte comes once, or before every answer while `stray_always` is set. */
+ * byte comes once, or before every answer while `stray_always` is set.
+ * While `late_answers` is set, an answer that finds the output buffer
+ * holding a byte waits in `pending` until the controller takes the next
+ * byte written, or the row lets time pass (`catch_up`), as a controller
+ * that runs its commands in order answers. The byte after WRITE_CONFIG is
+ * the configuration, kept in `config_written`, not a byte for the
+ * keyboard. */
 #define MAX_WRITES 256
 #define MAX_QUEUED 64
 static uint8_t model_status;
@@ -85,6 +91,10 @@ static int stray = -1;
 static int stray_mouse;
 static int stray_always;
 static int config_commands;
+static int late_answers;
+static int pending = -1;
+static int config_next;
+static int config_written = -1;
 static int data_reads;
 static int port_writes;
 static uint8_t data_writes[MAX_WRITES];
@@ -127,9 +137,19 @@ uint8_t inb(uint16_t port)
     return 0xFF;
 }
 
+/** Let time pass: the answer pending reaches the output buffer. */
+static void catch_up(void)
+{
+    if (pending >= 0) {
+        queue((uint8_t)pending, PS2_STATUS_OUTPUT_FULL);
+        pending = -1;
+    }
+}
+
 void outb(uint16_t port, uint8_t val)
 {
     port_writes++;
+    catch_up();
     if (port == PS2_CMD_PORT && val == PS2_CMD_READ_CONFIG) {
         config_commands++;
         if (stray >= 0) {
@@ -138,9 +158,18 @@ void outb(uint16_t port, uint8_t val)
                 stray = -1;
             }
         }
-        queue(model_config, PS2_STATUS_OUTPUT_FULL);
+        if (late_answers && n_queued > 0) {
+            pending = model_config;
+        } else {
+            queue(model_config, PS2_STATUS_OUTPUT_FULL);
+        }
     }
-    if (port == PS2_DATA_PORT && n_data_writes < MAX_WRITES) {
+    if (port == PS2_CMD_PORT) {
+        config_next = val == PS2_CMD_WRITE_CONFIG;
+    } else if (port == PS2_DATA_PORT && config_next) {
+        config_written = val;
+        config_next = 0;
+    } else if (port == PS2_DATA_PORT && n_data_writes < MAX_WRITES) {
         data_writes[n_data_writes++] = val;
     }
 }
@@ -728,6 +757,21 @@ static void config_rows(void)
     CHECK("nor a mouse byte",
           ps2_read_config() == 0x45 && config_commands == c + 3 && n_queued == 0);
     stray_mouse = 0;
+
+    late_answers = 1;
+    stray = 0x1E;
+    config_written = -1;
+    c = config_commands;
+    CHECK("an answer that comes late reads 0x1E, 0x45, 0x45",
+          ps2_read_config() == 0x45 && config_commands == c + 3);
+    CHECK("and the byte is written back", config_written == 0x45);
+    catch_up();
+    k = keys;
+    model_status = 0;
+    kbd_irq(0);
+    CHECK("so the last answer came before the drain, which took it",
+          pending < 0 && n_queued == 0 && keys == k);
+    late_answers = 0;
 
     stray = 0x1E;
     kbd.translated = 0;
