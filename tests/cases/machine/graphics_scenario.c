@@ -606,20 +606,58 @@ static int quick_gl_line(struct graphics_case *s, char *runner, size_t size, con
 }
 
 /**
+ * Run `command` as root, as as_root does, and report the witness `test` as
+ * each of piglit's tests ends, on piglit.sh's line `piglit: done: N of M`,
+ * so that the gap's watchdog bounds one test and not the whole quick_gl
+ * run, which takes longer than the gap bound together.
+ */
+static void quick_gl_run(struct graphics_case *s, const char *command, struct net_run *r)
+{
+    const char *argv[] = {"/bin/bash", "-c", command, NULL};
+    char text[48];
+    unsigned long n;
+
+    if (net_guest_start(&s->u, s->b.m, argv, NULL, "piglit: tests: ") == ETUDE_OK) {
+        for (n = 1;; n++) {
+            snprintf(text, sizeof(text), "piglit: done: %lu of ", n);
+            if (etude_guest_output_wait(s->b.m, text) != ETUDE_OK)
+                break;
+            etude_progress(s->u.c, "test", n);
+        }
+    }
+    net_guest_finish(&s->u, s->b.m, 0, "runner", r);
+}
+
+/** Print `out` but for piglit.sh's progress lines, `piglit: done: `. */
+static void print_runner(const char *out)
+{
+    static const char prefix[] = "piglit: done: ";
+    const char *line, *end;
+
+    for (line = out; *line != '\0'; line = end) {
+        end = strchr(line, '\n');
+        end = end != NULL ? end + 1 : line + strlen(line);
+        if (strncmp(line, prefix, sizeof(prefix) - 1) != 0)
+            fwrite(line, 1, (size_t)(end - line), stdout);
+    }
+}
+
+/**
  * Run the runner, as root, once the desktop services have stopped
  * (END_DESKTOP) for IGT, modetest and virgl's device loss, or as the test
  * account, with the environment of a Done's run of its class, performance
  * for glmark2, vkcube and the games and conformance for the others, assert
- * that it ran its whole case, and print what it printed.
+ * that it ran its whole case, and print what it printed. A quick_gl case
+ * reports each test of piglit's as its progress.
  */
 static void run(struct graphics_case *s)
 {
     char runner[512], env[768], command[1536], line[200];
     const char *pattern;
     struct net_run r;
-    int root = strcmp(s->test, "piglit-quick-gl") == 0
-                   ? quick_gl_line(s, runner, sizeof(runner), &pattern)
-                   : runner_line(s, runner, sizeof(runner), &pattern);
+    int quick_gl = strcmp(s->test, "piglit-quick-gl") == 0;
+    int root = quick_gl ? quick_gl_line(s, runner, sizeof(runner), &pattern)
+                        : runner_line(s, runner, sizeof(runner), &pattern);
 
     snprintf(env, sizeof(env),
              "GRAPHICS_CLASS=%s GRAPHICS_DONE=1; export GRAPHICS_CLASS GRAPHICS_DONE; "
@@ -633,8 +671,12 @@ static void run(struct graphics_case *s)
                  env);
     else
         snprintf(command, sizeof(command), "su -s /bin/sh test -c '%s'", env);
-    if (net_step(&s->u, "run") == ETUDE_OK)
-        as_root(s, command, "runner", &r);
+    if (net_step(&s->u, "run") == ETUDE_OK) {
+        if (quick_gl)
+            quick_gl_run(s, command, &r);
+        else
+            as_root(s, command, "runner", &r);
+    }
     if (!net_ok(&s->u)) {
         net_assert(&s->u, "ran", 0, "");
         return;
@@ -646,7 +688,7 @@ static void run(struct graphics_case *s)
                              line, sizeof(line)));
     /* The runner's own lines, its result among them, go to the run's log. */
     if (r.out != NULL)
-        fputs(r.out, stdout);
+        print_runner(r.out);
     net_run_free(&r);
 }
 

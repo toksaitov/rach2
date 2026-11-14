@@ -931,7 +931,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run piglit.sh -z /usr/share/vulkan/icd.d/venus_icd.x86_64.json -l piglit-quick-gl.txt.gz, zink over Venus's ICD alone in software mode, as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, a test process on each CPU, through the framed guest channel"
+          "does": "run piglit.sh -z /usr/share/vulkan/icd.d/venus_icd.x86_64.json -l piglit-quick-gl.txt.gz, zink over Venus's ICD alone in software mode, as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, a test process on each CPU, through the framed guest channel, and report each test's end, piglit.sh's line piglit: done: N of M, as the witness test"
         },
         {
           "step_id": "judge",
@@ -1005,6 +1005,12 @@
           "kind": "step",
           "means": "a step of the manifest has ended",
           "limit": 5
+        },
+        {
+          "witness_id": "test",
+          "kind": "counter",
+          "means": "a test of piglit-quick-gl.txt.gz has ended, as piglit.sh's line piglit: done: N of M says",
+          "limit": 3941
         }
       ],
       "bounds": {

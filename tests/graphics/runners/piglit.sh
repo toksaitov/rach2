@@ -74,9 +74,25 @@
 # ends one of its own GL tests after 60 s, as `timeout`, a result like any
 # other, and piglit.sh sets no limit of its own.
 #
+# piglit's verbose log names each test as it starts and as it ends, and
+# counts the tests ended. As each test ends, piglit.sh prints
+#
+#   piglit: done: N of M
+#
+# N counted across the run's `piglit run`s, M the sample's tests, or for
+# parts the tests of the parts begun; with a list it first prints `piglit:
+# tests: M`. A case reads those lines as its progress, so that its
+# watchdog bounds one test and not the whole run. When a `piglit run`
+# fails, or piglit.sh is killed or stopped while one runs, it keeps that
+# run's partial results in OUT as NAME.partial, piglit's metadata.json and
+# the result file of each test ended, beside its log, and prints to
+# standard error `piglit: kept:` lines: the tests ended, each test still
+# running and the log's last lines.
+#
 # OUT (.) gets the record, and for each part, or for the list under the
-# name of its file without `.txt` and `.gz`, NAME.json, piglit's results
-# whole (NAME-2.json the second run's), and NAME.results, one line a test
+# name of its file without `.txt` and `.gz`, NAME.log, piglit's verbose log
+# (NAME-2.log the second run's), NAME.json, piglit's results whole
+# (NAME-2.json the second run's), and NAME.results, one line a test
 # or subtest in the order of their names: `NAME RESULT`, NAME being
 # piglit's, which may hold blanks, with `@SUBTEST` for a subtest, and RESULT
 # piglit's: pass, skip, fail, warn, crash, timeout, dmesg-warn, dmesg-fail,
@@ -213,12 +229,63 @@ runner_record "renderer $(eglinfo -B -p "$platform" 2> /dev/null | awk -F': ' '
     END { print (r == "" ? "unknown" : r "; OpenGL " v "; " e) }')"
 
 # run_piglit LOG RESULTS ARG...: one `piglit run` of the quick profile with
-# the ARGs, its results directory RESULTS and its output LOG.
+# the ARGs, its results directory RESULTS and its verbose log LOG, printing
+# `piglit: done: N of M` as each test ends, N after the `ended` tests of
+# the runs before it, and M `total`, or for parts the tests of the runs
+# begun. While it runs, `running` names RESULTS and LOG for keep_partial,
+# which the exit trap runs; a run that fails is kept at once.
 run_piglit()
 {
     log=$1 dir=$2
     shift 2
-    piglit run "$at_once" -o -p "$piglit_platform" -l dummy "$@" quick "$dir" > "$log" 2>&1
+    running="$dir $log"
+    rm -f "$RUNNER_WORK/status" "$RUNNER_WORK/ended"
+    # piglit's verbose log prints `[D/T] ...` as a test begins and as it
+    # ends, D the tests ended of the run's T.
+    { piglit run "$at_once" -o -p "$piglit_platform" -l verbose "$@" quick "$dir" 2>&1; echo $? > "$RUNNER_WORK/status"; } |
+        tee "$log" | awk -v base="$ended" -v total="$total" -v save="$RUNNER_WORK/ended" '
+            /^\[[0-9]+\/[0-9]+\]/ {
+                n = substr($0, 2, index($0, "/") - 2) + 0
+                t = substr($0, index($0, "/") + 1) + 0
+                while (done < n) {
+                    done++
+                    printf "piglit: done: %d of %d\n", base + done, total != "" ? total : base + t
+                    fflush()
+                }
+            }
+            END { print base + done > save }'
+    ended=$(cat "$RUNNER_WORK/ended")
+    st=$(cat "$RUNNER_WORK/status" 2> /dev/null || echo 1)
+    [ "$st" -eq 0 ] || keep_partial
+    running=
+    return "$st"
+}
+
+# keep_partial: keep the log and the partial results of the `piglit run`
+# that `running` names, if one has not finished, and print what it shows;
+# run before runner_cleanup removes RUNNER_WORK.
+keep_partial()
+{
+    [ -n "${running:-}" ] || return 0
+    # shellcheck disable=SC2086 # a directory and a log of RUNNER_WORK and OUT
+    set -- $running
+    keep=$out/$(basename "$1").partial
+    rm -rf "$keep"
+    mkdir -p "$keep"
+    cp "$1/metadata.json" "$keep/" 2> /dev/null || true
+    [ ! -d "$1/tests" ] || cp -R "$1/tests" "$keep/"
+    {
+        echo "piglit: kept: $(basename "$1"): $(find "$keep" -name '*.json' ! -name metadata.json | wc -l | tr -d ' ') tests of this run ended, $ended before it; log $2, partial results $keep"
+        # A test's begin is `running: NAME`, its end `RESULT: NAME`, each
+        # padded with blanks to the length of the line before it.
+        awk '{ sub(/ +$/, "") }
+            /^running: / { r[substr($0, 10)] = 1; next }
+            /^[a-z-]+: / { delete r[substr($0, index($0, ": ") + 2)] }
+            END { for (t in r) print "piglit: kept: running: " t }' "$2"
+        echo "piglit: kept: the log's last lines:"
+        grep -v '^$' "$2" | tail -n 20
+    } >&2
+    sync
 }
 
 # summarize NAME WHAT JSON...: write NAME.results from piglit's results in
@@ -249,6 +316,8 @@ print("piglit: result: %s%s %d results: pass %d skip %d fail %d other %d" %
 EOF
 }
 
+trap 'keep_partial; runner_cleanup' EXIT
+running='' ended=0 total=''
 status=0
 if [ -n "$list" ]; then
     name=${list##*/}
@@ -264,6 +333,8 @@ if [ -n "$list" ]; then
     [ "$tests" -gt 0 ] || runner_die "the list $list has no test"
     runner_record "list $list $all tests sha256 $(sha256sum < "$RUNNER_WORK/list" | awk '{ print $1 }')"
     runner_record "sample $tests tests sha256 $(sha256sum < "$out/$name.sample" | awk '{ print $1 }')"
+    total=$tests
+    echo "piglit: tests: $tests"
     grep -v '#' "$out/$name.sample" > "$RUNNER_WORK/plain" || true
     grep '#' "$out/$name.sample" > "$RUNNER_WORK/marked" || true
     t0=$(date +%s)

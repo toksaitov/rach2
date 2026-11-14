@@ -362,6 +362,8 @@ The `virgl` and `venus` suites each run piglit's `quick_gl` subset whole in one 
 * `machine.virgl.piglit-quick-gl` runs it with `piglit.sh -g`, one test at a time on virgl over the RTX 4080 SUPER, OpenGL 4.2, and asks that the record's renderer be [`ref/virgl-wsl/renderer`](ref/virgl-wsl/renderer)'s.
 * `machine.venus.piglit-quick-gl` runs it with `piglit.sh -z /usr/share/vulkan/icd.d/venus_icd.x86_64.json`, a process on each CPU on zink over Venus over the host's lavapipe, OpenGL 4.6 and OpenGL ES 3.2, and asks that the record's renderer name zink over `Virtio-GPU Venus`. Zink takes Venus there only in software mode, `LIBGL_ALWAYS_SOFTWARE=1`, since Venus gives the host's device type, the CPU type of lavapipe; without it zink fails with "failed to choose pdev" and EGL falls back to llvmpipe.
 
+Each reports each test that piglit ends, `piglit.sh`'s line `piglit: done: N of M`, as its witness `test`, so that its watchdog's gap bound times one test, which piglit ends after 60 s, and not the whole run. When the run is stopped, `piglit.sh`'s exit path keeps piglit's verbose log, `piglit-quick-gl.log`, which names each test as it begins and ends, and its partial results, `piglit-quick-gl.partial`, in its output, and prints the tests ended, each test still running and the log's last lines to the runner's standard error, which the case keeps.
+
 Each boots the x86-64 GNU root with its display, 8 CPUs and 8 GiB, and `judge.py results` compares each test and subtest with the Debian guest's in the same profile, [`ref/virgl-wsl/piglit`](ref/virgl-wsl/Readme.md) and [`ref/venus-wsl/piglit`](ref/venus-wsl/Readme.md), with [`piglit-quick-gl.flakes`](piglit-quick-gl.flakes) not judged.
 
 ### The Lenovo's conformance
