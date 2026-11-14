@@ -5796,7 +5796,7 @@
         {"assertion_id": "ext2-msync", "checks": "msync of the mapping succeeds", "source": "program"},
         {"assertion_id": "ext2-reach-file", "checks": "the mapping's stores reach the file after munmap and after a mapper's exit", "source": "program"},
         {"assertion_id": "ext2-cached-truncate", "checks": "after a cache-warmed private read and a shared store, truncation removes both aliases with SIGBUS and regrowth preserves the prefix with a zero tail", "source": "program"},
-        {"assertion_id": "ext2-thp", "checks": "a private mapping of 4 MiB of the file without a hint reads it, and in a 64-bit program on x86-64 starts on a 2 MiB boundary, as Linux's thp_get_unmapped_area places one", "source": "program"},
+        {"assertion_id": "ext2-thp", "checks": "private mappings of 4 MiB of the file without a hint read it, and in a 64-bit program on x86-64 the one from offset 0 starts on a 2 MiB boundary and the one from offset 4096 at 4096 past one, as Linux's thp_get_unmapped_area places them", "source": "program"},
         {"assertion_id": "krffs-enodev", "checks": "on the KRFFS root, a writable shared mapping of the file fails with ENODEV", "source": "program"},
         {"assertion_id": "krffs-readonly", "checks": "a read-only shared mapping of the file, open for writing, cannot be made writable", "source": "program"},
         {"assertion_id": "trunc-file", "checks": "a file in /dev/shm to truncate is made", "source": "program"},

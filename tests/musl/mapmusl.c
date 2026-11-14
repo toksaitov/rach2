@@ -10,9 +10,10 @@
  * truncation and a growth a write to the file is seen through the mapping. On
  * ext2 a cache-warmed private page and a shared writable alias both raise
  * SIGBUS after truncation, and regrowth preserves the prefix and has a zero
- * tail; a private mapping of 4 MiB of an ext2 file without a hint reads
- * the file, and in a 64-bit program on x86-64 starts on a 2 MiB boundary,
- * as Linux's thp_get_unmapped_area places it. On x86-64, truncating a file
+ * tail; private mappings of 4 MiB of an ext2 file without a hint read the
+ * file, and in a 64-bit program on x86-64 one from offset 0 starts on a
+ * 2 MiB boundary and one from offset 4096 at 4096 past one, as Linux's
+ * thp_get_unmapped_area places them. On x86-64, truncating a file
  * of 4 GiB and a page to 4 GiB cuts only its last page from the mapping. A
  * file or shared-memory mapping of 16 TiB is EOVERFLOW and one of a page
  * less is made; mprotect,
@@ -1109,31 +1110,50 @@ out:
 }
 
 /**
- * Check that a private mapping of 4 MiB of `fd`, a file on ext2 that begins
- * with "root", made without a hint, reads the file, and in a 64-bit program
- * on x86-64 starts on a 2 MiB boundary, as Linux 6.12's ext2 and ext4 place
- * a mapping of a file that holds a 2 MiB page (thp_get_unmapped_area); a
- * 32-bit program's is not aligned, there or on Linux. The file is cut back
- * to its two pages, and the check's row is reported. Returns 0, or 1 once
- * the failure is reported.
+ * Map 4 MiB of `fd` privately from the file offset `off` without a hint and
+ * check that the mapping reads `bytes`, 4 bytes at `off`, and in a 64-bit
+ * program on x86-64 starts at `off` past a 2 MiB boundary. Returns 0, or 1
+ * once the failure is reported.
  */
-static int ext2_aligned(int fd)
+static int ext2_aligned_at(int fd, off_t off, const char *bytes)
 {
-    char *m;
+    char *m = mmap(NULL, 2 * HUGE_PAGE, PROT_READ, MAP_PRIVATE, fd, off);
     int rc = 0;
 
-    if (ftruncate(fd, 2 * HUGE_PAGE) != 0) {
-        return fail("grow a file on the root to 4 MiB");
-    }
-    m = mmap(NULL, 2 * HUGE_PAGE, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (m == MAP_FAILED || memcmp(m, "root", 4) != 0) {
+    if (m == MAP_FAILED || memcmp(m, bytes, 4) != 0) {
         rc = fail("a private mapping of 4 MiB of a file on the root");
-    } else if (THP_ALIGNS && ((uintptr_t)m & (HUGE_PAGE - 1)) != 0) {
+    } else if (THP_ALIGNS && ((uintptr_t)m & (HUGE_PAGE - 1)) != (uintptr_t)off) {
         errno = 0;
-        rc = fail("a mapping of 4 MiB of a file on the root is not on a 2 MiB boundary");
+        printf("mapmusl: offset %ld mapped at %p\n", (long)off, (void *)m);
+        rc = fail("a mapping of 4 MiB of a file on the root is not at its offset past 2 MiB");
     }
     if (m != MAP_FAILED) {
         munmap(m, 2 * HUGE_PAGE);
+    }
+    return rc;
+}
+
+/**
+ * Check that private mappings of 4 MiB of `fd`, a file on ext2 of two pages
+ * that begins with "root", made without a hint, read the file, and in a
+ * 64-bit program on x86-64 start on a 2 MiB boundary from offset 0 and 4096
+ * past one from offset 4096, as Linux 6.12's ext2 and ext4 place a mapping
+ * of a file that holds a 2 MiB page (thp_get_unmapped_area); a 32-bit
+ * program's are not aligned, there or on Linux. The two offsets cannot both
+ * hold by chance at the top of one free range. The file is cut back to its
+ * two pages, and the check's row is reported. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int ext2_aligned(int fd)
+{
+    int rc;
+
+    if (ftruncate(fd, 3 * HUGE_PAGE) != 0) {
+        return fail("grow a file on the root to 6 MiB");
+    }
+    rc = ext2_aligned_at(fd, 0, "root");
+    if (rc == 0) {
+        rc = ext2_aligned_at(fd, PAGE, "\0\0\0\0");
     }
     if (rc == 0 && ftruncate(fd, 2 * PAGE) != 0) {
         rc = fail("cut a file on the root back to two pages");
