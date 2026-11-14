@@ -133,7 +133,8 @@ tar xf "$TARBALL" -C "$WORK"
 # x86-64 it clears the high half of an unsigned int widened to 64 bits or
 # converted to floating point, keeps a VLA's size in a size_t, and scales an
 # index into a pointer to a VLA by the VLA's size; it lets an array
-# parameter's bound name an earlier parameter, as C99 programs do; and it
+# parameter's bound name an earlier parameter, as C99 programs do; it reads a
+# volatile scalar whose value a cast takes or a statement throws away; and it
 # calls a static executable's IFUNC through the function its resolver returns.
 # Patches applied here rather than an edited tree, so the vendored source stays
 # as upstream shipped it and the diff a reader wants is a file in this
@@ -174,6 +175,7 @@ if ! grep -q "s1->seg_size = 64;" "$SRC/tccasm.c" ||
    ! grep -q "^static void func_vla_params" "$SRC/tccgen.c" ||
    ! grep -q "^static void param_bound_replay" "$SRC/tccgen.c" ||
    ! grep -q "^static void param_effect" "$SRC/tccgen.c" ||
+   ! grep -q "^static void vpop_discard" "$SRC/tccgen.c" ||
    ! grep -q "owns its bound's tokens" "$SRC/tccgen.c" ||
    ! grep -q "^static void ifunc_entry_code" "$SRC/tccelf.c" ||
    ! grep -q "|| type == R_IRELATIVE" "$SRC/tccelf.c" ||

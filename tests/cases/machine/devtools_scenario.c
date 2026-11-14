@@ -245,6 +245,34 @@ static const char vread_built_line[] =
     "tcc -static -o /tmp/vread /tmp/vread.c && echo VREAD\"\"BUILT";
 
 /*
+ * A volatile read whose value is thrown away must still be made: by the
+ * bounds ((int)*vp,3), ((void)*vp,3) and (*vp,3) on entry, and by the
+ * statements (void)*vp;, *vp; and (int)*vp;. vp is a null pointer, so each
+ * read faults, and the handler marks its case and jumps back for the next;
+ * GCC's program prints VDISCARD 111111 on both targets. TinyCC popped each
+ * value without loading it and printed VDISCARD 000000.
+ */
+static const char vdisc1_line[] = "printf '#include <setjmp.h>\\n#include <signal.h>\\n"
+                                  "#include <stdio.h>\\nvolatile int *vp;\\n' > /tmp/vdisc.c";
+static const char vdisc2_line[] = "printf 'sigjmp_buf j;char r[]=\"000000\";int i;\\n"
+                                  "void h(int s){r[i]=49;siglongjmp(j,1);}\\n' >> /tmp/vdisc.c";
+static const char vdisc3_line[] = "printf 'int f1(int a[((int)*vp,3)]){return 0;}\\n"
+                                  "int f2(int a[((void)*vp,3)]){return 0;}\\n' >> /tmp/vdisc.c";
+static const char vdisc4_line[] = "printf 'int f3(int a[(*vp,3)]){return 0;}\\nvoid g1(void)"
+                                  "{(void)*vp;}\\nvoid g2(void){*vp;}\\nvoid g3(void)"
+                                  "{(int)*vp;}\\n' >> /tmp/vdisc.c";
+static const char vdisc5_line[] = "printf 'int main(void){int x[3];signal(SIGSEGV,h);"
+                                  "for(i=0;i<6;i++)if(!sigsetjmp(j,1))switch(i){\\n' >> "
+                                  "/tmp/vdisc.c";
+static const char vdisc6_line[] = "printf 'case 0:f1(x);break;case 1:f2(x);break;case 2:f3(x);"
+                                  "break;case 3:g1();break;case 4:g2();break;default:g3();}"
+                                  "\\n' >> /tmp/vdisc.c";
+static const char vdisc7_line[] =
+    "printf 'printf(\"VDIS\"\"CARD %%s\\\\n\",r);return 0;}\\n' >> /tmp/vdisc.c";
+static const char vdisc_built_line[] =
+    "tcc -static -o /tmp/vdisc /tmp/vdisc.c && echo VDISC\"\"BUILT";
+
+/*
  * A static program calling an IFUNC that TinyCC's assembler defines: pick is
  * a resolver that returns triple, so a call, a pointer taken at run time and
  * one in initialized data each reach triple, and the two pointers are equal.
@@ -332,6 +360,20 @@ static void language(struct shell *s)
     type(s, "/tmp/vread");
     has(s, "volatile-read", "VOLATILEREAD",
         "an array parameter's bound did not read its volatile object on entry");
+    type(s, vdisc1_line);
+    type(s, vdisc2_line);
+    type(s, vdisc3_line);
+    type(s, vdisc4_line);
+    type(s, vdisc5_line);
+    type(s, vdisc6_line);
+    type(s, vdisc7_line);
+    type(s, "cat /tmp/vdisc.c");
+    type(s, vdisc_built_line);
+    has(s, "discard-built", "VDISCBUILT",
+        "the compiler did not build a program that throws away volatile reads");
+    type(s, "/tmp/vdisc");
+    has(s, "volatile-discard", "VDISCARD 111111",
+        "a volatile read whose value is thrown away was not made");
     type(s, star_line);
     refused(s, "star-refused", "VSRC=1", "star-reason", "'[*]' not allowed",
             "a [*] in a function definition");

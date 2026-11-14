@@ -255,3 +255,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing; the result does not change from run to run, and the `webgl` suite's reference holds it.
 * Status: unreported.
 * Next: run the draw sequence as a GL program on llvmpipe to see whether Mesa alone reads 0; if it reads 1, read how Firefox's WebGL binds framebuffers inside an active query.
+
+## TinyCC makes no read of a volatile object whose value is thrown away
+
+* Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccgen.c`.
+* Fails: the statements `v;`, `(void)v;` and `(int)v;` and the left operand of `(v, 3)`, with `v` a volatile scalar, emit no load, where C99 6.3.2.1p2 and 6.3.2.2 and GCC make the read. `gexpr` pops the left operand of a comma with `vpop` (`tccgen.c` line 5684) and `block` pops an expression statement's value the same way (line 6227), and neither loads an lvalue; `gen_cast` (line 2459) keeps a cast to the same type as the lvalue and drops the qualifier, and a cast to `void` loads nothing either.
+* Found: 2026-11-14, Codex's third review of the TinyCC work of task 84-262c, milestone 84, which named `((int)v,3)`, `(void)v` and `(v,3)` in an array parameter's bound; task 84-262k found that the statements have the same fault, on the owner's Mac with an x86-64 and an i386 TinyCC built from the tarball and Rach2's patches.
+* Reproduction: compile `volatile int *vp; void g(void) { (void)*vp; *vp; (int)*vp; (*vp, 3); }` with TinyCC 0.9.27 and read the object: `g` loads `vp` and never reads through it, where GCC's object reads `*vp` four times at -O0 and -O2. Rach2's kernel built by TinyCC skips the read in `(void)mmio_read32(r->entry)` of `rach2/sys/pci.c`, which flushes the write of an MSI-X entry.
+* Evidence: `vendor/tcc/rach2-vla-param.patch`; the `discard-built` and `volatile-discard` assertions of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
+* Rach2: `vendor/tcc/rach2-vla-param.patch` loads a volatile scalar where a cast takes it and where an expression statement, an earlier statement of a statement expression, the first or third expression of a `for`, the left operand of a comma or a parameter's outermost bound throws its value away, and does not read again the value of an assignment to a bit-field, task 84-262k.
+* Status: unreported.
+* Next: read the mob branch's `gexpr`, `block` and `gen_cast` to see whether a discarded volatile read is made there, and report it with the reproduction if not.
