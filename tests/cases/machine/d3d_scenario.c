@@ -74,6 +74,8 @@ int etude_scenario(struct etude_case *c)
     snprintf(command, sizeof(command),
              "mkdir -p /tmp/d3d /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix && "
              "mount -t ext2 -o ro /dev/disk1 /tmp/d3d && "
+             "( mkdir -p /tmp/trace; tail -F /tmp/d3d-results/unit.log 2>/dev/null | while IFS= "
+             "read -r l; do echo \"$(date +%%s.%%N) $l\"; done > /tmp/trace/stamped ) & "
              "python3 -c 'import grp, os, pwd, sys; u = pwd.getpwnam(\"test\"); "
              "os.setgroups([grp.getgrnam(g).gr_gid for g in (\"video\", \"render\")]); "
              "os.setgid(u.pw_gid); os.setuid(u.pw_uid); "

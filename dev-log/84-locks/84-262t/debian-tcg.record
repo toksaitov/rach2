@@ -1,0 +1,12 @@
+guest profile virtio-vga
+guest firmware seabios
+guest accelerator tcg
+guest cpu max
+guest cpus 8
+guest memory_mib 16384
+guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+guest snapshot 20261108T000000Z
+guest claim debian-ref:toksaitov-d:3613572:1794662984
+guest host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+guest host_load 16.46 18.45 17.78

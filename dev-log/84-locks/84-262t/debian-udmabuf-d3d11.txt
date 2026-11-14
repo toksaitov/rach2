@@ -1,0 +1,15 @@
+# the same span in the Debian guest with /dev/udmabuf mode 0666
+info:  Creating sampler descriptor heap (512 kB)
+info:  Graphics pipeline libraries supported
+info:  Binding model: Descriptor buffer
+info:  D3D11InternalCreateDevice: Maximum supported feature level: D3D_FEATURE_LEVEL_11_1
+info:  D3D11InternalCreateDevice: Using feature level D3D_FEATURE_LEVEL_11_0
+d3d11.c:3364: Test failed: Test 3: Got unexpected device pointer 00000000007C6C40, expected NULL.
+warn:  Exporting semaphores of type 2 not supported by device
+
+crw-rw---- 1 root kvm 10, 258 Nov 14 13:43 /dev/udmabuf
+uid=1000(gfx) gid=1000(gfx) groups=1000(gfx),27(sudo),29(audio),44(video),991(render),995(input)
+modprobe: FATAL: Module udmabuf not found in directory /lib/modules/6.12.115+deb13.1-amd64
+crw-rw---- 1 root kvm 10, 258 Nov 14 13:43 /dev/udmabuf
+crw-rw-rw- 1 root kvm 10, 258 Nov 14 13:43 /dev/udmabuf
+022c:d3d11: 4 tests executed (0 marked as todo, 0 as flaky, 0 failures), 0 skipped.

@@ -1,0 +1,6 @@
+d3dref/1: {"d3d11:d3d11": {"exit": 5, "summary": null, "progress": false, "lines": 34, "matched": true}}
+d3dref/2: {"d3d9:d3d9ex": {"exit": 98, "summary": [2583, 47, 4, 98, 2], "progress": false, "lines": 156, "matched": true}}
+d3dref/3: {"d3d9:d3d9ex": {"exit": 0, "summary": [2764, 108, 0, 0, 2], "progress": false, "lines": 115, "matched": true}}
+d3dref-tcg/1: {"d3d9:d3d9ex": {"exit": 245, "summary": null, "progress": false, "lines": 12, "matched": true}}
+d3dref-tcg/2: {"d3d9:d3d9ex": {"exit": 0, "summary": [2785, 129, 0, 0, 2], "progress": false, "lines": 137, "matched": true}}
+d3dref-kvmgrp/out/1: {"d3d11:d3d11": {"exit": 5, "summary": [4, 0, 0, 0, 0], "progress": false, "lines": 3268, "matched": true}}

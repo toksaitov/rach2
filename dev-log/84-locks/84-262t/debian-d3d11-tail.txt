@@ -1,0 +1,4 @@
+# The end of d3d11:d3d11's log from d3d11.c:3332's case 2, Debian 13 guest under KVM, gfx without /dev/udmabuf; the process exited with 5 after the last line
+d3d11.c:3332: Test marked todo: Test 2: Texture should not implement ID3D10Texture2D.
+warn:  DxvkMemoryAllocator::createImageResource: Failed to open shared D3DKMT handle
+warn:  Exporting semaphores of type 4 not supported by device

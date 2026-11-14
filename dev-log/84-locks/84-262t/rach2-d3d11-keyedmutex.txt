@@ -1,0 +1,21 @@
+# the same span of Rach2's run under KVM, test in kvm, /dev/udmabuf open to it
+d3d11.c:3332: Test marked todo: Test 2: Texture should not implement ID3D10Texture2D.
+warn:  DxvkMemoryAllocator::createImageResource: Failed to open shared D3DKMT handle
+warn:  Exporting semaphores of type 4 not supported by device
+warn:  DxvkFence::DxvkFence: Failed to open shared D3DKMT handle
+warn:  D3D11: Failed to write shared resource info for a texture
+d3d11.c:3364: Test failed: Test 3: Got unexpected device pointer 00000000007C2D90, expected NULL.
+info:  Descriptor sizes (set alignment: 64)
+info:    Sampler              : 256
+info:    Uniform buffer       : 256
+info:    Storage buffer       : 256
+info:    Uniform texel buffer : 256
+info:    Storage texel buffer : 256
+info:    Sampled image        : 256
+info:    Storage image        : 256
+info:    Input attachment     : 256
+info:  Memory type mask for sparse resources: 0x1
+info:  Creating sampler descriptor heap (512 kB)
+warn:  DxvkFence::DxvkFence: Failed to open shared NT handle
+d3d11.c:3364: Test failed: Test 4: Got unexpected device pointer 00000000007C2D90, expected NULL.
+info:  Graphics pipeline libraries supported

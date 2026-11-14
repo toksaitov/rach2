@@ -310,3 +310,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `vendor/tcc/rach2-vla-param.patch` throws the value away before a declaration and leaves `void` in its place, so the case is refused as GCC refuses it, task 84-262z.
 * Status: unreported.
 * Next: read the mob branch's `block` to see whether the value is still kept across a declaration, and report it with the reproduction if so.
+
+## Proton dies on a keyed-mutex texture when the Vulkan driver has no external semaphores
+
+* Project: GE-Proton11-12, its DXVK and Wine 11.0 (`vendor/gnu/sources-extra.txt`, GE-Proton11-12-x86_64.tar.gz, SHA-256 0595159e417c3dbbfb7cc3ae0d3ed15a617cc607aa23ef756ea79029d7af5d70), on Mesa 25.0.7's lavapipe. Which of them faults is not proved.
+* Fails: Wine's `d3d11` unit, run on Proton with lavapipe in an account that cannot open `/dev/udmabuf`, ends with an access violation (exit 5, from `0xc0000005`) and no summary in `test_texture2d_interfaces`, at the `ID3D11Device_CreateTexture2D` of case 3, a texture with `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX` (`dlls/d3d11/tests/d3d11.c:3246-3250`, `3312`). DXVK's last lines are `DxvkMemoryAllocator::createImageResource: Failed to open shared D3DKMT handle` and `Exporting semaphores of type 4 not supported by device`. Without `/dev/udmabuf` llvmpipe makes no sync files (`src/gallium/drivers/llvmpipe/lp_fence.c:310-337`), lavapipe offers no `VK_KHR_external_semaphore_fd` (`src/gallium/frontends/lavapipe/lvp_device.c:1297-1300`), and Wine offers no `VK_KHR_external_semaphore_win32` and no `VK_KHR_win32_keyed_mutex` (`dlls/win32u/vulkan.c:542-543`, `2930-2931`), so DXVK enables neither; where it can open the device, DXVK logs the failure of the fence's shared handle and of the shared resource's information and the test goes on. A candidate, not checked in DXVK's source: a call through an entry point of an extension that was not enabled.
+* Found: 2026-11-14, the testing PC under WSL, QEMU under KVM, milestone 84, task 84-262t: the release's `machine.d3d-wine.proton-d3d11-d3d11` printed a child's summary where Debian's reference printed none, since Rach2's test account could open `/dev/udmabuf` and the Debian guest's could not.
+* Reproduction: in the Debian 13 reference guest, `tests/graphics/d3d/reference.sh -a lavapipe -p virtio-vga OUT wine/proton/d3d11:d3d11`; the unit exits with 5 after 34 test lines. With `/dev/udmabuf` made mode 0666 first it runs past case 3 and exits with 5 thousands of lines later.
+* Evidence: `dev-log/84-locks/84-262t.md` and `dev-log/84-locks/84-262t/`.
+* Rach2: nothing in Proton; the Direct3D rows run in the reference account's groups, so that both systems take the same path, in the commit of task 84-262t.
+* Status: unreported.
+* Next: run the unit under `WINEDEBUG=+seh` to find the faulting address and module, read DXVK's `DxvkFence` and keyed-mutex code in the GE-Proton11-12 tree, and try upstream DXVK and Wine.

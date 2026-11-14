@@ -1,0 +1,5 @@
+# DXVK's enabled device extensions, Debian guest (gfx) against Rach2 (test in kvm)
+20a21
+> VK_KHR_external_semaphore_win32
+29a31
+> VK_KHR_win32_keyed_mutex
