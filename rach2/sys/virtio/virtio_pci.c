@@ -1137,6 +1137,7 @@ static int vp_probe_one(const pci_device_t *p, struct virtio_pci **out)
     vp->pci = *p;
     vp->dev.ops = &vp_ops;
     vp->dev.notify_unlocked = 1;
+    vp->dev.config_atomic = 1;
     vp->dev.transport = vp;
     vp->dev.id = vp_type(p);
     vp->dev.name = "virtio";

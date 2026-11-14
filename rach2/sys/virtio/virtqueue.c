@@ -626,7 +626,7 @@ int virtqueue_reap(struct virtqueue *vq)
     uint16_t until = vq->used[1], left, now;
     int n = 0;
 
-    while (vq->event) {
+    while (vq->event && !vq->quiet) {
         vq->avail[2u + vq->size] = until;
         arch_dma_fence(); /* the mark is out before the device's index is read */
         now = vq->used[1];
@@ -684,7 +684,37 @@ int virtqueue_reap(struct virtqueue *vq)
         }
         n++;
     }
+    if (n > 0 && vq->batch) {
+        vq->batch(vq);
+    }
     return n;
+}
+
+/**
+ * Linux's virtqueue_disable_cb_split writes 0 as the `used_event` of a
+ * queue it keeps quiet (drivers/virtio/virtio_ring.c:879-903 in 6.12.115),
+ * which the device passes at its first buffer; the index before the last
+ * one reaped is the one it reaches last, 65535 buffers on. Turning the
+ * interrupt on points `used_event` at the next buffer, and the device's
+ * index is read after it, so that a buffer returned before the write is
+ * reported to the caller, as virtqueue_enable_cb_prepare_split and
+ * virtqueue_poll_split do together.
+ */
+int virtqueue_irq(struct virtqueue *vq, int on)
+{
+    uint32_t flags = spin_lock_irqsave(&vq->lock);
+    int waiting;
+
+    vq->quiet = !on;
+    if (vq->event) {
+        vq->avail[2u + vq->size] = on ? vq->last_used : (uint16_t)(vq->last_used - 1u);
+    } else {
+        vq->avail[0] = on ? 0 : VIRTQ_AVAIL_F_NO_INTERRUPT;
+    }
+    arch_dma_fence(); /* the word is out before the device's index is read */
+    waiting = on && vq->used[1] != vq->last_used;
+    spin_unlock_irqrestore(&vq->lock, flags);
+    return waiting;
 }
 
 uint16_t virtqueue_free_count(struct virtqueue *vq)

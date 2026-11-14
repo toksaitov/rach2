@@ -168,6 +168,12 @@ struct virtqueue {
     virtqueue_done_t done;
     void *priv; /* the driver's */
     uint32_t added, completed;
+    /* Called once at the end of a virtqueue_reap that took buffers, with
+     * the lock released, for what a driver does once for a batch, as
+     * virtio-net kicks the buffers its `done` gave back; NULL for none.
+     * The driver sets it after virtio_queue_setup. */
+    void (*batch)(struct virtqueue *vq);
+    int quiet; /* the device is asked not to interrupt (virtqueue_irq) */
     struct spinlock lock;
 };
 
@@ -340,6 +346,10 @@ struct virtio_dev {
      * them by polling (`virtqueue_reap`); set by irq_setup, as virtio-pci
      * sets it for a function with neither MSI-X nor a line. */
     int polled;
+    /* The configuration is read and written by register accesses that take
+     * no lock, so a handler, `config_changed` among them, may call
+     * virtio_config_read; set by the transport, as virtio-pci sets it. */
+    int config_atomic;
     struct virtqueue *queues[VIRTIO_MAX_QUEUES];
     uint32_t config_events;
     /* The device on the virtio bus in /sys (virtio_bus.c), each a handle of
@@ -530,6 +540,21 @@ int virtqueue_reap(struct virtqueue *vq);
 
 /** Free descriptors in `vq` now. */
 uint16_t virtqueue_free_count(struct virtqueue *vq);
+
+/**
+ * Ask the device not to interrupt for the buffers it returns on `vq`
+ * (`on` 0), for a queue its driver reaps itself, or to interrupt again
+ * (`on` 1), as Linux's virtqueue_disable_cb and virtqueue_enable_cb do:
+ * with VIRTIO_F_EVENT_IDX by a `used_event` the device has just passed,
+ * which a reap then leaves alone, and without it by
+ * VIRTQ_AVAIL_F_NO_INTERRUPT. The device may interrupt all the same, on a
+ * vector the queues share or once in 65536 buffers, and the reap that
+ * follows is harmless. A handler may call it.
+ *
+ * @return for `on` 1, whether buffers returned meanwhile wait for a reap,
+ *         for which no interrupt will come; 0 for `on` 0.
+ */
+int virtqueue_irq(struct virtqueue *vq, int on);
 
 /*
  * The transports' entries into the core, from their interrupt handlers.
