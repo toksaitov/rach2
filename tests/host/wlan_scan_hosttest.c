@@ -4,11 +4,13 @@
  * host-deps: rach2/sys/network/wireless/scan.c
  * host-deps: rach2/sys/network/wireless/bss.c
  * host-deps: rach2/sys/network/wireless/elems.c
+ * host-deps: rach2/sys/network/wireless/mlme.c rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  * host-cflags: -DTICK_HZ=1000
  */
 #include "../../rach2/sys/network/wireless/work.h"
+#include "../../rach2/sys/network/wireless/mlme.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/lib/kirq.h"
 #include "../../rach2/sys/lib/kstring.h"
@@ -1012,6 +1014,168 @@ static void away_retune(void)
     CHECK(away_well_formed());
 }
 
+/* ---- the MLME beside the scan ---- */
+
+static struct wlan_mlme mlme;
+static struct wlan_bss mlme_bss[2]; /* an AP on channel 6 and one on 11 */
+static struct {
+    uint8_t type;       /* the first byte of the frame control */
+    uint16_t frequency; /* the radio's channel as the frame went */
+    unsigned filters;   /* and its filters */
+    unsigned aborted;   /* SCAN_ABORTED events reported by then */
+} mlme_txs[8];
+static unsigned n_mlme_tx;
+
+/** Note a management frame with the radio's state as it goes. */
+static int mlme_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, unsigned flags)
+{
+    (void)wlan;
+    (void)len;
+    (void)flags;
+    if (n_mlme_tx < 8) {
+        mlme_txs[n_mlme_tx].type = frame[0];
+        mlme_txs[n_mlme_tx].frequency = tuned ? tuned->frequency : 0;
+        mlme_txs[n_mlme_tx].filters = tuned_filters;
+        mlme_txs[n_mlme_tx].aborted = count_events(WLAN_EVENT_SCAN_ABORTED);
+    }
+    n_mlme_tx++;
+    return 0;
+}
+
+/** Commit every state. */
+static int mlme_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss *bss)
+{
+    (void)wlan;
+    (void)state;
+    (void)bss;
+    return 0;
+}
+
+/** Take the MLME's events, which these rows do not read. */
+static void mlme_event(struct wlan *wlan, const struct wlan_event *event)
+{
+    (void)wlan;
+    (void)event;
+}
+
+static const struct wlan_mlme_ops mlme_ops = {mlme_tx, mlme_state, mlme_event, 0, 0, 0, 0, 0, 0, 0};
+
+/** An MLME in `state` with the AP on channel 6, as the scan's station. */
+static void mlme_joined(enum wlan_sta_state state)
+{
+    k_memset(mlme_bss, 0, sizeof(mlme_bss));
+    mlme_bss[0].bssid[0] = mlme_bss[1].bssid[0] = 0x02;
+    mlme_bss[0].bssid[5] = 0x0a;
+    mlme_bss[1].bssid[5] = 0x0b;
+    mlme_bss[0].frequency = 2437;
+    mlme_bss[1].frequency = 2462;
+    mlme_bss[0].beacon_interval = mlme_bss[1].beacon_interval = 100;
+    wlan_mlme_init(&mlme, (struct wlan *)&radio, &radio, &band, &scan, &mlme_ops);
+    mlme.state = state;
+    mlme.bss = &mlme_bss[0];
+    mlme_bss[0].refs = 1;
+    mlme.channel = &band.channels[5];
+    n_mlme_tx = 0;
+}
+
+/** Whether every management frame went on `frequency` with the radio's own
+ * filters, after the scan's abort was reported. */
+static int mlme_sent_on(uint16_t frequency)
+{
+    unsigned i;
+
+    for (i = 0; i < n_mlme_tx && i < 8; ++i) {
+        if (mlme_txs[i].frequency != frequency || (mlme_txs[i].filters & WLAN_FILTER_OTHER_BSS) ||
+            mlme_txs[i].aborted != 1) {
+            return 0;
+        }
+    }
+    return n_mlme_tx != 0;
+}
+
+/**
+ * An authentication with an AP on channel 11 that starts during a trip,
+ * in a probe delay and in a dwell, cancels the scan as mac80211's
+ * ieee80211_prep_connection does: the old association ends, the scan is
+ * reported aborted with the station back before the radio tunes to channel
+ * 11, the authentication frame and its retries go there, and nothing the
+ * scan queued tunes the radio or probes again. The radio is not taken home
+ * first: the association has ended, and the data path with it, so the
+ * station's return sends the old AP nothing.
+ */
+static void away_auth(void)
+{
+    static const unsigned at[2] = {1, WLAN_SCAN_PROBE_TICKS + 2};
+    struct wlan_mlme_auth req;
+    unsigned i, configs_then, tx_then;
+
+    for (i = 0; i < 2; ++i) {
+        away_start(0, 1, 0);
+        mlme_joined(WLAN_STA_ASSOCIATED);
+        advance(at[i]);
+        CHECK(scan.away == WLAN_SCAN_AWAY && same(ask_log, "SZT", 4));
+        CHECK(scan.probe_due == (i == 0) && n_tx == i);
+        k_memset(&req, 0, sizeof(req));
+        req.bss = &mlme_bss[1];
+        req.algorithm = WLAN_AUTH_OPEN;
+        CHECK(wlan_mlme_authenticate(&mlme, &req) == 0);
+        CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && !wlan_scan_running(&scan));
+        CHECK(scan.away == WLAN_SCAN_HOME && same(ask_log, "SZTBH", 6));
+        CHECK(tuned == &band.channels[10] && scan.home == &band.channels[10]);
+        CHECK(n_mlme_tx == 1 && mlme_txs[0].type == (IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_AUTH));
+        CHECK(mlme_sent_on(2462) && mlme_bss[0].refs == 0 && mlme_bss[1].refs == 1);
+        configs_then = n_configs;
+        tx_then = n_tx;
+        advance(13 * WLAN_SCAN_HOME_TICKS + 2000);
+        CHECK(n_configs == configs_then && n_tx == tx_then && tuned == &band.channels[10]);
+        CHECK(n_mlme_tx == WLAN_MLME_TRIES && mlme_sent_on(2462));
+        CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1);
+        CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 0 && same(ask_log, "SZTBH", 6));
+        wlan_mlme_stop(&mlme);
+    }
+}
+
+/**
+ * An association cancels the scan in the same way. An authenticated
+ * station's scan of its home channel, with the radio's filter changed there,
+ * ends reported aborted with the filter given back, the request goes on
+ * channel 6, and the scan never leaves for channel 1.
+ */
+static void home_assoc(void)
+{
+    struct wlan_scan_request r;
+    struct wlan_mlme_assoc req;
+    unsigned configs_then;
+
+    setup(&soft_ops);
+    mlme_joined(WLAN_STA_AUTHENTICATED);
+    wlan_scan_set_home(&scan, &band.channels[5], 0);
+    scan.ask = ask;
+    ask_busy = ask_idle = ask_told = 1;
+    ask_waiting = ask_stuck = 0;
+    ask_n = 0;
+    ask_log[0] = 0;
+    make_request(&r, 1, "");
+    r.frequencies[0] = 2437;
+    r.frequencies[1] = 2412;
+    r.n_frequencies = 2;
+    CHECK(wlan_scan_start(&scan, &r) == 0);
+    advance(1);
+    CHECK(same(ask_log, "O", 2) && scan.probe_due);
+    k_memset(&req, 0, sizeof(req));
+    req.bss = &mlme_bss[0];
+    CHECK(wlan_mlme_associate(&mlme, &req) == 0);
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && !wlan_scan_running(&scan));
+    CHECK(same(ask_log, "OH", 3) && tuned == &band.channels[5] && tuned_filters == 0);
+    CHECK(n_mlme_tx == 1 && mlme_txs[0].type == (IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_ASSOC_REQ));
+    CHECK(mlme_sent_on(2437));
+    configs_then = n_configs;
+    advance(2000);
+    CHECK(n_configs == configs_then && n_tx == 0 && mlme_sent_on(2437));
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && count_events(WLAN_EVENT_SCAN_DONE) == 0);
+    wlan_mlme_stop(&mlme);
+}
+
 /** Requests the scan refuses, each leaving it idle. */
 static void refusals(void)
 {
@@ -1271,6 +1435,8 @@ int main(void)
     away_abort();
     away_late();
     away_retune();
+    away_auth();
+    home_assoc();
     refusals();
     hardware_scan();
     bss_fields();

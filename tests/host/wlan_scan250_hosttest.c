@@ -4,6 +4,7 @@
  * host-deps: rach2/sys/network/wireless/scan.c
  * host-deps: rach2/sys/network/wireless/bss.c
  * host-deps: rach2/sys/network/wireless/elems.c
+ * host-deps: rach2/sys/network/wireless/mlme.c rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  */
@@ -67,6 +68,8 @@ int main(void)
     trips();
     away_late();
     away_retune();
+    away_auth();
+    home_assoc();
     wlan_bss_destroy(&table);
     printf("wlan_scan250_hosttest: %s\n", failures ? "failed" : "ok");
     return failures != 0;
