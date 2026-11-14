@@ -1,0 +1,151 @@
+run 1 rc 0 pass 49 fail 0
+run 2 rc 0 pass 49 fail 0
+run 3 rc 0 pass 49 fail 0
+run 4 rc 0 pass 49 fail 0
+run 5 rc 0 pass 49 fail 0
+run 6 rc 0 pass 49 fail 0
+run 7 rc 0 pass 49 fail 0
+run 8 rc 0 pass 49 fail 0
+run 9 rc 0 pass 49 fail 0
+run 10 rc 0 pass 49 fail 0
+run 11 rc 0 pass 49 fail 0
+run 12 rc 0 pass 49 fail 0
+run 13 rc 0 pass 49 fail 0
+run 14 rc 0 pass 49 fail 0
+run 15 rc 0 pass 49 fail 0
+run 16 rc 0 pass 49 fail 0
+run 17 rc 0 pass 49 fail 0
+run 18 rc 1 pass 47 fail 2
+run 18 FAIL PIGLIT: {"subtest": {"Tessellation evaluation shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 18 FAIL PIGLIT: {"result": "fail" }
+run 18 PROBE Probe value at (80, 50, 0, 0)
+run 18 PROBE   Expected: 33.000000
+run 18 PROBE   Observed: 3997702.000000
+run 19 rc 0 pass 49 fail 0
+run 20 rc 0 pass 49 fail 0
+run 21 rc 0 pass 49 fail 0
+run 22 rc 0 pass 49 fail 0
+run 23 rc 0 pass 49 fail 0
+run 24 rc 1 pass 46 fail 3
+run 24 FAIL PIGLIT: {"subtest": {"Tessellation evaluation shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 24 FAIL PIGLIT: {"subtest": {"Geometry shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 24 FAIL PIGLIT: {"result": "fail" }
+run 24 PROBE Probe value at (104, 46, 0, 0)
+run 24 PROBE   Expected: 33.000000
+run 24 PROBE   Observed: 393216.000000
+run 24 PROBE --
+run 24 PROBE Probe value at (96, 42, 0, 0)
+run 24 PROBE   Expected: 33.000000
+run 24 PROBE   Observed: 65536.000000
+run 25 rc 1 pass 47 fail 2
+run 25 FAIL PIGLIT: {"subtest": {"Geometry shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 25 FAIL PIGLIT: {"result": "fail" }
+run 25 PROBE Probe value at (80, 46, 0, 0)
+run 25 PROBE   Expected: 33.000000
+run 25 PROBE   Observed: 31850975.000000
+run 26 rc 0 pass 49 fail 0
+run 27 rc 0 pass 49 fail 0
+run 28 rc 0 pass 49 fail 0
+run 29 rc 1 pass 47 fail 2
+run 29 FAIL PIGLIT: {"subtest": {"Geometry shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 29 FAIL PIGLIT: {"result": "fail" }
+run 29 PROBE Probe value at (240, 50, 0, 0)
+run 29 PROBE   Expected: 33.000000
+run 29 PROBE   Observed: 6225920.000000
+run 30 rc 0 pass 49 fail 0
+run 31 rc 0 pass 49 fail 0
+run 32 rc 0 pass 49 fail 0
+run 33 rc 0 pass 49 fail 0
+run 34 rc 0 pass 49 fail 0
+run 35 rc 0 pass 49 fail 0
+run 36 rc 0 pass 49 fail 0
+run 37 rc 0 pass 49 fail 0
+run 38 rc 0 pass 49 fail 0
+run 39 rc 1 pass 47 fail 2
+run 39 FAIL PIGLIT: {"subtest": {"Tessellation evaluation shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 39 FAIL PIGLIT: {"result": "fail" }
+run 39 PROBE Probe value at (192, 50, 0, 0)
+run 39 PROBE   Expected: 33.000000
+run 39 PROBE   Observed: 1900562.000000
+run 40 rc 1 pass 47 fail 2
+run 40 FAIL PIGLIT: {"subtest": {"Tessellation evaluation shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 40 FAIL PIGLIT: {"result": "fail" }
+run 40 PROBE Probe value at (192, 50, 0, 0)
+run 40 PROBE   Expected: 33.000000
+run 40 PROBE   Observed: 393217.000000
+run 41 rc 0 pass 49 fail 0
+run 42 rc 0 pass 49 fail 0
+run 43 rc 0 pass 49 fail 0
+run 44 rc 0 pass 49 fail 0
+run 45 rc 0 pass 49 fail 0
+run 46 rc 0 pass 49 fail 0
+run 47 rc 0 pass 49 fail 0
+run 48 rc 0 pass 49 fail 0
+run 49 rc 0 pass 49 fail 0
+run 50 rc 0 pass 49 fail 0
+run 51 rc 0 pass 49 fail 0
+run 52 rc 0 pass 49 fail 0
+run 53 rc 0 pass 49 fail 0
+run 54 rc 1 pass 47 fail 2
+run 54 FAIL PIGLIT: {"subtest": {"Geometry shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 54 FAIL PIGLIT: {"result": "fail" }
+run 54 PROBE Probe value at (240, 50, 0, 0)
+run 54 PROBE   Expected: 33.000000
+run 54 PROBE   Observed: 655360.000000
+run 55 rc 1 pass 47 fail 2
+run 55 FAIL PIGLIT: {"subtest": {"Geometry shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 55 FAIL PIGLIT: {"result": "fail" }
+run 55 PROBE Probe value at (240, 50, 0, 0)
+run 55 PROBE   Expected: 33.000000
+run 55 PROBE   Observed: 1835008.000000
+run 56 rc 1 pass 47 fail 2
+run 56 FAIL PIGLIT: {"subtest": {"Tessellation evaluation shader/'volatile' qualifier memory barrier test/modulus=64" : "fail"}}
+run 56 FAIL PIGLIT: {"result": "fail" }
+run 56 PROBE Probe value at (112, 50, 0, 0)
+run 56 PROBE   Expected: 33.000000
+run 56 PROBE   Observed: 1376257.000000
+run 57 rc 0 pass 49 fail 0
+run 58 rc 0 pass 49 fail 0
+run 59 rc 0 pass 49 fail 0
+run 60 rc 0 pass 49 fail 0
+run 61 rc 0 pass 49 fail 0
+run 62 rc 0 pass 49 fail 0
+run 63 rc 0 pass 49 fail 0
+run 64 rc 0 pass 49 fail 0
+run 65 rc 0 pass 49 fail 0
+run 66 rc 0 pass 49 fail 0
+run 67 rc 0 pass 49 fail 0
+run 68 rc 0 pass 49 fail 0
+run 69 rc 0 pass 49 fail 0
+run 70 rc 0 pass 49 fail 0
+run 71 rc 0 pass 49 fail 0
+run 72 rc 0 pass 49 fail 0
+run 73 rc 0 pass 49 fail 0
+run 74 rc 0 pass 49 fail 0
+run 75 rc 0 pass 49 fail 0
+run 76 rc 0 pass 49 fail 0
+run 77 rc 0 pass 49 fail 0
+run 78 rc 0 pass 49 fail 0
+run 79 rc 0 pass 49 fail 0
+run 80 rc 0 pass 49 fail 0
+run 81 rc 0 pass 49 fail 0
+run 82 rc 0 pass 49 fail 0
+run 83 rc 0 pass 49 fail 0
+run 84 rc 0 pass 49 fail 0
+run 85 rc 0 pass 49 fail 0
+run 86 rc 0 pass 49 fail 0
+run 87 rc 0 pass 49 fail 0
+run 88 rc 0 pass 49 fail 0
+run 89 rc 0 pass 49 fail 0
+run 90 rc 0 pass 49 fail 0
+run 91 rc 0 pass 49 fail 0
+run 92 rc 0 pass 49 fail 0
+run 93 rc 0 pass 49 fail 0
+run 94 rc 0 pass 49 fail 0
+run 95 rc 0 pass 49 fail 0
+run 96 rc 0 pass 49 fail 0
+run 97 rc 0 pass 49 fail 0
+run 98 rc 0 pass 49 fail 0
+run 99 rc 0 pass 49 fail 0
+run 100 rc 0 pass 49 fail 0
+LOOP-DONE
