@@ -998,8 +998,12 @@ static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
  * `sync_inode_metadata` (fs/ext2/dir.c:440-447 in Linux 6.12.115), for a
  * step that depends on the inode: a grown directory's new pointer, size and
  * `i_blocks` before a name in the new block lets another go, a cleared
- * index flag before the entries change, and a new directory and its
- * parent's raised count before the parent names it. The cache writes the
+ * index flag before the entries change, a new inode before the entry that
+ * names it, so that no stop leaves an entry naming a zeroed inode, and a
+ * count raised for a new name, a link's, a rename's or a new directory's
+ * parent's, before the name, so that a stop leaves a count above the names
+ * and never below, which a later removal of a name would take to 0 while
+ * another still names the inode. The cache writes the
  * block after the dirty blocks it may name (`bcache_sync_last`,
  * `table_names`): the shared blocks dirtied before its last mark that are
  * not `after`, such as bitmaps, descriptors and directory and pointer
@@ -1638,15 +1642,15 @@ static void dir_lose_parent(struct ext2_mount *em, struct ext2_node *d, int lose
 /**
  * The `create` of `vfs_ops`: a new regular file `name` in `dir`, the root for
  * NULL, with the permission bits of `mode`: the inode allocated and written
- * whole, then the entry that names it, then the directory's times into the
- * cache. A failure to add the entry frees the inode (`inode_abandon`); a
- * failure to store the times is not the call's, since the entry is there,
- * and is not reported again: a failed read of the table block was reported
- * as it was met (READ_SLOT).
- * The batch is drained first. The caller holds the directory's lock, and
- * the new node's is held until it is named. 0 with the node held, -ENOENT
- * for a removed directory, -EEXIST, -ENAMETOOLONG, -EROFS, -ENOSPC,
- * -ENOMEM, or -errno.
+ * whole, and to the device on a mount that writes back (`inode_commit`), then
+ * the entry that names it, then the directory's times into the cache. A
+ * failure to add the entry frees the inode (`inode_abandon`); a failure to
+ * store the times is not the call's, since the entry is there, and is not
+ * reported again: a
+ * failed read of the table block was reported as it was met (READ_SLOT). The
+ * batch is drained first. The caller holds the directory's lock, and the new
+ * node's is held until it is named. 0 with the node held, -ENOENT for a removed
+ * directory, -EEXIST, -ENAMETOOLONG, -EROFS, -ENOSPC, -ENOMEM, or -errno.
  */
 int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node)
 {
@@ -1682,7 +1686,10 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
     sleep_lock_subclass(4);
     ext2_node_lock(n);
     sleep_lock_subclass(0);
-    rc = dir_add(em, d, name, n->ino, 1);
+    rc = inode_commit(em, n);
+    if (rc == 0) {
+        rc = dir_add(em, d, name, n->ino, 1);
+    }
     if (rc != 0) {
         inode_abandon(em, n);
         return rc;
@@ -1697,7 +1704,8 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
 /**
  * The `mknod` of `vfs_ops`: a FIFO, a socket or a device node `name` in
  * `dir`, in the order `create` keeps: the inode's bit, then the inode written
- * whole, then the entry that names it, then the directory's times. A
+ * whole, to the device on a mount that writes back, then the entry that
+ * names it, then the directory's times. A
  * device's number is where Linux keeps it: the old encoding, a byte each of
  * major and minor, in the first pointer word when both fit, and the new
  * encoding in the second word otherwise, with the first zero. The caller
@@ -1754,6 +1762,9 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         }
     }
     rc = ext2_inode_store(em, n);
+    if (rc == 0) {
+        rc = inode_commit(em, n);
+    }
     if (rc == 0) {
         rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode));
     }
@@ -2004,6 +2015,9 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
     ext2_node_nlink_set(n, n->nlink + 1);
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_store(em, n);
+    if (rc == 0) {
+        rc = inode_commit(em, n);
+    }
     if (rc != 0) {
         ext2_node_nlink_set(n, n->nlink - 1);
         return rc;
@@ -2020,7 +2034,8 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
 
 /**
  * The `link` of `vfs_ops`: a new name `name` in `dir` for the file `node`:
- * the count raised first, then the name written, so that a stop between
+ * the count raised first and, on a mount that writes back, written to the
+ * device (`inode_commit`), then the name written, so that a stop between
  * leaves a count one too high, which is a count repair; then the
  * directory's times. A failure to write the name lowers the count again in
  * memory, which the file's mark has its next store write.
@@ -2060,7 +2075,8 @@ int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
  * The `symlink` of `vfs_ops`: a link `name` in `dir` to `target`. A target
  * shorter than 60 bytes is kept in the inode's pointer words, and a longer one
  * in a block of its own, written first (`shared_block_new`); then the inode,
- * then the entry, then the directory's times. A failure to add the entry frees
+ * to the device on a mount that writes back (`inode_commit`), then the entry,
+ * then the directory's times. A failure to add the entry frees
  * the inode; a failure to store the times is not the call's, since the
  * entry, on the device on a mount that writes back, names the inode, as in
  * `ext2_create`. The batch is drained first. The caller holds the
@@ -2127,6 +2143,9 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
     if (rc == 0) {
         ext2_node_size_set(n, tlen);
         rc = ext2_inode_store(em, n);
+    }
+    if (rc == 0) {
+        rc = inode_commit(em, n);
     }
     if (rc == 0) {
         rc = dir_add(em, d, name, n->ino, 7);
@@ -2196,21 +2215,22 @@ struct ext2_rename_names {
 };
 
 /**
- * The rename of directory `n` from `r->oldname` in `r->od` to `r->newname`
- * in `r->nd`, over the empty directory `victim` at `nsc`, `nat` and `nprev`
- * when it is not NULL, for `ext2_rename`, whose caller holds every lock: the
- * victim removed as rmdir removes it, the new parent's count lowered for the
- * victim's `..`, then the new entry, then `..` rewritten and the new parent's
- * count raised when the parents differ, then the old entry removed and the old
- * parent's count lowered when the parents differ. Within one parent the count
- * falls by one, for the victim; between two, the new parent's is unchanged
- * with a victim and the old parent's falls by one, as Linux's `ext2_rename`
- * leaves `new_dir` with a target and drops `old_dir`
- * (fs/ext2/namei.c:354-396). A failed store of a count or of times after an
- * entry change is on the device fails nothing: the node keeps its mark, which
- * its next store settles. 0, -ENOENT, -EMLINK when the parents differ, there
- * is no victim and the new parent's count would pass 65000, as Linux tests it
- * only when the new name is no directory (fs/namei.c:5090-5093), or -errno.
+ * The rename of directory `n` from `r->oldname` in `r->od` to `r->newname` in
+ * `r->nd`, over the empty directory `victim` at `nsc`, `nat` and `nprev` when
+ * it is not NULL, for `ext2_rename`, whose caller holds every lock: the victim
+ * removed as rmdir removes it, the new parent's count lowered for the victim's
+ * `..`, then the new entry, then, when the parents differ, the new parent's
+ * count raised and written (`inode_commit`) and `..` rewritten, then the old
+ * entry removed and the old parent's count lowered when the parents differ. So
+ * a stop leaves no count below its names. Within one parent the count falls by
+ * one, for the victim; between two, the new parent's is unchanged with a victim
+ * and the old parent's falls by one, as Linux's `ext2_rename` leaves `new_dir`
+ * with a target and drops `old_dir` (fs/ext2/namei.c:354-396). A failed store
+ * of a count or of times after an entry change is on the device fails nothing:
+ * the node keeps its mark, which its next store settles. 0, -ENOENT, -EMLINK
+ * when the parents differ, there is no victim and the new parent's count would
+ * pass 65000, as Linux tests it only when the new name is no directory
+ * (fs/namei.c:5090-5093), or -errno.
  */
 static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
                       struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat,
@@ -2241,13 +2261,19 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
         return rc;
     }
     if (od != nd) {
-        rc = dir_set_dotdot(em, n, nd->ino);
-        if (rc != 0) {
-            return rc;
-        }
         ext2_node_nlink_set(nd, nd->nlink + 1);
         ext2_stamp(nd, T_MTIME | T_CTIME);
-        (void)ext2_inode_store(em, nd);
+        rc = ext2_inode_store(em, nd);
+        if (rc == 0) {
+            rc = inode_commit(em, nd);
+        }
+        if (rc == 0) {
+            rc = dir_set_dotdot(em, n, nd->ino);
+        }
+        if (rc != 0) {
+            ext2_node_nlink_set(nd, nd->nlink - 1);
+            return rc;
+        }
     }
     rc = dir_find(em, od, r->oldname, &oat, &oprev, &osc);
     if (rc <= 0) {
@@ -2264,7 +2290,8 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
  * The rename of file `n` from `r->oldname` in `r->od` to `r->newname` in
  * `r->nd`, over the file `victim` whose entry is `nsc` at `nat` when it is
  * not NULL, for `ext2_rename`, whose caller holds every lock: the count
- * raised, the new entry written or the victim's entry pointed at `n`, the
+ * raised and written (`inode_commit`), the new entry written or the
+ * victim's entry pointed at `n`, the
  * victim's count lowered as unlink lowers it, the old entry removed and the
  * count lowered again. A failed store of a count or of times after an entry
  * change is on the device fails nothing: the node keeps its mark, which its
@@ -2291,6 +2318,9 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
     ext2_node_nlink_set(n, n->nlink + 1);
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_store(em, n);
+    if (rc == 0) {
+        rc = inode_commit(em, n);
+    }
     if (rc != 0) {
         ext2_node_nlink_set(n, n->nlink - 1);
         return rc;
@@ -2364,8 +2394,8 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
  * the count lowered, so that the file has a name at every stop. A
  * destination file is replaced by rewriting its entry to the source's
  * inode, after which the victim loses a count and goes as an unlink's does.
- * A directory moves by a new entry, its `..` rewritten, the new parent's
- * count raised, the old entry removed and the old parent's count lowered; a
+ * A directory moves by a new entry, the new parent's count raised, its `..`
+ * rewritten, the old entry removed and the old parent's count lowered; a
  * destination directory must be empty and goes first, as rmdir's does. The
  * old entry is found again before it is removed, since a removal in the
  * same directory may have moved it. Two names of one file change nothing.
