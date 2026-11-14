@@ -340,8 +340,7 @@ extern int netdev_budget;
 /** The microseconds after which a drain of the loopback backlog ends at the
  * end of its turn: Linux's net.core.netdev_budget_usecs, two ticks, 8000,
  * unless written through /proc/sys/net/core/netdev_budget_usecs, which
- * takes two ticks' worth or more, as Linux's minimum is 2 * USEC_PER_SEC /
- * HZ. */
+ * takes 0 or more, as Linux 6.12's does. */
 extern int netdev_budget_usecs;
 
 /* A processor's counts of the loopback backlog, the first three columns of
