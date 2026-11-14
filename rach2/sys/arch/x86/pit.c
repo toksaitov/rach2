@@ -715,13 +715,13 @@ const char *timer_clocksource(int n)
         }
         return now ? clocksource_name(now) : "jiffies";
     }
-    if (tsc_per_tick && n-- == 0) {
-        return "tsc";
+    if (tsc_clock_per_tick() && n-- == 0) {
+        return "tsc"; /* trusted, or watched for the vDSO */
     }
     if (refclock_name() && n-- == 0) {
         return clocksource_name(refclock_name());
     }
-    return n == 0 && !tsc_per_tick && !refclock_name() ? "jiffies" : 0;
+    return n == 0 && !tsc_clock_per_tick() && !refclock_name() ? "jiffies" : 0;
 }
 
 /**

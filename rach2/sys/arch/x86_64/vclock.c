@@ -107,7 +107,10 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * length, as Linux skips a long interval. The first span, of at least
  * WATCH_FIRST_NS, sets the rate instead, as Linux's
  * tsc_refine_calibration_work measures the TSC again a second after boot
- * (arch/x86/kernel/tsc.c:1379-1470): the boot's measure spans 20 ms.
+ * (arch/x86/kernel/tsc.c:1314-1406): the boot's measure spans 20 ms. A
+ * first span that differs from the boot's rate by more than a hundredth
+ * keeps that rate, as Linux's does, and the watch goes on from there; a
+ * TSC that has not moved over a span parts from the clock.
  */
 #define WATCH_SPAN_NS  500000000u /* WATCHDOG_INTERVAL */
 #define WATCH_FIRST_NS 1000000000u
@@ -571,8 +574,7 @@ enum { WATCH_KEEP, WATCH_REFINED, WATCH_PARTED };
 static int vclock_watch(const struct vclock_sample *before, const struct vclock_sample *after,
                         uint64_t ref_raw)
 {
-    uint64_t tsc, span, need, ran;
-    uint32_t per_tick;
+    uint64_t tsc, span, need, ran, delta, per_tick;
 
     if (after->tsc < before->tsc ||
         vclock_scale(after->tsc - before->tsc, mult_measured, data->shift) > WATCH_SKEW_NS) {
@@ -582,7 +584,7 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
     tsc = vclock_middle(before->tsc, after->tsc);
     need = watch_refined ? WATCH_SPAN_NS : WATCH_FIRST_NS;
     span = ref_raw - watch_raw;
-    if (watch_tsc == 0 || ref_raw <= watch_raw || tsc <= watch_tsc || span > 2u * need) {
+    if (watch_tsc == 0 || ref_raw <= watch_raw || span > 2u * need) {
         watch_tsc = tsc;
         watch_raw = ref_raw;
         return WATCH_KEEP;
@@ -590,17 +592,24 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
     if (span < need) {
         return WATCH_KEEP;
     }
-    if (!watch_refined) {
-        per_tick = (uint32_t)tick_div64((tsc - watch_tsc) * TICK_NS, span, NULL);
-        timer_tsc_watch_refine(per_tick);
-        watch_refined = 1;
-        watch_tsc = tsc;
-        watch_raw = ref_raw;
-        return WATCH_REFINED;
-    }
-    ran = vclock_scale(tsc - watch_tsc, mult_measured, data->shift);
+    delta = tsc > watch_tsc ? tsc - watch_tsc : 0;
+    ran = vclock_scale(delta, mult_measured, data->shift);
     watch_tsc = tsc;
     watch_raw = ref_raw;
+    if (!watch_refined) {
+        watch_refined = 1;
+        /* Within a hundredth of the boot's measure, as Linux's refinement
+         * keeps the boot's rate otherwise (arch/x86/kernel/tsc.c:1379-1381). */
+        if ((ran > span ? ran - span : span - ran) > span / 100u) {
+            return WATCH_KEEP;
+        }
+        per_tick = tick_div64(delta * TICK_NS, span, NULL);
+        if (per_tick == 0 || per_tick > 0xFFFFFFFFu) {
+            return WATCH_KEEP;
+        }
+        timer_tsc_watch_refine((uint32_t)per_tick);
+        return WATCH_REFINED;
+    }
     if ((ran > span ? ran - span : span - ran) > WATCH_LIMIT_NS) {
         watch_parted = 1;
         watch_ran_ns = ran;
