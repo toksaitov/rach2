@@ -1606,8 +1606,13 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "virtio_bus",
+          "checks": "tests/host/virtio_bus_hosttest.c adds a model virtio-gpu to the virtio bus in /sys and checks its directory, attributes, links and uevents against Linux 6.12's, its card's parent through a link and its driver's binding under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "virtio_pci_shm",
-          "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of two functions under ASan and UBSan and exits 0",
+          "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of two functions, and shows each function bound with its virtio device and one bind uevent, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1747,7 +1752,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 338
+          "limit": 339
         }
       ],
       "bounds": {

@@ -1958,6 +1958,10 @@ struct drm_device {
     char unique[32];
     const pci_device_t *pci;
     const struct sysfs_pci_ident *pci_ident;
+    /* The directory of /sys the device's `drm` goes below, a handle of
+     * sysfs.h set by the driver, as virtio-gpu sets its virtio device's;
+     * 0 for its PCI function's, or a platform device's without one. */
+    int sysfs_parent;
     struct drm_file *master;
     uint32_t open_count;
     struct drm_file *files;              /* its open files, through `dev_next` */

@@ -25,10 +25,13 @@
  *   /sys/dev/char/226:N/device/subsystem, and for a PCI device its slot
  *   from the device's uevent, which is the name its `device` link leads to,
  *   and its IDs from the device's files, which `config` repeats; for a
- *   platform device its uevent's DRIVER and MODALIAS. The device's `drm`
- *   directory lists the node, the node's `dev` gives its numbers and its
- *   uevent its DEVNAME, and /sys/class/drm links it. Not run on a machine
- *   with no DRM node.
+ *   virtio device, as virtio-gpu's card has, its uevent's DRIVER and
+ *   MODALIAS, its `device`, `vendor`, `modalias` and `driver`, and the same
+ *   of the PCI function above it, reached through `device/..` as libdrm
+ *   reaches it; for a platform device its uevent's DRIVER and MODALIAS.
+ *   The device's `drm` directory lists the node, the node's `dev` gives its
+ *   numbers and its uevent its DEVNAME, and /sys/class/drm links it. Not
+ *   run on a machine with no DRM node.
  * * `dri`: the first card's debugfs files, those IGT 2.0's CRC and
  *   connector-forcing code opens among them, as Linux 6.12 gives them:
  *   /sys/kernel/debug/dri/N a link to the device's directory, whose `name`
@@ -623,14 +626,18 @@ static void find_node(const char *name, void *arg)
 }
 
 /** Find the PCI device of /sys/dev/char's `dir` by its identity, as libdrm
- * does: the slot in its uevent, its IDs in its files. */
-static void card_pci(const char *dir, const char *node)
+ * does: the slot in its uevent, its IDs in its files. The device is
+ * `dir`/device, or for a card on a virtio device its parent, `dir`/device/..,
+ * which libdrm's drmParseSubsystemType reads and whose name its
+ * get_real_pci_path takes by cutting the virtio device's from the link. */
+static void card_pci(const char *dir, const char *node, int virtio)
 {
     struct pci_ident id;
     char dev[160], path[176], text[512];
     const char *slot;
+    char *cut;
 
-    join(dev, sizeof(dev), dir, "/device", 0);
+    join(dev, sizeof(dev), dir, virtio ? "/device/.." : "/device", 0);
     dev_file(dev, "uevent", text, sizeof(text));
     slot = var_of(text, "PCI_SLOT_NAME=");
     if (!slot) {
@@ -641,9 +648,62 @@ static void card_pci(const char *dir, const char *node)
         fail2("the device's uevent disagrees with its files: ", node);
     }
     join(path, sizeof(path), dir, "/device", 0);
-    if (read_link(path, path, sizeof(path)) <= 0 || !value_is(slot, base_name(path))) {
+    if (read_link(path, path, sizeof(path)) <= 0) {
+        fail2("no device link of ", node);
+    }
+    if (virtio) {
+        cut = (char *)base_name(path);
+        if (!starts(cut, "virtio") || cut == path) {
+            fail2("the device link does not lead to a virtio device: ", node);
+        }
+        cut[-1] = '\0';
+    }
+    if (!value_is(slot, base_name(path))) {
         fail2("the device link does not lead to the slot of ", node);
     }
+}
+
+/** Check the virtio device of /sys/dev/char's `dir`, as Linux's virtio.c
+ * shows it: its uevent's DRIVER and MODALIAS, `device` and `vendor` as
+ * "0x%04x", the same in `modalias`, and a `driver` link; then its parent's
+ * subsystem, which must be PCI, as libdrm reads it through `device/..`. */
+static void card_virtio(const char *dir, const char *node)
+{
+    char dev[160], path[176], text[512], device[16], vendor[16], head[32], alias[64];
+    const char *drv, *mod;
+    char *c;
+
+    join(dev, sizeof(dev), dir, "/device", 0);
+    dev_file(dev, "uevent", text, sizeof(text));
+    drv = var_of(text, "DRIVER=");
+    mod = var_of(text, "MODALIAS=virtio:d");
+    if (!drv || !value_is(drv, "virtio_gpu") || !mod) {
+        fail2("no DRIVER=virtio_gpu or virtio MODALIAS in the virtio device's uevent of ", node);
+    }
+    if (dev_file(dev, "device", device, sizeof(device)) != 7 || !starts(device, "0x") ||
+        dev_file(dev, "vendor", vendor, sizeof(vendor)) != 7 || !starts(vendor, "0x")) {
+        fail2("the virtio device's device or vendor is not 0x%04x: ", node);
+    }
+    device[6] = vendor[6] = '\0';
+    join(head, sizeof(head), "virtio:d0000", device + 2, "v0000");
+    join(alias, sizeof(alias), head, vendor + 2, "\n");
+    for (c = alias; *c; c++) {
+        if (*c >= 'a' && *c <= 'f') {
+            *c = (char)(*c - 'a' + 'A');
+        }
+    }
+    if (dev_file(dev, "modalias", text, sizeof(text)) <= 0 || !str_eq(text, alias)) {
+        fail2("the virtio device's modalias is not its device and vendor: ", node);
+    }
+    join(path, sizeof(path), dev, "/driver", 0);
+    if (read_link(path, text, sizeof(text)) <= 0 || !str_eq(base_name(text), "virtio_gpu")) {
+        fail2("no driver link of the virtio device of ", node);
+    }
+    join(path, sizeof(path), dev, "/../subsystem", 0);
+    if (read_link(path, text, sizeof(text)) <= 0 || !str_eq(base_name(text), "pci")) {
+        fail2("the virtio device's parent is not on the PCI bus: ", node);
+    }
+    card_pci(dir, node, 1);
 }
 
 /** Check the DRM node `name` of /dev/dri as libdrm finds it, and keep the
@@ -670,9 +730,11 @@ static void dri_node(const char *name, void *arg)
         fail2("no device/subsystem link of ", dir);
     }
     if (str_eq(base_name(text), "pci")) {
-        card_pci(dir, node);
+        card_pci(dir, node, 0);
+    } else if (str_eq(base_name(text), "virtio")) {
+        card_virtio(dir, node);
     } else if (!str_eq(base_name(text), "platform")) {
-        fail2("a device on neither PCI nor the platform bus: ", node);
+        fail2("a device on neither PCI, virtio nor the platform bus: ", node);
     } else {
         join(path, sizeof(path), dir, "/device", 0);
         dev_file(path, "uevent", text, sizeof(text));

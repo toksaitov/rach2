@@ -344,10 +344,11 @@ static int add_node(struct drm_sysfs_dev *sd, int parent, int which, int *class_
     return dir;
 }
 
-/** The directory of the device `dev` sits below: its PCI function's, or a
- * platform device's under /sys/devices/platform, made here when absent with
- * its uevent, its `subsystem` link and its link in /sys/bus/platform. The
- * handle, or -errno. */
+/** The directory of the device `dev` sits below: the one its driver named
+ * (`sysfs_parent`), its PCI function's, or a platform device's under
+ * /sys/devices/platform, made here when absent with its uevent, its
+ * `subsystem` link and its link in /sys/bus/platform. The handle, or
+ * -errno. */
 static int device_parent(struct drm_sysfs_dev *sd)
 {
     const struct drm_device *dev = sd->dev;
@@ -369,7 +370,10 @@ static int device_parent(struct drm_sysfs_dev *sd)
             sysfs_pci_virtual_remove(key);
             sd->pci_key = 0;
         }
-        return h;
+        return h < 0 || dev->sysfs_parent <= 0 ? h : dev->sysfs_parent;
+    }
+    if (dev->sysfs_parent > 0) {
+        return dev->sysfs_parent;
     }
     if (platform < 0) {
         return platform;

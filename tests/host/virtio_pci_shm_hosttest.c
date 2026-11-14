@@ -18,7 +18,8 @@
  * and check that no window was mapped at a region's address.
  *
  * Each function taken is shown bound to virtio-pci once, however often it
- * is found.
+ * is found, with its virtio device added to the bus once, named virtioN for
+ * its place among the virtio functions, and one "bind" uevent.
  *
  * The interrupt rows give every MSI-X entry a remapped message, release
  * them before vectors, and force vector and remapper allocation failures.
@@ -294,6 +295,46 @@ int sysfs_pci_bind(int key, const char *driver)
     return 0;
 }
 
+/** Take the binding of `key` away. */
+void sysfs_pci_unbind(int key)
+{
+    if (key == bound_key) {
+        bound_key = -1;
+    }
+}
+
+/* The "bind" uevents of functions, and the devices added to the virtio bus:
+ * how many, the last one's name and vendor. */
+static int bind_events, bus_adds;
+static char bus_name[16];
+static unsigned bus_vendor;
+
+/** Count a function's "bind" uevent. */
+int32_t sysfs_pci_uevent(int key, const char *action)
+{
+    CHECK(key == bound_key && strcmp(action, "bind") == 0,
+          "the bind uevent is the bound function's");
+    bind_events++;
+    return 0;
+}
+
+/** The anchor of a fixed directory, here its key plus one. */
+int sysfs_anchor(int node, int key)
+{
+    (void)node;
+    return key + 1;
+}
+
+/** Record a device added to the virtio bus, as virtio_bus.c adds one. */
+int virtio_bus_add(struct virtio_dev *d, int parent, uint16_t vendor)
+{
+    CHECK(parent == bound_key + 1, "the virtio device goes below its function");
+    bus_adds++;
+    k_memcpy(bus_name, d->name, k_strlen(d->name) + 1);
+    bus_vendor = vendor;
+    return 0;
+}
+
 void virtio_interrupt_config(struct virtio_dev *d)
 {
     (void)d;
@@ -390,6 +431,8 @@ static void make_function(int f, uint64_t bar2)
     bar_size[f][2] = 0x4000;
     space[f][0] = 0xF4;
     space[f][1] = 0x1A;
+    space[f][0x2C] = 0xF4; /* the subsystem vendor, QEMU's */
+    space[f][0x2D] = 0x1A;
     space[f][2] = 0x50;
     space[f][3] = 0x10;
     space[f][PCI_STATUS] = PCI_STATUS_CAP_LIST;
@@ -431,6 +474,10 @@ static void qemu_layout(void)
     CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &d) == 0, "QEMU's virtio-gpu is taken");
     CHECK(binds == 1 && bound_key == 0 && strcmp(bound_driver, "virtio-pci") == 0,
           "the function is shown bound to virtio-pci, as Linux binds it");
+    CHECK(bus_adds == 1 && strcmp(bus_name, "virtio0") == 0 && bus_vendor == 0x1AF4u &&
+              bind_events == 1,
+          "the function's virtio device is virtio0 on the bus with the subsystem vendor, and "
+          "its bind uevent is sent");
     CHECK(d->ops->shm_region(d, 1, &addr, &len) == 0 && addr == hostmem && len == 4 * GIB,
           "shared memory 1 is the whole 4 GiB BAR at 14 TiB");
     CHECK(d->ops->shm_region(d, 0, &addr, &len) == -ENOENT, "no region 0");
@@ -457,6 +504,8 @@ static void refusals(void)
     add_cap(1, 8, 4, 6, GIB, 2 * GIB);
     log_text[0] = 0;
     CHECK(virtio_pci_find(VIRTIO_ID_GPU, 1, &d) == 0, "the second function is taken");
+    CHECK(bus_adds == 2 && strcmp(bus_name, "virtio1") == 0,
+          "the second virtio function's device is virtio1");
     CHECK(d->ops->shm_region(d, 2, &addr, &len) == -ENOENT, "a region in an I/O BAR is refused");
     CHECK(d->ops->shm_region(d, 3, &addr, &len) == -ENOENT,
           "a region past its BAR's end is refused");
@@ -479,7 +528,8 @@ static void interrupts(void)
     uint32_t *table = (uint32_t *)&windows[0][0x3000];
 
     CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &d) == 0, "reuse the first function");
-    CHECK(binds == 2, "a function found again is not bound again");
+    CHECK(binds == 2 && bus_adds == 2 && bind_events == 2,
+          "a function found again is not bound or added again");
     msix_ready = 1;
     for (i = 0; i < 2; i++) {
         CHECK(d->ops->irq_setup(d, 2) == 0, "set up two queues and configuration");

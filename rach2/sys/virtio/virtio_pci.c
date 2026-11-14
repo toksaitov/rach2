@@ -6,6 +6,7 @@
 
 #include "virtio.h"
 
+#include "../fs/synthfs.h"
 #include "../fs/sysfs.h"
 #include "../irq.h"
 #include "../klog.h"
@@ -19,12 +20,13 @@
  * 4.1.2): 0x1040 plus the device type for a device of virtio 1.x alone,
  * 0x1000 to 0x103F for a transitional one, whose type is then its
  * subsystem device id. */
-#define VP_VENDOR           0x1AF4u
-#define VP_MODERN_BASE      0x1040u
-#define VP_MODERN_LAST      0x107Fu
-#define VP_TRANSITION_FIRST 0x1000u
-#define VP_TRANSITION_LAST  0x103Fu
-#define PCI_SUBSYSTEM_ID    0x2E
+#define VP_VENDOR            0x1AF4u
+#define VP_MODERN_BASE       0x1040u
+#define VP_MODERN_LAST       0x107Fu
+#define VP_TRANSITION_FIRST  0x1000u
+#define VP_TRANSITION_LAST   0x103Fu
+#define PCI_SUBSYSTEM_VENDOR 0x2C
+#define PCI_SUBSYSTEM_ID     0x2E
 
 /* The vendor capability (virtio 1.2, 4.1.4): cap_vndr, cap_next, cap_len,
  * cfg_type, bar, id, two bytes of padding, offset and length, each 32 bits;
@@ -119,7 +121,7 @@ struct virtio_pci {
     int slot[VIRTIO_MAX_QUEUES + 1];   /* by MSI-X entry, -1 when none */
     int nentries;                      /* entries in use */
     int line;                          /* the INTx line, while on it */
-    char name[8];
+    char name[16];                     /* "virtioN" */
 };
 
 /* An interrupt slot: which device and target its vector serves, and how
@@ -926,11 +928,43 @@ static int vp_attach(struct virtio_pci *vp)
     return 0;
 }
 
+/** Whether `p` is a function Linux's virtio-pci takes: Red Hat's vendor id
+ * and a device id from 0x1000 to 0x107F, as virtio_pci_probe checks. */
+static int vp_is_virtio(const pci_device_t *p)
+{
+    return p->vendor_id == VP_VENDOR && p->device_id >= VP_TRANSITION_FIRST &&
+           p->device_id <= VP_MODERN_LAST;
+}
+
+/** Name `vp` "virtioN", N the number of virtio functions before its own
+ * among the `at` first of the bus, as Linux's register_virtio_device
+ * numbers the devices virtio-pci takes in the order of the bus. */
+static void vp_name(struct virtio_pci *vp, int at)
+{
+    pci_device_t q;
+    char digits[11];
+    int n = 0, i, len = 6;
+
+    for (i = 0; i < at && pci_nth(i, &q); i++) {
+        n += vp_is_virtio(&q);
+    }
+    k_memcpy(vp->name, "virtio", 6);
+    i = 0;
+    do {
+        digits[i++] = (char)('0' + n % 10);
+        n /= 10;
+    } while (n && i < (int)sizeof(digits));
+    while (i > 0 && len < (int)sizeof(vp->name) - 1) {
+        vp->name[len++] = digits[--i];
+    }
+    vp->name[len] = '\0';
+}
+
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
 {
     pci_device_t p;
     struct virtio_pci *vp = 0;
-    int i, k, seen = 0;
+    int i, k, key, seen = 0;
 
     for (i = 0; pci_nth(i, &p); i++) {
         if (p.vendor_id != VP_VENDOR || vp_type(&p) != id || seen++ != nth) {
@@ -959,22 +993,34 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
         vp->dev.notify_unlocked = 1;
         vp->dev.transport = vp;
         vp->dev.id = id;
-        k_memcpy(vp->name, "virtio", 6);
-        vp->name[6] = (char)('0' + (vp - vp_devs));
-        vp->name[7] = '\0';
+        vp_name(vp, i);
         vp->dev.name = vp->name;
         for (k = 0; k <= VIRTIO_MAX_QUEUES; k++) {
             vp->vector[k] = -1;
             vp->slot[k] = -1;
         }
+        /* Linux's driver core shows the binding before virtio_pci_probe
+         * runs, and a failure to show it fails the probe. */
+        key = (int)p.bus << 8 | p.device << 3 | p.function;
+        k = sysfs_pci_bind(key, "virtio-pci");
+        if (k != 0) {
+            klog(KLOG_WARN, "virtio", "refused: %s: driver link not added: error %d", vp->name, k);
+            return k;
+        }
         if (vp_attach(vp) != 0) {
+            sysfs_pci_unbind(key);
             return -EIO;
         }
-        vp->used = 1;
-        k = sysfs_pci_bind((int)p.bus << 8 | p.device << 3 | p.function, "virtio-pci");
+        k = virtio_bus_add(&vp->dev, sysfs_anchor(SYSFS_PCI_DEVICE, key),
+                           pci_read_config16(p.bus, p.device, p.function, PCI_SUBSYSTEM_VENDOR));
         if (k != 0) {
-            klog(KLOG_WARN, "virtio", "%s: driver link not added: error %d", vp->name, k);
+            klog(KLOG_WARN, "virtio", "refused: %s: not added to the virtio bus: error %d",
+                 vp->name, k);
+            sysfs_pci_unbind(key);
+            return k;
         }
+        vp->used = 1;
+        sysfs_pci_uevent(key, "bind");
         *out = &vp->dev;
         return 0;
     }

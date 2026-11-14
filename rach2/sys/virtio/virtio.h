@@ -311,6 +311,16 @@ struct virtio_dev {
     int notify_unlocked;
     struct virtqueue *queues[VIRTIO_MAX_QUEUES];
     uint32_t config_events;
+    /* The device on the virtio bus in /sys (virtio_bus.c), each a handle of
+     * sysfs.h: its directory, 0 when the transport shows none, and its link
+     * in /sys/bus/virtio/devices; the driver it is shown bound to, NULL for
+     * none, with its `driver` link and the driver's link back; whether its
+     * "bind" uevent was sent; and the vendor of its modalias. */
+    int sys_dir, sys_bus_link;
+    const char *sys_driver;
+    int sys_driver_link, sys_driver_back;
+    int sys_bound;
+    uint32_t vendor;
 };
 
 /*
@@ -486,19 +496,70 @@ void virtio_interrupt_config(struct virtio_dev *d);
 /**
  * Find the `nth` virtio-pci function of device type `id`, counting from
  * zero, read its capabilities, map them and log them, as
- * `virtio: found: 00:02.0 gpu: common bar 4+0x0 ...`, and show it in /sys
- * bound to Linux's driver of the function, virtio-pci (`sysfs_pci_bind`). A
- * second call for the same function returns the same record.
+ * `virtio: found: virtio0: 00:02.0 gpu: common bar 4+0x0 ...`, as Linux's
+ * virtio_pci_probe does: the function shown in /sys bound to virtio-pci
+ * (`sysfs_pci_bind`), its virtio device added below it
+ * (`virtio_bus_add`), named virtioN for its place among the bus's virtio
+ * functions, as Linux numbers them when virtio-pci takes them all, and the
+ * function's "bind" uevent sent. A second call for the same function
+ * returns the same record.
  *
  * @return 0 with `*out` set; -ENODEV when there is no such function, -EIO
  *         when it lacks a capability virtio 1.x requires or one cannot be
- *         mapped, -ENOMEM when every record is taken.
+ *         mapped, -ENOMEM when every record is taken, or the error of
+ *         showing it in /sys, with nothing of it left there.
  */
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out);
 
 /** The PCI function of `d`, for a driver that needs its class or BARs, or
  * NULL for a device of another transport. */
 const pci_device_t *virtio_pci_function(const struct virtio_dev *d);
+
+/*
+ * The virtio bus in /sys (virtio_bus.c), as Linux 6.12's drivers/virtio/
+ * virtio.c shows it. A transport adds each device it takes below its own
+ * device: virtio-pci below the PCI function, as
+ * /sys/devices/pci0000:00/0000:00:02.0/virtio0, with `device`, `vendor`,
+ * `status`, `modalias` ("virtio:dNNNNNNNNvNNNNNNNN"), `features`, `uevent`
+ * (DRIVER while bound, and MODALIAS) and a `subsystem` link to
+ * /sys/bus/virtio, which has the link /sys/bus/virtio/devices/virtioN. A
+ * driver shows the device bound to it before it registers what it makes
+ * over the device, and puts that below the device's directory, as
+ * virtio-gpu puts its DRM card; the driver's directory,
+ * /sys/bus/virtio/drivers/NAME, has a link to each device it has. The
+ * shared region's transport shows no device, and the calls on its devices
+ * do nothing. Every call runs under the big kernel lock.
+ */
+
+/** Add the device `d`, named `d->name`, below the directory `parent` of
+ * sysfs.h, with `vendor` in its modalias (the PCI function's subsystem
+ * vendor on virtio-pci, as Linux's vp_modern_probe takes it), and send its
+ * "add" uevent. 0, or the error of making the entries, with none left. */
+int virtio_bus_add(struct virtio_dev *d, int parent, uint16_t vendor);
+
+/** Take `d` off the bus: its driver's binding, as `virtio_driver_unbind`,
+ * then its "remove" uevent and its entries. */
+void virtio_bus_remove(struct virtio_dev *d);
+
+/** The directory of `d` on the bus, a handle of sysfs.h, below which a
+ * driver puts what it makes over the device; 0 when its transport shows
+ * none. */
+int virtio_bus_dir(const struct virtio_dev *d);
+
+/** Show `d` bound to the driver `driver`, a string that outlives the
+ * binding, as Linux's driver_sysfs_add does before the driver's probe: its
+ * `driver` link, the driver's link back and DRIVER in its uevent. 0, also
+ * for a device its transport does not show; -EBUSY when it is bound
+ * already; or the error of making the entries, with none left. */
+int virtio_driver_bind(struct virtio_dev *d, const char *driver);
+
+/** The driver's probe of `d` has succeeded: send its "bind" uevent, once, as
+ * Linux's driver_bound does. */
+void virtio_driver_bound(struct virtio_dev *d);
+
+/** Take away the binding `virtio_driver_bind` showed, and send "unbind" when
+ * "bind" was sent; nothing when there is none. */
+void virtio_driver_unbind(struct virtio_dev *d);
 
 /*
  * The shared-memory transport (shmem.c).

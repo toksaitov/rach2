@@ -2208,7 +2208,8 @@ void vgpu_kill(struct virtio_gpu_device *vg)
 
 /** The core's unplug, after the nodes have gone, Linux's virtio_gpu_remove:
  * the display is turned off, which lets go of the framebuffers it shows,
- * and the device stopped (`vgpu_kill`). The record stays until the last
+ * the device stopped (`vgpu_kill`), and the virtio device shown unbound,
+ * as Linux's device_release_driver ends. The record stays until the last
  * reference. */
 static void vgpu_unplug(struct drm_device *dev)
 {
@@ -2218,6 +2219,7 @@ static void vgpu_unplug(struct drm_device *dev)
     devices_remove(vg);
     (void)drm_atomic_helper_shutdown(dev);
     vgpu_kill(vg);
+    virtio_driver_unbind(vg->vdev);
 }
 
 /** The core's release, after the last reference: free the display, the
@@ -2355,12 +2357,43 @@ static int32_t vgpu_config_init(struct virtio_gpu_device *vg)
 }
 
 /**
+ * Make the device's nodes and register it below its virtio device, which is
+ * shown bound to virtio_gpu first, as Linux's driver core binds a device
+ * before the driver's probe runs. 0, or -errno with the nodes removed and
+ * the binding taken away.
+ */
+static int32_t vgpu_register(struct virtio_gpu_device *vg)
+{
+    int32_t rc = devices_add(vg);
+
+    if (rc != 0) {
+        return rc;
+    }
+    rc = virtio_driver_bind(vg->vdev, "virtio_gpu");
+    if (rc == 0) {
+        vg->drm.pci = vg->pci;
+        vg->drm.sysfs_parent = virtio_bus_dir(vg->vdev);
+        rc = drm_dev_register(&vg->drm);
+        if (rc != 0) {
+            virtio_driver_unbind(vg->vdev);
+        }
+    }
+    if (rc != 0) {
+        devices_remove(vg);
+    }
+    return rc;
+}
+
+/**
  * Bind the virtio device `vdev`, Linux's virtio_gpu_probe and
  * virtio_gpu_init: the firmware's framebuffer removed under virtio-vga, the
  * features negotiated (EDID, virgl, resource UUIDs, blobs and context
  * initialization), the host-visible region found, both queues, the
  * display, DRIVER_OK, the EDIDs and the displays read, and the DRM device
- * registered. 0 or -errno, with the device reset. The driver calls
+ * registered below the virtio device, which is shown bound to virtio_gpu
+ * first and sends its "bind" uevent once the device is up, as Linux's
+ * driver core does around the probe. 0 or -errno, with the device reset
+ * and the binding taken away. The driver calls
  * virtio_put once it is done with `vdev`: at once on an error, and at the
  * device's release otherwise.
  *
@@ -2444,14 +2477,8 @@ int32_t virtio_gpu_bind(struct virtio_dev *vdev)
         wait_queue_init(&vgpu_wake);
         vgpu_wake_ready = 1;
     }
-    rc = devices_add(vg);
+    rc = vgpu_register(vg);
     if (rc != 0) {
-        goto fail;
-    }
-    vg->drm.pci = pci;
-    rc = drm_dev_register(&vg->drm);
-    if (rc != 0) {
-        devices_remove(vg);
         goto fail;
     }
     rc = vgpu_reset_register(vg);
@@ -2459,6 +2486,7 @@ int32_t virtio_gpu_bind(struct virtio_dev *vdev)
         drm_dev_unplug(&vg->drm);
         return rc;
     }
+    virtio_driver_bound(vdev);
     return 0;
 fail:
     vgpu_kill(vg);

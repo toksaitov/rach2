@@ -1682,6 +1682,40 @@ const pci_device_t *virtio_pci_function(const struct virtio_dev *d)
     return pci_present ? &pci_fn : NULL;
 }
 
+/* The driver the model's device is shown bound to on the virtio bus, NULL
+ * for none, and whether its bind uevent was sent. */
+static const char *bus_driver;
+static int bus_bound;
+
+int virtio_bus_dir(const struct virtio_dev *d)
+{
+    (void)d;
+    return 0;
+}
+
+int virtio_driver_bind(struct virtio_dev *d, const char *driver)
+{
+    (void)d;
+    bus_driver = driver;
+    bus_bound = 0;
+    return 0;
+}
+
+void virtio_driver_bound(struct virtio_dev *d)
+{
+    (void)d;
+    CHECK(bus_driver && strcmp(bus_driver, "virtio_gpu") == 0,
+          "the device is bound to virtio_gpu before its bind uevent");
+    bus_bound = 1;
+}
+
+void virtio_driver_unbind(struct virtio_dev *d)
+{
+    (void)d;
+    bus_driver = NULL;
+    bus_bound = 0;
+}
+
 /* ------------------------------------------------------------------------
  * The rows
  */
@@ -1819,6 +1853,8 @@ static void row_bind(void)
 
     model_reset();
     CHECK(bind() == 1, "the probe binds the model's device");
+    CHECK(bus_bound && bus_driver && strcmp(bus_driver, "virtio_gpu") == 0,
+          "the virtio device is shown bound to virtio_gpu and sends its bind uevent");
     CHECK(vg && vg->has_edid && vg->num_scanouts == 1 && gpu.ready, "EDID taken, one scanout");
     CHECK(logged(0, VIRTIO_GPU_CMD_GET_EDID) && logged(1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO) &&
               gpu.nlog == 2,

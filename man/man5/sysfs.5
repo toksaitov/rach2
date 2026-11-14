@@ -253,6 +253,47 @@ them that has no driver;
 forgets ids it gave, and is
 .Er ENODEV
 for others.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/virtioN
+The virtio device of a virtio function the kernel has taken, bound to
+.Ql virtio-pci ,
+as Linux's virtio-pci adds it: N is the function's place among the bus's
+virtio functions, from 0.
+It has
+.Pa device
+and
+.Pa vendor ,
+the virtio device type and the function's subsystem vendor as
+.Ql 0x%04x ;
+.Pa status ,
+the device's status byte as
+.Ql 0x%08x ;
+.Pa modalias ,
+.Ql virtio:dNNNNNNNNvNNNNNNNN ;
+.Pa features ,
+a
+.Ql 0
+or
+.Ql 1
+for each of the 64 feature bits the driver took;
+.Pa uevent ,
+.Ql DRIVER
+while it is bound and
+.Ql MODALIAS ;
+a
+.Pa subsystem
+link to
+.Pa /sys/bus/virtio ;
+and, while a driver such as
+.Ql virtio_gpu
+has it, a
+.Pa driver
+link to
+.Pa /sys/bus/virtio/drivers/NAME ,
+which has a link back to it.
+What the driver makes over the device goes below it, as the DRM card of
+virtio-gpu does.
+.It Pa /sys/bus/virtio/devices/virtioN
+A link to each virtio device.
 .It Pa /sys/bus/pci/drivers_probe
 Write-only, mode 0200: a function's name written here gives it to
 vfio-pci if it has no driver and vfio-pci matches it, and leaves it alone
@@ -331,7 +372,9 @@ device, and
 Linux's.
 .It Pa /sys/devices/.../drm/cardN , /sys/devices/.../drm/renderDN
 A DRM device's card node, and its render node when its driver renders,
-below the device's directory: the PCI function's, or
+below the device's directory: the virtio device's for virtio-gpu, as
+.Pa /sys/devices/pci0000:00/0000:00:02.0/virtio0/drm/card0 ,
+the PCI function's for another PCI device, or
 .Pa /sys/devices/platform/NAME
 for a device with no PCI function, such as vkms.
 Each has
@@ -1156,6 +1199,15 @@ on the card when its outputs change.
 A USB interface goes after every input device below it has sent its own
 .Ql remove ,
 as on Linux.
+A virtio device sends
+.Ql add
+when its transport takes it.
+A PCI function or a virtio device sends
+.Ql bind
+once its driver has brought it up, after what the driver made over it,
+and
+.Ql unbind
+when the driver lets it go, as Linux's driver core sends them.
 A message is
 .Ql ACTION@DEVPATH
 and the variables
@@ -1281,11 +1333,6 @@ directory and no
 directories of the sizes Linux's multi-size huge pages add.
 .Pa /sys/dev/char
 lists only the DRM nodes and the event devices.
-A virtio-gpu card's
-.Pa device
-leads to its PCI function, where Linux puts a
-.Pa virtio0
-directory between them.
 Linux's
 .Pa /sys/block
 holds a link for each disk into its device's directory, which has a
@@ -1342,6 +1389,8 @@ later, where Linux makes them at once.
 The PCI functions.
 .It Pa /sys/bus/usb/devices
 The USB devices.
+.It Pa /sys/bus/virtio/devices
+The virtio devices.
 .It Pa /sys/class/net
 The network interfaces.
 .It Pa /sys/class/ieee80211/phyN
