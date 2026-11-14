@@ -1,2 +1,0 @@
-Rach2 kernel booting
-<2>[1.31] pa

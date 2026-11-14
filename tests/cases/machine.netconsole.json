@@ -235,13 +235,13 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "card",
-          "does": "boot the test image with netconsole=@/,6666@10.0.2.2/ on its command line and its card's frames recorded, until the debug shell's greeting"
+          "does": "boot the test image with netconsole=@/,6666@10.0.2.2/ and panic=0 on its command line and its card's frames recorded, until the debug shell's greeting"
         },
         {
           "step_id": "panic",
           "stage": "execute",
           "machine": "card",
-          "does": "type `fault` at the shell and wait for the console's `panic: stopped` and then the panic's first report record, `panic: report: build`, which the panic writes once the stopped record's delivery has sent the held records to the card"
+          "does": "type `fault` at the shell and wait for the console's `panic: stopped` and then the panic's first report record, `panic: report: build`, which the panic writes once the stopped record's delivery has sent the held records to the card, and then, through QMP, for QEMU to say that the machine runs and its processor has halted with its interrupts off, which the panic with panic=0 does only after it has written the whole report"
         },
         {
           "step_id": "capture",
@@ -262,7 +262,7 @@
             "memory_bytes": 134217728,
             "firmware": "direct",
             "devices": [{"model": "rtl8139"}],
-            "boot_options": ["netconsole=@/,6666@10.0.2.2/"],
+            "boot_options": ["netconsole=@/,6666@10.0.2.2/", "panic=0"],
             "captures": ["net0"]
           },
           "console": "serial",
@@ -273,6 +273,11 @@
       ],
       "assertions": [
         {"assertion_id": "shell", "checks": "the machine reaches the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "halted",
+          "checks": "after the panic's first report record, QEMU says through QMP that the machine runs and its one processor has halted with its interrupts off, so the panic, with panic=0, has written the whole report before the machine is ended",
+          "source": "scenario"
+        },
         {
           "assertion_id": "datagrams",
           "checks": "pcapcheck finds at least four datagrams from port 6665 to port 6666 that a receiver takes: IP and UDP checksums that sum to zero, one source address, identifications that count up by one, so none is missing or out of order, and one whole line in each",

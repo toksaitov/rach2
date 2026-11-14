@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "history_json.h"
 #include "netcase.h"
 
 /** Run pcapcheck netconsole on `capture` with `args`, ended by NULL,
@@ -146,17 +147,126 @@ static void stop_case(struct net_case *u, struct net_boot *b)
                "a line printed after the card was silenced is on the wire");
 }
 
+/**
+ * Send QMP command `execute` with `arguments` to the boot `b` and give the
+ * member `return` of its reply, parsed, with the whole reply in `*doc` for
+ * the caller to free with eh_json_free; or NULL, with the reason in `why`.
+ */
+static const struct eh_json *qmp_return(struct net_boot *b, const char *execute,
+                                        const char *arguments, struct eh_json **doc, char *why,
+                                        size_t size)
+{
+    char *reply = NULL;
+    const struct eh_json *r = NULL;
+    enum etude_status st;
+
+    *doc = NULL;
+    st = etude_qmp(b->m, execute, arguments, &reply);
+    if (st == ETUDE_OK && reply != NULL && (*doc = eh_json_parse(reply)) != NULL)
+        r = eh_json_get(*doc, "return");
+    free(reply);
+    if (r == NULL)
+        snprintf(why, size, "QMP's %s gave no return", execute);
+    return r;
+}
+
+/**
+ * Say whether every processor of the `info registers -a` text `regs` has
+ * halted with its interrupts off, and they are `cpus` when that is not 0;
+ * the reason when not is put in `why`. Each processor has one line of
+ * flags, `EFL=` or `RFL=` in hexadecimal, that ends with `HLT=0` or `HLT=1`.
+ *
+ * @return 1 when they have; -1 when a processor has not halted yet; and 0
+ *         when they will not.
+ */
+static int all_halted(const char *regs, int cpus, char *why, size_t size)
+{
+    const char *p = regs, *eol, *hlt;
+    unsigned long flags;
+    char *end;
+    int n = 0;
+
+    while ((p = strstr(p, "FL=")) != NULL) {
+        n++;
+        flags = strtoul(p + 3, &end, 16);
+        eol = strchr(p, '\n');
+        hlt = strstr(p, "HLT=");
+        if (end == p + 3 || hlt == NULL || (eol != NULL && hlt > eol)) {
+            snprintf(why, size, "the registers of processor %d are not readable", n);
+            return 0;
+        }
+        if (hlt[4] != '1') {
+            snprintf(why, size, "processor %d has not halted", n);
+            return -1;
+        }
+        if (flags & 0x200) {
+            snprintf(why, size, "processor %d has halted with its interrupts on", n);
+            return 0;
+        }
+        p = hlt;
+    }
+    if (n == 0) {
+        snprintf(why, size, "the monitor gave the registers of no processor");
+        return 0;
+    }
+    if (cpus != 0 && n != cpus) {
+        snprintf(why, size, "the monitor gave the registers of %d processors, not %d", n, cpus);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * Wait until QEMU says that the boot `b` runs and its one processor has
+ * halted with its interrupts off, as lc_halted waits in lifecycle.c, which
+ * this scenario does not link. The kernel writes the whole of a panic's
+ * report before it halts the processor, so the registers are read again
+ * while it has not halted; the step's bound ends the wait on a kernel that
+ * hangs in its report, when a QMP command gives no return.
+ *
+ * @return 1 when the processor has halted, with the reason it has not in
+ *         `why` otherwise.
+ */
+static int wait_halted(struct net_boot *b, char *why, size_t size)
+{
+    const struct eh_json *r, *status;
+    struct eh_json *doc;
+    int held = 0;
+
+    snprintf(why, size, "QEMU gave no registers");
+    r = qmp_return(b, "query-status", NULL, &doc, why, size);
+    status = r != NULL ? eh_json_get(r, "status") : NULL;
+    if (r != NULL && (status == NULL || status->type != 's' || strcmp(status->string, "running")))
+        snprintf(why, size, "QEMU says that the machine is %s; a halt leaves it running",
+                 status != NULL && status->type == 's' ? status->string : "in no state");
+    else if (r != NULL)
+        held = 1;
+    eh_json_free(doc);
+    if (held)
+        do {
+            r = qmp_return(b, "human-monitor-command", "{\"command-line\": \"info registers -a\"}",
+                           &doc, why, size);
+            if (r != NULL && r->type != 's')
+                snprintf(why, size, "the monitor gave no registers");
+            held = r != NULL && r->type == 's' ? all_halted(r->string, 1, why, size) : 0;
+            eh_json_free(doc);
+        } while (held < 0);
+    return held == 1;
+}
+
 /** The `udp` case: panic the kernel from the shell, wait for the panic's
- * first report record, end the machine, and read the datagrams.
+ * first report record and then for the processor to halt, end the machine,
+ * and read the datagrams.
  *
  * A record reaches the serial port before netconsole, and a panic within the
  * link's settle sends every record held since the boot only once the panic's
  * own record reaches netconsole, so `panic: stopped` on the console comes
  * before any datagram. The panic writes its report records after that
  * delivery has sent them to the card, so the report's `build` line on the
- * console means the datagrams are in the capture. QEMU then ends while the
- * report's later records are still written, so the console's last record may
- * be cut short, which etude.kernel passes on a boot that panicked. */
+ * console means the datagrams are in the capture. The case boots with
+ * `panic=0`, so the panic then writes the rest of its report and halts the
+ * processor with its interrupts off; QEMU is ended only once it says the
+ * processor has halted, so the console holds the whole report. */
 static void udp_case(struct net_case *u, struct net_boot *b)
 {
     static const char *const contract[] = {NULL};
@@ -168,6 +278,8 @@ static void udp_case(struct net_case *u, struct net_boot *b)
     struct etude_termination end;
     const char *capture;
     char *reply = NULL;
+    char why[160] = "the processor has not halted";
+    int halted;
 
     net_assert(u, "shell", 1, "");
     net_step(u, "panic");
@@ -176,6 +288,10 @@ static void udp_case(struct net_case *u, struct net_boot *b)
     if (net_ok(u) && etude_fault(b->m, ETUDE_END_PANIC) != ETUDE_OK)
         net_fail(u, "the console has no record of the kernel's panic");
     net_wait(b, "] panic: report: build");
+    halted = net_ok(u) && wait_halted(b, why, sizeof(why));
+    if (net_ok(u) && !halted)
+        net_fail(u, "%s", why);
+    net_assert(u, "halted", halted, "%s", why);
     net_step(u, "capture");
     if (net_ok(u) && etude_qmp(b->m, "quit", NULL, &reply) == ETUDE_FAILED)
         net_fail(u, "QEMU refused to quit");
