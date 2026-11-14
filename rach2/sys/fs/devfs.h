@@ -300,7 +300,9 @@ int devfs_subdir_present(int row);
  * owned by root with the
  * permission bits `mode`: an open binds `ops` to the descriptor, with
  * `priv` NULL, and then calls `open`, unless NULL, which may set the
- * descriptor's `priv` and refuse with -errno. Its inode is its slot's,
+ * descriptor's `priv` and refuse with -errno. A node with NULL `ops` opens
+ * the console terminal, as /dev/console does, for the node of a device
+ * that carries the console. Its inode is its slot's,
  * the same for the life of the kernel unless the slots run out. A node
  * unregistered leaves /dev at once; a descriptor open on it keeps its
  * operations and its `priv`, and fstat gives its name and numbers until
@@ -322,7 +324,7 @@ struct devfs_node {
 };
 
 /** Register `node`: 0, -EINVAL for a name no directory of /dev takes or
- * one too long, or NULL operations, -EEXIST for a name the table, a disk
+ * one too long, -EEXIST for a name the table, a disk
  * or a registered node has, or the numbers of a character device present,
  * or -ENOSPC when every slot is held. */
 int32_t devfs_node_register(struct devfs_node *node);
