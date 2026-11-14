@@ -972,6 +972,8 @@ void sched_wake_signal(process_t *p)
         p->wakeup_tick = 0;
         p->woken = 1;
         kick = sched_ready_locked(p);
+    } else if (cpu_table[p->cpu].current == p) {
+        kick = p->cpu;
     }
     spin_unlock_irqrestore(&sched_lock, flags);
     if (kick >= 0) {

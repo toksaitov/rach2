@@ -1066,13 +1066,16 @@ void isr_leave(isr_params_t *params)
  * of its own, taken after the return, since interrupts stay off.
  *
  * An interprocessor interrupt that finds user mode with a requested
- * reschedule or its thread's rseq marked takes the switch after its end of
- * interrupt, without the big lock, then returns through `isr_leave`, which
- * takes the lock for signal work or the rseq area, so that a move updates
- * the area and a barrier aborts its section before user code resumes. An
- * interrupt in kernel mode leaves the request for the system call's next
- * scheduling point. One that ended an idle halt marks the idle task awake
- * (`sched_idle_awake`), as the device's and the timer's router does.
+ * reschedule, signal work or its thread's rseq marked takes the switch
+ * after its end of interrupt, without the big lock, then returns through
+ * `isr_leave`, which takes the lock for signal work or the rseq area, so
+ * that a move updates the area, a barrier aborts its section and a signal
+ * another processor posted (`sched_wake_signal`) is taken before user code
+ * resumes, as Linux's return from the reschedule interrupt runs
+ * exit_to_user_mode_loop for _TIF_SIGPENDING. An interrupt in kernel mode
+ * leaves the request for the system call's next scheduling point. One that
+ * ended an idle halt marks the idle task awake (`sched_idle_awake`), as the
+ * device's and the timer's router does.
  */
 void isr_local_router(isr_params_t *params)
 {
@@ -1089,7 +1092,7 @@ void isr_local_router(isr_params_t *params)
         smp_ipi();
         timer_service_ipi();
         if (FRAME_USER(params) && current_proc &&
-            (current_proc->work & (WORK_RESCHED | WORK_RSEQ)) != 0) {
+            (current_proc->work & (WORK_RESCHED | WORK_RSEQ | WORK_SIGNAL)) != 0) {
             bkl_frame_push(0);
             isr_leave(params);
         }

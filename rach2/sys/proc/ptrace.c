@@ -230,9 +230,10 @@ int ptrace_group_stop(int signo)
 /**
  * Mark signal work for the thread `t`, which has a stop to take: one its
  * tracer requested (`PT_INTERRUPT`), or its process's, which a detach
- * leaves it owing, and wake it if it sleeps, as Linux 6.12's
- * ptrace_signal_wake_up sets TIF_SIGPENDING before signal_wake_up_state's
- * wake (include/linux/sched/signal.h, kernel/signal.c:759-773). A
+ * leaves it owing, and wake it if it sleeps or interrupt the processor it
+ * runs on (`sched_wake_signal`), as Linux 6.12's ptrace_signal_wake_up
+ * sets TIF_SIGPENDING before signal_wake_up_state's wake or kick
+ * (include/linux/sched/signal.h, kernel/signal.c:759-773). A
  * wait without the big lock ends only on the flag (`sig_woken`), and asks
  * `signal_pending`, which answers yes for the request, only once it is set;
  * a wake without it finds the wait's condition false and sleeps again. The
@@ -243,7 +244,7 @@ static void ptrace_signal_wake(process_t *t)
 {
     t->sig_woken = 1;
     proc_work_set(t, WORK_SIGNAL);
-    if (t->state == PROC_BLOCKED) {
+    if (t->state == PROC_BLOCKED || t != current_proc) {
         sched_wake_signal(t);
     }
 }

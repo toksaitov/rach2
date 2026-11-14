@@ -129,13 +129,19 @@ void sched_lock_give(uint32_t flags);
 
 /**
  * Make `p` ready, clearing its deadline, if it is blocked, as a signal or
- * `PTRACE_INTERRUPT` wakes it: Linux's `signal_wake_up_state` wakes through
- * `try_to_wake_up`'s test (kernel/signal.c:759-773). The test and the
- * clearing are under the run queues' lock, as `sched_wake_blocked`'s; a wait
- * that goes on arms its own deadline again. The thread is marked woken, as
- * `sched_wake_blocked` marks it, so that the current thread's slice gives
- * way to it (`sched_tick`). The interrupt is sent before this returns, so
- * the caller holds no spinlock. Interrupts may be on or off.
+ * `PTRACE_INTERRUPT` wakes it, or interrupt the processor it runs on, so
+ * that its return to user mode takes the work the caller marked: Linux's
+ * `signal_wake_up_state` wakes through `try_to_wake_up`'s test and kicks
+ * a thread that was not asleep (`kick_process`, kernel/signal.c:759-773,
+ * kernel/sched/core.c). Without the kick a thread running user code on
+ * another processor took the signal only at its next entry to the kernel,
+ * and a call it made then, such as a read of a pipe, ended with EINTR. The
+ * test and the clearing are under the run queues' lock, as
+ * `sched_wake_blocked`'s; a wait that goes on arms its own deadline again.
+ * The thread is marked woken, as `sched_wake_blocked` marks it, so that the
+ * current thread's slice gives way to it (`sched_tick`). The interrupt is
+ * sent before this returns, so the caller holds no spinlock. Interrupts
+ * may be on or off.
  */
 void sched_wake_signal(process_t *p);
 

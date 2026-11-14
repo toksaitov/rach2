@@ -4561,8 +4561,11 @@ static void sig_idle_wait(void)
  * `try_to_wake_up`'s test: a wait queue's waker and this one do not both
  * make it ready. An interruptible wait then calls `signal_pending` to learn
  * whether to end with -EINTR, and any wait that goes on arms its own
- * deadline again. A full barrier comes between the post and the read of the
- * state, which a sleeper sets before it tests (`sched_set_current_state`). */
+ * deadline again. A thread with work that runs on another processor is
+ * interrupted there, as signal_wake_up_state kicks it, so that it takes the
+ * signal before its next call. A full barrier comes between the post and
+ * the read of the state, which a sleeper sets before it tests
+ * (`sched_set_current_state`). */
 static void sig_wake(process_t *t, uint64_t bits)
 {
     if (t && (bits & ~t->sig_blocked) != 0) {
@@ -4572,7 +4575,7 @@ static void sig_wake(process_t *t, uint64_t bits)
         proc_work_set(t, WORK_SIGNAL);
     }
     sched_mb();
-    if (t && t->state == PROC_BLOCKED) {
+    if (t && (t->state == PROC_BLOCKED || (t->sig_woken && t != current_proc))) {
         sched_wake_signal(t);
     }
 }
