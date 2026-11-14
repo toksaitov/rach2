@@ -745,7 +745,9 @@ struct process {
      * of real time since `rt_steps`; 0 for none. It is the expiry of
      * Linux's hrtimer, whose callback clears the sleeper's task
      * (`hrtimer_wakeup`, kernel/time/hrtimer.c), and a wait keeps it across
-     * a later step of the clock. The wait clears it before it sleeps. */
+     * a later step of the clock. The wait clears it before it sleeps, and
+     * it changes, as do `wakeup_ns` and `rt_steps`, only under the run
+     * queues' lock or by the thread itself (`proc_wait_set`). */
     int64_t wakeup_fired;
     /* Nonzero while a fault from user mode runs with interrupts on; the
      * tick then leaves its switch for the fault's end, as in a system call
@@ -1201,6 +1203,20 @@ void proc_wake_sleepers(uint64_t now);
  * combined time and tick pass after advancing the clock.
  */
 void proc_wake_due(void);
+
+/**
+ * Set the current thread's timed wait: its tick `tick`, its time of the
+ * monotonic clock `ns` (`wakeup_ns`) and the real-time clock's step count
+ * it was counted at (`rt_steps`), each 0 for none; all 0 ends it. With
+ * `fresh`, the expiry record of the waits before it (`wakeup_fired`) is
+ * cleared too. The fields change under the run queues' lock, which the
+ * timer's pass holds from its test of a sleeper's deadline to its record of
+ * the expiry (`timer_wake`), so that the pass records only a deadline it
+ * tested, as Linux's sleeper waits for its timer's callback to finish
+ * (`hrtimer_cancel` in `do_nanosleep`) before it sleeps again. The caller
+ * holds no spinlock that comes after `sched_lock`.
+ */
+void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh);
 
 /**
  * Post `signo` to the process `target` is a thread of, with a siginfo whose

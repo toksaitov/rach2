@@ -193,6 +193,18 @@ int in_compat_syscall(void)
     return 0;
 }
 
+/** Set the thread's timed wait as the kernel does, under no lock, since the
+ * model has one processor and no timer pass runs beside the thread. */
+void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
+{
+    current_proc->wakeup_tick = tick;
+    current_proc->wakeup_ns = ns;
+    current_proc->rt_steps = steps;
+    if (fresh) {
+        current_proc->wakeup_fired = 0;
+    }
+}
+
 /**
  * The wait: at once when `cond` holds, else a sleep that the tick armed for
  * ends, or, when a row asks for it with `step_in_wait`, a setting of the

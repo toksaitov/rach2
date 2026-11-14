@@ -480,19 +480,16 @@ static int futex_sleeper_done(void *arg)
  * `wq_wait_event_as` does, and 0 for a deadline that expired. */
 static int futex_sleep(struct futex_sleeper *s, const char *wchan)
 {
-    int rc, fired;
+    int rc, fired, fresh = 1;
 
-    current_proc->wakeup_fired = 0;
     (void)futex_rt_count(s);
     for (;;) {
-        current_proc->wakeup_tick = s->timed ? (s->target != 0 ? s->target : 1u) : 0;
-        current_proc->wakeup_ns = s->timed ? s->ns : 0;
-        current_proc->rt_steps = s->rt ? s->steps : 0;
+        proc_wait_set(s->timed ? (s->target != 0 ? s->target : 1u) : 0, s->timed ? s->ns : 0,
+                      s->rt ? s->steps : 0, fresh);
+        fresh = 0;
         rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, wchan);
         fired = futex_fired(s);
-        current_proc->wakeup_tick = 0;
-        current_proc->wakeup_ns = 0;
-        current_proc->rt_steps = 0;
+        proc_wait_set(0, 0, 0, 0);
         if (fired) {
             return 0;
         }

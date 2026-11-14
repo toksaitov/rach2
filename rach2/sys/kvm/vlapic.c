@@ -1717,11 +1717,9 @@ static int32_t block(struct kvm_vcpu *v)
         now = kvm_host_ns();
         l->wake_tick = tick_count() + (next > now ? (next - now + TICK_NS - 1u) / TICK_NS : 0) + 1u;
     }
-    current_proc->wakeup_tick = l->wake_tick;
-    current_proc->wakeup_ns = kvm_timer_deadline(next);
+    proc_wait_set(l->wake_tick, kvm_timer_deadline(next), 0, 0);
     r = wq_wait_event_sigflag(&l->wq, wake_cond, v, "kvm_vcpu_block");
-    current_proc->wakeup_tick = 0;
-    current_proc->wakeup_ns = 0;
+    proc_wait_set(0, 0, 0, 0);
     l->wake_tick = 0;
     return r;
 }

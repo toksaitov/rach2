@@ -254,6 +254,18 @@ void proc_timer_update(process_t *p)
     (void)p;
 }
 
+/** Set the thread's timed wait as the kernel does, under no lock, since the
+ * model has one processor and no timer pass runs beside the thread. */
+void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
+{
+    current_proc->wakeup_tick = tick;
+    current_proc->wakeup_ns = ns;
+    current_proc->rt_steps = steps;
+    if (fresh) {
+        current_proc->wakeup_fired = 0;
+    }
+}
+
 /** Set the real-time timer as the kernel does, without a timer list. */
 void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
 {

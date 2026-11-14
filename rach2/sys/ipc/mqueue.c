@@ -683,22 +683,19 @@ static int mq_signal_pending(void)
  */
 static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 {
-    int rc, fired;
+    int rc, fired, fresh = 1;
 
     w->from = q->gen;
-    current_proc->wakeup_fired = 0;
     for (;;) {
         if (w->timed && w->steps != rtc_step_count()) {
             mq_count(w);
         }
-        current_proc->wakeup_tick = w->timed ? (w->target != 0 ? w->target : 1u) : 0;
-        current_proc->wakeup_ns = w->timed ? w->ns : 0;
-        current_proc->rt_steps = w->timed ? w->steps : 0;
+        proc_wait_set(w->timed ? (w->target != 0 ? w->target : 1u) : 0, w->timed ? w->ns : 0,
+                      w->timed ? w->steps : 0, fresh);
+        fresh = 0;
         rc = wq_wait_event(&q->wq, mq_wait_done, w);
         fired = mq_fired(w);
-        current_proc->wakeup_tick = 0;
-        current_proc->wakeup_ns = 0;
-        current_proc->rt_steps = 0;
+        proc_wait_set(0, 0, 0, 0);
         if (q->gen != w->from) {
             return 0;
         }

@@ -346,6 +346,18 @@ static int waits, sleep_to_tick, wakes_done, endless;
 static int sleep_to_fine;
 static int64_t fine_target;
 
+/** Set the thread's timed wait as the kernel does, under no lock, since the
+ * model has one processor and no timer pass runs beside the thread. */
+void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
+{
+    current_proc->wakeup_tick = tick;
+    current_proc->wakeup_ns = ns;
+    current_proc->rt_steps = steps;
+    if (fresh) {
+        current_proc->wakeup_fired = 0;
+    }
+}
+
 /** An eventfd's wait: its condition, or a signal. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

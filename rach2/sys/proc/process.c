@@ -814,12 +814,14 @@ void free_process(process_t *proc)
 /**
  * Whether the pass for the reasons `why`, at the tick `now`, the real-time
  * clock's step count `steps` and the monotonic clock's reading `clock`, is
- * to wake `p`. The caller holds the run queues' lock, which a waker takes to
- * make a sleeper ready, but a sleeper whose condition comes true leaves its
- * wait without it and may start another, so the test is made at the
- * collection and again at the wake (`timer_wake`).
+ * to wake `p`, whose time of the monotonic clock the caller read as `ns`.
+ * The caller holds the run queues' lock, which a waker takes to make a
+ * sleeper ready, but a sleeper whose condition comes true leaves its wait
+ * without it and may start another, so the test is made at the collection
+ * and again at the wake (`timer_wake`).
  */
-static int timer_due(const process_t *p, int why, uint64_t now, uint32_t steps, int64_t clock)
+static int timer_due(const process_t *p, int64_t ns, int why, uint64_t now, uint32_t steps,
+                     int64_t clock)
 {
     if (p->state != PROC_BLOCKED || p->wakeup_tick == 0) {
         return 0;
@@ -828,7 +830,7 @@ static int timer_due(const process_t *p, int why, uint64_t now, uint32_t steps, 
         (now >= p->wakeup_tick || (p->rt_steps != 0 && p->rt_steps != steps))) {
         return 1;
     }
-    return (why & PASS_TIME) && p->wakeup_ns != 0 && clock >= p->wakeup_ns;
+    return (why & PASS_TIME) && ns != 0 && clock >= ns;
 }
 
 /**
@@ -846,19 +848,23 @@ static int timer_due(const process_t *p, int why, uint64_t now, uint32_t steps, 
  * may have left the wait collected and started another since, whose
  * deadline the clear would otherwise take; Linux's timer callback never
  * reaches a sleeper's next sleep, which waits for it (`hrtimer_cancel` in
- * `do_nanosleep`, kernel/time/hrtimer.c:2096, 1501-1512). Returns the
- * processor to interrupt, or -1. The caller holds the run queues' lock.
+ * `do_nanosleep`, kernel/time/hrtimer.c:2096, 1501-1512). The time is read
+ * once, and the record is the time tested: a new wait sets its time and
+ * clears the record only under the run queues' lock (`proc_wait_set`), and
+ * accepts a record only of its own time, so no pass marks expired a wait
+ * whose time it did not test. Returns the processor to interrupt, or -1.
+ * The caller holds the run queues' lock.
  */
 static int timer_wake(process_t *p, int why, uint64_t now, uint32_t steps, int64_t clock)
 {
-    int64_t late;
+    int64_t ns = p->wakeup_ns, late;
 
-    if (!timer_due(p, why, now, steps, clock)) {
+    if (!timer_due(p, ns, why, now, steps, clock)) {
         return -1;
     }
-    late = p->wakeup_ns != 0 ? rtc_monotonic_ns() - p->wakeup_ns : -1;
+    late = ns != 0 ? rtc_monotonic_ns() - ns : -1;
     if (late >= 0 && (p->rt_steps == 0 || p->rt_steps == rtc_step_count())) {
-        p->wakeup_fired = p->wakeup_ns;
+        p->wakeup_fired = ns;
     }
     if (now >= p->wakeup_tick) {
         return sched_wake_due_locked(p, now);
@@ -929,7 +935,7 @@ static void timer_pass(int why, uint64_t now)
         work_count[3]++;
         for (p = timers; p; p = p->timer_next) {
             work_count[2]++;
-            if (timer_due(p, why, now, steps, clock)) {
+            if (timer_due(p, p->wakeup_ns, why, now, steps, clock)) {
                 if (n == WAKE_BATCH) {
                     break;
                 }
@@ -986,6 +992,19 @@ void proc_wake_sleepers(uint64_t now)
 void proc_wake_due(void)
 {
     timer_pass(PASS_TIME, tick_count());
+}
+
+void proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
+{
+    uint32_t flags = sched_lock_take();
+
+    current_proc->wakeup_tick = tick;
+    current_proc->wakeup_ns = ns;
+    current_proc->rt_steps = steps;
+    if (fresh) {
+        current_proc->wakeup_fired = 0;
+    }
+    sched_lock_give(flags);
 }
 
 uint64_t proc_alarm_at(uint64_t now, uint64_t ticks)

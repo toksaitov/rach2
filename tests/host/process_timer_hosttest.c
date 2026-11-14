@@ -54,7 +54,9 @@
  * interrupt that comes before the time arms it again. A sleeper the pass
  * collected that leaves its wait and starts another before the wake, as a
  * thread whose condition came true does without the run queues' lock,
- * keeps the new wait's deadline: the wake tests the record again.
+ * keeps the new wait's deadline: the wake tests the record again. One that
+ * starts a new wait between the wake's test of its time and its record of
+ * the expiry is not marked expired, since the record is the time tested.
  */
 #include "lib/kint.h"
 #include "compat/waketime_none.h"
@@ -209,9 +211,22 @@ void timer_wake_at(int64_t ns)
 /* The real-time clock's step count, which the step row moves. */
 static uint32_t step_count = 1;
 
+/* A record whose thread starts a new wait at the step count's reading this
+ * many readings on, at `restart_ns` and the tick `restart_tick`, clearing
+ * its expiry record, as a thread would that left its wait while the pass
+ * held the run queues' lock, did the kernel not keep it waiting. */
+static process_t *rearm;
+static int rearm_reads;
+
 /** The model's step count of the real-time clock (`rtc_step_count`). */
 uint32_t rtc_step_count(void)
 {
+    if (rearm && --rearm_reads == 0) {
+        rearm->wakeup_tick = restart_tick;
+        rearm->wakeup_ns = restart_ns;
+        rearm->wakeup_fired = 0;
+        rearm = NULL;
+    }
     return step_count;
 }
 
@@ -535,6 +550,44 @@ static void restart_rows(void)
     proc_timer_update(&runner);
 }
 
+/** A new wait started between the pass's test of a sleeper's time and its
+ * record of the expiry is not marked expired: the record is the time the
+ * pass tested, which the new wait does not accept as its own. The sleep is
+ * on real time, so the pass reads the step count once for the pass and
+ * once more at the wake, after its test and its reading of the lateness;
+ * the second reading moves the sleeper to the new wait. */
+static void rearm_rows(void)
+{
+    int64_t t = 5001 * (int64_t)TICK_NS + (int64_t)TICK_NS / 4;
+    int64_t later = 5099 * (int64_t)TICK_NS + (int64_t)TICK_NS / 4;
+
+    sleeper.state = PROC_BLOCKED;
+    sleeper.woken = 0;
+    sleeper.wakeup_cpu = 0;
+    sleeper.rt_steps = step_count;
+    sleeper.wakeup_fired = 0;
+    sleeper.wakeup_tick = 5003;
+    sleeper.wakeup_ns = t;
+    proc_timer_update(&sleeper);
+    rearm = &sleeper;
+    rearm_reads = 2;
+    restart_tick = 5101;
+    restart_ns = later;
+    clock_ns = t + 1000;
+    proc_wake_due();
+    CHECK(rearm == NULL, "the new wait starts between the test and the record");
+    CHECK(sleeper.wakeup_ns == later && sleeper.wakeup_fired != later,
+          "a new wait started after the pass's test is not marked expired");
+    CHECK(sleeper.wakeup_fired == 0 || sleeper.wakeup_fired == t,
+          "the record names only the time the pass tested");
+    sleeper.state = PROC_RUNNING;
+    sleeper.wakeup_tick = 0;
+    sleeper.wakeup_ns = 0;
+    sleeper.wakeup_fired = 0;
+    sleeper.rt_steps = 0;
+    proc_timer_update(&sleeper);
+}
+
 /** A remote pass expires a due sleep but rearms no other CPU's future event. */
 static void event_owner_rows(void)
 {
@@ -622,6 +675,7 @@ int main(int argc, char **argv)
     step_rows();
     between_rows();
     restart_rows();
+    rearm_rows();
     event_owner_rows();
     if (failures) {
         return 1;

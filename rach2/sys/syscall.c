@@ -1462,8 +1462,8 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
     uint64_t now, base, due;
     int64_t sec, armed;
     int32_t rc, nsec;
+    int fresh = 1;
 
-    current_proc->wakeup_fired = 0;
     do {
         steps = rtc_step_count();
         if (time_reached(kind, when)) {
@@ -1480,12 +1480,11 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
         if (due <= now) {
             due = now + 1u;
         }
-        current_proc->rt_steps = kind == KCLOCK_REAL ? steps : 0;
         armed = sleep_ns(sec, nsec);
-        current_proc->wakeup_ns = armed;
+        proc_wait_set(0, armed, kind == KCLOCK_REAL ? steps : 0, fresh);
+        fresh = 0;
         rc = sleep_until(base + (due - now), 0, wchan);
-        current_proc->wakeup_ns = 0;
-        current_proc->rt_steps = 0;
+        proc_wait_set(0, 0, 0, 0);
         if (rc >= 0 && armed != 0 && current_proc->wakeup_fired == armed) {
             return 0;
         }
@@ -1521,10 +1520,10 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
     int32_t rc;
 
     if (end->tv_sec != 0 || end->tv_nsec != 0) {
-        current_proc->wakeup_ns = sleep_ns(end->tv_sec, end->tv_nsec);
+        proc_wait_set(0, sleep_ns(end->tv_sec, end->tv_nsec), 0, 0);
     }
     rc = sleep_until(target, 1, wchan);
-    current_proc->wakeup_ns = 0;
+    proc_wait_set(0, 0, 0, 0);
     if (rc == 0 && (end->tv_sec != 0 || end->tv_nsec != 0)) {
         rc = sleep_until_time(KCLOCK_MONO, end, wchan);
         if (rc != 0) {
