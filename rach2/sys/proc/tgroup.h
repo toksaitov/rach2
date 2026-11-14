@@ -23,6 +23,7 @@
  * by its tracer's wait. `refs` counts the records that point at the group.
  */
 struct ktimer;
+struct pidfd;
 
 /* Signals sent to several processes while one fork builds a child. The
  * record lives on the calling thread's stack, linked under interrupts off
@@ -130,10 +131,10 @@ struct tgroup {
      * rather than to init (`reparent_children`). A fork starts at 0 and an
      * exec keeps it, as on Linux. */
     uint32_t child_subreaper;
-    /* The pidfds polled for the process's end, which the last thread's end
-     * wakes (`pidfd.h`). A pidfd holds a reference to the group, so the
-     * queue outlives the process's record. */
-    wait_queue_t exited;
+    /* The pidfds of the process and of its threads, each open one, linked
+     * through their `next` under the big lock: an end or a reap wakes the
+     * pollers of those whose id's lifetime it changed (`pidfd.h`). */
+    struct pidfd *pidfds;
     struct fork_pending *forks; /* children being built by threads of this group */
 };
 

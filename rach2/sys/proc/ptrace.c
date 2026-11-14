@@ -5,6 +5,7 @@
 #include "ptrace.h"
 
 #include "ns.h"
+#include "pidfd.h"
 #include "sched.h"
 #include "sigframe.h"
 #include "tgroup.h"
@@ -423,11 +424,12 @@ static void ptrace_parent_notify(process_t *t)
  * registers go, at the tracee's next switch or return to user mode
  * (WORK_DEBUGREG), and a thread in a ptrace stop resumes with `sig`. A thread
  * that ended while traced, which its tracer would have freed, is left for the
- * next return to user mode to free. A process that has ended, which its
- * parent's wait passed over while another process traced it, is left to the
- * parent, which is told of the end (`ptrace_parent_notify`); a parent that
- * is the tracer is ending itself, and the process goes to init with its
- * other children (`reparent_children`). A live thread whose process is
+ * next return to user mode to free, and its pidfds hang up now, as Linux's
+ * __ptrace_detach releases it (`pidfd_id_gone`). A process that has ended,
+ * which its parent's wait passed over while another process traced it, is
+ * left to the parent, which is told of the end (`ptrace_parent_notify`); a
+ * parent that is the tracer is ending itself, and the process goes to init
+ * with its other children (`reparent_children`). A live thread whose process is
  * stopped owes the stop again, and is marked and woken to take it, as Linux
  * 6.12.115's __ptrace_unlink sets JOBCTL_STOP_PENDING and calls
  * ptrace_signal_wake_up (kernel/ptrace.c): a thread its tracer resumed
@@ -449,6 +451,7 @@ static void ptrace_detach(process_t *t, int sig)
     proc_work_set(t, WORK_DEBUGREG);
     if (t->state == PROC_ZOMBIE && t->pid != t->tgid) {
         proc_dead_threads++;
+        pidfd_id_gone(t);
         return;
     }
     if (t->state == PROC_ZOMBIE && t->tg->live == 0) {

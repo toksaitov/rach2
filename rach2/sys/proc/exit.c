@@ -1,5 +1,6 @@
 /* exit.c: the end of a thread, and of a process with its last thread. */
 #include "process.h"
+#include "pidfd.h"
 #include "ptrace.h"
 #include "sched.h"
 #include "smp.h"
@@ -51,12 +52,12 @@
  * adjustments, detaches its tracees, ends the rest of a PID namespace whose
  * init it is, gives the children to init, and gives the process its
  * status, the group's when exit_group or a fatal signal ended it and the
- * leader's own otherwise. Each thread wakes the pidfds polled for its
- * group, those of the process at its last thread's end and those of the one
- * thread at that thread's, as Linux's exit_notify calls do_notify_pidfd;
- * the last then tells the parent; or, when a process other than the parent
- * traces the leader, the tracer, whose wait reports the end first and then
- * tells the parent (`ptrace_exit_release`).
+ * leader's own otherwise. Each thread wakes the pidfds of its own id, and
+ * the last those of the leader's, which are the process's too
+ * (`pidfd_exit`), as Linux's exit_notify and do_notify_parent call
+ * do_notify_pidfd; the last then tells the parent; or, when a process
+ * other than the parent traces the leader, the tracer, whose wait reports
+ * the end first and then tells the parent (`ptrace_exit_release`).
  * Each thread keeps the group's status once a group exit has begun, as
  * Linux 6.12.115's wait_task_zombie selects it (kernel/exit.c:1241-1242),
  * even if a signal began the group exit while this cleanup slept.
@@ -99,7 +100,7 @@ int proc_exit_cleanup(int32_t status)
     } else if (self != leader) {
         proc_dead_threads++;
     }
-    wq_wake_all(&tg->exited);
+    pidfd_exit(self);
     if (tg->live != 0) {
         wq_wake_all(&tg->gone);
         return 0;

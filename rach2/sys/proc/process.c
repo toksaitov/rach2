@@ -21,6 +21,7 @@
 #include "ns.h"
 #include "../tty/tty.h"
 #include "../io/timerfd.h"
+#include "pidfd.h"
 
 process_t *proc_list;
 process_t *proc_idle;
@@ -110,12 +111,15 @@ static int pid_reserve(void)
 }
 
 /** Exchange the kernel and namespace thread ids of `a` and `b` from the
- * same PID namespace, with the big lock held and interrupts masked during
- * the exchange, as Linux 6.12.115's de_thread exchanges the whole PID
- * objects (fs/exec.c:1112). Neither allocation nor namespace counts change. */
+ * same PID namespace, with the `serial` and `pidfd_told` of each id's
+ * lifetime, with the big lock held and interrupts masked during the
+ * exchange, as Linux 6.12.115's de_thread exchanges the whole PID objects
+ * (fs/exec.c:1112). Neither allocation nor namespace counts change. */
 void proc_exchange_pids(process_t *a, process_t *b)
 {
     uint32_t pid = a->pid;
+    uint64_t serial = a->serial;
+    uint32_t told = a->pidfd_told;
     uint32_t flags = kirq_save();
     uint32_t i;
 
@@ -123,6 +127,10 @@ void proc_exchange_pids(process_t *a, process_t *b)
     pid_remove(b);
     a->pid = b->pid;
     b->pid = pid;
+    a->serial = b->serial;
+    b->serial = serial;
+    a->pidfd_told = b->pidfd_told;
+    b->pidfd_told = told;
     for (i = 0; i < NS_LEVELS; i++) {
         pid = a->nspid[i];
         a->nspid[i] = b->nspid[i];
@@ -793,7 +801,7 @@ void free_process(process_t *proc)
     spin_unlock_irqrestore(&tick_post_lock, flags);
     pid_remove(proc);
     if (proc->tg) {
-        wq_wake_all(&proc->tg->exited); /* its pidfds hang up */
+        pidfd_id_gone(proc);
     }
     pid_records--;
     user_put(proc->user_count);
@@ -1063,7 +1071,6 @@ struct tgroup *tgroup_new(struct process *leader)
         wait_queue_init(&tg->chld);
         wait_queue_init(&tg->gone);
         wait_queue_init(&tg->sigfd);
-        wait_queue_init(&tg->exited);
     }
     return tg;
 }

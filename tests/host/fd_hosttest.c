@@ -380,12 +380,17 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 }
 
 /** Check that a wake follows the description's release, once the rows of
- * the description have one; a process freed before them wakes its exit
- * waiters with none open. */
+ * the description have one. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
     check(!reader || !reader->busy, "wake follows description release");
+}
+
+/** No row opens a pidfd, so a freed record has none to wake. */
+void pidfd_id_gone(process_t *p)
+{
+    (void)p;
 }
 
 /** No row files a record with a wake function on a thread group's queue,

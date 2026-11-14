@@ -496,9 +496,17 @@ struct process {
     uint64_t stime;
     /* This record's number, from a count of all records made since boot,
      * which no other record shares, as another thread may share `pid` once
-     * the ids wrap: a POSIX timer of a thread's CPU clock keeps it to know
-     * its thread, as Linux's keeps the struct pid (`clock_cpu_target`). */
+     * the ids wrap or ns_last_pid gives it out again: a POSIX timer of a
+     * thread's CPU clock keeps it to know its thread (`clock_cpu_target`),
+     * and so does a pidfd (`pidfd.h`), as Linux's keep the struct pid. It
+     * belongs to the id's lifetime, not to the record, so an exec by a
+     * thread that does not lead its process exchanges it with the ids
+     * (`proc_exchange_pids`). */
     uint64_t serial;
+    /* Whether the pidfds of `serial` have been woken for its id's going
+     * (`pidfd_id_gone`): at the end of a thread that lets its id go at once,
+     * so that the later free of the record wakes them no more. */
+    uint32_t pidfd_told;
     /* The page faults this thread took, getrusage's ru_minflt and ru_majflt:
      * each page a fault, or the kernel's own touch of user memory, backed or
      * copied for it, and of those the pages of a file mapping the file cache
@@ -965,7 +973,8 @@ int proc_tid_gone(const process_t *t);
 int proc_is_kthread(const process_t *p);
 
 /** Exchange the kernel and namespace thread ids of two threads in the
- * same PID namespace at exec, under the big kernel lock. */
+ * same PID namespace at exec, with the lifetime `serial` of each, under
+ * the big kernel lock. */
 void proc_exchange_pids(process_t *a, process_t *b);
 
 /** Change the real uid and its record count, under the big kernel lock.

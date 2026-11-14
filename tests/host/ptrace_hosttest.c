@@ -439,6 +439,12 @@ void idle_wait_irq_off(void)
     check(0, "unexpected idle wait");
 }
 
+/** No row opens a pidfd, so a detached zombie thread has none to wake. */
+void pidfd_id_gone(process_t *p)
+{
+    (void)p;
+}
+
 /** Count child-state wakes independently of the model's scheduled stops. */
 void wq_wake_all(wait_queue_t *wq)
 {

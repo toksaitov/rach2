@@ -26,35 +26,80 @@
 
 /* A pidfd: the thread group of its process and the PID namespace the
  * process has its number in, each held by a reference so that both outlast
- * the reap, and the kernel id it names: the process's, which its leader
- * has, an exec by another thread included, or for a pidfd of one thread
- * (PIDFD_THREAD) that thread's, which an exec by another thread of the
- * process gives to the leader it ends, as Linux's exchange_tids does. */
+ * the reap, and the kernel id it names with the `serial` of that id's
+ * lifetime, as Linux's pidfd holds a struct pid: the process's, which its
+ * leader has, an exec by another thread included, or for a pidfd of one
+ * thread (PIDFD_THREAD) that thread's, which an exec by another thread of
+ * the process gives to the leader it ends, as Linux's exchange_tids does.
+ * The serial goes with the id (`proc_exchange_pids`), so no thread given
+ * the id once its lifetime has ended passes for it. */
 struct pidfd {
     struct anon_obj anon;
     struct tgroup *tg;
     struct pidns *ns;
     uint32_t pid;
     uint32_t thread; /* a pidfd of the one thread `pid`, not of the process */
+    uint64_t serial; /* the `serial` (process.h) of `pid`'s lifetime */
+    /* Its pollers, which a change of that lifetime wakes, the thread's end
+     * and the release of its id, as Linux wakes the struct pid's
+     * wait_pidfd, and no other thread's (`pidfd_notify`). */
+    wait_queue_t polled;
+    struct pidfd *next; /* the next on `tg->pidfds` */
 };
 
-/** The thread of the thread group `tg` whose id is `pid`, or NULL once it
- * no longer has the id: the record of the id must be a thread of the group,
- * since the id may have been given to another process since, and must not
- * be a thread whose id Linux has let go (`proc_tid_gone`). A process
- * pidfd's leader keeps its id until the reap. */
-static process_t *group_task(const struct tgroup *tg, uint32_t pid)
+/** The thread of the thread group `tg` whose id is `pid` in the lifetime
+ * `serial`, or NULL once it no longer has the id: the record of the id
+ * must be a thread of the group, since the id may have been given to
+ * another process since, must have the serial, since another thread of the
+ * group may have been given it since, and must not be a thread whose id
+ * Linux has let go (`proc_tid_gone`). A process pidfd's leader keeps its
+ * id until the reap. */
+static process_t *group_task(const struct tgroup *tg, uint32_t pid, uint64_t serial)
 {
     process_t *p = get_process(pid);
 
-    return p && p->tg == tg && !proc_tid_gone(p) ? p : NULL;
+    return p && p->tg == tg && p->serial == serial && !proc_tid_gone(p) ? p : NULL;
 }
 
 /** The thread `pf` names, the leader for a pidfd of a process, or NULL once
  * it no longer has its id. */
 static process_t *pidfd_task(const struct pidfd *pf)
 {
-    return group_task(pf->tg, pf->pid);
+    return group_task(pf->tg, pf->pid, pf->serial);
+}
+
+/** Wake the pollers of each pidfd of `p`'s id in its lifetime. The caller
+ * holds the big lock. */
+static void pidfd_notify(const process_t *p)
+{
+    struct pidfd *pf;
+
+    for (pf = p->tg->pidfds; pf; pf = pf->next) {
+        if (pf->serial == p->serial) {
+            wq_wake_all(&pf->polled);
+        }
+    }
+}
+
+void pidfd_exit(process_t *t)
+{
+    process_t *leader = t->tg->leader;
+
+    pidfd_notify(t);
+    if (proc_tid_gone(t)) {
+        t->pidfd_told = 1;
+    }
+    if (t->tg->live == 0 && leader != t) {
+        pidfd_notify(leader);
+    }
+}
+
+void pidfd_id_gone(process_t *p)
+{
+    if (!p->pidfd_told) {
+        p->pidfd_told = 1;
+        pidfd_notify(p);
+    }
 }
 
 /** A read or a write of a pidfd, which has no data: EINVAL, as on Linux. */
@@ -77,16 +122,17 @@ static int32_t pidfd_write(fd_entry_t *e, const char __user *buf, uint32_t count
 /** poll of a pidfd: POLLIN once every thread of the process has ended, or
  * for a pidfd of one thread once that thread has, and POLLHUP too once the
  * process has been reaped or the thread has let its id go, as Linux 6.12's
- * pidfd_poll has it; the queue is woken at each thread's end and at the
- * free of each record. */
+ * pidfd_poll has it. The pidfd's own queue is woken at the end of its
+ * thread, of a process's leader and of its last thread, and when its id
+ * is let go (`pidfd_exit`, `pidfd_id_gone`). */
 static short pidfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
-    const struct pidfd *pf = (const struct pidfd *)e->priv;
+    struct pidfd *pf = (struct pidfd *)e->priv;
     const process_t *t = pidfd_task(pf);
     short mask = 0;
 
     if (wq) {
-        *wq = &pf->tg->exited;
+        *wq = &pf->polled;
     }
     if (!t) {
         mask = POLLIN | POLLRDNORM | POLLHUP;
@@ -117,6 +163,10 @@ struct pidfd *pidfd_new(process_t *p, int thread)
         pf->ns = pidns_get(proc_pidns(p));
         pf->pid = thread ? p->pid : p->tgid;
         pf->thread = thread != 0;
+        pf->serial = thread ? p->serial : p->tg->leader->serial;
+        wait_queue_init(&pf->polled);
+        pf->next = pf->tg->pidfds;
+        pf->tg->pidfds = pf;
     }
     return pf;
 }
@@ -140,7 +190,15 @@ void pidfd_install(struct pidfd *pf, int fd, int nonblock)
 
 void pidfd_free(struct pidfd *pf)
 {
+    struct pidfd **link;
+
     if (pf) {
+        link = &pf->tg->pidfds;
+        while (*link != pf) {
+            link = &(*link)->next;
+        }
+        *link = pf->next;
+        wq_wake_free(&pf->polled);
         tgroup_put(pf->tg);
         ns_put(&pf->ns->c);
         kfree(pf);
@@ -174,13 +232,14 @@ int32_t pidfd_ref_get(int fd, struct pidfd_ref *ref)
     ref->tg->refs++;
     ref->ns = pidns_get(pf->ns);
     ref->pid = pf->pid;
+    ref->serial = pf->serial;
     ref->thread = pf->thread;
     return 0;
 }
 
 process_t *pidfd_ref_task(const struct pidfd_ref *ref)
 {
-    return group_task(ref->tg, ref->pid);
+    return group_task(ref->tg, ref->pid, ref->serial);
 }
 
 int pidfd_ref_seen(const struct pidfd_ref *ref)
@@ -233,8 +292,8 @@ long sys_pidfd_open(struct isr_params *params)
     return fd;
 }
 
-/** Whether the caller may take descriptors of the process `t` leads: its
- * own, or one it could attach to with ptrace, as Linux's
+/** Whether the caller may take descriptors of the thread `t`: one of its
+ * own process, or one it could attach to with ptrace, as Linux's
  * PTRACE_MODE_ATTACH_REALCREDS check has it: the caller privileged, or its
  * real user and group IDs each of `t`'s three, and `t` dumpable and not
  * privileged. */
@@ -265,7 +324,6 @@ long sys_pidfd_getfd(struct isr_params *params)
     if (rc != 0) {
         return rc;
     }
-    t = pidfd_process(t);
     if (!t) {
         return -ESRCH;
     }

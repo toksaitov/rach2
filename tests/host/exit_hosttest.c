@@ -198,6 +198,13 @@ void ptimer_thread_exit(process_t *self)
     self->state = PROC_ZOMBIE;
 }
 
+/** Check that a thread's pidfds are woken once it is a zombie, as the
+ * real function reads its state to tell whether its id has gone. */
+void pidfd_exit(process_t *t)
+{
+    CHECK(t->state == PROC_ZOMBIE, "a thread's pidfds are woken once it is a zombie");
+}
+
 /** Check that the POSIX timers deleted are the child's process's. */
 void ptimer_delete_all(struct tgroup *tg)
 {
