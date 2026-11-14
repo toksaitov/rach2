@@ -30,9 +30,11 @@
  * changed and changed back, a page unmapped and mapped again, and the
  * range shrunk and grown back in place with mremap; then two pages of a
  * memfd mapped by two calls, which are one region where the file's offsets
- * continue through one open file; and it grows the heap with brk three
- * times. Linux 6.18 lists one region for the pages at each step but the
- * second and fourth, and one [heap].
+ * continue through one open file; then two private pages of a memfd moved
+ * together with mremap, which stay two regions when each was written while
+ * apart; and it grows the heap with brk three times. Linux 6.18 lists one
+ * region for the pages at each step but the second and fourth, and one
+ * [heap].
  *
  * Prints `VMAMUSL OK` and exits 0 on success, and prints
  * `VMAMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -174,6 +176,105 @@ static int check_file_merges(char *detail, size_t size)
 }
 
 /**
+ * Map pages 0 and 1 of the memfd `fd`, which hold `f`, privately at
+ * addresses apart, write to the first when `w` has 2 and to the second when
+ * it has 1, and move them with mremap to the pages after the first of
+ * `base`, the second first when `order` is 1. Returns the regions in the 6
+ * pages at `base`, or -1 when the pages could not be mapped and moved or
+ * lost what they held, which the file keeps in its own bytes. Leaves
+ * nothing but `base` mapped.
+ */
+static int private_trial(int fd, char *base, long pg, int w, int order)
+{
+    char *a, *b, *na = MAP_FAILED, *nb = MAP_FAILED;
+    char file[2];
+    int i, got = -1;
+
+    a = mmap(0, (size_t)pg, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    b = mmap(0, (size_t)pg, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, pg);
+    if (a != MAP_FAILED && b != MAP_FAILED) {
+        if (w & 2) {
+            a[0] = 'A';
+        }
+        if (w & 1) {
+            b[0] = 'B';
+        }
+        for (i = 0; i < 2; i++) {
+            if ((i == 0) == (order == 0)) {
+                na = mremap(a, (size_t)pg, (size_t)pg, MREMAP_MAYMOVE | MREMAP_FIXED, base + pg);
+            } else {
+                nb =
+                    mremap(b, (size_t)pg, (size_t)pg, MREMAP_MAYMOVE | MREMAP_FIXED, base + 2 * pg);
+            }
+        }
+    }
+    if (na != MAP_FAILED && nb != MAP_FAILED && na[0] == ((w & 2) ? 'A' : 'f') &&
+        nb[0] == ((w & 1) ? 'B' : 'f') && pread(fd, file, 1, 0) == 1 &&
+        pread(fd, file + 1, 1, pg) == 1 && file[0] == 'f' && file[1] == 'f') {
+        got = count_regions((unsigned long)base, (unsigned long)base + 6 * pg, NULL);
+    }
+    if (a != MAP_FAILED && na == MAP_FAILED) {
+        munmap(a, (size_t)pg);
+    }
+    if (b != MAP_FAILED && nb == MAP_FAILED) {
+        munmap(b, (size_t)pg);
+    }
+    return got;
+}
+
+/**
+ * Move two private pages of one memfd, written by neither, one or both
+ * while apart, to neighbouring addresses between guard pages where the
+ * file's offsets continue, in either order (`private_trial`). Linux merges
+ * the two regions unless each has pages of its own, since it refuses two
+ * regions with different anon_vma records (mm/vma.c, is_mergeable_anon_vma):
+ * three regions in the range, and four when both were written. Returns 0,
+ * or 1 with what differed in `detail`.
+ */
+static int check_private_merges(char *detail, size_t size)
+{
+    static const char *const writes[] = {"neither", "the second", "the first", "both"};
+    long pg = sysconf(_SC_PAGESIZE);
+    size_t span = 6 * (size_t)pg;
+    char *base;
+    int fd, got, want, order, w;
+
+    fd = memfd_create("vmamusl-private", 0);
+    if (fd < 0 || ftruncate(fd, 2 * pg) != 0 || pwrite(fd, "f", 1, 0) != 1 ||
+        pwrite(fd, "f", 1, pg) != 1) {
+        snprintf(detail, size, "the private memfd could not be made");
+        return 1;
+    }
+    for (order = 0; order < 2; order++) {
+        for (w = 0; w < 4; w++) {
+            want = w == 3 ? 4 : 3;
+            base = mmap(0, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            got = base == MAP_FAILED ? -1 : private_trial(fd, base, pg, w, order);
+            if (base != MAP_FAILED) {
+                munmap(base, span);
+            }
+            if (got == -1) {
+                snprintf(detail, size,
+                         "private memfd pages written by %s could not be moved with their data",
+                         writes[w]);
+            } else if (got != want) {
+                snprintf(detail, size,
+                         "%d regions for private memfd pages written by %s, the %s moved first, "
+                         "where Linux has %d",
+                         got, writes[w], order ? "second" : "first", want);
+            }
+            if (got != want) {
+                close(fd);
+                return 1;
+            }
+        }
+    }
+    close(fd);
+
+    return 0;
+}
+
+/**
  * Run the third half's calls and check the regions after each against
  * Linux's. Returns 0, or 1 with what differed in `detail`.
  */
@@ -250,7 +351,7 @@ static int check_merges(char *detail, size_t size)
         }
     }
     munmap(base, span);
-    if (check_file_merges(detail, size) != 0) {
+    if (check_file_merges(detail, size) != 0 || check_private_merges(detail, size) != 0) {
         return 1;
     }
 
