@@ -805,7 +805,7 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
                      VIRGL_NAMED "python3 -I " GRAPHICS_DIR "/runners/judge.py results " VIRGL_REF
                                  "/piglit/piglit-virgl.results.gz " GRAPHICS_DIR
                                  "/out/piglit-virgl.results " GRAPHICS_DIR
-                                 "/out/piglit-virgl.sample " VIRGL_FLAKES);
+                                 "/out/piglit-virgl.sample " VIRGL_FLAKES " -l " VIRGL_PIGLIT);
         else if (strcmp(s->test, "deqp") == 0)
             snprintf(command, size,
                      VIRGL_NAMED "python3 -I " GRAPHICS_DIR "/runners/judge.py deqp " VIRGL_REF

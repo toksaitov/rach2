@@ -3,7 +3,8 @@
 Usage:
   python3 -I judge.py webgl REF GOT [-x EXCLUSIONS]
   python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]
-  python3 -I judge.py results REF GOT [SAMPLE [FLAKES]] [-s SCOPE] [-x EXCLUSIONS]
+  python3 -I judge.py results REF GOT [SAMPLE [FLAKES]] [-l LIST] [-s SCOPE]
+      [-x EXCLUSIONS]
   python3 -I judge.py modes REF GOT [FAULTS]
   python3 -I judge.py glmark2 REF GOT
   python3 -I judge.py deqp REF GOT [FLAKES] [-x EXCLUSIONS]
@@ -39,7 +40,12 @@ likes. A name the reference has and this run lacks is worse, and so is one
 this run alone has that neither passes nor skips. SAMPLE, the names a
 list's run of piglit.sh took, its NAME.sample, keeps of the reference those
 tests and their subtests, for a run of a part of the list the reference ran
-whole. FLAKES names the tests and subtests that are not judged, one
+whole. LIST, the list the sample was taken from, tells a subtest from a
+test: piglit's names of tests may hold `@` too, so that the reference's
+`T@3@2` is a test of its own beside `T@3`, and without LIST it would be
+taken for a subtest of `T@3` and judged in `T@3`'s sample. A reference name
+belongs to the longest of its `@` prefixes, itself included, that LIST
+names, or that SAMPLE names without LIST. FLAKES names the tests and subtests that are not judged, one
 extended regular expression a line, searched for in the name, `#` beginning
 a comment. SCOPE, when given, names the part of both files that the run
 covers, one line each: `=NAME`, the name and every name below it
@@ -224,17 +230,26 @@ def named(path):
                     if line.strip() and not line.startswith("#"))
 
 
-def sampled(ref, sample_path):
+def sampled(ref, sample_path, list_path=None):
     """The results of REF for the tests SAMPLE_PATH names, one a line, and
-    for their subtests, `TEST@SUBTEST`."""
+    for their subtests, `TEST@SUBTEST`. A name of REF is the test, or a
+    subtest of the test, that is its longest `@` prefix, itself included,
+    that LIST_PATH names, the list SAMPLE_PATH was taken from, gzip's or
+    plain with `#` beginning a comment, or that SAMPLE_PATH names without
+    LIST_PATH."""
     with open(sample_path, encoding="utf-8") as f:
         tests = {line.rstrip("\n") for line in f if line.strip()}
+    listed = tests
+    if list_path:
+        with text(list_path) as f:
+            listed = {line.rstrip("\n") for line in f
+                      if line.strip() and not line.startswith("#")}
     kept = {}
     for name, result in ref.items():
         cut = len(name)
-        while cut != -1 and name[:cut] not in tests:
+        while cut != -1 and name[:cut] not in listed:
             cut = name.rfind("@", 0, cut)
-        if cut != -1:
+        if cut != -1 and name[:cut] in tests:
             kept[name] = result
     return kept
 
@@ -264,12 +279,12 @@ def scope(path):
 
 
 def results(ref_path, got_path, sample_path=None, flakes_path=None,
-            scope_path=None, exclusions_path=None):
+            scope_path=None, exclusions_path=None, list_path=None):
     within = scope(scope_path)
     ref = {k: v for k, v in named(ref_path).items() if within(k)}
     got = {k: v for k, v in named(got_path).items() if within(k)}
     if sample_path:
-        ref = sampled(ref, sample_path)
+        ref = sampled(ref, sample_path, list_path)
     flakes = []
     if flakes_path:
         with open(flakes_path, encoding="utf-8") as f:
@@ -450,18 +465,20 @@ def main():
     rest = sys.argv[1:]
     while rest:
         a = rest.pop(0)
-        if a in ("-s", "-x") and rest:
+        if a in ("-l", "-s", "-x") and rest:
             opts[a] = rest.pop(0)
         else:
             args.append(a)
-    x, s = opts.get("-x"), opts.get("-s")
+    x, s, l = opts.get("-x"), opts.get("-s"), opts.get("-l")
     kind = args[0] if args else ""
+    if l and (kind != "results" or len(args) < 4):
+        args = []
     if len(args) == 3 and kind == "webgl" and not s:
         ok = webgl(args[1], args[2], x)
     elif len(args) in (5, 6) and kind == "video" and not opts:
         ok = video(*args[1:])
     elif len(args) in (3, 4, 5) and kind == "results":
-        ok = results(*args[1:], scope_path=s, exclusions_path=x)
+        ok = results(*args[1:], scope_path=s, exclusions_path=x, list_path=l)
     elif len(args) in (3, 4) and kind == "modes" and not opts:
         ok = modes(*args[1:])
     elif len(args) == 3 and kind == "glmark2" and not opts:
@@ -475,7 +492,7 @@ def main():
     else:
         sys.exit("usage: judge.py webgl REF GOT [-x EXCLUSIONS]"
                  " | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]"
-                 " | results REF GOT [SAMPLE [FLAKES]] [-s SCOPE] [-x EXCLUSIONS]"
+                 " | results REF GOT [SAMPLE [FLAKES]] [-l LIST] [-s SCOPE] [-x EXCLUSIONS]"
                  " | modes REF GOT [FAULTS] | glmark2 REF GOT"
                  " | deqp REF GOT [FLAKES] [-x EXCLUSIONS]"
                  " | vkcube REF GOT [TIMING-REF TIMING-GOT] | gate GATE MEASURES")
