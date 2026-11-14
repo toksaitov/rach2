@@ -321,7 +321,7 @@
     },
     {
       "case_id": "machine.input.mouse",
-      "behavior": "the PS/2 mouse's motion, buttons and wheel reach its event device, ImExPS/2 Generic Explorer Mouse, as Linux's psmouse reports them, stamped by each open's clock",
+      "behavior": "the PS/2 mouse's probe waits for each unanswered command only as long as Linux's, and the mouse's motion, buttons and wheel reach its event device, ImExPS/2 Generic Explorer Mouse, as Linux's psmouse reports them, stamped by each open's clock",
       "units": [
         "evdev",
         "ps2mouse",
@@ -393,6 +393,11 @@
         {
           "assertion_id": "shell",
           "checks": "the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "probe",
+          "checks": "the console's `mouse: ready` follows its `mouse: started` by less than 0.6 s of the kernel's stamps: the probe waits for the two commands QEMU's mouse leaves unanswered, ALPS's 0xEC and the TrackPoint's 0xE1, once each and for Linux's 200 ms, and for no other",
           "source": "scenario"
         },
         {

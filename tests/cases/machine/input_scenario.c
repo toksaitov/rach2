@@ -94,28 +94,37 @@ static void packets(struct usb_boot *b, const char *what, const char *const even
     }
 }
 
-/** Run `command`, evprobe of a mouse; when it asks, move the mouse by 10
- * and 5, press and release the left button, and turn the wheel up and down
- * (`packets`); report assertion `mouse` of its run. */
-static int mouse(struct usb_case *u, const char *record, const char *command)
+/** Run `command`, evprobe of a mouse, on the machine booted into `b`;
+ * when it asks, move the mouse by 10 and 5, press and release the left
+ * button, and turn the wheel up and down (`packets`); report assertion
+ * `mouse` of its run. */
+static int mouse_steps(struct usb_case *u, struct usb_boot *b, const char *command)
 {
     static const char *const events[] = {
         "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
         "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]",
         LEFT_DOWN, LEFT_UP, TURN("wheel-up"), TURN("wheel-down")};
-    struct usb_boot b;
     struct usb_run r;
     uint64_t from;
 
-    booted(u, &b, record);
     usb_step(u, "mouse");
-    from = usb_start(&b, command);
-    usb_wait(&b, "EVPROBE: move the mouse");
-    packets(&b, "mouse", events, (int)(sizeof(events) / sizeof(events[0])));
-    usb_finish(&b, from, &r);
+    from = usb_start(b, command);
+    usb_wait(b, "EVPROBE: move the mouse");
+    packets(b, "mouse", events, (int)(sizeof(events) / sizeof(events[0])));
+    usb_finish(b, from, &r);
     usb_probe(u, "mouse", &r, "EVPROBE");
     free(r.text);
     return usb_end(u);
+}
+
+/** Boot, waiting for `record` (`booted`), and run `command`, evprobe of a
+ * mouse (`mouse_steps`). */
+static int mouse(struct usb_case *u, const char *record, const char *command)
+{
+    struct usb_boot b;
+
+    booted(u, &b, record);
+    return mouse_steps(u, &b, command);
 }
 
 /** Run evprobe of QEMU's tablet; when it asks, move the tablet to 10000
@@ -142,10 +151,45 @@ static int tablet(struct usb_case *u)
     return usb_end(u);
 }
 
-/** The PS/2 mouse's event device. */
+/* The most time the PS/2 mouse's probe may take by the kernel's stamps, in
+ * microseconds: under three of Linux's 200 ms waits for an ACK, since QEMU's
+ * mouse leaves two of the probe's commands unanswered, ALPS's 0xEC and the
+ * TrackPoint's 0xE1, and answers every other at once. */
+#define PROBE_US 600000u
+
+/** The kernel's stamp, in microseconds, of the console's first record that
+ * has `record` in it, "<L>[S.UUUUUU] record", or -1 when there is none. */
+static long long stamp(const char *text, const char *record)
+{
+    const char *line = usb_find(text, record);
+    unsigned long seconds, us;
+
+    if (line == NULL || (line = strchr(line, '[')) == NULL ||
+        sscanf(line, "[%lu.%6lu]", &seconds, &us) != 2)
+        return -1;
+    return (long long)seconds * 1000000 + (long long)us;
+}
+
+/** Report assertion `probe`: the console's `mouse: ready` follows its
+ * `mouse: started` by less than PROBE_US by the kernel's stamps. */
+static void probe_time(struct usb_case *u, const struct usb_boot *b)
+{
+    char *text = usb_text(b, 0, b->at);
+    long long started = stamp(text, "] mouse: started"), ready = stamp(text, "] mouse: ready");
+
+    usb_assert(u, "probe", started >= 0 && ready >= started && ready - started < PROBE_US,
+               "mouse: started at %lld us, mouse: ready at %lld us", started, ready);
+    free(text);
+}
+
+/** The PS/2 mouse's event device, and the time of its probe. */
 static int ps2_mouse(struct usb_case *u)
 {
-    return mouse(u, NULL, "/evprobe mouse");
+    struct usb_boot b;
+
+    booted(u, &b, NULL);
+    probe_time(u, &b);
+    return mouse_steps(u, &b, "/evprobe mouse");
 }
 
 /** A USB mouse's event device. */
