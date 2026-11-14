@@ -451,8 +451,9 @@ static void digest_of(const void *p, size_t n, char hex[65])
 /**
  * Write the attempt's invocation (schemas/invocation.schema.json): the
  * case's program and arguments in the workspace, the case's identity, seed
- * and architecture and the architecture of the kernel it runs on in its
- * environment, its scratch as TMPDIR, and its bound as the deadline; and its
+ * and architecture, the architecture of the kernel it runs on and the
+ * machine's accelerator in its environment, its scratch as TMPDIR, and its
+ * bound as the deadline; and its
  * digest and the attempt's token, the first digits of the digest of the
  * attempt's identity.
  */
@@ -488,6 +489,7 @@ static void make_invocation(struct legacy_guest *g)
     if (strcmp(k->arch, "none") != 0)
         put_member(&b, "ARCH", k->arch, 0);
     put_member(&b, "ETUDE_KERNEL", k->boot_arch, 0);
+    put_member(&b, "ETUDE_ACCEL", g->spec.accel, 0);
     if (k->scratch)
         put_member(&b, "TMPDIR", "${WORKSPACE}", 0);
     jbuf_puts(&b, "},\"stdin\":null,\"role\":\"ordinary\",\"files\":[{");
