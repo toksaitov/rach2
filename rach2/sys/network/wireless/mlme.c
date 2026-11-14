@@ -352,16 +352,19 @@ static int auth_done(struct wlan_mlme *m)
 
 int wlan_mlme_authenticate(struct wlan_mlme *m, const struct wlan_mlme_auth *req)
 {
+    struct wlan_bss *bss;
     int err;
 
     err = auth_check(req);
     if (err)
         return err;
+    bss = req->bss;
+    wlan_bss_hold(bss);
     if (req->algorithm != WLAN_AUTH_SAE || m->state != WLAN_STA_AUTHENTICATING ||
         m->algorithm != WLAN_AUTH_SAE || !addr_eq(m->bss->bssid, req->bss->bssid)) {
         err = auth_begin(m, req);
         if (err)
-            return err;
+            goto out;
     } else if (m->scan) {
         wlan_scan_cancel(m->scan);
     }
@@ -372,11 +375,13 @@ int wlan_mlme_authenticate(struct wlan_mlme *m, const struct wlan_mlme_auth *req
                                                           : WLAN_MLME_AUTH_TIMEOUT);
     if (err) {
         drop(m);
-        return err;
+        goto out;
     }
     if (m->algorithm == WLAN_AUTH_SAE && m->peer_confirmed && m->sae_trans == 2)
         auth_done(m);
-    return 0;
+out:
+    wlan_bss_put(bss);
+    return err;
 }
 
 /** Take the AP's Open System answer. */

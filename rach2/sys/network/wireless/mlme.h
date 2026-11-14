@@ -213,7 +213,10 @@ void wlan_mlme_stop(struct wlan_mlme *m);
  * ends first, reported as a local deauthentication with no frame sent. A
  * second SAE request to the BSS being authenticated continues the exchange.
  * A running scan is cancelled and reported aborted before the frame goes out,
- * as mac80211's ieee80211_prep_connection cancels it. Returns 0, -EINVAL
+ * as mac80211's ieee80211_prep_connection cancels it. req->bss need only
+ * have been found in the table: the call holds it throughout, since leaving
+ * the old connection can drop its last hold and the cancelled scan expires
+ * what nobody holds. Returns 0, -EINVAL
  * for a bad request, -EOPNOTSUPP for another algorithm, -EMSGSIZE when the
  * frame would not fit, or the radio's error.
  */
