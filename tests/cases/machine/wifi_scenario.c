@@ -278,11 +278,34 @@ static long pinged(struct wifi *w, const char *host)
 }
 
 /**
+ * Put in `why`, of `size` bytes, the first line of `text` that begins with
+ * `prefix`, or leave `why` as it is when there is none.
+ */
+static void first_line(const char *text, const char *prefix, char *why, size_t size)
+{
+    const char *p = text;
+    size_t n = strlen(prefix), len;
+
+    while (p != NULL && *p != '\0') {
+        if (strncmp(p, prefix, n) == 0) {
+            len = strcspn(p, "\r\n");
+            snprintf(why, size, "%.*s", (int)len, p);
+            return;
+        }
+        p = strchr(p, '\n');
+        if (p != NULL)
+            p++;
+    }
+}
+
+/**
  * Send ECHO_BYTES of random bytes from the station to hostpeer's echo at
  * `host`, which reaches the host at port 3 of the case, and say whether
- * the same bytes came back.
+ * the same bytes came back. When they did not and `why` is not NULL, put
+ * there, in `size` bytes, nc's first complaint, or else cmp's, or "" when
+ * neither said anything: "nc: bad address" is a lookup that failed.
  */
-static int echoed(struct wifi *w, const char *host)
+static int echoed_why(struct wifi *w, const char *host, char *why, size_t size)
 {
     char *text = NULL;
     int ok;
@@ -293,8 +316,22 @@ static int echoed(struct wifi *w, const char *host)
              "echo ECHO\"\"SAME",
              host, w->port[3]) == 0 &&
          has(text, "ECHOSAME");
+    if (!ok && why != NULL && size > 0) {
+        why[0] = '\0';
+        if (text != NULL) {
+            first_line(text, "nc: ", why, size);
+            if (why[0] == '\0')
+                first_line(text, "cmp: ", why, size);
+        }
+    }
     free(text);
     return ok;
+}
+
+/** Say whether an echo to `host` came back whole, as echoed_why does. */
+static int echoed(struct wifi *w, const char *host)
+{
+    return echoed_why(w, host, NULL, 0);
 }
 
 /** Give wpa_supplicant's state on the station, or "" when it said none,
@@ -783,8 +820,10 @@ static void lack_add(char *lack, const char *what)
  * Say whether the station's default routes and servers are network A's, or
  * B's with `b`, alone, and add to the list `lack`, of LACK_MAX bytes, each
  * thing that is not so: the network's default route on wlan0, a single
- * default route, the network's server, and no server of the other network
- * or of the cable.
+ * default route, the network's server and its answer for the endpoint,
+ * and no server of the other network or of the cable. The answer is asked
+ * of the IPv4 server by name, since a lookup that fails there passes on to
+ * the RA's IPv6 server once ndwatch has added it, and fails only before.
  */
 static int routed(struct wifi *w, int b, char *lack)
 {
@@ -817,16 +856,30 @@ static int routed(struct wifi *w, int b, char *lack)
     if (has(text, "nameserver 10.0.2.3"))
         lack_add(lack, "no server of the cable");
     free(text);
+    text = NULL;
+    sta(w, &text, "nslookup " ENDPOINT " %s", gw);
+    if (!has(text, "Address: 10.0.2.2")) {
+        snprintf(want, sizeof(want), "an answer from %s", gw);
+        lack_add(lack, want);
+    }
+    free(text);
     return strlen(lack) == was;
 }
 
 /** Say whether an echo to the endpoint came back whole, and add "the echo"
- * to the list `lack` when it did not. */
+ * to the list `lack` when it did not, with nc's or cmp's complaint, such as
+ * "the echo (nc: bad address 'endpoint.wifi.test')" for a failed lookup. */
 static int echoed_lack(struct wifi *w, char *lack)
 {
-    if (echoed(w, ENDPOINT))
+    char why[64], what[80];
+
+    if (echoed_why(w, ENDPOINT, why, sizeof(why)))
         return 1;
-    lack_add(lack, "the echo");
+    if (why[0] != '\0')
+        snprintf(what, sizeof(what), "the echo (%s)", why);
+    else
+        snprintf(what, sizeof(what), "the echo");
+    lack_add(lack, what);
     return 0;
 }
 
