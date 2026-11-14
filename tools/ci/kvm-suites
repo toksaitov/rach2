@@ -7,6 +7,9 @@
 # server in the release's run (bed/Readme.md, Tests). The KVM suite and
 # bed-shm run cases on the host-svm processor profile, which QEMU starts
 # only under KVM, since TCG has no `host` model (tests/kvm/Readme.md).
+# The Venus suite's references were taken under KVM, and under TCG QEMU
+# 10.2's iotlb_to_section aborts while its dEQP processes map and unmap
+# blobs (dev-log/84-locks/upstream.md); KVM never takes that path.
 browser
 video
 webgl
@@ -14,3 +17,4 @@ bed-vtest
 bed-forward
 kvm
 bed-shm
+venus
