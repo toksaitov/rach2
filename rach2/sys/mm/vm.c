@@ -494,20 +494,29 @@ static vma_t *vm_split(vm_space_t *vm, vma_t *r, uintptr_t at)
     return upper;
 }
 
-/** Merge a compatible right neighbour into r; return 1 if one was removed. */
+/** Whether regions of the files `a` and `b` may merge: one file, or two
+ * mappings of one open file that map the same pages (`same`). */
+static int vm_file_same(const struct vm_file *a, const struct vm_file *b)
+{
+    return a == b || (a && b && a->same && a->same == b->same && a->same(a, b));
+}
+
+/** Merge a compatible right neighbour into r; return 1 if one was removed.
+ * When the two map one open file through two records, r keeps its own and
+ * the neighbour's is put, which `vm_file_reap` releases after the change. */
 static int vm_merge(vm_space_t *vm, vma_t *r)
 {
     vma_t *s = r->next;
     uintptr_t end;
 
     if (!s || r->end != s->start || r->prot != s->prot || r->type != s->type ||
-        r->file != s->file || !vm_policy_equal(r->policy, s->policy) ||
+        !vm_file_same(r->file, s->file) || !vm_policy_equal(r->policy, s->policy) ||
         (r->file && r->pgoff + ((r->end - r->start) >> VM_PAGE_SHIFT) != s->pgoff)) {
         return 0;
     }
     end = s->end;
     r->anon |= s->anon;
-    vm_delete(vm, s, 0); /* r holds the file still */
+    vm_delete(vm, s, 0); /* r holds its file still */
     vm->total += end - r->end;
     r->end = end;
     return 1;

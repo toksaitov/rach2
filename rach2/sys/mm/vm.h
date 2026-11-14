@@ -204,6 +204,11 @@ struct vm_file {
     uint32_t (*around)(struct vm_file *f, uint32_t first, uint32_t count, uintptr_t *phys,
                        int hits);
     int (*mkwrite)(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
+    /* Whether `b`, a file with the same `same`, maps the pages `a` does
+     * through one open file, so that two neighbouring regions of them whose
+     * offsets continue merge, as Linux merges regions of one struct file;
+     * NULL for a file that merges only with its own regions. */
+    int (*same)(const struct vm_file *a, const struct vm_file *b);
 };
 
 /*

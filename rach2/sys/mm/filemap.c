@@ -1452,6 +1452,36 @@ static int filemap_reads_unlocked(const fd_entry_t *e)
     return t && t->reads_unlocked && !t->ns_serialised;
 }
 
+/**
+ * Whether the mapped files `a` and `b` map the same pages through one open
+ * file description, as two of Linux's regions with one struct file do, so
+ * that neighbouring regions of them whose offsets continue merge (vm.c's
+ * `vm_merge`): both lend the pages a tmpfs file or a disk file's shared
+ * record keeps, in the same way, under the same path. A mapping with pages
+ * of its own, a private one read through another file system or shared
+ * anonymous memory, never merges with another.
+ */
+static int filemap_same(const struct vm_file *a, const struct vm_file *b)
+{
+    const struct filemap *ma = (const struct filemap *)a;
+    const struct filemap *mb = (const struct filemap *)b;
+    const char *p = a->path, *q = b->path;
+
+    if (a->release != filemap_release || b->release != filemap_release || !ma->entry.ofd ||
+        ma->entry.ofd != mb->entry.ofd || ma->entry.flags != mb->entry.flags || !ma->sh ||
+        ma->sh != mb->sh || ma->sh == &ma->own || ma->ds != mb->ds || ma->shared != mb->shared ||
+        a->fill != b->fill || a->share != b->share || a->device != b->device ||
+        a->around != b->around || a->mkwrite != b->mkwrite || a->unlocked != b->unlocked ||
+        !p != !q) {
+        return 0;
+    }
+    while (p && *p && *p == *q) {
+        p++;
+        q++;
+    }
+    return !p || *p == *q;
+}
+
 struct vm_file *filemap_new(const fd_entry_t *e)
 {
     struct filemap *m = kzalloc(sizeof(*m));
@@ -1462,6 +1492,7 @@ struct vm_file *filemap_new(const fd_entry_t *e)
     m->vf.refs = 1;
     m->vf.fill = filemap_fill;
     m->vf.release = filemap_release;
+    m->vf.same = filemap_same;
     m->vf.unlocked = filemap_reads_unlocked(e);
     m->entry = *e;
     m->entry.flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
