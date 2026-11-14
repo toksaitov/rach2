@@ -9139,10 +9139,9 @@ static void synth_sys_identity(const struct vpath *vp, struct kstat *kst, int fo
 {
     kst->st_dev = SYSFS_FSID;
     if (vp->kind == VNODE_SYS_FILE) {
-        kst->st_mode = S_IFREG | (vp->sysent == SYSFS_REG ? sysfs_node_mode(vp->syskey)
-                                  : sysfs_attr_writable(vp->sysent, vp->procfile) ? 0644u
-                                  : sysfs_attr_private(vp->sysent, vp->procfile)  ? 0400u
-                                                                                  : 0444u);
+        kst->st_mode =
+            S_IFREG | (vp->sysent == SYSFS_REG ? sysfs_node_mode(vp->syskey)
+                                               : sysfs_attr_mode(vp->sysent, vp->procfile));
         kst->st_size = 4096;
         if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile >= SYSFS_PCI_RESOURCE0) {
             /* Both names of a BAR's file are root's and as long as the BAR. */

@@ -604,10 +604,14 @@ const char *sysfs_wlan_driver(int index);
  * with none. */
 const char *sysfs_attr(int node, int n);
 
-/** Whether only a privileged process may read the attribute `attr` of
- * `node`, mode 0400 as Linux gives them: the serial numbers and the UUID of
- * /sys/class/dmi/id. */
+/** Whether the attribute `attr` of `node` is root's alone, mode 0400 as
+ * Linux gives them: the serial numbers and the UUID of /sys/class/dmi/id. */
 int sysfs_attr_private(int node, int attr);
+
+/** The mode bits of the attribute `attr` of the fixed /sys directory `node`,
+ * owned by root as stat(2) reports them: 0644 for a writable one, 0400 for a
+ * private one (`sysfs_attr_private`) and 0444 for the rest. */
+uint32_t sysfs_attr_mode(int node, int attr);
 
 /** Whether the attribute `attr` of the fixed /sys directory `node` is
  * there, in procfs.c: a field of /sys/class/dmi/id only when the firmware's

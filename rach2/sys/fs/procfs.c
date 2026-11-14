@@ -108,7 +108,8 @@
 #include "../display/backlight.h"
 #include "../watchdog.h"
 
-/* O_CLOEXEC, Linux's value on i386 and x86-64. */
+/* O_TRUNC and O_CLOEXEC, Linux's values on i386 and x86-64. */
+#define PROCFS_O_TRUNC   01000
 #define PROCFS_O_CLOEXEC 02000000
 
 /* Inode namespace for /proc: the directory and the global files, then a
@@ -7544,19 +7545,17 @@ static const struct file_ops procfs_pciconfig_ops = {procfs_pciconfig_read,
  * Whether the caller may open a /sys file, root's with the mode bits
  * `mode`, for access `acc` (0 read, 1 write, 2 both), as Linux's
  * generic_permission judges a sysfs file: by the owner's bits when its
- * file-system user id is root's, else by the others' bits, which
- * CAP_DAC_OVERRIDE passes, and for a read CAP_DAC_READ_SEARCH, while root's
- * ids are mapped in its user namespace. Root's group is no help, since
- * these files give it no more than the others.
+ * file-system user id is root's, else by the others' bits; where they fall
+ * short, CAP_DAC_OVERRIDE passes, and for a read CAP_DAC_READ_SEARCH, while
+ * root's ids are mapped in its user namespace. Root's group is no help,
+ * since these files give it no more than the others.
  */
 static int sysfs_file_may(uint32_t mode, int acc)
 {
     uint32_t want = acc == 0 ? 4u : acc == 1 ? 2u : 6u;
+    uint32_t bits = proc_fsuid(current_proc) == 0 ? mode >> 6 : mode;
 
-    if (proc_fsuid(current_proc) == 0) {
-        return (want & ~(mode >> 6) & 7u) == 0;
-    }
-    if ((want & ~mode & 7u) == 0) {
+    if ((want & ~bits & 7u) == 0) {
         return 1;
     }
     if (!ns_ids_mapped(proc_userns(current_proc), 0, 0)) {
@@ -7567,35 +7566,54 @@ static int sysfs_file_may(uint32_t mode, int acc)
 }
 
 /**
+ * The access, as `sysfs_file_may` takes it, that an open with the flags
+ * `flags` needs of a file's mode: its access mode's, with a write added for
+ * O_TRUNC, as Linux's build_open_flags adds MAY_WRITE, although the
+ * descriptor of O_RDONLY | O_TRUNC is still only read. 3 for the access
+ * mode 3.
+ */
+static int sysfs_open_acc(int flags)
+{
+    int acc = flags & 3;
+
+    return acc == 0 && (flags & PROCFS_O_TRUNC) ? 2 : acc;
+}
+
+/**
  * Whether the caller may open the /sys attribute `attr` of the node `node`
- * and the key `key` for access `acc` (0 read, 1 write, 2 both, 3 neither),
- * as Linux judges the open of a kernfs file. A direction the file does not
- * support is refused first, whatever capabilities the caller holds, as
+ * and the key `key` with the flags `flags`, whose access mode is 0 read,
+ * 1 write, 2 both or 3 neither, as Linux judges the open of a kernfs file.
+ * A direction the descriptor would have that the file does not support is
+ * refused first, whatever capabilities the caller holds, as
  * kernfs_fop_open refuses it after generic_permission has let
  * CAP_DAC_OVERRIDE pass: a read of a file with no read bit or no show, a
  * write of one with no write bit or no store. `sysfs_file_may` then judges
- * the mode: a registered attribute's own, 0644 for a fixed one, whose
- * directions are a read and those `sysfs_attr_writable` gives it.
+ * the mode, for the access `sysfs_open_acc` gives: a registered
+ * attribute's own, or a fixed one's (`sysfs_attr_mode`), whose directions
+ * are a read and those `sysfs_attr_writable` gives it.
  */
-static int sysfs_attr_may(int node, int key, int attr, int acc)
+static int sysfs_attr_may(int node, int key, int attr, int flags)
 {
+    int acc = flags & 3;
+
     if (acc == 3 || (acc != 1 && node == SYSFS_REG && !sysfs_node_readable(key)) ||
         (acc != 0 && !sysfs_file_writable(node, key, attr))) {
         return 0;
     }
-    return sysfs_file_may(node == SYSFS_REG ? sysfs_node_mode(key) : 0644u, acc);
+    return sysfs_file_may(node == SYSFS_REG ? sysfs_node_mode(key) : sysfs_attr_mode(node, attr),
+                          sysfs_open_acc(flags));
 }
 
 /** Open raw PCI config, root's with mode 0644 as Linux's, which any caller
- * reads and a write needs `sysfs_file_may` to allow. Each access reaches the
- * current registers, including a read at a nonzero offset. */
+ * reads and a write or O_TRUNC needs `sysfs_file_may` to allow. Each access
+ * reaches the current registers, including a read at a nonzero offset. */
 static int procfs_open_pciconfig(const struct vpath *vp, int flags)
 {
     struct procfs_file *f;
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || !sysfs_file_may(0644, acc)) {
+    if (acc == 3 || !sysfs_file_may(0644, sysfs_open_acc(flags))) {
         return -EACCES;
     }
     if (!sysfs_pci_present(vp->syskey)) {
@@ -7842,7 +7860,8 @@ static const struct file_ops procfs_pcibar_ops = {
     procfs_close,       procfs_pcibar_mmap,  NULL,        0};
 
 /** Open a resourceN or resourceN_wc file, root's with mode 0600 as
- * Linux's, for the access `sysfs_file_may` allows. -EACCES for another caller,
+ * Linux's, for the access `sysfs_file_may` allows, a write for O_TRUNC
+ * (`sysfs_open_acc`). -EACCES for another caller,
  * -ENOENT for a BAR without a length or a function that is not there,
  * -ENOMEM, or the descriptor's error. */
 static int procfs_open_pcibar(const struct vpath *vp, int flags)
@@ -7851,7 +7870,7 @@ static int procfs_open_pcibar(const struct vpath *vp, int flags)
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || !sysfs_file_may(0600, acc)) {
+    if (acc == 3 || !sysfs_file_may(0600, sysfs_open_acc(flags))) {
         return -EACCES;
     }
     if (!sysfs_pci_attr_present(vp->syskey, vp->procfile)) {
@@ -9465,7 +9484,7 @@ static int procfs_open_sysattr(int node, int key, int attr, int flags)
     int acc = flags & 3;
     int fd;
 
-    if (!sysfs_attr_may(node, key, attr, acc)) {
+    if (!sysfs_attr_may(node, key, attr, flags)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -10161,21 +10180,23 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
 }
 
 /**
- * Whether a read open of the file `vp` is refused for being a /sys file the
- * caller may not read: a private DMI attribute to an unprivileged caller,
- * or a registered attribute that `sysfs_attr_may` refuses, a write-only one
- * or one whose mode the caller may not read.
+ * Whether a read open of the file `vp`, with the flags `flags`, is refused
+ * for being a /sys file whose mode the caller may not read, or with
+ * O_TRUNC may not also write, as `sysfs_file_may` judges it: a fixed
+ * attribute by its mode (`sysfs_attr_mode`), so a private DMI one by
+ * 0400, and a registered attribute as `sysfs_attr_may` judges it, which
+ * also refuses a write-only one.
  */
-static int sysfs_read_refused(const struct vpath *vp)
+static int sysfs_read_refused(const struct vpath *vp, int flags)
 {
     if (vp->kind != VNODE_SYS_FILE) {
         return 0;
     }
-    if (sysfs_attr_private(vp->sysent, vp->procfile) && !proc_privileged(current_proc)) {
-        return 1;
+    if (vp->sysent == SYSFS_REG) {
+        return sysfs_node_kind(vp->syskey) == SYSFS_NODE_ATTR &&
+               !sysfs_attr_may(SYSFS_REG, vp->syskey, vp->procfile, flags & ~3);
     }
-    return vp->sysent == SYSFS_REG && sysfs_node_kind(vp->syskey) == SYSFS_NODE_ATTR &&
-           !sysfs_attr_may(SYSFS_REG, vp->syskey, vp->procfile, 0);
+    return !sysfs_file_may(sysfs_attr_mode(vp->sysent, vp->procfile), sysfs_open_acc(flags & ~3));
 }
 
 /**
@@ -10221,7 +10242,7 @@ int procfs_open(const struct vpath *vp, int flags)
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
-    if (sysfs_read_refused(vp)) {
+    if (sysfs_read_refused(vp, flags)) {
         return -EACCES;
     }
 

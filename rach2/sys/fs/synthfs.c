@@ -1048,6 +1048,11 @@ int sysfs_attr_private(int node, int attr)
                                     attr == DMI_BOARD_SERIAL || attr == DMI_CHASSIS_SERIAL);
 }
 
+uint32_t sysfs_attr_mode(int node, int attr)
+{
+    return sysfs_attr_writable(node, attr) ? 0644u : sysfs_attr_private(node, attr) ? 0400u : 0444u;
+}
+
 int sysfs_attr_uevent(int node, int attr)
 {
     const char *name = sysfs_attr(node, attr);
