@@ -9476,6 +9476,46 @@ static int32_t sysctl_num_write(fd_entry_t *e, int entry, const char __user *buf
 }
 
 /**
+ * Write the stable_secret of the net/ipv6/conf directory `dir`, `count`
+ * bytes at `buf`, as Linux 6.12's `addrconf_sysctl_stable_secret` takes
+ * them: -EIO for `all`, which has none; else the IPv6 address up to the
+ * first space or newline (`nd6_secret_set`), -EIO for text that is none,
+ * and for an empty write the secret's own text again, which is `::` while
+ * none is written, so that it becomes the secret. Returns `count`,
+ * -ENODEV for an interface gone, or -EFAULT.
+ */
+static int32_t sysctl_secret_write(const char *dir, const char __user *buf, uint32_t count)
+{
+    uint8_t secret[IP6_ADDR_LEN];
+    char text[65];
+    uint32_t n = count < 64u ? count : 64u, len = 0;
+    int which = sysctl_ipv6_which(dir), rc;
+
+    if (which == -ENODEV || which == ND6_CONF_ALL) {
+        return which == ND6_CONF_ALL ? -EIO : which;
+    }
+    if (count == 0) {
+        if (nd6_secret_get(which, secret) != 0) {
+            k_memset(secret, 0, sizeof(secret));
+        }
+        rc = nd6_secret_set(which, secret);
+        return rc != 0 ? rc : 0;
+    }
+    k_memset(text, 0, sizeof(text));
+    if (copy_from_user(text, buf, n) != 0) {
+        return -EFAULT;
+    }
+    while (len < n && text[len] != '\n' && text[len] != ' ' && text[len] != '\0') {
+        len++;
+    }
+    if (ip6_parse(text, len, secret) != 0) {
+        return -EIO;
+    }
+    rc = nd6_secret_set(which, secret);
+    return rc != 0 ? rc : (int32_t)count;
+}
+
+/**
  * Write a /proc/sys file, as Linux's sysctl handlers take one.
  *
  * An empty write changes nothing and returns 0 (`_proc_do_string` and the
@@ -9483,9 +9523,8 @@ static int32_t sysctl_num_write(fd_entry_t *e, int entry, const char __user *buf
  * except what `sysctl_num_kept` names for a numeric file.
  * kernel/hostname and kernel/domainname become the text up to its first
  * newline, at most 64 bytes, as sethostname(2) and setdomainname(2) would
- * set them; the whole count is taken. net/ipv6/conf's stable_secret takes
- * an IPv6 address up to the first space or newline (`nd6_secret_set`),
- * -EINVAL for text that is none. Any other file is a number, which
+ * set them; the whole count is taken. net/ipv6/conf's stable_secret is
+ * `sysctl_secret_write`'s. Any other file is a number, which
  * `sysctl_num_write` takes as the file's handler does, and which a file of
  * `sysctl_ints` stores in its owner's variable, which the owner reads at
  * its next use. To net/ipv4/ip_forward 0, its value, is taken, and any
@@ -9499,12 +9538,14 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     char text[65];
     uint32_t n = count < 64u ? count : 64u;
     uint32_t len = 0;
-    int rc;
     const char *dir;
     int key;
 
     if (sysctl_numeric(f->origin_pid)) {
         return sysctl_num_write(e, f->origin_pid, buf, count);
+    }
+    if (synth_sys_ipv6(f->origin_pid, &dir, &key) && key == SYNTH_IPV6_STABLE_SECRET) {
+        return sysctl_secret_write(dir, buf, count);
     }
     if (count == 0) {
         return 0;
@@ -9523,22 +9564,6 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
             uts_set_domainname(text, len);
         }
         return (int32_t)count;
-    }
-    if (synth_sys_ipv6(f->origin_pid, &dir, &key) && key == SYNTH_IPV6_STABLE_SECRET) {
-        uint8_t secret[IP6_ADDR_LEN];
-        int which = sysctl_ipv6_which(dir);
-
-        while (len < n && text[len] != '\n' && text[len] != ' ' && text[len] != '\0') {
-            len++;
-        }
-        if (which == -ENODEV) {
-            return which;
-        }
-        if (ip6_parse(text, len, secret) != 0) {
-            return -EINVAL;
-        }
-        rc = nd6_secret_set(which, secret);
-        return rc != 0 ? rc : (int32_t)count;
     }
     return -EINVAL;
 }

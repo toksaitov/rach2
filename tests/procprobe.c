@@ -89,6 +89,7 @@
 #define O_WRONLY     1
 #define O_TRUNC      01000
 #define EINVAL       22
+#define EIO          5
 #define ECONNREFUSED 111
 #define SIGKILL      9
 #define ESRCH        3
@@ -270,6 +271,7 @@ static const struct row {
             {"sysctl-ulong-sign", ROW_PLAIN},
             {"sysctl-ranges", ROW_PLAIN},
             {"sysctl-forwarding-kept", ROW_PLAIN},
+            {"sysctl-secret-refuse", ROW_PLAIN},
             {"loop-drain-time", ROW_PLAIN},
             {"loop-drain-rest", ROW_PLAIN},
             {"rtc-open", ROW_PLAIN},
@@ -1680,6 +1682,11 @@ static void sysctl_handler_rows(void)
           sysctl_tries(sysctl_forwarding, SYSCTL_TRIES(sysctl_forwarding)),
           "a refused number written to ipv6's forwarding returns the whole count and changes "
           "nothing, as addrconf_sysctl_forward does");
+    check("sysctl-secret-refuse",
+          write_file("/proc/sys/net/ipv6/conf/all/stable_secret", "::1\n", 4) == -EIO &&
+              write_file("/proc/sys/net/ipv6/conf/default/stable_secret", "zz\n", 3) == -EIO,
+          "ipv6's stable_secret refuses a write to all and text that is no address with EIO, as "
+          "addrconf_sysctl_stable_secret does");
 }
 
 /**

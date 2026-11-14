@@ -1391,8 +1391,8 @@ its addresses again;
 0, which when not 0 makes the interface answer as a router and solicit none;
 .Pa ra_defrtr_metric ,
 1024, the metric of the default route each router's advertisement gives,
-from 1 to 4294967295, which a write sets on the routes already learned as well as on
-the next, where Linux waits for the next advertisement;
+from 1 to 4294967295, which a write sets on the routes already learned as
+well as on the next, where Linux waits for the next advertisement;
 .Pa use_tempaddr ,
 0, which above 0 makes a temporary address beside each made from a
 router's prefix and at 2 prefers it as a source; and
@@ -1404,7 +1404,11 @@ when it has none,
 which a read fails with
 .Er EIO
 while none is written, and always for
-.Ql all ;
+.Ql all ,
+as does a write of text that is no address, and which an empty write
+sets to the text it reads,
+.Ql ::
+while none is written, as on Linux;
 with none, the identifier is made from the station address.
 Each but
 .Pa ra_defrtr_metric
