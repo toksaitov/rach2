@@ -77,6 +77,18 @@ uint32_t pit_period_us(void);
 #define PIT_COUNTS_PER_SEC (2u * 1193182u)
 
 /**
+ * Write `command` to the 8254's command port and read `n` bytes of what it
+ * latched from channel 0 into `bytes`, as one operation that no other
+ * processor's latch of channel 0 interleaves: the latch is held across
+ * processors, with interrupts off, as Linux's i8253_lock is. Returns 1, or
+ * 0, with nothing written or read, when the latch stayed held for every try,
+ * as when its holder was stopped inside; the caller then has no reading.
+ * Safe in an NMI handler and with the other processors stopped. Defined in
+ * udelay.c.
+ */
+int pit_latch(uint8_t command, uint8_t *bytes, int n);
+
+/**
  * Sample channel 0 until its count has fallen by `counts` at least, and
  * return the counts it fell from the first sample to the last, which a
  * measurement divides by PIT_COUNTS_PER_SEC. A sweep of the counter that

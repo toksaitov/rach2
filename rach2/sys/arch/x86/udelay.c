@@ -14,7 +14,9 @@
  * Channel 0 is the one the tick already programmed. Reading it with a
  * latch command samples the count without changing it, so this neither
  * disturbs the tick nor needs interrupts, which matters because most callers
- * run during boot with interrupts off.
+ * run during boot with interrupts off. The latch and its reads are one
+ * operation on a chip all processors share, so every reader of channel 0
+ * goes through `pit_latch`, which serializes them.
  *
  * The mode matters to the arithmetic. `init_pit` writes control byte 0x36,
  * which selects mode 3, the square wave generator, and in mode 3 the counter
@@ -26,6 +28,7 @@
  */
 
 #include "portio.h"
+#include "../arch.h"
 #include "../../udelay.h"
 #include "../../kio.h"
 #include "../../lib/kirq.h"
@@ -58,27 +61,64 @@
  * clock. */
 uint32_t (*udelay_wait)(uint32_t usec);
 
-/**
- * Sample channel 0's current count without disturbing it.
- *
- * The latch and the two reads are one operation and run with interrupts
- * off. The tick's clock and the USB handler's stamps latch this counter too,
- * and a handler that ran between the latch here and the reads would consume
- * the latch, leaving the reads to return the live count a byte at a time:
- * a low byte from before a borrow and a high byte from after it reads as a
- * count below the last sample by a whole 256, the drop is overcounted by
- * that much, and the wait ends early.
+/*
+ * 1 while a processor is inside a latch of channel 0 (`pit_latch`), else 0.
+ * It is taken by exchange with interrupts off and without the lock checker,
+ * as Linux's i8253_lock is a raw spinlock, since a processor that stops the
+ * others, or one in an NMI handler, may delay on the 8254.
  */
-static uint16_t pit_count(void)
-{
-    uint32_t flags = kirq_save();
-    uint8_t lo, hi;
+static volatile unsigned int latch_held;
 
-    outb(0x43, 0x00); /* latch channel 0 */
-    lo = inb(0x40);
-    hi = inb(0x40);
+/*
+ * The tries `pit_latch` makes at a held latch before it gives up. A holder
+ * keeps it for one command and three reads at most; only one that was
+ * stopped inside, by the NMI that stops the processors or by one this
+ * processor is handling on top of it, keeps it for this long.
+ */
+#define PIT_LATCH_TRIES 100000u
+
+int pit_latch(uint8_t command, uint8_t *bytes, int n)
+{
+    uint32_t flags = kirq_save(), tries = 0;
+    int i;
+
+    while (arch_atomic_xchg(&latch_held, 1u) != 0) {
+        if (++tries == PIT_LATCH_TRIES) {
+            kirq_restore(flags);
+            return 0;
+        }
+        arch_relax();
+    }
+    outb(0x43, command);
+    for (i = 0; i < n; i++) {
+        bytes[i] = inb(0x40);
+    }
+    (void)arch_atomic_xchg(&latch_held, 0u);
     kirq_restore(flags);
-    return (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+    return 1;
+}
+
+/**
+ * Sample channel 0's current count into `*count` without disturbing it:
+ * 1, or 0 when the latch could not be had (`pit_latch`).
+ *
+ * The latch and the two reads are one operation, under `pit_latch`. The
+ * tick's clock latches this counter too, and a handler on this processor,
+ * or another processor, that latched it between the latch here and the
+ * reads would consume the latch, leaving the reads to return the live
+ * count a byte at a time: a low byte from before a borrow and a high byte
+ * from after it reads as a count below the last sample by a whole 256, the
+ * drop is overcounted by that much, and the wait ends early.
+ */
+static int pit_count(uint16_t *count)
+{
+    uint8_t b[2];
+
+    if (!pit_latch(0x00, b, 2)) {
+        return 0;
+    }
+    *count = (uint16_t)((uint16_t)b[0] | ((uint16_t)b[1] << 8));
+    return 1;
 }
 
 /**
@@ -86,16 +126,23 @@ static uint16_t pit_count(void)
  * when the counter has reloaded since the last sample the drop is taken around
  * the reload value instead. Sampling faster than the counter moves is
  * harmless, since a zero drop adds nothing. A counter that does not move for
- * PIT_STALL_SAMPLES samples ends the wait, which then returns 0.
+ * PIT_STALL_SAMPLES samples, or a sample that cannot be taken, ends the
+ * wait, which then returns 0.
  */
 uint32_t pit_wait_counts(uint32_t counts)
 {
     uint32_t seen = 0, still = 0;
-    uint16_t prev = pit_count();
+    uint16_t prev, now;
 
+    if (!pit_count(&prev)) {
+        return 0;
+    }
     while (seen < counts) {
-        uint16_t now = pit_count();
         uint32_t step;
+
+        if (!pit_count(&now)) {
+            return 0;
+        }
 
         if (now <= prev) {
             step = (uint32_t)(prev - now);

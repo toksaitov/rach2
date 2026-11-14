@@ -3,7 +3,7 @@
  * timer and against the 8254, and the TSC's against the same two, with the
  * processor stopped at any point of the measurement.
  *
- * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  *
  * The sources are included whole: `refclock.c`, `pit.c`, `udelay.c` and
  * `apictimer.c`, so that a row can start each calibration afresh. The
@@ -28,8 +28,9 @@
  * held, the rate of those after. Other rows check that a scale past 32
  * bits gives all ones, that a reference that stops gives no calibration,
  * when the TSC is measured at all, that `k_udelay` on a TSC that stops
- * ends and finishes on the PM timer or the 8254, and returns what the
- * counters measured (`tsc_wait_rows`), and that the clock follows KVM's clock
+ * ends and finishes on the PM timer, the 8254, or the 8254 after a PM
+ * timer that stops too, and returns what the counters measured
+ * (`tsc_wait_rows`), and that the clock follows KVM's clock
  * pages (`kvm_rows`), with their stable bit and without it, whose time a
  * processor with a TSC ahead, a stop of the processor or a tick a minute
  * late does not move, with a platform counter and without one, and that
@@ -101,7 +102,7 @@ static int nmarks, marking;
 static uint32_t pm_base;
 static int pm_frozen;
 static uint32_t pm_frozen_value;
-static uint16_t pit_latch;
+static uint16_t pit_latched;
 static int pit_status = -1;
 static int pit_byte;
 static uint64_t apic_start_ns;
@@ -247,7 +248,7 @@ void outb(uint16_t port, uint8_t val)
 {
     elapse();
     CHECK(port == 0x43 && (val == 0x00 || val == 0xC2), "the 8254 is only latched or read back");
-    pit_latch = pit_live();
+    pit_latched = pit_live();
     pit_status = -1;
     if (val == 0xC2) {
         pit_status = 0x36 | ((pit_fallen() / pit_reload) % 2u == 0 ? 0x80 : 0x00);
@@ -268,7 +269,7 @@ uint8_t inb(uint16_t port)
         pit_status = -1;
         return status;
     }
-    return pit_byte++ == 0 ? (uint8_t)(pit_latch & 0xFFu) : (uint8_t)(pit_latch >> 8);
+    return pit_byte++ == 0 ? (uint8_t)(pit_latched & 0xFFu) : (uint8_t)(pit_latched >> 8);
 }
 
 /** Start the APIC timer: one-shot and masked is all a calibration asks; the
@@ -1233,9 +1234,9 @@ static uint32_t tsc_stop_wait(uint64_t *gone)
  * `k_udelay` on the TSC: a wait as long as asked while the TSC runs, and one
  * that leaves the TSC after TSC_STALL_READS reads once it stops, which would
  * otherwise spin for good with interrupts off, and finishes on the PM timer,
- * or the 8254 where there is none; with the 8254 stopped too, it returns what
- * the TSC measured, which is less than asked and no more than the time that
- * passed. The model put back.
+ * or the 8254 where there is none or where it stands still too; with the
+ * 8254 stopped too, it returns what the TSC measured, which is less than
+ * asked and no more than the time that passed. The model put back.
  */
 static void tsc_wait_rows(void)
 {
@@ -1276,6 +1277,11 @@ static void tsc_wait_rows(void)
           "and with the 8254 stopped too, the wait returns the TSC's part, at most the time "
           "that passed");
     reference(1);
+    pm_frozen = 1;
+    got = tsc_stop_wait(&gone);
+    pm_frozen = 0;
+    CHECK(got == 4000u && gone >= 4000000u,
+          "with the PM timer there but standing still, the 8254 waits what it left");
     tsc_per_tick = saved_per_tick;
     udelay_wait = saved_wait;
 }

@@ -352,6 +352,21 @@ uint32_t pit_wait_counts(uint32_t counts)
     return 0;
 }
 
+/** Channel 0's latch as udelay.c gives it, on the one processor of the
+ * rows: the command and the reads, with interrupts off. */
+int pit_latch(uint8_t command, uint8_t *bytes, int n)
+{
+    uint32_t flags = kirq_save();
+    int i;
+
+    outb(0x43, command);
+    for (i = 0; i < n; i++) {
+        bytes[i] = inb(0x40);
+    }
+    kirq_restore(flags);
+    return 1;
+}
+
 /* The wait pit.c gives `k_udelay` once the TSC keeps the clock, which no row
  * reaches. */
 uint32_t (*udelay_wait)(uint32_t usec);

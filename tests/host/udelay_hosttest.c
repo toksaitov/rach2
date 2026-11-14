@@ -18,6 +18,15 @@
  * larger drop than the counter made and end early. With the sample taken
  * with interrupts off the handler cannot run between the latch and the
  * reads, and the wait takes its full time whatever is armed.
+ *
+ * host-deps: tests/host/compat/atomic_host.c
+ *
+ * Interrupts off do not keep out another processor, which latches channel 0
+ * as it delays too. The model runs one whenever a latch is pending at a read
+ * and `pit_latch`'s lock is free, as it would be with no lock, with the same
+ * torn reads; with the lock it waits until the wait's reads are done. A
+ * latch whose holder was stopped inside it ends the wait at once, with 0
+ * measured and the chip untouched, where spinning on it would never end.
  */
 
 #include "../../rach2/sys/arch/x86/udelay.c"
@@ -47,6 +56,12 @@ static int irq_off;
 static int reads_with_irq_on;
 static int handler_armed;
 static int tears;
+/* Another processor that latches channel 0 when it can, and the spins at a
+ * held latch. */
+static int rival_armed;
+static unsigned long spins;
+/* The port accesses made. */
+static unsigned long accesses;
 
 /** Move the counter down `counts` counts, reloading it at zero; every port
  * access costs three. */
@@ -82,6 +97,7 @@ void kirq_restore(uint32_t flags)
  * channel 0. */
 void outb(uint16_t port, uint8_t val)
 {
+    accesses++;
     counter_runs(3);
     if (port == 0x43 && val == 0x00) {
         latch_pending = 1;
@@ -98,6 +114,12 @@ uint8_t inb(uint16_t port)
 
     if (port != 0x40) {
         return 0;
+    }
+    accesses++;
+    if (rival_armed && latch_pending && latch_held == 0) {
+        /* The other processor's latch and reads, consuming the wait's. */
+        latch_pending = 0;
+        tears++;
     }
     if (!irq_off) {
         reads_with_irq_on++;
@@ -128,8 +150,14 @@ uint8_t inb(uint16_t port)
     return value;
 }
 
+/** A spin at a held latch, counted. */
+void arch_relax(void)
+{
+    spins++;
+}
+
 /** Reset the model with the counter at `start`, interrupts on and no
- * handler armed. */
+ * handler or other processor armed. */
 static void model_reset(uint32_t start)
 {
     live = start;
@@ -140,6 +168,9 @@ static void model_reset(uint32_t start)
     reads_with_irq_on = 0;
     handler_armed = 0;
     tears = 0;
+    rival_armed = 0;
+    spins = 0;
+    accesses = 0;
 }
 
 /** The counts a wait of `usec` must let pass, as the wait computes them. */
@@ -154,7 +185,10 @@ static uint32_t counts_for(uint32_t usec)
  * With no handler armed a wait lets its counts pass and few more, across the
  * reload too, and takes every sample of the counter with interrupts off.
  * With the handler armed no sample is torn and the wait takes its full time,
- * and so does a wait longer than one pass of the counter.
+ * and so does a wait longer than one pass of the counter. With another
+ * processor latching the counter beside the wait, with interrupts off, no
+ * sample is torn either; and a latch held by a processor stopped inside it
+ * ends the wait with 0 after PIT_LATCH_TRIES tries, touching no port.
  */
 int main(void)
 {
@@ -182,6 +216,23 @@ int main(void)
     handler_armed = 1;
     k_udelay(5000u);
     CHECK("a long wait takes its full time as well", descended >= counts_for(5000u));
+
+    /* Another processor latching beside the wait. */
+    model_reset(9000u);
+    irq_off = 1;
+    rival_armed = 1;
+    k_udelay(2000u);
+    CHECK("another processor's latch cannot tear a sample", tears == 0);
+    CHECK("and the wait beside it takes its full time", descended >= counts_for(2000u));
+
+    /* A latch whose holder was stopped inside it. */
+    model_reset(9000u);
+    latch_held = 1;
+    CHECK("a latch held by a stopped processor ends the wait with 0 measured",
+          k_udelay_measured(1000u) == 0u);
+    CHECK("after PIT_LATCH_TRIES tries, with no port touched",
+          spins == PIT_LATCH_TRIES - 1u && accesses == 0);
+    latch_held = 0;
 
     if (fails == 0) {
         printf("udelay_hosttest: ok\n");

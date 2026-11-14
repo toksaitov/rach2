@@ -338,13 +338,16 @@ static uint64_t tsc_now(void)
 #define TSC_STALL_READS 100000u
 
 /**
- * Wait `usec` microseconds on a counter apart from the TSC: the HPET or the
- * PM timer where the platform found one, else the 8254's channel 0. The
- * microseconds that counter measured, `usec` unless it stops too.
+ * Wait `usec` microseconds on the counters apart from the TSC, each taking
+ * the part the one before it did not measure: the HPET or the PM timer,
+ * whichever the platform found, then the 8254's channel 0. The microseconds
+ * they measured together, `usec` while either runs.
  */
 static uint32_t tsc_other_wait_us(uint32_t usec)
 {
-    return refclock_name() ? refclock_wait_us(usec) : pit_wait_us(usec);
+    uint32_t done = refclock_wait_us(usec);
+
+    return done < usec ? done + pit_wait_us(usec - done) : done;
 }
 
 /**
@@ -352,12 +355,12 @@ static uint32_t tsc_other_wait_us(uint32_t usec)
  * step stay inside 32 bits at any rate below 42 GHz; each step waits the
  * counts that cover it at least. `k_udelay`'s wait once the TSC is the
  * reference, as Linux's `delay_tsc`. A TSC that stops for TSC_STALL_READS
- * reads hands what is left of the wait to another counter
+ * reads hands what is left of the wait to the other counters in turn
  * (`tsc_other_wait_us`), so that a caller with interrupts off neither spins
- * for good nor returns early.
+ * for good nor returns early while any of them runs.
  *
- * @return the microseconds waited: `usec` while the TSC or the other counter
- * runs, else what the two measured, the TSC's part of its last step in the
+ * @return the microseconds waited: `usec` while the TSC or another counter
+ * runs, else what they measured, the TSC's part of its last step in the
  * whole microseconds of its counts but one.
  */
 static uint32_t tsc_wait_us(uint32_t usec)
@@ -858,15 +861,18 @@ static uint32_t pit_phase_from(uint32_t count, uint8_t status)
     return phase;
 }
 
+/* The phase `pit_phase_us` read last, which it gives again when it cannot
+ * have the latch. */
+static uint32_t phase_last;
+
 uint32_t pit_phase_us(void)
 {
-    uint8_t status, lo, hi;
+    uint8_t b[3];
 
-    outb(0x43, 0xC2); /* latch channel 0 status and count together */
-    status = inb(0x40);
-    lo = inb(0x40);
-    hi = inb(0x40);
-    return pit_phase_from(((uint32_t)hi << 8) | (uint32_t)lo, status);
+    if (pit_latch(0xC2, b, 3)) { /* latch channel 0 status and count together */
+        phase_last = pit_phase_from(((uint32_t)b[2] << 8) | (uint32_t)b[1], b[0]);
+    }
+    return phase_last;
 }
 
 /**
@@ -1116,7 +1122,7 @@ void timer_phase(int *pending, uint32_t *phase_ns)
 /**
  * Read channel 0 until its count changes, a few thousand times at most. A
  * counting 8254 moves between two readings; an absent one reads 0xFFFF
- * every time.
+ * every time. A latch that cannot be had ends the probe with what it read.
  */
 int pit_probe(void)
 {
@@ -1125,12 +1131,12 @@ int pit_probe(void)
     int i;
 
     for (i = 0; i < 4096; i++) {
-        uint8_t lo, hi;
+        uint8_t b[2];
 
-        outb(0x43, 0x00); /* latch channel 0 */
-        lo = inb(0x40);
-        hi = inb(0x40);
-        now = (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+        if (!pit_latch(0x00, b, 2)) {
+            break;
+        }
+        now = (uint16_t)((uint16_t)b[0] | ((uint16_t)b[1] << 8));
         if (i == 0) {
             first = now;
         } else if (now != first) {

@@ -26,9 +26,10 @@ void k_udelay(uint32_t usec);
 /**
  * Wait as `k_udelay` does, and return the microseconds the counters
  * measured: `usec` when the wait lasted it, which it does while any counter
- * runs, since a wait on the TSC that finds it stopped finishes on the HPET,
- * the PM timer or the 8254; less only when every counter stopped, and then
- * no more than the time that passed. A caller that bounds a wait by time
+ * runs, since a wait on the TSC that finds it stopped finishes on the HPET
+ * or the PM timer, and what that leaves on the 8254; less only when every
+ * counter stopped, or the 8254's latch stayed held, and then no more than
+ * the time that passed. A caller that bounds a wait by time
  * counts this, not `usec`.
  */
 uint32_t k_udelay_measured(uint32_t usec);
