@@ -2845,7 +2845,7 @@
         {"assertion_id": "net-class-address", "checks": "its address is lowercase, as Linux writes it, with QEMU's prefix 52:54:00", "source": "program"},
         {"assertion_id": "net-class-mtu", "checks": "its MTU is 1500", "source": "program"},
         {"assertion_id": "net-class-statistics", "checks": "its statistics count packets", "source": "program"},
-        {"assertion_id": "net-class-device", "checks": "its device link leads to its PCI function", "source": "program"},
+        {"assertion_id": "net-class-device", "checks": "its device link leads to its PCI function, or for a virtio network device to the virtio device below that function, as Linux's does", "source": "program"},
         {"assertion_id": "pool-fork", "checks": "fork makes a child that opens eight listeners", "source": "program"},
         {"assertion_id": "pool-listeners", "checks": "the probe opens its own eight listeners", "source": "program"},
         {"assertion_id": "pool-tcp-reads", "checks": "/proc/net/tcp reads with the sixteen listeners open", "source": "program"},

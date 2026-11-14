@@ -12,18 +12,21 @@
  *   files read -1 and "unknown" without it.
  * * `bus`: the first device of /sys/bus/virtio/devices whose `device` reads
  *   0x0001, a network device, has a `driver` link whose last name is
- *   `virtio_net`, as Linux's.
+ *   `virtio_net`, as Linux's, and the interface's `device` link leads to
+ *   that device below its PCI function,
+ *   ../../../devices/pci0000:00/0000:BB:DD.F/virtioN, the parent Linux
+ *   gives a virtio interface, with the virtio device's files through it.
  * * `ping`: a ping to the gateway gets a reply.
  * * `unbind`: the device's PCI function, the name above it in the link
  *   /sys/bus/virtio/devices/virtioN, written to
  *   /sys/bus/pci/drivers/virtio-pci/unbind, takes the device off the bus:
  *   no network device is left there.
  * * `no-carrier`: the interface stays, as the kernel keeps every interface
- *   it made at boot, with `carrier` reading 0, and a ping to the gateway
- *   fails.
+ *   it made at boot, with `carrier` reading 0 and no `device` link, and a
+ *   ping to the gateway fails.
  * * `bind`: the function's name written to /sys/bus/pci/drivers/virtio-pci/
- *   bind brings the device back on the bus with its `driver` link, and the
- *   interface's `carrier` reads 1.
+ *   bind brings the device back on the bus with its `driver` link, the
+ *   interface's `carrier` reads 1 and its `device` link leads to the device.
  * * `ping-again`: a ping to the gateway gets a reply over the device bound
  *   again.
  *
@@ -245,6 +248,50 @@ static int function_of(const char *name, char *out, size_t cap)
     return length(out) == 12;
 }
 
+/** Read the `device` link of the interface `ifname` into `to` of `cap`
+ * bytes as a string, and give its path in `path` of `pathcap` bytes: the
+ * link's length, or a negative number when the interface has none. */
+static long parent_link(const char *ifname, char *path, size_t pathcap, char *to, size_t cap)
+{
+    char inner[64];
+    long n;
+
+    join(inner, sizeof(inner), ifname, "/device", "");
+    join(path, pathcap, "/sys/class/net/", inner, "");
+    n = syscall3(SYS_READLINK, (long)path, (long)to, (long)cap - 1);
+    to[n > 0 ? n : 0] = '\0';
+    return n;
+}
+
+/**
+ * Whether the interface `ifname` has the virtio device `name` as its
+ * parent, as Linux's has: its `device` link reads
+ * ../../../devices/pci0000:00/FUNCTION/NAME, the device below its PCI
+ * function, and the device's own `device` file, 0x0001, is read through
+ * the link.
+ */
+static int parented(const char *ifname, const char *name)
+{
+    char path[96], file[112], to[160], want[160], function[16], below[64], id[16];
+
+    if (parent_link(ifname, path, sizeof(path), to, sizeof(to)) <= 0 ||
+        !function_of(name, function, sizeof(function))) {
+        return 0;
+    }
+    join(below, sizeof(below), function, "/", name);
+    join(want, sizeof(want), "../../../devices/pci0000:00/", below, "");
+    read_text(join(file, sizeof(file), path, "/device", ""), id, sizeof(id));
+    return same(to, want) && same(id, "0x0001");
+}
+
+/** Whether the interface `ifname` has no `device` link. */
+static int orphan(const char *ifname)
+{
+    char path[96], to[160];
+
+    return parent_link(ifname, path, sizeof(path), to, sizeof(to)) < 0;
+}
+
 /** Ping `ip`: the round-trip time in ticks, or a negated errno. */
 static int ping(uint32_t ip)
 {
@@ -314,13 +361,14 @@ static void rebind(const char *name, const char *ifname, uint32_t gateway)
         report_notrun("ping-again", "the device was not unbound");
         return;
     }
-    check("no-carrier", link_file(ifname, "carrier", "0") && ping(gateway) < 0,
-          "the unbound device's interface kept its carrier or a ping got a reply");
+    check("no-carrier", link_file(ifname, "carrier", "0") && orphan(ifname) && ping(gateway) < 0,
+          "the unbound device's interface kept its carrier or its device link, or a ping got a "
+          "reply");
     gone = !(write_text(DRIVERS "bind", function) && find_device(again, sizeof(again)) &&
-             driven(again) && link_file(ifname, "carrier", "1"));
+             driven(again) && link_file(ifname, "carrier", "1") && parented(ifname, again));
     check("bind", !gone,
           "the write of the function's name to bind did not bring back the device, "
-          "its driver and the interface's carrier");
+          "its driver, the interface's carrier and its device link");
     if (gone) {
         report_notrun("ping-again", "the device was not bound again");
         return;
@@ -352,8 +400,9 @@ void probe_main(unsigned long *sp)
               link_file(ifname, "mtu", probe_arg("mtu", "1500")),
           "the interface's carrier, speed, duplex or mtu file does not read as the device says");
     found = find_device(name, sizeof(name));
-    check("bus", found && driven(name),
-          "no network device of the virtio bus has a driver link to virtio_net");
+    check("bus", found && driven(name) && parented(ifname, name),
+          "no network device of the virtio bus has a driver link to virtio_net, or the "
+          "interface's device link does not lead to it");
     check("ping", ping(gateway) >= 0, "a ping to the gateway got no reply");
     if (found) {
         rebind(name, ifname, gateway);

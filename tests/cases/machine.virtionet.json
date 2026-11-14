@@ -113,7 +113,7 @@
         },
         {
           "assertion_id": "bus",
-          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net",
+          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net, and the interface's device link leads to that device below its PCI function, as Linux's does",
           "source": "scenario"
         },
         {
@@ -128,12 +128,12 @@
         },
         {
           "assertion_id": "no-carrier",
-          "checks": "the interface stays with its carrier reading 0, and a ping to the gateway fails",
+          "checks": "the interface stays with its carrier reading 0 and no device link, and a ping to the gateway fails",
           "source": "scenario"
         },
         {
           "assertion_id": "bind",
-          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, and the interface's carrier reads 1",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, the interface's carrier reads 1 and its device link leads to the device",
           "source": "scenario"
         },
         {
@@ -329,7 +329,7 @@
         },
         {
           "assertion_id": "bus",
-          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net",
+          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net, and the interface's device link leads to that device below its PCI function, as Linux's does",
           "source": "scenario"
         },
         {
@@ -344,12 +344,12 @@
         },
         {
           "assertion_id": "no-carrier",
-          "checks": "the interface stays with its carrier reading 0, and a ping to the gateway fails",
+          "checks": "the interface stays with its carrier reading 0 and no device link, and a ping to the gateway fails",
           "source": "scenario"
         },
         {
           "assertion_id": "bind",
-          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, and the interface's carrier reads 1",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, the interface's carrier reads 1 and its device link leads to the device",
           "source": "scenario"
         },
         {
@@ -537,7 +537,7 @@
         },
         {
           "assertion_id": "bus",
-          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net",
+          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net, and the interface's device link leads to that device below its PCI function, as Linux's does",
           "source": "scenario"
         },
         {
@@ -552,12 +552,12 @@
         },
         {
           "assertion_id": "no-carrier",
-          "checks": "the interface stays with its carrier reading 0, and a ping to the gateway fails",
+          "checks": "the interface stays with its carrier reading 0 and no device link, and a ping to the gateway fails",
           "source": "scenario"
         },
         {
           "assertion_id": "bind",
-          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, and the interface's carrier reads 1",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, the interface's carrier reads 1 and its device link leads to the device",
           "source": "scenario"
         },
         {
@@ -743,7 +743,7 @@
         },
         {
           "assertion_id": "bus",
-          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net",
+          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net, and the interface's device link leads to that device below its PCI function, as Linux's does",
           "source": "scenario"
         },
         {
@@ -758,12 +758,12 @@
         },
         {
           "assertion_id": "no-carrier",
-          "checks": "the interface stays with its carrier reading 0, and a ping to the gateway fails",
+          "checks": "the interface stays with its carrier reading 0 and no device link, and a ping to the gateway fails",
           "source": "scenario"
         },
         {
           "assertion_id": "bind",
-          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, and the interface's carrier reads 1",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, the interface's carrier reads 1 and its device link leads to the device",
           "source": "scenario"
         },
         {

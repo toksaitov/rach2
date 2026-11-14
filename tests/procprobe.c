@@ -2558,9 +2558,55 @@ static int lowercase_mac(const char *b)
     return 1;
 }
 
+/**
+ * Whether the `n` bytes at `link`, an interface's `device` link, lead to
+ * the parent Linux gives the interface: a PCI card's function,
+ * ../../../devices/pci0000:00/0000:BB:DD.F, on bus 0 unless the probe is
+ * native; or, for a virtio network device, whose function's vendor reads
+ * 0x1af4, the virtio device below that function, 0000:BB:DD.F/virtioN, as
+ * Linux's virtnet_probe sets it.
+ */
+static int net_parent(const char *link, int n)
+{
+    static const char head[] = "../../../devices/pci0000:00/";
+    static const char dir[] = "/sys/bus/pci/devices/";
+    static const char child[] = "/virtio";
+    static char vendor[48], id[16];
+    int at = (int)sizeof(head) - 1, k = 0, i, got, virtio;
+
+    if (n < at + 12 || !contains(link, at, head) ||
+        !contains(link + at, 8, probe_native() ? "0000:" : "0000:00:")) {
+        return 0;
+    }
+    for (i = 0; dir[i] != '\0'; i++) {
+        vendor[k++] = dir[i];
+    }
+    for (i = 0; i < 12; i++) {
+        vendor[k++] = link[at + i];
+    }
+    for (i = 0; i < 8; i++) {
+        vendor[k++] = "/vendor"[i];
+    }
+    got = slurp(vendor, id, (int)sizeof(id));
+    virtio = got >= 6 && contains(id, 6, "0x1af4");
+    at += 12;
+    if (!virtio) {
+        return n == at;
+    }
+    for (i = 0; child[i] != '\0'; i++, at++) {
+        if (at >= n || link[at] != child[i]) {
+            return 0;
+        }
+    }
+    for (i = at; i < n && link[i] >= '0' && link[i] <= '9'; i++) {
+    }
+    return i > at && i == n;
+}
+
 /** /sys/class/net: the card's interface listed, its address in Linux's
  * lowercase form with QEMU's prefix, its MTU, a counter of its statistics,
- * and its device link leading to its PCI function. */
+ * and its device link leading to its PCI function, or for a virtio device
+ * to the virtio device below the function. */
 static void net_class_rows(void)
 {
     static char names[256];
@@ -2591,11 +2637,9 @@ static void net_class_rows(void)
     check("net-class-statistics", n > 1 && buf[0] >= '0' && buf[0] <= '9',
           "its statistics count packets");
     n = syscall3(SYS_READLINK, (long)class_path("device"), (long)link, (int)sizeof(link) - 1);
-    check("net-class-device",
-          n > 0 && contains(link, n,
-                            probe_native() ? "../../../devices/pci0000:00/0000:"
-                                           : "../../../devices/pci0000:00/0000:00:"),
-          "and its device link leads to its PCI function");
+    check("net-class-device", n > 0 && net_parent(link, n),
+          "and its device link leads to its PCI function, or for a virtio device to the virtio "
+          "device below it");
 }
 
 /** Where the first line beginning with `head` starts, or -1. */
