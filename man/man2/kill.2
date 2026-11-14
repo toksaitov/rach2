@@ -1,4 +1,4 @@
-.Dd November 12, 2026
+.Dd November 14, 2026
 .Dt KILL 2
 .Os
 .Sh NAME
@@ -117,6 +117,10 @@ thread ID, and a signal; the thread must belong to that process.
 Zero and negative IDs are errors in these calls, never group selectors.
 Their permission and signal rules are those of
 .Fn kill .
+A thread that has ended is still found, and discards the signal, while
+Linux keeps its ID: a process's leading thread until the process is
+reaped, and a traced thread until its tracer's wait.
+Any other thread that has ended is gone.
 .Pp
 The i386 system call numbers are 37 for
 .Nm kill ,
@@ -165,7 +169,7 @@ A
 of \-1 never returns this error.
 .It Bq Er ESRCH
 No selected process exists, the selected group has no members, the
-thread has ended, or
+thread has ended and neither leads its process nor is traced, or
 .Nm tgkill
 was given a thread that does not belong to the process.
 .Fn kill

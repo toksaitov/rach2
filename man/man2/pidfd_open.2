@@ -54,37 +54,57 @@ names it
 .Fn pidfd_send_signal
 sends
 .Fa sig
-to the process, as
+under the permission of
+.Xr kill 2 ,
+where
+.Fa flags
+says, which is 0 or one of:
+.Bl -tag -width "PIDFD_SIGNAL_PROCESS_GROUP"
+.It Dv PIDFD_SIGNAL_THREAD
+the thread that leads the process alone, as
+.Xr tgkill 2
+sends it;
+.It Dv PIDFD_SIGNAL_THREAD_GROUP
+the process, as
 .Xr kill 2
-sends it to a process ID, under the same permission.
+sends it to a process ID, which 0 also does;
+.It Dv PIDFD_SIGNAL_PROCESS_GROUP
+each member of the process group whose ID is the process's, as
+.Xr kill 2
+sends it to the negated ID, even once the process has been reaped.
+.El
+.Pp
 A null
 .Fa info
 gives the receiver
 .Xr kill 2 Ns 's
-siginfo; otherwise
+siginfo,
+.Dv SI_TKILL Ns 's
+for a thread; otherwise
 .Fa info
 is the siginfo, whose
 .Va si_signo
 must be
 .Fa sig ,
-and whose code a thread may give a process it does not lead only when it
-is negative and not
+and whose code a thread may give a process it does not lead, or any
+process group, only when it is negative and not
 .Dv SI_TKILL ,
 as
 .Xr rt_sigqueueinfo 2
 has it; a native caller's siginfo is read and refused as there when its
 code's layout is unknown and it has bytes past the kept fields.
 Signal 0 checks the permission and sends nothing, and a signal to a process
-whose threads have all ended is discarded.
-.Fa flags
-must be 0.
+whose threads have all ended, or to a leading thread that has ended, is
+discarded.
 The checks come in Linux's order:
 .Fa flags ,
-then the pidfd and the process's PID namespace, then the copy of
+then the pidfd and the process's PID namespace, which the pidfd keeps
+after the reap, then the copy of
 .Fa info ,
 its
 .Va si_signo
-and its code, then whether the process has been reaped, and only then
+and its code, then whether the process has been reaped or the group is
+empty, and only then
 .Fa sig
 and the permission.
 The kernel holds the pidfd's process across the copy and finds it again
@@ -148,28 +168,33 @@ cannot be read.
 .Fa pid
 is not above 0 or names a thread that does not lead its process;
 .Fa flags
-has a bit not described above;
+has a bit not described above, or more than one of
+.Fn pidfd_send_signal Ns 's;
 .Fa sig
 is out of range for a process not reaped, or is not the
 .Va si_signo
 of
 .Fa info ;
-or the process is outside the caller's PID namespace and those below it.
+or the pidfd's process, reaped or not, is outside the caller's PID
+namespace and those below it.
 .It Bq Er EMFILE
 The caller has no free descriptor below its limit.
 .It Bq Er ENOMEM
 The kernel had no memory for the pidfd, a larger descriptor table or an
 open file description.
 .It Bq Er EPERM
-The caller may not signal the process, give it that siginfo code, or take
-its descriptors.
+The caller may not signal the process or any member of the group, give it
+that siginfo code, or take its descriptors.
 .It Bq Er ESRCH
 No process has the ID
 .Fa pid ,
-or the pidfd's process has been reaped.
+the pidfd's process has been reaped, or the process group
+.Dv PIDFD_SIGNAL_PROCESS_GROUP
+names has no members.
 .El
 .Sh SEE ALSO
 .Xr fork 2 ,
 .Xr kill 2 ,
 .Xr poll 2 ,
+.Xr tgkill 2 ,
 .Xr wait 2
