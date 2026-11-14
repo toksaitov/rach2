@@ -4887,9 +4887,12 @@ static void ftype_rows(void)
 static const char *const removal_kinds[3] = {"an empty file", "a fast symlink",
                                              "a file with blocks"};
 /* How it removes it, by its `way`: an unlink; an unlink and a new node of
-   another type, which takes the freed inode; a rename of a file over it. */
-static const char *const removal_ways[3] = {"unlinked", "unlinked with its inode reused",
-                                            "renamed over"};
+   another type, which takes the freed inode; a rename of a file over it; and
+   a new file made and then the unlink, so that the free meets the new
+   inode's bit not yet on the device in the same bitmap block. */
+#define REMOVAL_WAYS 4
+static const char *const removal_ways[REMOVAL_WAYS] = {
+    "unlinked", "unlinked with its inode reused", "renamed over", "unlinked after a file is made"};
 
 /* The repairs e2fsck may ask for after a stop of a removal on a mount that
    writes back: counts and bitmaps, an inode left with no name, a new
@@ -4952,16 +4955,26 @@ static int removal_setup(int kind, uint64_t *ino)
  * unlink and then a new node `new` of another type, a fast link for an
  * empty file, a file of 10 bytes for a link and a directory for a file with
  * blocks, which takes the freed inode as the lowest free one of its group;
- * or by a rename of `src` over it. The inode number of `new` in `*reused`,
- * 0 when there is none. Returns 0, or the first error.
+ * by a rename of `src` over it; or by a file `new` of 10 bytes made and
+ * then an unlink. The inode number of `new` in `*reused` for the second
+ * way, 0 otherwise. Returns 0, or the first error.
  */
 static int removal_run(int kind, int way, uint64_t *reused)
 {
     void *n = 0;
-    int rc;
+    int rc = 0;
 
     *reused = 0;
-    if (way == 2) {
+    if (way == 3) {
+        n = make_file(mnt.root, "new", &rc);
+        if (n) {
+            rc = write_at(n, pattern, 10, 0);
+            OPS->put(&mnt, n);
+            n = 0;
+        }
+    }
+    if (rc != 0) {
+    } else if (way == 2) {
         rc = OPS->rename(&mnt, mnt.root, "src", mnt.root, "gone");
     } else {
         rc = OPS->unlink(&mnt, mnt.root, "gone");
@@ -5078,10 +5091,38 @@ static void drop_as_crash(void)
 }
 
 /**
+ * Whether e2fsck's output `out` names no inode in use that its bitmap calls
+ * free: its `Inode bitmap differences:` line, if any, holds only `-N` and
+ * `-(N--M)`, inodes marked in use that nothing uses, which a stop may leave,
+ * and no `+`, which a later allocation would hand out a second time. The
+ * line is printed when it has one.
+ */
+static int inode_bits_kept(const char *out)
+{
+    static const char head[] = "Inode bitmap differences:";
+    void *f = fopen(out, "r");
+    char line[4096];
+    int ok = 1;
+
+    if (!f) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, head) == line && strstr(line, "+") != 0) {
+            printf("  a live inode whose bit is clear: %s", line);
+            ok = 0;
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
+/**
  * Drop the mount and its cache as a crash would, after `kind` was removed
  * in `way` and stopped after write `k` of `n`, and judge the volume left:
- * e2fsck run to its end asking only for `removal_findings`, and each name
- * left marked in use (`removal_names_used`).
+ * e2fsck run to its end asking only for `removal_findings`, with no inode
+ * in use whose bit is clear (`inode_bits_kept`), and each name left marked
+ * in use (`removal_names_used`).
  */
 static void removal_judge(int kind, int way, int k, int n)
 {
@@ -5098,6 +5139,10 @@ static void removal_judge(int kind, int way, int k, int n)
     if (!ok) {
         ext2_fixture_head(fix_path("fsck.out"), 30);
     }
+    snprintf(what, sizeof what,
+             "%s %s, stopped after write %d of %d, leaves no live inode whose bit is clear",
+             removal_kinds[kind], removal_ways[way], k, n);
+    check(inode_bits_kept(fix_path("fsck.out")), what);
     snprintf(what, sizeof what,
              "%s %s, stopped after write %d of %d, leaves no name of a free inode",
              removal_kinds[kind], removal_ways[way], k, n);
@@ -5143,13 +5188,16 @@ static int removal_row(int kind, int way)
 /**
  * On a mount that writes back, remove a synced empty file, fast symlink and
  * file with blocks by an unlink, by an unlink whose inode a node of another
- * type takes again, and by a rename over it (`removal_run`), and stop the
- * removal and the sync after it after each of their writes. No stop may
- * leave the removed name on the disk naming an inode the bitmap calls free
- * or one of another type, as Linux's ext2 writes a directory's change before
- * the inode loses its count (`ext2_handle_dirsync`, fs/ext2/dir.c:440 in
- * Linux 6.12.115): e2fsck must run to its end and ask only for the repairs
- * of `removal_findings`, and debugfs must find each name left marked in use.
+ * type takes again, by a rename over it, and by an unlink after a new file
+ * is made (`removal_run`), and stop the removal and the sync after it after
+ * each of their writes. No stop may leave the removed name on the disk
+ * naming an inode the bitmap calls free or one of another type, as Linux's
+ * ext2 writes a directory's change before the inode loses its count
+ * (`ext2_handle_dirsync`, fs/ext2/dir.c:440 in Linux 6.12.115), nor an
+ * inode in use whose bit is clear, which Linux's ext2 does not promise:
+ * e2fsck must run to its end and ask only for the repairs of
+ * `removal_findings`, with no `+` among the inode bitmap's differences, and
+ * debugfs must find each name left marked in use.
  */
 static void removal_rows(void)
 {
@@ -5157,7 +5205,7 @@ static void removal_rows(void)
 
     fill_pattern();
     for (kind = 0; kind < 3; kind++) {
-        for (way = 0; way < 3; way++) {
+        for (way = 0; way < REMOVAL_WAYS; way++) {
             got = removal_row(kind, way);
             if (got < 0) {
                 check(0, "the volume of the removal rows mounts and takes its files");
