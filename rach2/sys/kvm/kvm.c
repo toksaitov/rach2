@@ -7,6 +7,7 @@
 #include "kvm.h"
 
 #include "../arch/x86/kcpu.h"
+#include "../cmdline.h"
 #include "../fs/devfs.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
@@ -14,6 +15,7 @@
 #include "../fs/sysfs.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/mm.h"
@@ -913,47 +915,119 @@ static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl,
  * udev's rule for the kvm group gives it on a machine with one user. */
 static struct devfs_node kvm_node = {"kvm", 10, 232, 0666, &dev_ops, NULL, NULL};
 
+int kvm_ignore_msrs;
+int kvm_force_emulation_prefix;
+int kvm_eager_page_split;
+
 /*
  * The module parameters Linux's KVM selftests read, as Linux's files under
- * /sys/module give them, with what Rach2's KVM does: no forced emulation
- * prefix, host-dependent performance counters, the guest-physical tables
- * always (EPT or nested paging, with the unrestricted guest on VMX), and no
- * eager splitting of huge leaves when a dirty log starts. Every selftest
- * reads `force_emulation_prefix` before its main and skips without it.
+ * /sys/module give them, with what Rach2's KVM does: host-dependent
+ * performance counters, the guest-physical tables always (EPT or nested
+ * paging, with the unrestricted guest on VMX), which are read-only, and the
+ * three Linux lets root write, 0644: `force_emulation_prefix`, 0, and
+ * `ignore_msrs` and `eager_page_split`, N, whose effects kvm.h describes.
+ * Linux's `eager_page_split` is Y; Rach2's N keeps the dropping of a slot's
+ * leaves that dirty logging has always had. Every selftest reads
+ * `force_emulation_prefix` before its main and skips without it.
  */
 static const char *const kvm_modules[] = {"kvm", "kvm_intel", "kvm_amd"};
+
+/* The kinds of a parameter: a fixed character, a bool or an int that root
+ * writes, read as Linux's param_set_bool and param_set_int read them. */
+#define PARAM_FIXED 0
+#define PARAM_BOOL  1
+#define PARAM_INT   2
 
 static const struct kvm_param {
     int module; /* of kvm_modules: kvm, or the backend's kvm_intel or kvm_amd */
     const char *name;
-    char value; /* the file's character; zero means the host PMU's Y or N */
-} kvm_params[] = {{0, "force_emulation_prefix", '0'}, {0, "enable_pmu", 0},    {0, "tdp_mmu", 'Y'},
-                  {0, "eager_page_split", 'N'},       {0, "ignore_msrs", 'N'}, {1, "ept", 'Y'},
-                  {1, "unrestricted_guest", 'Y'},     {2, "npt", 'Y'},         {2, "avic", 'N'}};
+    char value; /* a fixed file's character; zero means the host PMU's Y or N */
+    int kind;   /* PARAM_*: a writable one's value is `*var` */
+    int *var;
+} kvm_params[] = {{0, "force_emulation_prefix", 0, PARAM_INT, &kvm_force_emulation_prefix},
+                  {0, "enable_pmu", 0, PARAM_FIXED, NULL},
+                  {0, "tdp_mmu", 'Y', PARAM_FIXED, NULL},
+                  {0, "eager_page_split", 0, PARAM_BOOL, &kvm_eager_page_split},
+                  {0, "ignore_msrs", 0, PARAM_BOOL, &kvm_ignore_msrs},
+                  {1, "ept", 'Y', PARAM_FIXED, NULL},
+                  {1, "unrestricted_guest", 'Y', PARAM_FIXED, NULL},
+                  {2, "npt", 'Y', PARAM_FIXED, NULL},
+                  {2, "avic", 'N', PARAM_FIXED, NULL}};
 
 #define KVM_NR_PARAMS (sizeof(kvm_params) / sizeof(kvm_params[0]))
 
-/** A parameter's file: the value of `kvm_params[arg]` and a newline. */
+/** A parameter's file: the value of `kvm_params[arg]` and a newline, an
+ * int's in decimal, as Linux's param_get_int writes it. */
 static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
 {
+    const struct kvm_param *p = &kvm_params[arg];
+    char text[16];
+    uint32_t n = 0, i;
+
     (void)obj;
-    if (cap >= 2u) {
-        buf[0] = kvm_params[arg].value;
-        if (!buf[0]) {
-            buf[0] = kvm_pmu_enabled() ? 'Y' : 'N';
-        }
-        buf[1] = '\n';
+    if (p->kind == PARAM_INT) {
+        n = (uint32_t)k_itoa(*p->var, text, sizeof(text), 'd', false) - 1u;
+    } else {
+        text[n++] = p->kind == PARAM_BOOL ? (*p->var ? 'Y' : 'N')
+                    : p->value            ? p->value
+                    : kvm_pmu_enabled()   ? 'Y'
+                                          : 'N';
     }
-    return 2;
+    text[n++] = '\n';
+    for (i = 0; i < n && i < cap; i++) {
+        buf[i] = text[i];
+    }
+    return (int32_t)n;
+}
+
+/**
+ * A write of a parameter's file, as Linux's param_attr_store gives it to
+ * param_set_bool or param_set_int: a bool by its first two bytes, as
+ * kstrtobool reads them, an int as kstrtoint reads it in base 0, with at
+ * most one newline, up to a NUL the write holds. `len`, or -EINVAL for a
+ * text that is not such a value and -ERANGE for a number past an int, which
+ * leave the value as it was.
+ */
+static int32_t param_store(void *obj, int arg, const char *buf, uint32_t len)
+{
+    const struct kvm_param *p = &kvm_params[arg];
+    char text[3];
+    long long v;
+    uint32_t n, i;
+    int on, r;
+
+    (void)obj;
+    for (n = 0; n < len && buf[n] != '\0'; n++) {
+    }
+    if (p->kind == PARAM_BOOL) {
+        for (i = 0; i < 2u && i < n; i++) {
+            text[i] = buf[i];
+        }
+        text[i] = '\0';
+        if (kcmdline_parse_bool(text, &on) != 0) {
+            return -EINVAL;
+        }
+        *p->var = on;
+        return (int32_t)len;
+    }
+    r = k_strtoll(buf, n, &v);
+    if (r != 0) {
+        return r;
+    }
+    if (v < -0x7FFFFFFFLL - 1 || v > 0x7FFFFFFFLL) {
+        return -ERANGE;
+    }
+    *p->var = (int)v;
+    return (int32_t)len;
 }
 
 /**
  * Make /sys/module/MODULE/parameters for `kvm` and for the backend's
  * module, `kvm_intel` (`backend` 1) or `kvm_amd` (2), as Linux's modules
- * show theirs, each file read-only. 0, or the first error of sysfs.h, which
- * takes away the failed module's files and the directories made for them
- * and keeps a module made whole before it; /dev/kvm works without the
- * files.
+ * show theirs, 0644 for a writable one and 0444 for the rest. 0, or the
+ * first error of sysfs.h, which takes away the failed module's files and
+ * the directories made for them and keeps a module made whole before it;
+ * /dev/kvm works without the files.
  */
 static int params_start(int backend)
 {
@@ -962,9 +1036,7 @@ static int params_start(int backend)
     int dir = 0, h, module = -1, made = 0, n = 0;
     uint32_t i;
 
-    attr.mode = 0444u;
     attr.show = param_show;
-    attr.store = NULL;
     for (i = 0; i < KVM_NR_PARAMS; i++) {
         if (kvm_params[i].module != 0 && kvm_params[i].module != backend) {
             continue;
@@ -978,6 +1050,8 @@ static int params_start(int backend)
             n = 0;
         }
         attr.name = kvm_params[i].name;
+        attr.mode = kvm_params[i].kind == PARAM_FIXED ? 0444u : 0644u;
+        attr.store = kvm_params[i].kind == PARAM_FIXED ? NULL : param_store;
         h = sysfs_add_attr(dir, &attr, NULL, (int)i);
         if (h < 0) {
             sysfs_module_params_undo(made, added, n);
@@ -986,6 +1060,17 @@ static int params_start(int backend)
         added[n++] = h;
     }
     return 0;
+}
+
+/** Take kvm.ignore_msrs, kvm.force_emulation_prefix and
+ * kvm.eager_page_split from the boot line, as Linux's parse_args gives a
+ * built-in module's parameters theirs. */
+static void params_boot(void)
+{
+    kvm_ignore_msrs = kcmdline_param_bool("kvm.ignore_msrs", kvm_ignore_msrs);
+    kvm_eager_page_split = kcmdline_param_bool("kvm.eager_page_split", kvm_eager_page_split);
+    kvm_force_emulation_prefix =
+        kcmdline_param_int("kvm.force_emulation_prefix", kvm_force_emulation_prefix);
 }
 
 void kvm_start(void)
@@ -1002,6 +1087,7 @@ void kvm_start(void)
     }
     kvm_pmu_start();
     kvm_spec_start();
+    params_boot();
     if (devfs_node_register(&kvm_node) != 0) {
         klog(KLOG_WARN, "kvm", "failed: /dev/kvm not registered");
         kvm_backend = NULL;

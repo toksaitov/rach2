@@ -664,7 +664,9 @@ static int spec_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *val
     return 0;
 }
 
-int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
+/** Read the MSR `index` of `v` as `kvm_msr_get` says, before
+ * `ignore_msrs` judges an MSR KVM does not have. */
+static int msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
 {
     uint32_t bank, reg;
     int r;
@@ -926,7 +928,9 @@ static int mce_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
     return 0;
 }
 
-int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
+/** Write the MSR `index` of `v` as `kvm_msr_set` says, before
+ * `ignore_msrs` judges an MSR KVM does not have. */
+static int msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
 {
     int slot;
 
@@ -1016,6 +1020,29 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
     }
     v->dirty |= KVM_PART_MSRS;
     return 0;
+}
+
+/* A read that fails gives 0, so that nothing of an earlier value reaches
+ * the guest or the caller, and an MSR KVM does not have is then read as 0
+ * under `ignore_msrs`, as Linux's kvm_do_msr_access answers
+ * KVM_MSR_RET_UNSUPPORTED; a value refused stays refused. */
+int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
+{
+    int r = msr_get(v, index, value, host);
+
+    if (r != 0) {
+        *value = 0;
+    }
+    return r == KVM_MSR_UNKNOWN && kvm_ignore_msrs ? 0 : r;
+}
+
+/* An MSR KVM does not have takes any write, and keeps nothing, under
+ * `ignore_msrs`, as Linux's kvm_do_msr_access. */
+int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
+{
+    int r = msr_set(v, index, value, host);
+
+    return r == KVM_MSR_UNKNOWN && kvm_ignore_msrs ? 0 : r;
 }
 
 /* ---- the filter and the caller's exits ---- */

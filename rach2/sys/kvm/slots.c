@@ -476,11 +476,17 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
  * frames goes after it, so that each frame is mapped again by the new
  * rules at its next fault, also one between two batches of the zap; the
  * call returns, and frees a log it ends, only once no copy can be using
- * the slot as it was. */
+ * the slot as it was. A log that starts on a slot that stays put, under
+ * `kvm_eager_page_split` and without KVM_DIRTY_LOG_INITIALLY_SET, keeps
+ * the mappings, split and write-protected, as Linux's
+ * kvm_mmu_slot_apply_flags does (`kvm_tdp_split_protect_locked`). */
 static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, uint64_t gfn,
                            uint32_t flags)
 {
     uint64_t *log = s->dirty, *old = NULL, base = s->base_gfn;
+    int eager = gfn == s->base_gfn && kvm_eager_page_split &&
+                !(s->flags & KVM_MEM_LOG_DIRTY_PAGES) && (flags & KVM_MEM_LOG_DIRTY_PAGES) &&
+                !(vm->dirty_manual & KVM_DIRTY_LOG_INITIALLY_SET);
     uint32_t lock;
 
     if ((flags & KVM_MEM_LOG_DIRTY_PAGES) && !log && !vm->dirty_ring_size) {
@@ -508,7 +514,11 @@ static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, u
     }
     s->flags = flags;
     write_end(t);
-    kvm_tdp_zap_locked(vm, base, s->npages, &lock);
+    if (eager) {
+        kvm_tdp_split_protect_locked(vm, base, s->npages, &lock);
+    } else {
+        kvm_tdp_zap_locked(vm, base, s->npages, &lock);
+    }
     kvm_mmu_unlock(vm, lock);
     kvm_srcu_synchronize(vm);
     kfree(old);

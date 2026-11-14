@@ -264,13 +264,44 @@ static int table_empty(const uint64_t *table)
 
 /* A zap under way: the frames [lo, hi) left to zap, the entries the batch
  * may still visit, and, when it stops for them, the first frame it did not
- * reach. */
+ * reach. With `protect`, the walk of `kvm_tdp_split_protect_locked`, the
+ * leaves stay, split to 4 KiB and without their write right. */
 struct zap {
+    const struct kvm_vm *vm;
     uint64_t lo, hi;
     uint64_t next;
     uint32_t budget;
-    int cleared; /* a leaf went in this batch */
+    int cleared; /* a leaf went or changed in this batch */
+    int protect;
 };
+
+/**
+ * Split the 2 MiB leaf `*e` into a table of 4 KiB leaves of `z->vm` that
+ * map its frames, each read-only and of the leaf's memory type, as Linux's
+ * eager split followed by the write protection of a slot whose log starts.
+ * The batch spends a table's worth of entries on it. 1, or 0 with nothing
+ * changed when no frame is free for the table.
+ */
+static int split_leaf(struct tdp *t, uint64_t *e, struct zap *z)
+{
+    uint64_t p = table_new(t), phys = *e & fmt()->addr & ~0x1FFFFFull, *child;
+    uint32_t i;
+    int device;
+
+    if (!p) {
+        return 0;
+    }
+    child = table_at(p);
+    device = paging_frame_is_device((uintptr_t)phys);
+    for (i = 0; i < TDP_ENTRIES; i++) {
+        child[i] = leaf_entry(z->vm, phys + (uint64_t)i * 4096u, 0, 0, device);
+    }
+    *e = table_entry(p);
+    t->pages[1]--;
+    t->pages[0] += TDP_ENTRIES;
+    z->budget = z->budget > TDP_ENTRIES ? z->budget - TDP_ENTRIES : 0;
+    return 1;
+}
 
 /**
  * Clear the entries of `table`, of level `level` and with `base` its first
@@ -301,7 +332,20 @@ static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, s
         if (!present(e)) {
             continue;
         }
+        if (leaf(e, level) && z->protect && level == 1) {
+            if (e & fmt()->write) {
+                table[i] = e & ~fmt()->write;
+                z->cleared = 1;
+            }
+            continue;
+        }
+        if (leaf(e, level) && z->protect && level == 2 && split_leaf(t, &table[i], z)) {
+            z->cleared = 1;
+            continue;
+        }
         if (leaf(e, level)) {
+            /* With `protect`, a leaf that cannot be split goes, as it goes
+             * when a log starts without eager splitting. */
             table[i] = 0;
             t->pages[level - 1]--;
             z->cleared = 1;
@@ -309,6 +353,9 @@ static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, s
         }
         if (zap_level(t, table_at(e & fmt()->addr), level - 1, from, z)) {
             return 1;
+        }
+        if (z->protect) {
+            continue;
         }
         if ((z->lo <= from && from + span <= z->hi) || table_empty(table_at(e & fmt()->addr))) {
             table[i] = 0;
@@ -319,14 +366,17 @@ static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, s
     return 0;
 }
 
-/** A table on the dead list is freed only after the flush, and a table
- * that goes needs the flush even when no leaf did. The count moves first,
- * whatever the tables held, so that a fault that read the caller's entry
- * before the change maps nothing from it, and again after each break. A
+/** The walk of a zap, or with `protect` of a split and protection, of the
+ * `npages` frames from `gfn`. A table on the dead list is freed only after
+ * the flush, and a table that goes needs the flush even when no leaf did.
+ * The count moves first, whatever the tables held, so that a fault that
+ * read the caller's entry before the change maps nothing from it, and
+ * again after each break. A
  * batch ends after TDP_ZAP_BATCH entries, which every batch spends on
  * frames past the last one's, as Linux yields only after progress
  * (arch/x86/kvm/mmu/tdp_mmu.c:711-713, 859-864). */
-void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32_t *flags)
+static void walk_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32_t *flags,
+                        int protect)
 {
     struct tdp *t = (struct tdp *)vm->tdp;
     struct zap z;
@@ -339,6 +389,8 @@ void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32
     if (npages == 0 || gfn >= kvm_tdp_frames()) {
         return;
     }
+    z.vm = vm;
+    z.protect = protect;
     z.lo = gfn;
     z.hi = gfn + npages;
     for (;;) {
@@ -362,6 +414,20 @@ void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32
         *flags = kvm_mmu_lock(vm);
         vm->mmu_seq++;
     }
+}
+
+void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32_t *flags)
+{
+    walk_locked(vm, gfn, npages, flags, 0);
+}
+
+/** The walk of `kvm_tdp_zap_locked`, its count moved, its batches and its
+ * flushes, with the leaves kept: a 2 MiB one split (`split_leaf`) and each
+ * 4 KiB one without its write right, so that the next write to any frame
+ * faults and is logged. No table goes. */
+void kvm_tdp_split_protect_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32_t *flags)
+{
+    walk_locked(vm, gfn, npages, flags, 1);
 }
 
 void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)

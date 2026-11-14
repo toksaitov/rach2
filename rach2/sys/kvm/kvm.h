@@ -353,6 +353,19 @@ extern const struct kvm_backend kvm_vmx;
 /* The backend `kvm_start` chose, or NULL when neither probed. */
 extern const struct kvm_backend *kvm_backend;
 
+/* KVM's writable module parameters, /sys/module/kvm/parameters, which root
+ * sets as Linux's: `ignore_msrs`, under which an MSR KVM does not have
+ * reads 0 and takes any write (`kvm_msr_get`); `force_emulation_prefix`,
+ * under which the bytes ud2 and "kvm" before an instruction have the
+ * emulator run it (`kvm_emul_ud`), bit 1 clearing RFLAGS.RF first; and
+ * `eager_page_split`, under which turning a slot's dirty log on splits its
+ * 2 MiB leaves and takes the write right from its leaves in place of
+ * dropping them (`kvm_tdp_split_protect`). Each is read where it acts, so
+ * that a write counts from the next access, exit or change of a slot. */
+extern int kvm_ignore_msrs;
+extern int kvm_force_emulation_prefix;
+extern int kvm_eager_page_split;
+
 /*
  * A VM. `refs` counts the VM's descriptors, its vCPUs and the mappings of
  * their run pages; the last `kvm_vm_put` frees it. The vCPUs are in
@@ -575,7 +588,7 @@ struct kvm_emul_chunk {
 struct kvm_emul {
     uint32_t stage;          /* emulate.c's EMUL_* */
     int resume;              /* the next exit is the instruction's next step */
-    int ud;                  /* a #UD exit brought the instruction */
+    int ud;                  /* a #UD exit brought it: 1, or 2 behind the forced prefix */
     uint8_t fx[KVM_EMUL_FX]; /* the x87 and SSE state as the pass found it */
     int fx_held;             /* `fx` was taken in this pass, at its first use */
     struct kvm_insn insn;    /* the instruction */
@@ -1068,12 +1081,15 @@ uint64_t kvm_spec_ctrl_host(int cpu);
 
 /** Read the MSR `index` of `v`, as the caller of KVM_GET_MSRS when `host`
  * is set and as the guest otherwise, which Linux's host_initiated tells
- * apart: 0, KVM_MSR_INVAL or KVM_MSR_UNKNOWN. */
+ * apart: 0, KVM_MSR_INVAL or KVM_MSR_UNKNOWN, with `*value` 0 on a failure.
+ * Under `kvm_ignore_msrs` an MSR KVM does not have reads 0 with success. */
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host);
 
 /** Write the MSR `index` of `v`, as `kvm_msr_get` reads it, with the
  * checks Linux makes of a write from the host or from the guest: 0,
- * KVM_MSR_INVAL or KVM_MSR_UNKNOWN. Marks KVM_PART_MSRS dirty. */
+ * KVM_MSR_INVAL or KVM_MSR_UNKNOWN. Marks KVM_PART_MSRS dirty. Under
+ * `kvm_ignore_msrs` a write of an MSR KVM does not have succeeds and keeps
+ * nothing. */
 int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host);
 
 /** Whether the guest of `v` may access the MSR `index`, a write when
@@ -1463,6 +1479,18 @@ void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
  * between batches maps by the new rules.
  */
 void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32_t *flags);
+
+/**
+ * `kvm_tdp_zap_locked` for a slot whose dirty log starts under
+ * `kvm_eager_page_split`, as Linux's kvm_mmu_slot_apply_flags splits and
+ * write-protects its leaves: each 2 MiB leaf of the frames is split into
+ * 4 KiB leaves, one that no free frame can split goes, and every 4 KiB leaf
+ * loses its write right, so that what was mapped stays mapped and the next
+ * write to each frame faults and is logged. Its batches, flushes and moves
+ * of `mmu_seq` are the zap's.
+ */
+void kvm_tdp_split_protect_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages,
+                                  uint32_t *flags);
 
 /** Count a device that does not snoop the processor's caches assigned to
  * `vm` (`assigned` 1) or taken from it (0). While one is assigned, RAM is

@@ -4146,8 +4146,10 @@ static int runs_on_ud(const struct kvm_insn *in)
 }
 
 /**
- * Fetch the instruction at CS:RIP and decode it; for a #UD exit, `ud`,
- * keep only those Linux's emulator carries out after one. Then run it.
+ * Fetch the instruction at CS:RIP and decode it; for a #UD exit, `ud` 1,
+ * keep only those Linux's emulator carries out after one, and for one
+ * behind the forced emulation prefix, `ud` 2, any it decodes, as Linux's
+ * EMULTYPE_TRAP_UD_FORCED. Then run it.
  */
 static int emul_begin(struct kvm_vcpu *v, int ud)
 {
@@ -4165,7 +4167,7 @@ static int emul_begin(struct kvm_vcpu *v, int ud)
     }
     v->stat[KVM_VCPU_STAT_INSN_EMULATION]++;
     known = kvm_decode(bytes, (uint32_t)n, kvm_emul_mode(v), in) == 0;
-    if (known && ud) {
+    if (known && ud == 1) {
         known = runs_on_ud(in);
     }
     if (!known) {
@@ -4181,10 +4183,43 @@ int kvm_emul_mmio(struct kvm_vcpu *v, const uint64_t info[5])
     return emul_begin(v, 0);
 }
 
+/**
+ * Whether the #UD at CS:RIP is the forced emulation prefix, ud2 and "kvm",
+ * while `force_emulation_prefix` is set, as Linux's handle_ud reads it:
+ * then RIP is stepped past its five bytes, and RFLAGS.RF cleared first
+ * when the parameter has bit 1, KVM_FEP_CLEAR_RFLAGS_RF. Bytes that cannot
+ * be read are no prefix, and leave nothing queued.
+ */
+static int fep_skip(struct kvm_vcpu *v)
+{
+    static const uint8_t prefix[5] = {0x0F, 0x0B, 'k', 'v', 'm'};
+    uint8_t bytes[KVM_INSN_MAX];
+    int fep = kvm_force_emulation_prefix, n, i;
+
+    if (fep == 0) {
+        return 0;
+    }
+    n = fetch(v, bytes);
+    if (n < 0) {
+        v->events.exception.pending = 0;
+    }
+    for (i = 0; i < 5 && i < n && bytes[i] == prefix[i]; i++) {
+    }
+    if (i < 5) {
+        return 0;
+    }
+    if (fep & 2) {
+        v->regs.rflags &= ~RFLAGS_RF;
+    }
+    v->regs.rip += sizeof(prefix);
+    v->dirty |= KVM_PART_REGS;
+    return 1;
+}
+
 int kvm_emul_ud(struct kvm_vcpu *v, const uint64_t info[5])
 {
     k_memcpy(v->emul.info, info, sizeof(v->emul.info));
-    return emul_begin(v, 1);
+    return emul_begin(v, fep_skip(v) ? 2 : 1);
 }
 
 /* ---- port I/O ---- */
