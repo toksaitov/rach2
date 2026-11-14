@@ -36,15 +36,29 @@
  * region for the pages at each step but the second and fourth, and one
  * [heap].
  *
+ * The fourth half makes guard pages with MADV_GUARD_INSTALL in a mapping of
+ * `GUARD_PAGES` pages, one at its first page and two inside, as glibc puts
+ * one below every thread stack. Linux 6.13 and later mark guard pages in the
+ * page tables and split no region, so the mapping is still one region, which
+ * vm.max_map_count counts once. A read of a guard page raises SIGSEGV with
+ * SEGV_MAPERR, write(2) from one fails with EFAULT, and the page beside them
+ * keeps what was written to it; a fork's child has the same guards, and
+ * mremap carries them with the mapping it moves; after MADV_GUARD_REMOVE the
+ * pages read as zeros.
+ *
  * Prints `VMAMUSL OK` and exits 0 on success, and prints
  * `VMAMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
  * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
  * each check: `mappings` (every page was granted), `readback` (each holds
  * what was written to it), `unmap` (each is given back), `small-blocks`
- * (malloc reaches the floor) and `merges` (the regions merge as Linux's do);
- * a failure leaves the checks after it not run.
+ * (malloc reaches the floor), `merges` (the regions merge as Linux's do)
+ * and `guards` (guard pages split no region and fault as Linux's do); a
+ * failure leaves the checks after it not run.
  */
 #define _GNU_SOURCE
+#include <errno.h>
+#include <setjmp.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +66,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 
 #include "../probe_report.h"
 
@@ -67,6 +82,19 @@
 
 /* The pages of the third half's range, between its two guard pages. */
 #define MERGE_PAGES 32
+
+/* The pages of the fourth half's mapping, and Linux's advice values for
+ * guard pages, which musl's headers may not have. */
+#define GUARD_PAGES 16
+#ifndef MADV_GUARD_INSTALL
+#define MADV_GUARD_INSTALL 102
+#define MADV_GUARD_REMOVE  103
+#endif
+
+/* Where a read that faults goes back to (`touch`), and the si_code of the
+ * last SIGSEGV. */
+static sigjmp_buf touch_env;
+static volatile sig_atomic_t touch_code;
 
 /* /proc/self/maps, read with read(2), since a buffer of stdio's or malloc's
  * could be a new region. */
@@ -372,6 +400,144 @@ static int check_merges(char *detail, size_t size)
     return 0;
 }
 
+/** Catch the SIGSEGV of `touch`: keep its si_code and go back. */
+static void touch_fault(int sig, siginfo_t *info, void *context)
+{
+    (void)sig;
+    (void)context;
+    touch_code = info->si_code;
+    siglongjmp(touch_env, 1);
+}
+
+/**
+ * Read the byte at `p` with SIGSEGV caught: the byte, 0 to 255, or -1 when
+ * the read raised SIGSEGV with SEGV_MAPERR, or -2 with another si_code.
+ */
+static int touch(const char *p)
+{
+    struct sigaction sa, old;
+    int got;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = touch_fault;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, &old);
+    if (sigsetjmp(touch_env, 1) == 0) {
+        got = *(const volatile unsigned char *)p;
+    } else {
+        got = touch_code == SEGV_MAPERR ? -1 : -2;
+    }
+    sigaction(SIGSEGV, &old, NULL);
+
+    return got;
+}
+
+/**
+ * Whether the guards of a mapping at `base` from `check_guards` are where it
+ * put them: pages 0, 5 and 6 fault with SEGV_MAPERR, and pages 4 and 7 hold
+ * their index. 1 or 0.
+ */
+static int guards_in_place(const char *base, long pg)
+{
+    return touch(base) == -1 && touch(base + 5 * pg) == -1 && touch(base + 6 * pg) == -1 &&
+           touch(base + 4 * pg) == 4 && touch(base + 7 * pg) == 7;
+}
+
+/**
+ * Run the fourth half's calls and check each against Linux 6.18. Returns 0,
+ * or 1 with what differed in `detail`.
+ */
+static int check_guards(char *detail, size_t size)
+{
+    long pg = sysconf(_SC_PAGESIZE);
+    size_t span = (size_t)GUARD_PAGES * (size_t)pg;
+    char *base, *moved, *away;
+    int fds[2];
+    int got, status, i;
+    pid_t child;
+
+    base = mmap(0, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED) {
+        snprintf(detail, size, "the mapping of %d pages could not be made", GUARD_PAGES);
+        return 1;
+    }
+    for (i = 0; i < GUARD_PAGES; i++) {
+        base[i * pg] = (char)i;
+    }
+    if (madvise(base, (size_t)pg, MADV_GUARD_INSTALL) != 0 ||
+        madvise(base + 5 * pg, 2 * (size_t)pg, MADV_GUARD_INSTALL) != 0) {
+        snprintf(detail, size, "MADV_GUARD_INSTALL failed with errno %d", errno);
+        munmap(base, span);
+        return 1;
+    }
+    got = count_regions((unsigned long)base, (unsigned long)base + span, NULL);
+    if (got != 1) {
+        snprintf(detail, size, "%d regions for a mapping with three guard pages, where Linux has 1",
+                 got);
+        munmap(base, span);
+        return 1;
+    }
+    if (!guards_in_place(base, pg)) {
+        snprintf(detail, size,
+                 "a guard page did not fault with SEGV_MAPERR, or a page beside it "
+                 "lost what it held");
+        munmap(base, span);
+        return 1;
+    }
+    got = -1;
+    if (pipe(fds) == 0) {
+        errno = 0;
+        got = write(fds[1], base + 5 * pg, 1) == -1 && errno == EFAULT;
+        close(fds[0]);
+        close(fds[1]);
+    }
+    if (got != 1) {
+        snprintf(detail, size, "write(2) from a guard page did not fail with EFAULT");
+        munmap(base, span);
+        return 1;
+    }
+    fflush(stdout);
+    child = fork();
+    if (child == 0) {
+        _exit(guards_in_place(base, pg) ? 0 : 1);
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        snprintf(detail, size, "a fork's child did not have the guard pages");
+        munmap(base, span);
+        return 1;
+    }
+    away = mmap(0, 2 * span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    moved = away == MAP_FAILED
+                ? MAP_FAILED
+                : mremap(base, span, span, MREMAP_MAYMOVE | MREMAP_FIXED, away + span / 2);
+    if (moved == MAP_FAILED) {
+        snprintf(detail, size, "mremap could not move the mapping with its guard pages");
+        if (away != MAP_FAILED) {
+            munmap(away, 2 * span);
+        }
+        munmap(base, span);
+        return 1;
+    }
+    base = moved;
+    if (!guards_in_place(base, pg) ||
+        count_regions((unsigned long)base, (unsigned long)base + span, NULL) != 1) {
+        snprintf(detail, size, "mremap did not carry the guard pages, or split the mapping");
+        munmap(away, 2 * span);
+        return 1;
+    }
+    if (madvise(base, span, MADV_GUARD_REMOVE) != 0 || touch(base) != 0 ||
+        touch(base + 5 * pg) != 0 || touch(base + 7 * pg) != 7) {
+        snprintf(detail, size, "after MADV_GUARD_REMOVE a guard page did not read as zeros");
+        munmap(away, 2 * span);
+        return 1;
+    }
+    munmap(away, 2 * span);
+
+    return 0;
+}
+
 /** Report one failed check, which fails the step under way and ends the
  * report, and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -380,6 +546,20 @@ static int fail(const char *what)
     report_stop(what);
 
     return 1;
+}
+
+/** Run `check`, and report it held, or failed with its detail: 0, or 1,
+ * the probe's failure status. */
+static int run_check(int (*check)(char *detail, size_t size))
+{
+    char detail[96];
+
+    if (check(detail, sizeof(detail)) != 0) {
+        return fail(detail);
+    }
+    report_held();
+
+    return 0;
 }
 
 int main(void)
@@ -394,6 +574,7 @@ int main(void)
     report_plan("unmap");
     report_plan("small-blocks");
     report_plan("merges");
+    report_plan("guards");
 
     for (i = 0; i < WANTED; i++) {
         maps[i] = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -464,14 +645,9 @@ int main(void)
         }
     }
     report_held();
-    {
-        char detail[96];
-
-        if (check_merges(detail, sizeof(detail)) != 0) {
-            return fail(detail);
-        }
+    if (run_check(check_merges) != 0 || run_check(check_guards) != 0) {
+        return 1;
     }
-    report_held();
     report_end();
 
     printf("VMAMUSL OK\n");
