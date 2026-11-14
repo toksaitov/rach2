@@ -146,7 +146,8 @@ def webgl_flakes(flakes_path, got_path):
     """The subtests of each page that FLAKES_PATH names and the verdict's run
     here failed, by page index: the lines of the `failures` file beside
     GOT_PATH, of each page's last run, whose message a page's expression
-    matches. Without FLAKES_PATH or that file, none."""
+    matches. A PATH ending in `/` names every page under it. Without
+    FLAKES_PATH or that file, none."""
     if not flakes_path:
         return {}
     patterns = collections.defaultdict(list)
@@ -169,7 +170,10 @@ def webgl_flakes(flakes_path, got_path):
     got = {int(f[0]): f[7] for f in lines(got_path)}
     flaky = {}
     for index, run in last.items():
-        exprs = patterns.get(got.get(index), [])
+        page = got.get(index, "")
+        exprs = [e for path, es in patterns.items()
+                 if path == page or (path.endswith("/") and page.startswith(path))
+                 for e in es]
         n = sum(1 for m in runs[index, run] if any(e.search(m) for e in exprs))
         if n:
             flaky[index] = n
