@@ -88,8 +88,25 @@ must leave zero every byte of
 past the fields the kernel keeps, 48 on x86-64 and 32 on i386, since no
 receiver could get them back.
 A signal of 0 checks the target and sends nothing.
-The kernel copies the whole siginfo before resolving the target; a page
-fault during that copy may let another process reap the target.
+.Pp
+The checks come in Linux's order.
+The siginfo is copied first, so an unreadable one is
+.Er EFAULT
+whatever the other arguments are; a page fault during that copy may let
+another process reap the target.
+A native caller's siginfo is read as far as the fields the kernel keeps,
+and past them only for a code whose layout Linux does not know, so an
+unreadable page after those fields is no fault for a known one; an i386
+caller's 128 bytes are read whole.
+Then
+.Fn rt_tgsigqueueinfo
+checks its ids, a kernel's code to another thread is
+.Er EPERM ,
+a target that does not exist is
+.Er ESRCH ,
+and only then is a signal out of range
+.Er EINVAL ,
+before the permission.
 .Pp
 The kernel keeps one pending instance of each signal, so a real-time
 signal sent again while it is pending is merged with it, where Linux
@@ -108,7 +125,7 @@ past the kept fields that is not zero.
 is not in the caller's memory.
 .It Er EINVAL
 .Fa sig
-is outside 0 to 64, or for
+is outside 0 to 64 and the target exists, or for
 .Fn rt_tgsigqueueinfo
 an id is not positive.
 .It Er EPERM

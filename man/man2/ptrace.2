@@ -508,7 +508,10 @@ fail there with
 .Er EINVAL ,
 which tells it from a signal-delivery stop of the stop signal;
 .Dv PTRACE_SETSIGINFO
-reads its buffer first, and fails with
+reads its buffer first, as
+.Xr rt_sigqueueinfo 2
+reads its siginfo, a native tracer's only as far as the kept fields for a
+known layout, and fails with
 .Er EFAULT
 for one it cannot read at any stop, and with
 .Er E2BIG
