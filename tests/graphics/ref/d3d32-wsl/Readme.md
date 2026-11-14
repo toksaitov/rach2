@@ -35,4 +35,4 @@ The runs that took them, from the top of the tree, `ref-lavapipe2` as `ref-lavap
 
 ## Updating
 
-The runs are taken again, and the two references folded again from them, when a probe, `run.py`'s probe rows, GE-Proton, the root's i386 layer or Mesa for either architecture changes.
+The runs are taken again, and the two references folded again from them, when a probe, `run.py`'s probe rows, GE-Proton, the root's i386 layer or Mesa for either architecture changes. The probes' `DXVK_CONFIG`, set after these runs, lifts only DXVK's limit on a submission and changes no result they record ([Direct3D on lavapipe](../../Readme.md#direct3d-on-lavapipe)).

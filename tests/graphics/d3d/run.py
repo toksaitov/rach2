@@ -278,7 +278,7 @@ def main():
     tests = list(json.loads((HERE / "ref" / "linux.json").read_text())["vkd3d"])
     ref = {} if record or reference is None else json.loads((HERE / "ref" / reference).read_text())
     env = os.environ.copy()
-    for key in ("PROBE_HOLD", "PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
+    for key in ("PROBE_HOLD", "DXVK_CONFIG", "PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
         env.pop(key, None)
     if adapter != "host":
         env.update(GALLIUM_DRIVER="llvmpipe", LIBGL_ALWAYS_SOFTWARE="1")
@@ -290,6 +290,10 @@ def main():
     if mode == "i386":
         # Proton's default mode runs an i386 program on its i386 Wine.
         del env["PROTON_USE_WOW64"]
+    if family == "probe":
+        # DXVK takes a submission still running after 5 s for a lost device;
+        # this option alone lifts that limit (tests/graphics/Readme.md).
+        env["DXVK_CONFIG"] = "d3d9.reproducibleCommandStream = True; d3d11.reproducibleCommandStream = True"
     if pattern:
         icds = sorted(Path("/usr/share/vulkan/icd.d").glob(pattern))
         files = [p for p in icds if "i686" not in p.name]
