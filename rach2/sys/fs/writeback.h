@@ -14,10 +14,14 @@
  * a mount whose tick has expired is written whole in the same turn. When a
  * dirty mark leaves the buffer cache past its background threshold
  * (`bcache_dirty_level`), the thread is woken and writes the oldest buffers
- * back until the cache is under it again. The first dirty buffer of a clean
- * cache wakes it too, and while any buffer is dirty it wakes a 32nd of the
- * expiry period apart to read the cache's count of marks, which stands for
- * the time a buffer went dirty.
+ * back until the cache is under it again. A page of the disk-backed window
+ * that goes dirty past the window's own background threshold
+ * (`pc_dirty_level`) wakes it the same way, and it writes the window's dirty
+ * pages back, a run at a time, until they are under it, with the disk's
+ * flush after each run. The first dirty buffer of a clean cache wakes it
+ * too, and while any buffer is dirty it wakes a 32nd of the expiry period
+ * apart to read the cache's count of marks, which stands for the time a
+ * buffer went dirty.
  *
  * Durability is the syncs': `fsync`, `fdatasync`, `sync`, `syncfs`, `msync`
  * with MS_SYNC, O_SYNC and O_DSYNC writes, an unmount and a shutdown write

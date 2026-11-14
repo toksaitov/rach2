@@ -90,17 +90,22 @@ static uint64_t reading_at(uint64_t before)
 }
 
 /**
- * Write the oldest dirty buffers back, a reading at a time from the oldest,
- * until the cache is under its background threshold, then, if it is not,
- * every dirty buffer, as Linux's background writeback writes the oldest
- * inodes first until `wb_over_bg_thresh` says no more (fs/fs-writeback.c).
- * Each file system's pending writes stay for their own age, since the cache
- * does not count them.
+ * Write the disk page cache's dirty pages back until they are under its
+ * background threshold (`pc_write_background`); then the oldest dirty
+ * buffers, a reading at a time from the oldest, until the buffer cache is
+ * under its background threshold, then, if it is not, every dirty buffer,
+ * as Linux's background writeback writes the oldest inodes first until
+ * `wb_over_bg_thresh` says no more (fs/fs-writeback.c). Each file system's
+ * pending writes stay for their own age, since the cache does not count
+ * them.
  */
 static void write_background(void)
 {
     int i;
 
+    if (pc_dirty_level() > 0) {
+        (void)pc_write_background();
+    }
     for (i = 0; i < reading_count && bcache_dirty_level() > 0; i++) {
         vfs_writeback_all(0, readings[(reading_first + i) % READINGS].marks);
     }
@@ -213,14 +218,15 @@ void writeback_kick(void)
     wq_wake_all(&flusher_wait);
 }
 
-/** The cache's call at its first dirty buffer and past the background
- * threshold: the kicks' count moved, and a wake unless the flusher is in a
- * turn, since every dirty mark past the threshold makes one. A turn ends
- * with another when the count has moved since its start (`flusher_main`);
- * the move comes before the look at `flusher_busy`, and the flusher clears
- * that before it reads the count for its sleep, each with a full barrier
- * between, so either the kicker sees the turn over and wakes the thread or
- * the thread sees the count moved. */
+/** The caches' call: the buffer cache's at its first dirty buffer and past
+ * its background threshold, the disk page cache's past its own, from a
+ * fault with interrupts off. The kicks' count moved, and a wake unless the
+ * flusher is in a turn, since every dirty mark past a threshold makes one.
+ * A turn ends with another when the count has moved since its start
+ * (`flusher_main`); the move comes before the look at `flusher_busy`, and
+ * the flusher clears that before it reads the count for its sleep, each
+ * with a full barrier between, so either the kicker sees the turn over and
+ * wakes the thread or the thread sees the count moved. */
 static void flusher_kick(void)
 {
     flusher_count();
@@ -265,4 +271,5 @@ void writeback_init(void)
         return;
     }
     bcache_set_flusher(flusher_kick);
+    pc_set_flusher(flusher_kick);
 }

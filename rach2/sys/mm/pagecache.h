@@ -167,6 +167,34 @@ uint32_t pc_window_size(void);
  */
 int pc_set_capacity(uint32_t slots);
 
+/**
+ * Where the dirty pages stand against the background threshold: 1 at or
+ * past it, `dirty_background_bytes` in pages when that is set, else
+ * `dirty_background_ratio` per cent of the live capacity, and 0 below. A
+ * page that goes dirty at or past it wakes the flusher (`pc_set_flusher`),
+ * which writes back until the count is under it (`pc_write_background`), as
+ * Linux's background writeback does, so that a fault seldom finds only dirty
+ * pages to evict, which it writes back with interrupts off.
+ */
+int pc_dirty_level(void);
+
+/** The resident pages marked dirty now. */
+uint32_t pc_dirty_count(void);
+
+/** Name the call that wakes the flusher when a page goes dirty at or past
+ * the background threshold; it is made from a fault, with interrupts off,
+ * and must not sleep. NULL calls nothing. */
+void pc_set_flusher(void (*kick)(void));
+
+/**
+ * Write dirty pages back, a run at a time (`PC_RUN_PAGES`), until the count
+ * is under the background threshold or no page is left to try: a page
+ * pinned by a write in flight is passed, and so is one whose run failed in
+ * this call, which stays dirty and is told to the failure hook. The writes
+ * may sleep. Returns the pages written.
+ */
+uint32_t pc_write_background(void);
+
 /** The pages read in since `init_pagecache`, for the host tests. */
 uint32_t pc_stat_reads(void);
 

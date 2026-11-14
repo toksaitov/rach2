@@ -14,8 +14,11 @@
  * clean page, a page not resident, a pinned page and PC_RUN_PAGES pages; that
  * a run whose write fails leaves each of its pages dirty, tells the failure
  * hook once and is tried once in a sync's pass, though each of its pages
- * has a slot of its own; and that a writeback while another run's write
- * sleeps writes its page alone, from the page's own frame.
+ * has a slot of its own; that a writeback while another run's write sleeps
+ * writes its page alone, from the page's own frame; that a fault evicts a
+ * clean page before a dirty one, and a dirty one, with its run, only when
+ * every page is dirty; and that a page going dirty at the background
+ * threshold wakes the flusher, whose writeback leaves the count under it.
  *
  * Built with PAGECACHE_HOSTTEST and 128 slots, it includes pagecache.c
  * whole, over a model disk of 128 pages that logs each write.
@@ -60,6 +63,7 @@ static const void *log_from[LOG_MAX];
 static int fail_next;              /* fail the next write */
 static void (*during_write)(void); /* run once inside the next write */
 static int hook_calls;
+static int kicks; /* wakes of the flusher */
 
 /** The backing's read: the disk's page. Returns 0, or -1 past the disk. */
 static int disk_read(uint32_t disk_off, void *page)
@@ -118,6 +122,12 @@ static void hook(int rc)
     hook_calls++;
 }
 
+/** The flusher's wake: count it. */
+static void kick(void)
+{
+    kicks++;
+}
+
 /** Start each row on an empty cache over a disk whose pages hold their
  *  numbers, with the logs and counts cleared. */
 static void fresh(void)
@@ -134,6 +144,7 @@ static void fresh(void)
     fail_next = 0;
     during_write = 0;
     hook_calls = 0;
+    kicks = 0;
     init_pagecache();
     pc_set_backing(disk_read, disk_write, DISK_PAGES * PC_PAGE_SIZE);
     pc_on_failure(hook);
@@ -358,6 +369,71 @@ static void test_busy_buffer(void)
     check(disk[41][0] == 0xEEu, "with the bytes the store left");
 }
 
+/**
+ * On four slots, pages 0 and 1 dirty and 2 and 3 clean: a fault of page 10
+ * takes a clean page and writes nothing, and so does one of page 11; with
+ * the four slots then dirty, a fault of page 12 writes the run of 0 and 1.
+ */
+static void test_clean_first(void)
+{
+    fresh();
+    check(pc_set_capacity(4) == 0, "the capacity falls to four");
+    touch(0, 1, 0x10u);
+    touch(1, 1, 0x11u);
+    touch(2, 0, 0);
+    touch(3, 0, 0);
+    touch(10, 0, 0);
+    check(log_n == 0, "a fault with clean pages to take writes nothing");
+    check(pc_test_page(0) != 0 && pc_test_page(PC_PAGE_SIZE) != 0, "the dirty pages stay");
+    touch(11, 0, 0);
+    check(log_n == 0, "a second fault takes the other clean page");
+    check(pc_dirty_count() == 2, "two pages are dirty");
+    touch(10, 1, 0x1Au);
+    touch(11, 1, 0x1Bu);
+    touch(12, 0, 0);
+    check(log_n == 1 && log_count[0] == 2 && (log_first[0] == 0 || log_first[0] == 10),
+          "with every page dirty, a fault writes a run of two");
+    check(pc_dirty_count() == 2, "the run's two pages are clean, the others dirty");
+}
+
+/**
+ * On 100 slots and a background ratio of 10 per cent, nine dirty pages
+ * wake nothing and the tenth wakes the flusher, as each one after it does;
+ * the level is then 1. The background writeback writes runs until the
+ * count is under ten, here the whole run of pages 50 to 69 in one write.
+ */
+static void test_background(void)
+{
+    uint32_t p, written;
+
+    fresh();
+    check(pc_set_capacity(100) == 0, "the capacity falls to 100");
+    pc_set_flusher(kick);
+    for (p = 50; p < 59; ++p) {
+        touch(p, 1, (uint8_t)p);
+    }
+    check(kicks == 0 && pc_dirty_level() == 0, "nine dirty pages are under the threshold");
+    touch(59, 1, 59);
+    check(kicks == 1 && pc_dirty_level() == 1, "the tenth wakes the flusher");
+    for (p = 60; p < 70; ++p) {
+        touch(p, 1, (uint8_t)p);
+    }
+    check(kicks == 11, "each page dirtied past the threshold wakes it");
+    touch(60, 1, 0x60u);
+    check(kicks == 11, "a store to a page already dirty wakes nothing");
+    written = pc_write_background();
+    check(written == 20 && log_n == 1 && log_first[0] == 50 && log_count[0] == 20,
+          "the background writeback writes the run of twenty in one write");
+    check(pc_dirty_count() == 0 && pc_dirty_level() == 0, "the count is under the threshold");
+    for (p = 50; p < 70; ++p) {
+        check(page_writes[p] == 1, "each page is written once");
+    }
+    touch(80, 1, 0x80u);
+    log_n = 0;
+    check(pc_write_background() == 0 && log_n == 0, "under the threshold it writes nothing");
+    pc_set_flusher(0);
+}
+
 /** Run the rows. Returns 0 when every check passed and 1 otherwise. */
 int main(void)
 {
@@ -366,6 +442,8 @@ int main(void)
     test_run_bounds();
     test_failed_run();
     test_busy_buffer();
+    test_clean_first();
+    test_background();
     if (fails == 0) {
         printf("pagecache_run_hosttest: ok\n");
     }

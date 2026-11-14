@@ -45,10 +45,16 @@ static void pc_platform_unmap(uintptr_t va)
 static void pc_platform_released(void)
 {}
 
+/* Linux's defaults for the background threshold, which the kernel keeps in
+ * the buffer cache (bcache.c). */
+static int dirty_background_ratio = 10;
+static unsigned long dirty_background_bytes;
+
 #else
 
 #include "paging.h"
 #include "pressure.h"
+#include "../fs/bcache.h"
 #include "../klog.h"
 #include "../panic.h"
 #include "../pci.h"
@@ -131,7 +137,11 @@ static int pc_unclaimed;
 
 static uint32_t pc_reads;
 static uint32_t pc_evicts;
-static uint32_t pc_writebacks; /* pages that writebacks which succeeded wrote */
+static uint32_t pc_writebacks;  /* pages that writebacks which succeeded wrote */
+static uint32_t pc_dirty_pages; /* resident pages marked dirty */
+/* Who wakes the flusher when a page goes dirty at or past the background
+ * threshold (`pc_set_flusher`), or NULL. */
+static void (*pc_kick)(void);
 
 /* The pages of a run of more than one, copied one after another for the
  * backing's one write (`pc_writeback`), and whether a writeback has them:
@@ -199,6 +209,49 @@ static void pc_slot_release(struct pc_entry *e)
         --pc_resident_frames;
     }
 #endif
+}
+
+/**
+ * The dirty pages past which the flusher writes back: `dirty_background_bytes`
+ * in pages when set, else `dirty_background_ratio` per cent of the live
+ * capacity, as Linux's `domain_dirty_limits` takes the bytes when set; at
+ * least one page.
+ */
+static uint32_t pc_background(void)
+{
+    uint32_t n;
+
+    if (dirty_background_bytes) {
+        unsigned long want = (dirty_background_bytes + PC_PAGE_SIZE - 1u) / PC_PAGE_SIZE;
+
+        n = want > pc_capacity ? pc_capacity : (uint32_t)want;
+    } else {
+        n = (uint32_t)(((uint64_t)pc_capacity * (uint32_t)dirty_background_ratio) / 100u);
+    }
+    return n ? n : 1u;
+}
+
+/** Mark the page of `e` dirty and count it; a page that goes dirty at or
+ * past the background threshold wakes the flusher. Interrupts may be off. */
+static void pc_mark_dirty(struct pc_entry *e)
+{
+    if (e->dirty) {
+        return;
+    }
+    e->dirty = 1;
+    ++pc_dirty_pages;
+    if (pc_kick && pc_dirty_pages >= pc_background()) {
+        pc_kick();
+    }
+}
+
+/** Clear the dirty mark of `e`, and its count. */
+static void pc_mark_clean(struct pc_entry *e)
+{
+    if (e->dirty) {
+        e->dirty = 0;
+        --pc_dirty_pages;
+    }
 }
 
 /** The page number of the backing offset `disk_off`, the hash's key. */
@@ -362,11 +415,11 @@ static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run)
  * PC_RUN_PAGES (`pc_gather`), as Linux's writeback puts a file's contiguous
  * dirty pages in one bio (mm/page-writeback.c, `write_cache_pages`): the
  * ATA disk flushes its cache after each write, a synchronous write of the
- * disk's image file under an emulator, and a lookup's walk of the ring
- * that evicted a page at a time behind a copy of a 6 MB file made a flush
- * for each of some 1500 pages, with interrupts off, for 23 s. A run of more
- * than one page is copied into `pc_run_buf` while no other writeback has it,
- * and a page alone is written from its frame.
+ * disk's image file under an emulator, and a copy of a 6 MB file whose
+ * walks of the ring evicted dirty pages one at a time, in faults with
+ * interrupts off, flushed the disk 2610 times. A run of more than one page
+ * is copied into `pc_run_buf` while no other writeback has it, and a page
+ * alone is written from its frame.
  *
  * The pins are tested before the dirty marks, since a write in flight
  * clears the mark for its length. A system call switches processes only
@@ -400,7 +453,7 @@ static int pc_writeback(struct pc_entry *e)
     for (i = 0; i < n; ++i) {
         run[i]->pinned = 1;
         pc_platform_map(PCWIN_BASE + run[i]->disk_off, run[i]->phys, 0);
-        run[i]->dirty = 0;
+        pc_mark_clean(run[i]);
     }
     from = e->page;
     if (n > 1) {
@@ -426,7 +479,10 @@ static int pc_writeback(struct pc_entry *e)
              "writeback failed at disk offset 0x%X, %u page(s); the pages stay dirty",
              run[0]->disk_off, n);
         for (i = 0; i < n; ++i) {
-            run[i]->dirty = 1;
+            if (!run[i]->dirty) {
+                run[i]->dirty = 1;
+                ++pc_dirty_pages;
+            }
             run[i]->failed = 1;
         }
         if (pc_failed) {
@@ -481,6 +537,14 @@ static int pc_evict(uint32_t slot)
  * page gives way. The clock passes a slot reclaim emptied of its frame, and
  * a victim whose writeback fails is left dirty and passed, so a clean
  * victim is still found; -1 only when no victim could be emptied.
+ *
+ * The clock's first two sweeps pass dirty pages, the first clearing the
+ * marks of use, so that a clean page not used since is taken before any
+ * dirty one, and a dirty one only when the sweeps found none: a fault runs
+ * with interrupts off, and a writeback there holds the processor for the
+ * disk's write and flush, as Linux's direct reclaim leaves dirty file pages
+ * to the flusher (mm/vmscan.c, `shrink_folio_list`). The flusher keeps the
+ * dirty pages under the background threshold (`pc_write_background`).
  */
 static int32_t pc_get_slot(void)
 {
@@ -498,7 +562,7 @@ static int32_t pc_get_slot(void)
         }
     }
 
-    for (scanned = 0; scanned < pc_capacity * 3u; ++scanned) {
+    for (scanned = 0; scanned < pc_capacity * 4u; ++scanned) {
         uint32_t v = pc_clock;
         pc_clock = (pc_clock + 1u) % pc_capacity;
         if (pc_slots[v].pinned || !PC_HAS_STORAGE(&pc_slots[v])) {
@@ -506,6 +570,9 @@ static int32_t pc_get_slot(void)
         }
         if (pc_slots[v].accessed) {
             pc_slots[v].accessed = 0;
+            continue;
+        }
+        if (pc_slots[v].dirty && scanned < pc_capacity * 2u) {
             continue;
         }
         if (pc_evict(v) == 0) {
@@ -538,7 +605,7 @@ int pc_fault(uintptr_t fault_address, int write)
         e = &pc_slots[slot];
         e->accessed = 1;
         if (write) {
-            e->dirty = 1;
+            pc_mark_dirty(e);
             pc_platform_map(page_va, e->phys, 1);
         }
         return 1;
@@ -556,9 +623,12 @@ int pc_fault(uintptr_t fault_address, int write)
         return 0;
     }
     e->valid = 1;
-    e->dirty = (uint8_t)(write ? 1 : 0);
+    e->dirty = 0;
     e->accessed = 1;
     e->failed = 0;
+    if (write) {
+        pc_mark_dirty(e);
+    }
     pc_hash_insert(disk_off, (uint32_t)slot);
     pc_platform_map(page_va, e->phys, write ? 1 : 0);
     pc_unpin(e);
@@ -623,6 +693,46 @@ void pc_wait_release(uint32_t seen)
 }
 #endif
 
+int pc_dirty_level(void)
+{
+    return pc_dirty_pages >= pc_background() ? 1 : 0;
+}
+
+uint32_t pc_dirty_count(void)
+{
+    return pc_dirty_pages;
+}
+
+void pc_set_flusher(void (*kick)(void))
+{
+    pc_kick = kick;
+}
+
+/**
+ * Each dirty page that is not pinned and whose run has not failed in this
+ * call starts a run (`pc_writeback`), which may sleep; a page that goes
+ * dirty behind the walk waits for the next call.
+ */
+uint32_t pc_write_background(void)
+{
+    uint32_t i, written = 0, before;
+
+    for (i = 0; i < PC_SLOTS; ++i) {
+        pc_slots[i].failed = 0;
+    }
+    for (i = 0; i < PC_SLOTS && pc_dirty_pages >= pc_background(); ++i) {
+        struct pc_entry *e = &pc_slots[i];
+
+        if (!e->valid || !e->dirty || e->pinned || e->failed) {
+            continue;
+        }
+        before = pc_writebacks;
+        (void)pc_writeback(e);
+        written += pc_writebacks - before;
+    }
+    return written;
+}
+
 /**
  * Busy slots and failed writes are reported apart, so that a competing sync
  * can wait for the writes in flight without trying a failed write again for
@@ -685,6 +795,7 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
     }
     pc_hash_rebuild();
     pc_clock = 0;
+    pc_dirty_pages = 0;
 
     pc_read = read;
     pc_write = write;
@@ -762,6 +873,7 @@ void init_pagecache(void)
     pc_capacity = PC_SLOTS;
     pc_clock = 0;
     pc_reads = pc_evicts = pc_writebacks = 0;
+    pc_dirty_pages = 0;
     pc_hash_rebuild();
 }
 
@@ -859,6 +971,7 @@ void init_pagecache(void)
     pc_resident_frames = 0;
     pc_clock = 0;
     pc_reads = pc_evicts = pc_writebacks = 0;
+    pc_dirty_pages = 0;
     pc_hash_rebuild();
 }
 
