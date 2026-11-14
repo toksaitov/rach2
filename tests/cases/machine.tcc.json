@@ -226,7 +226,7 @@
         },
         {
           "assertion_id": "widened",
-          "checks": "the program prints WIDENED 1 1 1 12 2147483648: an unsigned int cast from 0x100000001 in a register converts to 1 as a double, a float and a long double, a pointer to the last row of int[3][3] less one points 12 bytes into the array, and a pointer to a row of 0x80000000 chars plus one moves forward 2147483648 bytes in a mapping of that size",
+          "checks": "the program prints WIDENED 1 1 1 12 2147483648 on x86-64: an unsigned int cast from 0x100000001 in a register converts to 1 as a double, a float and a long double, a pointer to the last row of int[3][3] less one points 12 bytes into the array, and a pointer to a row of 0x80000000 chars plus one moves forward 2147483648 bytes in a mapping of that size; on i686, where musl's mmap refuses a length of 0x80000000, it prints WIDENED 1 1 1 12 0",
           "source": "scenario"
         },
         {
@@ -260,7 +260,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a step of the manifest has ended",
-          "limit": 8
+          "limit": 9
         }
       ],
       "bounds": {

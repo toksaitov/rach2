@@ -151,7 +151,9 @@ static const char units_line[] =
  * scaled in 32 bits moved forward almost 4 GiB, and w steps one row of 2 GiB
  * forward in a mapping that reserves no memory, which an int size read back
  * negative moved backward; the x86-64 step by the size of a pointer gave 16
- * and 8. The program the i686 compiler makes prints the same line.
+ * and 8. The i686 program prints the same line but for w, which is 0: musl's
+ * mmap refuses a length of PTRDIFF_MAX or more on i386, and there a 32-bit
+ * size and an int size step a pointer alike.
  */
 static const char wide1_line[] =
     "printf '#include <stdio.h>\\n#include <sys/mman.h>\\ntypedef unsigned long long u64;\\n"
@@ -243,8 +245,19 @@ static void refused(struct shell *s, const char *id, const char *status, const c
 static void compile(struct shell *s)
 {
     char line[200];
+    const char *arch, *widened;
     const char *missing;
     char *text;
+
+    arch = getenv("ARCH");
+    if (arch != NULL && strcmp(arch, "x86_64") == 0)
+        widened = "WIDENED 1 1 1 12 2147483648";
+    else if (arch != NULL && strcmp(arch, "i686") == 0)
+        widened = "WIDENED 1 1 1 12 0";
+    else {
+        net_fail(&s->u, "ARCH names no architecture of the build");
+        widened = "WIDENED";
+    }
 
     net_step(&s->u, "boot");
     login(s, 1, "login");
@@ -302,7 +315,7 @@ static void compile(struct shell *s)
     type(s, wide_built_line);
     has(s, "widen-built", "WIDEBUILT", "the compiler did not build the program of the widening");
     type(s, "/tmp/wide");
-    has(s, "widened", "WIDENED 1 1 1 12 2147483648",
+    has(s, "widened", widened,
         "the compiler read the high half of a 64-bit register for an unsigned int it converted "
         "to floating point, or scaled an index into a variable-length array by a size held in an "
         "int");
