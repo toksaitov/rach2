@@ -52,14 +52,10 @@ typedef unsigned int uint32_t;
 #define BUS     "/sys/bus/virtio/devices/"
 #define DRIVERS "/sys/bus/pci/drivers/virtio-pci/"
 
-/* The directory entry of getdents64(2). */
-struct dirent64_probe {
-    unsigned long long d_ino;
-    long long d_off;
-    unsigned short d_reclen;
-    unsigned char d_type;
-    char d_name[1];
-};
+/* A directory entry of getdents64(2), linux_dirent64: its length is at
+ * offset 16 and its name begins at 19. */
+#define DIRENT_RECLEN 16
+#define DIRENT_NAME   19
 
 static int failures;
 
@@ -175,16 +171,15 @@ static int find_device(char *name, size_t cap)
         return 0;
     }
     while (!found && (n = syscall3(SYS_GETDENTS64, fd, (long)buf, sizeof(buf))) > 0) {
-        for (at = 0; at < n && !found;) {
-            struct dirent64_probe *d = (struct dirent64_probe *)(buf + at);
+        for (at = 0; at < n && !found; at += *(unsigned short *)(buf + at + DIRENT_RECLEN)) {
+            const char *entry = buf + at + DIRENT_NAME;
 
-            at += d->d_reclen;
-            if (d->d_name[0] == '.') {
+            if (entry[0] == '.') {
                 continue;
             }
-            read_text(join(path, sizeof(path), BUS, d->d_name, "/device"), id, sizeof(id));
+            read_text(join(path, sizeof(path), BUS, entry, "/device"), id, sizeof(id));
             if (same(id, "0x0001")) {
-                join(name, cap, d->d_name, "", "");
+                join(name, cap, entry, "", "");
                 found = 1;
             }
         }
