@@ -88,45 +88,6 @@ static uint32_t user_seg(uint32_t sel)
     return (s == GDT_USER_DATA_SELECTOR || s == GDT_TLS_SELECTOR) ? s : GDT_USER_DATA_SELECTOR;
 }
 
-static void put32(uint8_t *p, uint32_t v)
-{
-    k_memcpy(p, &v, sizeof(v));
-}
-
-void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info)
-{
-    int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
-                 signo == SIGTRAP) &&
-                info->code > 0 && info->code < SI_KERNEL && !info->notify;
-
-    k_memset(out, 0, 128);
-    put32(out, (uint32_t)signo);
-    put32(out + 4, (uint32_t)info->err);
-    put32(out + 8, (uint32_t)info->code);
-    if (fault) {
-        put32(out + 12, info->addr);
-        return;
-    }
-    put32(out + 12, info->pid);
-    put32(out + 16, info->uid);
-    put32(out + 20, (uint32_t)info->status);
-}
-
-void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
-{
-    int32_t code;
-
-    k_memset(info, 0, sizeof(*info));
-    k_memcpy(&info->err, in + 4, 4);
-    k_memcpy(&code, in + 8, 4);
-    info->code = code;
-    k_memcpy(&info->pid, in + 12, 4);
-    k_memcpy(&info->uid, in + 16, 4);
-    k_memcpy(&info->status, in + 20, 4);
-    k_memcpy(&info->addr, in + 12, 4);
-    info->value = (uint32_t)info->status;
-}
-
 static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, uint32_t fp_addr,
                             uint64_t oldmask)
 {

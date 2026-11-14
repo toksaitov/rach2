@@ -606,7 +606,8 @@ struct process {
      * PTRACE_SETOPTIONS set; the wait status of the ptrace stop the thread is
      * in, 0 when it is in none; whether the tracer's wait reported that
      * stop; the signal the tracer resumes it with; the message
-     * PTRACE_GETEVENTMSG reads; the siginfo of the stop; the system call a
+     * PTRACE_GETEVENTMSG reads; the siginfo of the stop and its si_signo,
+     * the stop's or the one PTRACE_SETSIGINFO gave; the system call a
      * stop is in, -1 for none; whether the tracer has seen the process end;
      * and the debug registers DR0 to DR7 as the tracer set them, DR6 as the
      * last debug exception left it. */
@@ -618,6 +619,7 @@ struct process {
     int32_t ptrace_signo;
     uint32_t ptrace_msg;
     struct k_siginfo ptrace_info;
+    int32_t ptrace_info_signo;
     int32_t orig_nr;
     uint32_t ptrace_exit_seen;
     uintptr_t debugreg[8];

@@ -5453,33 +5453,36 @@ void siginfo_to_caller(uint8_t *out, int signo, const struct k_siginfo *info)
     sigframe_fill_siginfo(out, signo, info);
 }
 
-void siginfo_from_caller(const uint8_t *in, struct k_siginfo *info)
+void siginfo_from_caller(const uint8_t *in, int signo, struct k_siginfo *info)
 {
 #if defined(IA32_SYSCALL_TABLE_SIZE)
     if (in_compat_syscall()) {
-        ia32_take_siginfo(in, info);
+        ia32_take_siginfo(in, signo, info);
         return;
     }
 #endif
-    sigframe_take_siginfo(in, info);
+    sigframe_take_siginfo(in, signo, info);
 }
 
 /**
  * Copy and decode a queued signal's siginfo, in the caller's layout
- * (`siginfo_from_caller`), before resolving its target.
- * Returns 0 or -EFAULT. When nonnull, `signo` gets the signal number from
- * the same copy. This may sleep on a user page fault.
+ * (`siginfo_from_caller`), as one of the call's signal `signo`, before
+ * resolving its target: the union is read by the layout of that signal,
+ * whatever si_signo says, as Linux's __copy_siginfo_from_user sets si_signo
+ * to the call's signal before it reads the rest. Returns 0 or -EFAULT. When
+ * nonnull, `given` gets si_signo from the same copy. This may sleep on a
+ * user page fault.
  */
-static int32_t queued_info(uintptr_t u, struct k_siginfo *info, int32_t *signo)
+static int32_t queued_info(uintptr_t u, int signo, struct k_siginfo *info, int32_t *given)
 {
     uint8_t buf[SIGINFO_SIZE];
 
     if (copy_from_user(buf, (const void __user *)u, sizeof(buf)) != 0) {
         return -EFAULT;
     }
-    siginfo_from_caller(buf, info);
-    if (signo) {
-        k_memcpy(signo, buf, sizeof(*signo));
+    siginfo_from_caller(buf, signo, info);
+    if (given) {
+        k_memcpy(given, buf, sizeof(*given));
     }
     return 0;
 }
@@ -5518,7 +5521,7 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
     if (signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
-    rc = queued_info(SC_ARG(params, 2), &info, NULL);
+    rc = queued_info(SC_ARG(params, 2), signo, &info, NULL);
     if (rc != 0) {
         return rc;
     }
@@ -5556,7 +5559,7 @@ long sys_pidfd_send_signal(isr_params_t *params)
         return -EINVAL;
     }
     if (uinfo) {
-        rc = queued_info(uinfo, &info, &given);
+        rc = queued_info(uinfo, signo, &info, &given);
         if (rc != 0) {
             return rc;
         }
@@ -5605,7 +5608,7 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
     if (tgid <= 0 || tid <= 0 || signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
-    rc = queued_info(SC_ARG(params, 3), &info, NULL);
+    rc = queued_info(SC_ARG(params, 3), signo, &info, NULL);
     if (rc != 0) {
         return rc;
     }
@@ -6584,50 +6587,6 @@ struct sigfd {
     uint64_t mask;
 };
 
-/** Store the 32-bit `v` at `at`, which need not be aligned. */
-static void put_word(uint8_t *at, uint32_t v)
-{
-    k_memcpy(at, &v, sizeof(v));
-}
-
-/** Store the 64-bit `v` at `at`, which need not be aligned. */
-static void put_u64(uint8_t *at, uint64_t v)
-{
-    k_memcpy(at, &v, sizeof(v));
-}
-
-/**
- * The 128-byte struct signalfd_siginfo of `signo` and `info`, in Linux's
- * fields: a timer's id, overrun and value, a child's pid, uid and status, a
- * fault's address, or a sender's pid, uid and value.
- */
-static void sigfd_fill(uint8_t *out, int signo, const struct k_siginfo *info)
-{
-    int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
-                 signo == SIGTRAP) &&
-                info->code > 0;
-
-    k_memset(out, 0, 128);
-    put_word(out, (uint32_t)signo);
-    put_word(out + 8, (uint32_t)info->code);
-    if (fault) {
-        put_u64(out + 72, info->addr); /* ssi_addr */
-    } else if (info->code == SI_TIMER) {
-        put_word(out + 24, info->pid);             /* ssi_tid */
-        put_word(out + 32, info->uid);             /* ssi_overrun */
-        put_word(out + 44, (uint32_t)info->value); /* ssi_int */
-        put_u64(out + 48, info->value);            /* ssi_ptr */
-    } else {
-        put_word(out + 12, info->pid);
-        put_word(out + 16, info->uid);
-        put_word(out + 40, (uint32_t)info->status); /* ssi_status */
-        put_word(out + 44, (uint32_t)info->status); /* ssi_int */
-        put_u64(out + 48, info->code == SI_QUEUE || info->code == SI_MESGQ
-                              ? info->value
-                              : (uint32_t)info->status);
-    }
-}
-
 /** Whether a signal of the signalfd `arg`'s mask is pending for the current
  * thread or its process: the end of a signalfd read's wait. */
 static int sigfd_ready(void *arg)
@@ -6679,7 +6638,7 @@ static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
             }
             continue;
         }
-        sigfd_fill(one, (int)signo, &info);
+        signalfd_fill_siginfo(one, (int)signo, &info);
         if (copy_to_user((void __user *)(buf + done), one, sizeof(one)) != 0) {
             return done > 0 ? (int32_t)done : -EFAULT;
         }

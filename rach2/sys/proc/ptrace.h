@@ -65,7 +65,9 @@ void ptrace_return_stops(void);
  * A signal-delivery stop for `signo`, which the current thread has taken off
  * its pending sets with `*info`: a traced thread stops for its tracer, which
  * may change the signal, or its siginfo, or give none. A signal other than
- * `signo` gets an SI_USER siginfo from the tracer, and one the thread blocks
+ * the siginfo's si_signo, `signo` unless PTRACE_SETSIGINFO gave another,
+ * gets an SI_USER siginfo from the tracer, as Linux's ptrace_signal gives
+ * it, and one the thread blocks
  * is posted to it again. Returns the signal to act on, 0 for none; SIGKILL
  * and an untraced thread's signal pass.
  */

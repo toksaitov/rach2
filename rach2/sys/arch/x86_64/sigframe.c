@@ -105,36 +105,6 @@ int sigframe_on_altstack(uintptr_t sp)
            sp - (uintptr_t)current_proc->altstack_sp < (uintptr_t)current_proc->altstack_size;
 }
 
-/** Store `v` at `p`, which need not be aligned. */
-static void put32(uint8_t *p, uint32_t v)
-{
-    k_memcpy(p, &v, sizeof(v));
-}
-
-/** Store `v` at `p`, which need not be aligned. */
-static void put64(uint8_t *p, uint64_t v)
-{
-    k_memcpy(p, &v, sizeof(v));
-}
-
-/** The value at `p`, which need not be aligned. */
-static uint32_t get32(const uint8_t *p)
-{
-    uint32_t v;
-
-    k_memcpy(&v, p, sizeof(v));
-    return v;
-}
-
-/** The value at `p`, which need not be aligned. */
-static uint64_t get64(const uint8_t *p)
-{
-    uint64_t v;
-
-    k_memcpy(&v, p, sizeof(v));
-    return v;
-}
-
 /** Whether `sel` names a present writable data segment at DPL 3, one an
  * `iretq` to user mode may load into SS, as Linux's `force_valid_ss`
  * tests: `lar` leaves its 0 where the descriptor is out of reach. */
@@ -149,84 +119,6 @@ int sigframe_ss_valid(unsigned int sel)
     ar &= AR_TYPE_MASK | AR_S | AR_DPL3 | AR_P;
     return ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA) ||
            ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA_EXPDOWN);
-}
-
-/** Whether `signo` with `code` is a seccomp filter's SIGSYS or another of
- * the codes of SIGSYS's own layout, through SYS_USER_DISPATCH, 2, whose
- * union has the call's address, number and architecture, as Linux's
- * siginfo_layout gives SIL_SYS. */
-static int is_sigsys(int signo, int32_t code)
-{
-    return signo == SIGSYS && code >= SIGSYS_SECCOMP && code <= 2;
-}
-
-/**
- * The x86-64 siginfo: signo, errno and code, then at byte 16, past the
- * padding that aligns the union, Linux x86-64's fields of the kind the
- * code says, as Linux's siginfo_layout reads it: a fault's address, for a
- * fault signal's code between SI_USER and SI_KERNEL in a siginfo not marked
- * `notify`, whose pid and uid Linux's whole copy gives, and for SIGSEGV with
- * SEGV_PKUERR the key at 32, `si_pkey`; a seccomp SIGSYS's call address,
- * call number at 24 and architecture at 28; and otherwise the sender's or
- * child's pid and uid at 16 and 20 and, at 24, a timer's or a queued
- * signal's si_value, all eight bytes, or a child's status. For a timer the
- * first two are its id and overrun.
- */
-void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info)
-{
-    int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
-                 signo == SIGTRAP) &&
-                info->code > 0 && info->code < SI_KERNEL && !info->notify;
-
-    k_memset(out, 0, SIGINFO_SIZE);
-    put32(out, (uint32_t)signo);
-    put32(out + 4, (uint32_t)info->err);
-    put32(out + 8, (uint32_t)info->code);
-    if (fault) {
-        put64(out + 16, (uint64_t)info->addr);
-        if (signo == SIGSEGV && info->code == SEGV_PKUERR) {
-            put32(out + 32, info->pkey);
-        }
-        return;
-    }
-    if (is_sigsys(signo, info->code)) {
-        put64(out + 16, (uint64_t)info->addr);
-        put32(out + 24, info->uid);
-        put32(out + 28, (uint32_t)info->status);
-        return;
-    }
-    put32(out + 16, info->pid);
-    put32(out + 20, info->uid);
-    if (info->code == SI_TIMER || info->code == SI_QUEUE || info->code == SI_MESGQ) {
-        put64(out + 24, (uint64_t)info->value);
-    } else {
-        put32(out + 24, (uint32_t)info->status);
-    }
-}
-
-/** The fields of the x86-64 siginfo at `in` that sigframe_fill_siginfo
- * writes, for rt_sigqueueinfo and PTRACE_SETSIGINFO, read by the signal and
- * the code the siginfo has: a field another kind has there is read too,
- * and the fill of the kind the code says puts back the one it has. */
-void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
-{
-    int32_t code = (int32_t)get32(in + 8);
-
-    k_memset(info, 0, sizeof(*info));
-    info->err = (int32_t)get32(in + 4);
-    info->code = code;
-    info->addr = get64(in + 16);
-    if (is_sigsys((int)get32(in), code)) {
-        info->pid = (uint32_t)info->addr;
-        info->uid = get32(in + 24);
-        info->status = (int32_t)get32(in + 28);
-        return;
-    }
-    info->pid = get32(in + 16);
-    info->uid = get32(in + 20);
-    info->status = (int32_t)get32(in + 24);
-    info->value = get64(in + 24);
-    info->pkey = get32(in + 32);
 }
 
 /**

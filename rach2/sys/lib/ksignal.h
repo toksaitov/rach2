@@ -85,11 +85,15 @@
 #define FPE_FLTINV     7
 #define SEGV_MAPERR    1
 #define SEGV_ACCERR    2
+#define SEGV_BNDERR    3
 #define SEGV_PKUERR    4
 #define BUS_ADRALN     1
+#define BUS_MCEERR_AR  4
+#define BUS_MCEERR_AO  5
 #define TRAP_BRKPT     1
 #define TRAP_TRACE     2
 #define TRAP_HWBKPT    4
+#define TRAP_PERF      6
 #define CLD_EXITED     1
 #define CLD_KILLED     2
 #define CLD_DUMPED     3
@@ -97,15 +101,19 @@
 #define CLD_STOPPED    5
 #define CLD_CONTINUED  6
 
+/* The bytes of Linux's union __sifields, a siginfo's fields after si_code:
+ * 32 on x86-64 and 20 on i386. */
+#define SIGINFO_UNION_SIZE (sizeof(uintptr_t) == 8 ? 32 : 20)
+
 /*
  * What the kernel keeps with a pending signal for the `siginfo_t` its
  * handler receives: `si_code`, the sender's pid and uid, a child's status,
  * a fault's address, the word a timer or a queued signal carries
  * (`si_value`, which on i386 is where a child's status is, and is kept in
  * `status` as well), `si_errno`, which only SIGSYS from a seccomp filter
- * sets, and the protection key of a fault one refused. One record per
- * signal number, like the pending bit: the first instance's record stays
- * until the signal is delivered.
+ * sets, the protection key of a fault one refused, and the whole union of
+ * one a program gave. One record per signal number, like the pending bit:
+ * the first instance's record stays until the signal is delivered.
  */
 struct k_siginfo {
     int32_t code;
@@ -123,14 +131,13 @@ struct k_siginfo {
     uint32_t timer_key; /* a POSIX timer's SI_TIMER signal: the timer that
                          * posted it (`key`), whose later expirations add to
                          * it while it is pending; 0 for every other signal */
-    uint32_t notify;    /* nonzero for the siginfo of a ptrace stop that no
-                         * signal makes, which has the thread's pid and uid
-                         * whatever its code says, as Linux's
-                         * ptrace_do_notify writes them into the union: the
-                         * native layouts, which Linux copies whole, give
-                         * them as pid and uid, and the i386 layout of the
-                         * x86-64 kernel reads the union as the code says,
-                         * as Linux's copy_siginfo_to_external32 does */
+    uint32_t packed;    /* nonzero when `fields` holds the union whole */
+    /* The union of the siginfo in the native layout, as Linux's
+     * kernel_siginfo keeps it, for a siginfo a program gave and for that of
+     * a ptrace stop no signal makes, whose union has the thread's pid and
+     * uid whatever its code says (siginfo.c). The outputs read it by the
+     * layout of the signal and code; the members above are read from it. */
+    uint8_t fields[SIGINFO_UNION_SIZE];
 };
 
 /*

@@ -1,6 +1,7 @@
 /**
  * Check the i386 signal frames, siginfo and ptrace registers of the x86-64
- * kernel, `arch/x86_64/sigframe32.c` and `arch/x86_64/ptrace.c`, against
+ * kernel, `arch/x86_64/sigframe32.c`, `proc/siginfo.c` and
+ * `arch/x86_64/ptrace.c`, against
  * Linux 6.12's layouts, over a model of user memory, the selectors and the
  * floating-point state, compiled with x86-64's `cpu.h`.
  *
@@ -14,6 +15,7 @@
  * arch/x86/include/asm/user32.h give them.
  */
 #include "arch/x86_64/sigframe32.c"
+#include "proc/siginfo.c"
 #include "arch/x86_64/ptrace.c"
 #include "arch/x86_64/ia32_core.c"
 #include "lib/kstring.h"
@@ -501,7 +503,7 @@ static void run_siginfo(void)
     info.value = 0x1234567890ul;
     ia32_fill_siginfo(si, 40, &info);
     check(si_word(si, 20) == 0x34567890u, "sigqueue's value at 20, its low half");
-    ia32_take_siginfo(si, &back);
+    ia32_take_siginfo(si, 40, &back);
     check(back.code == SI_QUEUE && back.pid == 41 && back.uid == 1000 && back.value == 0x34567890u,
           "sigqueue's siginfo read back");
 
@@ -529,6 +531,116 @@ static void run_siginfo(void)
     ia32_fill_siginfo(si, SIGSYS, &info);
     check(si_word(si, 12) == 0x08048123u && si_word(si, 16) == 20 && si_word(si, 20) == 0x40000003u,
           "seccomp SIGSYS's call address, number and architecture at 12, 16 and 20");
+}
+
+/** The 64-bit word at `off` of the native siginfo `si`. */
+static uint64_t si_long(const uint8_t *si, unsigned off)
+{
+    uint64_t v;
+
+    k_memcpy(&v, si + off, sizeof(v));
+    return v;
+}
+
+/** An i386 siginfo at `si` with `signo`, `code` and the words `w` from byte
+ * 12 on. */
+static void si_make(uint8_t *si, uint32_t signo, uint32_t code, const uint32_t *w, unsigned n)
+{
+    unsigned i;
+
+    k_memset(si, 0, SIGINFO_SIZE);
+    put32(si, signo);
+    put32(si + 8, code);
+    for (i = 0; i < n; i++) {
+        put32(si + 12 + 4 * i, w[i]);
+    }
+}
+
+/**
+ * The layouts each way, as Linux 6.12's siginfo_layout,
+ * copy_siginfo_to_external32, post_copy_siginfo_from_user32 and
+ * signalfd_copyinfo give them: a queued siginfo read by the call's signal,
+ * the fallback layouts read alike by the i386, native and signalfd outputs,
+ * and the fault layouts with more than an address.
+ */
+static void run_siginfo_layouts(void)
+{
+    static const uint32_t addr[] = {0x12345000u};
+    static const uint32_t ids[] = {77u, 1000u};
+    static const uint32_t poll[] = {0xFFFFFFF0u, 9u};
+    static const uint32_t bnd[] = {0x1000u, 0, 0x2000u, 0x3000u};
+    static const uint32_t mce[] = {0x4000u, 12u};
+    static const uint32_t perf[] = {0x5000u, 0xA1u, 0xB2u, 0xC3u};
+    uint8_t si[SIGINFO_SIZE], out[SIGINFO_SIZE];
+    struct k_siginfo info;
+
+    si_make(si, 0, SEGV_MAPERR, addr, 1);
+    ia32_take_siginfo(si, SIGSEGV, &info);
+    ia32_fill_siginfo(out, SIGSEGV, &info);
+    check(info.addr == 0x12345000u && si_word(out, 12) == 0x12345000u,
+          "a queued SIGSEGV with si_signo 0 keeps its address, read by the call's signal");
+
+    si_make(si, SIGTRAP, 7, ids, 2);
+    ia32_take_siginfo(si, SIGTRAP, &info);
+    sigframe_fill_siginfo(out, SIGTRAP, &info);
+    check(si_word(out, 16) == 77u && si_word(out, 20) == 1000u,
+          "SIGTRAP code 7 from i386 gives its pid and uid to a native reader, SIL_KILL");
+    signalfd_fill_siginfo(out, SIGTRAP, &info);
+    check(si_word(out, 12) == 77u && si_word(out, 16) == 1000u && si_long(out, 72) == 0,
+          "and to signalfd as ssi_pid and ssi_uid");
+
+    si_make(si, SIGBUS, 6, poll, 2);
+    ia32_take_siginfo(si, SIGBUS, &info);
+    sigframe_fill_siginfo(out, SIGBUS, &info);
+    check(si_long(out, 16) == 0xFFFFFFFFFFFFFFF0ull && si_word(out, 24) == 9u,
+          "SIGBUS code 6 from i386 gives a native reader its band sign-extended and its fd, "
+          "SIL_POLL");
+    signalfd_fill_siginfo(out, SIGBUS, &info);
+    check(si_word(out, 28) == 0xFFFFFFF0u && si_word(out, 20) == 9u,
+          "and signalfd its ssi_band and ssi_fd");
+
+    si_make(si, SIGSEGV, SEGV_BNDERR, bnd, 4);
+    ia32_take_siginfo(si, SIGSEGV, &info);
+    sigframe_fill_siginfo(out, SIGSEGV, &info);
+    check(si_long(out, 16) == 0x1000u && si_long(out, 32) == 0x2000u && si_long(out, 40) == 0x3000u,
+          "SEGV_BNDERR's address, lower and upper at 16, 32 and 40 natively");
+    ia32_fill_siginfo(out, SIGSEGV, &info);
+    check(si_word(out, 12) == 0x1000u && si_word(out, 20) == 0x2000u && si_word(out, 24) == 0x3000u,
+          "and at 12, 20 and 24 for i386");
+
+    si_make(si, SIGBUS, BUS_MCEERR_AR, mce, 2);
+    ia32_take_siginfo(si, SIGBUS, &info);
+    sigframe_fill_siginfo(out, SIGBUS, &info);
+    check(si_long(out, 16) == 0x4000u && get16(out + 24) == 12u,
+          "BUS_MCEERR_AR's address and si_addr_lsb at 16 and 24 natively");
+    ia32_fill_siginfo(out, SIGBUS, &info);
+    check(si_word(out, 12) == 0x4000u && si_word(out, 16) == 12u, "and at 12 and 16 for i386");
+    signalfd_fill_siginfo(out, SIGBUS, &info);
+    check(si_long(out, 72) == 0x4000u && get16(out + 80) == 12u,
+          "and as ssi_addr and ssi_addr_lsb to signalfd");
+
+    si_make(si, SIGTRAP, TRAP_PERF, perf, 4);
+    ia32_take_siginfo(si, SIGTRAP, &info);
+    sigframe_fill_siginfo(out, SIGTRAP, &info);
+    check(si_long(out, 16) == 0x5000u && si_long(out, 24) == 0xA1u && si_word(out, 32) == 0xB2u &&
+              si_word(out, 36) == 0xC3u,
+          "TRAP_PERF's address, data, type and flags at 16, 24, 32 and 36 natively");
+    ia32_fill_siginfo(out, SIGTRAP, &info);
+    check(si_word(out, 12) == 0x5000u && si_word(out, 16) == 0xA1u && si_word(out, 20) == 0xB2u &&
+              si_word(out, 24) == 0xC3u,
+          "and at 12, 16, 20 and 24 for i386");
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = SIGTRAP;
+    info.pid = 31;
+    info.uid = 1000;
+    siginfo_pack(&info, SIL_KILL);
+    sigframe_fill_siginfo(out, SIGTRAP, &info);
+    check(si_word(out, 16) == 31u && si_word(out, 20) == 1000u,
+          "a plain system call stop's siginfo gives a native reader its pid and uid");
+    ia32_fill_siginfo(out, SIGTRAP, &info);
+    check(si_word(out, 12) == 31u && si_word(out, 16) == 0,
+          "and an i386 one its pid as the address of TRAP_UNK");
 }
 
 /** Give the running thread an i386 context: its frame `tf` interrupted at
@@ -853,6 +965,7 @@ int main(void)
 {
     run_layout();
     run_siginfo();
+    run_siginfo_layouts();
     run_rt_frame();
     run_plain_frame();
     run_stacks();

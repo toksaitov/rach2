@@ -122,6 +122,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/mutex.c \
     sys/proc/futex.c \
     sys/proc/ptrace.c \
+    sys/proc/siginfo.c \
     sys/proc/seccomp.c \
     sys/proc/ns.c \
     sys/proc/pidfd.c \

@@ -56,18 +56,54 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask);
 /* The bytes of a `siginfo_t`, on every architecture. */
 #define SIGINFO_SIZE 128
 
-/** Write the `siginfo_t` of `signo` with `info` into the SIGINFO_SIZE bytes
- * at `out`, as the architecture lays it out: signo, errno and code, then
- * the fault's address, or the sender's pid and uid and a child's status,
- * which a siginfo marked `notify` has whatever its code;
- * x86-64 also writes a seccomp SIGSYS's fields and a timer's or a queued
- * signal's value. */
+/* The layouts of a siginfo's union, Linux 6.12's enum siginfo_layout
+ * (include/linux/signal.h), but SIL_FAULT_TRAPNO, which only the codes of
+ * alpha and sparc have. */
+#define SIL_KILL             0
+#define SIL_TIMER            1
+#define SIL_POLL             2
+#define SIL_FAULT            3
+#define SIL_FAULT_MCEERR     4
+#define SIL_FAULT_BNDERR     5
+#define SIL_FAULT_PKUERR     6
+#define SIL_FAULT_PERF_EVENT 7
+#define SIL_CHLD             8
+#define SIL_RT               9
+#define SIL_SYS              10
+
+/**
+ * The layout of the union of a siginfo with the signal `signo` and the code
+ * `code`, as Linux 6.12's siginfo_layout (kernel/signal.c) chooses it: a
+ * code between SI_USER and SI_KERNEL has the layout of its signal's codes up
+ * to the last of them, with SEGV_BNDERR, SEGV_PKUERR, BUS_MCEERR_AR and _AO
+ * and TRAP_PERF fault layouts of their own, and otherwise SIL_POLL up to
+ * NSIGPOLL, whatever the signal, and SIL_KILL past it; SI_TIMER is
+ * SIL_TIMER, SI_SIGIO SIL_POLL and any other negative code SIL_RT; SI_USER
+ * and SI_KERNEL and the codes above it are SIL_KILL (siginfo.c).
+ */
+int siginfo_layout(int signo, int32_t code);
+
+/** Build the union `info` keeps from its members by `layout` and mark it
+ * kept, so that every output reads it by its signal's and code's layout:
+ * for a ptrace stop no signal makes, whose union has the thread's pid and
+ * uid as SIL_KILL places them, as Linux's ptrace_do_notify writes them,
+ * whatever its code says. */
+void siginfo_pack(struct k_siginfo *info, int layout);
+
+/** Write the native `siginfo_t` of `signo` with `info` into the
+ * SIGINFO_SIZE bytes at `out`: signo, errno and code, then the union at 12
+ * on i386 and 16 on x86-64, kept whole or built by the layout (siginfo.c). */
 void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
 
-/** Read the errno, the code, the sender's pid and uid, the status, the
- * value and the address of the `siginfo_t` at `in` into `info`, for
- * rt_sigqueueinfo and PTRACE_SETSIGINFO. */
-void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info);
+/** Read the native `siginfo_t` at `in` into `info`, its union whole, for a
+ * signal `signo`, whose layout gives the members the rest of the kernel
+ * reads, for rt_sigqueueinfo and PTRACE_SETSIGINFO (siginfo.c). */
+void sigframe_take_siginfo(const uint8_t *in, int signo, struct k_siginfo *info);
+
+/** Write the 128-byte `struct signalfd_siginfo` of `signo` with `info` at
+ * `out`, the fields of the layout, as Linux's signalfd_copyinfo writes them
+ * (siginfo.c). */
+void signalfd_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
 
 /** Write the `siginfo_t` of `signo` with `info` as the calling system
  * call's ABI lays it out: the i386 one (`ia32_fill_siginfo`) for a call by
@@ -77,8 +113,9 @@ void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info);
 void siginfo_to_caller(uint8_t *out, int signo, const struct k_siginfo *info);
 
 /** Read a `siginfo_t` the calling system call passed, in its ABI's layout,
- * as `siginfo_to_caller` chooses it. Defined in syscall_proc.c. */
-void siginfo_from_caller(const uint8_t *in, struct k_siginfo *info);
+ * as `siginfo_to_caller` chooses it, as one of the signal `signo`. Defined
+ * in syscall_proc.c. */
+void siginfo_from_caller(const uint8_t *in, int signo, struct k_siginfo *info);
 
 #if defined(IA32_SYSCALL_TABLE_SIZE)
 /* The bytes of an i386 `siginfo_t` through si_status, which waitid writes
@@ -88,13 +125,13 @@ void siginfo_from_caller(const uint8_t *in, struct k_siginfo *info);
 /** Write the i386 `siginfo_t`, Linux's `compat_siginfo`, of `signo` with
  * `info` into the SIGINFO_SIZE bytes at `out`: the fields of the layout
  * Linux's siginfo_layout gives the signal and code, at their i386 offsets,
- * with 32-bit addresses and values (x86_64/sigframe32.c). */
+ * with 32-bit addresses and values (siginfo.c). */
 void ia32_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
 
-/** Read the i386 `siginfo_t` at `in` into `info`: the fields of the layout
- * its signal and code have, and no others, as Linux's
- * post_copy_siginfo_from_user32 reads them (x86_64/sigframe32.c). */
-void ia32_take_siginfo(const uint8_t *in, struct k_siginfo *info);
+/** Read the i386 `siginfo_t` at `in` into `info` as one of the signal
+ * `signo`: the fields of the layout it and the code have, and no others,
+ * as Linux's post_copy_siginfo_from_user32 reads them (siginfo.c). */
+void ia32_take_siginfo(const uint8_t *in, int signo, struct k_siginfo *info);
 #endif
 
 /**

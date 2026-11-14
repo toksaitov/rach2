@@ -3,7 +3,7 @@
  * stop.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: rach2/sys/proc/child_signal.c
+ * host-deps: rach2/sys/proc/child_signal.c rach2/sys/proc/siginfo.c
  *
  * The copy of a register-set request's iovec can sleep, and the tracee can
  * be resumed meanwhile; the request, in either direction, must then answer
@@ -495,9 +495,10 @@ void siginfo_to_caller(uint8_t *buf, int sig, const struct k_siginfo *info)
 }
 
 /** Nothing: no row reads a siginfo from the user. */
-void siginfo_from_caller(const uint8_t *buf, struct k_siginfo *info)
+void siginfo_from_caller(const uint8_t *buf, int sig, struct k_siginfo *info)
 {
     (void)buf;
+    (void)sig;
     (void)info;
 }
 
