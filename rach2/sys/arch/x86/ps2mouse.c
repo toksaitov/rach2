@@ -392,7 +392,8 @@ static uint32_t reply_step(uint32_t waited, uint32_t limit_us)
  * `reply_step`. Inside a run of commands a step of a tick sleeps, and a
  * shorter one lets another processor have the big lock first
  * (`wait_turn`). A host test's model has no clock, and its reads take no
- * time: there the wait ends once the steps add up to `limit_us`.
+ * time: there the wait ends once the steps add up to `limit_us`. Either
+ * ends after PS2_TIMEOUT reads, more than the longest wait makes.
  *
  * During the bring-up a keyboard byte waiting in the buffer is read and
  * dropped: the buffer holds one byte, so the mouse's cannot arrive until the
@@ -407,6 +408,7 @@ static int ps2_wait_mouse_output(uint32_t limit_us)
     uint32_t start = timer_now_us();
 #endif
     uint32_t waited = 0, step;
+    int reads = 0;
     uint8_t status;
 
     for (;;) {
@@ -422,8 +424,8 @@ static int ps2_wait_mouse_output(uint32_t limit_us)
 #ifndef RACH2_HOSTTEST
         waited = timer_now_us() - start;
 #endif
-        if (waited >= limit_us) {
-            return -1;
+        if (waited >= limit_us || ++reads >= PS2_TIMEOUT) {
+            return -1; /* the reads' bound holds where the clock stood still */
         }
         step = reply_step(waited, limit_us);
 #ifdef RACH2_HOSTTEST
