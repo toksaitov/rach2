@@ -1000,18 +1000,27 @@ static int namespaces(void)
 
 /** tkill's and tgkill's checks in Linux 6.12's order: the ids, then the
  * thread, then the signal. 65 is above the last signal, and 2147483647
- * above pid_max, so no thread has it. */
+ * above pid_max, so no thread has it. The other process is a child, not
+ * the parent, since a program that runs as init has none and getppid's 0
+ * is EINVAL to tgkill. */
 static int tkill_order(void)
 {
     long self = syscall(SYS_gettid);
+    pid_t other = pausing_child();
+    int ok;
 
-    if (syscall(SYS_tkill, 0L, 0L) != -1 || errno != EINVAL ||
-        syscall(SYS_tgkill, 0L, self, 0L) != -1 || errno != EINVAL ||
-        syscall(SYS_tkill, 2147483647L, 65L) != -1 || errno != ESRCH ||
-        syscall(SYS_tgkill, (long)getpid(), 2147483647L, 65L) != -1 || errno != ESRCH ||
-        syscall(SYS_tgkill, (long)getppid(), self, 65L) != -1 || errno != ESRCH ||
-        syscall(SYS_tkill, self, 65L) != -1 || errno != EINVAL ||
-        syscall(SYS_tgkill, (long)getpid(), self, 65L) != -1 || errno != EINVAL) {
+    ok = other > 0 && syscall(SYS_tkill, 0L, 0L) == -1 && errno == EINVAL &&
+         syscall(SYS_tgkill, 0L, self, 0L) == -1 && errno == EINVAL &&
+         syscall(SYS_tkill, 2147483647L, 65L) == -1 && errno == ESRCH &&
+         syscall(SYS_tgkill, (long)getpid(), 2147483647L, 65L) == -1 && errno == ESRCH &&
+         syscall(SYS_tgkill, (long)other, self, 65L) == -1 && errno == ESRCH &&
+         syscall(SYS_tkill, self, 65L) == -1 && errno == EINVAL &&
+         syscall(SYS_tgkill, (long)getpid(), self, 65L) == -1 && errno == EINVAL;
+    if (other > 0) {
+        kill(other, SIGKILL);
+        waitpid(other, NULL, 0);
+    }
+    if (!ok) {
         return fail("tkill and tgkill did not check the ids, the thread and the signal in "
                     "Linux's order");
     }
