@@ -3,8 +3,10 @@
 
 /*
  * The PS/2 keyboard, on the 8042's first port: IRQ 1, one scancode of set 1
- * a byte, which it gives to the input layer (../../input.h), and its LEDs,
- * which follow the input layer's `input_leds`.
+ * a byte, which it gives to the input layer (../../input.h), its LEDs,
+ * which follow the input layer's `input_leds`, and the reconnect after its
+ * self-test code, which keeps its event device, or unbinds it and probes
+ * serio0 anew as serio0's `bind_mode` allows.
  */
 
 /** Register the keyboard's event device, take its interrupt, vector 33, and
@@ -21,7 +23,9 @@ void kbd_init(void);
  * the LEDs wanted change. The keyboard's answers are taken from its interrupt
  * (`input_ps2_reply`), which writes the LED byte after the command's ACK.
  * Writes only when the controller's input buffer is empty, so it never
- * waits. Nothing before `kbd_init`.
+ * waits. While a reconnect or a probe of serio0 runs, it moves that on in
+ * place of the LED command, and with no driver bound it does nothing.
+ * Nothing before `kbd_init`.
  */
 void ps2kbd_tick(void);
 

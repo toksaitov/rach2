@@ -4129,6 +4129,11 @@ static void input_file_rows(void)
               reg_is(child(in_serio, "description"), "i8042 KBD port\n") &&
               reg_is(child(child(in_serio, "id"), "type"), "06\n"),
           "the i8042's port gives its driver, type and modalias");
+    evdev_sysfs_serio_unbound(0, 1);
+    check(reg_is(child(in_serio, "uevent"), "SERIO_TYPE=06\nSERIO_PROTO=00\nSERIO_ID=00\n"
+                                            "SERIO_EXTRA=00\nMODALIAS=serio:ty06pr00id00ex00\n"),
+          "and names no driver while atkbd has left it");
+    evdev_sysfs_serio_unbound(0, 0);
     check(reg_is(child(in_iface, "uevent"),
                  "DEVTYPE=usb_interface\nDRIVER=usbhid\nPRODUCT=627/1/0\nTYPE=0/0/0\n"
                  "INTERFACE=3/1/2\nMODALIAS=usb:v0627p0001d0000dc00dsc00dp00ic03isc01ip02in00\n") &&

@@ -543,10 +543,15 @@ over the bytes written as Linux's serio core compares them, so that
 .Ql manual
 with a newline is
 .Er EINVAL ;
-a mouse port in manual mode whose device is lost and does not answer the
-reconnect keeps no driver, its input device goes and its uevent names no
-.Ev DRIVER ,
-and once the mode is auto again, the port's next byte probes it anew;
+a port whose device is lost and does not answer the reconnect, a mouse's
+or a keyboard's that sent its self-test code 0xAA, loses its driver and
+its input device; in auto mode the port is probed anew at once, which binds
+the driver with a new input device when the device answers, and in manual
+mode it keeps no driver and its uevent names no
+.Ev DRIVER ;
+a port without a driver in auto mode is probed anew at its next byte, as
+is a pass-through port at its device's next packet; a reconnect that
+finds the device keeps the driver and the input device in either mode;
 .Pa firmware_id ,
 the device's ACPI PNP IDs as Linux's i8042 writes them,
 .Ql PNP: LEN0036 PNP0f13

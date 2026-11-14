@@ -579,6 +579,16 @@ void evdev_sysfs_serio_remove(int port);
 int evdev_sysfs_serio_manual(int port);
 
 /**
+ * Mark serio port `port` as left by its driver when `unbound` is nonzero,
+ * and as bound again when it is 0, for a driver with no files of its own:
+ * the keyboard's atkbd, whose failed reconnect leaves serio0 without one.
+ * The port's uevent names the driver only while it is bound. Writes one
+ * word, so it may be called in interrupt context or from the tick. Defined
+ * in evdev_sysfs.c.
+ */
+void evdev_sysfs_serio_unbound(int port, int unbound);
+
+/**
  * Make serio port `port` with no event device below it, as Linux's serio
  * core registers a port before any driver binds: at once when its parent,
  * serio1 for the pass-through port, is in /sys, else at the sync that

@@ -109,7 +109,8 @@ static struct {
 
 /* Each serio port's firmware ID, NULL for none; whether its driver made it
  * without a device below it, which `evdev_sysfs_serio_add` says; whether
- * its `bind_mode` is manual; the functions that add its driver's own files
+ * its `bind_mode` is manual; whether the keyboard's driver left it
+ * (`evdev_sysfs_serio_unbound`); the functions that add its driver's own files
  * to its directory, which stay while the driver is bound, and its
  * protocol's, which a change of protocol replaces, NULL for none; and the
  * entries each function made, 0 past the last. */
@@ -117,6 +118,7 @@ static struct {
 static const char *serio_firmware[SERIO_PORTS];
 static int serio_wanted[SERIO_PORTS];
 static int serio_manual[SERIO_PORTS];
+static int serio_unbound[SERIO_PORTS];
 static int (*serio_driver[SERIO_PORTS])(int dir);
 static int (*serio_files[SERIO_PORTS])(int dir);
 static int serio_driver_made[SERIO_PORTS][SERIO_FILES_MAX];
@@ -558,8 +560,9 @@ static void emit_serio_alias(struct emit *e, int port)
 
 /** A file of a serio port, as Linux's serio core writes it: its
  * description, modalias, bind mode, firmware ID, id/ files and uevent,
- * with the driver bound to it, atkbd, or psmouse while the mouse's driver
- * has the port (`evdev_sysfs_serio_driver`). The i8042's own uevent with a
+ * with the driver bound to it, atkbd unless it left the port
+ * (`evdev_sysfs_serio_unbound`), or psmouse while the mouse's driver has
+ * the port (`evdev_sysfs_serio_driver`). The i8042's own uevent with a
  * `arg` of -1. */
 static int32_t show_serio(void *obj, int arg, char *buf, uint32_t cap)
 {
@@ -592,7 +595,9 @@ static int32_t show_serio(void *obj, int arg, char *buf, uint32_t cap)
         emit_str(&e, serio_manual[port] ? "manual\n" : "auto\n");
         break;
     case SERIO_UEVENT:
-        emit_str(&e, port == 0 ? "DRIVER=atkbd\n" : serio_driver[port] ? "DRIVER=psmouse\n" : "");
+        if (!serio_unbound[port] && (port == 0 || serio_driver[port])) {
+            emit_str(&e, port == 0 ? "DRIVER=atkbd\n" : "DRIVER=psmouse\n");
+        }
         emit_str(&e, "SERIO_TYPE=");
         emit_hex(&e, serio_type(port), 2, 0);
         emit_str(&e, "\nSERIO_PROTO=00\nSERIO_ID=00\nSERIO_EXTRA=00\nMODALIAS=");
@@ -1220,6 +1225,7 @@ void evdev_sysfs_serio_remove(int port)
     serio_firmware[port] = NULL;
     serio_wanted[port] = 0;
     serio_manual[port] = 0;
+    serio_unbound[port] = 0;
     serio_driver[port] = NULL;
     serio_files[port] = NULL;
     k_memset(serio_driver_made[port], 0, sizeof(serio_driver_made[port]));
@@ -1245,6 +1251,13 @@ static void make_wanted_ports(void)
 int evdev_sysfs_serio_manual(int port)
 {
     return port >= 0 && port < SERIO_PORTS && serio_manual[port];
+}
+
+void evdev_sysfs_serio_unbound(int port, int unbound)
+{
+    if (port >= 0 && port < SERIO_PORTS) {
+        serio_unbound[port] = unbound != 0;
+    }
 }
 
 void evdev_sysfs_serio_add(int port)

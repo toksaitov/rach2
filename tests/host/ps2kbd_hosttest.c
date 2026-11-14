@@ -18,6 +18,13 @@
  * 100 ms without an answer and given up after three writes, and nothing
  * written while the controller's input buffer is full.
  *
+ * The reconnect rows send the keyboard's BAT, 0xAA, and answer the probe
+ * that follows, as Linux's atkbd_reconnect runs it: GETID, its ID bytes,
+ * RESET_DIS and ENABLE, or the LED command when GETID fails. A probe that
+ * fails unbinds the keyboard, whose event device goes, and in auto mode
+ * probes serio0 again as a connect, which binds a new one; in manual mode
+ * serio0 stays without a driver and drops its bytes until the mode is auto.
+ *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DTICK_HZ=1000
  *
@@ -46,8 +53,8 @@ static int fails;
 
 /* The model 8042: the status the row sets, the byte waiting in the data
  * port, the count of data port reads and of any port write, and the bytes
- * written to the data port, the last MAX_WRITES of them. */
-#define MAX_WRITES 32
+ * written to the data port, the first MAX_WRITES of them. */
+#define MAX_WRITES 128
 static uint8_t model_status;
 static uint8_t model_data;
 static int data_reads;
@@ -99,6 +106,32 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
+/* serio0's bind mode, manual when set; whether the driver marked it
+ * unbound; and the keyboard's attaches and detaches. */
+static int serio0_manual;
+static int serio0_unbound;
+static int attaches;
+static int detaches;
+
+int evdev_sysfs_serio_manual(int port)
+{
+    return port == 0 && serio0_manual;
+}
+
+void evdev_sysfs_serio_unbound(int port, int unbound)
+{
+    if (port == 0) {
+        serio0_unbound = unbound;
+    }
+}
+
+/** Count the detach; the keys released are the input layer's. */
+void input_keyboard_detach(struct input_keyboard *kb)
+{
+    (void)kb;
+    detaches++;
+}
+
 /** Record the code the decoder was given. */
 void input_set1_event(struct input_keyboard *kb, uint8_t code)
 {
@@ -111,6 +144,7 @@ void input_set1_event(struct input_keyboard *kb, uint8_t code)
 void input_keyboard_attach(struct input_keyboard *kb, const char *name, const char *phys,
                            uint16_t bustype, uint16_t vendor, uint16_t product)
 {
+    attaches++;
     (void)kb;
     (void)name;
     (void)phys;
@@ -278,6 +312,126 @@ static void leds_rows(void)
     CHECK("one warning in all", warnings == 1);
 }
 
+/** Answer `n` bytes at `ticks` and return the bytes written meanwhile. */
+static int answers_at(uint32_t ticks, const uint8_t *codes, int n)
+{
+    int i, wrote = 0;
+
+    for (i = 0; i < n; i++) {
+        wrote += answer_at(ticks, codes[i]);
+    }
+    return wrote;
+}
+
+/* GETID's ACK and a keyboard's ID bytes, and its ACK and a byte that
+ * begins no keyboard's ID. */
+static const uint8_t id[] = {0xFA, 0xAB, 0x41};
+static const uint8_t not_id[] = {0xFA, 0x00};
+
+/** The BAT's rows, after the LED command's, which leave the LEDs at 0x02
+ * from T(404): 0xAA after the left Shift's press, or after E0, is a key's
+ * release, and a BAT's reconnect that finds the keyboard keeps its event
+ * device. */
+static void bat_rows(void)
+{
+    keys = 0;
+    CHECK("the left Shift's press is a key", answer_at(T(500), 0x2A) == 0 && keys == 1);
+    CHECK("its release, 0xAA, is a key and no BAT",
+          answer_at(T(501), 0xAA) == 0 && keys == 2 && last_key == 0xAA);
+    CHECK("E0 AA is a fake Shift's release and no BAT",
+          answer_at(T(502), 0xE0) == 0 && answer_at(T(502), 0xAA) == 0 && keys == 4);
+
+    /* A BAT: the reconnect probes at once and keeps the event device. */
+    CHECK("a BAT writes GETID", answer_at(T(510), 0xAA) == 1 && last_write() == 0xF2);
+    CHECK("the BAT is no key", keys == 4);
+    CHECK("a key during the reconnect is dropped", answer_at(T(511), 0x1E) == 0 && keys == 4);
+    CHECK("GETID's ACK writes nothing", answer_at(T(512), 0xFA) == 0);
+    CHECK("its ID bytes write RESET_DIS",
+          answer_at(T(512), 0xAB) == 0 && answer_at(T(513), 0x41) == 1 && last_write() == 0xF5);
+    CHECK("RESET_DIS's ACK writes ENABLE", answer_at(T(514), 0xFA) == 1 && last_write() == 0xF4);
+    CHECK("ENABLE's ACK ends the reconnect", answer_at(T(515), 0xFA) == 0);
+    CHECK("which kept the event device", attaches == 1 && detaches == 0 && !serio0_unbound);
+    CHECK("its ACK is no key", keys == 4);
+    CHECK("the LEDs are sent again", tick_at(T(516)) == 1 && last_write() == 0xED);
+    CHECK("with the LEDs wanted", answer_at(T(517), 0xFA) == 1 && last_write() == 0x02);
+    CHECK("and the command ends", answer_at(T(518), 0xFA) == 0 && tick_at(T(600)) == 0);
+    CHECK("keys flow again", answer_at(T(600), 0x1E) == 0 && keys == 5);
+}
+
+/** GETID unanswered: the LED command then answers for the keyboard. */
+static void getid_rows(void)
+{
+    CHECK("a second BAT writes GETID", answer_at(T(700), 0xAA) == 1 && last_write() == 0xF2);
+    CHECK("GETID again after 100 ms", tick_at(T(700) + WAIT) == 1 && last_write() == 0xF2);
+    CHECK("and a third time", tick_at(T(700) + 2 * WAIT) == 1 && last_write() == 0xF2);
+    CHECK("then the LED command", tick_at(T(700) + 3 * WAIT) == 1 && last_write() == 0xED);
+    CHECK("whose ACK writes the LEDs off", answer_at(T(800), 0xFA) == 1 && last_write() == 0x00);
+    CHECK("whose ACK writes ENABLE", answer_at(T(801), 0xFA) == 1 && last_write() == 0xF4);
+    CHECK("whose ACK keeps the binding",
+          answer_at(T(802), 0xFA) == 0 && attaches == 1 && detaches == 0 && !serio0_unbound);
+    CHECK("the LEDs follow", tick_at(T(803)) == 1 && last_write() == 0xED &&
+                                 answer_at(T(804), 0xFA) == 1 && answer_at(T(805), 0xFA) == 0);
+}
+
+/** A reconnect that finds no keyboard's ID, in auto mode: unbound, then
+ * probed as a connect, which binds a new event device. */
+static void unbind_rows(void)
+{
+    int k = warnings;
+
+    CHECK("a third BAT writes GETID", answer_at(T(900), 0xAA) == 1 && last_write() == 0xF2);
+    CHECK("an ID that is no keyboard's fails the reconnect and probes anew",
+          answers_at(T(901), not_id, 2) == 1 && last_write() == 0xF2);
+    CHECK("the failure unbinds the keyboard", detaches == 1 && serio0_unbound && warnings > k);
+    CHECK("the connect's ID writes RESET_DIS",
+          answers_at(T(902), id, 3) == 1 && last_write() == 0xF5);
+    CHECK("then ENABLE", answer_at(T(903), 0xFA) == 1 && last_write() == 0xF4);
+    CHECK("whose ACK binds a new event device",
+          answer_at(T(904), 0xFA) == 0 && attaches == 2 && detaches == 1 && !serio0_unbound);
+    CHECK("the new device's LEDs follow", tick_at(T(905)) == 1 && last_write() == 0xED &&
+                                              answer_at(T(906), 0xFA) == 1 &&
+                                              answer_at(T(907), 0xFA) == 0);
+}
+
+/** Manual mode: a reconnect that finds a keyboard keeps the binding, and
+ * one that fails leaves serio0 without a driver. */
+static void manual_rows(void)
+{
+    serio0_manual = 1;
+    CHECK("a BAT in manual mode writes GETID",
+          answer_at(T(1000), 0xAA) == 1 && last_write() == 0xF2);
+    CHECK("an answer that binds", answers_at(T(1001), id, 3) == 1 &&
+                                      answer_at(T(1002), 0xFA) == 1 &&
+                                      answer_at(T(1003), 0xFA) == 0);
+    CHECK("keeps the binding in manual mode", attaches == 2 && detaches == 1 && !serio0_unbound);
+    CHECK("the LEDs follow it",
+          tick_at(T(1004)) == 1 && answer_at(T(1005), 0xFA) == 1 && answer_at(T(1006), 0xFA) == 0);
+
+    CHECK("another BAT in manual mode writes GETID",
+          answer_at(T(1100), 0xAA) == 1 && last_write() == 0xF2);
+    CHECK("its failure probes nothing", answers_at(T(1101), not_id, 2) == 0);
+    CHECK("and unbinds the keyboard", detaches == 2 && serio0_unbound && attaches == 2);
+    keys = 0;
+    CHECK("whose bytes are dropped, writing nothing", answer_at(T(1102), 0x1E) == 0 && keys == 0);
+    CHECK("and whose LEDs are not sent", tick_at(T(1200)) == 0);
+}
+
+/** Auto mode again: the next byte probes serio0 as a connect, and a failed
+ * one leaves it unbound until the byte after. */
+static void auto_again_rows(void)
+{
+    serio0_manual = 0;
+    CHECK("the first byte in auto mode writes GETID",
+          answer_at(T(1300), 0x1E) == 1 && last_write() == 0xF2 && keys == 0);
+    CHECK("a connect that fails leaves serio0 unbound",
+          answers_at(T(1301), not_id, 2) == 0 && attaches == 2 && serio0_unbound);
+    CHECK("the next byte probes again", answer_at(T(1400), 0x9E) == 1 && last_write() == 0xF2);
+    CHECK("and a keyboard that answers is bound",
+          answers_at(T(1401), id, 3) == 1 && answer_at(T(1402), 0xFA) == 1 &&
+              answer_at(T(1403), 0xFA) == 0 && attaches == 3 && !serio0_unbound);
+    CHECK("its keys reach the decoder", answer_at(T(1500), 0x1E) == 0 && keys == 1);
+}
+
 int main(void)
 {
     /* A mouse byte, the first of a packet. */
@@ -303,6 +457,11 @@ int main(void)
     CHECK("the handler writes no port", port_writes == 0);
 
     leds_rows();
+    bat_rows();
+    getid_rows();
+    unbind_rows();
+    manual_rows();
+    auto_again_rows();
 
     if (fails == 0) {
         printf("ps2kbd-test: pass\n");
