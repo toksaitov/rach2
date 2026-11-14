@@ -16,9 +16,12 @@
  * several; takes transmit buffers and keeps what they held; answers the
  * control queue's commands as it is told of them; and raises an interrupt
  * only where the driver's ring asks for one, which the row then delivers
- * as the transport does. The rows check what the stack was given, what the
- * model saw, the notifications and interrupts counted, and the memory the
- * model still holds.
+ * as the transport does. Its configuration interrupt, which a row may have
+ * it raise in the middle of a read of the status word, is delivered at
+ * once, or at the end of the `net_lock` bracket it falls in, as a
+ * processor with interrupts off takes it. The rows check what the stack
+ * was given, what the model saw, the notifications and interrupts counted,
+ * and the memory the model still holds.
  */
 
 #include <stdarg.h>
@@ -33,6 +36,8 @@ extern int strcmp(const char *a, const char *b);
 #include "network/ethernet/ethernet.h"
 #include "network/net.h"
 #include "virtio/virtio.h"
+#include "fs/synthfs.h"
+#include "fs/sysfs.h"
 #include "klog.h"
 #include "udelay.h"
 #include "lib/kerrno.h"
@@ -91,18 +96,27 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
-/** The network's bracket, counted, so a row sees that a send took it. */
-static int net_locks;
+static void config_irq_deliver(void);
+
+/** The network's bracket, counted, so a row sees that a send took it, and
+ * its depth, inside which the model's interrupts wait. */
+static int net_locks, net_depth, config_irq_waits;
 uint32_t net_lock(void)
 {
     net_locks++;
+    net_depth++;
     return 0;
 }
 
-/** The bracket's end. */
+/** The bracket's end: an interrupt that waited is taken as the outermost
+ * bracket ends. */
 void net_unlock(uint32_t flags)
 {
     (void)flags;
+    if (--net_depth == 0 && config_irq_waits) {
+        config_irq_waits = 0;
+        config_irq_deliver();
+    }
 }
 
 /** A fixed pattern, so a row knows the address made up. */
@@ -147,11 +161,19 @@ static struct model {
     int tx_per_delay;  /* transmit buffers it takes at each k_udelay */
     const char *bound; /* the driver shown bound, or NULL */
     int bound_sent, unbinds;
+    int up_at_read;   /* the link comes up in the middle of the next read of
+                       * the status word, which still reads the old one */
+    int status_reads; /* reads of the status word */
+    int limit_seen;   /* the receive queue's first notification came */
+    uint32_t limit;   /* the interface's largest MTU and its MTU then */
+    uint32_t mtu;
+    int sys_dir; /* its directory on the virtio bus, or 0 */
 } m;
 
 static uint8_t arena[ARENA_PAGES][4096] __attribute__((aligned(4096)));
 static uint8_t arena_taken[ARENA_PAGES];
 static pci_device_t model_pci;
+static struct netdev nd; /* the interface, defined with the stack below */
 static virtio_probe_t registered;
 static uint32_t udelays;
 
@@ -222,11 +244,40 @@ static uint32_t m_generation(struct virtio_dev *d)
     return 0;
 }
 
-/** Copy out of the configuration. */
+/** Take the model's configuration interrupt as the transport's handler
+ * does. */
+static void config_irq_deliver(void)
+{
+    virtio_interrupt_config(&m.dev);
+}
+
+/** Raise the configuration interrupt: taken at once, or at the end of the
+ * `net_lock` bracket that has interrupts off. */
+static void config_irq(void)
+{
+    if (net_depth > 0) {
+        config_irq_waits = 1;
+    } else {
+        config_irq_deliver();
+    }
+}
+
+/** Copy out of the configuration. A row may have the link come up just
+ * after the status word was read, with the interrupt that reports it. */
 static void m_config_read(struct virtio_dev *d, uint32_t offset, void *buf, uint32_t len)
 {
     (void)d;
     k_memcpy(buf, m.config + offset, len);
+    if (offset == VNET_CFG_STATUS) {
+        m.status_reads++;
+        if (m.up_at_read) {
+            uint16_t up = VIRTIO_NET_S_LINK_UP;
+
+            m.up_at_read = 0;
+            k_memcpy(m.config + VNET_CFG_STATUS, &up, 2);
+            config_irq();
+        }
+    }
 }
 
 /** Copy into the configuration. */
@@ -268,6 +319,11 @@ static void m_notify(struct virtio_dev *d, struct virtqueue *vq)
     (void)d;
     check((m.status & VIRTIO_STATUS_DRIVER_OK) != 0, "no notification comes before DRIVER_OK");
     m.q[vq->index].notified++;
+    if (vq->index == VNET_Q_RX && !m.limit_seen) {
+        m.limit_seen = 1;
+        m.limit = nd.mtu_max;
+        m.mtu = nd.mtu;
+    }
     if (vq->index == VNET_Q_CTRL && !m.ctrl_mute) {
         dev_ctrl();
     }
@@ -409,6 +465,46 @@ void virtio_driver_unbind(struct virtio_dev *d)
     (void)d;
     m.bound = 0;
     m.unbinds++;
+}
+
+/** The device's directory on the virtio bus, as the row has it. */
+int virtio_bus_dir(const struct virtio_dev *d)
+{
+    (void)d;
+    return m.sys_dir;
+}
+
+/* /sys as the driver uses it: the anchor of an interface's directory, and
+ * the one link the driver adds below it and removes. */
+#define SYS_ANCHOR 500
+#define SYS_LINK   700
+static int sys_link_parent, sys_link_target, sys_links, sys_unlinks;
+static char sys_link_name[16];
+
+/** The anchor of /sys/class/net/IF, which names the interface's index. */
+int sysfs_anchor(int node, int key)
+{
+    check(node == SYSFS_NET_IF, "the driver anchors only an interface's directory");
+    return SYS_ANCHOR + key;
+}
+
+/** Keep the link added. */
+int sysfs_add_link(int parent, const char *name, int target)
+{
+    sys_link_parent = parent;
+    sys_link_target = target;
+    k_strncpy(sys_link_name, name, sizeof(sys_link_name) - 1u);
+    sys_links++;
+    return SYS_LINK;
+}
+
+/** Count the link's removal; a handle of 0 names nothing. */
+void sysfs_remove(int handle)
+{
+    if (handle != 0) {
+        check(handle == SYS_LINK, "the driver removes the link it added");
+        sys_unlinks++;
+    }
 }
 
 /* The stack above the driver. */
@@ -694,6 +790,8 @@ static void fresh(uint64_t offered)
     m.qmax[1] = 256;
     m.qmax[2] = 64;
     m.dma_left = -1;
+    m.sys_dir = 55;
+    sys_links = sys_unlinks = sys_link_parent = sys_link_target = 0;
     k_memcpy(m.config + VNET_CFG_MAC, model_mac, 6);
     k_memcpy(m.config + VNET_CFG_STATUS, &up, 2);
     model_pci.bus = 0;
@@ -701,6 +799,7 @@ static void fresh(uint64_t offered)
     model_pci.function = 0;
     k_memset(&nd, 0, sizeof(nd));
     nd.ops = &virtio_net_netdev;
+    nd.index = 1;
     nd.pci_key = -1;
     nd.mtu = NETDEV_ETH_MTU_MAX;
     ngot = rx_errors = carrier_changes = reply_from_rx = 0;
@@ -738,7 +837,9 @@ static int got_is(int k, uint32_t len, uint8_t seed)
  * The bring-up against QEMU's offer: the features Linux's driver would
  * take less the offloads, the status that ends at DRIVER_OK, the receive
  * queue full of buffers and told of once, the receive filter set, and the
- * interface given the device's address and function.
+ * interface given the device's address and, as its `device` in /sys, the
+ * virtio device's directory, which Linux's virtnet_probe makes its parent;
+ * a device with no directory leaves the PCI function as the parent.
  */
 static void row_bring_up(void)
 {
@@ -766,7 +867,10 @@ static void row_bring_up(void)
               m.ctrl[1].cmd == VIRTIO_NET_CTRL_RX_PROMISC && m.ctrl[1].data[0] == 0,
           "every multicast frame is asked for, then promiscuous mode turned off");
     check(memcmp(nd.mac, model_mac, 6) == 0, "the interface has the device's address");
-    check(nd.pci_key == (3 << 3) && nd.dev != 0, "the interface names the PCI function");
+    check(nd.dev != 0 && sys_links == 1 && sys_link_parent == SYS_ANCHOR + 1 &&
+              sys_link_target == 55 && strcmp(sys_link_name, "device") == 0,
+          "the interface's device in /sys is a link to the virtio device's directory");
+    check(nd.pci_key == -1, "and no link to the PCI function stands in its place");
     check(nd.mtu == 1500 && nd.mtu_max == 0, "without VIRTIO_NET_F_MTU the MTU stays 1500");
     check(nd.ops->poll == 0, "a device that interrupts has no poll");
     check(m.bound && strcmp(m.bound, "virtio_net") == 0 && m.bound_sent == 1,
@@ -778,6 +882,10 @@ static void row_bring_up(void)
     check(m.dma_out == 64 + 32 + 1 + 3 + 3,
           "128 receive and 64 transmit buffers, two to a page, a command page, the rings and "
           "their tables");
+    fresh(QEMU_OFFER);
+    m.sys_dir = 0;
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && sys_links == 0 && nd.pci_key == (3 << 3),
+          "a device with no directory leaves the interface's device at the PCI function");
 }
 
 /**
@@ -961,6 +1069,29 @@ static void row_link(void)
 }
 
 /**
+ * The link comes up while the bring-up reads it: the read has the old
+ * status word, down, and the interrupt that reports the change arrives
+ * before the read's result is kept. The interrupt's reading, the newer
+ * one, must stand, as it does when it is taken after the first read is
+ * over; kept the other way round, the link stays down until the next
+ * change.
+ */
+static void row_link_race(void)
+{
+    struct netdev_link link;
+    uint16_t status = 0;
+
+    fresh(QEMU_OFFER);
+    k_memcpy(m.config + VNET_CFG_STATUS, &status, 2);
+    m.up_at_read = 1;
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && m.up_at_read == 0,
+          "the device comes up, its link changing under the first read");
+    check(nd.ops->link(nd.dev, &link) && link.up,
+          "the interrupt's newer reading stands over the first read's");
+    check(strstr(logged, "link: virtio0: up") != 0, "and the change is logged");
+}
+
+/**
  * VIRTIO_NET_F_MTU: a device's 1400 is the interface's MTU and its limit;
  * 9000 leaves 1500; and 60, below the least an interface may have, makes
  * the driver negotiate again without the feature, as Linux does.
@@ -1089,11 +1220,13 @@ static void row_rebind(void)
     m.dev.removed(&m.dev);
     check(m.status == 0 && m.dma_out == 0 && m.puts == 1 && m.bound == 0 && m.unbinds == 1,
           "removal resets the device, frees its pages, unbinds it and gives it back");
+    check(sys_links == 1 && sys_unlinks == 1, "and takes away the interface's device in /sys");
     check(nd.ops->link(dev, &link) && !link.up && carrier_changes == 1,
           "the interface is left without a carrier, and told");
     check(nd.ops->tx(dev, frame_of(60, 1), 60) == NETDEV_TX_DROPPED, "and sends nothing");
     check(virtio_net_bind(&m.dev) == 0 && nd.dev == dev, "a bind brings it up again");
     check(nd.ops->link(dev, &link) && link.up && m.bound != 0, "on the same interface");
+    check(sys_links == 2 && sys_link_target == 55, "whose device in /sys is the virtio device");
     check(dev_rx(frame_of(60, 1), 60, 1, 1) && rx_irq() && ngot == 1, "which receives");
     check(nd.ops->tx(dev, frame_of(60, 1), 60) == NETDEV_TX_OK && dev_tx(0, 0), "and sends");
     nd.ops->stop(dev);
@@ -1104,11 +1237,52 @@ static void row_rebind(void)
 }
 
 /**
+ * A function bound again as a device with another largest MTU: the
+ * interface's limit is the new device's each time, as Linux's
+ * virtnet_probe sets max_mtu at every probe, by the time the device is
+ * first told of buffers; an MTU above a smaller limit comes down to it,
+ * and one a larger limit allows is kept.
+ */
+static void row_rebind_mtu(void)
+{
+    uint16_t mtu = 1400;
+
+    fresh(QEMU_OFFER | VIRTIO_BIT(VIRTIO_NET_F_MTU));
+    k_memcpy(m.config + VNET_CFG_MTU, &mtu, 2);
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && nd.mtu == 1400 && nd.mtu_max == 1400,
+          "the device comes up with 1400 as the MTU and its limit");
+    m.dev.removed(&m.dev);
+    mtu = 1300;
+    k_memcpy(m.config + VNET_CFG_MTU, &mtu, 2);
+    m.limit_seen = 0;
+    check(virtio_net_bind(&m.dev) == 0 && nd.mtu_max == 1300 && nd.mtu == 1300,
+          "bound again with 1300, the limit and the MTU come down to it");
+    check(m.limit_seen && m.limit == 1300 && m.mtu == 1300,
+          "before the device is told of a buffer");
+    check(strstr(logged, "mtu: virtio0: 1300") != 0, "and the lowered MTU is logged");
+    m.dev.removed(&m.dev);
+    mtu = 1450;
+    k_memcpy(m.config + VNET_CFG_MTU, &mtu, 2);
+    check(virtio_net_bind(&m.dev) == 0 && nd.mtu_max == 1450 && nd.mtu == 1300,
+          "bound again with 1450, the limit rises and the MTU is kept");
+    m.dev.removed(&m.dev);
+    m.offered &= ~VIRTIO_BIT(VIRTIO_NET_F_MTU);
+    check(virtio_net_bind(&m.dev) == 0 && nd.mtu_max == 0 && nd.mtu == 1300,
+          "bound again with no largest MTU, the interface has the stack's limit again");
+}
+
+/**
  * A device the transport cannot interrupt for: the interface takes the
- * table with a `poll`, which delivers what the device returned.
+ * table with a `poll`, which delivers what the device returned, and reads
+ * the link once in VNET_LINK_POLLS polls, since no interrupt reports it:
+ * a device started with its cable out sends once the cable is in.
  */
 static void row_polled(void)
 {
+    struct netdev_link link;
+    uint16_t status = 0;
+    int i, reads;
+
     fresh(QEMU_OFFER);
     m.polled = 1;
     check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && nd.ops->poll != 0,
@@ -1117,6 +1291,30 @@ static void row_polled(void)
     nd.ops->poll(nd.dev);
     check(ngot == 1 && got_is(0, 60, 1), "the poll delivers it");
     check(nd.ops->tx(nd.dev, frame_of(60, 1), 60) == NETDEV_TX_OK && dev_tx(0, 0), "and it sends");
+    fresh(QEMU_OFFER);
+    m.polled = 1;
+    k_memcpy(m.config + VNET_CFG_STATUS, &status, 2);
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && nd.ops->link(nd.dev, &link) && !link.up,
+          "a polled device started with its cable out has no link");
+    status = VIRTIO_NET_S_LINK_UP;
+    k_memcpy(m.config + VNET_CFG_STATUS, &status, 2);
+    reads = m.status_reads;
+    for (i = 0; i < VNET_LINK_POLLS - 1; i++) {
+        nd.ops->poll(nd.dev);
+    }
+    check(m.status_reads == reads && nd.ops->link(nd.dev, &link) && !link.up,
+          "the polls short of the interval read no configuration");
+    nd.ops->poll(nd.dev);
+    check(m.status_reads == reads + 1 && nd.ops->link(nd.dev, &link) && link.up &&
+              carrier_changes == 1 && strstr(logged, "link: virtio0: up") != 0,
+          "the poll at the interval finds the cable in, and the interface is told");
+    status = 0;
+    k_memcpy(m.config + VNET_CFG_STATUS, &status, 2);
+    for (i = 0; i < VNET_LINK_POLLS; i++) {
+        nd.ops->poll(nd.dev);
+    }
+    check(nd.ops->link(nd.dev, &link) && !link.up && carrier_changes == 2,
+          "and an interval later, the cable pulled out");
 }
 
 int main(void)
@@ -1127,10 +1325,12 @@ int main(void)
     row_transmit();
     row_no_event_idx();
     row_link();
+    row_link_race();
     row_mtu();
     row_control();
     row_stop_and_failures();
     row_rebind();
+    row_rebind_mtu();
     row_polled();
     check(net_locks > 0, "the sends ran under net_lock");
     if (failures) {

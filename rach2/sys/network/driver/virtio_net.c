@@ -21,6 +21,12 @@
  * are taken at the next send, as Linux's free_old_xmit takes them in
  * start_xmit. The control queue is polled, as virtnet_send_command polls.
  *
+ * The link is the configuration's status word, read at bring-up, at the
+ * configuration's interrupt, and every VNET_LINK_POLLS polls on a device
+ * that has no interrupt. Each reading and what it leaves in the device's
+ * record are one step under `net_lock`, so that an interrupt's reading is
+ * never undone by an older one it arrived in the middle of.
+ *
  * The transport, virtio-pci, and the queues are virtio/'s, reached through
  * virtio.h alone, so the host test runs the driver against a model device.
  * Every path runs under the big kernel lock: a system call's send, the
@@ -30,6 +36,8 @@
 
 #include "virtio_net.h"
 
+#include "../../fs/synthfs.h"
+#include "../../fs/sysfs.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/krandom.h"
@@ -54,9 +62,11 @@ struct vnet {
     struct netdev *nd;
     struct virtqueue *rx, *tx, *ctrl;
     int up;           /* DRIVER_OK is set and the queues carry frames */
-    int key;          /* the PCI function, as `nd->pci_key`, or -1 */
+    int key;          /* the PCI function a bind finds the record by, or -1 */
+    int sys_link;     /* the interface's `device` link in /sys, or 0 */
     int mrg;          /* VIRTIO_NET_F_MRG_RXBUF was taken */
     int polled;       /* no interrupt: the tick reaps the queues */
+    int polls;        /* polls since a polled device's link was read */
     uint8_t mac[6];   /* the station address */
     int link_up;      /* the link, as the configuration last said */
     uint32_t speed;   /* Mb/s, or 0 when the device does not say */
@@ -85,6 +95,7 @@ static const char *vnet_err = "no virtio network device";
 static int vnet_registered;
 
 static int vnet_init(struct netdev *nd, int nth);
+static void vnet_interface(struct vnet *v, struct netdev *nd);
 
 /* Where a command's parts lie in its page: the class and command, the data
  * and the device's answer, each in a descriptor of its own. */
@@ -300,15 +311,23 @@ static void vnet_rx_mode(struct vnet *v)
  * virtnet_config_changed_work and virtnet_update_settings do: up or down
  * from the status word, and up always without VIRTIO_NET_F_STATUS; the
  * speed and duplex with VIRTIO_NET_F_SPEED_DUPLEX, each kept only when
- * valid. Called at bring-up and from the configuration's interrupt, which
- * virtio-pci allows (`config_atomic`). Returns whether the link changed.
+ * valid. Called at bring-up, from the configuration's interrupt and from
+ * a polled device's poll, the last two only where the transport allows
+ * (`config_atomic`). There the reading and its record in `v` are one step
+ * under `net_lock`: the configuration's interrupt cannot fall between
+ * them, so a reading it took later is not replaced by this older one, as
+ * Linux runs every reading in the one config work. Elsewhere only the
+ * bring-up reads, and nothing can fall between. Returns whether the link
+ * changed.
  */
 static int vnet_link_read(struct vnet *v)
 {
     uint16_t status = VIRTIO_NET_S_LINK_UP;
     uint32_t speed = 0xFFFFFFFFu;
     uint8_t duplex = 0xFF;
-    int was = v->link_up;
+    int atomic = v->vdev->config_atomic;
+    uint32_t flags = atomic ? net_lock() : 0;
+    int was = v->link_up, changed;
 
     if (virtio_has(v->vdev, VIRTIO_NET_F_STATUS)) {
         virtio_config_read(v->vdev, VNET_CFG_STATUS, &status, sizeof(status));
@@ -320,18 +339,32 @@ static int vnet_link_read(struct vnet *v)
     v->link_up = (status & VIRTIO_NET_S_LINK_UP) != 0;
     v->speed = speed <= VNET_SPEED_MAX ? speed : 0;
     v->duplex = duplex <= 1 ? (int)duplex : -1;
-    return was != v->link_up;
+    changed = was != v->link_up;
+    if (atomic) {
+        net_unlock(flags);
+    }
+    return changed;
 }
 
-/** The device's `config_changed`: the link may have changed. The interface
- * is told to ask again at its next look. Handler context. */
+/** Read the link of a device that is up and, when it changed, tell the
+ * interface to ask again at its next look and log the change. Handler
+ * context, on a transport with `config_atomic`. */
+static void vnet_link_refresh(struct vnet *v)
+{
+    if (vnet_link_read(v)) {
+        netdev_carrier_changed(v->nd);
+        klog(KLOG_INFO, "virtio_net", "link: %s: %s", v->vdev->name, v->link_up ? "up" : "down");
+    }
+}
+
+/** The device's `config_changed`: the link may have changed. Handler
+ * context. */
 static void vnet_config_changed(struct virtio_dev *d)
 {
     struct vnet *v = (struct vnet *)d->priv;
 
-    if (v && v->up && d->config_atomic && vnet_link_read(v)) {
-        netdev_carrier_changed(v->nd);
-        klog(KLOG_INFO, "virtio_net", "link: %s: %s", d->name, v->link_up ? "up" : "down");
+    if (v && v->up && d->config_atomic) {
+        vnet_link_refresh(v);
     }
 }
 
@@ -476,15 +509,38 @@ static int vnet_queues(struct vnet *v)
 }
 
 /**
+ * Make the `device` of the interface `nd` in /sys/class/net a link to the
+ * virtio device, /sys/devices/pci0000:00/0000:BB:DD.F/virtioN, the parent
+ * Linux's virtnet_probe gives its interface with SET_NETDEV_DEV, where a
+ * PCI card's is its function. The interface has no `pci_key`, since that
+ * link would stand in this one's place; where the virtio device has no
+ * directory or the link cannot be made, the function is the parent after
+ * all. Process context, since adding takes heap.
+ */
+static void vnet_sysfs_link(struct vnet *v, struct netdev *nd)
+{
+    int dir = virtio_bus_dir(v->vdev);
+
+    v->sys_link =
+        dir > 0 ? sysfs_add_link(sysfs_anchor(SYSFS_NET_IF, nd->index), "device", dir) : 0;
+    if (v->sys_link < 0) {
+        v->sys_link = 0;
+    }
+    nd->pci_key = v->sys_link ? -1 : v->key;
+}
+
+/**
  * Bring `v->vdev` up, Linux's virtnet_probe and virtnet_open: the device
  * shown bound to virtio_net, the features negotiated, the address read,
  * the queues set up and the receive queue filled, DRIVER_OK, the device
- * told of its buffers, the receive filter set and the link read. On an
- * error the device is reset, its memory given back and the binding taken
- * away; the caller gives the device back. 0 or -errno, with the reason in
- * `vnet_err`.
+ * told of its buffers, the receive filter set and the link read. The
+ * interface `nd` is given what the device says of itself before a frame
+ * moves (`vnet_interface`), and its `device` in /sys once the device is up.
+ * On an error the device is reset, its memory given back and the binding
+ * taken away, with `nd` as it was; the caller gives the device back. 0 or
+ * -errno, with the reason in `vnet_err`.
  */
-static int vnet_start(struct vnet *v)
+static int vnet_start(struct vnet *v, struct netdev *nd)
 {
     struct virtio_dev *d = v->vdev;
     int rc;
@@ -494,6 +550,7 @@ static int vnet_start(struct vnet *v)
     d->config_changed = 0;
     v->rx = v->tx = v->ctrl = 0;
     v->rx_left = 0;
+    v->polls = 0;
     vnet_err = "the virtio network device could not be shown bound";
     rc = virtio_driver_bind(d, "virtio_net");
     if (rc != 0) {
@@ -522,17 +579,20 @@ static int vnet_start(struct vnet *v)
         virtio_driver_unbind(d);
         return rc;
     }
+    vnet_interface(v, nd);
     v->up = 1;
     virtqueue_kick(v->rx);
     vnet_rx_mode(v);
     d->config_changed = vnet_config_changed;
     (void)vnet_link_read(v);
+    vnet_sysfs_link(v, nd);
     virtio_driver_bound(d);
     return 0;
 }
 
 /** Stop the device: no frame is taken or sent from here on, the device is
- * reset, which ends its use of memory, and its buffers are given back. */
+ * reset, which ends its use of memory, and its buffers are given back. The
+ * interface's `device` in /sys goes with it. Process context. */
 static void vnet_down(struct vnet *v)
 {
     uint32_t flags = net_lock();
@@ -540,6 +600,8 @@ static void vnet_down(struct vnet *v)
     v->up = 0;
     v->link_up = 0;
     net_unlock(flags);
+    sysfs_remove(v->sys_link);
+    v->sys_link = 0;
     v->vdev->config_changed = 0;
     virtio_teardown(v->vdev);
     v->rx = v->tx = v->ctrl = 0;
@@ -672,8 +734,15 @@ static int vnet_tx(void *dev, const uint8_t *data, uint16_t len)
     return NETDEV_TX_OK;
 }
 
-/** The polled table's `poll`: reap both queues, for a device that cannot
- * interrupt. The tick calls it, with interrupts off. */
+/**
+ * The polled table's `poll`: reap both queues, for a device that cannot
+ * interrupt, and every VNET_LINK_POLLS polls read its link, which no
+ * interrupt reports, so that a cable put in or pulled out is seen as on a
+ * device that interrupts. The status word itself is read, not the
+ * configuration's generation, which virtio 1.2, 4.1.4.3.1 requires to
+ * change only after a changed field has been read. The tick calls it, with
+ * interrupts off.
+ */
 static void vnet_poll(void *dev)
 {
     struct vnet *v = (struct vnet *)dev;
@@ -681,6 +750,10 @@ static void vnet_poll(void *dev)
     if (v && v->up) {
         (void)virtqueue_reap(v->rx);
         vnet_tx_reclaim(v);
+        if (v->vdev->config_atomic && ++v->polls >= VNET_LINK_POLLS) {
+            v->polls = 0;
+            vnet_link_refresh(v);
+        }
     }
 }
 
@@ -742,6 +815,30 @@ static const struct netdev_ops vnet_polled_netdev = {
     vnet_link,    vnet_error, vnet_print_info, 0,         0};
 
 /**
+ * Give the interface `nd` what the device of `v` says of itself, at the
+ * probe and at each bind, before a frame moves: the table with a `poll`
+ * or without, the address, and the largest MTU, which is the interface's
+ * limit when it is below the stack's 1500 and no limit otherwise, as
+ * Linux's virtnet_probe sets max_mtu from VIRTIO_NET_F_MTU each time it
+ * runs. An MTU above the limit comes down to it: the probe's 1500 to the
+ * device's own, as Linux sets dev->mtu, and at a bind the MTU the
+ * interface kept from a device that allowed more.
+ */
+static void vnet_interface(struct vnet *v, struct netdev *nd)
+{
+    uint32_t limit = v->mtu_max < NETDEV_ETH_MTU_MAX ? v->mtu_max : 0;
+
+    nd->ops = v->polled ? &vnet_polled_netdev : &virtio_net_netdev;
+    k_memcpy(nd->mac, v->mac, 6);
+    nd->mtu_max = limit;
+    if (limit != 0 && nd->mtu > limit) {
+        nd->mtu = limit;
+        klog(KLOG_INFO, "virtio_net", "mtu: %s: %d, the device's largest", v->vdev->name,
+             (int)limit);
+    }
+}
+
+/**
  * The driver table's `init` (netdev.h): bring up the `nth` virtio network
  * device the transport took as the interface `nd`, with the device's
  * address and, with VIRTIO_NET_F_MTU, its largest MTU as the interface's
@@ -768,7 +865,7 @@ static int vnet_init(struct netdev *nd, int nth)
     pci = virtio_pci_function(d);
     v->key = pci ? pci->bus << 8 | pci->device << 3 | pci->function : -1;
     v->vdev = d;
-    if (vnet_start(v) != 0) {
+    if (vnet_start(v, nd) != 0) {
         v->vdev = 0;
         virtio_put(d);
         return NETDEV_FAILED;
@@ -776,15 +873,6 @@ static int vnet_init(struct netdev *nd, int nth)
     d->removed = vnet_removed;
     v->nd = nd;
     nd->dev = v;
-    nd->pci_key = v->key;
-    if (v->polled) {
-        nd->ops = &vnet_polled_netdev;
-    }
-    k_memcpy(nd->mac, v->mac, 6);
-    if (v->mtu_max != 0 && v->mtu_max < NETDEV_ETH_MTU_MAX) {
-        nd->mtu_max = v->mtu_max;
-        nd->mtu = v->mtu_max;
-    }
     return NETDEV_UP;
 }
 
@@ -806,15 +894,13 @@ int32_t virtio_net_bind(struct virtio_dev *vdev)
         return -ENODEV;
     }
     v->vdev = vdev;
-    rc = vnet_start(v);
+    rc = vnet_start(v, v->nd);
     if (rc != 0) {
         v->vdev = 0;
         virtio_put(vdev);
         return rc;
     }
     vdev->removed = vnet_removed;
-    v->nd->ops = v->polled ? &vnet_polled_netdev : &virtio_net_netdev;
-    k_memcpy(v->nd->mac, v->mac, 6);
     netdev_carrier_changed(v->nd);
     return 0;
 }

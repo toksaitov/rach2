@@ -285,7 +285,9 @@ struct netdev {
 
     /* The card's PCI function as bus << 8 | device << 3 | function, which
      * its driver sets when it finds the card, or -1; /sys/class/net links
-     * the interface's `device` to it. */
+     * the interface's `device` to it. An interface on a device below a
+     * function, as a virtio device is, leaves -1, and its driver adds the
+     * link to that device itself (fs/sysfs.h). */
     int pci_key;
 
     /* Nonzero for `lo`, which no card stands behind (`netdev_loopback`). */

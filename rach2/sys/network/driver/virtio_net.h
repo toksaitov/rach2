@@ -127,6 +127,10 @@ struct virtio_net_hdr {
 #define VNET_DRAIN_STEPS   100
 #define VNET_CTRL_STEPS    1000
 
+/* A device that cannot interrupt has its link read once in this many
+ * polls, a fifth of a second of the tick's 250 Hz. */
+#define VNET_LINK_POLLS 50
+
 struct virtio_dev;
 
 /**
