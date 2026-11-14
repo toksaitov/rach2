@@ -3892,9 +3892,19 @@ static void stop_on_suites(struct set *x)
 }
 
 /**
+ * Give the forecast of member `m` for the ledger: its median elapsed time
+ * when its history has samples, and 0 when its cost is the case's initial
+ * bound, which bounds the case and does not forecast it.
+ */
+static uint64_t forecast(const struct member *m)
+{
+    return m->cost.samples > 0 ? m->cost.elapsed_us : 0;
+}
+
+/**
  * Ask the site's ledger for the processors of member `m`, its claim of the
  * run's own ledger held, waiting in the site's ledger as any request does,
- * with its expected time as the claim's forecast.
+ * with its forecast.
  *
  * @return 1 once they are held or the command needs none, 0 while the
  *         request waits, and -1 with the reason in its command when it is
@@ -3915,7 +3925,7 @@ static int site_claim(struct set *x, struct member *m)
         return 1;
     c->site = 1;
     if (etude_ledger_admit_for(x->site_l, c->site_id, x->o->account, &cpu, 1, &cap, 1, 1,
-                               m->cost.elapsed_us) == 0) {
+                               forecast(m)) == 0) {
         c->site = 2;
         return 1;
     }
@@ -4494,6 +4504,7 @@ static int case_command(struct set *x, struct member *m)
     x->jobs[m - x->mem].case_id = m->case_id;
     x->jobs[m - x->mem].arch = k->arch;
     x->jobs[m - x->mem].cost_us = m->cost.elapsed_us;
+    x->jobs[m - x->mem].forecast_us = forecast(m);
     x->jobs[m - x->mem].res = c->res;
     x->jobs[m - x->mem].nres = c->nres;
     return 0;

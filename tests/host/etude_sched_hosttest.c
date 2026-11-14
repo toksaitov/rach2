@@ -32,6 +32,15 @@
  * A blocked request is protected: a claim that would take what it needs is
  * refused, though it fits now, and one that takes none of it is admitted.
  * The protected request is chosen fairly between accounts and stays chosen.
+ * A claim with a forecast is still admitted beside it when it ends by the
+ * protected request's expected start, the earliest time by which the claims'
+ * forecasts leave it room, or fits beside it then; a claim past its forecast
+ * counts as ending a forecast from now, and nothing is admitted on a
+ * forecast while the protected request waits for a claim that has none. A
+ * replay of the release's run 343804 through the schedule, with the times
+ * its attempts took and, as forecasts, the medians a rerun takes from its
+ * history, which are those times, starts its short cases beside the graphics
+ * fractions and starts no fraction later than the schedule without them.
  * A request whose owner has died is removed; one that claims left uncertain
  * by a dead worker leave no room for is refused, and one too large for the
  * machine as well. A worker keeps one request waiting. Six workers of three
@@ -56,6 +65,7 @@
 #include "compat/load_history_host.h"
 #include "etude/history.h"
 #include "etude/sched.h"
+#include "etude_sched_replay.h"
 
 static int fails;
 
@@ -110,6 +120,38 @@ static int ask(struct etude_ledger *l, const char *id, const char *account, uint
     struct need n;
 
     return etude_ledger_admit(l, id, account, need(&n, cpu, mem), 2, CAP, NCAP, wait);
+}
+
+/** Ask for claim `id` as `ask` does without waiting, with the forecast
+ * `forecast_us`. */
+static int ask_for(struct etude_ledger *l, const char *id, const char *account, uint64_t cpu,
+                   uint64_t mem, uint64_t forecast_us)
+{
+    struct need n;
+
+    return etude_ledger_admit_for(l, id, account, need(&n, cpu, mem), 2, CAP, NCAP, 0, forecast_us);
+}
+
+/** Give the time of day a row has set in `ctx`, for etude_ledger_clock. */
+static uint64_t row_clock(void *ctx)
+{
+    return *(const uint64_t *)ctx;
+}
+
+/** Say whether ledger file `dir`/claims has the line `line`. */
+static int has_line(const char *dir, const char *line)
+{
+    char path[1024], buf[512];
+    FILE *f;
+    int found = 0;
+
+    snprintf(path, sizeof(path), "%s/claims", dir);
+    if ((f = fopen(path, "r")) == NULL)
+        return 0;
+    while (!found && fgets(buf, sizeof(buf), f) != NULL)
+        found = strncmp(buf, line, strlen(line)) == 0 && buf[strlen(line)] == '\n';
+    fclose(f);
+    return found;
 }
 
 /** Say whether `ask` was refused with `err`. */
@@ -481,11 +523,11 @@ static void test_class(void)
 static void test_order(void)
 {
     struct etude_job jobs[] = {
-        {"A", "a", "i686", 1, 1, 10, NULL, 0, ETUDE_JOB_PENDING, 0},
-        {"B", "b", "x86_64", 0, 1, 5, NULL, 0, ETUDE_JOB_PENDING, 0},
-        {"C", "b", "i686", 0, 1, 9, NULL, 0, ETUDE_JOB_PENDING, 0},
-        {"D", "a", "x86_64", 0, 1, 9, NULL, 0, ETUDE_JOB_PENDING, 0},
-        {"E", "a", "i686", 0, 1, 9, NULL, 0, ETUDE_JOB_PENDING, 0},
+        {"A", "a", "i686", 1, 1, 10, NULL, 0, ETUDE_JOB_PENDING, 0, 0},
+        {"B", "b", "x86_64", 0, 1, 5, NULL, 0, ETUDE_JOB_PENDING, 0, 0},
+        {"C", "b", "i686", 0, 1, 9, NULL, 0, ETUDE_JOB_PENDING, 0, 0},
+        {"D", "a", "x86_64", 0, 1, 9, NULL, 0, ETUDE_JOB_PENDING, 0, 0},
+        {"E", "a", "i686", 0, 1, 9, NULL, 0, ETUDE_JOB_PENDING, 0, 0},
     };
     static const char *const want[] = {"E", "D", "C", "B", "A"};
     size_t i, n = sizeof(jobs) / sizeof(jobs[0]);
@@ -551,6 +593,188 @@ static void test_beside(void)
     CHECK(done(l, "hold") == 0 && ask(l, "mem", "b", 1000, 4096, 1) == 0, "beside");
     CHECK(done(l, "mem") == 0 && done(l, "cpu-only") == 0 && empty(l), "beside");
     etude_ledger_close(l);
+}
+
+/**
+ * Beside a protected request blocked on processors, a claim with a forecast
+ * is admitted when it ends by the request's expected start, and one that
+ * runs past it only when it fits beside the request then. A claim past its
+ * forecast is taken to end a forecast from now, and a request that waits
+ * for a claim with no forecast has no expected start.
+ */
+static void test_forecast(void)
+{
+    const char *dir = fix_path("forecast");
+    struct etude_ledger *l = etude_ledger_open(dir);
+    uint64_t now = UINT64_C(1763092800) * SECOND;
+    const struct etude_ledger_res bad[] = {{CPU, 1000}, {"expected_us", 1}};
+
+    if (l == NULL) {
+        CHECK(0, "forecast");
+        return;
+    }
+    etude_ledger_clock(l, row_clock, &now);
+    CHECK(refused(etude_ledger_admit(l, "bad", "a", bad, 2, CAP, NCAP, 0), EINVAL), "forecast");
+    CHECK(ask_for(l, "hold-a", "a", 2000, 0, 100 * SECOND) == 0, "forecast");
+    CHECK(has_line(dir, "resource expected_us 100000000") &&
+              has_line(dir, "resource admitted_utc_us 1763092800000000"),
+          "forecast");
+    CHECK(ask(l, "hold-b", "a", 1000, 0, 1) == 0, "forecast");
+    CHECK(refused(ask(l, "big", "b", 3000, 0, 1), EAGAIN) && state_is(l, "big", "blocked"),
+          "forecast");
+    CHECK(refused(ask_for(l, "long", "c", 1000, 0, 1000 * SECOND), EAGAIN), "forecast");
+    CHECK(refused(ask(l, "plain", "c", 1000, 0, 0), EAGAIN), "forecast");
+    CHECK(ask_for(l, "short", "c", 1000, 0, 50 * SECOND) == 0, "forecast");
+    CHECK(done(l, "short") == 0, "forecast");
+    CHECK(ask(l, "mem", "c", 0, 1024, 0) == 0 && done(l, "mem") == 0, "forecast");
+
+    now += 200 * SECOND;
+    CHECK(refused(ask_for(l, "short", "c", 1000, 0, 101 * SECOND), EAGAIN), "late");
+    CHECK(ask_for(l, "short", "c", 1000, 0, 100 * SECOND) == 0, "late");
+    CHECK(done(l, "short") == 0 && done(l, "hold-a") == 0, "late");
+    CHECK(ask(l, "big", "b", 3000, 0, 1) == 0, "late");
+
+    CHECK(done(l, "big") == 0 && refused(ask(l, "big2", "b", 4000, 0, 1), EAGAIN), "unknown");
+    CHECK(state_is(l, "big2", "blocked"), "unknown");
+    CHECK(refused(ask_for(l, "short", "c", 1000, 0, SECOND), EAGAIN), "unknown");
+    CHECK(done(l, "hold-b") == 0 && ask(l, "big2", "b", 4000, 0, 1) == 0, "unknown");
+    CHECK(done(l, "big2") == 0 && empty(l), "unknown");
+    etude_ledger_close(l);
+}
+
+/* The replay's machine: the testing PC's site, and the run's 20 workers. */
+#define REPLAY_CPU   32000
+#define REPLAY_WIDTH 20
+#define REPLAY_N     (sizeof(REPLAY) / sizeof(REPLAY[0]))
+
+/* A graphics fraction, which claims every processor of its guest. */
+#define FRACTION_MILLIS 8000
+
+/**
+ * Mark ready, in order, as many of the replay's `jobs` not yet admitted as
+ * the run's worker has workers free, the jobs that have not `ended` holding
+ * one each, and give the place of the first job not yet admitted.
+ */
+static size_t replay_ready(struct etude_job *jobs, const int *ended)
+{
+    size_t i, room = REPLAY_WIDTH, first = REPLAY_N;
+
+    for (i = 0; i < REPLAY_N; i++)
+        room -= jobs[i].state == ETUDE_JOB_ADMITTED && !ended[i];
+    for (i = 0; i < REPLAY_N; i++) {
+        jobs[i].ready = jobs[i].state != ETUDE_JOB_ADMITTED && room > 0;
+        room -= jobs[i].ready;
+        if (jobs[i].state != ETUDE_JOB_ADMITTED && first == REPLAY_N)
+            first = i;
+    }
+    return first;
+}
+
+/**
+ * Replay the run's attempts through etude_sched_admit on a ledger of the
+ * site's processors, in the run's order, its worker marking ready as many as
+ * it has free workers, each attempt taking the time it took. The forecast,
+ * when `forecast` is set, is the median a rerun takes from the run's history,
+ * the time the attempt took; otherwise there is none, as in the run, whose
+ * cases had no history.
+ * Give each attempt's start, in microseconds from the replay's start, in
+ * `start`, and return 0, or -1 when the replay stalls or the ledger fails.
+ */
+static int replay(const char *dir, int forecast, uint64_t *start)
+{
+    static const struct etude_ledger_res cap = {CPU, REPLAY_CPU};
+    static struct etude_job jobs[REPLAY_N];
+    static struct etude_ledger_res res[REPLAY_N];
+    static uint64_t end[REPLAY_N];
+    static int ended[REPLAY_N];
+    const uint64_t zero = UINT64_C(1763092800) * SECOND;
+    uint64_t now = zero, next;
+    struct etude_ledger *l = etude_ledger_open(dir);
+    size_t i, left = REPLAY_N;
+    int rc = 0;
+
+    if (l == NULL)
+        return -1;
+    etude_ledger_clock(l, row_clock, &now);
+    for (i = 0; i < REPLAY_N; i++) {
+        res[i].name = CPU;
+        res[i].amount = REPLAY[i].cpu_millis;
+        memset(&jobs[i], 0, sizeof(jobs[i]));
+        jobs[i].id = REPLAY[i].item;
+        jobs[i].res = &res[i];
+        jobs[i].nres = 1;
+        jobs[i].cost_us = REPLAY[i].expected_us;
+        jobs[i].forecast_us = forecast ? REPLAY[i].elapsed_us : 0;
+        ended[i] = 0;
+    }
+    while (left > 0 && rc == 0) {
+        i = replay_ready(jobs, ended);
+        if (etude_sched_admit(l, "ghrunner", jobs + i, REPLAY_N - i, &cap, 1, NULL) != 0)
+            rc = -1;
+        next = UINT64_MAX;
+        for (i = 0; i < REPLAY_N; i++) {
+            if (jobs[i].state == ETUDE_JOB_REFUSED)
+                rc = -1;
+            if (jobs[i].state != ETUDE_JOB_ADMITTED || ended[i])
+                continue;
+            if (end[i] == 0) {
+                start[i] = now - zero;
+                end[i] = now + REPLAY[i].elapsed_us;
+            }
+            next = end[i] < next ? end[i] : next;
+        }
+        if (next == UINT64_MAX)
+            rc = -1;
+        for (now = next, i = 0; rc == 0 && i < REPLAY_N; i++)
+            if (jobs[i].state == ETUDE_JOB_ADMITTED && !ended[i] && end[i] == now) {
+                ended[i] = 1;
+                left--;
+                if (done(l, jobs[i].id) != 0)
+                    rc = -1;
+            }
+    }
+    memset(end, 0, sizeof(end));
+    etude_ledger_close(l);
+    return rc;
+}
+
+/**
+ * The replay of the release's run 343804 starts no graphics fraction later
+ * with forecasts than without, and starts its short cases sooner: their
+ * starts, summed, are earlier, and so is the replay's end.
+ */
+static void test_replay(void)
+{
+    static uint64_t before[REPLAY_N], after[REPLAY_N];
+    uint64_t waited_before = 0, waited_after = 0, end_before = 0, end_after = 0;
+    size_t i, sooner = 0;
+
+    CHECK(replay(fix_path("replay-before"), 0, before) == 0, "replay");
+    CHECK(replay(fix_path("replay-after"), 1, after) == 0, "replay");
+    for (i = 0; i < REPLAY_N; i++) {
+        if (before[i] + REPLAY[i].elapsed_us > end_before)
+            end_before = before[i] + REPLAY[i].elapsed_us;
+        if (after[i] + REPLAY[i].elapsed_us > end_after)
+            end_after = after[i] + REPLAY[i].elapsed_us;
+        if (REPLAY[i].cpu_millis >= FRACTION_MILLIS) {
+            if (after[i] > before[i])
+                printf("etude-sched-test: %s: starts at %llu s, not %llu s\n", REPLAY[i].item,
+                       (unsigned long long)(after[i] / SECOND),
+                       (unsigned long long)(before[i] / SECOND));
+            CHECK(after[i] <= before[i], "replay");
+            continue;
+        }
+        waited_before += before[i];
+        waited_after += after[i];
+        sooner += after[i] < before[i];
+    }
+    printf("etude-sched-test: replay: short cases started sooner: %lu of %lu; their starts "
+           "summed: %llu s before, %llu s after; the end: %llu s before, %llu s after\n",
+           (unsigned long)sooner, (unsigned long)REPLAY_N,
+           (unsigned long long)(waited_before / SECOND),
+           (unsigned long long)(waited_after / SECOND), (unsigned long long)(end_before / SECOND),
+           (unsigned long long)(end_after / SECOND));
+    CHECK(sooner > 0 && waited_after < waited_before && end_after < end_before, "replay");
 }
 
 /**
@@ -725,13 +949,13 @@ static void test_sched(void)
     struct etude_ledger *l = etude_ledger_open(fix_path("sched"));
     struct need n1, n2, n3, n4, n5;
     struct etude_job jobs[] = {
-        {"j1", "c1", "i686", 0, 1, 30, need(&n1, 2000, 0), 2, ETUDE_JOB_PENDING, 0},
-        {"j2", "c2", "x86_64", 0, 1, 20, need(&n2, 1000, 0), 2, ETUDE_JOB_PENDING, 0},
-        {"j3", "c3", "i686", 0, 0, 10, need(&n3, 500, 0), 2, ETUDE_JOB_PENDING, 0},
-        {"j4", "c4", "x86_64", 0, 1, 40, need(&n4, 9000, 0), 2, ETUDE_JOB_PENDING, 0},
+        {"j1", "c1", "i686", 0, 1, 30, need(&n1, 2000, 0), 2, ETUDE_JOB_PENDING, 0, 0},
+        {"j2", "c2", "x86_64", 0, 1, 20, need(&n2, 1000, 0), 2, ETUDE_JOB_PENDING, 0, 0},
+        {"j3", "c3", "i686", 0, 0, 10, need(&n3, 500, 0), 2, ETUDE_JOB_PENDING, 0, 0},
+        {"j4", "c4", "x86_64", 0, 1, 40, need(&n4, 9000, 0), 2, ETUDE_JOB_PENDING, 0, 0},
     };
     struct etude_job late = {"j5", "c5", "i686", 0, 1, 1, need(&n5, 4000, 0), 2, ETUDE_JOB_PENDING,
-                             0};
+                             0,    0};
     size_t i, got = 9, nj = sizeof(jobs) / sizeof(jobs[0]);
 
     if (l == NULL || ask(l, "hold", "x", 3000, 0, 1) != 0) {
@@ -931,6 +1155,8 @@ int main(void)
     test_order();
     test_backfill();
     test_beside();
+    test_forecast();
+    test_replay();
     test_fair();
     test_dead();
     test_uncertain();

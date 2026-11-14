@@ -35,7 +35,8 @@ struct etude_job {
     const struct etude_ledger_res *res;
     size_t nres;
     enum etude_job_state state;
-    int error; /* ERANGE or ENOSPC, as etude_ledger_admit gave it */
+    int error;            /* ERANGE or ENOSPC, as etude_ledger_admit gave it */
+    uint64_t forecast_us; /* its median time from history, for the ledger; 0 without history */
 };
 
 /**
@@ -68,8 +69,8 @@ void etude_sched_order(struct etude_job *jobs, size_t n);
  * The worker keeps one request waiting in the ledger: the job already
  * waiting, or else the first that is refused for now. The other jobs are
  * asked without waiting, and each is admitted only where the ledger finds it
- * room beside the claims and the protected request, its `cost_us` given as
- * its forecast, as etude_ledger_admit_for says. A job the machine can
+ * room beside the claims and the protected request, with its `forecast_us`,
+ * as etude_ledger_admit_for says. A job the machine can
  * never hold becomes ETUDE_JOB_REFUSED with the reason in `error`, and the
  * rest go on. `*admitted`, when not NULL, has the count of jobs admitted.
  * The caller runs each job that has become ETUDE_JOB_ADMITTED, ends its
