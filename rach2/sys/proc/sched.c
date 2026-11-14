@@ -444,14 +444,44 @@ static process_t *sched_find(int owner, int cpu, int woken_only)
     return NULL;
 }
 
+/* How long after an ordinary thread leaves a processor its cache there
+ * counts as warm, so that an idle processor does not take it from its queue:
+ * Linux's sysctl_sched_migration_cost, which can_migrate_task's task_hot
+ * reads (kernel/sched/fair.c:9147-9175, 9311-9314). */
+#define SCHED_MIGRATION_COST_NS 500000u
+
 /**
- * Take the first eligible entry from the busiest other queue, trying each
- * donor at most once. Counts choose donors without visiting blocked records.
- * The returned process is unlinked before its cpu changes; sched_lock is held.
+ * Find an entry of queue `owner` that processor `cpu` may take from it at
+ * `now`: an eligible one whose cache is cold, or a real-time one, as Linux's
+ * load balancing leaves a cache-hot task where it is and its real-time
+ * pull ignores the cache (kernel/sched/rt.c:2320-2395). A thread that
+ * a wake preempted waits for its own processor, which runs it again within
+ * the waker's turn, instead of moving to one whose cache it fills anew.
+ * sched_lock is held.
+ */
+static process_t *sched_find_cold(int owner, int cpu, uint64_t now)
+{
+    process_t *p;
+
+    for (p = run_queues[owner].head; p; p = p->ready_next) {
+        pick_steps++;
+        if (p->state == PROC_READY && sched_may_run(p, cpu) &&
+            (sched_priority(p) != 0 || now - p->ran_ns >= SCHED_MIGRATION_COST_NS)) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Take the first entry another processor may give (`sched_find_cold`) from
+ * the busiest other queue, trying each donor at most once. Counts choose
+ * donors without visiting blocked records. The returned process is unlinked
+ * before its cpu changes; sched_lock is held.
  */
 static process_t *sched_steal(int cpu)
 {
-    uint64_t tried = (uint64_t)1 << cpu;
+    uint64_t tried = (uint64_t)1 << cpu, now = sched_clock_ns();
     process_t *p;
     unsigned int most;
     int c, donor;
@@ -469,7 +499,7 @@ static process_t *sched_steal(int cpu)
             return NULL;
         }
         tried |= (uint64_t)1 << donor;
-        p = sched_find(donor, cpu, 0);
+        p = sched_find_cold(donor, cpu, now);
         if (p) {
             sched_remove(p);
             sched_move(p, cpu);
@@ -1345,6 +1375,7 @@ void schedule(void)
     sched_move(next, me);
     next->pcount++;
     next->slice_ns = sched_clock_ns();
+    old->ran_ns = next->slice_ns;
 
     if (old != cpu->idle) {
         fpu_save(old->fpu);
@@ -1515,6 +1546,7 @@ void sched_idle_balance(void)
 {
     int me = (int)arch_cpu_id(), c, kick = -1;
     uint32_t flags;
+    uint64_t now;
 
     if (run_queues[me].count == 0) {
         return;
@@ -1525,9 +1557,10 @@ void sched_idle_balance(void)
         return;
     }
     flags = spin_lock_irqsave(&sched_lock);
+    now = sched_clock_ns();
     for (c = 0; c < NR_CPUS && kick < 0; c++) {
         if (c != me && cpu_table[c].tick_stopped && sched_cpu_idle(c) &&
-            !cpu_table[c].current->need_resched && sched_find(me, c, 0)) {
+            !cpu_table[c].current->need_resched && sched_find_cold(me, c, now)) {
             cpu_table[c].current->need_resched = 1;
             kick = c;
         }
