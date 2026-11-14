@@ -74,6 +74,10 @@
  * pidfd_send_signal and polls readable and hung up. An edge-triggered
  * epoll of a thread's pidfd reports its end once, and a sibling's end,
  * which its own pidfd polls readable after, gives it no second event.
+ * By the pidfd of a child's thread that the program traces, pidfd_getfd
+ * copies a descriptor while the thread runs, and is ESRCH once it has ended
+ * and released its descriptors but is not yet reaped, as Linux's
+ * __pidfd_fget answers a task past exit_files().
  *
  * A child that led a group, left it for its parent's while a member of its
  * own stayed in it, is refused setsid with EPERM, and is let make its
@@ -108,10 +112,10 @@
  * `reaped-namespace`, `tkill-order`, `thread-open`, `thread-refusals`,
  * `thread-signal`, `leader-thread-signal`, `thread-poll`,
  * `leader-thread-poll`, `thread-id-reused`, `thread-edge`,
- * `setsid-left-group`, `last-pid-above`, `last-pid-read`,
- * `last-pid-cap` and `fork-eagain`. The first failure fails its
- * assertion and leaves the rest not run. The program runs as root, which
- * the writes of ns_last_pid and pid_max need.
+ * `traced-zombie-getfd`, `setsid-left-group`, `last-pid-above`,
+ * `last-pid-read`, `last-pid-cap` and `fork-eagain`. The first failure
+ * fails its assertion and leaves the rest not run. The program runs as
+ * root, which the writes of ns_last_pid and pid_max need.
  */
 
 #define _GNU_SOURCE
@@ -126,6 +130,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/ptrace.h>
 #include <sys/epoll.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -1380,6 +1385,67 @@ static int thread_edge(void)
     return 0;
 }
 
+/** The thread of a child that the caller traces, and that has ended but
+ * is not yet reaped: by the pidfd of that thread, pidfd_getfd copies a
+ * descriptor while it runs and is ESRCH once its end has released its
+ * table, as Linux's __pidfd_fget answers a task past exit_files(). */
+static int traced_zombie(void)
+{
+    struct waiter w;
+    siginfo_t si;
+    pid_t pid;
+    int tfd = -1, copy = -1, ok = 0, st;
+
+    w.tid = -1;
+    if (pipe(w.ready) != 0 || pipe(w.go) != 0) {
+        return fail("pipe for a traced thread");
+    }
+    pid = fork();
+    if (pid == 0) {
+        if (pthread_create(&w.t, NULL, waiting_thread, &w) != 0) {
+            _exit(2);
+        }
+        for (;;) {
+            pause();
+        }
+    }
+    if (pid > 0 && read(w.ready[0], &w.tid, sizeof(w.tid)) == (ssize_t)sizeof(w.tid)) {
+        tfd = (int)syscall(SYS_pidfd_open, (long)w.tid, (long)PIDFD_THREAD);
+        copy = tfd >= 0 ? (int)syscall(SYS_pidfd_getfd, (long)tfd, (long)w.go[0], 0L) : -1;
+        memset(&si, 0, sizeof(si));
+        ok = copy >= 0 && ptrace(PTRACE_SEIZE, w.tid, NULL, NULL) == 0 &&
+             write(w.go[1], "g", 1) == 1 &&
+             waitid(P_PID, (id_t)w.tid, &si, WEXITED | WNOWAIT | __WALL) == 0 &&
+             si.si_pid == w.tid && si.si_code == CLD_EXITED &&
+             syscall(SYS_pidfd_getfd, (long)tfd, (long)w.go[0], 0L) == -1 && errno == ESRCH &&
+             waitpid(w.tid, &st, __WALL) == w.tid;
+    }
+    if (pid > 0) {
+        kill(pid, SIGKILL);
+        /* A traced thread not yet reaped holds its leader's reap back. */
+        if (w.tid > 0 && !ok) {
+            waitpid(w.tid, NULL, __WALL);
+        }
+        ok = reaped_killed(pid) && ok;
+    }
+    if (copy >= 0) {
+        close(copy);
+    }
+    if (tfd >= 0) {
+        close(tfd);
+    }
+    close(w.ready[0]);
+    close(w.ready[1]);
+    close(w.go[0]);
+    close(w.go[1]);
+    if (!ok) {
+        return fail("pidfd_getfd by the pidfd of a traced thread that ended and was not reaped "
+                    "was not ESRCH, or copied nothing while it ran");
+    }
+    report_held();
+    return 0;
+}
+
 /** pidfd_open's PIDFD_THREAD: the rows of a pidfd of one thread. */
 static int threads(void)
 {
@@ -1408,7 +1474,10 @@ static int threads(void)
     if (rc == 0) {
         rc = thread_id_reused();
     }
-    return rc != 0 ? rc : thread_edge();
+    if (rc == 0) {
+        rc = thread_edge();
+    }
+    return rc != 0 ? rc : traced_zombie();
 }
 
 /** A child that leads a group, joins its parent's group while a member
@@ -1616,22 +1685,51 @@ static int fork_eagain(void)
  * checked. */
 static void plan(void)
 {
-    static const char *const ids[] = {
-        "clear-sighand",      "clear-sighand-einval", "clone3-pidfd",
-        "pidfd-readable",     "waitid-pidfd",         "pidfd-hangup",
-        "pidfd-open",         "send-signal",          "killed",
-        "send-reaped",        "nonblock-eagain",      "getfd",
-        "getfd-errors",       "pidfd-errors",         "self-faults",
-        "populate",           "wait4-faults",         "children-faults",
-        "hangup-wakes",       "pidfd-file-info",      "process-file-info",
-        "thread-file-info",   "info-before-target",   "queued-code-permission",
-        "scope-thread",       "scope-thread-group",   "scope-process-group",
-        "scope-group-reaped", "scope-group-reused",   "reaped-namespace",
-        "tkill-order",        "thread-open",          "thread-refusals",
-        "thread-signal",      "leader-thread-signal", "thread-poll",
-        "leader-thread-poll", "thread-id-reused",     "thread-edge",
-        "setsid-left-group",  "last-pid-above",       "last-pid-read",
-        "last-pid-cap",       "fork-eagain"};
+    static const char *const ids[] = {"clear-sighand",
+                                      "clear-sighand-einval",
+                                      "clone3-pidfd",
+                                      "pidfd-readable",
+                                      "waitid-pidfd",
+                                      "pidfd-hangup",
+                                      "pidfd-open",
+                                      "send-signal",
+                                      "killed",
+                                      "send-reaped",
+                                      "nonblock-eagain",
+                                      "getfd",
+                                      "getfd-errors",
+                                      "pidfd-errors",
+                                      "self-faults",
+                                      "populate",
+                                      "wait4-faults",
+                                      "children-faults",
+                                      "hangup-wakes",
+                                      "pidfd-file-info",
+                                      "process-file-info",
+                                      "thread-file-info",
+                                      "info-before-target",
+                                      "queued-code-permission",
+                                      "scope-thread",
+                                      "scope-thread-group",
+                                      "scope-process-group",
+                                      "scope-group-reaped",
+                                      "scope-group-reused",
+                                      "reaped-namespace",
+                                      "tkill-order",
+                                      "thread-open",
+                                      "thread-refusals",
+                                      "thread-signal",
+                                      "leader-thread-signal",
+                                      "thread-poll",
+                                      "leader-thread-poll",
+                                      "thread-id-reused",
+                                      "thread-edge",
+                                      "traced-zombie-getfd",
+                                      "setsid-left-group",
+                                      "last-pid-above",
+                                      "last-pid-read",
+                                      "last-pid-cap",
+                                      "fork-eagain"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.pidfdmusl"));
