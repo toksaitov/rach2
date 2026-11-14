@@ -79,7 +79,8 @@ A setting of the real-time clock or a leap second moves a deadline on it,
 here and for every wait below, as in Linux: a step past the time ends the
 wait at the next tick with
 .Er ETIMEDOUT ,
-and a step back keeps it waiting until the clock reaches the time again.
+and a step back keeps it waiting until the clock reaches the time again;
+a step back after the clock has reached the time leaves the wait ended.
 .It Dv FUTEX_WAKE
 Wake up to
 .Fa val

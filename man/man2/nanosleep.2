@@ -112,7 +112,8 @@ A setting of the real-time clock or a leap second moves an absolute sleep
 on
 .Dv CLOCK_REALTIME ,
 as in Linux: a step past its time ends it at the next tick, and a step back
-keeps it sleeping until the clock reaches its time again.
+keeps it sleeping until the clock reaches its time again; a step back after
+the clock has reached its time leaves the sleep ended.
 The fourth is the caller's process CPU clock,
 .Dv CLOCK_PROCESS_CPUTIME_ID ,
 or any process's in the negative form

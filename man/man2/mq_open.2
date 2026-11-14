@@ -67,7 +67,8 @@ Linux's hrtimer ends it, or where the timer has no interrupt between
 ticks at the first tick at which the clock has reached it.
 A setting of the real-time clock or a leap second moves the deadline, as
 in Linux: a step past it ends the wait at the next tick, and a step back
-keeps the call waiting until the clock reaches it again.
+keeps the call waiting until the clock reaches it again; a step back after
+the clock has reached it leaves the wait ended.
 .Fn mq_timedreceive
 takes the first message and its priority, waiting while the queue is
 empty.
@@ -195,7 +196,7 @@ and
 .Dv O_EXCL
 for a queue that exists.
 .It Bq Er EINTR
-A signal ended the wait.
+A signal ended the wait, also one pending when the timeout ran out.
 .It Bq Er EINVAL
 An access mode of 3, attributes outside the caller's limits, a priority
 past 32767, a malformed timeout, a notification of another kind or a
