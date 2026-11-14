@@ -30,6 +30,13 @@
  * atkbd_skip_getid; and a connect that finds no event device free leaves
  * serio0 without a driver.
  *
+ * The configuration rows read the controller's configuration byte with
+ * bytes waiting before the read, which the drain takes, and with a key or
+ * mouse byte that arrives after the drain and answers the first READ_CONFIG:
+ * the reads go on until two agree, so the translation bit kbd_init caches
+ * is the controller's, and a controller whose reads never agree gives -1
+ * after ten.
+ *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DTICK_HZ=1000
  *
@@ -58,13 +65,24 @@ static int fails;
 
 /* The model 8042: the status the row sets, the byte waiting in the data
  * port, the count of data port reads and of any port write, and the bytes
- * written to the data port, the first MAX_WRITES of them. A read of the
- * configuration byte puts `model_config` in the data port. */
+ * written to the data port, the first MAX_WRITES of them. While `queued`
+ * holds bytes, the status is theirs and a read of the data port takes the
+ * first. READ_CONFIG queues `stray`, when it is not -1, and then
+ * `model_config`: a device byte that came after the drain and before the
+ * controller's answer, the mouse's when `stray_mouse` is set. The stray
+ * byte comes once, or before every answer while `stray_always` is set. */
 #define MAX_WRITES 256
+#define MAX_QUEUED 64
 static uint8_t model_status;
 static uint8_t model_data;
 static uint8_t model_config = 0x45;
-static int config_due;
+static uint8_t queued[MAX_QUEUED];
+static uint8_t queued_status[MAX_QUEUED];
+static int n_queued;
+static int stray = -1;
+static int stray_mouse;
+static int stray_always;
+static int config_commands;
 static int data_reads;
 static int port_writes;
 static uint8_t data_writes[MAX_WRITES];
@@ -74,16 +92,33 @@ static int n_data_writes;
 static int keys;
 static uint8_t last_key;
 
+/** Queue `byte` in the output buffer with `status`, as far as it holds. */
+static void queue(uint8_t byte, uint8_t status)
+{
+    if (n_queued < MAX_QUEUED) {
+        queued_status[n_queued] = status;
+        queued[n_queued++] = byte;
+    }
+}
+
 uint8_t inb(uint16_t port)
 {
+    uint8_t byte;
+    int i;
+
     if (port == PS2_STATUS_PORT) {
-        return config_due ? PS2_STATUS_OUTPUT_FULL : model_status;
+        return n_queued ? queued_status[0] : model_status;
     }
     if (port == PS2_DATA_PORT) {
         data_reads++;
-        if (config_due) {
-            config_due = 0;
-            return model_config;
+        if (n_queued) {
+            byte = queued[0];
+            for (i = 1; i < n_queued; i++) {
+                queued[i - 1] = queued[i];
+                queued_status[i - 1] = queued_status[i];
+            }
+            n_queued--;
+            return byte;
         }
         return model_data;
     }
@@ -94,7 +129,14 @@ void outb(uint16_t port, uint8_t val)
 {
     port_writes++;
     if (port == PS2_CMD_PORT && val == PS2_CMD_READ_CONFIG) {
-        config_due = 1;
+        config_commands++;
+        if (stray >= 0) {
+            queue((uint8_t)stray, stray_mouse ? MOUSE_BYTE : KEYBOARD_BYTE);
+            if (!stray_always) {
+                stray = -1;
+            }
+        }
+        queue(model_config, PS2_STATUS_OUTPUT_FULL);
     }
     if (port == PS2_DATA_PORT && n_data_writes < MAX_WRITES) {
         data_writes[n_data_writes++] = val;
@@ -292,7 +334,7 @@ static void leds_rows(void)
 
     CHECK("no command before kbd_init", tick_at(T(100)) == 0);
     kbd_init();
-    CHECK("kbd_init reads the controller's translation", kbd.translated && !config_due);
+    CHECK("kbd_init reads the controller's translation", kbd.translated && n_queued == 0);
     CHECK("and a chassis that names no type is not portable", !kbd.portable);
 
     /* The first command, at once, with the LEDs dark. */
@@ -656,6 +698,58 @@ static void nodes_rows(void)
     CHECK("and whose LEDs follow", leds_sent(T(3303)));
 }
 
+/** The configuration byte: bytes before the read drained, and a key or
+ * mouse byte between the drain and the controller's answer never taken for
+ * it, so kbd_init caches the controller's translation bit. */
+static void config_rows(void)
+{
+    int c;
+
+    model_status = 0;
+    n_queued = 0;
+    queue(0x1C, KEYBOARD_BYTE);
+    queue(0x09, MOUSE_BYTE);
+    c = config_commands;
+    CHECK("bytes waiting before the read are drained",
+          ps2_read_config() == 0x45 && config_commands == c + 2 && n_queued == 0);
+
+    stray = 0x1E;
+    c = config_commands;
+    CHECK("a key byte after the drain is not the configuration",
+          ps2_read_config() == 0x45 && config_commands == c + 3);
+    /* The first answer waits behind the stray byte and answers the second
+     * READ_CONFIG; the second answer is left over. */
+    n_queued = 0;
+    stray_mouse = 1;
+    stray = 0x08;
+    c = config_commands;
+    CHECK("nor a mouse byte", ps2_read_config() == 0x45 && config_commands == c + 3);
+    n_queued = 0;
+    stray_mouse = 0;
+
+    stray = 0x1E;
+    kbd.translated = 0;
+    kbd_init();
+    CHECK("kbd_init caches the controller's translation past a key byte", kbd.translated == 1);
+    n_queued = 0;
+}
+
+/** A controller that answers every READ_CONFIG after a fresh key byte reads
+ * 0x1E and 0x45 in turn, never twice the same: -1 after ten reads. */
+static void unstable_rows(void)
+{
+    int c = config_commands;
+
+    stray = 0x1E;
+    stray_always = 1;
+    n_queued = 0;
+    CHECK("reads that never agree give -1", ps2_read_config() == -1);
+    CHECK("after ten of them", config_commands == c + 10);
+    stray = -1;
+    stray_always = 0;
+    n_queued = 0;
+}
+
 int main(void)
 {
     /* A mouse byte, the first of a packet. */
@@ -690,6 +784,8 @@ int main(void)
     busy_rows();
     portable_rows();
     nodes_rows();
+    config_rows();
+    unstable_rows();
 
     if (fails == 0) {
         printf("ps2kbd-test: pass\n");
