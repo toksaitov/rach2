@@ -19,9 +19,10 @@
  * blended, the CRC equal to the test's own of the frame it expects
  * (76-12.1). Vblanks from the tick at the mode's rate over the model's
  * clock, none before their time, each stamped with the end of its frame
- * however late its tick, the next deadline published, at most eight for a
- * tick that comes late, and the timer off five seconds after the last
- * holder (76-12.2).
+ * however late its tick, the next deadline published, a tick that comes
+ * frames late counting them all at once with the latest's time and sending
+ * an event asked for meanwhile at that time, and the timer off five seconds
+ * after the last holder (76-12.2).
  * Equal frames with equal CRCs and consecutive frame numbers, a composer
  * that fell behind entering each frame, a flip that changes the CRC and
  * one back that restores it, a gamma table of zeros that makes the frame
@@ -685,11 +686,22 @@ static void row_compose(void)
 
 /* ---- 76-12.2: vblanks ---- */
 
+/** WAIT_VBLANK for an event at the next vblank: the answer. */
+static int32_t event_next_vblank(void)
+{
+    union drm_wait_vblank w;
+
+    k_memset(&w, 0, sizeof(w));
+    w.request.type = (enum drm_vblank_seq_type)(_DRM_VBLANK_RELATIVE | _DRM_VBLANK_EVENT);
+    w.request.sequence = 1;
+    return drm_wait_vblank_ioctl(&v->drm, &w, &fa);
+}
+
 /** Vblanks at the mode's rate over the model clock. */
 static void row_vblank(void)
 {
     uint64_t count;
-    int64_t start, next;
+    int64_t start, next, asked, n;
     int i;
 
     CHECK(period == 16683217, "a frame of 640x480 at 25.175 MHz: 800 by 525 pixels");
@@ -719,11 +731,30 @@ static void row_vblank(void)
     CHECK(v->crtc.vblank.time_ns == next && wake_at_ns == next + period,
           "a tick 3 ms late: the vblank stamped with its frame's end, not the tick's time");
     count = v->crtc.vblank.count;
+    next = v->next_ns;
+    model_now_ns = next + period / 2;
+    nsent = 0;
+    CHECK(event_next_vblank() == 0,
+          "an event asked for half a frame after a vblank not yet served");
+    asked = model_now_ns;
+    model_now_ns = next + 9 * period + 1000;
+    vkms_tick();
+    CHECK(v->crtc.vblank.count == count + 10 && v->overruns == 1 &&
+              v->next_ns == next + 10 * period && v->crtc.vblank.time_ns == next + 9 * period,
+          "a tick nine frames late: ten counted at once, stamped with the latest, on the grid");
+    CHECK(nsent == 1 && sent[0].sequence == (uint32_t)v->crtc.vblank.count &&
+              (int64_t)sent[0].tv_sec * 1000000000ll + (int64_t)sent[0].tv_usec * 1000 ==
+                  (next + 9 * period) / 1000 * 1000 &&
+              next + 9 * period >= asked,
+          "the event sent at that count and time, none before it was asked for");
+    count = v->crtc.vblank.count;
+    next = v->next_ns;
     model_now_ns += 1000000000ll;
     vkms_tick();
-    CHECK(v->crtc.vblank.count == count + 8 && v->overruns == 1 &&
-              v->next_ns == model_now_ns + period,
-          "a tick a second late: eight, and the timer starts again from now");
+    n = (model_now_ns - next) / period + 1;
+    CHECK(v->crtc.vblank.count == count + (uint64_t)n && v->overruns == 2 &&
+              v->next_ns == next + n * period && v->next_ns > model_now_ns,
+          "a tick a second late: every frame gone counted, the timer on its grid");
     drain();
     drm_crtc_vblank_put(&v->crtc);
     drm_crtc_crc_release(&v->crtc);

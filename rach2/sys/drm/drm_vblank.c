@@ -83,6 +83,26 @@ static int64_t vblank_timestamp(struct drm_crtc *crtc, int in_vblank_irq, int *p
     return vblank_now();
 }
 
+/**
+ * The length of a frame of `mode` in nanoseconds, Linux's
+ * drm_calc_timestamping_constants: the pixels of a frame, blanking
+ * included, over the clock, halved for an interlaced mode; 0 for a mode
+ * with no clock.
+ */
+static int64_t vblank_framedur(const struct drm_mode_modeinfo *mode)
+{
+    uint64_t ns;
+
+    if (mode->clock == 0 || mode->htotal == 0 || mode->vtotal == 0) {
+        return 0;
+    }
+    ns = drm_div64((uint64_t)mode->htotal * mode->vtotal * 1000000u, mode->clock);
+    if (mode->flags & DRM_MODE_FLAG_INTERLACE) {
+        ns /= 2;
+    }
+    return (int64_t)ns;
+}
+
 /** A monotonic time `ns`, not negative, as the seconds and microseconds of
  * an event or a reply, without the 64-bit division i686 has no routine
  * for. */
@@ -195,26 +215,35 @@ static uint32_t vblank_sample(struct drm_crtc *crtc, int in_vblank_irq, int64_t 
 /**
  * Take in the vblanks of `crtc` since the count last did, Linux's
  * drm_update_vblank_count with a counter of 32 bits: the frame counter's
- * difference, or 1 at an interrupt of a CRTC without a counter. When none
- * has come, as at an interrupt whose frame was already counted, the count
- * and its time stay as they are, since a second reading of the same frame
- * may come out earlier than the first. Outside the interrupt the time is
- * kept only from where the CRTC scans, else 0 until the next vblank.
- * The device's `vbl_lock` is held.
+ * difference; for a CRTC without a counter, the frames between the
+ * driver's time of its latest vblank and the time stored, rounded to the
+ * nearest, when the driver gives that time, the mode has a frame and a
+ * time is stored; else 1 at an interrupt. When none has come, as at an
+ * interrupt whose frame was already counted, the count and its time stay
+ * as they are, since a second reading of the same frame may come out
+ * earlier than the first. Outside the interrupt the time is kept only from
+ * where the CRTC scans, else 0 until the next vblank. The device's
+ * `vbl_lock` is held.
  */
 static void vblank_update_count(struct drm_crtc *crtc, int in_vblank_irq)
 {
-    uint32_t cur = crtc->vblank.last, diff;
+    struct drm_vblank *v = &crtc->vblank;
+    uint32_t cur = v->last, diff;
     int64_t t = 0;
     int precise = 0;
 
     if (crtc->funcs->get_vblank_counter) {
         cur = vblank_sample(crtc, in_vblank_irq, &t, &precise);
-        diff = cur - crtc->vblank.last;
+        diff = cur - v->last;
     } else {
-        diff = in_vblank_irq ? 1 : 0;
-        if (diff != 0) {
-            t = vblank_timestamp(crtc, in_vblank_irq, &precise);
+        t = vblank_timestamp(crtc, in_vblank_irq, &precise);
+        if (precise && v->framedur_ns > 0 && v->time_ns != 0) {
+            diff = t <= v->time_ns ? 0
+                                   : (uint32_t)drm_div64((uint64_t)(t - v->time_ns) +
+                                                             (uint64_t)v->framedur_ns / 2u,
+                                                         (uint64_t)v->framedur_ns);
+        } else {
+            diff = in_vblank_irq ? 1 : 0;
         }
     }
     if (diff == 0) {
@@ -527,6 +556,9 @@ void drm_crtc_vblank_on(struct drm_crtc *crtc)
     if (v->inmodeset) {
         v->refs--;
         v->inmodeset = 0;
+    }
+    if (crtc->state) {
+        v->framedur_ns = vblank_framedur(&crtc->state->mode);
     }
     /* Linux's drm_reset_vblank_timestamp: one more count, with the time
      * from where the CRTC scans or none until the next vblank; a hardware

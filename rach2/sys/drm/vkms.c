@@ -37,10 +37,6 @@
 #define NUM_OVERLAY_PLANES 8
 #define VKMS_MAX_PLANES    (2 + NUM_OVERLAY_PLANES)
 
-/* The vblanks one tick counts at most before the timer gives up the ones
- * it missed, as an hrtimer that overran does. */
-#define VKMS_MAX_CATCHUP 8
-
 /* What a plane shows as the last commit programmed it, Linux's
  * vkms_frame_info: its framebuffer, held; the corner of the part shown, in
  * the framebuffer's pixels; where on the CRTC, clipped to it; and its
@@ -70,9 +66,10 @@ struct vkms_scene {
  * which is their order from the bottom up. `timer_on`, `period_ns` and
  * `next_ns` are the vblank timer: on while the core holds vblanks, a frame
  * of the mode long, firing at `next_ns` of CLOCK_MONOTONIC, which the tick
- * moves on by a period before it handles the vblank, as Linux's
- * hrtimer_forward does, so that the vblank being handled ended at
- * `next_ns - period_ns`. `scene` is what
+ * moves on past the clock by whole periods before it handles the vblank,
+ * as Linux's hrtimer_forward_now does, so that the latest vblank ended at
+ * `next_ns - period_ns`; `overruns` counts the passes that found more than
+ * one period gone. `scene` is what
  * the last commit programmed. While `composer_enabled`, the CRC source is
  * on: each vblank asks for the frames from `frame_start` to `frame_end`
  * (`crc_pending`), which the composer thread composes and enters. The tick
@@ -546,19 +543,18 @@ void vkms_tick(void)
 {
     struct vkms_device *v = vkms_dev;
     int64_t now;
-    int n = 0;
+    uint64_t n;
 
     if (!v || !v->timer_on) {
         return;
     }
     now = vkms_now();
-    while (v->timer_on && now >= v->next_ns) {
-        if (++n > VKMS_MAX_CATCHUP) {
-            v->next_ns = now + v->period_ns;
+    if (now >= v->next_ns) {
+        n = drm_div64((uint64_t)(now - v->next_ns), (uint64_t)v->period_ns) + 1u;
+        if (n != 1u) {
             v->overruns++;
-            break;
         }
-        v->next_ns += v->period_ns;
+        v->next_ns += (int64_t)n * v->period_ns;
         vkms_vblank(v);
     }
     if (v->timer_on) {
@@ -571,8 +567,9 @@ void vkms_tick(void)
  * the vblanks are on, the timer's expiry less a frame, since the tick moves
  * the expiry on before it handles the vblank, so that each vblank is
  * stamped with the end of its period and not with the time the tick ran,
- * which a tick of 4 ms puts 16 or 20 ms apart for a frame of 16.67 ms;
- * otherwise the clock now. Under the device's `vbl_lock`. Answers 1.
+ * which a tick of 4 ms puts 16 or 20 ms apart for a frame of 16.67 ms, and
+ * the core counts the frames a late pass skipped from the stamps; otherwise
+ * the clock now. Under the device's `vbl_lock`. Answers 1.
  */
 static int vkms_get_vblank_timestamp(struct drm_crtc *crtc, int64_t *time_ns, int in_vblank_irq)
 {
@@ -587,32 +584,13 @@ static int vkms_get_vblank_timestamp(struct drm_crtc *crtc, int64_t *time_ns, in
     return 1;
 }
 
-/**
- * The length of a frame of `mode` in nanoseconds, Linux's
- * drm_calc_timestamping_constants: the pixels of a frame, blanking
- * included, over the clock, halved for an interlaced mode; a frame of
- * 60 Hz for a mode with no clock.
- */
-static int64_t frame_ns(const struct drm_mode_modeinfo *mode)
-{
-    uint64_t ns;
-
-    if (mode->clock == 0 || mode->htotal == 0 || mode->vtotal == 0) {
-        return 16666667;
-    }
-    ns = drm_div64((uint64_t)mode->htotal * mode->vtotal * 1000000u, mode->clock);
-    if (mode->flags & DRM_MODE_FLAG_INTERLACE) {
-        ns /= 2;
-    }
-    return ns ? (int64_t)ns : 1;
-}
-
 /** Start the timer, Linux's vkms_enable_vblank: the first vblank a frame of
- * the CRTC's mode from now. 0. */
+ * the CRTC's mode from now, the core's `framedur_ns`, or of 60 Hz for a
+ * mode with no clock. 0. */
 static int32_t vkms_enable_vblank(struct drm_crtc *crtc)
 {
     struct vkms_device *v = to_vkms(crtc->dev);
-    int64_t period = frame_ns(&crtc->state->mode);
+    int64_t period = crtc->vblank.framedur_ns ? crtc->vblank.framedur_ns : 16666667;
     uint32_t flags;
 
     flags = kirq_save();

@@ -1112,6 +1112,9 @@ struct drm_crtc_funcs {
  * count last took it in, for a CRTC with `get_vblank_counter`. `backwards`
  * counts the times stored before the latest one stored earlier,
  * `stamp_max_ns`, which debugfs's `crtc-N/vblank_backwards` reads.
+ * `framedur_ns` is a frame of the CRTC's mode, Linux's field of that name,
+ * which `drm_crtc_vblank_on` sets from the mode and which is 0 for a mode
+ * with no clock.
  */
 struct drm_vblank {
     uint32_t seq; /* odd while `count` and `time_ns` change, Linux's seqlock */
@@ -1119,6 +1122,7 @@ struct drm_vblank {
     uint32_t last;
     int64_t time_ns;
     int64_t stamp_max_ns;
+    int64_t framedur_ns;
     uint32_t backwards;
     uint32_t refs;
     int enabled;   /* the driver's interrupt is on */
