@@ -28,8 +28,9 @@
  * reset and acknowledged over the status a previous owner left; a GPU whose
  * bus registration fails, which leaves no window mapped, its command word
  * as it was, no record and no PCI claim but one it found; and a virtio-net
- * function whose reset does not finish, refused the same way, its bus
- * mastering never turned on. The model's
+ * function found mastering whose reset does not finish, refused the same
+ * way, its bus mastering turned off before the reset and left off. The
+ * model's
  * enables make the kernel a function's owner, as pci.c's do, so that a
  * claim left behind fails a row.
  *
@@ -831,9 +832,11 @@ static void probe_bus_fails(void)
     owner[4] = 0;
 }
 
-/** A device whose reset does not finish: refused before it is published,
- * with no window, binding or claim left and its command word as it was,
- * and bus mastering never turned on for it. */
+/** A device whose reset does not finish, found with memory decoding and
+ * bus mastering on, as an earlier owner whose own reset did not finish may
+ * leave it: refused before it is published, with no window, binding or
+ * claim left, its command word as it was less bus mastering, and bus
+ * mastering off through the reset and after it. */
 static void probe_reset_fails(void)
 {
     int adds = bus_adds, maps = live_maps, r = resets;
@@ -841,14 +844,17 @@ static void probe_reset_fails(void)
     make_function(5, 0xF9000000u);
     fns[5].device_id = 0x1041;
     space[5][2] = 0x41;
+    space[5][PCI_COMMAND] = PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER;
+    stuck_mastering = 0;
     reset_stuck = 1;
     log_text[0] = 0;
     CHECK(virtio_pci_probe() == 0 && resets > r, "the probe resets the device and takes nothing");
     CHECK(strstr(log_text, "refused: 00:05.0: the device did not reset: error -110") != 0 &&
-              bus_adds == adds && bound_key == -1 && live_maps == maps &&
-              space[5][PCI_COMMAND] == 0 && owner[5] == 0,
+              bus_adds == adds && bound_key == -1 && live_maps == maps && owner[5] == 0,
           "the device that did not reset is refused, unbound, unmapped and unclaimed");
-    CHECK(stuck_mastering == 0, "bus mastering waits for a reset that finished");
+    CHECK(stuck_mastering == 0, "the inherited bus mastering is off before the reset");
+    CHECK(space[5][PCI_COMMAND] == PCI_CMD_MEMORY_SPACE && space[5][PCI_COMMAND + 1] == 0,
+          "the command word is put back less bus mastering, which stays off");
     reset_stuck = 0;
 }
 

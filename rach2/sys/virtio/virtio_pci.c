@@ -115,7 +115,7 @@ struct virtio_pci {
     struct virtio_dev dev;
     pci_device_t pci;
     struct virtio_pci *next;
-    uint16_t command; /* the function's command word before the probe */
+    uint16_t command; /* the command word before the probe, less bus mastering */
     int claimed;      /* the probe made the kernel the function's PCI owner */
     int held;         /* a driver has `dev`, from virtio_pci_find to virtio_put */
     int gone;         /* unbound: its windows given back, its registers out of reach */
@@ -953,11 +953,12 @@ static int vp_map_window(struct vp_window *w)
 }
 
 /** Give back the windows of `vp` that `vp_map_window` mapped and its MSI-X
- * table, put back the command word the function had before `vp_attach`, so
- * that a function the transport does not keep decodes and masters as it
- * did, and give back the kernel's PCI claim when the probe took it, as
- * Linux's pci_disable_device ends a probe or a binding, so that another
- * driver, vfio-pci among them, may have the function. */
+ * table, put back the command word the function had before `vp_attach` less
+ * bus mastering, so that a function the transport does not keep decodes as
+ * it did and masters no more, even when an earlier owner left a device that
+ * never reset mastering, and give back the kernel's PCI claim when the
+ * probe took it, as Linux's pci_disable_device ends a probe or a binding,
+ * so that another driver, vfio-pci among them, may have the function. */
 static void vp_detach(struct virtio_pci *vp)
 {
     struct vp_window *w[4];
@@ -990,13 +991,15 @@ static void vp_detach(struct virtio_pci *vp)
 
 /** Read, check and map the capabilities of the function `vp->pci`, and turn
  * on its memory decoding, which makes the kernel the function's owner when
- * it had none (`claimed`); bus mastering waits for a reset that finished
+ * it had none (`claimed`); bus mastering, which the command word kept for
+ * `vp_detach` leaves out, waits for a reset that finished
  * (`vp_acknowledge`). Returns 0, or -EIO with
  * the reason in the log and every window it mapped given back
  * (`vp_detach`). */
 static int vp_attach(struct virtio_pci *vp)
 {
     vp->command = pci_read_config16(vp->pci.bus, vp->pci.device, vp->pci.function, PCI_COMMAND);
+    vp->command &= (uint16_t)~PCI_CMD_BUS_MASTER;
     vp_read_caps(vp);
     if (vp->common.len < VP_COMMON_MIN || vp->notify.len == 0 || vp->isr.len == 0) {
         klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: no %s capability in a memory BAR",
@@ -1065,16 +1068,20 @@ static struct virtio_pci *vp_record(const pci_device_t *p)
  * Reset the device of `vp` and set ACKNOWLEDGE, as Linux's
  * register_virtio_device does before it publishes a device, whether a
  * driver of its type exists or not, so that no DRIVER_OK or queue a
- * previous owner left stands, and turn on bus mastering, as Linux's
- * virtio_pci_probe does, only once the reset has finished, so that a
- * device still working through what an earlier binding gave it cannot
- * reach memory freed since. 0, or -ETIMEDOUT with a record when the reset
- * did not finish.
+ * previous owner left stands. Bus mastering, which firmware, an earlier
+ * owner or a binding whose reset did not finish may have left on, is
+ * turned off before the reset and on, as Linux's virtio_pci_probe does,
+ * only once the reset has finished, so that a device still working through
+ * what an earlier binding gave it cannot reach memory freed since. 0, or
+ * -ETIMEDOUT with a record and bus mastering left off when the reset did
+ * not finish.
  */
 static int vp_acknowledge(struct virtio_pci *vp)
 {
-    int k = virtio_reset(&vp->dev);
+    int k;
 
+    pci_disable_bus_master(&vp->pci);
+    k = virtio_reset(&vp->dev);
     if (k != 0) {
         klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: the device did not reset: error %d",
              vp->pci.bus, vp->pci.device, vp->pci.function, k);
@@ -1092,8 +1099,9 @@ static int vp_acknowledge(struct virtio_pci *vp)
  * which names it, log it and send the function's "bind" uevent, and keep
  * its record at the end of `vp_list`, in `*out` when `out` is not NULL.
  * 0, or -ENOMEM, -EIO, -ETIMEDOUT, or the error of showing it in /sys,
- * with nothing of it left: no record, binding, window, PCI claim or change
- * to its command word.
+ * with nothing of it left: no record, binding, window or PCI claim, and
+ * its command word as it was, less the bus mastering of a function whose
+ * capabilities were mapped.
  */
 static int vp_probe_one(const pci_device_t *p, struct virtio_pci **out)
 {
@@ -1172,11 +1180,12 @@ static int vp_key(const pci_device_t *p)
  * device reset, its interrupts released, its virtio device taken off the
  * bus, which gives its number back, the record taken off `vp_list`, its
  * windows and PCI claim given back with its command word less bus
- * mastering, as pci_disable_device leaves it, so that putting the word back
- * cannot turn on the mastering that the child's teardown turned off after a
- * reset that did not finish (`dma_enable`), and the function shown unbound
- * with its "unbind" uevent. The record is freed now, or at the driver's
- * virtio_put while one still holds it. May sleep, in the child's removal.
+ * mastering, as pci_disable_device leaves it (`vp_detach`), so that putting
+ * the word back cannot turn on the mastering that the child's teardown
+ * turned off after a reset that did not finish (`dma_enable`), and the
+ * function shown unbound with its "unbind" uevent. The record is freed
+ * now, or at the driver's virtio_put while one still holds it. May sleep,
+ * in the child's removal.
  */
 static void vp_unbind(struct virtio_pci *vp)
 {
@@ -1198,7 +1207,6 @@ static void vp_unbind(struct virtio_pci *vp)
             break;
         }
     }
-    vp->command &= (uint16_t)~PCI_CMD_BUS_MASTER;
     vp_detach(vp);
     vp->gone = 1;
     sysfs_pci_unbind(key);
