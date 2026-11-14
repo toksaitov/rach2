@@ -44,8 +44,9 @@
  * function bound; and the GPU unbound while its driver holds it and its
  * device does not reset, the driver removed first, freeing its buffers only
  * with bus mastering off, which nothing turns on again, and the MSI-X table
- * given back with the windows. No reset that does not finish, at a probe or
- * an unbind, runs with bus mastering on.
+ * given back with the windows. No reset at a probe or a bind that does not
+ * finish runs with bus mastering on; at an unbind the child's reset runs
+ * first, and its teardown turns mastering off before it frees anything.
  *
  * The interrupt rows give every MSI-X entry a remapped message, release
  * them before vectors, and force vector and remapper allocation failures.
