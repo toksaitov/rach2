@@ -166,6 +166,12 @@ uint32_t tsc_counts_per_tick(void)
     return 2u * TICK_NS;
 }
 
+/** The clock's rate, the trusted TSC's. */
+uint32_t tsc_clock_per_tick(void)
+{
+    return tsc_counts_per_tick();
+}
+
 /** Every processor's TSC agreed at its start. */
 int tsc_synced(int *cpu, uint64_t *behind)
 {

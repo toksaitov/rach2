@@ -617,8 +617,6 @@ uint32_t tsc_counts_per_tick(void)
  */
 uint32_t timer_tsc_watch(void)
 {
-    uint32_t flags;
-
     if (tsc_watch_measured) {
         return tsc_watch_per_tick;
     }
@@ -628,11 +626,12 @@ uint32_t timer_tsc_watch(void)
         tsc_kvm_counts_per_tick() != 0 || !refclock_name()) {
         return 0;
     }
-    flags = kirq_save();
-    tsc_watch_per_tick = tsc_against_reference();
-    kirq_restore(flags);
-#else
-    (void)flags;
+    {
+        uint32_t flags = kirq_save();
+
+        tsc_watch_per_tick = tsc_against_reference();
+        kirq_restore(flags);
+    }
 #endif
     return tsc_watch_per_tick;
 }
