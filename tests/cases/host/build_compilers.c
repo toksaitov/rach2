@@ -548,16 +548,22 @@ static void ifunc_export(struct fixture *f, int bits)
 
 /**
  * Link vendor/tcc/ifunc-test/ref.c into a shared library with the `bits`-bit
- * TinyCC's library and, for x86-64, the GNU helper's own architecture, link
- * vendor/tcc/ifunc-test/run.c and pick64.o against its C library and run
- * it: dlsym, the library's reference to pick and the executable's own
- * pointers to it must give one address, which reaches triple. The helper
- * has no i386 loader, so the i386 library is linked and not loaded.
+ * TinyCC's library, link vendor/tcc/ifunc-test/run.c and pickBITS.o
+ * against the host's loader and C library for that target, and run it:
+ * dlsym, the library's reference to pick and the executable's own
+ * pointers to it must give one address, which reaches triple. The 32-bit
+ * run takes the host's /lib/ld-linux.so.2 and /lib32/libc.so.6, which
+ * the release's Ubuntu host has; a host without them fails the check by
+ * name rather than passing on less. run.c loads ./libref.so, so the
+ * library of the target under run is copied to that name first when it was
+ * linked under another.
  */
 static void ifunc_run(struct fixture *f, int bits)
 {
-    char what[160];
+    char exe[64], object[64], path[80], what[160];
     const char *lib = bits == 32 ? "libref32.so" : "libref.so";
+    const char *loader = bits == 32 ? "/lib/ld-linux.so.2" : "/lib64/ld-linux-x86-64.so.2";
+    const char *libc = bits == 32 ? "/lib32/libc.so.6" : "/lib/libc.so.6";
     const char *shared[] = {dynlink(f, bits), "-shared", lib,
                             bp(f->tree, "vendor/tcc/ifunc-test/ref.c"), NULL};
     if (!command(f, shared))
@@ -566,21 +572,34 @@ static void ifunc_run(struct fixture *f, int bits)
     snprintf(what, sizeof(what), "%d-bit shared library %s is an ELF", bits, lib);
     fx_check(f, elf_read(bp(f->work, lib), &e), what);
     free(e.b);
-    if (bits == 32)
+    snprintf(what, sizeof(what), "the host has the %d-bit loader %s and C library %s", bits, loader,
+             libc);
+    if (!fx_check(f, access(loader, F_OK) == 0 && access(libc, F_OK) == 0, what))
         return;
-    const char *link[] = {dynlink(f, 64),
-                          "run64.elf",
+    snprintf(object, sizeof(object), "pick%d.o", bits);
+    if (!fx_exists(bp(f->work, object)) && !ifunc_pick(f, bits))
+        return;
+    if (strcmp(lib, "libref.so") &&
+        !fx_check(f, fx_copy(bp(f->work, lib), bp(f->work, "libref.so")),
+                  "32-bit shared library is libref.so for run32.elf to load"))
+        return;
+    snprintf(exe, sizeof(exe), "run%d.elf", bits);
+    snprintf(path, sizeof(path), "./%s", exe);
+    const char *link[] = {dynlink(f, bits),
+                          exe,
                           bp(f->tree, "vendor/tcc/ifunc-test/run.c"),
-                          "pick64.o",
-                          "/lib64/ld-linux-x86-64.so.2",
-                          "/lib/libc.so.6",
+                          object,
+                          loader,
+                          libc,
                           NULL};
-    const char *run[] = {"./run64.elf", NULL};
+    const char *run[] = {path, NULL};
     if (!command(f, link) || !command(f, run))
         return;
-    fx_check(f, f->out && !strcmp(f->out, "IFUNCRUN 1 1 1\n"),
-             "64-bit dlsym, the library's reference and the executable's pointers to pick are "
-             "one address that reaches triple");
+    snprintf(what, sizeof(what),
+             "%d-bit dlsym, the library's reference and the executable's pointers to pick are "
+             "one address that reaches triple",
+             bits);
+    fx_check(f, f->out && !strcmp(f->out, "IFUNCRUN 1 1 1\n"), what);
 }
 
 int build_ifunc(struct fixture *f)

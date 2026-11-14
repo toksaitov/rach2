@@ -3774,7 +3774,7 @@
         },
         {
           "assertion_id": "check_ifunc",
-          "checks": "TinyCC's dynamic executable exports its IFUNC as a function at its stub, as GNU ld does: on i686 and x86-64 the exported pick is STT_FUNC of size 0, though GNU as gave its resolver a size, at the address the executable's pointer fp holds, and the IRELATIVE relocation names pick's resolver; a shared library that refers to pick links for each target, and on x86-64 dlsym, the library's reference and the executable's own pointers to pick give one address, which reaches triple; its native C controller passes every row",
+          "checks": "TinyCC's dynamic executable exports its IFUNC as a function at its stub, as GNU ld does: on i686 and x86-64 the exported pick is STT_FUNC of size 0, though GNU as gave its resolver a size, at the address the executable's pointer fp holds, and the IRELATIVE relocation names pick's resolver; a shared library that refers to pick links for each target, and on i686 and x86-64, through the host's loader and C library for each, dlsym, the library's reference and the executable's own pointers to pick give one address, which reaches triple; its native C controller passes every row",
           "source": "scenario"
         },
         {
