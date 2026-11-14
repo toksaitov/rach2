@@ -1046,11 +1046,14 @@ void tty_signal_group(int pgid, uint64_t serial, int signo)
 }
 
 /** Take every byte written to the console: `count`. */
-int tty_write(struct tty *t, const unsigned char *kbuf, int count)
+int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, int nonblock,
+                       const uint32_t *opened)
 {
     (void)t;
-    (void)kbuf;
-    return count;
+    (void)buf;
+    (void)nonblock;
+    (void)opened;
+    return (int32_t)count;
 }
 
 /** No row opens a /proc file: -ENOENT. */
