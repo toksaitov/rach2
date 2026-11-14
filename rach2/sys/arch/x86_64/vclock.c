@@ -121,18 +121,22 @@ static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
  * turn and the span with it, unjudged: the next online processor begins a
  * new span, as Linux's watchdog timer, late on a processor that did not
  * run it, skips that comparison and moves on to the next processor
- * (add_timer_on), with no deadline of its own. Only a measured parting
- * stops the clock, so a processor late or silent skips its own
- * comparison but holds up no other's. A turn that passes to the next
- * processor, as when its own goes offline, begins anew. The passes keep a
- * stretch the whole machine spent stopped, as a guest its host did not
- * run, from ending a turn in one pass. The first span, of at least
- * WATCH_FIRST_NS, read on one processor, sets the rate instead, as Linux's
- * tsc_refine_calibration_work measures the TSC again a second after boot
- * (arch/x86/kernel/tsc.c: 1314-1406): the boot's measure spans 20 ms. A
- * first span that differs from the boot's rate by more than a hundredth
- * keeps that rate, as Linux's does, and the watch goes on from there; a
- * TSC that has not moved over a span parts from the clock.
+ * (add_timer_on), with no deadline of its own. A processor that begins a
+ * span in place of one dropped, or of none, keeps the turn until it has
+ * measured that span, and only then passes it on, so that a turn that
+ * comes back to it from silent processors still compares its own TSC with
+ * the clock, as Linux's watchdog goes on comparing on the processors that
+ * run its timer. Only a measured parting stops the clock, so a processor
+ * late or silent skips its own comparison but holds up no other's. A turn
+ * that passes to the next processor, as when its own goes offline, begins
+ * anew. The passes keep a stretch the whole machine spent stopped, as a
+ * guest its host did not run, from ending a turn in one pass. The first
+ * span, of at least WATCH_FIRST_NS, read on one processor, sets the rate
+ * instead, as Linux's tsc_refine_calibration_work measures the TSC again a
+ * second after boot (arch/x86/kernel/tsc.c: 1314-1406): the boot's measure
+ * spans 20 ms. A first span that differs from the boot's rate by more than
+ * a hundredth keeps that rate, as Linux's does, and the watch goes on from
+ * there; a TSC that has not moved over a span parts from the clock.
  */
 #define WATCH_SPAN_NS       500000000u /* WATCHDOG_INTERVAL */
 #define WATCH_FIRST_NS      1000000000u
@@ -597,16 +601,19 @@ static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns)
     return ahead ? mult - adjust : mult + adjust;
 }
 
-/* What `vclock_watch` found: a span begun or kept, the first span's rate
+/* What `vclock_watch` found: a span measured and kept, a new span begun
+ * in place of none or of one it could not judge, the first span's rate
  * set, the TSC parted from the tick's clock, or a span not yet long
  * enough. */
-enum { WATCH_KEEP, WATCH_REFINED, WATCH_PARTED, WATCH_EARLY };
+enum { WATCH_KEEP, WATCH_BEGUN, WATCH_REFINED, WATCH_PARTED, WATCH_EARLY };
 
 /**
  * Set the watched TSC against the tick's raw clock `ref_raw`, read between
  * the moments `*before` and `*after` on this processor, a reading not held
  * up (`vclock_watch_cpu`), as the comment at WATCH_SPAN_NS says: begin a
- * span, measure the rate over the first one, or test a later one.
+ * span, measure the rate over the first one, or test a later one, and
+ * begin the next span where the measured one ended. WATCH_BEGUN where
+ * there was no span to measure, or one it could not judge, and
  * WATCH_PARTED after it sets `watch_parted`, which the tick acts on. Under
  * `vclock_lock`.
  */
@@ -622,7 +629,7 @@ static int vclock_watch(const struct vclock_sample *before, const struct vclock_
         watch_based = 1;
         watch_tsc = tsc;
         watch_raw = ref_raw;
-        return WATCH_KEEP;
+        return WATCH_BEGUN;
     }
     if (span < need) {
         return WATCH_EARLY;
@@ -682,7 +689,8 @@ static int vclock_next_cpu(int cpu)
  * processor is no longer online passes to the next, whose turn begins at
  * `ref_raw`; one whose processor has let its turn pass WATCH_ANSWER_NS and
  * WATCH_ANSWER_PASSES unread is dropped unjudged, and the next processor's
- * turn begins a new span, as the comment at WATCH_SPAN_NS says. The
+ * turn begins a new span, which that processor keeps until it has
+ * measured it, as the comment at WATCH_SPAN_NS says. The
  * processor to kick so that it reads the span's end, or begins the new
  * span, or -1 where that is this one, which reads it at this tick, or
  * where the TSC parted. Under `vclock_lock`.
@@ -718,7 +726,8 @@ static int vclock_watch_due(uint64_t ref_raw)
 /** The tick's clock is read outside `vclock_lock`, up to WATCH_READS
  * times, until one reading's two TSC readings lie within WATCH_SKEW_NS at
  * the watched rate; the span is judged under the lock, where it is still
- * this processor's and due. */
+ * this processor's and due. A measured span passes the turn on once the
+ * rate is set; a span begun keeps it here. */
 void vclock_watch_cpu(void)
 {
     struct vclock_sample before, after;
@@ -745,7 +754,7 @@ void vclock_watch_cpu(void)
         found = vclock_watch(&before, &after, ref_raw);
         if (found != WATCH_EARLY) {
             watch_due = 0;
-            if (refined) {
+            if (refined && found != WATCH_BEGUN) {
                 watch_cpu = vclock_next_cpu(me);
             }
         }
