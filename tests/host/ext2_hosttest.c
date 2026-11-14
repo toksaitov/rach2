@@ -5953,6 +5953,106 @@ static void fault_row(const char *img, const char *script, const char *fault, co
 }
 
 /**
+ * Require the dirty volume `img`, of `bytes`, to mount writable with the
+ * check's record that inode `ino`'s link count `was` was set to `links`, as
+ * `e2fsck -p` sets it in its pass 4, and the unmount to leave the volume
+ * valid and clean.
+ */
+static void count_on(const char *img, uint64_t bytes, long ino, long was, long links,
+                     const char *what)
+{
+    char want[96];
+    int rc;
+
+    snprintf(want, sizeof(want), "check: test: inode %ld: link count %ld, set to %ld\n", ino, was,
+             links);
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check_log[0] = 0;
+    rc = mount_rw();
+    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 || !strstr(check_log, want)) {
+        printf("  mount %d, flags 0x%x, check: %s", rc, (unsigned)mnt.flags, check_log);
+        check(0, what);
+    } else {
+        check(1, what);
+    }
+    if (rc != 0) {
+        return;
+    }
+    check(unmount_rw() == 0 && disk_state(img) == 1 && e2fsck_clean(img),
+          "and the unmount leaves the volume valid and clean");
+}
+
+/**
+ * Mount dirty volumes whose link counts a stop on a mount that writes back
+ * leaves apart from their names, which the check sets to the names as
+ * `e2fsck -p` does in its pass 4, the volume writable:
+ *
+ * - the root's count behind /r, a mkdir whose entry and inode reached the
+ *   disk before its parent's count, as machine.installer-repair.resume's
+ *   power cut left it;
+ * - /alias, a second name of /dir/big.bin that reached the disk before
+ *   the file's count;
+ * - /dir/big.bin's count two above its names, and /dir's six above its
+ *   entries, as an unlink and an rmdir leave a count behind their entries;
+ * - the root's count behind /r on a volume mounted read-only and remounted
+ *   writable, whose root node is in memory: the node must take the count,
+ *   so that a mkdir after it stores the right one and e2fsck finds the
+ *   volume clean.
+ */
+static void count_rows(void)
+{
+    const char *img = fix_path("count.ext2");
+    char script[128], want[96];
+    uint64_t bytes;
+    long root, dir, dir_ino, file, ino;
+    int rc;
+
+    build_image(img, 4096, 128, PROFILE, 16, "tree");
+    root = debugfs_number(img, "stat /", "Links: ");
+    dir = debugfs_number(img, "stat /dir", "Links: ");
+    dir_ino = debugfs_number(img, "stat /dir", "Inode: ");
+    file = debugfs_number(img, "stat /dir/big.bin", "Links: ");
+    ino = debugfs_number(img, "stat /dir/big.bin", "Inode: ");
+    if (root <= 0 || dir <= 0 || dir_ino <= 0 || file <= 0 || ino <= 0) {
+        check(0, "the root, /dir and /dir/big.bin read for the count rows");
+        return;
+    }
+    snprintf(script, sizeof(script), "mkdir /r\nsif / links_count %ld\n", root);
+    count_on(img, dirty_image(img, script), 2, root, root + 1,
+             "a mkdir stopped before its parent's count mounts writable, the count set");
+    count_on(img, dirty_image(img, "ln /dir/big.bin /alias\n"), ino, file, file + 1,
+             "a link stopped before the file's count mounts writable, the count set");
+    snprintf(script, sizeof(script), "sif /dir/big.bin links_count %ld\n", file + 2);
+    count_on(img, dirty_image(img, script), ino, file + 2, file,
+             "a file's count above its names mounts writable, the count set");
+    snprintf(script, sizeof(script), "sif /dir links_count %ld\n", dir + 6);
+    count_on(img, dirty_image(img, script), dir_ino, dir + 6, dir,
+             "a directory's count above its entries mounts writable, the count set");
+
+    snprintf(script, sizeof(script), "mkdir /r\nsif / links_count %ld\n", root);
+    bytes = dirty_image(img, script);
+    snprintf(want, sizeof(want), "check: test: inode 2: link count %ld, set to %ld\n", root,
+             root + 1);
+    use_image(img, bytes);
+    check_log[0] = 0;
+    if (mount_ro() != 0) {
+        check(0, "the volume of the remount count row mounts read-only");
+        return;
+    }
+    rc = OPS->remount(&mnt, rw_flags, NULL);
+    check(rc == 0 && strstr(check_log, want) != 0, "a remount writable sets the root's count");
+    if (rc != 0) {
+        unmount_rw();
+        return;
+    }
+    mnt.flags = rw_flags;
+    check(OPS->mkdir(&mnt, mnt.root, "grown", 0755) == 0 && unmount_rw() == 0 &&
+              disk_state(img) == 1 && e2fsck_clean(img),
+          "and its node in memory takes it, so a mkdir after it leaves the volume clean");
+}
+
+/**
  * Require the dirty volume `img` to mount writable with `log` among the
  * check's records, the file /gone that a stop left named with its inode
  * unused to have no name, and the unmount to leave the volume valid and
@@ -6390,7 +6490,7 @@ static void stopped_memory_row(const char *img, long blk);
 /**
  * Mount dirty volumes whose check stops while /hello.txt, which keeps its
  * name, has lost the bit of its block, as a stop leaves a pointer before
- * its bit. At a fault, the root's link count, the volume must mount
+ * its bit. At a fault, /dir/big.bin's inode bit clear, the volume must mount
  * read-only and leave the bit clear, since it repairs nothing, until
  * `e2fsck -p` has repaired the volume, which then mounts writable unchecked.
  * On a machine too short of memory for the check, the volume without the
@@ -6408,7 +6508,7 @@ static void stopped_rows(void)
 
     build_image(img, 4096, 128, PROFILE, 16, "tree");
     blk = debugfs_number(img, "blocks /hello.txt", "");
-    snprintf(script, sizeof(script), "sif / links_count 9\nfreeb %ld\n", blk);
+    snprintf(script, sizeof(script), "freei /dir/big.bin\nfreeb %ld\n", blk);
     snprintf(testb, sizeof(testb), "testb %ld", blk);
     bytes = dirty_image(img, script);
     use_image(img, bytes);
@@ -6418,7 +6518,7 @@ static void stopped_rows(void)
     rc = mount_rw();
     if (blk <= 0 || rc != 0 || (mnt.flags & VFS_MS_RDONLY) == 0 ||
         strstr(check_log, "marked used") ||
-        !strstr(last_check, "a directory link count that does not match its entries") ||
+        !strstr(last_check, "a reached inode the bitmap calls free") ||
         !streq(last_warn, STOPPED_WARN)) {
         printf("  block %ld, mount %d, flags 0x%x, check: %s", blk, rc, (unsigned)mnt.flags,
                check_log);
@@ -6489,7 +6589,9 @@ static void stopped_memory_row(const char *img, long blk)
           "and its unmount leaves it valid and clean");
 }
 
+static int unlink_in(const char *path, const char *name);
 static void orphan_clear_row(const char *img, long ino);
+static void orphan_alias_row(const char *img, long ino, long links);
 static void orphan_parent_row(const char *img, long ino, long links);
 static void orphan_reached_row(const char *img);
 static void orphan_named_row(const char *img, long blk, long ino, long links);
@@ -6502,9 +6604,9 @@ static void orphan_named_row(const char *img, long blk, long ino, long links);
  *   that files made after the mount take other inodes, and e2fsck must
  *   find the orphan and no bitmap difference;
  * - an orphan directory, its name gone from the root, whose entry names
- *   /dir/big.bin, which has one link, must stop the check at the second
- *   name, so that an unlink of /dir/big.bin cannot free the inode while
- *   the orphan directory names it;
+ *   /dir/big.bin, which has one link, must have the file's count set to
+ *   its two names, as `e2fsck -p` sets it, so that an unlink of
+ *   /dir/big.bin leaves the inode the orphan directory names;
  * - an orphan directory of two links, its name gone from the root, whose
  *   `..` names /dir/big.bin, must stop the check, so that an unlink of the
  *   file cannot free an inode the kept directory names;
@@ -6532,13 +6634,43 @@ static void orphan_rows(void)
         return;
     }
     orphan_clear_row(img, ino);
-    snprintf(script, sizeof(script),
-             "mkdir /od\nln /dir/big.bin /od/alias\nunlink /od\nsif / links_count %ld\n", links);
-    fault_row(img, script, "named twice with one link",
-              "an orphan directory naming a file of one link mounts read-only");
+    orphan_alias_row(img, ino, links);
     orphan_parent_row(img, ino, links);
     orphan_reached_row(img);
     orphan_named_row(img, blk, ino, links);
+}
+
+/** The second row of `orphan_rows`: the orphan directory /od, whose entry
+ * alias names /dir/big.bin, inode `ino`, of one link; `links` is the root's
+ * link count without /od. */
+static void orphan_alias_row(const char *img, long ino, long links)
+{
+    char script[128], want[96];
+    uint64_t bytes;
+    int rc;
+
+    snprintf(script, sizeof(script),
+             "mkdir /od\nln /dir/big.bin /od/alias\nunlink /od\nsif / links_count %ld\n", links);
+    bytes = dirty_image(img, script);
+    snprintf(want, sizeof(want), "check: test: inode %ld: link count 1, set to 2\n", ino);
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check_log[0] = 0;
+    rc = mount_rw();
+    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 || !strstr(check_log, want) ||
+        !strstr(last_check, "0 lost blocks, 1 orphan inodes")) {
+        printf("  mount %d, flags 0x%x, check: %s", rc, (unsigned)mnt.flags, check_log);
+        check(0, "an orphan directory naming a file of one link has the count set to its names");
+    } else {
+        check(1, "an orphan directory naming a file of one link has the count set to its names");
+    }
+    if (rc != 0) {
+        return;
+    }
+    snprintf(script, sizeof(script), "stat <%ld>", ino);
+    check(unlink_in("/dir", "big.bin") == 0 && unmount_rw() == 0 && disk_state(img) == 2 &&
+              debugfs_number(img, script, "Links: ") == 1,
+          "and an unlink of its name in the tree leaves the inode the orphan directory names");
 }
 
 /** The third row of `orphan_rows`: the orphan directory /od, its `..`
@@ -6742,13 +6874,9 @@ static void dirty_rows(void)
               "a reached inode whose bit is clear mounts read-only");
     orphan_rows();
     entry_rows();
-    fault_row(img, "sif /dir/big.bin links_count 3\n", "a link count that does not match its names",
-              "a link count above its names mounts read-only");
+    count_rows();
     fault_row(img, "sif /dir/big.bin links_count 0\n", "a link count that does not match its names",
               "a named file with no link mounts read-only");
-    fault_row(img, "sif /dir links_count 9\n",
-              "a directory link count that does not match its entries",
-              "a directory count above its entries mounts read-only");
     fault_row(img, "link /dir/sub /many/twice\nsif /many links_count 3\n",
               "a directory with two parents", "a directory named twice mounts read-only");
     kept_size_row(img, "sif /dir/big.bin size 100\n", "i_size is",
@@ -6836,7 +6964,7 @@ static void readonly_rows(void)
     }
     check(image_equals_snap(img, bytes), "and the volume is byte for byte as it was");
 
-    bytes = dirty_image(img, "sif /dir/big.bin links_count 3\n");
+    bytes = dirty_image(img, "freei /dir/big.bin\n");
     snapshot(img, bytes);
     use_image(img, bytes);
     last_check[0] = 0;
@@ -6846,7 +6974,7 @@ static void readonly_rows(void)
     if (rc == 0) {
         last_warn[0] = 0;
         check(OPS->remount(&mnt, rw_flags, NULL) == -EROFS &&
-                  strstr(last_check, "a link count that does not match its names") != 0 &&
+                  strstr(last_check, "a reached inode the bitmap calls free") != 0 &&
                   streq(last_warn, STOPPED_WARN) && disk_state(img) == 2 &&
                   make_file(mnt.root, "new", &rc) == 0 && rc == -EROFS,
               "a remount writable whose check finds a fault is EROFS with the error bit set");
@@ -9326,6 +9454,7 @@ static const struct {
     {"--cache-partial-only", cache_partial_row},
     {"--xattr-only", xattr_rows},
     {"--dirty-only", dirty_rows},
+    {"--counts-only", count_rows},
     {"--stopped-only", stopped_rows},
     {"--orphans-only", orphan_rows},
     {"--entries-only", entry_rows},
