@@ -178,6 +178,17 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: unreported.
 * Next: read the mob branch's `gen_op`, whose `vpush_type_size` of the pointed type may already cover it, and report it with the reproduction if not.
 
+## TinyCC refuses an array parameter sized by an earlier parameter
+
+* Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccgen.c`.
+* Fails: `void f(int n, int a[n])`, which C99 allows (6.7.5.2, 6.7.5.3p7, 6.9.1p10), stops with `'n' undeclared`. `post_type` pushes each parameter as a field symbol (`tccgen.c` line 4296), which `sym_find` never returns, so a later parameter's bound cannot name it; at file scope a bound must be a constant expression (line 4344); and nothing evaluates a bound on entry to the function, so a parameter `int a[n][m]`, a pointer to a row of variable length, has no size for `a[i][j]` or `sizeof a[0]`. `convert_parameter_type` clears `VT_ARRAY` but not `VT_VLA` (line 4226), and `compare_types` takes an array of variable length and one of fixed size for different types (line 2815), against 6.7.5.2p6.
+* Found: 2026-11-14, Codex's review of the VLA fixes of task 84-261j, milestone 84, which named the limit; task 84-261n confirmed it on the owner's Mac with an x86-64 and an i386 TinyCC built from the tarball and Rach2's patches.
+* Reproduction: compile `void f(int n, int a[n]) { a[0] = n; }` with TinyCC 0.9.27 for either target: it fails with `'n' undeclared` on line 1. `void h(int n, int a[*]);` fails the same way.
+* Evidence: `vendor/tcc/rach2-vla-param.patch`; the `vla-built` and `vla-param` assertions of `machine.tcc.compile` in `tests/cases/machine.tcc.json`.
+* Rach2: `vendor/tcc/rach2-vla-param.patch` makes each named parameter visible to the bounds after it, keeps the tokens of a bound that is not constant, evaluates them on entry to the function into the size slot of each row a parameter points to, accepts `[*]` in a prototype, clears `VT_VLA` in the adjustment to a pointer, and makes an array of variable length compatible with one of fixed size.
+* Status: fixed upstream on TinyCC's mob branch, in no release: ec5d9429 of 2022-03-01 makes the parameters visible to the bounds, 313855c2 of 2022-03-21 evaluates a saved bound on entry to the function, and 0244320b of 2022-03-24 with a5588501 of 2022-04-12 allows `int a[][m]`. The mob branch at f830a169, built for x86-64, compiles the program of `machine.tcc` and passes `int arr[2][3]` for `int a[n][m]` with no warning. The commits do not apply to 0.9.27, whose parser they postdate.
+* Next: nothing to report; drop the patch when Rach2 moves to a TinyCC release that has these commits.
+
 ## virgl on Mesa's D3D12 driver shows a geometry or tessellation shader's image stores out of order across memoryBarrier
 
 * Project: virglrenderer 1.2.0, Ubuntu 26.04's 1.2.0-2ubuntu2, in QEMU 10.2.1 (1:10.2.1+ds-1ubuntu3.3), drawing on Mesa 26.0.8's D3D12 gallium driver (26.0.8-1ubuntu0.3) under WSL2 on an NVIDIA GeForce RTX 4080 SUPER; the guests' Mesa is Debian's 25.0.7-2+deb13u1 and their piglit Debian's 0.0~git20250409.af62c0dea-2. Which of virglrenderer, Mesa's driver, Direct3D 12 and NVIDIA's driver is at fault was not traced.

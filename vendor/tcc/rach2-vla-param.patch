@@ -1,0 +1,374 @@
+Let an array parameter's bound name an earlier parameter, as C99 says:
+void f(int n, int a[n]), void g(int n, int m, int a[n][m]) with a[i][j]
+and sizeof a[0], and the prototype void h(int n, int a[*]). Upstream's
+mob branch made the same change in three commits that do not apply to
+0.9.27, whose parser they postdate: ec5d9429 of 2022-03-01 ("tccgen:
+accept array-size expressions in function paramters") makes the
+parameters visible to the bounds, 313855c2 of 2022-03-21 ("Fix multi
+dimensional vla arrays on stack") keeps a bound's tokens and evaluates
+them on entry to the function, and 0244320b of 2022-03-24 with a5588501
+of 2022-04-12 lets the outermost bound be empty, int a[][m]. This patch
+follows their design.
+
+TinyCC 0.9.27 pushes a parameter as a field symbol, which no lookup finds,
+so a bound that named one failed with "'n' undeclared"; and at file scope a
+bound had to be a constant expression. post_type now makes each named
+parameter visible, at a scope of its own, to the bounds of the parameters
+after it until its list ends (C99 6.2.1p4 and p7). A bound inside a
+parameter list is read into a token string and typed with no code, since
+the parameter it names has no storage yet; a constant bound gives an array
+as before, and any other gives a VLA whose element symbol keeps the tokens.
+The parameter's type is adjusted to a pointer to the element, which for
+int a[n][m] is a VLA row, and convert_parameter_type now clears VT_VLA as
+it clears VT_ARRAY. On entry to the function, after gfunc_prolog has made
+the parameters locals, func_vla_params evaluates the saved bounds (C99
+6.9.1p10): the outermost bound of an array parameter for its side effects
+only, and the bound of each VLA the parameter points to, innermost first,
+into a size_t slot that an index and sizeof read. The qualifiers and
+static of a parameter's array are accepted, and [*] gives a VLA of
+unspecified size, which a function definition refuses as GCC does.
+
+compare_types took an array of variable length and an array of fixed size
+for different types, so passing int arr[2][3] to int a[n][m] warned of an
+incompatible pointer, and a definition after a prototype with a fixed
+bound was refused; by C99 6.7.5.2p6 they are compatible.
+
+A function with no parameter of variably modified type compiles to the
+same code as before: no bound is evaluated and no slot is allocated.
+
+diff --git a/tcc.h b/tcc.h
+index 17b46d6..861af15 100644
+--- a/tcc.h
++++ b/tcc.h
+@@ -486,6 +486,9 @@ typedef struct Sym {
+     };
+     struct Sym *prev; /* prev symbol in stack */
+     struct Sym *prev_tok; /* previous symbol for this token */
++    /* in the element symbol of a parameter's array of variable length, the
++       tokens of its bound, which the function evaluates on entry */
++    struct TokenString *vla_bound;
+ } Sym;
+ 
+ /* section definition */
+diff --git a/tccgen.c b/tccgen.c
+index 2a03937..985d5ad 100644
+--- a/tccgen.c
++++ b/tccgen.c
+@@ -40,6 +40,10 @@ ST_DATA Sym *define_stack;
+ ST_DATA Sym *global_label_stack;
+ ST_DATA Sym *local_label_stack;
+ static int local_scope;
++/* parameter lists being parsed, and the named parameters of those lists,
++   which post_type makes visible to the bounds of the parameters after them */
++static int param_depth;
++static Sym *param_stack;
+ static int in_sizeof;
+ static int section_sym;
+ 
+@@ -240,6 +244,8 @@ ST_FUNC int tccgen_compile(TCCState *s1)
+     section_sym = 0;
+     const_wanted = 0;
+     nocode_wanted = 0x80000000;
++    param_depth = 0;
++    param_stack = NULL;
+ 
+     /* define some often used types */
+     int_type.t = VT_INT;
+@@ -2824,6 +2830,12 @@ static int compare_types(CType *type1, CType *type2, int unqualified)
+         t1 &= ~VT_DEFSIGN;
+         t2 &= ~VT_DEFSIGN;
+     }
++    /* C99 6.7.5.2p6: an array of variable length is compatible with any
++       array of a compatible element type */
++    if ((t1 & (VT_ARRAY | VT_VLA)) && (t2 & (VT_ARRAY | VT_VLA))) {
++        t1 |= VT_ARRAY | VT_VLA;
++        t2 |= VT_ARRAY | VT_VLA;
++    }
+     /* XXX: bitfields ? */
+     if (t1 != t2)
+         return 0;
+@@ -3777,10 +3789,14 @@ static void struct_decl(CType *type, int u)
+ {
+     int v, c, size, align, flexible;
+     int bit_size, bsize, bt;
++    int saved_param_depth;
+     Sym *s, *ss, **ps;
+     AttributeDef ad, ad1;
+     CType type1, btype;
+ 
++    /* a member's array is no parameter's, even in a parameter list */
++    saved_param_depth = param_depth;
++    param_depth = 0;
+     memset(&ad, 0, sizeof ad);
+     next();
+     parse_attribute(&ad);
+@@ -3983,6 +3999,7 @@ do_decl:
+ 	    struct_layout(type, &ad);
+         }
+     }
++    param_depth = saved_param_depth;
+ }
+ 
+ static void sym_to_attr(AttributeDef *ad, Sym *s)
+@@ -4236,7 +4253,7 @@ static inline void convert_parameter_type(CType *pt)
+        to indicate a const function parameter */
+     pt->t &= ~(VT_CONSTANT | VT_VOLATILE);
+     /* array must be transformed to pointer according to ANSI C */
+-    pt->t &= ~VT_ARRAY;
++    pt->t &= ~(VT_ARRAY | VT_VLA);
+     if ((pt->t & VT_BTYPE) == VT_FUNC) {
+         mk_pointer(pt);
+     }
+@@ -4265,18 +4282,77 @@ static int asm_label_instr(void)
+     return v;
+ }
+ 
++/* Make the parameter 'v' of type 'type' visible to the bounds of the
++   parameters after it, as C99 6.2.1p4 and p7 say, until post_type pops
++   param_stack at the end of its list.  Its scope is one of its own, below
++   any open block, so that it may hide a global or local of the same name
++   and two parameters of one name are an error.  The symbol is only ever
++   evaluated under nocode_wanted. */
++static void param_push(int v, CType *type)
++{
++    Sym *s, **ps;
++
++    s = sym_push2(&param_stack, v, type->t, 0);
++    s->type.ref = type->ref;
++    s->r = VT_LOCAL | lvalue_type(type->t);
++    ps = &table_ident[v - TOK_IDENT]->sym_identifier;
++    s->prev_tok = *ps;
++    *ps = s;
++    s->sym_scope = local_scope + param_depth;
++    if (s->prev_tok && s->prev_tok->sym_scope == s->sym_scope)
++        tcc_error("redeclaration of '%s'", get_tok_str(v, NULL));
++}
++
++/* Read the tokens of a parameter's array bound up to the ']' that closes
++   it, which is left the current token, and return them ending in TOK_EOF. */
++static TokenString *param_bound_save(void)
++{
++    TokenString *str;
++    int nest;
++
++    str = tok_str_alloc();
++    for (nest = 0; nest > 0 || tok != ']'; next()) {
++        if (tok == TOK_EOF)
++            expect("']'");
++        if (tok == '[')
++            nest++;
++        else if (tok == ']')
++            nest--;
++        tok_str_add_tok(str);
++    }
++    tok_str_add(str, TOK_EOF);
++    tok_str_add(str, 0);
++    return str;
++}
++
++/* Evaluate the saved tokens of an array bound with gexpr, leaving the
++   value on the value stack and the current token as it was. */
++static void param_bound_eval(TokenString *str)
++{
++    unget_tok(0);
++    begin_macro(str, 2);
++    next();
++    gexpr();
++    if (tok != TOK_EOF)
++        expect("']'");
++    end_macro();
++    next();
++}
++
+ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+ {
+     int n, l, t1, arg_size, align;
+-    Sym **plast, *s, *first;
++    Sym **plast, *s, *first, *ptop;
+     AttributeDef ad1;
+     CType pt;
++    TokenString *bound;
+ 
+     if (tok == '(') {
+         /* function type, or recursive declarator (return if so) */
+         next();
+ 	if (td && !(td & TYPE_ABSTRACT))
+ 	  return 0;
++        ptop = param_stack;
+ 	if (tok == ')')
+ 	  l = 0;
+ 	else if (parse_btype(&pt, &ad1))
+@@ -4294,7 +4370,9 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+                 if (l != FUNC_OLD) {
+                     if ((pt.t & VT_BTYPE) == VT_VOID && tok == ')')
+                         break;
++                    param_depth++;
+                     type_decl(&pt, &ad1, &n, TYPE_DIRECT | TYPE_ABSTRACT);
++                    param_depth--;
+                     if ((pt.t & VT_BTYPE) == VT_VOID)
+                         tcc_error("parameter declared as void");
+                     arg_size += (type_size(&pt, &align) + PTR_SIZE - 1) / PTR_SIZE;
+@@ -4309,6 +4387,11 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+                 s = sym_push(n | SYM_FIELD, &pt, 0, 0);
+                 *plast = s;
+                 plast = &s->next;
++                if (l != FUNC_OLD && n) {
++                    param_depth++;
++                    param_push(n, &pt);
++                    param_depth--;
++                }
+                 if (tok == ')')
+                     break;
+                 skip(',');
+@@ -4324,6 +4407,7 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+             /* if no parameters, then old type prototype */
+             l = FUNC_OLD;
+         skip(')');
++        sym_pop(&param_stack, ptop, 0);
+         /* NOTE: const is ignored in returned type as it has a special
+            meaning in gcc / C++ */
+         type->t &= ~VT_CONSTANT; 
+@@ -4352,7 +4436,50 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+             next();
+         n = -1;
+         t1 = 0;
+-        if (tok != ']') {
++        bound = NULL;
++        if (param_depth) {
++            /* C99 6.7.5.2p1: the qualifiers and static of a parameter's
++               array, which its adjustment to a pointer makes no matter
++               here, and the '*' of a VLA of unspecified size */
++            for (;;) {
++                if (tok == TOK_CONST1 || tok == TOK_CONST2 ||
++                    tok == TOK_CONST3 || tok == TOK_VOLATILE1 ||
++                    tok == TOK_VOLATILE2 || tok == TOK_VOLATILE3 ||
++                    tok == TOK_RESTRICT1 || tok == TOK_RESTRICT2 ||
++                    tok == TOK_RESTRICT3 || tok == TOK_STATIC)
++                    next();
++                else
++                    break;
++            }
++            if (tok == '*') {
++                next();
++                if (tok == ']')
++                    t1 = VT_VLA;
++                else
++                    unget_tok('*');
++            }
++        }
++        if (param_depth && tok != ']') {
++            /* The bound may name an earlier parameter, which has no storage
++               yet: type it here with no code, and keep its tokens for
++               func_vla_params to evaluate on entry to the function. */
++            bound = param_bound_save();
++            nocode_wanted = 1;
++            param_bound_eval(bound);
++            nocode_wanted = saved_nocode_wanted;
++            if (!is_integer_btype(vtop->type.t & VT_BTYPE))
++                tcc_error("size of array should be an integer");
++            if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST) {
++                n = vtop->c.i;
++                if (n < 0 || n != vtop->c.i)
++                    tcc_error("invalid array size");
++                tok_str_free(bound);
++                bound = NULL;
++            } else {
++                t1 = VT_VLA;
++            }
++            vpop();
++        } else if (tok != ']') {
+             if (!local_stack || (storage & VT_STATIC))
+                 vpushi(expr_const());
+             else {
+@@ -4380,7 +4507,11 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+             tcc_error("declaration of an array of functions");
+         t1 |= type->t & VT_VLA;
+         
+-        if (t1 & VT_VLA) {
++        if (param_depth) {
++            /* func_vla_params gives a parameter's VLA its size slot */
++            if (t1 & VT_VLA)
++                n = 0;
++        } else if (t1 & VT_VLA) {
+             /* the size is a size_t, as GCC keeps it, so that the length
+                times the element's size neither wraps at 32 bits nor
+                reads back sign-extended */
+@@ -4394,13 +4525,14 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
+             vswap();
+             vstore();
+         }
+-        if (n != -1)
++        if (n != -1 && !param_depth)
+             vpop();
+ 	nocode_wanted = saved_nocode_wanted;
+                 
+         /* we push an anonymous symbol which will contain the array
+            element type */
+         s = sym_push(SYM_FIELD, type, 0, n);
++        s->vla_bound = bound;
+         type->t = (t1 ? VT_VLA : VT_ARRAY) | VT_PTR;
+         type->ref = s;
+     }
+@@ -7065,6 +7197,54 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
+     nocode_wanted = saved_nocode_wanted;
+ }
+ 
++/* Give the VLA 'type' points to, and each VLA inside it, its size slot, from
++   the innermost out, so that an index or sizeof finds the size there. */
++static void vla_param_size(CType *type)
++{
++    Sym *s;
++    int align;
++
++    if ((type->t & VT_BTYPE) != VT_PTR)
++        return;
++    s = type->ref;
++    vla_param_size(&s->type);
++    if (!(type->t & VT_VLA))
++        return;
++    if (!s->vla_bound)
++        tcc_error("'[*]' not allowed in a function definition");
++    loc -= type_size(&size_type, &align);
++    loc &= -align;
++    s->c = loc;
++    param_bound_eval(s->vla_bound);
++    vla_runtime_type_size(&s->type, &align);
++    gen_op('*');
++    vset(&size_type, VT_LOCAL|VT_LVAL, s->c);
++    vswap();
++    vstore();
++    vpop();
++}
++
++/* On entry to the function 'sym', after gfunc_prolog has made its
++   parameters locals, evaluate the bounds of its variably modified
++   parameters, as C99 6.9.1p10 says: the outermost one of an array
++   parameter, which its adjustment to a pointer leaves no use but its side
++   effects, and those of the VLAs the parameter points to. */
++static void func_vla_params(Sym *sym)
++{
++    Sym *arg, *s;
++
++    for (arg = sym->type.ref->next; arg; arg = arg->next) {
++        if ((arg->type.t & VT_BTYPE) != VT_PTR)
++            continue;
++        s = arg->type.ref;
++        if (s->vla_bound) {
++            param_bound_eval(s->vla_bound);
++            vpop();
++        }
++        vla_param_size(&s->type);
++    }
++}
++
+ /* parse a function defined by symbol 'sym' and generate its code in
+    'cur_text_section' */
+ static void gen_function(Sym *sym)
+@@ -7086,6 +7266,7 @@ static void gen_function(Sym *sym)
+     gfunc_prolog(&sym->type);
+     local_scope = 0;
+     rsym = 0;
++    func_vla_params(sym);
+     block(NULL, NULL, 0);
+     nocode_wanted = 0;
+     gsym(rsym);

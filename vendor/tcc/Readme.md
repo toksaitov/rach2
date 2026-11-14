@@ -8,7 +8,7 @@ The source is the release tarball from <https://download.savannah.gnu.org/releas
 
 ## Local changes
 
-`build_tcc.sh` applies seven patches, in this order. Each patch begins with a description of its change; what follows is a summary.
+`build_tcc.sh` applies eight patches, in this order. Each patch begins with a description of its change; what follows is a summary.
 
 ### Output policy
 
@@ -38,6 +38,10 @@ The source is the release tarball from <https://download.savannah.gnu.org/releas
 
 [`rach2-x86_64-zero-extend.patch`](rach2-x86_64-zero-extend.patch) makes the x86-64 compiler clear the high half of an `unsigned int` it widens to 64 bits or converts to floating point, with `movl r, r`. TinyCC 0.9.27 emits nothing for a cast of a 64-bit value to `unsigned int`, which leaves the high half in the register, and nothing for the widening, which takes that half for zero: `x == (uint32_t)x` with `x` an `unsigned long` in a register came out true, and the kernel's `USER_LEN32` passed a semop count of 0x100000001 as 1. Its conversion of an `unsigned int` to `float`, `double` or `long double` reads the whole register, so `(double)(unsigned)(c ? a : 0)` with `a` 0x100000001 came out 4294967297. The patch also keeps the size of a VLA in a `size_t`, as GCC does, where TinyCC kept an `int`: an index scaled by the `int` in 32 bits moved a pointer one row back almost 4 GiB forward, and a row of 0x80000000 bytes or more read back negative. On i386, where `size_t` is 32 bits wide, the code is the same, but for the difference of two pointers to VLA rows, which divides by the size cast to `ptrdiff_t` as before. On both targets it scales an index into a declared pointer to a VLA row, `int (*p)[n]`, by the row's size, where TinyCC took the size of a pointer.
 
+### Array parameters of variable length
+
+[`rach2-vla-param.patch`](rach2-vla-param.patch) lets an array parameter's bound name an earlier parameter, as C99 programs do: `void f(int n, int a[n])`, `void g(int n, int m, int a[n][m])`, whose `a[i][j]` and `sizeof a[0]` use the row's size `m * sizeof(int)`, and the prototype `void h(int n, int a[*])`. TinyCC 0.9.27 hid each parameter from lookups until the function's body, so such a bound failed with `'n' undeclared`, and at file scope a bound had to be a constant. Each named parameter is now visible to the bounds after it; a bound in a parameter list is typed with no code and its tokens kept, and on entry to the function the bounds are evaluated, the outermost for its side effects and each bound of a row the parameter points to into the row's size slot. `[*]` is accepted in a prototype and refused in a definition, as GCC does, and the qualifiers and `static` of a parameter's array are accepted. An array of variable length is now compatible with one of fixed size, so passing `int arr[2][3]` for `int a[n][m]` draws no warning. Upstream's mob branch made the same change in commits ec5d9429, 313855c2, 0244320b and a5588501 of 2022, which postdate 0.9.27's parser; the patch follows their design. A function with no such parameter compiles to the same code as before: the kernel's, the utilities' and the shell's objects are byte for byte those of the compiler without the patch.
+
 ## Building
 
 ```
@@ -49,7 +53,7 @@ The root `make` builds TinyCC after musl. An i686 build extracts into `vendor/tc
 
 [`build_tcc.sh`](build_tcc.sh):
 
-1. Checks the tarball's SHA-256, extracts it, applies the seven patches with `patch --batch --forward`, and checks that a line of each patch is in the source.
+1. Checks the tarball's SHA-256, extracts it, applies the eight patches with `patch --batch --forward`, and checks that a line of each patch is in the source.
 2. Writes `rach2-gcc`, which runs `muslgcc`, and `rach2-ar` and `rach2-strip`, which run the architecture's cross tools, into `rach2-toolchain/` of the extracted tree, and gives configure that prefix with `--cross-prefix`. Without a cross prefix configure would run a test program it built, which the host cannot run.
 3. Configures with `--cpu=i386` or `--cpu=x86_64`, since configure would otherwise take the host's processor; with `--config-musl`, which leaves out the bounds-checking runtime that needs glibc's allocator hooks, so `tcc -b` is not available; and with the guest paths `--tccdir=/lib/tcc`, `--sysincludepaths=/lib/tcc/include:/include`, `--libpaths=/lib` and `--crtprefix=/lib`.
 4. Sets `TARGETOS=Linux` and removes `CONFIG_OSX` in `config.mak`, which configure writes on macOS, and checks `ARCH`, the absence of `CONFIG_OSX` and the guest paths in `config.mak` and `config.h`.
@@ -74,6 +78,6 @@ The manifests `os-real`, `os-real-gnu`, `grub-test` and `rach2-metal-disk` in [`
 
 * The `check_asm` check of `tests/run host`, in [`tests/cases/host/build_compilers.c`](../../tests/cases/host/build_compilers.c), runs both assemblers that preparation builds for the host (`vendor/gnu/build_host_products.sh`) and compares them with GNU as on the files of [`asm-test/`](asm-test): 16-bit and 32-bit code instruction for instruction, the 64-bit system instructions, and a trampoline and fields of a constant less a label, linked by GNU ld and by TinyCC, byte for byte. The 32-bit comparison leaves out four forms the i386 assembler encodes its own way: `movw` to a segment register with an operand-size prefix, and `sldt`, `smsw`, `str`, and `jmp` and `call` through a 16-bit register without one.
 * The `check_ldscript` check, in the same file, links [`ld-test/prog.s`](ld-test/prog.s) by [`ld-test/script.ld`](ld-test/script.ld) with TinyCC and with GNU ld, and requires the same layout and symbols of both.
-* `tests/run tcc` compiles and runs a program on Rach2 as an unprivileged user, requires each of the four refusals with its message and no output file, compiles an object, builds `cat` from `/src/utils` and compares it with BusyBox's, links `ping` from two sources, and runs a program whose x86-64 code must clear the high half of an `unsigned int` it converts to `float`, `double` and `long double` and scale a negative index and a row of 2 GiB of a VLA in the pointer's width. The boot traces each system call the kernel does not implement, and the suite fails if the compiler asked for one.
+* `tests/run tcc` compiles and runs a program on Rach2 as an unprivileged user, requires each of the four refusals with its message and no output file, compiles an object, builds `cat` from `/src/utils` and compares it with BusyBox's, links `ping` from two sources, and runs a program whose x86-64 code must clear the high half of an `unsigned int` it converts to `float`, `double` and `long double` and scale a negative index and a row of 2 GiB of a VLA in the pointer's width, and a program whose functions take array parameters sized by earlier parameters, `int a[n]`, `int a[n][m]` and a prototype's `int a[*]`, and must give GCC's results. The boot traces each system call the kernel does not implement, and the suite fails if the compiler asked for one.
 * `tests/run make` builds a program with pdpmake and TinyCC across an incremental rebuild and a reboot.
 * `tests/run selfbuild` builds the kernel twice on Rach2 and requires the two to be equal, builds the utilities and the shell, and runs the default probes on the kernel it built.
