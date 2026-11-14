@@ -58,7 +58,8 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask);
 
 /** Write the `siginfo_t` of `signo` with `info` into the SIGINFO_SIZE bytes
  * at `out`, as the architecture lays it out: signo, errno and code, then
- * the fault's address, or the sender's pid and uid and a child's status;
+ * the fault's address, or the sender's pid and uid and a child's status,
+ * which a siginfo marked `notify` has whatever its code;
  * x86-64 also writes a seccomp SIGSYS's fields and a timer's or a queued
  * signal's value. */
 void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
@@ -85,13 +86,14 @@ void siginfo_from_caller(const uint8_t *in, struct k_siginfo *info);
 #define SIGINFO32_CHLD_BYTES 24
 
 /** Write the i386 `siginfo_t`, Linux's `compat_siginfo`, of `signo` with
- * `info` into the SIGINFO_SIZE bytes at `out`: the fields
- * `sigframe_fill_siginfo` writes, at their i386 offsets, with 32-bit
- * addresses and values (x86_64/sigframe32.c). */
+ * `info` into the SIGINFO_SIZE bytes at `out`: the fields of the layout
+ * Linux's siginfo_layout gives the signal and code, at their i386 offsets,
+ * with 32-bit addresses and values (x86_64/sigframe32.c). */
 void ia32_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
 
-/** Read the i386 `siginfo_t` at `in` into `info`, as
- * `sigframe_take_siginfo` reads the native one (x86_64/sigframe32.c). */
+/** Read the i386 `siginfo_t` at `in` into `info`: the fields of the layout
+ * its signal and code have, and no others, as Linux's
+ * post_copy_siginfo_from_user32 reads them (x86_64/sigframe32.c). */
 void ia32_take_siginfo(const uint8_t *in, struct k_siginfo *info);
 #endif
 

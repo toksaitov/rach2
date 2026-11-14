@@ -127,8 +127,10 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
  * a stop that no signal makes, with the siginfo Linux 6.12's
  * ptrace_do_notify gives it (kernel/signal.c): the stop's signal, the code
  * of the status's bits 8-23, `SIGTRAP | event << 8` for an event stop, and
- * the thread's own ID and real user ID as its namespaces see them. Returns
- * what `ptrace_stop` returns.
+ * the thread's own ID and real user ID as its namespaces see them, marked
+ * `notify`, since a plain system call stop's code, SIGTRAP, is a fault's
+ * TRAP_UNK, and the layouts must not read the union as a fault's address
+ * where Linux copies it whole. Returns what `ptrace_stop` returns.
  */
 static int ptrace_notify(uint32_t status)
 {
@@ -139,6 +141,7 @@ static int ptrace_notify(uint32_t status)
     info.code = (int32_t)((status >> 8) & 0xFFFFu);
     info.pid = pid_seen_by(self, self->pid);
     info.uid = ns_uid_from_kernel(proc_userns(self), self->ruid);
+    info.notify = 1;
     return ptrace_stop(status, &info);
 }
 
@@ -316,7 +319,12 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
         self->orig_nr = -1;
     }
     if (sig > 0 && sig <= KSIG_MAX) {
-        tracer_info(&info);
+        if (stepping) {
+            tracer_info(&info);
+        } else {
+            k_memset(&info, 0, sizeof(info));
+            info.code = SI_KERNEL;
+        }
         signal_post_thread(self, sig, &info);
     }
 }
@@ -698,15 +706,18 @@ static int32_t tracee_memory(process_t *t, uintptr_t addr, void *word, uint32_t 
  * runs, as Linux's `compat_ptrace_request` has it. 0, -EFAULT, -EINVAL for
  * a stop that has no siginfo (`PT_NOINFO`), as Linux's ptrace_getsiginfo
  * and ptrace_setsiginfo refuse a stop without last_siginfo, or -ESRCH
- * for a thread gone from its stop during the copy in. */
+ * for a thread gone from its stop during the copy in. PTRACE_SETSIGINFO
+ * copies its siginfo in before it looks for one to replace, so that a bad
+ * pointer is -EFAULT at any stop, as Linux copies it before
+ * ptrace_setsiginfo runs. */
 static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[SIGINFO_SIZE];
 
-    if (t->ptrace & PT_NOINFO) {
-        return -EINVAL;
-    }
     if (!set) {
+        if (t->ptrace & PT_NOINFO) {
+            return -EINVAL;
+        }
         siginfo_to_caller(buf, (int)((t->ptrace_status >> 8) & 0x7F), &t->ptrace_info);
         return copy_to_user((void __user *)data, buf, sizeof(buf)) == 0 ? 0 : -EFAULT;
     }

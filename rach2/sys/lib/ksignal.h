@@ -123,6 +123,14 @@ struct k_siginfo {
     uint32_t timer_key; /* a POSIX timer's SI_TIMER signal: the timer that
                          * posted it (`key`), whose later expirations add to
                          * it while it is pending; 0 for every other signal */
+    uint32_t notify;    /* nonzero for the siginfo of a ptrace stop that no
+                         * signal makes, which has the thread's pid and uid
+                         * whatever its code says, as Linux's
+                         * ptrace_do_notify writes them into the union: the
+                         * native layouts, which Linux copies whole, give
+                         * them as pid and uid, and the i386 layout of the
+                         * x86-64 kernel reads the union as the code says,
+                         * as Linux's copy_siginfo_to_external32 does */
 };
 
 /*

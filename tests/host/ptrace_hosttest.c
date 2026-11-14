@@ -225,9 +225,10 @@ static void return_stops(void)
 /**
  * The siginfo of a trace stop's SIGCHLD has the tracee's ids as the tracer
  * sees them; a signal the tracer resumes with in place of the stop's has the
- * tracer's ids as the tracee sees them, at a signal-delivery stop and at a
- * system-call stop; and the SIGCHLD of a tracee's end is made for the tracer,
- * not for the parent.
+ * tracer's ids as the tracee sees them at a signal-delivery stop, and at a
+ * system-call stop is SI_KERNEL without ids, as Linux's send_sig posts it;
+ * and the SIGCHLD of a tracee's end is made for the tracer, not for the
+ * parent.
  */
 static void namespace_ids(void)
 {
@@ -255,9 +256,9 @@ static void namespace_ids(void)
     resume_signo = SIGUSR2;
     k_memset(&frame, 0, sizeof(frame));
     ptrace_syscall_stop(&frame, 20, 1);
-    check(posted_to == &tracee && posted_info.code == SI_USER && posted_info.pid == 110 &&
-              posted_info.uid == 1005,
-          "syscall stop signal has tracer ids as tracee sees them");
+    check(posted_to == &tracee && posted_info.code == SI_KERNEL && posted_info.pid == 0 &&
+              posted_info.uid == 0,
+          "syscall stop signal is SI_KERNEL without ids");
 
     setup();
     tracee.parent_pid = 1;

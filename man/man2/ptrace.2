@@ -337,7 +337,9 @@ another type is
 Resume the tracee with the signal
 .Fa data ,
 0 for none; after a stop that is not a signal-delivery stop the signal is
-sent afresh after a syscall stop and dropped after any other.
+sent afresh after a syscall stop, with
+.Dv SI_KERNEL
+and no sender as Linux sends it, and dropped after any other.
 .Dv PTRACE_SYSCALL
 stops it at the next system call's entry or exit, and
 .Dv PTRACE_SINGLESTEP
@@ -473,10 +475,24 @@ outside a group stop, and the tracee's own thread ID and real user ID in
 and
 .Fa si_uid ,
 as Linux gives them.
+A syscall stop without
+.Dv PTRACE_O_TRACESYSGOOD
+has the code
+.Dv SIGTRAP ,
+which is also
+.Dv TRAP_UNK ;
+Linux copies its thread ID and user ID whole to a native tracer, and an
+i386 tracer on x86-64 reads the union as a fault's, with the thread ID in
+.Fa si_addr
+and no user ID.
 A group stop of a tracee that was not seized has none, and both requests
 fail there with
 .Er EINVAL ,
-which tells it from a signal-delivery stop of the stop signal.
+which tells it from a signal-delivery stop of the stop signal;
+.Dv PTRACE_SETSIGINFO
+reads its buffer first, and fails with
+.Er EFAULT
+for one it cannot read at any stop.
 .It Dv PTRACE_GET_THREAD_AREA , PTRACE_SET_THREAD_AREA
 The TLS descriptor of entry
 .Fa addr ,
@@ -507,7 +523,10 @@ and
 .Dv PTRACE_SETSIGINFO
 take i386's 128-byte
 .Vt siginfo_t ,
-whose union starts at byte 12;
+whose union starts at byte 12 and has only the fields of the layout
+Linux's
+.Fn siginfo_layout
+gives its signal and code, in each direction;
 .Dv PTRACE_GETREGSET
 and
 .Dv PTRACE_SETREGSET

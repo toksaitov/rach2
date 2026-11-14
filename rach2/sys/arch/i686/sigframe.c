@@ -97,7 +97,7 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
 {
     int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
                  signo == SIGTRAP) &&
-                info->code > 0 && info->code < SI_KERNEL;
+                info->code > 0 && info->code < SI_KERNEL && !info->notify;
 
     k_memset(out, 0, 128);
     put32(out, (uint32_t)signo);

@@ -151,18 +151,21 @@ int sigframe_ss_valid(unsigned int sel)
            ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA_EXPDOWN);
 }
 
-/** Whether `signo` with `code` is a seccomp filter's SIGSYS, whose union
- * has the call's address, number and architecture. */
+/** Whether `signo` with `code` is a seccomp filter's SIGSYS or another of
+ * the codes of SIGSYS's own layout, through SYS_USER_DISPATCH, 2, whose
+ * union has the call's address, number and architecture, as Linux's
+ * siginfo_layout gives SIL_SYS. */
 static int is_sigsys(int signo, int32_t code)
 {
-    return signo == SIGSYS && code == SIGSYS_SECCOMP;
+    return signo == SIGSYS && code >= SIGSYS_SECCOMP && code <= 2;
 }
 
 /**
  * The x86-64 siginfo: signo, errno and code, then at byte 16, past the
  * padding that aligns the union, Linux x86-64's fields of the kind the
  * code says, as Linux's siginfo_layout reads it: a fault's address, for a
- * fault signal's code between SI_USER and SI_KERNEL, and for SIGSEGV with
+ * fault signal's code between SI_USER and SI_KERNEL in a siginfo not marked
+ * `notify`, whose pid and uid Linux's whole copy gives, and for SIGSEGV with
  * SEGV_PKUERR the key at 32, `si_pkey`; a seccomp SIGSYS's call address,
  * call number at 24 and architecture at 28; and otherwise the sender's or
  * child's pid and uid at 16 and 20 and, at 24, a timer's or a queued
@@ -173,7 +176,7 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
 {
     int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
                  signo == SIGTRAP) &&
-                info->code > 0 && info->code < SI_KERNEL;
+                info->code > 0 && info->code < SI_KERNEL && !info->notify;
 
     k_memset(out, 0, SIGINFO_SIZE);
     put32(out, (uint32_t)signo);

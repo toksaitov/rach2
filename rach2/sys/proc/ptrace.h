@@ -106,7 +106,10 @@ void ptrace_event(int event, uint32_t msg);
  * entry stop gets -1, so the call does not run, as Linux skips it. A single
  * step over the call stops at its exit with TRAP_TRACE, before the next
  * user instruction, without the TRACESYSGOOD bit. A signal the tracer
- * resumes the thread with is posted to it.
+ * resumes the thread with is posted to it: from a system call stop with
+ * SI_KERNEL, as Linux's ptrace_report_syscall posts it with send_sig's
+ * private siginfo, and from the step's stop with the tracer's IDs, as a
+ * signal-delivery stop gives another signal.
  */
 void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving);
 
