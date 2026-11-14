@@ -68,6 +68,23 @@ int ps2_send_command(uint8_t cmd)
     return 0;
 }
 
+int ps2_read_config(void)
+{
+    int drained;
+
+    if (inb(PS2_STATUS_PORT) == 0xFF) {
+        return -1;
+    }
+    for (drained = 0; drained < 16 && (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0;
+         drained++) {
+        inb(PS2_DATA_PORT);
+    }
+    if (ps2_send_command(PS2_CMD_READ_CONFIG) < 0 || ps2_wait_output() < 0) {
+        return -1;
+    }
+    return inb(PS2_DATA_PORT);
+}
+
 int ps2_kbd_write(uint8_t byte)
 {
     uint8_t status = inb(PS2_STATUS_PORT);

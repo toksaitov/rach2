@@ -16,6 +16,13 @@
 #define PS2_STATUS_PORT 0x64
 #define PS2_CMD_PORT    0x64
 
+/* The controller's commands that read and write its configuration byte,
+ * which follows on the data port, and the byte's bit that has the
+ * controller translate the keyboard's set 2 into set 1. */
+#define PS2_CMD_READ_CONFIG  0x20
+#define PS2_CMD_WRITE_CONFIG 0x60
+#define PS2_CONFIG_TRANSLATE 0x40
+
 /* The status register's bits. A controller that is not there reads 0xFF. */
 #define PS2_STATUS_OUTPUT_FULL 0x01 /* a byte waits in the data port */
 #define PS2_STATUS_INPUT_FULL  0x02 /* the controller has not taken the last write */
@@ -57,6 +64,14 @@ int ps2_wait_output(void);
 /** Write `cmd` to the controller's command port once its input buffer is
  * empty. Returns 0, or -1 when the buffer never empties. */
 int ps2_send_command(uint8_t cmd);
+
+/**
+ * Read the controller's configuration byte, the bytes waiting in its output
+ * buffer drained first, at most 16 of them, so that none is taken for it.
+ * Returns the byte, or -1 when no controller answers or the read times out.
+ * The caller keeps interrupts off, so that no handler takes the byte.
+ */
+int ps2_read_config(void);
 
 /**
  * Write `byte` to the keyboard, on the controller's first port, only when
