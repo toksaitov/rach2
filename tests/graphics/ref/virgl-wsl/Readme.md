@@ -1,6 +1,6 @@
 # Linux's virgl references on the testing PC
 
-Debian's results through virgl on the testing PC's WSL, the reference that Rach2's results in the same QEMU profile are compared with by the `virgl` suite ([virgl's GL](../../Readme.md#virgls-gl)). They come from the Debian reference guest of the graphics tests ([its Readme](../../Readme.md#the-reference-guest)) on the `virgl` profile, under KVM with 8 CPUs and 8 GiB: QEMU 10.2.1's virtio-vga-gl with virglrenderer 1.2.0 drawing on the host's Mesa 26.0.8 D3D12 driver and the RTX 4080 SUPER, which the guest's Mesa 25.0.7-2+deb13u1 names `virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))`, OpenGL 4.2 and OpenGL ES 3.1. No other guest drew on the GPU during a run, but where a run below says otherwise. The files are the runners' own output, unedited.
+Debian's results through virgl on the testing PC's WSL, the reference that Rach2's results in the same QEMU profile are compared with by the `virgl` suite ([virgl's GL](../../Readme.md#virgls-gl)). They come from the Debian reference guest of the graphics tests ([its Readme](../../Readme.md#the-reference-guest)) on the `virgl` profile, under KVM with 8 CPUs and 8 GiB: QEMU 10.2.1's virtio-vga-gl with virglrenderer 1.2.0 drawing on the host's Mesa 26.0.8 D3D12 driver and the RTX 4080 SUPER under NVIDIA's Windows driver 621.01 (32.0.16.2101), which the guest's Mesa 25.0.7-2+deb13u1 names `virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))`, OpenGL 4.2 and OpenGL ES 3.1. No other guest drew on the GPU during a run, but where a run below says otherwise. The files are the runners' own output, unedited.
 
 ## Results
 
@@ -40,4 +40,4 @@ and for Chromium's 2.0.1 the last with `NN` for `all`, once for each chunk.
 
 ## Updating
 
-A new QEMU, virglrenderer or host Mesa on the testing PC, a new guest package or browser, or a change to a list or a runner takes the references it touches again, on a guest with no other guest drawing beside it. A new run replaces a directory or file whole, and its commit message says what was run and where.
+A new QEMU, virglrenderer, host Mesa or Windows GPU driver on the testing PC, a new guest package or browser, or a change to a list or a runner takes the references it touches again, on a guest with no other guest drawing beside it. A new run replaces a directory or file whole, and its commit message says what was run and where.
