@@ -72,7 +72,8 @@ GNU_DEBIAN_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_ass
 GNU_PROTON_SOURCES = vendor/gnu/proton/fetch_proton.sh vendor/gnu/proton/fetch_dinput.sh \
                      vendor/gnu/proton/prepare_dinput.py vendor/gnu/proton/dinput-shutdown.patch \
                      vendor/gnu/proton/sources.txt vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
-GNU_VENUS_SOURCES = vendor/gnu/debian/fetch_venus.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/debian/venus.list
+GNU_VENUS_SOURCES = vendor/gnu/debian/fetch_venus.sh vendor/gnu/debian/nodelete.py vendor/gnu/debian/fetch_asset.sh \
+                    vendor/gnu/debian/venus.list
 GNU_WEBGL_SOURCES = vendor/gnu/debian/fetch_webgl.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 
 .PHONY: gnu-desktop gnu-proton gnu-webgl gnu-venus
@@ -103,8 +104,9 @@ $(GNU_VENUS_STAMP): $(GNU_VENUS_SOURCES) | $(SHA256TOOL) $(ETUDE)
 # has no such layer, since its own packages are i386's.
 GNU_I386_STAMP = $(GNU_OUT)/i386.stamp
 GNU_STEP_STAMPS += $(GNU_I386_STAMP)
-GNU_I386_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_venus.sh vendor/gnu/debian/fetch_asset.sh \
-                   vendor/gnu/debian/resolve_debs.py vendor/gnu/debian/multiarch.sh vendor/gnu/debian/i386.list \
+GNU_I386_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_venus.sh vendor/gnu/debian/nodelete.py \
+                   vendor/gnu/debian/fetch_asset.sh vendor/gnu/debian/resolve_debs.py vendor/gnu/debian/multiarch.sh \
+                   vendor/gnu/debian/i386.list \
                    vendor/gnu/games/i386.list vendor/gnu/debian/venus.list vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 GNU_I386_RUN = RACH2_ARCH=i686 RACH2_GNU_OUT="$$ETUDE_STEP_ROOT"
 

@@ -12,6 +12,11 @@
 # i686. Debian's own ICD names the library bare, and Mesa 25.0.7's library of
 # the same name is in the loader's search path, so the ICD here names its
 # driver's path; install_root.sh removes 25.0.7's Venus ICD and library.
+#
+# The driver is marked DF_1_NODELETE (nodelete.py), so that the Vulkan
+# loader's dlclose leaves it mapped: it registers a thread-specific data
+# destructor that it never deletes, which a thread would otherwise call at
+# exit after the driver was unloaded and loaded again at another address.
 
 set -e
 
@@ -30,7 +35,7 @@ WORK="$OUT/work/${1:-venus}"
 LIB="usr/lib/$GNU_MULTIARCH/venus/libvulkan_virtio.so"
 ICD="usr/share/vulkan/icd.d/venus_icd.$RACH2_ARCH.json"
 
-for tool in ar xz tar; do
+for tool in ar xz tar python3; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "gnu: venus: $tool not found" >&2
         exit 1
@@ -62,6 +67,7 @@ fi
 
 mkdir -p "$STAGE/${LIB%/*}" "$STAGE/${ICD%/*}" "$STAGE/usr/share/doc/mesa-venus"
 cp "$WORK/data/usr/lib/$GNU_MULTIARCH/libvulkan_virtio.so" "$STAGE/$LIB"
+python3 -I "$DIR/nodelete.py" "$STAGE/$LIB" >/dev/null
 sed "s|\"libvulkan_virtio.so\"|\"/$LIB\"|" "$icd" > "$STAGE/$ICD"
 cp "$WORK/data/usr/share/doc/mesa-vulkan-drivers/copyright" \
     "$STAGE/usr/share/doc/mesa-venus/copyright"

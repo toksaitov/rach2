@@ -60,6 +60,7 @@ A recipe changes its upstream only where Rach2 or a cross build needs it, and it
 * bash and Readline take their upstream patch series, pinned in `sources.txt`. zip, unzip, socat and cmus take Debian's patch series from Debian's packaging tarballs (`DEBIAN` in [`build_port.sh`](build_port.sh)); socat's makes it build with OpenSSL 4, and cmus's brings its FFmpeg input up to FFmpeg 8's interface.
 * The toolchain and the native GCC point the `m64` line of GCC's `gcc/config/i386/t-linux64` at `lib`, so that x86-64 libraries are in `/lib` and `/usr/lib`, as on i686.
 * [`ports/lsof.sh`](ports/lsof.sh) treats an unknown count of an epoll descriptor's watched descriptors as 0; [`ports/bind9.sh`](ports/bind9.sh) keeps OpenSSL's own allocator; [`ports/chawan.sh`](ports/chawan.sh) adds the Rach2 console, `TERM=rach2`, to Chawan's table of terminals; [`ports/tmux.sh`](ports/tmux.sh) dates tmux's manual page; [`ports/bubblewrap.sh`](ports/bubblewrap.sh) takes bwrap's page from Debian's package of the release, since the build host has no DocBook stylesheets to make it; [`ports/cmus.sh`](ports/cmus.sh) makes cmus's configure test for OSS by compiling `<sys/soundcard.h>` with the cross compiler, where it looked for the build host's header, and gives its make the version, which its Makefile would take from `git describe` of the clone around the build tree.
+* [`debian/fetch_venus.sh`](debian/fetch_venus.sh) marks Mesa 26.1.6's Venus driver `DF_1_NODELETE` with [`debian/nodelete.py`](debian/nodelete.py), so that the Vulkan loader's dlclose leaves it mapped. The driver registers a destructor of thread-specific data and never deletes it, so a thread that exits after the loader has unloaded the driver and loaded it again at another address calls code that is no longer there ([Venus](#venus)).
 * A recipe's `CACHE` gives configure the answers a cross build cannot find out. [`ports/openssh.sh`](ports/openssh.sh) edits configure's own cross-build answer instead, so that it accepts the rlimit sandbox.
 
 ## Design
@@ -162,7 +163,7 @@ The root has two Mesas. Debian 13's Mesa 25.0.7, in the desktop closure ([`debia
 
 [`debian/venus.list`](debian/venus.list) pins `mesa-vulkan-drivers` 26.1.6-1~bpo13+1 for amd64 and i386 by SHA-256, with its URL in Debian's snapshot of 2026-11-08; its header says how the digests were checked. [`debian/fetch_venus.sh`](debian/fetch_venus.sh), the step `gnu-venus`, fetches the build's architecture's package into `build/cache/gnu`, refuses it unless it has that digest, and stages three of its files in `venus/`:
 
-* `/usr/lib/MULTIARCH/venus/libvulkan_virtio.so`, the driver, MULTIARCH being `x86_64-linux-gnu` or `i386-linux-gnu`.
+* `/usr/lib/MULTIARCH/venus/libvulkan_virtio.so`, the driver, MULTIARCH being `x86_64-linux-gnu` or `i386-linux-gnu`, with `DF_1_NODELETE` added in a spare entry of its dynamic section, which the script refuses to stage without.
 * `/usr/share/vulkan/icd.d/venus_icd.ARCH.json`, ARCH being `x86_64` or `i686`: Debian's ICD with the library's absolute path in place of its bare name, which the loader would find as 25.0.7's library of the same name. The script refuses an ICD of another form.
 * `/usr/share/doc/mesa-venus/copyright`, the package's notice.
 
