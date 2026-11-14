@@ -4,10 +4,11 @@
  * installed system compiling programs on itself, as the unprivileged test
  * account at the serial console. Case `compile` compiles and runs a program
  * with tcc, requires each output kind the system cannot run to be refused
- * with its reason, builds two of this project's programs, and reads the
- * kernel's trace of missing system calls once the machine has ended. Case
- * `rebuild` builds a program with make, rebuilds what a change needs and
- * nothing else, and does it again after a reboot of the same disk.
+ * with its reason, builds two of this project's programs, runs one whose
+ * x86-64 code must clear or extend the high half of a 32-bit value, and
+ * reads the kernel's trace of missing system calls once the machine has
+ * ended. Case `rebuild` builds a program with make, rebuilds what a change
+ * needs and nothing else, and does it again after a reboot of the same disk.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -140,6 +141,29 @@ static const char units_line[] =
     "tcc -static -o /tmp/ping /src/utils/ping.c /src/utils/resolv.c && "
     "echo TWO\"\"UNITS";
 
+/*
+ * A program that reads an unsigned int out of a 64-bit register on x86-64.
+ * The conditional expression leaves 0x100000001 in a register, and the cast
+ * to unsigned int emits no code there, so a conversion to floating point
+ * that read the whole register gave 4294967297 in place of 1. A row of a
+ * variable-length array has an int size, and the pointer one row back moved
+ * forward almost 4 GiB when the 64-bit add took the 32-bit product as
+ * zero-extended. The program the i686 compiler makes prints the same line.
+ */
+static const char wide1_line[] =
+    "printf '#include <stdio.h>\\ntypedef unsigned long long u64;\\n"
+    "double d(u64 a,int c){return (unsigned)(c?a:0);}\\n' > /tmp/wide.c";
+static const char wide2_line[] = "printf 'float f(u64 a,int c){return (unsigned)(c?a:0);}\\n"
+                                 "long double l(u64 a,int c){return (unsigned)(c?a:0);}\\n' >> "
+                                 "/tmp/wide.c";
+static const char wide3_line[] = "printf 'long v(int n,int i){int a[2][n];return "
+                                 "(char*)(a+i)-(char*)a;}\\n' >> /tmp/wide.c";
+static const char wide4_line[] =
+    "printf 'int main(void){u64 a=0x100000001ULL;printf(\"WIDE\"\"NED %%lld %%lld %%lld "
+    "%%ld\\\\n\",(long long)d(a,1),(long long)f(a,1),(long long)l(a,1),v(3,-1));"
+    "return 0;}\\n' >> /tmp/wide.c";
+static const char wide_built_line[] = "tcc -static -o /tmp/wide /tmp/wide.c && echo WIDE\"\"BUILT";
+
 /**
  * Report a refusal of the compiler, which the last line asked for: assertion
  * `id` that the status `status` was reported, and `reason_id` that the
@@ -235,6 +259,19 @@ static void compile(struct shell *s)
     type(s, units_line);
     has(s, "two-units", "TWOUNITS",
         "the machine could not compile a program from two sources at once");
+
+    net_step(&s->u, "widen");
+    type(s, wide1_line);
+    type(s, wide2_line);
+    type(s, wide3_line);
+    type(s, wide4_line);
+    type(s, "cat /tmp/wide.c");
+    type(s, wide_built_line);
+    has(s, "widen-built", "WIDEBUILT", "the compiler did not build the program of the widening");
+    type(s, "/tmp/wide");
+    has(s, "widened", "WIDENED 1 1 1 -12",
+        "the compiler read the high half of a 64-bit register for an unsigned int it converted "
+        "to floating point, or took a negative index into a variable-length array as positive");
 
     net_step(&s->u, "end");
     finish(s, "finished");

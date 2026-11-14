@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.tcc.compile",
-      "behavior": "The installed system, as the test account at the console, compiles a C program with tcc and runs it; refuses -run, -shared, a link without -static and a raw-image link, each with its reason and with no output left; compiles an object; builds this project's cat, which agrees with BusyBox's over a 21 KB binary file and over two files; links ping from two sources; and the kernel's trace of missing system calls names none that tcc asked for",
+      "behavior": "The installed system, as the test account at the console, compiles a C program with tcc and runs it; refuses -run, -shared, a link without -static and a raw-image link, each with its reason and with no output left; compiles an object; builds this project's cat, which agrees with BusyBox's over a 21 KB binary file and over two files; links ping from two sources; runs a program in which the x86-64 compiler must clear the high half of an unsigned int it converts to floating point, and widen a negative index into an array of variable length; and the kernel's trace of missing system calls names none that tcc asked for",
       "units": [
         "tcc"
       ],
@@ -84,6 +84,12 @@
           "stage": "execute",
           "machine": "fixture",
           "does": "link ping from /src/utils/ping.c and /src/utils/resolv.c in one command"
+        },
+        {
+          "step_id": "widen",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "write /tmp/wide.c with printf, compile it with tcc -static and run it"
         },
         {
           "step_id": "end",
@@ -208,6 +214,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "widen-built",
+          "checks": "tcc -static builds /tmp/wide from /tmp/wide.c",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "widened",
+          "checks": "the program prints WIDENED 1 1 1 -12: an unsigned int cast from 0x100000001 in a register converts to 1 as a double, a float and a long double, and a pointer to a row of int[2][3] less one moves back 12 bytes",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "finished",
           "checks": "sync returns and the shell comes back after the last line",
           "source": "scenario"
@@ -228,7 +244,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a step of the manifest has ended",
-          "limit": 7
+          "limit": 8
         }
       ],
       "bounds": {
