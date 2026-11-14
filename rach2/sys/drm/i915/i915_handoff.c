@@ -75,6 +75,7 @@
 static struct handoff_slot {
     struct drm_i915_private *i915; /* NULL for a free slot */
     int linked;                    /* shown bound to i915 in /sys */
+    int announced;                 /* its "bind" uevent sent */
 } slots[HANDOFF_DEVICES];
 
 static int sys_dir;        /* /sys/bus/pci/drivers/i915, or 0 */
@@ -524,10 +525,10 @@ static void sys_start(void)
     (void)sysfs_add_attr(sys_dir, &attr_unbind, 0, 0);
 }
 
-void i915_handoff_bound(struct drm_i915_private *i915)
+int32_t i915_handoff_link(struct drm_i915_private *i915)
 {
     struct handoff_slot *slot = 0;
-    int i, err, key;
+    int i, err;
 
     for (i = 0; i < HANDOFF_DEVICES && !slot; i++) {
         if (!slots[i].i915) {
@@ -535,18 +536,31 @@ void i915_handoff_bound(struct drm_i915_private *i915)
         }
     }
     if (!slot) {
-        klog(KLOG_WARN, "i915", "handoff: no record left; the device cannot be unbound");
-        return;
+        klog(KLOG_WARN, "i915", "handoff: refused: every one of %d records is taken",
+             HANDOFF_DEVICES);
+        return -ENOSPC;
     }
     sys_start();
-    slot->i915 = i915;
-    key = (int)i915->pci.bus << 8 | devfn_of(&i915->pci);
-    err = sysfs_pci_bind(key, "i915");
+    err = sysfs_pci_bind((int)i915->pci.bus << 8 | devfn_of(&i915->pci), "i915");
     if (err != 0) {
-        klog(KLOG_WARN, "i915", "handoff: driver link not added: error %d", err);
-    } else {
-        slot->linked = 1;
-        sysfs_pci_uevent(key, "bind");
+        klog(KLOG_WARN, "i915", "handoff: refused: driver link not added: error %d", err);
+        return err;
+    }
+    slot->i915 = i915;
+    slot->linked = 1;
+    slot->announced = 0;
+    return 0;
+}
+
+void i915_handoff_bound(struct drm_i915_private *i915)
+{
+    int i;
+
+    for (i = 0; i < HANDOFF_DEVICES; i++) {
+        if (slots[i].i915 == i915 && slots[i].linked && !slots[i].announced) {
+            slots[i].announced = 1;
+            sysfs_pci_uevent((int)i915->pci.bus << 8 | devfn_of(&i915->pci), "bind");
+        }
     }
 }
 
@@ -558,10 +572,13 @@ void i915_handoff_unbound(struct drm_i915_private *i915)
         if (slots[i].i915 == i915) {
             if (slots[i].linked) {
                 sysfs_pci_unbind(key);
+            }
+            if (slots[i].announced) {
                 sysfs_pci_uevent(key, "unbind");
             }
             slots[i].i915 = 0;
             slots[i].linked = 0;
+            slots[i].announced = 0;
         }
     }
 }

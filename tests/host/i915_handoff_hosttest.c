@@ -58,8 +58,10 @@
  * stand-in, and a record that a program still holds reaching no register;
  * a bring-up refused while vfio-pci has the function or its
  * driver_override names another driver; the function scribbled on as a
- * guest's driver would leave it; a bring-up whose reset fails, and one
- * whose bind fails, each leaving the function without an owner; the
+ * guest's driver would leave it; a bring-up whose reset fails, one whose
+ * bind fails at the registration, and one whose driver link cannot be
+ * shown, which registers no card, each leaving the function without an
+ * owner; the
  * bring-up, which resets the function, waits out the panel's power cycle
  * and binds with nothing adopted, none of the guest's entries in the GTT
  * and the PWM's period from the VBT; a full mode set of the panel by
@@ -787,6 +789,7 @@ void sysfs_remove(int handle)
 /* The one binding `sysfs_pci_bind` shows here, as fs/sysfs.c makes it: the
  * function's key, or -1, its `driver` link and the directory's link back. */
 static int bound_key = -1, bound_link, bound_back;
+static int link_error; /* what the next binding fails with, or 0 */
 
 int sysfs_pci_bind(int key, const char *driver)
 {
@@ -795,6 +798,11 @@ int sysfs_pci_bind(int key, const char *driver)
     int dev = sysfs_anchor(SYSFS_PCI_DEVICE, key);
     int dir = sysfs_anchor(SYSFS_BUS_PCI, 0), h;
 
+    if (link_error) {
+        h = link_error;
+        link_error = 0;
+        return h;
+    }
     if (bound_key >= 0) {
         return bound_key == key ? 0 : -ENOSPC;
     }
@@ -1003,11 +1011,13 @@ void drm_dev_put(struct drm_device *dev)
 }
 
 static int register_error; /* what the next registration fails with, or 0 */
+static int registrations;  /* the registrations tried */
 
 int32_t drm_dev_register(struct drm_device *dev)
 {
     int i;
 
+    registrations++;
     if (register_error) {
         i = register_error;
         register_error = 0;
@@ -1983,6 +1993,26 @@ static void row_bind_fails(void)
           "bind fails: no owner, bus mastering, the message and interrupts off, the record freed");
 }
 
+/** A bring-up whose driver link cannot be shown: the binding's error before
+ * any card is registered, with everything the bind took given back and no
+ * uevent sent, as Linux's really_probe stops when driver_sysfs_add
+ * fails. */
+static void row_link_fails(void)
+{
+    int r = releases, tried = registrations, binds = bind_events;
+
+    log_text[0] = 0;
+    link_error = -ENOMEM;
+    CHECK(driver_write("bind", CHIP "\n") == -ENOMEM, "link fails: bind: the binding's error");
+    CHECK(link_error == 0 && registrations == tried && card() == NULL && bind_events == binds,
+          "link fails: no card registered and no bind uevent");
+    CHECK(resets == 3 && owner == NULL && !(command() & PCI_CMD_BUS_MASTER) && !msi_on() &&
+              vectors_live == 0 && interrupts_off() && !sys_bound() && bound() == NULL &&
+              releases == r + 1 && pages_live == 0 &&
+              logged("handoff: refused: driver link not added: error"),
+          "link fails: no owner, bus mastering, the message and interrupts off, the record freed");
+}
+
 /**
  * The bring-up: the function reset once, with no owner, before any access;
  * the first access the reset's 100 ms and the panel's power cycle later;
@@ -2160,6 +2190,7 @@ int main(void)
         row_guest();
         row_reset_fails();
         row_bind_fails();
+        row_link_fails();
         row_bring_up("bring-up: bind taken");
         row_mode_set(0);
         row_release_lit(0);

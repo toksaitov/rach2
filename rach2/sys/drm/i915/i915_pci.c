@@ -419,7 +419,7 @@ static void i915_display_bringup(struct drm_i915_private *i915)
 }
 
 /** What a registered device adds outside the DRM core: its files of /sys
- * and debugfs, the shrinker, and the driver's links on the function. */
+ * and debugfs, the shrinker, and the function's "bind" uevent. */
 static void i915_registered(struct drm_i915_private *i915)
 {
     i915_sysfs_register(i915);
@@ -467,6 +467,40 @@ static void i915_locks_init(struct drm_i915_private *i915)
     for (e = 0; e < I915_NUM_ENGINES; e++) {
         spin_lock_init(&i915->gt.engine[e].lock, "i915_engine");
     }
+}
+
+/**
+ * Register the card of a device whose bind has its rings and display up,
+ * with the driver shown on its function first (`i915_handoff_link`), as
+ * Linux's driver core shows the binding before i915_pci_probe runs, so that
+ * the card's uevent finds its parent's driver. 0, or the error of the link
+ * or of the registration, with the bind undone in reverse, the command
+ * word put back to `command` and the record put.
+ */
+static int32_t i915_register(struct drm_i915_private *i915, uint16_t command)
+{
+    const pci_device_t *pdev = &i915->pci;
+    int32_t err = i915_handoff_link(i915);
+
+    if (err == 0) {
+        err = drm_dev_register(&i915->drm);
+        if (err < 0) {
+            klog(KLOG_ERR, "i915", "register: error %d", (int)err);
+            i915_handoff_unbound(i915);
+        }
+    }
+    if (err < 0) {
+        intel_display_fini(i915);
+        i915_gt_pm_disable(i915);
+        i915_irq_reset(i915);
+        i915_msi_stop(i915);
+        i915_devices_remove(i915);
+        i915_gt_fini(i915);
+        i915_uncore_fini(i915);
+        pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
+        drm_dev_put(&i915->drm);
+    }
+    return err;
 }
 
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
@@ -545,18 +579,8 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     i915->drm.driver_priv = i915;
     i915_ident(i915);
     i915_display_bringup(i915);
-    err = drm_dev_register(&i915->drm);
+    err = i915_register(i915, command);
     if (err < 0) {
-        klog(KLOG_ERR, "i915", "register: error %d", (int)err);
-        intel_display_fini(i915);
-        i915_gt_pm_disable(i915);
-        i915_irq_reset(i915);
-        i915_msi_stop(i915);
-        i915_devices_remove(i915);
-        i915_gt_fini(i915);
-        i915_uncore_fini(i915);
-        pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
-        drm_dev_put(&i915->drm);
         return err;
     }
     klog(KLOG_INFO, "i915", "registered: i915 1.6.0 for %s on card %d", i915->drm.unique,

@@ -4384,16 +4384,24 @@ void i915_debugfs_register(struct drm_i915_private *i915);
  * device that comes and goes.
  */
 
-/** A device is bound and registered: make the driver's directory of /sys
- * if it is not there, and show the driver on the function as Linux's
- * driver core does (`sysfs_pci_bind`): its `driver` link, the directory's
- * link to it and DRIVER= in its uevent, which libudev, IGT's device scan
- * and Mesa's loader read, and send the function's "bind" uevent. From the
- * bind, under the big lock. */
+/** A device is about to register its card: make the driver's directory of
+ * /sys if it is not there, and show the driver on the function as Linux's
+ * driver core does before the driver's probe (`sysfs_pci_bind`): its
+ * `driver` link, the directory's link to it and DRIVER= in its uevent,
+ * which libudev, IGT's device scan and Mesa's loader read, so that the
+ * card's uevent finds its parent's driver. 0, or -ENOSPC when every record
+ * of a bound device is taken, or the error of showing it, which fails the
+ * bind as Linux's really_probe stops when driver_sysfs_add fails, with
+ * nothing shown. From the bind, under the big lock. */
+int32_t i915_handoff_link(struct drm_i915_private *i915);
+
+/** A device `i915_handoff_link` showed is registered: send the function's
+ * "bind" uevent, once, as Linux's driver_bound does. */
 void i915_handoff_bound(struct drm_i915_private *i915);
 
-/** A device is unplugged: take that binding away and send "unbind".
- * Nothing for a device `i915_handoff_bound` did not show bound. */
+/** A device is unplugged, or its registration failed: take its binding
+ * away, and send "unbind" when "bind" was sent. Nothing for a device
+ * `i915_handoff_link` did not show bound. */
 void i915_handoff_unbound(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */
