@@ -2200,7 +2200,8 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     for (bo = kill_hold(vg, vg->resources); bo; bo = next) {
         vgpu_blob_pages_drop(vg, bo, 1);
         /* A transport's own backing is its heap's, which the reset frees;
-         * a mapping that faulted in since the unplug's zap goes first. An
+         * its mappings go first, those that faulted in since the unplug's
+         * zap or, for a device that has gone, all of them. An
          * exported object keeps its frames, which an importer may hold in
          * its own translations, as i915 does in its GTT, until it is
          * freed, as Linux's page references keep them. */
@@ -2246,16 +2247,23 @@ static void vgpu_release(struct drm_device *dev)
     kfree(vg);
 }
 
-/** The transport's word that the device has gone for good, as when the VM
- * that serves a shared-memory transport dies: the device is unplugged as a
- * reset through debugfs unplugs it, every pending fence failing. Process
- * context. */
+/**
+ * The transport's word that the device has gone for good, as when the VM
+ * that serves a shared-memory transport dies: the device is stopped and
+ * every pending fence fails (`vgpu_kill`), and then it is unplugged as a
+ * reset through debugfs unplugs it. The fences fail first because a commit
+ * waiting on one holds the commit lock, which the unplug and the display's
+ * shutdown in `vgpu_unplug` take, and a device that has gone never answers:
+ * the transport's thread would wait under that lock for ever, a client's
+ * close for the lock, and the detach for the thread. Process context.
+ */
 static void vgpu_removed(struct virtio_dev *vdev)
 {
     struct virtio_gpu_device *vg = (struct virtio_gpu_device *)vdev->priv;
 
     if (vg && !vg->drm.unplugged) {
         klog(KLOG_WARN, "virtio_gpu", "%s: the device has gone", vdev->name);
+        vgpu_kill(vg);
         drm_dev_unplug(&vg->drm);
     }
 }
