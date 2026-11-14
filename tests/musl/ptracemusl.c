@@ -59,7 +59,10 @@
  * in a read, a poll or a sigtimedwait, stops nothing and posts nothing, as on
  * Linux, while the tracee's own write of the word after it still traps.
  * PTRACE_INTERRUPT of a tracee in PTRACE_LISTEN stops it before its next
- * instruction.
+ * instruction. A SIGCONT with no group stop to end lets a seized tracee out
+ * of PTRACE_LISTEN at an interrupt stop into a new PTRACE_EVENT_STOP. A
+ * thread its tracer resumed during its process's stop, asleep in a pipe
+ * read, takes the stop when the tracer ends without PTRACE_O_EXITKILL.
  *
  * The program takes no positional argument and runs every row. It prints
  * "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
@@ -99,7 +102,9 @@
  * `entry-bad-stack-result`, `copy-watch-no-stop`, `copy-watch-user-trap`,
  * `copy-watch-result`, `poll-watch-no-stop`, `poll-watch-returns`,
  * `sigwait-watch`, `interrupt-pause-stop`,
- * `listen-interrupt-before-instruction`, `tp-set-readback` and
+ * `listen-interrupt-before-instruction`, `listen-sigcont-event-stop`,
+ * `listen-sigcont-delivery`, `tracer-gone-resumed`, `tracer-gone-group-stop`,
+ * `tracer-gone-runs-on`, `tp-set-readback` and
  * `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`,
  * `setoptions-wide-einval`, `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
  * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
@@ -1729,6 +1734,135 @@ static int listen_user_return(void)
 }
 
 /**
+ * Check that a SIGCONT, with no group stop to end, lets a seized tracee out
+ * of PTRACE_LISTEN at an interrupt stop, as Linux's prepare_signal tells each
+ * seized thread of every SIGCONT (ptrace_trap_notify): a child asleep in
+ * pause is seized, interrupted and listened to, and the SIGCONT gives a new
+ * PTRACE_EVENT_STOP with SIGTRAP and then, resumed, the SIGCONT's own
+ * signal-delivery stop. The child is killed either way. Returns 0, or 1
+ * after the failure is printed.
+ */
+static int listen_sigcont(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        for (;;) {
+            pause();
+        }
+    }
+    if (pid < 0) {
+        return fail("fork for the listening SIGCONT");
+    }
+    if (granted(pid, ptrace(PTRACE_SEIZE, pid, NULL, NULL),
+                "seizing the child for the listening SIGCONT") ||
+        granted(pid, ptrace(PTRACE_INTERRUPT, pid, NULL, NULL),
+                "the interrupt before the listening SIGCONT") ||
+        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
+                    "the interrupt before the listening SIGCONT made no event stop") ||
+        granted(pid, ptrace(PTRACE_LISTEN, pid, NULL, NULL),
+                "PTRACE_LISTEN of the interrupt stop") ||
+        granted(pid, kill(pid, SIGCONT), "the SIGCONT during the listen") ||
+        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
+                    "a SIGCONT outside a group stop did not end PTRACE_LISTEN") ||
+        passed() ||
+        granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL),
+                "PTRACE_CONT of the SIGCONT's event stop") ||
+        expect_stop(pid, SIGCONT, "the listening SIGCONT made no signal-delivery stop") ||
+        passed()) {
+        return 1;
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    return 0;
+}
+
+/**
+ * As the tracer of `c`, asleep in a read of an empty pipe: seize it, stop
+ * its process with SIGSTOP, let the stop's signal-delivery stop through to
+ * the group stop's PTRACE_EVENT_STOP, resume it in the stop, which leaves it
+ * to sleep in its read again, and see it asleep. Returns 0, for the caller
+ * to end without PTRACE_O_EXITKILL, or the number of the step that failed.
+ */
+static int stop_resumer(pid_t c)
+{
+    int status;
+
+    if (ptrace(PTRACE_SEIZE, c, NULL, NULL) != 0) {
+        return 1;
+    }
+    if (kill(c, SIGSTOP) != 0 || waitpid(c, &status, 0) != c || !WIFSTOPPED(status) ||
+        status >> 8 != SIGSTOP) {
+        return 2;
+    }
+    if (ptrace(PTRACE_CONT, c, NULL, (void *)(long)SIGSTOP) != 0 || waitpid(c, &status, 0) != c ||
+        !WIFSTOPPED(status) || status >> 8 != (SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
+        return 3;
+    }
+    if (ptrace(PTRACE_CONT, c, NULL, NULL) != 0 || await_state(c, 'S') != 'S') {
+        return 4;
+    }
+    return 0;
+}
+
+/**
+ * Check that a thread its tracer resumed during its process's stop, and
+ * which sleeps in a pipe read, takes the stop when the tracer ends without
+ * PTRACE_O_EXITKILL, as Linux's __ptrace_unlink makes the stop pending again
+ * and wakes it: a second child traces the first (`stop_resumer`) and ends;
+ * the first is then seen stopped (T), and after SIGCONT reads the byte
+ * written to it and ends with 0. Returns 0, or 1 after the failure is
+ * printed.
+ */
+static int tracer_gone_stop(void)
+{
+    int p[2], status = 0;
+    char why[64];
+    char ch;
+    pid_t c, x;
+
+    if (pipe(p) != 0) {
+        return fail("pipe");
+    }
+    c = fork();
+    if (c == 0) {
+        close(p[1]);
+        _exit(read(p[0], &ch, 1) == 1 && ch == 'g' ? 0 : 1);
+    }
+    close(p[0]);
+    if (c < 0) {
+        close(p[1]);
+        return fail("fork of the sleeper");
+    }
+    x = fork();
+    if (x == 0) {
+        close(p[1]);
+        _exit(stop_resumer(c));
+    }
+    if (x < 0 || waitpid(x, &status, 0) != x || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        close(p[1]);
+        snprintf(why, sizeof(why), "the tracer that resumes in a stop, step %d",
+                 x > 0 && WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+        return abandon(c, why);
+    }
+    held();
+    if (await_state(c, 'T') != 'T') {
+        close(p[1]);
+        return abandon(c, "a sleeper whose tracer ended did not take its group stop");
+    }
+    held();
+    if (write(p[1], "g", 1) != 1 || kill(c, SIGCONT) != 0 || waitpid(c, &status, 0) != c ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        close(p[1]);
+        return abandon(c, "the sleeper did not read its byte and end after SIGCONT");
+    }
+    held();
+    close(p[1]);
+    return 0;
+}
+
+/**
  * Check that PTRACE_SINGLESTEP over a system call instruction stops at
  * step_return with the call's result and TRAP_TRACE, before the increment of
  * BX runs, and that the next step runs exactly that one instruction.
@@ -2285,7 +2419,8 @@ static int second_rows(void)
 {
     return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
            killed_tracee() || step_system_call() || entry_system_call() || watched_copy() ||
-           watched_poll() || watched_sigwait() || listen_user_return() || thread_pointer();
+           watched_poll() || watched_sigwait() || listen_user_return() || listen_sigcont() ||
+           tracer_gone_stop() || thread_pointer();
 }
 
 /* The assertions after `ended-mem-freed`, in the order they are checked. */
@@ -2377,6 +2512,11 @@ static const char *const later_rows[] = {
     "sigwait-watch",
     "interrupt-pause-stop",
     "listen-interrupt-before-instruction",
+    "listen-sigcont-event-stop",
+    "listen-sigcont-delivery",
+    "tracer-gone-resumed",
+    "tracer-gone-group-stop",
+    "tracer-gone-runs-on",
 #if defined __x86_64__
     "tp-arch-get-fs",
     "tp-peekuser-fs",
