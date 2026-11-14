@@ -3417,20 +3417,19 @@ static int case_emulator(const struct set *x, const struct legacy_case *k, char 
 /** Publish the artifacts of machine case member `m` to the tree's store, and
  * write its invocation; 0, or -1 with the reason in `why`. An object the
  * store has already is checked first, so that a good one is not copied
- * again and a damaged one is replaced. The invocation names the emulator
- * case_emulator gives in place of the site's. */
-static int publish_member(struct set *x, struct member *m, char site[2][PATH_LEN], char *why,
+ * again and a damaged one is replaced. `qemu` has the site's programs, a
+ * copy of the caller's, in which case_emulator puts the case's own. */
+static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN], char *why,
                           size_t size)
 {
     const struct legacy_case *k = m->k;
-    char qemu[2][PATH_LEN], path[PATH_LEN], hex[ETUDE_DIGEST_HEX + 1];
+    char path[PATH_LEN], hex[ETUDE_DIGEST_HEX + 1];
     const char *emulator;
     struct stat st;
     size_t g;
 
     if (boundary_admits(x, m, why, size) != 0)
         return -1;
-    memcpy(qemu, site, sizeof(qemu));
     if (case_emulator(x, k, qemu, why, size) != 0)
         return -1;
     emulator = qemu[strcmp(k->arch, "x86_64") == 0];
@@ -3465,7 +3464,7 @@ static int publish_member(struct set *x, struct member *m, char site[2][PATH_LEN
 static void publish(struct set *x)
 {
     static const char *const emulators[] = {"qemu-system-i386", "qemu-system-x86_64"};
-    char qemu[2][PATH_LEN], why[REASON_LEN];
+    char qemu[2][PATH_LEN], mine[2][PATH_LEN], why[REASON_LEN];
     struct member *m;
     size_t i;
     int opened;
@@ -3488,7 +3487,8 @@ static void publish(struct set *x)
         m = &x->mem[i];
         if (!m->k->machine || m->c.state != QUEUED)
             continue;
-        if (opened && publish_member(x, m, qemu, why, sizeof(why)) == 0)
+        memcpy(mine, qemu, sizeof(mine));
+        if (opened && publish_member(x, m, mine, why, sizeof(why)) == 0)
             continue;
         asked(&m->c);
         came_out(&m->c, INCOMPLETE, 1, "%s", why);
