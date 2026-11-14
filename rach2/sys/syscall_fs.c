@@ -830,11 +830,14 @@ static uint32_t fsize_fit(uint64_t pos, uint32_t count)
 }
 
 /**
- * Take the lock of the file the description `ofd` is open on for a write or
- * a change of its size, on a type that sets `file_locked` (`vfs_node_lock`),
- * into `file`: 1 when taken, which `file_unlock` gives back, and 0 on any
- * other type, whose description lock and namespace lock cover the change.
- * The caller holds the description's lock, which comes first.
+ * Take the locks of the file the description `ofd` is open on for a write
+ * or a change of its size, on a type that sets `file_locked`, into `file`:
+ * its write lock (`vfs_write_lock`), held to the end of the call, and then
+ * its node lock (`vfs_node_lock`), which a write lets go around a fault on
+ * its buffer (`file_write_pieces`). 1 when taken, which `file_unlock` gives
+ * back, and 0 on any other type, whose description lock and namespace lock
+ * cover the change. The caller holds the description's lock, which comes
+ * first, and no node lock of a regular file.
  */
 static int file_lock(const struct open_file *ofd, struct vfs_ref *file)
 {
@@ -843,15 +846,17 @@ static int file_lock(const struct open_file *ofd, struct vfs_ref *file)
     if (!vfs_file_locked(ofd->vmnt)) {
         return 0;
     }
+    vfs_write_lock(file);
     vfs_node_lock(file);
     return 1;
 }
 
-/** Give back the lock `file_lock` took when `own` says it did. */
+/** Give back the locks `file_lock` took when `own` says it did. */
 static void file_unlock(const struct vfs_ref *file, int own)
 {
     if (own) {
         vfs_node_unlock(file);
+        vfs_write_unlock(file);
     }
 }
 
@@ -883,18 +888,11 @@ static void size_ns_unlock(const struct open_file *ofd, int held)
     }
 }
 
-/* The most times a write brings its buffer in again with no byte moved
- * between, before it answers -EFAULT. */
-#define WRITE_REFAULTS 8
-
 /* The file lock and per-operation append choice of one write or vector. */
 struct file_write_state {
     struct vfs_ref file;
     int own;    /* nonzero when the type's file lock is held */
     int append; /* end-of-file placement without changing O_APPEND */
-    /* nonzero once this call, an earlier vector element included, has moved
-     * a byte */
-    int moved;
     /* nonzero once this call has taken the big lock for a file mappings
      * hold pages of (`file_write_mapped`), which its caller gives back */
     int big;
@@ -1011,23 +1009,22 @@ static int32_t file_write_piece(const struct open_file *ofd, struct file_write_s
  * buffer's or a smaller stack buffer's when the heap has no room. Returns
  * the bytes written, or the first write's error when none were.
  *
- * On a type that sets `file_locked`, `state` names the file whose lock
- * the caller holds, with `own` clear on another type. The file system
- * copies from `buf`
- * only while its pages are present (`vm_resident`), answering a short count
- * at the first that is not, since a fault under the lock could wait for
- * another file's lock. The write then goes on from there, as Linux's
- * generic_perform_write faults the buffer in and goes on (mm/filemap.c in
- * 6.12): at once when the rest of the buffer is present by now, as a page
- * another thread of the caller's brought in since the copy is, and else
- * with the lock let go while the rest is brought in, up to WRITE_REFAULTS
- * times with no byte moved between. A second short count of no bytes with
- * the rest present is the type's own, and ends the write. An append reads
- * the end again after the lock was let go, where another writer may have
- * moved it meanwhile: the count is cut again to what RLIMIT_FSIZE lets
- * through (`fsize_fit`), and a write that finds the end at the limit stops
- * there, -EFBIG when it has moved no byte. An end that cannot be read
- * again ends the write with the bytes moved.
+ * On a type that sets `file_locked`, `state` names the file whose locks
+ * the caller holds (`file_lock`), with `own` clear on another type. The
+ * file system copies from `buf` only while its pages are present
+ * (`vm_resident`), answering a short count at the first that is not, 0
+ * bytes when that is the first, since a fault under the node's lock could
+ * wait for another file's node lock. The write then goes on from there
+ * until every byte has moved or the type answers an error, as Linux's
+ * generic_perform_write faults the buffer in and goes on under the inode's
+ * lock (mm/filemap.c in 6.12): at once when the rest of the buffer is
+ * present by now, as a page another thread of the caller's brought in since
+ * the copy is, and else with the node's lock let go while the rest is
+ * brought in. The file's write lock stays held throughout, so no other
+ * write, truncation or fallocate of the file comes between two pieces, and
+ * the end an append found stays the end. A rest that cannot be brought in
+ * ends the write with the bytes moved, or -EFAULT for none, and a SIGKILL
+ * with them, or -EINTR, as Linux's loop stops on `fatal_signal_pending`.
  */
 static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *state,
                                  const char __user *buf, uint32_t count, uint64_t *pos)
@@ -1036,7 +1033,6 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
     uintptr_t from = (__force uintptr_t)buf;
     struct write_snap snap;
     uint32_t done = 0;
-    int refaults = 0, stalls = 0;
     int32_t n;
 
     snap.buf = NULL;
@@ -1044,9 +1040,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
         n = file_write_piece(ofd, state, from + done, count - done, *pos, &snap);
         if (n > 0) {
             done += (uint32_t)n;
-            state->moved = 1;
             *pos += (uint64_t)n;
-            refaults = stalls = 0;
         }
         if (n < 0 || done == count) {
             break;
@@ -1057,33 +1051,18 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
         if (!state->own) {
             break;
         }
+        if (current_proc->sig_pending & KSIG_BIT(SIGKILL)) {
+            n = -EINTR;
+            break;
+        }
         if (!snap.absent && user_resident(from + done, count - done)) {
-            if (n == 0 && ++stalls > 1) {
-                break;
-            }
             continue;
         }
         vfs_node_unlock(&state->file);
-        n = ++refaults <= WRITE_REFAULTS && vm_prefault_range(from + done, count - done, 0)
-                ? 0
-                : -EFAULT;
+        n = vm_prefault_range(from + done, count - done, 0) ? 0 : -EFAULT;
         vfs_node_lock(&state->file);
         if (n != 0) {
             break;
-        }
-        if (state->append) {
-            struct vfs_stat vst;
-
-            n = vfs_getattr(ofd->vmnt, ofd->vnode, &vst);
-            if (n != 0) {
-                break;
-            }
-            *pos = vst.size;
-            if (fsize_fit(*pos, count - done) == 0) {
-                n = done > 0 ? 0 : vfs_fsize_refused(*pos + 1);
-                break;
-            }
-            count = done + fsize_fit(*pos, count - done);
         }
     }
     if (snap.buf && snap.buf != snap.small) {
@@ -1096,8 +1075,8 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
  * Write with the description and the locks in `state` already held. Its
  * `own` says the type uses a file lock; `append` is the operation's final
  * end-placement choice, independent of the shared O_APPEND flag. The caller
- * has faulted in the buffer; a later fault releases and reacquires the file
- * lock through file_write_pieces.
+ * has faulted in the buffer; a later fault lets the file's node lock go and
+ * takes it again, with its write lock held, through file_write_pieces.
  * Return bytes or a negative errno,
  * the getattr's error among them when the end of an append cannot be read.
  *
@@ -1202,8 +1181,9 @@ static long write_synced(fd_entry_t *entry, long written)
  * the offset says and whatever `at` asks for, as Linux's pwrite does. The
  * file system reads the user buffer directly, so its pages are range-checked
  * and faulted in first, and on a type that sets `file_locked` brought in
- * again with the file's lock let go when one goes, before or after bytes
- * have moved, and the write goes on (`file_write_pieces`). A file
+ * again with the file's node lock let go and its write lock held when one
+ * goes, before or after bytes have moved, and the write goes on
+ * (`file_write_pieces`). A file
  * that backs a loop device is reached through that device and nowhere else,
  * since the file system mounted on it may not have its image change
  * underneath, and is -EBUSY: that is asked before the description is locked
@@ -1256,7 +1236,6 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     }
     state.own = file_lock(ofd, &state.file);
     state.append = (ofd->status_flags & OFD_APPEND) != 0;
-    state.moved = 0;
     state.big = 0;
     if (loop_backs(ofd->vmnt, ofd->vnode)) {
         file_unlock(&state.file, state.own);
@@ -14850,7 +14829,6 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
         vfs_node_lock(&state.file);
     }
     state.append = append;
-    state.moved = 0;
     state.big = 0;
     rc = iov_file_refused(entry, pos, wanted);
     if (rc == 0) {
@@ -17321,7 +17299,10 @@ struct core_file {
 
 /** The core file's writer for `core_write`: `len` bytes of `buf` at the
  * file's place, or a hole of `len` bytes for a null `buf`. Returns 0 or the
- * write's error; a short write is a full disk, -ENOSPC. A file a loop
+ * write's error; a short write is a full disk, -ENOSPC. Each piece takes
+ * the file's write lock and then its node lock (`vfs_write_lock`), as
+ * write(2) does, so that it never lands between the pieces of another
+ * process's write. A file a loop
  * device stands on is -EBUSY, asked under the file's lock before each write
  * as write(2) asks: the dump holds no description lock, so another process
  * may attach the file while the dump sleeps between pieces, and an
@@ -17343,9 +17324,11 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
     if (buf) {
         file.mnt = cf->ofd->vmnt;
         file.node = cf->ofd->vnode;
+        vfs_write_lock(&file);
         vfs_node_lock(&file);
         if (loop_backs(cf->ofd->vmnt, cf->ofd->vnode)) {
             vfs_node_unlock(&file);
+            vfs_write_unlock(&file);
             return -EBUSY;
         }
         n = vfs_write(cf->ofd->vmnt, cf->ofd->fhandle, buf, len, cf->pos);
@@ -17355,6 +17338,7 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
             big_give(big);
         }
         vfs_node_unlock(&file);
+        vfs_write_unlock(&file);
         if (n < 0) {
             return n;
         }

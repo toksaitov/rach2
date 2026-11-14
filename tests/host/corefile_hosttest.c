@@ -1,12 +1,11 @@
 /**
  * corefile_hosttest.c: the core file `fs_core_file` writes, its descriptor
- * and its limit, the limit of an append that brings its buffer in again,
- * and the SIGPIPE of a writev to a TCP stream.
+ * and its limit, a write that brings its buffer in again under the file's
+ * write lock, and the SIGPIPE of a writev to a TCP stream.
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/nodelock_none.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  * host-deps: tests/host/compat/bkl_none.c
  * host-deps: tests/host/compat/atomic_host.c rach2/sys/fs/fsize.c
@@ -33,12 +32,19 @@
  * with the last page written and the call must answer EFBIG; with one byte
  * more, the zero is written at the file's last byte.
  *
- * The append rows call `file_write_pieces` as a type that sets
- * `file_locked` has it, with the file's lock held: the model's first write
- * moves a few bytes and the rest of the buffer is not resident. The call
- * must end short without releasing the lock. Only a call that moved no
- * byte may bring the buffer in with the lock let go; another writer then
- * moves the end, so the resumed append must check RLIMIT_FSIZE again.
+ * The refault rows write 32 bytes through `file_lock` and
+ * `file_write_locked` as on a type that sets `file_locked`, whose file has
+ * a write lock and a node lock (`vfs_write_lock`, `vfs_node_lock`), which
+ * the model counts. The model type copies only while the buffer is
+ * resident, as ext2 does under a lock it cannot let go: it stops at a page
+ * the row made absent, and a row may also have a call stop as if its page
+ * were absent at its look and back by the caller's (`type_caps`). Every
+ * row requires the full count. At the first fault another process may
+ * append, overwrite or truncate the file (`competitor`); it takes the
+ * file's write lock, so it runs when the buffer is brought in only if that
+ * lock is free, and otherwise when the writer gives it back. Neither
+ * write's bytes may interleave, and a truncation must come wholly before or
+ * after the write.
  *
  * The writev row writes a vector of two elements to a TCP stream whose
  * model send takes the first and fails the second with EPIPE: the call
@@ -235,11 +241,24 @@ static uint32_t file_len, file_written;
 static void (*meanwhile)(void);
 static int32_t sharer_write, sharer_dup;
 static int sharer_writes;
-/* The most bytes the model's next write moves, -1 for every byte asked;
- * and the length another writer gives the file while a buffer is brought in,
- * 0 for no such writer, whose buffer is then resident. */
-static int32_t write_cap;
-static uint32_t grown_len;
+/* The model of a type that sets `file_locked`, for the refault rows: nonzero
+ * while a row's mount is one, and the takes of the file's write lock. */
+static int model_file_locked, write_depth;
+/* The refault row's buffer, and the offset of its first byte not resident,
+ * NO_ABSENT for none; a fault brings the rest in. */
+#define NO_ABSENT 0xFFFFFFFFu
+static const char *row_buf;
+static uint32_t absent_at;
+/* The most bytes each of the type's next writes moves, as if the page after
+ * them was absent at its look and brought in by another thread before the
+ * caller's; `caps_left` of them remain, from `caps_next`. */
+static uint32_t type_caps[4];
+static int caps_next, caps_left;
+/* What another process does to the file at the first fault, which takes
+ * the file's write lock and so waits while the writer holds it; how often it
+ * ran; and how often the buffer was brought in. */
+static void (*competitor)(void);
+static int competitor_runs, prefaults;
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -606,10 +625,17 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     if (offset + count > sizeof(file)) {
         return -EFBIG;
     }
-    if (write_cap >= 0 && count > (uint32_t)write_cap) {
-        count = (uint32_t)write_cap;
+    if (row_buf && absent_at != NO_ABSENT && (const char *)buf <= row_buf + absent_at &&
+        row_buf + absent_at < (const char *)buf + count) {
+        count = (uint32_t)(row_buf + absent_at - (const char *)buf);
     }
-    write_cap = -1;
+    if (caps_left > 0) {
+        if (count > type_caps[caps_next]) {
+            count = type_caps[caps_next];
+        }
+        caps_next++;
+        caps_left--;
+    }
     k_memcpy(file + offset, buf, count);
     if (offset + count > file_len) {
         file_len = (uint32_t)(offset + count);
@@ -655,29 +681,130 @@ uint64_t sysfs_pci_bar_size(int key, int bar)
     return 0;
 }
 
-/** Every page of a model buffer is present, but for an append row's until
- * it is brought in. */
+/** Every page of a model buffer is present, but for a refault row's from
+ * its absent byte until it is brought in. */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
-    (void)addr;
-    (void)len;
     (void)write;
-    return grown_len == 0;
+    if (!row_buf || absent_at == NO_ABSENT) {
+        return 1;
+    }
+    return addr + len <= (uintptr_t)(row_buf + absent_at);
 }
 
-/** Every page of a model buffer is brought in, while an append row's other
- * writer moves the file's end with the file's lock let go. */
+/** Run the row's other process once, as it runs when it has the file's
+ * write lock and node lock. */
+static void competitor_run(void)
+{
+    void (*run)(void) = competitor;
+
+    check(write_depth == 0 && ns_depth == 0,
+          "another process changes the file only with its locks");
+    competitor = 0;
+    competitor_runs++;
+    run();
+}
+
+/** Bring the rest of a refault row's buffer in, with the file's node lock
+ * let go; the row's other process gets in now when the write lock is free. */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     (void)addr;
     (void)len;
     (void)write;
-    if (grown_len != 0) {
-        check(ns_depth == 0, "a buffer is brought in with the file's lock let go");
-        file_len = grown_len;
-        grown_len = 0;
+    if (row_buf) {
+        check(ns_depth == 0, "a buffer is brought in with the file's node lock let go");
+        absent_at = NO_ABSENT;
+        prefaults++;
+        if (competitor && write_depth == 0) {
+            competitor_run();
+        }
     }
     return 1;
+}
+
+/** A refault row's mount locks each file; no other row's does. */
+int vfs_file_locked(const struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return model_file_locked;
+}
+
+/** The node lock, which the model counts as the namespace lock. */
+void vfs_node_lock(const struct vfs_ref *ref)
+{
+    vfs_ns_lock(ref->mnt);
+}
+
+/** Give back a take of `vfs_node_lock`. */
+void vfs_node_unlock(const struct vfs_ref *ref)
+{
+    vfs_ns_unlock(ref->mnt);
+}
+
+/** Take the file's write lock, which the model counts. */
+void vfs_write_lock(const struct vfs_ref *ref)
+{
+    (void)ref;
+    check(ns_depth == 0, "the write lock comes before the node lock");
+    write_depth++;
+}
+
+/** Give back a take of the write lock; once it is free, the row's other
+ * process, which waited for it, runs. */
+void vfs_write_unlock(const struct vfs_ref *ref)
+{
+    (void)ref;
+    check(write_depth > 0, "the write lock is taken before it is given back");
+    write_depth--;
+    if (write_depth == 0 && ns_depth == 0 && competitor) {
+        competitor_run();
+    }
+}
+
+/** No row locks a child, renames or covers: nothing is taken. */
+int vfs_child_lock(const struct vfs_ref *dir, const char *name, struct vfs_ref *child)
+{
+    (void)name;
+    child->mnt = dir->mnt;
+    child->node = 0;
+    return 0;
+}
+
+/** Nothing: `vfs_child_lock` took nothing. */
+void vfs_child_unlock(struct vfs_ref *child)
+{
+    child->node = 0;
+}
+
+/** The namespace lock, as for a type without `file_locked`. */
+int vfs_rename_lock(const struct vfs_ref *opar, const char *oleaf, const struct vfs_ref *npar,
+                    const char *nleaf, struct vfs_rename_hold *h)
+{
+    (void)oleaf;
+    (void)npar;
+    (void)nleaf;
+    h->renaming = 0;
+    h->dir[0] = *opar;
+    h->dir[1].mnt = 0;
+    h->dir[1].node = 0;
+    h->child[0] = h->dir[1];
+    h->child[1] = h->dir[1];
+    vfs_ns_lock(opar->mnt);
+    return 0;
+}
+
+/** Give back what `vfs_rename_lock` took. */
+void vfs_rename_unlock(struct vfs_rename_hold *h)
+{
+    vfs_ns_unlock(h->dir[0].mnt);
+}
+
+/** The namespace lock of the cover's mount. */
+int vfs_cover_lock(const struct vfs_ref *tref)
+{
+    vfs_ns_lock(tref->mnt);
+    return 0;
 }
 
 static int host_copies; /* nonzero while a row's user pointers are the host's */
@@ -1871,8 +1998,12 @@ static void row_begin(void)
     sharer_write = sharer_dup = 0;
     sharer_writes = 0;
     meanwhile = 0;
-    write_cap = -1;
-    grown_len = 0;
+    model_file_locked = write_depth = 0;
+    row_buf = NULL;
+    absent_at = NO_ABSENT;
+    caps_next = caps_left = 0;
+    competitor = 0;
+    competitor_runs = prefaults = 0;
     current_proc = &self;
 }
 
@@ -1958,84 +2089,139 @@ static void trailing_zero_limit(void)
     row_end();
 }
 
-/* The limit of the append rows, and the bytes their first write moves. */
-#define APPEND_LIMIT 64u
-#define APPEND_FIRST 8u
+/** Another process's append of 16 bytes of 'B' at the file's end. */
+static void competing_append(void)
+{
+    k_memset(file + file_len, 'B', 16);
+    file_len += 16;
+}
+
+/** Another process's write of 32 bytes of 'B' at the file's start. */
+static void competing_overwrite(void)
+{
+    k_memset(file, 'B', 32);
+    if (file_len < 32) {
+        file_len = 32;
+    }
+}
+
+/** Another process's truncation of the file to nothing. */
+static void competing_truncate(void)
+{
+    k_memset(file, 0, sizeof(file));
+    file_len = 0;
+}
+
+/** Whether the `len` bytes of the file from `from` are all `c`: 1 or 0. */
+static int file_is(uint32_t from, uint32_t len, int c)
+{
+    uint32_t i;
+
+    for (i = 0; i < len; i++) {
+        if (file[from + i] != (uint8_t)c) {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 /**
- * Append 32 bytes as a type that sets `file_locked` does, with the file's
- * lock held and RLIMIT_FSIZE at APPEND_LIMIT: the first write moves
- * `first` bytes, and while the rest is brought in another writer makes the
- * file `grown` bytes long, but only when no byte moved. Return the write's
- * result; a completed prefix must not release the lock to fault. With
- * `previous`, write an eight-byte element first using the same state.
+ * Write 32 bytes of 'A' as write(2) does on a type that sets `file_locked`,
+ * through `file_lock` and `file_write_locked`: at the file's end with
+ * `append`, and else at its start, as pwrite64 writes. The buffer is not
+ * resident from its byte `absent` on, NO_ABSENT for none. Returns the
+ * write's result.
  */
-static int32_t append_across_refault(uint32_t first, uint32_t grown, int previous)
+static int32_t refault_write(uint32_t absent, int append)
 {
-    static const char buf[32] = "the bytes of an appending write";
+    static char buf[32];
     struct open_file ofd;
     fd_entry_t entry;
     struct file_write_state state;
     unsigned long was = self.rlim[RLIM_FSIZE].cur;
-    uint64_t pos = 0;
+    uint64_t at = 0;
     int32_t n;
 
+    k_memset(buf, 'A', sizeof(buf));
     k_memset(&ofd, 0, sizeof(ofd));
     k_memset(&entry, 0, sizeof(entry));
     ofd.vmnt = &mount;
     ofd.vnode = &core_node;
     ofd.fhandle = &core_node;
-    ofd.status_flags = OFD_APPEND;
+    ofd.status_flags = append ? OFD_APPEND : 0;
     entry.ofd = &ofd;
-    state.file.mnt = &mount;
-    state.file.node = &core_node;
-    state.own = 1;
-    state.append = 1;
-    state.moved = 0;
-    if (previous) {
-        vfs_node_lock(&state.file);
-        n = file_write_pieces(&entry, &state, (const char __user *)buf, 8, &pos);
-        vfs_node_unlock(&state.file);
-        check(n == 8 && state.moved, "the first vector element wrote eight bytes");
-    }
-    write_cap = (int32_t)first;
-    grown_len = grown;
-    self.rlim[RLIM_FSIZE].cur = APPEND_LIMIT;
-    vfs_node_lock(&state.file);
-    n = file_write_pieces(&entry, &state, (const char __user *)buf, sizeof(buf), &pos);
-    vfs_node_unlock(&state.file);
+    model_file_locked = 1;
+    row_buf = buf;
+    absent_at = absent;
+    self.rlim[RLIM_FSIZE].cur = RLIM_INFINITY;
+    state.own = file_lock(&ofd, &state.file);
+    check(state.own && write_depth == 1 && ns_depth == 1,
+          "a write takes the file's write lock and then its node lock");
+    state.append = append;
+    state.big = 0;
+    n = file_write_locked(&entry, (const char __user *)buf, sizeof(buf), append ? NULL : &at,
+                          &state);
+    check(write_depth == 1 && ns_depth == 1, "and holds both when the write ends");
+    file_unlock(&state.file, state.own);
+    check(write_depth == 0 && ns_depth == 0, "and gives both back");
     self.rlim[RLIM_FSIZE].cur = was;
-    check(grown_len == (first || previous ? grown : 0),
-          "only an append that moved no byte released the lock to fault");
+    row_buf = NULL;
+    model_file_locked = 0;
     return n;
 }
 
 /**
- * A buffer fault after bytes moved ends the append without letting another
- * writer in. A fault before any bytes moved may release the lock, and the
- * resumed append must check the new end against RLIMIT_FSIZE.
+ * A write that meets a page of its buffer absent brings it in and goes on
+ * to the full count, after bytes moved and before, and as often as the
+ * type's stop races another thread that brings the page in. The file's
+ * write lock stays held across the fault, so another process's append,
+ * overwrite or truncation, which takes it, comes wholly after the write.
  */
-static void append_refault_limit(void)
+static void refault_rows(void)
 {
     row_begin();
-    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT - 4u, 0) == (int32_t)APPEND_FIRST,
-          "an append ends before faulting after bytes moved");
-    check(file_len == APPEND_FIRST, "and no other writer entered the call");
+    check(refault_write(8, 0) == 32 && prefaults == 1,
+          "a write that faults after 8 bytes brings the rest in and writes all 32");
+    check(file_len == 32 && file_is(0, 32, 'A'), "and the file has every byte");
     row_end();
     row_begin();
-    check(append_across_refault(0, APPEND_LIMIT - 4u, 0) == 4,
-          "an append that moved no byte resumes at the new end and writes what fits");
-    check(file_len == APPEND_LIMIT, "and stops at the limit");
+    type_caps[0] = 0;
+    caps_left = 1;
+    check(refault_write(NO_ABSENT, 0) == 32 && prefaults == 0,
+          "a write whose type stopped at a page another thread brought in goes on at once");
+    check(file_len == 32 && file_is(0, 32, 'A'), "and writes every byte");
     row_end();
     row_begin();
-    check(append_across_refault(0, APPEND_LIMIT, 0) == -EFBIG,
-          "an append that moved no byte before the end reached the limit is EFBIG");
-    check(file_len == APPEND_LIMIT, "and writes nothing");
+    type_caps[0] = type_caps[1] = 0;
+    caps_left = 2;
+    check(refault_write(NO_ABSENT, 0) == 32 && file_len == 32 && file_is(0, 32, 'A'),
+          "the same race twice before any byte moved still writes all 32");
     row_end();
     row_begin();
-    check(append_across_refault(0, APPEND_LIMIT, 1) == -EFAULT,
-          "a later element cannot release the lock after the first wrote");
-    check(file_len == 8, "and the vector keeps only its first element");
+    type_caps[0] = 8;
+    type_caps[1] = type_caps[2] = 0;
+    caps_left = 3;
+    check(refault_write(NO_ABSENT, 0) == 32 && file_len == 32 && file_is(0, 32, 'A'),
+          "and so does it twice after 8 bytes moved");
+    row_end();
+    row_begin();
+    competitor = competing_append;
+    check(refault_write(8, 1) == 32 && competitor_runs == 1,
+          "an append that faults after 8 bytes writes all 32 while another append waits");
+    check(file_len == 48 && file_is(0, 32, 'A') && file_is(32, 16, 'B'),
+          "and the other append lands wholly after it");
+    row_end();
+    row_begin();
+    competitor = competing_overwrite;
+    check(refault_write(8, 0) == 32 && competitor_runs == 1,
+          "a write that faults after 8 bytes writes all 32 while another write waits");
+    check(file_len == 32 && file_is(0, 32, 'B'), "and the other write lands wholly after it");
+    row_end();
+    row_begin();
+    competitor = competing_truncate;
+    check(refault_write(8, 0) == 32 && competitor_runs == 1,
+          "a write that faults after 8 bytes writes all 32 while a truncation waits");
+    check(file_len == 0, "and the truncation comes wholly after it");
     row_end();
 }
 
@@ -2121,12 +2307,12 @@ int main(void)
     mount.type = &model_type;
     sharer_finds_no_descriptor();
     trailing_zero_limit();
-    append_refault_limit();
+    refault_rows();
     stream_writev();
     if (!failures) {
         printf("corefile-hosttest: result: pass: the core file's descriptor, its trailing "
-               "zero under the limit, an append's limit across a refault, and a writev's "
-               "SIGPIPE\n");
+               "zero under the limit, a write's refault under the file's write lock, and a "
+               "writev's SIGPIPE\n");
     }
     return failures != 0;
 }
