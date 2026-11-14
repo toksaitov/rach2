@@ -182,7 +182,9 @@ void ps2mouse_port_rate_set(unsigned int rate);
  * Begin a change through a file of the auxiliary port, as Linux's
  * `psmouse_attr_set_helper` begins one: a run of commands, and the device
  * disabled. Returns 0, or -ENODEV, having begun nothing, while the port
- * waits for its reconnect. Process context; it may sleep.
+ * waits for its reconnect, has no driver, or lost the driver it had on
+ * entry while the call waited for the command lock. Process context; it
+ * may sleep.
  */
 int ps2mouse_change_begin(void);
 

@@ -321,8 +321,12 @@ static char guest_devname[64];
  * that waited for the command lock compares with the count it saw on
  * entry, so that it does not change their successors, as Linux's removal
  * of a driver's or a protocol's files waits out their callbacks: serio2's
- * psmouse files compare `guest_gen`, a guest TrackPoint's `guest_proto_gen`. */
+ * psmouse files compare `guest_gen`, a guest TrackPoint's `guest_proto_gen`;
+ * and the bindings of psmouse to serio1 that have ended (`aux_unbound`),
+ * which serio1's psmouse files compare, as they stay across a change of
+ * protocol. */
 static unsigned int aux_gen;
+static unsigned int aux_bind_gen;
 static unsigned int guest_gen;
 static unsigned int guest_proto_gen;
 
@@ -1427,6 +1431,14 @@ void ps2mouse_guest_packet(const uint8_t *bytes)
 {
     uint32_t now = (uint32_t)kernel_ticks;
 
+    if (!guest.active && !guest.dev) {
+        /* serio2 has no driver: Linux's serio_interrupt rescans such a port
+         * at its byte, which binds psmouse unless the mode is manual. */
+        if (!evdev_sysfs_serio_manual(EVDEV_SERIO_PASS_THROUGH)) {
+            request_reconnect(RECONNECT_GUEST);
+        }
+        return;
+    }
     if (!guest.active || guest.resyncing) {
         return;
     }
@@ -1919,16 +1931,17 @@ void ps2mouse_guest_change_end(void)
  * Begin a change through a file of the port `port`, ON_AUX or ON_GUEST, as
  * Linux's `psmouse_attr_set_helper` begins one: a run of commands, then the
  * touchpad disabled, and for the guest the guest after it. `gen` is the
- * count `guest_gen` had when a guest's file was called. Returns 0, or
- * -ENODEV, having begun nothing, while the port waits for its reconnect,
- * the guest does not report, or the guest the file was made for went
- * while the change waited for the command lock.
+ * count `guest_gen` had when a guest's file was called, or `aux_bind_gen`
+ * when serio1's was. Returns 0, or -ENODEV, having begun nothing, while
+ * the port waits for its reconnect, the guest does not report, or the
+ * guest or the binding of serio1 the file was made for went while the
+ * change waited for the command lock.
  */
 static int port_change_begin(int port, unsigned int gen)
 {
     int was = cmd_begin_state();
 
-    if (was == STATE_IGNORE ||
+    if (was == STATE_IGNORE || (port == ON_AUX && (aux_unbound || aux_bind_gen != gen)) ||
         (port == ON_GUEST && (!guest.dev || !guest.active || guest_gen != gen))) {
         cmd_end_state(was);
         return -ENODEV;
@@ -1960,7 +1973,7 @@ static void port_change_end(int port, int rc)
 
 int ps2mouse_change_begin(void)
 {
-    return port_change_begin(ON_AUX, guest_gen);
+    return port_change_begin(ON_AUX, aux_bind_gen);
 }
 
 void ps2mouse_change_end(int rc)
@@ -2071,6 +2084,9 @@ static void probe_port_anew(void)
         }
         evdev_sysfs_serio_files(1, NULL);
         evdev_sysfs_serio_driver(1, NULL);
+        if (!aux_unbound) {
+            aux_bind_gen++;
+        }
         aux_unbound = 1;
         return;
     }
@@ -2443,14 +2459,15 @@ static int32_t show_port(void *obj, int arg, char *buf, uint32_t cap)
  * `kstrtouint` reads it, set as the rate or resolution through the
  * protocol's own `set_rate` and `set_resolution`, which keep what they
  * sent, or kept as `resetafter` or `resync_time`. Returns `len`, -ENODEV
- * while the port waits for its reconnect or the guest does not report,
- * -EINVAL for a protocol or number Linux refuses, or -ERANGE.
+ * while the port waits for its reconnect or the guest does not report, or
+ * when the binding the file was made for ended while the write waited for
+ * the command lock, -EINVAL for a protocol or number Linux refuses, or -ERANGE.
  */
 static int32_t store_port(void *obj, int arg, const char *buf, uint32_t len)
 {
     int port = arg >> 3, rc;
     struct port_settings *set = port == ON_GUEST ? &guest.set : &aux;
-    unsigned int gen = guest_gen;
+    unsigned int gen = port == ON_GUEST ? guest_gen : aux_bind_gen;
     uint32_t n, v = 0;
 
     (void)obj;

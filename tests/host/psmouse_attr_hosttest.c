@@ -1777,6 +1777,8 @@ static void guest_switch_rows(void)
  * so does one in relative mode, where no guest is probed. */
 static void guest_reconnect_rows(void)
 {
+    static const uint8_t unbound_motion[4] = {0x08, 3, 0, 0};
+
     pt_present = 0;
     reconnect_wanted = RECONNECT_GUEST;
     ps2mouse_reconnect();
@@ -1805,8 +1807,12 @@ static void guest_reconnect_rows(void)
     ps2mouse_reconnect();
     CHECK("and a guest that answers is not probed while the mode is manual",
           !guest.dev && port_driver[EVDEV_SERIO_PASS_THROUGH] == NULL);
+    ps2mouse_guest_packet(unbound_motion);
+    CHECK("whose pass-through packet asks nothing in manual mode", !reconnect_wanted);
     serio_manual[EVDEV_SERIO_PASS_THROUGH] = 0;
-    reconnect_wanted = RECONNECT_GUEST;
+    ps2mouse_guest_packet(unbound_motion);
+    CHECK("and in auto mode asks for the guest's reconnect, as serio_interrupt rescans",
+          reconnect_wanted == RECONNECT_GUEST && !guest.dev);
     ps2mouse_reconnect();
     CHECK("in auto mode it is bound again",
           guest.dev && port_driver[EVDEV_SERIO_PASS_THROUGH] == guest_files);
@@ -1864,6 +1870,52 @@ static void guest_parked_rows(void)
                                                reads(EVDEV_SERIO_PASS_THROUGH, "rate", "100\n"));
     CHECK("the pad and the new guest report with the lock free",
           !cmd_busy && state == STATE_ACTIVE && aux_mouse.reporting && pt_mouse.reporting);
+}
+
+/** Enter the saved serio1 file's write of `imps`, whose command wait
+ * parks it. */
+static void parked_protocol_write(void)
+{
+    parked_result = parked_file.attr.store(parked_file.obj, parked_file.arg, "imps", 4);
+}
+
+/** A write of serio1's protocol parked behind a reconnect that fails in
+ * manual mode, which unbinds psmouse, and then behind one that binds it
+ * again: the write finds the binding it was made for gone and registers
+ * no device. */
+static void aux_parked_rows(void)
+{
+    int done, rebind;
+
+    for (rebind = 0; rebind < 2; rebind++) {
+        model_reset(KIND_MOUSE, 0);
+        CHECK("the parked row brings a mouse up", init_mouse() == 0 && mouse_dev);
+        parked_file = *file_of(1, "protocol");
+        parked_result = 0;
+        CHECK("the reconnect takes the command lock", ps2mouse_change_begin() == 0);
+        done = park_run(parked_protocol_write);
+        CHECK("serio1's write waits for it", done == 0 && cmd_busy);
+        serio_manual[1] = 1;
+        probe_port_anew();
+        CHECK("the failed reconnect in manual mode unbinds psmouse", aux_unbound && !mouse_dev);
+        serio_manual[1] = 0;
+        if (rebind) {
+            probe_port_anew();
+            CHECK("a probe in auto mode binds psmouse again", !aux_unbound && mouse_dev);
+        }
+        ps2mouse_change_end(-ENODEV);
+        if (!done) {
+            CHECK("the waiting write returns", park_resume() == 1);
+        }
+        CHECK("with ENODEV", parked_result == -ENODEV);
+        CHECK("registering no device and keeping the port as the reconnect left it",
+              protocol == PROTO_PS2 &&
+                  (rebind ? mouse_dev && !aux_unbound : !mouse_dev && aux_unbound));
+        CHECK("the command lock is free", !cmd_busy && state == STATE_ACTIVE);
+        if (aux_unbound) {
+            probe_port_anew(); /* bound again for the rows after */
+        }
+    }
 }
 
 /** Whether reg_10 reads 0x5b. */
@@ -2068,6 +2120,7 @@ int main(void)
     guest_switch_rows();
     guest_reconnect_rows();
     guest_parked_rows();
+    aux_parked_rows();
     exhaustion_rows(0);
     exhaustion_rows(1);
     pad_exhaustion_rows();
