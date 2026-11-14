@@ -120,6 +120,20 @@ static int read_config_agreed(void)
     return config[0];
 }
 
+/** Wait until the controller has finished the commands written before:
+ * write `config` back with WRITE_CONFIG, as Linux's i8042_controller_init
+ * writes its CTR before i8042_flush, and wait for the controller to take
+ * the command and the byte. The controller runs its commands in order, so
+ * once it takes WRITE_CONFIG the last READ_CONFIG's answer is in the output
+ * buffer. Without a byte to write, wait for it to take the last command. */
+static void ps2_sync(int config)
+{
+    if (config >= 0 && ps2_send_command(PS2_CMD_WRITE_CONFIG) == 0 && ps2_wait_input() == 0) {
+        outb(PS2_DATA_PORT, (uint8_t)config);
+    }
+    (void)ps2_wait_input();
+}
+
 int ps2_read_config(void)
 {
     int config;
@@ -129,6 +143,7 @@ int ps2_read_config(void)
     }
     ps2_drain();
     config = read_config_agreed();
+    ps2_sync(config);
     ps2_drain();
     return config;
 }

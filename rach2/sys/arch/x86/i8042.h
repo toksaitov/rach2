@@ -71,8 +71,10 @@ int ps2_send_command(uint8_t cmd);
  * of them, then READ_CONFIG until two reads in a row agree, 50 us apart and
  * at most 10 reads. A key or mouse byte that arrives after the drain answers
  * one read and leaves the controller's byte for the next, so those two
- * reads disagree and the reads go on. The bytes left after the reads, such
- * a late answer among them, are drained again, as Linux's i8042_flush ends
+ * reads disagree and the reads go on; the last READ_CONFIG's answer is then
+ * still to come. The agreed byte is written back, as Linux's setup writes
+ * its CTR, and once the controller has taken it, and so has answered every
+ * READ_CONFIG, the bytes left are drained again, as Linux's i8042_flush ends
  * its setup, so that no handler takes one for a device's byte.
  * Returns the byte, or -1 when no controller answers, a read times out or
  * no two reads agree. The caller keeps interrupts off, so that no handler
