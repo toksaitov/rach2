@@ -435,20 +435,24 @@ static int ignored_rs_open;
  * The first line asked for after a window ends opens the next, and
  * `*missed` is then the count the last one held back, for the caller to
  * log first; otherwise 0. A caller that finds the state taken is held back
- * uncounted, as ___ratelimit's trylock holds it back.
+ * uncounted, as ___ratelimit's trylock holds it back. The clock is read
+ * under the lock with interrupts off, as ___ratelimit reads jiffies.
  */
 static int ignored_ratelimit(uint32_t *missed)
 {
     int64_t sec, nsec;
-    uint32_t now;
+    uint32_t now, flags;
     int ok;
 
-    rtc_raw_monotonic(&sec, &nsec);
-    now = (uint32_t)sec * 1000u + (uint32_t)nsec / 1000000u;
     *missed = 0;
+    flags = kirq_save();
     if (!spin_trylock(&ignored_rs_lock)) {
+        kirq_restore(flags);
         return 0;
     }
+    /* Sampled under the lock, so that no window opens after it. */
+    rtc_raw_monotonic(&sec, &nsec);
+    now = (uint32_t)sec * 1000u + (uint32_t)nsec / 1000000u;
     if (!ignored_rs_open) {
         ignored_rs_open = 1;
         ignored_rs_begin = now;
@@ -466,6 +470,7 @@ static int ignored_ratelimit(uint32_t *missed)
         ignored_rs_missed++;
     }
     spin_unlock(&ignored_rs_lock);
+    kirq_restore(flags);
     return ok;
 }
 
