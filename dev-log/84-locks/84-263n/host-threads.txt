@@ -1,0 +1,35 @@
+Threads of the host's virgl_render_server workers that took 0.2 s or more of CPU between two samples, about 0.8 s apart; time is /proc/uptime, u and s the CPU ticks (1/100 s) in user and kernel mode, vol and invol the context switches. The last worker of each run is the Venus context of z_range_test; its busy thread appears at that test's device creation, runs in user mode with no voluntary switch until the segfault, and the worker is gone at the next sample.
+
+v7-Rach2
+80573.70 worker 2232304 thread 2232307 vkr-ring-3 u=83 s=3 vol=0 invol=1
+80574.55 worker 2232304 thread 2232307 vkr-ring-3 u=84 s=1 vol=0 invol=1
+80576.77 worker 2232996 thread 2232999 vkr-ring-3 u=84 s=1 vol=0 invol=10
+80577.60 worker 2232996 thread 2232999 vkr-ring-3 u=80 s=1 vol=23 invol=0
+80580.04 worker 2235316 thread 2235333 vkr-ring-3 u=23 s=3 vol=57 invol=0
+80580.86 worker 2235316 thread 2235333 vkr-ring-3 u=80 s=1 vol=0 invol=1
+80581.67 worker 2235316 thread 2235333 vkr-ring-3 u=62 s=2 vol=114 invol=1
+80583.13 worker 2237262 thread 2237334 vkr-ring-3 u=55 s=4 vol=107 invol=0
+80583.13 worker 2237262 thread 2237337 vkr-ring-3 u=19 s=2 vol=126 invol=0
+80586.42 worker 2237262 thread 2238042 vkr-ring-3 u=82 s=1 vol=0 invol=1
+80587.25 worker 2237262 thread 2238042 vkr-ring-3 u=82 s=0 vol=0 invol=1
+80588.08 worker 2237262 thread 2238042 vkr-ring-3 u=83 s=0 vol=0 invol=4
+80588.90 worker 2237262 thread 2238042 vkr-ring-3 u=84 s=2 vol=0 invol=3
+80589.76 worker 2237262 thread 2238042 vkr-ring-3 u=83 s=0 vol=0 invol=10
+80590.58 worker 2237262 thread 2238042 vkr-ring-3 u=82 s=0 vol=0 invol=3
+
+d2-Debian
+80688.33 worker 2296625 thread 2296628 vkr-ring-3 u=80 s=1 vol=0 invol=2
+80689.13 worker 2296625 thread 2296628 vkr-ring-3 u=81 s=0 vol=0 invol=0
+80691.30 worker 2299615 thread 2299640 vkr-ring-3 u=78 s=4 vol=0 invol=1
+80692.11 worker 2299615 thread 2299640 vkr-ring-3 u=78 s=1 vol=21 invol=1
+80694.56 worker 2304102 thread 2304106 vkr-ring-3 u=23 s=3 vol=113 invol=0
+80695.37 worker 2304102 thread 2304106 vkr-ring-3 u=79 s=2 vol=0 invol=0
+80696.18 worker 2304102 thread 2304106 vkr-ring-3 u=59 s=1 vol=109 invol=0
+80697.61 worker 2304808 thread 2304888 vkr-ring-3 u=46 s=5 vol=125 invol=0
+80697.61 worker 2304808 thread 2304892 vkr-ring-3 u=19 s=1 vol=117 invol=1
+80699.26 worker 2304808 thread 2305284 vkr-ring-3 u=30 s=0 vol=74 invol=0
+80700.88 worker 2304808 thread 2305647 vkr-ring-3 u=80 s=3 vol=0 invol=1
+80701.71 worker 2304808 thread 2305647 vkr-ring-3 u=81 s=0 vol=0 invol=1
+80702.52 worker 2304808 thread 2305647 vkr-ring-3 u=81 s=0 vol=0 invol=0
+80703.34 worker 2304808 thread 2305647 vkr-ring-3 u=80 s=2 vol=0 invol=1
+80704.16 worker 2304808 thread 2305647 vkr-ring-3 u=84 s=0 vol=0 invol=3

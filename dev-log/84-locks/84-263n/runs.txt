@@ -1,0 +1,36 @@
+Proton's d3d9:visual on Venus, x86_64, KVM, 8 CPUs, 16 GiB, the testing PC,
+2026-11-14 (UTC+5 on the PC). Rach2: tests/run d3dvenus with
+RACH2_CASES=machine.d3dvenus.wine-proton-d3d9-visual at 623f657e4. Debian:
+tests/graphics/d3d/reference.sh OUT wine/proton/d3d9:visual. "cold" is a run
+that started with the account's host shader cache, ~/.cache/mesa_shader_cache,
+moved away; "warm" one that started with the cache the runs before it left.
+The host segfault is the dmesg line of virgl_render_server's worker, in the
+kernel's clock, which ran 2.63 s behind /proc/uptime (measured with a fault
+of a process of the same account at 81507.28 dmesg, 81509.91 uptime).
+
+run  guest   cache  ended  exit  test lines  last test line                 host segfault
+v1   Rach2   cold   22:38  1     20          visual.c:3874 (z_range_test)   78889.43
+v2   Rach2   warm   22:46  255   944         summary [208921,142,0,770,24]  none
+v3   Rach2   warm   22:49  255   944         summary [208921,142,0,770,24]  none
+v4   Rach2   cold   22:53  1     20          visual.c:3874 (z_range_test)   79789.24
+d1   Debian  cold   22:58  255   944         summary [208921,142,0,770,24]  none
+v5   Rach2   cold   23:01  1     20          visual.c:3874 (z_range_test)   80272.62
+v6   Rach2   cold   23:03  1     20          visual.c:3874 (z_range_test)   80382.44
+v7   Rach2   cold   23:06  1     20          visual.c:3874 (z_range_test)   80588.28
+d2   Debian  cold   23:08  245   20          visual.c:3874 (z_range_test)   80702.51
+v8   Rach2   cold   23:16  1     384         visual.c:10585 (stencil_cull)  81158.73
+v9   Rach2   cold   23:17  1     20          visual.c:3874 (z_range_test)   81244.21
+d3   Debian  cold   23:19  1     20          visual.c:3874 (z_range_test)   81378.57
+
+v2 ran with VN_DEBUG=result,log_ctx_info,wsi, which printed nothing. v9 and d3
+ran with WINEDEBUG's +seh added. The release's run of 2026-11-14 04:00Z ended
+as v1 did: exit 1 after 20 test lines. The stored reference runs,
+ref-proton and ref-proton2 of tests/graphics/ref/d3d-venus-wsl, ended with
+245 after 384 test lines at visual.c:10585.
+
+Each segfault line has the same instruction:
+  vkr-ring-3[N]: segfault at 0x51..0x91 ip ...fbab7 error 4 in
+  libvulkan_lvp.so[fbab7,BASE+49000+4d8000]
+that is offset 0x144ab7 of the host's /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so,
+Mesa 26.0.8-1ubuntu0.3, build ID 1dab537bd9d19186a0a1e8aef43781f0fa90dbb6,
+whose symbols the host does not have.

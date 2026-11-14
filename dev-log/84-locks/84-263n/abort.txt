@@ -1,0 +1,34 @@
+Rach2, v9: from DXVK's timeout to the end of unit.log, Wine's thread-start warnings left out
+err:   Presenter: vkWaitForPresentKHR failed: VK_ERROR_DEVICE_LOST
+err:   DxvkSubmissionQueue: Timeout occured, GPU likely hung.
+visual.c:3874: Test failed: Z range failed: Got color 0x00000000, expected 0x00ffffff.
+err:   DxvkSubmissionQueue: Command submission failed: VK_ERROR_DEVICE_LOST
+0304:warn:seh:dispatch_exception backtrace: --- Exception 0x80000101 at 0x7e7a160a9f24: /lib/libc.so.6 + 0x96f24.
+0304:trace:seh:dispatch_exception code=80000101 (EXCEPTION_WINE_ASSERTION) flags=1 addr=00007E7A160A9F24
+0304:trace:seh:dispatch_exception rip=00007e7a160a9f24 rsp=00000001009fddb0 rbp=00000000000000a0 eflags=00000246
+0304:trace:seh:dispatch_exception rax=0000000000000000 rbx=000000000000025e rcx=00007e7a160a9f24 rdx=0000000000000006
+0304:trace:seh:dispatch_exception rsi=000000000000025e rdi=0000000000000146  r8=0000000000000000  r9=3ba0a60600000000
+0304:trace:seh:dispatch_exception r10=0000000000000000 r11=0000000000000246 r12=0000000000000004 r13=000000000000000e
+0304:trace:seh:dispatch_exception r14=0000000000000006 r15=0000558fa1d2fe10 mxcsr=00001f80 cs=0033 ss=002b
+0304:warn:seh:virtual_unwind backtrace: 00007E7A160A9F24: unknown module.
+0304:warn:seh:dwarf_virtual_unwind backtrace: 0x7e7a160a9f24: /lib/libc.so.6 + 0x96f24.
+0304:err:seh:call_seh_handlers invalid frame 00000001009FDDB0 (00000000020A2000-00000000021A0000)
+0304:err:seh:NtRaiseException Exception frame is not in stack limits => unable to dispatch exception.
+
+Debian, d3: the same
+info:  DXVK: Using 8 compiler threads
+err:   Presenter: vkWaitForPresentKHR failed: VK_ERROR_DEVICE_LOST
+err:   DxvkSubmissionQueue: Timeout occured, GPU likely hung.
+visual.c:3874: Test failed: Z range failed: Got color 0x00000000, expected 0x00ffffff.
+err:   DxvkSubmissionQueue: Command submission failed: VK_ERROR_DEVICE_LOST
+0300:warn:seh:dispatch_exception backtrace: --- Exception 0x80000101 at 0x7fe0a5c5c69c: /lib/x86_64-linux-gnu/libc.so.6 + 0x9469c.
+0300:trace:seh:dispatch_exception code=80000101 (EXCEPTION_WINE_ASSERTION) flags=1 addr=00007FE0A5C5C69C
+0300:trace:seh:dispatch_exception rip=00007fe0a5c5c69c rsp=0000000100afdde0 rbp=00000000000000a0 eflags=00000246
+0300:trace:seh:dispatch_exception rax=0000000000000000 rbx=000000000000049e rcx=00007fe0a5c5c69c rdx=0000000000000006
+0300:trace:seh:dispatch_exception rsi=000000000000049e rdi=00000000000003c3  r8=0000000000000000  r9=0000000100aff9c8
+0300:trace:seh:dispatch_exception r10=0000000000000009 r11=0000000000000246 r12=0000000000000004 r13=0000000000000006
+0300:trace:seh:dispatch_exception r14=00005555644e8860 r15=00005555645c16d0 mxcsr=00001f80 cs=0033 ss=002b
+0300:warn:seh:virtual_unwind backtrace: 00007FE0A5C5C69C: unknown module.
+0300:warn:seh:dwarf_virtual_unwind backtrace: 0x7fe0a5c5c69c: /lib/x86_64-linux-gnu/libc.so.6 + 0x9469c.
+0300:err:seh:call_seh_handlers invalid frame 0000000100AFDDE0 (00000000021A2000-00000000022A0000)
+0300:err:seh:NtRaiseException Exception frame is not in stack limits => unable to dispatch exception.
