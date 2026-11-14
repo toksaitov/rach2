@@ -294,9 +294,11 @@ struct vfs_ops {
      * mount made read-only is synced and left as an unmount leaves its
      * volume, and one made writable is set up as a writable mount is; and
      * take the options of `options`, mount(2)'s data, NULL for none, that
-     * the type lets a remount change. Called for a change of VFS_MS_RDONLY
-     * and for options that are not empty. NULL for a type that does
-     * neither, whose remounts change only the other flags. */
+     * the type lets a remount change. Called for a change of VFS_MS_RDONLY,
+     * VFS_MS_SYNCHRONOUS or VFS_MS_DIRSYNC, which a type that orders its
+     * writes may need to settle first, and for options that are not empty.
+     * NULL for a type that does none of this, whose remounts change only
+     * the other flags. */
     int (*remount)(struct vfs_mount *mnt, uint32_t flags, const char *options);
     /* fallocate(2) on an open file, `mode` its FALLOC_FL_ bits: allocate
      * [offset, offset + len) ahead of its writes, the size grown to its end
@@ -1188,7 +1190,9 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
 /**
  * mount(2) with MS_REMOUNT: the flags of the active mount `m` become
  * `flags`. A change between read-only and writable goes through the type's
- * `remount`, and is EINVAL on a type without one; a read-only device
+ * `remount`, and is EINVAL on a type without one; a change of
+ * VFS_MS_SYNCHRONOUS or VFS_MS_DIRSYNC goes through it when the type has
+ * one, which may settle its writes first; a read-only device
  * (BLOCK_READ_ONLY), or a mount that has failed a write, stays read-only,
  * EROFS. The options of `options`, mount(2)'s data or NULL, go to the
  * type's `remount` too, and a type without one ignores them. EINVAL for a

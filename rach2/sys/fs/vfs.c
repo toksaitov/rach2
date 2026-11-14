@@ -5601,6 +5601,7 @@ const struct vfs_type *vfs_type_at(int idx)
 int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
 {
     uint32_t changed = (flags ^ m->flags) & VFS_MS_RDONLY;
+    uint32_t order = (flags ^ m->flags) & (VFS_MS_SYNCHRONOUS | VFS_MS_DIRSYNC);
     int rc, closing = changed && (flags & VFS_MS_RDONLY);
 
     if (flags & ~VFS_MS_KNOWN) {
@@ -5630,7 +5631,7 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
             return rc;
         }
     }
-    if (m->type->ops->remount && (changed || (options && *options))) {
+    if (m->type->ops->remount && (changed || order || (options && *options))) {
         rc = m->type->ops->remount(m, flags, options);
         if (rc != 0) {
             if (closing) {

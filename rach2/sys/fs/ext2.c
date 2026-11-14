@@ -2392,8 +2392,46 @@ static int remount_writable(struct ext2_mount *em)
 }
 
 /**
+ * Give the closed mount `em` the `sync` and `dirsync` of `flags`, for a
+ * remount once its change of mode has succeeded. A mount that writes
+ * (`ext2_writes`) and becomes strict (`ext2_em_strict`) first writes out
+ * everything pending, by the gate's owner with the final puts held back
+ * (`em_hold`, `sync_by`), as Linux's `ext2_remount` syncs the file system
+ * before it changes the flags (fs/ext2/super.c:1334): a strict mount writes
+ * each change through in the caller's order, and its first write of a
+ * bitmap holding a free's cleared bit `after`, or of a table block holding
+ * a new inode whose bit is still dirty, would reach the device before the
+ * blocks the order of writing back had it wait for. The flags change under
+ * the big lock and `em->super`, beside the read-only flag a fault sets
+ * (`ext2_writeback_error`, `ext2_mark_error`), before admission opens, so
+ * that every writer let in after the remount sees them. The caller has
+ * closed the mount (`em_close`) and holds no file lock. 0, or the sync's
+ * -errno, with the flags as they were.
+ */
+static int remount_strictness(struct vfs_mount *mnt, struct ext2_mount *em, uint32_t flags)
+{
+    uint32_t strict = flags & (VFS_MS_SYNCHRONOUS | VFS_MS_DIRSYNC);
+    int big, rc;
+
+    if (strict != 0 && !ext2_em_strict(em) && ext2_writes(em)) {
+        em_hold(em);
+        rc = sync_by(mnt, 1);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    big = ext2_big_enter();
+    ext2_super_lock(em);
+    mnt->flags = (mnt->flags & ~(VFS_MS_SYNCHRONOUS | VFS_MS_DIRSYNC)) | strict;
+    ext2_super_unlock(em);
+    ext2_big_exit(big);
+    return 0;
+}
+
+/**
  * The `remount` of `vfs_ops`: make the mount read-only or writable, by
- * VFS_MS_RDONLY in `flags`, and take `errors=` of `options`
+ * VFS_MS_RDONLY in `flags`, give it the `sync` and `dirsync` of `flags`
+ * (`remount_strictness`), and take `errors=` of `options`
  * (`errors_option`) once that succeeds, as Linux's `ext2_remount` sets the
  * options it parsed at its end; a remount that keeps the mount as it is
  * changes only the policy, and other options are ignored. -EINVAL for a
@@ -2435,6 +2473,9 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
         rc = remount_writable(em);
     } else if (ext2_failed(em)) {
         rc = -EROFS;
+    }
+    if (rc == 0) {
+        rc = remount_strictness(mnt, em, flags);
     }
     if (rc == 0 && errors != 0) {
         em->errors = errors;

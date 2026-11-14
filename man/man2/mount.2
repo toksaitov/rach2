@@ -119,6 +119,14 @@ A mount is not made writable on a device that refuses writes or has failed
 one, or on ext2 when the volume has a feature the driver reads but does
 not write, which mounted it read-only, or when the volume's check stops,
 .Er EROFS .
+A remount that adds
+.Dv MS_SYNCHRONOUS
+or
+.Dv MS_DIRSYNC
+to a writable ext2 mount first writes out everything the mount has
+pending, holding new changes off, as Linux syncs the file system before a
+remount, so that the order the mount wrote back in still holds at a stop;
+a write that fails is the call's error, and the flags stay as they were.
 With
 .Dv MS_BIND
 as well, the change is to that mount alone, as Linux changes a bind
