@@ -62,10 +62,10 @@
  * POSIX timer's, which `tg` names and whose expirations post a signal. A
  * timer of the clocks expires when `base` reaches `end`, which the tick
  * checks from the tick `due` on. A POSIX timer on a clock of processor time
- * counts the ticks charged to `cpu_tg`'s threads, or to its thread `cpu_tid`
- * alone, user ticks alone for `cpu_user`, each as TICK_NS: `cpu_left` is
- * then the time left, and its interval is `ins`, both to the nanosecond, as
- * Linux's posix-cpu-timers keep them. */
+ * counts the ticks charged to `cpu_tg`'s threads, or for `cpu_thread` to its
+ * thread `cpu_tid` alone, user ticks alone for `cpu_user`, each as TICK_NS:
+ * `cpu_left` is then the time left, and its interval is `ins`, both to the
+ * nanosecond, as Linux's posix-cpu-timers keep them. */
 struct ktimer {
     struct anon_obj anon;
     struct ktimer *next; /* the list of armed timers the tick walks */
@@ -133,7 +133,11 @@ struct ktimer {
                             * into whose setting's count (`set_count`) the
                             * later expirations go (`ptimer_fire`) */
     struct tgroup *cpu_tg; /* held: the process whose time it counts, or NULL */
-    uint32_t cpu_tid;
+    uint32_t cpu_tid;      /* the id of the thread it counts, or with
+                            * `cpu_thread` clear of the process, by which
+                            * every setting and reading finds it
+                            * (`clock_cpu_sample`) */
+    int cpu_thread;
     int cpu_user;
 
     struct ktimer *cnext;     /* the next timer on `cancelable` */
@@ -705,16 +709,21 @@ static void cpu_timer_charge(struct ktimer *t)
     ptimer_fire_later(t, n);
 }
 
-void ptimer_cpu_tick(const process_t *p, int user)
+void ptimer_cpu_tick(process_t *p, int user)
 {
     struct ktimer *t;
 
     spin_lock(&timer_lock);
+    if (user) {
+        ++p->utime;
+    } else {
+        ++p->stime;
+    }
     t = cpu_armed;
     while (t) {
         struct ktimer *next = t->next;
 
-        if (t->cpu_tg == p->tg && (t->cpu_tid == 0 || t->cpu_tid == p->pid) &&
+        if (t->cpu_tg == p->tg && (!t->cpu_thread || t->cpu_tid == p->pid) &&
             (user || !t->cpu_user)) {
             cpu_timer_charge(t);
         }
@@ -1109,7 +1118,9 @@ long sys_timerfd_create(struct isr_params *params)
  * reading the forwarding was made on, as common_timer_get counts both from
  * one `now` (kernel/time/posix-timers.c:671-688), so that a short interval
  * that ends between two readings cannot leave a forwarded timer reported
- * as due. */
+ * as due. A timer of processor time whose thread or process has been
+ * reaped reports nothing, as Linux's posix_cpu_timer_get finds no task
+ * (`clock_cpu_sample`). The caller of a POSIX timer's holds the big lock. */
 static void current_setting(struct ktimer *t, struct setting *s)
 {
     uint32_t irq = spin_lock_irqsave(&timer_lock);
@@ -1136,6 +1147,10 @@ static void current_setting(struct ktimer *t, struct setting *s)
     if (t->armed && t->cpu_tg) {
         uint64_t ns;
 
+        if (clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_thread, 0, &ns) != 0) {
+            timer_unlock(irq);
+            return;
+        }
         s->vsec = (int64_t)div64(t->cpu_left, NS_PER_SEC, &ns);
         s->vnsec = (int32_t)ns;
         s->isec = (int64_t)div64(t->ins, NS_PER_SEC, &ns);
@@ -1207,16 +1222,18 @@ static int32_t list_clock(struct ktimer *t, int base, int flags, const struct se
  * nanoseconds, or 0 for an absolute time already reached, with how far the
  * clock is past it in `*over`. The clock is that of the process or thread
  * the timer was made for (`clock_cpu_sample`), whoever sets it, and is read
- * for every setting, as Linux's posix_cpu_timer_set samples the timer's own
- * task and fails when that has been reaped
- * (kernel/time/posix-cpu-timers.c:719-751). 0, or -ESRCH for a timer of a
- * thread that has ended.
+ * for every setting, a disarming one too, as Linux's posix_cpu_timer_set
+ * samples the timer's own task and fails when that has been reaped
+ * (kernel/time/posix-cpu-timers.c:719-751). 0, or -ESRCH for a timer whose
+ * thread or process has been reaped. The caller holds the big lock and
+ * `timer_lock`, which the tick adds to the clock under (`ptimer_cpu_tick`),
+ * so that no tick comes between the reading and the arming.
  */
 static int32_t cpu_time_left(const struct ktimer *t, int flags, const struct setting *s,
                              uint64_t *left, uint64_t *over)
 {
     uint64_t now, v = ns_of(s->vsec, s->vnsec);
-    int32_t rc = clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_user, &now);
+    int32_t rc = clock_cpu_sample(t->cpu_tg, t->cpu_tid, t->cpu_thread, t->cpu_user, &now);
 
     *left = v;
     *over = 0;
@@ -1295,7 +1312,8 @@ static void cpu_arm(struct ktimer *t, const struct setting *s, uint64_t left, ui
  * `expire`): never early. Its clock and the tick are read under the timers'
  * lock (`read_now`). A time already past expires at once by that interrupt,
  * or at the next tick without it, with each interval since it counted. A
- * timer of processor time is armed by `cpu_arm`.
+ * timer of processor time is armed by `cpu_arm` from its clock read under
+ * the timers' lock too (`cpu_time_left`).
  *
  * A timerfd goes on `cancelable` or off it by `flags`, as Linux's
  * timerfd_settime does before it arms the timer, and one armed while
@@ -1318,19 +1336,15 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     if (s->vsec < 0 || s->vnsec < 0 || s->vnsec >= NS_PER_SEC) {
         return -EINVAL;
     }
+    irq = spin_lock_irqsave(&timer_lock);
     if (t->cpu_tg) {
         rc = cpu_time_left(t, flags, s, &left, &over);
-        if (rc != 0) {
-            return rc;
-        }
-    }
-    irq = spin_lock_irqsave(&timer_lock);
-    if (on && !t->cpu_tg) {
+    } else if (on) {
         rc = read_now(base, &r);
-        if (rc != 0) {
-            spin_unlock_irqrestore(&timer_lock, irq);
-            return rc;
-        }
+    }
+    if (rc != 0) {
+        spin_unlock_irqrestore(&timer_lock, irq);
+        return rc;
     }
     if (!t->tg) {
         set_cancel(t, t->clock == CLOCK_REALTIME && (flags & TFD_TIMER_ABSTIME) &&
@@ -1942,7 +1956,7 @@ static int32_t ptimer_clock(struct ktimer *t, int clock)
     if (clock == CLOCK_REALTIME || clock == CLOCK_MONOTONIC || clock == CLOCK_BOOTTIME) {
         return 0;
     }
-    return clock_cpu_target(clock, &t->cpu_tg, &t->cpu_tid, &t->cpu_user);
+    return clock_cpu_target(clock, &t->cpu_tg, &t->cpu_tid, &t->cpu_thread, &t->cpu_user);
 }
 
 /**

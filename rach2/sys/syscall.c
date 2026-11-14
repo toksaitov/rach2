@@ -695,7 +695,7 @@ static int32_t clock_res_ns(const struct kclock *c)
     return (int32_t)(vclock_running() ? vclock_resolution_ns() : timer_resolution_ns());
 }
 
-int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *user_only)
+int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *id, int *thread, int *user_only)
 {
     struct kclock c;
 
@@ -704,26 +704,24 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *us
     }
     *tg = c.proc->tg;
     (*tg)->refs++;
-    *tid = c.thread ? c.proc->pid : 0u;
+    *id = c.thread ? c.proc->pid : c.proc->tgid;
+    *thread = c.thread;
     *user_only = c.user_only;
     return 0;
 }
 
-int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t tid, int user_only, uint64_t *ns)
+int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t id, int thread, int user_only,
+                         uint64_t *ns)
 {
+    const process_t *p = get_process(id);
     uint64_t user, sys;
 
-    if (tid != 0) {
-        const process_t *p = get_process(tid);
-        uint32_t flags;
-
-        if (!p || p->tg != tg || p->state == PROC_ZOMBIE) {
-            return -ESRCH;
-        }
-        flags = kirq_save();
+    if (!p || p->tg != tg || (!thread && p != tg->leader)) {
+        return -ESRCH;
+    }
+    if (thread) {
         user = p->utime;
         sys = p->stime;
-        kirq_restore(flags);
     } else {
         tgroup_cpu_time(tg, &user, &sys);
     }

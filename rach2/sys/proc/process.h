@@ -482,7 +482,8 @@ struct process {
     uint32_t uwin_len;
     /* CPU time in ticks. The timer adds the tick it interrupts to `utime`
      * when this thread was in user mode and to `stime` when it was in the
-     * kernel, and a tick of an idle wait to neither. A fork starts both at
+     * kernel, and a tick of an idle wait to neither, under `timer_lock` for a
+     * thread of a process (`ptimer_cpu_tick`). A fork starts both at
      * zero; an exec keeps them. The reaped children's time is the thread
      * group's (`tgroup.h`). They are 64 bits wide, so they do not wrap; on
      * the i686 a reader on another processor than the one counting could

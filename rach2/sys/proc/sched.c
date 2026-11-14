@@ -1901,7 +1901,8 @@ static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
  * that was ring 3's code; Linux charges an interrupt handler's time to the
  * process it interrupted too. An ACCOUNT_IDLE tick, one an idle wait
  * took, is charged to no one, although the process whose call is waiting
- * is still current.
+ * is still current. The tick goes into the process's times together with
+ * its POSIX timers, under their lock (`ptimer_cpu_tick`).
  */
 static void sched_account_one(struct percpu *cpu, int mode)
 {
@@ -1918,15 +1919,14 @@ static void sched_account_one(struct percpu *cpu, int mode)
     }
     cpu->ticks_seq++;
     if (!idle && current_proc) {
-        if (user) {
-            ++current_proc->utime;
-        } else {
-            ++current_proc->stime;
-        }
         if (current_proc->tg) {
             cpu_timer_tick(current_proc, 0, user, SIGVTALRM);
             cpu_timer_tick(current_proc, 1, 1, SIGPROF);
             ptimer_cpu_tick(current_proc, user);
+        } else if (user) {
+            ++current_proc->utime;
+        } else {
+            ++current_proc->stime;
         }
     }
 }
