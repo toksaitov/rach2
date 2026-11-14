@@ -32,6 +32,19 @@
  * target, and pidfd_send_signal a descriptor that is not open before the
  * siginfo, as Linux 6.12 orders them; kernel codes stay within a process.
  *
+ * pidfd_send_signal on the program's own pidfd with PIDFD_SIGNAL_THREAD
+ * posts a blocked SIGUSR1 to the leading thread alone, which a new thread
+ * does not find pending, with SI_TKILL; with PIDFD_SIGNAL_THREAD_GROUP it
+ * posts it to the process, which a new thread finds pending, with SI_USER.
+ * With PIDFD_SIGNAL_PROCESS_GROUP, SIGKILL by the pidfd of a child that
+ * leads a group of two kills both; the pidfd of the member, which leads no
+ * group, is ESRCH, and SI_USER by the program's own pidfd is EPERM. Once
+ * the leader is killed and reaped, its pidfd is ESRCH without a flag but
+ * still kills the member with the process-group scope, and is ESRCH with
+ * it once the group is empty. A child in new user and PID namespaces is
+ * refused with EINVAL by the pidfd of a process outside them, before and
+ * after that process is reaped.
+ *
  * Touching 64 new pages raises getrusage's ru_minflt by at least 64; a
  * mapping of 64 pages made with MAP_POPULATE raises it by at least 64 in the
  * mmap call and by fewer than 64 when they are then written. A child that
@@ -46,15 +59,17 @@
  * `send-signal`, `killed`, `send-reaped`, `nonblock-eagain`, `getfd`,
  * `getfd-errors`, `pidfd-errors`, `self-faults`, `populate`, `wait4-faults`
  * and `children-faults`, followed by `hangup-wakes`, `pidfd-file-info`,
- * `process-file-info`, `thread-file-info`, `info-before-target` and
- * `queued-code-permission`. The first failure fails its assertion and leaves
- * the rest not run.
+ * `process-file-info`, `thread-file-info`, `info-before-target`,
+ * `queued-code-permission`, `scope-thread`, `scope-thread-group`,
+ * `scope-process-group`, `scope-group-reaped` and `reaped-namespace`. The
+ * first failure fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sched.h>
 #include <stdlib.h>
@@ -90,6 +105,16 @@
 #define CLONE_VM_FLAG       0x00000100ull
 #define CLONE_CLEAR_SIGHAND 0x100000000ull
 #define PIDFD_NONBLOCK      O_NONBLOCK
+
+/* pidfd_send_signal's scopes since Linux 6.9: the pidfd's thread, its
+ * process, and the process group whose id is the process's. */
+#define PIDFD_SIGNAL_THREAD        1L
+#define PIDFD_SIGNAL_THREAD_GROUP  2L
+#define PIDFD_SIGNAL_PROCESS_GROUP 4L
+
+/* Namespaces for clone, which an older musl may not name. */
+#define CLONE_NEWUSER_FLAG 0x10000000L
+#define CLONE_NEWPID_FLAG  0x20000000L
 
 /* The pages the fault rows touch. */
 #define PAGES 64
@@ -620,19 +645,223 @@ static int queued_checks(void)
     return 0;
 }
 
+/** The start of a thread that tells whether SIGUSR1, which it blocks as
+ * its creator does, is pending for it: 1 or 0 in the int at `arg`. */
+static void *pending_here(void *arg)
+{
+    sigset_t set;
+
+    *(int *)arg = sigpending(&set) == 0 ? sigismember(&set, SIGUSR1) : -1;
+    return NULL;
+}
+
+/** Whether a new thread of this process finds SIGUSR1 pending, sent to the
+ * process or to it: 1 or 0, or -1 when it could not tell. */
+static int sibling_pending(void)
+{
+    pthread_t t;
+    int has = -1;
+
+    if (pthread_create(&t, NULL, pending_here, &has) != 0 || pthread_join(t, NULL) != 0) {
+        return -1;
+    }
+    return has;
+}
+
+/** Send this process SIGUSR1, blocked, by its own pidfd `self` with the
+ * scope `flags`, and take it back: whether a new thread found it pending
+ * as `shared` says and it came with the code `code` and this process's
+ * pid. */
+static int scoped_to_self(int self, long flags, int shared, int code)
+{
+    struct timespec zero = {0, 0};
+    siginfo_t si;
+    sigset_t set;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    memset(&si, 0, sizeof(si));
+    return syscall(SYS_pidfd_send_signal, (long)self, (long)SIGUSR1, NULL, flags) == 0 &&
+           sibling_pending() == shared && sigtimedwait(&set, &si, &zero) == SIGUSR1 &&
+           si.si_code == code && si.si_pid == getpid();
+}
+
+/** pidfd_send_signal's thread and thread-group scopes on this process's
+ * own pidfd. */
+static int scopes(void)
+{
+    sigset_t set, old;
+    int self = (int)syscall(SYS_pidfd_open, (long)getpid(), 0L);
+    int thread, group;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    if (self < 0 || sigprocmask(SIG_BLOCK, &set, &old) != 0) {
+        return fail("pidfd_open of this process");
+    }
+    thread = scoped_to_self(self, PIDFD_SIGNAL_THREAD, 0, SI_TKILL);
+    group = thread && scoped_to_self(self, PIDFD_SIGNAL_THREAD_GROUP, 1, SI_USER);
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    close(self);
+    if (!thread) {
+        return fail("PIDFD_SIGNAL_THREAD did not signal the leading thread alone with SI_TKILL");
+    }
+    report_held();
+    if (!group) {
+        return fail("PIDFD_SIGNAL_THREAD_GROUP did not signal the process with SI_USER");
+    }
+    report_held();
+    return 0;
+}
+
+/** Two pausing children in one process group, which the first leads, in
+ * `*lead` and `*member`: 0, or -1 with neither left running. */
+static int pausing_group(pid_t *lead, pid_t *member)
+{
+    *lead = pausing_child();
+    *member = *lead > 0 ? pausing_child() : -1;
+    if (*member > 0 && setpgid(*lead, *lead) == 0 && setpgid(*member, *lead) == 0) {
+        return 0;
+    }
+    if (*lead > 0) {
+        kill(*lead, SIGKILL);
+        waitpid(*lead, NULL, 0);
+    }
+    if (*member > 0) {
+        kill(*member, SIGKILL);
+        waitpid(*member, NULL, 0);
+    }
+    return -1;
+}
+
+/** Whether waitpid reaps `pid` killed by SIGKILL. */
+static int reaped_killed(pid_t pid)
+{
+    int st;
+
+    return waitpid(pid, &st, 0) == pid && WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL;
+}
+
+/** pidfd_send_signal's process-group scope: the group a child leads, while
+ * it lives and once it is reaped, and the refusals. */
+static int process_groups(void)
+{
+    pid_t lead, member;
+    int lfd, mfd, self, ok;
+    siginfo_t si;
+
+    if (pausing_group(&lead, &member) != 0) {
+        return fail("could not make a process group of two children");
+    }
+    lfd = (int)syscall(SYS_pidfd_open, (long)lead, 0L);
+    mfd = (int)syscall(SYS_pidfd_open, (long)member, 0L);
+    self = (int)syscall(SYS_pidfd_open, (long)getpid(), 0L);
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGUSR1;
+    si.si_code = SI_USER;
+    ok = lfd >= 0 && mfd >= 0 && self >= 0 &&
+         syscall(SYS_pidfd_send_signal, (long)mfd, 0L, NULL, PIDFD_SIGNAL_PROCESS_GROUP) == -1 &&
+         errno == ESRCH &&
+         syscall(SYS_pidfd_send_signal, (long)self, (long)SIGUSR1, &si,
+                 PIDFD_SIGNAL_PROCESS_GROUP) == -1 &&
+         errno == EPERM &&
+         syscall(SYS_pidfd_send_signal, (long)lfd, (long)SIGKILL, NULL,
+                 PIDFD_SIGNAL_PROCESS_GROUP) == 0;
+    if (!ok) {
+        kill(lead, SIGKILL);
+        kill(member, SIGKILL);
+    }
+    ok = reaped_killed(lead) && reaped_killed(member) && ok;
+    close(lfd);
+    close(mfd);
+    close(self);
+    if (!ok) {
+        return fail("PIDFD_SIGNAL_PROCESS_GROUP did not kill the group a child leads");
+    }
+    report_held();
+
+    if (pausing_group(&lead, &member) != 0) {
+        return fail("could not make a process group of two children");
+    }
+    lfd = (int)syscall(SYS_pidfd_open, (long)lead, 0L);
+    kill(lead, SIGKILL);
+    ok = lfd >= 0 && reaped_killed(lead) &&
+         syscall(SYS_pidfd_send_signal, (long)lfd, 0L, NULL, 0L) == -1 && errno == ESRCH &&
+         syscall(SYS_pidfd_send_signal, (long)lfd, (long)SIGKILL, NULL,
+                 PIDFD_SIGNAL_PROCESS_GROUP) == 0;
+    if (!ok) {
+        kill(member, SIGKILL);
+    }
+    ok = reaped_killed(member) && ok &&
+         syscall(SYS_pidfd_send_signal, (long)lfd, 0L, NULL, PIDFD_SIGNAL_PROCESS_GROUP) == -1 &&
+         errno == ESRCH;
+    close(lfd);
+    if (!ok) {
+        return fail("PIDFD_SIGNAL_PROCESS_GROUP did not kill the group of a reaped leader");
+    }
+    report_held();
+    return 0;
+}
+
+/** pidfd_send_signal from a PID namespace below the one of the pidfd's
+ * process, before and after that process is reaped. */
+static int namespaces(void)
+{
+    pid_t x, n;
+    int px, go[2], st, ok;
+    char b = 'g';
+
+    x = pausing_child();
+    px = x > 0 ? (int)syscall(SYS_pidfd_open, (long)x, 0L) : -1;
+    if (px < 0 || pipe(go) != 0) {
+        if (x > 0) {
+            kill(x, SIGKILL);
+            waitpid(x, NULL, 0);
+        }
+        return fail("pidfd_open of a pausing child");
+    }
+    n = (pid_t)syscall(SYS_clone, CLONE_NEWUSER_FLAG | CLONE_NEWPID_FLAG | (long)SIGCHLD, 0L, 0L,
+                       0L, 0L);
+    if (n == 0) {
+        if (syscall(SYS_pidfd_send_signal, (long)px, 0L, NULL, 0L) != -1 || errno != EINVAL) {
+            _exit(2);
+        }
+        if (read(go[0], &b, 1) != 1) {
+            _exit(3);
+        }
+        _exit(syscall(SYS_pidfd_send_signal, (long)px, 0L, NULL, 0L) == -1 && errno == EINVAL ? 0
+                                                                                              : 4);
+    }
+    kill(x, SIGKILL);
+    waitpid(x, NULL, 0);
+    ok = n > 0 && write(go[1], &b, 1) == 1 && waitpid(n, &st, 0) == n && WIFEXITED(st) &&
+         WEXITSTATUS(st) == 0;
+    close(go[0]);
+    close(go[1]);
+    close(px);
+    if (!ok) {
+        return fail("pidfd_send_signal from a PID namespace below the process's was not EINVAL "
+                    "before and after the reap");
+    }
+    report_held();
+    return 0;
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
 {
     static const char *const ids[] = {
-        "clear-sighand",    "clear-sighand-einval", "clone3-pidfd",
-        "pidfd-readable",   "waitid-pidfd",         "pidfd-hangup",
-        "pidfd-open",       "send-signal",          "killed",
-        "send-reaped",      "nonblock-eagain",      "getfd",
-        "getfd-errors",     "pidfd-errors",         "self-faults",
-        "populate",         "wait4-faults",         "children-faults",
-        "hangup-wakes",     "pidfd-file-info",      "process-file-info",
-        "thread-file-info", "info-before-target",   "queued-code-permission"};
+        "clear-sighand",      "clear-sighand-einval", "clone3-pidfd",
+        "pidfd-readable",     "waitid-pidfd",         "pidfd-hangup",
+        "pidfd-open",         "send-signal",          "killed",
+        "send-reaped",        "nonblock-eagain",      "getfd",
+        "getfd-errors",       "pidfd-errors",         "self-faults",
+        "populate",           "wait4-faults",         "children-faults",
+        "hangup-wakes",       "pidfd-file-info",      "process-file-info",
+        "thread-file-info",   "info-before-target",   "queued-code-permission",
+        "scope-thread",       "scope-thread-group",   "scope-process-group",
+        "scope-group-reaped", "reaped-namespace"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.pidfdmusl"));
@@ -645,7 +874,8 @@ int main(void)
 {
     plan();
     if (clones() != 0 || opens() != 0 || getfds() != 0 || faults() != 0 || hangup_wakes() != 0 ||
-        file_info() != 0 || queued_checks() != 0) {
+        file_info() != 0 || queued_checks() != 0 || scopes() != 0 || process_groups() != 0 ||
+        namespaces() != 0) {
         return 1;
     }
     report_end();

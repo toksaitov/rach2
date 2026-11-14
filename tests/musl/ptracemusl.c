@@ -92,6 +92,11 @@
  * before the siginfo is copied. A native siginfo of a layout Linux knows is
  * read only as far as the union Linux keeps, so each call and
  * PTRACE_SETSIGINFO take one whose extension lies on an unreadable page.
+ * pidfd_send_signal takes each of Linux 6.9's scope flags alone and refuses
+ * two together before it finds the pidfd, and refuses SI_USER to a process
+ * group even from its own process. The thread of a child that has ended is
+ * found by rt_tgsigqueueinfo, tgkill, tkill and pidfd_send_signal's thread
+ * scope until the child is reaped.
  * The waits of these rows end on the stop or state they wait for, with no
  * limit of their own, so a loaded host never fails one and a stop that
  * never comes holds it to the case's bound.
@@ -149,6 +154,7 @@
  * `queued-unknown-extension`, `sigqueueinfo-error-order`,
  * `tgsigqueueinfo-error-order`, `pidfd-send-signal-error-order`,
  * `queued-extension-unread`, `setsiginfo-extension-unread`,
+ * `pidfd-send-signal-scope-order`, `zombie-thread-signal`,
  * `tp-set-readback` and `tp-tracee-runs`.
  * x86-64 adds `dr7-bit32-einval`, `setoptions-wide-einval`,
  * `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
@@ -3122,6 +3128,134 @@ static int pidfd_order(void)
     return 0;
 }
 
+/* pidfd_send_signal's scope flags since Linux 6.9. */
+#define PIDFD_SIGNAL_THREAD        1L
+#define PIDFD_SIGNAL_THREAD_GROUP  2L
+#define PIDFD_SIGNAL_PROCESS_GROUP 4L
+
+/**
+ * Check pidfd_send_signal's scope flags in Linux 6.12's order: each of
+ * PIDFD_SIGNAL_THREAD, _THREAD_GROUP and _PROCESS_GROUP alone on no
+ * descriptor is EBADF, and two or three of them together EINVAL; on x86-64
+ * a bit above the low 32, which the call's unsigned int flags never hold,
+ * is EBADF too. With SI_USER and signal 65, this process's own pidfd is
+ * EINVAL with no flag and with the thread and thread-group scopes, and
+ * EPERM with the process group's, since a code that only the kernel gives
+ * never goes to a group. Returns 0, or 1 after the failure is printed.
+ */
+static int pidfd_scope_order(void)
+{
+    static const long one[] = {PIDFD_SIGNAL_THREAD, PIDFD_SIGNAL_THREAD_GROUP,
+                               PIDFD_SIGNAL_PROCESS_GROUP};
+    static const long many[] = {3L, 5L, 6L, 7L};
+    const char *failed = NULL;
+    long self = syscall(SYS_pidfd_open, (long)getpid(), 0L);
+    siginfo_t si;
+    unsigned int i;
+
+    memset(&si, 0, sizeof(si));
+    si.si_signo = (int)BAD_SIG;
+    si.si_code = SI_USER;
+    for (i = 0; !failed && i < sizeof(one) / sizeof(one[0]); i++) {
+        if (syscall(SYS_pidfd_send_signal, -1L, BAD_SIG, NULL, one[i]) != -1 || errno != EBADF) {
+            failed = "pidfd_send_signal with one scope flag on no descriptor was not EBADF";
+        }
+    }
+    for (i = 0; !failed && i < sizeof(many) / sizeof(many[0]); i++) {
+        if (syscall(SYS_pidfd_send_signal, -1L, BAD_SIG, NULL, many[i]) != -1 || errno != EINVAL) {
+            failed = "pidfd_send_signal with two scope flags on no descriptor was not EINVAL";
+        }
+    }
+#if defined __x86_64__
+    if (!failed && (syscall(SYS_pidfd_send_signal, -1L, BAD_SIG, NULL, 0x100000000L) != -1 ||
+                    errno != EBADF)) {
+        failed = "pidfd_send_signal with bit 32 of flags on no descriptor was not EBADF";
+    }
+#endif
+    if (failed) {
+    } else if (self < 0) {
+        failed = "pidfd_open of this process";
+    } else if (syscall(SYS_pidfd_send_signal, self, BAD_SIG, &si, 0L) != -1 || errno != EINVAL ||
+               syscall(SYS_pidfd_send_signal, self, BAD_SIG, &si, PIDFD_SIGNAL_THREAD) != -1 ||
+               errno != EINVAL ||
+               syscall(SYS_pidfd_send_signal, self, BAD_SIG, &si, PIDFD_SIGNAL_THREAD_GROUP) !=
+                   -1 ||
+               errno != EINVAL) {
+        failed = "pidfd_send_signal of signal 65 and SI_USER to this process was not EINVAL";
+    } else if (syscall(SYS_pidfd_send_signal, self, BAD_SIG, &si, PIDFD_SIGNAL_PROCESS_GROUP) !=
+                   -1 ||
+               errno != EPERM) {
+        failed = "pidfd_send_signal of signal 65 and SI_USER to this process's group was not EPERM";
+    }
+    if (self >= 0) {
+        close((int)self);
+    }
+    if (failed) {
+        return fail(failed);
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check that the thread of a child that has ended is found until the child
+ * is reaped, as Linux's do_send_specific finds a zombie: with the child left
+ * unreaped by waitid's WNOWAIT, rt_tgsigqueueinfo of signal 65 with
+ * SI_QUEUE is EINVAL from the permission check, not ESRCH; signal 0 by it,
+ * by tgkill and by tkill succeeds; and pidfd_send_signal of SIGKILL to the
+ * child's leading thread alone is taken and dropped. Once the child is
+ * reaped, rt_tgsigqueueinfo of signal 0 is ESRCH. Returns 0, or 1 after the
+ * failure is printed.
+ */
+static int zombie_thread(void)
+{
+    const char *failed = NULL;
+    siginfo_t si, queued;
+    long pidfd = -1;
+    pid_t c = fork();
+
+    if (c == 0) {
+        _exit(0);
+    }
+    if (c < 0) {
+        return fail("fork of a child to leave unreaped");
+    }
+    pidfd = syscall(SYS_pidfd_open, (long)c, 0L);
+    memset(&queued, 0, sizeof(queued));
+    queued.si_signo = SIGUSR2;
+    queued.si_code = SI_QUEUE;
+    memset(&si, 0, sizeof(si));
+    if (waitid(P_PID, (id_t)c, &si, WEXITED | WNOWAIT) != 0 || si.si_pid != c || pidfd < 0) {
+        failed = "waitid with WNOWAIT did not see the child end, or pidfd_open failed";
+    } else if (syscall(SYS_rt_tgsigqueueinfo, (long)c, (long)c, BAD_SIG, &queued) != -1 ||
+               errno != EINVAL) {
+        failed = "rt_tgsigqueueinfo of signal 65 to an unreaped child was not EINVAL";
+    } else if (syscall(SYS_rt_tgsigqueueinfo, (long)c, (long)c, 0L, &queued) != 0 ||
+               syscall(SYS_tgkill, (long)c, (long)c, 0L) != 0 ||
+               syscall(SYS_tkill, (long)c, 0L) != 0) {
+        failed = "signal 0 by rt_tgsigqueueinfo, tgkill or tkill to an unreaped child failed";
+    } else if (syscall(SYS_pidfd_send_signal, pidfd, (long)SIGKILL, NULL, PIDFD_SIGNAL_THREAD) !=
+               0) {
+        failed = "pidfd_send_signal of SIGKILL to an unreaped child's thread failed";
+    } else if (waitpid(c, NULL, 0) != c) {
+        failed = "waitpid did not reap the child";
+    } else if (syscall(SYS_rt_tgsigqueueinfo, (long)c, (long)c, 0L, &queued) != -1 ||
+               errno != ESRCH) {
+        failed = "rt_tgsigqueueinfo of signal 0 to a reaped child was not ESRCH";
+    }
+    if (failed) {
+        waitpid(c, NULL, 0);
+    }
+    if (pidfd >= 0) {
+        close((int)pidfd);
+    }
+    if (failed) {
+        return fail(failed);
+    }
+    held();
+    return 0;
+}
+
 /**
  * Send this process SIGUSR2 by pidfd_send_signal with the siginfo `si`
  * copied to end at `edge`, with SIGUSR2 blocked, and take it back: taken
@@ -3267,9 +3401,10 @@ static int setsiginfo_extension_unread(void)
 }
 
 /**
- * Run the rows of `queue_order`, `pidfd_order`, `queue_extension_unread`
- * and `setsiginfo_extension_unread` with the pages of `edge` mapped, and
- * unmap them. Returns 0, or 1 after the failure is printed.
+ * Run the rows of `queue_order`, `pidfd_order`, `queue_extension_unread`,
+ * `setsiginfo_extension_unread`, `pidfd_scope_order` and `zombie_thread`
+ * with the pages of `edge` mapped, and unmap them. Returns 0, or 1 after
+ * the failure is printed.
  */
 static int siginfo_copy_order(void)
 {
@@ -3278,8 +3413,8 @@ static int siginfo_copy_order(void)
     if (edge_map() != 0) {
         return fail("two pages, the second unreadable");
     }
-    rc =
-        queue_order() || pidfd_order() || queue_extension_unread() || setsiginfo_extension_unread();
+    rc = queue_order() || pidfd_order() || queue_extension_unread() ||
+         setsiginfo_extension_unread() || pidfd_scope_order() || zombie_thread();
     edge_unmap();
     return rc;
 }
@@ -3967,6 +4102,8 @@ static const char *const later_rows[] = {
     "pidfd-send-signal-error-order",
     "queued-extension-unread",
     "setsiginfo-extension-unread",
+    "pidfd-send-signal-scope-order",
+    "zombie-thread-signal",
 #if defined __x86_64__
     "tp-arch-get-fs",
     "tp-peekuser-fs",
