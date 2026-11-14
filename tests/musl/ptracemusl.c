@@ -62,7 +62,15 @@
  * instruction. A SIGCONT with no group stop to end lets a seized tracee out
  * of PTRACE_LISTEN at an interrupt stop into a new PTRACE_EVENT_STOP. A
  * thread its tracer resumed during its process's stop, asleep in a pipe
- * read, takes the stop when the tracer ends without PTRACE_O_EXITKILL.
+ * read, takes the stop when the tracer ends without PTRACE_O_EXITKILL, and
+ * when its tracer interrupts and detaches it, as a second thread of the
+ * process detached in the stop does, but not once a SIGCONT has ended the
+ * stop. Every PTRACE_EVENT_STOP has the siginfo Linux gives it, SIGTRAP or
+ * the stop signal with that signal | PTRACE_EVENT_STOP << 8 as the code and
+ * the thread's own ID and user ID, and a group stop of a thread attached with
+ * PTRACE_ATTACH has none, so that PTRACE_GETSIGINFO fails with EINVAL. The
+ * waits of these rows are bounded, so a stop or state that never comes fails
+ * the row at once.
  *
  * The program takes no positional argument and runs every row. It prints
  * "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
@@ -103,8 +111,12 @@
  * `copy-watch-result`, `poll-watch-no-stop`, `poll-watch-returns`,
  * `sigwait-watch`, `interrupt-pause-stop`,
  * `listen-interrupt-before-instruction`, `listen-sigcont-event-stop`,
- * `listen-sigcont-delivery`, `tracer-gone-resumed`, `tracer-gone-group-stop`,
- * `tracer-gone-runs-on`, `tp-set-readback` and
+ * `listen-sigcont-siginfo`, `listen-sigcont-delivery`, `tracer-gone-resumed`,
+ * `tracer-gone-group-stop`, `tracer-gone-runs-on`,
+ * `resumed-sigcont-event-stop`, `resumed-sigcont-detach-runs`,
+ * `thread-group-event-siginfo`, `thread-resumed-interrupt`,
+ * `thread-detach-stays-stopped`, `thread-detach-runs-on`,
+ * `attach-group-stop-noinfo`, `tp-set-readback` and
  * `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`,
  * `setoptions-wide-einval`, `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
  * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
@@ -119,6 +131,7 @@
 
 #define _GNU_SOURCE
 #include <elf.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -127,6 +140,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
@@ -192,7 +206,7 @@ static volatile long target = 1234;
 /* The assertions of etude's report in the order they are checked, more than
  * probe_report.h's path holds, and how many are planned and reported. A run
  * of one named row plans none. */
-static const char *rows[112];
+static const char *rows[128];
 static int rows_planned, rows_reported;
 
 /** Add the assertion `id` to the end of the planned rows. */
@@ -971,25 +985,144 @@ static int sleeping(pid_t pid, pid_t t)
     return stat_state(path) == 'S';
 }
 
-/**
- * Wait for process `pid` to reach the state `want` in /proc/PID/stat,
- * looking every 10 ms. Returns the state the wait ends at: `want`; Z when the
- * process ends first; or 0 when its stat file is gone.
- */
-static char await_state(pid_t pid, char want)
-{
-    char path[64];
-    char state;
+/* The looks a bounded wait takes, 10 ms apart, before it judges that the
+ * stop or state it waits for will not come. The kernel makes each at once,
+ * so a thousand looks are far more than any needs, and a missing one fails
+ * its row instead of holding it to the case's bound. */
+#define LOOKS 1000
 
-    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
-    for (;;) {
+/**
+ * Wait for the stat file at `path` to give the state `want`, looking every
+ * 10 ms, at most LOOKS times. Returns the state the wait ends at: `want`; Z
+ * when the thread ends first; 0 when the file is gone; or the last state seen
+ * when the looks run out.
+ */
+static char await_stat(const char *path, char want)
+{
+    char state = 0;
+    int i;
+
+    for (i = 0; i < LOOKS; i++) {
         state = stat_state(path);
         if (state == want || state == 'Z' || state == 0) {
-            return state;
+            break;
         }
         /* interval: a process's state is looked at again every 10 ms */
         usleep(10000);
     }
+    return state;
+}
+
+/**
+ * Wait for process `pid` to reach the state `want` in /proc/PID/stat, as
+ * `await_stat` waits, and return the state the wait ends at.
+ */
+static char await_state(pid_t pid, char want)
+{
+    char path[64];
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    return await_stat(path, want);
+}
+
+/**
+ * Wait for thread `t` of process `pid` to reach the state `want` in
+ * /proc/PID/task/T/stat, as `await_stat` waits, and return the state the
+ * wait ends at.
+ */
+static char await_task(pid_t pid, pid_t t, char want)
+{
+    char path[64];
+
+    snprintf(path, sizeof(path), "/proc/%d/task/%d/stat", (int)pid, (int)t);
+    return await_stat(path, want);
+}
+
+/**
+ * Wait for the child or tracee `t` to change state, looking every 10 ms, at
+ * most LOOKS times, with waitpid's `__WALL`. Returns what waitpid returned,
+ * with the status in `*status`: `t`, -1 with errno, or 0 when the looks ran
+ * out with no change.
+ */
+static pid_t bounded_wait(pid_t t, int *status)
+{
+    pid_t r = 0;
+    int i;
+
+    for (i = 0; i < LOOKS; i++) {
+        r = waitpid(t, status, WNOHANG | __WALL);
+        if (r != 0) {
+            break;
+        }
+        /* interval: a process's state is looked at again every 10 ms */
+        usleep(10000);
+    }
+    return r;
+}
+
+/**
+ * Wait, as `bounded_wait` does, for the thread `t` to stop with `want` as
+ * its status shifted right by 8 bits. Returns 1 when it did, and 0 when it
+ * stopped otherwise, ended, or did not change.
+ */
+static int stops_with(pid_t t, int want)
+{
+    int status = 0;
+
+    return bounded_wait(t, &status) == t && WIFSTOPPED(status) && status >> 8 == want;
+}
+
+/**
+ * Wait, as `bounded_wait` does, for the child `pid` to end, and return 1
+ * when it exited with 0, and 0 otherwise.
+ */
+static int exits_zero(pid_t pid)
+{
+    int status = 0;
+
+    return bounded_wait(pid, &status) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/**
+ * Check the siginfo PTRACE_GETSIGINFO gives for the thread `t` in a
+ * PTRACE_EVENT_STOP with the signal `sig`: the one Linux's do_jobctl_trap
+ * makes through ptrace_do_notify, with `sig`, the code
+ * `sig | PTRACE_EVENT_STOP << 8`, and the thread's own ID and real user ID.
+ * Returns 0, or 1 with what was read instead written to `why`, of `len`
+ * bytes.
+ */
+static int event_info_bad(pid_t t, int sig, char *why, size_t len)
+{
+    siginfo_t info;
+
+    memset(&info, 0, sizeof(info));
+    if (ptrace(PTRACE_GETSIGINFO, t, NULL, &info) != 0) {
+        snprintf(why, len, "PTRACE_GETSIGINFO failed with errno %d", errno);
+        return 1;
+    }
+    if (info.si_signo != sig || info.si_code != (sig | (PTRACE_EVENT_STOP << 8)) ||
+        info.si_pid != t || info.si_uid != getuid()) {
+        snprintf(why, len, "signo %d code %d pid %d uid %d", info.si_signo, info.si_code,
+                 (int)info.si_pid, (int)info.si_uid);
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Check the event stop's siginfo of the thread `t` of the child `pid`, as
+ * `event_info_bad` does. Returns 0, or 1 after the child is killed and the
+ * failure `what`, with what was read, is printed.
+ */
+static int event_info(pid_t pid, pid_t t, int sig, const char *what)
+{
+    char got[96], why[200];
+
+    if (!event_info_bad(t, sig, got, sizeof(got))) {
+        return 0;
+    }
+    snprintf(why, sizeof(why), "%s: %s", what, got);
+    return abandon(pid, why);
 }
 
 /**
@@ -1739,8 +1872,10 @@ static int listen_user_return(void)
  * seized thread of every SIGCONT (ptrace_trap_notify): a child asleep in
  * pause is seized, interrupted and listened to, and the SIGCONT gives a new
  * PTRACE_EVENT_STOP with SIGTRAP and then, resumed, the SIGCONT's own
- * signal-delivery stop. The child is killed either way. Returns 0, or 1
- * after the failure is printed.
+ * signal-delivery stop. Both event stops have the siginfo Linux's
+ * ptrace_do_notify gives them (`event_info`). The waits after the SIGCONT
+ * are bounded, so a stop that never comes fails at once. The child is killed
+ * either way. Returns 0, or 1 after the failure is printed.
  */
 static int listen_sigcont(void)
 {
@@ -1761,15 +1896,18 @@ static int listen_sigcont(void)
                 "the interrupt before the listening SIGCONT") ||
         expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
                     "the interrupt before the listening SIGCONT made no event stop") ||
+        event_info(pid, pid, SIGTRAP, "the siginfo of the interrupt stop") ||
         granted(pid, ptrace(PTRACE_LISTEN, pid, NULL, NULL),
                 "PTRACE_LISTEN of the interrupt stop") ||
         granted(pid, kill(pid, SIGCONT), "the SIGCONT during the listen") ||
-        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
-                    "a SIGCONT outside a group stop did not end PTRACE_LISTEN") ||
+        granted(pid, !stops_with(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8)),
+                "a SIGCONT outside a group stop did not end PTRACE_LISTEN") ||
+        passed() || event_info(pid, pid, SIGTRAP, "the siginfo of the SIGCONT's event stop") ||
         passed() ||
         granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL),
                 "PTRACE_CONT of the SIGCONT's event stop") ||
-        expect_stop(pid, SIGCONT, "the listening SIGCONT made no signal-delivery stop") ||
+        granted(pid, !stops_with(pid, SIGCONT),
+                "the listening SIGCONT made no signal-delivery stop") ||
         passed()) {
         return 1;
     }
@@ -1781,24 +1919,29 @@ static int listen_sigcont(void)
 /**
  * As the tracer of `c`, asleep in a read of an empty pipe: seize it, stop
  * its process with SIGSTOP, let the stop's signal-delivery stop through to
- * the group stop's PTRACE_EVENT_STOP, resume it in the stop, which leaves it
- * to sleep in its read again, and see it asleep. Returns 0, for the caller
- * to end without PTRACE_O_EXITKILL, or the number of the step that failed.
+ * the group stop's PTRACE_EVENT_STOP, check that stop's siginfo
+ * (`event_info_bad`), resume it in the stop, which leaves it to sleep in its
+ * read again, and see it asleep. Every wait is bounded. Returns 0, for the
+ * caller to end without PTRACE_O_EXITKILL, or the number of the step that
+ * failed.
  */
 static int stop_resumer(pid_t c)
 {
-    int status;
+    char why[96];
 
     if (ptrace(PTRACE_SEIZE, c, NULL, NULL) != 0) {
         return 1;
     }
-    if (kill(c, SIGSTOP) != 0 || waitpid(c, &status, 0) != c || !WIFSTOPPED(status) ||
-        status >> 8 != SIGSTOP) {
+    if (kill(c, SIGSTOP) != 0 || !stops_with(c, SIGSTOP)) {
         return 2;
     }
-    if (ptrace(PTRACE_CONT, c, NULL, (void *)(long)SIGSTOP) != 0 || waitpid(c, &status, 0) != c ||
-        !WIFSTOPPED(status) || status >> 8 != (SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
+    if (ptrace(PTRACE_CONT, c, NULL, (void *)(long)SIGSTOP) != 0 ||
+        !stops_with(c, SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
         return 3;
+    }
+    if (event_info_bad(c, SIGSTOP, why, sizeof(why))) {
+        printf("ptracemusl: the group stop's siginfo: %s\n", why);
+        return 5;
     }
     if (ptrace(PTRACE_CONT, c, NULL, NULL) != 0 || await_state(c, 'S') != 'S') {
         return 4;
@@ -1812,8 +1955,8 @@ static int stop_resumer(pid_t c)
  * PTRACE_O_EXITKILL, as Linux's __ptrace_unlink makes the stop pending again
  * and wakes it: a second child traces the first (`stop_resumer`) and ends;
  * the first is then seen stopped (T), and after SIGCONT reads the byte
- * written to it and ends with 0. Returns 0, or 1 after the failure is
- * printed.
+ * written to it and ends with 0. Every wait is bounded. Returns 0, or 1
+ * after the failure is printed.
  */
 static int tracer_gone_stop(void)
 {
@@ -1840,7 +1983,11 @@ static int tracer_gone_stop(void)
         close(p[1]);
         _exit(stop_resumer(c));
     }
-    if (x < 0 || waitpid(x, &status, 0) != x || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (x < 0 || bounded_wait(x, &status) != x || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        if (x > 0) {
+            kill(x, SIGKILL);
+            waitpid(x, NULL, 0);
+        }
         close(p[1]);
         snprintf(why, sizeof(why), "the tracer that resumes in a stop, step %d",
                  x > 0 && WIFEXITED(status) ? WEXITSTATUS(status) : -1);
@@ -1852,13 +1999,272 @@ static int tracer_gone_stop(void)
         return abandon(c, "a sleeper whose tracer ended did not take its group stop");
     }
     held();
-    if (write(p[1], "g", 1) != 1 || kill(c, SIGCONT) != 0 || waitpid(c, &status, 0) != c ||
-        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (write(p[1], "g", 1) != 1 || kill(c, SIGCONT) != 0 || !exits_zero(c)) {
         close(p[1]);
         return abandon(c, "the sleeper did not read its byte and end after SIGCONT");
     }
     held();
     close(p[1]);
+    return 0;
+}
+
+/**
+ * Check that a SIGCONT, which ends the stop of a process whose seized thread
+ * its tracer resumed during the stop, leaves the thread owing nothing once
+ * the tracer detaches it: a child asleep in a read of an empty pipe is
+ * seized and stopped with SIGSTOP; its group stop's PTRACE_EVENT_STOP has
+ * SIGSTOP's siginfo; the tracer resumes it into its read, sends SIGCONT,
+ * which gives a PTRACE_EVENT_STOP with SIGTRAP and its siginfo, as Linux's
+ * ptrace_trap_notify does, and detaches it there; the child then reads the
+ * byte written to it and exits 0, where a stop it still owed would hold it.
+ * Every wait is bounded. Returns 0, or 1 after the failure is printed.
+ */
+static int sigcont_detach(void)
+{
+    int p[2];
+    char ch;
+    pid_t c;
+
+    if (pipe(p) != 0) {
+        return fail("pipe");
+    }
+    c = fork();
+    if (c == 0) {
+        close(p[1]);
+        _exit(read(p[0], &ch, 1) == 1 && ch == 'g' ? 0 : 1);
+    }
+    close(p[0]);
+    if (c < 0) {
+        close(p[1]);
+        return fail("fork of the reader resumed in its stop");
+    }
+    if (granted(c, await_state(c, 'S') != 'S', "the reader was never seen asleep") ||
+        granted(c, ptrace(PTRACE_SEIZE, c, NULL, NULL), "seizing the reader") ||
+        granted(c, kill(c, SIGSTOP), "the SIGSTOP of the reader") ||
+        granted(c, !stops_with(c, SIGSTOP), "the reader's SIGSTOP made no delivery stop") ||
+        granted(c, ptrace(PTRACE_CONT, c, NULL, (void *)(long)SIGSTOP),
+                "PTRACE_CONT of the reader with SIGSTOP") ||
+        granted(c, !stops_with(c, SIGSTOP | (PTRACE_EVENT_STOP << 8)),
+                "the reader's group stop made no event stop") ||
+        event_info(c, c, SIGSTOP, "the siginfo of the reader's group stop") ||
+        granted(c, ptrace(PTRACE_CONT, c, NULL, NULL), "resuming the reader in its stop") ||
+        granted(c, await_state(c, 'S') != 'S', "the resumed reader did not sleep in its read") ||
+        granted(c, kill(c, SIGCONT), "the SIGCONT of the resumed reader") ||
+        granted(c, !stops_with(c, SIGTRAP | (PTRACE_EVENT_STOP << 8)),
+                "the SIGCONT made no event stop of the resumed reader") ||
+        event_info(c, c, SIGTRAP, "the siginfo of the SIGCONT's event stop") || passed() ||
+        granted(c, ptrace(PTRACE_DETACH, c, NULL, NULL), "PTRACE_DETACH after the SIGCONT") ||
+        granted(c, write(p[1], "g", 1) != 1, "the write to the detached reader") ||
+        granted(c, !exits_zero(c), "the reader detached after the SIGCONT did not run on") ||
+        passed()) {
+        close(p[1]);
+        return 1;
+    }
+    close(p[1]);
+    return 0;
+}
+
+/* The read end of the pipe whose byte the second thread of a
+ * `thread_detach_stop` child waits for. */
+static int reader_fd = -1;
+
+/** Read one byte from `reader_fd`, and return non-null when it was 'g'. */
+static void *pipe_reader(void *arg)
+{
+    char ch;
+
+    (void)arg;
+    return read(reader_fd, &ch, 1) == 1 && ch == 'g' ? (void *)pipe_reader : NULL;
+}
+
+/**
+ * Return the ID of the thread of process `pid` other than its first, from
+ * /proc/PID/task, once that thread is asleep, looking every 10 ms at most
+ * LOOKS times; -1 when none is seen asleep.
+ */
+static pid_t second_thread(pid_t pid)
+{
+    char path[64];
+    struct dirent *e;
+    pid_t t = -1;
+    DIR *d;
+    int i;
+
+    snprintf(path, sizeof(path), "/proc/%d/task", (int)pid);
+    for (i = 0; i < LOOKS; i++) {
+        d = opendir(path);
+        while (d && (e = readdir(d)) != NULL) {
+            if (e->d_name[0] != '.' && atoi(e->d_name) != pid) {
+                t = atoi(e->d_name);
+            }
+        }
+        if (d) {
+            closedir(d);
+        }
+        if (t > 0 && sleeping(pid, t) && sleeping(pid, pid)) {
+            return t;
+        }
+        /* interval: the second thread's state is looked at again every 10 ms */
+        usleep(10000);
+    }
+    return -1;
+}
+
+/**
+ * Kill the child `pid`, reap its traced thread `t` and the child, as Linux
+ * reaps a traced thread's end before its leader's, and report `what`.
+ * Returns 1.
+ */
+static int abandon_threads(pid_t pid, pid_t t, const char *what)
+{
+    kill(pid, SIGKILL);
+    if (t > 0) {
+        waitpid(t, NULL, __WALL);
+    }
+    return abandon(pid, what);
+}
+
+/**
+ * The tracer's part of `thread_detach_stop`, for the child `c` whose second
+ * thread `t` sleeps in a read: seize both threads, stop the process with a
+ * SIGSTOP sent to `t`, let its delivery stop through, and check each
+ * thread's group stop PTRACE_EVENT_STOP and its siginfo; resume `t` into
+ * its read and interrupt it there, into a new PTRACE_EVENT_STOP with SIGSTOP;
+ * then detach both, and check that both take the process's stop again (T).
+ * Returns 0, or the description of the step that failed.
+ */
+static const char *threads_detached(pid_t c, pid_t t)
+{
+    char why[96];
+
+    if (ptrace(PTRACE_SEIZE, c, NULL, NULL) != 0 || ptrace(PTRACE_SEIZE, t, NULL, NULL) != 0) {
+        return "seizing both threads";
+    }
+    if (syscall(SYS_tgkill, c, t, SIGSTOP) != 0 || !stops_with(t, SIGSTOP)) {
+        return "the second thread's SIGSTOP made no delivery stop";
+    }
+    if (ptrace(PTRACE_CONT, t, NULL, (void *)(long)SIGSTOP) != 0 ||
+        !stops_with(t, SIGSTOP | (PTRACE_EVENT_STOP << 8)) ||
+        !stops_with(c, SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
+        return "a thread made no event stop for the group stop";
+    }
+    if (event_info_bad(t, SIGSTOP, why, sizeof(why)) ||
+        event_info_bad(c, SIGSTOP, why, sizeof(why))) {
+        printf("ptracemusl: a thread's group stop siginfo: %s\n", why);
+        return "the siginfo of a thread's group stop";
+    }
+    held();
+    if (ptrace(PTRACE_CONT, t, NULL, NULL) != 0 || await_task(c, t, 'S') != 'S' ||
+        ptrace(PTRACE_INTERRUPT, t, NULL, NULL) != 0 ||
+        !stops_with(t, SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
+        return "the second thread, resumed in the stop, made no interrupt stop";
+    }
+    if (event_info_bad(t, SIGSTOP, why, sizeof(why))) {
+        printf("ptracemusl: the interrupt stop's siginfo: %s\n", why);
+        return "the siginfo of the interrupt stop in the group stop";
+    }
+    held();
+    if (ptrace(PTRACE_DETACH, t, NULL, NULL) != 0 || ptrace(PTRACE_DETACH, c, NULL, NULL) != 0) {
+        return "PTRACE_DETACH of both threads";
+    }
+    if (await_task(c, t, 'T') != 'T' || await_task(c, c, 'T') != 'T') {
+        return "a thread detached in its process's stop did not take the stop";
+    }
+    held();
+    return NULL;
+}
+
+/**
+ * Check a multithreaded tracee's detach during its process's stop
+ * (`threads_detached`): a child whose second thread sleeps in a read of an
+ * empty pipe and whose first joins it has both threads seized, stopped,
+ * the second resumed and interrupted in the stop, and both detached, after
+ * which both are stopped (T), as Linux's __ptrace_unlink makes the stop
+ * pending again for each; after SIGCONT the second reads the byte written
+ * to it and the child exits 0. Every wait is bounded. Returns 0, or 1 after
+ * the failure is printed.
+ */
+static int thread_detach_stop(void)
+{
+    int p[2];
+    const char *why;
+    pthread_t th;
+    void *r;
+    pid_t c, t;
+
+    if (pipe(p) != 0) {
+        return fail("pipe");
+    }
+    c = fork();
+    if (c == 0) {
+        close(p[1]);
+        reader_fd = p[0];
+        if (pthread_create(&th, NULL, pipe_reader, NULL) != 0 || pthread_join(th, &r) != 0) {
+            _exit(2);
+        }
+        _exit(r ? 0 : 1);
+    }
+    close(p[0]);
+    if (c < 0) {
+        close(p[1]);
+        return fail("fork of the two-thread reader");
+    }
+    t = second_thread(c);
+    if (t < 0) {
+        close(p[1]);
+        return abandon(c, "the reader's second thread was never seen asleep");
+    }
+    why = threads_detached(c, t);
+    if (why) {
+        close(p[1]);
+        return abandon_threads(c, t, why);
+    }
+    if (write(p[1], "g", 1) != 1 || kill(c, SIGCONT) != 0 || !exits_zero(c)) {
+        close(p[1]);
+        return abandon_threads(c, t, "the detached threads did not run on after SIGCONT");
+    }
+    held();
+    close(p[1]);
+    return 0;
+}
+
+/**
+ * Check that a group stop of a thread attached with PTRACE_ATTACH has no
+ * siginfo, as Linux's do_jobctl_trap gives ptrace_stop none, so that
+ * PTRACE_GETSIGINFO fails there with EINVAL, while the SIGSTOP's delivery
+ * stop before it has SIGSTOP's. Every wait is bounded. The child is killed
+ * either way. Returns 0, or 1 after the failure is printed.
+ */
+static int attach_group_noinfo(void)
+{
+    siginfo_t info;
+    int status;
+    pid_t c = fork();
+
+    if (c == 0) {
+        for (;;) {
+            pause();
+        }
+    }
+    if (c < 0) {
+        return fail("fork for the attached group stop");
+    }
+    memset(&info, 0, sizeof(info));
+    errno = 0;
+    if (granted(c, ptrace(PTRACE_ATTACH, c, NULL, NULL), "PTRACE_ATTACH for the group stop") ||
+        granted(c, !stops_with(c, SIGSTOP), "the attach made no SIGSTOP delivery stop") ||
+        granted(c, ptrace(PTRACE_GETSIGINFO, c, NULL, &info) != 0 || info.si_signo != SIGSTOP,
+                "the siginfo of the attach's SIGSTOP") ||
+        granted(c, ptrace(PTRACE_CONT, c, NULL, (void *)(long)SIGSTOP),
+                "PTRACE_CONT with the attach's SIGSTOP") ||
+        granted(c, !stops_with(c, SIGSTOP), "the attached thread made no group stop") ||
+        granted(c, ptrace(PTRACE_GETSIGINFO, c, NULL, &info) != -1 || errno != EINVAL,
+                "PTRACE_GETSIGINFO at a group stop not seized did not fail with EINVAL") ||
+        passed()) {
+        return 1;
+    }
+    kill(c, SIGKILL);
+    waitpid(c, &status, 0);
     return 0;
 }
 
@@ -2420,7 +2826,8 @@ static int second_rows(void)
     return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
            killed_tracee() || step_system_call() || entry_system_call() || watched_copy() ||
            watched_poll() || watched_sigwait() || listen_user_return() || listen_sigcont() ||
-           tracer_gone_stop() || thread_pointer();
+           tracer_gone_stop() || sigcont_detach() || thread_detach_stop() ||
+           attach_group_noinfo() || thread_pointer();
 }
 
 /* The assertions after `ended-mem-freed`, in the order they are checked. */
@@ -2513,10 +2920,18 @@ static const char *const later_rows[] = {
     "interrupt-pause-stop",
     "listen-interrupt-before-instruction",
     "listen-sigcont-event-stop",
+    "listen-sigcont-siginfo",
     "listen-sigcont-delivery",
     "tracer-gone-resumed",
     "tracer-gone-group-stop",
     "tracer-gone-runs-on",
+    "resumed-sigcont-event-stop",
+    "resumed-sigcont-detach-runs",
+    "thread-group-event-siginfo",
+    "thread-resumed-interrupt",
+    "thread-detach-stays-stopped",
+    "thread-detach-runs-on",
+    "attach-group-stop-noinfo",
 #if defined __x86_64__
     "tp-arch-get-fs",
     "tp-peekuser-fs",
