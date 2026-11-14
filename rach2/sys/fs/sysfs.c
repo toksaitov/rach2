@@ -385,6 +385,13 @@ uint32_t sysfs_node_mode(int handle)
     return n && n->kind == SYSFS_NODE_ATTR ? n->mode : 0;
 }
 
+int sysfs_node_readable(int handle)
+{
+    struct sysfs_node *n = node_of(handle);
+
+    return n && n->kind == SYSFS_NODE_ATTR && n->show && (n->mode & 0444u);
+}
+
 int sysfs_node_writable(int handle)
 {
     struct sysfs_node *n = node_of(handle);

@@ -188,6 +188,10 @@ int sysfs_node_target(int handle);
 /** The permission bits of the attribute `handle`, or 0. */
 uint32_t sysfs_node_mode(int handle);
 
+/** Whether the attribute `handle` can be read: it has a show and a read
+ * bit in its mode. */
+int sysfs_node_readable(int handle);
+
 /** Whether the attribute `handle` takes writes. */
 int sysfs_node_writable(int handle);
 

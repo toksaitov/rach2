@@ -7566,6 +7566,26 @@ static int sysfs_file_may(uint32_t mode, int acc)
            (acc == 0 && cap_holds(current_proc, CAP_DAC_READ_SEARCH));
 }
 
+/**
+ * Whether the caller may open the /sys attribute `attr` of the node `node`
+ * and the key `key` for access `acc` (0 read, 1 write, 2 both, 3 neither),
+ * as Linux judges the open of a kernfs file. A direction the file does not
+ * support is refused first, whatever capabilities the caller holds, as
+ * kernfs_fop_open refuses it after generic_permission has let
+ * CAP_DAC_OVERRIDE pass: a read of a file with no read bit or no show, a
+ * write of one with no write bit or no store. `sysfs_file_may` then judges
+ * the mode: a registered attribute's own, 0644 for a fixed one, whose
+ * directions are a read and those `sysfs_attr_writable` gives it.
+ */
+static int sysfs_attr_may(int node, int key, int attr, int acc)
+{
+    if (acc == 3 || (acc != 1 && node == SYSFS_REG && !sysfs_node_readable(key)) ||
+        (acc != 0 && !sysfs_file_writable(node, key, attr))) {
+        return 0;
+    }
+    return sysfs_file_may(node == SYSFS_REG ? sysfs_node_mode(key) : 0644u, acc);
+}
+
 /** Open raw PCI config, root's with mode 0644 as Linux's, which any caller
  * reads and a write needs `sysfs_file_may` to allow. Each access reaches the
  * current registers, including a read at a nonzero offset. */
@@ -9429,10 +9449,11 @@ static const struct file_ops procfs_sysattr_ops = {procfs_sysattr_read,
 
 /**
  * Open the writable attribute `attr` of the /sys directory `node` of the
- * device `key` for writing, or for reading and writing, as
- * `sysfs_file_may` judges the access against its mode, owned by root: a
- * registered attribute's own (`sysfs_node_mode`), and 0644 for a fixed
- * one's, as `procfs_fd_writable` reports them. Each read and write reaches
+ * device `key` for writing, or for reading and writing, as `sysfs_attr_may`
+ * judges the access: by the directions the file supports, then against its
+ * mode, owned by root, a registered attribute's own (`sysfs_node_mode`) and
+ * 0644 for a fixed one's, as `procfs_fd_writable` reports them. -EACCES
+ * for an access it refuses. Each read and write reaches
  * the value as it is then. The descriptor is a sysfs one, with the node and
  * the attribute in `origin_task` and the key in `origin_pid`, as a snapshot
  * of a /sys file has them.
@@ -9444,7 +9465,7 @@ static int procfs_open_sysattr(int node, int key, int attr, int flags)
     int acc = flags & 3;
     int fd;
 
-    if (acc == 3 || !sysfs_file_may(node == SYSFS_REG ? sysfs_node_mode(key) : 0644u, acc)) {
+    if (!sysfs_attr_may(node, key, attr, acc)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -10140,12 +10161,31 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
 }
 
 /**
+ * Whether a read open of the file `vp` is refused for being a /sys file the
+ * caller may not read: a private DMI attribute to an unprivileged caller,
+ * or a registered attribute that `sysfs_attr_may` refuses, a write-only one
+ * or one whose mode the caller may not read.
+ */
+static int sysfs_read_refused(const struct vpath *vp)
+{
+    if (vp->kind != VNODE_SYS_FILE) {
+        return 0;
+    }
+    if (sysfs_attr_private(vp->sysent, vp->procfile) && !proc_privileged(current_proc)) {
+        return 1;
+    }
+    return vp->sysent == SYSFS_REG && sysfs_node_kind(vp->syskey) == SYSFS_NODE_ATTR &&
+           !sysfs_attr_may(SYSFS_REG, vp->syskey, vp->procfile, 0);
+}
+
+/**
  * The checks of the flags are in the order that gives the errno of a
  * regular file that exists: O_CREAT with O_EXCL is -EEXIST first, then
  * O_DIRECTORY -ENOTDIR, then -EACCES for a file of a process whose mode
  * the caller lacks (`procfs_owner_may_open`). The files a write reaches
  * then go to opens of their own (`procfs_open_own`), and any other write or
- * create is -EACCES.
+ * create is -EACCES, as is a read of a /sys file that
+ * `sysfs_read_refused` refuses.
  *
  * `/proc/disk` is rendered from the record taken at boot, so opening it
  * issues no command to the device. `diskinfo_format` truncates to the size
@@ -10181,8 +10221,7 @@ int procfs_open(const struct vpath *vp, int flags)
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
-    if (vp->kind == VNODE_SYS_FILE && sysfs_attr_private(vp->sysent, vp->procfile) &&
-        !proc_privileged(current_proc)) {
+    if (sysfs_read_refused(vp)) {
         return -EACCES;
     }
 
