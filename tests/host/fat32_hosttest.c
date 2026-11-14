@@ -192,6 +192,31 @@ static uint64_t join_in(int copy, uint64_t lba, uint32_t count, const unsigned c
     return 0;
 }
 
+/* The entry fault: while `entry_fail_armed`, the first write that puts a
+   directory's short entry whose name begins `ENTRY_FAIL_ALIAS` where the
+   device holds no such entry fails with -5 (EIO), once, and counts in
+   `faults_fired`. */
+#define ENTRY_FAIL_NAME  "mkdir fail"
+#define ENTRY_FAIL_ALIAS "MKDIRF"
+static int entry_fail_armed;
+
+/** Whether the write of `count` sectors of `buf` at `lba` puts a new short
+ * entry of a directory whose name begins `ENTRY_FAIL_ALIAS`. */
+static int writes_entry(uint64_t lba, uint32_t count, const unsigned char *buf)
+{
+    uint32_t o;
+
+    for (o = 0; o + 32 <= count * 512; o += 32) {
+        const unsigned char *e = buf + o;
+
+        if (__builtin_memcmp(e, ENTRY_FAIL_ALIAS, 6) == 0 && e[11] == 0x10 &&
+            __builtin_memcmp(image + lba * 512 + o, e, 32) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Writes go to the model, pending until the driver's next barrier.
    `stop_after` is the interruption matrix's crash: the writes after that
    many fail, as a machine stopped after the Nth write would, and what the
@@ -212,6 +237,11 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
 
     if (join_faults > 0 && join_in(join_copy, lba, count, buf) != 0) {
         join_faults--;
+        faults_fired++;
+        return -5;
+    }
+    if (entry_fail_armed && writes_entry(lba, count, buf)) {
+        entry_fail_armed = 0;
         faults_fired++;
         return -5;
     }
@@ -2700,6 +2730,63 @@ static void join_rows(void)
     OPS->unmount(&mnt);
 }
 
+/** The clusters in use in the active FAT of the image: its entries past
+ * the two reserved ones that are not 0. */
+static uint32_t used_clusters(void)
+{
+    uint64_t bps = image[11] | ((uint32_t)image[12] << 8);
+    uint64_t fat = (image[14] | ((uint32_t)image[15] << 8)) * bps;
+    uint32_t sectors = get32(image + 32) ? get32(image + 32) : (image[19] | (image[20] << 8));
+    uint32_t data = (uint32_t)(fat / bps) + image[16] * get32(image + 36);
+    uint32_t clusters = (sectors - data) / image[13];
+    uint32_t c, used = 0;
+
+    for (c = 2; c < clusters + 2; c++) {
+        used += (get32(image + fat + 4 * c) & 0x0fffffffu) != 0;
+    }
+    return used;
+}
+
+/**
+ * A mkdir whose write of the short entry naming its new directory fails.
+ * The failed write through leaves the entry in the cache, dirty, and a later
+ * sync writes it, so the directory's cluster must stay allocated unless the
+ * entries are written free again; the failed write marks the device failed,
+ * so they are not. The mkdir must fail, and once a sync writes the cache's
+ * blocks the check must find no entry that names a free cluster, with more
+ * clusters in use than before.
+ */
+static void mkdir_fail_row(void)
+{
+    uint32_t used;
+    int rc;
+
+    load("--junk");
+    if (mount_rw("") != 0) {
+        check(0, "a writable mount for the failed entry of a mkdir");
+        return;
+    }
+    bcache_sync(&dev);
+    settle();
+    used = used_clusters();
+    faults_fired = 0;
+    entry_fail_armed = 1;
+    rc = OPS->mkdir(&mnt, mnt.root, ENTRY_FAIL_NAME, 0755);
+    entry_fail_armed = 0;
+    check(rc != 0 && faults_fired == 1, "a mkdir whose entry's write fails fails");
+    bcache_sync(&dev);
+    OPS->put(&mnt, mnt.root);
+    OPS->unmount(&mnt);
+    settle();
+    check(mkfatfixture_check(image, IMG_BYTES, 0, check_out, sizeof(check_out)) <= 1,
+          "the independent checker completed");
+    check(findings_allowed(check_out), "and finds no entry that names a free cluster");
+    if (!findings_allowed(check_out)) {
+        printf("fat32_hosttest: the check said:\n%s", check_out);
+    }
+    check(used_clusters() > used, "and the directory's cluster stays allocated");
+}
+
 /* The neighbour of `neighbour_rows`: a file of this many cache blocks. */
 #define NEIGHBOUR_BLOCKS 64u
 
@@ -2980,10 +3067,15 @@ void sched_service_point(void)
  * failures would make a poor status, since an exit status keeps its low eight
  * bits and 256 failures would read as a pass.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
+    if (argc > 1 && streq(argv[1], "--publish-only")) {
+        mkdir_fail_row();
+        printf("fat32_hosttest: %s\n", fails == 0 ? "OK" : "failed");
+        return fails != 0;
+    }
     checker_equivalence();
     well_formed_rows();
     small_and_active_rows();
@@ -2998,6 +3090,7 @@ int main(void)
     durability_rows();
     neighbour_rows();
     join_rows();
+    mkdir_fail_row();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
         fix_passed();

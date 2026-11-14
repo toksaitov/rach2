@@ -198,6 +198,35 @@ static uint32_t rd32(const unsigned char *p)
     return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/* The set fault: while `set_fail_armed`, the first write that puts a name
+   entry, 0xC1, of `SET_FAIL_NAME` where the device holds no such entry
+   fails with -5 (EIO), once, and is counted in `set_failed`. */
+#define SET_FAIL_NAME "mkdir fail"
+static int set_fail_armed;
+static int set_failed;
+
+/** Whether the write of `count` sectors of `buf` at `lba` writes a new name
+ *  entry of `SET_FAIL_NAME`: an entry that begins 0xC1 with that name in
+ *  UTF-16, where the image's entry differs. */
+static int writes_set_name(uint64_t lba, uint32_t count, const unsigned char *buf)
+{
+    static const char name[] = SET_FAIL_NAME;
+    uint32_t o, k;
+
+    for (o = 0; o + 32 <= count * 512; o += 32) {
+        const unsigned char *e = buf + o;
+        int same = e[0] == 0xC1;
+
+        for (k = 0; same && k < sizeof(name) - 1; k++) {
+            same = e[2 + 2 * k] == (unsigned char)name[k] && e[3 + 2 * k] == 0;
+        }
+        if (same && memcmp(image + lba * 512 + o, e, 32) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Whether the write of `count` sectors of `buf` at `lba` joins a chain:
  *  an entry of the active FAT the device answers as the end becomes a
  *  cluster of the heap. */
@@ -239,6 +268,11 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     if (join_fail_armed && joins_chain(lba, count, buf)) {
         join_fail_armed = 0;
         join_failed++;
+        return -5;
+    }
+    if (set_fail_armed && writes_set_name(lba, count, buf)) {
+        set_fail_armed = 0;
+        set_failed++;
         return -5;
     }
     writes_made++;
@@ -1971,6 +2005,39 @@ static void join_fail_rows(void)
 }
 
 /**
+ * A mkdir whose write of the set naming its new directory fails. The failed
+ * write through leaves the set published in the cache, dirty, and a later
+ * sync writes it, so the directory's cluster must stay allocated unless the
+ * set is written retired again; here every write through after the failure
+ * is refused, as on a device whose write failed, so it is not. The mkdir
+ * must fail, and once the unmount drains the cache the walk must find no
+ * set that names a free cluster, with more clusters in use than before.
+ */
+static void mkdir_fail_row(void)
+{
+    uint32_t used;
+    int rc;
+
+    load("--junk");
+    if (mount_rw() != 0) {
+        check(0, "a writable mount for the failed publication of a mkdir");
+        return;
+    }
+    bcache_sync(&dev);
+    settle();
+    used = used_clusters(image);
+    set_failed = 0;
+    set_fail_armed = 1;
+    rc = OPS->mkdir(&mnt, mnt.root, SET_FAIL_NAME, 0755);
+    set_fail_armed = 0;
+    check(set_failed == 1 && rc != 0, "a mkdir whose set's write fails fails");
+    unmount_image();
+    bcache_sync(&dev);
+    check_consistent("and the volume holds no set that names a free cluster", 1);
+    check(used_clusters(image) > used, "and the directory's cluster stays allocated");
+}
+
+/**
  * What an unlink promises of the clusters it frees. exfat.Readme.md has a
  * freed chain's bitmap bits and FAT entries reach the disk at the sync that
  * precedes the return, followed by the device's own flush, so the medium
@@ -2751,10 +2818,16 @@ void sched_service_point(void)
 {}
 
 /** Run every row. Returns 0 when every check passed, and 1 otherwise. */
-int main(void)
+int main(int argc, char **argv)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
+    if (argc > 1 && strcmp(argv[1], "--publish-only") == 0) {
+        fill_pattern();
+        mkdir_fail_row();
+        printf("exfat_hosttest: %s\n", fails == 0 ? "OK" : "failed");
+        return fails != 0;
+    }
     well_formed_rows("", "the held up-case table");
     well_formed_rows("--big-upcase", "the streamed up-case table");
     well_formed_rows("--uncompressed-upcase", "the indexed up-case table");
@@ -2762,6 +2835,7 @@ int main(void)
     external_rows();
     write_rows();
     join_fail_rows();
+    mkdir_fail_row();
     full_set_rows();
     scan_cost_rows();
     durability_rows();
