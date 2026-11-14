@@ -752,24 +752,28 @@ otherwise;
 .Pa tdp_mmu ,
 .Ql Y ;
 .Pa eager_page_split ,
-.Ql N ,
-where Linux's is
 .Ql Y ,
 which when
 .Ql Y
 keeps a slot's mappings, split to 4 KiB pages and write-protected, when
 its dirty log is turned on;
-and
 .Pa ignore_msrs ,
 .Ql N ,
 under which a guest's access to an MSR KVM does not have raises #GP, and
 which when
 .Ql Y
-makes such a read give 0 and such a write do nothing.
-.Pa force_emulation_prefix ,
-.Pa eager_page_split
+makes such a read give 0 and such a write do nothing;
 and
+.Pa report_ignored_msrs ,
+.Ql Y ,
+under which each access that
 .Pa ignore_msrs
+lets succeed is logged, at most ten lines in five seconds.
+.Pa force_emulation_prefix ,
+.Pa eager_page_split ,
+.Pa ignore_msrs
+and
+.Pa report_ignored_msrs
 have mode 0644 and take a write from root: an integer as
 .Xr strtol 3
 reads it with base 0 for the first, and for the others a boolean whose
@@ -796,9 +800,10 @@ and an integer outside the range of an int is
 .Er ERANGE .
 The boot options
 .Cm kvm.force_emulation_prefix= ,
-.Cm kvm.eager_page_split=
-and
+.Cm kvm.eager_page_split= ,
 .Cm kvm.ignore_msrs=
+and
+.Cm kvm.report_ignored_msrs=
 set them at boot.
 The others are read-only.
 Beside it,
