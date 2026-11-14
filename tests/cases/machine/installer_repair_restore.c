@@ -72,18 +72,70 @@ static void change(struct drive *d, struct etude_case *c, const char *password)
     drive_expect(d, "ARCHIVETAMPERED");
 }
 
-/** Update the installed machine from the stick, row 12. */
+/**
+ * Run `rach2-install ARGS` at the recovery shell, with no input, and wait for
+ * the line typed after it, which ends the wait whatever rach2-install did, so
+ * that a run that stops early fails its row at once and not at the case's
+ * gap bound. It must exit with `status` and print each text of `seen`, a list
+ * ended by NULL, in that order.
+ */
+static void install(struct drive *d, const char *args, int status, const char *const seen[])
+{
+    char end[64];
+    uint64_t from = d->at, at;
+
+    drive_send(d, "rach2-install %s < /dev/null; echo INSTALL\"\"STATUS=$?=INSTALL\"\"ENDED", args);
+    drive_expect(d, "=INSTALLENDED");
+    if (d->failed)
+        return;
+    snprintf(end, sizeof(end), "INSTALLSTATUS=%d=INSTALLENDED", status);
+    if (etude_console_find(d->m, end, from, &at) != ETUDE_OK) {
+        d->failed = 1;
+        snprintf(d->why, sizeof(d->why), "rach2-install %.80s did not exit with status %d", args,
+                 status);
+        return;
+    }
+    for (; *seen != NULL; seen++)
+        if (etude_console_find(d->m, *seen, from, &from) != ETUDE_OK) {
+            d->failed = 1;
+            snprintf(d->why, sizeof(d->why), "rach2-install %.50s did not print \"%.90s\"", args,
+                     *seen);
+            return;
+        }
+}
+
+/**
+ * Update the installed machine from the stick, row 12. The disk has no data
+ * partition, and its recovery partition of 16 MiB keeps under 2 MiB free, so
+ * the update refuses before it writes anything for want of room for the copy
+ * of the homes, the 8 MiB file among them; `rach2-install --data` then makes
+ * the data partition after the root, which keeps its 64 MiB, and the update
+ * run again keeps its copy there.
+ */
 static void update(struct drive *d, struct etude_case *c)
 {
+    static const char *const refused[] = {
+        "neither the data partition nor the recovery partition of /dev/disk0 has the",
+        "a copy of the root's homes takes", "nothing was written", NULL};
+    static const char *const room[] = {
+        "made room: /dev/disk0p3 is 64M, and /dev/disk0p6 is the data partition", NULL};
+    static const char *const updated[] = {"copying this machine's accounts",
+                                          "differs from the root's etc/group; the root's is kept",
+                                          "keeping a copy of the root's homes and configuration "
+                                          "in /dev/disk0p6",
+                                          "what reached the root is the image",
+                                          "writing the accounts, the policy and the keys back",
+                                          "the configuration is archived on",
+                                          "armed for one trial boot",
+                                          "updated:",
+                                          NULL};
+    char args[128];
+
     repair_recovery(d, c, "recovery");
-    drive_send(d, "rach2-install --update /m/%s /dev/disk0", REPAIR_ROOT_NAME);
-    drive_expect(d, "copying this machine's accounts");
-    drive_expect(d, "differs from the root's etc/group; the root's is kept");
-    drive_expect(d, "what reached the root is the image");
-    drive_expect(d, "writing the accounts, the policy and the keys back");
-    drive_expect(d, "the configuration is archived on");
-    drive_expect(d, "armed for one trial boot");
-    drive_expect(d, "updated:");
+    snprintf(args, sizeof(args), "--update /m/%s /dev/disk0", REPAIR_ROOT_NAME);
+    install(d, args, 1, refused);
+    install(d, "--data /dev/disk0 64M", 0, room);
+    install(d, args, 0, updated);
     drive_send(d, "%s", "umount /m; echo UPDATE\"\"DONE");
     drive_expect(d, "UPDATEDONE");
 }
@@ -122,6 +174,15 @@ static void updated(struct drive *d, struct etude_case *c, const char *password)
 /** Damage the root's superblock and update from the archive, row 14. */
 static void damage(struct drive *d, struct etude_case *c)
 {
+    static const char *const archived[] = {
+        "the root does not read; taking the configuration saved on the recovery partition",
+        "what reached the root is the image",
+        "writing the accounts, the policy and the keys back",
+        "the configuration is archived on",
+        "updated:",
+        NULL};
+    char args[128];
+
     drive_boot(d, c, "recovery", NULL);
     drive_expect(d, "recovery image");
     drive_expect(d, "# ");
@@ -130,13 +191,8 @@ static void damage(struct drive *d, struct etude_case *c)
     drive_expect(d, "DAMAGED");
     drive_send(d, "%s", "mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED");
     drive_expect(d, "MOUNTED");
-    drive_send(d, "rach2-install --update /m/%s /dev/disk0", REPAIR_ROOT_NAME);
-    drive_expect(d, "the root does not read; taking the configuration saved on the recovery "
-                    "partition");
-    drive_expect(d, "what reached the root is the image");
-    drive_expect(d, "writing the accounts, the policy and the keys back");
-    drive_expect(d, "the configuration is archived on");
-    drive_expect(d, "updated:");
+    snprintf(args, sizeof(args), "--update /m/%s /dev/disk0", REPAIR_ROOT_NAME);
+    install(d, args, 0, archived);
     drive_send(d, "%s", "umount /m; echo ARCHIVE\"\"DONE");
     drive_expect(d, "ARCHIVEDONE");
 }

@@ -43,7 +43,7 @@
     },
     {
       "case_id": "machine.installer-repair.restore",
-      "behavior": "a disk with no boot code and no table is put back through rach2-recover's menu and boots with the image's accounts; changed and updated from the stick it keeps its password, keys and homes and names its archive's difference; with its root damaged it is updated from the archive on its recovery partition",
+      "behavior": "a disk with no boot code and no table is put back through rach2-recover's menu and boots with the image's accounts; changed and updated from the stick it refuses at once, writing nothing, while no volume has room for the copy of its homes, gains a data partition from rach2-install --data, and then keeps its password, keys and homes and names its archive's difference; with its root damaged it is updated from the archive on its recovery partition",
       "units": ["installer-repair", "`tests/system/suites/installer.sh` rows 9 and 10, a destroyed disk is put back through the recovery menu and boots", "`tests/system/suites/installer.sh` rows 11 to 13, a changed machine is updated from the stick and keeps what it had", "`tests/system/suites/installer.sh` rows 14 and 15, a machine whose root does not read is updated from its archive"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -55,7 +55,7 @@
         {"step_id": "restore", "stage": "execute", "does": "boot the stick beside the disk, restore the stick's image to the disk through rach2-recover's menu, and compare the disk's boot code with the image's", "machine": "recovery"},
         {"step_id": "recovered", "stage": "execute", "does": "boot the disk and log in with the image's password", "machine": "installed"},
         {"step_id": "change", "stage": "execute", "does": "change root's password, remove its keys, make an account's home with a file of 8 MiB, mark the motd, and put an archive in the old layout with a group line the root lacks", "machine": "installed"},
-        {"step_id": "update", "stage": "execute", "does": "boot the stick and update the disk from it", "machine": "recovery"},
+        {"step_id": "update", "stage": "execute", "does": "boot the stick, update the disk from it, which refuses for want of room for the copy of the homes, make the data partition with rach2-install --data and update again", "machine": "recovery"},
         {"step_id": "updated", "stage": "execute", "does": "boot the disk and check the password, the keys, the home and the motd", "machine": "installed"},
         {"step_id": "damage", "stage": "execute", "does": "boot the stick, zero the root's superblock and update the disk from it", "machine": "recovery"},
         {"step_id": "archived", "stage": "execute", "does": "boot the disk and check the password, the group file, the homes and the test account's keys, and commit the boot", "machine": "installed"}
@@ -70,7 +70,7 @@
         {"assertion_id": "boot-code", "checks": "the restored disk's first 440 bytes are the image's boot code", "source": "scenario"},
         {"assertion_id": "recovered-boots", "checks": "the restored disk boots to a login that takes the image's root password", "source": "scenario"},
         {"assertion_id": "changed", "checks": "the installed machine takes a new root password, an account's home with a file of 8 MiB and a marked motd, and its recovery partition an archive whose group file has a line the root's lacks", "source": "scenario"},
-        {"assertion_id": "updated", "checks": "the update from the stick copies the machine's accounts, names the archive's difference and keeps the root's group file, writes the image, writes the accounts back, archives the configuration and arms one trial boot", "source": "scenario"},
+        {"assertion_id": "updated", "checks": "with no data partition and under 2 MiB free on the recovery partition, the update exits 1 at once, saying neither volume has room for the copy of the homes and that nothing was written; rach2-install --data keeps the root at 64 MiB and makes the data partition after it; the update run again copies the machine's accounts, names the archive's difference and keeps the root's group file, keeps its copy of the homes on the data partition, writes the image, writes the accounts back, archives the configuration, arms one trial boot and exits 0", "source": "scenario"},
         {"assertion_id": "updated-boots", "checks": "the updated machine refuses the image's password and takes its own, has no keys for root, keeps the home with its owner and its file of 8 MiB, and has the image's motd", "source": "scenario"},
         {"assertion_id": "archive-update", "checks": "with its superblock zeroed the root does not read, and the update takes the configuration from the recovery partition's archive, writes the image and the accounts and archives them again", "source": "scenario"},
         {"assertion_id": "archive-boots", "checks": "the machine updated from the archive takes the password the archive kept, has the group file the last update archived and not the tampered one, has lost the home file the archive did not keep, keeps the test account's keys with their owner and modes, and commits its boot", "source": "scenario"}
