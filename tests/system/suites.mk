@@ -201,12 +201,13 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # the pending fences. The machine case is tests/cases/machine.vgpu.json and
 # has no make target.
 
-# `tests/run vdso`: the vDSO, on two processors: under `rach2.tscreliable` the
-# x86-64 kernel keeps its clock from the TSC and vdsomusl's clock calls make
-# no system call by /proc/stat's count, and under `rach2.notsc` each makes
-# one, as every clock call does on i686, which maps no vDSO. They are the
-# cases of tests/cases/guest.vdso.json, which etude runs, and have no target
-# here.
+# `tests/run vdso`: the vDSO, on two processors: under `rach2.tscreliable`,
+# and with no option on QEMU's emulator, whose TSC the kernel watches as
+# Linux's clocksource watchdog does, the x86-64 kernel reads the TSC and
+# vdsomusl's clock calls make no system call by /proc/stat's count, and under
+# `rach2.notsc` each makes one, as every clock call does on i686, which maps
+# no vDSO. They are the cases of tests/cases/guest.vdso.json, which etude
+# runs, and have no target here.
 # `tests/run ia32`: an i386 and an x86-64 program on the x86-64 kernel exec
 # each other, pass descriptors, share a futex, trace each other, run under
 # each other's seccomp filters and queue signals to each other, each in its
