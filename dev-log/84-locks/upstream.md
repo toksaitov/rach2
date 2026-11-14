@@ -133,3 +133,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the release runs the KVM suite under KVM, as its nested cases require. Its `outer_kvm` row expects the failure already measured under Linux there. The program and the TCG row are unchanged.
 * Status: unreported.
 * Next: propose making the sync timeout optional for emulated and nested hosts, with the external runner's progress watchdog detecting a stopped guest.
+
+## TinyCC's x86-64 code keeps the high half of a 64-bit value cast to unsigned int
+
+* Project: TinyCC 0.9.27, `tcc-0.9.27.tar.bz2`, SHA-256 de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c, `tccgen.c`.
+* Fails: on a 64-bit target `gen_cast` emits nothing for a cast of a 64-bit value to `unsigned int` (the truncation under `PTR_SIZE == 4`, lines 2635-2646, has no 64-bit counterpart) and nothing for the widening of an `unsigned int` to 64 bits (lines 2602-2623 extend only a signed source, with `movslq`), on the assumption that the register's high half is already zero, as after a 32-bit load. A value already in a register, such as the result of a conditional expression, keeps its high half through both: `(unsigned long)(unsigned int)x` gives `x`, and `x == (unsigned int)x` is always true. A value cast straight from memory is right, since the load is 32 bits wide.
+* Found: 2026-11-14, the testing PC, milestone 84, task 84-260y, in `machine.selfbuild.kernel` on x86-64: ipcmusl's `sem-wide-count` row, a semop of 0x100000001 operations, ran one operation on the TinyCC-built kernel, where the GCC-built one returns E2BIG. The kernel's `USER_LEN32` is `(n) == (uint32_t)(n) ? (uint32_t)(n) : 0xFFFFFFFFu`, and x86-64's `SC_ARG` is a conditional expression.
+* Reproduction: compile `int f(unsigned long a, unsigned long b, int c) { return (c ? a : b) == (unsigned)(c ? a : b); }` with the x86-64 TinyCC 0.9.27 and read the object: the two 64-bit values are compared with no `movl r, r` before the `cmp`, and `f(0x100000001, 0, 1)` returns 1. `rach2/sys/ipc/sysv.c`'s `sys_semop`, compiled with `-nostdinc -nostdlib -D__RACH2__ -Isys/acpi -mno-sse`, shows the same.
+* Evidence: the release's failed case `tests.x86_64.20261114T070413Z.2894414.machine.selfbuild.kernel.r0`, in m2's clone on the testing PC, `evidence/probes.1.console`: `IPCMUSL FAIL (a count of operations past 32 bits is not E2BIG, or ran: errno 11)`.
+* Rach2: `vendor/tcc/rach2-x86_64-zero-extend.patch` clears the high half with `movl r, r` at the widening of an `unsigned int` on x86-64.
+* Status: unreported.
+* Next: read TinyCC's mob branch to see whether its reworked `gen_cast` truncates or zero-extends here, and report it with the reproduction if not.

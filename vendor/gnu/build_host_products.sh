@@ -27,7 +27,7 @@ for tool in mcopy mdir minfo mtype mformat mmd mdel mdeltree; do
 done
 
 # Build both TinyCC assemblers for this helper's execution architecture.
-# The tarball and six patches are the same as the installed compiler's.
+# The tarball and seven patches are the same as the installed compiler's.
 tarball=$repo/vendor/tcc/tcc-0.9.27.tar.bz2
 expected=$(sed -n 's/^TARBALL_SHA256="\([0-9a-f]*\)"$/\1/p' vendor/tcc/build_tcc.sh)
 actual=$(build/tools/verify/sha256 "$tarball")
@@ -38,7 +38,7 @@ src=$work/tcc-0.9.27
 cd "$src"
 for name in rach2-output-policy.patch rach2-x86_64-static-link.patch \
     rach2-x86-asm.patch rach2-linker-script.patch \
-    rach2-builtin-offsetof.patch rach2-va-list-trap.patch; do
+    rach2-builtin-offsetof.patch rach2-va-list-trap.patch rach2-x86_64-zero-extend.patch; do
     patch -p1 --batch --forward < "$repo/vendor/tcc/$name"
 done
 case "$RACH2_ARCH" in i686) cpu=i386 ;; *) cpu=x86_64 ;; esac

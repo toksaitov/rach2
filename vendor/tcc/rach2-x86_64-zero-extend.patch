@@ -1,0 +1,33 @@
+Zero-extend an unsigned int that a 64-bit value was cast to when x86-64
+code widens it to 64 bits again.
+
+On a 64-bit target gen_cast emits nothing for a cast of a 64-bit value to
+unsigned int, which leaves the value's high half in its register, and
+nothing for the widening of an unsigned int to 64 bits, which takes the
+high half for zero, as it is after a 32-bit load or a 32-bit operation.
+A value cast down in a register and widened again kept its high half:
+(unsigned long)(unsigned int)x, and x == (unsigned int)x, which the
+kernel's USER_LEN32 tests, came out as x and as true. The widening of an
+unsigned int on x86-64 now clears the high half with movl r, r. The
+registers RC_INT names are rax, rcx and rdx, which need no REX prefix.
+
+--- a/tccgen.c
++++ b/tccgen.c
+@@ -2618,7 +2618,17 @@
+ #else
+ #error
+ #endif
++                    }
++#if defined(TCC_TARGET_X86_64)
++                    else {
++                        /* x86_64 specific: movl r, r clears the high half,
++                           which a 64-bit value cast to unsigned int in this
++                           register still holds */
++                        int r = gv(RC_INT);
++                        o(0x89);
++                        o(0xc0 + (REG_VALUE(r) << 3) + REG_VALUE(r));
+                     }
++#endif
+                 }
+ #endif
+             } else if (dbt == VT_BOOL) {

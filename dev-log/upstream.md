@@ -167,3 +167,4 @@ The bullets state only what the records show. A fact the records do not hold, su
 | QEMU's TCG checks INT3 against SVM's INTn intercept | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-checks-int3-against-svms-intn-intercept) |
 | libdrm's modetest reports DIRTYFB's error in place of SETCRTC's | libdrm 2.4.124 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#libdrms-modetest-reports-dirtyfbs-error-in-place-of-setcrtcs) |
 | Linux's memslot_perf_test ends a progressing guest on an alarm | Linux 6.12.115 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#linuxs-memslot_perf_test-ends-a-progressing-guest-on-an-alarm) |
+| TinyCC's x86-64 code keeps the high half of a 64-bit value cast to unsigned int | TinyCC 0.9.27 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#tinyccs-x86-64-code-keeps-the-high-half-of-a-64-bit-value-cast-to-unsigned-int) |

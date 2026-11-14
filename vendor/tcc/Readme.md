@@ -8,7 +8,7 @@ The source is the release tarball from <https://download.savannah.gnu.org/releas
 
 ## Local changes
 
-`build_tcc.sh` applies six patches, in this order. Each patch begins with a description of its change; what follows is a summary.
+`build_tcc.sh` applies seven patches, in this order. Each patch begins with a description of its change; what follows is a summary.
 
 ### Output policy
 
@@ -34,6 +34,10 @@ The source is the release tarball from <https://download.savannah.gnu.org/releas
 
 [`rach2-va-list-trap.patch`](rach2-va-list-trap.patch) makes the x86-64 runtime's `__va_arg` execute `__builtin_trap()` on an argument class it does not know, where it called `abort()`, which a kernel linked against the runtime does not have.
 
+### x86-64 zero extension
+
+[`rach2-x86_64-zero-extend.patch`](rach2-x86_64-zero-extend.patch) makes the x86-64 compiler clear the high half of an `unsigned int` it widens to 64 bits, with `movl r, r`. TinyCC 0.9.27 emits nothing for a cast of a 64-bit value to `unsigned int`, which leaves the high half in the register, and nothing for the widening, which takes that half for zero: `x == (uint32_t)x` with `x` an `unsigned long` in a register came out true, and the kernel's `USER_LEN32` passed a semop count of 0x100000001 as 1. The i386 compiler is unchanged.
+
 ## Building
 
 ```
@@ -45,7 +49,7 @@ The root `make` builds TinyCC after musl. An i686 build extracts into `vendor/tc
 
 [`build_tcc.sh`](build_tcc.sh):
 
-1. Checks the tarball's SHA-256, extracts it, applies the six patches with `patch --batch --forward`, and checks that a line of each patch is in the source.
+1. Checks the tarball's SHA-256, extracts it, applies the seven patches with `patch --batch --forward`, and checks that a line of each patch is in the source.
 2. Writes `rach2-gcc`, which runs `muslgcc`, and `rach2-ar` and `rach2-strip`, which run the architecture's cross tools, into `rach2-toolchain/` of the extracted tree, and gives configure that prefix with `--cross-prefix`. Without a cross prefix configure would run a test program it built, which the host cannot run.
 3. Configures with `--cpu=i386` or `--cpu=x86_64`, since configure would otherwise take the host's processor; with `--config-musl`, which leaves out the bounds-checking runtime that needs glibc's allocator hooks, so `tcc -b` is not available; and with the guest paths `--tccdir=/lib/tcc`, `--sysincludepaths=/lib/tcc/include:/include`, `--libpaths=/lib` and `--crtprefix=/lib`.
 4. Sets `TARGETOS=Linux` and removes `CONFIG_OSX` in `config.mak`, which configure writes on macOS, and checks `ARCH`, the absence of `CONFIG_OSX` and the guest paths in `config.mak` and `config.h`.
