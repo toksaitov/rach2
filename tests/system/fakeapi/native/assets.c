@@ -194,7 +194,17 @@ static int verify_curl(const struct value *entries)
     return request != 6 || socket_entry != 6;
 }
 
-static int worker_prompt(const char *script_path, const struct value *steps,
+/**
+ * Say whether the first request of a worker session carries its prompt.
+ *
+ * The expected text is tools/flow/worker.txt with its placeholders filled in
+ * as worker.sh fills them: @ISSUE@ by the session's task, 901 or 902,
+ * @BRANCH@ by milestone/01-worker and @BOARD@ by the board.sh under the
+ * row's state directory, /tmp/agents/work/ROW/state. Returns 1 when the first
+ * user message holds that text, 0 when it does not or the template cannot be
+ * read, and 1 for a step that starts no session.
+ */
+static int worker_prompt(const char *script_path, const char *row, const struct value *steps,
                          const struct value *step, const struct value *body)
 {
     const char *root_end = strstr(script_path, "/tests/system/");
@@ -202,7 +212,7 @@ static int worker_prompt(const char *script_path, const struct value *steps,
     struct buffer filename = {0}, prompt = {0}, actual = {0};
     struct value *expected;
     FILE *f;
-    char block[4096], issue[32];
+    char block[4096], issue[32], board[300];
     size_t n;
     unsigned session = 0;
     if (!messages || !messages->child)
@@ -239,6 +249,8 @@ static int worker_prompt(const char *script_path, const struct value *steps,
     snprintf(issue, sizeof(issue), "%u", session == 1 ? 901U : 902U);
     replace(expected, "@ISSUE@", issue);
     replace(expected, "@BRANCH@", "milestone/01-worker");
+    snprintf(board, sizeof(board), "/tmp/agents/work/%s/state/run/board.sh", row);
+    replace(expected, "@BOARD@", board);
     content = get(messages->child, "content");
     if (content && content->type == 's')
         putsb(&actual, text(content));
@@ -332,7 +344,7 @@ static int audit_request(struct audit *a, const struct value *e)
                                             : "plain";
     why = protocol_check(protocol, step, &r);
     if (!why && !strcmp(row, "worker-session") && !get(step, "results") &&
-        !worker_prompt(script_path, steps, step, r.json))
+        !worker_prompt(script_path, row, steps, step, r.json))
         why = "the first request lacks its worker prompt";
     destroy(r.json);
     if (why) {
