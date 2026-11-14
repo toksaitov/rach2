@@ -380,10 +380,6 @@ struct process {
      * onto a processor, from which the tick measures its slice
      * (`sched_tick`); 0 before its first switch. */
     uint64_t slice_ns;
-    /* The monotonic clock in nanoseconds when `schedule` last switched it
-     * off a processor, by which an idle processor leaves a thread whose
-     * cache is still warm where it is (`sched_steal`); 0 before. */
-    uint64_t ran_ns;
     unsigned long pcount;
     uint8_t run_queued;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),

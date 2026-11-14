@@ -199,8 +199,7 @@ void sched_idle_loop(void);
 /**
  * Kick a processor whose tick is stopped in its idle wait
  * (`percpu.tick_stopped`) when this processor's queue holds a thread it may
- * take, one whose cache here has gone cold (`sched_find_cold`), so that it
- * steals it (`sched_steal`) at once, as Linux's busy
+ * take, so that it steals it (`sched_steal`) at once, as Linux's busy
  * processor kicks an idle one into NO_HZ balancing (nohz_balancer_kick,
  * kernel/sched/fair.c:12426-12540): a processor that ticked took such a
  * thread at its next tick. The kick claims the idle task's request
