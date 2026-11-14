@@ -21,7 +21,9 @@
  * mouse's protocol or the Synaptics touchpad's (`synaptics_init`), its
  * event device, and its reporting, with the handler on vector 44. Returns
  * 0 once reporting is on, -1 with the reason in the log when the
- * controller or the mouse does not answer. Turns interrupts off for the
+ * controller or the mouse does not answer; a timeout of the configuration
+ * byte's read or write also fails the controller's setup (`i8042_fail`),
+ * for the caller to give up the keyboard too. Turns interrupts off for the
  * handshake and on again before it returns, whatever they were. Called
  * once, at boot, from `platform_mouse_init`.
  */

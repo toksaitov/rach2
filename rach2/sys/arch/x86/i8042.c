@@ -6,6 +6,7 @@
 
 #include "i8042.h"
 #include "portio.h"
+#include "../../klog.h"
 #include "../../lib/kctypes.h"
 #include "../../lib/kstring.h"
 #ifndef RACH2_HOSTTEST
@@ -17,12 +18,9 @@
  * row agree, Linux's in i8042_controller_init. */
 #define PS2_CONFIG_READS 10
 
-/* The configuration byte a WRITE_CONFIG still owes the controller, or -1:
- * the command went out and the controller had not taken it when the wait
- * ran out, so it may take it late and then take the next byte written to
- * the data port for its configuration. Every later write gives it this
- * byte first, so that no command or keyboard byte becomes it. */
-static int config_owed = -1;
+/* The controller's setup failed (`i8042_fail`): no port is bound and
+ * nothing more is written to it. */
+static int setup_failed;
 
 uint32_t ps2_wait_begin(void)
 {
@@ -73,13 +71,6 @@ int ps2_wait_output(void)
 
 int ps2_send_command(uint8_t cmd)
 {
-    if (config_owed >= 0) {
-        if (ps2_wait_input() < 0) {
-            return -1;
-        }
-        outb(PS2_DATA_PORT, (uint8_t)config_owed);
-        config_owed = -1;
-    }
     if (ps2_wait_input() < 0) {
         return -1;
     }
@@ -89,11 +80,7 @@ int ps2_send_command(uint8_t cmd)
 
 int ps2_write_config(uint8_t config)
 {
-    if (ps2_send_command(PS2_CMD_WRITE_CONFIG) < 0) {
-        return -1;
-    }
-    if (ps2_wait_input() < 0) {
-        config_owed = config;
+    if (ps2_send_command(PS2_CMD_WRITE_CONFIG) < 0 || ps2_wait_input() < 0) {
         return -1;
     }
     outb(PS2_DATA_PORT, config);
@@ -124,7 +111,8 @@ static void ps2_drain(void)
 }
 
 /** Send READ_CONFIG until two answers in a row agree, 50 us apart: the
- * byte, or -1 when a read fails or ten pass without agreement. */
+ * byte, or -1 when a read fails, logged as Linux's
+ * i8042_controller_init logs it, or ten pass without agreement. */
 static int read_config_agreed(void)
 {
     int config[2];
@@ -132,6 +120,7 @@ static int read_config_agreed(void)
 
     do {
         if (n >= PS2_CONFIG_READS) {
+            klog(KLOG_ERR, "i8042", "setup: failed: unable to get stable CTR read");
             return -1;
         }
 #ifndef RACH2_HOSTTEST
@@ -141,47 +130,50 @@ static int read_config_agreed(void)
 #endif
         config[n % 2] = read_config_once();
         if (config[n++ % 2] < 0) {
+            klog(KLOG_ERR, "i8042", "setup: failed: can't read CTR while initializing i8042");
             return -1;
         }
     } while (n < 2 || config[0] != config[1]);
     return config[0];
 }
 
-/** Wait until the controller has finished the commands written before:
- * write `config` back with WRITE_CONFIG, as Linux's i8042_controller_init
- * writes its CTR before i8042_flush, and wait for the controller to take
- * the command and the byte. The controller runs its commands in order, so
- * once it takes WRITE_CONFIG the last READ_CONFIG's answer is in the output
- * buffer. Without a byte to write, wait for it to take the last command.
- * Returns 0, or -1 when WRITE_CONFIG fails, as Linux's i8042_command fails
- * and its setup with it. A failed read leaves kbd_init taking translation
- * to be on, so a byte left owed is the agreed one with translation on. */
-static int ps2_sync(int config)
-{
-    if (config >= 0 && ps2_write_config((uint8_t)config) < 0) {
-        if (config_owed >= 0) {
-            config_owed |= PS2_CONFIG_TRANSLATE;
-        }
-        return -1;
-    }
-    (void)ps2_wait_input();
-    return 0;
-}
-
 int ps2_read_config(void)
 {
     int config;
 
+    if (setup_failed) {
+        return -1;
+    }
     if (inb(PS2_STATUS_PORT) == 0xFF) {
+        klog(KLOG_INFO, "i8042", "setup: failed: no controller found");
+        i8042_fail();
         return -1;
     }
     ps2_drain();
     config = read_config_agreed();
-    if (ps2_sync(config) < 0) {
+    /* The controller runs its commands in order: once it has taken the
+     * write-back's command and byte, it has answered every READ_CONFIG. */
+    if (config >= 0 && ps2_write_config((uint8_t)config) < 0) {
+        klog(KLOG_ERR, "i8042", "setup: failed: can't write CTR while initializing i8042");
         config = -1;
+    } else {
+        (void)ps2_wait_input();
     }
     ps2_drain();
+    if (config < 0) {
+        i8042_fail();
+    }
     return config;
+}
+
+void i8042_fail(void)
+{
+    setup_failed = 1;
+}
+
+int i8042_failed(void)
+{
+    return setup_failed;
 }
 
 int ps2_kbd_write(uint8_t byte)
@@ -189,11 +181,6 @@ int ps2_kbd_write(uint8_t byte)
     uint8_t status = inb(PS2_STATUS_PORT);
 
     if (status == 0xFF || (status & PS2_STATUS_INPUT_FULL) != 0) {
-        return -1;
-    }
-    if (config_owed >= 0) {
-        outb(PS2_DATA_PORT, (uint8_t)config_owed);
-        config_owed = -1;
         return -1;
     }
     outb(PS2_DATA_PORT, byte);

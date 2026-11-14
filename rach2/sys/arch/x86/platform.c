@@ -514,7 +514,9 @@ static void ps2_waiting(uint8_t vector, int aux)
 void platform_keyboard_init(void)
 {
     kbd_init();
-    ps2_waiting(IRQ_VECTOR(1), 0);
+    if (!i8042_failed()) {
+        ps2_waiting(IRQ_VECTOR(1), 0);
+    }
 }
 
 void platform_mouse_init(void)
@@ -523,11 +525,17 @@ void platform_mouse_init(void)
         klog(KLOG_INFO, "mouse", "skipped: rach2.nomouse");
         return;
     }
+    if (i8042_failed()) {
+        klog(KLOG_INFO, "mouse", "skipped: the i8042's setup failed");
+        return;
+    }
     klog(KLOG_DEBUG, "mouse", "started");
     if (init_mouse() == 0) {
         input_mouse_found();
         ps2_waiting(IRQ_VECTOR(12), 1);
         klog(KLOG_DEBUG, "mouse", "ready");
+    } else if (i8042_failed()) {
+        kbd_stop();
     } else {
         klog(KLOG_WARN, "mouse", "absent: nothing answered the probe");
     }

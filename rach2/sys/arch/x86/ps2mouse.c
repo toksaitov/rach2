@@ -1708,7 +1708,11 @@ static void connect_device(void)
  * and nothing said, which on a laptop without a serial port leaves nothing
  * to read. A failed reset is tolerated because some emulators do not answer
  * it, and so is a refused default; a failed port enable, configuration byte
- * or reporting enable fails the bring-up.
+ * or reporting enable fails the bring-up. A timeout of the configuration
+ * byte's read or write fails the controller's setup too (`i8042_fail`), as
+ * Linux's i8042_probe fails when i8042_enable_aux_port cannot write the
+ * CTR: a READ_CONFIG or WRITE_CONFIG the controller takes late would answer
+ * IRQ 1 or take the next byte written for its configuration.
  */
 int init_mouse(void)
 {
@@ -1738,11 +1742,13 @@ int init_mouse(void)
 
     if (ps2_send_command(PS2_CMD_READ_CONFIG) < 0) {
         klog(KLOG_WARN, "mouse", "the configuration byte would not read");
+        i8042_fail();
         arch_irq_enable();
         return -1;
     }
     if (ps2_wait_output() < 0) {
         klog(KLOG_WARN, "mouse", "reading the configuration byte timed out");
+        i8042_fail();
         arch_irq_enable();
         return -1;
     }
@@ -1753,6 +1759,7 @@ int init_mouse(void)
 
     if (ps2_write_config(config) < 0) {
         klog(KLOG_WARN, "mouse", "the configuration byte would not write");
+        i8042_fail();
         arch_irq_enable();
         return -1;
     }

@@ -102,10 +102,12 @@ void platform_firmware_start(void);
 void platform_threads_start(void);
 
 /** Take keystrokes from the platform's own keyboard, which a USB keyboard
- * joins later. */
+ * joins later; on a PC, none when the 8042's setup fails. */
 void platform_keyboard_init(void);
 
-/** Probe the platform's own mouse, unless `rach2.nomouse` says not to. */
+/** Probe the platform's own mouse, unless `rach2.nomouse` says not to; on a
+ * PC, none when the 8042's setup failed, and a mouse whose setup fails the
+ * 8042's gives up the keyboard too. */
 void platform_mouse_init(void);
 
 /** Have the platform's mouse start its next packet afresh, when the queue is

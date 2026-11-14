@@ -13,14 +13,25 @@
  * Register the keyboard's event device, take its interrupt, vector 33, and
  * unmask IRQ 1, which `init_pic` left masked. The controller's configuration
  * byte is read first, with interrupts off, for its translation, which on a
- * portable chassis has every probe of the keyboard skip GETID, and which a
- * failed read takes to be on, the firmware's default; the bytes waiting
- * before and after that read are drained by it, before IRQ 1 is unmasked.
- * With no event device free serio0 is left without a driver. Called once,
- * at boot, from `platform_keyboard_init`, after the firmware's tables are
- * found.
+ * portable chassis has every probe of the keyboard skip GETID; the bytes
+ * waiting before and after that read are drained by it, before IRQ 1 is
+ * unmasked. When the read fails, the controller's setup has failed, as
+ * Linux's i8042_controller_init fails it: `kbd_stop` binds nothing and
+ * leaves IRQ 1 and IRQ 12 masked. With no event device free serio0 is left
+ * without a driver. Called once, at boot, from `platform_keyboard_init`,
+ * after the firmware's tables are found.
  */
 void kbd_init(void);
+
+/**
+ * Give up the 8042's ports after its setup failed (`i8042_failed`): mask
+ * IRQ 1 and IRQ 12, unbind atkbd from serio0, its event device gone when
+ * `kbd_init` bound one, and stop the LED command, the probe and the
+ * handler, so that nothing more is written to the controller, as Linux's
+ * i8042_probe, failing, registers no port. Called from `kbd_init`, and from
+ * `platform_mouse_init` when the mouse's setup failed the controller.
+ */
+void kbd_stop(void);
 
 /**
  * Move the LED command one step, from the tick (`platform_tick`): start

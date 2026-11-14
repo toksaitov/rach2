@@ -95,6 +95,7 @@ static uint16_t keymap[INPUT_SET1_KEYMAP];
  * probe's.
  */
 static struct {
+    int off;        /* the i8042's setup failed: the port is given up */
     int unbound;    /* atkbd left serio0 after a failed reconnect */
     int translated; /* the controller translates set 2 into set 1 */
     int portable;   /* the firmware calls the machine portable */
@@ -534,6 +535,9 @@ static void kbd_irq(isr_params_t *params)
     uint32_t now;
 
     (void)params;
+    if (kbd.off) {
+        return;
+    }
     status = inb(PS2_STATUS_PORT);
     if (!(status & PS2_STATUS_OUTPUT_FULL) || (status & PS2_STATUS_MOUSE_DATA)) {
         return;
@@ -568,12 +572,11 @@ void kbd_init(void)
     int config = ps2_read_config();
 
     kirq_restore(flags);
-    /* A failed read keeps translation, the firmware's default, so that a
-     * portable machine never sends GETID. */
-    kbd.translated = config < 0 || (config & PS2_CONFIG_TRANSLATE) != 0;
     if (config < 0) {
-        klog(KLOG_WARN, "kbd", "configuration: unreadable: taking translation as on");
+        kbd_stop();
+        return;
     }
+    kbd.translated = (config & PS2_CONFIG_TRANSLATE) != 0;
     kbd.portable = portable_chassis();
     if (kbd_bind() < 0) {
         klog(KLOG_WARN, "kbd", "no event device is free: unbound");
@@ -582,6 +585,27 @@ void kbd_init(void)
     pic_unmask_irq(1);
     leds.shown = -1;
     leds.ready = 1;
+}
+
+void kbd_stop(void)
+{
+    uint32_t flags = kirq_save();
+
+    pic_mask_irq(1);
+    pic_mask_irq(12);
+    if (!kbd.off) {
+        klog(KLOG_WARN, "kbd", "stopped: the i8042's setup failed: unbound");
+    }
+    if (leds.ready && !kbd.unbound) {
+        input_keyboard_detach(&ps2_keyboard);
+    }
+    evdev_sysfs_serio_unbound(0, 1);
+    kbd.off = 1;
+    kbd.unbound = 1;
+    kbd.job = JOB_NONE;
+    kbd.due = 0;
+    leds.ready = 0;
+    kirq_restore(flags);
 }
 
 /** Return the next service deadline for the stopped idle tick. */
