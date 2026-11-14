@@ -671,6 +671,45 @@ static void serial_record(const struct klog_record *r)
         }
         serial_out(r->text[i]);
     }
+    serial_flush();
+}
+
+void klog_replay(void)
+{
+    char chunk[128];
+    uint32_t at = 0, n, i;
+    int how = report_get(0);
+    /* Where a record's byte is: 0 at its start, 1 in its `<level>`, 2
+     * after that, 3 in its timestamp, 4 at the space after that, 5 in
+     * its body. */
+    int state = 0;
+
+    at = klog_clamp(at);
+    while ((n = klog_read_from(chunk, sizeof(chunk), &at)) > 0) {
+        for (i = 0; i < n; i++) {
+            char c = chunk[i];
+
+            if (c == '\n') {
+                serial_out('\r');
+                serial_out('\n');
+                state = 0;
+                continue;
+            }
+            if (state == 3 || state == 4) {
+                state = state == 3 ? (c == ']' ? 4 : 3) : 5;
+                continue;
+            }
+            if (state == 2 && c == '[' && !show_time) {
+                state = 3;
+                continue;
+            }
+            state = state == 0 ? (c == '<' ? 1 : 5) : state == 1 ? (c == '>' ? 2 : 1) : 5;
+            serial_out(c);
+        }
+    }
+    serial_line_open = 0;
+    serial_flush();
+    report_put(how);
 }
 
 /**
@@ -1414,9 +1453,13 @@ void console_write_begin(void)
 
 void console_write_end(void)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags;
     unsigned int me = arch_cpu_id();
-    int held = console_held[me] > 0u;
+    int held;
+
+    serial_flush();
+    flags = kirq_save();
+    held = console_held[me] > 0u;
 
     textcon_release();
     if (held) {
@@ -1573,6 +1616,9 @@ void console_putc(char c)
         serial_out('\r');
     }
     serial_out(c);
+    if (console_writing == 0) {
+        serial_flush();
+    }
     console_byte_end(took);
 }
 
@@ -1589,6 +1635,9 @@ void console_putc_raw(char c)
     serial_line_open = c != '\n';
     k_putc(c);
     serial_out(c);
+    if (console_writing == 0) {
+        serial_flush();
+    }
     console_byte_end(took);
 }
 

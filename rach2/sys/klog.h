@@ -122,6 +122,18 @@ void klog_flush(void);
 int klog_kept(void);
 
 /**
+ * Write every record the ring holds to the serial console, each as it is
+ * written there when it is raised: after its level, without its timestamp
+ * while `klog_time` is off, each newline as a carriage return and a
+ * newline. A line that takes the console over once its device is found
+ * (`serial_line_attach`) is given the log this way, as Linux's
+ * register_console gives a new console the buffer (CON_PRINTBUFFER). The
+ * caller has interrupts off and has let every record raised so far go out
+ * (`klog_flush`), so that none is written twice.
+ */
+void klog_replay(void);
+
+/**
  * Write out the records kept for later from a processor that may not write
  * klog's shared state, outside an NMI, once the hard-lockup detector has
  * reported the holder of the big lock locked up: that one would never

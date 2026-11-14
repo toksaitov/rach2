@@ -172,6 +172,10 @@ void serial_out(char c)
     }
 }
 
+/** Nothing: the recorder's port sends each byte as it is written. */
+void serial_flush(void)
+{}
+
 /** Whether netconsole has a device: `net_on`. */
 int netconsole_is_enabled(void)
 {

@@ -85,6 +85,10 @@ void serial_out(char c)
     }
 }
 
+/** Nothing: the recorded port sends each byte as it is written. */
+void serial_flush(void)
+{}
+
 /** Drop a byte of netconsole: `dest_net` takes what `dest_serial` takes. */
 void netconsole_putc(char c)
 {
