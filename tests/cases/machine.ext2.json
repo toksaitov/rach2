@@ -17,7 +17,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "probes-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
@@ -64,7 +64,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "probes-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
@@ -111,7 +111,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "probes-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
@@ -158,7 +158,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "probes-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
@@ -205,7 +205,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "probes-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
@@ -251,7 +251,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image beside a copy of the fixture disk, run ext2probe links from the debug shell, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["fixture-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "fixture-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"},
@@ -280,7 +280,7 @@
         {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "disk", "reason": "the case mounts the fixture from the machine's IDE disk and counts that disk's commands; tests/native/probes.cases runs ext2probe natively on the fixture through a loop device"}
+      "native": {"plan": "none", "class": "disk", "reason": "the case mounts the fixture from the machine's virtio disk and counts that disk's commands; tests/native/probes.cases runs ext2probe natively on the fixture through a loop device"}
     },
     {
       "case_id": "machine.ext2.cost",
@@ -295,7 +295,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image beside a copy of the fixture disk, run ext2probe cost from the debug shell, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["fixture-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "fixture-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"},
@@ -323,7 +323,7 @@
         {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "disk", "reason": "the case mounts the fixture from the machine's IDE disk and counts that disk's commands; tests/native/probes.cases runs ext2probe natively on the fixture through a loop device"}
+      "native": {"plan": "none", "class": "disk", "reason": "the case mounts the fixture from the machine's virtio disk and counts that disk's commands; tests/native/probes.cases runs ext2probe natively on the fixture through a loop device"}
     },
     {
       "case_id": "machine.ext2.names",
@@ -338,7 +338,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image beside a copy of the fixture disk, run ext2probe names from the debug shell, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["fixture-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "fixture-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"},
@@ -381,7 +381,7 @@
         {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image beside a copy of the fixture disk, run ext2probe lookup from the debug shell, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["fixture-disk"], "cpu": "max", "processors": 1, "memory_bytes": 402653184, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "fixture-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 402653184, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"},
@@ -424,7 +424,7 @@
         {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, read disk-commands from /proc/disk around fifty rewrites of /root/cost.bin and their sync, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "writes", "checks": "every write and the sync succeed and the file stays 4096 bytes, which the guest's shell judges", "source": "scenario"},
@@ -467,7 +467,7 @@
         {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, read disk-commands from /proc/disk around fifty appends to /root/grow.bin and their sync, and end the machine"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "writes", "checks": "every append and the sync succeed and the file is 204800 bytes, which the guest's shell judges", "source": "scenario"},
@@ -510,7 +510,7 @@
         {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, run /modeprobe /tmp and end the machine"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "said-ok", "checks": "modeprobe says MODEPROBE OK and never MODEPROBE FAIL", "source": "scenario"}
@@ -552,7 +552,7 @@
         {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, run /lchownmusl /tmp and end the machine"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "said-ok", "checks": "lchownmusl says LCHOWNMUSL OK (links) and never LCHOWNMUSL FAIL", "source": "scenario"}
@@ -594,7 +594,7 @@
         {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, run /direntmusl /tmp and end the machine"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "said-ok", "checks": "direntmusl says DIRENTMUSL OK (links) and never DIRENTMUSL FAIL", "source": "scenario"}
@@ -636,7 +636,7 @@
         {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, run /zombieprobe in /tmp, power the machine off and end it"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "said-ok", "checks": "zombieprobe says ZOMBIEPROBE OK and never ZOMBIEPROBE FAIL", "source": "scenario"},
@@ -679,7 +679,7 @@
         {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk with rach2.blocklag=3, log in as root at the console, start three shell loops that each write a file of /root and sync, wait until the third has written, power the machine off with poweroff -f and end it"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.blocklag=3"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.blocklag=3"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "writing", "checks": "the third writer's file has its number before the poweroff is typed, so all three loops run", "source": "scenario"},
@@ -724,7 +724,7 @@
         {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk with rach2.blocklag=3 and twelve of the lag's five-second deadline periods, its flushes kept from the host, log in as root at the console, run /lockwaitprobe lag and end the machine"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "flush": false}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.blocklag=3", "rach2.lagperiods=12"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio", "flush": false}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.blocklag=3", "rach2.lagperiods=12"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "said-ok", "checks": "lockwaitprobe says LOCKWAITPROBE OK and never LOCKWAITPROBE FAIL: the slow read waited for at least 32 of the lag device's answers, the child's rounds on the other file were at least as many, and /proc/fs/lockwait has its mount line", "source": "scenario"}
@@ -769,7 +769,7 @@
         {"step_id": "check", "stage": "execute", "does": "run e2fsck -fn on the second partition of the copy, in the image helper machine"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}, {"name": "image-transfer", "bus": "ide", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
@@ -826,9 +826,9 @@
         {"step_id": "clean", "stage": "execute", "machine": "root", "does": "boot the repaired copy, read /proc/mounts and /root/again, and power off"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "look", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "repair", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk", {"name": "root-copy", "bus": "ide", "size_bytes": 136314880}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.fsck"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "look", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": [{"name": "root-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "repair", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": [{"name": "root-disk", "bus": "virtio"}, {"name": "root-copy", "bus": "virtio", "size_bytes": 136314880}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.fsck"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}, {"name": "image-transfer", "bus": "ide", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
@@ -966,7 +966,10 @@
             "kernel": "kernel",
             "initrd": "test-image",
             "disks": [
-              "fixture-disk"
+              {
+                "name": "fixture-disk",
+                "bus": "virtio"
+              }
             ],
             "cpu": "max",
             "processors": 1,
