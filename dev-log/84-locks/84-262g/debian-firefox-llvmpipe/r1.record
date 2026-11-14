@@ -1,0 +1,552 @@
+runner webgl
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 4
+memory_kib 8138032
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.00 0.00 0.00
+processes start 157
+kernel_before cpu  127 0 428 1632 147 0 22 0 0 0
+kernel_before cpu0 27 0 169 353 39 0 7 0 0 0
+kernel_before cpu1 29 0 83 432 30 0 8 0 0 0
+kernel_before cpu2 46 0 76 425 37 0 2 0 0 0
+kernel_before cpu3 23 0 99 420 39 0 4 0 0 0
+kernel_before intr 46163 29 9 0 0 378 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 928 639 562 676 0 1121 572 0 0 5 0 38 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 29280
+kernel_before btime 1794655643
+kernel_before processes 835
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 12262 0 765 4 1120 0 0 29 2393 0 7951
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=8138032
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case webgl firefox 2.0.1 chunk 1824 of 1 pages
+warmup 0
+repetitions 1, and each page that does not pass once more
+suite /tmp/webgl
+omitted none
+browser Mozilla Firefox 153.6.0esr
+switches --new-instance --no-remote --kiosk MOZ_ENABLE_WAYLAND=1
+prefs user_pref("browser.shell.checkDefaultBrowser", false);
+prefs user_pref("browser.startup.homepage_override.mstone", "ignore");
+prefs user_pref("browser.aboutwelcome.enabled", false);
+prefs user_pref("browser.sessionstore.resume_from_crash", false);
+prefs user_pref("toolkit.startup.max_resumed_crashes", -1);
+prefs user_pref("datareporting.policy.dataSubmissionEnabled", false);
+prefs user_pref("datareporting.healthreport.uploadEnabled", false);
+prefs user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
+prefs user_pref("app.update.auto", false);
+prefs user_pref("dom.max_script_run_time", 0);
+prefs user_pref("dom.max_chrome_script_run_time", 0);
+prefs user_pref("webgl.force-enabled", true);
+prefs user_pref("media.autoplay.default", 0);
+compositor weston 14.0.2 headless pixman kiosk no-config
+list 2.0.1 2865 pages sha256 9d7bddb435701ca417201b55f82c6b9f88933fbd175a3b346ddc4165917a380b
+renderer webgl llvmpipe, or similar; WebGL 1.0; unmasked llvmpipe, or similar; vendor Mesa
+renderer webgl2 llvmpipe, or similar; WebGL 2.0; unmasked llvmpipe, or similar; vendor Mesa
+list fetches failed 0
+load end 1.38 0.30 0.10
+busy 45.7%
+kernel_after cpu  1411 0 994 3893 208 0 127 2 0 0
+kernel_after cpu0 285 0 322 979 57 0 30 0 0 0
+kernel_after cpu1 320 0 224 994 52 0 57 0 0 0
+kernel_after cpu2 450 0 216 916 47 0 21 0 0 0
+kernel_after cpu3 354 0 232 1004 51 0 17 0 0 0
+kernel_after intr 146795 29 9 0 0 378 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 0 0 0 1879 2017 1085 1456 0 6316 3555 0 0 7 0 92 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 237890
+kernel_after btime 1794655643
+kernel_after processes 1875
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 41979 0 2585 13 11110 0 0 37 8570 0 19664
+guest profile virtio-vga
+guest firmware seabios
+guest accelerator kvm
+guest cpu host,invtsc=on
+guest cpus 4
+guest memory_mib 8192
+guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+guest snapshot 20261108T000000Z
+guest claim debian-ref:toksaitov-m:2043959:1794655606
+guest host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+guest host_load 11.89 13.04 13.08
+guest host_claims 16
+guest host_ledger etude-ledger 1
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:ports
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261114T104520Z.1673571:ports
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 1673571 5412642 1
+guest host_ledger account toksaitov-a
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261114T104520Z.1673571:machine.virgl.webgl-chromium-webgl1-00:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 1673571 5412642 1
+guest host_ledger account toksaitov-a
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger process keeper 1795538 5488025 1
+guest host_ledger process case 1795539 5488025 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.virgl.webgl-firefox-webgl2-11:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger process keeper 2042651 5658286 1
+guest host_ledger process case 2042662 5658287 1
+guest host_ledger end
+guest host_ledger claim tests.i686.20261114T112403Z.2034052:ports
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2034052 5644968 1
+guest host_ledger account toksaitov-v
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim tests.i686.20261114T112403Z.2034052:machine.wifi.robust:i686:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2034052 5644968 1
+guest host_ledger account toksaitov-v
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 1073741824
+guest host_ledger resource disk_bytes 268435456
+guest host_ledger process keeper 2038350 5653669 1
+guest host_ledger process case 2038351 5653669 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:host.host.checkers:none:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 1000
+guest host_ledger resource memory_bytes 6442450944
+guest host_ledger resource disk_bytes 15032385536
+guest host_ledger process keeper 2038582 5654775 1
+guest host_ledger process case 2038588 5654776 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:host.host.etude:none:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 1000
+guest host_ledger resource memory_bytes 6442450944
+guest host_ledger resource disk_bytes 15032385536
+guest host_ledger process keeper 2038617 5654779 1
+guest host_ledger process case 2038625 5654779 1
+guest host_ledger process child 2038944 5654820 1
+guest host_ledger process child 2038946 5654820 1
+guest host_ledger process child 2038963 5654824 1
+guest host_ledger process child 2038964 5654824 1
+guest host_ledger process child 2038975 5654830 1
+guest host_ledger process child 2038977 5654830 1
+guest host_ledger process child 2038991 5654832 1
+guest host_ledger process child 2038992 5654832 1
+guest host_ledger process child 2039289 5654868 1
+guest host_ledger process child 2039291 5654868 1
+guest host_ledger process child 2040282 5655098 1
+guest host_ledger process child 2040284 5655098 1
+guest host_ledger process child 2040290 5655156 1
+guest host_ledger process child 2040291 5655156 1
+guest host_ledger process child 2040397 5655276 1
+guest host_ledger process child 2040398 5655276 1
+guest host_ledger process child 2040438 5655305 1
+guest host_ledger process child 2040439 5655305 1
+guest host_ledger process child 2040523 5655376 1
+guest host_ledger process child 2040524 5655377 1
+guest host_ledger process child 2040628 5655417 1
+guest host_ledger process child 2040629 5655417 1
+guest host_ledger process child 2040712 5655436 1
+guest host_ledger process child 2040713 5655436 1
+guest host_ledger process child 2040742 5655446 1
+guest host_ledger process child 2040744 5655446 1
+guest host_ledger process child 2040751 5655449 1
+guest host_ledger process child 2040752 5655449 1
+guest host_ledger process child 2041070 5655819 1
+guest host_ledger process child 2041071 5655819 1
+guest host_ledger process child 2041094 5655894 1
+guest host_ledger process child 2041095 5655894 1
+guest host_ledger process child 2041592 5656016 1
+guest host_ledger process child 2041593 5656016 1
+guest host_ledger process child 2041678 5656068 1
+guest host_ledger process child 2041679 5656068 1
+guest host_ledger process child 2041886 5656699 1
+guest host_ledger process child 2041887 5656699 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:host.host.fuzz:none:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 1000
+guest host_ledger resource memory_bytes 6442450944
+guest host_ledger resource disk_bytes 15032385536
+guest host_ledger process keeper 2038660 5654782 1
+guest host_ledger process case 2038673 5654783 1
+guest host_ledger process child 2038794 5654795 1
+guest host_ledger process child 2038799 5654796 1
+guest host_ledger process child 2038820 5654797 1
+guest host_ledger process child 2038833 5654801 1
+guest host_ledger process child 2038835 5654802 1
+guest host_ledger process child 2038847 5654807 1
+guest host_ledger process child 2038870 5654811 1
+guest host_ledger process child 2038880 5654812 1
+guest host_ledger process child 2038892 5654814 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:host.host.scripts_tools:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 2952790016
+guest host_ledger resource disk_bytes 13421772800
+guest host_ledger process keeper 2038728 5654787 1
+guest host_ledger process case 2038735 5654788 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.ext2stop.writes:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 1000
+guest host_ledger resource memory_bytes 1610612736
+guest host_ledger resource disk_bytes 402653184
+guest host_ledger process keeper 2038773 5654793 1
+guest host_ledger process case 2038776 5654793 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.exfat.volume:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 2147483648
+guest host_ledger resource disk_bytes 13958643712
+guest host_ledger process keeper 2045244 5664927 1
+guest host_ledger process case 2045245 5664928 1
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-m:2043959:1794655606
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2043959 5661456 1
+guest host_ledger account toksaitov-m
+guest host_ledger state running
+guest host_ledger resource cpu_millis 4000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 2045268 5664975 1
+guest host_ledger process case 2045269 5664975 1
+guest host_ledger end
+guest host_ledger claim launch:564fde46bc06c7b1d72e727acf5c62ef
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2044513 5662952 1
+guest host_ledger account toksaitov-s
+guest host_ledger state running
+guest host_ledger resource memory_bytes 5368709120
+guest host_ledger process keeper 2044528 5662956 1
+guest host_ledger process case 2044529 5662956 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.fatwrite.volume:i686:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 2147483648
+guest host_ledger resource disk_bytes 13958643712
+guest host_ledger process keeper 2045246 5664931 1
+guest host_ledger process case 2045247 5664932 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.fatwrite.volume:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 343804 2846571 1
+guest host_ledger account ghrunner
+guest host_ledger state blocked
+guest host_ledger ticket 7
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 2147483648
+guest host_ledger resource disk_bytes 13958643712
+guest host_ledger end
+guest env GRAPHICS_CLASS=conformance
+guest env GRAPHICS_CPUS=4
+guest env GRAPHICS_MEMORY_KIB=8138032
+guest env LP_NUM_THREADS=0
+guest env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+guest env MESA_SHADER_CACHE_FILES=0
+guest env GRAPHICS_DONE=1
+guest env XVFB=-noreset
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 12.25 13.07 13.09
+host_claims 17
+host_ledger etude-ledger 1
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261114T104520Z.1673571:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 1673571 5412642 1
+host_ledger account toksaitov-a
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261114T104520Z.1673571:machine.virgl.webgl-chromium-webgl1-00:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 1673571 5412642 1
+host_ledger account toksaitov-a
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 1795538 5488025 1
+host_ledger process case 1795539 5488025 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.virgl.webgl-firefox-webgl2-11:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 2042651 5658286 1
+host_ledger process case 2042662 5658287 1
+host_ledger end
+host_ledger claim tests.i686.20261114T112403Z.2034052:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 2034052 5644968 1
+host_ledger account toksaitov-v
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.i686.20261114T112403Z.2034052:machine.wifi.robust:i686:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 2034052 5644968 1
+host_ledger account toksaitov-v
+host_ledger state running
+host_ledger resource cpu_millis 2000
+host_ledger resource memory_bytes 1073741824
+host_ledger resource disk_bytes 268435456
+host_ledger process keeper 2038350 5653669 1
+host_ledger process case 2038351 5653669 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:host.host.checkers:none:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 1000
+host_ledger resource memory_bytes 6442450944
+host_ledger resource disk_bytes 15032385536
+host_ledger process keeper 2038582 5654775 1
+host_ledger process case 2038588 5654776 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:host.host.etude:none:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 1000
+host_ledger resource memory_bytes 6442450944
+host_ledger resource disk_bytes 15032385536
+host_ledger process keeper 2038617 5654779 1
+host_ledger process case 2038625 5654779 1
+host_ledger process child 2038944 5654820 1
+host_ledger process child 2038946 5654820 1
+host_ledger process child 2038963 5654824 1
+host_ledger process child 2038964 5654824 1
+host_ledger process child 2038975 5654830 1
+host_ledger process child 2038977 5654830 1
+host_ledger process child 2038991 5654832 1
+host_ledger process child 2038992 5654832 1
+host_ledger process child 2039289 5654868 1
+host_ledger process child 2039291 5654868 1
+host_ledger process child 2040282 5655098 1
+host_ledger process child 2040284 5655098 1
+host_ledger process child 2040290 5655156 1
+host_ledger process child 2040291 5655156 1
+host_ledger process child 2040397 5655276 1
+host_ledger process child 2040398 5655276 1
+host_ledger process child 2040438 5655305 1
+host_ledger process child 2040439 5655305 1
+host_ledger process child 2040523 5655376 1
+host_ledger process child 2040524 5655377 1
+host_ledger process child 2040628 5655417 1
+host_ledger process child 2040629 5655417 1
+host_ledger process child 2040712 5655436 1
+host_ledger process child 2040713 5655436 1
+host_ledger process child 2040742 5655446 1
+host_ledger process child 2040744 5655446 1
+host_ledger process child 2040751 5655449 1
+host_ledger process child 2040752 5655449 1
+host_ledger process child 2041070 5655819 1
+host_ledger process child 2041071 5655819 1
+host_ledger process child 2041094 5655894 1
+host_ledger process child 2041095 5655894 1
+host_ledger process child 2041592 5656016 1
+host_ledger process child 2041593 5656016 1
+host_ledger process child 2041678 5656068 1
+host_ledger process child 2041679 5656068 1
+host_ledger process child 2041886 5656699 1
+host_ledger process child 2041887 5656699 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:host.host.fuzz:none:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 1000
+host_ledger resource memory_bytes 6442450944
+host_ledger resource disk_bytes 15032385536
+host_ledger process keeper 2038660 5654782 1
+host_ledger process case 2038673 5654783 1
+host_ledger process child 2038794 5654795 1
+host_ledger process child 2038799 5654796 1
+host_ledger process child 2038820 5654797 1
+host_ledger process child 2038833 5654801 1
+host_ledger process child 2038835 5654802 1
+host_ledger process child 2038847 5654807 1
+host_ledger process child 2038870 5654811 1
+host_ledger process child 2038880 5654812 1
+host_ledger process child 2038892 5654814 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:host.host.scripts_tools:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 2000
+host_ledger resource memory_bytes 2952790016
+host_ledger resource disk_bytes 13421772800
+host_ledger process keeper 2038728 5654787 1
+host_ledger process case 2038735 5654788 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.ext2stop.writes:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 1000
+host_ledger resource memory_bytes 1610612736
+host_ledger resource disk_bytes 402653184
+host_ledger process keeper 2038773 5654793 1
+host_ledger process case 2038776 5654793 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.exfat.volume:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 2000
+host_ledger resource memory_bytes 2147483648
+host_ledger resource disk_bytes 13958643712
+host_ledger process keeper 2045244 5664927 1
+host_ledger process case 2045245 5664928 1
+host_ledger end
+host_ledger claim launch:564fde46bc06c7b1d72e727acf5c62ef
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 2044513 5662952 1
+host_ledger account toksaitov-s
+host_ledger state running
+host_ledger resource memory_bytes 5368709120
+host_ledger process keeper 2044528 5662956 1
+host_ledger process case 2044529 5662956 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.fatwrite.volume:i686:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state running
+host_ledger resource cpu_millis 2000
+host_ledger resource memory_bytes 2147483648
+host_ledger resource disk_bytes 13958643712
+host_ledger process keeper 2045246 5664931 1
+host_ledger process case 2045247 5664932 1
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.fatwrite.volume:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state blocked
+host_ledger ticket 7
+host_ledger resource cpu_millis 2000
+host_ledger resource memory_bytes 2147483648
+host_ledger resource disk_bytes 13958643712
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.gnu.curl:i686:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state reserved
+host_ledger resource cpu_millis 1000
+host_ledger resource memory_bytes 2415919104
+host_ledger resource disk_bytes 1073741824
+host_ledger end
+host_ledger claim tests.i686-x86_64.20261114T040011Z.343804:machine.gnu.curl:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 343804 2846571 1
+host_ledger account ghrunner
+host_ledger state reserved
+host_ledger resource cpu_millis 1000
+host_ledger resource memory_bytes 2415919104
+host_ledger resource disk_bytes 1073741824
+host_ledger end
