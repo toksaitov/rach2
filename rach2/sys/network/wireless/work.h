@@ -253,6 +253,12 @@ void wlan_scan_set_home(struct wlan_scan *scan, const struct wlan_channel *chann
  * now; the abort that has to follow ends it. Worker only. */
 void wlan_scan_go_home(struct wlan_scan *scan);
 
+/** Tell the scan that another caller has tuned the radio. A probe request
+ * waiting out its probe delay would go out on the new channel, so it is
+ * dropped, and its channel is tuned again and waits a fresh delay before it
+ * is probed. Worker only. */
+void wlan_scan_retuned(struct wlan_scan *scan);
+
 /** The registry's `wlan_radio_scan_done` calls it for the radio's scan: it
  * records the outcome and queues the completion. IRQ-safe under the kernel
  * lock; a completion with no hardware scan running is ignored. */

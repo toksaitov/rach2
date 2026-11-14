@@ -319,6 +319,8 @@ static int auth_begin(struct wlan_mlme *m, const struct wlan_mlme_auth *req)
     else if (m->state != WLAN_STA_NONE)
         drop(m);
     err = m->radio->ops->config(m->radio, ch, 0);
+    if (m->scan)
+        wlan_scan_retuned(m->scan);
     if (err)
         return err;
     m->bss = req->bss;
@@ -936,8 +938,11 @@ static void csa_switch(struct wlan_mlme *m)
     m->bss->frequency = ch->frequency;
     if (m->scan)
         wlan_scan_set_home(m->scan, ch, m->scan->home_filters);
-    if (!m->scan || m->scan->state != WLAN_SCAN_SOFTWARE || m->scan->away != WLAN_SCAN_AWAY)
+    if (!m->scan || m->scan->state != WLAN_SCAN_SOFTWARE || m->scan->away != WLAN_SCAN_AWAY) {
         (void)m->radio->ops->config(m->radio, ch, m->scan ? m->scan->home_filters : 0);
+        if (m->scan)
+            wlan_scan_retuned(m->scan);
+    }
     m->ops->moved(m->wlan, ch);
     if (m->csa_hold) {
         m->csa_hold = 0;

@@ -1685,6 +1685,12 @@ void wlan_scan_set_home(struct wlan_scan *s, const struct wlan_channel *channel,
     s->home = channel;
 }
 
+/** The scan has no probe waiting here. */
+void wlan_scan_retuned(struct wlan_scan *s)
+{
+    (void)s;
+}
+
 /** Take a management frame; the rows script the AP's answers. */
 static int mon_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, unsigned flags)
 {

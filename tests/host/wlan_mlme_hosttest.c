@@ -130,6 +130,12 @@ void wlan_scan_set_home(struct wlan_scan *s, const struct wlan_channel *channel,
     s->home = channel;
 }
 
+/** The scan has no probe waiting here. */
+void wlan_scan_retuned(struct wlan_scan *s)
+{
+    (void)s;
+}
+
 /** Keep the event and a copy of its borrowed frame. */
 static void iface_event(struct wlan *wlan, const struct wlan_event *event)
 {

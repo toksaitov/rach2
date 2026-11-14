@@ -91,6 +91,7 @@ static struct {
     struct wlan_tx_info info;
 } txs[MAX_TX];
 static unsigned n_tx;
+static unsigned n_tx_astray; /* frames sent for a channel the radio is not on */
 static int hw_result = -EOPNOTSUPP;
 static struct wlan_scan_request hw_request;
 static unsigned hw_starts, hw_cancels;
@@ -153,6 +154,7 @@ static int radio_tx(struct wlan_radio *r, const uint8_t *frame, unsigned len,
         txs[n_tx].info = *info;
     }
     n_tx++;
+    n_tx_astray += !tuned || tuned->frequency != info->frequency;
     ap_heard_probe(frame, len, info->frequency);
     return 0;
 }
@@ -220,7 +222,7 @@ static void setup(const struct wlan_radio_ops *ops)
     wlan_scan_attach(&scan, (struct wlan *)&radio, record_event, &radio, &band, &table);
     tuned = 0;
     tuned_filters = 0;
-    n_configs = n_tx = n_events = 0;
+    n_configs = n_tx = n_tx_astray = n_events = 0;
     hw_starts = hw_cancels = 0;
     hw_result = -EOPNOTSUPP;
 }
@@ -937,6 +939,79 @@ static void away_abort(void)
     CHECK(ask_log[ask_n - 1] == 'B');
 }
 
+/**
+ * A step that comes late is judged by the next channel's whole time, its
+ * probe delay and its dwell, as ieee80211_scan_get_channel_time counts it:
+ * at trip tick AWAY - PROBE - ACTIVE the second channel still fits, and a
+ * tick later the trip ends, though the dwell alone would still fit.
+ */
+static void away_late(void)
+{
+    uint64_t left;
+    unsigned at, fit = WLAN_SCAN_AWAY_TICKS - WLAN_SCAN_PROBE_TICKS - WLAN_SCAN_ACTIVE_TICKS;
+
+    CHECK(fit >= WLAN_SCAN_PROBE_TICKS + WLAN_SCAN_ACTIVE_TICKS);
+    CHECK(fit + 1 + WLAN_SCAN_ACTIVE_TICKS <= WLAN_SCAN_AWAY_TICKS);
+    for (at = fit; at <= fit + 1; ++at) {
+        away_start(0, 1, 0);
+        advance(1);
+        CHECK(same(ask_log, "SZT", 4) && configs[0] == 2412);
+        left = now;
+        advance(WLAN_SCAN_PROBE_TICKS);
+        CHECK(n_tx == 1);
+        now = left + at - 1;
+        advance(1);
+        if (at == fit) {
+            CHECK(same(ask_log, "SZTT", 5) && n_configs == 2 && configs[1] == 2417);
+        } else {
+            CHECK(same(ask_log, "SZTHB", 6) && tuned == &band.channels[5]);
+        }
+        advance(13 * WLAN_SCAN_HOME_TICKS + 2000);
+        CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && scan.channels_tuned == 13);
+        CHECK(n_tx == 11 && n_tx_astray == 0 && away_well_formed());
+    }
+}
+
+/**
+ * A retune by another caller during a probe delay, as a channel switch makes
+ * while the home channel is scanned from home, drops the probe: none goes
+ * out on the new channel, and the old one is tuned again, on a trip now, and
+ * probed after a fresh delay.
+ */
+static void away_retune(void)
+{
+    struct wlan_scan_request r;
+
+    setup(&soft_ops);
+    wlan_scan_set_home(&scan, &band.channels[5], WLAN_FILTER_CONTROL);
+    scan.ask = ask;
+    ask_busy = ask_waiting = ask_stuck = 0;
+    ask_idle = ask_told = 1;
+    ask_n = 0;
+    ask_log[0] = 0;
+    make_request(&r, 1, "");
+    r.frequencies[0] = 2437;
+    r.n_frequencies = 1;
+    CHECK(wlan_scan_start(&scan, &r) == 0);
+    advance(1);
+    CHECK(same(ask_log, "O", 2) && n_tx == 0);
+    advance(WLAN_SCAN_PROBE_TICKS - 2);
+    wlan_scan_set_home(&scan, &band.channels[10], WLAN_FILTER_CONTROL);
+    CHECK(radio.ops->config(&radio, &band.channels[10], WLAN_FILTER_CONTROL) == 0);
+    wlan_scan_retuned(&scan);
+    advance(2);
+    CHECK(n_tx == 0 && same(ask_log, "OHSZT", 6) && tuned == &band.channels[5]);
+    advance(WLAN_SCAN_PROBE_TICKS - 1);
+    CHECK(n_tx == 0);
+    advance(1);
+    CHECK(n_tx == 1 && n_tx_astray == 0 && txs[0].info.frequency == 2437);
+    advance(WLAN_SCAN_ACTIVE_TICKS);
+    CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && !wlan_scan_running(&scan));
+    CHECK(same(ask_log, "OHSZTHB", 8) && scan.channels_tuned == 2);
+    CHECK(tuned == &band.channels[10] && tuned_filters == WLAN_FILTER_CONTROL);
+    CHECK(away_well_formed());
+}
+
 /** Requests the scan refuses, each leaving it idle. */
 static void refusals(void)
 {
@@ -1194,6 +1269,8 @@ int main(void)
     away_refused();
     away_tell();
     away_abort();
+    away_late();
+    away_retune();
     refusals();
     hardware_scan();
     bss_fields();

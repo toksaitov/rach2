@@ -41,10 +41,10 @@ static void dwells(void)
 }
 
 /** An associated station's trips keep within 31 ticks, judged by the
- * channel's time after its probes, as mac80211's decision does: two active
- * channels, 14 ticks apart, since a third, tuned at 28 ticks, would end at
- * 35; a passive channel goes alone or after active ones that leave room for
- * its 27 ticks, eight trips in all. */
+ * channel's whole time, its probe delay and its dwell, as mac80211's
+ * decision does: two active channels, 14 ticks apart, since a third, tuned at
+ * 28 ticks, would end at 42; a passive channel goes alone or after active
+ * ones that leave room for its 27 ticks, eight trips in all. */
 static void trips(void)
 {
     unsigned i, n = 0;
@@ -65,6 +65,8 @@ int main(void)
     CHECK(TICK_HZ == 250);
     dwells();
     trips();
+    away_late();
+    away_retune();
     wlan_bss_destroy(&table);
     printf("wlan_scan250_hosttest: %s\n", failures ? "failed" : "ok");
     return failures != 0;

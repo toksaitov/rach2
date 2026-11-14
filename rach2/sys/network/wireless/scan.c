@@ -218,12 +218,19 @@ static void scan_begin(struct wlan_scan *scan)
     scan_queue_step(scan, 0);
 }
 
-/** The ticks to stay on `channel`. */
-static uint64_t scan_dwell(const struct wlan_scan *scan, const struct wlan_channel *channel)
+/** Whether the scan probes on `channel`. */
+static int scan_active(const struct wlan_scan *scan, const struct wlan_channel *channel)
 {
-    int active = scan->request.n_ssids && !(channel->flags & WLAN_CHANNEL_PASSIVE);
+    return scan->request.n_ssids && !(channel->flags & WLAN_CHANNEL_PASSIVE);
+}
 
-    return active ? WLAN_SCAN_ACTIVE_TICKS : WLAN_SCAN_PASSIVE_TICKS;
+/** The ticks the scan spends on `channel` from its tuning: on an active one
+ * the probe delay and the dwell after the probes, as mac80211's
+ * ieee80211_scan_get_channel_time counts them. */
+static uint64_t scan_channel_time(const struct wlan_scan *scan, const struct wlan_channel *channel)
+{
+    return scan_active(scan, channel) ? WLAN_SCAN_PROBE_TICKS + WLAN_SCAN_ACTIVE_TICKS
+                                      : WLAN_SCAN_PASSIVE_TICKS;
 }
 
 /** Give a departure up: a stay at home, or the end of the scan once
@@ -296,7 +303,8 @@ static int scan_leave(struct wlan_scan *scan)
 
 /** Decide, for an associated station, whether the scan may go on to
  * `channel` now, as ieee80211_scan_state_decision does: a trip ends when
- * frames wait or the next channel would take it past WLAN_SCAN_AWAY_TICKS.
+ * frames wait or the next channel's time, its probe delay included, would
+ * take it past WLAN_SCAN_AWAY_TICKS.
  * The home channel, reached from home, is scanned there with the queue
  * running and the AP not told, as mac80211 scans its operating channel
  * alone: the radio's receive filter changes and its channel does not.
@@ -314,7 +322,8 @@ static int scan_may_tune(struct wlan_scan *scan, const struct wlan_channel *chan
     if (scan->away != WLAN_SCAN_AWAY) {
         return scan_leave(scan);
     }
-    if (scan_ask(scan, WLAN_SCAN_ASK_WAITING) || tick_count() + scan_dwell(scan, channel) > limit) {
+    if (scan_ask(scan, WLAN_SCAN_ASK_WAITING) ||
+        tick_count() + scan_channel_time(scan, channel) > limit) {
         (void)scan_return(scan);
         scan_queue_step(scan, WLAN_SCAN_HOME_TICKS);
         return 0;
@@ -331,7 +340,6 @@ static void scan_step(struct wlan_work *work)
     struct wlan_scan *scan = ((struct wlan_scan_work *)work)->scan;
     struct wlan_radio *radio = scan->radio;
     const struct wlan_channel *channel;
-    int active;
 
     if (scan->start_pending) {
         scan_begin(scan);
@@ -363,13 +371,12 @@ static void scan_step(struct wlan_work *work)
         return;
     }
     scan->channels_tuned++;
-    active = scan->request.n_ssids && !(channel->flags & WLAN_CHANNEL_PASSIVE);
-    if (active) {
+    if (scan_active(scan, channel)) {
         scan->probe_due = 1;
         scan_queue_step(scan, WLAN_SCAN_PROBE_TICKS);
         return;
     }
-    scan_queue_step(scan, scan_dwell(scan, channel));
+    scan_queue_step(scan, WLAN_SCAN_PASSIVE_TICKS);
 }
 
 /** The radio's scan has ended, or an abort asks to cancel it. Worker only. */
@@ -541,6 +548,14 @@ void wlan_scan_set_home(struct wlan_scan *scan, const struct wlan_channel *chann
 void wlan_scan_go_home(struct wlan_scan *scan)
 {
     (void)scan_return(scan);
+}
+
+void wlan_scan_retuned(struct wlan_scan *scan)
+{
+    if (scan->probe_due) {
+        scan->probe_due = 0;
+        scan->next--;
+    }
 }
 
 void wlan_scan_hw_done(struct wlan_scan *scan, int aborted)
