@@ -34,8 +34,23 @@ see
 .Pa /dev/tty
 opens the caller's controlling terminal, either the console or a
 pseudoterminal slave.
-A caller without a controlling terminal gets
+A caller without a controlling terminal, one that gave it up with
+.Dv TIOCNOTTY
+among them, gets
 .Er ENXIO .
+.Pp
+When the leader of the session the console controls exits, or a
+.Xr vhangup 2
+hangs it up, every description of the console opened through
+.Pa /dev/tty
+is hung up: a read returns 0 and a write fails with
+.Er EIO .
+The descriptions of
+.Pa /dev/console ,
+and the descriptors 0, 1 and 2 the kernel gives the first process, are
+not, as Linux's hangup passes over
+.Pa /dev/console ,
+so that init and the shells it starts again keep their console.
 .Pp
 Opening
 .Pa /dev/ptmx
@@ -450,8 +465,8 @@ group
 .Dv SIGHUP
 and
 .Dv SIGCONT
-and detach the console from the session; from another member, change
-nothing.
+and detach the console from the session; from another member, detach it
+from the caller's process alone, which then has no controlling terminal.
 The console must be the caller's controlling terminal.
 .El
 .Pp

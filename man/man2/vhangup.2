@@ -68,7 +68,11 @@ the usual control characters and
 1.
 .It
 It hangs up every open file description of the terminal, the caller's
-own among them.
+own among them, but the console's descriptions of
+.Pa /dev/console
+and the descriptors 0, 1 and 2 the kernel gives the first process, as
+Linux's hangup passes over
+.Pa /dev/console .
 A read of a hung-up description returns 0, a write fails with
 .Er EIO ,
 an
@@ -112,7 +116,9 @@ too, as
 describes.
 .Sh RETURN VALUES
 .Rv -std vhangup
-A caller with no controlling terminal gets 0, and nothing is hung up.
+A caller with no controlling terminal, one that gave it up with
+.Dv TIOCNOTTY
+among them, gets 0, and nothing is hung up.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/vhangprobe.c

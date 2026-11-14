@@ -200,8 +200,9 @@ fails with
 .Er ENOTTY .
 The terminal holds its foreground group by identity, as Linux holds a
 reference to the group: once the group has ended, the request still gives
-its number, 0 only when no group was set, and no signal of the terminal
-reaches a later group given that number.
+its number, in the caller's PID namespace too, 0 only when no group was set
+or the group is outside that namespace, and no signal of the terminal
+reaches a later group given that number, which a new process may take.
 .It Dv TIOCGSID
 Write the session ID of the terminal through the
 .Vt int
@@ -216,8 +217,10 @@ Read a positive process group ID through the
 pointer
 .Fa arg
 and make it foreground.
-The terminal must belong to the caller's session, and the group must
-have a member in that session.
+The terminal must be the caller's controlling terminal, or the request
+fails with
+.Er ENOTTY ,
+and the group must have a member in its session.
 If the number names no group but names a thread in the session, that
 number is accepted as on Linux.
 A negative number fails with
@@ -244,9 +247,18 @@ From the session leader, the terminal's foreground group gets
 and
 .Dv SIGCONT ,
 and the terminal is detached from the session, as on Linux.
-From another member of the session it succeeds and changes nothing, since
-a controlling terminal belongs to the whole session, where Linux would
-detach it from the caller alone.
+From another member of the session it succeeds and detaches the
+terminal from the caller's process alone, as Linux's
+.Fn no_tty
+does: the session keeps the terminal, and the caller and the children it
+forks then have no controlling terminal, so
+.Pa /dev/tty
+fails with
+.Er ENXIO ,
+the requests that need a controlling terminal fail with
+.Er ENOTTY
+and job control no longer stops them, until a
+.Xr setsid 2 .
 A terminal that is not the caller's controlling terminal fails with
 .Er ENOTTY .
 .El
@@ -255,8 +267,14 @@ When a session leader exits, each terminal its session controls sends
 .Dv SIGHUP
 to its foreground group and is detached, as Linux's
 .Fn disassociate_ctty
-does; the console's open descriptors are not hung up, as Linux would
-hang up a virtual terminal's.
+does.
+The console is also hung up then, as Linux hangs up any terminal but a
+pseudo-terminal: its descriptions are hung up as by
+.Xr vhangup 2 ,
+but those of
+.Pa /dev/console
+and the first process's descriptors 0, 1 and 2, and it takes the default
+termios; bytes of the serial port that no session has read stay.
 .Pp
 A process of a background group of the session a terminal controls that
 calls
