@@ -78,11 +78,24 @@ struct sysfs_attr {
  * are given `obj` and `arg`; its handle, or -errno as `sysfs_add_dir`. */
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg);
 
-/** The directory /sys/module/MODULE/parameters of the module `module`,
- * made with the directories above it on its first use, where a driver adds
- * its module's parameters as Linux's module_param shows them; its handle,
- * or -errno as `sysfs_add_dir`. */
-int sysfs_module_params(const char *module);
+/**
+ * The directory /sys/module/MODULE/parameters of the module `module`, made
+ * with the directories above it on its first use, where a driver adds its
+ * module's parameters as Linux's module_param shows them; its handle, or
+ * -errno as `sysfs_add_dir`, which leaves none of the directories the call
+ * made. `*made` is the highest directory the call made, 0 when all were
+ * there, for `sysfs_module_params_undo`.
+ */
+int sysfs_module_params(const char *module, int *made);
+
+/**
+ * Take away a module's parameters that failed part way, as Linux's
+ * module_param_sysfs_setup leaves none of its group: the directory `made`
+ * of `sysfs_module_params`, with the files added below it, or, when it is
+ * 0, the `n` files at `added`, so that the directories and files that
+ * other modules share or own stay.
+ */
+void sysfs_module_params_undo(int made, const int *added, int n);
 
 /** Add the link `name` below `parent` to the directory or anchor `target`,
  * which a path through the link reaches and `readlink` gives relative to

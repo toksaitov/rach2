@@ -951,12 +951,15 @@ static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
  * Make /sys/module/MODULE/parameters for `kvm` and for the backend's
  * module, `kvm_intel` (`backend` 1) or `kvm_amd` (2), as Linux's modules
  * show theirs, each file read-only. 0, or the first error of sysfs.h, which
- * leaves what was made; /dev/kvm works without the files.
+ * takes away the failed module's files and the directories made for them
+ * and keeps a module made whole before it; /dev/kvm works without the
+ * files.
  */
 static int params_start(int backend)
 {
     struct sysfs_attr attr;
-    int dir = 0, h, made = -1;
+    int added[KVM_NR_PARAMS];
+    int dir = 0, h, module = -1, made = 0, n = 0;
     uint32_t i;
 
     attr.mode = 0444u;
@@ -966,18 +969,21 @@ static int params_start(int backend)
         if (kvm_params[i].module != 0 && kvm_params[i].module != backend) {
             continue;
         }
-        if (kvm_params[i].module != made) {
-            dir = sysfs_module_params(kvm_modules[kvm_params[i].module]);
+        if (kvm_params[i].module != module) {
+            dir = sysfs_module_params(kvm_modules[kvm_params[i].module], &made);
             if (dir < 0) {
                 return dir;
             }
-            made = kvm_params[i].module;
+            module = kvm_params[i].module;
+            n = 0;
         }
         attr.name = kvm_params[i].name;
         h = sysfs_add_attr(dir, &attr, NULL, (int)i);
         if (h < 0) {
+            sysfs_module_params_undo(made, added, n);
             return h;
         }
+        added[n++] = h;
     }
     return 0;
 }

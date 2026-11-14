@@ -18,7 +18,8 @@ void printk_params_early(void);
  * Make /sys/module/printk/parameters with its five files, each `Y` or `N`
  * and a newline, mode 0644, which root writes with any text Linux's
  * `kstrtobool` takes and which answer -EINVAL to another. A failure is
- * logged and leaves the parameters as they are.
+ * logged, leaves no part of the tree it made and leaves the parameters as
+ * they are.
  */
 void printk_params_start(void);
 

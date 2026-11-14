@@ -115,17 +115,26 @@ static int32_t param_store(void *obj, int arg, const char *buf, uint32_t len)
     return (int32_t)len;
 }
 
+/** A failure to make a file takes away the files made before it and the
+ * directories made for them (`sysfs_module_params_undo`), so that no
+ * program finds some of the parameters and not the others. */
 void printk_params_start(void)
 {
     struct sysfs_attr attr;
-    int dir = sysfs_module_params("printk"), i, h = 0;
+    int added[PRINTK_NR_PARAMS];
+    int made, dir = sysfs_module_params("printk", &made), i, h = 0;
 
     attr.mode = 0644u;
     attr.show = param_show;
     attr.store = param_store;
-    for (i = 0; dir >= 0 && h >= 0 && i < PRINTK_NR_PARAMS; i++) {
+    for (i = 0; dir >= 0 && i < PRINTK_NR_PARAMS; i++) {
         attr.name = params[i].name;
         h = sysfs_add_attr(dir, &attr, NULL, i);
+        if (h < 0) {
+            sysfs_module_params_undo(made, added, i);
+            break;
+        }
+        added[i] = h;
     }
     if (dir < 0 || h < 0) {
         klog(KLOG_WARN, "printk", "failed: /sys/module/printk not made: %d", dir < 0 ? dir : h);

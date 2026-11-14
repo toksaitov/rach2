@@ -269,10 +269,18 @@ int sysfs_add_dir(int parent, const char *name)
     return ++sysfs_handles;
 }
 
-int sysfs_module_params(const char *module)
+int sysfs_module_params(const char *module, int *made)
 {
     (void)module;
+    *made = 0;
     return ++sysfs_handles;
+}
+
+void sysfs_module_params_undo(int made, const int *added, int n)
+{
+    (void)made;
+    (void)added;
+    (void)n;
 }
 
 /* exitstat.c's debug file kvm/exit_stats: its hooks and their data, which

@@ -587,22 +587,49 @@ static int name_same(const char *a, const char *b)
     return *a == *b;
 }
 
-/** The directory `name` below `parent`, made when it is not there: its
- * handle, or -errno as `sysfs_add_dir`. */
-static int dir_made(int parent, const char *name)
+/** The directory `name` below `parent`, made when it is not there, in which
+ * case `*made`, when `made` is not NULL and `*made` is 0, takes its handle:
+ * its handle, or -errno as `sysfs_add_dir`. */
+static int dir_made(int parent, const char *name, int *made)
 {
     int h = sysfs_node_child(parent, name, (int)k_strlen(name));
 
-    return h > 0 ? h : sysfs_add_dir(parent, name);
+    if (h > 0) {
+        return h;
+    }
+    h = sysfs_add_dir(parent, name);
+    if (h > 0 && made && *made == 0) {
+        *made = h;
+    }
+    return h;
 }
 
-int sysfs_module_params(const char *module)
+/** The anchor of /sys, which stays, is not counted in `*made`; a failure
+ * removes the highest directory made, which takes those below it. */
+int sysfs_module_params(const char *module, int *made)
 {
     int dir = sysfs_anchor(SYSFS_ROOT, 0);
 
-    dir = dir < 0 ? dir : dir_made(dir, "module");
-    dir = dir < 0 ? dir : dir_made(dir, module);
-    return dir < 0 ? dir : dir_made(dir, "parameters");
+    *made = 0;
+    dir = dir < 0 ? dir : dir_made(dir, "module", made);
+    dir = dir < 0 ? dir : dir_made(dir, module, made);
+    dir = dir < 0 ? dir : dir_made(dir, "parameters", made);
+    if (dir < 0 && *made) {
+        sysfs_remove(*made);
+        *made = 0;
+    }
+    return dir;
+}
+
+void sysfs_module_params_undo(int made, const int *added, int n)
+{
+    if (made) {
+        sysfs_remove(made);
+        return;
+    }
+    while (n-- > 0) {
+        sysfs_remove(added[n]);
+    }
 }
 
 int sysfs_pci_bind(int key, const char *driver)
@@ -622,9 +649,9 @@ int sysfs_pci_bind(int key, const char *driver)
     if (dev < 0) {
         return dev;
     }
-    dir = dir_made(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers");
+    dir = dir_made(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers", NULL);
     if (dir > 0) {
-        dir = dir_made(dir, driver);
+        dir = dir_made(dir, driver, NULL);
     }
     if (dir < 0) {
         return dir;
