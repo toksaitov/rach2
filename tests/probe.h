@@ -187,6 +187,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_FACCESSAT         269
 #define SYS_PSELECT6          270
 #define SYS_PPOLL             271
+#define SYS_UNSHARE           272
 #define SYS_SPLICE            275
 #define SYS_TEE               276
 #define SYS_VMSPLICE          278
@@ -439,6 +440,7 @@ static __inline__ long syscall0(long n)
 #define SYS_FACCESSAT         307
 #define SYS_PSELECT6          308
 #define SYS_PPOLL             309
+#define SYS_UNSHARE           310
 #define SYS_SPLICE            313
 #define SYS_TEE               315
 #define SYS_VMSPLICE          316

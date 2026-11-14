@@ -308,6 +308,10 @@ struct procfs_file {
     int origin_task; /* the process whose task/<origin_pid> it came from, or 0;
                       * for a /sys file, its node << 8 | its attribute */
     struct mm *mm;   /* /proc/<pid>/mem: a hold on the address space it allowed */
+    /* A file of /proc/sys/user: the user namespace of the opener, held, whose
+     * limit each read and write reaches, as Linux's inode keeps the table
+     * header its open found (`procfs_open_sysctl`); NULL for another. */
+    struct userns *userns;
     /* A snapshot's path, with the process or thread `procfs_resolve_id`
      * gave at the open, by which a read from offset 0 makes it again
      * (`procfs_read`); `fresh` while no read has used the text since it was
@@ -7394,7 +7398,6 @@ static int procfs_regen(struct procfs_file *f)
 }
 
 static int sysctl_numeric(int entry);
-static unsigned sysctl_mode(int entry);
 
 /**
  * Read the snapshot from the description's offset, which moves past what
@@ -7487,8 +7490,9 @@ static int32_t procfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 /** Free the descriptor's record and its text, drop its kept owner
- * (`procfs_owner_drop`), and drop a mem descriptor's hold on its address
- * space; at the description's last close. */
+ * (`procfs_owner_drop`), a mem descriptor's hold on its address space and
+ * a /proc/sys/user descriptor's on its user namespace; at the
+ * description's last close. */
 static void procfs_close(fd_entry_t *e)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -7496,6 +7500,9 @@ static void procfs_close(fd_entry_t *e)
         procfs_owner_drop(&f->own);
         e->priv = NULL;
         mm_unhold(f->mm);
+        if (f->userns) {
+            ns_put(&f->userns->c);
+        }
         kfree(f->data);
         kfree(f);
     }
@@ -8331,7 +8338,7 @@ int procfs_fd_writable(struct fd_entry *e)
         return 0600;
     }
     if (f->origin_file == SYNTH_PROC_SYSCTL) {
-        return sysctl_mode(f->origin_pid);
+        return (int)synth_sys_mode(f->origin_pid);
     }
     return 0;
 }
@@ -8827,12 +8834,11 @@ static int sysctl_get_long(const char *s, uint32_t len, uint32_t *at, unsigned l
 #define SYSCTL_ULONG 3
 
 /* The most seconds a file read by `proc_dointvec_jiffies` takes, of either
- * sign, INT_MAX / HZ, and the most of the hung-task detector's, LONG_MAX /
- * HZ on i686: as many as the kernel's clock counts in 31 bits. */
+ * sign, INT_MAX / HZ: as many as the kernel's clock counts in 31 bits. */
 #define SYSCTL_SECONDS_MAX (0x7FFFFFFF / TICK_HZ)
 
 /* The /proc/sys files whose values are their owners' int variables: the
- * family of each one's handler in Linux 6.12 and the range a write must
+ * family of each one's handler in Linux 6.12.115 and the range a write must
  * fall in, its `extra1` and `extra2`, or an int's whole range where it has
  * none (kernel/sysctl.c, fs/file_table.c, fs/namei.c, mm/page-writeback.c,
  * kernel/watchdog.c, kernel/hung_task.c, kernel/panic.c,
@@ -8854,7 +8860,7 @@ static const struct {
     {SYNTH_SYS_MAX_MAP_COUNT, &vm_max_map_count, SYSCTL_INT, 0, 0x7FFFFFFF},
     {SYNTH_SYS_OVERFLOWGID, &ns_overflowgid, SYSCTL_INT, 0, 65535},
     {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, SYSCTL_INT, 0, 65535},
-    {SYNTH_SYS_NR_OPEN, &fd_nr_open, SYSCTL_INT, FD_NR_OPEN_MIN, FD_NR_OPEN_MAX},
+    {SYNTH_SYS_NR_OPEN, &fd_nr_open, SYSCTL_UINT, FD_NR_OPEN_MIN, FD_NR_OPEN_MAX},
     {SYNTH_SYS_RANDOMIZE_VA_SPACE, &randomize_va_space, SYSCTL_INT, -0x7FFFFFFF - 1, 0x7FFFFFFF},
     {SYNTH_SYS_TCP_KEEPALIVE_TIME, &tcp_keepalive_time, SYSCTL_INT, -SYSCTL_SECONDS_MAX,
      SYSCTL_SECONDS_MAX},
@@ -8876,10 +8882,6 @@ static const struct {
     {SYNTH_SYS_WATCHDOG + 8, &sysctl_hung_task_all_cpu_backtrace, SYSCTL_INT, 0, 1},
     {SYNTH_SYS_WATCHDOG + 9, &sysctl_hung_task_panic, SYSCTL_INT, 0, 1},
     {SYNTH_SYS_WATCHDOG + 10, &sysctl_hung_task_check_count, SYSCTL_INT, 0, 0x7FFFFFFF},
-    {SYNTH_SYS_HUNG_TASK_TIMEOUT, &sysctl_hung_task_timeout_secs, SYSCTL_ULONG, 0,
-     SYSCTL_SECONDS_MAX},
-    {SYNTH_SYS_HUNG_TASK_INTERVAL, &sysctl_hung_task_check_interval_secs, SYSCTL_ULONG, 0,
-     SYSCTL_SECONDS_MAX},
     {SYNTH_SYS_HUNG_TASK_WARNINGS, &sysctl_hung_task_warnings, SYSCTL_INT, -1, 0x7FFFFFFF},
     {SYNTH_SYS_PROTECTED_FIFOS, &vfs_protected_fifos, SYSCTL_INT, 0, 2},
     {SYNTH_SYS_PROTECTED_FIFOS + 1, &vfs_protected_hardlinks, SYSCTL_INT, 0, 1},
@@ -8893,7 +8895,8 @@ static const struct {
     {SYNTH_SYS_LOCK_STAT, &sleep_lock_stat, SYSCTL_INT, -0x7FFFFFFF - 1, 0x7FFFFFFF},
     {SYNTH_SYS_NETDEV_MAX_BACKLOG, &netdev_max_backlog, SYSCTL_INT, -0x7FFFFFFF - 1, 0x7FFFFFFF},
     {SYNTH_SYS_NETDEV_BUDGET, &netdev_budget, SYSCTL_INT, -0x7FFFFFFF - 1, 0x7FFFFFFF},
-    {SYNTH_SYS_NETDEV_BUDGET_USECS, &netdev_budget_usecs, SYSCTL_INT, 0, 0x7FFFFFFF}};
+    {SYNTH_SYS_NETDEV_BUDGET_USECS, &netdev_budget_usecs, SYSCTL_INT, 2 * 1000000 / TICK_HZ,
+     0x7FFFFFFF}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
@@ -8947,9 +8950,6 @@ static int sysctl_int_write(int entry, int32_t v)
     *sysctl_ints[i].var = (int)v;
     if (restart) {
         watchdog_reconfigure();
-    }
-    if (entry == SYNTH_SYS_HUNG_TASK_TIMEOUT || entry == SYNTH_SYS_HUNG_TASK_INTERVAL) {
-        watchdog_sysctl_changed();
     }
     if (entry == SYNTH_SYS_DIRTY_BACKGROUND_RATIO) {
         dirty_background_bytes = 0;
@@ -9007,11 +9007,35 @@ static const int sysctl_ipv6_keys[SYNTH_IPV6_KEYS] = {
     ND6_ACCEPT_RA,        ND6_AUTOCONF, ND6_DISABLE_IPV6, ND6_FORWARDING,
     ND6_RA_DEFRTR_METRIC, -1,           ND6_USE_TEMPADDR};
 
+/* The length of a stable secret's text as Linux's `%pI6` writes it, eight
+ * groups of four hexadecimal digits, and the most of it a write leaves,
+ * IPV6_MAX_STRLEN less the terminator (net/ipv6/addrconf.c). */
+#define SECRET_TEXT_LEN 39u
+#define SECRET_TEXT_MAX 45u
+
+/** Write the address `a` into `out`, of at least SECRET_TEXT_LEN + 1
+ * bytes, as Linux's `%pI6` writes it: eight groups of four lowercase
+ * hexadecimal digits, each but the last followed by a colon. */
+static void secret_format(const uint8_t *a, char *out)
+{
+    static const char hex[] = "0123456789abcdef";
+    int i, n = 0;
+
+    for (i = 0; i < IP6_ADDR_LEN; i++) {
+        out[n++] = hex[a[i] >> 4];
+        out[n++] = hex[a[i] & 15];
+        if ((i & 1) != 0 && i < IP6_ADDR_LEN - 1) {
+            out[n++] = ':';
+        }
+    }
+    out[n] = '\0';
+}
+
 /**
  * The text of the net/ipv6/conf file `key` of the directory `dir`,
  * appended to `t`: the setting, ra_defrtr_metric unsigned, as Linux's
- * `proc_douintvec_minmax` gives it, or the stable secret as an IPv6
- * address.
+ * `proc_douintvec_minmax` gives it, or the stable secret as Linux's
+ * `addrconf_sysctl_stable_secret` writes it (`secret_format`).
  * Returns 0, -EIO for a secret not written, as Linux reads one, or -ENODEV
  * for an interface gone.
  */
@@ -9019,7 +9043,7 @@ static int sysctl_ipv6_text(struct procfs_text *t, const char *dir, int key)
 {
     int which = sysctl_ipv6_which(dir);
     uint8_t secret[IP6_ADDR_LEN];
-    char text[40];
+    char text[SECRET_TEXT_LEN + 1];
     int32_t v;
     int rc;
 
@@ -9029,7 +9053,7 @@ static int sysctl_ipv6_text(struct procfs_text *t, const char *dir, int key)
     if (key == SYNTH_IPV6_STABLE_SECRET) {
         rc = nd6_secret_get(which, secret);
         if (rc == 0) {
-            ip6_format(secret, text);
+            secret_format(secret, text);
             ap_str(t, text);
             ap_ch(t, '\n');
         }
@@ -9047,17 +9071,57 @@ static int sysctl_ipv6_text(struct procfs_text *t, const char *dir, int key)
 }
 
 /** Append the value of the /proc/sys file `entry` when it is one of a
- * namespace of the caller's, user/max_mnt_namespaces of its user namespace
- * or kernel/ns_last_pid of its PID namespace: 1, or 0 for another file. */
-static int sysctl_ns_text(struct procfs_text *t, int entry)
+ * namespace's, user/max_mnt_namespaces of the user namespace `uns`, or of
+ * the caller's when `uns` is NULL, or kernel/ns_last_pid of the caller's
+ * PID namespace: 1, or 0 for another file. */
+static int sysctl_ns_text(struct procfs_text *t, int entry, struct userns *uns)
 {
     if (entry == SYNTH_SYS_MAX_MNT_NAMESPACES) {
-        ap_int(t, ns_max_mnt(proc_userns(current_proc)));
+        ap_int(t, ns_max_mnt(uns ? uns : proc_userns(current_proc)));
     } else if (entry == SYNTH_SYS_NS_LAST_PID) {
         ap_u32(t, pidns_last_pid());
     } else {
         return 0;
     }
+    ap_ch(t, '\n');
+    return 1;
+}
+
+/** Append the value of the /proc/sys file `entry` when it is an unsigned
+ * long or fs/pipe-max-size: 1, or 0 for another file. */
+static int sysctl_ulong_text(struct procfs_text *t, int entry)
+{
+    unsigned long v;
+
+    switch (entry) {
+    case SYNTH_SYS_FILE_MAX:
+        v = fd_file_max;
+        break;
+    case SYNTH_SYS_HUNG_TASK_TIMEOUT:
+        v = sysctl_hung_task_timeout_secs;
+        break;
+    case SYNTH_SYS_HUNG_TASK_INTERVAL:
+        v = sysctl_hung_task_check_interval_secs;
+        break;
+    case SYNTH_SYS_DIRTY_BACKGROUND_BYTES:
+        v = dirty_background_bytes;
+        break;
+    case SYNTH_SYS_DIRTY_BYTES:
+        v = vm_dirty_bytes;
+        break;
+    case SYNTH_SYS_PIPE_MAX_SIZE:
+        v = pipe_max_size;
+        break;
+    case SYNTH_SYS_PIPE_USER_PAGES_HARD:
+        v = pipe_user_pages_hard;
+        break;
+    case SYNTH_SYS_PIPE_USER_PAGES_SOFT:
+        v = pipe_user_pages_soft;
+        break;
+    default:
+        return 0;
+    }
+    ap_ulong(t, v);
     ap_ch(t, '\n');
     return 1;
 }
@@ -9070,11 +9134,12 @@ static int sysctl_ns_text(struct procfs_text *t, int entry)
  * drawn once, at its first read, and stays for the boot;
  * kernel/random/uuid is drawn anew for each read, as Linux draws it. Both
  * come from the kernel's generator, whatever its seed, since neither is a
- * key. A file of net/ipv6/conf is `sysctl_ipv6_text`'s.
+ * key. A file of net/ipv6/conf is `sysctl_ipv6_text`'s. A file of user is
+ * the user namespace `uns`'s, or the caller's when `uns` is NULL.
  *
  * Returns 0, or a negative errno: -EIO for a stable secret not written.
  */
-static int procfs_sysctl_text(struct procfs_text *t, int entry)
+static int procfs_sysctl_text(struct procfs_text *t, int entry, struct userns *uns)
 {
     static uint8_t boot_id[16];
     static int boot_id_drawn;
@@ -9089,7 +9154,7 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
     if (entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) {
         ap_str(t, entry == SYNTH_SYS_HOSTNAME ? uts_hostname() : uts_domainname());
         ap_ch(t, '\n');
-    } else if (sysctl_ns_text(t, entry)) {
+    } else if (sysctl_ns_text(t, entry, uns)) {
         return 0;
     } else if (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_NMI_WATCHDOG) {
         ap_int(t, watchdog_sysctl_value(entry - SYNTH_SYS_WATCHDOG));
@@ -9097,19 +9162,8 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
     } else if (i >= 0) {
         ap_int(t, *sysctl_ints[i].var);
         ap_ch(t, '\n');
-    } else if (entry == SYNTH_SYS_FILE_MAX) {
-        ap_ulong(t, fd_file_max);
-        ap_ch(t, '\n');
-    } else if (entry == SYNTH_SYS_DIRTY_BACKGROUND_BYTES || entry == SYNTH_SYS_DIRTY_BYTES) {
-        ap_ulong(t, entry == SYNTH_SYS_DIRTY_BYTES ? vm_dirty_bytes : dirty_background_bytes);
-        ap_ch(t, '\n');
-    } else if (entry == SYNTH_SYS_PIPE_MAX_SIZE) {
-        ap_ulong(t, pipe_max_size);
-        ap_ch(t, '\n');
-    } else if (entry == SYNTH_SYS_PIPE_USER_PAGES_HARD || entry == SYNTH_SYS_PIPE_USER_PAGES_SOFT) {
-        ap_ulong(t, entry == SYNTH_SYS_PIPE_USER_PAGES_HARD ? pipe_user_pages_hard
-                                                            : pipe_user_pages_soft);
-        ap_ch(t, '\n');
+    } else if (sysctl_ulong_text(t, entry)) {
+        return 0;
     } else if (entry == SYNTH_SYS_FILE_NR) {
         ap_ulong(t, fd_files_open());
         ap_str(t, "\t0\t");
@@ -9167,7 +9221,8 @@ static int sysctl_numeric(int entry)
  * The family of Linux 6.12's handler of the writable numeric /proc/sys file
  * `entry`, SYSCTL_INT, SYSCTL_UINT or SYSCTL_ULONG: a row's of
  * `sysctl_ints`; `proc_doulongvec_minmax` for fs/file-max, the pipe page
- * limits, vm's byte counts and user/max_mnt_namespaces;
+ * limits, vm's byte counts, user/max_mnt_namespaces and the hung-task
+ * timeout and interval (`proc_dohung_task_timeout_secs`);
  * `proc_dopipe_max_size`, which is `proc_douintvec`'s, for
  * fs/pipe-max-size; `proc_douintvec_minmax` for net/ipv6/conf's
  * ra_defrtr_metric; and `proc_dointvec` or its `_minmax` for every other.
@@ -9190,6 +9245,8 @@ static int sysctl_kind(int entry)
     case SYNTH_SYS_DIRTY_BACKGROUND_BYTES:
     case SYNTH_SYS_DIRTY_BYTES:
     case SYNTH_SYS_MAX_MNT_NAMESPACES:
+    case SYNTH_SYS_HUNG_TASK_TIMEOUT:
+    case SYNTH_SYS_HUNG_TASK_INTERVAL:
         return SYSCTL_ULONG;
     case SYNTH_SYS_PIPE_MAX_SIZE:
         return SYSCTL_UINT;
@@ -9198,49 +9255,51 @@ static int sysctl_kind(int entry)
     }
 }
 
+/** The directory right under /proc/sys that holds the entry `entry`, or
+ * `entry` itself when it is one. */
+static int sysctl_top(int entry)
+{
+    int up;
+
+    while ((up = synth_sys_parent(entry)) > 0) {
+        entry = up;
+    }
+    return entry;
+}
+
 /* The access a /proc/sys check asks for, Linux's MAY_WRITE and MAY_READ. */
 #define SYSCTL_MAY_WRITE 2
 #define SYSCTL_MAY_READ  4
 
-/** The mode of the /proc/sys file `entry`, as Linux's tables give it: 0666
- * for kernel/ns_last_pid, 0644 for a file that takes a write and 0444 for
- * any other, each owned by root. */
-static unsigned sysctl_mode(int entry)
-{
-    if (entry == SYNTH_SYS_NS_LAST_PID) {
-        return 0666;
-    }
-    return synth_sys_writable(entry) ? 0644 : 0444;
-}
-
 /**
  * Whether the current process may have the access `op`, of SYSCTL_MAY_,
- * to the /proc/sys file `entry`, as Linux's sysctl_perm judges it at the
- * open and at each read and write. A file of net gives every class its
- * owner's bits to a holder of CAP_NET_ADMIN (`net_ctl_permissions`), in
- * the first user namespace, which owns the one set of values the stack
- * keeps; a file of user does to a holder of CAP_SYS_RESOURCE in the
- * caller's user namespace, whose limit it is, and gives the others read
- * alone (`set_permissions`). Then `test_perm`: an effective uid of 0 takes
- * the owner's bits, an effective or supplementary gid of 0 the group's,
- * any other caller the others'. Capabilities count only as said, so root
- * that dropped them still writes, and a setuid process does not.
- * Returns 1 or 0.
+ * to the /proc/sys file `entry`, of the mode `synth_sys_mode` gives, as
+ * Linux's sysctl_perm judges it at the open and at each read and write. A
+ * file of net gives every class its owner's bits to a holder of
+ * CAP_NET_ADMIN (`net_ctl_permissions`), in the first user namespace,
+ * which owns the one set of values the stack keeps; a file of user does to
+ * a holder of CAP_SYS_RESOURCE in the user namespace `uns` whose limit it
+ * is, the one the descriptor's open found, or the caller's when `uns` is
+ * NULL, and gives the others read alone (`set_permissions`). Then
+ * `test_perm`: an effective uid of 0 takes the owner's bits, an effective
+ * or supplementary gid of 0 the group's, any other caller the others'.
+ * Capabilities count only as said, so root that dropped them still
+ * writes, and a setuid process does not. Returns 1 or 0.
  */
-static int sysctl_may(int entry, unsigned op)
+static int sysctl_may(int entry, unsigned op, const struct userns *uns)
 {
     const process_t *p = current_proc;
-    unsigned mode = sysctl_mode(entry);
-    int top = entry, up;
+    unsigned mode = synth_sys_mode(entry);
+    int top = sysctl_top(entry);
     uint32_t i;
 
-    while ((up = synth_sys_parent(top)) > 0) {
-        top = up;
-    }
     if (top == SYNTH_SYS_NET && ns_capable(p, NULL, CAP_NET_ADMIN)) {
         mode = ((mode >> 6) & 7) * 0111;
     } else if (top == SYNTH_SYS_USER) {
-        mode = ns_capable(p, proc_userns(p), CAP_SYS_RESOURCE) ? ((mode >> 6) & 7) * 0111 : 0444;
+        if (!uns) {
+            uns = proc_userns(p);
+        }
+        mode = ns_capable(p, uns, CAP_SYS_RESOURCE) ? ((mode >> 6) & 7) * 0111 : 0444;
     }
     if (p->euid == 0) {
         mode >>= 6;
@@ -9274,14 +9333,14 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
     uint32_t n = 0;
     int rc;
 
-    if (!sysctl_may(f->origin_pid, SYSCTL_MAY_READ)) {
+    if (!sysctl_may(f->origin_pid, SYSCTL_MAY_READ, f->userns)) {
         return -EPERM;
     }
     if (off != 0 && sysctl_numeric(f->origin_pid)) {
         return 0;
     }
     procfs_text_init(&t);
-    rc = procfs_sysctl_text(&t, f->origin_pid);
+    rc = procfs_sysctl_text(&t, f->origin_pid, f->userns);
     if (rc != 0 || t.nomem) {
         kfree(t.buf);
         return rc != 0 ? rc : -ENOMEM;
@@ -9319,8 +9378,10 @@ static int dirty_bytes_too_many(unsigned long bytes)
  * (`dirty_bytes_too_many`), which clear dirty_background_ratio and, when
  * changed, dirty_ratio, and wake the flusher
  * (`dirty_background_bytes_handler`, `dirty_bytes_handler`,
- * mm/page-writeback.c). Returns 1 with 0, -EINVAL or -ERANGE in `*rc`, or
- * 0 for any other file.
+ * mm/page-writeback.c); kernel/hung_task_timeout_secs and
+ * hung_task_check_interval_secs up to `hung_task_timeout_max`, LONG_MAX /
+ * HZ, which wake the detector (`proc_dohung_task_timeout_secs`). Returns 1
+ * with 0, -EINVAL or -ERANGE in `*rc`, or 0 for any other file.
  */
 static int sysctl_ulong_store(int entry, unsigned long v, int *rc)
 {
@@ -9332,6 +9393,19 @@ static int sysctl_ulong_store(int entry, unsigned long v, int *rc)
         } else {
             fd_file_max = v;
         }
+        return 1;
+    case SYNTH_SYS_HUNG_TASK_TIMEOUT:
+    case SYNTH_SYS_HUNG_TASK_INTERVAL:
+        if (v > hung_task_timeout_max) {
+            *rc = -EINVAL;
+            return 1;
+        }
+        if (entry == SYNTH_SYS_HUNG_TASK_TIMEOUT) {
+            sysctl_hung_task_timeout_secs = v;
+        } else {
+            sysctl_hung_task_check_interval_secs = v;
+        }
+        watchdog_sysctl_changed();
         return 1;
     case SYNTH_SYS_PIPE_USER_PAGES_HARD:
         pipe_user_pages_hard = v;
@@ -9375,16 +9449,17 @@ static int sysctl_ulong_store(int entry, unsigned long v, int *rc)
  * `round_pipe_size` does, so that 0 or 1 sets a page; net/ipv6/conf's
  * ra_defrtr_metric takes 1 to UINT_MAX. A SYSCTL_ULONG file of
  * `sysctl_ulong_store`'s is that function's; user/max_mnt_namespaces is
- * the limit of the caller's user namespace, from 0 to INT_MAX
- * (`ns_set_max_mnt`). A SYSCTL_INT file takes INT_MIN to INT_MAX, as
- * `do_proc_dointvec_conv` does: kernel/ns_last_pid sets the last number of
- * the caller's PID namespace (`pidns_set_last_pid`), -EPERM unless the
- * caller is privileged over that namespace and -EINVAL out of 0 to
- * pid_max, and a file of net/ipv6/conf is `nd6_conf_set`'s. A row of
+ * the limit of the user namespace `uns`, or the caller's when `uns` is
+ * NULL, from 0 to INT_MAX (`ns_set_max_mnt`). A SYSCTL_INT file takes
+ * INT_MIN to INT_MAX, as `do_proc_dointvec_conv` does: kernel/ns_last_pid
+ * sets the last number of the caller's PID namespace
+ * (`pidns_set_last_pid`), -EPERM unless the caller is privileged over that
+ * namespace and -EINVAL out of 0 to pid_max, and a file of net/ipv6/conf
+ * is `nd6_conf_set`'s. A row of
  * `sysctl_ints` of any family is `sysctl_int_write`'s, -EINVAL out of the
  * row's range. Returns 0, -EINVAL, or the error named.
  */
-static int sysctl_num_store(int entry, int kind, unsigned long mag, int neg)
+static int sysctl_num_store(int entry, int kind, unsigned long mag, int neg, struct userns *uns)
 {
     const char *dir;
     int key, which, rc, i = sysctl_int(entry);
@@ -9412,8 +9487,10 @@ static int sysctl_num_store(int entry, int kind, unsigned long mag, int neg)
                                                        : sysctl_int_write(entry, (int32_t)mag);
     }
     if (entry == SYNTH_SYS_MAX_MNT_NAMESPACES) {
-        return mag > 0x7FFFFFFFul ? -EINVAL
-                                  : ns_set_max_mnt(proc_userns(current_proc), (int32_t)mag);
+        if (!uns) {
+            uns = proc_userns(current_proc);
+        }
+        return mag > 0x7FFFFFFFul ? -EINVAL : ns_set_max_mnt(uns, (int32_t)mag);
     }
     if (kind == SYSCTL_INT && (neg ? mag > 0x80000000ul : mag > 0x7FFFFFFFul)) {
         return -EINVAL;
@@ -9491,7 +9568,8 @@ static int sysctl_refusal_kept(int entry)
  * `count`, moving the offset by it (`sysctl_num_kept`). Otherwise the first
  * SYSCTL_WRITE_MAX bytes are read: spaces, which must not be all of them;
  * a number (`sysctl_get_long`), stored as the file's handler stores it
- * (`sysctl_num_store`); and the spaces after it, while whatever follows
+ * (`sysctl_num_store`), a file of user in the descriptor's user namespace;
+ * and the spaces after it, while whatever follows
  * them is left. A SYSCTL_UINT file then returns `count` and leaves the
  * offset where it was (`do_proc_douintvec_w`), so that each write on one
  * descriptor is read from offset 0; any other returns the bytes up to the
@@ -9502,6 +9580,7 @@ static int sysctl_refusal_kept(int entry)
  */
 static int32_t sysctl_num_write(fd_entry_t *e, int entry, const char __user *buf, uint32_t count)
 {
+    struct procfs_file *f = (struct procfs_file *)e->priv;
     uint32_t n = count < SYSCTL_WRITE_MAX ? count : SYSCTL_WRITE_MAX, at = 0;
     int kind = sysctl_kind(entry), neg = 0, rc;
     unsigned long mag = 0;
@@ -9523,7 +9602,7 @@ static int32_t sysctl_num_write(fd_entry_t *e, int entry, const char __user *buf
     sysctl_skip(text, n, &at);
     rc = at == n ? -EINVAL : sysctl_get_long(text, n, &at, &mag, &neg);
     if (rc == 0) {
-        rc = sysctl_num_store(entry, kind, mag, neg);
+        rc = sysctl_num_store(entry, kind, mag, neg, f->userns);
     }
     sysctl_skip(text, n, &at);
     kfree(text);
@@ -9541,44 +9620,73 @@ static int32_t sysctl_num_write(fd_entry_t *e, int entry, const char __user *buf
     return (int32_t)(count - (n - at));
 }
 
+/** Whether `c` is a byte of an IPv6 address's text as Linux's `in6_pton`
+ * reads one with no delimiter, which ends the text at any other byte: a
+ * hexadecimal digit, a colon or a dot. */
+static int secret_char(char c)
+{
+    char lower = (char)(c | 0x20);
+
+    return (c >= '0' && c <= '9') || (lower >= 'a' && lower <= 'f') || c == ':' || c == '.';
+}
+
 /**
- * Write the stable_secret of the net/ipv6/conf directory `dir`, `count`
- * bytes at `buf`, as Linux 6.12's `addrconf_sysctl_stable_secret` takes
- * them: -EIO for `all`, which has none; else the IPv6 address up to the
- * first space or newline (`nd6_secret_set`), -EIO for text that is none,
- * and for an empty write the secret's own text again, which is `::` while
- * none is written, so that it becomes the secret. Returns `count`,
- * -ENODEV for an interface gone, or -EFAULT.
+ * Write the stable_secret of the net/ipv6/conf directory `dir` through
+ * `e`, `count` bytes at `buf`, as Linux 6.12's
+ * `addrconf_sysctl_stable_secret` takes them: -EIO for `all`, which has
+ * none. The secret's text as a read gives it (`secret_format`), all zeros
+ * while none is written, is changed as `proc_dostring` changes a string,
+ * `sysctl_writes_strict` being 1: from the description's offset, when that
+ * is within the text, the written bytes up to the first newline or NUL
+ * replace the rest, the whole at most SECRET_TEXT_MAX bytes, and the
+ * offset moves by `count`; for an empty write, or at an offset past the
+ * text, the text and the offset stay as they were. The text up to its
+ * first byte that is no part of an address (`secret_char`) then becomes
+ * the secret, so that the last two leave it as it was and mark it
+ * written; -EIO for text that is no address. Returns `count`, -ENODEV for
+ * an interface gone, or -EFAULT, each of the errors moving nothing.
  */
-static int32_t sysctl_secret_write(const char *dir, const char __user *buf, uint32_t count)
+static int32_t sysctl_secret_write(fd_entry_t *e, const char *dir, const char __user *buf,
+                                   uint32_t count)
 {
     uint8_t secret[IP6_ADDR_LEN];
-    char text[65];
-    uint32_t n = count < 64u ? count : 64u, len = 0;
+    char text[SECRET_TEXT_MAX + 1];
+    uint64_t off = e->ofd->offset;
+    int splice = count != 0 && off <= SECRET_TEXT_LEN;
     int which = sysctl_ipv6_which(dir), rc;
+    uint32_t len, n, i;
 
     if (which == -ENODEV || which == ND6_CONF_ALL) {
         return which == ND6_CONF_ALL ? -EIO : which;
     }
-    if (count == 0) {
-        if (nd6_secret_get(which, secret) != 0) {
-            k_memset(secret, 0, sizeof(secret));
+    if (nd6_secret_get(which, secret) != 0) {
+        k_memset(secret, 0, sizeof(secret));
+    }
+    secret_format(secret, text);
+    if (splice) {
+        len = (uint32_t)off;
+        n = count < SECRET_TEXT_MAX - len ? count : SECRET_TEXT_MAX - len;
+        if (copy_from_user(text + len, buf, n) != 0) {
+            return -EFAULT;
         }
-        rc = nd6_secret_set(which, secret);
-        return rc != 0 ? rc : 0;
+        for (i = 0; i < n && text[len] != '\n' && text[len] != '\0'; i++) {
+            len++;
+        }
+        text[len] = '\0';
     }
-    k_memset(text, 0, sizeof(text));
-    if (copy_from_user(text, buf, n) != 0) {
-        return -EFAULT;
+    for (n = 0; secret_char(text[n]); n++) {
     }
-    while (len < n && text[len] != '\n' && text[len] != ' ' && text[len] != '\0') {
-        len++;
-    }
-    if (ip6_parse(text, len, secret) != 0) {
+    if (ip6_parse(text, n, secret) != 0) {
         return -EIO;
     }
     rc = nd6_secret_set(which, secret);
-    return rc != 0 ? rc : (int32_t)count;
+    if (rc != 0) {
+        return rc;
+    }
+    if (splice) {
+        e->ofd->offset = off + count;
+    }
+    return (int32_t)count;
 }
 
 /**
@@ -9607,14 +9715,14 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     const char *dir;
     int key;
 
-    if (!sysctl_may(f->origin_pid, SYSCTL_MAY_WRITE)) {
+    if (!sysctl_may(f->origin_pid, SYSCTL_MAY_WRITE, f->userns)) {
         return -EPERM;
     }
     if (sysctl_numeric(f->origin_pid)) {
         return sysctl_num_write(e, f->origin_pid, buf, count);
     }
     if (synth_sys_ipv6(f->origin_pid, &dir, &key) && key == SYNTH_IPV6_STABLE_SECRET) {
-        return sysctl_secret_write(dir, buf, count);
+        return sysctl_secret_write(e, dir, buf, count);
     }
     if (count == 0) {
         return 0;
@@ -10215,7 +10323,7 @@ static int procfs_open_sysctl(int entry, int flags)
     if (flags & 01000 /* O_TRUNC */) {
         op |= SYSCTL_MAY_WRITE;
     }
-    if (acc == 3 || !sysctl_may(entry, op)) {
+    if (acc == 3 || !sysctl_may(entry, op, NULL)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -10228,6 +10336,10 @@ static int procfs_open_sysctl(int entry, int flags)
     if (fd < 0) {
         kfree(f);
         return fd;
+    }
+    if (sysctl_top(entry) == SYNTH_SYS_USER) {
+        /* A user namespace's first member is its ns_common. */
+        f->userns = (struct userns *)ns_of(current_proc, NS_USER);
     }
     e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
@@ -10537,7 +10649,7 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
         len = procfs_gen_cpuinfo(t);
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
-        len = procfs_sysctl_text(t, vp->sysent);
+        len = procfs_sysctl_text(t, vp->sysent, NULL);
         len = len < 0 ? len : t->len;
         *key = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

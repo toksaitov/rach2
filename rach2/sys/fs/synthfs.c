@@ -420,6 +420,20 @@ int synth_sys_writable(int entry)
            (entry >= SYNTH_SYS_PROTECTED_FIFOS && entry <= SYNTH_SYS_DIRTYTIME_EXPIRE);
 }
 
+unsigned synth_sys_mode(int entry)
+{
+    const char *dir;
+    int key;
+
+    if (synth_sys_ipv6(entry, &dir, &key) && key == SYNTH_IPV6_STABLE_SECRET) {
+        return 0600;
+    }
+    if (entry == SYNTH_SYS_NS_LAST_PID) {
+        return 0666;
+    }
+    return synth_sys_writable(entry) ? 0644 : 0444;
+}
+
 /* The files of /proc/net after the first four, by origin and name. */
 static const struct {
     int origin;

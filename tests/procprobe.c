@@ -276,7 +276,13 @@ static const struct row {
             {"sysctl-secret-refuse", ROW_PLAIN},
             {"sysctl-perm-write", ROW_PLAIN},
             {"sysctl-read-live", ROW_PLAIN},
-            {"loop-drain-time", ROW_PLAIN},
+            {"sysctl-secret-mode", ROW_PLAIN},
+            {"sysctl-secret-text", ROW_PLAIN},
+            {"sysctl-secret-past", ROW_PLAIN},
+            {"sysctl-secret-splice", ROW_PLAIN},
+            {"sysctl-user-opened", ROW_PLAIN},
+            {"sysctl-hung-range", ROW_PLAIN},
+            {"loop-drain-budget", ROW_PLAIN},
             {"loop-drain-rest", ROW_PLAIN},
             {"rtc-open", ROW_PLAIN},
             {"rtc-read", ROW_PLAIN},
@@ -1563,10 +1569,12 @@ static const struct sysctl_try sysctl_ulong[] = {
     {"/proc/sys/fs/pipe-user-pages-soft", "-0\n", -EINVAL, 0},
     {"/proc/sys/fs/pipe-user-pages-soft", "0x10  junk\n", 6, "16\n"}};
 
-/* Linux 6.12's ranges: randomize_va_space any int; tcp_keepalive_time and
- * _intvl, of `proc_dointvec_jiffies`, 0 and negative seconds within
+/* Linux 6.12.115's ranges: randomize_va_space any int; tcp_keepalive_time
+ * and _intvl, of `proc_dointvec_jiffies`, 0 and negative seconds within
  * INT_MAX / HZ; tcp_mtu_probing 0 to 255; IPv6's accept_ra and autoconf
- * any int; netdev_budget_usecs 0 up. */
+ * any int; netdev_budget_usecs two ticks up, 8000 at 250 Hz and 2000 at
+ * 1000; and fs/nr_open, of `proc_douintvec_minmax`, which returns the
+ * whole count of a write whose number has text after its spaces. */
 static const struct sysctl_try sysctl_ranges[] = {
     {"/proc/sys/kernel/randomize_va_space", "5\n", 2, "5\n"},
     {"/proc/sys/kernel/randomize_va_space", "-1\n", 3, "-1\n"},
@@ -1581,8 +1589,11 @@ static const struct sysctl_try sysctl_ranges[] = {
     {"/proc/sys/net/ipv6/conf/default/accept_ra", "5\n", 2, "5\n"},
     {"/proc/sys/net/ipv6/conf/default/accept_ra", "-3\n", 3, "-3\n"},
     {"/proc/sys/net/ipv6/conf/default/autoconf", "7\n", 2, "7\n"},
-    {"/proc/sys/net/core/netdev_budget_usecs", "0\n", 2, "0\n"},
-    {"/proc/sys/net/core/netdev_budget_usecs", "-1\n", -EINVAL, 0}};
+    {"/proc/sys/net/core/netdev_budget_usecs", "8000\n", 5, "8000\n"},
+    {"/proc/sys/net/core/netdev_budget_usecs", "1\n", -EINVAL, 0},
+    {"/proc/sys/net/core/netdev_budget_usecs", "0\n", -EINVAL, 0},
+    {"/proc/sys/net/core/netdev_budget_usecs", "-1\n", -EINVAL, 0},
+    {"/proc/sys/fs/nr_open", "1048576  junk\n", 14, "1048576\n"}};
 
 /* A refused number written to IPv6's forwarding, or an empty write,
  * returns its whole count and changes nothing, as Linux's
@@ -1723,6 +1734,158 @@ static int sysctl_read_live(void)
     return ok && n == 6 && same_str(got, want);
 }
 
+#define SYS_SECRET    "/proc/sys/net/ipv6/conf/lo/stable_secret"
+#define SYS_MNT_NS    "/proc/sys/user/max_mnt_namespaces"
+#define CLONE_NEWUSER 0x10000000
+#define SEEK_SET      0
+#define SEEK_CUR      1
+
+/* lo's stable secret as a read gives it, Linux's `%pI6`, once fe80::1 is
+ * written, and once the last group is written over with 0002. */
+#define SECRET_ONE "fe80:0000:0000:0000:0000:0000:0000:0001\n"
+#define SECRET_TWO "fe80:0000:0000:0000:0000:0000:0000:0002\n"
+
+/** The permission bits of the stat `st`. */
+static unsigned st_perm(const char *st)
+{
+    return *(const unsigned int *)(st + KSTAT_MODE) & 07777u;
+}
+
+/** The child of `secret_mode_ok`: takes uid 1000 and exits 0 when an open
+ * of lo's stable_secret for reading is then EACCES, or with the number of
+ * the step that went otherwise. */
+static void secret_mode_child(void)
+{
+    if (syscall3(SYS_SETRESUID, probe_id(1000), probe_id(1000), probe_id(1000)) != 0) {
+        sys_exit(1);
+    }
+    sys_exit(syscall3(SYS_OPEN, (long)SYS_SECRET, O_RDONLY, 0) == -EACCES ? 0 : 2);
+}
+
+/** Whether lo's stable_secret is mode 0600 by stat and by fstat, as Linux's
+ * table gives it (net/ipv6/addrconf.c), so that uid 1000 cannot open it
+ * for reading. */
+static int secret_mode_ok(void)
+{
+    static char st[KSTAT_SIZE], fst[KSTAT_SIZE];
+    int fd = syscall3(SYS_OPEN, (long)SYS_SECRET, O_RDONLY, 0);
+    int status = -1, pid, ok;
+
+    ok = fd >= 0 && syscall3(SYS_FSTAT, fd, (long)fst, 0) == 0 && st_perm(fst) == 0600u &&
+         syscall3(SYS_STAT, (long)SYS_SECRET, (long)st, 0) == 0 && st_perm(st) == 0600u;
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    pid = syscall1(SYS_FORK, 0);
+    if (pid == 0) {
+        secret_mode_child();
+    }
+    return ok && pid > 0 && syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid && status == 0;
+}
+
+/**
+ * lo's stable_secret through one descriptor, as Linux's
+ * `addrconf_sysctl_stable_secret` and `proc_dostring` take it: fe80::1
+ * written reads as `%pI6` writes it; a write at offset 100, past that
+ * text, returns its count, leaves the offset and the secret as they were;
+ * and one at offset 35, the start of the last group, writes that group
+ * over and moves the offset by its count.
+ */
+static void secret_rows(void)
+{
+    int fd = syscall3(SYS_OPEN, (long)SYS_SECRET, O_RDWR, 0);
+    int text = fd >= 0 && syscall3(SYS_WRITE, fd, (long)"fe80::1\n", 8) == 8 &&
+               reads_as(SYS_SECRET, SECRET_ONE);
+
+    check("sysctl-secret-text", text,
+          "fe80::1 written to lo's stable_secret reads as eight groups of four digits, as "
+          "Linux's %pI6 gives it");
+    check("sysctl-secret-past",
+          text && syscall3(SYS_LSEEK, fd, 100, SEEK_SET) == 100 &&
+              syscall3(SYS_WRITE, fd, (long)"::2\n", 4) == 4 &&
+              syscall3(SYS_LSEEK, fd, 0, SEEK_CUR) == 100 && reads_as(SYS_SECRET, SECRET_ONE),
+          "a write to it at offset 100, past its text, returns its count and leaves the "
+          "secret and the offset as they were, as proc_dostring does");
+    check("sysctl-secret-splice",
+          text && syscall3(SYS_LSEEK, fd, 35, SEEK_SET) == 35 &&
+              syscall3(SYS_WRITE, fd, (long)"0002\n", 5) == 5 &&
+              syscall3(SYS_LSEEK, fd, 0, SEEK_CUR) == 40 && reads_as(SYS_SECRET, SECRET_TWO),
+          "and a write at offset 35 writes the last group over and moves the offset by its "
+          "count");
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+}
+
+/**
+ * The child of `user_opened_ok`: opens user/max_mnt_namespaces for reading
+ * and writing, enters a new user namespace, which gives it every
+ * capability there and none in the first, and exits 0 when that
+ * descriptor still reads `want`, the first namespace's limit, and refuses
+ * a write with EPERM; or with the number of the step that went otherwise.
+ */
+static void user_opened_child(const char *want)
+{
+    static char got[24];
+    int fd = syscall3(SYS_OPEN, (long)SYS_MNT_NS, O_RDWR, 0), n;
+
+    if (fd < 0) {
+        sys_exit(1);
+    }
+    if (syscall1(SYS_UNSHARE, CLONE_NEWUSER) != 0) {
+        sys_exit(2);
+    }
+    n = syscall3(SYS_READ, fd, (long)got, (int)sizeof(got) - 1);
+    if (n < 0) {
+        sys_exit(3);
+    }
+    got[n] = '\0';
+    if (!same_str(got, want)) {
+        sys_exit(4);
+    }
+    sys_exit(syscall3(SYS_WRITE, fd, (long)"7\n", 2) == -EPERM ? 0 : 5);
+}
+
+/** Whether a descriptor of user/max_mnt_namespaces keeps the user namespace
+ * of its open, as Linux's inode keeps the table header its open found
+ * (`set_permissions`, kernel/ucount.c), with the first namespace's limit
+ * at 1000, which a new namespace's INT_MAX is not; the limit is put back
+ * as it was read. */
+static int user_opened_ok(void)
+{
+    static char was[24];
+    int had = slurp(SYS_MNT_NS, was, (int)sizeof(was));
+    int status = -1, pid = -1, ok = had >= 2 && write_file(SYS_MNT_NS, "1000\n", 5) == 5;
+
+    if (ok) {
+        pid = syscall1(SYS_FORK, 0);
+    }
+    if (pid == 0) {
+        user_opened_child("1000\n");
+    }
+    ok = ok && pid > 0 && syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid && status == 0 &&
+         reads_as(SYS_MNT_NS, "1000\n");
+    put_back(SYS_MNT_NS, was, had);
+    return ok;
+}
+
+/** Whether kernel/hung_task_timeout_secs and hung_task_check_interval_secs,
+ * unsigned long as on Linux, take 8589935 on x86-64, within LONG_MAX / HZ,
+ * and refuse it with EINVAL on i686, past LONG_MAX / HZ at 250 Hz or 1000;
+ * each is put back as it was read. */
+static int hung_range_ok(void)
+{
+    static const struct sysctl_try wide[] = {
+        {"/proc/sys/kernel/hung_task_timeout_secs", "8589935\n", 8, "8589935\n"},
+        {"/proc/sys/kernel/hung_task_check_interval_secs", "8589935\n", 8, "8589935\n"}};
+    static const struct sysctl_try narrow[] = {
+        {"/proc/sys/kernel/hung_task_timeout_secs", "8589935\n", -EINVAL, 0},
+        {"/proc/sys/kernel/hung_task_check_interval_secs", "8589935\n", -EINVAL, 0}};
+
+    return sizeof(long) == 8 ? sysctl_tries(wide, SYSCTL_TRIES(wide))
+                             : sysctl_tries(narrow, SYSCTL_TRIES(narrow));
+}
+
 /** The /proc/sys files read and write as Linux 6.12's handler of each
  * does, as the tables above and the two functions before say. */
 static void sysctl_handler_rows(void)
@@ -1749,7 +1912,8 @@ static void sysctl_handler_rows(void)
     check("sysctl-ranges", sysctl_tries(sysctl_ranges, SYSCTL_TRIES(sysctl_ranges)),
           "randomize_va_space takes any int, tcp_keepalive_time and _intvl 0 and negative "
           "seconds within INT_MAX / HZ, tcp_mtu_probing 255, ipv6's accept_ra and autoconf any "
-          "int and netdev_budget_usecs 0, as Linux 6.12's handlers do");
+          "int, netdev_budget_usecs 8000 and not 1 or 0, and fs/nr_open a number with text "
+          "after it, returning the whole count, as Linux 6.12.115's handlers do");
     check("sysctl-forwarding-kept",
           sysctl_tries(sysctl_forwarding, SYSCTL_TRIES(sysctl_forwarding)),
           "a refused number written to ipv6's forwarding returns the whole count and changes "
@@ -1765,28 +1929,39 @@ static void sysctl_handler_rows(void)
     check("sysctl-read-live", sysctl_read_live(),
           "kernel/pid_max opened for reading reads a value written through another descriptor "
           "after the open");
+    check("sysctl-secret-mode", secret_mode_ok(),
+          "lo's stable_secret is mode 0600 by stat and fstat, and uid 1000 cannot open it for "
+          "reading, as Linux's table gives it");
+    secret_rows();
+    check("sysctl-user-opened", user_opened_ok(),
+          "user/max_mnt_namespaces opened for writing, after unshare(CLONE_NEWUSER), still "
+          "reads the first namespace's limit and refuses a write with EPERM, as Linux keeps "
+          "the table its open found");
+    check("sysctl-hung-range", hung_range_ok(),
+          sizeof(long) == 8 ? "kernel/hung_task_timeout_secs and hung_task_check_interval_secs "
+                              "take 8589935, within x86-64's LONG_MAX / HZ"
+                            : "kernel/hung_task_timeout_secs and hung_task_check_interval_secs "
+                              "refuse 8589935, past i686's LONG_MAX / HZ");
 }
 
 /**
- * A drain of the loopback backlog ends on its time budget whether or not
- * the processor's cycle counter has a measured rate, as on i686 and under
- * QEMU's emulator: with net/core/netdev_budget at 1000000 and
- * netdev_budget_usecs at 1, a burst of LOOP_BURST datagrams that one
- * sendmmsg puts on the backlog is drained in more than one go, each
- * counted in /proc/net/softnet_stat's third column, and every datagram
- * still reaches its socket at a later return to user mode. Both budgets
- * are put back as they were read.
+ * A drain of the loopback backlog ends on its budget of datagrams: with
+ * net/core/netdev_budget at 1, a burst of LOOP_BURST datagrams that one
+ * sendmmsg puts on the backlog is drained in more than one go, after a
+ * turn of 64, each counted in /proc/net/softnet_stat's third column, and
+ * every datagram still reaches its socket at a later return to user mode.
+ * The budget is put back as it was read. Its budget of time, at least two
+ * ticks as Linux 6.12.115 has it, ends no drain of a burst this small with
+ * certainty; packet_hosttest.c and rtc_hosttest.c have its rows.
  */
 static void loop_drain_rows(void)
 {
     static const char budget[] = "/proc/sys/net/core/netdev_budget";
-    static const char usecs[] = "/proc/sys/net/core/netdev_budget_usecs";
-    static char w_budget[24], w_usecs[24], payload[16], got[32];
+    static char w_budget[24], payload[16], got[32];
     static unsigned char sa[16];
     static struct probe_iovec iov;
     static struct probe_mmsghdr msgs[LOOP_BURST];
     int h_budget = slurp(budget, w_budget, (int)sizeof(w_budget));
-    int h_usecs = slurp(usecs, w_usecs, (int)sizeof(w_usecs));
     unsigned long args[6], before, after;
     int rfd, sfd, i, sent = -1, taken = 0, ok;
 
@@ -1805,8 +1980,8 @@ static void loop_drain_rows(void)
     args[0] = (unsigned int)rfd;
     args[1] = (unsigned long)sa;
     args[2] = 16;
-    ok = h_budget >= 2 && h_usecs >= 2 && rfd >= 0 && sfd >= 0 && sock_call(SC_BIND, args) == 0 &&
-         takes(budget, "1000000\n", 8, "1000000\n") && takes(usecs, "1\n", 2, "1\n");
+    ok = h_budget >= 2 && rfd >= 0 && sfd >= 0 && sock_call(SC_BIND, args) == 0 &&
+         takes(budget, "1\n", 2, "1\n");
     iov.base = payload;
     iov.len = sizeof(payload);
     for (i = 0; i < LOOP_BURST; i++) {
@@ -1824,10 +1999,10 @@ static void loop_drain_rows(void)
         sent = syscall4(SYS_SENDMMSG, sfd, (long)msgs, LOOP_BURST, 0);
     }
     after = softnet_squeezed();
-    check("loop-drain-time",
+    check("loop-drain-budget",
           ok && sent == LOOP_BURST && before != ~0ul && after != ~0ul && after > before,
-          "with netdev_budget_usecs at 1 a drain of a burst of 128 datagrams to 127.0.0.1 ends "
-          "on time and is counted in /proc/net/softnet_stat");
+          "with netdev_budget at 1 a drain of a burst of 128 datagrams to 127.0.0.1 ends after "
+          "its first turn and is counted in /proc/net/softnet_stat");
     args[0] = (unsigned int)rfd;
     args[1] = (unsigned long)got;
     args[2] = sizeof(got);
@@ -1838,7 +2013,6 @@ static void loop_drain_rows(void)
     check("loop-drain-rest", ok && taken == LOOP_BURST,
           "and every datagram of the burst reaches its socket at later returns to user mode");
     put_back(budget, w_budget, h_budget);
-    put_back(usecs, w_usecs, h_usecs);
     if (rfd >= 0) {
         syscall1(SYS_CLOSE, rfd);
     }

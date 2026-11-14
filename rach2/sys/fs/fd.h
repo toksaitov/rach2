@@ -35,7 +35,7 @@
  */
 #define FD_NOFILE_HARD 524288
 #define FD_NR_OPEN     1048576
-#define FD_NR_OPEN_MIN 64
+#define FD_NR_OPEN_MIN ((int)sizeof(long) * 8) /* BITS_PER_LONG */
 #define FD_NR_OPEN_MAX 16777216
 
 /* fs.nr_open: the most descriptors a process may be allowed, and the bound

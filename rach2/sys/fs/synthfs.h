@@ -450,6 +450,11 @@ int synth_sys_ipv6(int entry, const char **dir, int *key);
  * makes 0444 (kernel/watchdog.c:1162 and :1173-1174), so that an open for
  * writing fails with EACCES. */
 int synth_sys_writable(int entry);
+/** The mode of the file entry `entry`, as Linux's tables give it, each
+ * owned by root: 0600 for net/ipv6/conf's stable_secret
+ * (net/ipv6/addrconf.c), 0666 for kernel/ns_last_pid, 0644 for any other
+ * file that takes a write and 0444 for the rest. */
+unsigned synth_sys_mode(int entry);
 
 /** The name of the entry `entry`, the last component of its path. */
 const char *synth_sys_name(int entry);

@@ -48,8 +48,9 @@ int sysctl_hardlockup_all_cpu_backtrace;
 int sysctl_hung_task_all_cpu_backtrace;
 int sysctl_hung_task_panic;
 int sysctl_hung_task_check_count = HUNG_TASK_CHECK_COUNT;
-int sysctl_hung_task_timeout_secs = 120;
-int sysctl_hung_task_check_interval_secs;
+unsigned long sysctl_hung_task_timeout_secs = 120;
+unsigned long sysctl_hung_task_check_interval_secs;
+const unsigned long hung_task_timeout_max = (~0ul >> 1) / TICK_HZ;
 int sysctl_hung_task_warnings = 10;
 
 /* Linux's NUM_SAMPLE_PERIODS (kernel/watchdog.c:43): the watchdog's timer
@@ -1056,7 +1057,8 @@ struct hung_report {
  * copied into `rep`. Interrupts are off, and `t` is only safe to read
  * while they stay off.
  */
-static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now, struct hung_report *rep)
+static int check_hung_task(process_t *t, unsigned long timeout, uint64_t now,
+                           struct hung_report *rep)
 {
     unsigned long switch_count = t->nvcsw + t->nivcsw;
     uintptr_t fp;
@@ -1135,7 +1137,7 @@ static void hung_task_log(const struct hung_report *rep)
  * big lock with interrupts off, and a walk of every thread's record is
  * short.
  */
-static void check_hung_uninterruptible_tasks(uint32_t timeout)
+static void check_hung_uninterruptible_tasks(unsigned long timeout)
 {
     int max_count = sysctl_hung_task_check_count, reported = 0, want[NR_CPUS], c;
     uint64_t now = tick_count();
@@ -1197,13 +1199,14 @@ static int hung_due(void *arg)
 static void khungtaskd_main(void)
 {
     uint64_t last = tick_count(), due;
-    uint32_t timeout, interval, flags;
+    unsigned long timeout, interval;
+    uint32_t flags;
     struct hung_wait_arg arg;
 
     arch_irq_enable();
     for (;;) {
-        timeout = (uint32_t)sysctl_hung_task_timeout_secs;
-        interval = (uint32_t)sysctl_hung_task_check_interval_secs;
+        timeout = sysctl_hung_task_timeout_secs;
+        interval = sysctl_hung_task_check_interval_secs;
         if (interval == 0 || interval > timeout) {
             interval = timeout;
         }
@@ -1271,31 +1274,55 @@ static void opt_int(const char *key, int *var, int min, int max)
     *var = (int)v;
 }
 
-/* The /proc/sys/kernel files the boot line may set as `sysctl.kernel.NAME=`
- * (fs/proc/proc_sysctl.c, `process_sysctl_arg`), with their ranges, and the
- * three Linux also takes by their bare names (`sysctl_aliases`, :1580). */
+/** Set `*var` from the number `key=` gives when it lies in [0,
+ * `hung_task_timeout_max`], as a write of the hung-task file would take it;
+ * another is refused with a warning. */
+static void opt_hung_secs(const char *key, unsigned long *var)
+{
+    char text[24];
+    long long v = 0;
+
+    if (!kcmdline_value(key, text, sizeof(text))) {
+        return;
+    }
+    if (k_strtoll(text, k_strlen(text), &v) != 0 || v < 0 ||
+        (unsigned long long)v > hung_task_timeout_max) {
+        klog(KLOG_WARN, "watchdog", "boot option: refused: %s=%s", key, text);
+        return;
+    }
+    *var = (unsigned long)v;
+}
+
+/* The /proc/sys/kernel files of int values the boot line may set as
+ * `sysctl.kernel.NAME=` (fs/proc/proc_sysctl.c, `process_sysctl_arg`),
+ * with their ranges, and the three Linux also takes by their bare names
+ * (`sysctl_aliases`, :1580). */
 static const struct {
     const char *name;
     int *var;
     int min;
     int max;
     int alias;
-} sysctl_opts[] = {
-    {"watchdog", &watchdog_user_enabled, 0, 1, 0},
-    {"soft_watchdog", &watchdog_softlockup_user_enabled, 0, 1, 0},
-    {"nmi_watchdog", &watchdog_hardlockup_user_enabled, 0, 1, 0},
-    {"watchdog_thresh", &watchdog_thresh, 0, 60, 0},
-    {"softlockup_panic", &softlockup_panic, 0, 1, 0},
-    {"hardlockup_panic", &hardlockup_panic, 0, 1, 0},
-    {"softlockup_all_cpu_backtrace", &sysctl_softlockup_all_cpu_backtrace, 0, 1, 1},
-    {"hardlockup_all_cpu_backtrace", &sysctl_hardlockup_all_cpu_backtrace, 0, 1, 1},
-    {"hung_task_all_cpu_backtrace", &sysctl_hung_task_all_cpu_backtrace, 0, 1, 0},
-    {"hung_task_panic", &sysctl_hung_task_panic, 0, 1, 1},
-    {"hung_task_check_count", &sysctl_hung_task_check_count, 0, 0x7FFFFFFF, 0},
-    {"hung_task_timeout_secs", &sysctl_hung_task_timeout_secs, 0, 0x7FFFFFFF / TICK_HZ, 0},
-    {"hung_task_check_interval_secs", &sysctl_hung_task_check_interval_secs, 0,
-     0x7FFFFFFF / TICK_HZ, 0},
-    {"hung_task_warnings", &sysctl_hung_task_warnings, -1, 0x7FFFFFFF, 0}};
+} sysctl_opts[] = {{"watchdog", &watchdog_user_enabled, 0, 1, 0},
+                   {"soft_watchdog", &watchdog_softlockup_user_enabled, 0, 1, 0},
+                   {"nmi_watchdog", &watchdog_hardlockup_user_enabled, 0, 1, 0},
+                   {"watchdog_thresh", &watchdog_thresh, 0, 60, 0},
+                   {"softlockup_panic", &softlockup_panic, 0, 1, 0},
+                   {"hardlockup_panic", &hardlockup_panic, 0, 1, 0},
+                   {"softlockup_all_cpu_backtrace", &sysctl_softlockup_all_cpu_backtrace, 0, 1, 1},
+                   {"hardlockup_all_cpu_backtrace", &sysctl_hardlockup_all_cpu_backtrace, 0, 1, 1},
+                   {"hung_task_all_cpu_backtrace", &sysctl_hung_task_all_cpu_backtrace, 0, 1, 0},
+                   {"hung_task_panic", &sysctl_hung_task_panic, 0, 1, 1},
+                   {"hung_task_check_count", &sysctl_hung_task_check_count, 0, 0x7FFFFFFF, 0},
+                   {"hung_task_warnings", &sysctl_hung_task_warnings, -1, 0x7FFFFFFF, 0}};
+
+/* The two of unsigned long values, 0 to `hung_task_timeout_max`. */
+static const struct {
+    const char *name;
+    unsigned long *var;
+} sysctl_hung_opts[] = {
+    {"sysctl.kernel.hung_task_timeout_secs", &sysctl_hung_task_timeout_secs},
+    {"sysctl.kernel.hung_task_check_interval_secs", &sysctl_hung_task_check_interval_secs}};
 
 /**
  * nmi_watchdog= takes a list of panic, nopanic, 0 and 1
@@ -1353,6 +1380,9 @@ static void read_options(void)
         k_strncpy(key, "sysctl.kernel.", sizeof(key));
         k_strncpy(key + 14, sysctl_opts[i].name, sizeof(key) - 15);
         opt_int(key, sysctl_opts[i].var, sysctl_opts[i].min, sysctl_opts[i].max);
+    }
+    for (i = 0; i < (int)(sizeof(sysctl_hung_opts) / sizeof(sysctl_hung_opts[0])); i++) {
+        opt_hung_secs(sysctl_hung_opts[i].name, sysctl_hung_opts[i].var);
     }
 }
 

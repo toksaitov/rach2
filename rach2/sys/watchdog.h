@@ -29,8 +29,12 @@ extern int sysctl_hardlockup_all_cpu_backtrace;
 extern int sysctl_hung_task_all_cpu_backtrace;
 extern int sysctl_hung_task_panic;
 extern int sysctl_hung_task_check_count;
-extern int sysctl_hung_task_timeout_secs;
-extern int sysctl_hung_task_check_interval_secs;
+/* The hung-task timeout and interval in seconds, unsigned long as on
+ * Linux, each at most `hung_task_timeout_max`, LONG_MAX / HZ
+ * (kernel/hung_task.c:263). */
+extern unsigned long sysctl_hung_task_timeout_secs;
+extern unsigned long sysctl_hung_task_check_interval_secs;
+extern const unsigned long hung_task_timeout_max;
 extern int sysctl_hung_task_warnings;
 
 /**

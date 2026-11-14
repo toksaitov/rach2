@@ -96,6 +96,8 @@ skipped.
 .It Pa hung_task_timeout_secs
 Seconds in D before a thread is reported, 120 by default; 0 stops the
 detector.
+It and the interval take up to LONG_MAX divided by the tick's rate, as on
+Linux: 8589934 on i686 at 250 Hz, and far more on x86-64.
 .It Pa hung_task_check_interval_secs
 Seconds between checks, 0 for the timeout.
 .It Pa hung_task_check_count
