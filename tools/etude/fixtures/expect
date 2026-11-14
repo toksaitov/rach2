@@ -248,6 +248,13 @@
 1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-truncated.out run-1 attempt-1 item-1 stopped | {"assertion_id":"etude.fault","source":"executor","outcome":"missing","detail":"no boot of smp was reported to end, and the report is truncated"}
 1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-truncated.out run-1 attempt-1 item-1 stopped | "detail":"the console has <2>[    1.200000] isr: hardware fault: non-maskable interrupt (vector 2, pc 0xc0101234)"
 3 attempt ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.fault","source":"executor","outcome":"missing","detail":"etude check attempt was given no console of smp.1"}
+# A panic's last record that the console's end cuts short, where QEMU was
+# ended while the report was still written, passes etude.kernel on a boot
+# that panicked; a cut record that cannot be a panic's, or a cut record on a
+# boot that did not panic, still fails it.
+0 attempt -k ./consoles/fault/cut/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"pass","detail":null}
+1 attempt -k ./consoles/fault/cutother/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"fail","detail":"the console has <2>[    1.200300] vm: fa"}
+1 attempt -k ./console-cut.txt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"fail","detail":"the console has <2>[1.31] pa"}
 1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-bad.out run-1 attempt-1 item-1 exited 0 | "errors":["line 6: the record \"@etude 1 machine\" does not parse","line 4: vm.1 is the boot of no machine of the case","line 5: the end of smp.1 is reported twice"]
 1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-fault-guest.out run-1 attempt-1 item-1 exited 0 | "errors":["line 9: a machine record from a case that is not a machine case"]
 1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-fault-guest.out run-1 attempt-1 item-1 exited 0 | !"machines"
