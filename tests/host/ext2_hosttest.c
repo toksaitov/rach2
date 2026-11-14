@@ -3258,8 +3258,11 @@ static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
 
 /**
  * A mount without `sync` or `dirsync` writes back as Linux's ext2 does:
- * creates, writes and a remove stay dirty in the cache and reach the disk
- * not at all; an fsync writes them and flushes the disk, and the volume
+ * creates, writes and a remove leave the files' data, inodes and bitmaps
+ * dirty in the cache and send the device only the root's entries, at each
+ * change, without a flush, as Linux's `ext2_handle_dirsync` writes a
+ * directory's pages (`dir_commit`); an fsync writes the rest and flushes the
+ * disk, and the volume
  * unmounts clean. The device is marked write-through, so that a write sent
  * without `BLOCK_REQ_NOFLUSH` would count as a flush; the removed file's
  * inode and blocks are freed at its last put.
@@ -3268,9 +3271,11 @@ static void default_mount_row(void)
 {
     static unsigned char block[3 * 4096];
     void *f, *g;
-    int rc, flushes;
+    uint64_t root = 0;
+    int rc, flushes, i, entries;
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    (void)debugfs_numbers("stat /", "(0):", &root, 1);
     use_image(wimg, wbytes);
     rw_flags = 0;
     rc = mount_rw();
@@ -3291,7 +3296,12 @@ static void default_mount_row(void)
     if (g) {
         OPS->put(&mnt, g);
     }
-    check(flush_n == 0 && wlog_n == 0, "stay in the cache on a mount without dirsync");
+    entries = root > 0;
+    for (i = 0; i < wlog_n; i++) {
+        entries = entries && wlog_lba[i] == root * 8 && wlog_count[i] == 8;
+    }
+    check(flush_n == 0 && wlog_n > 0 && entries,
+          "send the device the root's entries alone, unflushed, on a mount without dirsync");
     flushes = flush_n;
     check(f && OPS->fsync(&mnt, 0) == 0 && wlog_n > 0 && flush_n > flushes,
           "and an fsync writes them and flushes the disk");
