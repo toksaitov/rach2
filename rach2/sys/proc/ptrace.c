@@ -196,8 +196,9 @@ int ptrace_group_stop(int signo)
 }
 
 /**
- * Mark signal work for the traced thread `t`, whose stop has just been
- * requested (`PT_INTERRUPT`), and wake it if it sleeps, as Linux 6.12's
+ * Mark signal work for the thread `t`, which has a stop to take: one its
+ * tracer requested (`PT_INTERRUPT`), or its process's, which a detach
+ * leaves it owing, and wake it if it sleeps, as Linux 6.12's
  * ptrace_signal_wake_up sets TIF_SIGPENDING before signal_wake_up_state's
  * wake (include/linux/sched/signal.h, kernel/signal.c:759-773). A
  * wait without the big lock ends only on the flag (`sig_woken`), and asks
@@ -390,7 +391,12 @@ static void ptrace_parent_notify(process_t *t)
  * parent's wait passed over while another process traced it, is left to the
  * parent, which is told of the end (`ptrace_parent_notify`); a parent that
  * is the tracer is ending itself, and the process goes to init with its
- * other children (`reparent_children`).
+ * other children (`reparent_children`). A live thread whose process is
+ * stopped owes the stop again, and is marked and woken to take it, as Linux
+ * 6.12.115's __ptrace_unlink sets JOBCTL_STOP_PENDING and calls
+ * ptrace_signal_wake_up (kernel/ptrace.c): a thread its tracer resumed
+ * during the stop may sleep in a wait that ends only on its signal-work
+ * flag, which nothing else would set.
  */
 static void ptrace_detach(process_t *t, int sig)
 {
@@ -421,6 +427,9 @@ static void ptrace_detach(process_t *t, int sig)
         if (t->state == PROC_STOPPED) {
             sched_make_ready(t);
         }
+    }
+    if (t->tg->stop && !t->exit_begun) {
+        ptrace_signal_wake(t);
     }
 }
 

@@ -83,7 +83,8 @@ int ptrace_group_stop(int signo);
 
 /**
  * Tell the seized tracees among the threads of `tg` that its group stop has
- * begun or ended, as Linux's JOBCTL_TRAP_NOTIFY tells them: each makes a new
+ * begun, or that a SIGCONT came, whether or not it ended a stop, as Linux's
+ * JOBCTL_TRAP_NOTIFY tells them: each makes a new
  * PTRACE_EVENT_STOP, at once when PTRACE_LISTEN keeps it in its stop, else
  * when its tracer next resumes it, or as it returns to user mode.
  */

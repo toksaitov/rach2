@@ -13,7 +13,7 @@ A tracer makes one call, `ptrace`, and learns of its tracees' stops and ends fro
 | `ptrace_return_stops` | `deliver_signals` | a seized thread's first, and the one `PTRACE_INTERRUPT` requests |
 | `ptrace_signal_stop` | `deliver_signals` | a signal about to be acted on |
 | `ptrace_group_stop` | `deliver_signals` | the stop of the tracee's process |
-| `ptrace_group_change` | `sig_group_stop`, `sig_job_control` | a new stop when a seized tracee's process stops or continues |
+| `ptrace_group_change` | `sig_group_stop`, `sig_job_control` | a new stop when a seized tracee's process stops or is sent `SIGCONT` |
 | `ptrace_event` | `do_fork`, `ptrace_exec`, `exit_current`, `terminate_current_process`, `seccomp_trace` | an event the options include |
 | `ptrace_syscall_stop` | `_syscall_handler` | a system call's entry and exit |
 
@@ -62,7 +62,7 @@ A tracee stops in `ptrace_stop`, on its own kernel stack. It stores the status a
 
 `PTRACE_INTERRUPT`, and a change of a seized thread's group stop, set `PT_INTERRUPT` and the thread's signal-work flag, `sig_woken`, and wake the thread if it sleeps, as Linux's `ptrace_signal_wake_up` sets TIF_SIGPENDING before its wake: a wait without the big lock, such as a pipe's, ends only on that flag, and would otherwise find its condition false and sleep again. `signal_pending` returns nonzero for it as for a stop signal, so a thread asleep in an interruptible call returns `EINTR` and makes the stop on its way back to user mode, and a call that a stop and a continue would restart is restarted once the tracer resumes it. A traced thread's wait also ends on a signal it ignores, as Linux's `sig_ignored` has it, so the tracer sees that signal at a delivery stop; with the signal suppressed or ignored, the wait is restarted as after a stop.
 
-`PTRACE_LISTEN` (`ptrace_listen`) keeps a seized thread in a `PTRACE_EVENT_STOP` as a stopped process keeps its threads. When the process's stop begins or ends, `ptrace_group_change`, Linux's `JOBCTL_TRAP_NOTIFY`, requests a new stop of each seized thread (`ptrace_restop`): a listening thread leaves its stop and makes the new one at once, and another makes it when its tracer next resumes it. A thread that reports the group stop itself drops the request, which the report answers. A request that comes before the `PTRACE_LISTEN` is kept, and the listen then resumes the thread into the new stop at once: strace answers a group stop with `PTRACE_LISTEN`, and the `SIGCONT` it sends can end the stop on another processor before the listen.
+`PTRACE_LISTEN` (`ptrace_listen`) keeps a seized thread in a `PTRACE_EVENT_STOP` as a stopped process keeps its threads. When the process's stop begins, and on every `SIGCONT`, whether or not it ends a stop, as Linux's `prepare_signal` calls `ptrace_trap_notify`, `ptrace_group_change`, Linux's `JOBCTL_TRAP_NOTIFY`, requests a new stop of each seized thread (`ptrace_restop`): a listening thread leaves its stop and makes the new one at once, and another makes it when its tracer next resumes it. A thread that reports the group stop itself drops the request, which the report answers. A request that comes before the `PTRACE_LISTEN` is kept, and the listen then resumes the thread into the new stop at once: strace answers a group stop with `PTRACE_LISTEN`, and the `SIGCONT` it sends can end the stop on another processor before the listen.
 
 ### Registers and system calls
 
@@ -96,7 +96,7 @@ Bringing a page in, and a copy to or from the tracer's own memory, may sleep, an
 
 A tracer's wait selects every tracee as if `__WALL` were set, including nonleader threads and zero-signal children. A traced thread's end also sends its tracer `SIGCHLD` (`ptrace_exit_notify`), with the siginfo `proc_child_info` makes for the tracer, translated into the tracer's namespaces as a parent's is into the parent's.
 
-`ptrace_detach`, for `PTRACE_DETACH`, a tracer's end and the report of a process's end, clears the tracing state, the trap flag the kernel set and the debug registers, and resumes a stopped tracee with the signal given. A tracee whose process is stopped then parks in that stop. When the tracer's process ends (`ptrace_tracer_gone`), each tracee is detached, sent `SIGKILL` first under `PTRACE_O_EXITKILL`, and the parent of a tracee whose process has ended is notified, as the tracer's report would have notified it.
+`ptrace_detach`, for `PTRACE_DETACH`, a tracer's end and the report of a process's end, clears the tracing state, the trap flag the kernel set and the debug registers, and resumes a stopped tracee with the signal given. A tracee whose process is stopped then parks in that stop: a live one owes the stop again, and is marked for signal work and woken (`ptrace_signal_wake`), as Linux's `__ptrace_unlink` sets `JOBCTL_STOP_PENDING` and calls `ptrace_signal_wake_up`, since one its tracer resumed during the stop may sleep in a wait, such as a pipe's, that ends only on that flag. When the tracer's process ends (`ptrace_tracer_gone`), each tracee is detached, sent `SIGKILL` first under `PTRACE_O_EXITKILL`, and the parent of a tracee whose process has ended is notified, as the tracer's report would have notified it.
 
 ### The hardware breakpoints
 

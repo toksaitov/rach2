@@ -4629,9 +4629,13 @@ static void sig_discard(process_t *target, uint64_t bits)
  * What a signal to the process of `target` does before any thread takes it,
  * with interrupts off. SIGCONT cancels the pending stops and ends a stop in
  * effect: every stopped thread runs again, and the parent learns of it from
- * wait4(WCONTINUED) and a SIGCHLD. SIGKILL makes a stopped thread runnable,
- * so it can take its lethal default. A stop signal cancels a pending
- * SIGCONT. Every other signal stays pending while the process is stopped.
+ * wait4(WCONTINUED) and a SIGCHLD. Every SIGCONT, with a stop in effect or
+ * not, requests a new PTRACE_EVENT_STOP of each seized thread and lets one
+ * out of PTRACE_LISTEN (`ptrace_group_change`), as Linux 6.12.115's
+ * prepare_signal calls ptrace_trap_notify for each (kernel/signal.c:
+ * 902-967). SIGKILL makes a stopped thread runnable, so it can take its
+ * lethal default. A stop signal cancels a pending SIGCONT. Every other
+ * signal stays pending while the process is stopped.
  */
 static void sig_job_control(process_t *target, int signo)
 {
@@ -4654,7 +4658,6 @@ static void sig_job_control(process_t *target, int signo)
                     sched_make_ready(t);
                 }
             }
-            ptrace_group_change(tg);
             tg->leader->jc_status = 0xffff; /* WIFCONTINUED */
             if (parent) {
                 k_memset(&child, 0, sizeof(child));
@@ -4666,6 +4669,7 @@ static void sig_job_control(process_t *target, int signo)
                 wq_wake_all(&parent->tg->chld);
             }
         }
+        ptrace_group_change(tg);
     } else if (signo == SIGKILL) {
         for (t = proc_list; t; t = t->next) {
             if (t->tg == tg && t->state == PROC_STOPPED) {
