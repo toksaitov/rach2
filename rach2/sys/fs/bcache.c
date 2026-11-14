@@ -1873,6 +1873,19 @@ int bcache_state(block_device_t *dev, uint64_t blk)
     return state;
 }
 
+/* The place changes under `wb_lock` alone (`bcache_dirty_ordered`), but only
+ * by a mark of the caller's, who alone dirties the block, and the write
+ * that cleans it clears it under both locks, so `cache_spin` is enough. */
+int bcache_order(block_device_t *dev, uint64_t blk)
+{
+    uint32_t flags = cache_lock();
+    struct bbuf *b = index_find(dev, blk);
+    int order = b != 0 && b->dirty ? b->order : -1;
+
+    cache_unlock(flags);
+    return order;
+}
+
 int bcache_copy_cached(block_device_t *dev, uint64_t blk, uint32_t offset, void *out,
                        uint32_t count)
 {

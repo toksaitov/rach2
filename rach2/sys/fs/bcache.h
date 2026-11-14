@@ -326,6 +326,16 @@ int bcache_cached(block_device_t *dev, uint64_t blk);
  * is, and 2 when it is and is dirty, for cachestat(2). */
 int bcache_state(block_device_t *dev, uint64_t blk);
 
+/**
+ * The place in its device's writeback of `dev`'s block `blk`
+ * (`bcache_dirty_ordered`): BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 for a
+ * dirty block, and -1 for a clean one or one the cache lacks. A write may
+ * clean the block at any time, so the answer is exact only for a caller that
+ * alone dirties the block, under a lock of its own, and then only for a
+ * dirty block it read as clean or a place it set.
+ */
+int bcache_order(block_device_t *dev, uint64_t blk);
+
 /** Copy a resident buffer's bytes [offset, offset + count) into `out`
  * without a disk read, a wait or a hold. Return 1, or 0 for an absent,
  * discarded or busy buffer or a range outside its valid bytes. The state
