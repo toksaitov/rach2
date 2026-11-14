@@ -2191,6 +2191,18 @@ int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
     return 1;
 }
 
+/** The most bytes one discard gives disk `d`'s device, as `block_discard`
+ * splits a range: 0 when the device takes none, as a polled one does not. */
+static uint64_t disk_discard_bytes(struct disk *d)
+{
+    block_device_t *s = d->backing ? block_submitter(d->backing) : 0;
+
+    if (!s || !s->submit || (s->flags & BLOCK_FAULT_SAFE)) {
+        return 0;
+    }
+    return (uint64_t)s->max_discard * BLOCK_SECTOR_SIZE;
+}
+
 int devfs_disk_row(int i, struct devfs_disk_row *row)
 {
     const struct block_device *dev, *alias;
@@ -2209,6 +2221,7 @@ int devfs_disk_row(int i, struct devfs_disk_row *row)
         row->removable = 0;
         row->model = "";
         row->serial = "";
+        row->discard_bytes = 0;
         return 1;
     }
     node = &disk_nodes[i];
@@ -2225,6 +2238,7 @@ int devfs_disk_row(int i, struct devfs_disk_row *row)
     row->removable = node->disk->removable;
     row->model = node->disk->model;
     row->serial = node->disk->serial;
+    row->discard_bytes = disk_discard_bytes(node->disk);
     return 1;
 }
 

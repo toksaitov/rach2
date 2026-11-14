@@ -1333,8 +1333,9 @@ fail:
 /**
  * Register `vb`'s disk, as transport `virtio` at its place, with its
  * serial laid out as IDENTIFY words 10 to 19, first character in the high
- * byte, and no model, as Linux's virtio_blk gives a disk none; the first as
- * `block0` when no other driver has published one.
+ * byte, the firmware and the model words blank, as Linux's virtio_blk gives
+ * a disk no model; the first as `block0` when no other driver has published
+ * one.
  */
 static void vblk_publish(struct vblk *vb)
 {
@@ -1342,7 +1343,7 @@ static void vblk_publish(struct vblk *vb)
     int i;
 
     for (i = 0; i < 256; i++) {
-        words[i] = 0;
+        words[i] = i >= 10 && i < 47 ? 0x2020u : 0u; /* ATA pads with spaces */
     }
     for (i = 0; i < 10; i++) {
         uint8_t hi = (uint8_t)vb->serial[2 * i], lo = (uint8_t)vb->serial[2 * i + 1];

@@ -339,6 +339,8 @@ struct devfs_disk_row {
     uint64_t start, sectors;
     int removable;
     const char *model, *serial;
+    uint64_t discard_bytes; /* the most bytes one BLKDISCARD gives the
+                               device at once; 0 when it takes none */
 };
 
 /** The major and minor numbers of the node at `path`, /dev and its leaf:

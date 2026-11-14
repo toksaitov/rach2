@@ -6167,7 +6167,8 @@ static void ap_loopattr(struct procfs_text *t, int key, const char *name)
  * programs like it: a disk's or a partition's numbers, size in 512-byte
  * sectors, first sector and number, a disk's range of minor numbers and
  * whether it is a removable stick, its uevent; its queue's sizes, a transfer
- * of at most 128 KiB, no discard and no scheduler; its device's model,
+ * of at most 128 KiB, the discard its device takes, in 512-byte pieces, and
+ * no scheduler; its device's model,
  * serial number and vendor, "USB" or "ATA"; and a loop device's `loop`
  * attributes (`ap_loopattr`). Another attribute of a disk, a partition or
  * a queue is 0, and a device's revision is empty. -ENOENT for no such
@@ -6211,6 +6212,10 @@ static int procfs_gen_blockattr(struct procfs_text *t, int node, int key, int at
                                               : "");
     } else if (node == SYSFS_BLOCK_LOOP) {
         ap_loopattr(t, key, name);
+    } else if (same_word(name, "discard_max_bytes")) {
+        ap_u64(t, row.discard_bytes);
+    } else if (same_word(name, "discard_granularity")) {
+        ap_u32(t, row.discard_bytes != 0 ? (uint32_t)BLOCK_SECTOR_SIZE : 0u);
     } else {
         static const char *const fixed[][2] = {{"range", "16"},
                                                {"ext_range", "256"},
