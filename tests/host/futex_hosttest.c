@@ -154,8 +154,11 @@ static uint64_t armed;
 static int64_t armed_ns;
 static uint32_t armed_steps;
 /* The seconds a setting of the real-time clock moves it by in the next
- * wait, or in the next fault at `step_at`; 0 for none. */
-static int64_t step_in_wait, step_in_fault;
+ * wait, or in the next fault at `step_at`; 0 for none. With `step_after_fire`,
+ * the next wait of the lag rows reaches its time of the monotonic clock, the
+ * timer's pass records the expiry (`wakeup_fired`), and the clock is then
+ * set by that many seconds before the thread runs. */
+static int64_t step_in_wait, step_in_fault, step_after_fire;
 static uint32_t step_at;
 static struct futex_q waiter;
 static struct futex_sleeper waiter_s; /* the model's waiter's sleep */
@@ -469,7 +472,8 @@ static void model_reach(int64_t ns)
 
 /** A wait that ends at its deadline, noting the tick and the time it was
  * armed for. In the lag rows the clocks go on to its tick, or with
- * `fine_wakes` to its time. */
+ * `fine_wakes` to its time, and with `step_after_fire` to its time, where
+ * the timer's wake records the expiry, and the clock is then set. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -477,7 +481,12 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     armed = current_proc->wakeup_tick;
     armed_ns = current_proc->wakeup_ns;
     armed_steps = current_proc->rt_steps;
-    if (step_in_wait != 0) {
+    if (step_after_fire != 0 && rt_ticking && armed_ns != 0 && !cond(arg)) {
+        model_reach(armed_ns);
+        current_proc->wakeup_fired = armed_ns;
+        model_step(step_after_fire);
+        step_after_fire = 0;
+    } else if (step_in_wait != 0) {
         model_step(step_in_wait);
         step_in_wait = 0;
         if (!cond(arg)) {
@@ -809,10 +818,17 @@ static int32_t timed_wait(uint32_t now, int32_t sec, int32_t nsec, uint32_t faul
  * as Linux's futex_init_timeout fixes the hrtimer's time
  * (kernel/futex/syscalls.c:175-186), by the interrupt between ticks. A wait
  * of a millisecond from half a tick into tick 2000 is armed for that time,
- * 2000.5 ticks and a millisecond, not for whole ticks.
+ * 2000.5 ticks and a millisecond, not for whole ticks. A relative timeout
+ * of LLONG_MAX seconds and 999999999 ns, which a 64-bit long can give, from
+ * a clock a nanosecond into its tick, ends at its tick alone, saturated, as
+ * Linux's timespec64_to_ktime and ktime_add_safe saturate it at KTIME_MAX,
+ * and adding it to the clock does not overflow.
  */
 static void deadline_fixed(void)
 {
+    isr_params_t p;
+    struct kernel_timespec ts;
+
     CHECK(timed_wait(1000, 0, (int32_t)TICK_NS, 50) == -ETIMEDOUT && waits == 0,
           "a deadline a fault outlasted ends the wait without a sleep");
     CHECK(timed_wait(2000, 1, 0, 50) == -ETIMEDOUT && waits == 1 && armed == 2001u + TICK_HZ &&
@@ -829,6 +845,27 @@ static void deadline_fixed(void)
           "a wait of a second begun while tick 2001 is pending sleeps until a second and a "
           "tick past the clock's 2001");
     tick_pending = 0;
+
+    if (sizeof(long) > 4u) {
+        ts.tv_sec = (long)(~0ul >> 1);
+        ts.tv_nsec = 999999999;
+        k_memcpy(user + 608, &ts, sizeof(ts));
+        word_set(600, 7u);
+        kernel_ticks = 3000;
+        mono_phase_ns = 1;
+        waits = 0;
+        armed = 0;
+        armed_ns = -1;
+        k_memset(&p, 0, sizeof(p));
+        p.ebx = 600;
+        p.ecx = FUTEX_WAIT | FUTEX_PRIVATE_FLAG;
+        p.edx = 7;
+        p.esi = 608;
+        CHECK(sys_futex(&p) == -ETIMEDOUT && waits == 1 && armed_ns == 0 &&
+                  armed == 3001u + (((uint64_t)1 << 40) + 1u) * TICK_HZ,
+              "a relative timeout of LLONG_MAX seconds saturates and ends at its tick alone");
+        mono_phase_ns = 0;
+    }
 }
 
 /**
@@ -923,7 +960,10 @@ static int32_t rt_wait(uint32_t now, int32_t at)
  * read then is still short of the time counts again and sleeps on, since
  * Linux's hrtimer never expires before its clock reaches its time; where
  * the interrupt between ticks comes, it ends the wait in one sleep, when
- * the monotonic clock reaches the time real time reaches it at.
+ * the monotonic clock reaches the time real time reaches it at; and a step
+ * back of the clock after that wake, before the thread runs, leaves it
+ * ended, as Linux's hrtimer_wakeup clears the sleeper's task and
+ * futex_wait returns -ETIMEDOUT.
  */
 static void realtime_steps(void)
 {
@@ -979,6 +1019,11 @@ static void realtime_steps(void)
               model_mono_ns() == 2000LL * TICK_NS + 1000000000,
           "the interrupt between ticks ends it once the clock reaches its time");
     fine_wakes = 0;
+    step_after_fire = -1;
+    CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 1 &&
+              model_mono_ns() == 2000LL * TICK_NS + 1000000000,
+          "a step back after the timer ended the wait at its time leaves it ended");
+    step_after_fire = 0;
     rt_ticking = 0;
     rt_lag_ns = 0;
     mono_phase_ns = 0;

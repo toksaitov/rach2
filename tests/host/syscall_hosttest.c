@@ -325,10 +325,11 @@ void kirq_restore(uint32_t flags)
 
 /* Real time less time since boot, in seconds and nanoseconds below a
  * second, and the nanoseconds a setting of the clock moves it by right after
- * the next reading of it, or in the next sleep; 0 for none. */
+ * the next reading of it, in the next sleep, or right after the timer's
+ * wake of the next sleep at its time (`wake_between`); 0 for none. */
 static int64_t model_epoch = 1000000;
 static int32_t model_epoch_ns;
-static int64_t step_after_offset, step_in_sleep;
+static int64_t step_after_offset, step_in_sleep, step_after_wake;
 
 /** Real time as the clock keeps it: time since boot plus the offset, the
  * boot's epoch, which a setting of the clock moves. */
@@ -772,7 +773,10 @@ static void clock_to(uint64_t tick)
  * `switch_back`, as the kernel's `schedule` leaves it when it switches back.
  *
  * With `step_in_sleep`, the clock is set once instead, and the sleeper left
- * blocked for the next tick to wake.
+ * blocked for the next tick to wake. With `wake_between` and
+ * `step_after_wake`, the timer's wake at the sleeper's time records the
+ * expiry (`wakeup_fired`), as its pass does, and the clock is set after it,
+ * before the sleeper runs.
  *
  * No row yields a thousand times. A sleep that does, one that returns before
  * its clock moves to a caller that sleeps again until it has, is a fault the
@@ -811,6 +815,11 @@ void schedule(void)
         mono_phase_ns = at - ((int64_t)kernel_uptime_seconds * 1000000000 +
                               (int64_t)kernel_second_ticks * TICK_NS);
         wake(0);
+        if (step_after_wake != 0) {
+            current_proc->wakeup_fired = at;
+            model_step(step_after_wake);
+            step_after_wake = 0;
+        }
         return;
     }
     if (step_in_sleep != 0) {
@@ -1895,7 +1904,9 @@ static void ask_rt_sleep(isr_params_t *p, uint64_t tick)
  * counts the offset to the nanosecond, as Linux subtracts its base's whole
  * offset (kernel/time/hrtimer.c:922, 2140): after a step of half a second
  * forward it sleeps on to the tick of 11.5 s, and after one of half a
- * second back to that of 12.5 s.
+ * second back to that of 12.5 s. A step back of a second after the timer
+ * woke the sleep at its time, before it ran, leaves it ended, as Linux's
+ * do_nanosleep ends once hrtimer_wakeup has cleared its task.
  */
 static void realtime_steps(void)
 {
@@ -1926,6 +1937,14 @@ static void realtime_steps(void)
     CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 12u * TICK_HZ &&
               blocked_until == 25u * TICK_HZ / 2u && kernel_ticks == 25u * TICK_HZ / 2u,
           "a step of half a second back moves the sleep's tick half a second on");
+    ask_rt_sleep(&p, TICK_HZ + 10u);
+    wake_between = 1;
+    step_after_wake = -1000000000LL;
+    CHECK(clock_sleep_call(&p) == 0 && blocks == 1 && kernel_ticks == TICK_HZ + 10u,
+          "a step back after the timer ended an absolute sleep on real time leaves it ended");
+    wake_between = 0;
+    step_after_wake = 0;
+    mono_phase_ns = 0;
     model_epoch = 1000000;
     model_epoch_ns = 0;
 }

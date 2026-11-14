@@ -1,6 +1,7 @@
 /**
  * Check that a message-queue wait to a time of real time follows a setting
- * of the clock, as Linux's wq_sleep waits on an hrtimer of CLOCK_REALTIME.
+ * of the clock, as Linux's wq_sleep waits on an hrtimer of CLOCK_REALTIME,
+ * and that a signal pending at its deadline ends it with EINTR.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c tests/host/compat/kheap_host.c
@@ -49,6 +50,15 @@ static int64_t rt_lag_ns;
  * between ticks ends a wait at its time (`wakeup_ns`), not at its tick. */
 static uint32_t mono_phase_ns;
 static int fine_wakes;
+/* With `step_after_fire`, the next wait reaches its time, where the timer's
+ * pass records the expiry (`wakeup_fired`), and the clock is then set by
+ * that many seconds before the thread runs; with `signal_in_wait`, a caught
+ * signal is posted at that time. Whether a signal the process acts on is
+ * pending, and the big lock's depth and takes. */
+static int64_t step_after_fire;
+static int signal_in_wait;
+static int sig_pending;
+static int bkl_depth, bkl_takes;
 
 /** Count and print a failure when `c` is false. */
 #define CHECK(c, detail)                               \
@@ -186,7 +196,9 @@ int in_compat_syscall(void)
 /**
  * The wait: at once when `cond` holds, else a sleep that the tick armed for
  * ends, or, when a row asks for it with `step_in_wait`, a setting of the
- * clock whose wake `cond` must see.
+ * clock whose wake `cond` must see, or with `step_after_fire`, one after
+ * the timer's wake at its time. With `signal_in_wait`, a caught signal is
+ * posted as the sleep ends, after the condition was last tested.
  */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
@@ -202,7 +214,12 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     armed = current_proc->wakeup_tick;
     armed_ns = current_proc->wakeup_ns;
     armed_steps = current_proc->rt_steps;
-    if (step_in_wait != 0) {
+    if (step_after_fire != 0 && armed_ns != 0) {
+        model_reach(armed_ns);
+        current_proc->wakeup_fired = armed_ns;
+        model_step(step_after_fire);
+        step_after_fire = 0;
+    } else if (step_in_wait != 0) {
         model_step(step_in_wait);
         step_in_wait = 0;
         if (!cond(arg)) {
@@ -213,7 +230,37 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     } else {
         kernel_ticks = armed;
     }
+    if (signal_in_wait) {
+        signal_in_wait = 0;
+        sig_pending = 1;
+        self.sig_woken = 1;
+    }
     return 0;
+}
+
+/** Whether a signal the process acts on is pending: the rows' flag. */
+int signal_pending(void)
+{
+    return sig_pending;
+}
+
+/** Whether this processor holds the big lock. */
+int bkl_held(void)
+{
+    return bkl_depth > 0;
+}
+
+/** Take the big lock: count the depth and the take. */
+void bkl_enter(void)
+{
+    bkl_depth++;
+    bkl_takes++;
+}
+
+/** Give the big lock back. */
+void bkl_exit(void)
+{
+    bkl_depth--;
 }
 
 /** No row wakes a queue. */
@@ -342,7 +389,10 @@ static void deadline(struct mq_wait *w, int64_t at)
  * then is still short of the time counts again and sleeps on, since Linux's
  * hrtimer never expires before its clock reaches its time; where the interrupt
  * between ticks comes, it ends the wait in one sleep, when the monotonic clock
- * reaches the time real time reaches it at, a second after the call.
+ * reaches the time real time reaches it at, a second after the call; and a
+ * step back of the clock after that wake, before the thread runs, leaves it
+ * ended, as Linux's hrtimer_wakeup clears the sleeper's task and
+ * schedule_hrtimeout_range_clock returns 0 to wq_sleep.
  */
 static void realtime_steps(void)
 {
@@ -400,15 +450,66 @@ static void realtime_steps(void)
     fine_wakes = 0;
     rt_lag_ns = 0;
     mono_phase_ns = 0;
+
+    rt_sec = 100;
+    deadline(&w, 101);
+    w.q = &q;
+    step_after_fire = -1;
+    CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 1 &&
+              model_mono_ns() == 2000LL * TICK_NS + 1000000000,
+          "a step back after the timer ended the wait at its time leaves it ended");
+    step_after_fire = 0;
+    mono_phase_ns = 0;
+}
+
+/**
+ * A caught signal pending when the deadline has come ends the wait with
+ * EINTR, not ETIMEDOUT, as Linux's wq_sleep tests signal_pending before the
+ * timeout (ipc/mqueue.c): one posted as the timer ends the sleep at its
+ * time, and one pending when a wait whose time has passed begins. The
+ * signal is judged under the big lock, which the wait takes and gives
+ * back. A signal not pending leaves the timeout ETIMEDOUT.
+ */
+static void signal_rows(void)
+{
+    static struct mqueue q;
+    struct mq_wait w;
+
+    rt_sec = 100;
+    fine_wakes = 1;
+    deadline(&w, 101);
+    w.q = &q;
+    signal_in_wait = 1;
+    bkl_takes = 0;
+    CHECK(mq_sleep(&q, &w) == -EINTR && waits == 1 && bkl_takes == 1 && bkl_depth == 0,
+          "a signal posted as the timer ends the wait is EINTR, judged under the big lock");
+    fine_wakes = 0;
+    mono_phase_ns = 0;
+
+    rt_sec = 100;
+    deadline(&w, 99);
+    w.q = &q;
+    sig_pending = 1;
+    self.sig_woken = 1;
+    CHECK(mq_sleep(&q, &w) == -EINTR && waits == 0,
+          "a signal pending when a wait past its time begins is EINTR");
+    sig_pending = 0;
+    self.sig_woken = 0;
+    rt_sec = 100;
+    deadline(&w, 99);
+    w.q = &q;
+    CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 0,
+          "with no signal pending the wait past its time is ETIMEDOUT");
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     realtime_steps();
+    signal_rows();
     if (failures) {
         return 1;
     }
-    printf("mqueue-test: pass: the steps of real time\n");
+    printf("mqueue-test: pass: the steps of real time and a signal at the deadline\n");
     return 0;
 }
