@@ -1421,8 +1421,8 @@ static void disks_row(const struct etude_qemu_profile *p, const struct etude_qem
 }
 
 /**
- * Check the disks on AHCI and the disks that boot first that the launcher
- * attaches, and those it refuses. `p` has the direct firmware.
+ * Check the disks on AHCI and on virtio and the disks that boot first that
+ * the launcher attaches, and those it refuses. `p` has the direct firmware.
  */
 static void test_ahci_disks(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
 {
@@ -1447,6 +1447,14 @@ static void test_ahci_disks(const struct etude_qemu_profile *p, const struct etu
     d[0].cdrom = 0;
     d[0].serial = "s";
     disks_row(&b, site, d, 0, "a serial on AHCI");
+    fill_disks(d, 0, 8);
+    for (i = 0; i < 8; i++)
+        d[i].bus = ETUDE_BUS_VIRTIO;
+    d[1].serial = NULL;
+    d[7].boot = 1;
+    disks_row(&b, site, d, 1, "eight disks on virtio, one without a serial");
+    d[2].cdrom = 1;
+    disks_row(&b, site, d, 0, "a CD on virtio");
     fill_disks(d, 1, 1);
     d[0].boot = 1;
     disks_row(&b, site, d, 1, "a disk on IDE that boots first");
@@ -1482,7 +1490,8 @@ static void disk_line(const struct etude_qemu_profile *p, const struct etude_qem
 /**
  * Check the command lines of disks on IDE and AHCI in one profile, the
  * second AHCI disk booted first; of a CD on IDE booted first; of a disk
- * on NVMe booted first; and of the q35 machine, whose disks on IDE are on
+ * on NVMe booted first; of two disks on virtio, one discarding and one with
+ * a serial booted first; and of the q35 machine, whose disks on IDE are on
  * the ports of its own AHCI, the second booted first. `p` has the direct
  * firmware.
  */
@@ -1501,6 +1510,10 @@ static void test_disk_lines(const struct etude_qemu_profile *p, const struct etu
         {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0}};
     static const struct etude_qemu_disk nvme[] = {
         {"/d/n", ETUDE_BUS_NVME, 0, "s", 0, NULL, 1, 0, 0},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0}};
+    static const struct etude_qemu_disk virtio[] = {
+        {"/d/v0", ETUDE_BUS_VIRTIO, 0, NULL, 1, NULL, 0, 0, 0},
+        {"/d/v1", ETUDE_BUS_VIRTIO, 0, "rach2v", 0, NULL, 1, 0, 0},
         {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0}};
     static const struct etude_qemu_disk q35[] = {
         {"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0},
@@ -1529,6 +1542,11 @@ static void test_disk_lines(const struct etude_qemu_profile *p, const struct etu
     disk_line(&b, site, nvme,
               "-m 268435456B -drive file=/d/n,format=raw,if=none,id=etude-disk0 "
               "-device nvme,drive=etude-disk0,serial=s,bootindex=0 -netdev");
+    disk_line(&b, site, virtio,
+              "-m 268435456B -drive file=/d/v0,format=raw,if=none,id=etude-disk0,"
+              "discard=unmap,detect-zeroes=unmap -device virtio-blk-pci,drive=etude-disk0 "
+              "-drive file=/d/v1,format=raw,if=none,id=etude-disk1 "
+              "-device virtio-blk-pci,drive=etude-disk1,serial=rach2v,bootindex=0 -netdev");
     b.q35 = 1;
     disk_line(&b, site, q35,
               "-m 268435456B -machine q35 -device ich9-ahci,id=etude-ahci "

@@ -186,7 +186,7 @@
           "required": ["name"],
           "properties": {
             "name": {"$ref": "#/$defs/name"},
-            "bus": {"enum": ["ide", "nvme", "ahci", "device"]},
+            "bus": {"enum": ["ide", "nvme", "ahci", "device", "virtio"]},
             "id": {"$ref": "#/$defs/qemu_id"},
             "media": {"enum": ["disk", "cdrom"]},
             "serial": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$"},

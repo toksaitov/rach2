@@ -167,6 +167,17 @@ static int stock(struct legacy_guest *g, const char *name, char hex[65], char *p
     return 0;
 }
 
+/** The bus a profile's disk names as `bus`; IDE when it names none. */
+static enum etude_disk_bus disk_bus(const char *bus)
+{
+    return bus == NULL                  ? ETUDE_BUS_IDE
+           : strcmp(bus, "nvme") == 0   ? ETUDE_BUS_NVME
+           : strcmp(bus, "ahci") == 0   ? ETUDE_BUS_AHCI
+           : strcmp(bus, "device") == 0 ? ETUDE_BUS_DEVICE
+           : strcmp(bus, "virtio") == 0 ? ETUDE_BUS_VIRTIO
+                                        : ETUDE_BUS_IDE;
+}
+
 /**
  * Make disk `i` of the profile from `d`, a name or an object of the
  * profile's `disks`: an empty sparse disk of its size, a CD whose medium is
@@ -188,11 +199,7 @@ static int make_disk(struct legacy_guest *g, size_t i, const struct json *d)
     uint64_t n;
     int fd;
 
-    q->bus = bus == NULL                  ? ETUDE_BUS_IDE
-             : strcmp(bus, "nvme") == 0   ? ETUDE_BUS_NVME
-             : strcmp(bus, "ahci") == 0   ? ETUDE_BUS_AHCI
-             : strcmp(bus, "device") == 0 ? ETUDE_BUS_DEVICE
-                                          : ETUDE_BUS_IDE;
+    q->bus = disk_bus(bus);
     q->id = d->type == JSON_OBJECT ? json_text(d, "id") : NULL;
     q->cdrom = media != NULL && strcmp(media, "cdrom") == 0;
     q->serial = d->type == JSON_OBJECT ? json_text(d, "serial") : NULL;

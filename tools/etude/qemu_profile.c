@@ -391,10 +391,10 @@ static int device_disk_ok(const struct etude_qemu_disk *disks, const struct etud
 }
 
 /**
- * Check disk `d`, on IDE, AHCI or NVMe, against its controller, `*ide` and
- * `*ahci` counting the disks on IDE and on AHCI before it: a place free; a CD
- * on IDE alone, of a raw medium, without a serial or `discard`; and a serial
- * on IDE or NVMe alone, which NVMe needs.
+ * Check disk `d`, on IDE, AHCI, NVMe or virtio, against its controller,
+ * `*ide` and `*ahci` counting the disks on IDE and on AHCI before it: a place
+ * free; a CD on IDE alone, of a raw medium, without a serial or `discard`;
+ * and a serial on IDE, NVMe or virtio alone, which NVMe needs.
  *
  * @return 0, or EINVAL.
  */
@@ -406,6 +406,9 @@ static int bus_disk_check(const struct etude_qemu_disk *d, size_t *ide, size_t *
             return EINVAL;
     } else if (d->bus == ETUDE_BUS_AHCI) {
         if (++*ahci > AHCI_PORTS || d->serial != NULL || d->cdrom)
+            return EINVAL;
+    } else if (d->bus == ETUDE_BUS_VIRTIO) {
+        if (d->cdrom)
             return EINVAL;
     } else if (d->bus != ETUDE_BUS_NVME || d->cdrom || d->serial == NULL) {
         return EINVAL;
@@ -1058,6 +1061,11 @@ static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, 
     add(l, 0, "-device");
     if (d->bus == ETUDE_BUS_NVME) {
         add(l, 0, "nvme,drive=%s,serial=%s%s", id, d->serial, boot);
+        return;
+    }
+    if (d->bus == ETUDE_BUS_VIRTIO) {
+        add(l, 0, "virtio-blk-pci,drive=%s%s%s%s", id, d->serial != NULL ? ",serial=" : "",
+            d->serial != NULL ? d->serial : "", boot);
         return;
     }
     if (d->bus == ETUDE_BUS_AHCI) {

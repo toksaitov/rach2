@@ -390,6 +390,7 @@
 1 manifest ./disks-shape.json | /disks/15: has "base", which this form does not allow
 1 manifest ./disks-shape.json | /disks/16/cluster_bytes: 3000 is not one of the values the schema allows
 1 manifest ./disks-shape.json | /disks/17: has "serial", which this form does not allow
+1 manifest ./disks-shape.json | /disks/18/bus: is not "ide"
 
 # A machine's cards forward only the ports the case reserves, each once by a
 # protocol; the cards of a guest case's boot forward none and are not

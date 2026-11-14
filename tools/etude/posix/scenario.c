@@ -438,6 +438,8 @@ static int disk_decl(const struct eh_json *v, struct disk_decl *d)
         d->bus = ETUDE_BUS_AHCI;
     else if (bus != NULL && strcmp(bus, "device") == 0)
         d->bus = ETUDE_BUS_DEVICE;
+    else if (bus != NULL && strcmp(bus, "virtio") == 0)
+        d->bus = ETUDE_BUS_VIRTIO;
     else if (bus != NULL && strcmp(bus, "ide") != 0)
         return -1;
     if (media != NULL && strcmp(media, "cdrom") == 0)

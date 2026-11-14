@@ -594,6 +594,7 @@ static enum etude_disk_bus disk_bus(const struct json *v)
     return same(bus, "nvme")     ? ETUDE_BUS_NVME
            : same(bus, "ahci")   ? ETUDE_BUS_AHCI
            : same(bus, "device") ? ETUDE_BUS_DEVICE
+           : same(bus, "virtio") ? ETUDE_BUS_VIRTIO
                                  : ETUDE_BUS_IDE;
 }
 

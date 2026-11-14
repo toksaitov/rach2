@@ -108,10 +108,11 @@ int etude_qemu_guest_address(const struct etude_qemu_device *d, const char *addr
 
 /* The controller a disk of a profile is attached to. */
 enum etude_disk_bus {
-    ETUDE_BUS_IDE,   /* one of the four places of the PC's IDE controllers */
-    ETUDE_BUS_NVME,  /* an NVMe controller of its own */
-    ETUDE_BUS_AHCI,  /* one of the six ports of the profile's one ich9-ahci */
-    ETUDE_BUS_DEVICE /* the device whose `drive` is the disk's `id` */
+    ETUDE_BUS_IDE,    /* one of the four places of the PC's IDE controllers */
+    ETUDE_BUS_NVME,   /* an NVMe controller of its own */
+    ETUDE_BUS_AHCI,   /* one of the six ports of the profile's one ich9-ahci */
+    ETUDE_BUS_DEVICE, /* the device whose `drive` is the disk's `id` */
+    ETUDE_BUS_VIRTIO  /* a virtio-blk-pci of its own */
 };
 
 /* A disk of a profile, its file resolved to a path. */
@@ -119,7 +120,8 @@ struct etude_qemu_disk {
     const char *path; /* the file QEMU opens; NULL ends a list */
     enum etude_disk_bus bus;
     int cdrom;          /* a CD drive with the file as its read-only medium, on IDE */
-    const char *serial; /* the drive's serial number, or NULL; an NVMe disk has one */
+    const char *serial; /* the drive's serial number, or NULL; an NVMe disk has one,
+                           and an IDE or virtio disk may */
     int discard;        /* the guest's discards, and its writes of zeros, free the
                            file's blocks */
     const char *id;     /* the identity a device's `drive` names, on
@@ -243,10 +245,10 @@ struct etude_qemu_site {
  * what the launcher attaches: at most ETUDE_QEMU_DISKS, of which at most four
  * are on IDE, CDs among them, and six on AHCI; a path for each; an NVMe disk
  * with a serial; a serial that is a word of at most ETUDE_QEMU_SERIAL_MAX
- * printable characters without a comma, on NVMe and IDE alone; a CD on IDE,
- * of a raw medium, without a serial or `discard`; an identity of QEMU's, given
- * once, for each disk on ETUDE_BUS_DEVICE alone; and at most one disk that
- * boots first, on another bus.
+ * printable characters without a comma, on NVMe, IDE and virtio alone; a CD
+ * on IDE, of a raw medium, without a serial or `discard`; an identity of
+ * QEMU's, given once, for each disk on ETUDE_BUS_DEVICE alone; and at most
+ * one disk that boots first, on another bus.
  *
  * @return 0, or EINVAL.
  */

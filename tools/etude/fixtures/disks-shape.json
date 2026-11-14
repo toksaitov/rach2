@@ -58,7 +58,8 @@
               {"name": "overlay-empty", "base": "stick", "cluster_bytes": 4096, "size_bytes": 1048576},
               {"name": "overlay-cd", "media": "cdrom", "base": "stick", "cluster_bytes": 4096},
               {"name": "cluster-odd", "base": "stick", "cluster_bytes": 3000},
-              {"name": "ahci-serial", "bus": "ahci", "serial": "stick"}
+              {"name": "ahci-serial", "bus": "ahci", "serial": "stick"},
+              {"name": "virtio-cd", "bus": "virtio", "media": "cdrom"}
             ],
             "cpu": "max",
             "processors": 1,
