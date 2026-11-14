@@ -62,6 +62,9 @@ real-time
 .Fa abs ,
 or not at all for a descriptor with
 .Dv O_NONBLOCK .
+The wait ends when real time reaches the deadline, between ticks, as
+Linux's hrtimer ends it, or where the timer has no interrupt between
+ticks at the first tick at which the clock has reached it.
 A setting of the real-time clock or a leap second moves the deadline, as
 in Linux: a step past it ends the wait at the next tick, and a step back
 keeps the call waiting until the clock reaches it again.
