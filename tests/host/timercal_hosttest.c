@@ -22,12 +22,15 @@
  * STOP_STRIDE-th elsewhere. Each result must be within TOLERANCE of the
  * rate the row set. A run with two stops is not a row: the calibration
  * against the 8254 is right when one of its three waits had none, and the
- * TSC's against the PM timer when one of its three windows had none. Other
- * rows check that a scale past 32 bits gives all ones, that a reference
- * that stops gives no calibration, when the TSC is measured at all, and
- * that the clock follows KVM's clock pages (`kvm_rows`), whose time a
- * processor with a TSC ahead, a stop inside a hand-over or a hand-over a
- * minute late does not move, with a platform counter and without one.
+ * TSC's against the PM timer when one of its three windows had none. With
+ * each window's end read of the PM timer held up 800 us, the TSC's
+ * calibration gives no rate, never one 2% low, and with the first three
+ * held, the rate of those after. Other rows check that a scale past 32
+ * bits gives all ones, that a reference that stops gives no calibration,
+ * when the TSC is measured at all, and that the clock follows KVM's clock
+ * pages (`kvm_rows`), whose time a processor with a TSC ahead, a stop
+ * inside a hand-over or a hand-over a minute late does not move, with a
+ * platform counter and without one.
  *
  * Timer rows use a 1 GHz APIC model, one count per nanosecond, on one
  * shared vector. They check a common monotonic scheduler phase, pending
@@ -158,13 +161,41 @@ void kirq_restore(uint32_t flags)
     }
 }
 
-/** The PM timer's register: its count at the clock, in 24 bits. */
+/* The held reads of the PM timer: while `pm_holds` is not 0, a read that
+ * ends a window of the TSC's calibration, 20 ms of the PM timer past the
+ * read that began it, `pm_window_start`, is held up `pm_hold_ns` before the
+ * PM timer is read, and `pm_holds` counts down unless it is negative. */
+static uint64_t pm_hold_ns;
+static int pm_holds;
+static int pm_in_window;
+static uint32_t pm_window_start;
+
+/** The PM timer's count at the clock, in 24 bits. */
+static uint32_t pm_count(void)
+{
+    return (uint32_t)(pm_base + now_ns * 3579545u / 1000000000u) & 0xFFFFFFu;
+}
+
+/** The PM timer's register: its count at the clock, in 24 bits, the read
+ * held up where it ends a window and the row holds one. */
 int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
 {
     (void)g;
     elapse();
     if (!pm_frozen) {
-        pm_frozen_value = (uint32_t)(pm_base + now_ns * 3579545u / 1000000000u) & 0xFFFFFFu;
+        pm_frozen_value = pm_count();
+        if (pm_holds != 0 && !pm_in_window) {
+            pm_in_window = 1;
+            pm_window_start = pm_frozen_value;
+        } else if (pm_holds != 0 &&
+                   ((pm_frozen_value - pm_window_start) & 0xFFFFFFu) >= 3579545u / 50u) {
+            now_ns += pm_hold_ns;
+            pm_frozen_value = pm_count();
+            pm_in_window = 0;
+            if (pm_holds > 0) {
+                pm_holds--;
+            }
+        }
     }
     *value = pm_frozen_value;
     return 0;
@@ -663,6 +694,44 @@ static void stop_rows(int path, uint32_t truth)
         printf("  %s: %lu of %lu stops gave a wrong result\n", path_names[path], wrong, rows);
     }
     CHECK(wrong == 0, "a stop anywhere in a calibration leaves its result right");
+}
+
+/**
+ * The TSC's calibration against the PM timer with each window's end read
+ * held up 800 us before the PM timer is read, the first `windows` windows
+ * or, for -1, every one: the middle of that end's spread is 400 us before
+ * the read, which makes a window's rate 2% low. Return the calibration's
+ * counts in a tick.
+ */
+static uint32_t held_calibrate(int windows)
+{
+    reference(1);
+    now_ns = 1000000u;
+    accesses = 0;
+    stop_at = 0;
+    tsc_per_tick = 0;
+    tsc_measured = 0;
+    ref_kind = REF_NONE;
+    tsc_one_rate_bit = 1;
+    pm_hold_ns = 800000u;
+    pm_holds = windows;
+    pm_in_window = 0;
+    return timer_calibrate();
+}
+
+/** Windows held up whose spread passes its bound give no rate, never one
+ * 2% low; the windows after the held ones give the right rate. */
+static void held_rows(uint32_t truth)
+{
+    uint32_t counts;
+
+    counts = held_calibrate(-1);
+    CHECK(counts == 0, "a calibration whose every window's end was held up 800 us gives no rate");
+    counts = held_calibrate((int)TSC_WINDOWS);
+    CHECK(close_to(counts, truth), "one whose first three windows' ends were held up gives the "
+                                   "rate of the windows after them");
+    pm_holds = 0;
+    pm_hold_ns = 0;
 }
 
 /* The rows' times, in milliseconds on the model's clock. */
@@ -1402,6 +1471,7 @@ int main(int argc, char **argv)
     tsc_khz = 2893417u;
     stop_rows(TSC_BY_PIT, (uint32_t)((uint64_t)tsc_khz * 1000u / TICK_HZ));
     stop_rows(TSC_BY_PM, (uint32_t)((uint64_t)tsc_khz * 1000u / TICK_HZ));
+    held_rows((uint32_t)((uint64_t)tsc_khz * 1000u / TICK_HZ));
 
     /* A rate past 32 bits, which a stop longer than the reference's wrap can
      * give, is no measurement, and no division fault on i686. */

@@ -206,6 +206,20 @@ static int tsc_watch_measured;
 #define TSC_WINDOWS     3u
 #define TSC_WAIT_COUNTS (PIT_COUNTS_PER_SEC / 50u)
 
+/*
+ * A window against the platform's counter counts only when the spread of
+ * its two ends, the TSC's counts across each end's read of the counter
+ * together, is at most 2^-TSC_SPREAD_SHIFT of the window: the middle of each
+ * end is then within half its spread of the read, and the rate within one
+ * part in 512, inside the refinement's hundredth (arch/x86_64/vclock.c),
+ * as Linux's tsc_read_refs refuses a read pair past SMI_TRESHOLD
+ * (arch/x86/kernel/tsc.c). Up to TSC_TRIES windows are made to find
+ * TSC_WINDOWS that count, as Linux's pit_hpet_ptimer_calibrate_cpu tries
+ * again a calibration an SMI disturbed.
+ */
+#define TSC_SPREAD_SHIFT 8u /* a 64-bit shift, no divide on i686 */
+#define TSC_TRIES        (4u * TSC_WINDOWS)
+
 #ifdef RACH2_HOSTTEST
 void host_tsc_read(uint32_t *lo, uint32_t *hi);
 #endif
@@ -519,21 +533,26 @@ static uint32_t tsc_against_pit(void)
 }
 
 /**
- * The TSC's counts in a tick over the window of TSC_WINDOWS whose readings
- * of the platform's counter were closest to the TSC's, each window 20 ms of
- * that counter. Each end reads the TSC on both sides of the counter's read
- * and takes the middle, so a read held up, as an emulated device's is, adds
- * to the spread and not to the count; the counter counts on while the
- * processor is stopped, so no window needs the least. A counter that does
- * not move in 2^26 reads gives 0.
+ * The TSC's counts in a tick over the window whose readings of the
+ * platform's counter were closest to the TSC's, of the first TSC_WINDOWS
+ * windows whose spread is within the bound at TSC_SPREAD_SHIFT, each window
+ * 20 ms of that counter. Each end reads the TSC on both sides of the
+ * counter's read and takes the middle, so a read held up, as an emulated
+ * device's is, adds to the spread and not to the count, and the bound keeps
+ * a window whose ends were both held up from giving a rate off by half
+ * their spread; the counter counts on while the processor is stopped, so
+ * no window needs the least. 0 where none of TSC_TRIES windows is within
+ * the bound, so that a host too loaded to read the counter promptly leaves
+ * the TSC unmeasured and not measured wrong, and where a counter does not
+ * move in 2^26 reads.
  */
 static uint32_t tsc_against_reference(void)
 {
     uint32_t hz = refclock_hz(), mask = refclock_mask(), want = hz / 50u;
-    uint32_t r0, r1, seen = 0, spins, best = 0, i;
-    uint64_t a0, b0, a1, b1, spread, best_spread = 0;
+    uint32_t r0, r1, seen = 0, spins, best = 0, kept = 0, i;
+    uint64_t a0, b0, a1, b1, gone, spread, best_spread = 0;
 
-    for (i = 0; i < TSC_WINDOWS; i++) {
+    for (i = 0; i < TSC_TRIES && kept < TSC_WINDOWS; i++) {
         a0 = tsc_now();
         r0 = refclock_read();
         b0 = tsc_now();
@@ -548,8 +567,13 @@ static uint32_t tsc_against_reference(void)
             return 0;
         }
         spread = (b0 - a0) + (b1 - a1);
+        gone = ((a1 + b1) >> 1) - ((a0 + b0) >> 1);
+        if (spread > gone >> TSC_SPREAD_SHIFT) {
+            continue;
+        }
+        kept++;
         if (best == 0 || spread < best_spread) {
-            best = tsc_per_tick_of(((a1 + b1) >> 1) - ((a0 + b0) >> 1), seen, hz);
+            best = tsc_per_tick_of(gone, seen, hz);
             best_spread = spread;
         }
     }
