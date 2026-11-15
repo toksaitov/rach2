@@ -1,0 +1,9 @@
+stackscan: deepest nonzero byte 0x1e58 below main's stack
+stackscan: expected: 0 nonzero bytes outside [1024,2048), first 0 last 0
+IGT-Version: 2.0-NO-GIT (x86_64) (Linux: 6.18.58.1-microsoft-standard-WSL2 x86_64)
+Using IGT_SRANDOM=1794771429 for randomisation
+Test requirement not met in function drm_open_driver, file ../lib/drmtest.c:749:
+Test requirement: !(fd<0)
+No known gpu found for chipset flags 0x1 (intel)
+Last errno: 2, No such file or directory
+Subtest read-write: SKIP (0.000s)

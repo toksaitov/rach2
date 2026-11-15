@@ -1,0 +1,49 @@
+stackscan: deepest nonzero byte 0x4f30 below main's stack
+stackscan: expected: 2057 nonzero bytes outside [1024,2048), first 12544 last 16376
+stackscan: expected[12552]: 0x73b941616888 /lib/libc.so.6 ?+0x1e5888
+stackscan: expected[12568]: 0x73b9414d4d0f /lib/libc.so.6 ?+0xa3d0f
+stackscan: expected[12616]: 0x73b941544d2f /lib/libc.so.6 __tsearch+0xef
+stackscan: expected[12632]: 0x73b941616888 /lib/libc.so.6 ?+0x1e5888
+stackscan: expected[12648]: 0x73b94145cb30 /lib/libc.so.6 ?+0x2bb30
+stackscan: expected[12712]: 0x73b94145d4c9 /lib/libc.so.6 ?+0x2c4c9
+stackscan: expected[12720]: 0x73b9415d74b1 /lib/libc.so.6 ?+0x1a64b1
+stackscan: expected[12744]: 0x73b941615640 /lib/libc.so.6 ?+0x1e4640
+stackscan: expected[12776]: 0x73b94145cfb6 /lib/libc.so.6 ?+0x2bfb6
+stackscan: expected[12784]: 0x73b9415d7483 /lib/libc.so.6 ?+0x1a6483
+stackscan: expected[12808]: 0x73b9416155d0 /lib/libc.so.6 ?+0x1e45d0
+stackscan: expected[12840]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[12848]: 0x73b9415d7453 /lib/libc.so.6 ?+0x1a6453
+stackscan: expected[12872]: 0x73b941615560 /lib/libc.so.6 ?+0x1e4560
+stackscan: expected[12904]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[12968]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13032]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13096]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13160]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13224]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13288]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13352]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13416]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13480]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13544]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13608]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13672]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13736]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13800]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13864]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13928]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13992]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14056]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14120]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14184]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14248]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14312]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14376]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14440]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14504]: 0x73b94145d04b /lib/libc.so.6 ?+0x2c04b
+IGT-Version: 2.0-NO-GIT (x86_64) (Linux: 6.18.58.1-microsoft-standard-WSL2 x86_64)
+Using IGT_SRANDOM=1794771365 for randomisation
+Test requirement not met in function drm_open_driver, file ../lib/drmtest.c:749:
+Test requirement: !(fd<0)
+No known gpu found for chipset flags 0x1 (intel)
+Last errno: 2, No such file or directory
+Subtest read-write: SKIP (0.000s)
