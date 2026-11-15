@@ -1865,7 +1865,8 @@ I915_GEM_LOCKED(i915_gem_userptr_ioctl)
  * GEM locks, contexts their file's mutex and the GEM mutex for their state,
  * and THROTTLE the context mutex and engine locks. REG_READ has forcewake's
  * uncore lock; GETPARAM and QUERY initialize topology under the GEM mutex.
- * GET_PIPE_FROM_CRTC_ID holds the mode mutex. The core's KMS rows run under
+ * GET_PIPE_FROM_CRTC_ID holds the mode mutex, and SET_SPRITE_COLORKEY, the
+ * master's as SETPLANE, commits under it. The core's KMS rows run under
  * that mutex too, without the big lock on DRIVER_KMS_UNLOCKED devices:
  * i915's display hooks use it, the GEM mutex and the event, vblank,
  * backlight and hardware locks. */
@@ -1874,6 +1875,10 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
      "I915_GETPARAM"},
     {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, DRM_MODESET_LOCK | DRM_UNLOCKED,
      intel_get_pipe_from_crtc_id_ioctl, "I915_GET_PIPE_FROM_CRTC_ID"},
+    {DRM_IOCTL_I915_GET_SPRITE_COLORKEY, DRM_MASTER | DRM_UNLOCKED, drm_noop,
+     "I915_GET_SPRITE_COLORKEY"},
+    {DRM_IOCTL_I915_SET_SPRITE_COLORKEY, DRM_MASTER | DRM_MODESET_LOCK | DRM_UNLOCKED | DRM_KMS,
+     intel_sprite_set_colorkey_ioctl, "I915_SET_SPRITE_COLORKEY"},
     {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW | DRM_UNLOCKED,
      i915_gem_context_create_ioctl, "I915_GEM_CONTEXT_CREATE"},
     {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW | DRM_UNLOCKED,

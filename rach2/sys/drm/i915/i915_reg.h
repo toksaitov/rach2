@@ -797,6 +797,8 @@
 #define SPRITE_FORMAT_RGBX101010            (1u << 25)
 #define SPRITE_FORMAT_RGBX888               (2u << 25)
 #define SPRITE_FORMAT_RGBX161616            (3u << 25)
+#define SPRITE_SOURCE_KEY                   (1u << 22)
+#define SPRITE_DEST_KEY                     (1u << 2)
 #define SPRITE_PIPE_CSC_ENABLE              (1u << 24)
 #define SPRITE_RGB_ORDER_RGBX               (1u << 20)
 #define SPRITE_YUV_TO_RGB_CSC_FORMAT_BT709  (1u << 18)

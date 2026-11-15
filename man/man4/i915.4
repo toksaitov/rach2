@@ -895,6 +895,29 @@ the plane has taken the new surface.
 gives the pipe, 0 for A, of the CRTC whose id it is given, or fails with
 .Er ENOENT
 for none; a render node may not call it.
+.Pp
+.Dv DRM_IOCTL_I915_SET_SPRITE_COLORKEY
+sets the colour key of the sprite whose plane id it is given, which later
+commits keep.
+.Dv I915_SET_COLORKEY_SOURCE
+hides the sprite's pixels whose channels in
+.Fa channel_mask
+lie from
+.Fa min_value
+to
+.Fa max_value ;
+.Dv I915_SET_COLORKEY_DESTINATION
+shows the sprite only over the primary plane's pixels that equal
+.Fa min_value
+in those channels; no flag turns the key off.
+It fails with
+.Er EINVAL
+for another flag or for both, and with
+.Er ENOENT
+for a plane that is no sprite.
+Only the master may call it or
+.Dv DRM_IOCTL_I915_GET_SPRITE_COLORKEY ,
+which does nothing.
 Each CRTC's
 .Pa i915_pipe
 and

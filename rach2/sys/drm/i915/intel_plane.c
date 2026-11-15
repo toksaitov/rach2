@@ -575,7 +575,7 @@ static int32_t sprite_check(struct drm_plane *plane, struct drm_atomic_state *st
 
 /**
  * Show the sprite's state, Linux's ivb_sprite_update_noarm and
- * ivb_sprite_update_arm: its stride, place, size, no colour key and no
+ * ivb_sprite_update_arm: its stride, place, size, colour key and no
  * scaling, its offset and control, then its surface, which arms them, and
  * for FP16 its own gamma.
  */
@@ -615,6 +615,11 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     if (ps->rotation & DRM_MODE_ROTATE_180) {
         ctl |= SPRITE_ROTATE_180;
     }
+    if (ps->ckey.flags & I915_SET_COLORKEY_DESTINATION) {
+        ctl |= SPRITE_DEST_KEY;
+    } else if (ps->ckey.flags & I915_SET_COLORKEY_SOURCE) {
+        ctl |= SPRITE_SOURCE_KEY;
+    }
     /* Linux's ivb_sprite_ctl_crtc. */
     if (c->color.gamma_enable) {
         ctl |= SPRITE_PIPE_GAMMA_ENABLE;
@@ -626,9 +631,9 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     i915_write(hw, SPRPOS(c->pipe), (uint32_t)ps->dst.y1 << 16 | (uint32_t)ps->dst.x1);
     i915_write(hw, SPRSIZE(c->pipe), (h - 1u) << 16 | (w - 1u));
     i915_write(hw, SPRSCALE(c->pipe), 0);
-    i915_write(hw, SPRKEYVAL(c->pipe), 0);
-    i915_write(hw, SPRKEYMAX(c->pipe), 0);
-    i915_write(hw, SPRKEYMSK(c->pipe), 0);
+    i915_write(hw, SPRKEYVAL(c->pipe), ps->ckey.min_value);
+    i915_write(hw, SPRKEYMAX(c->pipe), ps->ckey.max_value);
+    i915_write(hw, SPRKEYMSK(c->pipe), ps->ckey.channel_mask);
     i915_write(hw, SPROFFSET(c->pipe), y << 16 | x);
     i915_write(hw, SPRCTL(c->pipe), ctl);
     i915_write(hw, SPRSURF(c->pipe), surf);
@@ -639,6 +644,44 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
 }
 
 static const struct drm_plane_funcs sprite_funcs = {sprite_check, sprite_update, NULL};
+
+/* The flags the uapi takes; NONE is dropped first, as Linux drops it. */
+#define COLORKEY_FLAGS (I915_SET_COLORKEY_DESTINATION | I915_SET_COLORKEY_SOURCE)
+
+int32_t intel_sprite_set_colorkey_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_intel_sprite_colorkey *set = (struct drm_intel_sprite_colorkey *)data;
+    struct drm_atomic_state *state;
+    struct drm_plane_state *ps;
+    struct drm_plane *plane;
+    int32_t rc;
+
+    set->flags &= ~I915_SET_COLORKEY_NONE;
+    if ((set->flags & ~COLORKEY_FLAGS) != 0 || (set->flags & COLORKEY_FLAGS) == COLORKEY_FLAGS) {
+        return -EINVAL;
+    }
+    plane = drm_plane_find(dev, file, set->plane_id);
+    if (!plane || plane->type != DRM_PLANE_TYPE_OVERLAY) {
+        return -ENOENT;
+    }
+    rc = drm_modeset_lock(dev);
+    if (rc != 0) {
+        return rc;
+    }
+    state = drm_atomic_state_alloc(dev);
+    ps = state ? drm_atomic_get_plane_state(state, plane) : NULL;
+    rc = ps ? 0 : -ENOMEM;
+    if (rc == 0) {
+        ps->ckey.min_value = set->min_value;
+        ps->ckey.channel_mask = set->channel_mask;
+        ps->ckey.max_value = set->max_value;
+        ps->ckey.flags = set->flags;
+        rc = drm_atomic_commit(state);
+    }
+    drm_atomic_state_free(state);
+    drm_modeset_unlock(dev);
+    return rc;
+}
 
 int32_t intel_planes_init(struct intel_crtc *crtc)
 {

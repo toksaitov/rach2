@@ -33,6 +33,8 @@
 #define DRM_I915_GET_PIPE_FROM_CRTC_ID 0x25
 #define DRM_I915_GEM_MADVISE           0x26
 #define DRM_I915_GEM_EXECBUFFER2       0x29
+#define DRM_I915_GET_SPRITE_COLORKEY   0x2a
+#define DRM_I915_SET_SPRITE_COLORKEY   0x2b
 #define DRM_I915_GEM_WAIT              0x2c
 #define DRM_I915_GEM_CONTEXT_CREATE    0x2d
 #define DRM_I915_GEM_CONTEXT_DESTROY   0x2e
@@ -623,6 +625,23 @@ struct drm_i915_gem_madvise {
     uint32_t retained;
 };
 
+/* SET_SPRITE_COLORKEY: the colour key of the sprite plane `plane_id`.
+ * A source key hides the sprite's pixels whose channels in `channel_mask`
+ * lie from `min_value` to `max_value`; a destination key shows the sprite
+ * only over the pixels below it that equal `min_value` in those channels.
+ * GET_SPRITE_COLORKEY does nothing, as Linux's. */
+#define I915_SET_COLORKEY_NONE        (1u << 0) /* ignored */
+#define I915_SET_COLORKEY_DESTINATION (1u << 1)
+#define I915_SET_COLORKEY_SOURCE      (1u << 2)
+
+struct drm_intel_sprite_colorkey {
+    uint32_t plane_id;
+    uint32_t min_value;
+    uint32_t channel_mask;
+    uint32_t max_value;
+    uint32_t flags;
+};
+
 /* GEM_WAIT: wait for the object's work for `timeout_ns`, negative for
  * ever, 0 to ask; the time left is written back. */
 struct drm_i915_gem_wait {
@@ -690,6 +709,10 @@ struct drm_i915_gem_userptr {
     DRM_IOW(DRM_COMMAND_BASE + DRM_I915_GEM_EXECBUFFER2, struct drm_i915_gem_execbuffer2)
 #define DRM_IOCTL_I915_GEM_EXECBUFFER2_WR \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_EXECBUFFER2, struct drm_i915_gem_execbuffer2)
+#define DRM_IOCTL_I915_GET_SPRITE_COLORKEY \
+    DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GET_SPRITE_COLORKEY, struct drm_intel_sprite_colorkey)
+#define DRM_IOCTL_I915_SET_SPRITE_COLORKEY \
+    DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_SET_SPRITE_COLORKEY, struct drm_intel_sprite_colorkey)
 #define DRM_IOCTL_I915_GEM_WAIT \
     DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_WAIT, struct drm_i915_gem_wait)
 #define DRM_IOCTL_I915_GEM_CONTEXT_CREATE \

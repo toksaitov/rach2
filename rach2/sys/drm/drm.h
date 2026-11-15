@@ -992,6 +992,12 @@ struct drm_plane_state {
     struct drm_property_blob *fb_damage_clips;
     struct drm_rect src, dst;
     int visible;
+    /* i915's legacy colour key, Linux's intel_plane_state's ckey: its
+     * SET_SPRITE_COLORKEY sets it, and each later state copies it. */
+    struct {
+        uint32_t min_value, channel_mask, max_value;
+        uint32_t flags; /* I915_SET_COLORKEY_DESTINATION or _SOURCE */
+    } ckey;
 };
 
 /*

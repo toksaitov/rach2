@@ -2295,7 +2295,7 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 extern const struct drm_gem_object_funcs i915_gem_object_funcs;
 
 /* The driver's own ioctls, for the DRM core. */
-#define I915_NUM_IOCTLS 28
+#define I915_NUM_IOCTLS 30
 extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
 
 /**
@@ -4032,6 +4032,13 @@ int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file 
  * (intel_display.c): the CRTC's pipe, or -ENOENT for no such CRTC. */
 int32_t intel_get_pipe_from_crtc_id_ioctl(struct drm_device *dev, void *data,
                                           struct drm_file *file);
+
+/** SET_SPRITE_COLORKEY, Linux's intel_sprite_set_colorkey_ioctl
+ * (intel_sprite_uapi.c): commit the key to the sprite's state, which
+ * later commits keep. -EINVAL for an unknown flag or for both a source and
+ * a destination key, -ENOENT for a plane that is no sprite, or the
+ * commit's error. Takes the commit lock. */
+int32_t intel_sprite_set_colorkey_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 
 /** Read the GT's slices, subslices, EUs and eDRAM once, as Linux's
  * hsw_sseu_info_init and its eDRAM probe. */
