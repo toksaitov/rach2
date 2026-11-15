@@ -840,10 +840,22 @@ property, as on Linux before display version 12;
 still flushes the rectangles it names.
 A commit fails with
 .Er EINVAL
-for C8, which needs a gamma table the CRTCs do not have; a modifier that
+for C8 without a 256-entry gamma table; a modifier that
 does not match the object's tiling; a stride that is not a multiple of 64
 bytes, or of 512 X-tiled; a YUV source that starts or ends on an odd
 pixel; scaling; and a primary plane that does not cover the CRTC.
+Each CRTC has
+.Ql GAMMA_LUT
+and
+.Ql GAMMA_LUT_SIZE ,
+1024 entries at 10 bits per channel, and also accepts a 256-entry table
+at 8 bits per channel for the legacy palette.
+C8 requires that legacy table and bypasses the RGB gamma stage.
+An absent table bypasses gamma for RGB planes.
+.Dv DRM_IOCTL_MODE_GETGAMMA
+and
+.Dv DRM_IOCTL_MODE_SETGAMMA
+use 256 entries.
 A plane reads a stride of at most 8192 pixels, and at most 32 KiB on the
 primary plane and 16 KiB on the sprite.
 A framebuffer with a wider stride, up to 16384 pixels wide, is shown

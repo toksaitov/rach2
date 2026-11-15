@@ -2957,9 +2957,15 @@ int32_t intel_cursor_init(struct intel_crtc *crtc);
 
 /** The bits of the primary plane's DSPCNTR that set the pipe and not the
  * plane, Linux's i9xx_plane_ctl_crtc: the pipe's colour space conversion
- * when it makes limited range RGB. A disabled plane keeps them, since
+ * when it makes limited range RGB and its gamma table when enabled.
+ * A disabled plane keeps them, since
  * they also act on the pipe's background. */
 uint32_t intel_plane_ctl_crtc(const struct intel_crtc *crtc);
+
+/** Whether the committed pipe uses its gamma table for RGB planes,
+ * Linux's ilk_gamma_enable: a table present and no visible C8 primary.
+ * Called with the device's mode lock held. */
+int intel_crtc_gamma_enabled(const struct intel_crtc *crtc);
 
 /*
  * The watermarks (intel_wm.c), Linux's i9xx_wm.c for Haswell.

@@ -724,7 +724,11 @@ static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *
         return 0;
     }
     modeset = drm_atomic_crtc_needs_modeset(cs);
-    if (modeset && cs->async_flip) {
+    if ((modeset || cs->color_mgmt_changed) && cs->async_flip) {
+        return -EINVAL;
+    }
+    if (cs->gamma_lut && cs->gamma_lut->length != 256u * sizeof(struct drm_color_lut) &&
+        cs->gamma_lut->length != 1024u * sizeof(struct drm_color_lut)) {
         return -EINVAL;
     }
     cfg = c->cfg;
@@ -895,9 +899,57 @@ static void write_csc_limited(struct i915_hw *hw, int pipe)
 }
 
 /**
- * The pipe's colour, Linux's color commit for a pipe without tables or
- * user matrix: the legacy 8-bit gamma, and for limited range RGB the
- * matrix that scales to 16-235, which the planes then pass through.
+ * The pipe's gamma table, Linux's ilk_load_lut_8 and ivb_load_lut_10:
+ * the 256-entry legacy palette, or 1024 entries at 10 bits, indexed
+ * explicitly because Haswell's auto-increment does not work. The mode
+ * lock is held, and the state has passed the table-size check.
+ */
+static void load_gamma(struct intel_crtc *c)
+{
+    const struct drm_property_blob *blob = c->base.state->gamma_lut;
+    const struct drm_color_lut *lut;
+    struct i915_hw *hw = &c->i915->hw;
+    uint32_t n, i, r, g, b, bits, shift;
+
+    if (!blob) {
+        return;
+    }
+    lut = (const struct drm_color_lut *)blob->data;
+    n = blob->length / sizeof(*lut);
+    bits = n == 256 ? 8 : 10;
+    shift = 16u - bits;
+    for (i = 0; i < n; i++) {
+        r = ((uint32_t)lut[i].red + (1u << (shift - 1))) >> shift;
+        g = ((uint32_t)lut[i].green + (1u << (shift - 1))) >> shift;
+        b = ((uint32_t)lut[i].blue + (1u << (shift - 1))) >> shift;
+        if (r >= (1u << bits)) {
+            r = (1u << bits) - 1u;
+        }
+        if (g >= (1u << bits)) {
+            g = (1u << bits) - 1u;
+        }
+        if (b >= (1u << bits)) {
+            b = (1u << bits) - 1u;
+        }
+        if (n == 256) {
+            i915_write(hw, LGC_PALETTE(c->pipe, i), r << 16 | g << 8 | b);
+        } else {
+            i915_write(hw, PREC_PAL_INDEX(c->pipe), i);
+            i915_write(hw, PREC_PAL_DATA(c->pipe), r << 20 | g << 10 | b);
+        }
+    }
+    if (n != 256) {
+        i915_write(hw, PREC_PAL_INDEX(c->pipe), 0);
+        for (i = 0; i < 3; i++) {
+            i915_write(hw, PREC_PAL_EXT_GC_MAX(c->pipe, i), 1u << 16);
+        }
+    }
+}
+
+/**
+ * The pipe's colour, Linux's Haswell color commit: the gamma table and
+ * its mode, and for limited range RGB the matrix that scales to 16-235.
+ * The mode lock is held; a running pipe is in its vblank.
  */
 static void color_commit(struct intel_crtc *c, const struct intel_crtc_config *cfg)
 {
@@ -910,7 +962,12 @@ static void color_commit(struct intel_crtc *c, const struct intel_crtc_config *c
     if (cfg->limited_range) {
         write_csc_limited(hw, pipe);
     }
-    i915_write(hw, GAMMA_MODE(pipe), GAMMA_MODE_MODE_8BIT);
+    load_gamma(c);
+    i915_write(hw, GAMMA_MODE(pipe),
+               c->base.state->gamma_lut &&
+                       c->base.state->gamma_lut->length == 1024u * sizeof(struct drm_color_lut)
+                   ? GAMMA_MODE_MODE_10BIT
+                   : GAMMA_MODE_MODE_8BIT);
     i915_write(hw, PIPE_CSC_MODE(pipe), cfg->limited_range ? 0 : CSC_POSITION_BEFORE_GAMMA);
 }
 
@@ -1131,6 +1188,10 @@ static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *sta
         crtc_enable(c, state);
     } else if (cs && !drm_atomic_crtc_needs_modeset(cs)) {
         intel_wm_commit(c, state, 0);
+        if (cs->active && cs->color_mgmt_changed) {
+            wait_next_vblank(c->i915, c->pipe);
+            color_commit(c, &c->cfg);
+        }
     }
     intel_crtc_arm_flip_done(c, state);
 }
@@ -1233,6 +1294,29 @@ static int32_t intel_atomic_check(struct drm_device *dev, struct drm_atomic_stat
             return -ENOMEM;
         }
         cs->mode_changed = 1;
+    }
+    for (i = 0; i < dev->mode_config.num_crtc; i++) {
+        struct drm_crtc_state *cs = state->crtcs_new[i];
+        const struct drm_plane_state *old, *next;
+        struct drm_plane *primary;
+
+        if (!cs) {
+            continue;
+        }
+        primary = cs->crtc->primary;
+        old = primary->state;
+        next = state->planes_new[primary->index];
+        if (cs->color_mgmt_changed || (next && cs->gamma_lut &&
+                                       ((old->fb && old->fb->format == DRM_FORMAT_C8) !=
+                                        (next->fb && next->fb->format == DRM_FORMAT_C8)))) {
+            err = drm_atomic_add_affected_planes(state, cs->crtc);
+            if (err != 0) {
+                return err;
+            }
+            if (!drm_atomic_get_plane_state(state, primary)) {
+                return -ENOMEM;
+            }
+        }
     }
     err = drm_atomic_helper_check(dev, state);
     return err != 0 ? err : check_dplls(to_i915(dev), state);
@@ -1658,6 +1742,10 @@ int32_t intel_display_init(struct drm_i915_private *i915)
                                              &intel_crtc_funcs)) != 0) {
             return err;
         }
+        if ((err = drm_mode_crtc_set_gamma_size(&c->base, 256)) != 0) {
+            return err;
+        }
+        drm_crtc_enable_color_mgmt(&c->base, 0, 0, 1024);
     }
     /* A board without the panel, or a panel that does not answer, has no
      * connector, as Linux's intel_edp_init_connector fails. */

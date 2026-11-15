@@ -863,6 +863,11 @@
  * colour matrix's mode, which sits before the gamma with CSC_POSITION. */
 #define GAMMA_MODE(p)             (0x4a480 + (p) * 0x800)
 #define GAMMA_MODE_MODE_8BIT      0u
+#define GAMMA_MODE_MODE_10BIT     1u
+#define LGC_PALETTE(p, i)         (0x4a000 + (p) * 0x800 + (i) * 4)
+#define PREC_PAL_INDEX(p)         (0x4a400 + (p) * 0x800)
+#define PREC_PAL_DATA(p)          (0x4a404 + (p) * 0x800)
+#define PREC_PAL_EXT_GC_MAX(p, i) (0x4a420 + (p) * 0x800 + (i) * 4)
 #define PIPE_CSC_MODE(p)          (0x49028 + (p) * 0x100)
 #define CSC_POSITION_BEFORE_GAMMA (1u << 1)
 #define CSC_MODE_YUV_TO_RGB       (1u << 0)

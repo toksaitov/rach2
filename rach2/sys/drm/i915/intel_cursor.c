@@ -130,6 +130,9 @@ static void cursor_update(struct drm_plane *plane, struct drm_atomic_state *stat
     if (c->cfg.limited_range) {
         cntr |= MCURSOR_PIPE_CSC_ENABLE;
     }
+    if (intel_crtc_gamma_enabled(c)) {
+        cntr |= MCURSOR_PIPE_GAMMA_ENABLE;
+    }
     i915_write(hw, CURCNTR(c->pipe), cntr);
     i915_write(hw, CURPOS(c->pipe),
                cursor_coord(ps->crtc_y, CURSOR_POS_X_SIGN) << 16 |
