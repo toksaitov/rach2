@@ -17,11 +17,14 @@ int nd_identity(struct nd_deploy *d, char *prefix, size_t size)
         "slot=$(sed -n 's/.*rach2\\.slot=\\([a-z]*\\).*/\\1/p' /proc/cmdline); "
         "test \"$slot\" = '%s'; status=$(bootctl status); "
         "printf '%%s\\n' \"$status\" | grep -Eq '^bootctl: next_entry: (empty|absent)'; "
-        "extent=$(printf '%%s\\n' \"$status\" | awk -v s=\"$slot:\" "
-        "'$2 == s && $3 == \"first\" { sub(\",\", \"\", $5); print $5, $6 }'); "
-        "set -- $extent; test \"$#\" = 2; "
-        "sum=$(dd if=/dev/bootpart bs=512 skip=\"$1\" count=\"$2\" 2>/dev/null | "
-        "head -c %llu | sha256sum); test \"${sum%%%% *}\" = '%s'; "
+        "runs=$(printf '%%s\\n' \"$status\" | awk -v s=\"$slot:\" "
+        "'$2 == s && $3 == \"runs:\" { for (i = 4; i <= NF; i++) print $i }'); "
+        "if test -z \"$runs\"; then runs=$(printf '%%s\\n' \"$status\" | awk -v s=\"$slot:\" "
+        "'$2 == s && $3 == \"first\" { sub(\",\", \"\", $5); print $5 \"+\" $6 }'); fi; "
+        "test -n \"$runs\"; "
+        "sum=$(for r in $runs; do dd if=/dev/bootpart bs=512 skip=\"${r%%+*}\" "
+        "count=\"${r#*+}\" 2>/dev/null; done | head -c %llu | sha256sum); "
+        "test \"${sum%%%% *}\" = '%s'; "
         "printf 'native-deploy: verified %s mac %s slot %%s kernel %%s\\n' \"$slot\" '%s' >&2; ",
         c->mac, c->slot, (unsigned long long)c->kernel_size, c->kernel_sha, c->host, c->mac,
         c->kernel_sha);
