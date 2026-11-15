@@ -23,6 +23,9 @@ static uint8_t image[IMAGE_BYTES];
 static struct vfs_mount mount, other_mount;
 static block_device_t disk;
 const struct vfs_type vfs_krffs_type = {0};
+/* No processor runs a thread: the rows call no transfer, whose count of
+ * loop transfers is the only reader of `current_proc` here. */
+struct percpu cpu_table[NR_CPUS];
 static krffs_node_t *original, *relocated;
 /* What runs while the attachment waits for the namespace lock. */
 static void (*waiting)(void);
