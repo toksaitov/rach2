@@ -31,6 +31,8 @@
 .set D_RAW_SEC,    88
 .set D_TZ_MW,      104
 .set D_TZ_DST,     108
+.set D_COARSE_MONO_SEC, 112
+.set D_COARSE_REAL_SEC, 128
 # From the data page back to KVM's clock page, and that page's fields,
 # pvclock_vcpu_time_info's (../x86/tsc.c), with PVCLOCK_TSC_STABLE_BIT.
 .set KVM_BACK,         0x1000
@@ -161,8 +163,9 @@ vdso_fine:
     btrq $63, %rax
     jmp 6b
 
-# The same clock as of the last tick, without the TSC: %rax and %rdx and
-# the carry as `vdso_fine` gives them. Changes %r11.
+# A coarse clock, the seconds at the offset in %edi and the nanoseconds 8
+# bytes after them, the time at the tick's last edge, without the TSC: %rax
+# and %rdx and the carry as `vdso_fine` gives them. Changes %r11.
 vdso_coarse:
     movl D_SEQ(%r8), %r11d
     testl $1, %r11d
@@ -222,10 +225,10 @@ vdso_clock_gettime:
     jc 9f
     jmp 5f
 3:
-    movl $D_REAL_SEC, %eax
+    movl $D_COARSE_REAL_SEC, %eax
     jmp 8f
 4:
-    movl $D_MONO_SEC, %eax
+    movl $D_COARSE_MONO_SEC, %eax
 8:
     pushq %rdi
     movl %eax, %edi

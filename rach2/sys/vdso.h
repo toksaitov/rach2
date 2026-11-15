@@ -44,8 +44,14 @@ struct vm_file;
  * 2^`shift` nanoseconds to the first, `real_mult` / 2^`shift`, the same, to
  * the second, and `raw_mult` / 2^`shift` to the third, the count's measured
  * rate, which the NTP state's slew does not change. Each clock's rate is 8
- * bytes before its seconds. The coarse clocks are the first two times as
- * they are, without the counts since.
+ * bytes before its seconds. The coarse clocks read no count: they are the
+ * monotonic clock at the tick's last edge, `coarse_mono_sec` and
+ * `coarse_mono_nsec`, and real time there, `coarse_real_sec` and
+ * `coarse_real_nsec`, as Linux's timekeeper moves its base only by whole
+ * tick intervals (kernel/time/timekeeping.c:2164-2193), never at an
+ * interrupt between ticks, so that a coarse reading is less than a tick
+ * past the tick count; the edge is no later than the base, so no coarse
+ * reading is later than a fine one.
  *
  * The time zone, which gettimeofday gives, is the kernel's
  * (`vclock_set_tz`), outside the sequence count, as Linux keeps it.
@@ -72,27 +78,35 @@ struct vdso_data {
     uint64_t raw_nsec;      /* below 10^9 */
     int32_t tz_minuteswest; /* struct timezone's, as settimeofday set it */
     int32_t tz_dsttime;
+    int64_t coarse_mono_sec;   /* CLOCK_MONOTONIC_COARSE, the tick's edge */
+    uint64_t coarse_mono_nsec; /* below 10^9 */
+    int64_t coarse_real_sec;   /* CLOCK_REALTIME_COARSE, the same edge */
+    uint64_t coarse_real_nsec; /* below 10^9 */
 };
 
 /* The offsets the vDSO reads the page at. */
-#define VDSO_DATA_SEQ        0
-#define VDSO_DATA_MODE       4
-#define VDSO_DATA_CYCLE_BASE 8
-#define VDSO_DATA_MULT       16
-#define VDSO_DATA_SHIFT      20
-#define VDSO_DATA_MONO_SEC   24
-#define VDSO_DATA_MONO_NSEC  32
-#define VDSO_DATA_REAL_MULT  40
-#define VDSO_DATA_REAL_SEC   48
-#define VDSO_DATA_REAL_NSEC  56
-#define VDSO_DATA_RES_NS     64
-#define VDSO_DATA_GETCPU     68
-#define VDSO_DATA_COARSE_NS  72
-#define VDSO_DATA_RAW_MULT   80
-#define VDSO_DATA_RAW_SEC    88
-#define VDSO_DATA_RAW_NSEC   96
-#define VDSO_DATA_TZ_MW      104
-#define VDSO_DATA_TZ_DST     108
+#define VDSO_DATA_SEQ              0
+#define VDSO_DATA_MODE             4
+#define VDSO_DATA_CYCLE_BASE       8
+#define VDSO_DATA_MULT             16
+#define VDSO_DATA_SHIFT            20
+#define VDSO_DATA_MONO_SEC         24
+#define VDSO_DATA_MONO_NSEC        32
+#define VDSO_DATA_REAL_MULT        40
+#define VDSO_DATA_REAL_SEC         48
+#define VDSO_DATA_REAL_NSEC        56
+#define VDSO_DATA_RES_NS           64
+#define VDSO_DATA_GETCPU           68
+#define VDSO_DATA_COARSE_NS        72
+#define VDSO_DATA_RAW_MULT         80
+#define VDSO_DATA_RAW_SEC          88
+#define VDSO_DATA_RAW_NSEC         96
+#define VDSO_DATA_TZ_MW            104
+#define VDSO_DATA_TZ_DST           108
+#define VDSO_DATA_COARSE_MONO_SEC  112
+#define VDSO_DATA_COARSE_MONO_NSEC 120
+#define VDSO_DATA_COARSE_REAL_SEC  128
+#define VDSO_DATA_COARSE_REAL_NSEC 136
 
 /* The clocks `vclock_read` and `vclock_read_cycles` read. */
 #define VCLOCK_READ_MONO 0
@@ -146,6 +160,15 @@ uint32_t vclock_generation(void);
  * latest reading given.
  */
 void vclock_tick(void);
+
+/**
+ * Put the coarse clocks at the tick's last edge, `edge_ns` of the monotonic
+ * clock (`rtc_tick_coarse_ns`), from the clock's pass after it counted the
+ * tick and before it ends the tick's sequence count, so that a reader that
+ * sees the new tick count (`tick_count`) reads the new edge; a TSC's clock
+ * behind the edge is stepped forward to it. With interrupts off.
+ */
+void vclock_tick_edge(uint64_t edge_ns);
 
 /**
  * Read the end of the watched TSC's span on this processor, when the tick

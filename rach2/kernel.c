@@ -284,7 +284,9 @@ static int timer_clock_try(int late);
  * Advance the clocks since boot by the raw ticks the clock says this
  * interrupt counts (`timer_tick_clock`), none for one delivered again and
  * more than one for one that came late, each the NTP state's tick length,
- * which moves the tick count and the uptime (`rtc_tick_advance`); give the
+ * which moves the tick count and the uptime (`rtc_tick_advance`), and the
+ * vDSO's coarse clocks to the tick's edge before the count shows
+ * (`vclock_tick_edge`); give the
  * NTP state each second of real time that began (`rtc_seconds`), whose tick
  * length the next ticks take; carry the vDSO's clock on to the tick at that
  * rate (`vclock_tick`); and measure the gap since the last pass
@@ -299,6 +301,7 @@ static void timer_clock_pass(void)
 
     tick_write_begin();
     seconds = rtc_tick_advance(timer_tick_clock(), length);
+    vclock_tick_edge(rtc_tick_coarse_ns());
     tick_write_end();
     if (seconds != 0) {
         rtc_seconds(seconds);

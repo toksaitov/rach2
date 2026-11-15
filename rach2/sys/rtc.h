@@ -114,6 +114,12 @@ int64_t rtc_mono_rate(void);
  * reference the vDSO's clock follows. */
 void rtc_tick_both(uint64_t *mono_ns, uint64_t *raw_ns);
 
+/** The monotonic clock at the last tick in nanoseconds, the time of the
+ * tick's edge and not of its handler, as the coarse clocks read it from the
+ * tick (`rtc_coarse_monotonic`), without the floor a stop of the vDSO's
+ * clock leaves: the time the vDSO's coarse clocks give while it runs. */
+uint64_t rtc_tick_coarse_ns(void);
+
 /** The real time of uptime zero, which /proc/stat gives as `btime` and a
  * node with no times of its own reports (a device, a /proc file, a pipe):
  * the seconds of `rtc_offset`, which a slew does not move. */

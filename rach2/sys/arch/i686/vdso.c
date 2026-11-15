@@ -26,6 +26,11 @@ uint32_t vclock_generation(void)
 void vclock_tick(void)
 {}
 
+void vclock_tick_edge(uint64_t edge_ns)
+{
+    (void)edge_ns;
+}
+
 void vclock_watch_cpu(void)
 {}
 

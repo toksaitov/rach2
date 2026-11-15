@@ -517,6 +517,16 @@ void rtc_tick_both(uint64_t *mono_ns, uint64_t *raw_ns)
     kirq_restore(flags);
 }
 
+uint64_t rtc_tick_coarse_ns(void)
+{
+    uint32_t flags = kirq_save();
+    int64_t seconds, nanoseconds;
+
+    rtc_coarse_since_boot(&seconds, &nanoseconds);
+    kirq_restore(flags);
+    return (uint64_t)seconds * 1000000000u + (uint64_t)nanoseconds;
+}
+
 /** The monotonic clock now, to the timer's place within the tick, or by
  * the clock from the TSC while it runs, without `rtc_monotonic`'s floor,
  * with nanoseconds that may pass a second; the caller has interrupts off. */

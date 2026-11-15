@@ -153,6 +153,13 @@ since the machine is never suspended.
 .It Dv CLOCK_MONOTONIC_COARSE
 ID 6.
 Time since boot at the last tick, without the place within it.
+It moves only when the kernel counts a tick.
+It is the time of the ticks counted, which
+.Fn times
+gives in its own units, plus the part of a tick, under one, that a slew of
+the clock
+.Pq Xr adjtimex 2
+has carried.
 .It Dv CLOCK_REALTIME_COARSE
 ID 5.
 Real time at the last tick, without the place within it, so

@@ -25,27 +25,31 @@
 /* The struct's offsets, which vdsocode.s reads the page at: an array size of -1
  * fails the compile. TinyCC's build skips the check. */
 #if !defined(__TINYC__)
-typedef char
-    vdso_data_fits[(__builtin_offsetof(struct vdso_data, seq) == VDSO_DATA_SEQ &&
-                    __builtin_offsetof(struct vdso_data, mode) == VDSO_DATA_MODE &&
-                    __builtin_offsetof(struct vdso_data, cycle_base) == VDSO_DATA_CYCLE_BASE &&
-                    __builtin_offsetof(struct vdso_data, mult) == VDSO_DATA_MULT &&
-                    __builtin_offsetof(struct vdso_data, shift) == VDSO_DATA_SHIFT &&
-                    __builtin_offsetof(struct vdso_data, mono_sec) == VDSO_DATA_MONO_SEC &&
-                    __builtin_offsetof(struct vdso_data, mono_nsec) == VDSO_DATA_MONO_NSEC &&
-                    __builtin_offsetof(struct vdso_data, real_mult) == VDSO_DATA_REAL_MULT &&
-                    __builtin_offsetof(struct vdso_data, real_sec) == VDSO_DATA_REAL_SEC &&
-                    __builtin_offsetof(struct vdso_data, real_nsec) == VDSO_DATA_REAL_NSEC &&
-                    __builtin_offsetof(struct vdso_data, res_ns) == VDSO_DATA_RES_NS &&
-                    __builtin_offsetof(struct vdso_data, getcpu) == VDSO_DATA_GETCPU &&
-                    __builtin_offsetof(struct vdso_data, coarse_ns) == VDSO_DATA_COARSE_NS &&
-                    __builtin_offsetof(struct vdso_data, raw_mult) == VDSO_DATA_RAW_MULT &&
-                    __builtin_offsetof(struct vdso_data, raw_sec) == VDSO_DATA_RAW_SEC &&
-                    __builtin_offsetof(struct vdso_data, raw_nsec) == VDSO_DATA_RAW_NSEC &&
-                    __builtin_offsetof(struct vdso_data, tz_minuteswest) == VDSO_DATA_TZ_MW &&
-                    __builtin_offsetof(struct vdso_data, tz_dsttime) == VDSO_DATA_TZ_DST)
-                       ? 1
-                       : -1];
+typedef char vdso_data_fits
+    [(__builtin_offsetof(struct vdso_data, seq) == VDSO_DATA_SEQ &&
+      __builtin_offsetof(struct vdso_data, mode) == VDSO_DATA_MODE &&
+      __builtin_offsetof(struct vdso_data, cycle_base) == VDSO_DATA_CYCLE_BASE &&
+      __builtin_offsetof(struct vdso_data, mult) == VDSO_DATA_MULT &&
+      __builtin_offsetof(struct vdso_data, shift) == VDSO_DATA_SHIFT &&
+      __builtin_offsetof(struct vdso_data, mono_sec) == VDSO_DATA_MONO_SEC &&
+      __builtin_offsetof(struct vdso_data, mono_nsec) == VDSO_DATA_MONO_NSEC &&
+      __builtin_offsetof(struct vdso_data, real_mult) == VDSO_DATA_REAL_MULT &&
+      __builtin_offsetof(struct vdso_data, real_sec) == VDSO_DATA_REAL_SEC &&
+      __builtin_offsetof(struct vdso_data, real_nsec) == VDSO_DATA_REAL_NSEC &&
+      __builtin_offsetof(struct vdso_data, res_ns) == VDSO_DATA_RES_NS &&
+      __builtin_offsetof(struct vdso_data, getcpu) == VDSO_DATA_GETCPU &&
+      __builtin_offsetof(struct vdso_data, coarse_ns) == VDSO_DATA_COARSE_NS &&
+      __builtin_offsetof(struct vdso_data, raw_mult) == VDSO_DATA_RAW_MULT &&
+      __builtin_offsetof(struct vdso_data, raw_sec) == VDSO_DATA_RAW_SEC &&
+      __builtin_offsetof(struct vdso_data, raw_nsec) == VDSO_DATA_RAW_NSEC &&
+      __builtin_offsetof(struct vdso_data, tz_minuteswest) == VDSO_DATA_TZ_MW &&
+      __builtin_offsetof(struct vdso_data, tz_dsttime) == VDSO_DATA_TZ_DST &&
+      __builtin_offsetof(struct vdso_data, coarse_mono_sec) == VDSO_DATA_COARSE_MONO_SEC &&
+      __builtin_offsetof(struct vdso_data, coarse_mono_nsec) == VDSO_DATA_COARSE_MONO_NSEC &&
+      __builtin_offsetof(struct vdso_data, coarse_real_sec) == VDSO_DATA_COARSE_REAL_SEC &&
+      __builtin_offsetof(struct vdso_data, coarse_real_nsec) == VDSO_DATA_COARSE_REAL_NSEC)
+         ? 1
+         : -1];
 #endif
 
 #define NSEC_PER_SEC 1000000000u
@@ -71,8 +75,10 @@ typedef char
  * because KVM's clock page withdrew its stable bit, the data page in the
  * kernel's map, NULL until it is whole, the page's counts in a tick its
  * rate was made for, the rate measured, the monotonic and raw clocks at
- * the page's base in nanoseconds whole, and real time's offset over the
- * monotonic clock in nanoseconds, which may be negative. The page's fields
+ * the page's base in nanoseconds whole, the monotonic clock at the tick's
+ * last edge, which the coarse clocks read, never past the base, and real
+ * time's offset over the monotonic clock in nanoseconds, which may be
+ * negative. The page's fields
  * and these change under `vclock_lock`, the page's between the increments
  * of its sequence count.
  *
@@ -95,6 +101,7 @@ static uint32_t per_tick_used;
 static uint32_t mult_measured;
 static uint64_t mono_base_ns;
 static uint64_t raw_base_ns;
+static uint64_t coarse_base_ns;
 static int64_t wall_ns;
 static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 
@@ -241,11 +248,13 @@ static uint64_t vclock_raw_at(uint64_t cycles)
 }
 
 /** Write the page's times for the bases `mono_base_ns` and `raw_base_ns`,
- * and real time, the first plus `wall_ns`, in seconds and nanoseconds; and
- * real time's rate, the monotonic clock's. */
+ * and real time, the first plus `wall_ns`, in seconds and nanoseconds, and
+ * the coarse clocks' for `coarse_base_ns`, real time's plus `wall_ns`
+ * likewise; and real time's rate, the monotonic clock's. */
 static void vclock_write_times(void)
 {
     uint64_t real_ns = mono_base_ns + (uint64_t)wall_ns;
+    uint64_t coarse_real_ns = coarse_base_ns + (uint64_t)wall_ns;
 
     data->mono_sec = (int64_t)(mono_base_ns / NSEC_PER_SEC);
     data->mono_nsec = mono_base_ns % NSEC_PER_SEC;
@@ -253,6 +262,10 @@ static void vclock_write_times(void)
     data->real_nsec = real_ns % NSEC_PER_SEC;
     data->raw_sec = (int64_t)(raw_base_ns / NSEC_PER_SEC);
     data->raw_nsec = raw_base_ns % NSEC_PER_SEC;
+    data->coarse_mono_sec = (int64_t)(coarse_base_ns / NSEC_PER_SEC);
+    data->coarse_mono_nsec = coarse_base_ns % NSEC_PER_SEC;
+    data->coarse_real_sec = (int64_t)(coarse_real_ns / NSEC_PER_SEC);
+    data->coarse_real_nsec = coarse_real_ns % NSEC_PER_SEC;
     data->real_mult = data->mult;
 }
 
@@ -502,9 +515,11 @@ static const char *vclock_refusal(void)
  * where a clock stopped before is still ahead of the tick's, so that no
  * reading is earlier than one before the start. The base is a new anchor
  * at the count read with the tick's clocks, KVM's clock where its pages
- * are kept, carried from no old one, since the clock did not run. The
- * bases go back into them. Where KVM's pages are kept and either reading,
- * or the boot processor's page now, lacks the stable bit, as when KVM
+ * are kept, carried from no old one, since the clock did not run, and the
+ * coarse clocks begin there too, as the floor `rtc_vclock_change` gives
+ * the tick's coarse clocks does. The bases go back into them. Where KVM's
+ * pages are kept and either reading, or the boot processor's page now,
+ * lacks the stable bit, as when KVM
  * withdraws it after the tick decided to start, the clock does not start
  * and the floors stay; the tick tries again once the bit is back. Given to
  * `rtc_vclock_change`.
@@ -513,6 +528,7 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
 {
     struct vclock_sample before, after;
     uint64_t mono, raw, cycles;
+    int64_t rate = rtc_mono_rate();
     int kvm;
 
     mono = vclock_reference(&before, &after, &raw);
@@ -529,7 +545,8 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     per_tick_used = vclock_counts_per_tick();
     vclock_rate(per_tick_used, &mult_measured, &data->shift);
     vclock_anchor(cycles, mono > *mono_ns ? mono : *mono_ns, raw > *raw_ns ? raw : *raw_ns);
-    data->mult = (uint32_t)rtc_slewed(mult_measured, rtc_mono_rate());
+    coarse_base_ns = mono_base_ns;
+    data->mult = (uint32_t)rtc_slewed(mult_measured, rate);
     data->raw_mult = mult_measured;
     data->res_ns = vclock_resolution_ns();
     vclock_write_times();
@@ -906,7 +923,9 @@ void vclock_watch_cpu(void)
  * not agree with the base's. The monotonic clock's rate is the measured
  * one at the tick length's rate, under 2^32 since the measured is under
  * 2^31 and the length within a quarter of a tick. Real time goes with the
- * monotonic clock, a step forward of it included.
+ * monotonic clock, a step forward of it included. The coarse clocks stay
+ * at the tick's last edge, which the pass gave them before it showed the
+ * tick count (`vclock_tick_edge`).
  *
  * The boot processor's clock page, the one every reader tests
  * (`kvmclock_boot_withdrawn`), decides, as Linux's vDSO reads only that page
@@ -981,10 +1000,53 @@ void vclock_tick(void)
     }
 }
 
-/** The page's base seconds, nanoseconds and rate of the clock `which`. */
-static void vclock_fields(int which, int64_t *sec, uint64_t *nsec, uint32_t *mult)
+/**
+ * The coarse clocks go to the tick's last edge, never to the base, which a
+ * pass moves to the moment it runs, and an interrupt between ticks makes a
+ * pass too (kernel.c's `timer_hr_pass`): at the base a coarse clock would
+ * read up to a tick past the tick count, and with the part of a tick the
+ * NTP state's slew carries, past the next tick's edge. The edge is written
+ * before the tick count shows, so that a reader that sees the count reads
+ * an edge no earlier than its tick's. A TSC's clock behind the edge is
+ * stepped forward to it, by much less than STEP_NS, so that no coarse
+ * reading is later than a fine one; the steering at the pass's
+ * `vclock_tick` then makes good only what is left of its error. No holder
+ * of `vclock_lock` waits for the tick, which this pass holds odd, but the
+ * pass's own `vclock_tick`, after it.
+ */
+void vclock_tick_edge(uint64_t edge_ns)
 {
-    if (which == VCLOCK_READ_REAL) {
+    struct vclock_sample s;
+    uint64_t clock_ns;
+
+    spin_lock(&vclock_lock);
+    if (running && edge_ns > coarse_base_ns) {
+        vclock_sample(&s);
+        clock_ns = vclock_at(vclock_count(&s));
+        vclock_write_begin();
+        if (edge_ns > clock_ns) {
+            vclock_advance(edge_ns - clock_ns, 0);
+        }
+        coarse_base_ns = edge_ns;
+        vclock_write_times();
+        vclock_write_end();
+    }
+    spin_unlock(&vclock_lock);
+}
+
+/** The page's base seconds, nanoseconds and rate of the clock `which`, or
+ * with `coarse` its seconds and nanoseconds at the tick's last edge, which
+ * have no rate. */
+static void vclock_fields(int which, int coarse, int64_t *sec, uint64_t *nsec, uint32_t *mult)
+{
+    *mult = 0;
+    if (coarse && which == VCLOCK_READ_REAL) {
+        *sec = data->coarse_real_sec;
+        *nsec = data->coarse_real_nsec;
+    } else if (coarse) {
+        *sec = data->coarse_mono_sec;
+        *nsec = data->coarse_mono_nsec;
+    } else if (which == VCLOCK_READ_REAL) {
         *sec = data->real_sec;
         *nsec = data->real_nsec;
         *mult = data->real_mult;
@@ -1032,7 +1094,7 @@ static int vclock_pass(int which, int coarse, int64_t *sec, uint64_t *ns, uint64
         if (mode == VCLOCK_NONE) {
             return VREAD_STOPPED;
         }
-        vclock_fields(which, sec, ns, &mult);
+        vclock_fields(which, coarse, sec, ns, &mult);
         if (!coarse) {
             if (mode != VCLOCK_PVCLOCK) {
                 *cycles = tsc_ordered();
@@ -1074,7 +1136,7 @@ static int vclock_withdrawn(int which, int64_t *sec, uint64_t *ns)
         vclock_advance(0, 0);
         vclock_write_times();
         vclock_write_end();
-        vclock_fields(which, sec, ns, &mult);
+        vclock_fields(which, 0, sec, ns, &mult);
         found = VREAD_OK;
     }
     spin_unlock_irqrestore(&vclock_lock, flags);

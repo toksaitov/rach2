@@ -36,6 +36,8 @@
 .set D_RAW_SEC,    88
 .set D_TZ_MW,      104
 .set D_TZ_DST,     108
+.set D_COARSE_MONO_SEC, 112
+.set D_COARSE_REAL_SEC, 128
 # From the data page back to KVM's clock page, and that page's fields,
 # pvclock_vcpu_time_info's (../x86/tsc.c), with PVCLOCK_TSC_STABLE_BIT.
 .set KVM_BACK,         0x1000
@@ -292,8 +294,9 @@ vdso32_fine:
     andl $0x7FFFFFFF, %edx
     jmp 8b
 
-# The same clock as of the last tick, without the TSC: EDX:EAX and ECX and
-# the carry as `vdso32_fine` gives them, the mode checked in each pass as
+# A coarse clock, the seconds at the offset in EAX and the nanoseconds 8
+# bytes after them, the time at the tick's last edge, without the TSC:
+# EDX:EAX and ECX and the carry as `vdso32_fine` gives them, the mode checked in each pass as
 # there; Linux's do_coarse needs no check, since its page is kept while the
 # clock is stopped, and this one is not.
 vdso32_coarse:
@@ -366,10 +369,10 @@ vdso32_clock:
     movl $D_MONO_SEC, %eax
     jmp vdso32_fine
 3:
-    movl $D_REAL_SEC, %eax
+    movl $D_COARSE_REAL_SEC, %eax
     jmp vdso32_coarse
 4:
-    movl $D_MONO_SEC, %eax
+    movl $D_COARSE_MONO_SEC, %eax
     jmp vdso32_coarse
 
 # The system call in EAX with the first two arguments of the function that
