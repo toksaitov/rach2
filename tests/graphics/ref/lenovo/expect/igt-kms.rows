@@ -1347,138 +1347,72 @@ igt@kms_joiner@invalid-modeset-force-big-joiner skip
 igt@kms_joiner@invalid-modeset-force-ultra-joiner skip
 igt@kms_joiner@invalid-modeset-ultra-joiner skip
 igt@kms_joiner@switch-modeset-ultra-joiner-big-joiner skip
-# deferred: DRM leases (#5231)
-igt@kms_lease@atomic-implicit-crtc xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@atomic-implicit-crtc@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@atomic-implicit-crtc@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@atomic-implicit-crtc@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@cursor-implicit-plane xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@cursor-implicit-plane@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@cursor-implicit-plane@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@cursor-implicit-plane@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@empty-lease xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@empty-lease@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@empty-lease@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@empty-lease@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@implicit-plane-lease xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@invalid-create-leases xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-again xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-again@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-again@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-again@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-get xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-get@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-get@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-get@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-connector xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-connector@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-connector@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-connector@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-crtc xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-crtc@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-crtc@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-crtc@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-plane xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-plane@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-plane@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-invalid-plane@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-revoke xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-revoke@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-revoke@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-revoke@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-uevent xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-unleased-connector xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-unleased-connector@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-unleased-connector@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-unleased-connector@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-unleased-crtc xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-unleased-crtc@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-unleased-crtc@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lease-unleased-crtc@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lessee-list xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lessee-list@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lessee-list@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@lessee-list@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@master-vs-lease xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@multimaster-lease xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@page-flip-implicit-plane xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@page-flip-implicit-plane@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@page-flip-implicit-plane@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@page-flip-implicit-plane@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@possible-crtcs-filtering xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@setcrtc-implicit-plane xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@setcrtc-implicit-plane@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@setcrtc-implicit-plane@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@setcrtc-implicit-plane@pipe-c-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@simple-lease xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@simple-lease@pipe-a-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@simple-lease@pipe-b-edp-1 xfail
-# deferred: DRM leases (#5231)
-igt@kms_lease@simple-lease@pipe-c-edp-1 xfail
+igt@kms_lease@atomic-implicit-crtc pass
+igt@kms_lease@atomic-implicit-crtc@pipe-a-edp-1 pass
+igt@kms_lease@atomic-implicit-crtc@pipe-b-edp-1 pass
+igt@kms_lease@atomic-implicit-crtc@pipe-c-edp-1 pass
+igt@kms_lease@cursor-implicit-plane pass
+igt@kms_lease@cursor-implicit-plane@pipe-a-edp-1 pass
+igt@kms_lease@cursor-implicit-plane@pipe-b-edp-1 pass
+igt@kms_lease@cursor-implicit-plane@pipe-c-edp-1 pass
+igt@kms_lease@empty-lease pass
+igt@kms_lease@empty-lease@pipe-a-edp-1 pass
+igt@kms_lease@empty-lease@pipe-b-edp-1 pass
+igt@kms_lease@empty-lease@pipe-c-edp-1 pass
+igt@kms_lease@implicit-plane-lease pass
+igt@kms_lease@invalid-create-leases pass
+igt@kms_lease@lease-again pass
+igt@kms_lease@lease-again@pipe-a-edp-1 pass
+igt@kms_lease@lease-again@pipe-b-edp-1 pass
+igt@kms_lease@lease-again@pipe-c-edp-1 pass
+igt@kms_lease@lease-get pass
+igt@kms_lease@lease-get@pipe-a-edp-1 pass
+igt@kms_lease@lease-get@pipe-b-edp-1 pass
+igt@kms_lease@lease-get@pipe-c-edp-1 pass
+igt@kms_lease@lease-invalid-connector pass
+igt@kms_lease@lease-invalid-connector@pipe-a-edp-1 pass
+igt@kms_lease@lease-invalid-connector@pipe-b-edp-1 pass
+igt@kms_lease@lease-invalid-connector@pipe-c-edp-1 pass
+igt@kms_lease@lease-invalid-crtc pass
+igt@kms_lease@lease-invalid-crtc@pipe-a-edp-1 pass
+igt@kms_lease@lease-invalid-crtc@pipe-b-edp-1 pass
+igt@kms_lease@lease-invalid-crtc@pipe-c-edp-1 pass
+igt@kms_lease@lease-invalid-plane pass
+igt@kms_lease@lease-invalid-plane@pipe-a-edp-1 pass
+igt@kms_lease@lease-invalid-plane@pipe-b-edp-1 pass
+igt@kms_lease@lease-invalid-plane@pipe-c-edp-1 pass
+igt@kms_lease@lease-revoke pass
+igt@kms_lease@lease-revoke@pipe-a-edp-1 pass
+igt@kms_lease@lease-revoke@pipe-b-edp-1 pass
+igt@kms_lease@lease-revoke@pipe-c-edp-1 pass
+igt@kms_lease@lease-uevent pass
+igt@kms_lease@lease-unleased-connector pass
+igt@kms_lease@lease-unleased-connector@pipe-a-edp-1 pass
+igt@kms_lease@lease-unleased-connector@pipe-b-edp-1 pass
+igt@kms_lease@lease-unleased-connector@pipe-c-edp-1 pass
+igt@kms_lease@lease-unleased-crtc pass
+igt@kms_lease@lease-unleased-crtc@pipe-a-edp-1 pass
+igt@kms_lease@lease-unleased-crtc@pipe-b-edp-1 pass
+igt@kms_lease@lease-unleased-crtc@pipe-c-edp-1 pass
+igt@kms_lease@lessee-list pass
+igt@kms_lease@lessee-list@pipe-a-edp-1 pass
+igt@kms_lease@lessee-list@pipe-b-edp-1 pass
+igt@kms_lease@lessee-list@pipe-c-edp-1 pass
+igt@kms_lease@master-vs-lease pass
+igt@kms_lease@multimaster-lease pass
+igt@kms_lease@page-flip-implicit-plane pass
+igt@kms_lease@page-flip-implicit-plane@pipe-a-edp-1 pass
+igt@kms_lease@page-flip-implicit-plane@pipe-b-edp-1 pass
+igt@kms_lease@page-flip-implicit-plane@pipe-c-edp-1 pass
+igt@kms_lease@possible-crtcs-filtering pass
+igt@kms_lease@setcrtc-implicit-plane pass
+igt@kms_lease@setcrtc-implicit-plane@pipe-a-edp-1 pass
+igt@kms_lease@setcrtc-implicit-plane@pipe-b-edp-1 pass
+igt@kms_lease@setcrtc-implicit-plane@pipe-c-edp-1 pass
+igt@kms_lease@simple-lease pass
+igt@kms_lease@simple-lease@pipe-a-edp-1 pass
+igt@kms_lease@simple-lease@pipe-b-edp-1 pass
+igt@kms_lease@simple-lease@pipe-c-edp-1 pass
 igt@kms_legacy_colorkey@basic pass
 igt@kms_legacy_colorkey@basic@pipe-a pass
 igt@kms_legacy_colorkey@basic@pipe-b pass
