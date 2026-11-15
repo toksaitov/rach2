@@ -304,15 +304,29 @@ static int32_t madvise(uint32_t handle, uint32_t madv, uint32_t *kept)
 }
 
 /** MADVISE's refusals and states, and an object without pages purged at
- * once, as Linux discards its storage. */
+ * once, as Linux discards its storage, a PWRITE's bytes among them. */
 static void madvise_states(void)
 {
     uint32_t h = create(&file_a, 8192), e = create(&file_a, 8192), kept;
+    uint32_t w = create(&file_a, 8192);
     uint8_t buf[64];
 
+    k_memset(buf, 0x5a, sizeof(buf));
     CHECK(madvise(h, __I915_MADV_PURGED, &kept) == -EINVAL, "madvise: the purged state, EINVAL");
     CHECK(madvise(999, I915_MADV_DONTNEED, &kept) == -ENOENT, "madvise: no such object, ENOENT");
-    CHECK(prw(&file_a, h, 0, buf, sizeof(buf), 1) == 0, "madvise: an object with pages");
+    CHECK(prw(&file_a, w, 0, buf, sizeof(buf), 1) == 0 && !object(&file_a, w)->frames &&
+              object(&file_a, w)->pages.held == 1,
+          "madvise: PWRITE puts the bytes in an object's memory and gives it no pages");
+    CHECK(madvise(w, I915_MADV_DONTNEED, &kept) == 0 && kept == 0 &&
+              object(&file_a, w)->madv == __I915_MADV_PURGED && object(&file_a, w)->pages.held == 0,
+          "madvise: DONTNEED after only a PWRITE, purged at once, as on Linux");
+    CHECK(i915_gem_object_pin_pages(object(&file_a, w)) == -EFAULT &&
+              prw(&file_a, w, 0, buf, sizeof(buf), 1) == -EFAULT,
+          "madvise: a purged object takes no pages and no PWRITE, EFAULT");
+    close_handle(&file_a, w);
+    CHECK(prw(&file_a, h, 0, buf, sizeof(buf), 1) == 0 &&
+              domain(&file_a, h, I915_GEM_DOMAIN_CPU, 0) == 0 && object(&file_a, h)->frames,
+          "madvise: an object with pages");
     CHECK(madvise(h, I915_MADV_DONTNEED, &kept) == 0 && kept == 1 &&
               object(&file_a, h)->madv == I915_MADV_DONTNEED,
           "madvise: DONTNEED with pages, retained");

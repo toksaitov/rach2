@@ -777,6 +777,10 @@ struct drm_i915_gem_object {
     uint32_t userfault_count;
     uint8_t madv;
     uint8_t dumb;
+    /* Whether `i915_gem_object_frame` gave a page of `pages` to a map, an
+     * import or an access, which in Linux attaches the object's pages; the
+     * pages a write of PWRITE puts in `pages` before then do not count. */
+    uint8_t pages_given;
     struct i915_userptr userptr;
     /* The next shadow batch of its bucket in the GT's `pool`, and the tick
      * at which a trim of the pool first found it idle, 0 while it is taken
@@ -2315,7 +2319,8 @@ int32_t i915_gem_object_pin_pages(struct drm_i915_gem_object *obj);
  * frames go with the last. */
 void i915_gem_object_unpin_pages(struct drm_i915_gem_object *obj);
 
-/** Whether the object has pages: frames held, or a shmem page given. */
+/** Whether the object has pages, as Linux's i915_gem_object_has_pages:
+ * frames held, or a page given by `i915_gem_object_frame`. */
 int i915_gem_object_has_pages(const struct drm_i915_gem_object *obj);
 
 /** Whether a fence of the object's reservation has not signalled, so that

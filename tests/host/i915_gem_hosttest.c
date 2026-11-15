@@ -54,8 +54,9 @@ static void objects(void)
     flushes = 0;
     CHECK(prw(&file_a, h, 0, out, 8192, 1) == 0, "pwrite: two pages");
     CHECK(flushes == 0, "pwrite: an LLC object needs no flush");
-    CHECK(memcmp((void *)obj->frames[1], out + 4096, 4096) == 0,
-          "pwrite: the bytes are in the object's second page");
+    CHECK(!obj->frames && !i915_gem_object_has_pages(obj) &&
+              memcmp((void *)shmem_resident(&obj->pages, 1), out + 4096, 4096) == 0,
+          "pwrite: the bytes in the second page of its memory, as yet no pages, as on Linux");
     k_memset(in, 0, sizeof(in));
     CHECK(prw(&file_a, h, 100, in, 5000, 0) == 0 && memcmp(in, out + 100, 5000) == 0,
           "pread: 5000 bytes from 100 across the pages");
@@ -945,7 +946,8 @@ static void prime(void)
     vma.end = vma.start + 8192;
     CHECK(slots[fd].ops->mmap(&slots[fd], &vma) == 0 && ((struct region *)vma.file)->cache == 0,
           "dma-buf: mapped write-back");
-    CHECK(fault(&vma, 1) == (uint8_t *)obj->frames[1], "dma-buf: the exporter's page");
+    CHECK(fault(&vma, 1) == (uint8_t *)shmem_resident(&obj->pages, 1),
+          "dma-buf: the exporter's page");
     unmap(&vma);
     CHECK(buf->ops->cpu_access(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE) == 0 &&
               obj->read_domains == I915_GEM_DOMAIN_CPU && obj->write_domain == I915_GEM_DOMAIN_CPU,

@@ -110,7 +110,7 @@ void i915_gem_object_unpin_pages(struct drm_i915_gem_object *obj)
 
 int i915_gem_object_has_pages(const struct drm_i915_gem_object *obj)
 {
-    return obj->frames != 0 || obj->pages.held != 0;
+    return obj->frames != 0 || obj->pages_given;
 }
 
 /** Whether `f` is a fence that has not signalled. */
@@ -268,6 +268,9 @@ uintptr_t i915_gem_object_frame(struct drm_i915_gem_object *obj, uint32_t pgoff)
     if (!phys && obj->madv == I915_MADV_WILLNEED &&
         shmem_allocate(&obj->pages, (uint64_t)pgoff << PAGE_SHIFT, PAGE_SIZE) == 0) {
         phys = shmem_resident(&obj->pages, pgoff);
+    }
+    if (phys) {
+        obj->pages_given = 1;
     }
     return phys;
 }
@@ -864,6 +867,57 @@ static int32_t shmem_pread(struct drm_i915_gem_object *obj, const struct drm_i91
     return err;
 }
 
+/**
+ * Write into the object's memory before it has pages, as Linux's
+ * shmem_pwrite (gem/i915_gem_shmem.c): the bytes go to `pages` alone and
+ * the object still has none, so that a DONTNEED after it purges them at
+ * once, as Linux truncates the shmem file then. The object stays in the
+ * processor's domain it was made in.
+ *
+ * @return 0; -EFAULT for an object that is not WILLNEED; -ENODEV for an
+ *         object that has pages or is an import, or when a page cannot be
+ *         had or the user's buffer faults, which the caller then writes
+ *         through the object's pages, as Linux's caller does.
+ */
+static int32_t shmem_pwrite_unpinned(struct drm_i915_gem_object *obj,
+                                     const struct drm_i915_gem_pwrite *args)
+{
+    const uint8_t __user *user = (const uint8_t __user *)(uintptr_t)args->data_ptr;
+    uint64_t remain = args->size, at = args->offset;
+
+    if (obj->base.import || i915_gem_object_has_pages(obj)) {
+        return -ENODEV;
+    }
+    if (obj->madv != I915_MADV_WILLNEED) {
+        return -EFAULT;
+    }
+    while (remain) {
+        uint32_t off = (uint32_t)(at & (PAGE_SIZE - 1));
+        uint32_t len = remain < PAGE_SIZE - off ? (uint32_t)remain : PAGE_SIZE - off;
+        uint32_t pgoff = (uint32_t)(at >> PAGE_SHIFT);
+        uintptr_t phys = shmem_resident(&obj->pages, pgoff);
+        uint8_t *va;
+        int fault;
+
+        if (!phys && shmem_allocate(&obj->pages, at - off, PAGE_SIZE) == 0) {
+            phys = shmem_resident(&obj->pages, pgoff);
+        }
+        va = phys ? (uint8_t *)kmap_temp(phys) : 0;
+        if (!va) {
+            return -ENODEV;
+        }
+        fault = copy_from_user_left(va + off, user, len) != 0; /* the rest stays */
+        kunmap_temp(va);
+        if (fault) {
+            return -ENODEV;
+        }
+        remain -= len;
+        user += len;
+        at += len;
+    }
+    return 0;
+}
+
 /** Write through the processor's view, as Linux's i915_gem_shmem_pwrite. */
 static int32_t shmem_pwrite(struct drm_i915_gem_object *obj, const struct drm_i915_gem_pwrite *args)
 {
@@ -1078,6 +1132,8 @@ int32_t i915_gem_pread_ioctl(struct drm_device *dev, void *data, struct drm_file
 
 /**
  * GEM_PWRITE, as Linux's i915_gem_pwrite_ioctl: its refusals are PREAD's;
+ * an object of its own memory that has no pages written straight into it
+ * (`shmem_pwrite_unpinned`), EFAULT for one that is not WILLNEED; else
  * every fence waited for, then written through the aperture when the
  * object has no view of the processor's or its caching would need the
  * lines flushed, and otherwise, or when the aperture has no room or the
@@ -1107,14 +1163,17 @@ int32_t i915_gem_pwrite_ioctl(struct drm_device *dev, void *data, struct drm_fil
     } else if (i915_gem_object_is_userptr(obj)) {
         err = -EINVAL;
     } else {
-        err = i915_gem_object_wait(obj, 1, -1);
-        if (err == 0) {
-            err = -EFAULT;
-            if (obj->base.import || i915_gem_cpu_write_needs_clflush(obj)) {
-                err = gtt_rw(obj, args->offset, args->size, args->data_ptr, 1);
-            }
-            if ((err == -EFAULT || err == -ENOSPC) && !obj->base.import) {
-                err = shmem_pwrite(obj, args);
+        err = shmem_pwrite_unpinned(obj, args);
+        if (err == -ENODEV) {
+            err = i915_gem_object_wait(obj, 1, -1);
+            if (err == 0) {
+                err = -EFAULT;
+                if (obj->base.import || i915_gem_cpu_write_needs_clflush(obj)) {
+                    err = gtt_rw(obj, args->offset, args->size, args->data_ptr, 1);
+                }
+                if ((err == -EFAULT || err == -ENOSPC) && !obj->base.import) {
+                    err = shmem_pwrite(obj, args);
+                }
             }
         }
     }

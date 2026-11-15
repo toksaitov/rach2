@@ -35,6 +35,7 @@ uint32_t i915_gem_object_truncate(struct drm_i915_gem_object *obj)
     kfree(obj->frames);
     obj->frames = 0;
     obj->pages_pin_count = 0;
+    obj->pages_given = 0;
     shmem_free(&obj->pages);
     obj->madv = __I915_MADV_PURGED;
     return freed;
