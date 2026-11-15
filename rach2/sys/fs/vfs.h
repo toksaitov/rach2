@@ -1482,9 +1482,10 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
 int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node);
 /** The type's unlink of `name` in `dir`: 0, -EROFS for a type without
  * `unlink`, -EPERM when the directory or the file is immutable or
- * append-only, -EBUSY for a file that backs a loop device, or the type's
- * error. The caller holds the locks of the removal, under which the loop
- * devices are asked. */
+ * append-only, or the type's error. A file that backs a loop device loses
+ * its name and the attachment's open keeps the node, as Linux's loop device
+ * keeps the inode; the KRFFS root, whose attachment holds no count, is
+ * refused by the caller (`unlink_root_name`). */
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name);
 /** The type's mkdir of `name` in `dir`: 0, -EROFS for a type without
  * `mkdir`, or the type's error. */
@@ -1496,9 +1497,10 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name);
 /**
  * The type's rename of `oldname` in `olddir` to `newname` in `newdir`: 0,
  * -EROFS for a type without `rename`, -EPERM by Linux's rules for the
- * immutable and append-only flags (`rename_guarded`), -EBUSY when the new
- * name has a file that backs a loop device, other than the one moved, or
- * the type's error. The caller holds the rename's locks (`vfs_rename_lock`).
+ * immutable and append-only flags (`rename_guarded`), or the type's error.
+ * A replaced file that backs a loop device is kept by the attachment's
+ * open, as an unlinked one is (`vfs_unlink_name`). The caller holds the
+ * rename's locks (`vfs_rename_lock`).
  * inotify is told IN_MOVED_FROM and IN_MOVED_TO with one cookie to the two
  * directories, IN_MOVE_SELF to the file moved, and to a file the new name
  * replaced what its removal would have told.

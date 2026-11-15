@@ -119,9 +119,11 @@ A chain may contain only one loop device.
 .Pp
 While attached, the file cannot be written, truncated, grown by
 .Xr fallocate 2 ,
-mapped shared through a descriptor open for writing, written by a core
-dump, unlinked or renamed over, through any mount that shows it, a bind
-included.
+mapped shared through a descriptor open for writing, or written by a core
+dump, through any mount that shows it, a bind included.
+On the KRFFS boot root it cannot be unlinked or renamed over either; on
+every other file system it then loses its name and the device keeps the
+file until the detach, as on Linux.
 A file on tmpfs is not attached while a shared mapping through a
 descriptor open for writing maps it, or once it is sealed against
 shrinking, which
