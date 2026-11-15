@@ -709,8 +709,10 @@ static int32_t compute_config(struct intel_crtc *c, const struct drm_crtc_state 
 }
 
 /** The CRTC's check, Linux's intel_crtc_atomic_check: a mode set must
- * configure, without an async flip, and the planes' watermarks must fit,
- * the new alone and with the old. 0, -EINVAL or -ERANGE. */
+ * configure; neither it nor a change of colour may come with an async
+ * flip, which Linux's drm_atomic_check_prop_changes refuses; the colour
+ * must check (`intel_color_check`); and the planes' watermarks must fit,
+ * the new alone and with the old. 0, -EINVAL, -ERANGE or -ENOMEM. */
 static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
@@ -727,12 +729,11 @@ static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *
     if ((modeset || cs->color_mgmt_changed) && cs->async_flip) {
         return -EINVAL;
     }
-    if (cs->gamma_lut && cs->gamma_lut->length != 256u * sizeof(struct drm_color_lut) &&
-        cs->gamma_lut->length != 1024u * sizeof(struct drm_color_lut)) {
-        return -EINVAL;
-    }
     cfg = c->cfg;
     if (modeset && (err = compute_config(c, cs, state, &cfg)) != 0) {
+        return err;
+    }
+    if ((err = intel_color_check(c, state, &cfg)) != 0) {
         return err;
     }
     if ((err = intel_wm_compute(c, state, &cfg, &wm)) != 0) {
@@ -875,102 +876,6 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
     i915_posting_read(hw, TRANSCONF(t));
 }
 
-/** Pipe `pipe`'s matrix for limited range RGB, Linux's
- * ilk_csc_matrix_limited_range through ilk_update_pipe_csc. */
-static void write_csc_limited(struct i915_hw *hw, int pipe)
-{
-    /* A gain of 219/256, exponent 0 and a 12-bit fraction, and an offset
-     * of 16/256 of full scale: Linux's ILK_CSC_COEFF_LIMITED_RANGE and
-     * ILK_CSC_POSTOFF_LIMITED_RANGE. */
-    const uint32_t coeff = (235u - 16u) << 4, postoff = 16u << 4;
-
-    i915_write(hw, PIPE_CSC_PREOFF_HI(pipe), 0);
-    i915_write(hw, PIPE_CSC_PREOFF_ME(pipe), 0);
-    i915_write(hw, PIPE_CSC_PREOFF_LO(pipe), 0);
-    i915_write(hw, PIPE_CSC_COEFF_RY_GY(pipe), coeff << 16);
-    i915_write(hw, PIPE_CSC_COEFF_BY(pipe), 0);
-    i915_write(hw, PIPE_CSC_COEFF_RU_GU(pipe), coeff);
-    i915_write(hw, PIPE_CSC_COEFF_BU(pipe), 0);
-    i915_write(hw, PIPE_CSC_COEFF_RV_GV(pipe), 0);
-    i915_write(hw, PIPE_CSC_COEFF_BV(pipe), coeff << 16);
-    i915_write(hw, PIPE_CSC_POSTOFF_HI(pipe), postoff);
-    i915_write(hw, PIPE_CSC_POSTOFF_ME(pipe), postoff);
-    i915_write(hw, PIPE_CSC_POSTOFF_LO(pipe), postoff);
-}
-
-/**
- * The pipe's gamma table, Linux's ilk_load_lut_8 and ivb_load_lut_10:
- * the 256-entry legacy palette, or 1024 entries at 10 bits, indexed
- * explicitly because Haswell's auto-increment does not work. The mode
- * lock is held, and the state has passed the table-size check.
- */
-static void load_gamma(struct intel_crtc *c)
-{
-    const struct drm_property_blob *blob = c->base.state->gamma_lut;
-    const struct drm_color_lut *lut;
-    struct i915_hw *hw = &c->i915->hw;
-    uint32_t n, i, r, g, b, bits, shift;
-
-    if (!blob) {
-        return;
-    }
-    lut = (const struct drm_color_lut *)blob->data;
-    n = blob->length / sizeof(*lut);
-    bits = n == 256 ? 8 : 10;
-    shift = 16u - bits;
-    for (i = 0; i < n; i++) {
-        r = ((uint32_t)lut[i].red + (1u << (shift - 1))) >> shift;
-        g = ((uint32_t)lut[i].green + (1u << (shift - 1))) >> shift;
-        b = ((uint32_t)lut[i].blue + (1u << (shift - 1))) >> shift;
-        if (r >= (1u << bits)) {
-            r = (1u << bits) - 1u;
-        }
-        if (g >= (1u << bits)) {
-            g = (1u << bits) - 1u;
-        }
-        if (b >= (1u << bits)) {
-            b = (1u << bits) - 1u;
-        }
-        if (n == 256) {
-            i915_write(hw, LGC_PALETTE(c->pipe, i), r << 16 | g << 8 | b);
-        } else {
-            i915_write(hw, PREC_PAL_INDEX(c->pipe), i);
-            i915_write(hw, PREC_PAL_DATA(c->pipe), r << 20 | g << 10 | b);
-        }
-    }
-    if (n != 256) {
-        i915_write(hw, PREC_PAL_INDEX(c->pipe), 0);
-        for (i = 0; i < 3; i++) {
-            i915_write(hw, PREC_PAL_EXT_GC_MAX(c->pipe, i), 1u << 16);
-        }
-    }
-}
-
-/**
- * The pipe's colour, Linux's Haswell color commit: the gamma table and
- * its mode, and for limited range RGB the matrix that scales to 16-235.
- * The mode lock is held; a running pipe is in its vblank.
- */
-static void color_commit(struct intel_crtc *c, const struct intel_crtc_config *cfg)
-{
-    struct i915_hw *hw = &c->i915->hw;
-    int pipe = c->pipe;
-
-    /* Linux's ivb_csc_mode: the matrix after the gamma when it makes
-     * limited range, before it otherwise; hsw_color_commit_arm writes the
-     * matrix first (ilk_color_commit_noarm) and the modes after. */
-    if (cfg->limited_range) {
-        write_csc_limited(hw, pipe);
-    }
-    load_gamma(c);
-    i915_write(hw, GAMMA_MODE(pipe),
-               c->base.state->gamma_lut &&
-                       c->base.state->gamma_lut->length == 1024u * sizeof(struct drm_color_lut)
-                   ? GAMMA_MODE_MODE_10BIT
-                   : GAMMA_MODE_MODE_8BIT);
-    i915_write(hw, PIPE_CSC_MODE(pipe), cfg->limited_range ? 0 : CSC_POSITION_BEFORE_GAMMA);
-}
-
 /** The link failed to train and a new mode set should try the link the
  * fallback chose: `connector`'s link status bad and a hotplug event for
  * the console and the compositor, Linux's
@@ -1091,7 +996,9 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
     i915_write(hw, PIPESRC(c->pipe), (cfg->src_w - 1u) << 16 | (cfg->src_h - 1u));
     configure_transcoder(c, cfg);
     ilk_pfit_enable(i915, c->pipe, cfg);
-    color_commit(c, cfg);
+    /* Linux's intel_color_modeset: the tables while the pipe's clocks run
+     * and before it does, then the primary plane's enables. */
+    intel_color_commit(c);
     plane_off(c, INTEL_PLANE_PRIMARY);
     i915_write(hw, WM_LINETIME(c->pipe),
                cfg->linetime | cfg->ips_linetime << HSW_IPS_LINETIME_SHIFT);
@@ -1165,6 +1072,7 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     }
     k_memset(&c->cfg, 0, sizeof(c->cfg));
     c->cfg.pll = DPLL_ID_NONE;
+    k_memset(&c->color, 0, sizeof(c->color));
     /* A pipe that stays off gives its share of the FIFO back. */
     if (!state->crtcs_new[crtc->index]->active) {
         intel_wm_commit(c, state, 1);
@@ -1175,10 +1083,11 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
 }
 
 /** Before the planes: a pipe that comes on turned on, as Linux's commit
- * tail turns it on before it writes the planes, else the watermarks
- * raised to cover the planes the commit shows; and an async flip's flip
- * done unmasked, since the chip latches only an unmasked event and the
- * flip may be done as soon as the surface is written. */
+ * tail turns it on before it writes the planes, else its new colour set
+ * and the watermarks raised to cover the planes the commit shows; and an
+ * async flip's flip done unmasked, since the chip latches only an
+ * unmasked event and the flip may be done as soon as the surface is
+ * written. */
 static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
@@ -1187,11 +1096,14 @@ static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *sta
     if (cs && drm_atomic_crtc_needs_modeset(cs) && cs->active) {
         crtc_enable(c, state);
     } else if (cs && !drm_atomic_crtc_needs_modeset(cs)) {
-        intel_wm_commit(c, state, 0);
-        if (cs->active && cs->color_mgmt_changed) {
-            wait_next_vblank(c->i915, c->pipe);
-            color_commit(c, &c->cfg);
+        /* Linux's color commit of a fastset, before the planes, which
+         * take its enables; the tables are written before the modes that
+         * use them latch at the vblank, where Linux loads tables already
+         * in use after it. */
+        if (cs->color_mgmt_changed && cs->active) {
+            intel_color_commit(c);
         }
+        intel_wm_commit(c, state, 0);
     }
     intel_crtc_arm_flip_done(c, state);
 }
@@ -1294,29 +1206,6 @@ static int32_t intel_atomic_check(struct drm_device *dev, struct drm_atomic_stat
             return -ENOMEM;
         }
         cs->mode_changed = 1;
-    }
-    for (i = 0; i < dev->mode_config.num_crtc; i++) {
-        struct drm_crtc_state *cs = state->crtcs_new[i];
-        const struct drm_plane_state *old, *next;
-        struct drm_plane *primary;
-
-        if (!cs) {
-            continue;
-        }
-        primary = cs->crtc->primary;
-        old = primary->state;
-        next = state->planes_new[primary->index];
-        if (cs->color_mgmt_changed || (next && cs->gamma_lut &&
-                                       ((old->fb && old->fb->format == DRM_FORMAT_C8) !=
-                                        (next->fb && next->fb->format == DRM_FORMAT_C8)))) {
-            err = drm_atomic_add_affected_planes(state, cs->crtc);
-            if (err != 0) {
-                return err;
-            }
-            if (!drm_atomic_get_plane_state(state, primary)) {
-                return -ENOMEM;
-            }
-        }
     }
     err = drm_atomic_helper_check(dev, state);
     return err != 0 ? err : check_dplls(to_i915(dev), state);
@@ -1739,13 +1628,10 @@ int32_t intel_display_init(struct drm_i915_private *i915)
         c->cfg.pll = DPLL_ID_NONE;
         if ((err = intel_planes_init(c)) != 0 ||
             (err = drm_crtc_init_with_planes(dev, &c->base, &c->primary, &c->cursor,
-                                             &intel_crtc_funcs)) != 0) {
+                                             &intel_crtc_funcs)) != 0 ||
+            (err = intel_color_crtc_init(c)) != 0) {
             return err;
         }
-        if ((err = drm_mode_crtc_set_gamma_size(&c->base, 256)) != 0) {
-            return err;
-        }
-        drm_crtc_enable_color_mgmt(&c->base, 0, 0, 1024);
     }
     /* A board without the panel, or a panel that does not answer, has no
      * connector, as Linux's intel_edp_init_connector fails. */

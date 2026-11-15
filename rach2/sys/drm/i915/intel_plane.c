@@ -326,13 +326,13 @@ static int32_t check_async(struct drm_atomic_state *state, struct drm_plane *pla
 }
 
 /**
- * A primary or sprite plane's check: clipped to the CRTC without scaling,
- * the primary covering it whole as Haswell's primary plane must, then the
- * surface's checks, and the stride of the view the plane reads within the
- * plane's widest (`plane_view`, Linux's intel_plane_check_stride); C8
- * requires a 256-entry GAMMA_LUT, and a YUV source must start and end on
- * a pair of pixels. A plane is visible only on a CRTC that is on. 0,
- * -EINVAL or -ERANGE.
+ * A primary or sprite plane's check: clipped to the CRTC without scaling, the
+ * primary covering it whole as Haswell's primary plane must, then the surface's
+ * checks, and the stride of the view the plane reads within the plane's widest
+ * (`plane_view`, Linux's intel_plane_check_stride), and a YUV source must start
+ * and end on a pair of pixels. A C8 plane's palette is its CRTC's legacy
+ * GAMMA_LUT, which the CRTC's check requires. A plane is visible only on a CRTC
+ * that is on. 0, -EINVAL or -ERANGE.
  */
 static int32_t intel_plane_check(struct drm_plane *plane, struct drm_atomic_state *state,
                                  int primary)
@@ -360,10 +360,6 @@ static int32_t intel_plane_check(struct drm_plane *plane, struct drm_atomic_stat
     }
     if (!ps->visible) {
         return 0;
-    }
-    if (ps->fb->format == DRM_FORMAT_C8 &&
-        (!cs || !cs->gamma_lut || cs->gamma_lut->length != 256u * sizeof(struct drm_color_lut))) {
-        return -EINVAL;
     }
     err = check_surface(ps);
     if (err != 0) {
@@ -445,19 +441,10 @@ static int32_t primary_check(struct drm_plane *plane, struct drm_atomic_state *s
     return intel_plane_check(plane, state, 1);
 }
 
-/** The committed pipe's gamma-enable bit, with the mode lock held. */
-int intel_crtc_gamma_enabled(const struct intel_crtc *crtc)
-{
-    const struct drm_plane_state *ps = crtc->primary.state;
-
-    return crtc->base.state->gamma_lut &&
-           !(ps && ps->visible && ps->fb && ps->fb->format == DRM_FORMAT_C8);
-}
-
 uint32_t intel_plane_ctl_crtc(const struct intel_crtc *crtc)
 {
-    return (crtc->cfg.limited_range ? DISP_PIPE_CSC_ENABLE : 0) |
-           (intel_crtc_gamma_enabled(crtc) ? DISP_PIPE_GAMMA_ENABLE : 0);
+    return (crtc->color.gamma_enable ? DISP_PIPE_GAMMA_ENABLE : 0) |
+           (crtc->color.csc_enable ? DISP_PIPE_CSC_ENABLE : 0);
 }
 
 /**
@@ -582,11 +569,12 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     if (ps->rotation & DRM_MODE_ROTATE_180) {
         ctl |= SPRITE_ROTATE_180;
     }
-    if (c->cfg.limited_range) {
-        ctl |= SPRITE_PIPE_CSC_ENABLE;
-    }
-    if (intel_crtc_gamma_enabled(c)) {
+    /* Linux's ivb_sprite_ctl_crtc. */
+    if (c->color.gamma_enable) {
         ctl |= SPRITE_PIPE_GAMMA_ENABLE;
+    }
+    if (c->color.csc_enable) {
+        ctl |= SPRITE_PIPE_CSC_ENABLE;
     }
     i915_write(hw, SPRSTRIDE(c->pipe), stride);
     i915_write(hw, SPRPOS(c->pipe), (uint32_t)ps->dst.y1 << 16 | (uint32_t)ps->dst.x1);

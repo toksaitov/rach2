@@ -857,17 +857,15 @@
 #define WM_LP_PRIMARY_SHIFT        8
 #define DISP_FBC_WM_DIS            (1u << 15) /* of DISP_ARB_CTL */
 
-/* A pipe's line time in eighths of a microsecond, at the pixel clock in
- * bits 8:0 and at the CD clock, for IPS, in bits 24:16. */
-/* A pipe's gamma mode, 8 bits through the legacy table when 0, and its
- * colour matrix's mode, which sits before the gamma with CSC_POSITION. */
+/* A pipe's gamma mode: 8 bits through the legacy table, 10 bits through
+ * the precision table's 1024 entries, or the precision table split into a
+ * degamma of 512 entries before the colour matrix and a gamma of 512 after
+ * it; and its colour matrix's mode, which sits before the gamma with
+ * CSC_POSITION. */
 #define GAMMA_MODE(p)             (0x4a480 + (p) * 0x800)
 #define GAMMA_MODE_MODE_8BIT      0u
 #define GAMMA_MODE_MODE_10BIT     1u
-#define LGC_PALETTE(p, i)         (0x4a000 + (p) * 0x800 + (i) * 4)
-#define PREC_PAL_INDEX(p)         (0x4a400 + (p) * 0x800)
-#define PREC_PAL_DATA(p)          (0x4a404 + (p) * 0x800)
-#define PREC_PAL_EXT_GC_MAX(p, i) (0x4a420 + (p) * 0x800 + (i) * 4)
+#define GAMMA_MODE_MODE_SPLIT     3u
 #define PIPE_CSC_MODE(p)          (0x49028 + (p) * 0x100)
 #define CSC_POSITION_BEFORE_GAMMA (1u << 1)
 #define CSC_MODE_YUV_TO_RGB       (1u << 0)
@@ -888,6 +886,22 @@
 #define PIPE_CSC_POSTOFF_ME(p)  (0x49044 + (p) * 0x100)
 #define PIPE_CSC_POSTOFF_LO(p)  (0x49048 + (p) * 0x100)
 
+/* A pipe's gamma tables (display/intel_color_regs.h). The legacy table has
+ * 256 entries of 8 bits a channel, red in bits 23:16, green 15:8 and blue
+ * 7:0. The precision table is reached through its index, which Haswell
+ * does not advance by itself, and its data, 10 bits a channel, red in bits
+ * 29:20, green 19:10 and blue 9:0; in split mode the index's entries 0 to
+ * 511 are the degamma and 512 to 1023 the gamma. EXT_GC_MAX holds each
+ * channel's output for inputs above 1.0, in 3.16 fixed point. */
+#define LGC_PALETTE(p, i)         (0x4a000 + (p) * 0x800 + (i) * 4)
+#define PREC_PAL_INDEX(p)         (0x4a400 + (p) * 0x800)
+#define PAL_PREC_SPLIT_MODE       (1u << 31)
+#define PAL_PREC_INDEX_VALUE(x)   ((uint32_t)(x) & 0x3ffu)
+#define PREC_PAL_DATA(p)          (0x4a404 + (p) * 0x800)
+#define PREC_PAL_EXT_GC_MAX(p, i) (0x4a420 + (p) * 0x800 + (i) * 4)
+
+/* A pipe's line time in eighths of a microsecond, at the pixel clock in
+ * bits 8:0 and at the CD clock, for IPS, in bits 24:16. */
 #define WM_LINETIME(p)         (0x45270 + (p) * 4)
 #define HSW_LINETIME_MASK      0x1ffu
 #define HSW_IPS_LINETIME_SHIFT 16

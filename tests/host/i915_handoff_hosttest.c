@@ -98,6 +98,7 @@
 #include "drm/i915/intel_dp.c"
 #include "drm/i915/intel_panel.c"
 #include "drm/i915/intel_pfit.c"
+#include "drm/i915/intel_color.c"
 #include "drm/i915/intel_wm.c"
 /* The probe's mapping of the registers is the test's, below. */
 #define i915_hw_mmio_init i915_hw_mmio_init_chip

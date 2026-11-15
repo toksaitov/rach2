@@ -1322,36 +1322,46 @@ struct intel_boost {
 };
 
 /*
- * A pipe as a CRTC, with its three planes. `hw` is the readout of the
- * bind. `event` is the commit's event the pipe holds until the frame
- * counter passes `event_frame`, the count read after the commit's writes,
- * or until the flip done of an async flip (`event_async`); NULL for none.
- * `cfg` is what the pipe is set to, from the readout until its first mode
- * set. `crc_wa` says a CRC source runs that needs Linux's force-through
- * of the fitter. The watermarks (intel_wm.c): `wm_active` those the
- * registers hold for the pipe, `wm_optimal` those of the last commit's
- * planes, made active once the frame counter passes `wm_frame` while
- * `wm_pending`, which holds a vblank reference.
- * `vbl_on` says its vblank interrupt is unmasked. The CRC: `crc_ctl` is
- * PIPE_CRC_CTL's value while a source runs, 0 when none does,
- * `crc_skip` the frames still to drop after it starts, and `crc_res`
- * PIPE_CRC_RES_HSW as the error interrupt read it at the pipe's CRC done,
- * which latches a frame's CRC after its vblank, under the interrupt
- * mask's lock. `shown` and
- * `parked` are each plane's scanouts (`struct intel_scanout`), and
- * `shown_from` and `shown_to` the frame counts read before and after the
- * commit that wrote `shown`, by which a commit without a stall, a legacy
- * cursor update, tells whether the chip may still read `parked`.
- * `planes_on` has bit INTEL_PLANE_ for each plane the hardware shows.
- * `underrun_off` says its FIFO underruns are not reported, Linux's
- * cpu_fifo_underrun_disabled, and `inherited` that it shows what the
- * firmware lit, with no commit of its own yet. `boosts` lists, under the
- * interrupts' masking, the requests drawing flips that the next vblank
- * boosts if the chip has not begun them, one entry for each call of
- * `intel_crtc_boost_after_vblank`, Linux's wait_rps_boost;
- * `rps_mark` is 1 more than the slot of the display's `rps_marks` whose
- * commit's interactive mark of RPS (`i915_rps_mark_interactive`) the pipe
- * holds until its pending flip ends, 0 for none.
+ * A pipe's colour as the hardware runs it (intel_color.c), Linux's
+ * gamma_enable, csc_enable, gamma_mode and csc_mode of intel_crtc_state:
+ * whether the planes go through the pipe's gamma tables and its colour
+ * matrix, which their control registers enable, and GAMMA_MODE and
+ * PIPE_CSC_MODE.
+ */
+struct intel_color {
+    uint8_t gamma_enable, csc_enable;
+    uint32_t gamma_mode, csc_mode;
+};
+
+/*
+ * A pipe as a CRTC, with its three planes. `hw` is the readout of the bind.
+ * `event` is the commit's event the pipe holds until the frame counter passes
+ * `event_frame`, the count read after the commit's writes, or until the flip
+ * done of an async flip (`event_async`); NULL for none. `cfg` is what the pipe
+ * is set to, from the readout until its first mode set, and `color` its colour,
+ * all off until a commit sets it. `crc_wa` says a CRC source runs that needs
+ * Linux's force-through of the fitter. The watermarks (intel_wm.c): `wm_active`
+ * those the registers hold for the pipe, `wm_optimal` those of the last
+ * commit's planes, made active once the frame counter passes `wm_frame` while
+ * `wm_pending`, which holds a vblank reference. `vbl_on` says its vblank
+ * interrupt is unmasked. The CRC: `crc_ctl` is PIPE_CRC_CTL's value while a
+ * source runs, 0 when none does, `crc_skip` the frames still to drop after it
+ * starts, and `crc_res` PIPE_CRC_RES_HSW as the error interrupt read it at the
+ * pipe's CRC done, which latches a frame's CRC after its vblank, under the
+ * interrupt mask's lock. `shown` and `parked` are each plane's scanouts
+ * (`struct intel_scanout`), and `shown_from` and `shown_to` the frame counts
+ * read before and after the commit that wrote `shown`, by which a commit
+ * without a stall, a legacy cursor update, tells whether the chip may still
+ * read `parked`. `planes_on` has bit INTEL_PLANE_ for each plane the hardware
+ * shows. `underrun_off` says its FIFO underruns are not reported, Linux's
+ * cpu_fifo_underrun_disabled, and `inherited` that it shows what the firmware
+ * lit, with no commit of its own yet. `boosts` lists, under the interrupts'
+ * masking, the requests drawing flips that the next vblank boosts if the chip
+ * has not begun them, one entry for each call of
+ * `intel_crtc_boost_after_vblank`, Linux's wait_rps_boost; `rps_mark` is 1 more
+ * than the slot of the display's `rps_marks` whose commit's interactive mark of
+ * RPS (`i915_rps_mark_interactive`) the pipe holds until its pending flip ends,
+ * 0 for none.
  */
 struct intel_crtc {
     struct drm_crtc base;
@@ -1360,6 +1370,7 @@ struct intel_crtc {
     int pipe;
     struct intel_pipe_readout hw;
     struct intel_crtc_config cfg;
+    struct intel_color color;
     uint8_t crc_wa;
     struct intel_pipe_wm wm_active, wm_optimal;
     uint8_t wm_pending;
@@ -2956,16 +2967,36 @@ int32_t intel_planes_init(struct intel_crtc *crtc);
 int32_t intel_cursor_init(struct intel_crtc *crtc);
 
 /** The bits of the primary plane's DSPCNTR that set the pipe and not the
- * plane, Linux's i9xx_plane_ctl_crtc: the pipe's colour space conversion
- * when it makes limited range RGB and its gamma table when enabled.
- * A disabled plane keeps them, since
+ * plane, Linux's i9xx_plane_ctl_crtc: the pipe's gamma and its colour
+ * matrix as `crtc->color` enables them. A disabled plane keeps them, since
  * they also act on the pipe's background. */
 uint32_t intel_plane_ctl_crtc(const struct intel_crtc *crtc);
 
-/** Whether the committed pipe uses its gamma table for RGB planes,
- * Linux's ilk_gamma_enable: a table present and no visible C8 primary.
- * Called with the device's mode lock held. */
-int intel_crtc_gamma_enabled(const struct intel_crtc *crtc);
+/*
+ * The pipes' colour (intel_color.c), Linux's intel_color.c for Haswell.
+ */
+
+/** Give `crtc` its colour properties, Linux's intel_color_crtc_init: a
+ * legacy gamma table of 256 entries, DEGAMMA_LUT and GAMMA_LUT of 1024
+ * and CTM. 0 or -ENOMEM. */
+int32_t intel_color_crtc_init(struct intel_crtc *crtc);
+
+/**
+ * Check the colour of `crtc`'s new state in `state`, on a pipe set to `cfg`,
+ * Linux's intel_color_check with ivb_color_check: a C8 plane that comes or goes
+ * marks the colour changed; DEGAMMA_LUT must have 1024 entries and GAMMA_LUT
+ * 1024 or the legacy 256, and a C8 plane needs the legacy GAMMA_LUT and no
+ * DEGAMMA_LUT; and a change of the gamma or matrix enable adds the planes whose
+ * control holds it. 0, -EINVAL or -ENOMEM.
+ */
+int32_t intel_color_check(struct intel_crtc *crtc, struct drm_atomic_state *state,
+                          const struct intel_crtc_config *cfg);
+
+/** Set the pipe's colour to what its state and `cfg` say, Linux's
+ * intel_color_modeset without the primary plane: the tables, the matrix
+ * when enabled, then GAMMA_MODE and PIPE_CSC_MODE, and `crtc->color`. The
+ * planes written after it take the enables. */
+void intel_color_commit(struct intel_crtc *crtc);
 
 /*
  * The watermarks (intel_wm.c), Linux's i9xx_wm.c for Haswell.
