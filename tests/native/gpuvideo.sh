@@ -2,7 +2,7 @@
 # gpuvideo.sh: video on the Lenovo's GPU judged against Linux's on the same
 # machine, as the native cases video/* run 78-14b's checks.
 #
-#   gpuvideo.sh decode|browsers|hang SUMS LINUX
+#   gpuvideo.sh decode|browsers|hang SUMS LINUX [SPREAD]
 #
 # Run as root by etude-guest in the case's workspace, in a mount namespace of
 # the case's own, on the GNU root whose desktop account is in render and
@@ -12,7 +12,10 @@
 # reference left them on the data partition, /dev/disk0p6, in
 # native/video/clips, and SUMS, tests/graphics/ref/lenovo-video/data.sha256,
 # has the SHA-256 of each. LINUX, tests/graphics/ref/lenovo-video/linux.tar.gz,
-# is that boot's output of the same checks: linux/ and linux-*.out.
+# is that boot's output of the same checks: linux/ and linux-*.out. SPREAD,
+# tests/graphics/ref/lenovo-video/spread, is the frames by which the browsers
+# check lets a clip's median of dropped frames exceed Linux's most, by
+# browser.
 #
 # The script mounts the partition read-only, copies the clips into the
 # workspace, checks each against SUMS and unmounts it, lays out the kit as
@@ -22,7 +25,7 @@
 #   decode    each clip's frames, in software and through VA-API, the same
 #             MD5s line for line as Linux's
 #   browsers  `judge.py video` for each browser and clip against Linux's
-#             plays and decoders, under runners/video.limits
+#             plays and decoders, under runners/video.limits and SPREAD
 #   hang      the decode during the triggers with 0 frames differing from
 #             the decode alone and status 0; the kernel's hangs and resets of
 #             rcs0 as Linux's, and no reset of vcs0 or of the chip and
@@ -31,14 +34,16 @@
 # The last line is `gpuvideo: result: CHECK: pass` or `fail: why`.
 set -eu
 
-[ $# -eq 3 ] || {
-    echo "usage: gpuvideo.sh decode|browsers|hang SUMS LINUX" >&2
+[ $# -eq 3 ] || [ $# -eq 4 ] || {
+    echo "usage: gpuvideo.sh decode|browsers|hang SUMS LINUX [SPREAD]" >&2
     exit 2
 }
 check=$1
 here=$(pwd)
 sums=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
 linux=$(cd "$(dirname "$3")" && pwd)/$(basename "$3")
+spread=''
+[ $# -lt 4 ] || spread=$(cd "$(dirname "$4")" && pwd)/$(basename "$4")
 data=/dev/disk0p6
 mounted=''
 DECODE="h264-720p.mp4 h264-1080p.mp4 mpeg2-720p.m2v jpeg-720p.mkv SA10091.vc1 SMM0005.rcv"
@@ -66,6 +71,7 @@ case $check in
     *) fail "no check $check" ;;
 esac
 [ -f "$sums" ] && [ -f "$linux" ] || fail "no $2 or $3"
+[ -z "$spread" ] || [ -f "$spread" ] || fail "no $4"
 
 # The clips, from the data partition, each as SUMS has it.
 rm -rf clips data kit rach2 ref
@@ -119,7 +125,7 @@ case $check in
         for b in chromium firefox; do
             for c in $PLAY; do
                 python3 -I kit/runners/judge.py video "ref/linux/$b/$b-$c.plays" "rach2/$b/$b-$c.plays" \
-                    "ref/linux/$b/$b-$c.decoders" "rach2/$b/$b-$c.decoders" kit/runners/video.limits ||
+                    "ref/linux/$b/$b-$c.decoders" "rach2/$b/$b-$c.decoders" kit/runners/video.limits ${spread:+"$spread"} ||
                     bad="$bad $b-$c"
             done
         done

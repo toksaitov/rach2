@@ -273,7 +273,8 @@ case video/browsers alone log mountns \
     file:tests/graphics/runners/cdp.py file:tests/graphics/runners/events.py file:tests/graphics/runners/video.html \
     file:tests/graphics/runners/clips.sha256 file:tests/graphics/runners/judge.py file:tests/graphics/runners/video.limits \
     file:tests/graphics/ref/lenovo-video/data.sha256 file:tests/graphics/ref/lenovo-video/linux.tar.gz \
-    -- native/gpuvideo.sh browsers data.sha256 linux.tar.gz
+    file:tests/graphics/ref/lenovo-video/spread \
+    -- native/gpuvideo.sh browsers data.sha256 linux.tar.gz spread
 case video/hang alone log mountns \
     file:tests/graphics/lenovo/video-gpu.sh file:tests/graphics/guest-env.sh \
     file:tests/graphics/runners/video.sh file:tests/graphics/runners/common.sh file:tests/graphics/runners/server.py \

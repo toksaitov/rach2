@@ -1,0 +1,18 @@
+# spread: the frames a clip's median of dropped frames may exceed the most
+# Linux dropped in one play of that clip, on the Lenovo, for each browser,
+# which `judge.py video` reads as SPREAD (tests/native/gpuvideo.sh browsers).
+# A line is `BROWSER FRAMES`.
+#
+# Both browsers decode the clips in software but for Firefox's H.264, so
+# their drops measure processor time and frame timing, and they vary from
+# play to play on either system. The judge has three counted plays a side,
+# and the median of one side's three exceeds the most of the other's in 4 of
+# the 20 orders of six untied counts, so with no spread a system that drops
+# as Linux does fails one clip in five.
+#
+# FRAMES is the widest range of one clip's three counted plays in that
+# browser's run of linux.tar.gz, the reference beside this file: Chromium's
+# AV1 720p dropped 24, 24 and 3, Firefox's AV1 1080p 0, 22 and 2. A new
+# reference takes its own widest range here.
+chromium 21
+firefox 22

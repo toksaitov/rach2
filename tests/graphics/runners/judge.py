@@ -2,7 +2,7 @@
 
 Usage:
   python3 -I judge.py webgl REF GOT [FLAKES] [-x EXCLUSIONS]
-  python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]
+  python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT [LIMITS [SPREAD]]
   python3 -I judge.py results REF GOT [SAMPLE [FLAKES]] [-l LIST] [-s SCOPE]
       [-x EXCLUSIONS]
   python3 -I judge.py modes REF GOT [FAULTS]
@@ -34,7 +34,12 @@ reference's, the first line of each decoders file. LIMITS, video.limits,
 names the clips whose drops are a known limit of Rach2, each by the name of
 its plays file without `.plays`: for such a clip a median over the
 reference's most is printed as `judge: limit: ...` and is not worse, and
-every other check holds.
+every other check holds. SPREAD, the Lenovo's `ref/lenovo-video/spread`,
+gives each browser, `BROWSER FRAMES` a line, the frames by which a clip's
+median may exceed the reference's most, the widest range of one clip's plays
+in that browser's reference run: such a median is printed as `judge:
+spread: ...` and is not worse. The browser is the plays file's name up to
+its first `-`.
 
 `results` compares two results files of igt.sh or piglit.sh, `NAME RESULT`
 a line, compressed with gzip when the name ends in .gz, by name: a test or
@@ -246,12 +251,27 @@ def first_line(path):
         return ""
 
 
-def video(ref_path, got_path, ref_dec, got_dec, limits_path=None):
+def spread_of(spread_path, clip):
+    """The frames SPREAD_PATH lets CLIP's median exceed the reference's most:
+    the line of the browser that begins CLIP's name, 0 with no file or line."""
+    if spread_path is None:
+        return 0
+    browser = clip.split("-")[0]
+    for f in lines(spread_path):
+        if len(f) != 2 or not f[1].isdigit():
+            sys.exit("judge: %s: a line that is not `BROWSER FRAMES`: %s" % (spread_path, " ".join(f)))
+        if f[0] == browser:
+            return int(f[1])
+    return 0
+
+
+def video(ref_path, got_path, ref_dec, got_dec, limits_path=None, spread_path=None):
     ref, got = counted(ref_path), counted(got_path)
     clip = os.path.basename(got_path)
     if clip.endswith(".plays"):
         clip = clip[:-len(".plays")]
     limited = limits_path is not None and clip in {f[0] for f in lines(limits_path)}
+    spread = spread_of(spread_path, clip)
     worse = []
     limit = ""
     if len(got) != len(ref):
@@ -272,6 +292,9 @@ def video(ref_path, got_path, ref_dec, got_dec, limits_path=None):
         if limited:
             limit = ", a named limit"
             print("judge: limit: %s: %s" % (clip, over))
+        elif statistics.median(dropped_got) <= max(dropped_ref) + spread:
+            limit = ", within Linux's spread"
+            print("judge: spread: %s: %s, within Linux's spread of %d" % (clip, over, spread))
         else:
             worse.append(over)
     dr, dg = first_line(ref_dec), first_line(got_dec)
@@ -581,7 +604,7 @@ def judge(kind, args, opts):
     x, s, l = opts.get("-x"), opts.get("-s"), opts.get("-l")
     if len(args) in (3, 4) and kind == "webgl" and not s:
         ok = webgl(args[1], args[2], x, args[3] if len(args) == 4 else None)
-    elif len(args) in (5, 6) and kind == "video" and not opts:
+    elif len(args) in (5, 6, 7) and kind == "video" and not opts:
         ok = video(*args[1:])
     elif len(args) in (3, 4, 5) and kind == "results":
         ok = results(*args[1:], scope_path=s, exclusions_path=x, list_path=l)
@@ -597,7 +620,7 @@ def judge(kind, args, opts):
         ok = gate(args[1], args[2])
     else:
         sys.exit("usage: judge.py webgl REF GOT [FLAKES] [-x EXCLUSIONS]"
-                 " | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]"
+                 " | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS [SPREAD]]"
                  " | results REF GOT [SAMPLE [FLAKES]] [-l LIST] [-s SCOPE] [-x EXCLUSIONS]"
                  " | modes REF GOT [FAULTS] | glmark2 REF GOT"
                  " | deqp REF GOT [FLAKES] [-x EXCLUSIONS]"
