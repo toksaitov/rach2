@@ -593,9 +593,7 @@ static int32_t bring_up(void)
     gpu.pci = model.pci;
     gpu.hw = model.hw;
     gpu.id = &lenovo_id;
-    /* The reference the bind's i915_power_init holds for its life. */
-    gpu.power.count = 1;
-    gpu.power.on = 1;
+    CHECK(i915_power_init(&gpu) == 0, "the bind takes the display well's initial reference");
     gpu.msi_vector = 48;
     driver.ident.name = "i915";
     gpu.drm.driver = &driver;
@@ -903,7 +901,7 @@ static void row_hdmi_set(void)
     CHECK(reg(PIPE_CSC_POSTOFF_HI(1)) == 0x100 && reg(PIPE_CSC_POSTOFF_ME(1)) == 0x100 &&
               reg(PIPE_CSC_POSTOFF_LO(1)) == 0x100,
           "hdmi: limited range through the colour space conversion");
-    CHECK(gpu.power.count == 2 && disp->crtc[1].cfg.well, "hdmi: the pipe holds the power well");
+    CHECK(gpu.power.count == 1 && disp->crtc[1].cfg.well, "hdmi: the pipe holds the power well");
     CHECK(((reg(WM0_PIPE_ILK(1)) >> WM0_PIPE_PRIMARY_SHIFT) & 0xffu) != 0,
           "hdmi: pipe B's level 0 watermark written for its plane");
     CHECK(logged("display: pipe B set: 1920x1080@60 on HDMI B, 148500 kHz, 24 bpp, TMDS 148500 "
@@ -1066,13 +1064,13 @@ static void row_dp(void)
               (func & TRANS_DDI_MODE_SELECT_MASK) == TRANS_DDI_MODE_SELECT_DP_SST &&
               (reg(TRANSCONF(2)) & TRANSCONF_ENABLE),
           "dp: transcoder C in SST mode on port C");
-    CHECK(gpu.power.count == 3, "dp: both external pipes hold the power well");
+    CHECK(gpu.power.count == 2, "dp: both external pipes hold the power well");
     CHECK(logged("display: pipe C set: 1920x1080 in 1920x1080@60, 148500 kHz, 24 bpp, 4 lanes at "
                  "162000 kHz, DP C"),
           "dp: the log's line");
     frame();
     CHECK(setcrtc(2, NULL, NULL, 0) == 0 && !(reg(TRANSCONF(2)) & TRANSCONF_ENABLE) &&
-              !(reg(DDI_BUF_CTL(INTEL_PORT_C)) & DDI_BUF_CTL_ENABLE) && gpu.power.count == 2,
+              !(reg(DDI_BUF_CTL(INTEL_PORT_C)) & DDI_BUF_CTL_ENABLE) && gpu.power.count == 1,
           "dp: pipe C off, its port off and the well let go");
     frame();
 }
@@ -1113,7 +1111,7 @@ static void row_inject(void)
           "inject: the log's line");
     frame();
     CHECK(setcrtc(2, NULL, NULL, 0) == 0 && !(reg(WRPLL_CTL(1)) & WRPLL_PLL_ENABLE) &&
-              gpu.power.count == 2,
+              gpu.power.count == 1,
           "inject: pipe C off, WRPLL 2 off");
     drm_edid_override_reset(hdmi);
     hdmi->force = DRM_FORCE_UNSPECIFIED;
@@ -1301,8 +1299,8 @@ static void row_3d(void)
 static void row_fini(void)
 {
     CHECK(setcrtc(1, NULL, NULL, 0) == 0 && !(reg(WRPLL_CTL(0)) & WRPLL_PLL_ENABLE) &&
-              gpu.power.count == 1,
-          "fini: pipe B off, WRPLL 1 off, the well back to the bind's");
+              gpu.power.count == 0,
+          "fini: pipe B off, WRPLL 1 off, the well let go");
     frame();
     intel_display_fini(&gpu);
     CHECK(!disp->hotplug.ready, "fini: hotplug off");

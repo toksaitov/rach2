@@ -623,11 +623,12 @@ int32_t intel_dp_connector_init(struct drm_i915_private *i915)
         return err;
     }
     /* Linux's intel_dp_add_properties for eDP on a PCH display: "max bpc"
-     * from 6 to 12, and "scaling mode" without None, Full aspect first. */
+     * from 6 to 12, and "scaling mode", Full aspect first. */
     if ((err = drm_connector_attach_max_bpc_property(&d->connector, 6, 12)) != 0 ||
         (err = drm_connector_attach_scaling_mode_property(
-             &d->connector, 1u << DRM_MODE_SCALE_ASPECT | 1u << DRM_MODE_SCALE_FULLSCREEN |
-                                1u << DRM_MODE_SCALE_CENTER)) != 0) {
+             &d->connector, 1u << DRM_MODE_SCALE_NONE | 1u << DRM_MODE_SCALE_ASPECT |
+                                1u << DRM_MODE_SCALE_FULLSCREEN | 1u << DRM_MODE_SCALE_CENTER)) !=
+            0) {
         return err;
     }
     d->connector.state->scaling_mode = DRM_MODE_SCALE_ASPECT;

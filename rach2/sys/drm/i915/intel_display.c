@@ -1201,6 +1201,52 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     spin_unlock_irqrestore(&i915->drm.event_lock, flags);
 }
 
+/** Whether this commit changes the pipe's source mode or panel scaling. */
+static int pipe_config_changed(struct intel_crtc *c, struct drm_atomic_state *state)
+{
+    const struct drm_connector_state *conn, *old_conn;
+    uint32_t i;
+
+    if (state->crtcs_new[c->base.index]->mode_blob != state->crtcs_old[c->base.index]->mode_blob) {
+        return 1;
+    }
+    for (i = 0; i < c->i915->drm.mode_config.num_connector; i++) {
+        conn = state->connectors_new[i];
+        old_conn = state->connectors_old[i];
+        if (conn && conn->crtc == &c->base && old_conn &&
+            conn->scaling_mode != old_conn->scaling_mode) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Update an eDP pipe's source and panel fitter without stopping its
+ * unchanged link and timings, Linux's intel_pipe_fastset. The check has
+ * established that its transcoder input and power domains stay the same. */
+static void crtc_fastset(struct intel_crtc *c, struct drm_atomic_state *state)
+{
+    struct intel_crtc_config cfg;
+    int32_t err = compute_config(c, state->crtcs_new[c->base.index], state, &cfg);
+
+    if (err != 0) {
+        klog(KLOG_ERR, "i915", "display: pipe %c fastset: error %d", 'A' + c->pipe, (int)err);
+        return;
+    }
+    cfg.pll = c->cfg.pll;
+    cfg.pll_hw = c->cfg.pll_hw;
+    cfg.well = c->cfg.well;
+    i915_write(&c->i915->hw, PIPESRC(c->pipe), (cfg.src_w - 1u) << 16 | (cfg.src_h - 1u));
+    if (cfg.pfit) {
+        ilk_pfit_enable(c->i915, c->pipe, &cfg);
+    } else if (c->cfg.pfit) {
+        ilk_pfit_disable(c->i915, c->pipe, &c->cfg);
+    }
+    i915_write(&c->i915->hw, WM_LINETIME(c->pipe),
+               cfg.linetime | cfg.ips_linetime << HSW_IPS_LINETIME_SHIFT);
+    c->cfg = cfg;
+}
+
 /** Before the planes: a pipe that comes on turned on, as Linux's commit
  * tail turns it on before it writes the planes, else its new colour set
  * and the watermarks raised to cover the planes the commit shows; and an
@@ -1214,6 +1260,9 @@ static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *sta
     if (cs && drm_atomic_crtc_needs_modeset(cs) && cs->active) {
         crtc_enable(c, state);
     } else if (cs && !drm_atomic_crtc_needs_modeset(cs)) {
+        if (cs->active && pipe_config_changed(c, state)) {
+            crtc_fastset(c, state);
+        }
         /* Linux's color commit of a fastset, before the planes, which
          * take its enables; the tables are written before the modes that
          * use them latch at the vblank, where Linux loads tables already
@@ -1301,11 +1350,58 @@ static int32_t check_dplls(struct drm_i915_private *i915, struct drm_atomic_stat
     return 0;
 }
 
+/** Whether an eDP configuration keeps every part that cannot be changed
+ * while the pipe runs, Linux's intel_pipe_config_compare for a fastset.
+ * In particular pipe A's always-on/force-through mux needs a full mode set. */
+static int config_can_fastset(const struct intel_crtc_config *old,
+                              const struct intel_crtc_config *cfg)
+{
+    return old->active && cfg->active && old->output == INTEL_OUTPUT_EDP &&
+           cfg->output == old->output && cfg->port == old->port && cfg->trans == old->trans &&
+           drm_mode_equal(&cfg->mode, &old->mode) && cfg->force_thru == old->force_thru &&
+           cfg->bpp == old->bpp && cfg->dither == old->dither &&
+           cfg->limited_range == old->limited_range && cfg->port_clock == old->port_clock &&
+           cfg->lanes == old->lanes && cfg->tu == old->tu && cfg->data_m == old->data_m &&
+           cfg->data_n == old->data_n && cfg->link_m == old->link_m && cfg->link_n == old->link_n;
+}
+
+/** Downgrade a mode change to a fastset when only an eDP pipe's source
+ * size or panel fitting changes. The core has checked the new configuration;
+ * also check its intermediate watermarks before keeping the pipe running.
+ * 0 or the watermark error. */
+static int32_t check_fastsets(struct drm_i915_private *i915, struct drm_atomic_state *state)
+{
+    int pipe;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        struct intel_crtc *c = &i915->display.crtc[pipe];
+        struct drm_crtc_state *cs = state->crtcs_new[c->base.index];
+        struct intel_crtc_config cfg;
+        struct intel_pipe_wm wm;
+        int32_t err;
+
+        if (!cs || !cs->mode_changed || cs->active_changed || cs->connectors_changed ||
+            compute_config(c, cs, state, &cfg) != 0 || !config_can_fastset(&c->cfg, &cfg)) {
+            continue;
+        }
+        err = intel_wm_compute(c, state, &cfg, &wm);
+        if (err == 0) {
+            err = intel_wm_intermediate(&c->wm_optimal, &wm);
+        }
+        if (err != 0) {
+            return err;
+        }
+        cs->mode_changed = 0;
+    }
+    return 0;
+}
+
 /**
  * The device's check, Linux's intel_atomic_check: a new "scaling mode"
  * sets its CRTC's mode again
  * (intel_digital_connector_atomic_check); then the core's checks, and the
- * PLLs of the pipes set again.
+ * PLLs of the pipes set again, then a source or fitter update on an
+ * unchanged eDP link made a fastset, as intel_crtc_check_fastset does.
  */
 static int32_t intel_atomic_check(struct drm_device *dev, struct drm_atomic_state *state)
 {
@@ -1326,6 +1422,9 @@ static int32_t intel_atomic_check(struct drm_device *dev, struct drm_atomic_stat
         cs->mode_changed = 1;
     }
     err = drm_atomic_helper_check(dev, state);
+    if (err == 0) {
+        err = check_fastsets(to_i915(dev), state);
+    }
     return err != 0 ? err : check_dplls(to_i915(dev), state);
 }
 
@@ -1786,7 +1885,13 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     if (d->dp.present) {
         intel_backlight_setup(i915);
     }
-    return intel_hotplug_init(i915);
+    err = intel_hotplug_init(i915);
+    if (err == 0 && i915->power.init_ref) {
+        /* POWER_DOMAIN_INIT ends once each adopted pipe holds its domains. */
+        i915->power.init_ref = 0;
+        i915_power_put(i915);
+    }
+    return err;
 }
 
 void intel_display_fini(struct drm_i915_private *i915)

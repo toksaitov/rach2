@@ -819,6 +819,17 @@ system: total:0x%016x bytes
 .Ed
 .Pp
 and a line for stolen memory when the device has it.
+.It Pa dri/DEVICE/i915_lpsp_status
+Mode 0444.
+Reads
+.Ql LPSP: enabled
+when Haswell's global display power well is off, else
+.Ql LPSP: disabled .
+.It Pa dri/DEVICE/i915_gem_framebuffer
+Mode 0444.
+One line per live framebuffer, read under the mode lock:
+its size, depth, bits a pixel, modifier and reference count with Linux's
+field names, then its backing object's address and size in KiB.
 .It Pa dri/DEVICE/i915_frequency_info
 Mode 0444.
 The GT's frequency registers and limits, as Linux's

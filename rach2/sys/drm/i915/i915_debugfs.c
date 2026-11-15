@@ -953,6 +953,50 @@ static int32_t gem_objects_show(void *data, char *buf, uint32_t cap)
     return emit_end(&e);
 }
 
+/** i915_lpsp_status, Linux's Haswell test: LPSP is enabled while the
+ * global display power well is off. -ENODEV after unplug. */
+static int32_t lpsp_status_show(void *data, char *buf, uint32_t cap)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    struct emit e;
+
+    if (gone(i915)) {
+        return -ENODEV;
+    }
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emitf(&e, "LPSP: %s\n", i915_power_well_on(i915) ? "disabled" : "enabled");
+    return emit_end(&e);
+}
+
+/** i915_gem_framebuffer, Linux's i915_gem_framebuffer_info: one line
+ * per live framebuffer, held by the mode lock while its size, format,
+ * reference count and backing object are read. -ENODEV after unplug. */
+static int32_t gem_framebuffer_show(void *data, char *buf, uint32_t cap)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    const struct drm_framebuffer *fb;
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    drm_modeset_lock_nointr(&i915->drm);
+    if (gone(i915)) {
+        drm_modeset_unlock(&i915->drm);
+        return -ENODEV;
+    }
+    for (fb = i915->drm.mode_config.fbs; fb; fb = fb->next) {
+        emitf(&e, "user size: %u x %u, depth %u, %u bpp, modifier 0x%Lx, refcount %u, obj ",
+              fb->width, fb->height, (uint32_t)fb->info->depth, (uint32_t)fb->info->cpp[0] * 8u,
+              fb->modifier, fb->base.refs);
+        emitf(&e, "%016Lx: %LuKiB\n", (uint64_t)(uintptr_t)fb->obj[0], fb->obj[0]->size >> 10);
+    }
+    drm_modeset_unlock(&i915->drm);
+    return emit_end(&e);
+}
+
 /** Append "NAME: COUNT (NSns)" for an RPS counter in its units of 16 CS
  * timestamps, Linux's intel_gt_pm_interval_to_ns. */
 static void rp_counter(struct emit *e, const char *name, uint32_t count)
@@ -1650,6 +1694,8 @@ static int32_t params_register(struct drm_i915_private *i915)
 }
 
 static const struct debugfs_text_ops capabilities_ops = {capabilities_show, NULL};
+static const struct debugfs_text_ops lpsp_status_ops = {lpsp_status_show, NULL};
+static const struct debugfs_text_ops gem_framebuffer_ops = {gem_framebuffer_show, NULL};
 static const struct debugfs_text_ops gem_objects_ops = {gem_objects_show, NULL};
 static const struct debugfs_text_ops frequency_ops = {frequency_show, NULL};
 static const struct debugfs_text_ops rps_boost_ops = {rps_boost_show, NULL};
@@ -1665,6 +1711,8 @@ static const struct {
     const struct debugfs_text_ops *ops;
 } text_files[] = {{"i915_capabilities", 0444u, &capabilities_ops},
                   {"i915_gem_objects", 0444u, &gem_objects_ops},
+                  {"i915_lpsp_status", 0444u, &lpsp_status_ops},
+                  {"i915_gem_framebuffer", 0444u, &gem_framebuffer_ops},
                   {"i915_frequency_info", 0444u, &frequency_ops},
                   {"i915_engine_info", 0444u, &engine_info_ops},
                   {"i915_cdclk_info", 0444u, &cdclk_info_ops},

@@ -234,6 +234,11 @@ void i915_hw_gone(struct i915_hw *hw);
 /** Whether `hw` is the MMIO backend, whose `priv` is the mapping of the
  * registers and whose `gsm` the mapping of the GTT's entries. */
 int i915_hw_is_mmio(const struct i915_hw *hw);
+/** Reinitialize VGA I/O after enabling Haswell's display well, Linux's
+ * intel_vga_reset_io_mem: write the VGA miscellaneous output register
+ * back to itself. Only the MMIO backend reaches legacy I/O ports; the
+ * model and fake have no VGA I/O decoder to reset. */
+void i915_hw_vga_reset_io_mem(struct i915_hw *hw);
 
 /*
  * The aperture, BAR 2 (i915_aperture.c): the first `size` bytes of the

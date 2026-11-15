@@ -401,9 +401,7 @@ static int32_t bring_up(void)
           "the VBT is read and decoded");
     gpu.pci = model.pci;
     gpu.hw = model.hw;
-    /* The reference the bind's i915_power_init holds for its life. */
-    gpu.power.count = 1;
-    gpu.power.on = 1;
+    CHECK(i915_power_init(&gpu) == 0, "the bind takes the display well's initial reference");
     gpu.msi_vector = 48;
     driver.ident.name = "i915";
     gpu.drm.driver = &driver;
@@ -695,6 +693,8 @@ static void row_probe(void)
               gc.count_modes == 1 && drm_mode_equal(&modes[0], &pa->hw.mode) &&
               gc.encoder_id == gpu.display.encoder.base.id,
           "probe: eDP-1 connected, the firmware's mode alone, on its encoder");
+    CHECK(gpu.power.count == 0 && !gpu.power.init_ref && !i915_power_well_on(&gpu),
+          "probe: the initial display well reference is gone after adoption of always-on pipe A");
     CHECK(gpu.display.encoder.possible_crtcs == 7u && gpu.display.connector.scaling_mode_property &&
               gpu.display.connector.max_bpc_property &&
               gpu.display.connector.state->scaling_mode == DRM_MODE_SCALE_ASPECT,
@@ -1211,7 +1211,8 @@ static void row_colorkey(void)
           "colorkey: a source key in the sprite's registers, NONE ignored");
     fb = addfb(h, 64, 64, DRM_FORMAT_XRGB16161616F, 512, NO_MODIFIER);
     CHECK(fb && plane_commit(&pa->sprite, fb, &at, 0) == 0 &&
-              reg(SPRCTL(0)) == (SPRITE_ENABLE | SPRITE_FORMAT_RGBX161616 | SPRITE_SOURCE_KEY),
+              reg(SPRCTL(0)) == (SPRITE_ENABLE | SPRITE_FORMAT_RGBX161616 | SPRITE_SOURCE_KEY |
+                                 SPRITE_YUV_TO_RGB_CSC_FORMAT_BT709),
           "fp16: the sprite's gamma on, the key kept by a later commit");
     CHECK(reg(SPRGAMC(0, 0)) == 0 && reg(SPRGAMC(0, 1)) == (256u << 20 | 256u << 10 | 256u) &&
               reg(SPRGAMC(0, 3)) == (768u << 20 | 768u << 10 | 768u) &&
@@ -1662,7 +1663,7 @@ static int32_t set_scaling(uint64_t mode)
 
     k_memset(&r, 0, sizeof(r));
     req_add(&r, &gpu.display.connector.base, gpu.display.connector.scaling_mode_property, mode);
-    return req_commit(&r, DRM_MODE_ATOMIC_ALLOW_MODESET);
+    return req_commit(&r, 0);
 }
 
 /**
@@ -1677,6 +1678,9 @@ static void row_modeset(void)
     struct drm_mode_modeinfo small = pa->hw.mode;
     uint32_t from = model.nlog;
     long off[7], on[9];
+    struct drm_property_blob *blob;
+    struct req r;
+    int32_t err;
 
     small.hdisplay = 1024;
     drm_mode_set_name(&small);
@@ -1719,10 +1723,36 @@ static void row_modeset(void)
           "modeset: the log's line");
     frame();
     frame();
+    from = model.nlog;
+    CHECK(set_scaling(DRM_MODE_SCALE_CENTER) == 0 && reg(PF_WIN_POS(0)) == PF_WIN_XPOS(171) &&
+              reg(PF_WIN_SZ(0)) == (PF_WIN_XSIZE(1024) | 768u),
+          "fastset: Center keeps the source's size at the panel's centre");
+    frame();
     CHECK(set_scaling(DRM_MODE_SCALE_FULLSCREEN) == 0 && reg(PF_WIN_POS(0)) == 0 &&
               reg(PF_WIN_SZ(0)) == (PF_WIN_XSIZE(1366) | 768u),
-          "modeset: scaling mode Full stretches it, by a mode set");
+          "fastset: scaling mode Full stretches it without ALLOW_MODESET");
+    CHECK(first_write(TRANSCONF(I915_TRANS_EDP), 0, 0, from) < 0 &&
+              first_write(DDI_BUF_CTL(0), 0, 0, from) < 0 &&
+              first_write(PP_CONTROL, 0, 0, from) < 0,
+          "fastset: the transcoder, link and panel power are not written");
     frame();
+    small.hdisplay = 640;
+    small.vdisplay = 480;
+    drm_mode_set_name(&small);
+    blob = drm_property_create_blob(&gpu.drm, sizeof(small), &small, &err);
+    CHECK(blob != NULL, "fastset: a source mode blob is made");
+    if (blob) {
+        k_memset(&r, 0, sizeof(r));
+        req_add(&r, &pa->base.base, gpu.drm.mode_config.prop_mode_id, blob->base.id);
+        req_add(&r, &gpu.display.connector.base, gpu.display.connector.scaling_mode_property,
+                DRM_MODE_SCALE_CENTER);
+        CHECK(req_commit(&r, 0) == 0 && reg(PIPESRC(0)) == (639u << 16 | 479u) &&
+                  reg(PF_WIN_POS(0)) == (PF_WIN_XPOS(363) | PF_WIN_YPOS(144)) &&
+                  reg(PF_WIN_SZ(0)) == (PF_WIN_XSIZE(640) | 480u),
+              "fastset: the source mode and Center window change without ALLOW_MODESET");
+        drm_property_blob_put(blob);
+        frame();
+    }
     CHECK(setcrtc(&pa->hw.mode, fb_con) == 0 && reg(PF_CTL(0)) == 0 &&
               reg(PIPESRC(0)) == (1365u << 16 | 767u) &&
               (reg(TRANS_DDI_FUNC_CTL(I915_TRANS_EDP)) & TRANS_DDI_EDP_INPUT_MASK) ==

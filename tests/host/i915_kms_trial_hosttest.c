@@ -376,9 +376,7 @@ static int32_t bring_up(void)
     gpu.pci = model.pci;
     gpu.hw = model.hw;
     gpu.id = &lenovo_id;
-    /* The reference the bind's i915_power_init holds for its life. */
-    gpu.power.count = 1;
-    gpu.power.on = 1;
+    CHECK(i915_power_init(&gpu) == 0, "the bind takes the display well's initial reference");
     gpu.msi_vector = 48;
     driver.ident.name = "i915";
     gpu.drm.driver = &driver;
@@ -1097,12 +1095,12 @@ static void row_inject(void)
           "inject: limited range by the matrix after the gamma, as Linux's ivb_csc_mode");
     CHECK(!wrote_range(PIPE_DATA_M2(0), PIPE_LINK_N2(0), from),
           "inject: no second M/N written on transcoder A");
-    CHECK((reg(HSW_TVIDEO_DIP_CTL(0)) & VIDEO_DIP_ENABLE_VS_HSW) && gpu.power.count == 2,
+    CHECK((reg(HSW_TVIDEO_DIP_CTL(0)) & VIDEO_DIP_ENABLE_VS_HSW) && gpu.power.count == 1,
           "inject: the HDMI VIC in the vendor infoframe, the power well held");
     frame();
     frame();
     CHECK(setcrtc(0, NULL, NULL, 0) == 0 && !(reg(WRPLL_CTL(0)) & WRPLL_PLL_ENABLE) &&
-              !(reg(DDI_BUF_CTL(INTEL_PORT_B)) & DDI_BUF_CTL_ENABLE) && gpu.power.count == 1,
+              !(reg(DDI_BUF_CTL(INTEL_PORT_B)) & DDI_BUF_CTL_ENABLE) && gpu.power.count == 0,
           "inject: pipe A off, DDI B and WRPLL 1 off, the well let go");
     drm_edid_override_reset(hdmi);
     CHECK(drm_connector_force_write(hdmi, "unspecified", 11) == 11 &&

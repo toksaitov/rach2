@@ -55,9 +55,16 @@ int i915_power_well_in_use(struct drm_i915_private *i915)
  * -ETIMEDOUT. */
 static int32_t i915_power_enable(struct drm_i915_private *i915)
 {
+    int was_on = i915_power_well_on(i915);
+    int32_t err;
+
     i915_rmw(&i915->hw, HSW_PWR_WELL_CTL2, 0, I915_PW_REQ);
-    return i915_wait_for(&i915->hw, "power well on", HSW_PWR_WELL_CTL2, I915_PW_STATE,
-                         I915_PW_STATE, I915_PW_US);
+    err = i915_wait_for(&i915->hw, "power well on", HSW_PWR_WELL_CTL2, I915_PW_STATE, I915_PW_STATE,
+                        I915_PW_US);
+    if (err == 0 && !was_on) {
+        i915_hw_vga_reset_io_mem(&i915->hw);
+    }
+    return err;
 }
 
 /** The requests other than the driver's: bit 0 the BIOS's, 2 the KVMR's,
@@ -134,6 +141,7 @@ int32_t i915_power_init(struct drm_i915_private *i915)
 {
     struct i915_hw *hw = &i915->hw;
     uint32_t bios = i915_read(hw, HSW_PWR_WELL_CTL1), drv;
+    int32_t err;
 
     /* hsw_power_well_sync_hw: the BIOS's request becomes the driver's. */
     if (bios & I915_PW_REQ) {
@@ -146,5 +154,7 @@ int32_t i915_power_init(struct drm_i915_private *i915)
     i915->power.count = 0;
     i915->power.on = (uint8_t)i915_power_well_on(i915);
     i915->power.kept = 0;
-    return i915_power_get(i915);
+    err = i915_power_get(i915);
+    i915->power.init_ref = err == 0;
+    return err;
 }

@@ -132,6 +132,7 @@ struct i915_power {
     uint32_t count;
     uint8_t on;
     uint8_t kept;
+    uint8_t init_ref; /* POWER_DOMAIN_INIT held until display adoption ends */
 };
 
 /*

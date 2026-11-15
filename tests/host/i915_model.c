@@ -6,9 +6,24 @@
 
 #include "i915_model.h"
 #include "i915_lenovo.h"
+#include "arch/x86/portio.h"
 
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *p);
+
+/** The host has no VGA I/O ports; the model backend never reaches them. */
+uint8_t inb(uint16_t port)
+{
+    (void)port;
+    return 0;
+}
+
+/** The host has no VGA I/O ports; the model backend never reaches them. */
+void outb(uint16_t port, uint8_t value)
+{
+    (void)port;
+    (void)value;
+}
 
 /*
  * The blocks, one file each, included here and listed in the table below,

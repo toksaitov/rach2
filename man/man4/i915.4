@@ -738,7 +738,7 @@ eDP connector
 always connected, with the modes of the panel's EDID and its fixed modes,
 and the properties
 .Ql scaling mode ,
-Full aspect by default, Full or Center, and
+Full aspect by default, None, Full or Center, and
 .Ql max bpc ,
 6 to 12.
 At bind the driver reads out what the firmware left lit, without a write:
@@ -757,6 +757,12 @@ the mode in Linux's order, with the panel's power, its link trained and
 its backlight, and logs
 .Dq i915: display: pipe A set
 with the sizes, the clock, the bits a pixel and the link.
+A change to the pipe's source size or panel fitting keeps the pipe
+running when its link and adjusted timings stay unchanged, as Linux's
+fastset does, and needs no
+.Dv DRM_MODE_ATOMIC_ALLOW_MODESET .
+Changing pipe A's always-on or force-through transcoder input still
+needs a full mode set.
 Any pipe may drive the panel.
 A mode of the panel's size and refresh rate is driven as it is; a
 different size is scaled to the panel by the pipe's fitter as

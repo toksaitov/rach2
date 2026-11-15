@@ -7,6 +7,7 @@
 #include "i915_reg.h"
 
 #include "../../arch/x86/pat.h"
+#include "../../arch/x86/portio.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../mm/paging.h"
@@ -252,6 +253,13 @@ void i915_hw_gone(struct i915_hw *hw)
 int i915_hw_is_mmio(const struct i915_hw *hw)
 {
     return hw->ops == &i915_mmio_ops;
+}
+
+void i915_hw_vga_reset_io_mem(struct i915_hw *hw)
+{
+    if (i915_hw_is_mmio(hw)) {
+        outb(0x3c2, inb(0x3cc));
+    }
 }
 
 int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
