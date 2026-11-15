@@ -12,7 +12,12 @@
 #          order: IGT's buffer list as root with no compositor, then Weston
 #          as gfx on the panel and on it glmark2's validations, glmark2's
 #          benchmark, the WebGL probe and the WebGL suite in its 12 chunks,
-#          each browser in turn
+#          each browser in turn; or deqp, the suite's chunks 3 to 6, which
+#          hold its 793 deqp/ pages, without webgl-lenovo.omit, in the
+#          browser and chunks of DEQP_CHUNKS (`chromium:5 chromium:6
+#          firefox:3 firefox:4 firefox:5 firefox:6`, since 83-15's boot ran
+#          Chromium's chunks 3 and 4 before the cut), each page's line of
+#          the browser's chunks then in $OUT/conformance/deqp/BROWSER.pages
 # Each case runs in a directory of its own under $OUT/conformance/NAME, and
 # `collect` then writes $OUT/conformance/expect/, the files that go into
 # tests/graphics/ref/lenovo/expect/, and gate.lines, the probe's lines for
@@ -39,6 +44,7 @@ case_run() {
 	rm -rf $d
 	mkdir -p $d
 	cp $S/*.sh $S/*.py $S/*.html $S/*.list $S/*.omit $d/ 2> /dev/null
+	[ -z "${NO_OMIT:-}" ] || rm -f $d/webgl-lenovo.omit
 	say "conformance: start $n: $*" | tee $d/run.log
 	(cd $d && sh lenovo.sh "$@" -) > $d/lenovo.out 2>&1
 	echo "exit $?" >> $d/run.log
@@ -132,6 +138,21 @@ for part; do
 				case_run "webgl-$b.$(printf %02d $i)" webgl $b $i
 			done
 		done
+		;;
+	deqp)
+		[ -n "$WESTON" ] || weston_start
+		LENOVO_WEBGL=$(webgl_suite)
+		[ -n "$LENOVO_WEBGL" ] || { echo "conformance: no WebGL suite under /srv/run2/step9/web/webgl" >&2; exit 1; }
+		export LENOVO_WEBGL
+		for bc in ${DEQP_CHUNKS:-chromium:5 chromium:6 firefox:3 firefox:4 firefox:5 firefox:6}; do
+			b=${bc%:*} i=${bc#*:}
+			NO_OMIT=1 case_run "webgl-deqp-$b.$(printf %02d $i)" webgl $b $i
+		done
+		mkdir -p $O/deqp
+		for b in chromium firefox; do
+			cat $O/webgl-deqp-$b.*/out/$b-2.0.1-*.pages > $O/deqp/$b.pages 2> /dev/null
+		done
+		wc -l $O/deqp/*.pages
 		;;
 	*) echo "conformance: no part $part" >&2; exit 2 ;;
 	esac
