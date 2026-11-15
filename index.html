@@ -28,19 +28,21 @@ header a { font-size: 13px; white-space: nowrap; }
 .right { padding: 16px 20px 24px; }
 
 #machine { background: #000; overflow: hidden; position: relative; container-type: inline-size; }
-#screen { display: flex; justify-content: center; background: #000; min-height: 120px; overflow: hidden;
-  touch-action: manipulation; outline: 0; }
-/* A game's picture keeps the 4:3 of the screens it was drawn for, and fits the window's height. */
+/* The screen is one 4:3 box that fits the window's height and depends on
+   nothing else, so that the page keeps its place when the machine goes from
+   text to a game's picture and back. */
+#screen { display: flex; justify-content: center; align-items: center; background: #000; overflow: hidden;
+  position: relative; height: min(75cqw, calc(100vh - 96px)); touch-action: manipulation; outline: 0; }
 #screen canvas { width: min(100cqw, calc((100vh - 96px) * 4 / 3)) !important; height: min(75cqw, calc(100vh - 96px)) !important;
-  align-self: flex-start; flex: none; image-rendering: pixelated; display: block; }
+  flex: none; image-rendering: pixelated; display: block; }
 #screen > div { font: 14px/14px ui-monospace, Menlo, Consolas, monospace; white-space: pre;
-  transform-origin: 0 0; flex: none; align-self: flex-start; }
+  position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 #status { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; background: #000; color: #b9b9b3; font-size: 13px; text-align: center; padding: 16px; }
 #bar { width: min(280px, 70%); height: 3px; background: #3a3a37; overflow: hidden; }
 #bar i { display: block; height: 100%; width: 0; background: #f7f7f4; }
 #machine:fullscreen { display: flex; align-items: center; justify-content: center; }
-#machine:fullscreen #screen { width: 100%; }
+#machine:fullscreen #screen { width: 100%; height: 100vh; }
 #machine:fullscreen #screen canvas { width: min(100vw, calc(100vh * 4 / 3)) !important; height: min(75vw, 100vh) !important; }
 #typed { position: absolute; opacity: 0; height: 1px; width: 1px; left: 0; top: 0; }
 
@@ -92,6 +94,8 @@ li small { display: block; color: var(--muted); font-size: 12.5px; line-height: 
   background: var(--field); color: var(--ink); resize: none; outline: 0; white-space: pre;
   font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; }
 #log.open #serial { display: block; }
+/* The emulator sets the display of its serial box itself. */
+#log:not(.open) #serial { display: none !important; }
 footer { padding: 12px 20px 28px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 footer a { color: var(--muted); }
 
@@ -291,17 +295,16 @@ var fs = $("machine").requestFullscreen || $("machine").webkitRequestFullscreen;
 if (!fs) { $("full").style.display = "none"; }
 $("full").onclick = function () { fs.call($("machine")); };
 
-/* The text console is 80 columns wide: scale it to the box. */
+/* The text console is 80 columns by 25 rows: scale it to the box and centre it. */
 function fit() {
     var box = $("screen"), t = box.firstElementChild, c = box.lastElementChild;
     var game = c && c.style.display !== "none" && c.offsetWidth > 0;
     $("machine").classList.toggle("game", !!game);
-    if (!t || t.style.display === "none" || !t.offsetWidth) { box.style.height = ""; return; }
-    var k = box.clientWidth / t.offsetWidth;
-    if (document.fullscreenElement) { k = Math.min(k, window.innerHeight / t.scrollHeight); }
+    if (!t || t.style.display === "none" || !t.offsetWidth) { return; }
+    var k = Math.min(box.clientWidth / t.offsetWidth, box.clientHeight / t.offsetHeight);
     t.style.transform = "scale(" + k + ")";
-    box.style.justifyContent = "flex-start";
-    box.style.height = Math.ceil(t.scrollHeight * k) + "px";
+    t.style.left = Math.max(0, (box.clientWidth - t.offsetWidth * k) / 2) + "px";
+    t.style.top = Math.max(0, (box.clientHeight - t.offsetHeight * k) / 2) + "px";
 }
 setInterval(fit, 300);
 window.addEventListener("resize", fit);
