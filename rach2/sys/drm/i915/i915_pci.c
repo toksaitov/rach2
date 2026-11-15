@@ -419,10 +419,12 @@ static void i915_display_bringup(struct drm_i915_private *i915)
 }
 
 /** What a registered device adds outside the DRM core: its files of /sys
- * and debugfs, the shrinker, and the function's "bind" uevent. */
+ * and debugfs, its AUX channels' devices, the shrinker, and the function's
+ * "bind" uevent. */
 static void i915_registered(struct drm_i915_private *i915)
 {
     i915_sysfs_register(i915);
+    intel_dp_aux_dev_register(i915);
     i915_gem_shrinker_register(i915);
     i915_debugfs_register(i915);
     i915_handoff_bound(i915);

@@ -91,6 +91,16 @@ struct file_ops {
  */
 #define FILE_OPS_SEEK_UNLOCKED 4u
 
+/*
+ * The `read` and `write` operations work at the description's offset and
+ * move it, as a Linux file that is not a stream does, so that pread64 and
+ * pwrite64 take the object, at an offset of their own (`pio_view`,
+ * syscall_fs.c), and read and write hold the description while they run.
+ * An object without the flag that has no other way to an offset is a
+ * stream, which pread64 refuses with ESPIPE.
+ */
+#define FILE_OPS_POSITIONED 8u
+
 /** Whether a call on `e`, and the release of its last descriptor, may run
  * without the big lock: its operations are marked FILE_OPS_UNLOCKED, it is
  * no socket, its description names no file, device node or synthetic node,

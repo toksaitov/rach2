@@ -43,6 +43,7 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/intel_cdclk.c \
     sys/drm/i915/intel_pps.c \
     sys/drm/i915/intel_dp_aux.c \
+    sys/drm/i915/intel_dp_aux_dev.c \
     sys/drm/i915/intel_gmbus.c \
     sys/drm/i915/intel_dpll.c \
     sys/drm/i915/intel_hdmi.c \

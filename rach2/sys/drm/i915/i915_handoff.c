@@ -326,6 +326,7 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     if (boot_screen_in_aperture(i915)) {
         drm_client_boot_screen_gone();
     }
+    intel_dp_aux_dev_unregister(i915);
     drm_dev_unplug(dev);
     i915_aperture_fini(&i915->gem.aperture);
     i915->gem.aperture.size = 0;

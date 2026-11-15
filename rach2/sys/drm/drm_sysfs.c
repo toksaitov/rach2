@@ -568,6 +568,16 @@ int drm_sysfs_card_dir(const struct drm_device *dev)
     return sd && sd->dev == dev ? sd->card : 0;
 }
 
+int drm_sysfs_connector_dir(const struct drm_connector *connector)
+{
+    struct drm_sysfs_dev *sd = connector ? sysdev_of(connector->dev) : NULL;
+
+    if (!sd || sd->dev != connector->dev || connector->index >= DRM_MAX_CONNECTORS) {
+        return 0;
+    }
+    return sd->conn[connector->index];
+}
+
 void drm_kms_hotplug_event(struct drm_device *dev)
 {
     struct drm_sysfs_dev *sd = sysdev_of(dev);

@@ -575,15 +575,24 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
     fd_ofd_unref(ofd);
 }
 
+/** Whether the operations of `entry` work at its description's offset
+ * (FILE_OPS_POSITIONED): 1 or 0. */
+static int ops_positioned(const fd_entry_t *entry)
+{
+    return entry->ops && (entry->ops->flags & FILE_OPS_POSITIONED) != 0;
+}
+
 /** Whether pread64 can read `entry` at an offset, or it is a stream that
  * pread64 refuses with -ESPIPE: a pipe, a socket, a terminal or
- * pseudoterminal, the mouse, a device other than a raw window, the log or
- * /dev/null, /dev/zero and /dev/full, and an anonymous object with no
+ * pseudoterminal, the mouse, a device other than a raw window, the log,
+ * /dev/null, /dev/zero and /dev/full or one whose operations are
+ * FILE_OPS_POSITIONED, and an anonymous object with no
  * `llseek`. 1 or 0. Asked once, for FD_MODE_PREAD (`fd_mode`). */
 static int pio_seekable_of(fd_entry_t *entry)
 {
     if (entry->type == FD_TYPE_DEVICE) {
-        return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || devfs_lseek_zero(entry);
+        return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) ||
+               devfs_lseek_zero(entry) || ops_positioned(entry);
     }
     if (entry->type == FD_TYPE_ANON) {
         return entry->ops && entry->ops->llseek;
@@ -600,7 +609,8 @@ static int pio_seekable_of(fd_entry_t *entry)
  * or an address of /proc/PID/mem; and a log device's the offset, a byte of
  * the kernel log's ring or of the screen log's text
  * (`devfs_fd_moves_offset`); and the framebuffer's the offset, a byte of
- * its pixels. Each may sleep before it sets the offset past
+ * its pixels; and one whose operations are FILE_OPS_POSITIONED the
+ * offset. Each may sleep before it sets the offset past
  * what it moved, in a disk request, or in a fault on the caller's buffer or
  * in bringing in a page of a process; a debugfs file's, whose operations
  * are its registrant's, may too. A seek through a descriptor that
@@ -613,7 +623,8 @@ static int pio_seekable_of(fd_entry_t *entry)
 static int ops_offset_moves(const fd_entry_t *entry)
 {
     return devfs_fd_moves_offset((fd_entry_t *)(uintptr_t)entry) || entry->type == FD_TYPE_PROC ||
-           entry->type == FD_TYPE_FRAMEBUFFER || entry->type == FD_TYPE_FILE;
+           entry->type == FD_TYPE_FRAMEBUFFER || entry->type == FD_TYPE_FILE ||
+           ops_positioned(entry);
 }
 
 static int file_rw_unlocked(const fd_entry_t *e);

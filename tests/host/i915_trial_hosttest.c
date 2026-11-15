@@ -673,6 +673,16 @@ void i915_debugfs_register(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void intel_dp_aux_dev_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void intel_dp_aux_dev_unregister(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 void i915_gem_shrinker_register(struct drm_i915_private *i915)
 {
     (void)i915;

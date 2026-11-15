@@ -17,6 +17,8 @@
 .Pp
 .Pa /dev/dri/renderD Ns Ar M
 .Pp
+.Pa /dev/drm_dp_aux Ns Ar N
+.Pp
 .Pa /sys/class/drm/cardN/gt_*_freq_mhz
 .Pp
 .Pa /sys/class/drm/cardN/power/rc6_*
@@ -967,6 +969,39 @@ describes.
 The card node of a bound device.
 .It Pa /dev/dri/renderD Ns Ar M
 Its render node.
+.It Pa /dev/drm_dp_aux Ns Ar N
+The AUX channel of the eDP connector and of each DisplayPort connector,
+numbered from 0 in the connectors' order, character devices of major 239
+and mode 0600, as Linux's
+.Pa drm_dp_aux_dev .
+A read or write at an offset reads or writes the sink's DPCD at that
+address, 16 bytes a transfer, as far as its end at 1 MiB; it stops at a
+signal or an error, returning the bytes moved, or the error when none
+moved:
+.Er ENXIO
+on an external port with nothing on its hotplug line,
+.Er ETIMEDOUT
+when no sink answers, and
+.Er ENODEV
+once the device is released.
+.Xr lseek 2 ,
+.Xr pread 2
+and
+.Xr pwrite 2
+take it as a file of 1 MiB.
+Each has its directory
+.Pa drm_dp_aux Ns Ar N
+below its connector's,
+.Pa /sys/class/drm/cardN-CONNECTOR ,
+with
+.Pa dev ,
+.Pa name ,
+the channel and its port as Linux names them, such as
+.Ql AUX A/DDI A/PHY A ,
+and
+.Pa uevent ,
+and a link in
+.Pa /sys/class/drm_dp_aux_dev .
 .It Pa /sys/kernel/debug/dri/DEVICE/i915_*
 Linux's debugfs files that IGT opens, as
 .Xr debugfs 5

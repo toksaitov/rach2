@@ -3200,6 +3200,19 @@ int intel_dp_probe_ddc(struct intel_dp *dp);
 /** `dp`'s I2C over AUX bus, for the DP++ adaptor's registers. */
 void intel_dp_i2c_bus(struct intel_dp *dp, struct intel_i2c_bus *bus);
 
+/**
+ * Make /dev/drm_dp_auxN for the AUX channel of each eDP and DisplayPort
+ * connector of the registered device `i915`, in the connectors' order,
+ * with its directory below the connector's in /sys
+ * (intel_dp_aux_dev.c), as Linux's drm_dp_aux_register_devnode. A
+ * device that cannot be made is logged and left out. Process context.
+ */
+void intel_dp_aux_dev_register(struct drm_i915_private *i915);
+
+/** Take away `i915`'s AUX devices, before its unplug, after which an open
+ * one answers -ENODEV. Process context. */
+void intel_dp_aux_dev_unregister(struct drm_i915_private *i915);
+
 /*
  * The panel power sequencer (intel_pps.c), Linux's intel_pps.c for one
  * panel on a Lynx Point PCH, under the device's mode lock in process
