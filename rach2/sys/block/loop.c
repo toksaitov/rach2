@@ -289,7 +289,7 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
     loop_fs_exit(big);
     loop_end(loop, &f, 0, 0);
     if (got < 0 || (uint32_t)got != bytes) {
-        klog(KLOG_WARN, "loop", "read: loop%d: sector %d: short by %d", loop->index, (int)lba,
+        klog(KLOG_WARN, "loop", "read: loop%d: sector %u: short by %d", loop->index, (uint32_t)lba,
              (int)(bytes - (got < 0 ? 0 : (uint32_t)got)));
         return -EIO;
     }
@@ -329,7 +329,7 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     loop_fs_exit(big);
     loop_end(loop, &f, 1, 0);
     if (wrote < 0 || (uint32_t)wrote != bytes) {
-        klog(KLOG_WARN, "loop", "write: loop%d: sector %d: short by %d", loop->index, (int)lba,
+        klog(KLOG_WARN, "loop", "write: loop%d: sector %u: short by %d", loop->index, (uint32_t)lba,
              (int)(bytes - (wrote < 0 ? 0 : (uint32_t)wrote)));
         return -EIO;
     }
@@ -822,8 +822,8 @@ int loop_attach(int index, const char *path, int writable)
 
     vfs_node_unlock(&ref);
 
-    klog(KLOG_INFO, "loop", "loop%d: %s, %d bytes, %s", index, loop->path, (int)st.size,
-         loop->writable ? "read-write" : "read-only");
+    klog(KLOG_INFO, "loop", "loop%d: %s, %u sectors, %s", index, loop->path,
+         (uint32_t)(st.size / BLOCK_SECTOR_SIZE), loop->writable ? "read-write" : "read-only");
     return index;
 }
 
