@@ -666,7 +666,10 @@ static int region_same(struct mm *mm, uintptr_t page, const struct vm_file *f, u
  * mapped with rights its region no longer gives; so does a page another
  * fault mapped meanwhile (`install_new`). 1 with the page mapped, 0 when no
  * frame could be had, the read failed or the lock could not be let go, -1
- * to resolve again.
+ * to resolve again. A failed read sets `bus_fault`, so that a user access
+ * ends in SIGBUS, as Linux's filemap_fault answers a page it could not read
+ * with VM_FAULT_SIGBUS (mm/filemap.c), and not in a SIGSEGV that reads as
+ * an access outside the program's regions.
  */
 static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
@@ -692,6 +695,8 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
     rc = filled >= 0 ? 1 : 0;
     if (!region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
+    } else if (rc == 0 && current_proc) {
+        current_proc->bus_fault = 1; /* filemap_fault's VM_FAULT_SIGBUS for a failed read */
     }
     vm_file_put(f);
     if (rc == 1 && write) {
@@ -2403,7 +2408,8 @@ static int user_fault_done(isr_params_t *params, uintptr_t addr, int write, int 
  *
  * A user fault in a device region whose object has no page there now
  * (`device_fault`) is SIGBUS with BUS_ADRERR and the address, forced as
- * the SIGSEGV below is, as Linux answers a driver's VM_FAULT_SIGBUS.
+ * the SIGSEGV below is, as Linux answers a driver's VM_FAULT_SIGBUS; so is
+ * one of a private file mapping whose page could not be read (`file_fault`).
  * A user fault of a legal access that no frame could be had for ends the
  * process with SIGKILL, which no handler sees. The system's init is ended
  * directly, since Linux 6.12.115's sig_task_ignored drops its SIGKILL
