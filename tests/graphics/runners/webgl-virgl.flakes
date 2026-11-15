@@ -10,18 +10,6 @@
 # other subtests passed in every run and are judged.
 conformance2/query/occlusion-query-scissor.html ^pass [0-9]+, result: 1 === expected: 0$
 #
-# fboinvalidate/whole.html and target.html in Chromium's chunk 3: from
-# fbocolorbuffer/tex3d_01.html on, the host's virglrenderer has refused
-# Chromium's context ("context error reported", GL error 1281, then "Illegal
-# command buffer") and every case reads back an image it did not draw, its
-# difference thousands against the threshold's 0.05. Which cases pass follows
-# the testing PC's NVIDIA driver: the Debian guest's reference, under 621.01,
-# failed 18 and 23 of their cases, and its runs under 621.24 fail 19 and 27,
-# as Rach2's do (dev-log/84-locks/84-265s.md). These two lines go when
-# chunk 3's reference is taken again under 621.24.
-deqp/functional/gles3/fboinvalidate/whole.html ^invalidate\.whole\.
-deqp/functional/gles3/fboinvalidate/target.html ^invalidate\.target\.
-#
 # deqp/functional/gles3/texturefiltering/: every case of chunk 4's 103 pages
 # fails "Image verification failed" in the Debian guest as on Rach2, and the
 # 13 that begin chunk 5 pass in its new browser. The count of subtests
