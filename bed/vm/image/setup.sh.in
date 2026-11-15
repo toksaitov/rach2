@@ -3,10 +3,11 @@
 # preparing boot. vm.sh puts the snapshot's date in place of @SNAPSHOT@, the
 # package list in place of @PACKAGES@ and vkms.patch, in base64, in place of
 # @VKMS_PATCH@. It points apt at Debian's snapshot of that date, installs the
-# packages, rebuilds Debian's virglrenderer with GBM allocation, builds vkms
-# with the patch, readies the kernel for vfio, adds the service that reports
-# the VM ready, turns cloud-init off so that every later boot is the same,
-# and reports on the serial console, which vm.sh reads.
+# packages, rebuilds Debian's virglrenderer with GBM allocation and a check
+# of its GBM device, builds vkms with the patch, readies the kernel for vfio,
+# adds the service that reports the VM ready, turns cloud-init off so that
+# every later boot is the same, and reports on the serial console, which
+# vm.sh reads.
 set -eu
 
 say()
@@ -58,8 +59,16 @@ cd virglrenderer-*/
 version=$(dpkg-parsechangelog -S Version)
 sed -i 's/^\t-Dtests=true \\$/\t-Dtests=true -Dminigbm_allocation=true \\/' debian/rules
 grep -q -- '-Dminigbm_allocation=true' debian/rules
+# Under VIRGL_RENDERER_USE_EXTERNAL_BLOB a persistent buffer takes the
+# memory-object branch of vrend_create_buffer, which calls gbm_bo_create on
+# a NULL device when no render node opened; keep it to a GBM device, so that
+# such a buffer gets no storage and its export is refused.
+sed -i 's/^\(      else if (\)\(has_feature(feat_memory_object_fd) && has_feature(feat_memory_object)) {\)$/\1gbm \&\& \2/' \
+    src/vrend_renderer.c
+grep -q 'else if (gbm && has_feature(feat_memory_object_fd)' src/vrend_renderer.c
 DEBFULLNAME="Rach2 testbed" DEBEMAIL=testbed@invalid \
-    dch --local +rach2 --distribution trixie "Build with minigbm_allocation for the testbed."
+    dch --local +rach2 --distribution trixie \
+    "Build with minigbm_allocation for the testbed; keep GL memory objects to a GBM device."
 dpkg-buildpackage -b -uc -us -j"$(nproc)" > /root/virgl/build.log 2>&1 ||
     { tail -n 30 /root/virgl/build.log > /dev/ttyS0; exit 1; }
 cd /root/virgl
