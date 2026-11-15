@@ -9,6 +9,7 @@ shift
 here=$(cd "$(dirname "$0")" && pwd)
 stop=$dir/stop-4904
 dri=$(ls -d /sys/kernel/debug/dri/* 2> /dev/null | head -n 1)
+mkdir -p "$dir"
 rm -f "$stop"
 dump() {
     for f in i915_frequency_info i915_rps_boost_info i915_engine_info; do
