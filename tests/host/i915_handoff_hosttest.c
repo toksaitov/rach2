@@ -1140,6 +1140,16 @@ void intel_dp_aux_dev_unregister(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void intel_i2c_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void intel_i2c_unregister(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)
 {
     (void)dev;

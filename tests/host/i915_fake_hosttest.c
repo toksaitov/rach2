@@ -645,6 +645,16 @@ void intel_dp_aux_dev_unregister(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void intel_i2c_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void intel_i2c_unregister(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 /* The release and the bring-up through /sys, i915_handoff.c, which
  * i915_handoff_hosttest.c tests; no row here unbinds the driver. */
 int32_t i915_handoff_link(struct drm_i915_private *i915)

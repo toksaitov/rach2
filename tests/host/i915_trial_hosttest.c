@@ -684,6 +684,16 @@ void intel_dp_aux_dev_unregister(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void intel_i2c_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void intel_i2c_unregister(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 void i915_gem_shrinker_register(struct drm_i915_private *i915)
 {
     (void)i915;

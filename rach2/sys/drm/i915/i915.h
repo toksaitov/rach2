@@ -9,6 +9,7 @@
 #include "../../mm/notify.h"
 #include "../../mm/pressure.h"
 #include "../../mm/shmem.h"
+#include "../../i2c.h"
 #include "../../pm_runtime.h"
 #include "../../fs/sysfs.h"
 #include "../../lib/spinlock.h"
@@ -1023,6 +1024,7 @@ struct intel_dp {
     uint8_t sink_count;
     struct drm_edid_hdmi_info info;
     uint32_t dfp_max_bpc, dfp_max_dotclock, dfp_min_tmds, dfp_max_tmds;
+    struct i2c_adapter ddc; /* its I2C over AUX as /dev/i2c-N */
 };
 
 /* ---- The external outputs, DDI B to D ---- */
@@ -1089,6 +1091,7 @@ struct intel_gmbus {
     uint32_t gpio_reg;
     uint32_t xfers, bit_xfers, naks, timeouts;
     struct intel_i2c_bus bus;
+    struct i2c_adapter adapter; /* its /dev/i2c-N (intel_i2c_dev.c) */
 };
 
 /* Linux's GMBUS_FORCE_BIT_RETRY. */
@@ -1465,6 +1468,7 @@ struct intel_display {
     struct intel_ddi_port ddi[3];
     struct intel_gmbus gmbus[GMBUS_NUM_PINS];
     struct mutex gmbus_mutex;
+    int ddc_links[7]; /* the connectors' `ddc` links in /sys, or 0 */
     struct intel_dpll dpll[INTEL_NUM_DPLLS];
     uint32_t dpll_nssc;
     struct intel_hotplug hotplug;
@@ -3362,6 +3366,20 @@ void intel_dp_aux_dev_register(struct drm_i915_private *i915);
 /** Take away `i915`'s AUX devices, before its unplug, after which an open
  * one answers -ENODEV. Process context. */
 void intel_dp_aux_dev_unregister(struct drm_i915_private *i915);
+
+/**
+ * Add the display's I2C buses as adapters with their /dev/i2c-N
+ * (intel_i2c_dev.c), as Linux's intel_gmbus_setup and drm_dp_aux_register
+ * do: each valid GMBUS pin's below the PCI function, then each eDP and
+ * DisplayPort channel's I2C over AUX below its connector, and each
+ * connector's `ddc` link to its bus. One that cannot be added is logged and
+ * left out. Process context, for the registered device `i915`.
+ */
+void intel_i2c_register(struct drm_i915_private *i915);
+
+/** Take `i915`'s adapters away, before its unplug, after which an open
+ * /dev/i2c-N answers -ENODEV. Process context. */
+void intel_i2c_unregister(struct drm_i915_private *i915);
 
 /*
  * The panel power sequencer (intel_pps.c), Linux's intel_pps.c for one
