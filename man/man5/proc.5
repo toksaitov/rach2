@@ -1280,7 +1280,7 @@ a random UUID drawn at its first read that stays for the boot, and
 .Pa kernel/random/uuid ,
 a new one at each read;
 .Pa vm/max_map_count ,
-65536, the regions of memory a process may map, as
+65530, the regions of memory a process may map, as
 .Xr mmap 2
 counts them, which a write sets for the next mapping; a process already
 past a value written keeps what it has;

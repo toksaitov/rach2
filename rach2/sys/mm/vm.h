@@ -5,9 +5,11 @@
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 
-/* The default region limit and the number of stable nodes per allocation.
- * vm_max_map_count bounds live regions, not spare nodes. */
-#define VMA_LIMIT 65536
+/* The default region limit, Linux's DEFAULT_MAX_MAP_COUNT, USHRT_MAX less
+ * MAPCOUNT_ELF_CORE_MARGIN (include/linux/mm.h), and the number of stable
+ * nodes per allocation. vm_max_map_count bounds live regions, not spare
+ * nodes. */
+#define VMA_LIMIT 65530
 #define VMA_FIRST 16
 
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
