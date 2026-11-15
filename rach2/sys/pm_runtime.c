@@ -25,10 +25,14 @@ static int32_t retry_ms(int32_t err)
     return (int32_t)(err == -EAGAIN ? RPM_RETRY_MS : RPM_BUSY_MS);
 }
 
-/** The process running now, which a change of state records as its mover. */
+/** The process running now, which a change of state records as its mover,
+ * or the processor before the first process runs: never NULL, which
+ * `mover` holds when no change is under way. */
 static const void *rpm_current(void)
 {
-    return (const void *)current_proc;
+    const void *self = (const void *)current_proc;
+
+    return self ? self : (const void *)this_cpu();
 }
 
 /** Add the time since the last account to the state's total. Under the

@@ -69,7 +69,9 @@ struct pm_runtime {
     int64_t accounted;     /* rtc_monotonic_ns up to which the times count */
     uint64_t active_ns;    /* time awake, RPM_ACTIVE or RPM_SUSPENDING */
     uint64_t suspended_ns; /* time asleep, RPM_SUSPENDED or RPM_RESUMING */
-    const void *mover;     /* the process that runs the change under way */
+    const void *mover;     /* the process or, before the first, the
+                            * processor that runs the change under way;
+                            * NULL for none */
     uint32_t suspends;     /* sleeps the device has entered */
     uint32_t resumes;      /* wakes from them */
     int dir;               /* the power directory's handle in /sys, or 0 */
