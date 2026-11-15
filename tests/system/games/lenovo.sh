@@ -169,14 +169,14 @@ lock_result()
             if ($1 == "cpu") {
                 sign = FILENAME == ARGV[3] ? -1 : 1
                 user += sign * ($2 + $3) / 100
-                system += sign * $4 / 100
+                stime += sign * $4 / 100
             }
             next
         }
         FILENAME == ARGV[5] { wall -= $1; next }
         FILENAME == ARGV[6] { wall += $1 }
         END {
-            busy = user + system
+            busy = user + stime
             if (wall <= 0 || busy <= 0 || user <= 0 || held < 0 || waits < 0 || idle < 0) {
                 print "lenovo-games: invalid big-lock counter window" > "/dev/stderr"
                 exit 1
@@ -186,7 +186,7 @@ lock_result()
             printf "waits in entries %.3f s / %.3f s busy = %.2f%% (under 3%%), ",
                 waits / 1000000, busy, 100 * waits / 1000000 / busy
             printf "idle-take waits %.3f s (under 5 s), system/user %.3f (under 0.5)\n",
-                idle / 1000000, system / user
+                idle / 1000000, stime / user
         }' "$dir/calls-before" "$dir/calls-after" "$dir/stat-before" "$dir/stat-after" \
         "$dir/uptime-before" "$dir/uptime-after" || lock_status=1
     return "$lock_status"
