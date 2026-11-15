@@ -41,6 +41,10 @@ With `-u` as root, OUT stays root's: the harness takes it back at its start, roo
 
 The line is a run's, never a verdict: the plan's tables set each rung's figures beside the others' and beside Linux's with its IOMMU configuration named. Each count is read before and after the scene, and the line gives the difference. The latency runs before the scene, since its round trips would load the scene's path. The scenes come from the graphics runners, so that a figure here and a figure of the graphics suites on the same machine measure the same thing.
 
+## Limits
+
+* The HUD records a frame only when it can map memory for the vertices it would draw, even with `GALLIUM_HUD_VISIBLE=false`: Mesa's `hud_stop_queries` returns before it reads its graphs when its stream uploader gives no memory ([upstream fault](../../dev-log/84-locks/upstream.md#mesas-hud-drops-its-samples-when-its-vertex-upload-fails)). Under virgl that memory is a persistent mapping of a host blob whenever the host offers buffer storage and the driver offers host-visible blobs, so a backend that refuses those maps leaves `frametimes` empty while glmark2 draws, and the scene fails with `the scene gave no frame times`; a frame after a refused one takes the time of both. [84-5263](../../dev-log/84-locks/84-5263.md) has the measurements.
+
 ## Tests
 
 `bed-shm.sh -w -x DIR` runs the glmark2 scene on the reversed rung inside `machine.bed-shm.vm-death`'s path ([tests/kvm](../../tests/kvm/Readme.md)). The harness has no suite of its own; its checks are its lines in QEMU, recorded in [83-7](../../dev-log/83-testbed/83-7.md).
