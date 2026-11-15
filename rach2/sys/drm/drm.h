@@ -300,7 +300,21 @@ struct drm_driver {
     const struct drm_ioctl_desc *ioctls; /* the driver's own, or NULL */
     int num_ioctls;
     void (*release)(struct drm_device *dev); /* frees the record after the last put */
+    /* Runtime power management, NULL for a device without: `pm_get` wakes
+     * the device and keeps it awake until the matching `pm_put`, as
+     * Linux's pm_runtime_get_sync and put_autosuspend. Process context,
+     * without spinlocks; neither sleeps. The core holds the device awake
+     * through the driver's own ioctls, each commit's tail, each probe of
+     * a connector and each change of a CRTC's CRC source. */
+    void (*pm_get)(struct drm_device *dev);
+    void (*pm_put)(struct drm_device *dev);
 };
+
+/** The driver's `pm_get` of `dev`, if it has one. */
+void drm_dev_pm_get(struct drm_device *dev);
+
+/** The driver's `pm_put` of `dev`, if it has one. */
+void drm_dev_pm_put(struct drm_device *dev);
 
 /* ------------------------------------------------------------------------
  * Fences: dma_fence, in sys/dmabuf/fence.c (76-3a)

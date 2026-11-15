@@ -901,8 +901,9 @@ static void vkms_release(struct drm_device *dev)
     kfree(v);
 }
 
-static const struct drm_driver vkms_driver = {
-    DRM_IDENT_VKMS, NULL, NULL, drm_gem_shmem_dumb_create, NULL, NULL, NULL, 0, vkms_release};
+static const struct drm_driver vkms_driver = {DRM_IDENT_VKMS, NULL, NULL, drm_gem_shmem_dumb_create,
+                                              NULL,           NULL, NULL, 0,
+                                              vkms_release,   NULL, NULL};
 
 /**
  * A boolean module parameter of Linux's, `key` on the command line, read

@@ -389,7 +389,8 @@ static void fbdrm_release(struct drm_device *dev)
 }
 
 static const struct drm_driver fbdrm_driver = {
-    DRM_IDENT_SIMPLEDRM, NULL, NULL, drm_gem_shmem_dumb_create, NULL, NULL, NULL, 0, fbdrm_release};
+    DRM_IDENT_SIMPLEDRM, NULL, NULL, drm_gem_shmem_dumb_create, NULL, NULL, NULL, 0,
+    fbdrm_release,       NULL, NULL};
 
 /** The aperture's hook: a native driver takes the framebuffer, and the
  * device goes as a device lost does. */

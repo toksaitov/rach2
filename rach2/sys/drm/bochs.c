@@ -772,7 +772,7 @@ static struct drm_gem_object *bochs_prime_import(struct drm_device *dev, struct 
 
 static const struct drm_driver bochs_driver = {DRM_IDENT_BOCHS,    NULL, NULL, bochs_dumb_create,
                                                bochs_prime_import, NULL, NULL, 0,
-                                               bochs_release};
+                                               bochs_release,      NULL, NULL};
 
 /**
  * Bind the std-vga function `pdev` whose registers are at `mmio`, BAR 2's

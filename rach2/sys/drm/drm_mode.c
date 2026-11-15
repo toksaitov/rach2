@@ -2164,8 +2164,9 @@ int32_t drm_connector_force_write(struct drm_connector *connector, const char *b
     return (int32_t)len;
 }
 
-int drm_helper_probe_single_connector_modes(struct drm_connector *connector, uint32_t max_width,
-                                            uint32_t max_height)
+/** drm_helper_probe_single_connector_modes's work, with the device held
+ * awake. */
+static int probe_modes(struct drm_connector *connector, uint32_t max_width, uint32_t max_height)
 {
     struct drm_display_mode *kept = NULL, **tail = &kept, *m, *k;
     int count = 0;
@@ -2242,6 +2243,18 @@ int drm_helper_probe_single_connector_modes(struct drm_connector *connector, uin
     for (m = kept; m; m = m->next) {
         count++;
     }
+    return count;
+}
+
+int drm_helper_probe_single_connector_modes(struct drm_connector *connector, uint32_t max_width,
+                                            uint32_t max_height)
+{
+    struct drm_device *dev = connector->dev;
+    int count;
+
+    drm_dev_pm_get(dev);
+    count = probe_modes(connector, max_width, max_height);
+    drm_dev_pm_put(dev);
     return count;
 }
 

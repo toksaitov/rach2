@@ -2525,9 +2525,17 @@ static void vgpu_removed(struct virtio_dev *vdev)
 
 /* What the driver says of itself: Linux's virtio_gpu, with its dumb buffers,
  * its ioctls and the shmem helper's PRIME import. */
-static const struct drm_driver vgpu_driver = {
-    DRM_IDENT_VIRTIO_GPU, vgpu_open,   vgpu_context_close,    vgpu_dumb_create, NULL,
-    vgpu_unplug,          vgpu_ioctls, DRM_VIRTIO_NUM_IOCTLS, vgpu_release};
+static const struct drm_driver vgpu_driver = {DRM_IDENT_VIRTIO_GPU,
+                                              vgpu_open,
+                                              vgpu_context_close,
+                                              vgpu_dumb_create,
+                                              NULL,
+                                              vgpu_unplug,
+                                              vgpu_ioctls,
+                                              DRM_VIRTIO_NUM_IOCTLS,
+                                              vgpu_release,
+                                              NULL,
+                                              NULL};
 
 /** Remove the firmware's framebuffer from every memory BAR of a virtio-vga,
  * as Linux's virtio_gpu_pci_quirk does before the driver touches it. */

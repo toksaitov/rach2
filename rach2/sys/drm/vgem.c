@@ -287,9 +287,17 @@ static void vgem_release(struct drm_device *dev)
     kfree(dev);
 }
 
-static const struct drm_driver vgem_driver = {DRM_IDENT_VGEM,   vgem_open, vgem_postclose,
-                                              vgem_dumb_create, NULL,      NULL,
-                                              vgem_ioctls,      2,         vgem_release};
+static const struct drm_driver vgem_driver = {DRM_IDENT_VGEM,
+                                              vgem_open,
+                                              vgem_postclose,
+                                              vgem_dumb_create,
+                                              NULL,
+                                              NULL,
+                                              vgem_ioctls,
+                                              2,
+                                              vgem_release,
+                                              NULL,
+                                              NULL};
 
 int32_t vgem_probe(void)
 {

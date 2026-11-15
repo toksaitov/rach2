@@ -974,6 +974,20 @@ static int32_t ioctl_permit(uint32_t flags, const struct drm_file *file)
     return 0;
 }
 
+void drm_dev_pm_get(struct drm_device *dev)
+{
+    if (dev->driver->pm_get) {
+        dev->driver->pm_get(dev);
+    }
+}
+
+void drm_dev_pm_put(struct drm_device *dev)
+{
+    if (dev->driver->pm_put) {
+        dev->driver->pm_put(dev);
+    }
+}
+
 /** Whether `row` needs no big lock on `dev`, as ioctl_call judges it. */
 static int ioctl_unlocked(struct drm_device *dev, const struct drm_ioctl_desc *row)
 {
@@ -1090,7 +1104,13 @@ int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
     if (ksize > in_size) {
         k_memset(kdata + in_size, 0, ksize - in_size);
     }
+    if (nr >= DRM_COMMAND_BASE) {
+        drm_dev_pm_get(dev);
+    }
     rc = ioctl_call(dev, row, kdata, file);
+    if (nr >= DRM_COMMAND_BASE) {
+        drm_dev_pm_put(dev);
+    }
     if (out_size && copy_to_user((void __user *)arg, kdata, out_size) != 0) {
         rc = -EFAULT;
     }
