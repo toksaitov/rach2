@@ -785,6 +785,11 @@ size_t frame_window_total_count(void);
  * read without a lock. */
 size_t frame_window_free_count(void);
 
+/** The fewest frames the window has had free at once since boot, read
+ * without a lock: how near `alloc_kernel_frame` came to failing, even for
+ * an instant no sampling of `frame_window_free_count` would see. */
+size_t frame_window_free_min(void);
+
 /**
  * Make every page table of [va_start, va_start + size) in the kernel's
  * directory, with no page mapped, so that `map_kernel_frame` can later write
