@@ -28,8 +28,11 @@
  * and shown on pipe C (78-10c.4); hotplug's connect and disconnect, a
  * pulse that changed nothing probed again 1 s later, and a storm that
  * masks the pin and polls it until it is turned on again 2 minutes later;
- * and IGT's kms_hdmi_inject, a connector with no monitor forced on with a
- * 4K EDID override and set at 3840x2160@30 (78-10c.5).
+ * IGT's kms_hdmi_inject, a connector with no monitor forced on with a 4K
+ * EDID override and set at 3840x2160@30 (78-10c.5); and IGT's kms_3d, the
+ * same connector forced on with IGT's 3D EDID, its 13 stereo modes in
+ * Linux's order and each set, a frame-packed one in a frame of both eyes
+ * at twice the clock.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -170,7 +173,7 @@ void drm_file_locks_init(struct drm_file *file)
 /* ---- the driver's buffer objects: a few, bound in the aperture by the
  * pin ---- */
 
-#define NBO 4
+#define NBO 8
 
 const struct drm_gem_object_funcs i915_gem_object_funcs;
 static struct drm_i915_gem_object bo[NBO];
@@ -411,6 +414,29 @@ static const uint8_t cea_1080p[] = {0x43, 0x90, 0x04, 0x03, 0x67, 0x03,
  * HDMI VIC 1, 3840x2160@30. */
 static const uint8_t cea_2160p30[] = {0x41, 0x10, 0x6b, 0x03, 0x0c, 0x00, 0x10,
                                       0x00, 0x00, 0x3c, 0x20, 0x00, 0x20, 0x01};
+
+/* IGT 2.0's igt_kms_get_3d_edid, which kms_3d sets as the override, as
+ * IGT's own code made it in 2026: its base block's 1920x1080@60, and an
+ * extension with VICs 32 (native), 5, 20, 4 and 19 and HDMI's VSDB with
+ * 3D_Present and no 3D entries. */
+static const uint8_t igt_3d_edid[256] = {
+    0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x24, 0xf4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x24, 0x01, 0x03, 0x80, 0x34, 0x1e, 0x78, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x21, 0x08, 0x00, 0xd1, 0xc0, 0x81, 0xc0, 0x61, 0x40, 0x45, 0x40, 0x31, 0x40,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x3a, 0x80, 0x18, 0x71, 0x38, 0x2d, 0x40, 0x58, 0x2c,
+    0x45, 0x00, 0x08, 0x2c, 0x21, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x3b, 0x3d, 0x42,
+    0x44, 0x0f, 0x00, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0xfc, 0x00, 0x49,
+    0x47, 0x54, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xe3,
+    0x02, 0x03, 0x15, 0x00, 0x45, 0xa0, 0x05, 0x14, 0x04, 0x13, 0x6a, 0x03, 0x0c, 0x00, 0x10, 0x00,
+    0x00, 0x00, 0x20, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa8,
+};
 
 /* The DDC pins of the ports, as the Lenovo's VBT gives them. */
 #define PIN_B GMBUS_PIN_DPB
@@ -1096,6 +1122,180 @@ static void row_inject(void)
     frame();
 }
 
+/* A stereo mode of Linux's list: its timings, clock and flags. */
+struct stereo_want {
+    uint16_t h[4], v[4];
+    uint32_t clock, flags;
+};
+
+#define SBSH  DRM_MODE_FLAG_3D_SIDE_BY_SIDE_HALF
+#define TB    DRM_MODE_FLAG_3D_TOP_AND_BOTTOM
+#define FP    DRM_MODE_FLAG_3D_FRAME_PACKING
+#define SYNCS (DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC)
+
+/* The 13 stereo modes Linux 6.12 gave kms_3d on the Lenovo, in its order
+ * (tests/graphics/ref/lenovo/igt/results.json.gz). */
+static const struct stereo_want stereo_modes[] = {
+    {{1920, 2008, 2052, 2200}, {1080, 1084, 1094, 1125}, 74250, DRM_MODE_FLAG_INTERLACE | SBSH},
+    {{1920, 2008, 2052, 2200}, {1080, 1084, 1094, 1125}, 74176, DRM_MODE_FLAG_INTERLACE | SBSH},
+    {{1920, 2448, 2492, 2640}, {1080, 1084, 1094, 1125}, 74250, DRM_MODE_FLAG_INTERLACE | SBSH},
+    {{1920, 2558, 2602, 2750}, {1080, 1084, 1089, 1125}, 74250, TB},
+    {{1920, 2558, 2602, 2750}, {1080, 1084, 1089, 1125}, 74250, FP},
+    {{1920, 2558, 2602, 2750}, {1080, 1084, 1089, 1125}, 74176, TB},
+    {{1920, 2558, 2602, 2750}, {1080, 1084, 1089, 1125}, 74176, FP},
+    {{1280, 1390, 1430, 1650}, {720, 725, 730, 750}, 74250, TB},
+    {{1280, 1390, 1430, 1650}, {720, 725, 730, 750}, 74250, FP},
+    {{1280, 1390, 1430, 1650}, {720, 725, 730, 750}, 74176, TB},
+    {{1280, 1390, 1430, 1650}, {720, 725, 730, 750}, 74176, FP},
+    {{1280, 1720, 1760, 1980}, {720, 725, 730, 750}, 74250, TB},
+    {{1280, 1720, 1760, 1980}, {720, 725, 730, 750}, 74250, FP},
+};
+
+/** GETCONNECTOR of `connector` for the master, its stereo modes into
+ * `out`, at most `n`, in the connector's order; their number. */
+static uint32_t get_stereo_modes(struct drm_connector *connector, struct drm_mode_modeinfo *out,
+                                 uint32_t n)
+{
+    struct drm_mode_get_connector gc;
+    static struct drm_mode_modeinfo modes[64];
+    uint32_t i, k = 0;
+
+    k_memset(&gc, 0, sizeof(gc));
+    gc.connector_id = connector->base.id;
+    gc.modes_ptr = UPTR(modes);
+    gc.count_modes = 64;
+    if (drm_mode_getconnector(&gpu.drm, &gc, &fa) != 0) {
+        return 0;
+    }
+    for (i = 0; i < gc.count_modes && i < 64; i++) {
+        if ((modes[i].flags & DRM_MODE_FLAG_3D_MASK) && k < n) {
+            out[k++] = modes[i];
+        }
+    }
+    return k;
+}
+
+/** Whether `m` is the stereo mode `s`, with positive syncs; else print
+ * mode `i`'s difference. */
+static int stereo_mode_is(uint32_t i, const struct drm_mode_modeinfo *m,
+                          const struct stereo_want *s)
+{
+    if (m->hdisplay == s->h[0] && m->hsync_start == s->h[1] && m->hsync_end == s->h[2] &&
+        m->htotal == s->h[3] && m->vdisplay == s->v[0] && m->vsync_start == s->v[1] &&
+        m->vsync_end == s->v[2] && m->vtotal == s->v[3] && m->clock == s->clock &&
+        m->flags == (s->flags | SYNCS)) {
+        return 1;
+    }
+    printf("%s: stereo mode %u: %ux%u %u flags %#x, want %ux%u %u flags %#x\n", test_name,
+           (unsigned)i, m->hdisplay, m->vdisplay, m->clock, m->flags, s->h[0], s->v[0], s->clock,
+           s->flags | SYNCS);
+    return 0;
+}
+
+/** The size of IGT's stereo framebuffer for `m`, its stereo_fb_layout:
+ * a frame-packed mode's both eyes with the blanking between them. */
+static void stereo_fb_size(const struct drm_mode_modeinfo *m, uint32_t *w, uint32_t *h)
+{
+    *w = m->hdisplay;
+    *h = m->vdisplay;
+    if ((m->flags & DRM_MODE_FLAG_3D_MASK) == FP) {
+        *h = 2u * m->vdisplay + (m->vtotal - m->vdisplay);
+    }
+}
+
+/** Set stereo mode `i`, `m`, on pipe C through `hdmi` with framebuffer
+ * `fb` of `w` by `h`, as kms_3d does: 1 when SETCRTC takes it and the
+ * pipe's source is the framebuffer, the transcoder's frame is the mode's,
+ * twice its lines when frame-packed, and the vendor infoframe names its 3D
+ * structure; else print what differs. */
+static int set_stereo_mode(uint32_t i, struct drm_connector *hdmi,
+                           const struct drm_mode_modeinfo *m, uint32_t fb, uint32_t w, uint32_t h)
+{
+    uint32_t layout = m->flags & DRM_MODE_FLAG_3D_MASK, vs0, vs2, lines;
+
+    if (!fb || setcrtc(2, hdmi, m, fb) != 0) {
+        printf("%s: stereo mode %u: SETCRTC refused\n", test_name, (unsigned)i);
+        return 0;
+    }
+    vs0 = reg(HSW_TVIDEO_DIP_VS_DATA(2));
+    vs2 = reg(HSW_TVIDEO_DIP_VS_DATA(2) + 8);
+    lines = layout == FP                           ? 2u * m->vtotal
+            : (m->flags & DRM_MODE_FLAG_INTERLACE) ? m->vtotal - 1u
+                                                   : m->vtotal;
+    if (!(reg(HSW_TVIDEO_DIP_CTL(2)) & VIDEO_DIP_ENABLE_VS_HSW) ||
+        vs0 != (layout == SBSH ? 0x00060181u : 0x00050181u) ||
+        vs2 != (layout == SBSH ? 0x00008040u
+                : layout == TB ? 0x00006040u
+                               : 0x00000040u)) {
+        printf("%s: stereo mode %u: vendor infoframe %#x %#x\n", test_name, (unsigned)i, vs0, vs2);
+        return 0;
+    }
+    if (reg(PIPESRC(2)) != ((w - 1u) << 16 | (h - 1u)) ||
+        reg(TRANS_VTOTAL(2)) != ((h - 1u) | (lines - 1u) << 16)) {
+        printf("%s: stereo mode %u: PIPESRC %#x TRANS_VTOTAL %#x\n", test_name, (unsigned)i,
+               reg(PIPESRC(2)), reg(TRANS_VTOTAL(2)));
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * IGT's kms_3d: HDMI-A-2, with no monitor, forced on with IGT's 3D EDID
+ * override; no stereo mode for a client without the stereo cap, and with
+ * it Linux's 13 in Linux's order, each set on pipe C on a framebuffer of
+ * IGT's stereo layout. A frame-packed mode runs at twice its clock with
+ * both eyes and the blanking between them in one frame of twice its lines,
+ * and the vendor infoframe names each mode's 3D structure, with
+ * 3D_Ext_Data for side-by-side (half).
+ */
+static void row_3d(void)
+{
+    struct drm_connector *hdmi = &disp->ddi[1].hdmi_connector;
+    struct drm_mode_modeinfo got[16];
+    uint32_t n, i, w, h, fb[4] = {0, 0, 0, 0};
+    int ok = 1, slot;
+
+    CHECK(drm_edid_override_set(hdmi, igt_3d_edid, sizeof(igt_3d_edid)) == 0,
+          "3d: the EDID override set");
+    hdmi->force = DRM_FORCE_ON;
+    (void)drm_helper_probe_single_connector_modes(hdmi, 8192, 8192);
+    CHECK(hdmi->status == DRM_CONNECTOR_CONNECTED && disp->ddi[1].hdmi.info.has_hdmi_infoframe,
+          "3d: HDMI-A-2 forced on, an HDMI sink");
+    CHECK(get_stereo_modes(hdmi, got, 16) == 0, "3d: no stereo mode without the stereo cap");
+    fa.stereo_allowed = 1;
+    n = get_stereo_modes(hdmi, got, 16);
+    CHECK(n == NELEM(stereo_modes), "3d: 13 stereo modes with the cap");
+    for (i = 0; i < n && i < NELEM(stereo_modes); i++) {
+        ok &= stereo_mode_is(i, &got[i], &stereo_modes[i]);
+    }
+    CHECK(ok, "3d: Linux's stereo modes in Linux's order");
+    for (i = 0; i < n; i++) {
+        stereo_fb_size(&got[i], &w, &h);
+        /* One framebuffer for each size: 1080 or 720 lines, packed or not. */
+        slot = (got[i].vdisplay == 1080 ? 0 : 2) + ((got[i].flags & DRM_MODE_FLAG_3D_MASK) == FP);
+        if (!fb[slot]) {
+            fb[slot] = fb_new(4 + slot, w, h);
+        }
+        ok &= set_stereo_mode(i, hdmi, &got[i], fb[slot], w, h);
+        frame();
+    }
+    CHECK(ok, "3d: each stereo mode set, with its source, timings and vendor infoframe");
+    CHECK(reg(PORT_CLK_SEL(INTEL_PORT_C)) == PORT_CLK_SEL_WRPLL1 &&
+              disp->dpll[DPLL_ID_WRPLL1].active == ((1u << 1) | (1u << 2)) &&
+              logged("display: pipe C set: 1280x1470@50 on HDMI C, 148500 kHz, 24 bpp, TMDS "
+                     "148500 kHz from WRPLL 1"),
+          "3d: 720p50 frame-packed in 1470 lines at 148.5 MHz, sharing pipe B's WRPLL 1");
+    CHECK(setcrtc(2, NULL, NULL, 0) == 0 && disp->dpll[DPLL_ID_WRPLL1].active == (1u << 1) &&
+              !(reg(WRPLL_CTL(1)) & WRPLL_PLL_ENABLE),
+          "3d: pipe C off, WRPLL 1 pipe B's alone, WRPLL 2 off");
+    fa.stereo_allowed = 0;
+    drm_edid_override_reset(hdmi);
+    hdmi->force = DRM_FORCE_UNSPECIFIED;
+    (void)drm_helper_probe_single_connector_modes(hdmi, 8192, 8192);
+    CHECK(hdmi->status == DRM_CONNECTOR_DISCONNECTED, "3d: HDMI-A-2 given back, disconnected");
+    frame();
+}
+
 /** The display let go: pipe B off with its PLL and well, the hotplug
  * interrupt off, every scanout unpinned. */
 static void row_fini(void)
@@ -1108,7 +1308,9 @@ static void row_fini(void)
     CHECK(!disp->hotplug.ready, "fini: hotplug off");
     drm_mode_file_release(&fa);
     drm_mode_config_cleanup(&gpu.drm);
-    CHECK(bo_vma[1].pin_count == 0 && bo_vma[2].pin_count == 0 && bo_vma[3].pin_count == 0,
+    CHECK(bo_vma[1].pin_count == 0 && bo_vma[2].pin_count == 0 && bo_vma[3].pin_count == 0 &&
+              bo_vma[4].pin_count == 0 && bo_vma[5].pin_count == 0 && bo_vma[6].pin_count == 0 &&
+              bo_vma[7].pin_count == 0,
           "fini: every scanout unpinned");
 }
 
@@ -1156,6 +1358,7 @@ int main(void)
     row_hotplug();
     row_dp();
     row_inject();
+    row_3d();
     row_fini();
     if (failures != 0) {
         show_log();
