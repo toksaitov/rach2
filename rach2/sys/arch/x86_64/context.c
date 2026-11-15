@@ -273,14 +273,12 @@ extern const char x86_64_ds_load_insn[], x86_64_ds_load_null[];
 extern const char x86_64_es_load_insn[], x86_64_es_load_null[];
 extern const char x86_64_fs_load_insn[], x86_64_fs_load_null[];
 extern const char x86_64_gs_load_insn[], x86_64_gs_load_null[];
-extern const char x86_64_rdmsr_insn[], x86_64_wrmsr_insn[], x86_64_msr_fault[];
 
 /**
  * The load of a selector faults with #NP for a segment not present, #SS
  * for SS, and #GP for any other refusal. The fault of the load into GS
  * comes in with the user's GS base loaded, which the common entry has
  * swapped already (isr_handler.s), and its resumption swaps back.
- * An optional RDMSR or WRMSR resumes at its -1 return on #GP.
  */
 int x86_64_fault_fixup(isr_params_t *p)
 {
@@ -294,11 +292,6 @@ int x86_64_fault_fixup(isr_params_t *p)
     };
     unsigned int i;
 
-    if (p->vector == 13 && (p->rip == (uint64_t)(uintptr_t)x86_64_rdmsr_insn ||
-                            p->rip == (uint64_t)(uintptr_t)x86_64_wrmsr_insn)) {
-        p->rip = (uint64_t)(uintptr_t)x86_64_msr_fault;
-        return 1;
-    }
     if (p->vector < 11 || p->vector > 13) {
         return 0;
     }

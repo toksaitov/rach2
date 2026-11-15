@@ -54,6 +54,32 @@ int x86_64_fault_fixup(isr_params_t *p);
 int ldt_fault(const isr_params_t *p);
 #endif
 
+/* The optional RDMSR and WRMSR instructions of msr.s and where a #GP at
+ * each resumes (x86/kcpu.h). */
+extern const char kcpu_rdmsr_insn[], kcpu_wrmsr_insn[], kcpu_msr_fault[];
+extern const char kcpu_rdmsr_regs_insn[], kcpu_wrmsr_regs_insn[], kcpu_msr_regs_fault[];
+
+/** Resume a #GP in kernel mode at one of msr.s's optional RDMSR or WRMSR
+ * instructions at its failure return, as Linux's exception table resumes
+ * rdmsr_safe: 1 when it was one, else 0. */
+static int msr_fixup(isr_params_t *p)
+{
+    uintptr_t pc = (uintptr_t)FRAME_PC(p);
+
+    if (p->vector != 13) {
+        return 0;
+    }
+    if (pc == (uintptr_t)kcpu_rdmsr_insn || pc == (uintptr_t)kcpu_wrmsr_insn) {
+        FRAME_PC(p) = (uintptr_t)kcpu_msr_fault;
+        return 1;
+    }
+    if (pc == (uintptr_t)kcpu_rdmsr_regs_insn || pc == (uintptr_t)kcpu_wrmsr_regs_insn) {
+        FRAME_PC(p) = (uintptr_t)kcpu_msr_regs_fault;
+        return 1;
+    }
+    return 0;
+}
+
 /* The saved flags register of a frame: EFLAGS, or RFLAGS on x86-64. */
 #if defined(__x86_64__)
 #define FRAME_FLAGS(p) ((p)->rflags)
@@ -322,6 +348,9 @@ static void _exception_handler(isr_params_t *params)
         return;
     }
 
+    if (msr_fixup(params)) {
+        return;
+    }
 #if defined(__x86_64__)
     if (x86_64_fault_fixup(params)) {
         return;

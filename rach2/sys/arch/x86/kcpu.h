@@ -76,14 +76,21 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi);
 /** Write `hi` and `lo` to the model-specific register `msr`. */
 void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi);
 
-#if defined(__x86_64__) || defined(RACH2_HOST_X86_64)
-/** Read an optional MSR into value on x86-64. Return 0, or -1 on #GP,
- * leaving value unchanged. The fault fixup is local to the instruction. */
+/** Read an optional MSR into value. Return 0, or -1 on #GP, leaving value
+ * unchanged. The fault fixup is local to the instruction. */
 int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value);
 
-/** Write an optional MSR on x86-64. Return 0, or -1 on #GP. */
+/** Write an optional MSR. Return 0, or -1 on #GP. */
 int kcpu_wrmsr_safe(uint32_t msr, uint64_t value);
-#endif
+
+/**
+ * RDMSR, or WRMSR when `write` is not 0, with EAX, ECX, EDX, EBX, EBP, ESI
+ * and EDI taken from regs[0] to regs[7], regs[4] standing for ESP and left
+ * alone, and given back there, as Linux's rdmsr_safe_regs and
+ * wrmsr_safe_regs, for the msr device's X86_IOC_RDMSR_REGS and
+ * X86_IOC_WRMSR_REGS. Return 0, or -1 on #GP, with regs as they were.
+ */
+int kcpu_msr_safe_regs(int write, uint32_t regs[8]);
 
 /** Whether XSAVES may be used (xsaves.c): leaf 0xD subleaf 1 reports it,
  * and the part is not an AMD Zen 1 or Zen 2, family 0x17, whose XSAVES
