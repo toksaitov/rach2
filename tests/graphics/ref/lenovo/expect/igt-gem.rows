@@ -121,7 +121,8 @@ igt@gem_busy@busy@bcs0 pass
 igt@gem_busy@busy@rcs0 pass
 igt@gem_busy@busy@vcs0 pass
 igt@gem_busy@busy@vecs0 pass
-igt@gem_busy@close-race pass
+# deferred: vgem (#5236)
+igt@gem_busy@close-race xfail
 igt@gem_busy@extended pass
 igt@gem_busy@extended@bcs0 pass
 igt@gem_busy@extended@rcs0 pass
@@ -250,12 +251,18 @@ igt@gem_userptr_blits@sync-unmap-after-close pass
 igt@gem_userptr_blits@sync-unmap-cycles pass
 igt@gem_userptr_blits@usage-restrictions pass
 igt@gem_userptr_blits@vma-merge pass
-igt@gem_wait@await pass
-igt@gem_wait@await@all-engines pass
-igt@gem_wait@await@bcs0 pass
-igt@gem_wait@await@rcs0 pass
-igt@gem_wait@await@vcs0 pass
-igt@gem_wait@await@vecs0 pass
+# deferred: vgem (#5236)
+igt@gem_wait@await xfail
+# deferred: vgem (#5236)
+igt@gem_wait@await@all-engines xfail
+# deferred: vgem (#5236)
+igt@gem_wait@await@bcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@await@rcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@await@vcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@await@vecs0 xfail
 igt@gem_wait@busy pass
 igt@gem_wait@busy@all-engines pass
 igt@gem_wait@busy@bcs0 pass
@@ -270,15 +277,27 @@ igt@gem_wait@wait@bcs0 pass
 igt@gem_wait@wait@rcs0 pass
 igt@gem_wait@wait@vcs0 pass
 igt@gem_wait@wait@vecs0 pass
-igt@gem_wait@write-busy pass
-igt@gem_wait@write-busy@all-engines pass
-igt@gem_wait@write-busy@bcs0 pass
-igt@gem_wait@write-busy@rcs0 pass
-igt@gem_wait@write-busy@vcs0 pass
-igt@gem_wait@write-busy@vecs0 pass
-igt@gem_wait@write-wait pass
-igt@gem_wait@write-wait@all-engines pass
-igt@gem_wait@write-wait@bcs0 pass
-igt@gem_wait@write-wait@rcs0 pass
-igt@gem_wait@write-wait@vcs0 pass
-igt@gem_wait@write-wait@vecs0 pass
+# deferred: vgem (#5236)
+igt@gem_wait@write-busy xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-busy@all-engines xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-busy@bcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-busy@rcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-busy@vcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-busy@vecs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-wait xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-wait@all-engines xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-wait@bcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-wait@rcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-wait@vcs0 xfail
+# deferred: vgem (#5236)
+igt@gem_wait@write-wait@vecs0 xfail

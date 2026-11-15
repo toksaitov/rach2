@@ -23,6 +23,8 @@ fast-skip check, and two EGL tests skipped for absent displays, accept
 `skip-or-pass`. These are setup skips, not answers about the kernel's device.
 IGT's absent sw_sync device and the cursor and extended-mode tests that
 found no second connected output use the same rule.
+The owner's deferred DRM leases, msr device, runtime PM and vgem use `xfail`
+with a comment naming the deferral; a missing parent test still fails.
 
 The tests that failed beside the first run's other tests and passed alone
 stay as the first run had them, since piglit.sh runs a test on each CPU
@@ -44,8 +46,7 @@ CAP = 600
 def igt():
     tests = json.load(gzip.open(os.path.join(REF, "igt/results.json.gz"), "rt",
                                 encoding="utf-8"))["tests"]
-    rows = sorted("%s %s" % (name, "skip-or-pass" if igt_setup_skip(name, t) else t["result"])
-                  for name, t in tests.items())
+    rows = [igt_row(name, tests[name]) for name in sorted(tests)]
     static = sorted(n for n in tests if n.count("@") <= 2)
     seconds = {n: tests[n]["time"]["end"] - tests[n]["time"]["start"] for n in static}
     programs = {}
@@ -86,6 +87,23 @@ def igt():
     with open(os.path.join(REF, "expect/igt-kms.rows"), "w", encoding="utf-8") as f:
         f.write("\n".join(rows) + "\n")
     return len(parts), len(rows)
+
+
+def igt_row(name, test):
+    """Write a reference row, retaining the owner's deferred requirements."""
+    deferred = {
+        "igt@kms_lease": "DRM leases (#5231)",
+        "igt@kms_pm_rpm": "msr device and i915 runtime PM (#5235)",
+        "igt@kms_vblank@ts-continuation-dpms-rpm": "i915 runtime PM (#5235)",
+        "igt@kms_vblank@ts-continuation-modeset-rpm": "i915 runtime PM (#5235)",
+        "igt@kms_prime@basic-crc-vgem": "vgem (#5236)",
+    }
+    if test["result"] == "pass":
+        for prefix, reason in deferred.items():
+            if name == prefix or name.startswith(prefix + "@"):
+                return "# deferred: %s\n%s xfail" % (reason, name)
+    result = "skip-or-pass" if igt_setup_skip(name, test) else test["result"]
+    return "%s %s" % (name, result)
 
 
 def igt_setup_skip(name, test):

@@ -1347,72 +1347,138 @@ igt@kms_joiner@invalid-modeset-force-big-joiner skip
 igt@kms_joiner@invalid-modeset-force-ultra-joiner skip
 igt@kms_joiner@invalid-modeset-ultra-joiner skip
 igt@kms_joiner@switch-modeset-ultra-joiner-big-joiner skip
-igt@kms_lease@atomic-implicit-crtc pass
-igt@kms_lease@atomic-implicit-crtc@pipe-a-edp-1 pass
-igt@kms_lease@atomic-implicit-crtc@pipe-b-edp-1 pass
-igt@kms_lease@atomic-implicit-crtc@pipe-c-edp-1 pass
-igt@kms_lease@cursor-implicit-plane pass
-igt@kms_lease@cursor-implicit-plane@pipe-a-edp-1 pass
-igt@kms_lease@cursor-implicit-plane@pipe-b-edp-1 pass
-igt@kms_lease@cursor-implicit-plane@pipe-c-edp-1 pass
-igt@kms_lease@empty-lease pass
-igt@kms_lease@empty-lease@pipe-a-edp-1 pass
-igt@kms_lease@empty-lease@pipe-b-edp-1 pass
-igt@kms_lease@empty-lease@pipe-c-edp-1 pass
-igt@kms_lease@implicit-plane-lease pass
-igt@kms_lease@invalid-create-leases pass
-igt@kms_lease@lease-again pass
-igt@kms_lease@lease-again@pipe-a-edp-1 pass
-igt@kms_lease@lease-again@pipe-b-edp-1 pass
-igt@kms_lease@lease-again@pipe-c-edp-1 pass
-igt@kms_lease@lease-get pass
-igt@kms_lease@lease-get@pipe-a-edp-1 pass
-igt@kms_lease@lease-get@pipe-b-edp-1 pass
-igt@kms_lease@lease-get@pipe-c-edp-1 pass
-igt@kms_lease@lease-invalid-connector pass
-igt@kms_lease@lease-invalid-connector@pipe-a-edp-1 pass
-igt@kms_lease@lease-invalid-connector@pipe-b-edp-1 pass
-igt@kms_lease@lease-invalid-connector@pipe-c-edp-1 pass
-igt@kms_lease@lease-invalid-crtc pass
-igt@kms_lease@lease-invalid-crtc@pipe-a-edp-1 pass
-igt@kms_lease@lease-invalid-crtc@pipe-b-edp-1 pass
-igt@kms_lease@lease-invalid-crtc@pipe-c-edp-1 pass
-igt@kms_lease@lease-invalid-plane pass
-igt@kms_lease@lease-invalid-plane@pipe-a-edp-1 pass
-igt@kms_lease@lease-invalid-plane@pipe-b-edp-1 pass
-igt@kms_lease@lease-invalid-plane@pipe-c-edp-1 pass
-igt@kms_lease@lease-revoke pass
-igt@kms_lease@lease-revoke@pipe-a-edp-1 pass
-igt@kms_lease@lease-revoke@pipe-b-edp-1 pass
-igt@kms_lease@lease-revoke@pipe-c-edp-1 pass
-igt@kms_lease@lease-uevent pass
-igt@kms_lease@lease-unleased-connector pass
-igt@kms_lease@lease-unleased-connector@pipe-a-edp-1 pass
-igt@kms_lease@lease-unleased-connector@pipe-b-edp-1 pass
-igt@kms_lease@lease-unleased-connector@pipe-c-edp-1 pass
-igt@kms_lease@lease-unleased-crtc pass
-igt@kms_lease@lease-unleased-crtc@pipe-a-edp-1 pass
-igt@kms_lease@lease-unleased-crtc@pipe-b-edp-1 pass
-igt@kms_lease@lease-unleased-crtc@pipe-c-edp-1 pass
-igt@kms_lease@lessee-list pass
-igt@kms_lease@lessee-list@pipe-a-edp-1 pass
-igt@kms_lease@lessee-list@pipe-b-edp-1 pass
-igt@kms_lease@lessee-list@pipe-c-edp-1 pass
-igt@kms_lease@master-vs-lease pass
-igt@kms_lease@multimaster-lease pass
-igt@kms_lease@page-flip-implicit-plane pass
-igt@kms_lease@page-flip-implicit-plane@pipe-a-edp-1 pass
-igt@kms_lease@page-flip-implicit-plane@pipe-b-edp-1 pass
-igt@kms_lease@page-flip-implicit-plane@pipe-c-edp-1 pass
-igt@kms_lease@possible-crtcs-filtering pass
-igt@kms_lease@setcrtc-implicit-plane pass
-igt@kms_lease@setcrtc-implicit-plane@pipe-a-edp-1 pass
-igt@kms_lease@setcrtc-implicit-plane@pipe-b-edp-1 pass
-igt@kms_lease@setcrtc-implicit-plane@pipe-c-edp-1 pass
-igt@kms_lease@simple-lease pass
-igt@kms_lease@simple-lease@pipe-a-edp-1 pass
-igt@kms_lease@simple-lease@pipe-b-edp-1 pass
-igt@kms_lease@simple-lease@pipe-c-edp-1 pass
+# deferred: DRM leases (#5231)
+igt@kms_lease@atomic-implicit-crtc xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@atomic-implicit-crtc@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@atomic-implicit-crtc@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@atomic-implicit-crtc@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@cursor-implicit-plane xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@cursor-implicit-plane@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@cursor-implicit-plane@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@cursor-implicit-plane@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@empty-lease xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@empty-lease@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@empty-lease@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@empty-lease@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@implicit-plane-lease xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@invalid-create-leases xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-again xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-again@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-again@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-again@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-get xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-get@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-get@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-get@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-connector xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-connector@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-connector@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-connector@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-crtc xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-crtc@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-crtc@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-crtc@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-plane xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-plane@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-plane@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-invalid-plane@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-revoke xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-revoke@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-revoke@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-revoke@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-uevent xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-unleased-connector xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-unleased-connector@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-unleased-connector@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-unleased-connector@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-unleased-crtc xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-unleased-crtc@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-unleased-crtc@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lease-unleased-crtc@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lessee-list xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lessee-list@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lessee-list@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@lessee-list@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@master-vs-lease xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@multimaster-lease xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@page-flip-implicit-plane xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@page-flip-implicit-plane@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@page-flip-implicit-plane@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@page-flip-implicit-plane@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@possible-crtcs-filtering xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@setcrtc-implicit-plane xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@setcrtc-implicit-plane@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@setcrtc-implicit-plane@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@setcrtc-implicit-plane@pipe-c-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@simple-lease xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@simple-lease@pipe-a-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@simple-lease@pipe-b-edp-1 xfail
+# deferred: DRM leases (#5231)
+igt@kms_lease@simple-lease@pipe-c-edp-1 xfail
 igt@kms_legacy_colorkey@basic pass
 igt@kms_legacy_colorkey@basic@pipe-a pass
 igt@kms_legacy_colorkey@basic@pipe-b pass
@@ -1760,44 +1826,74 @@ igt@kms_pm_dc@deep-pkgc skip
 igt@kms_pm_lpsp@kms-lpsp pass
 igt@kms_pm_lpsp@kms-lpsp@pipe-a-edp-1 pass
 igt@kms_pm_lpsp@screens-disabled pass
-igt@kms_pm_rpm@basic-pci-d3-state pass
-igt@kms_pm_rpm@basic-rte pass
-igt@kms_pm_rpm@cursor pass
-igt@kms_pm_rpm@cursor-dpms pass
-igt@kms_pm_rpm@dpms-lpsp pass
-igt@kms_pm_rpm@dpms-mode-unset-lpsp pass
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@basic-pci-d3-state xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@basic-rte xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@cursor xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@cursor-dpms xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@dpms-lpsp xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@dpms-mode-unset-lpsp xfail
 igt@kms_pm_rpm@dpms-mode-unset-non-lpsp skip
 igt@kms_pm_rpm@dpms-non-lpsp skip
-igt@kms_pm_rpm@drm-resources-equal pass
-igt@kms_pm_rpm@fences pass
-igt@kms_pm_rpm@fences-dpms pass
-igt@kms_pm_rpm@i2c pass
-igt@kms_pm_rpm@legacy-planes pass
-igt@kms_pm_rpm@legacy-planes-dpms pass
-igt@kms_pm_rpm@legacy-planes-dpms@plane-36 pass
-igt@kms_pm_rpm@legacy-planes@plane-36 pass
-igt@kms_pm_rpm@modeset-lpsp pass
-igt@kms_pm_rpm@modeset-lpsp-stress pass
-igt@kms_pm_rpm@modeset-lpsp-stress-no-wait pass
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@drm-resources-equal xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@fences xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@fences-dpms xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@i2c xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@legacy-planes xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@legacy-planes-dpms xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@legacy-planes-dpms@plane-36 xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@legacy-planes@plane-36 xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@modeset-lpsp xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@modeset-lpsp-stress xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@modeset-lpsp-stress-no-wait xfail
 igt@kms_pm_rpm@modeset-non-lpsp skip
 igt@kms_pm_rpm@modeset-non-lpsp-stress skip
 igt@kms_pm_rpm@modeset-non-lpsp-stress-no-wait skip
 igt@kms_pm_rpm@modeset-pc8-residency-stress fail
-igt@kms_pm_rpm@modeset-stress-extra-wait pass
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@modeset-stress-extra-wait xfail
 igt@kms_pm_rpm@pc8-residency fail
-igt@kms_pm_rpm@pm-caching pass
-igt@kms_pm_rpm@pm-tiling pass
-igt@kms_pm_rpm@universal-planes pass
-igt@kms_pm_rpm@universal-planes-dpms pass
-igt@kms_pm_rpm@universal-planes-dpms@plane-32 pass
-igt@kms_pm_rpm@universal-planes-dpms@plane-36 pass
-igt@kms_pm_rpm@universal-planes-dpms@plane-42 pass
-igt@kms_pm_rpm@universal-planes@plane-32 pass
-igt@kms_pm_rpm@universal-planes@plane-36 pass
-igt@kms_pm_rpm@universal-planes@plane-42 pass
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@pm-caching xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@pm-tiling xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@universal-planes xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@universal-planes-dpms xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@universal-planes-dpms@plane-32 xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@universal-planes-dpms@plane-36 xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@universal-planes-dpms@plane-42 xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@universal-planes@plane-32 xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@universal-planes@plane-36 xfail
+# deferred: msr device and i915 runtime PM (#5235)
+igt@kms_pm_rpm@universal-planes@plane-42 xfail
 igt@kms_prime@basic-crc-hybrid skip
-igt@kms_prime@basic-crc-vgem pass
-igt@kms_prime@basic-crc-vgem@second-to-first pass
+# deferred: vgem (#5236)
+igt@kms_prime@basic-crc-vgem xfail
+# deferred: vgem (#5236)
+igt@kms_prime@basic-crc-vgem@second-to-first xfail
 igt@kms_prime@basic-modeset-hybrid skip
 igt@kms_prime@d3hot skip
 igt@kms_prop_blob@basic pass
@@ -2145,16 +2241,22 @@ igt@kms_vblank@query-forked@pipe-c-edp-1 pass
 igt@kms_vblank@query-idle pass
 igt@kms_vblank@query-idle@pipe-a-edp-1 pass
 igt@kms_vblank@query-idle@pipe-c-edp-1 pass
-igt@kms_vblank@ts-continuation-dpms-rpm pass
-igt@kms_vblank@ts-continuation-dpms-rpm@pipe-a-edp-1 pass
-igt@kms_vblank@ts-continuation-dpms-rpm@pipe-c-edp-1 pass
+# deferred: i915 runtime PM (#5235)
+igt@kms_vblank@ts-continuation-dpms-rpm xfail
+# deferred: i915 runtime PM (#5235)
+igt@kms_vblank@ts-continuation-dpms-rpm@pipe-a-edp-1 xfail
+# deferred: i915 runtime PM (#5235)
+igt@kms_vblank@ts-continuation-dpms-rpm@pipe-c-edp-1 xfail
 igt@kms_vblank@ts-continuation-idle pass
 igt@kms_vblank@ts-continuation-idle@pipe-a-edp-1 pass
 igt@kms_vblank@ts-continuation-idle@pipe-c-edp-1 pass
 igt@kms_vblank@ts-continuation-modeset pass
-igt@kms_vblank@ts-continuation-modeset-rpm pass
-igt@kms_vblank@ts-continuation-modeset-rpm@pipe-a-edp-1 pass
-igt@kms_vblank@ts-continuation-modeset-rpm@pipe-c-edp-1 pass
+# deferred: i915 runtime PM (#5235)
+igt@kms_vblank@ts-continuation-modeset-rpm xfail
+# deferred: i915 runtime PM (#5235)
+igt@kms_vblank@ts-continuation-modeset-rpm@pipe-a-edp-1 xfail
+# deferred: i915 runtime PM (#5235)
+igt@kms_vblank@ts-continuation-modeset-rpm@pipe-c-edp-1 xfail
 igt@kms_vblank@ts-continuation-modeset@pipe-a-edp-1 pass
 igt@kms_vblank@ts-continuation-modeset@pipe-c-edp-1 pass
 igt@kms_vblank@wait-busy pass

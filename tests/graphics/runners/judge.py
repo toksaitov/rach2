@@ -43,7 +43,10 @@ skipped must skip here, as Linux's skips are the guest's answers about its
 devices, and one that failed or crashed in the reference may end as it
 likes. A reference's `skip-or-pass` marks a setup skip, not a device's
 answer, and requires either skip or pass here. A name the reference has
-and this run lacks is worse, and so is one
+and this run lacks is worse, except that `xfail` marks an owner's deferred
+requirement: it accepts any recorded result, and an absent IGT dynamic
+subtest when its parent is also `xfail` and records skip or fail. A missing
+parent still fails. So does one
 this run alone has that neither passes nor skips. An IGT dynamic subtest
 is named by its pipe and the output IGT gave that pipe, `@pipe-P-OUTPUT`,
 and IGT gives each pipe after the panel's to a connected external output
@@ -380,6 +383,10 @@ def results(ref_path, got_path, sample_path=None, flakes_path=None,
             shown = moved[name]
             print("judge: output: %s here for %s" % (shown, name))
             g = got[shown]
+        if g is None and r == "xfail" and name.startswith("igt@") and name.count("@") > 2:
+            parent = name.rsplit("@", 1)[0]
+            if ref.get(parent) == "xfail" and got.get(parent) in ("skip", "fail"):
+                continue
         if g is None:
             worse.append((name, "%s: not run here, %s in the reference" % (name, r)))
         elif r in ("pass", "skip") and g != r:
