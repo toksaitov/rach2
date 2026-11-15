@@ -1,4 +1,4 @@
-.Dd November 13, 2026
+.Dd November 15, 2026
 .Dt DEBUGFS 5
 .Os
 .Sh NAME
@@ -832,6 +832,18 @@ frequency with its limits, in MHz, and the wait boosts counted, as Linux's
 .It Pa dri/DEVICE/i915_cdclk_info
 Mode 0444.
 The current and the highest CD clock and the highest dot clock, in kHz.
+.It Pa dri/DEVICE/i915_ignore_long_hpd
+Mode 0644, for a device with a display.
+Reads
+.Ql Y
+while set, else
+.Ql N .
+A write takes the words of
+.Fn kstrtobool ;
+.Er EINVAL
+for anything else.
+While it is set the hotplug work probes no connector for the pulses it
+takes, as Linux's; IGT's link training tests clear it before they run.
 .It Pa dri/DEVICE/i915_wedged
 Mode 0644.
 Reads 1 while the GPU is wedged, else 0.

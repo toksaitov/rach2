@@ -1207,6 +1207,8 @@ struct intel_ddi_port {
  * `poll_at`, all kernel ticks, 0 for none. `work` is the DRM core's deferred
  * work that runs it in process context. `pulses` counts the interrupts taken
  * and `storms` the storms; `ready` says the interrupts are hooked.
+ * `ignore_long_hpd`, debugfs's i915_ignore_long_hpd, has the work drop the
+ * probes the pulses asked for while it is set, as Linux's does.
  */
 struct intel_hotplug {
     uint32_t long_mask, short_mask, event_bits;
@@ -1219,6 +1221,7 @@ struct intel_hotplug {
     uint32_t pulses, storms;
     struct drm_work work;
     uint8_t ready;
+    uint8_t ignore_long_hpd;
 };
 
 /*

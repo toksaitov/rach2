@@ -1552,6 +1552,45 @@ static const struct debugfs_text_ops param_ops = {param_show, NULL};
 static const struct debugfs_text_ops reset_ops = {reset_show, reset_store};
 static const struct debugfs_text_ops hangcheck_ops = {hangcheck_show, hangcheck_store};
 
+/** i915_ignore_long_hpd, Linux's debugfs_create_bool on the hotplug's
+ * ignore_long_hpd: Y or N and a newline. */
+static int32_t ignore_long_hpd_show(void *data, char *buf, uint32_t cap)
+{
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emit_s(&e, ((struct drm_i915_private *)data)->display.hotplug.ignore_long_hpd ? "Y\n" : "N\n");
+    return emit_end(&e);
+}
+
+/**
+ * A write of i915_ignore_long_hpd, as debugfs's bool: kstrtobool's words,
+ * or -EINVAL. The hotplug work reads it under the mode lock; Linux stores it
+ * with no lock, and so does this.
+ */
+static int32_t ignore_long_hpd_store(void *data, const char __user *buf, uint32_t len)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    char text[24];
+    int32_t rc;
+    int b = 0;
+
+    rc = copy_write(buf, len, text, sizeof(text));
+    if (rc >= 0) {
+        rc = parse_bool(text, (uint32_t)rc, &b);
+    }
+    if (rc < 0) {
+        return rc;
+    }
+    i915->display.hotplug.ignore_long_hpd = (uint8_t)(b != 0);
+    return (int32_t)len;
+}
+
+static const struct debugfs_text_ops ignore_long_hpd_ops = {ignore_long_hpd_show,
+                                                            ignore_long_hpd_store};
+
 /**
  * Make one file of i915_params for the line `line` of a table above, as
  * Linux's i915_debugfs_params: reset and enable_hangcheck, mode 0600, on
@@ -1702,6 +1741,12 @@ void i915_debugfs_register(struct drm_i915_private *i915)
     }
     if (i915->drm.features & DRIVER_MODESET) {
         rc = crtcs_register(i915, path, sizeof(path));
+        /* Linux's intel_hpd_debugfs_register; IGT's link training tests
+         * clear it in their fixture and fail where it is not there. */
+        if (rc == 0) {
+            drm_debugfs_path(&i915->drm, "i915_ignore_long_hpd", path, sizeof(path));
+            rc = debugfs_create_text(path, 0644u, &ignore_long_hpd_ops, i915);
+        }
     }
     for (i = 0; rc == 0 && i < NELEM(text_files); i++) {
         drm_debugfs_path(&i915->drm, text_files[i].name, path, sizeof(path));

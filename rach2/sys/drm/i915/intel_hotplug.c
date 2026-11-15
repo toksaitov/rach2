@@ -326,6 +326,11 @@ static void hotplug_work_locked(struct drm_work *work)
         hp->retry_at = 0;
     }
     storm_switch(i915, now);
+    if (hp->ignore_long_hpd) {
+        /* Linux's i915_hotplug_work_func returns here, the pins taken. */
+        event_bits = 0;
+        retry_bits = 0;
+    }
 
     /* Linux's i915_hotplug_work_func with intel_ddi_hotplug: each
      * connector on a pin that pulsed probed, an event for each change, and
