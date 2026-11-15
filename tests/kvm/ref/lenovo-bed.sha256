@@ -3,7 +3,7 @@
 # `sha256sum -c` form with names relative to that directory: vm.disk, the
 # bed's VM raw as `bed/vm/image/vm.sh rach2` makes it, and the forward
 # guest's guest.qcow2, guest.tar and id_ed25519 of build/tests/cases/bed-forward.
-b0d085e2751181a890bba7bef9eaaeecf7a80c67ad12ff57cd0bb77198bc00bb  vm.disk
+0d3b23928bbea5df5a342f238aad425bf30616e17a6c02019dd80f649490a0e4  vm.disk
 954e4b2092fa1c052775e06f92deb164024e83fe600494ebded5e52b25d669f0  guest.qcow2
 63b26f3396baef6eb2408b2a04f1861a7ee732cc5daed01823943e209cd93548  guest.tar
 efafff0678c1d2a16799f3bb51e8759afc066c174092e596d256d81fe64492e5  id_ed25519

@@ -135,7 +135,9 @@ static void log_line(enum virgl_log_level_flags level, const char *message, void
  * Start virglrenderer with EGL: on GBM over gbm_fd when it is a DRM
  * device, so that resources it allocates there export as dma-bufs, or
  * surfaceless when gbm_fd is -1; with Venus through the render server
- * when venus is set and the DRM renderer when native is set. Native
+ * when venus is set and the DRM renderer when native is set. Blobs use
+ * external storage, since page lists need an exported descriptor rather
+ * than a GL mapping in this process. Native
  * context requires a build of virglrenderer with a driver for the GPU.
  * Returns the renderer, or 0 when virglrenderer fails.
  */
@@ -143,7 +145,9 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
 {
     static const uint32_t ids[] = {CAPSET_VIRGL, CAPSET_VIRGL2, CAPSET_VENUS, CAPSET_DRM};
     struct vr *r = calloc(1, sizeof(*r));
-    int flags = VIRGL_RENDERER_USE_EGL | VIRGL_RENDERER_THREAD_SYNC, err;
+    int flags =
+            VIRGL_RENDERER_USE_EGL | VIRGL_RENDERER_THREAD_SYNC | VIRGL_RENDERER_USE_EXTERNAL_BLOB,
+        err;
     uint32_t i, ver, size;
 
     if (r == 0) {
