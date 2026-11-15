@@ -10,6 +10,7 @@
  * host-deps: rach2/sys/drm/i915/i915_hw.c tests/host/i915_model.c
  * host-deps: rach2/sys/mm/frame.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/i915_rpm_host.c
  *
  * A row makes a fresh model, whose blocks give forcewake's acknowledgement,
  * the GT FIFO's free entries and the power well's state behaviour a test

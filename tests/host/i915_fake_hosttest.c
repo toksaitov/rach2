@@ -18,6 +18,7 @@
  * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
  * host-deps: tests/host/compat/i915_gem_lock_host.c
  * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/i915_rpm_host.c
  *
  * i915_fake.c is included whole, which reaches its record and its
  * debugfs file's operations. The bus holds one edu function, 00:04.0,

@@ -13,6 +13,7 @@
  * host-deps: rach2/sys/drm/i915/i915_gtt.c rach2/sys/drm/i915/i915_hw.c
  * host-deps: tests/host/i915_model.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/i915_rpm_host.c
  *
  * A row makes a fresh model and a device record over it, and brings it up
  * as the bind does: forcewake, the global GTT, the interrupts reset and
