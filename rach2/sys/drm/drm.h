@@ -2282,6 +2282,10 @@ void drm_debugfs_path(const struct drm_device *dev, const char *name, char *path
  * a native driver's device that replaced the firmware's comes to it. Only a
  * device with mode setting and dumb buffers is taken. */
 void drm_client_dev_register(struct drm_device *dev);
+/** The last open file of `dev` closed: restore the console's outputs,
+ * screen and keyboard, as Linux's drm_lastclose. Process context with
+ * the big lock held; may sleep. A master that comes meanwhile keeps it. */
+void drm_client_dev_restore(struct drm_device *dev);
 /** A device is going: the console leaves it, and gets the keyboard and
  * /fb back if a master of it held the screen. Does not sleep. */
 void drm_client_dev_unregister(struct drm_device *dev);

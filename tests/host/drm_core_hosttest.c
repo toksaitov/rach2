@@ -201,6 +201,12 @@ void drm_client_dev_unregister(struct drm_device *dev)
     client_unregisters++;
 }
 
+/** This core test has no console to restore on last close. */
+void drm_client_dev_restore(struct drm_device *dev)
+{
+    (void)dev;
+}
+
 /** The /sys entries, which drm_sysfs.c's own rows in procfs_hosttest.c
  * check; here a device always gets them. */
 int32_t drm_sysfs_register(struct drm_device *dev)

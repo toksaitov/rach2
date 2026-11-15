@@ -1,8 +1,8 @@
 /*
  * drm_client.c: the console as an in-kernel DRM client, Linux's fbdev
  * emulation: it draws on a buffer of its device that it scans out itself,
- * and gives the screen and the keyboard to a master of that device until
- * the master drops the role, closes the card or dies.
+ * and gives the screen and the keyboard to programs until the last open
+ * file of that device closes.
  */
 
 #include "drm.h"
@@ -33,8 +33,8 @@
  * so the console moves to it.
  *
  * Until a master first leaves the device, the console stays where it was at
- * boot: on the loader's framebuffer, or on the VGA's text mode. When a
- * master leaves, or the outputs change while none holds the device, the
+ * boot: on the loader's framebuffer, or on the VGA's text mode. When the
+ * last file closes, or the outputs change while the console owns it, the
  * console probes the connectors and sets its own mode on each connected
  * one: a buffer of XRGB8888 as large as the largest mode, which every lit
  * CRTC scans out from its top left corner, and the grid drawn in the part
@@ -59,7 +59,7 @@
  *
  * The firmware's framebuffer (fbdrm) is the screen itself, so there the
  * console draws on it directly, as it did before the device registered,
- * and turns the device's CRTC off when a master leaves, which takes the
+ * and turns the device's CRTC off on last close, which takes the
  * master's picture off the screen.
  *
  * While a master holds the device the console is handed over: fbcon draws
@@ -710,7 +710,7 @@ static void con_hand_over(struct drm_device *dev)
     klog(KLOG_INFO, "console", "card%d: handed to a master, the keyboard off", dev->index);
 }
 
-/** No master holds `dev`, the console's device, now: start the countdown
+/** The last file of `dev`, the console's device, closed: start the countdown
  * to the console's blank again (`console_poke`), before the tick can see
  * the screen as the console's with the old count, then take the screen
  * back on the console's own outputs, /fb and the keyboard. Nothing if a
@@ -746,7 +746,8 @@ static void con_take_back(struct drm_device *dev)
 }
 
 /** The master listener: hand the screen over when a master of the
- * console's device comes, and take it back when none holds it. */
+ * console's device comes. A drop of the role alone leaves its modes
+ * intact for a handover to another file, as Linux's DROP_MASTER does. */
 static void con_master_changed(struct drm_device *dev, struct drm_file *master)
 {
     if (dev != con.dev) {
@@ -755,7 +756,13 @@ static void con_master_changed(struct drm_device *dev, struct drm_file *master)
     con.gen++;
     if (master) {
         con_hand_over(dev);
-    } else if (con.handed) {
+    }
+}
+
+/** Restore the console only on last close, as Linux's drm_lastclose. */
+void drm_client_dev_restore(struct drm_device *dev)
+{
+    if (dev == con.dev && con.handed && !dev->master && !dev->open_count) {
         con_take_back(dev);
     }
 }

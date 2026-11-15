@@ -405,9 +405,10 @@ then reports, and
 .Dv KDSKBMODE
 sets, the mode that returns.
 .Pp
-The console takes them back when no process holds the master role: after
-.Dv DRM_IOCTL_DROP_MASTER ,
-or when the master closes the card or exits, by a signal or not.
+The console takes them back when the last open DRM file closes.
+.Dv DRM_IOCTL_DROP_MASTER
+leaves the scanout intact so that another open file can take the role
+without a console mode set between them.
 On a native driver it sets a mode on each connected display, scanned out
 from a buffer of its own, and draws its text there again.
 The mode is the size that
@@ -430,8 +431,8 @@ The console keeps the columns and rows it had at boot.
 On a screen of another size it draws them at the largest whole scale of
 the font at which they fit, centered, and on one too small for them at
 scale 1 it shows those that fit from the top left corner.
-Until a master first leaves the card, the console stays where it was at
-boot: on the loader's framebuffer, or on the VGA's text mode, which it
+Until the card first has no open files after a master used it, the
+console stays where it was at boot: on the loader's framebuffer, or on the VGA's text mode, which it
 then leaves for the card's buffer.
 .Ss Terminal requests
 The console and pseudoterminal slaves answer these

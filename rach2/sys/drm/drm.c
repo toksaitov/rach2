@@ -493,6 +493,9 @@ static void drm_file_release(struct drm_file *file)
         }
     }
     dev->open_count--;
+    if (dev->open_count == 0) {
+        drm_client_dev_restore(dev);
+    }
     kfree(file);
     drm_dev_put(dev);
 }
