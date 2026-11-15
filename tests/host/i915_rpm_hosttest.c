@@ -199,6 +199,13 @@ void intel_hotplug_resume(struct drm_i915_private *i915)
     called("hotplug-resume");
 }
 
+/** No handler runs on another processor; the call is recorded, with
+ * whether every source was already off. */
+void i915_irq_sync(struct drm_i915_private *i915)
+{
+    called(i915->irq.suspended ? "irq-sync" : "irq-sync-early");
+}
+
 void i915_gem_restore_fences(struct drm_i915_private *i915)
 {
     (void)i915;
@@ -530,6 +537,8 @@ static void row_suspend(void)
     CHECK("suspend: prepared", prep == 0);
     CHECK("suspend: done", err == 0);
     CHECK("suspend: the GTT map revoked first", strstr(calls, "revoke ") == calls);
+    CHECK("suspend: the handlers waited for once every source is off",
+          strstr(calls, "revoke irq-sync hotplug-suspend ") == calls);
     CHECK("suspend: no wait reached its bound", no_timeout());
     CHECK("suspend: the well is off", !i915_model_power(&m)->on);
     for (bank = 0; bank < I915_IRQ_BANKS; bank++) {
@@ -779,9 +788,9 @@ static void row_fault(void)
  * A sideband that stays busy, an LCPLL that neither unlocks nor locks and
  * a pcode that never answers: each wait ends at its bound and is logged,
  * the sleep and the wake are carried through as Linux's are, and the two
- * take less than 30 ms of the model's clock, the sum of the bounds: two
- * sideband transfers of 100 us, LCPLL's unlock of 1 ms and lock of 5 ms,
- * the pcode's 20.5 ms and D_COMP's 1 ms.
+ * take less than 450 ms of the model's clock, the sum of the bounds: four
+ * sideband waits of 100 ms, two on each side, LCPLL's unlock of 1 ms and
+ * lock of 5 ms, the pcode's 20.5 ms and D_COMP's 1 ms.
  */
 static void row_stuck(void)
 {
@@ -806,7 +815,7 @@ static void row_stuck(void)
     CHECK("stuck: LCPLL's lock wait logged", logged("lcpll lock: timeout"));
     CHECK("stuck: the power down taken back",
           !(i915_model_peek(&m, LCPLL_CTL) & LCPLL_POWER_DOWN_ALLOW));
-    CHECK("stuck: within the sum of Linux's bounds", m.now_us - start < 30000u);
+    CHECK("stuck: within the sum of Linux's bounds", m.now_us - start < 450000u);
     i915_model_free(&m);
 }
 

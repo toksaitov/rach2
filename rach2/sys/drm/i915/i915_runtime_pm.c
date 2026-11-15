@@ -15,13 +15,14 @@
 #include "../../lib/kerrno.h"
 
 /* Linux's bounds: the switch of the CD clock's source, 1 us; LCPLL's lock
- * and unlock, 5 ms and 1 ms; D_COMP's compensation, 1 ms; a sideband
- * transfer, 100 us; and the wait after PATHALT before SSC goes off, 32 us. */
+ * and unlock, 5 ms and 1 ms; D_COMP's compensation, 1 ms; the sideband's
+ * idle and its answer, 100 ms each (intel_sbi_rw); and the wait after
+ * PATHALT before SSC goes off, 32 us. */
 #define FCLK_US    1u
 #define LOCK_US    5000u
 #define UNLOCK_US  1000u
 #define RCOMP_US   1000u
-#define SBI_US     100u
+#define SBI_US     100000u
 #define PATHALT_US 32u
 #define PCI_D3_US  (PCI_PM_D3HOT_WAIT * 1000u)
 
@@ -370,8 +371,9 @@ static int32_t rpm_prepare(void *owner)
  * Put the device to sleep, Linux's intel_runtime_suspend and the PCI
  * core's after it: a GTT fault since `rpm_prepare` refuses it, and so do
  * the checks of `sleep_ready` again; then forcewake let go, the
- * interrupts off, package C8 allowed, D3hot, every access refused
- * (`hw.asleep`), and the connectors polled.
+ * interrupts off and a handler on another processor finished, as Linux's
+ * intel_runtime_pm_disable_interrupts, package C8 allowed, D3hot, every
+ * access refused (`hw.asleep`), and the connectors polled.
  */
 static int32_t rpm_suspend(void *owner)
 {
@@ -390,6 +392,7 @@ static int32_t rpm_suspend(void *owner)
     }
     i915->rpm.refused = NULL;
     i915_irq_suspend(i915);
+    i915_irq_sync(i915);
     pc8_enable(i915);
     d3_enter(i915);
     i915->hw.asleep_logged = 0;
