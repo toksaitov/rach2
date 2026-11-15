@@ -1777,9 +1777,62 @@ static int32_t crtcs_register(struct drm_i915_private *i915, char *path, uint32_
     return rc;
 }
 
+/** i915_lpsp_capability, Linux's i915_lpsp_capability_show for Haswell:
+ * whether the connector's output can run on low-power single pipe, which
+ * on Haswell only eDP can, through the eDP transcoder on pipe A. IGT's
+ * kms_pm_lpsp tests only the outputs that read "capable". -ENODEV while
+ * the connector is not connected or has no encoder, or after unplug. */
+static int32_t lpsp_capability_show(void *data, char *buf, uint32_t cap)
+{
+    const struct drm_connector *connector = (const struct drm_connector *)data;
+    struct emit e;
+
+    if (gone(to_i915(connector->dev)) || connector->possible_encoders == 0 ||
+        connector->status != DRM_CONNECTOR_CONNECTED) {
+        return -ENODEV;
+    }
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emitf(&e, "LPSP: %s\n",
+          connector->connector_type == DRM_MODE_CONNECTOR_eDP ? "capable" : "incapable");
+    return emit_end(&e);
+}
+
+static const struct debugfs_text_ops lpsp_capability_ops = {lpsp_capability_show, NULL};
+
+/** Make each connector's files beside the DRM core's, Linux's
+ * intel_connector_debugfs_add: i915_lpsp_capability for each eDP, DSI,
+ * DisplayPort and HDMI connector. 0, or the first error. */
+static int32_t connectors_register(struct drm_i915_private *i915, char *path, uint32_t cap)
+{
+    const struct drm_mode_config *mc = &i915->drm.mode_config;
+    char name[DRM_CONNECTOR_NAME_LEN + 32];
+    int32_t rc = 0;
+    uint32_t i, type, n;
+
+    for (i = 0; rc == 0 && i < mc->num_connector && i < DRM_MAX_CONNECTORS; i++) {
+        type = mc->connectors[i]->connector_type;
+        if (type != DRM_MODE_CONNECTOR_eDP && type != DRM_MODE_CONNECTOR_DSI &&
+            type != DRM_MODE_CONNECTOR_DisplayPort && type != DRM_MODE_CONNECTOR_HDMIA &&
+            type != DRM_MODE_CONNECTOR_HDMIB) {
+            continue;
+        }
+        k_strncpy(name, mc->connectors[i]->name, DRM_CONNECTOR_NAME_LEN);
+        name[DRM_CONNECTOR_NAME_LEN - 1] = '\0';
+        n = (uint32_t)k_strlen(name);
+        k_strncpy(name + n, "/i915_lpsp_capability", sizeof(name) - n);
+        name[sizeof(name) - 1] = '\0';
+        drm_debugfs_path(&i915->drm, name, path, cap);
+        rc = debugfs_create_text(path, 0444u, &lpsp_capability_ops, mc->connectors[i]);
+    }
+    return rc;
+}
+
 void i915_debugfs_register(struct drm_i915_private *i915)
 {
-    char path[64];
+    /* The DRM core's bound on a path below dri/. */
+    char path[128];
     int32_t rc = 0;
     int card;
     unsigned i;
@@ -1789,6 +1842,9 @@ void i915_debugfs_register(struct drm_i915_private *i915)
     }
     if (i915->drm.features & DRIVER_MODESET) {
         rc = crtcs_register(i915, path, sizeof(path));
+        if (rc == 0) {
+            rc = connectors_register(i915, path, sizeof(path));
+        }
         /* Linux's intel_hpd_debugfs_register; IGT's link training tests
          * clear it in their fixture and fail where it is not there. */
         if (rc == 0) {

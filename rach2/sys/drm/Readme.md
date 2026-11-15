@@ -75,7 +75,7 @@ The files of `sys/drm/` that every architecture compiles are listed in [`sources
 * A page flip to a target vblank is `EINVAL`, Linux's answer for a driver without `page_flip_target`.
 * vkms has no writeback connector, which Linux's has by default.
 * The EDID's quirks, DisplayID blocks, tiles and the non-desktop flag are not read.
-* debugfs has no `internal_clients`, and no connector's `vrr_range`, `output_bpc` or the HDMI and DisplayPort files, which no driver here has or IGT's CRC and forcing tests open; `bridges` is empty, since no driver has bridges.
+* debugfs has no `internal_clients`, and none of the DRM core's HDMI and DisplayPort files of a connector, which IGT's CRC and forcing tests do not open; `bridges` is empty, since no driver has bridges.
 
 ## Tests
 

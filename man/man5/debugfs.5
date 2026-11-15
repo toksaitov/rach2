@@ -811,6 +811,17 @@ and a newline, N the bits a colour the sink's EDID names, 0 when it names
 none, which IGT reads as the most the connector takes;
 .Er ENODEV
 while the connector is not connected.
+.It Pa dri/DEVICE/CONNECTOR/i915_lpsp_capability
+Mode 0444, for each eDP, DSI, DisplayPort and HDMI connector of a device
+bound by
+.Xr i915 4 .
+.Ql LPSP: capable
+and a newline when the connector's output can run on the low-power single
+pipe, which on Haswell only eDP can, else
+.Ql LPSP: incapable ;
+.Er ENODEV
+while the connector is not connected.
+IGT's kms_pm_lpsp tests only the outputs that read capable.
 .It Pa dri/DEVICE/i915_capabilities
 Mode 0444, for a device bound by
 .Xr i915 4 ,
