@@ -213,6 +213,24 @@ uint32_t pci_read_config32(uint8_t b, uint8_t d, uint8_t f, uint8_t offset)
     return is_chip(b, d, f) ? i915_model_config(bus, offset, 4) : 0xffffffffu;
 }
 
+/** The function's soft reset on leaving D3hot, its PMCSR having no
+ * No_Soft_Reset: the command word, the BARs and the message's capability
+ * back to 0. */
+static void soft_reset(void)
+{
+    unsigned k;
+
+    for (k = PCI_COMMAND; k < PCI_COMMAND + 2u; k++) {
+        bus->config[k] = 0;
+    }
+    for (k = PCI_BAR0; k < PCI_BAR0 + 24u; k++) {
+        bus->config[k] = 0;
+    }
+    for (k = LENOVO_GPU_CAP_MSI + 2u; k < LENOVO_GPU_CAP_MSI + 10u; k++) {
+        bus->config[k] = 0;
+    }
+}
+
 /** Note the function's moves into and out of D3hot by its PMCSR. */
 static void pmcsr_written(unsigned at)
 {
@@ -228,6 +246,7 @@ static void pmcsr_written(unsigned at)
     } else if (!d3 && in_d3) {
         d0_at = bus->nlog;
         d3_accesses += bus->nlog - d3_at;
+        soft_reset();
     }
     in_d3 = d3;
 }
@@ -845,16 +864,16 @@ static void row_resume(void)
 {
     struct i915_model m;
     struct drm_i915_private *i915 = fresh(&m);
-    uint32_t ier[I915_IRQ_BANKS], imr[I915_IRQ_BANKS], cmd, lc;
+    uint32_t ier[I915_IRQ_BANKS], imr[I915_IRQ_BANKS], cmd, bar0, bar2, lc;
     long fw_on, pda_off, dcomp, enable;
     int b, banks_same = 1;
 
+    i915->msi_vector = 48;
     read_banks(&m, ier_before, imr_before);
     cmd = i915_model_config(&m, PCI_COMMAND, 2);
+    bar0 = i915_model_config(&m, PCI_BAR0, 4);
+    bar2 = i915_model_config(&m, PCI_BAR0 + 8u, 4);
     suspend(&m);
-    /* D3hot loses the command word, as a reset of the function would. */
-    bus->config[PCI_COMMAND] = 0;
-    bus->config[PCI_COMMAND + 1] = 0;
     m.nlog = 0;
     d3_at = 0;
     i915->hw.timeouts = 0;
@@ -875,7 +894,13 @@ static void row_resume(void)
     CHECK("resume: no wait reached its bound", i915->hw.timeouts == 0);
     CHECK("resume: D0 before any access to BAR 0",
           pci_state(&m) == PCI_D0 && !in_d3 && d0_at == 0 && d3_accesses == 0);
-    CHECK("resume: the command word restored", i915_model_config(&m, PCI_COMMAND, 2) == cmd);
+    CHECK("resume: the command word and BARs restored after the soft reset",
+          i915_model_config(&m, PCI_COMMAND, 2) == cmd &&
+              i915_model_config(&m, PCI_BAR0, 4) == bar0 &&
+              i915_model_config(&m, PCI_BAR0 + 8u, 4) == bar2);
+    CHECK("resume: the message enabled again",
+          (i915_model_config(&m, LENOVO_GPU_CAP_MSI + 2u, 2) & 1u) &&
+              (i915_model_config(&m, LENOVO_GPU_CAP_MSI + 8u, 2) & 0xffu) == 48);
     CHECK("resume: no longer asleep", !i915->hw.asleep);
     CHECK("resume: forcewake held, then power-down disallowed, D_COMP on, LCPLL enabled",
           fw_on < pda_off && pda_off < dcomp && dcomp < enable && enable < (1L << 30));
