@@ -1,5 +1,5 @@
 {
-  "source": "Debian 13 on Venus over the testing PC's lavapipe, Mesa 26.1.6's Venus driver, GE-Proton11-12, 8 CPUs, 16 GiB, udmabuf size_limit_mb 16384; probes and Proton units twice, WineD3D on Vulkan twice, vkd3d-proton once; Proton's d3d10core unit six times more on 2026-11-14, three to a boot, which ended with exit 5 three times, 245 twice and 1 once, at 1 to 146 test lines",
+  "source": "Debian 13 on Venus over the testing PC's lavapipe, Mesa 26.1.6's Venus driver, GE-Proton11-12, 8 CPUs, 16 GiB, udmabuf size_limit_mb 16384; probes and Proton units twice, WineD3D on Vulkan twice, vkd3d-proton once; Proton's d3d10core unit six times more on 2026-11-14, three to a boot, which ended with exit 5 three times, 245 twice and 1 once, at 1 to 146 test lines; WineD3D's d3d11:d3d11 on Vulkan 30 times more on 2026-11-15, six, eight and sixteen to a boot, of which one ended with 499 failures and one crashed before its summary, set apart",
   "probe": {
     "proton/9": {
       "exit": 0,
@@ -131,9 +131,47 @@
       "d3d11:d3d11": {
         "exit": 255,
         "summary": true,
-        "failures": 502,
+        "failures": [
+          499,
+          502
+        ],
         "min_checks": 5640691,
-        "max_skipped": 8
+        "max_skipped": 8,
+        "varying_lines": [
+          "d3d11.c:10263",
+          "d3d11.c:10662",
+          "d3d11.c:11333",
+          "d3d11.c:14621",
+          "d3d11.c:14671",
+          "d3d11.c:18343",
+          "d3d11.c:20835",
+          "d3d11.c:21324",
+          "d3d11.c:21338",
+          "d3d11.c:24057",
+          "d3d11.c:24380",
+          "d3d11.c:26640",
+          "d3d11.c:26642",
+          "d3d11.c:26677",
+          "d3d11.c:28023",
+          "d3d11.c:28269",
+          "d3d11.c:28297",
+          "d3d11.c:28318",
+          "d3d11.c:28557",
+          "d3d11.c:29083",
+          "d3d11.c:29092",
+          "d3d11.c:30324",
+          "d3d11.c:30513",
+          "d3d11.c:30519",
+          "d3d11.c:30521",
+          "d3d11.c:30538",
+          "d3d11.c:3200",
+          "d3d11.c:32020",
+          "d3d11.c:32025",
+          "d3d11.c:3478",
+          "d3d11.c:36716",
+          "d3d11.c:9283",
+          "d3d11.c:9371"
+        ]
       },
       "d3d12:d3d12": {
         "exit": 0,

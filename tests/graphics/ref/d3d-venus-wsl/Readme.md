@@ -8,6 +8,7 @@ Each archive is one run's output directory whole: a numbered directory for each 
 
 * `proton.tar.gz` and `proton2.tar.gz`, `ref-proton` and `ref-proton2`: the six probes, Direct3D 9, 11 and 12 through Proton's DXVK and vkd3d-proton and through WineD3D on Vulkan with Wine's vkd3d, and Wine's 13 units through Proton. Every probe drew and read both pixels back right in both runs. The two runs agree in every unit's summary and exit but for the units that crash before their summary, whose exits vary. `d3d9:device` stalled at the same line in both, its process alive with no CPU time, and was killed by hand.
 * `wined3dvk.tar.gz` and `wined3dvk1.tar.gz`, `ref-wined3dvk` and `ref-wined3dvk1`: Wine's 13 units through WineD3D on Vulkan. The two agree unit for unit. `wined3dvk1-lost.tar.gz` is the first run's `d3d10:effect`, set apart from it: Proton's prefix creation hung there, with explorer.exe logging "no driver could be loaded", and the row has no `results.json`; the unit ran in the second run.
+* `wined3dvk-d3d11.tar.gz`, `d3d11a`, `d3d11b` and `d3d11c`: WineD3D's `d3d11:d3d11` on Vulkan 6, 8 and 16 times in three boots, taken on 2026-11-15 with the same image and snapshot to measure how its failure count varies. 29 of the 30 runs ran to the summary: 28 counted 502 failures, with the stored runs' failures, and `d3d11a`'s second counted 499, `test_quad_tessellation`'s checks at `d3d11.c:26640`, `26642` and `26677` passing ([Direct3D on Venus](../../Readme.md#direct3d-on-venus)). `wined3dvk-d3d11-crash.tar.gz` is `d3d11c`'s third run, set apart from it: after 39 test lines its threads waited 16 minutes on WineD3D's command stream lock, and the unit ended with exit 1 and no summary.
 * `vkd3d.tar.gz`, `ref-vkd3d`: vkd3d-proton's 578 tests, the eight parts of `run.py`'s list. None crashed. `test_multithread_command_queue_exec` stalled after its 26th failure at line 4176 and was killed by hand.
 
 The reference was folded from the five runs, each archive unpacked in one directory and `wined3dvk1-lost.tar.gz` left out:
@@ -17,6 +18,14 @@ The reference was folded from the five runs, each archive unpacked in one direct
         "Debian 13 on Venus over the testing PC's lavapipe, Mesa 26.1.6's Venus driver, GE-Proton11-12, 8 CPUs, 16 GiB, udmabuf size_limit_mb 16384; probes and Proton units twice, WineD3D on Vulkan twice, vkd3d-proton once" \
         tests/graphics/d3d/ref/venus.json \
         ref-proton ref-proton2 ref-wined3dvk ref-wined3dvk1 ref-vkd3d
+
+`d3d11a`, `d3d11b` and `d3d11c` are folded with them, with `venus.json`'s `source` as SOURCE and `wined3dvk-d3d11-crash.tar.gz` left out, so that WineD3D's `d3d11:d3d11` keeps both counts and the lines of the stored runs' failures as its `varying_lines`:
+
+    python3 tests/graphics/d3d/mkref.py \
+        -s proton/d3d9:device -s test_multithread_command_queue_exec \
+        "SOURCE" tests/graphics/d3d/ref/venus.json \
+        ref-proton ref-proton2 ref-wined3dvk ref-wined3dvk1 ref-vkd3d \
+        d3d11a d3d11b d3d11c
 
 The fold gives Proton's `d3d9:visual` the stored runs' end, exit 245 before its summary after 384 test lines, where DXVK timed out in `stencil_cull_test`. That end follows the host's shader cache and load, and `venus.json` replaces it by hand with a stop at the unit's `visual.c:2412` record, the last before `z_range_test`, where the Debian guest's later runs timed out ([Direct3D on Venus](../../Readme.md#direct3d-on-venus)).
 
@@ -41,6 +50,11 @@ The runs that took them, from the top of the tree, `ref-proton2` as `ref-proton`
         wine/wined3dvk/dxgi:dxgi
     sh tests/graphics/d3d/reference.sh ref-vkd3d \
         vkd3d/0 vkd3d/1 vkd3d/2 vkd3d/3 vkd3d/4 vkd3d/5 vkd3d/6 vkd3d/7
+
+`d3d11a`, `d3d11b` and `d3d11c` are one row given 6, 8 and 16 times:
+
+    r=wine/wined3dvk/d3d11:d3d11
+    sh tests/graphics/d3d/reference.sh d3d11a $r $r $r $r $r $r
 
 A stalled unit was found by its process in the guest, alive with no CPU time and its log unchanged for minutes, and killed there with SIGKILL, so that the run went on to the next row.
 
