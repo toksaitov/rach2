@@ -733,7 +733,8 @@ static int32_t queue_vblank_event(struct drm_crtc *crtc, uint64_t req_seq,
 
 /**
  * WAIT_VBLANK, Linux's drm_wait_vblank_ioctl: on the CRTC of the index the
- * request's high bits or SECONDARY give, wait for an absolute count or one
+ * request's high bits or SECONDARY give, among those a lessee leases, as
+ * Linux counts a lessee's index, wait for an absolute count or one
  * relative to now, the next on a miss when asked, at most 3 s (EBUSY), or
  * queue a VBLANK event for it with EVENT; the reply has the count reached
  * and its time, or with EVENT the count the event waits for.
@@ -742,7 +743,7 @@ int32_t drm_wait_vblank_ioctl(struct drm_device *dev, void *data, struct drm_fil
 {
     union drm_wait_vblank *vblwait = (union drm_wait_vblank *)data;
     uint32_t type = (uint32_t)vblwait->request.type;
-    uint32_t flags, high, pipe, sec, usec;
+    uint32_t flags, high, index, pipe, sec, usec;
     uint64_t req_seq, seq;
     struct drm_crtc *crtc;
     int64_t now;
@@ -760,7 +761,13 @@ int32_t drm_wait_vblank_ioctl(struct drm_device *dev, void *data, struct drm_fil
     }
     flags = type & _DRM_VBLANK_FLAGS_MASK;
     high = type & _DRM_VBLANK_HIGH_CRTC_MASK;
-    pipe = high ? high >> _DRM_VBLANK_HIGH_CRTC_SHIFT : (flags & _DRM_VBLANK_SECONDARY ? 1 : 0);
+    index = high ? high >> _DRM_VBLANK_HIGH_CRTC_SHIFT : (flags & _DRM_VBLANK_SECONDARY ? 1 : 0);
+    /* A lessee's index counts the CRTCs it leases alone. */
+    for (pipe = 0; pipe < dev->mode_config.num_crtc; pipe++) {
+        if (drm_lease_held(file, dev->mode_config.crtcs[pipe]->base.id) && index-- == 0) {
+            break;
+        }
+    }
     if (pipe >= dev->mode_config.num_crtc) {
         return -EINVAL;
     }

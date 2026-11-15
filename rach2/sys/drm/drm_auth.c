@@ -47,9 +47,10 @@ void drm_master_release(struct drm_file *file)
 {
     struct drm_device *dev = file->dev;
 
-    /* The magic goes with the file, which leaves the device's list. */
+    /* The magic goes with the file, which leaves the device's list. A
+     * lessee holds the role through its lessor's record, which keeps it. */
     file->magic = 0;
-    if (drm_is_current_master(file)) {
+    if (dev->master == file) {
         dev->master = NULL;
         drm_master_changed(dev, NULL);
     }
@@ -120,7 +121,8 @@ static int32_t master_check_perm(const struct drm_file *file)
 }
 
 /** SET_MASTER: 0 for the master; EBUSY while another file is master; a
- * file that made no record of its own makes one. */
+ * file that made no record of its own makes one; EINVAL for a lessee, whose
+ * role is its lessor's. */
 int32_t drm_setmaster_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     int32_t rc = master_check_perm(file);
@@ -137,13 +139,16 @@ int32_t drm_setmaster_ioctl(struct drm_device *dev, void *data, struct drm_file 
     }
     if (!file->is_master) {
         new_set_master(dev, file);
+    } else if (file->lessor_id) {
+        return -EINVAL;
     } else {
         set_master(dev, file);
     }
     return 0;
 }
 
-/** DROP_MASTER: the master gives up the role; EINVAL for any other file. */
+/** DROP_MASTER: the master gives up the role; EINVAL for any other file,
+ * a lessee among them. */
 int32_t drm_dropmaster_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     int32_t rc = master_check_perm(file);
@@ -152,7 +157,7 @@ int32_t drm_dropmaster_ioctl(struct drm_device *dev, void *data, struct drm_file
     if (rc != 0) {
         return rc;
     }
-    if (!drm_is_current_master(file)) {
+    if (!drm_is_current_master(file) || file->lessor_id) {
         return -EINVAL;
     }
     dev->master = NULL;

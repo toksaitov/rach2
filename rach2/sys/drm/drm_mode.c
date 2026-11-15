@@ -2,7 +2,8 @@
  * drm_mode.c: the mode objects of a device's display, Linux's KMS objects:
  * their IDs and properties, blobs, pixel formats and framebuffers, the
  * drivers' calls that make CRTCs, planes, encoders and connectors, the
- * probe of a connector's modes, and the ioctls that report them.
+ * probe of a connector's modes, and the ioctls that report them, to a
+ * lessee only those it leases.
  */
 
 #include "drm.h"
@@ -181,13 +182,66 @@ static void object_add(struct drm_device *dev, struct drm_mode_object *obj, uint
     obj->type = type;
 }
 
+int drm_lease_held(const struct drm_file *file, uint32_t id)
+{
+    uint32_t lo = 0, hi, mid;
+
+    if (!file || !file->lessor_id) {
+        return 1;
+    }
+    hi = file->lease_count;
+    while (lo < hi) {
+        mid = lo + (hi - lo) / 2u;
+        if (file->leases[mid] == id) {
+            return 1;
+        }
+        if (file->leases[mid] < id) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    return 0;
+}
+
+uint32_t drm_lease_filter_crtcs(const struct drm_file *file, uint32_t mask)
+{
+    const struct drm_mode_config *mc;
+    uint32_t i, out = 0, n = 0;
+
+    if (!file || !file->lessor_id) {
+        return mask;
+    }
+    mc = &file->dev->mode_config;
+    for (i = 0; i < mc->num_crtc; i++) {
+        if (drm_lease_held(file, mc->crtcs[i]->base.id)) {
+            if (mask & (1u << i)) {
+                out |= 1u << n;
+            }
+            n++;
+        }
+    }
+    return out;
+}
+
+/** Whether objects of `type` must be leased for a lessee to use them, as
+ * Linux's drm_mode_object_lease_required. */
+static int lease_required(uint32_t type)
+{
+    return type == DRM_MODE_OBJECT_CONNECTOR || type == DRM_MODE_OBJECT_CRTC ||
+           type == DRM_MODE_OBJECT_PLANE;
+}
+
 struct drm_mode_object *drm_mode_object_find(struct drm_device *dev, struct drm_file *file,
                                              uint32_t id, uint32_t type)
 {
     struct drm_mode_object *obj = object_by_id(dev, id);
 
-    (void)file;
     if (!obj || (type != DRM_MODE_OBJECT_ANY && obj->type != type)) {
+        return NULL;
+    }
+    /* A lessee finds only what it leases. */
+    if (lease_required(obj->type) && !drm_lease_held(file, obj->id)) {
         return NULL;
     }
     if (obj->type == DRM_MODE_OBJECT_FB || obj->type == DRM_MODE_OBJECT_BLOB) {
@@ -2246,7 +2300,7 @@ static int32_t getresources_fbs(struct drm_mode_card_res *res, struct drm_file *
 
 /** GETRESOURCES, Linux's drm_mode_getresources: the caller's framebuffers,
  * newest first, and the CRTCs, encoders and connectors, with the size
- * limits. */
+ * limits; a lessee sees the CRTCs and connectors it leases alone. */
 int32_t drm_mode_getresources(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_mode_card_res *res = (struct drm_mode_card_res *)data;
@@ -2265,12 +2319,17 @@ int32_t drm_mode_getresources(struct drm_device *dev, void *data, struct drm_fil
     res->min_height = mc->min_height;
     res->max_width = mc->max_width;
     res->min_width = mc->min_width;
+    count = 0;
     for (i = 0; i < mc->num_crtc; i++) {
-        if (put_id(res->crtc_id_ptr, i, res->count_crtcs, mc->crtcs[i]->base.id) != 0) {
+        if (!drm_lease_held(file, mc->crtcs[i]->base.id)) {
+            continue;
+        }
+        if (put_id(res->crtc_id_ptr, count, res->count_crtcs, mc->crtcs[i]->base.id) != 0) {
             return -EFAULT;
         }
+        count++;
     }
-    res->count_crtcs = mc->num_crtc;
+    res->count_crtcs = count;
     for (i = 0; i < mc->num_encoder; i++) {
         if (put_id(res->encoder_id_ptr, i, res->count_encoders, mc->encoders[i]->base.id) != 0) {
             return -EFAULT;
@@ -2285,6 +2344,9 @@ int32_t drm_mode_getresources(struct drm_device *dev, void *data, struct drm_fil
         if (!file->writeback_connectors && c->connector_type == DRM_MODE_CONNECTOR_WRITEBACK) {
             continue;
         }
+        if (!drm_lease_held(file, c->base.id)) {
+            continue;
+        }
         if (put_id(res->connector_id_ptr, count, res->count_connectors, c->base.id) != 0) {
             return -EFAULT;
         }
@@ -2296,7 +2358,8 @@ int32_t drm_mode_getresources(struct drm_device *dev, void *data, struct drm_fil
 
 /** Whether `file` sees `plane` in GETPLANERESOURCES: overlays always, the
  * rest with the universal-planes cap, and a virtualized driver's cursor
- * only for an atomic client that takes its hotspot, as Linux. */
+ * only for an atomic client that takes its hotspot, as Linux; a lessee only
+ * those it leases. */
 static int plane_listed(struct drm_device *dev, struct drm_file *file,
                         const struct drm_plane *plane)
 {
@@ -2308,7 +2371,7 @@ static int plane_listed(struct drm_device *dev, struct drm_file *file,
         !file->supports_virtualized_cursor_plane) {
         return 0;
     }
-    return 1;
+    return drm_lease_held(file, plane->base.id);
 }
 
 /** GETPLANERESOURCES: the planes the caller sees. */
@@ -2335,7 +2398,8 @@ int32_t drm_mode_getplane_res(struct drm_device *dev, void *data, struct drm_fil
     return 0;
 }
 
-/** GETPLANE: a plane's CRTC, framebuffer, CRTCs and formats. */
+/** GETPLANE: a plane's CRTC, framebuffer, CRTCs and formats; a lessee sees
+ * the CRTC only when it leases it, and its CRTCs renumbered. */
 int32_t drm_mode_getplane(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_mode_get_plane *req = (struct drm_mode_get_plane *)data;
@@ -2348,9 +2412,11 @@ int32_t drm_mode_getplane(struct drm_device *dev, void *data, struct drm_file *f
     if (!plane) {
         return -ENOENT;
     }
-    req->crtc_id = plane->state->crtc ? plane->state->crtc->base.id : 0;
+    req->crtc_id = plane->state->crtc && drm_lease_held(file, plane->state->crtc->base.id)
+                       ? plane->state->crtc->base.id
+                       : 0;
     req->fb_id = plane->state->fb ? plane->state->fb->base.id : 0;
-    req->possible_crtcs = plane->possible_crtcs;
+    req->possible_crtcs = drm_lease_filter_crtcs(file, plane->possible_crtcs);
     req->gamma_size = 0;
     if (plane->format_count && req->count_format_types >= plane->format_count &&
         copy_to_user((void __user *)(uintptr_t)req->format_type_ptr, plane->formats,
@@ -2398,7 +2464,8 @@ int32_t drm_mode_getcrtc(struct drm_device *dev, void *data, struct drm_file *fi
 }
 
 /** GETENCODER: an encoder's type, its CRTC now and the CRTCs it can
- * take. */
+ * take; a lessee sees the CRTC only when it leases it, and the CRTCs
+ * renumbered. */
 int32_t drm_mode_getencoder(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_mode_get_encoder *req = (struct drm_mode_get_encoder *)data;
@@ -2422,10 +2489,10 @@ int32_t drm_mode_getencoder(struct drm_device *dev, void *data, struct drm_file 
             break;
         }
     }
-    req->crtc_id = crtc ? crtc->base.id : 0;
+    req->crtc_id = crtc && drm_lease_held(file, crtc->base.id) ? crtc->base.id : 0;
     req->encoder_type = encoder->encoder_type;
     req->encoder_id = encoder->base.id;
-    req->possible_crtcs = encoder->possible_crtcs;
+    req->possible_crtcs = drm_lease_filter_crtcs(file, encoder->possible_crtcs);
     req->possible_clones = encoder->possible_clones;
     return 0;
 }
@@ -2725,46 +2792,4 @@ int32_t drm_mode_gamma_get_ioctl(struct drm_device *dev, void *data, struct drm_
         return -EFAULT;
     }
     return 0;
-}
-
-/* ------------------------------------------------------------------------
- * Leases, which no driver offers
- */
-
-/** CREATE_LEASE: -EOPNOTSUPP on every device, since leases are not
- * supported (Readme.md, Limits); Linux answers so only on a device without
- * mode setting. */
-int32_t drm_mode_create_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
-{
-    (void)dev;
-    (void)data;
-    (void)file;
-    return -EOPNOTSUPP;
-}
-
-/** LIST_LESSEES: -EOPNOTSUPP, as CREATE_LEASE. */
-int32_t drm_mode_list_lessees_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
-{
-    (void)dev;
-    (void)data;
-    (void)file;
-    return -EOPNOTSUPP;
-}
-
-/** GET_LEASE: -EOPNOTSUPP, as CREATE_LEASE. */
-int32_t drm_mode_get_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
-{
-    (void)dev;
-    (void)data;
-    (void)file;
-    return -EOPNOTSUPP;
-}
-
-/** REVOKE_LEASE: -EOPNOTSUPP, as CREATE_LEASE. */
-int32_t drm_mode_revoke_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
-{
-    (void)dev;
-    (void)data;
-    (void)file;
-    return -EOPNOTSUPP;
 }

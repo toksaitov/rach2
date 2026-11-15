@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 16, 2026
 .Dt DRM-KMS 7
 .Os
 .Sh NAME
@@ -305,14 +305,89 @@ Set one property; a connector's
 .Ql DPMS
 turns its CRTC off, or on while any of its connectors is on.
 .El
+.Ss Leases
+The master may lend CRTCs, connectors and planes to another master, a
+lessee, which sees and changes only those.
+.Bl -tag -width DRM_IOCTL_MODE_REVOKE_LEASE
+.It Dv DRM_IOCTL_MODE_CREATE_LEASE
+.Vt struct drm_mode_create_lease
+names
+.Fa object_count
+IDs at
+.Fa object_ids :
+at least one CRTC and one connector, and a plane when the caller has
+.Dv DRM_CLIENT_CAP_UNIVERSAL_PLANES ;
+without that capability each CRTC brings its primary and cursor planes.
+.Fa flags
+may hold
+.Dv O_CLOEXEC
+and
+.Dv O_NONBLOCK .
+The call opens the card again, as the caller opened it, and gives the new
+descriptor in
+.Fa fd
+and the lessee's ID, the lowest free from 1, in
+.Fa lessee_id .
+An empty list makes a lessee of nothing.
+.It Dv DRM_IOCTL_MODE_LIST_LESSEES
+The IDs of the caller's lessees whose leases are not revoked, as many as
+.Fa count_lessees
+has room for at
+.Fa lessees_ptr ,
+and their number in
+.Fa count_lessees .
+.It Dv DRM_IOCTL_MODE_GET_LEASE
+The IDs of the objects the caller may use, ascending, as many as
+.Fa count_objects
+has room for at
+.Fa objects_ptr ,
+and their number: a lessee's leases, none once revoked, or every mode
+object for the master.
+.It Dv DRM_IOCTL_MODE_REVOKE_LEASE
+Take every object from the caller's lessee
+.Fa lessee_id ,
+which keeps its descriptor and its ID, holding nothing, until it closes.
+.El
+.Pp
+A lessee holds the master role while the master that made it does, and
+can neither set nor drop it.
+.Dv DRM_IOCTL_MODE_GETRESOURCES
+and
+.Dv DRM_IOCTL_MODE_GETPLANERESOURCES
+list only its CRTCs, connectors and planes, and another connector, CRTC or
+plane is
+.Er ENOENT
+to it;
+.Dv DRM_IOCTL_MODE_GETPLANE
+and
+.Dv DRM_IOCTL_MODE_GETENCODER
+give a CRTC it does not lease as 0, and their
+.Fa possible_crtcs
+count its own CRTCs alone, as does the CRTC index of
+.Dv DRM_IOCTL_WAIT_VBLANK .
+The close of the lessee ends its lease and sends the card's uevent
+.Ql change
+with
+.Ql LEASE=1 ;
+the close of the master's descriptor empties every lease it made.
 .Ss Errors
 .Bl -tag -width Er
 .It Er EACCES
 A plane's or connector's
 .Ql CRTC_ID
-of no CRTC.
+of no CRTC, or of one a lessee does not lease; a lessee's
+.Dv DRM_IOCTL_MODE_SETCRTC
+with a mode,
+.Dv DRM_IOCTL_MODE_PAGE_FLIP
+or
+.Dv DRM_IOCTL_MODE_CURSOR
+on a CRTC whose primary or cursor plane it does not lease; a lease call by
+a file that is not master;
+.Dv DRM_IOCTL_MODE_REVOKE_LEASE
+of a lessee another file made.
 .It Er EBUSY
-A page flip of a CRTC whose primary plane shows nothing; a
+A lease of an object another lessee of the same master holds; a page flip
+of a CRTC whose primary plane shows nothing; a
 .Dv DRM_MODE_ATOMIC_NONBLOCK
 commit or page flip on a CRTC whose flip is pending, or that changes a
 CRTC, plane or connector of a nonblocking commit still queued on its
@@ -333,20 +408,30 @@ have, with
 .Dv _DRM_VBLANK_SIGNAL
 or with an unknown flag; or
 .Dv DRM_IOCTL_MODE_ATOMIC
-by a file without the atomic capability.
+by a file without the atomic capability; a lease of an object that is no
+CRTC, connector or plane, without a CRTC or a connector, or without a plane
+under the universal-planes capability; a lease or a
+.Dv DRM_IOCTL_SET_MASTER
+or
+.Dv DRM_IOCTL_DROP_MASTER
+by a lessee; a nonzero
+.Fa pad .
 .It Er EINTR
 A signal came during a blocking commit's wait for a pending flip or for its
 in-fences, or during
 .Dv DRM_IOCTL_WAIT_VBLANK .
 .It Er ENOENT
-An ID of no object of the kind asked, a property an atomic commit names
+An ID of no object of the kind asked, or of a connector, CRTC or plane a
+lessee does not lease; a lessee ID the caller's master did not make; a property an atomic commit names
 that the object does not have, a framebuffer of another file, or a blob
 .Dv DRM_IOCTL_MODE_DESTROYPROPBLOB
 names that does not exist.
 .It Er ENOMEM
-No room for another event in the file's 4096 bytes.
+No room for another event in the file's 4096 bytes, or a lease's list of
+more than 4 MiB.
 .It Er ENOSPC
-A plane's source outside its framebuffer.
+A plane's source outside its framebuffer; an ID a lease names twice, or a
+plane a CRTC of it brings.
 .It Er ENOSYS
 .Dv DRM_IOCTL_MODE_SETGAMMA
 on a CRTC without a gamma table, or
@@ -358,7 +443,7 @@ on a CRTC without a cursor.
 .It Er EOPNOTSUPP
 A device without mode setting, an atomic call on a driver without atomic
 commits, a vblank call on a driver without vblank interrupts, or a lease
-call.
+call on a device without mode setting.
 .It Er EPERM
 .Dv DRM_IOCTL_MODE_DESTROYPROPBLOB
 of a blob another file owns.
@@ -378,6 +463,4 @@ object IDs are Linux 6.12's.
 A target vblank of a page flip is
 .Er EINVAL ,
 as Linux answers for a driver without one.
-The lease calls are
-.Er EOPNOTSUPP .
 The EDID's quirks, DisplayID blocks and tiles are not read.
