@@ -108,7 +108,9 @@ case: a difference there is printed as `judge: excluded: ...` and is not
 worse.
 
 Each prints `judge: worse: ...` for each difference and one line, `judge:
-result: pass ...` or `judge: result: fail ...`, and exits 0 or 1.
+result: pass ...` or `judge: result: fail ...`, and exits 0 or 1. A file it
+cannot read, such as the results file of a runner that stopped before it
+wrote one, fails the comparison: `judge: result: fail KIND: PATH: REASON`.
 """
 import collections
 import gzip
@@ -555,10 +557,21 @@ def main():
             opts[a] = rest.pop(0)
         else:
             args.append(a)
-    x, s, l = opts.get("-x"), opts.get("-s"), opts.get("-l")
     kind = args[0] if args else ""
-    if l and (kind != "results" or len(args) < 4):
+    if "-l" in opts and (kind != "results" or len(args) < 4):
         args = []
+    try:
+        ok = judge(kind, args, opts)
+    except OSError as e:
+        print("judge: result: fail %s: %s: %s" %
+              (kind, e.filename, (e.strerror or str(e)).lower()))
+        ok = False
+    sys.exit(0 if ok else 1)
+
+
+def judge(kind, args, opts):
+    """Run the comparison KIND on ARGS and OPTS; return whether it passed."""
+    x, s, l = opts.get("-x"), opts.get("-s"), opts.get("-l")
     if len(args) in (3, 4) and kind == "webgl" and not s:
         ok = webgl(args[1], args[2], x, args[3] if len(args) == 4 else None)
     elif len(args) in (5, 6) and kind == "video" and not opts:
@@ -582,7 +595,8 @@ def main():
                  " | modes REF GOT [FAULTS] | glmark2 REF GOT"
                  " | deqp REF GOT [FLAKES] [-x EXCLUSIONS]"
                  " | vkcube REF GOT [TIMING-REF TIMING-GOT] | gate GATE MEASURES")
-    sys.exit(0 if ok else 1)
+    return ok
+
 
 if __name__ == "__main__":
     main()
