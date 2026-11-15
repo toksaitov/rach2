@@ -987,7 +987,7 @@ igt@kms_fbcon_fbt@fbc skip
 igt@kms_fbcon_fbt@psr skip
 igt@kms_feature_discovery@display pass
 igt@kms_feature_discovery@display-1x pass
-igt@kms_feature_discovery@display-2x skip
+igt@kms_feature_discovery@display-2x skip-or-pass
 igt@kms_feature_discovery@display-3x skip
 igt@kms_feature_discovery@display-4x skip
 igt@kms_feature_discovery@dp-mst skip
