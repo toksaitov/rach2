@@ -195,6 +195,7 @@ The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these c
 | `firefox-esr` | `firefox-esr` | `/usr/bin/firefox-esr` | [firefox-esr(1)](man1/firefox-esr.1) |
 | `glmark2` | `glmark2-x11` | `/usr/bin/glmark2` | [glmark2(1)](man1/glmark2.1) |
 | `glmark2-drm` | `glmark2-drm` | `/usr/bin/glmark2-drm` | [glmark2-drm(1)](man1/glmark2-drm.1) |
+| `glmark2-es2-wayland` | `glmark2-es2-wayland` | `/usr/bin/glmark2-es2-wayland` | [glmark2-es2-wayland(1)](man1/glmark2-es2-wayland.1) |
 | `glmark2-wayland` | `glmark2-wayland` | `/usr/bin/glmark2-wayland` | [glmark2-wayland(1)](man1/glmark2-wayland.1) |
 | `glxdemo` | `mesa-utils` | `/usr/bin/glxdemo` | [glxdemo(1)](man1/glxdemo.1) |
 | `glxgears` | `mesa-utils` | `/usr/bin/glxgears` | [glxgears(1)](man1/glxgears.1) |

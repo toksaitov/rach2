@@ -4,6 +4,7 @@ piglit
 waffle-utils
 glmark2-x11
 glmark2-wayland
+glmark2-es2-wayland
 glmark2-drm
 libdrm-tests
 vulkan-tools

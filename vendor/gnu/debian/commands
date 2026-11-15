@@ -37,6 +37,7 @@ firefox firefox-esr /usr/bin/firefox
 firefox-esr firefox-esr /usr/bin/firefox-esr
 glmark2 glmark2-x11 /usr/bin/glmark2
 glmark2-drm glmark2-drm /usr/bin/glmark2-drm
+glmark2-es2-wayland glmark2-es2-wayland /usr/bin/glmark2-es2-wayland
 glmark2-wayland glmark2-wayland /usr/bin/glmark2-wayland
 glxdemo mesa-utils /usr/bin/glxdemo
 glxgears mesa-utils /usr/bin/glxgears
