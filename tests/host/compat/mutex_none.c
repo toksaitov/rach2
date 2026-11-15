@@ -73,5 +73,5 @@ void mutex_unlock(struct mutex *m)
  * whose hold a try fails on and a take would wait for. */
 int mutex_held(const struct mutex *m)
 {
-    return m->owner == m;
+    return m->owner == (uintptr_t)m;
 }
