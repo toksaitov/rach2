@@ -1540,12 +1540,34 @@ static int machine_rerun_rows(struct release *r)
              r->tried);
     run(r, &(struct release_row){
                .record = old, .sha = C, .git = "yes", .machines = LENOVO, .rerun = 1});
+    ok = check(r,
+               f->status == 75 && fx_has(record(r), "\nagain lenovo dirprobe.ext2\n") &&
+                   count(record(r), "^full done ") == 1 && !fx_has(record(r), "trial done ") &&
+                   !fx_has(record(r), "lenovo done ") && called(r, "^testing .* run ") &&
+                   called(r, "^ +ARCH=x86_64 make native-assets && cd "),
+               "-r runs again only the native failure on a new install") &&
+         ok;
+    /* A rerun that failed before the Lenovo's step, or was stopped during
+     * it, has the `again lenovo` line and no Lenovo result; the next -r runs
+     * the same cases, not the whole native set. */
+    snprintf(old, sizeof(old),
+             "%sagain lenovo dirprobe.ext2 fsync.ext2\ninstall started %s\nfailed install: the "
+             "install failed\n",
+             r->built, T);
+    run(r, &(struct release_row){
+               .record = old, .sha = C, .git = "yes", .machines = LENOVO, .rerun = 1});
+    ok = check(r,
+               f->status == 75 && fx_has(record(r), "\nagain lenovo dirprobe.ext2 fsync.ext2\n") &&
+                   count(record(r), "^full done ") == 1 && !fx_has(record(r), "install started"),
+               "-r after a rerun that failed in its install runs the same native cases") &&
+         ok;
+    snprintf(old, sizeof(old), "%sagain lenovo dirprobe.ext2\nlenovo started l\n", r->tried);
+    run(r, &(struct release_row){
+               .record = old, .sha = C, .git = "yes", .machines = LENOVO, .rerun = 1});
     return check(r,
                  f->status == 75 && fx_has(record(r), "\nagain lenovo dirprobe.ext2\n") &&
-                     count(record(r), "^full done ") == 1 && !fx_has(record(r), "trial done ") &&
-                     !fx_has(record(r), "lenovo done ") && called(r, "^testing .* run ") &&
-                     called(r, "^ +ARCH=x86_64 make native-assets && cd "),
-                 "-r runs again only the native failure on a new install") &&
+                     !fx_has(record(r), "lenovo started"),
+                 "-r after a rerun stopped during its native cases runs the same cases") &&
            ok;
 }
 static int build_rows(struct release *r)
