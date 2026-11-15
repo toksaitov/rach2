@@ -122,6 +122,33 @@ runner_finish()
     sed 's/^/kernel_after /' /proc/stat >> "$RUNNER_OUT/record"
 }
 
+# runner_memory: sample the memory counts every 5 s while the run lasts,
+# into $RUNNER_OUT/memory, which begins with a line naming the columns:
+# the seconds since boot, as the kernel's log stamps its lines, then
+# MemFree, LowFree, Cached, Buffers and Slab of /proc/meminfo in kB, `-`
+# for one the kernel lacks. LowFree is Rach2's window of memory below
+# 64 MiB, whose end makes a driver's buffer allocation fail; Linux on
+# x86-64 has no such line. runner_cleanup stops the sampler.
+runner_memory()
+{
+    echo "uptime MemFree LowFree Cached Buffers Slab" > "$RUNNER_OUT/memory"
+    (
+        while :; do
+            awk -v up="$(cut -d' ' -f1 /proc/uptime)" '
+                { v[$1] = $2 }
+                END {
+                    n = split("MemFree: LowFree: Cached: Buffers: Slab:", k, " ")
+                    line = up
+                    for (i = 1; i <= n; i++)
+                        line = line " " (k[i] in v ? v[k[i]] : "-")
+                    print line
+                }' /proc/meminfo >> "$RUNNER_OUT/memory" || exit 0
+            sleep 5
+        done
+    ) < /dev/null > /dev/null 2>&1 &
+    RUNNER_MEMORY=$!
+}
+
 # runner_weston: start a headless Weston at the fixed size under kiosk-shell,
 # with its own runtime directory, and export WAYLAND_DISPLAY for the browser;
 # or, with RUNNER_SESSION=1, check that the session's compositor answers at
@@ -346,7 +373,7 @@ runner_cleanup()
 {
     [ -z "${RUNNER_SIGNAL:-}" ] || runner_stopped
     runner_stop
-    for pid in $RUNNER_SERVER $RUNNER_WESTON; do
+    for pid in $RUNNER_SERVER $RUNNER_WESTON ${RUNNER_MEMORY:-}; do
         kill -TERM "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
     done
@@ -360,6 +387,7 @@ runner_init()
     RUNNER_NAME=$1
     RUNNER_OUT=$2
     RUNNER_BROWSER='' RUNNER_SERVER='' RUNNER_WESTON='' RUNNER_KEEP='' RUNNER_SIGNAL=''
+    RUNNER_MEMORY=''
     mkdir -p "$RUNNER_OUT"
     RUNNER_WORK=$(mktemp -d "${TMPDIR:-/tmp}/$RUNNER_NAME.XXXXXX")
     trap runner_cleanup EXIT
