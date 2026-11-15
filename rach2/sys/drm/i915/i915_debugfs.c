@@ -1635,6 +1635,58 @@ static int32_t ignore_long_hpd_store(void *data, const char __user *buf, uint32_
 static const struct debugfs_text_ops ignore_long_hpd_ops = {ignore_long_hpd_show,
                                                             ignore_long_hpd_store};
 
+/** i915_fifo_underrun_reset has no read, as Linux's has none: EINVAL. */
+static int32_t fifo_underrun_reset_show(void *data, char *buf, uint32_t cap)
+{
+    (void)data;
+    (void)buf;
+    (void)cap;
+    return -EINVAL;
+}
+
+/**
+ * A write of i915_fifo_underrun_reset, Linux's
+ * i915_fifo_underrun_reset_write: a true word of kstrtobool's reports the
+ * FIFO underruns of each pipe that is on again, which its first underrun
+ * turned off, so that once every pipe reports the error interrupt that
+ * carries the pipe CRCs is let through again; a false word does nothing.
+ * IGT writes it before it starts a CRC and after its first commit. Under
+ * the commit lock, as Linux waits for each CRTC's commit. `len`, -EINVAL
+ * for another word, or -EINTR for a signal while the lock is waited for.
+ */
+static int32_t fifo_underrun_reset_store(void *data, const char __user *buf, uint32_t len)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    char text[24];
+    int32_t rc;
+    int b = 0, pipe;
+
+    rc = copy_write(buf, len, text, sizeof(text));
+    if (rc >= 0) {
+        rc = parse_bool(text, (uint32_t)rc, &b);
+    }
+    if (rc < 0) {
+        return rc;
+    }
+    if (!b) {
+        return (int32_t)len;
+    }
+    rc = drm_modeset_lock(&i915->drm);
+    if (rc != 0) {
+        return rc;
+    }
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        if (i915->display.crtc[pipe].cfg.active) {
+            intel_fifo_underrun_reporting(&i915->display.crtc[pipe], 1);
+        }
+    }
+    drm_modeset_unlock(&i915->drm);
+    return (int32_t)len;
+}
+
+static const struct debugfs_text_ops fifo_underrun_reset_ops = {fifo_underrun_reset_show,
+                                                                fifo_underrun_reset_store};
+
 /**
  * Make one file of i915_params for the line `line` of a table above, as
  * Linux's i915_debugfs_params: reset and enable_hangcheck, mode 0600, on
@@ -1850,6 +1902,10 @@ void i915_debugfs_register(struct drm_i915_private *i915)
         if (rc == 0) {
             drm_debugfs_path(&i915->drm, "i915_ignore_long_hpd", path, sizeof(path));
             rc = debugfs_create_text(path, 0644u, &ignore_long_hpd_ops, i915);
+        }
+        if (rc == 0) {
+            drm_debugfs_path(&i915->drm, "i915_fifo_underrun_reset", path, sizeof(path));
+            rc = debugfs_create_text(path, 0644u, &fifo_underrun_reset_ops, i915);
         }
     }
     for (i = 0; rc == 0 && i < NELEM(text_files); i++) {
