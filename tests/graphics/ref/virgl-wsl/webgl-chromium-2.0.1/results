@@ -4,7 +4,7 @@ webgl: result: chromium 2.0.1 chunk 2 of 12 pages 250 pass 250 fail 0 timeout 0 
 webgl: result: chromium 2.0.1 chunk 3 of 12 pages 250 pass 201 fail 49 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 49 subtests passed 226654176 failed 1367
 webgl: result: chromium 2.0.1 chunk 4 of 12 pages 250 pass 132 fail 118 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 118 subtests passed 463732567 failed 2339
 webgl: result: chromium 2.0.1 chunk 5 of 12 pages 250 pass 250 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 0 subtests passed 87787123 failed 0
-webgl: result: chromium 2.0.1 chunk 6 of 12 pages 250 pass 212 fail 9 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 29 rerun 9 subtests passed 391589410 failed 516
+webgl: result: chromium 2.0.1 chunk 6 of 12 pages 250 pass 212 fail 9 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 29 rerun 9 subtests passed 391589647 failed 279
 webgl: result: chromium 2.0.1 chunk 7 of 12 pages 250 pass 246 fail 4 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 4 subtests passed 45210 failed 147
 webgl: result: chromium 2.0.1 chunk 8 of 12 pages 250 pass 250 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 0 subtests passed 92252 failed 0
 webgl: result: chromium 2.0.1 chunk 9 of 12 pages 250 pass 246 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 4 rerun 0 subtests passed 55741 failed 0
