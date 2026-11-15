@@ -177,14 +177,27 @@ static void loop_end(struct loop_device *loop, const struct loop_file *f, int wr
 }
 
 /**
- * Take the big lock for an operation of the file system under `mnt`, as a
- * descriptor's call does (`file_read_lock`, syscall_fs.c): for a read
- * (`read`) only when the type does not read without it. Returns 1 when it
- * took the lock, which `loop_fs_exit` gives back, and 0 when the caller
- * holds it already or the read needs none.
+ * Enter the file system under `mnt` for a transfer: count it in the
+ * caller's `device_io`, so that a SIGKILL pending for the caller does not
+ * end the transfer's write there, and take the big lock as a descriptor's
+ * call does (`file_read_lock`, syscall_fs.c), for a read (`read`) only when
+ * the type does not read without it. Returns 1 when it took the lock, which
+ * `loop_fs_exit` gives back, and 0 when the caller holds it already or the
+ * read needs none.
+ *
+ * The transfer runs in whatever thread reached the device: one that writes
+ * back the cache of the file system on the device as it dies, from its exit
+ * or with its process killed during a write, too. Linux's loop runs it on
+ * a worker that no signal reaches (`loop_queue_work`,
+ * drivers/block/loop.c:776-869), and so must this: a write refused for the
+ * caller's signal is a failed write of the device, which the file system
+ * above it records and answers by going read-only.
  */
 static int loop_fs_enter(const struct vfs_mount *mnt, int read)
 {
+    if (current_proc) {
+        current_proc->device_io++;
+    }
     if (bkl_held() || (read && vfs_mount_base(mnt)->type->reads_unlocked)) {
         return 0;
     }
@@ -197,6 +210,9 @@ static void loop_fs_exit(int big)
 {
     if (big) {
         bkl_exit();
+    }
+    if (current_proc) {
+        current_proc->device_io--;
     }
 }
 

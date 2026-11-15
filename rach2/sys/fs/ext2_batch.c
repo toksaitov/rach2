@@ -806,10 +806,14 @@ static uint32_t drain_bitmap_group(const struct ext2_mount *em, const struct ext
 /** Whether the calling thread has SIGKILL pending in its own set, where a
  * signal that ends its process puts one for every thread (`sig_group_end`):
  * Linux's `fatal_signal_pending`, which the core file's writer reads too
- * (`core_file_put`). 0 for a caller with no process. */
+ * (`core_file_put`). 0 for a caller with no process, and for one running a
+ * loop device's transfer (`device_io`): that write is the device's, which
+ * the cache above it owes and a refusal would fail, making that file system
+ * read-only. */
 static int write_killed(void)
 {
-    return current_proc && (current_proc->sig_pending & KSIG_BIT(SIGKILL)) != 0;
+    return current_proc && current_proc->device_io == 0 &&
+           (current_proc->sig_pending & KSIG_BIT(SIGKILL)) != 0;
 }
 
 /** Whether another process holds in the cache a block the drain will copy

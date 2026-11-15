@@ -743,6 +743,12 @@ struct process {
      * two groups of one mount run at once. */
     void *fs_plan;
     uint32_t fs_missed;
+    /* The loop devices' transfers this thread runs in its own call
+     * (block/loop.c), each a write the device owes the cache above it: while
+     * above 0, a file system under the device finishes a write that a pending
+     * SIGKILL would end (fs/ext2_batch.c's `write_killed`), as Linux's loop
+     * runs its transfers on a worker no signal reaches. */
+    uint32_t device_io;
     /* The name of the function its last sleep began in, a static string,
      * set before each block: /proc/PID/wchan gives it while the thread is
      * PROC_BLOCKED, and reads nothing from it in any other state. */

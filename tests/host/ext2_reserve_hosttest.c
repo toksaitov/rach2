@@ -5,7 +5,9 @@
  * what the batch and the allocators read and write under their locks,
  * `em->batch` and the groups'; and that a
  * change of a file is admitted only once it has the file's lock; a sync
- * between an inode encode and store, and an interrupt at its odd size count.
+ * between an inode encode and store, and an interrupt at its odd size count;
+ * and a loop device's write, which a SIGKILL pending for its caller does not
+ * end.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/fs/ext2xattr.c
@@ -1257,6 +1259,35 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
     kirq_restore(flags);
 }
 
+/**
+ * Write 4 KiB into the hole at 13.9 GiB of an empty file, through a triple
+ * indirect block, with SIGKILL pending for the caller, as a loop device's
+ * file takes the write of a dying thread that writes the cache above it
+ * back. A descriptor's write is -EINTR with nothing taken; the same write
+ * inside a loop device's transfer (`device_io`) takes its data block and
+ * three pointer blocks and reads back, since a refusal there would fail the
+ * device's write and make the file system on it read-only.
+ */
+static void killed_rows(void)
+{
+    uint64_t offset = (uint64_t)29155608 * 512;
+
+    reset(56);
+    process.sig_pending = KSIG_BIT(SIGKILL);
+    check(ext2_write(&mount, &file, payload, 4096, offset) == -EINTR && volume.free_blocks == 56 &&
+              file.blocks == 0 && batch.count == 0,
+          "a killed caller's write is EINTR with nothing taken");
+    process.device_io = 1;
+    check(ext2_write(&mount, &file, payload, 4096, offset) == 4096 && volume.free_blocks == 52 &&
+              file.blocks == 4 * 8 && file.size == offset + 4096,
+          "a loop device's write with SIGKILL pending takes its data and three pointer blocks");
+    check(ext2_read_data(&volume, &file, offset, result, 4096, 0) == 0 &&
+              memcmp(result, payload, 4096) == 0,
+          "and reads back");
+    process.device_io = 0;
+    process.sig_pending = 0;
+}
+
 /** Run the rows; 0 when every row passed. */
 int main(void)
 {
@@ -1273,9 +1304,11 @@ int main(void)
     admission_rows();
     inode_store_sync_row();
     inode_size_irq_row();
+    killed_rows();
     if (!failures) {
         printf("ext2-reserve-hosttest: result: pass: boundaries, reservation quotas, plans and "
-               "frees under their locks, admission, inode stores and size interrupts\n");
+               "frees under their locks, admission, inode stores, size interrupts and a loop "
+               "device's write with SIGKILL pending\n");
     }
     return failures != 0;
 }
