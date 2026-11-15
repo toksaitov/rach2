@@ -57,7 +57,7 @@ second display moves a row to its own name without leaving the pipe
 untested. SAMPLE, the names a
 list's run of piglit.sh took, its NAME.sample, keeps of the reference those
 tests and their subtests, for a run of a part of the list the reference ran
-whole. LIST, the list the sample was taken from, tells a subtest from a
+whole; an empty SAMPLE keeps the whole reference. LIST, the list the sample was taken from, tells a subtest from a
 test: piglit's names of tests may hold `@` too, so that the reference's
 `T@3@2` is a test of its own beside `T@3`, and without LIST it would be
 taken for a subtest of `T@3` and judged in `T@3`'s sample. A reference name

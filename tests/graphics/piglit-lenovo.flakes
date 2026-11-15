@@ -1,0 +1,10 @@
+# piglit-lenovo.flakes: the tests and subtests of the Lenovo's piglit cases
+# (tests/native/gpu.cases) that are not judged, one extended regular
+# expression a line, searched for in the name.
+#
+# arb_query_buffer_object@qbo and its subtests come and go on Linux on
+# Haswell: Mesa 25.0.7's CI lists the test among crocus's Haswell flakes
+# (src/gallium/drivers/crocus/ci/crocus-hsw-flakes.txt, since Mesa's commit
+# fd8e31198866). Rach2 warned one of its subtests where step 9's one run
+# passed it, and passed it in the runs before (dev-log/84-locks/84-266z30.md).
+^spec@arb_query_buffer_object@qbo(@|$)

@@ -41,23 +41,23 @@ case gpu/deqp-gles31.3 alone log \
 # piglit's quick profile through GBM, as the desktop's user.
 case gpu/piglit-glsl1 alone log \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
-    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz file:tests/graphics/piglit-lenovo.flakes \
     -- graphics/runners/lenovo.sh piglit quick-glsl1 piglit-quick.rows.gz
 case gpu/piglit-glsl2 alone log \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
-    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz file:tests/graphics/piglit-lenovo.flakes \
     -- graphics/runners/lenovo.sh piglit quick-glsl2 piglit-quick.rows.gz
 case gpu/piglit-arb1 alone log \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
-    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz file:tests/graphics/piglit-lenovo.flakes \
     -- graphics/runners/lenovo.sh piglit quick-arb1 piglit-quick.rows.gz
 case gpu/piglit-arb2 alone log \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
-    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz file:tests/graphics/piglit-lenovo.flakes \
     -- graphics/runners/lenovo.sh piglit quick-arb2 piglit-quick.rows.gz
 case gpu/piglit-rest alone log \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
-    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz \
+    file:tests/graphics/runners/piglit.sh file:tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz file:tests/graphics/piglit-lenovo.flakes \
     -- graphics/runners/lenovo.sh piglit quick-rest piglit-quick.rows.gz
 
 # IGT's display tests, as root, with the desktop's compositor stopped.

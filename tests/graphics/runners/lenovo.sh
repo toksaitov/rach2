@@ -24,7 +24,9 @@
 #            session's compositor stopped, since IGT's display tests take
 #            the card's master as Linux's run did with none; judged by
 #            name over the part's subtests
-#   piglit   piglit.sh's PART on the GPU through GBM, as the session's user
+#   piglit   piglit.sh's PART on the GPU through GBM, as the session's user,
+#            without judging the tests piglit-lenovo.flakes names when it is
+#            there
 #   deqp     deqp.sh's SUITE, every EVERYth case from the STARTth, as root,
 #            as step 9 ran it
 #   glmark2  glmark2.sh's validation of each scene, fullscreen on the
@@ -261,7 +263,10 @@ case $kind in
         part=$1
         run user conformance piglit.sh -p gbm -o "$work/out" "$part" || status=$?
         if [ "$ref" != - ]; then
-            judge results "$here/$ref" "$out/$part.results" -s "$out/$part.scope" || status=1
+            # The empty SAMPLE takes the whole reference, within the scope.
+            set -- "$here/$ref" "$out/$part.results"
+            [ ! -f "$here/piglit-lenovo.flakes" ] || set -- "$@" '' "$here/piglit-lenovo.flakes"
+            judge results "$@" -s "$out/$part.scope" || status=1
         fi
         ;;
     deqp)
