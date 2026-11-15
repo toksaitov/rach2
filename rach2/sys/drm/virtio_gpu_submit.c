@@ -507,7 +507,7 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
         return rc;
     }
     ctx = file->driver_priv;
-    cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_SUBMIT_3D, sizeof(*req));
+    cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_SUBMIT_3D, sizeof(*req));
     s = kzalloc(sizeof(*s));
     if (!cmd || !s) {
         rc = -ENOMEM;

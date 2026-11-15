@@ -290,7 +290,7 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
     int32_t rc;
 
     for (i = 0; i < 2; i++) {
-        cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
+        cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
         if (!cmd) {
             return -ENOMEM;
         }
@@ -394,7 +394,7 @@ static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     if (vg->host_pages) {
         return blob_map_pages(vg, bo);
     }
-    cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
+    cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
     if (!cmd) {
         return -ENOMEM;
     }
@@ -432,8 +432,9 @@ static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *
  */
 int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
-    struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB,
-                                              sizeof(struct virtio_gpu_resource_unref));
+    struct virtio_gpu_cmd *cmd =
+        vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB,
+                          sizeof(struct virtio_gpu_resource_unref));
 
     if (!cmd) {
         return -ENOMEM;
@@ -594,8 +595,8 @@ static int32_t blob_verify(struct virtio_gpu_device *vg,
 static int32_t blob_commands(struct virtio_gpu_device *vg, uint32_t ctx_id, uint64_t user,
                              uint32_t size)
 {
-    struct virtio_gpu_cmd *cmd =
-        vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_SUBMIT_3D, sizeof(struct virtio_gpu_submit_3d));
+    struct virtio_gpu_cmd *cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_SUBMIT_3D,
+                                                   sizeof(struct virtio_gpu_submit_3d));
     struct virtio_gpu_submit_3d *req;
     int32_t rc;
 
@@ -629,7 +630,7 @@ static int32_t blob_create_cmd(struct virtio_gpu_device *vg, struct virtio_gpu_o
 {
     struct virtio_gpu_resource_create_blob *req;
     struct virtio_gpu_cmd *cmd =
-        vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB, sizeof(*req));
+        vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB, sizeof(*req));
     uint32_t n = 0;
     int32_t rc;
 
@@ -686,8 +687,8 @@ static int32_t blob_uuid(struct virtio_gpu_device *vg, struct virtio_gpu_object 
     if (!vg->has_uuid) {
         return 0;
     }
-    cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID,
-                       sizeof(struct virtio_gpu_resource_unref));
+    cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID,
+                            sizeof(struct virtio_gpu_resource_unref));
     if (!cmd) {
         return -ENOMEM;
     }

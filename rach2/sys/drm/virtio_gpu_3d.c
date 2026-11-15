@@ -1,6 +1,7 @@
 /* virtio_gpu_3d.c: virgl capability sets, per-file contexts and transfers. */
 #include "virtio_gpu.h"
 #include "../dmabuf/dmabuf.h"
+#include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
@@ -29,8 +30,11 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
     if (cmd->vg->dead) {
         return -ENODEV;
     }
+    /* A chain too long for the queue has only the block, so it waits. */
     if (n > 1 && vdev->dma_max / PAGE_SIZE >= n) {
-        block = (uint8_t *)virtio_dma_alloc(vdev, n * PAGE_SIZE, &addr);
+        block = n > (uint32_t)cmd->vq->size - 2
+                    ? (uint8_t *)vgpu_dma_alloc_wait(cmd->vg, n * PAGE_SIZE, &addr)
+                    : (uint8_t *)virtio_dma_alloc(vdev, n * PAGE_SIZE, &addr);
     }
     if (!block && n > (uint32_t)cmd->vq->size - 2) {
         return -E2BIG;
@@ -55,7 +59,7 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
     }
     for (i = 0; i < n; i++) {
         if (!block) {
-            cmd->payload[i].page = virtio_dma_alloc(vdev, PAGE_SIZE, &cmd->payload[i].addr);
+            cmd->payload[i].page = vgpu_dma_alloc_wait(cmd->vg, PAGE_SIZE, &cmd->payload[i].addr);
             if (!cmd->payload[i].page) {
                 return -ENOMEM;
             }
@@ -344,7 +348,7 @@ int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
     if (!ctx || ctx->created) {
         return 0;
     }
-    cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_CREATE, sizeof(*req));
+    cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_CREATE, sizeof(*req));
     if (!cmd) {
         return -ENOMEM;
     }
@@ -375,12 +379,14 @@ void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
     }
     (void)vgpu_room(vg, 0);
     if (ctx->created && !vg->dead) {
-        cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DESTROY,
-                           sizeof(struct virtio_gpu_ctrl_hdr));
+        cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DESTROY,
+                                sizeof(struct virtio_gpu_ctrl_hdr));
         if (cmd) {
             ((struct virtio_gpu_ctrl_hdr *)(void *)cmd->page)->ctx_id = ctx->id;
             vgpu_cmd_send(cmd, NULL, NULL);
-        } else {
+        } else if (!vg->dead) {
+            klog(KLOG_WARN, "virtio_gpu", "context %u: no memory for CTX_DESTROY; reset",
+                 (unsigned)ctx->id);
             drm_dev_unplug(&vg->drm);
         }
     }
@@ -419,7 +425,7 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
     if (!a) {
         return -ENOMEM;
     }
-    cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE, sizeof(*req));
+    cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE, sizeof(*req));
     if (!cmd) {
         kfree(a);
         return -ENOMEM;
@@ -457,9 +463,15 @@ void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object
             if (vg->dead) {
                 continue;
             }
-            cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE, sizeof(*req));
+            cmd =
+                vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE, sizeof(*req));
             if (!cmd) {
-                drm_dev_unplug(&vg->drm);
+                if (!vg->dead) {
+                    klog(KLOG_WARN, "virtio_gpu",
+                         "resource %u: no memory for CTX_DETACH_RESOURCE; reset",
+                         (unsigned)bo->res_id);
+                    drm_dev_unplug(&vg->drm);
+                }
                 return;
             }
             req = (struct virtio_gpu_resource_unref *)(void *)cmd->page;
@@ -1037,10 +1049,10 @@ int32_t vgpu_transfer_3d_ioctl(struct drm_device *dev, void *data, struct drm_fi
     if (rc) {
         goto out;
     }
-    cmd = vgpu_cmd_new(vg, vg->ctrlq,
-                       from ? VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D
-                            : VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D,
-                       sizeof(*req));
+    cmd = vgpu_cmd_new_wait(vg, vg->ctrlq,
+                            from ? VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D
+                                 : VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D,
+                            sizeof(*req));
     if (!cmd) {
         rc = -ENOMEM;
         goto out;

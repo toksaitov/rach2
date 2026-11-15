@@ -716,36 +716,79 @@ static int held_moved(void *arg)
 }
 
 /**
+ * One turn of a sender's wait for a page of the DMA pool, which it found
+ * empty: reap, and when no answer freed a page, sleep on the answers for
+ * VGPU_POLL_NS and reap again. The pool is the transport's, which on a
+ * shared region also holds every object's backing, so a program that frees
+ * and makes buffers faster than the device answers finds it full of pages
+ * whose commands, UNREFs among them, are not yet answered.
+ *
+ * @return 1 to ask the pool again; 0 to give up, when the caller may not
+ *         sleep, no started command holds a page that an answer would free,
+ *         the device has died, or `until` of dma_fence_now's clock has
+ *         passed. The caller holds a reference on the device.
+ */
+static int vgpu_dma_wait(struct virtio_gpu_device *vg, int64_t until)
+{
+    struct held_wait w;
+
+    if (!vgpu_may_wait(vg) || vg->held == 0 || dma_fence_now() >= until) {
+        return 0;
+    }
+    w.vg = vg;
+    w.seen = vg->held;
+    vgpu_reap(vg);
+    if (!vg->dead && vg->held == w.seen) {
+        vgpu_sleep(held_moved, &w, dma_fence_now() + VGPU_POLL_NS, NULL);
+        vgpu_reap(vg);
+    }
+    return !vg->dead;
+}
+
+/**
+ * `bytes` of the DMA pool, as virtio_dma_alloc, for a sender that may sleep:
+ * while the pool is empty it waits for the pages started commands hold
+ * (`vgpu_dma_wait`), as Linux's sender sleeps where its __GFP_NOFAIL
+ * allocation would. NULL when the wait gives up or VGPU_WAIT_NS pass.
+ */
+void *vgpu_dma_alloc_wait(struct virtio_gpu_device *vg, uint32_t bytes, uint64_t *addr)
+{
+    void *p = vg->dead ? NULL : virtio_dma_alloc(vg->vdev, bytes, addr);
+    int64_t until = dma_fence_now() + VGPU_WAIT_NS;
+
+    if (p || vg->dead) {
+        return p;
+    }
+    drm_dev_get(&vg->drm);
+    while (!p && vgpu_dma_wait(vg, until)) {
+        p = virtio_dma_alloc(vg->vdev, bytes, addr);
+    }
+    drm_dev_put(&vg->drm);
+    return p;
+}
+
+/**
  * A new command, as vgpu_cmd_new, for a sender that may sleep and must not
  * fail, as Linux allocates its commands with __GFP_NOFAIL: while the DMA
- * pool has no page and commands started before hold some, it reaps and
- * sleeps on the answers, which free them, and asks again. NULL when none
- * is held, the caller may not sleep, the device dies, or VGPU_WAIT_NS pass.
- * The bound keeps a wait that a sleeping reap holds up from lasting: its
- * NULL unplugs the device, which ends that reap's own wait for the mode
- * lock, whose holder may be this caller.
+ * pool has no page it waits for the pages started commands hold
+ * (`vgpu_dma_wait`) and asks again. NULL when the wait gives up or
+ * VGPU_WAIT_NS pass. The bound keeps a wait that a sleeping reap holds up
+ * from lasting: its NULL unplugs the device, which ends that reap's own
+ * wait for the mode lock, whose holder may be this caller. A commit's
+ * steps, which hold the mode lock, use vgpu_cmd_new.
  */
-static struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct virtqueue *vq,
-                                                uint32_t type, uint32_t req_len)
+struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct virtqueue *vq,
+                                         uint32_t type, uint32_t req_len)
 {
     struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vq, type, req_len);
-    struct held_wait w;
-    int64_t until;
+    int64_t until = dma_fence_now() + VGPU_WAIT_NS;
 
-    if (cmd || !vgpu_may_wait(vg) || vg->held == 0) {
+    if (cmd || vg->dead) {
         return cmd;
     }
-    until = dma_fence_now() + VGPU_WAIT_NS;
-    w.vg = vg;
     drm_dev_get(&vg->drm);
-    while (!cmd && !vg->dead && vg->held > 0 && dma_fence_now() < until) {
-        w.seen = vg->held;
-        vgpu_reap(vg);
-        if (!vg->dead && vg->held == w.seen) {
-            vgpu_sleep(held_moved, &w, dma_fence_now() + VGPU_POLL_NS, NULL);
-            vgpu_reap(vg);
-        }
-        cmd = vg->dead ? NULL : vgpu_cmd_new(vg, vq, type, req_len);
+    while (!cmd && vgpu_dma_wait(vg, until)) {
+        cmd = vgpu_cmd_new(vg, vq, type, req_len);
     }
     drm_dev_put(&vg->drm);
     return cmd;
@@ -1169,7 +1212,7 @@ static struct virtio_gpu_mem_entry *entry_slot(struct virtio_gpu_cmd *cmd, uint3
         return NULL;
     }
     if (k == cmd->nextra) {
-        cmd->extra[k] = virtio_dma_alloc(cmd->vg->vdev, PAGE_SIZE, &cmd->extra_addr[k]);
+        cmd->extra[k] = vgpu_dma_alloc_wait(cmd->vg, PAGE_SIZE, &cmd->extra_addr[k]);
         if (!cmd->extra[k]) {
             return NULL;
         }
@@ -1252,8 +1295,9 @@ static struct virtio_gpu_cmd *vgpu_attach_cmd(struct virtio_gpu_device *vg,
                                               struct virtio_gpu_object *bo, uint32_t res,
                                               int32_t *err)
 {
-    struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
-                                              sizeof(struct virtio_gpu_resource_attach_backing));
+    struct virtio_gpu_cmd *cmd =
+        vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+                          sizeof(struct virtio_gpu_resource_attach_backing));
     struct virtio_gpu_resource_attach_backing *req;
     uint32_t n;
 
@@ -1545,7 +1589,7 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
         drm_gem_object_put(&bo->shmem.base);
         return NULL;
     }
-    create = vgpu_cmd_new(
+    create = vgpu_cmd_new_wait(
         vg, vg->ctrlq, r3d ? VIRTIO_GPU_CMD_RESOURCE_CREATE_3D : VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
         r3d ? sizeof(struct virtio_gpu_resource_create_3d) : sizeof(*req));
     attach = create ? vgpu_attach_cmd(vg, bo, id, err) : NULL;

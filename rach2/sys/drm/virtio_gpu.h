@@ -742,6 +742,12 @@ struct virtio_gpu_object *vgpu_bo(struct drm_gem_object *obj);
 /** Allocate a control or cursor command, or NULL; process context. */
 struct virtio_gpu_cmd *vgpu_cmd_new(struct virtio_gpu_device *vg, struct virtqueue *vq,
                                     uint32_t type, uint32_t bytes);
+/** As vgpu_cmd_new, waiting while the DMA pool is empty and started commands
+ * hold pages; never under the mode lock. */
+struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct virtqueue *vq,
+                                         uint32_t type, uint32_t bytes);
+/** Pages of the DMA pool, waiting as vgpu_cmd_new_wait does, or NULL. */
+void *vgpu_dma_alloc_wait(struct virtio_gpu_device *vg, uint32_t bytes, uint64_t *addr);
 /** Free an unsubmitted or completed command and its DMA pages. */
 void vgpu_cmd_free(struct virtio_gpu_cmd *cmd);
 /** Send a new control command without a fence, as Linux sends a command it
