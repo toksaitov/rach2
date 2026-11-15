@@ -252,7 +252,7 @@ Faults this milestone found in another project's code, one section each, in the 
 * Found: 2026-11-15, the testing PC's WSL, milestone 84, task 84-265s: the release's rerun and a run at the branch head failed `machine.virgl.webgl-chromium-webgl2-03` on x86_64 with `fboinvalidate/whole.html` and `target.html` passing 1 and 4 cases fewer than the Debian guest's reference, taken on 2026-11-11.
 * Reproduction: on that host under KVM, `sh tests/graphics/runners/debian.sh webgl -p virgl -c 8 OUT -b chromium -v 2.0.1 -g -k 13 73` runs pages 949 to 961 in a new browser and, as each fails, once more; QEMU's standard error gets the two lines above in each browser. With `-k 25 38`, pages 950 to 974, nothing fails.
 * Evidence: `dev-log/84-locks/84-265s/`, with Debian's run of pages 949 to 961 and its QEMU lines, Debian's run of pages 950 to 974, and the two Rach2 runs of the chunk with their QEMU lines; [84-265s.md](84-265s.md) gives the counts.
-* Rach2: nothing in its own code; the guest runs Debian's Mesa and Chromium, as the Debian guest does, and gives the same counts. `tests/graphics/runners/webgl-virgl.flakes` leaves the cases of `fboinvalidate/whole.html` and `target.html` unjudged in the virgl cases.
+* Rach2: nothing in its own code; the guest runs Debian's Mesa and Chromium, as the Debian guest does, and gives the same counts, which the reference of Chromium's chunk 3, taken again under 621.24, holds.
 * Status: unreported.
 * Next: find the call that gives GL_INVALID_VALUE, with virglrenderer's `VREND_DEBUG=err,cmd` on the host and ANGLE's command trace in the guest, on the page's second case, SRGB8_ALPHA8, after RGBA32UI; then run that GL sequence on the host with `GALLIUM_DRIVER=d3d12` to see whether virglrenderer is needed.
 
