@@ -1276,6 +1276,7 @@ static int32_t engine_info_show(void *data, char *buf, uint32_t cap)
     }
     emitf(&e, "GT awake? %s [%d], %Lums\n", yes_no(gt->awake), gt->awake ? 1 : 0, ticks_ms(awake));
     emitf(&e, "GT idle at a retire, awake: %u\n", gt->idle_passes);
+    emitf(&e, "GT park switches: %u\n", gt->park_switches);
     emitf(&e, "CS timestamp frequency: %u Hz, %u ns\n", CS_TIMESTAMP_HZ, CS_TIMESTAMP_NS);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         if (gt->engine[i].running) {

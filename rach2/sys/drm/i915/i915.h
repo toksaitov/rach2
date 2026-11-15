@@ -299,9 +299,15 @@ struct i915_irq {
  * Parking. `unretired` is set by each new request and cleared once Linux
  * would have retired every request of the engine, which on Haswell's ring
  * submission, one timeline an engine, is when the last request signals to
- * a listener or when the retire worker, once a second, finds it complete;
- * the GT parks only at the worker's pass or a wait for its idle, when no
- * engine has it set (i915_request.c).
+ * a listener or when the retire worker, once a second, finds it complete.
+ * A wait for the GT's idle parks it at once when no engine has it set; the
+ * retire worker parks it as Linux's engines park (i915_request.c): two
+ * ticks after the pass that first finds every engine idle, an engine that
+ * ran a request since its last switch to the GT's own context switches to
+ * it, and the pass that retires the switch parks the GT. `serial` counts
+ * the engine's requests and `wakeref_serial` is `serial` as the last such
+ * switch left it, Linux's engine->serial and engine->wakeref_serial: equal,
+ * the engine holds the GT's own context.
  * `building` is set from a request's creation to its publication on
  * `requests`, as Linux holds the timeline's mutex from i915_request_create
  * to i915_request_add: while it is set the engine's last request is not
@@ -369,6 +375,8 @@ struct i915_engine {
     uint32_t hw_tail;
     uint8_t unretired;
     uint8_t building;
+    uint32_t serial;
+    uint32_t wakeref_serial;
     uint8_t hc_armed;
     uint32_t hc_seqno;
     uint32_t hc_acthd;
@@ -450,8 +458,11 @@ struct i915_ppgtt {
  * was awake before its last park, and `unpark_ticks` is the tick of its
  * last unpark, as Linux's intel_gt_get_awake_time adds them.
  * `idle_passes` counts the retire passes that found every engine retired
- * and idle while the GT stayed awake, where Linux's engines would start to
- * park, for i915_engine_info.
+ * and idle while the GT stayed awake, and `park_switches` the switches to
+ * the GT's own context that the retire worker made before a park, for
+ * i915_engine_info. `park_next` is the tick at which the retire worker
+ * next tries to park an idle GT, Linux's engine wakeref's delayed put, 0
+ * for none.
  */
 /* The buckets of the GT's pool of shadow batches, Linux's
  * intel_gt_buffer_pool's four. */
@@ -481,6 +492,8 @@ struct i915_gt {
     uint64_t awake_ticks;
     uint64_t unpark_ticks;
     uint32_t idle_passes;
+    uint32_t park_switches;
+    uint64_t park_next;
     /* The command parser's shadow batches, kept for the next batch their
      * bucket fits, as Linux's intel_gt_buffer_pool: `pool[n]` lists objects
      * of 2^n pages, the last bucket those of 8 pages or more, each with the

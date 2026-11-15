@@ -1887,6 +1887,64 @@ static void park_per_call(void)
     close_handle(&file_a, b);
 }
 
+/**
+ * 84-176: a waited call's signal retires its engine at once and leaves the
+ * GT awake, and the retire worker parks it as Linux's engines park: the
+ * pass two ticks after the first that found every engine idle switches
+ * each engine that ran a request since its last switch to the GT's own
+ * context, here the earlier rows' engines too, as Linux's __engine_park
+ * does two jiffies after the context's unpin puts the engine's wakeref
+ * (i915_active.c:983, gt/intel_engine_pm.c:151-288), and the pass that
+ * retires the switches, whose signals are asked for, parks the GT.
+ */
+static void park_after_delay(void)
+{
+    uint32_t b = batch_end();
+    struct drm_i915_gem_object *obj = object(&file_a, b);
+    struct i915_engine *rcs = &dev_a->gt.engine[I915_RCS0];
+    struct dma_fence *f = 0;
+    struct dma_fence_cb cb;
+    uint32_t sw;
+    int i, p, u, kernel = 1;
+
+    idle();
+    i915_gt_retire_requests(dev_a);
+    p = parks;
+    u = unparks;
+    sw = dev_a->gt.park_switches;
+    ring_hold(I915_RCS0);
+    CHECK(!dev_a->gt.awake && exec1(b, I915_EXEC_RENDER) == 0 && obj->base.resv->nreads == 1 &&
+              unparks == u + 1,
+          "delay: a call unparks the GT");
+    if (obj->base.resv->nreads == 1) {
+        f = dma_fence_get(obj->base.resv->reads[0]);
+    }
+    CHECK(f && dma_fence_add_callback(f, &cb, listen_cb) == 0, "delay: a listener on its fence");
+    ring_release(I915_RCS0);
+    idle();
+    kick();
+    CHECK(dev_a->gt.awake && !rcs->requests && !rcs->unretired && dev_a->gt.park_next != 0 &&
+              parks == p,
+          "delay: its signal retires the engine at once and leaves the GT awake two ticks");
+    ring_hold(I915_RCS0);
+    now_ns += 2 * TICK_NS;
+    kick();
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        kernel &= dev_a->gt.engine[i].wakeref_serial == dev_a->gt.engine[i].serial;
+    }
+    CHECK(dev_a->gt.awake && dev_a->gt.park_switches > sw && rcs->requests && kernel &&
+              dev_a->gt.park_next == 0 && parks == p,
+          "delay: the pass two ticks on switches each engine to the GT's own context");
+    sw = dev_a->gt.park_switches;
+    ring_release(I915_RCS0);
+    idle();
+    kick();
+    CHECK(!dev_a->gt.awake && parks == p + 1 && !rcs->requests && dev_a->gt.park_switches == sw,
+          "delay: and the pass that retires the switches parks the GT, switching no more");
+    dma_fence_put(f);
+    close_handle(&file_a, b);
+}
+
 /* Another thread's mark on a mutex it holds, which compat/mutex_none.c
  * tells from the test's own. */
 static char other_thread;
@@ -2083,6 +2141,7 @@ int main(void)
     park_per_call();
     retire_in_caller();
     timeout_retirement();
+    park_after_delay();
     idle();
     /* The pool keeps its shadows past the rows until the GT parks. */
     i915_gem_pool_trim(dev_a, I915_POOL_ALL);

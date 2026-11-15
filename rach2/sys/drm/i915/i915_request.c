@@ -65,6 +65,12 @@
  * round_jiffies_up_relative(HZ) on (`retire_deadline`). */
 #define I915_RETIRE_INTERVAL_MS 1000u
 
+/* The ticks from the retire pass that finds every engine idle to the
+ * worker's try to park the GT, as the context's unpin puts the engine's
+ * wakeref with Linux's intel_engine_pm_put_delay(engine, 2), two jiffies
+ * (i915_active.c:983), which are two ticks at Debian's HZ of 250. */
+#define I915_PARK_DELAY_TICKS 2u
+
 /* The room a request is given in its ring before it begins, which holds
  * the most the driver emits for one with its breadcrumb and a wrap, as
  * Linux's intel_ring_begin waits for the requests ahead to free it. */
@@ -105,6 +111,7 @@ static wait_queue_t submit_wait;
 static volatile int retire_kicked;
 
 static void retire_work(void);
+static int32_t request_new(struct intel_context *ce, size_t room, struct i915_request **out);
 
 /**
  * The tick of the retire worker's next pass from the tick `now`: the first
@@ -387,6 +394,9 @@ static uint64_t hangcheck_deadline(void)
         }
         if (i915->gt.awake && (at == 0 || i915->gt.retire_next < at)) {
             at = i915->gt.retire_next;
+        }
+        if (i915->gt.awake && i915->gt.park_next != 0 && (at == 0 || i915->gt.park_next < at)) {
+            at = i915->gt.park_next;
         }
     }
     if (await != 0 && (at == 0 || await < at)) {
@@ -873,6 +883,7 @@ static void gt_park(struct drm_i915_private *i915)
     int i;
 
     gt->awake = 0;
+    gt->park_next = 0;
     gt->awake_ticks += rtc_ticks_now() - gt->unpark_ticks;
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         if (gt->engine[i].irq_armed) {
@@ -982,19 +993,112 @@ static void retire_big_take(int depth)
 #endif
 
 /**
- * Retire each engine's completed requests and, when `park` is set, the
- * pass of Linux's intel_gt_retire_requests: first each engine whose last
- * request is complete counts as one Linux would have retired
- * (`unretired` cleared), then, when no engine has a request on its list,
- * one being built or one Linux would not yet have retired, the GT parks,
- * and the pool's stale shadows go. Under the GEM lock, since a request's
- * release lets go of its objects and their bindings. For the retire
- * worker (`worker`) the lock is only tried, and the pass skipped,
- * returning 0, when another thread holds it, as Linux's retire worker
- * does with each timeline's mutex (gt/intel_gt_requests.c:77-80,
- * 144-145); and the worker's big lock goes while the GEM lock is held,
- * which keeps the device on the worker's list meanwhile, since its unplug
- * takes the GEM lock. Returns 1 when the pass ran.
+ * Switch the idle engine `e` to the GT's own context before the GT parks,
+ * as Linux's switch_to_kernel_context in __engine_park
+ * (gt/intel_engine_pm.c:151-235): a request on `kernel_ce` whose signal is
+ * asked for, as Linux's duration callback asks for it, so that its retire
+ * comes at once and that pass parks the GT. An engine that ran no request
+ * since its last switch, or that is not running, needs none, nor does a
+ * wedged GT, as on Linux. Under the GEM lock, every engine retired.
+ * Returns 1 when the engine may park now, 0 when the switch was emitted;
+ * a switch that cannot be made returns 1, as Linux then parks anyway.
+ */
+static int engine_park_switch(struct drm_i915_private *i915, struct i915_engine *e)
+{
+    struct i915_request *rq;
+
+    if (i915->gt.wedged || !e->running || !e->kernel_ce || e->wakeref_serial == e->serial) {
+        return 1;
+    }
+    if (request_new(e->kernel_ce, 0, &rq) < 0) {
+        return 1;
+    }
+    /* The switch's own request counts, as Linux's serial + 1. */
+    e->wakeref_serial = e->serial;
+    rq->signaling = 1;
+    if (i915_request_add(rq) < 0) {
+        i915_request_put(rq);
+        return 1;
+    }
+    i915_request_put(rq);
+    i915->gt.park_switches++;
+    return 0;
+}
+
+/**
+ * The retire worker's park of the GT, idle and awake, as Linux's engines
+ * park once their wakeref's last put has run (gt/intel_engine_pm.c:258-
+ * 288, intel_wakeref.c:62-95): at once when every engine holds the GT's
+ * own context, the last request each ran being its switch, as the
+ * switch's retire puts the wakeref at once; otherwise
+ * I915_PARK_DELAY_TICKS after the first such pass, as the context's unpin
+ * puts it with a delay, and then each engine that needs it switches and
+ * the pass that retires the switches parks. Under the GEM lock.
+ */
+static void gt_park_idle(struct drm_i915_private *i915, uint64_t now)
+{
+    struct i915_gt *gt = &i915->gt;
+    int i, switching = 0, kernel = 1;
+
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        kernel &= !gt->engine[i].running || gt->engine[i].wakeref_serial == gt->engine[i].serial;
+    }
+    if (kernel || gt->wedged) {
+        gt_park(i915);
+    } else if (gt->park_next == 0) {
+        gt->park_next = now + I915_PARK_DELAY_TICKS;
+    } else if (now >= gt->park_next) {
+        gt->park_next = 0;
+        /* Each engine parks by itself on Linux; the GT parks once none
+         * switches. */
+        for (i = 0; i < I915_NUM_ENGINES; i++) {
+            switching |= !engine_park_switch(i915, &gt->engine[i]);
+        }
+        if (!switching) {
+            gt_park(i915);
+        }
+    }
+}
+
+/**
+ * The park at the end of a retire pass of the awake GT, which found every
+ * engine idle unless `held`: a pass with `park` outside the worker, which
+ * a wait for the GT's idle makes, parks it at once, and a pass of the
+ * worker (`worker`) parks it as `gt_park_idle` says; a worker's pass that
+ * finds an engine busy once the park's delay is over ends the delay, as
+ * Linux's delayed put then only drops its count, and the next idle pass
+ * starts another. Under the GEM lock.
+ */
+static void retire_park(struct drm_i915_private *i915, int held, int park, int worker)
+{
+    struct i915_gt *gt = &i915->gt;
+    uint64_t now = rtc_ticks_now();
+
+    if (!gt->awake || !worker) {
+        if (gt->awake && !held && park) {
+            gt_park(i915);
+        }
+    } else if (!held) {
+        gt_park_idle(i915, now);
+    } else if (gt->park_next != 0 && now >= gt->park_next) {
+        gt->park_next = 0;
+    }
+}
+
+/**
+ * Retire each engine's completed requests and, when `park` is set, make
+ * the pass of Linux's intel_gt_retire_requests: each engine whose last
+ * request is complete first counts as one Linux would have retired
+ * (`unretired` cleared), and the pool's stale shadows go. Then the GT
+ * parks as `retire_park` says, idle when no engine has a request on its
+ * list, one being built or one Linux would not yet have retired. Under
+ * the GEM lock, since a request's release lets go of its objects and
+ * their bindings. For the worker (`worker`) the lock is only tried, and
+ * the pass skipped, returning 0, when another thread holds it, as Linux's
+ * retire worker does with each timeline's mutex (gt/intel_gt_requests.c:
+ * 77-80, 144-145); and the worker's big lock goes while the GEM lock is
+ * held, which keeps the device on the worker's list meanwhile, since its
+ * unplug takes the GEM lock. Returns 1 when the pass ran.
  */
 static int retire_pass(struct drm_i915_private *i915, int park, int worker)
 {
@@ -1025,9 +1129,8 @@ static int retire_pass(struct drm_i915_private *i915, int park, int worker)
         engine_retire(i915, &gt->engine[i], 0, 0);
         held |= gt->engine[i].requests != 0 || gt->engine[i].unretired || gt->engine[i].building;
     }
-    if (park && gt->awake && !held) {
-        gt_park(i915);
-    } else if (gt->awake && !held) {
+    retire_park(i915, held, park, worker);
+    if (gt->awake && !held) {
         gt->idle_passes++;
     }
     if (park) {
@@ -1059,17 +1162,17 @@ void i915_request_retire_engine(struct i915_request *rq)
 }
 
 /**
- * The retire worker, Linux's retire_work_handler and engine_retire: on
- * each device whose GT is awake, the pass of every engine at
- * `retire_deadline`, which parks an idle GT, and the requests of an engine
- * whose last request signalled to a listener at once, which does not.
- * Linux parks an engine only after a switch to its kernel context has run
- * and retired (gt/intel_engine_pm.c:151-288), and on the Lenovo
- * its GT stayed awake from one call of WineD3D's round trip to the next:
- * 1,013 of the GPU's interrupts for 1,003 calls, where a park after each
- * would add the switch's own (dev-log/84-locks/84-157.md). So the GT
- * stays awake between a client's requests, and RC6 and RPS's down
- * interrupts lower its power meanwhile.
+ * The retire worker, Linux's retire_work_handler, engine_retire and the
+ * engine wakeref's delayed put: on each device whose GT is awake, the
+ * pass of every engine at `retire_deadline`, the requests of an engine
+ * whose last request signalled to a listener at once, and a pass at
+ * `park_next`. Each pass that finds every engine idle parks the GT as
+ * `gt_park_idle` says, two ticks after the first such pass and after a
+ * switch to the GT's own context, so that a client whose next request
+ * comes within two ticks keeps the GT awake. On the Lenovo, Linux's GT
+ * parked so every 12 to 30 ms of WineD3D's round trip, and each park set
+ * RPS's next frequency to RPe at least, which held its GPU at 450 to 500
+ * MHz (dev-log/84-locks/84-176.md).
  *
  * Each pass only tries the GEM lock and is skipped while another thread
  * holds it, as Linux's worker only tries each timeline's mutex: a holder
@@ -1087,7 +1190,7 @@ static void retire_work(void)
     struct drm_i915_private *i915;
     uint64_t now = rtc_ticks_now();
     uint32_t flags;
-    int kicked, due;
+    int kicked, due, parking;
 
     /* Taken and cleared in one step, Linux's xchg(&engine->retire, NULL)
      * (gt/intel_gt_requests.c:64): a signal after it kicks the next pass. */
@@ -1100,7 +1203,8 @@ static void retire_work(void)
             continue;
         }
         due = now >= i915->gt.retire_next;
-        if (!due && !kicked) {
+        parking = i915->gt.park_next != 0 && now >= i915->gt.park_next;
+        if (!due && !kicked && !parking) {
             continue;
         }
         if (due) {
@@ -1409,6 +1513,7 @@ static int32_t request_new(struct intel_context *ce, size_t room, struct i915_re
      * holds the GT awake by the parking rule. */
     idle = !e->requests && !e->unretired && !e->building;
     e->seqno = e->seqno == 0xffffffffu ? 1u : e->seqno + 1u; /* 0 is never a seqno */
+    e->serial++;
     e->unretired = 1;
     e->building = 1;
     spin_unlock_irqrestore(&e->lock, flags);

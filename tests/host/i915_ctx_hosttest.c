@@ -1645,9 +1645,11 @@ static void park_listener(struct dma_fence *fence, struct dma_fence_cb *cb)
  * are retired, which happens at once only when an engine's last request
  * signals to a listener, and otherwise at the retire worker's pass, on
  * the first whole second after a second from the unpark, as Linux's
- * round_jiffies_up_relative(HZ). Here, requests no one waits for: a
- * client's next request finds the GT awake, with no park and unpark
- * between them.
+ * round_jiffies_up_relative(HZ); the GT then parks two ticks later, as
+ * Linux's engine wakeref is put two jiffies after the retire, once a
+ * switch to its own context has run and retired. Here, requests no one
+ * waits for: a client's next request finds the GT awake, with no park and
+ * unpark between them.
  */
 static void row_park_unwatched(void)
 {
@@ -1657,6 +1659,7 @@ static void row_park_unwatched(void)
     struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
     struct i915_request *rq;
     uint64_t at;
+    uint32_t sw;
     int n, p, u;
 
     rq = submit(r, 0, 0);
@@ -1664,6 +1667,7 @@ static void row_park_unwatched(void)
     i915_retire_requests(i915);
     p = parks;
     u = unparks;
+    sw = i915->gt.park_switches;
     CHECK("park: a request no one waits for retires, the engine held and the GT awake",
           rq && rq->fence.base.signaled && !rcs->requests && rcs->unretired && i915->gt.awake);
     i915_request_put(rq);
@@ -1679,11 +1683,14 @@ static void row_park_unwatched(void)
         (void)i915_submit_work();
     }
     at = rtc_ticks_now();
-    CHECK("park: its pass retires the engine and parks the GT",
-          !i915->gt.awake && parks == p + 1 && !rcs->requests && !rcs->unretired);
-    CHECK("park: on the first whole second after a second from the unpark",
-          at % TICK_HZ == 0 && at - i915->gt.unpark_ticks > TICK_HZ &&
-              at - i915->gt.unpark_ticks <= 2u * TICK_HZ);
+    CHECK("park: its pass retires the engine and the GT parks after a switch to its own context",
+          !i915->gt.awake && parks == p + 1 && !rcs->requests && !rcs->unretired &&
+              i915->gt.park_switches > sw && rcs->wakeref_serial == rcs->serial);
+    /* The pass's whole second, then Linux's two jiffies, then the switch's
+     * retire within the next tick. */
+    CHECK("park: two ticks after the first whole second after a second from the unpark",
+          at % TICK_HZ >= 2u && at % TICK_HZ <= 3u && at - i915->gt.unpark_ticks > TICK_HZ &&
+              at - i915->gt.unpark_ticks <= 2u * TICK_HZ + 3u);
     i915_request_put(rq);
     intel_context_put(r);
     done(&m);
