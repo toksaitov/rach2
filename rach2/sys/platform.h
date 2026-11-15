@@ -93,6 +93,12 @@ void platform_board_init(void);
 void platform_firmware_start(void);
 
 /**
+ * Register the platform's devices of each processor, on a PC its
+ * /dev/cpu/N/msr (arch/x86/msrdev.h), once every processor has started.
+ */
+void platform_cpus_started(void);
+
+/**
  * Make the platform's kernel threads, on a PC ACPICA's, the wireless
  * worker's, the PS/2 mouse's and the TCO watchdog's, once the first program
  * has its pid, so that init is process 1. Every processor runs by then, and

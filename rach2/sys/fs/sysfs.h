@@ -79,6 +79,14 @@ struct sysfs_attr {
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg);
 
 /**
+ * The directory /sys/module/MODULE of the module `module`, made with
+ * /sys/module on its first use, where a built-in driver that Linux builds
+ * as a module shows it loaded; its handle, or -errno as `sysfs_add_dir`,
+ * with `*made` as `sysfs_module_params` sets it.
+ */
+int sysfs_module_dir(const char *module, int *made);
+
+/**
  * The directory /sys/module/MODULE/parameters of the module `module`, made
  * with the directories above it on its first use, where a driver adds its
  * module's parameters as Linux's module_param shows them; its handle, or

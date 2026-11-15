@@ -1,0 +1,108 @@
+.Dd November 16, 2026
+.Dt MSR 4
+.Os
+.Sh NAME
+.Nm msr
+.Nd read and write a processor's model-specific registers
+.Sh SYNOPSIS
+.Pa /dev/cpu/N/msr
+.Sh DESCRIPTION
+Each processor online has a character device, major 202 and minor
+.Ar N ,
+its number, through which root reads and writes that processor's
+model-specific registers, as Linux's msr driver gives them.
+The kernel creates each as root:root with mode 0600 once the processors
+are started.
+An open needs
+.Dv CAP_SYS_RAWIO
+in the first user namespace.
+.Pp
+The file offset is the register's index, cut to 32 bits.
+A
+.Xr pread 2
+or
+.Xr read 2
+of 8 bytes, or of any multiple of 8, gives the register's 64 bits for
+each 8 asked, read again each time, on the device's processor; a
+.Xr pwrite 2
+or
+.Xr write 2
+writes the register from each 8 bytes given.
+Neither moves the offset.
+.Xr lseek 2
+takes
+.Dv SEEK_SET
+and
+.Dv SEEK_CUR
+alone.
+.Pp
+The ioctls of
+.In asm/msr.h
+take an array of eight 32-bit registers, EAX, ECX, EDX, EBX, ESP, EBP,
+ESI and EDI, the last four of which some AMD registers read as a key.
+.Bl -tag -width X86_IOC_RDMSR_REGS
+.It Dv X86_IOC_RDMSR_REGS
+Load the registers but ESP from the array, run RDMSR with them, and store
+them back.
+The descriptor must be open for reading.
+.It Dv X86_IOC_WRMSR_REGS
+The same with WRMSR.
+The descriptor must be open for writing.
+.El
+.Pp
+A write goes through the module parameter
+.Pa allow_writes :
+.Cm on
+lets every write through,
+.Cm off
+refuses every write, and
+.Cm default ,
+the value at boot, lets every write through and logs one of them, its
+register, program and thread, at most once in 30 seconds.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /sys/devices/virtual/msr/msrN
+The device's directory, with dev, uevent and a subsystem link to msr.
+.It Pa /sys/class/msr/msrN
+.It Pa /sys/dev/char/202:N
+Links to that directory, through which udev finds the device.
+.It Pa /sys/module/msr/initstate
+.Ql live ,
+as a loaded
+.Pa msr.ko
+reads, so that
+.Ql modprobe msr
+succeeds.
+.It Pa /sys/module/msr/parameters/allow_writes
+The parameter above, mode 0600.
+.El
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EPERM
+The caller lacks
+.Dv CAP_SYS_RAWIO ,
+or a write was made while
+.Pa allow_writes
+is
+.Cm off .
+.It Bq Er ENXIO
+The processor is not online.
+.It Bq Er EIO
+The processor has no MSRs, or refused the register with a general
+protection fault.
+.It Bq Er EINVAL
+A transfer's size is not a multiple of 8, or a seek's origin is not
+.Dv SEEK_SET
+or
+.Dv SEEK_CUR .
+.It Bq Er EBADF
+An ioctl's descriptor is not open for its direction.
+.It Bq Er EFAULT
+The buffer or array cannot be read or written.
+.It Bq Er ENOTTY
+The request is unknown.
+.El
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr pread 2 ,
+.Xr pwrite 2

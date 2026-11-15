@@ -16,6 +16,7 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/portio.c \
     sys/arch/x86/cpu.c \
     sys/arch/x86/cpuinfo.c \
+    sys/arch/x86/msrdev.c \
     sys/arch/x86/debugreg.c \
     sys/arch/x86/serial.c \
     sys/arch/x86/module.c \

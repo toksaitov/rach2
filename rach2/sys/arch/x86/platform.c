@@ -27,6 +27,7 @@
 #include "kvmsteal.h"
 #include "ps2kbd.h"
 #include "lapic.h"
+#include "msrdev.h"
 #include "pat.h"
 #include "pciconf.h"
 #include "pic.h"
@@ -470,6 +471,11 @@ void platform_firmware_start(void)
     lapic_x2apic_settle(iommu_irq_remapped_x2apic());
     iommu_fault_hold(0);
 #endif
+}
+
+void platform_cpus_started(void)
+{
+    msrdev_start();
 }
 
 void platform_threads_start(void)

@@ -613,13 +613,24 @@ static int dir_made(int parent, const char *name, int *made)
 
 /** The anchor of /sys, which stays, is not counted in `*made`; a failure
  * removes the highest directory made, which takes those below it. */
-int sysfs_module_params(const char *module, int *made)
+int sysfs_module_dir(const char *module, int *made)
 {
     int dir = sysfs_anchor(SYSFS_ROOT, 0);
 
     *made = 0;
     dir = dir < 0 ? dir : dir_made(dir, "module", made);
     dir = dir < 0 ? dir : dir_made(dir, module, made);
+    if (dir < 0 && *made) {
+        sysfs_remove(*made);
+        *made = 0;
+    }
+    return dir;
+}
+
+int sysfs_module_params(const char *module, int *made)
+{
+    int dir = sysfs_module_dir(module, made);
+
     dir = dir < 0 ? dir : dir_made(dir, "parameters", made);
     if (dir < 0 && *made) {
         sysfs_remove(*made);

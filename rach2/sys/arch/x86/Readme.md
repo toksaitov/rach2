@@ -193,6 +193,8 @@ COM1 (`serial.c`) is the 16550 at 0x3F8, found by its scratch register and set t
 
 The speaker (`speaker.c`) is the 8254's channel 2 in mode 3, gated to the speaker by port 0x61 ([audio](../../audio/Readme.md)). The CMOS clock (`cmos.c`) is read at boot as two samples that must agree, and a clear valid bit in status register D ends the read, since reading the register can set the bit again; its device is [rtc(4)](../../../../man/man4/rtc.4).
 
+`msrdev.c` gives each processor online the device `/dev/cpu/N/msr`, major 202 and the processor's number, through which root reads and writes the processor's model-specific registers as Linux's msr driver does ([msr(4)](../../../../man/man4/msr.4)): the descriptor's offset names the register, each 8 bytes of a transfer is one RDMSR or WRMSR on that processor, run there by `smp_call` with the caller's interrupts off so that it cannot move meanwhile, and a register the processor refuses with a #GP is EIO through the optional helpers of `msr.s` ([the architectures](../Readme.md)). `/dev/cpu` and its rows are directories of /dev's table ([file systems](../../fs/Readme.md)). Rach2 builds the driver in, where Debian builds `msr.ko`, and has no `modules.builtin` for libkmod to find it in, so `/sys/module/msr/initstate` reads `live`, as a loaded module's does, and `modprobe msr`, which IGT's `kms_pm_rpm` asks for, succeeds.
+
 ### The reports and the rest
 
 Both boot reports read and print and configure nothing. `platform_report` runs them after the firmware's tables are read and before the interrupt controllers start.

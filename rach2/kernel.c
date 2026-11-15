@@ -4656,7 +4656,8 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
                                                            lockdep_inject_store};
 #endif
 
-/** Start the processors past the first (`smp_start`), the lockup
+/** Start the processors past the first (`smp_start`) and register their
+ * devices (`platform_cpus_started`), the lockup
  * detectors on all of them (`watchdog_init`) and the flusher
  * (`writeback_init`), then register bkl/calls, bkl/profile, bkl/long,
  * bkl/tick, cputime_test and, with the checker, lockdep/inject in
@@ -4664,6 +4665,7 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
 static void start_processors(void)
 {
     smp_start();
+    platform_cpus_started();
     pci_msi_rebalance();
     watchdog_init();
     writeback_init();
