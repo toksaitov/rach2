@@ -9,11 +9,15 @@ several runs recorded keeps every failure count they gave, the fewest checks
 and the most skips, as linux.json keeps the discovery's runs. A Wine unit
 that ends before its summary keeps the fewest test lines it printed, and its
 exit only when every run gave the same one, since a unit that crashes ends
-with an exit that varies from run to run. SOURCE is the reference's own
-description of where it was taken. A vkd3d-proton test that "placement",
-below, does not name, whose runs failed two or more different nonzero
-numbers of checks, also keeps the source lines of the checks it failed in
-any run, `varying_lines`, by which run.py judges it in place of the count.
+with an exit that varies from run to run. A Wine unit whose runs ended in
+their summaries with different failure counts keeps every count, its exit
+only when every run gave the same one, and the source lines of the checks
+it failed in any run, `varying_lines`, by which run.py judges it in place of
+the count. SOURCE is the reference's own description of where it was taken.
+A vkd3d-proton test that "placement", below, does not name, whose runs
+failed two or more different nonzero numbers of checks, also keeps the
+source lines of the checks it failed in any run, `varying_lines`, by which
+run.py judges it in place of the count.
 
 -s names a unit, PATH/EXE:NAME of Wine's or a vkd3d-proton test, that its
 author saw stall in Linux's runs, its process alive and idle, and stopped:
@@ -43,6 +47,7 @@ STALL = "dxgi.c:8040, d3d10 test 2, unexpected present count 1, expected 2; stop
 PLACEMENT = ("test_suballocate_va_alignment",)
 SEGV = (-signal.SIGSEGV, 128 + signal.SIGSEGV)
 TEST_LINE = r"^\w+\.c:\d+: "
+WINE_FAILED = r"^(\w+\.c:\d+): Test (?:failed|succeeded inside todo block): "
 VK_LINE = r"^test_\w+:\d+: "
 VK_FAILED = r"^%s:(\d+): Test failed: "
 
@@ -95,6 +100,9 @@ def main():
     ref = {"source": source, "probe": {}, "wine": {}, "vkd3d": {}, "flakes": []}
     adapters = set()
     failed_lines = {}
+    # Each Wine unit's runs with a summary: the run, its count of failures
+    # and the source lines of the failures its log printed.
+    wine_failed = {}
     for top in dirs:
         for row_dir in sorted(p for p in Path(top).iterdir() if p.is_dir()):
             env = json.loads((row_dir / "environment.json").read_text())
@@ -139,8 +147,11 @@ def main():
                     lines = len(re.findall(TEST_LINE, (row_dir / "unit.log").read_text(errors="replace"), re.M))
                     new = {"exit": result["exit"], "summary": False, "failures": 0, "min_lines": lines}
                 else:
-                    new = {"exit": result["exit"], "summary": True, "failures": counts[3],
+                    new = {"exit": result["exit"], "summary": True, "failures": [counts[3]],
                            "min_checks": counts[0], "max_skipped": counts[4]}
+                    text = (row_dir / "unit.log").read_text(errors="replace")
+                    wine_failed.setdefault((path, unit), []).append(
+                        (row_dir, counts[3], re.findall(WINE_FAILED, text, re.M)))
                 if old is not None and ("progress" in old) != ("progress" in new):
                     fail("%s: %s stalled in one run and not in another" % (row_dir, row))
                 if old is not None and "progress" not in new:
@@ -150,9 +161,10 @@ def main():
                         new["min_lines"] = min(old["min_lines"], new["min_lines"])
                         if old["exit"] != new["exit"]:
                             new["exit"] = None
-                    elif (old["exit"], old["failures"]) != (new["exit"], new["failures"]):
-                        fail("%s: %s ended in two ways, %s and %s" % (row_dir, row, old, new))
                     if new["summary"]:
+                        if old["exit"] != new["exit"]:
+                            new["exit"] = None
+                        new["failures"] = sorted(set(old["failures"]) | set(new["failures"]))
                         new["min_checks"] = min(old["min_checks"], new["min_checks"])
                         new["max_skipped"] = max(old["max_skipped"], new["max_skipped"])
                 units[unit] = new
@@ -177,6 +189,17 @@ def main():
                         int(n) for n in re.findall(VK_FAILED % re.escape(name), text, re.M))
             else:
                 fail("%s: unknown family %s" % (row_dir, family))
+    for (path, name), runs in wine_failed.items():
+        unit = ref["wine"][path][name]
+        if len(unit["failures"]) == 1:
+            unit["failures"] = unit["failures"][0]
+            continue
+        # Wine silences a line's records past a threshold, which would hide
+        # a failure from run.py's comparison of lines.
+        for row_dir, count, failed in runs:
+            if len(failed) != count:
+                fail("%s: %s/%s counted %d failures but printed %d" % (row_dir, path, name, count, len(failed)))
+        unit["varying_lines"] = sorted(set().union(*(failed for _, _, failed in runs)))
     if len(adapters) != 1:
         fail("the records name the adapters %s, not one" % sorted(adapters))
     for name, unit in ref["vkd3d"].items():

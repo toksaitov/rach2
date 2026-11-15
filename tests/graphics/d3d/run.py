@@ -19,6 +19,9 @@ WINE_SUMMARY = r"%s: (\d+) tests executed \((\d+) marked as todo, (\d+) as flaky
 # A line a Wine test prints for one of its checks, the progress of a unit
 # that ends before its summary.
 TEST_LINE = r"^\w+\.c:\d+: "
+# The source file and line of each check that counts as a Wine test's
+# failure: one that failed, or one inside a todo block that passed.
+WINE_FAILED = r"^(\w+\.c:\d+): Test (?:failed|succeeded inside todo block): "
 VK_SUMMARY = r"(\d+) tests executed \((\d+) failures, (\d+) successful todo, (\d+) skipped, (\d+) todo, (\d+) bugs\)"
 # The source line of each check a vkd3d-proton test failed.
 VK_FAILED = r"^%s:(\d+): Test failed: "
@@ -213,6 +216,22 @@ def summaries(text, expression):
     """Sum a unit's own and child summaries, returning None when no summary was written."""
     found = re.findall(expression, text)
     return [sum(int(row[i]) for row in found) for i in range(len(found[0]))] if found else None
+
+
+def wine_failures(failures, text, expected):
+    """Return whether a Wine unit's failures are ones Linux's runs allow.
+
+    FAILURES is the count of the unit's summaries and TEXT its log. A unit
+    whose runs on Linux counted different failures has the source lines its
+    failures were on in any of them, `varying_lines`: each failure here must
+    be on one of those lines, and the log must print as many failures as the
+    summaries count. Any other unit's count must equal Linux's `failures`.
+    """
+    varying = expected.get("varying_lines")
+    if not varying:
+        return failures == expected["failures"]
+    failed = re.findall(WINE_FAILED, text, re.M)
+    return len(failed) == failures and set(failed) <= set(varying)
 
 
 def adapter_name(text):
@@ -431,7 +450,7 @@ def main():
                 actual["matched"] = record or ((stopped or counts is not None) if stop else (
                     expected["exit"] in (None, rc) and (counts is not None) == expected["summary"] and
                     (lines >= expected.get("min_lines", 0) if counts is None else
-                     (counts[3] == expected["failures"] and
+                     (wine_failures(counts[3], text, expected) and
                       counts[0] >= expected["min_checks"] and counts[4] <= expected["max_skipped"]))))
                 results[unit] = actual
         elif family == "vkd3d":
