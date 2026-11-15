@@ -44,7 +44,14 @@ devices, and one that failed or crashed in the reference may end as it
 likes. A reference's `skip-or-pass` marks a setup skip, not a device's
 answer, and requires either skip or pass here. A name the reference has
 and this run lacks is worse, and so is one
-this run alone has that neither passes nor skips. SAMPLE, the names a
+this run alone has that neither passes nor skips. An IGT dynamic subtest
+is named by its pipe and the output IGT gave that pipe, `@pipe-P-OUTPUT`,
+and IGT gives each pipe after the panel's to a connected external output
+when there is one: a reference name of that form that this run lacks is
+judged by this run's one name of the same subtest and pipe with another
+output, which the reference lacks, as `judge: output: ...` says, so that a
+second display moves a row to its own name without leaving the pipe
+untested. SAMPLE, the names a
 list's run of piglit.sh took, its NAME.sample, keeps of the reference those
 tests and their subtests, for a run of a part of the list the reference ran
 whole. LIST, the list the sample was taken from, tells a subtest from a
@@ -330,6 +337,26 @@ def scope(path):
     return within
 
 
+DYNAMIC_PIPE = re.compile(r"^(igt@.*@pipe-[a-z])-([^@]+)$")
+
+
+def moved_outputs(ref, got):
+    """The names of REF that GOT lacks, each mapped to GOT's name of the
+    same IGT dynamic subtest and pipe with another output, which REF lacks,
+    where each side has one such name."""
+    def by_pipe(names):
+        found = collections.defaultdict(list)
+        for name in names:
+            m = DYNAMIC_PIPE.match(name)
+            if m:
+                found[m.group(1)].append(name)
+        return found
+    lost = by_pipe(set(ref) - set(got))
+    lone = by_pipe(set(got) - set(ref))
+    return {names[0]: lone[key][0] for key, names in lost.items()
+            if len(names) == 1 and len(lone.get(key, ())) == 1}
+
+
 def results(ref_path, got_path, sample_path=None, flakes_path=None,
             scope_path=None, exclusions_path=None, list_path=None):
     within = scope(scope_path)
@@ -343,16 +370,21 @@ def results(ref_path, got_path, sample_path=None, flakes_path=None,
             flakes = [re.compile(line.strip()) for line in f
                       if line.strip() and not line.startswith("#")]
     flaky = {name for name in set(ref) | set(got) if any(p.search(name) for p in flakes)}
+    moved = moved_outputs(ref, got)
     worse = []
     for name in sorted(set(ref) - flaky):
-        r, g = ref[name], got.get(name)
+        r, g, shown = ref[name], got.get(name), name
+        if g is None and name in moved:
+            shown = moved[name]
+            print("judge: output: %s here for %s" % (shown, name))
+            g = got[shown]
         if g is None:
             worse.append((name, "%s: not run here, %s in the reference" % (name, r)))
         elif r in ("pass", "skip") and g != r:
-            worse.append((name, "%s: %s here, %s in the reference" % (name, g, r)))
+            worse.append((name, "%s: %s here, %s in the reference" % (shown, g, r)))
         elif r == "skip-or-pass" and g not in ("skip", "pass"):
-            worse.append((name, "%s: %s here, %s in the reference" % (name, g, r)))
-    for name in sorted(set(got) - set(ref) - flaky):
+            worse.append((name, "%s: %s here, %s in the reference" % (shown, g, r)))
+    for name in sorted(set(got) - set(ref) - set(moved.values()) - flaky):
         if got[name] not in ("pass", "skip"):
             worse.append((name, "%s: %s here, not in the reference" % (name, got[name])))
     worse = report(worse, excluded(exclusions_path), lambda w: w[0])
