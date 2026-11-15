@@ -26,7 +26,8 @@
  *
  * A sibling blocks in poll with no requested events on an unreaped child's
  * pidfd. Reaping the child wakes it with POLLHUP. Each queued-signal call
- * copies siginfo from a file page not yet faulted into the caller's mapping;
+ * copies siginfo from a file page not yet faulted into the caller's mapping,
+ * and the copy counts the page's fault, minor or major;
  * the signal retains its code, sender, errno and value. rt_sigqueueinfo
  * and rt_tgsigqueueinfo reject an unreadable siginfo before a missing
  * target, and pidfd_send_signal a descriptor that is not open before the
@@ -565,17 +566,41 @@ out:
     return 0;
 }
 
-/** Return the count of faults that read a file, or -1 on failure. */
-static long major_faults(void)
+/** Return the page faults of the caller, minor and major, or -1 on failure.
+ * A fault served from the page cache is minor and one that reads the file
+ * major, so a file page's first touch counts in one or the other. */
+static long all_faults(void)
 {
     struct rusage ru;
 
-    return getrusage(RUSAGE_SELF, &ru) == 0 ? ru.ru_majflt : -1;
+    return getrusage(RUSAGE_SELF, &ru) == 0 ? ru.ru_minflt + ru.ru_majflt : -1;
+}
+
+/** Map each of the three pages of the file `fd` alone, page i two pages
+ * after page i - 1, in a reservation of five pages whose gaps stay
+ * PROT_NONE. Returns the reservation, which the caller unmaps whole, or
+ * MAP_FAILED with nothing mapped. */
+static char *map_alone(int fd)
+{
+    char *base = mmap(NULL, 5 * 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int i;
+
+    for (i = 0; base != MAP_FAILED && i < 3; i++) {
+        if (mmap(base + 2 * i * 4096, 4096, PROT_READ, MAP_PRIVATE | MAP_FIXED, fd, i * 4096) ==
+            MAP_FAILED) {
+            munmap(base, 5 * 4096);
+            base = MAP_FAILED;
+        }
+    }
+    return base;
 }
 
 /** Send queued siginfo through each call, faulting a fresh file page.
- * The temporary file is unlinked before use; mappings, descriptors and the
- * signal mask are restored on every return. */
+ * Each page of the file is mapped alone, a page apart from the next, so
+ * that no fault maps another around its own, as a fault of a file in the
+ * page cache does on Linux and Rach2, and the copy of each call takes its
+ * page's first fault. The temporary file is unlinked before use; mappings,
+ * descriptors and the signal mask are restored on every return. */
 static int file_info(void)
 {
     const char *tmp = getenv("TMPDIR");
@@ -622,22 +647,23 @@ static int file_info(void)
         }
     }
     pidfd = (int)syscall(SYS_pidfd_open, (long)pid, 0L);
-    mapping = mmap(NULL, 3 * 4096, PROT_READ, MAP_PRIVATE, fd, 0);
+    mapping = map_alone(fd);
     if (pidfd < 0 || mapping == MAP_FAILED) {
         goto out;
     }
     for (i = 0; i < 3; i++) {
-        before = major_faults();
+        before = all_faults();
         if (i == 0) {
-            rc = syscall(SYS_pidfd_send_signal, (long)pidfd, (long)SIGUSR1, mapping + i * 4096, 0L);
+            rc = syscall(SYS_pidfd_send_signal, (long)pidfd, (long)SIGUSR1, mapping + 2 * i * 4096,
+                         0L);
         } else if (i == 1) {
-            rc = syscall(SYS_rt_sigqueueinfo, (long)pid, (long)SIGUSR1, mapping + i * 4096);
+            rc = syscall(SYS_rt_sigqueueinfo, (long)pid, (long)SIGUSR1, mapping + 2 * i * 4096);
         } else {
             rc = syscall(SYS_rt_tgsigqueueinfo, (long)pid, syscall(SYS_gettid), (long)SIGUSR1,
-                         mapping + i * 4096);
+                         mapping + 2 * i * 4096);
         }
         error = "queued siginfo did not fault its file page or retain its fields";
-        if (rc != 0 || before < 0 || major_faults() <= before ||
+        if (rc != 0 || before < 0 || all_faults() <= before ||
             sigtimedwait(&set, &got, &zero) != SIGUSR1 || got.si_code != SI_QUEUE ||
             got.si_errno != 37 || got.si_pid != pid || got.si_uid != getuid() ||
             got.si_value.sival_int != 100 + i) {
@@ -648,7 +674,7 @@ static int file_info(void)
     error = NULL;
 out:
     if (mapping != MAP_FAILED) {
-        munmap(mapping, 3 * 4096);
+        munmap(mapping, 5 * 4096);
     }
     if (pidfd >= 0) {
         close(pidfd);
