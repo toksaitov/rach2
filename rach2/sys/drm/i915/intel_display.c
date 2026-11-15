@@ -1091,9 +1091,8 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
 /** Before the planes: a pipe that comes on turned on, as Linux's commit
  * tail turns it on before it writes the planes, else its new colour set
  * and the watermarks raised to cover the planes the commit shows; and an
- * async flip's flip done unmasked, since the chip latches only an
- * unmasked event and the flip may be done as soon as the surface is
- * written. */
+ * async flip's event installed before flip done is unmasked, since the
+ * flip may be done as soon as the surface is written. */
 static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
