@@ -1085,6 +1085,56 @@ static void row_addfb_tiling(void)
           "addfb: X tiles past the object in whole rows refused, within it taken");
 }
 
+/** The sprite's FP16 gamma and colour properties on the sprite object
+ * `h`: an FP16 framebuffer turns the sprite's own gamma on with Linux's
+ * ramp of four times the input, and COLOR_ENCODING and COLOR_RANGE, at
+ * Linux's BT.709 limited range first, set SPRCTL's bits. */
+static void sprite_color(uint32_t h)
+{
+    static const struct place at = {0, 0, 64, 64, 10, 20, 64, 64};
+    struct drm_plane *sp = &pa->sprite;
+    struct req r;
+    uint32_t fb, max = 1023u << 20 | 1023u << 10 | 1023u;
+
+    CHECK(sp->color_encoding_property && sp->color_range_property &&
+              sp->state->color_encoding == DRM_COLOR_YCBCR_BT709 &&
+              sp->state->color_range == DRM_COLOR_YCBCR_LIMITED_RANGE,
+          "sprite: COLOR_ENCODING and COLOR_RANGE at BT.709 limited range");
+    fb = addfb(h, 64, 64, DRM_FORMAT_XRGB16161616F, 512, NO_MODIFIER);
+    CHECK(fb && plane_commit(sp, fb, &at, 0) == 0 &&
+              reg(SPRCTL(0)) ==
+                  (SPRITE_ENABLE | SPRITE_FORMAT_RGBX161616 | SPRITE_YUV_TO_RGB_CSC_FORMAT_BT709),
+          "sprite: FP16 shown with its own gamma on");
+    CHECK(reg(SPRGAMC(0, 0)) == 0 && reg(SPRGAMC(0, 1)) == (256u << 20 | 256u << 10 | 256u) &&
+              reg(SPRGAMC(0, 3)) == (768u << 20 | 768u << 10 | 768u) && reg(SPRGAMC(0, 4)) == max &&
+              reg(SPRGAMC(0, 15)) == max && reg(SPRGAMC16(0, 0)) == 1024u &&
+              reg(SPRGAMC16(0, 2)) == 1024u && reg(SPRGAMC17(0, 0)) == 3072u &&
+              reg(SPRGAMC17(0, 2)) == 3072u,
+          "sprite: FP16's gamma is Linux's ramp of four times the input");
+    frame();
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &sp->base, sp->color_encoding_property, DRM_COLOR_YCBCR_BT2020);
+    CHECK(req_commit(&r, 0) == -EINVAL, "sprite: BT.2020, which it does not offer, refused");
+    fb = addfb(h, 64, 64, DRM_FORMAT_YUYV, 128, NO_MODIFIER);
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &sp->base, mc->prop_fb_id, fb);
+    req_add(&r, &sp->base, sp->color_encoding_property, DRM_COLOR_YCBCR_BT601);
+    req_add(&r, &sp->base, sp->color_range_property, DRM_COLOR_YCBCR_FULL_RANGE);
+    CHECK(fb && req_commit(&r, 0) == 0 &&
+              reg(SPRCTL(0)) == (SPRITE_ENABLE | SPRITE_PLANE_GAMMA_DISABLE | SPRITE_FORMAT_YUV422 |
+                                 SPRITE_YUV_ORDER_YUYV | SPRITE_YUV_RANGE_CORRECTION_DISABLE),
+          "sprite: YUYV at BT.601 full range, its own gamma off");
+    frame();
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &sp->base, sp->color_encoding_property, DRM_COLOR_YCBCR_BT709);
+    req_add(&r, &sp->base, sp->color_range_property, DRM_COLOR_YCBCR_LIMITED_RANGE);
+    CHECK(req_commit(&r, 0) == 0 &&
+              reg(SPRCTL(0)) == (SPRITE_ENABLE | SPRITE_PLANE_GAMMA_DISABLE | SPRITE_FORMAT_YUV422 |
+                                 SPRITE_YUV_ORDER_YUYV | SPRITE_YUV_TO_RGB_CSC_FORMAT_BT709),
+          "sprite: YUYV at BT.709 limited range");
+    frame();
+}
+
 /** The sprite's registers, its checks, and the low-power watermarks off
  * once it shows. */
 static void row_sprite(void)
@@ -1115,6 +1165,7 @@ static void row_sprite(void)
     frame();
     CHECK(i915_model_pipes(&model)->pipe[0].sprite.surf == BO_GGTT(8),
           "sprite: scanned after the vblank");
+    sprite_color(h);
     CHECK(plane_commit(&pa->sprite, 0, &full, 0) == 0 && reg(SPRCTL(0)) == 0, "sprite: turned off");
     frame();
 }
