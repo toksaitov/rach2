@@ -4012,20 +4012,24 @@ static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
  * MemAvailable is the free count and the three together, as Linux's
  * si_mem_available adds its reclaimable kernel memory. SwapCached, which
  * IGT adds to Cached, is 0, as SwapTotal and SwapFree are, since nothing is
- * swapped. HeapPages and
- * HeapUsed are the kernel heap's pages and the bytes in use inside it, for a
- * test that makes and frees objects and requires the heap back where it
- * started. Slab, last, is the heap's pages but the buffer cache's, which
- * the heap holds and Buffers counts, in kilobytes: the kernel's own objects
- * as Linux's slab holds them, which BusyBox's nmeter adds to MemFree,
- * Buffers and Cached, and subtracts from MemTotal, for the memory in use.
- * Every count is taken before the first append, which may take a page for
- * the heap.
+ * swapped. HeapPages and HeapUsed are the kernel heap's pages and the bytes
+ * in use inside it, for a test that makes and frees objects and requires
+ * the heap back where it started. LowTotal and LowFree are the window's
+ * frames, the memory below HARD_MEMORY_LIMIT that a device can be given and
+ * `alloc_kernel_frame` takes from, under Linux's names for its low memory:
+ * a test watches LowFree for the pool whose end makes a driver's allocation
+ * fail. Slab, last, is the heap's pages but the buffer cache's, which the
+ * heap holds and Buffers counts, in kilobytes: the kernel's own objects as
+ * Linux's slab holds them, which BusyBox's nmeter adds to MemFree, Buffers
+ * and Cached, and subtracts from MemTotal, for the memory in use. Every
+ * count is taken before the first append, which may take a page for the heap.
  */
 static int procfs_gen_meminfo(struct procfs_text *t)
 {
     size_t total = frame_total_count();
     size_t free_frames = frame_free_count();
+    size_t low_total = frame_window_total_count();
+    size_t low_free = frame_window_free_count();
     uint32_t buffers = bcache_resident();
     uint32_t cached = pc_resident() + filecache_pages();
     uint32_t kreclaim = kheap_reclaimable();
@@ -4051,6 +4055,10 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_str(t, "HeapUsed:       ");
     ap_ulong(t, (unsigned long)heap_bytes);
     ap_str(t, "\n");
+    ap_str(t, "LowTotal:       ");
+    ap_frames_as_kb(t, low_total);
+    ap_str(t, "LowFree:        ");
+    ap_frames_as_kb(t, low_free);
     ap_str(t, "SwapTotal:             0 kB\n");
     ap_str(t, "SwapFree:              0 kB\n");
     ap_str(t, "KReclaimable:   ");

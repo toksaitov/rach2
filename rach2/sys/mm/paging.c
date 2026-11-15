@@ -43,6 +43,8 @@ static uint8_t *_frame_anon;
 static size_t _window_frames;
 /* The frames the allocator manages, counted at boot (`frame_total_count`). */
 static size_t _managed_frames;
+/* Those of them in the window (`frame_window_total_count`). */
+static size_t _managed_window_frames;
 static size_t _free_frames; /* words of the table that are 0, kept by every writer */
 
 static void frame_take(uintptr_t frame);
@@ -58,7 +60,7 @@ static uintptr_t _next_free_frame;
  * so the last WINDOW_KEEP of them are left to `alloc_kernel_frame`, which
  * takes from the window's top for the block requests and the page cache. */
 static uintptr_t _next_free_upper;
-static size_t _free_window_frames; /* free frames below the window */
+static size_t _free_window_frames; /* free frames of the window */
 #define WINDOW_KEEP 64u
 /* rach2.framehigh, a test switch: the scan for a frame starts at 4 GiB, so
  * the heap's pages and the buffers a device is given of them lie above it
@@ -337,6 +339,22 @@ static uintptr_t frame_prev_free(uintptr_t floor, uintptr_t from)
  * HARD_MEMORY_LIMIT and PAGE_SIZE again, so that frame.c compiles on the
  * host, and the boot stops if the two copies differ.
  */
+/** Count the frames the allocator manages, the free ones above the boot's
+ * reservations, and those of them in the window, once at boot. */
+static void frame_count_managed(void)
+{
+    uintptr_t frame;
+
+    _managed_frames = 0;
+    _managed_window_frames = 0;
+    for (frame = _user_frames_start; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0) {
+            _managed_frames++;
+            _managed_window_frames += frame < _window_frames;
+        }
+    }
+}
+
 void init_paging(struct frame_map *map)
 {
     uintptr_t frame, first, last;
@@ -415,12 +433,7 @@ void init_paging(struct frame_map *map)
     if (map->top_frame) {
         frame_map_reserve(map, 0, mem_reserved_ptr);
     }
-    _managed_frames = 0;
-    for (frame = _user_frames_start; frame < _frames_number; frame++) {
-        if (_frames[frame] == 0) {
-            _managed_frames++;
-        }
-    }
+    frame_count_managed();
     _free_frames = 0;
     _free_window_frames = 0;
     for (frame = 0; frame < _frames_number; frame++) {
@@ -3410,6 +3423,17 @@ size_t frame_total_count(void)
 size_t frame_free_count(void)
 {
     return _free_frames;
+}
+
+size_t frame_window_total_count(void)
+{
+    return _managed_window_frames;
+}
+
+/** Read without a lock, as `frame_free_count` is. */
+size_t frame_window_free_count(void)
+{
+    return _free_window_frames;
 }
 
 /**
