@@ -676,6 +676,13 @@ and are in kibibytes.
 is the kernel heap's page count;
 .Li HeapUsed
 is the number of bytes in use within it.
+.Li LowTotal
+and
+.Li LowFree
+give the total and free frames of the low window, the first 64 MiB, whose
+addresses every device can be given: the pool of the kernel's frames for
+device buffers, the disk window's cache and the virtio queues, taken by user
+pages only once the memory above it is gone, as Linux's low memory is.
 .Li SwapTotal
 and
 .Li SwapFree

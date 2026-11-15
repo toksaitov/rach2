@@ -775,6 +775,16 @@ size_t frame_total_count(void);
  * read without a lock: a reader gets the count at one moment. */
 size_t frame_free_count(void);
 
+/** The frames of the window, below HARD_MEMORY_LIMIT, that the allocator
+ * manages, counted at boot as `frame_total_count` counts them: the pool of
+ * `alloc_kernel_frame`, and of user pages once the frames above it are
+ * gone. */
+size_t frame_window_total_count(void);
+
+/** The window's frames free now: what `alloc_kernel_frame` can still give,
+ * read without a lock. */
+size_t frame_window_free_count(void);
+
 /**
  * Make every page table of [va_start, va_start + size) in the kernel's
  * directory, with no page mapped, so that `map_kernel_frame` can later write
