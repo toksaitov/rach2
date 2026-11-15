@@ -1,10 +1,29 @@
 #!/bin/sh
 #
-# pre-push: refuse a push whose new commits on a milestone branch fail the
-# checks of the commit hook, or link no longer in a host test. A rebase runs
-# no commit hook, so this is where a rebased task is judged. Other branches
-# pass, so that unfinished work can always be saved.
+# pre-push: refuse a push that carries a commit the history rewrite of
+# 2026-11-15 replaced, which dev-log/commit-map-2026-11-15.tsv lists as old,
+# since the old commits hold data the rewrite removed; then refuse a push
+# whose new commits on a milestone branch fail the checks of the commit hook,
+# or link no longer in a host test. A rebase runs no commit hook, so this is
+# where a rebased task is judged. Other branches pass, so that unfinished work
+# can always be saved.
 #
-# tools/verify/hookcheck.sh does the work; its header says how.
+# tools/verify/hookcheck.sh does the second part; its header says how.
 #
-exec sh "$(dirname "$0")/../verify/hookcheck.sh" push
+refs=$(cat)
+map="$(dirname "$0")/../../dev-log/commit-map-2026-11-15.tsv"
+[ -f "$map" ] || map=''
+old=$(printf '%s\n' "$refs" | while read -r _ lsha _ _; do
+    # A deletion pushes the all-zero name and carries no commits.
+    [ -n "$(printf '%s' "$lsha" | tr -d 0)" ] || continue
+    git rev-list "$lsha" --not --remotes 2>/dev/null
+done | { if [ -n "$map" ]; then cat "$map"; else git show origin/master:dev-log/commit-map-2026-11-15.tsv; fi; echo; cat; } |
+    awk 'NF == 2 && $1 != "old" { old[$1] = 1; next } NF == 1 && ($1 in old) { print $1; n++ }
+        END { exit 0 }' | head -n 3)
+if [ -n "$old" ]; then
+    echo "pre-push: refused: the push carries commits that the history rewrite replaced:" >&2
+    printf '%s\n' "$old" | sed 's/^/  /' >&2
+    echo "pre-push: rebase the work onto the new history with git rebase --onto NEW OLD, NEW being OLD's partner in dev-log/commit-map-2026-11-15.tsv" >&2
+    exit 1
+fi
+printf '%s\n' "$refs" | exec sh "$(dirname "$0")/../verify/hookcheck.sh" push
