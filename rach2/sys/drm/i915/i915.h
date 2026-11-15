@@ -1317,6 +1317,14 @@ struct intel_scanout {
     struct i915_vma *vma;
 };
 
+/** A replaced cursor's scanout, kept until the frame after its last
+ * surface write. The commit lock protects the list. */
+struct intel_cursor_retire {
+    struct intel_cursor_retire *next;
+    struct intel_scanout scanout;
+    uint32_t frame;
+};
+
 /** A request a pipe boosts at its next vblank, Linux's wait_rps_boost:
  * `rq` holds a fence reference, and the entry a vblank reference. */
 struct intel_boost {
@@ -1391,6 +1399,8 @@ struct intel_crtc {
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
     uint32_t shown_from[INTEL_NUM_PLANES], shown_to[INTEL_NUM_PLANES];
+    struct intel_cursor_retire *cursor_retired;
+    struct drm_work cursor_work; /* frees retired cursors under mode_lock */
     struct intel_boost *boosts;
     uint8_t rps_mark;
 };
@@ -3050,16 +3060,17 @@ void intel_wm_sanitize(struct drm_i915_private *i915);
  * the DRM device's `event_lock`. */
 void intel_wm_cancel(struct intel_crtc *crtc);
 
-/** Unmask the flip done of `crtc` when its new state in `state` is an
- * async flip with an event. From the CRTC's `atomic_begin`, before the
- * planes are written. */
+/** Install the event and unmask flip done when `crtc`'s new state in
+ * `state` is an async flip. From `atomic_begin`, before the surface write
+ * can complete the flip. */
 void intel_crtc_arm_flip_done(struct intel_crtc *crtc, struct drm_atomic_state *state);
 
 /**
  * Hand the event of `crtc`'s new state in `state` to the vblank path: the
  * commit's flip armed and its event held until the frame counter passes
  * the count read now, or sent now on a pipe that is off or without its
- * vblanks. From the CRTC's `atomic_flush`, after the planes are written.
+ * vblanks. From `atomic_flush` after the planes, or, for an async flip,
+ * from `atomic_begin` before the surface write.
  */
 void intel_crtc_arm_event(struct intel_crtc *crtc, struct drm_atomic_state *state);
 

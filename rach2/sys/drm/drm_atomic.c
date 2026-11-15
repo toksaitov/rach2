@@ -2125,6 +2125,29 @@ static struct commit_work *work_overlapping(const struct drm_atomic_state *state
     return w;
 }
 
+/** Whether queued hardware work would overwrite an independent cursor
+ * update of `plane`; the caller holds the commit lock. */
+int drm_atomic_helper_plane_pending(struct drm_plane *plane)
+{
+    struct commit_work *w;
+    struct drm_crtc *crtc = plane->state->crtc;
+    uint32_t flags = spin_lock_irqsave(&work_lock);
+    int pending = 0;
+
+    for (w = works; w && !pending; w = w->next) {
+        struct drm_crtc_state *cs;
+
+        if (w->state.dev != plane->dev) {
+            continue;
+        }
+        cs = crtc ? w->state.crtcs_new[crtc->index] : NULL;
+        pending = w->state.planes_new[plane->index] != NULL ||
+                  (cs && (drm_atomic_crtc_needs_modeset(cs) || cs->color_mgmt_changed));
+    }
+    spin_unlock_irqrestore(&work_lock, flags);
+    return pending;
+}
+
 /* What a commit stalled on a queued one waits with: its state and the
  * tick its sleep wakes at, the queued commit's fence timeout, 0 for
  * none. */
@@ -2274,27 +2297,38 @@ static int32_t implicit_fences(struct drm_atomic_state *state)
     return 0;
 }
 
-/** The work that defers a nonblocking `state` with an in-fence not yet
- * signalled to the commit worker, or NULL: the commit blocks, no fence
- * waits, or the work or the worker could not be had. */
-static struct commit_work *defer_work(struct drm_atomic_state *state, int nonblock)
+/** Allocate `*work` to defer a nonblocking mode set or an unsignalled
+ * in-fence, or leave it NULL for an inline tail. 0, -ENOMEM or the
+ * worker's start error; failure leaves the state unchanged. */
+static int32_t defer_work(struct drm_atomic_state *state, int nonblock, struct commit_work **work)
 {
-    struct commit_work *w;
-    int i;
+    int32_t rc;
+    int i, defer = 0;
 
+    *work = NULL;
+    for (i = 0; i < DRM_MAX_CRTCS && nonblock; i++) {
+        struct drm_crtc_state *cs = state->crtcs_new[i];
+
+        defer |= cs && drm_atomic_crtc_needs_modeset(cs);
+    }
     for (i = 0; i < DRM_MAX_PLANES && nonblock; i++) {
         struct drm_plane_state *ps = state->planes_new[i];
 
-        if (ps && ps->fence && !dma_fence_is_signaled(ps->fence)) {
-            w = (struct commit_work *)kzalloc(sizeof(*w));
-            if (w && commit_worker_start() != 0) {
-                kfree(w);
-                w = NULL;
-            }
-            return w;
+        defer |= ps && ps->fence && !dma_fence_is_signaled(ps->fence);
+    }
+    if (defer) {
+        *work = (struct commit_work *)kzalloc(sizeof(**work));
+        if (!*work) {
+            return -ENOMEM;
+        }
+        rc = commit_worker_start();
+        if (rc != 0) {
+            kfree(*work);
+            *work = NULL;
+            return rc;
         }
     }
-    return NULL;
+    return 0;
 }
 
 int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state *state,
@@ -2312,9 +2346,11 @@ int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state
     if (rc != 0) {
         return rc;
     }
-    w = defer_work(state, nonblock);
-    /* Linux waits before the swap for a blocking commit; here also for a
-     * nonblocking one the worker cannot take. */
+    rc = defer_work(state, nonblock, &w);
+    if (rc != 0) {
+        return rc;
+    }
+    /* Linux waits before the swap for a blocking commit. */
     if (!w && (rc = wait_for_fences(state, 1)) != 0) {
         return rc;
     }

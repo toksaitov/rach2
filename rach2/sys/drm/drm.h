@@ -1719,13 +1719,18 @@ int32_t drm_atomic_helper_check(struct drm_device *dev, struct drm_atomic_state 
  * free the old states. A blocking commit then waits for its flips, at most
  * 100 ms; a nonblocking one returns before them, and when an in-fence has
  * not signalled it leaves the tail to the commit worker, which runs it once
- * the fences signal. Each CRTC the commit leaves or makes active has an
- * event, the caller's or one of the core's, whose sending ends its pending
- * flip; a legacy cursor update has none and waits for no flip of its own.
+ * the fences signal. A nonblocking mode set always queues its tail. Each
+ * CRTC the commit leaves or makes active has an event, the caller's or
+ * one of the core's, whose sending ends its pending flip; a legacy cursor
+ * update has none and waits for no flip of its own.
  * 0, -EBUSY, -EINTR or -ENOMEM.
  */
 int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state *state,
                                  int nonblock);
+/** Whether a queued commit still programs `plane` or sets its CRTC's
+ * mode or colour. The caller holds the commit lock. An independent
+ * cursor update may replace only its plane state when this returns 0. */
+int drm_atomic_helper_plane_pending(struct drm_plane *plane);
 /**
  * Clip a plane state to its CRTC as Linux's
  * drm_atomic_helper_check_plane_state: set `src`, `dst` and `visible`.

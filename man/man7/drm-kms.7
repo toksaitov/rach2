@@ -191,6 +191,14 @@ The descriptor of each out-fence is reserved and written before the commit
 takes effect, so that a descriptor that cannot be written fails the commit;
 the sync file is given to the caller once the commit has succeeded, and a
 commit that fails writes \-1 to each.
+.Pp
+A nonblocking mode set queues its hardware programming even when no
+in-fence waits.
+On i915, a legacy move or framebuffer change of an enabled cursor with
+unchanged size and rotation updates only that plane, without waiting for
+a primary-plane flip or sending its event.
+A pending update of the cursor itself or its CRTC's mode or colour, and
+cursor on/off, size or rotation changes, use the full commit path.
 .Ss Vblanks and events
 A CRTC whose driver takes its vblank interrupt counts the vblanks it scans
 out, in 64 bits, and stamps each with the
