@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.vgpu",
-  "summary": "Virtio GPU virgl 3D, device loss, blobs and context init",
+  "summary": "Virtio GPU virgl 3D, device loss, a program's exit with thousands of textures, blobs and context init",
   "cases": [
     {
       "case_id": "machine.vgpu.virgl",
@@ -153,6 +153,128 @@
         "plan": "none",
         "class": "layout",
         "reason": "This case requires QEMU virtio-vga-gl and resets that virtual GPU; it uses the guest probe runner under the virgl display profile"
+      }
+    },
+    {
+      "case_id": "machine.vgpu.exit",
+      "behavior": "A child makes 8192 textures on the virgl render node and exits without freeing them, and its exit's CTX_DETACH and RESOURCE_UNREF commands neither empty the window below HARD_MEMORY_LIMIT nor unplug the GPU",
+      "units": [
+        "vgpuprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 268435456,
+          "firmware": "direct",
+          "devices": [],
+          "boot_options": [],
+          "display": "virgl"
+        },
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "vgpuprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the probe removes what it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "flood",
+          "checks": "A child makes a context and 8192 textures of one page each and exits with them open; the window's free frames before and after, and the fewest since boot, are printed",
+          "source": "program"
+        },
+        {
+          "assertion_id": "survives",
+          "checks": "After the child's exit a texture of the parent's file is made and waited on, and the render node opens again as virgl's",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 402653184,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "vgpuprobe",
+          "node": "tests/vgpuprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "This case requires QEMU virtio-vga-gl with a virgl renderer; it uses the guest probe runner under the virgl display profile"
       }
     },
     {

@@ -1,6 +1,8 @@
 /* vgpuprobe.c: virgl capability sets, transfers, submissions and device loss
  * on the virgl QEMU profile, as root, where the reset row unplugs its GPU;
- * and blobs, host-visible memory and CONTEXT_INIT on the Venus profile. */
+ * a program's exit that frees thousands of textures at once, on the same
+ * profile; and blobs, host-visible memory and CONTEXT_INIT on the Venus
+ * profile. */
 #include "probe.h"
 #include "probe_report.h"
 #include "../rach2/sys/drm/virtio_gpu.h"
@@ -19,6 +21,12 @@
 #define VIRGL_RESOURCE_FLAG_MAP_COHERENT    (1u << 2)
 
 #define BLOB_BYTES 64 /* the bytes the blob row writes and reads back */
+
+/* The textures the exit case's child makes and leaves to its exit: each is
+ * freed there with a CTX_DETACH and a RESOURCE_UNREF of a DMA page each,
+ * 64 MiB in all, the whole of the window below HARD_MEMORY_LIMIT. */
+#define EXIT_TEXTURES 8192
+#define EXIT_BATCH    128 /* the textures made between two waits */
 
 static int gpu_fd = -1, other_fd = -1, fence_fd = -1, reset_fd = -1, ctx_fd = -1;
 static void *mapping, *blob_map, *buf_map;
@@ -564,6 +572,147 @@ static void blob_row(void)
     report_held();
 }
 
+static char proc_text[32768]; /* a /proc file read whole */
+
+/** Print the line of /proc file `path` that begins with `key`, as
+ * "VGPUPROBE EXIT `when` line", or nothing when either is missing. */
+static void proc_line(const char *path, const char *key, const char *when)
+{
+    long fd = syscall3(SYS_OPEN, (long)path, 0, 0), n, got = 0;
+    char *line, *end;
+    const char *k;
+
+    if (fd < 0) {
+        return;
+    }
+    while ((n = syscall3(SYS_READ, fd, (long)(proc_text + got),
+                         (long)(sizeof(proc_text) - 1 - got))) > 0) {
+        got += n;
+    }
+    syscall1(SYS_CLOSE, fd);
+    proc_text[got] = 0;
+    for (line = proc_text; *line; line = *end ? end + 1 : end) {
+        for (end = line; *end && *end != '\n'; end++) {
+        }
+        for (k = key; *k && *k == line[k - key]; k++) {
+        }
+        if (!*k) {
+            *end = 0;
+            probe_line("VGPUPROBE EXIT ", when, line);
+            return;
+        }
+    }
+}
+
+/** Print the window's free frames and their fewest since boot, the trace of
+ * the pool whose end unplugged the GPU. */
+static void window_trace(const char *when)
+{
+    proc_line("/proc/meminfo", "LowFree:", when);
+    proc_line("/proc/stat", "window_free_min ", when);
+}
+
+/** Make a 4 by 4 BGRA texture over one page of backing in file `fd`: its
+ * handle, or 0. */
+static uint32_t small_texture(int fd)
+{
+    struct drm_virtgpu_resource_create a;
+
+    zero(&a, sizeof(a));
+    a.target = 2;
+    a.format = 1;
+    a.bind = 2;
+    a.width = a.height = 4;
+    a.depth = a.array_size = 1;
+    a.size = 4096;
+    return call(fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a) == 0 ? a.bo_handle : 0;
+}
+
+/** The exit case's child: open the render node, make a context and
+ * EXIT_TEXTURES textures, waiting on every EXIT_BATCHth so that the commands
+ * of their making are answered, and exit with them all still open. Exits
+ * 0, or 1 with no context, or 2 when a texture could not be made. */
+static void flood_child(const char *path)
+{
+    struct drm_virtgpu_execbuffer e;
+    struct drm_virtgpu_3d_wait w;
+    uint32_t i, handle;
+    int fd = (int)syscall3(SYS_OPEN, (long)path, 2, 0);
+
+    zero(&e, sizeof(e));
+    if (fd < 0 || call(fd, DRM_IOCTL_VIRTGPU_EXECBUFFER, &e) != 0) {
+        syscall1(SYS_EXIT, 1);
+    }
+    for (i = 1; i <= EXIT_TEXTURES; i++) {
+        handle = small_texture(fd);
+        if (!handle) {
+            syscall1(SYS_EXIT, 2);
+        }
+        if (i % EXIT_BATCH == 0) {
+            w.handle = handle;
+            w.flags = 0;
+            (void)call(fd, DRM_IOCTL_VIRTGPU_WAIT, &w);
+        }
+    }
+    syscall1(SYS_EXIT, 0);
+}
+
+/** A child makes EXIT_TEXTURES textures and exits without freeing them, so
+ * that its exit frees them all at once under the big lock, as a piglit
+ * test of every internal format did when virgl's guest lost its GPU. */
+static void flood_row(void)
+{
+    char path[64];
+    long pid;
+    int status = -1;
+
+    find_gpu();
+    render_path(path, (uint32_t)(128 + card_index));
+    syscall1(SYS_CLOSE, other_fd);
+    other_fd = -1;
+    window_trace("before ");
+    pid = syscall0(SYS_FORK);
+    require(pid >= 0, "fork the child that floods");
+    if (pid == 0) {
+        flood_child(path);
+    }
+    require(syscall4(SYS_WAIT4, pid, (long)&status, 0, 0) == pid, "wait for the child");
+    window_trace("after ");
+    require((status & 0x7f) == 0 && ((status >> 8) & 0xff) != 1, "the child's context");
+    require((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0, "the child's 8192 textures");
+    report_held();
+}
+
+/** After the child's exit the GPU is still there: a texture of the
+ * parent's file is made and waited on, and the render node opens again
+ * as virgl's. */
+static void survives_row(void)
+{
+    struct drm_virtgpu_3d_wait w;
+
+    w.handle = small_texture(gpu_fd);
+    w.flags = 0;
+    require(w.handle != 0, "a texture after the exit");
+    require(call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w) == 0, "wait after the exit");
+    syscall1(SYS_CLOSE, gpu_fd);
+    gpu_fd = -1;
+    find_gpu();
+    report_held();
+}
+
+/** The exit case's two rows, on the virgl profile. */
+static void exit_case(void)
+{
+    report_plan("flood");
+    report_plan("survives");
+    flood_row();
+    survives_row();
+    window_trace("end ");
+    report_end();
+    probe_line("VGPUPROBE OK", 0, 0);
+    finish(0);
+}
+
 void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
@@ -581,8 +730,8 @@ static void blob_case(void)
     finish(0);
 }
 
-/** Run the case's rows, the virgl case's eight or the blob case's three,
- * and close every resource on exit. */
+/** Run the case's rows, the virgl case's eight, the exit case's two or the
+ * blob case's three, and close every resource on exit. */
 void probe_main(unsigned long *sp)
 {
     const char *rows[] = {"params", "context",   "resource", "transfer",
@@ -593,6 +742,9 @@ void probe_main(unsigned long *sp)
     report_begin(name);
     if (same(name, "machine.vgpu.blob")) {
         blob_case();
+    }
+    if (same(name, "machine.vgpu.exit")) {
+        exit_case();
     }
     for (i = 0; i < 8; i++) {
         report_plan(rows[i]);
