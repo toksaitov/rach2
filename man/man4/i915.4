@@ -19,6 +19,8 @@
 .Pp
 .Pa /dev/drm_dp_aux Ns Ar N
 .Pp
+.Pa /dev/i2c- Ns Ar N
+.Pp
 .Pa /sys/class/drm/cardN/gt_*_freq_mhz
 .Pp
 .Pa /sys/class/drm/cardN/power/rc6_*
@@ -1002,6 +1004,23 @@ and
 .Pa uevent ,
 and a link in
 .Pa /sys/class/drm_dp_aux_dev .
+.It Pa /dev/i2c- Ns Ar N
+The display's I2C buses, each GMBUS pin's and each eDP and DisplayPort
+channel's I2C over AUX, as
+.Xr i2c-dev 4
+gives them; each connector's
+.Pa ddc
+link names the bus that reads its EDID.
+.It Pa /sys/devices/pci0000:00/0000:00:02.0/power
+The device's runtime power management, as
+.Xr sysfs 5
+gives it.
+Once nothing has used the device for 10 seconds, no pipe is lit and no
+forcewake is held, the driver revokes programs' GTT maps, turns the
+interrupts off, lets the package enter C8, and puts the function in D3hot;
+the next use wakes it, as Linux's runtime suspend and resume do.
+.Pa /sys/kernel/debug/dri/DEVICE/i915_runtime_pm_status
+reports the state.
 .It Pa /sys/kernel/debug/dri/DEVICE/i915_*
 Linux's debugfs files that IGT opens, as
 .Xr debugfs 5
@@ -1081,8 +1100,10 @@ wrapping at 2^32.
 .Xr mmap 2 ,
 .Xr backlight 4 ,
 .Xr drm 4 ,
+.Xr i2c-dev 4 ,
 .Xr watchdog 4 ,
-.Xr debugfs 5
+.Xr debugfs 5 ,
+.Xr sysfs 5
 .Sh HISTORY
 The driver follows Linux 6.12's i915, whose register names and device
 table it takes.

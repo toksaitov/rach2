@@ -198,6 +198,39 @@ or
 whose directory has a link back to the function by its name, as on
 Linux.
 libudev reads a device's driver from this link.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/power
+The runtime power management of a function whose driver has it, as on
+Linux; here
+.Xr i915 4 's .
+.Pa control
+reads
+.Ql auto ,
+which lets the device sleep once nothing has used it for
+.Pa autosuspend_delay_ms ,
+or
+.Ql on ,
+which keeps it awake; root writes either, and a write of
+.Ql on
+wakes it.
+.Pa autosuspend_delay_ms
+takes a number of milliseconds, below 0 to keep the device awake; i915
+sets 10000.
+.Pa runtime_status
+reads
+.Ql active ,
+.Ql suspending ,
+.Ql suspended ,
+.Ql resuming ,
+.Ql unsupported
+before the driver lets the device sleep and after its unbind, or
+.Ql error
+once the driver failed a sleep or a wake, which stops the sleeps until
+.Pa control
+is written.
+.Pa runtime_active_time
+and
+.Pa runtime_suspended_time
+count the milliseconds awake and asleep since the driver took the device.
 .It Pa /sys/bus/pci/drivers/i915/{bind,unbind}
 Write-only, mode 0200; the directory is there once the Intel graphics
 driver has bound a device, under
@@ -492,9 +525,12 @@ its
 .Pa uevent
 with
 .Ql DEVTYPE=drm_connector ;
-and a
+a
 .Pa device
-link to the card.
+link to the card; and, for i915's connectors, a
+.Pa ddc
+link to the I2C adapter that reads the sink's EDID, see
+.Xr i2c-dev 4 .
 .It Pa /sys/dev/char/226:N
 A link for each DRM node, by its numbers, to its directory; libdrm reads
 .Pa device/subsystem ,
@@ -1489,7 +1525,8 @@ directory and no
 .Pa hugepages- Ns Ar N Ns Pa kB
 directories of the sizes Linux's multi-size huge pages add.
 .Pa /sys/dev/char
-lists only the DRM nodes and the event devices.
+lists only the DRM nodes, the event devices, udmabuf, the DisplayPort AUX
+devices, the msr devices and the I2C devices.
 Linux's
 .Pa /sys/block
 holds a link for each disk into its device's directory, which has a

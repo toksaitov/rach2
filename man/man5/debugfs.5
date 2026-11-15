@@ -852,6 +852,35 @@ Reads
 .Ql LPSP: enabled
 when Haswell's global display power well is off, else
 .Ql LPSP: disabled .
+.It Pa dri/DEVICE/i915_runtime_pm_status
+Mode 0444.
+Linux's five lines of the device's runtime power management:
+.Bd -literal -offset indent
+Runtime power status: enabled
+GPU idle: yes
+IRQs disabled: no
+Usage count: 1
+PCI device power state: D0 [0]
+.Ed
+.Pp
+The status is
+.Ql disabled
+before the device is registered and after its unbind; the GPU is idle
+while no request keeps it busy; the interrupts are disabled while the
+device sleeps; the count is the holds that keep it awake, among them one
+while
+.Pa power/control
+reads
+.Ql on ;
+and the power state is
+.Ql D3hot [3]
+while the device sleeps in D3hot, else
+.Ql D0 [0] .
+See
+.Xr sysfs 5
+for the device's
+.Pa power
+directory.
 .It Pa dri/DEVICE/i915_gem_framebuffer
 Mode 0444.
 One line per live framebuffer, read under the mode lock:
