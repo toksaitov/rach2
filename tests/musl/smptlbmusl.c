@@ -25,7 +25,8 @@
  *
  * With two processors or more, a child's thread spins on processor 1 while
  * debugfs's cputime_test has set its user time 25 ticks short of 2^32 ticks
- * and has its tick at the carry write the count's lower half, wait for a
+ * and has its tick at the carry wait half a tick, so that processor 0's
+ * tick at the same edge is done, write the count's lower half, wait for a
  * read of that thread's clock or its process's to begin, and write the
  * upper half a millisecond later, and the child's main thread on processor
  * 0 reads the thread's clock and the process's over and over until the

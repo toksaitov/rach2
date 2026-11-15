@@ -488,7 +488,8 @@ A write of
 .Ql spl TID
 sets the user time of the thread TID of the writer's process to 25 ticks
 short of 2^32 ticks and has each of its ticks, where the upper half
-changes, write the count's lower half, wait until a reading of the
+changes, wait half a tick, so that the other processors' ticks at the
+same time are done, write the count's lower half, wait until a reading of the
 thread's clock or its process's begins or 100 ms pass, and write the
 upper half a
 millisecond later, which no reading of the clock may see; it fails with

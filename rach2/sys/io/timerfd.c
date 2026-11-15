@@ -790,10 +790,31 @@ void ptimer_times_unlock(uint32_t irq)
     spin_unlock_irqrestore(&timer_lock, irq);
 }
 
+/**
+ * Wait half a tick before the tick of the thread `test_split_serial` names
+ * takes `timer_lock` to carry its count `count` into the upper half
+ * (`split_add`). Every processor's tick comes at the same edge
+ * (`hr_next_tick`, apictimer.c) and takes the lock to charge what it
+ * interrupted and again for its timer pass, and the boot processor's runs
+ * the clock's pass first, so without the wait the boot processor's tick
+ * spins on the lock with interrupts off through the whole carry and the
+ * reader there begins no read in it. Reads the serial and `count` without
+ * the lock, which only `test_split` writes besides this processor's tick,
+ * before the carry.
+ */
+static void split_settle(const process_t *p, const uint64_t *count)
+{
+    if (test_split_serial != 0 && p->serial == test_split_serial &&
+        (uint32_t)*count == 0xFFFFFFFFu) {
+        k_udelay((uint32_t)NS_PER_TICK / 2000u);
+    }
+}
+
 void ptimer_cpu_tick(process_t *p, int user)
 {
     struct ktimer *t;
 
+    split_settle(p, user ? &p->utime : &p->stime);
     spin_lock(&timer_lock);
     if (test_split_serial != 0 && p->serial == test_split_serial) {
         split_add(user ? &p->utime : &p->stime);
