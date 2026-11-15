@@ -10,7 +10,8 @@
 # bound. The workspace holds the runners (tests/kvm/bed-shm.sh,
 # tests/assign/gpu.sh, bed/forward/forward.sh), vgshmprobe, the harness
 # (bed/measure) with the graphics runners it uses, and 82-4b's check.sh with
-# the source of 78-10d's crcmodes, which the root's cc builds here. The VMs'
+# the source of 78-10d's crcmodes, which the root's cc, TinyCC, builds here
+# with -static, as it requires of every program (tcc(1)). The VMs'
 # disks, which only an x86-64 Linux host builds, are on the data partition,
 # /dev/disk0p6, in native/bed: vm.disk, the bed's VM raw, and guest.qcow2,
 # guest.tar and id_ed25519, the forward guest's disk, archive and key. SUMS,
@@ -95,7 +96,7 @@ done
 for f in common.sh games.sh piglit.sh; do
     cp "$f" kit/measure/runners/
 done
-cc -std=c99 -O2 -o kit/crcmodes crcmodes.c > crcmodes.build 2>&1 ||
+cc -std=c99 -static -O2 -o kit/crcmodes crcmodes.c > crcmodes.build 2>&1 ||
     fail "crcmodes did not build: $(tail -n 3 crcmodes.build)"
 chmod -R a+rX kit
 
