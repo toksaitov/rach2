@@ -483,6 +483,6 @@ Faults this milestone found in another project's code, one section each, in the 
 * Found: 2026-11-16, QEMU on the testing PC, milestone 84, task 5263, when `bed-shm.sh -k` with #5259's backend, which sets the flag, hung at `vgshmprobe refuse` waiting for the answer to its first persistent GL buffer.
 * Reproduction: on a machine with no DRM render node, call `virgl_renderer_init` with `VIRGL_RENDERER_USE_EGL | VIRGL_RENDERER_USE_SURFACELESS | VIRGL_RENDERER_THREAD_SYNC | VIRGL_RENDERER_USE_EXTERNAL_BLOB` under `LIBGL_ALWAYS_SOFTWARE=1`, then `virgl_renderer_resource_create` with target `PIPE_BUFFER`, format R8_UNORM, bind vertex buffer, width 65536 and flags `MAP_PERSISTENT | MAP_COHERENT`: SIGSEGV; without the flag it returns 0.
 * Evidence: `dev-log/84-locks/84-5263.md`.
-* Rach2: the backend must keep virglrenderer off that path when it has no GBM device (#5259).
+* Rach2: the VM's rebuild of virglrenderer in `bed/vm/image/setup.sh.in` adds `gbm &&` to the condition of that branch (#5265), so that without a GBM device a persistent buffer gets no storage and its export gives `VIRGL_RESOURCE_FD_INVALID` (`vrend_renderer.c:7529-7545`), the `-EINVAL` that `machine.bed-shm.nocopy`'s `refuse` row expects. With a GBM device, as on the Lenovo, nothing changes.
 * Status: unreported.
 * Next: propose that `vrend_create_buffer` fail the resource when `gbm` is NULL, or that the flag keep `glBufferStorage` without a GBM device, and send it with the reproduction above.
