@@ -1048,6 +1048,7 @@ static int32_t gtt_copy(struct drm_i915_private *i915, uint64_t base, uint32_t o
  * i915_gem_gtt_pread and i915_gem_gtt_pwrite_fast: through the object's
  * binding, or a page at a time through a page of the aperture taken for
  * the call, whose entry maps each of the object's pages uncached in turn.
+ * A wakeref is held throughout, as Linux's GTT paths hold one.
  */
 static int32_t gtt_rw(struct drm_i915_gem_object *obj, uint64_t offset, uint64_t size,
                       uint64_t data_ptr, int write)
@@ -1056,9 +1057,12 @@ static int32_t gtt_rw(struct drm_i915_gem_object *obj, uint64_t offset, uint64_t
     uint8_t __user *user = (uint8_t __user *)(uintptr_t)data_ptr;
     struct i915_vma *vma;
     uint64_t node = 0, remain = size, at = offset;
-    int32_t err = gtt_prepare(obj, write, &vma, &node);
+    int32_t err;
 
+    i915_rpm_get(i915);
+    err = gtt_prepare(obj, write, &vma, &node);
     if (err != 0) {
+        i915_rpm_put(i915);
         return err;
     }
     while (remain && err == 0) {
@@ -1083,6 +1087,7 @@ static int32_t gtt_rw(struct drm_i915_gem_object *obj, uint64_t offset, uint64_t
         at += len;
     }
     gtt_cleanup(obj, vma, node);
+    i915_rpm_put(i915);
     return err;
 }
 

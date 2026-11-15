@@ -777,7 +777,10 @@ static int32_t show_freq(void *obj, int arg, char *buf, uint32_t cap)
 
     switch (arg) {
     case SYSFS_ACT:
+        /* Linux's act_freq_mhz_show wakes the device to read it. */
+        i915_rpm_get(i915);
         mhz = i915_rps_read_actual_mhz(i915);
+        i915_rpm_put(i915);
         break;
     case SYSFS_CUR:
         mhz = (uint32_t)rps->cur_freq * RPS_MHZ;
@@ -812,9 +815,12 @@ static int32_t store_freq(void *obj, int arg, const char *buf, uint32_t len)
     int32_t err = sysfs_parse_u32(buf, len, &mhz);
 
     if (err == 0) {
+        /* The limits are written to the chip at once. */
+        i915_rpm_get(i915);
         err = arg == SYSFS_BOOST ? i915_rps_set_boost_mhz(i915, mhz)
               : arg == SYSFS_MAX ? i915_rps_set_max_mhz(i915, mhz)
                                  : i915_rps_set_min_mhz(i915, mhz);
+        i915_rpm_put(i915);
     }
     return err < 0 ? err : (int32_t)len;
 }
@@ -824,11 +830,16 @@ static int32_t store_freq(void *obj, int arg, const char *buf, uint32_t len)
 static int32_t show_rc6(void *obj, int arg, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)obj;
+    uint32_t ms;
 
     if (arg == SYSFS_RC6_ENABLE) {
         return sysfs_emit_u32(buf, cap, i915->rc6.enabled, 16);
     }
-    return sysfs_emit_u32(buf, cap, (uint32_t)i915_rc6_residency_ms(i915), 10);
+    /* Linux's rc6_residency_ms_show reads the counter under a wakeref. */
+    i915_rpm_get(i915);
+    ms = (uint32_t)i915_rc6_residency_ms(i915);
+    i915_rpm_put(i915);
+    return sysfs_emit_u32(buf, cap, ms, 10);
 }
 
 /* Linux's gen6_gt_attrs, in its order. */

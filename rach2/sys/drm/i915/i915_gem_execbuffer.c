@@ -1671,7 +1671,8 @@ static int32_t eb_do(struct eb *eb)
     return err;
 }
 
-int32_t i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+/** EXECBUFFER2 itself; i915_gem_execbuffer2_ioctl holds a wakeref over it. */
+static int32_t execbuffer2(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_i915_gem_execbuffer2 *args = (struct drm_i915_gem_execbuffer2 *)data;
     const size_t each = sizeof(struct drm_i915_gem_exec_object2) + sizeof(struct eb_vma);
@@ -1728,5 +1729,17 @@ int32_t i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data, struct dr
         kfree(eb.ev[i].relocs);
     }
     kfree(eb.exec);
+    return err;
+}
+
+int32_t i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    int32_t err;
+
+    /* Linux's eb_pin_engine and the relocations through the aperture hold
+     * one; the whole call is simpler and wakes no more often. */
+    i915_rpm_get(to_i915(dev));
+    err = execbuffer2(dev, data, file);
+    i915_rpm_put(to_i915(dev));
     return err;
 }

@@ -113,16 +113,19 @@
 #define I915_MASKED_DISABLE(a) ((uint32_t)(a) << 16)
 
 /* The MCHBAR mirror in BAR 0 (intel_mchbar_regs.h). */
-#define MCHBAR_MIRROR_BASE_SNB 0x140000
-#define MAD_DIMM_C0            (MCHBAR_MIRROR_BASE_SNB + 0x5004)
-#define MAD_DIMM_C1            (MCHBAR_MIRROR_BASE_SNB + 0x5008)
-#define MAD_DIMM_B_SIZE_MASK   (0xffu << 8)
-#define MAD_DIMM_A_SIZE_MASK   (0xffu << 0)
-#define GEN6_GT_PERF_STATUS    (MCHBAR_MIRROR_BASE_SNB + 0x5948)
-#define GEN6_RP_STATE_LIMITS   (MCHBAR_MIRROR_BASE_SNB + 0x5994)
-#define GEN6_RP_STATE_CAP      (MCHBAR_MIRROR_BASE_SNB + 0x5998)
-#define DCLK                   (MCHBAR_MIRROR_BASE_SNB + 0x5e04)
-#define D_COMP_HSW             (MCHBAR_MIRROR_BASE_SNB + 0x5f0c)
+#define MCHBAR_MIRROR_BASE_SNB   0x140000
+#define MAD_DIMM_C0              (MCHBAR_MIRROR_BASE_SNB + 0x5004)
+#define MAD_DIMM_C1              (MCHBAR_MIRROR_BASE_SNB + 0x5008)
+#define MAD_DIMM_B_SIZE_MASK     (0xffu << 8)
+#define MAD_DIMM_A_SIZE_MASK     (0xffu << 0)
+#define GEN6_GT_PERF_STATUS      (MCHBAR_MIRROR_BASE_SNB + 0x5948)
+#define GEN6_RP_STATE_LIMITS     (MCHBAR_MIRROR_BASE_SNB + 0x5994)
+#define GEN6_RP_STATE_CAP        (MCHBAR_MIRROR_BASE_SNB + 0x5998)
+#define DCLK                     (MCHBAR_MIRROR_BASE_SNB + 0x5e04)
+#define D_COMP_HSW               (MCHBAR_MIRROR_BASE_SNB + 0x5f0c)
+#define D_COMP_RCOMP_IN_PROGRESS (1u << 9)
+#define D_COMP_COMP_FORCE        (1u << 8)
+#define D_COMP_COMP_DISABLE      (1u << 0)
 
 /* ------------------------------------------------------------------------
  * Interrupts (i915_reg.h): the display engine's, the GT's, the power
@@ -643,6 +646,7 @@
 #define GEN6_PCODE_WRITE_MIN_FREQ_TABLE                 0x8
 #define GEN6_PCODE_READ_MIN_FREQ_TABLE                  0x9
 #define GEN6_READ_OC_PARAMS                             0xc
+#define GEN6_PCODE_WRITE_D_COMP                         0x11
 #define HSW_PCODE_DYNAMIC_DUTY_CYCLE_CONTROL            0x1a
 #define GEN6_PCODE_DATA                                 0x138128
 #define GEN6_PCODE_FREQ_IA_RATIO_SHIFT                  8
@@ -922,10 +926,12 @@
 #define MCH_SSKPD    0x145d10
 #define MCH_SSKPD_HI 0x145d14
 
-/* The fuses: the CD clock held to 450 MHz, and the non-SSC reference of a
- * non-ULT part at 24 MHz instead of 135. */
+/* The fuses: the CD clock held to 450 MHz, the processor's own SSC
+ * reference, and the non-SSC reference of a non-ULT part at 24 MHz
+ * instead of 135. */
 #define FUSE_STRAP         0x42014
 #define HSW_CDCLK_LIMIT    (1u << 24)
+#define HSW_CPU_SSC_ENABLE (1u << 21)
 #define FUSE_STRAP3        0x42020
 #define HSW_REF_CLK_SELECT (1u << 1)
 
@@ -1007,6 +1013,7 @@
 #define WRPLL_REF_BCLK             (0u << 28)
 #define WRPLL_REF_PCH_SSC          (1u << 28)
 #define WRPLL_REF_SPECIAL_HSW      (2u << 28)
+#define WRPLL_REF_MUXED_SSC_BDW    (2u << 28)
 #define WRPLL_REF_LCPLL            (3u << 28)
 #define WRPLL_REF_MASK             (3u << 28)
 #define WRPLL_DIVIDER_REFERENCE(x) ((uint32_t)(x) << 0)
@@ -1107,7 +1114,11 @@
 #define BLC_PWM_CPU_CTL2          0x48250
 #define BLM_PWM_ENABLE            (1u << 31)
 #define BLC_PWM_CPU_CTL           0x48254
+#define HSW_BLC_PWM2_CTL          0x48350
 #define UTIL_PIN_CTL              0x48400
+#define UTIL_PIN_ENABLE           (1u << 31)
+#define UTIL_PIN_MODE_MASK        (0xfu << 24)
+#define UTIL_PIN_MODE_PWM         (1u << 24)
 #define BLC_PWM_PCH_CTL1          0xc8250
 #define BLM_PCH_PWM_ENABLE        (1u << 31)
 #define BLM_PCH_OVERRIDE_ENABLE   (1u << 30)
@@ -1130,6 +1141,33 @@
 #define TRANS_CHICKEN1_DP0UNIT_GC_DISABLE (1u << 4)
 #define SOUTH_DSPCLK_GATE_D               0xc2020
 #define PCH_LP_PARTITION_LEVEL_DISABLE    (1u << 12)
+
+/* The PCH's global time code, which must be off for package C8. */
+#define PCH_GTC_CTL    0xe7000
+#define PCH_GTC_ENABLE (1u << 31)
+
+/*
+ * The PCH's sideband interface (intel_sbi_regs.h): an address, a data
+ * word and a control and status word, through which the driver reaches
+ * the PCH's clock unit (ICLK); and the clock unit's registers that turn
+ * CLKOUT_DP, the reference of FDI, off.
+ */
+#define SBI_ADDR                        0xc6000
+#define SBI_DATA                        0xc6004
+#define SBI_CTL_STAT                    0xc6008
+#define SBI_CTL_DEST_ICLK               (0x0u << 16)
+#define SBI_CTL_DEST_MPHY               (0x1u << 16)
+#define SBI_CTL_OP_IORD                 (0x2u << 8)
+#define SBI_CTL_OP_CRRD                 (0x6u << 8)
+#define SBI_CTL_OP_WRITE                (0x1u << 8)
+#define SBI_RESPONSE_FAIL               (0x1u << 1)
+#define SBI_BUSY                        (0x1u << 0)
+#define SBI_SSCCTL                      0x020c
+#define SBI_SSCCTL_PATHALT              (1u << 3)
+#define SBI_SSCCTL_DISABLE              (1u << 0)
+#define SBI_DBUFF0                      0x2a00
+#define SBI_GEN0                        0x1f00
+#define SBI_GEN0_CFG_BUFFENABLE_DISABLE (1u << 0)
 
 /* ------------------------------------------------------------------------
  * DisplayPort AUX (display/intel_dp_aux_regs.h): port A's channel is the

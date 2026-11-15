@@ -90,8 +90,8 @@ static void aux_unpack(uint32_t v, uint8_t *dst, int n)
  *         done, or a reply of 0 or more than 20 bytes, -EIO for a receive
  *         error and -ETIMEDOUT when no sink answered.
  */
-static int32_t aux_xfer(struct intel_dp *dp, const uint8_t *send, int send_bytes, uint8_t *recv,
-                        int recv_size)
+static int32_t aux_xfer_awake(struct intel_dp *dp, const uint8_t *send, int send_bytes,
+                              uint8_t *recv, int recv_size)
 {
     struct i915_hw *hw = &dp->i915->hw;
     int port = dp->aux_port;
@@ -181,6 +181,19 @@ out:
     if (vdd) {
         intel_pps_vdd_off_unlocked(dp->i915, 0);
     }
+    return ret;
+}
+
+/** aux_xfer_awake under a wakeref, as Linux's intel_dp_aux_xfer holds the
+ * AUX channel's power domain. */
+static int32_t aux_xfer(struct intel_dp *dp, const uint8_t *send, int send_bytes, uint8_t *recv,
+                        int recv_size)
+{
+    int32_t ret;
+
+    i915_rpm_get(dp->i915);
+    ret = aux_xfer_awake(dp, send, send_bytes, recv, recv_size);
+    i915_rpm_put(dp->i915);
     return ret;
 }
 

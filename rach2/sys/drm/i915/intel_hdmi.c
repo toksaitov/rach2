@@ -271,9 +271,16 @@ static int hdmi_set_edid(struct intel_ddi_port *p)
  * alone, since the port's live status is not trusted before Gen 11. */
 static int intel_hdmi_detect(struct drm_connector *connector, int force_probe)
 {
+    struct drm_i915_private *i915 = to_i915(connector->dev);
+    int status;
+
     (void)force_probe;
-    return hdmi_set_edid(hdmi_port(connector)) ? DRM_CONNECTOR_CONNECTED
-                                               : DRM_CONNECTOR_DISCONNECTED;
+    /* Linux's intel_hdmi_detect holds the GMBUS domain's wakeref. */
+    i915_rpm_get(i915);
+    status =
+        hdmi_set_edid(hdmi_port(connector)) ? DRM_CONNECTOR_CONNECTED : DRM_CONNECTOR_DISCONNECTED;
+    i915_rpm_put(i915);
+    return status;
 }
 
 /** A forced connector's EDID, Linux's intel_hdmi_force: read when it is

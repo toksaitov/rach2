@@ -76,12 +76,20 @@ static void bl_set(void *ctx, int level)
  * intel_backlight_enable runs from the encoder's enable. */
 static void bl_power(void *ctx, int on)
 {
-    struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
+    struct drm_i915_private *i915 = (struct drm_i915_private *)ctx;
+    struct intel_display *d = &i915->display;
+    /* A suspended device has its pipes, and so the backlight, off. */
+    int awake = i915_rpm_get_if_active(i915);
     uint32_t flags = spin_lock_irqsave(&d->bl_lock);
 
     d->bl_want_on = on != 0;
-    intelbl_power(&d->bl, on && d->bl_pipe_on && !d->bl_dark);
+    if (awake) {
+        intelbl_power(&d->bl, on && d->bl_pipe_on && !d->bl_dark);
+    }
     spin_unlock_irqrestore(&d->bl_lock, flags);
+    if (awake) {
+        i915_rpm_put(i915);
+    }
 }
 
 static const struct backlight_ops bl_ops = {bl_get, bl_set, bl_power};

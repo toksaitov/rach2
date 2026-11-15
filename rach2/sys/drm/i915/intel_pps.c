@@ -9,6 +9,7 @@
 #include "i915_reg.h"
 
 #include "../../klog.h"
+#include "../../lib/kerrno.h"
 #include "../../rtc.h"
 #include "../../timer.h"
 #include "../../proc/percpu.h"
@@ -323,6 +324,20 @@ void intel_pps_vdd_off_unlocked(struct drm_i915_private *i915, int sync)
     } else {
         pps->vdd_off_due = pps_now_ms() + VDD_OFF_CYCLES * pps->power_cycle_ms;
     }
+}
+
+int32_t intel_pps_vdd_suspend(struct drm_i915_private *i915)
+{
+    struct intel_pps *pps = &i915->display.dp.pps;
+
+    if (!pps->ready) {
+        return 0;
+    }
+    if (pps->want_vdd) {
+        return -EBUSY;
+    }
+    vdd_off_sync(i915);
+    return 0;
 }
 
 void intel_pps_vdd_work(struct drm_i915_private *i915)

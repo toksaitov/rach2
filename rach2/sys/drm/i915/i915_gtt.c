@@ -148,10 +148,13 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
     if (err < 0) {
         return err;
     }
+    /* The entries are written through BAR 0, which D3hot leaves dead. */
+    i915_rpm_get(i915);
     for (i = 0; i < n; i++) {
         i915_gtt_write(&i915->hw, first + i, i915_ggtt_pte_encode(pages[i], cache));
     }
     i915_ggtt_invalidate(i915);
+    i915_rpm_put(i915);
     return 0;
 }
 
@@ -195,6 +198,10 @@ int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, ui
         return err;
     }
     n = (uint32_t)(size / I915_GTT_PAGE_SIZE);
+    /* A sleeping device is not woken to unbind: the resume writes them. */
+    if (!i915_rpm_get_or_defer_clear(i915, offset, size)) {
+        return 0;
+    }
     yield = may_yield && mutex_held(&i915->gem.lock);
     for (i = 0; i < n; i++) {
         i915_gtt_write(&i915->hw, first + i, i915->ggtt.scratch_pte);
@@ -203,6 +210,7 @@ int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, ui
         }
     }
     i915_ggtt_invalidate(i915);
+    i915_rpm_put(i915);
     return 0;
 }
 

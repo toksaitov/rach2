@@ -17,9 +17,30 @@
  * wait, in microseconds. */
 #define I915_WAIT_STEP_MAX 1000u
 
+/* The accesses to a device asleep in D3hot that are logged one by one;
+ * the rest are only counted. */
+#define I915_ASLEEP_LOGGED 8u
+
+/**
+ * Count an access to `hw` while it is asleep (`asleep`), at register
+ * offset `reg`, a GTT entry's counted from I915_GSM_OFFSET, and log the
+ * first few, as Linux's "RPM wakelock ref not held during HW access".
+ */
+static void i915_asleep_access(struct i915_hw *hw, uint32_t reg, int write)
+{
+    if (++hw->asleep_accesses <= I915_ASLEEP_LOGGED) {
+        klog(KLOG_WARN, "i915", "rpm: %s of 0x%x while the device is suspended; nothing reached",
+             write ? "write" : "read", (unsigned)reg);
+    }
+}
+
 uint32_t i915_read(struct i915_hw *hw, uint32_t reg)
 {
     if (hw->size < 4u || reg > hw->size - 4u || (reg & 3u) != 0) {
+        return 0xffffffffu;
+    }
+    if (hw->asleep) {
+        i915_asleep_access(hw, reg, 0);
         return 0xffffffffu;
     }
     return hw->ops->read32(hw, reg);
@@ -28,6 +49,10 @@ uint32_t i915_read(struct i915_hw *hw, uint32_t reg)
 void i915_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
 {
     if (hw->size < 4u || reg > hw->size - 4u || (reg & 3u) != 0) {
+        return;
+    }
+    if (hw->asleep) {
+        i915_asleep_access(hw, reg, 1);
         return;
     }
     hw->ops->write32(hw, reg, value);
@@ -151,6 +176,10 @@ uint32_t i915_gtt_read(struct i915_hw *hw, uint32_t index)
     if (index >= hw->gtt_entries) {
         return 0xffffffffu;
     }
+    if (hw->asleep) {
+        i915_asleep_access(hw, I915_GSM_OFFSET + index * 4u, 0);
+        return 0xffffffffu;
+    }
     if (hw->gsm) {
         return mmio_read32((uintptr_t)hw->gsm + index * 4u);
     }
@@ -160,6 +189,10 @@ uint32_t i915_gtt_read(struct i915_hw *hw, uint32_t index)
 void i915_gtt_write(struct i915_hw *hw, uint32_t index, uint32_t pte)
 {
     if (index >= hw->gtt_entries) {
+        return;
+    }
+    if (hw->asleep) {
+        i915_asleep_access(hw, I915_GSM_OFFSET + index * 4u, 1);
         return;
     }
     if (hw->gsm) {

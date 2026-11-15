@@ -43,25 +43,28 @@ static void i915_irq_write_bank(struct drm_i915_private *i915, int bank)
     if (bank == I915_IRQ_DE && irq->installed) {
         ier |= DE_MASTER_IRQ_CONTROL;
     }
+    if (irq->suspended) {
+        return;
+    }
     i915_write(&i915->hw, REG_IMR(bank), irq->imr[bank]);
     i915_write(&i915->hw, REG_IER(bank), ier);
     i915_posting_read(&i915->hw, REG_IMR(bank));
 }
 
-void i915_irq_reset(struct drm_i915_private *i915)
+/* ilk_irq_reset's order: the display engine's, the GT's, then power
+ * management's and the south display's. */
+static const int i915_irq_order[I915_IRQ_BANKS] = {I915_IRQ_DE, I915_IRQ_GT, I915_IRQ_PM,
+                                                   I915_IRQ_SDE};
+
+/** Mask, disable and clear every bank on the chip, as ilk_irq_reset does,
+ * leaving the driver's copies alone. Under the interrupt mask's lock. */
+static void i915_irq_reset_hw(struct drm_i915_private *i915)
 {
     struct i915_hw *hw = &i915->hw;
-    struct i915_irq *irq = &i915->irq;
-    uint32_t flags = spin_lock_irqsave(&irq->lock);
-    int bank, bit;
-
-    /* ilk_irq_reset's order: the display engine's, the GT's, then power
-     * management's and the south display's. */
-    static const int order[I915_IRQ_BANKS] = {I915_IRQ_DE, I915_IRQ_GT, I915_IRQ_PM, I915_IRQ_SDE};
-    int i;
+    int bank, i;
 
     for (i = 0; i < I915_IRQ_BANKS; i++) {
-        bank = order[i];
+        bank = i915_irq_order[i];
         i915_write(hw, REG_IMR(bank), 0xffffffffu);
         i915_posting_read(hw, REG_IMR(bank));
         i915_write(hw, REG_IER(bank), 0);
@@ -74,6 +77,18 @@ void i915_irq_reset(struct drm_i915_private *i915)
             i915_write(hw, EDP_PSR_IMR, 0xffffffffu);
             i915_write(hw, EDP_PSR_IIR, 0xffffffffu);
         }
+    }
+    i915_write(hw, SERR_INT, 0xffffffffu);
+}
+
+void i915_irq_reset(struct drm_i915_private *i915)
+{
+    struct i915_irq *irq = &i915->irq;
+    uint32_t flags = spin_lock_irqsave(&irq->lock);
+    int bank, bit;
+
+    i915_irq_reset_hw(i915);
+    for (bank = 0; bank < I915_IRQ_BANKS; bank++) {
         irq->imr[bank] = 0xffffffffu;
         irq->ier[bank] = 0;
         for (bit = 0; bit < 32; bit++) {
@@ -81,11 +96,35 @@ void i915_irq_reset(struct drm_i915_private *i915)
             irq->data[bank][bit] = 0;
         }
     }
-    i915_write(hw, SERR_INT, 0xffffffffu);
     irq->installed = 0;
     irq->deferred = 0;
     irq->deferred_display = 0;
     spin_unlock_irqrestore(&irq->lock, flags);
+}
+
+void i915_irq_suspend(struct drm_i915_private *i915)
+{
+    uint32_t flags = spin_lock_irqsave(&i915->irq.lock);
+
+    i915_irq_reset_hw(i915);
+    i915->irq.suspended = 1;
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
+    i915_irq_sync(i915);
+}
+
+void i915_irq_resume(struct drm_i915_private *i915)
+{
+    static const int order[I915_IRQ_BANKS] = {I915_IRQ_GT, I915_IRQ_PM, I915_IRQ_SDE, I915_IRQ_DE};
+    uint32_t flags = spin_lock_irqsave(&i915->irq.lock);
+    int i;
+
+    i915_irq_reset_hw(i915);
+    i915->irq.suspended = 0;
+    /* The display engine's last, with the master enable. */
+    for (i = 0; i < I915_IRQ_BANKS; i++) {
+        i915_irq_write_bank(i915, order[i]);
+    }
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
 }
 
 void i915_irq_install(struct drm_i915_private *i915)
@@ -213,8 +252,10 @@ void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits)
     }
     flags = spin_lock_irqsave(&irq->lock);
     irq->imr[bank] &= ~i915_irq_owned(irq, bank, bits);
-    i915_write(&i915->hw, REG_IMR(bank), irq->imr[bank]);
-    i915_posting_read(&i915->hw, REG_IMR(bank));
+    if (!irq->suspended) {
+        i915_write(&i915->hw, REG_IMR(bank), irq->imr[bank]);
+        i915_posting_read(&i915->hw, REG_IMR(bank));
+    }
     spin_unlock_irqrestore(&irq->lock, flags);
 }
 
@@ -229,8 +270,10 @@ void i915_irq_mask_locked(struct drm_i915_private *i915, int bank, uint32_t bits
         bits &= ~DE_RESERVED;
     }
     irq->imr[bank] |= bits;
-    i915_write(&i915->hw, REG_IMR(bank), irq->imr[bank]);
-    i915_posting_read(&i915->hw, REG_IMR(bank));
+    if (!irq->suspended) {
+        i915_write(&i915->hw, REG_IMR(bank), irq->imr[bank]);
+        i915_posting_read(&i915->hw, REG_IMR(bank));
+    }
 }
 
 void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits)
@@ -304,6 +347,13 @@ void i915_irq_handle(struct drm_i915_private *i915)
     int found = 0;
 
     irq->messages++;
+    /* Linux's intel_irqs_enabled: a message of a suspended device, which
+     * its registers would answer with all ones, is not its own. */
+    if (irq->suspended) {
+        irq->spurious++;
+        spin_unlock_irqrestore(&irq->lock, flags);
+        return;
+    }
     /* The master enable off before any identity is cleared, and the south
      * display's enables off, so that an event behind one cleared raises a
      * new message once they are restored. */

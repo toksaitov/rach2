@@ -297,6 +297,53 @@ static uint64_t sooner(uint64_t a, uint64_t b)
     return a == 0 ? b : b == 0 || a < b ? a : b;
 }
 
+/**
+ * Probe every output, Linux's i915_hpd_poll_detect_connectors, under a
+ * wakeref taken first, as i915_hpd_poll_init_work takes one: the resume it
+ * may cause asks for this probe again, which the wakeref makes needless,
+ * so the request is dropped after it, and no probe loops on its own
+ * resume. A forced connector is left alone.
+ */
+static void redetect_all(struct drm_i915_private *i915)
+{
+    struct intel_hotplug *hp = &i915->display.hotplug;
+    struct drm_connector *cs[2];
+    int pin, i;
+
+    i915_rpm_get(i915);
+    hp->redetect = 0;
+    for (pin = 0; pin < HPD_NUM_PINS; pin++) {
+        struct intel_ddi_port *p = pin_port(i915, pin);
+
+        if (!p) {
+            continue;
+        }
+        port_connectors(p, cs);
+        for (i = 0; i < 2; i++) {
+            if (cs[i] && cs[i]->force == DRM_FORCE_UNSPECIFIED && detect_connector(p, cs[i])) {
+                klog(KLOG_INFO, "i915", "hotplug: %s: %s", cs[i]->name,
+                     cs[i]->status == DRM_CONNECTOR_CONNECTED ? "connected" : "disconnected");
+                drm_connector_hotplug_later(cs[i]);
+            }
+        }
+    }
+    i915_rpm_put(i915);
+}
+
+/** Probe every output when a resume asked for it or, while the device is
+ * suspended, when the poll is due at `now`, kernel ticks. */
+static void redetect_due(struct drm_i915_private *i915, uint64_t now)
+{
+    struct intel_hotplug *hp = &i915->display.hotplug;
+
+    if (hp->rpm_poll && now >= hp->rpm_poll_at) {
+        hp->redetect = 1;
+    }
+    if (hp->redetect) {
+        redetect_all(i915);
+    }
+}
+
 /** intel_hotplug_work's body, under the device's mode_lock. */
 static void hotplug_work_locked(struct drm_work *work)
 {
@@ -309,6 +356,7 @@ static void hotplug_work_locked(struct drm_work *work)
     if (!hp->ready) {
         return;
     }
+    redetect_due(i915, now);
     flags = spin_lock_irqsave(&i915->irq.lock);
     long_mask = hp->long_mask;
     short_mask = hp->short_mask;
@@ -379,7 +427,8 @@ static void hotplug_work_locked(struct drm_work *work)
     }
     again = retrain_links(i915);
 
-    next = sooner(sooner(hp->retry_at, hp->reenable_at), hp->poll_at);
+    next = sooner(sooner(sooner(hp->retry_at, hp->reenable_at), hp->poll_at),
+                  hp->rpm_poll ? hp->rpm_poll_at : 0);
     if (again) {
         next = sooner(next, now + MS_TO_TICKS(20u));
     }
@@ -407,10 +456,30 @@ int intel_hotplug_live(struct drm_i915_private *i915, int pin)
     return (i915_read(&i915->hw, SDEISR) & sde_bit[pin]) != 0;
 }
 
+/** Enable the PCH's detection on the pins whose port was made, Linux's
+ * ibx_hotplug_enables: on a Lynx Point LP, in the processor's package, the
+ * eDP port's pin is enabled in the PCH too. */
+static void hotplug_enables(struct drm_i915_private *i915)
+{
+    uint32_t clear = PORTA_HOTPLUG_ENABLE, set = 0;
+    int pin;
+
+    for (pin = 0; pin < HPD_NUM_PINS; pin++) {
+        clear |= PORT_HOTPLUG_ENABLE(pin) | PORT_PULSE_DURATION_MASK(pin);
+        if (pin_port(i915, pin)) {
+            set |= PORT_HOTPLUG_ENABLE(pin);
+        }
+    }
+    if (i915->display.dp.present && i915->id && i915->id->ult) {
+        set |= PORTA_HOTPLUG_ENABLE;
+    }
+    i915_rmw(&i915->hw, PCH_PORT_HOTPLUG, clear, set);
+}
+
 int32_t intel_hotplug_init(struct drm_i915_private *i915)
 {
     struct intel_hotplug *hp = &i915->display.hotplug;
-    uint32_t bits, clear = 0, set = 0;
+    uint32_t bits;
     int32_t err;
     int pin;
 
@@ -419,18 +488,8 @@ int32_t intel_hotplug_init(struct drm_i915_private *i915)
         hp->state[pin] = HPD_ENABLED;
         hp->storm_count[pin] = 0;
         hp->retries[pin] = 0;
-        clear |= PORT_HOTPLUG_ENABLE(pin) | PORT_PULSE_DURATION_MASK(pin);
-        if (pin_port(i915, pin)) {
-            set |= PORT_HOTPLUG_ENABLE(pin);
-        }
     }
-    /* Linux's ibx_hotplug_enables: on a Lynx Point LP, in the processor's
-     * package, the eDP port's pin is enabled in the PCH too. */
-    clear |= PORTA_HOTPLUG_ENABLE;
-    if (i915->display.dp.present && i915->id && i915->id->ult) {
-        set |= PORTA_HOTPLUG_ENABLE;
-    }
-    i915_rmw(&i915->hw, PCH_PORT_HOTPLUG, clear, set);
+    hotplug_enables(i915);
     bits = pin_irqs(i915, 0);
     if (bits == 0) {
         return 0;
@@ -458,4 +517,29 @@ void intel_hotplug_fini(struct drm_i915_private *i915)
     i915_irq_unregister(i915, I915_IRQ_SDE, bits);
     hp->ready = 0;
     drm_dev_work_cancel(&hp->work);
+}
+
+void intel_hotplug_suspend(struct drm_i915_private *i915)
+{
+    struct intel_hotplug *hp = &i915->display.hotplug;
+
+    if (!hp->ready) {
+        return;
+    }
+    hp->rpm_poll_at = rtc_ticks_now() + MS_TO_TICKS(HPD_POLL_MS);
+    hp->rpm_poll = 1;
+    drm_dev_work_later_ms(&i915->drm, &hp->work, HPD_POLL_MS);
+}
+
+void intel_hotplug_resume(struct drm_i915_private *i915)
+{
+    struct intel_hotplug *hp = &i915->display.hotplug;
+
+    if (!hp->ready) {
+        return;
+    }
+    hotplug_enables(i915);
+    hp->rpm_poll = 0;
+    hp->redetect = 1;
+    drm_dev_work_later(&i915->drm, &hp->work);
 }

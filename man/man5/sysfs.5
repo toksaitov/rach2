@@ -198,6 +198,42 @@ or
 whose directory has a link back to the function by its name, as on
 Linux.
 libudev reads a device's driver from this link.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/power
+The runtime power management of a function the Intel graphics driver has
+bound, from the end of its bind to its unbind, as Linux's
+.Pa power
+directory of a device that uses autosuspend.
+.Pa control
+reads and takes
+.Ql auto ,
+the default, which lets the device suspend, or
+.Ql on ,
+which keeps it awake;
+.Pa autosuspend_delay_ms
+reads and takes the milliseconds the device stays awake after its last
+use, 10000 by default, a negative number keeping it awake.
+Both are mode 0644, and another word or number is
+.Er EINVAL .
+Mode 0444:
+.Pa runtime_status ,
+one of
+.Ql active ,
+.Ql suspending ,
+.Ql suspended
+and
+.Ql resuming ;
+.Pa runtime_active_time
+and
+.Pa runtime_suspended_time ,
+in milliseconds since the bind;
+.Pa runtime_enabled ,
+.Ql enabled
+or
+.Ql forbidden ;
+and
+.Pa runtime_usage ,
+the references that keep the device awake.
+A suspended function is in D3hot.
 .It Pa /sys/bus/pci/drivers/i915/{bind,unbind}
 Write-only, mode 0200; the directory is there once the Intel graphics
 driver has bound a device, under

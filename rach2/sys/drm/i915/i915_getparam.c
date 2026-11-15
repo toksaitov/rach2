@@ -62,6 +62,7 @@ void i915_sseu_init(struct drm_i915_private *i915)
      * them out from the part, GT2 here. */
     sseu->slice_mask = 0x1;
     sseu->subslice_mask = 0x3;
+    i915_rpm_get(i915);
     fuse1 = i915_uncore_read(i915, HSW_PAVP_FUSE1);
     switch ((fuse1 & HSW_F1_EU_DIS_MASK) >> HSW_F1_EU_DIS_SHIFT) {
     case HSW_F1_EU_DIS_8EUS:
@@ -79,6 +80,7 @@ void i915_sseu_init(struct drm_i915_private *i915)
     sseu->max_eus_per_subslice = sseu->eu_per_subslice;
     sseu->eu_total = (uint16_t)(sseu->max_slices * sseu->max_subslices * sseu->eu_per_subslice);
     sseu->edram = (i915_uncore_read(i915, HSW_EDRAM_CAP) & EDRAM_ENABLED) != 0;
+    i915_rpm_put(i915);
     sseu->ready = 1;
     i915_gem_unlock(i915, taken);
 }

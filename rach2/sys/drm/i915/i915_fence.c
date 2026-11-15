@@ -33,6 +33,11 @@ void i915_fence_write(struct drm_i915_private *i915, int id, uint64_t start, uin
         }
         val |= I965_FENCE_REG_VALID;
     }
+    /* A sleeping device takes the fence at resume, from `gem.fences`, as
+     * Linux's fence_update leaves it dirty for intel_ggtt_restore_fences. */
+    if (!i915_rpm_get_if_active(i915)) {
+        return;
+    }
     /* As Linux's i965_write_fence_reg: the fence off first, so that no
      * half-written pair is ever in force, then the high half, then the low
      * half with its valid bit, each landing before the next. */
@@ -41,6 +46,7 @@ void i915_fence_write(struct drm_i915_private *i915, int id, uint64_t start, uin
     i915_write(hw, FENCE_REG_GEN6_HI(id), (uint32_t)(val >> 32));
     i915_write(hw, FENCE_REG_GEN6_LO(id), (uint32_t)val);
     i915_posting_read(hw, FENCE_REG_GEN6_LO(id));
+    i915_rpm_put(i915);
 }
 
 /**

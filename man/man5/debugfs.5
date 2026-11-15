@@ -870,6 +870,27 @@ frequency with its limits, in MHz, and the wait boosts counted, as Linux's
 .It Pa dri/DEVICE/i915_cdclk_info
 Mode 0444.
 The current and the highest CD clock and the highest dot clock, in kHz.
+.It Pa dri/DEVICE/i915_runtime_pm_status
+Mode 0444.
+As Linux's
+.Fn i915_runtime_pm_status :
+.Bd -literal -offset indent
+Runtime power status: enabled
+GPU idle: yes
+IRQs disabled: no
+Usage count: N
+PCI device power state: D0 [0]
+.Ed
+.Pp
+whether runtime power management is on, which it is once the display's
+initial power reference has gone, whether the GT is parked, whether the
+interrupts are off for a suspend, the references that keep the device
+awake, and the function's power state,
+.Ql D3hot [3]
+while it is suspended.
+A device that cannot suspend, the fake chip, adds
+.Ql Runtime power management not supported
+first.
 .It Pa dri/DEVICE/i915_ignore_long_hpd
 Mode 0644, for a device with a display.
 Reads

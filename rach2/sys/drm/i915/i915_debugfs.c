@@ -616,7 +616,7 @@ static void error_text(struct emit *e, struct drm_i915_private *i915,
 {
     uint64_t now = rtc_ticks_now(), age = ticks_ms(now - err->ticks);
     int64_t sec, nsec;
-    uint32_t sub;
+    uint32_t sub, rawclk;
     int i;
 
     rtc_realtime(&sec, &nsec);
@@ -662,8 +662,11 @@ static void error_text(struct emit *e, struct drm_i915_private *i915,
     driver_caps(e);
     emit_params(e, &err->params);
     emit_lines(e, display_info, NELEM(display_info));
-    emitf(e, "rawclk rate: %u kHz\n",
-          (i915_read(&i915->hw, PCH_RAWCLK_FREQ) & RAWCLK_FREQ_MASK) * 1000u);
+    /* The PCH's register, read now, under a wakeref. */
+    i915_rpm_get(i915);
+    rawclk = i915_read(&i915->hw, PCH_RAWCLK_FREQ) & RAWCLK_FREQ_MASK;
+    i915_rpm_put(i915);
+    emitf(e, "rawclk rate: %u kHz\n", rawclk * 1000u);
     emit_lines(e, display_params, NELEM(display_params));
     emitf(e, "DERRMR: 0x%08x\n", err->derrmr);
 }
@@ -770,7 +773,10 @@ static int32_t forcewake_user_open(fd_entry_t *e, int flags)
     if (gone(i915)) {
         return -ENODEV;
     }
+    /* Linux's i915_forcewake_open holds a wakeref with the forcewake. */
+    i915_rpm_get(i915);
     if (i915_forcewake_get(i915) < 0) {
+        i915_rpm_put(i915);
         return -EIO;
     }
     drm_dev_get(&i915->drm);
@@ -787,6 +793,7 @@ static void forcewake_user_close(fd_entry_t *e)
         if (!gone(i915)) {
             i915_forcewake_put(i915);
         }
+        i915_rpm_put(i915);
         drm_dev_put(&i915->drm);
     }
     e->priv = NULL;
@@ -823,10 +830,12 @@ static int32_t state_open(fd_entry_t *e, int fresh)
     if (fresh) {
         /* The unplug takes the GEM lock after it marks the device, so a
          * look under the lock keeps the capture off a device torn down. */
+        i915_rpm_get(i915);
         taken = i915_gem_lock(i915);
         rc = gone(i915);
         err = rc == 0 ? i915_gpu_coredump(i915, (1u << I915_NUM_ENGINES) - 1u, 0) : 0;
         i915_gem_unlock(i915, taken);
+        i915_rpm_put(i915);
         if (rc == 0) {
             rc = err ? state_text_make(t, err) : -ENOMEM;
         }
@@ -955,7 +964,7 @@ static int32_t gem_objects_show(void *data, char *buf, uint32_t cap)
 
 /** i915_lpsp_status, Linux's Haswell test: LPSP is enabled while the
  * global display power well is off. -ENODEV after unplug. */
-static int32_t lpsp_status_show(void *data, char *buf, uint32_t cap)
+static int32_t lpsp_status_show_awake(void *data, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     struct emit e;
@@ -1010,7 +1019,7 @@ static void rp_counter(struct emit *e, const char *name, uint32_t count)
  * its evaluation counters with their thresholds, and the limits and state
  * of the driver's RPS.
  */
-static int32_t frequency_show(void *data, char *buf, uint32_t cap)
+static int32_t frequency_show_awake(void *data, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     struct i915_rps *rps = &i915->rps;
@@ -1098,7 +1107,7 @@ static int32_t frequency_show(void *data, char *buf, uint32_t cap)
  * the GT is awake, the waitboosts outstanding and the flips pending, the
  * requested and actual frequency with the limits, and the boosts counted.
  */
-static int32_t rps_boost_show(void *data, char *buf, uint32_t cap)
+static int32_t rps_boost_show_awake(void *data, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     struct i915_rps *rps = &i915->rps;
@@ -1244,7 +1253,7 @@ static void engine_dump(struct emit *e, struct drm_i915_private *i915, struct i9
 /** i915_engine_info, Linux's i915_engine_info: whether the GT is awake
  * and for how long it has been, the timestamp's frequency, and each
  * engine the driver runs. */
-static int32_t engine_info_show(void *data, char *buf, uint32_t cap)
+static int32_t engine_info_show_awake(void *data, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     struct i915_gt *gt = &i915->gt;
@@ -1274,7 +1283,7 @@ static int32_t engine_info_show(void *data, char *buf, uint32_t cap)
 /** i915_cdclk_info, Linux's i915_cdclk_info_show: the CD clock now, the
  * most it may be, and the fastest pixel clock that allows. IGT reads the
  * second (igt_get_max_cdclk). */
-static int32_t cdclk_info_show(void *data, char *buf, uint32_t cap)
+static int32_t cdclk_info_show_awake(void *data, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     struct emit e;
@@ -1290,7 +1299,7 @@ static int32_t cdclk_info_show(void *data, char *buf, uint32_t cap)
 
 /** i915_wedged, Linux's i915_wedged_get: 1 while the GPU is wedged, else
  * 0, as "%llu\n". */
-static int32_t wedged_show(void *data, char *buf, uint32_t cap)
+static int32_t wedged_show_awake(void *data, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     struct emit e;
@@ -1326,7 +1335,7 @@ static uint32_t engines_by_index(struct drm_i915_private *i915, uint64_t val)
  * where that fails or the GPU is wedged, which IGT's igt_force_gpu_reset
  * writes -1 for.
  */
-static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
+static int32_t wedged_store_awake(void *data, const char __user *buf, uint32_t len)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     char text[24], msg[48];
@@ -1417,7 +1426,7 @@ static int32_t drop_caches(struct drm_i915_private *i915, uint64_t val);
  * nothing to do, since objects go at their last reference. The wait for
  * idle may sleep and a signal ends it with -EINTR.
  */
-static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t len)
+static int32_t drop_caches_store_awake(void *data, const char __user *buf, uint32_t len)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     char text[24];
@@ -1693,7 +1702,74 @@ static int32_t params_register(struct drm_i915_private *i915)
     return rc;
 }
 
+/*
+ * A file that reaches the chip, under a wakeref, as Linux's shows and
+ * stores of these files take one: `fn` runs `fn##_awake`.
+ */
+#define AWAKE_SHOW(fn)                                     \
+    static int32_t fn(void *data, char *buf, uint32_t cap) \
+    {                                                      \
+        int32_t n;                                         \
+                                                           \
+        i915_rpm_get((struct drm_i915_private *)data);     \
+        n = fn##_awake(data, buf, cap);                    \
+        i915_rpm_put((struct drm_i915_private *)data);     \
+        return n;                                          \
+    }
+#define AWAKE_STORE(fn)                                                 \
+    static int32_t fn(void *data, const char __user *buf, uint32_t len) \
+    {                                                                   \
+        int32_t n;                                                      \
+                                                                        \
+        i915_rpm_get((struct drm_i915_private *)data);                  \
+        n = fn##_awake(data, buf, len);                                 \
+        i915_rpm_put((struct drm_i915_private *)data);                  \
+        return n;                                                       \
+    }
+
+AWAKE_SHOW(lpsp_status_show)
+AWAKE_SHOW(frequency_show)
+AWAKE_SHOW(rps_boost_show)
+AWAKE_SHOW(engine_info_show)
+AWAKE_SHOW(cdclk_info_show)
+AWAKE_SHOW(wedged_show)
+AWAKE_STORE(wedged_store)
+AWAKE_STORE(drop_caches_store)
+
+/**
+ * i915_runtime_pm_status, Linux's i915_runtime_pm_status: whether runtime
+ * PM is enabled, which it is once the display's initial power reference
+ * has gone, whether the GT is idle and the interrupts off, the wakerefs
+ * held, and the PCI function's power state.
+ */
+static int32_t runtime_pm_status_show(void *data, char *buf, uint32_t cap)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    int state = i915->runtime_pm.available ? pci_power_state(&i915->pci) : PCI_D0;
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    if (!i915->runtime_pm.available) {
+        emit_s(&e, "Runtime power management not supported\n");
+    }
+    emitf(&e, "Runtime power status: %s\n", i915->power.init_ref ? "disabled" : "enabled");
+    emitf(&e, "GPU idle: %s\n", i915->gt.awake ? "no" : "yes");
+    emitf(&e, "IRQs disabled: %s\n", i915->irq.suspended ? "yes" : "no");
+    emitf(&e, "Usage count: %d\n", (int)i915_rpm_usage(i915));
+    emitf(&e, "PCI device power state: %s [%d]\n",
+          state == PCI_D0      ? "D0"
+          : state == 1         ? "D1"
+          : state == 2         ? "D2"
+          : state == PCI_D3HOT ? "D3hot"
+                               : "error",
+          state);
+    return emit_end(&e);
+}
+
 static const struct debugfs_text_ops capabilities_ops = {capabilities_show, NULL};
+static const struct debugfs_text_ops runtime_pm_status_ops = {runtime_pm_status_show, NULL};
 static const struct debugfs_text_ops lpsp_status_ops = {lpsp_status_show, NULL};
 static const struct debugfs_text_ops gem_framebuffer_ops = {gem_framebuffer_show, NULL};
 static const struct debugfs_text_ops gem_objects_ops = {gem_objects_show, NULL};
@@ -1718,7 +1794,8 @@ static const struct {
                   {"i915_cdclk_info", 0444u, &cdclk_info_ops},
                   {"i915_wedged", 0644u, &wedged_ops},
                   {"i915_gem_drop_caches", 0644u, &drop_caches_ops},
-                  {"i915_rps_boost_info", 0444u, &rps_boost_ops}};
+                  {"i915_rps_boost_info", 0444u, &rps_boost_ops},
+                  {"i915_runtime_pm_status", 0444u, &runtime_pm_status_ops}};
 
 /** crtc-N/i915_pipe, Linux's intel_crtc_pipe_show: the pipe's letter, by
  * which IGT maps a CRTC to its pipe. */

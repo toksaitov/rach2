@@ -221,10 +221,13 @@ static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
     if (obj->base.dev->unplugged || (uint64_t)pgoff >= obj->base.size >> PAGE_SHIFT) {
         return -1;
     }
+    /* Linux's vm_fault_gtt holds a wakeref; the suspend revokes the map. */
+    i915_rpm_get(i915);
     taken = i915_gem_lock(i915);
     err = gtt_fault_pin(obj, pgoff, &vma);
     if (err != 0) {
         i915_gem_unlock(i915, taken);
+        i915_rpm_put(i915);
         return gtt_fault_error(err);
     }
     err = i915_vma_pin_fence(vma);
@@ -245,6 +248,7 @@ static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
     }
     i915_vma_unpin(vma);
     i915_gem_unlock(i915, taken);
+    i915_rpm_put(i915);
     return err == 0 ? 0 : gtt_fault_error(err);
 }
 

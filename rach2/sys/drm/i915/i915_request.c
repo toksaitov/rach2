@@ -865,7 +865,8 @@ static void request_release(struct i915_request *rq)
  * armed since its first request of the GT's wake, is let go, as Linux's
  * engine park disarms its breadcrumbs (gt/intel_engine_pm.c:280,
  * gt/intel_breadcrumbs.c:317-324, 266-272). The pool's idle shadows go,
- * since no retire pass runs to age them while the GT sleeps. */
+ * since no retire pass runs to age them while the GT sleeps, and the
+ * wakeref the unpark took is put. */
 static void gt_park(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
@@ -881,6 +882,7 @@ static void gt_park(struct drm_i915_private *i915)
     }
     i915_gt_park(i915);
     i915_gem_pool_trim(i915, I915_POOL_IDLE);
+    i915_rpm_put(i915);
 }
 
 /**
@@ -1381,6 +1383,9 @@ static int32_t request_new(struct intel_context *ce, size_t room, struct i915_re
      * first beat is the GT's first. */
     now = rtc_ticks_now();
     if (!i915->gt.awake) {
+        /* Linux's __gt_unpark takes POWER_DOMAIN_GT_IRQ's wakeref, which
+         * the park puts. */
+        i915_rpm_get(i915);
         i915->gt.awake = 1;
         i915->gt.unpark_ticks = now;
         i915->gt.retire_next = retire_deadline(now);

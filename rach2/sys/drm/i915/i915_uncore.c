@@ -136,6 +136,8 @@ int32_t i915_forcewake_get(struct drm_i915_private *i915)
 
     if (u->gone) {
         err = -ENODEV;
+    } else if (i915->hw.asleep) {
+        err = -EIO;
     } else if (!i915_fw_held(u)) {
         err = i915_fw_wake(i915);
     } else if (u->timer_armed) {
@@ -189,6 +191,9 @@ static int32_t i915_fw_auto(struct drm_i915_private *i915)
 
     if (u->gone) {
         return -ENODEV;
+    }
+    if (i915->hw.asleep) {
+        return -EIO;
     }
     if (i915_fw_held(u)) {
         return 0;
@@ -283,6 +288,42 @@ void i915_uncore_fini(struct drm_i915_private *i915)
     u->timer_armed = 0;
     u->active = 0;
     u->gone = 1;
+    spin_unlock_irqrestore(&u->lock, flags);
+}
+
+int32_t i915_uncore_suspend(struct drm_i915_private *i915)
+{
+    struct i915_uncore *u = &i915->uncore;
+    uint32_t flags = spin_lock_irqsave(&u->lock);
+
+    if (u->wake_count != 0) {
+        spin_unlock_irqrestore(&u->lock, flags);
+        return -EBUSY;
+    }
+    if (!u->gone && u->timer_armed) {
+        i915_fw_release(i915);
+    }
+    u->timer_armed = 0;
+    u->active = 0;
+    spin_unlock_irqrestore(&u->lock, flags);
+    if (i915_read(&i915->hw, FPGA_DBG) & FPGA_DBG_RM_NOCLAIM) {
+        klog(KLOG_WARN, "i915", "uncore: an unclaimed access before the suspend");
+        i915_write(&i915->hw, FPGA_DBG, FPGA_DBG_RM_NOCLAIM);
+    }
+    return 0;
+}
+
+void i915_uncore_resume(struct drm_i915_private *i915)
+{
+    struct i915_uncore *u = &i915->uncore;
+    uint32_t flags;
+
+    if (i915_read(&i915->hw, FPGA_DBG) & FPGA_DBG_RM_NOCLAIM) {
+        klog(KLOG_INFO, "i915", "uncore: an unclaimed access while suspended, cleared");
+        i915_write(&i915->hw, FPGA_DBG, FPGA_DBG_RM_NOCLAIM);
+    }
+    flags = spin_lock_irqsave(&u->lock);
+    u->fifo_count = i915_read(&i915->hw, GTFIFOCTL) & GT_FIFO_FREE_ENTRIES_MASK;
     spin_unlock_irqrestore(&u->lock, flags);
 }
 

@@ -249,7 +249,10 @@ void i915_pci_unmap(struct i915_hw *hw)
 static void i915_unplug(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
-    int taken = i915_gem_lock(i915);
+    int taken;
+
+    i915_rpm_disable(i915);
+    taken = i915_gem_lock(i915);
 
     i915_handoff_unbound(i915);
     i915_requests_unplug(i915);
@@ -550,6 +553,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     i915->subsystem_device = i915_hw_config16(&i915->hw, pdev, PCI_SUBSYSTEM_ID);
     i915->gmch_ctrl = i915_hw_config16(&i915->hw, pdev, SNB_GMCH_CTRL);
     i915->bsm = i915_hw_config32(&i915->hw, pdev, INTEL_BSM);
+    i915_rpm_init(i915);
 
     command = pci_read_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND);
     claimed = pci_owner(pdev->bus, (uint8_t)(pdev->device << 3 | pdev->function)) == NULL;
@@ -603,6 +607,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     if (i915->hw.ops->attach) {
         i915->hw.ops->attach(&i915->hw, i915);
     }
+    i915_rpm_enable(i915);
     return 0;
 }
 

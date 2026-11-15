@@ -547,7 +547,10 @@ static int intel_edp_detect(struct drm_connector *connector, int force_probe)
     struct drm_i915_private *i915 = to_i915(connector->dev);
 
     (void)force_probe;
-    intel_pps_vdd_work(i915);
+    if (i915_rpm_get_if_active(i915)) {
+        intel_pps_vdd_work(i915);
+        i915_rpm_put(i915);
+    }
     return DRM_CONNECTOR_CONNECTED;
 }
 
@@ -912,18 +915,11 @@ static void check_link_state(struct intel_dp *dp)
     drm_dev_work_later(&dp->i915->drm, &dp->i915->display.hotplug.work);
 }
 
-/**
- * Probe a monitor, Linux's intel_dp_detect for an external port: no sink
- * while the hotplug pin is low, else its DPCD; then the link's bounds
- * forgotten after a long pulse, its training checked, and its EDID, which
- * makes a sink of unknown status connected.
- */
-static int intel_dp_ext_detect(struct drm_connector *connector, int force_probe)
+/** intel_dp_ext_detect's body, under its wakeref. */
+static int ext_detect(struct intel_dp *dp)
 {
-    struct intel_dp *dp = ext_dp(connector);
     int status;
 
-    (void)force_probe;
     status = intel_dp_connected(dp) ? detect_dpcd(dp) : DRM_CONNECTOR_DISCONNECTED;
     if (status == DRM_CONNECTOR_DISCONNECTED) {
         unset_edid(dp);
@@ -943,6 +939,25 @@ static int intel_dp_ext_detect(struct drm_connector *connector, int force_probe)
     if (status != DRM_CONNECTOR_CONNECTED) {
         unset_edid(dp);
     }
+    return status;
+}
+
+/**
+ * Probe a monitor, Linux's intel_dp_detect for an external port: no sink
+ * while the hotplug pin is low, else its DPCD; then the link's bounds
+ * forgotten after a long pulse, its training checked, and its EDID, which
+ * makes a sink of unknown status connected.
+ */
+static int intel_dp_ext_detect(struct drm_connector *connector, int force_probe)
+{
+    struct intel_dp *dp = ext_dp(connector);
+    int status;
+
+    (void)force_probe;
+    /* Linux's intel_dp_detect holds the AUX domain's wakeref. */
+    i915_rpm_get(dp->i915);
+    status = ext_detect(dp);
+    i915_rpm_put(dp->i915);
     return status;
 }
 

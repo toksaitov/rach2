@@ -102,6 +102,12 @@ struct i915_hw_ops {
  * made reachable, 0 before it, and `gsm` the kernel address of the first
  * where the backend's `gtt_map` mapped them, or NULL. `faults` counts the
  * errors the backend injected at fault points.
+ *
+ * `asleep` is set while runtime power management has the device in D3hot
+ * (i915_runtime_pm.c), where it answers configuration cycles alone: a
+ * register or GTT access then reaches nothing, reads all ones, as the
+ * chip's own would, and is counted in `asleep_accesses` and logged, as
+ * Linux warns of a hardware access without a wakeref.
  */
 struct i915_hw {
     const struct i915_hw_ops *ops;
@@ -112,6 +118,8 @@ struct i915_hw {
     uint32_t gtt_entries;
     void *gsm;
     uint32_t faults;
+    volatile uint8_t asleep;
+    uint32_t asleep_accesses;
 };
 
 /*

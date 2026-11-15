@@ -701,7 +701,8 @@ static void commit_scanouts(struct drm_atomic_state *state, struct drm_plane *co
     }
 }
 
-int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
+/** intel_atomic_commit's body, under its wakeref. */
+static int32_t atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
 {
     struct drm_i915_private *i915 = to_i915(dev);
     struct i915_vma *pinned[DRM_MAX_PLANES];
@@ -765,6 +766,30 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
                     : nonblock ? COMMIT_NONBLOCK
                                : COMMIT_BLOCKING);
     return err;
+}
+
+int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
+{
+    int32_t err;
+
+    /* Linux's intel_atomic_commit holds a wakeref to the end of the
+     * commit; a deferred tail takes its own (`commit_tail_hold`). */
+    i915_rpm_get(to_i915(dev));
+    err = atomic_commit(dev, state, nonblock);
+    i915_rpm_put(to_i915(dev));
+    return err;
+}
+
+/** The DRM core's `commit_tail_hold`: a wakeref across a commit's tail,
+ * whoever runs it, as Linux's intel_atomic_commit_tail keeps the one its
+ * commit took. */
+static void commit_tail_hold(struct drm_device *dev, int hold)
+{
+    if (hold) {
+        i915_rpm_get(to_i915(dev));
+    } else {
+        i915_rpm_put(to_i915(dev));
+    }
 }
 
 /* ------------------------------------------------------------------------
@@ -1185,6 +1210,9 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
         return;
     }
     connector = crtc_connector(c, state, &conn);
+    /* A running pipe holds the device awake, as Linux's pipe power
+     * domains hold their wakerefs; intel_crtc_disable puts it. */
+    i915_rpm_get(i915);
     if (intel_crtc_needs_well(c->pipe, cfg)) {
         cfg->well = i915_power_get(i915) == 0;
     }
@@ -1269,6 +1297,7 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
         if (c->cfg.well) {
             i915_power_put(i915);
         }
+        i915_rpm_put(i915);
     }
     k_memset(&c->cfg, 0, sizeof(c->cfg));
     c->cfg.pll = DPLL_ID_NONE;
@@ -1679,6 +1708,7 @@ static void adopt_config(struct drm_i915_private *i915, struct intel_crtc *c)
     cfg->pll = DPLL_ID_NONE;
     (void)intel_dpll_readout(i915, c->pipe, rd(i915, PORT_CLK_SEL(INTEL_PORT_A)), cfg);
     cfg->well = intel_crtc_needs_well(c->pipe, cfg) && i915_power_get(i915) == 0;
+    i915_rpm_get(i915);
     dp->link_rate = hw->port_clock;
     dp->lane_count = hw->lanes;
     dp->link_trained = 1;
@@ -1850,16 +1880,7 @@ static int32_t ports_init(struct drm_i915_private *i915)
     return 0;
 }
 
-/**
- * Write the display's registers of Linux's hsw_init_clock_gating and
- * lpt_init_clock_gating, which it writes once, at load:
- * WaFbcAsynchFlipDisableFbcQueue, WaPsrDPAMaskVBlankInSRD and, on each
- * pipe, WaPsrDPRSUnmaskVBlankInSRD; on a low-power PCH, which a ULT or
- * ULX part has, the partition level's gating off; and
- * WADPOClockGatingDisable. The GT's registers of those functions are
- * `i915_gt_init`'s.
- */
-static void hsw_display_clock_gating(struct drm_i915_private *i915)
+void intel_display_clock_gating(struct drm_i915_private *i915)
 {
     struct i915_hw *hw = &i915->hw;
     int pipe;
@@ -1889,7 +1910,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     /* The PLLs first, as Linux's intel_shared_dpll_init comes before its
      * readout: a WRPLL's port clock needs the non-SSC reference. */
     intel_dpll_init(i915);
-    hsw_display_clock_gating(i915);
+    intel_display_clock_gating(i915);
     intel_display_readout(i915);
     err = drm_mode_config_init(dev);
     if (err != 0) {
@@ -1915,6 +1936,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     mc->fb_destroy = intel_fb_destroy;
     mc->commit_fence_wait = commit_fence_wait;
     mc->commit_fence_timeout_ms = I915_FENCE_TIMEOUT_MS;
+    mc->commit_tail_hold = commit_tail_hold;
     intel_cdclk_init(i915);
     intel_wm_init(i915);
     intel_gmbus_setup(i915);

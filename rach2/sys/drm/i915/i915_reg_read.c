@@ -39,6 +39,7 @@ int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file 
     struct drm_i915_reg_read *reg = (struct drm_i915_reg_read *)data;
     struct drm_i915_private *i915 = to_i915(dev);
     uint32_t flags = (uint32_t)(reg->offset & 7u), i, n, lo = 0, hi = 0;
+    int32_t err;
 
     (void)file;
     n = sizeof(reg_read_allowed) / sizeof(reg_read_allowed[0]);
@@ -51,5 +52,9 @@ int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file 
     if (hi == 0 || (flags != 0 && flags != I915_REG_READ_8B_WA)) {
         return -EINVAL;
     }
-    return i915_uncore_read64(i915, lo, hi, flags == I915_REG_READ_8B_WA, &reg->val);
+    /* Linux's i915_reg_read_ioctl reads under with_intel_runtime_pm. */
+    i915_rpm_get(i915);
+    err = i915_uncore_read64(i915, lo, hi, flags == I915_REG_READ_8B_WA, &reg->val);
+    i915_rpm_put(i915);
+    return err;
 }
