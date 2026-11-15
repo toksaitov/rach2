@@ -1052,6 +1052,8 @@ static void lease_row(int fd)
         fail("a second lease of the same objects is not EBUSY");
     }
     zero(&res, sizeof(res));
+    zero(crtcs, sizeof(crtcs));
+    zero(conns, sizeof(conns));
     res.crtc_id_ptr = (u64)(unsigned long)crtcs;
     res.connector_id_ptr = (u64)(unsigned long)conns;
     res.count_crtcs = MAX_IDS;
