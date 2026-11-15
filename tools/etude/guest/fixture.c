@@ -1,7 +1,8 @@
 /*
  * fixture.c: the fixtures of a native case beyond its workspace: mapped ids
  * and ports, volumes on loop devices, a tmpfs, namespaces, a private root,
- * a pseudo-terminal, the kernel's records and the GPU's minimum clock.
+ * a pseudo-terminal, the kernel's records, the GPU's minimum clock and the
+ * console with the desktop's compositor ended.
  * etude-guest parses them with the invocation, makes them before the child
  * runs and removes them after it ends; tools/etude/Readme.md, "Native
  * runs", gives the contract.
@@ -33,13 +34,17 @@
  * compiles where FIX_KERNEL is 1: on Linux, and on Rach2, whose cross
  * compiler defines no operating system and whose build of etude-guest
  * defines __rach2__. macOS has none of them, and the host tests compile this
- * file there too: fixture_parse refuses those fixtures. Any other system does
- * not compile this file.
+ * file there too: fixture_parse refuses those fixtures. The end of the
+ * desktop's compositor for `console`, which reads /proc, compiles where
+ * FIX_KERNEL is 1 too; macOS has no such desktop, and `console` makes
+ * nothing there. Any other system does not compile this file.
  */
 #if defined(__linux__) || defined(__rach2__)
 #define FIX_KERNEL 1
+#include <signal.h>
 #include <sys/klog.h>
 #include <sys/mount.h>
+#include <time.h>
 
 /* unshare(2) and the flags of the Linux ABI, declared here because a host
  * test's include path finds the kernel's own sched.h first. */
@@ -367,7 +372,7 @@ int fixture_simple(const struct fixtures *fx)
 {
     return !fx->nids && !fx->nports && !fx->nvol && !fx->has_root && !fx->tmpfs_bytes &&
            !fx->mountns && !fx->ipcns && !fx->utsns && !fx->pty && !fx->log && !fx->peer[0] &&
-           !fx->private_dir && !fx->gpumin;
+           !fx->private_dir && !fx->gpumin && !fx->console;
 }
 
 /** Whether `id` is field 3 of a line of the colon-separated file `path`. */
@@ -954,6 +959,158 @@ static int restore_gpumins(const char *dir)
     return rc;
 }
 
+/* The desktop's session (vendor/gnu/desktop, desktop(7)): its supervisor's
+ * pid file, whose SIGHUP starts the session again, its compositor's command
+ * name, and the socket the session makes once it serves. */
+#define DESKTOP_PIDFILE    "/run/rach2-desktop.pid"
+#define DESKTOP_COMPOSITOR "weston"
+#define DESKTOP_SOCKET     "/run/user/1001/wayland-0"
+
+/* The looks, 100 ms apart, within which the compositor ends after SIGTERM
+ * and the session serves again after SIGHUP. */
+#define DESKTOP_LOOKS 600
+
+/**
+ * Put in `pid`, of `max` entries, the processes whose command name, as
+ * /proc/PID/stat gives it, is the desktop's compositor's.
+ *
+ * @return how many there are, which may exceed `max`, or -1 when /proc
+ * cannot be read.
+ */
+static int compositors(pid_t *pid, int max)
+{
+    DIR *d = opendir("/proc");
+    struct dirent *e;
+    int n = 0;
+
+    if (!d)
+        return -1;
+    while ((e = readdir(d)) != NULL) {
+        char path[FIX_PATH], text[256];
+        const char *open_paren, *close_paren;
+        ssize_t len;
+        int fd;
+
+        if (!e->d_name[0] || strspn(e->d_name, "0123456789") != strlen(e->d_name) ||
+            fpath(path, "/proc/%s/stat%s", e->d_name, "") < 0 ||
+            (fd = open(path, O_RDONLY | O_CLOEXEC)) < 0)
+            continue;
+        len = read(fd, text, sizeof(text) - 1);
+        close(fd);
+        if (len <= 0)
+            continue;
+        text[len] = '\0';
+        open_paren = strchr(text, '(');
+        close_paren = strrchr(text, ')');
+        if (!open_paren || !close_paren || close_paren < open_paren ||
+            (size_t)(close_paren - open_paren - 1) != strlen(DESKTOP_COMPOSITOR) ||
+            strncmp(open_paren + 1, DESKTOP_COMPOSITOR, strlen(DESKTOP_COMPOSITOR)) != 0)
+            continue;
+        if (n < max)
+            pid[n] = (pid_t)atol(e->d_name);
+        n++;
+    }
+    closedir(d);
+    return n;
+}
+
+/** Sleep for a look's 100 ms. */
+static void desktop_pause(void)
+{
+    struct timespec ts = {0, 100000000};
+
+    nanosleep(&ts, NULL);
+}
+
+/**
+ * End the desktop's compositor for a case with the `console` fixture, so
+ * that the case may open the framebuffer and take the card's master, which
+ * the compositor holds while it runs, as one stops the display manager on
+ * Linux; the line `desktop` in the attempt's record `DIR/fixtures`, written
+ * first, has fixture_cleanup, or fixture_settle when etude-guest ends before
+ * the case, start the session again. Nothing is done and nothing recorded
+ * when no compositor runs. The supervisor starts no compositor of its own
+ * after the session ends.
+ *
+ * @return 0, or -1 when a compositor runs and the desktop's supervisor does
+ * not, since what holds the display is then no session this fixture may end
+ * and start again, or when the compositor has not ended after SIGTERM within
+ * DESKTOP_LOOKS looks.
+ */
+static int desktop_stop(const char *dir)
+{
+    pid_t pid[16];
+    int looks, n = compositors(pid, 16), i;
+
+    if (n <= 0)
+        return n;
+    if (access(DESKTOP_PIDFILE, R_OK) < 0 || remember(dir, "desktop") < 0)
+        return -1;
+    for (looks = 0; n > 0; looks++) {
+        if (looks == DESKTOP_LOOKS)
+            return -1;
+        for (i = 0; i < n && i < 16; i++)
+            kill(pid[i], SIGTERM);
+        desktop_pause();
+        n = compositors(pid, 16);
+    }
+    return n;
+}
+
+/**
+ * Start the desktop's session again, once a case that desktop_stop ended it
+ * for has ended: SIGHUP to the supervisor that DESKTOP_PIDFILE names, unless
+ * a compositor runs and the session's socket is there, and then a wait for
+ * both.
+ *
+ * @return 0, or -1 when the supervisor cannot be read or signalled, or the
+ * session does not serve within DESKTOP_LOOKS looks.
+ */
+static int desktop_start(void)
+{
+    char text[32];
+    struct stat st;
+    ssize_t len;
+    long sup;
+    int fd, looks;
+
+    if (compositors(NULL, 0) > 0 && stat(DESKTOP_SOCKET, &st) == 0 && S_ISSOCK(st.st_mode))
+        return 0;
+    if ((fd = open(DESKTOP_PIDFILE, O_RDONLY | O_CLOEXEC)) < 0)
+        return -1;
+    len = read(fd, text, sizeof(text) - 1);
+    close(fd);
+    if (len <= 0)
+        return -1;
+    text[len] = '\0';
+    sup = atol(text);
+    if (sup <= 1 || kill((pid_t)sup, SIGHUP) < 0)
+        return -1;
+    for (looks = 0; looks < DESKTOP_LOOKS; looks++) {
+        if (compositors(NULL, 0) > 0 && stat(DESKTOP_SOCKET, &st) == 0 && S_ISSOCK(st.st_mode))
+            return 0;
+        desktop_pause();
+    }
+    return -1;
+}
+
+/** Start the desktop's session again when the attempt's record `DIR/fixtures`
+ * has the line `desktop`, as fixture_cleanup does once the case has ended; 0,
+ * or -1 when the record cannot be read or the session does not start. */
+static int restore_desktop(const char *dir)
+{
+    char text[8192];
+    char *line[64];
+    int n = read_record(dir, text, sizeof(text), line, 64);
+
+    if (n < 0)
+        return -1;
+    while (n-- > 0)
+        if (strcmp(line[n], "desktop") == 0)
+            return desktop_start();
+    return 0;
+}
+
 /** Make the fixtures of `fx` that need the kernel, as fixture_prepare
  * says; 0 or -1. */
 static int kernel_prepare(struct fixtures *fx, const char *dir)
@@ -975,6 +1132,8 @@ static int kernel_prepare(struct fixtures *fx, const char *dir)
     }
     if ((fx->has_root && (root_place(fx, dir) < 0 || attach(&fx->root, dir) < 0)) ||
         (fx->tmpfs_bytes && mount_point(fx, dir, "tmpfs", NULL) < 0))
+        return -1;
+    if (fx->console && desktop_stop(dir) < 0)
         return -1;
     return 0;
 }
@@ -1277,6 +1436,8 @@ static int kernel_cleanup(struct fixtures *fx, const char *dir)
         rc = -1;
     if (fx->log && keep_log(fx, dir) < 0)
         rc = -1;
+    if (fx->console && restore_desktop(dir) < 0)
+        rc = -1;
     free(fx->log_before);
     fx->log_before = NULL;
     if (rc == 0 && fpath(path, "%s/fixtures%s", dir, "") == 0)
@@ -1291,9 +1452,9 @@ static int kernel_cleanup(struct fixtures *fx, const char *dir)
  * account's and no process's, and that each port is free; read the
  * kernel's log; make the directory `private` of the workspace; record each
  * card's minimum GPU clock; attach each volume and the root's image; mount
- * the volumes
- * and the tmpfs of a case without a mount namespace of its own; and open the
- * pseudo-terminal. What is made is written to `DIR/fixtures` as it is made.
+ * the volumes and the tmpfs of a case without a mount namespace of its own;
+ * end the desktop's compositor for `console`; and open the pseudo-terminal.
+ * What is made is written to `DIR/fixtures` as it is made.
  *
  * @return NULL, or the error code with the reason in `*why`: `refused` for
  * an id or a port in use, `failed` for a fixture that could not be made.
@@ -1391,8 +1552,9 @@ int fixture_enter(const struct fixtures *fx, const char *work, char *prog, size_
  * ended: close the pseudo-terminal, unmount what etude-guest mounted, remove
  * the directory `private` of the workspace with all it holds, write back
  * each card's minimum GPU clock as it was before the case, detach the loop
- * devices on files of the attempt, its program's among them, and keep
- * the kernel's records as `DIR/log`. A mount namespace of the case's
+ * devices on files of the attempt, its program's among them, keep
+ * the kernel's records as `DIR/log`, and start the desktop's session again
+ * when `console` ended its compositor. A mount namespace of the case's
  * own has ended with its last process, and the kernel unmounted its mounts
  * then.
  *
@@ -1415,9 +1577,10 @@ int fixture_cleanup(struct fixtures *fx, const char *dir)
 /**
  * Remove what an attempt whose etude-guest ended before it could left: the
  * mounts the record `DIR/fixtures` names, in the order opposite to their
- * making, the directory `private` of the workspace when it names that, and
- * each GPU clock it names written back, then every loop device on a file
- * under `DIR`. A mount is recorded before it is made, so a name of the
+ * making, the directory `private` of the workspace when it names that,
+ * each GPU clock it names written back, and the desktop's session started
+ * again when it names `desktop`, then every loop device on a file under
+ * `DIR`. A mount is recorded before it is made, so a name of the
  * record that is not a mount point is passed by. Only the fixtures that
  * need the kernel write the record, so where FIX_KERNEL is 0 there is
  * nothing to remove.
@@ -1442,6 +1605,8 @@ int fixture_settle(const char *dir)
         if (strcmp(line[n], "private") == 0 && remove_private(dir) < 0)
             rc = -1;
         if (strncmp(line[n], "gpumin ", 7) == 0 && restore_gpumin(line[n]) < 0)
+            rc = -1;
+        if (strcmp(line[n], "desktop") == 0 && desktop_start() < 0)
             rc = -1;
     }
     if (detach_left(dir) < 0)

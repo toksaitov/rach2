@@ -29,7 +29,7 @@ Each case has a workspace: a directory of its own, its working directory, remove
 * `peer:ROLE`: a process on the controller's side that plays ROLE. Its address and port reach the program as `peer=ADDRESS:PORT`, and what the role knows of the machine's network as further arguments. `echo` is a TCP and UDP echo server, as `tests/system/runner/hostpeer.c` plays it; `dgram-outside` sends one datagram to the port that 7502 maps to once the program prints `DGRAMPROBE OUTSIDE`; and `network` answers echoes and gives `ifname=NAME` and `addr=ADDRESS/PREFIX`, the machine's own interface and address, `gateway=ADDRESS`, `far=ADDRESS`, an address off the subnet that answers echoes, `empty=ADDRESS`, an address on the subnet that nobody has, and `silent=ADDRESS`, one that nobody answers, from the machine's declared network.
 * `log`: the kernel's records written while the case ran are kept beside its output.
 * `alone`: no other case runs on the machine meanwhile.
-* `console`: the machine's console and framebuffer, with `alone`.
+* `console`: the machine's console and framebuffer, with `alone`: the desktop's Weston, which holds the display and the card's master while it runs, is ended before the case starts, and the session is started again once every process of the case has ended.
 * `env:NAME=VALUE` and `env:NAME`: the variable NAME set to VALUE, or left out, in the case's environment, which otherwise has `PATH`, `HOME` set to the workspace, and `ETUDE_CASE`.
 * `end:signal:N`: the case passes when the program is killed by signal N; otherwise it passes when the program exits 0.
 

@@ -20,6 +20,8 @@ case bootprobe -- bootprobe machine=native
 # machine=native leaves out the fall of MemFree across the cycles.
 case cowregrant -- cowregrant machine=native
 case credprobe ids:1000,1001,1002,2000,3000 -- credprobe
+# The console fixture ends the desktop's Weston for the case, which holds the
+# display and the card's master while it runs, and starts it again after.
 case devprobe console -- devprobe console=open
 # eth0 is the Lenovo's one card; the probe reads its address and broadcast.
 # machine=native receives the outsider's datagram from peer:dgram-outside
@@ -173,8 +175,9 @@ case stressprobe volume:krffs:krffs48 -- stressprobe dir=vol0
 case sudoprobe root:krffs ids:1000,1001 -- sudoprobe
 case suidprobe root:krffs ids:1000,5 -- suidprobe
 # Under fbdrm the Lenovo's card is a platform device; the uevent row writes
-# the card's add.
-case sysdrmprobe -- sysdrmprobe
+# the card's add. The probe takes the card's master, which the desktop's
+# Weston holds until the console fixture ends it.
+case sysdrmprobe console -- sysdrmprobe
 case tcptest peer:echo -- tcptest closed=9
 case timeprobe -- timeprobe
 case trapprobe -- trapprobe
