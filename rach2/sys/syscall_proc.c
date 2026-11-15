@@ -7968,10 +7968,18 @@ long sys_brk(isr_params_t *params)
  * meets the limit meets it in a loop and a flood of lines would bury the
  * first one. The mark is in the process record, since a pid is reused, and
  * the next process to have that number would go unreported.
+ *
+ * `vm_reserve` fails both at the limit and when the heap has no node for a
+ * region, so the line is said only when the count is within the two regions
+ * a change can need of the limit; a failure with room under it was the
+ * heap's, which `kheap` reports.
  */
 static void vma_exhausted(const char *what)
 {
-    if (!current_proc || current_proc->vma_reported) {
+    uint32_t limit = vm_max_map_count > 0 ? (uint32_t)vm_max_map_count : 0;
+
+    if (!current_proc || current_proc->vma_reported || !current_proc->mm ||
+        (limit >= 2u && current_proc->mm->vm.count <= limit - 2u)) {
         return;
     }
     current_proc->vma_reported = 1;
