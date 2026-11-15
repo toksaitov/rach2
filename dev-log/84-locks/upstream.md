@@ -464,3 +464,25 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `vendor/gnu/install_root.sh` writes the root's `gconv-modules.cache` with the root's own `iconvconfig`, as Debian's package has it, and the row requires Linux's pass again in `tests/graphics/ref/lenovo/expect/igt-gem.rows` (#5254).
 * Status: unreported.
 * Next: check current upstream IGT's gem_readwrite.c for the same unset `expected`, and send a patch that sets `expected` whole.
+
+## Mesa's HUD drops its samples when its vertex upload fails
+
+* Project: Mesa 25.0.7 as Debian 13 builds it, 25.0.7-2+deb13u1, in the GNU root; read in upstream's tag `mesa-25.0.7`, whose `src/gallium/auxiliary/hud/hud_context.c` has SHA-256 a97ad234c0ad7c895b14ce432cacea504b80de985932dcc6c02e1bbc0f60d2a4; Rach2 keeps no source tarball of it.
+* Fails: a frame whose HUD vertex memory cannot be had records no value in any graph, and the next frame that records one takes the time of both. `hud_stop_queries` asks the context's stream uploader for the vertices of the background, lines and text (`hud_context.c:703-708`) and returns when it gives none (lines 709-710), before the loop that calls each graph's `query_new_value` (line 730). The frametime graph's `query_fps` (`hud_fps.c:42-65`) then neither writes `GALLIUM_HUD_DUMP_DIR`'s file nor moves `last_time`. The samples depend on drawing memory even with `GALLIUM_HUD_VISIBLE=false`, which hides the drawing (`hud_draw_results`, line 494).
+* Found: 2026-11-16, the Lenovo and then QEMU on the testing PC, milestone 84, task 5263, when bed/shm's glmark2 scene through virgl over Rach2's region drew but wrote an empty frame-time file, since every map of virgl's persistent uploader buffers was refused by the test bed's VM.
+* Reproduction: in QEMU, `bed-shm.sh -w -x measure -S glmark2` on the x86-64 GNU root with a VM disk of the milestone's backend, which starts virglrenderer without `VIRGL_RENDERER_USE_EXTERNAL_BLOB`: the scene fails with no frame times; the same with `VIRGL_DEBUG=nocoherent` gives 416. Outside Rach2, any Gallium driver whose `u_upload_alloc` fails would show it, such as virgl over a host that refuses blob maps.
+* Evidence: `dev-log/84-locks/84-5263.md`.
+* Rach2: nothing in Mesa; `bed/measure/Readme.md` names the limit, and the backend's maps are #5259's to fix.
+* Status: unreported.
+* Next: read `hud_stop_queries` in Mesa's main to see whether it still returns before the queries, then propose that the queries run and only the vertex accumulation be skipped when the upload fails.
+
+## virglrenderer dereferences a null GBM device for a persistent buffer under external blobs
+
+* Project: virglrenderer 1.1.0, Debian's 1.1.0-2 rebuilt with `-Dminigbm_allocation=true` as 1.1.0-2+rach21 by `bed/vm/image/setup.sh.in`; read in upstream's tag `1.1.0`, whose `src/vrend_renderer.c` has SHA-256 074fda8b44ec7bdd2387bd7930362150a09589f3648fb085764de9077fbbb6d1, and the same code in main at 01637fc76f59a6a4ccb622de0a1d7530c7073917; Rach2 keeps no source tarball of it.
+* Fails: with `VIRGL_RENDERER_USE_EXTERNAL_BLOB` and no GBM device, a buffer resource created with `VIRGL_RESOURCE_FLAG_MAP_PERSISTENT` crashes the renderer. `vrend_create_buffer` skips `glBufferStorage` under the flag (`vrend_renderer.c:8310`) and takes the memory-object branch whenever the GL context has `EXT_memory_object` and `EXT_memory_object_fd` (line 8315), as llvmpipe's does, and calls `gbm_bo_create(gbm->device, ...)` (line 8321) without checking `gbm`, which `vrend_winsys_init` leaves NULL when no render node opens (`vrend_winsys.c:63`, `vrend_winsys_gbm.c:266-287`). The flag withdraws `VIRGL_CAP_ARB_BUFFER_STORAGE` without a GBM device (lines 12673 and 12703-12712), so Mesa's virgl driver never asks for such a buffer, but any guest can.
+* Found: 2026-11-16, QEMU on the testing PC, milestone 84, task 5263, when `bed-shm.sh -k` with #5259's backend, which sets the flag, hung at `vgshmprobe refuse` waiting for the answer to its first persistent GL buffer.
+* Reproduction: on a machine with no DRM render node, call `virgl_renderer_init` with `VIRGL_RENDERER_USE_EGL | VIRGL_RENDERER_USE_SURFACELESS | VIRGL_RENDERER_THREAD_SYNC | VIRGL_RENDERER_USE_EXTERNAL_BLOB` under `LIBGL_ALWAYS_SOFTWARE=1`, then `virgl_renderer_resource_create` with target `PIPE_BUFFER`, format R8_UNORM, bind vertex buffer, width 65536 and flags `MAP_PERSISTENT | MAP_COHERENT`: SIGSEGV; without the flag it returns 0.
+* Evidence: `dev-log/84-locks/84-5263.md`.
+* Rach2: the backend must keep virglrenderer off that path when it has no GBM device (#5259).
+* Status: unreported.
+* Next: propose that `vrend_create_buffer` fail the resource when `gbm` is NULL, or that the flag keep `glBufferStorage` without a GBM device, and send it with the reproduction above.
