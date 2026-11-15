@@ -109,7 +109,6 @@ void i915_irq_suspend(struct drm_i915_private *i915)
     i915_irq_reset_hw(i915);
     i915->irq.suspended = 1;
     spin_unlock_irqrestore(&i915->irq.lock, flags);
-    i915_irq_sync(i915);
 }
 
 void i915_irq_resume(struct drm_i915_private *i915)

@@ -2001,10 +2001,10 @@ void i915_irq_reset(struct drm_i915_private *i915);
 /**
  * Mask, disable and clear every bank on the chip for a runtime suspend, as
  * Linux's intel_runtime_pm_disable_interrupts, keeping the handlers and
- * the driver's copies of the masks and enables, then wait for a handler
- * running elsewhere (`i915_irq_sync`). Until `i915_irq_resume` the mask
- * calls change the copies alone and a message is counted as spurious.
- * Takes the interrupt mask's lock; does not sleep.
+ * the driver's copies of the masks and enables. The caller then waits for
+ * a handler running elsewhere (`i915_irq_sync`). Until `i915_irq_resume`
+ * the mask calls change the copies alone and a message is counted as
+ * spurious. Takes the interrupt mask's lock; does not sleep.
  */
 void i915_irq_suspend(struct drm_i915_private *i915);
 

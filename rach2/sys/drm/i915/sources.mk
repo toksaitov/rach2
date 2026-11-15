@@ -6,6 +6,7 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/i915_pci.c \
     sys/drm/i915/i915_uncore.c \
     sys/drm/i915/i915_power.c \
+    sys/drm/i915/i915_pc8.c \
     sys/drm/i915/i915_runtime_pm.c \
     sys/drm/i915/i915_stolen.c \
     sys/drm/i915/i915_gtt.c \

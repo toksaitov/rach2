@@ -135,6 +135,7 @@ static int32_t rpm_suspend(struct drm_i915_private *i915)
         i915_vma_flush_writes(vma);
     }
     i915_irq_suspend(i915);
+    i915_irq_sync(i915);
     err = i915_uncore_suspend(i915);
     if (err < 0) {
         i915_irq_resume(i915);
