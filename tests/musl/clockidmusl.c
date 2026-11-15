@@ -213,7 +213,11 @@ static void alarm_every(long usec)
  * counted, the count `times` returns.
  *
  * Coarse time since boot is that count of ticks, read between two calls of
- * `times`, and no later than a fine reading after it. The fine clock can be
+ * `times`, plus the part of a tick, under one, that the NTP state's slew
+ * has carried, since a slewed tick counts only once the monotonic clock
+ * has gone a whole tick (clock.c's `rtc_tick_advance`), as on the Lenovo,
+ * whose ntpd slews the clock; and it is no later than a fine reading after
+ * it. The fine clock can be
  * later by any number of ticks, since it counts the ticks of an interrupt not
  * yet taken, as many as an emulator holds back while it does not run the
  * boot processor. Coarse real time is coarse time since boot plus the offset
@@ -236,7 +240,7 @@ static int coarse_clocks(void)
     x = ns_of(CLOCK_MONOTONIC_COARSE);
     t1 = ((long long)times(NULL) + 1) * CLOCK_T_NS;
     after = ns_of(CLOCK_MONOTONIC);
-    if (x < t0 || x > t1 || x > after) {
+    if (x < t0 || x >= t1 + TICK_NS || x > after) {
         printf("CLOCKIDMUSL FAIL (coarse time since boot is not time since boot at the last tick: "
                "ticks %lld ns, coarse %lld ns, ticks %lld ns, fine %lld ns)\n",
                t0, x, t1, after);
