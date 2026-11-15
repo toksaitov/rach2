@@ -20,9 +20,12 @@
 #
 # OUT (.) gets the record and `measures`, `KEY VALUE` a line, the form
 # `judge.py gate` reads: webgl1-fill-BROWSER and webgl2-fill-BROWSER in
-# Mpix/s, webgl1-alu-BROWSER and webgl2-alu-BROWSER in ms. It prints one
-# line:
+# Mpix/s, webgl1-alu-BROWSER and webgl2-alu-BROWSER in ms. It prints, for
+# each context that gave both measures, the milliseconds of each timed run
+# in the order they ran, which tell a slow stretch of a few runs from a
+# draw that is slow every time, then the result:
 #
+#   probe: rounds: BROWSER webglN fill MS... alu MS...
 #   probe: result: BROWSER webgl1 fill F1 alu A1 webgl2 fill F2 alu A2
 #
 # The status is 0 when both contexts gave both measures and 1 otherwise.
@@ -78,6 +81,10 @@ with open(record, "a", encoding="utf-8") as rec:
             ok = False
             words.append("webgl%d %s" % (api, e.get("error") or "none"))
             continue
+        if "fill_rounds" in e and "alu_rounds" in e:
+            print("probe: rounds: %s webgl%d fill %s alu %s" % (
+                browser, api, " ".join("%.1f" % t for t in e["fill_rounds"]),
+                " ".join("%.1f" % t for t in e["alu_rounds"])))
         rows.append("webgl%d-fill-%s %.1f" % (api, browser, e["fill_mpix"]))
         rows.append("webgl%d-alu-%s %.2f" % (api, browser, e["alu_ms"]))
         words.append("webgl%d fill %.1f alu %.2f" % (api, e["fill_mpix"], e["alu_ms"]))
