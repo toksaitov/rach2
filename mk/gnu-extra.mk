@@ -207,7 +207,8 @@ $(GNU_KVM_STAMP): $(GNU_KVM_SOURCES) $(GNU_TOOLCHAIN_STAMP) | $(SHA256TOOL) $(ET
 # inputs, so that a changed guest builds the tests again.
 GNU_IGT_STAMP = $(GNU_OUT)/igt.stamp
 GNU_STEP_STAMPS += $(GNU_IGT_STAMP)
-GNU_IGT_SOURCES = vendor/gnu/igt/build_igt.sh vendor/gnu/igt/sources.txt vendor/gnu/debian/fetch_asset.sh \
+GNU_IGT_SOURCES = vendor/gnu/igt/build_igt.sh vendor/gnu/igt/sources.txt \
+                  vendor/gnu/igt/kms-content-protection-plane-size.patch vendor/gnu/debian/fetch_asset.sh \
                   vendor/gnu/debian/venus.list \
                   $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages setup.sh.in \
                       user-data.in meta-data network-config) \

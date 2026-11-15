@@ -10,15 +10,19 @@
 # runner, since its rules configure with -Dtests=disabled. On the host, the
 # script fetches the source package that sources.txt pins and checks each
 # file's SHA-256, prepares the builder guest of tests/graphics/debian-ref if
-# this clone has none, and boots it with the four files and itself, which
-# the guest runs as `build_igt.sh guest`. There Debian's own debhelper
-# configures, builds and installs the source with the flags of Debian's
-# build, as debian/rules does, and these changes: the tests and the runner
-# are built, the libraries the tests use go in
+# this clone has none, and boots it with the four files, the patch
+# kms-content-protection-plane-size.patch and itself, which the guest runs
+# as `build_igt.sh guest`. There the patch is applied to the unpacked source,
+# and Debian's own debhelper configures, builds and installs it with the
+# flags of Debian's build, as debian/rules does, and these changes: the
+# tests and the runner are built, the libraries the tests use go in
 # /usr/libexec/igt-gpu-tools/lib, which the tests and the runner find by
 # their run paths, so that nothing replaces the packaged libigt.so.0, and
 # Chamelium, liboping, Valgrind and the documentation are off, so that the
-# result does not depend on what else the guest has installed.
+# result does not depend on what else the guest has installed. The patch
+# carries upstream IGT's later fix to kms_content_protection, whose primary
+# plane IGT 2.0 scales when a second connected output is larger than the
+# first.
 #
 # The guest stages what the package lacks: the tests, their libraries and
 # lists under /usr/libexec/igt-gpu-tools, less the benchmarks and Intel's CI
@@ -52,6 +56,8 @@ if [ "${1:-}" = guest ]; then
     say "unpacking intel-gpu-tools 2.0-1"
     dpkg-source -x /tmp/intel-gpu-tools_2.0-1.dsc src
     cd src
+    say "applying kms-content-protection-plane-size.patch"
+    patch -p1 --no-backup-if-mismatch < /tmp/kms-content-protection-plane-size.patch
     say "installing the build dependencies"
     sudo DEBIAN_FRONTEND=noninteractive apt-get -q -y build-dep ./
     sudo DEBIAN_FRONTEND=noninteractive apt-get -q -y install libjson-c-dev
@@ -122,7 +128,8 @@ ref="$REPO/tests/graphics/debian-ref/debian-ref.sh"
 sh "$ref" prepare -n
 echo "gnu: igt: building in the builder guest; the log is $WORK/build.log"
 if ! sh "$ref" run -c "${GNU_IGT_CPUS:-8}" -m "${GNU_IGT_MIB:-8192}" -r "$WORK/guest.record" \
-    -i "$dsc" -i "$orig" -i "$asc" -i "$debian" -i "$GNU/igt/build_igt.sh" -o "$WORK/igt.tar" \
+    -i "$dsc" -i "$orig" -i "$asc" -i "$debian" \
+    -i "$GNU/igt/kms-content-protection-plane-size.patch" -i "$GNU/igt/build_igt.sh" -o "$WORK/igt.tar" \
     'sh /tmp/build_igt.sh guest' > "$WORK/build.log" 2>&1; then
     tail -n 40 "$WORK/build.log" >&2
     echo "gnu: igt: the build in the builder guest failed; the log is $WORK/build.log" >&2

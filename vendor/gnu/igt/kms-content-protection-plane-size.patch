@@ -1,0 +1,75 @@
+Description: Show kms_content_protection's framebuffers at each output's mode
+ IGT 2.0 makes its red and green framebuffers as large as the largest
+ connected output's mode, sets the source of the primary plane to the
+ output's mode and leaves the plane's size at the framebuffer's. With a
+ second output larger than the first, the first output's plane is scaled,
+ which a primary plane that cannot scale, as Haswell's, refuses with ERANGE;
+ the subtest then aborts on its first commit, before it asks whether the
+ output can do HDCP. Upstream IGT sets the plane's size to the mode as well;
+ this does the same at each place the test shows a framebuffer.
+Author: Rach2
+Forwarded: not-needed
+---
+--- a/tests/kms_content_protection.c
++++ b/tests/kms_content_protection.c
+@@ -233,10 +233,13 @@
+ 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
+ 	igt_plane_set_fb(primary, &data.red);
+ 	igt_fb_set_size(&data.red, primary, mode->hdisplay, mode->vdisplay);
++	igt_plane_set_size(primary, mode->hdisplay, mode->vdisplay);
+ 
+ 	igt_display_commit2(display, commit_style);
+ 
+ 	igt_plane_set_fb(primary, &data.green);
++	igt_fb_set_size(&data.green, primary, mode->hdisplay, mode->vdisplay);
++	igt_plane_set_size(primary, mode->hdisplay, mode->vdisplay);
+ 
+ 	/* Wait for Flip completion before starting the HDCP authentication */
+ 	commit_display_and_wait_for_flip(commit_style);
+@@ -246,6 +249,7 @@
+ 			   int content_type, bool type_change)
+ {
+ 	igt_display_t *display = &data.display;
++	drmModeModeInfo *mode = igt_output_get_mode(output);
+ 	igt_plane_t *primary;
+ 	bool ret;
+ 
+@@ -266,6 +270,8 @@
+ 				  KERNEL_AUTH_TIME_ALLOWED_MSEC);
+ 	if (ret) {
+ 		igt_plane_set_fb(primary, &data.green);
++		igt_fb_set_size(&data.green, primary, mode->hdisplay, mode->vdisplay);
++		igt_plane_set_size(primary, mode->hdisplay, mode->vdisplay);
+ 		igt_display_commit2(display, commit_style);
+ 	}
+ 
+@@ -283,8 +289,12 @@
+ 	u64 val;
+ 
+ 	for (count = 0; count < valid_outputs; count++) {
++		drmModeModeInfo *mode = igt_output_get_mode(hdcp_mst_output[count]);
++
+ 		primary = igt_output_get_plane_type(hdcp_mst_output[count], DRM_PLANE_TYPE_PRIMARY);
+ 		igt_plane_set_fb(primary, &data.red);
++		igt_fb_set_size(&data.red, primary, mode->hdisplay, mode->vdisplay);
++		igt_plane_set_size(primary, mode->hdisplay, mode->vdisplay);
+ 		igt_output_set_prop_value(hdcp_mst_output[count], IGT_CONNECTOR_CONTENT_PROTECTION,
+ 					  CP_UNDESIRED);
+ 	}
+@@ -305,6 +315,7 @@
+ static void test_cp_disable(igt_output_t *output, enum igt_commit_style commit_style)
+ {
+ 	igt_display_t *display = &data.display;
++	drmModeModeInfo *mode = igt_output_get_mode(output);
+ 	igt_plane_t *primary;
+ 	bool ret;
+ 
+@@ -317,6 +328,8 @@
+ 	igt_output_set_prop_value(output, IGT_CONNECTOR_CONTENT_PROTECTION,
+ 				  CP_UNDESIRED);
+ 	igt_plane_set_fb(primary, &data.red);
++	igt_fb_set_size(&data.red, primary, mode->hdisplay, mode->vdisplay);
++	igt_plane_set_size(primary, mode->hdisplay, mode->vdisplay);
+ 	igt_display_commit2(display, commit_style);
+ 
+ 	/* Wait for HDCP to be disabled, before crtc off */

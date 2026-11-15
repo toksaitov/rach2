@@ -442,3 +442,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `tests/graphics/runners/piglit.sh` already sets PIGLIT_NO_FAST_SKIP=1; `lenovo-expect.py` marks the reference's affected skips as skip-or-pass, and `judge.py` still rejects their failures and missing results.
 * Status: unreported.
 * Next: check the profile selection in current upstream, then report the mismatch with the legacy compiler test and the two context selections.
+
+## IGT's kms_content_protection scales its primary plane when a second output is larger
+
+* Project: IGT 2.0, Debian's intel-gpu-tools 2.0-1 source; `intel-gpu-tools_2.0.orig.tar.xz`, SHA-256 ab060a2652509e3bbaeb19d8b227c3b063074c9a905a37508830360435d2bb8f, which `vendor/gnu/igt/sources.txt` pins.
+* Fails: `create_fbs` (`tests/kms_content_protection.c`, lines 811-831) makes the red and green framebuffers as large as the largest connected output's mode. `modeset_with_fb` (lines 224-243) sets the primary plane's source to the output's own mode with `igt_fb_set_size`, but `igt_plane_set_fb` (`lib/igt_kms.c`) leaves the plane's CRTC size at the framebuffer's. With a 1366x768 panel and a 1920x1080 HDMI display, the panel's plane reads 1366x768 and draws 1920x1080. A primary plane that cannot scale refuses that: Linux 6.12's `i9xx_plane_check` passes `DRM_PLANE_NO_SCALING` to `intel_atomic_plane_check_clipping`, which returns -ERANGE. The first commit at line 239 asserts, and each atomic subtest ends by SIGABRT before `output_hdcp_capable` can skip it. `test_cp_enable`, `test_mst_cp_disable` and `test_cp_disable` show a framebuffer the same way.
+* Found: 2026-11-15, the Lenovo's native `gpu/igt-kms.2` in milestone 84's release, task 5228: `atomic`, `atomic-dpms`, `lic-type-0`, `lic-type-1`, `type1` and `uevent` were incomplete with `Last errno: 34` in `do_display_commit`, where Linux's reference, run with the panel alone, skipped them.
+* Reproduction: on a Haswell with its panel and a larger external display connected, run `kms_content_protection --run-subtest atomic` under Linux or Rach2; it aborts on its first commit. With the panel alone it skips.
+* Evidence: igt_runner's output of the Lenovo's run at 4add94748, copied to `build/tmp/lenovo-igt/212d9f986ab3a99d` of the owner's clones; `vendor/gnu/igt/kms-content-protection-plane-size.patch`.
+* Rach2: `vendor/gnu/igt/build_igt.sh` applies `kms-content-protection-plane-size.patch`, which sizes the plane to the output's mode at each of the four places.
+* Status: fixed upstream; IGT's master of 2026-11-15 sets the plane's size to the mode in each of these functions. The commit and the first release that has it are not recorded.
+* Next: find the upstream commit and its release, so that the patch can go when Rach2's IGT moves past it.
