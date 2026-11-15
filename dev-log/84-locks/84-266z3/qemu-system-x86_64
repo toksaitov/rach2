@@ -1,0 +1,11 @@
+#!/bin/sh
+# qemu-system-x86_64: run QEMU with eglcount.so preloaded, each QEMU's log of
+# EGL contexts in EGLCOUNT_DIR/egl.PID. EGLCOUNT_SO names the library.
+: "${EGLCOUNT_DIR:?}" "${EGLCOUNT_SO:?}"
+for a; do
+    case $a in --version | -version | -help | --help) exec /usr/bin/qemu-system-x86_64 "$@" ;; esac
+done
+EGLCOUNT_OUT=$EGLCOUNT_DIR/egl
+LD_PRELOAD=$EGLCOUNT_SO${LD_PRELOAD:+:$LD_PRELOAD}
+export EGLCOUNT_OUT LD_PRELOAD
+exec /usr/bin/qemu-system-x86_64 "$@"

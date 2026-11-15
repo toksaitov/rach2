@@ -1,0 +1,26 @@
+The EGL contexts QEMU 10.2.1 held in chunk 00 of the WebGL 1.0.4 list in
+Firefox ESR on the virgl profile, 8 CPUs and 8192 MiB, on the testing
+PC on 2026-11-15 between 10:25 and 10:58 (UTC+6), counted by eglcount.so
+in QEMU. The Debian 13 guest ran `debian.sh webgl -p virgl -c 8 OUT -b
+firefox -v 1.0.4 -g -x /tmp/runners/webgl-virgl.omit 0`, Rach2's guest the
+case machine.virgl.webgl-firefox-webgl1-00 at e52a38fdf, alone with
+RACH2_CASES; the *-fix runs added webgl.sh -n 100, a new Firefox every 100
+pages. The release's virgl cases ran beside them.
+
+`made/destroyed` gives the contexts destroyed by the time each 40th was made.
+A failed creation is followed by libepoxy's assertion and QEMU's SIGABRT.
+
+debian-1  peak 235 alive at 304 made,  69 destroyed; no failure
+          made/destroyed: 40/3 80/62 120/65 160/69 200/69 240/69 280/69 320/302
+debian-2  peak 203 alive at 336 made, 133 destroyed; no failure
+          made/destroyed: 40/3 80/52 120/55 160/132 200/133 240/133 280/133 320/133
+debian-3  peak 240 alive at 295 made,  55 destroyed; creation failed at 240
+          made/destroyed: 40/27 80/52 120/55 160/55 200/55 240/55 280/55
+rach2-1   peak 240 alive at 299 made,  59 destroyed; creation failed at 240
+          made/destroyed: 40/15 80/54 120/57 160/59 200/59 240/59 280/59
+rach2-2   peak 189 alive at 302 made, 113 destroyed; no failure
+          made/destroyed: 40/26 80/54 120/72 160/113 200/113 240/113 280/113 320/293
+rach2-3   peak 120 alive at 176 made,  56 destroyed; no failure
+          made/destroyed: 40/26 80/53 120/56 160/56 200/172 240/204 280/246 320/289
+debian-fix peak 105 alive at 175 made,  70 destroyed; no failure; 358 made in all
+rach2-fix  peak 120 alive at 176 made,  56 destroyed; no failure; 359 made in all
