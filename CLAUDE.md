@@ -14,7 +14,7 @@
 
 ### Other agents
 
-* Codex, agy and Muse Code run only in the owner's accounts, Codex through the `codex-exec` skill and the other two through the `second-opinion` skill. Each runs one job at a time, and one is unavailable only when it answers with its usage-limit message.
+* Codex, agy and Muse Code run only in the owner's accounts, Codex through the `codex-exec` skill and the other two through the `second-opinion` skill. Each runs one job at a time, and one is unavailable only when it says so.
 * When work goes to a worker session, Codex, agy or Muse Code, give it the milestone, the files, the claims the work must make true and what would prove it done, and check every claim in what comes back against the code before using it.
 * Never report that a delegated job is running without reading its state in the same turn.
 
@@ -27,6 +27,6 @@
 * Pass each failure the manager reports to the owner at once, in the manager's words. Never tell the owner that a run goes on, or that nothing changed, without reading the run's own output in that turn.
 * Show research the owner asked for whole, and say which of its findings the plan follows and which it sets aside, and why.
 * Before passing on a question or an action of the manager's, check whether the rules or the owner's standing orders already settle it and whether it is the fastest correct path. When they settle it, order that path and tell the owner what was done.
-* Push to the owner's phone only what needs the owner now: work stopped on a decision, a dialog or an approval that only the owner can give, led by the problem and what the owner must do. While the owner is awake, also push a forecast that the owner's limit runs out before it resets, with the hour it runs out, the days lost and the cut proposed, a Lenovo hang, a failure that stops a milestone and each finished milestone or release. While the owner sleeps, push only what cannot wait for morning, and ask nothing that can. Withdraw a question to the owner that no longer needs them.
+* Push to the owner's phone only what needs the owner now: work stopped on a decision, a dialog or an approval that only the owner can give, led by the problem and what the owner must do. While the owner is awake, also push a Lenovo hang, a failure that stops a milestone and each finished milestone or release. While the owner sleeps, push only what cannot wait for morning, and ask nothing that can. Withdraw a question to the owner that no longer needs them.
 * Ask before adding the owner's reflections to `dev-log/reflections.md`.
 * At the start of a session and after each compaction, the chat reads the newest `build/flow/coordinator/state-*.md` and checks what it says against the board and the manager. The chat and the manager recover the owner's messages from the session transcripts under `~/.claude/projects/`, and a request not yet done becomes a task; no separate record is kept of each message.

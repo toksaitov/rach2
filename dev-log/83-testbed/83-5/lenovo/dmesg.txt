@@ -199,12 +199,12 @@
 [    5.218000] vtd: irte: dmar1 index 8: msi of 1:0.0, vector 52 to apic 0, edge, sid 0x0100 svt 1
 [    5.218000] pci: msi: 1:0.0 on vector 52, remapped
 [    5.218000] rtl8168: interrupts: messages on vector 52
-[    5.225000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    5.225000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    5.232000] net: ready: RTL8168GU
-[    5.238000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/D0:11:E5:C8:0D:59
+[    5.238000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
 [    5.245000] netconsole: started: network logging, targets 1
-[    5.253000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-[    5.260000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+[    5.253000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+[    5.260000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 [    5.260000] rtl8168: no link yet
 [    5.267000] rtl8168: messages on vector 52: none yet, 0 by the tick
 [    5.274000] net: eth0: no address
@@ -213,7 +213,7 @@
 [    5.314000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
 [    5.314000] pci: msi: 2:0.0 on vector 56, remapped
 [    5.314000] ath9k: interrupts: messages on vector 56
-[    5.321000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    5.321000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 [    5.332000] drm: start
 [    5.339000] i915: uncore: an unclaimed access before the bind, cleared
 [    5.347000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it
@@ -278,7 +278,7 @@
 [    6.139000] input: sysfs: worker: kinputd is pid 8
 [    8.463000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
 [    9.248000] net: eth0: IPv4 192.168.0.106/24
-[    9.494000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    9.494000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    9.807000] net: eth0: IPv6 fd91:381e:e667:4a0c:ccc1:250c:eb6a:2264/64 added
 [    9.807000] net: eth0: IPv6 fd91:381e:e667:4a0c:735c:f815:18d2:ca8e/64 added
 [   12.302000] console: card0: handed to a master, the keyboard off

@@ -1,5 +1,5 @@
 <6>[9.064000] net: eth0: IPv4 192.168.0.106/24
-<6>[9.296000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+<6>[9.296000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 <6>[9.567000] net: eth0: IPv6 fd91:381e:e667:4a0c:ed8a:e65:4c38:4f64/64 added
 <6>[9.567000] net: eth0: IPv6 fd91:381e:e667:4a0c:7fca:c556:1570:a3ef/64 added
 <6>[10.773000] wlan: wlan0: key: pairwise: last pn 0, decrypt errors 0, duplicates 0, replays 0

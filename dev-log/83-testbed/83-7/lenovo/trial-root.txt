@@ -1,4 +1,4 @@
-rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/t2670/root-3c8e8df0e57b4b82.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/t2670/root-3c8e8df0e57b4b82.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 netconsole=6665@192.168.0.106/,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
 bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
 bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
 bootctl: fallback: runs: 2053+4096 20040+4096

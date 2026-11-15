@@ -191,12 +191,12 @@
 <6>[5.196000] net: started
 <7>[5.212000] pci: msi: 1:0.0 on vector 51
 <6>[5.212000] rtl8168: interrupts: messages on vector 51
-<6>[5.219000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+<6>[5.219000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 <6>[5.226000] net: ready: RTL8168GU
-<6>[5.232000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/D0:11:E5:C8:0D:59
+<6>[5.232000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
 <6>[5.240000] netconsole: started: network logging, targets 1
-<6>[5.247000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-<7>[5.254000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+<6>[5.247000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+<7>[5.254000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 <6>[5.254000] rtl8168: no link yet
 <6>[5.261000] rtl8168: messages on vector 51: none yet, 0 by the tick
 <6>[5.268000] net: eth0: no address
@@ -204,7 +204,7 @@
 <6>[5.290000] netconsole: udp: port 6666 of eth0: 0 datagrams, held, 0 characters dropped
 <7>[5.308000] pci: msi: 2:0.0 on vector 52
 <6>[5.308000] ath9k: interrupts: messages on vector 52
-<6>[5.315000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+<6>[5.315000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 <6>[5.326000] drm: start
 <6>[5.333000] i915: uncore: an unclaimed access before the bind, cleared
 <6>[5.341000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region
@@ -269,7 +269,7 @@
 <7>[6.136000] input: sysfs: worker: kinputd is pid 9
 <6>[8.341000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
 <6>[9.100000] net: eth0: IPv4 192.168.0.106/24
-<6>[9.409000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+<6>[9.409000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 <6>[10.207000] net: eth0: IPv6 fd91:381e:e667:4a0c:d565:f7a2:76ec:8903/64 added
 <6>[10.207000] net: eth0: IPv6 fd91:381e:e667:4a0c:8390:76d0:6d90:708f/64 added
 <6>[12.712000] console: card0: handed to a master, the keyboard off

@@ -6,9 +6,9 @@ Milestone 50 is accepted at source `8ce6fbd5` on 2026-09-16. The full set at `78
 
 The first hardware restore on 2026-09-16 exhausted the RAM root; an operator workaround moved its transcript and work to the stick. The second sitting ran the committed fixes from a freshly written stick, with growset and the helper verified by their changed strings on the notebook. Save, grow and restore completed with status 0, work and logs on the stick, and the RAM root never full. A grow attempt with an operator transcript left open on the store was correctly refused before any SSD write; the retry used `/dev/console` as this procedure requires. The owner's original root is restored and clean with the pre-grow e2fsck counts unchanged, recovery saved and no candidate trial armed. Entries 94 through 96 are proved on the machine as well as by the host/QEMU tests. The [first sitting](notes.md#recovery-sitting-2026-09-16) records the failure and workaround; the [second sitting](notes.md#second-recovery-sitting-with-committed-code) records the committed-code cycle. No later candidate boot is claimed. A future physical write still requires device identification and the owner's approval at the time. No host disk node is inferred from the notebook's `/dev/disk1`.
 
-The target last reported by the notebook is `/dev/disk0`, AHCI, internal, Samsung SSD 870 EVO 250GB, serial `S6P2NX0T381638Z`, 488397168 sectors of 512 bytes, 250059350016 bytes. MBR identifier `1acef00d`; partition 1 starts at 2048 for 131072 sectors, FAT type 0c; partition 2 starts at 133120 for 131072 sectors, FAT type 0c; partition 3 starts at 266240 for 488130928 sectors, ext2 type 83. The disk stays in its bay.
+The target last reported by the notebook is `/dev/disk0`, AHCI, internal, Samsung SSD 870 EVO 250GB, serial `XXXXXXXXXXXXXXX`, 488397168 sectors of 512 bytes, 250059350016 bytes. MBR identifier `1acef00d`; partition 1 starts at 2048 for 131072 sectors, FAT type 0c; partition 2 starts at 133120 for 131072 sectors, FAT type 0c; partition 3 starts at 266240 for 488130928 sectors, ext2 type 83. The disk stays in its bay.
 
-The stick recorded for this procedure is the removable USB SanDisk 3.2Gen1, serial `00014101091624031318`, 120164352 sectors of 512 bytes. It was rebuilt as the prepared recovery stick and booted for this sitting. Its backup remains part of the recovery arrangement; do not rebuild it over that copy. The recorded identities do not supply approval for a later write.
+The stick recorded for this procedure is the removable USB SanDisk 3.2Gen1, serial `XXXXXXXXXXXXXXXXXXXX`, 120164352 sectors of 512 bytes. It was rebuilt as the prepared recovery stick and booted for this sitting. Its backup remains part of the recovery arrangement; do not rebuild it over that copy. The recorded identities do not supply approval for a later write.
 
 ## Contents and host preparation
 
@@ -20,7 +20,7 @@ The builder allocates the exFAT volume in memory, about 6.2 GiB at this geometry
 cd /Users/toksaitov/Desktop/rach2
 make build/tools/inspect/growset rach2-install-stick
 sh tools/dev/machine_grow_plan.sh \
-    build/images/rach2-metal-disk.ext2 488397168 S6P2NX0T381638Z 1acef00d \
+    build/images/rach2-metal-disk.ext2 488397168 XXXXXXXXXXXXXXX 1acef00d \
     build/machine-50/recovery-grow
 tar -C build/machine-50/recovery-grow -cf build/machine-50/grow-tools.tar \
     grow.plan ranges.txt machine_grow.sh seed.sha256 programs.sha256

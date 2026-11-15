@@ -1,4 +1,4 @@
-rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4733/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys intel_iommu=off intremap=off rach2.cycleaccount netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4733/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys intel_iommu=off intremap=off rach2.cycleaccount netconsole=6665@192.168.0.106/,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
 Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
 bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
 bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes

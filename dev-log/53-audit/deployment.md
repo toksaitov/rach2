@@ -20,7 +20,7 @@ here.
 ## The stick
 
 The install stick is written to the development flash drive, a SanDisk
-3.2Gen1 of 61,524,148,224 bytes, USB serial `00014101091624031318`. It is the
+3.2Gen1 of 61,524,148,224 bytes, USB serial `XXXXXXXXXXXXXXXXXXXX`. It is the
 recovery ISO at sector 1 for 13291 sectors, then an exFAT volume at sector
 14336 for 2373632 sectors holding `rach2-sealed.disk` and the manifest that
 declares its hash.

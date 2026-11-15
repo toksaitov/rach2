@@ -168,17 +168,17 @@
 [    5.210000] net: started
 [    5.226000] pci: msi: 1:0.0 on vector 51
 [    5.226000] rtl8168: interrupts: messages on vector 51
-[    5.233000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    5.233000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    5.240000] net: ready: RTL8168GU
-[    5.246000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-[    5.253000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+[    5.246000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+[    5.253000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 [    5.253000] rtl8168: no link yet
 [    5.259000] rtl8168: messages on vector 51: none yet, 0 by the tick
 [    5.266000] net: eth0: no address
 [    5.273000] netconsole: broadcast, ethertype 0x88b5, boot id 0xa5a380d, 0 frames, 5863 characters dropped
 [    5.298000] pci: msi: 2:0.0 on vector 52
 [    5.298000] ath9k: interrupts: messages on vector 52
-[    5.305000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    5.305000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 [    5.316000] drm: start
 [    5.323000] i915: uncore: an unclaimed access before the bind, cleared
 [    5.330000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region
@@ -219,7 +219,7 @@
 [    9.343000] net: eth0: IPv4 192.168.0.106/24
 [    9.589000] net: eth0: IPv6 fd91:381e:e667:4a0c:4c68:cd09:2076:e38e/64 added
 [    9.589000] net: eth0: IPv6 fd91:381e:e667:4a0c:4e41:97f5:19e4:c01f/64 added
-[    9.660000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    9.660000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [   12.812000] console: card1: handed to a master, the keyboard off
 [   16.203000] syscall: 425: not implemented (asked for by qemu-system-x86)
 [   50.663000] syscall: 425: not implemented (asked for by qemu-system-x86)

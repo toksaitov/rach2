@@ -173,10 +173,10 @@
 [4.252000] usb: device: port 2.3: 46d:c077, class 3 protocol 2, endpoint 1
 [4.266000] pci: msi: 1:0.0 on vector 51
 [4.266000] rtl8168: interrupts: messages on vector 51
-[4.273000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[4.273000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [4.280000] net: ready: RTL8168GU
-[4.287000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-[4.294000] rtl8168: RTL8168GU: xid 0x509, MMIO 0xF078A000, MAC 28:D2:44:7E:E0:AF
+[4.287000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+[4.294000] rtl8168: RTL8168GU: xid 0x509, MMIO 0xF078A000, MAC xx:xx:xx:xx:xx:xx
 [4.294000] rtl8168: no link yet
 [4.300000] rtl8168: messages on vector 51: none yet, 0 by the tick
 [4.306000] net: eth0: no address

@@ -59,7 +59,7 @@ Rach2 becomes a machine that students share: logged in over SSH at once, compili
 
 ## How the work runs
 
-* In three batches, as the Batches section of `AGENTS.md` describes, by Claude Code with at most three helpers, the owner's allowance of 2026-10-03. A helper takes a part whose files no other part changes, in a worktree and on a branch of its own; Claude Code merges each part into the batch it belongs to and checks it there.
+* In three batches, as the Batches section of `AGENTS.md` describes, by Claude Code with at most three helpers. A helper takes a part whose files no other part changes, in a worktree and on a branch of its own; Claude Code merges each part into the batch it belongs to and checks it there.
 * `audit.md` lists, scope by scope, what assumes i386, from a read of the whole tree on 2026-10-03 at commit `5349d3df`. The work starts from it instead of a new search.
 * Batch 1 changes no behavior of the i686 build. It is checked once, at its end: the compile, `tests/run style` and one `tests/run all`.
 * In batches 2 and 3, the work is booted under QEMU as it is built; those boots are the building, not its checks. Batch 2's checks run once, at its end, as batch 1's do. Batch 3 ends with the checks of `AGENTS.md`, the Codex review of the whole milestone among them, and the machine comes last.

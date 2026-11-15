@@ -5,7 +5,7 @@ The chat's memory notes on the graphics work, the project's direction and the Cr
 ## project-direction
 
 
-On 2026-11-03 the owner said teaching is no longer the main goal, though Rach2 stays in the owner's courses and a book is planned. Two directions are open: a sovereign OS (the first Kyrgyz OS) or a university research sandbox for publishable OS ideas under full control of the code. The near goal: run the most basic 90% of consumer software with decent reliability, then pitch at local government startup events and seek investment (hardware, subscriptions, tokens, a test lab, people). Speed matters: "move fast and break things"; other agent-built OS projects exist but are behind.
+On 2026-11-03 the owner set the near goal: run the most basic 90% of consumer software with decent reliability. Speed matters; other agent-built OS projects exist but are behind.
 
 Later on 2026-11-03 the owner named the graphics stack as "the next big thing", after a month spent on the test system, drivers and making the Lenovo solid as a development machine. Rach2 has no graphics stack yet: only the /fb framebuffer, owned by one process at a time.
 

@@ -31,12 +31,12 @@
 <7>[3.982000] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
 <6>[3.985000] usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte contexts
 <6>[4.549000] usb: device: port 6: bda:579a, class 0: no driver for it here
-<7>[5.208000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+<7>[5.208000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 <6>[5.244000] netconsole: udp: port 6666 of eth0: 0 datagrams, held, 0 characters dropped
 <7>[5.261000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
 <7>[5.261000] pci: msi: 2:0.0 on vector 56, remapped
 <6>[5.261000] ath9k: interrupts: messages on vector 56
-<6>[5.269000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+<6>[5.269000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 <6>[5.280000] drm: start
 <6>[5.287000] i915: 00:02.0: 0a16 left to the firmware's framebuffer; rach2.i915 binds it
 <6>[5.295000] drm: simpledrm: card0

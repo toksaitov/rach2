@@ -536,7 +536,7 @@
 [    0.964499] Mounting boot media...
 [    1.066354] ACPI: battery: Slot [BAT0] (battery present)
 [    1.096189] r8169 0000:01:00.0: can't disable ASPM; OS doesn't have ASPM control
-[    1.104677] r8169 0000:01:00.0 eth0: RTL8168gu/8111gu, 28:d2:44:7e:e0:af, XID 509, IRQ 43
+[    1.104677] r8169 0000:01:00.0 eth0: RTL8168gu/8111gu, xx:xx:xx:xx:xx:xx, XID 509, IRQ 43
 [    1.105111] r8169 0000:01:00.0 eth0: jumbo features [frames: 9194 bytes, tx checksumming: ko]
 [    1.129309] ACPI: bus type USB registered
 [    1.130147] usbcore: registered new interface driver usbfs
@@ -602,7 +602,7 @@
 [    1.923118] usb 2-3: New USB device strings: Mfr=1, Product=2, SerialNumber=3
 [    1.923876] usb 2-3: Product:  SanDisk 3.2Gen1
 [    1.924659] usb 2-3: Manufacturer:  USB
-[    1.925422] usb 2-3: SerialNumber: 00014101091624031318
+[    1.925422] usb 2-3: SerialNumber: XXXXXXXXXXXXXXXXXXXX
 [    1.994109] usb 2-2.1: new low-speed USB device number 4 using xhci_hcd
 [    2.087255] usb 2-2.1: New USB device found, idVendor=046d, idProduct=c34b, bcdDevice=62.00
 [    2.087821] usb 2-2.1: New USB device strings: Mfr=1, Product=2, SerialNumber=0

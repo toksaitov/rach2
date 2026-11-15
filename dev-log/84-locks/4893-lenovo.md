@@ -61,7 +61,7 @@ Every remote command below checks the station address and the disk serial before
 ```
 LOCK=$(git rev-parse --git-common-dir)/../build/flow/lenovo
 mkdir "$LOCK" && echo 4893 > "$LOCK/issue"
-L() { ssh -i krffs/rach2_demo_ed25519 -o BatchMode=yes -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o ServerAliveInterval=5 -o ServerAliveCountMax=3 root@192.168.0.106 'test "$(cat /sys/class/net/eth0/address)" = 28:d2:44:7e:e0:af && grep -q S6P2NX0T381638Z /proc/disk && '"$*"; }
+L() { ssh -i krffs/rach2_demo_ed25519 -o BatchMode=yes -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o ServerAliveInterval=5 -o ServerAliveCountMax=3 root@192.168.0.106 'test "$(cat /sys/class/net/eth0/address)" = xx:xx:xx:xx:xx:xx && grep -q XXXXXXXXXXXXXXX /proc/disk && '"$*"; }
 back() { i=0; until L "test \"\$(cat /proc/sys/kernel/random/boot_id)\" != \"$BOOT_ID\"" 2>/dev/null; do i=$((i + 1)); [ "$i" -ge 180 ] && { echo 'no answer'; return 1; }; sleep 2; done; L 'mixer vol 1'; }
 L 'cat /etc/rach2/release; bootctl status; cat /proc/cmdline' | tee "$R/before.txt"
 L 's=$(bootctl status | sed -n "s/^bootctl: candidate: first sector \([0-9]*\),.*/\1/p"); dd if=/dev/bootpart bs=512 skip=$s count=8192 2>/dev/null' > "$R/slot.bin"

@@ -56,7 +56,6 @@ From 21:44 to 03:31 UTC it landed eleven pull requests, one every 32 minutes, wi
 * ci is `make test` on two runners of the testing host, 17 to 20 minutes for one run alone and 25 to 36 minutes with both runners and the team's own suites on the host.
 * Strict up-to-date merging lets one pull request merge per ci round: each merge makes every other open pull request behind, its author rebases, and ci runs again. Of the runner minutes spent on pull requests by 15:20, 338 went to runs that passed, 318 to runs a later push cancelled, and 54 to failures.
 * A rebase took an author's session 5 to 20 minutes, because each one ran `tests/run style` and its suites again before pushing.
-* Use of the subscription was small: each account's five-hour window stood at 2 to 5 percent at the end, and the 44 sessions together came to about 33 dollars at API prices.
 
 ## Where a ci run's time goes
 

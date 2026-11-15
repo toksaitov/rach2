@@ -14,7 +14,7 @@ The disk layout, boot menu, and two levels of disk authority remain unchanged. T
 
 The sealed disk was written to the 250 GB SSD, booted in QEMU off the physical drive, and booted on the Lenovo G50-70 over a USB adapter on a real network.
 
-DHCP works end to end on real hardware. The netconsole capture records discovery, selection of 192.168.0.107 from server 192.168.0.1, and lease acquisition. The router's reservation matched the MAC reported by the driver, `28:D2:44:7E:E0:AF`, and by `dev-log/24-metal/baseline.md`. The client applied the address, mask, default route, and `/etc/resolv.conf` from the lease. `nslookup` reaches 1.1.1.1 and returns the correct answer.
+DHCP works end to end on real hardware. The netconsole capture records discovery, selection of 192.168.0.107 from server 192.168.0.1, and lease acquisition. The router's reservation matched the MAC reported by the driver, `xx:xx:xx:xx:xx:xx`, and by `dev-log/24-metal/baseline.md`. The client applied the address, mask, default route, and `/etc/resolv.conf` from the lease. `nslookup` reaches 1.1.1.1 and returns the correct answer.
 
 That router hands out an infinite lease, 4294967295 seconds. The in-house client is not exposed to it: `HARD_MAX_LEASE` (`utils/dhcpc.c:89`) is seven days and `dhcp_sane_lease` clamps before `dhcp_boundaries` multiplies by seven, on both lease paths.
 

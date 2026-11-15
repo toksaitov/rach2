@@ -41,7 +41,7 @@ followed it.
 | xHCI | 00:14.0, 8086:9c31, MSI on vector 48; an EHCI at 00:1d.0 beside it |
 | HDA | the driver binds 00:1b.0 on vector 49; codec 0x14f1510f |
 | Disk | AHCI port 0, 488397168 sectors, 238475 MiB |
-| Network | RTL8168GU, MAC 28:D2:44:7E:E0:AF |
+| Network | RTL8168GU, MAC xx:xx:xx:xx:xx:xx |
 | USB at boot | a hub 35d6:2510 on port 1 with nothing behind it; the keyboard on port 2; the mouse on port 3; ports 4, 6 and 7 the soldered devices this kernel refuses |
 | `/dev` | bootlog bootpart console disk0p1 disk0p2 disk0p3 full grubcore null ptmx random tty urandom zero |
 

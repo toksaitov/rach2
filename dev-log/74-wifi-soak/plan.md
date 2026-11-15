@@ -8,7 +8,7 @@ The Lenovo holds its connection through a long soak with disk load. A renewal th
 
 ## What was measured
 
-All on the Lenovo on the real access point, TDA-NET, under 6 writers of 6000 MiB and a renewal every 20 s.
+All on the Lenovo on the real access point, HOME-NET, under 6 writers of 6000 MiB and a renewal every 20 s.
 
 | Reading | 624c42061 | Fixed |
 |---|---|---|
@@ -77,7 +77,7 @@ Milestone 74 was released as milestone 11 on GitHub on 2026-11-08 at 4d096f0a1, 
 
 ## The final soak
 
-On the installed 4d096f0a1, from the installed slot, no tracer, 3620 s from 06:48 UTC, 6 writers of 1000 MiB from /dev/zero and sync, wpa_ptk_rekey 120, the access point TDA-NET on 2427 MHz and then 2457 MHz. It exited 0. #2473 is closed.
+On the installed 4d096f0a1, from the installed slot, no tracer, 3620 s from 06:48 UTC, 6 writers of 1000 MiB from /dev/zero and sync, wpa_ptk_rekey 120, the access point HOME-NET on 2427 MHz and then 2457 MHz. It exited 0. #2473 is closed.
 
 | Reading | Value |
 |---|---|

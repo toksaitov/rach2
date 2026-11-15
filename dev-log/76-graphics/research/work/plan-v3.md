@@ -34,7 +34,7 @@ The Lenovo G50-70: Core i3-4030U (two cores, four threads, 1.9 GHz, no turbo), I
 5. Proton with WineD3D (Direct3D on OpenGL); Vulkan deferred.
 6. Proper 32-bit on 64-bit: Linux's whole compat ABI, as its own milestone.
 7. Estimates at agent speed, not a person's.
-8. The original Crysis, bought on GOG at 22:06 tonight.
+8. The original Crysis, the GOG release.
 9. Crysis is tested on the Lenovo under Linux first (22:38).
 10. Playable means lowest resolution, lowest settings, about 24 FPS, at least the first level (22:38).
 

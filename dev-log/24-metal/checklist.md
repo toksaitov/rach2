@@ -34,7 +34,7 @@ The Mac provides two services only during the session:
 
 * Start a packet capture to obtain the first evidence that the network card transmits:
   `sudo tcpdump -i en0 -nn -e -s0 'ether proto 0x88b5'`
-  These are netconsole frames. Their source address should be the notebook's `28:D2:44:7E:E0:AF`.
+  These are netconsole frames. Their source address should be the notebook's `xx:xx:xx:xx:xx:xx`.
 * Use an SSH client after the notebook responds.
 
 ## Ordered boots
@@ -68,7 +68,7 @@ rach2.ip=<the reserved address>/24 rach2.gateway=<the router> rach2.netconsole
 
 Start `tcpdump` on the Mac before booting. This is the first hardware test of the ported driver. Check these results in increasing order of evidence:
 
-* Frames arrive from `28:D2:44:7E:E0:AF`, proving that the card transmits.
+* Frames arrive from `xx:xx:xx:xx:xx:xx`, proving that the card transmits.
 * Sequence numbers increase without gaps, proving that the ring and doorbell operate.
 * Frame contents contain the boot log beginning before network initialization, proving that buffering retained the earlier output.
 

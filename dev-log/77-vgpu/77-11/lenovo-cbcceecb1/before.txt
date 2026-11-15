@@ -32,7 +32,7 @@ cache-buffers 23581
 cache-limit 259584
 cache-buckets 262144
 disk 0 ahci 0 488397168 gpt Samsung SSD 870 EVO 250GB
-identity 0 512 fixed mounted S6P2NX0T381638Z
+identity 0 512 fixed mounted XXXXXXXXXXXXXXX
 part 0 1 2048 131072 43424140-4544-4746-4849-4a4b4c4d4e4f Rach2 boot
 part 0 2 133120 131072 44434241-4645-4847-4849-4a4b4c4d4e4f Rach2 recovery
 part 0 3 266240 134217728 45444342-4746-4948-4849-4a4b4c4d4e4f Rach2 root

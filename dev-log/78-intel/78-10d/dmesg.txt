@@ -133,10 +133,10 @@
 [    5.066000] vtd: irte: dmar1 index 8: msi of 1:0.0, vector 52 to apic 0, edge, sid 0x0100 svt 1
 [    5.066000] pci: msi: 1:0.0 on vector 52, remapped
 [    5.066000] rtl8168: interrupts: messages on vector 52
-[    5.073000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    5.073000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    5.079000] net: ready: RTL8168GU
-[    5.085000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-[    5.091000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+[    5.085000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+[    5.091000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 [    5.091000] rtl8168: no link yet
 [    5.097000] rtl8168: messages on vector 52: none yet, 0 by the tick
 [    5.104000] net: eth0: no address
@@ -144,7 +144,7 @@
 [    5.132000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
 [    5.132000] pci: msi: 2:0.0 on vector 56, remapped
 [    5.132000] ath9k: interrupts: messages on vector 56
-[    5.138000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    5.138000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 [    5.148000] drm: start
 [    5.154000] i915: uncore: an unclaimed access before the bind, cleared
 [    5.161000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it

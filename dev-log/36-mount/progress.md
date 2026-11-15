@@ -42,7 +42,7 @@ Phase 5: mount
 - [x] mountprobe, lagprobe mounted half, vfsprobe through a mount
 - [x] suites/mount.sh, tests/run mount in core tier; BusyBox boot; mdir/mcopy comparison
 - [x] phase mutations; phase gate
-- [x] review round: seven units fixed, run five then two at a time after the owner's cap; unit 3 split; every finding fixed or recorded
+- [x] review round: seven units fixed, run five then two at a time; unit 3 split; every finding fixed or recorded
 
 Phase 6: the record and the sweep
 - [x] docs written and read against code; prosecheck; sweep of code/build/tests

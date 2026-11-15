@@ -77,7 +77,7 @@ Before the trial both slots were checked against the release record. The candida
 
 | Step | Result |
 |---|---|
-| Address | SLAAC took `fd91:381e:e667:4a0c:2ad2:44ff:fe7e:e0af/64`, the modified EUI-64 with no secret written, 5 s after the link-local `fe80::2ad2:44ff:fe7e:e0af`; the prefix route `fd91:381e:e667:4a0c::/64 proto ra` and the router `fe80::10a0:35cb:9f95:89b7` in the neighbour cache; no default route, since the network's router advertises none |
+| Address | SLAAC took `fd91:381e:e667:4a0c:xxxx:xxff:fexx:xxxx/64`, the modified EUI-64 with no secret written, 5 s after the link-local `fe80::xxxx:xxff:fexx:xxxx`; the prefix route `fd91:381e:e667:4a0c::/64 proto ra` and the router `fe80::10a0:35cb:9f95:89b7` in the neighbour cache; no default route, since the network's router advertises none |
 | The Mac pings it | 5 of 5 to the ULA, 0.32-1.0 ms; 3 of 3 to the link-local address |
 | `ssh -6` from the Mac | OpenSSH's sshd, started at boot by the release's root, answered on the ULA: `SSH_CONNECTION` named both ULAs |
 | curl to a server on the Mac | `python3 -m http.server --bind ::` on the Mac; three GETs of a 4 MiB random file over the ULA, each 0.04 s with the file's SHA-256, and one over the link-local address with `%eth0` |

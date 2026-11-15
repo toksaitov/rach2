@@ -46,7 +46,7 @@
 <6>[0.89] krffs: mounted: 586 files (disk)
 <6>[0.90] net: started
 <6>[0.93] net: ready: RTL8168GU
-<6>[0.94] rtl8168: RTL8168GU: xid 0x509, MMIO 0xC0504000, MAC 28:D2:44:7E:E0:AF
+<6>[0.94] rtl8168: RTL8168GU: xid 0x509, MMIO 0xC0504000, MAC xx:xx:xx:xx:xx:xx
 <6>[0.96] rtl8168: no link yet
 <6>[0.97] rtl8168: rx 0 (0 error, 0 dropped), tx 7 (0 stalled)
 <6>[0.99] net: IPv4 0.0.0.0/0, no gateway: this subnet only

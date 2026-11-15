@@ -8,7 +8,7 @@ metal-accept: 192.168.0.106:22
   the random pool is trusted (16 bytes read from /dev/urandom)
   disk: policy=read-write
   disk: disk 0 ahci 0 488397168 mbr Samsung SSD 870 EVO 250GB
-  disk: identity 0 512 fixed mounted S6P2NX0T381638Z
+  disk: identity 0 512 fixed mounted XXXXXXXXXXXXXXX
   disk: the installed system's root is on it
   disk: the MBR hashes to e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   disk: part 0 1 2048 131072 mbr:0c
@@ -53,7 +53,7 @@ metal-accept: 192.168.0.106:22
   the host's checker finds the image the machine wrote clean
   with the file the machine wrote inside it
   stick: disk1  USB  SanDisk 3.2Gen1 120164352 sectors 1 parts ready flushes 0
-  stick: /dev/disk1 (00014101091624031318) is the one written
+  stick: /dev/disk1 (XXXXXXXXXXXXXXXXXXXX) is the one written
   stick: /dev/disk1 is a block device
   stick: /dev/disk1p1: LABEL="RACH2TEST" UUID="C84E-0F0F" TYPE="vfat"
   stick: the volume RACH2TEST on /dev/disk1p1 mounts, takes a file and gives it back

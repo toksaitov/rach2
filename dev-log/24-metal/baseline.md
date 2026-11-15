@@ -9,7 +9,7 @@ The acceptance run compares these values with the notebook. `rach2.diskdiag` pro
 ## Machine
 
 * Lenovo G50-70, serial YB04287142.
-* Ethernet: Realtek RTL8168GU, station address `28:D2:44:7E:E0:AF`. The driver requires the expected masked revision `0x509`. Windows did not read it because that requires a raw MMIO access that no stock tool performs safely. The Rach2 diagnostic boot reads it.
+* Ethernet: Realtek RTL8168GU, station address `xx:xx:xx:xx:xx:xx`. The driver requires the expected masked revision `0x509`. Windows did not read it because that requires a raw MMIO access that no stock tool performs safely. The Rach2 diagnostic boot reads it.
 * SATA controller: AHCI, ABAR at `0xC061B000`, 2048 bytes, MSI.
 * The DMAR ACPI table shows that the chipset provides VT-d. If enabled, it blocks DMA and prevents the network card from working. The notebook session records the firmware setting.
 

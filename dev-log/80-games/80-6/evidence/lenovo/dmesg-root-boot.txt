@@ -190,17 +190,17 @@
 [    5.054000] net: started
 [    5.069000] pci: msi: 1:0.0 on vector 51
 [    5.069000] rtl8168: interrupts: messages on vector 51
-[    5.075000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    5.075000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    5.082000] net: ready: RTL8168GU
-[    5.088000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-[    5.094000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+[    5.088000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+[    5.094000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 [    5.094000] rtl8168: no link yet
 [    5.100000] rtl8168: messages on vector 51: none yet, 0 by the tick
 [    5.106000] net: eth0: no address
 [    5.112000] netconsole: broadcast, ethertype 0x88b5, boot id 0x68ca8e3b, 0 frames, 5679 characters dropped
 [    5.134000] pci: msi: 2:0.0 on vector 52
 [    5.134000] ath9k: interrupts: messages on vector 52
-[    5.140000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    5.140000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 [    5.150000] drm: start
 [    5.156000] i915: 00:02.0: 0a16 left to the firmware's framebuffer; rach2.i915 binds it
 [    5.163000] drm: simpledrm: card0
@@ -222,6 +222,6 @@
 [    5.646000] input: sysfs: worker: kinputd is pid 5
 [    8.122000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
 [    8.268000] net: eth0: IPv4 192.168.0.106/24
-[    8.462000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    8.462000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    9.646000] net: eth0: IPv6 fd91:381e:e667:4a0c:4ce0:fc3c:40b:648/64 added
 [    9.646000] net: eth0: IPv6 fd91:381e:e667:4a0c:3e68:64f1:b948:9c6c/64 added

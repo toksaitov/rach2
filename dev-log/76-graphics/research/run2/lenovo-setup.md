@@ -60,7 +60,7 @@ Written as it ran, from 20:11 on 2026-11-08 (UTC+6), by the agent of the Lenovo'
 ## Debian on the Lenovo
 
 * 20:28:59, 30 s after the reboot: Debian answered SSH at 192.168.0.106 by the development key, with the line above. Its host key is in `run2/lenovo-known-debian` (`dssh`). GRUB had cleared `next_entry` (`saved_entry=candidate`, `next_entry=` read from p1 under Debian).
-* First boot (`debian-first.txt`): Debian 13.7, kernel 6.12.115+deb13.1-amd64; `cloud-init status --long` "done", NoCloud from the seed, no errors; `systemctl is-system-running` "running", no failed units; `enp1s0` (r8169, RTL8168gu, 28:d2:44:7e:e0:af) 192.168.0.106/24 by DHCP, gateway 192.168.0.1, link-local `fe80::2ad2:44ff:fe7e:e0af`; `/` is `/dev/sda5`, grown online to 32G; `intel_backlight` 47 of 937; neither `ath9k` nor `snd_hda_intel` loaded; root and `gfx` have locked passwords; root's `authorized_keys` holds the development key alone, without cloud-init's "Please login as" prefix.
+* First boot (`debian-first.txt`): Debian 13.7, kernel 6.12.115+deb13.1-amd64; `cloud-init status --long` "done", NoCloud from the seed, no errors; `systemctl is-system-running` "running", no failed units; `enp1s0` (r8169, RTL8168gu, xx:xx:xx:xx:xx:xx) 192.168.0.106/24 by DHCP, gateway 192.168.0.1, link-local `fe80::xxxx:xxff:fexx:xxxx`; `/` is `/dev/sda5`, grown online to 32G; `intel_backlight` 47 of 937; neither `ath9k` nor `snd_hda_intel` loaded; root and `gfx` have locked passwords; root's `authorized_keys` holds the development key alone, without cloud-init's "Please login as" prefix.
 * The clock: `systemd-timesyncd` synced at 20:33 from 17.253.18.131, the NTP server the router's DHCP gives (`facts/time.txt`); time zone Etc/UTC.
 * The flash drive is not seen under Debian: `lsblk` lists only the Samsung SSD (sda1 to sda5) and the optical drive.
 * r8169 asks for `rtl_nic/rtl8168g-3.fw` (non-free-firmware, not installed), fails to load it and runs without it: link up at 1 Gb/s full duplex.
@@ -119,7 +119,7 @@ From `facts.sh` at 20:34, into `/root/run2/setup-facts/` on Debian and `run2/len
 
 ## For step 9's agent
 
-* Address: 192.168.0.106 (DHCP, the same lease Rach2 gets); link-local `fe80::2ad2:44ff:fe7e:e0af%en1` if IPv4 does not answer. SSH, from the repository root on the Mac, with Apple's `ssh`:
+* Address: 192.168.0.106 (DHCP, the same lease Rach2 gets); link-local `fe80::xxxx:xxff:fexx:xxxx%en1` if IPv4 does not answer. SSH, from the repository root on the Mac, with Apple's `ssh`:
 
   `ssh -i krffs/rach2_demo_ed25519 -o UserKnownHostsFile=build/flow/coordinator/graphics-research/run2/lenovo-known-debian -o StrictHostKeyChecking=accept-new root@192.168.0.106`
 

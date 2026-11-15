@@ -58,7 +58,7 @@ The owner's earlier direction, from a discussion in October (summary):
 * Order: virtio-gpu in QEMU first, then virgl on the testing host, then native Haswell, then the research experiment.
 * Research: a Linux driver VM as a GPU service: KVM-like support in Rach2, a VMM, the virgl or Venus protocol, VFIO-like device assignment. Design the native stack now with buffer handles, asynchronous fences, defined device loss and one owner per device, so that the experiment plugs in.
 * Lab: an iPhone on a tripod watching the Lenovo's panel, network console logs, a reset method for hangs.
-* Later decisions: software rendering (llvmpipe) is a must, also as the fallback on any machine; as much as possible in QEMU first; the full ia32 compat ABI as its own milestone, with Wine's WoW64 slice first; the project's aim is the basic 90% of consumer software, quickly; teaching is secondary.
+* Later decisions: software rendering (llvmpipe) is a must, also as the fallback on any machine; as much as possible in QEMU first; the full ia32 compat ABI as its own milestone, with Wine's WoW64 slice first; the project's aim is the basic 90% of consumer software, quickly.
 
 ## Facts measured for this round
 

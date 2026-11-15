@@ -100,8 +100,8 @@
 <6>[3.92] pci: msi: 1:0.0 on vector 51
 <6>[3.94] rtl8168: interrupts: messages on vector 51
 <6>[3.95] net: ready: RTL8168GU
-<6>[3.96] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-<6>[3.98] rtl8168: RTL8168GU: xid 0x509, MMIO 0xF0017000, MAC 28:D2:44:7E:E0:AF
+<6>[3.96] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+<6>[3.98] rtl8168: RTL8168GU: xid 0x509, MMIO 0xF0017000, MAC xx:xx:xx:xx:xx:xx
 <6>[4.01] rtl8168: no link yet
 <6>[4.02] rtl8168: rx 0 (0 error, 0 dropped, 0 error reports), tx 15 (0 stalled, 0 error reports)
 <6>[4.05] rtl8168: messages on vector 51: 12, 4 idle, 4 deferred, 0 by the tick

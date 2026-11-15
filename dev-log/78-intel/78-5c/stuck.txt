@@ -38,7 +38,7 @@
 [    5.818000] input: sysfs: worker: kinputd is pid 5
 [    8.066000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
 [    9.147000] net: eth0: IPv4 192.168.0.106/24
-[    9.460000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    9.460000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    9.797000] net: eth0: IPv6 fd91:381e:e667:4a0c:94e:cd29:78c7:b63/64 added
 [    9.797000] net: eth0: IPv6 fd91:381e:e667:4a0c:a2e1:3317:6bcb:fbc5/64 added
 [   12.592000] console: card1: handed to a master, the keyboard off

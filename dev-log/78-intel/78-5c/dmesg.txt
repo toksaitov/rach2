@@ -172,10 +172,10 @@
 [    5.070000] vtd: irte: dmar1 index 8: msi of 1:0.0, vector 52 to apic 0, edge, sid 0x0100 svt 1
 [    5.070000] pci: msi: 1:0.0 on vector 52, remapped
 [    5.070000] rtl8168: interrupts: messages on vector 52
-[    5.076000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    5.076000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    5.083000] net: ready: RTL8168GU
-[    5.089000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-[    5.095000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+[    5.089000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+[    5.095000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 [    5.095000] rtl8168: no link yet
 [    5.101000] rtl8168: messages on vector 52: none yet, 0 by the tick
 [    5.107000] net: eth0: no address
@@ -183,7 +183,7 @@
 [    5.136000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
 [    5.136000] pci: msi: 2:0.0 on vector 56, remapped
 [    5.136000] ath9k: interrupts: messages on vector 56
-[    5.142000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    5.142000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 [    5.152000] drm: start
 [    5.158000] i915: uncore: an unclaimed access before the bind, cleared
 [    5.165000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it
@@ -221,7 +221,7 @@
 [    5.818000] input: sysfs: worker: kinputd is pid 5
 [    8.066000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
 [    9.147000] net: eth0: IPv4 192.168.0.106/24
-[    9.460000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    9.460000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    9.797000] net: eth0: IPv6 fd91:381e:e667:4a0c:94e:cd29:78c7:b63/64 added
 [    9.797000] net: eth0: IPv6 fd91:381e:e667:4a0c:a2e1:3317:6bcb:fbc5/64 added
 [   12.592000] console: card1: handed to a master, the keyboard off

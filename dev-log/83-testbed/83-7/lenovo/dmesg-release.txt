@@ -167,17 +167,17 @@
 [    4.084000] net: started
 [    4.111000] pci: msi: 1:0.0 on vector 51
 [    4.111000] rtl8168: interrupts: messages on vector 51
-[    4.117000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    4.117000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    4.123000] net: ready: RTL8168GU
-[    4.129000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-[    4.135000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x787000, MAC 28:D2:44:7E:E0:AF
+[    4.129000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+[    4.135000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x787000, MAC xx:xx:xx:xx:xx:xx
 [    4.135000] rtl8168: no link yet
 [    4.140000] rtl8168: messages on vector 51: none yet, 0 by the tick
 [    4.146000] net: eth0: no address
 [    4.151000] netconsole: broadcast, ethertype 0x88b5, boot id 0x362180c2, 0 frames, 4046 characters dropped
 [    4.172000] pci: msi: 2:0.0 on vector 52
 [    4.172000] ath9k: interrupts: messages on vector 52
-[    4.178000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    4.178000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 [    4.520000] timing: tick 1000 Hz, 200 ms delay measured 201 ms, 2000 us wait measured 2014 us
 [    4.526000] clock: reference: the hpet; a tick the timer misses or delays is counted
 [    4.545000] smp: cpu1: tsc: synchronized with cpu0
@@ -190,7 +190,7 @@
 [    4.621000] wlan: worker: kwlan is pid 3
 [    7.164000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
 [    7.345000] net: eth0: IPv4 192.168.0.106/24
-[    7.549000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    7.549000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [    8.623000] net: eth0: IPv6 fd91:381e:e667:4a0c:ed8a:e65:4c38:4f64/64 added
 [    8.623000] net: eth0: IPv6 fd91:381e:e667:4a0c:389:1648:7fe4:adad/64 added
 [    8.974000] wlan: wlan0: key: pairwise: last pn 0, decrypt errors 0, duplicates 0, replays 0
@@ -205,5 +205,5 @@
 [ 1815.426000] net: eth0: IPv6 fd91:381e:e667:4a0c:389:1648:7fe4:adad removed
 [ 1816.426000] nd6: wlan0: fd91:381e:e667:4a0c:1974:2286:afc0:cb4d expired
 [ 1816.426000] net: wlan0: IPv6 fd91:381e:e667:4a0c:1974:2286:afc0:cb4d removed
-[ 2030.584000] wlan: wlan0: beacon: 60:a4:b7:a4:eb:63: on channel 9, not 5
-[ 2031.591000] wlan: wlan0: switched: 60:a4:b7:a4:eb:63: to channel 9
+[ 2030.584000] wlan: wlan0: beacon: xx:xx:xx:xx:xx:xx: on channel 9, not 5
+[ 2031.591000] wlan: wlan0: switched: xx:xx:xx:xx:xx:xx: to channel 9

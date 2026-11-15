@@ -1,7 +1,7 @@
 # bootctl rootimage: one boot of a root image
 menuentry "Start Rach2 once from the root image GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4879/root-d4d1da30b4f6cb50.img" --id trialroot {
     search --no-floppy --fs-uuid --set=root 1ACE-F00D
-    multiboot2 /boot/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4879/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys rach2.cycleaccount intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59
+    multiboot2 /boot/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4879/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys rach2.cycleaccount intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
     if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
     boot
 }
@@ -9,7 +9,7 @@ if [ "${next_entry}" = "trialroot" ]; then
     set next_entry=
     save_env next_entry
     search --no-floppy --fs-uuid --set=root 1ACE-F00D
-    multiboot2 /boot/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4879/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys rach2.cycleaccount intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59
+    multiboot2 /boot/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4879/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys rach2.cycleaccount intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
     if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
     boot
 fi

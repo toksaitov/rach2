@@ -432,7 +432,7 @@ The cost to measure is:
 
 A cheap worker that requires the lead to reconstruct its reasoning and rewrite its patch may cost more overall. A helper that returns a correct dependency manifest while the lead diagnoses GPU execution can save both time and consumption.
 
-I would judge the first few real assignments by accepted work, lead time spent correcting them, and actual usage. API token prices alone do not tell us how much of your subscription allowance a task consumes. Increase helper count only when accepted work arrives faster than the lead can produce it without creating an integration backlog.
+I would judge the first few real assignments by accepted work, lead time spent correcting them, and actual usage. Increase helper count only when accepted work arrives faster than the lead can produce it without creating an integration backlog.
 
 For Rach2, my starting recommendation is two main implementers and one Sonnet helper. Four concurrent implementers is a provisional ceiling, not a target to keep filled.
 

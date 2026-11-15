@@ -2,7 +2,7 @@
 
 The four TinyCC modes passed on 24 October 2026 from the Mac through actual SSH to the Lenovo G50-70. This meets T50 and [#963](https://github.com/toksaitov/rach2/issues/963#issuecomment-6375581096). It does not establish T93, the run of every eligible case on the final candidate kernel.
 
-The target was `root@192.168.0.106`, Ethernet address `28:d2:44:7e:e0:af`, booted in the candidate slot. Before staging and each connection, the identity check required that address, `rach2.slot=candidate`, `bootctl: booted: candidate`, no pending next entry, and the candidate's first sector 2053 and length 4096 sectors. The first 1766480 kernel bytes had SHA-256 `b18555143514b7c21105e93e2cbb1fddf60c0be9524c752f8190872ab36f3555`, matching the retained `h682/build/x86_64/rach2/kernel` artifact. This is an artifact identity; no kernel source commit is claimed.
+The target was `root@192.168.0.106`, Ethernet address `xx:xx:xx:xx:xx:xx`, booted in the candidate slot. Before staging and each connection, the identity check required that address, `rach2.slot=candidate`, `bootctl: booted: candidate`, no pending next entry, and the candidate's first sector 2053 and length 4096 sectors. The first 1766480 kernel bytes had SHA-256 `b18555143514b7c21105e93e2cbb1fddf60c0be9524c752f8190872ab36f3555`, matching the retained `h682/build/x86_64/rach2/kernel` artifact. This is an artifact identity; no kernel source commit is claimed.
 
 ## Inputs and commands
 

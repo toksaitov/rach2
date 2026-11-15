@@ -39,8 +39,8 @@ The Codex review's 146 units found faults that the record lists with their fixes
 * The machine's root: `os-real-gnu.ext2` of the build of source `49362aa8` for x86-64, 4096 MiB, sha256 `dd65f4a76423a6eced0d4b622260a0e0ddca0097b8bc401b70a43f64472cf653`. `rach2-install --update` wrote it from the stick, and it was grown to 232.8 GiB. The root carries the kernel's sources in `/src`, so a change of any file under `rach2/` changes the image.
 * Hardware:
   * The Lenovo G50-70 at 192.168.0.106, with an Intel Core i3-4030U of four logical processors and 16 GiB of memory.
-  * Its Samsung SSD 870 EVO of 488397168 sectors, serial `S6P2NX0T381638Z`, on AHCI.
-  * The SanDisk 3.2Gen1 stick, serial `00014101091624031318`, plugged into it.
+  * Its Samsung SSD 870 EVO of 488397168 sectors, serial `XXXXXXXXXXXXXXX`, on AHCI.
+  * The SanDisk 3.2Gen1 stick, serial `XXXXXXXXXXXXXXXXXXXX`, plugged into it.
 * The testing host's judges, on 32 processors:
   * The i686 and x86-64 GCC 15.2.0, which also compiled the machine's kernel.
   * QEMU 10.2.1, Cppcheck 2.19.0 and clang-format 21.1.8.

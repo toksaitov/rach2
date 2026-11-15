@@ -97,7 +97,7 @@ Proof, once and in this order: build from clean; the full set; everything that c
 
 ## Handoff, 2026-09-07 07:00
 
-Written by the session that ran phases 1 to 5 when its allowance ran out. The next session finishes phase 5's close and runs phase 6. Everything below is checked against the tree at the time of writing; verify before relying on it.
+Written by the session that ran phases 1 to 5, before it stopped. The next session finishes phase 5's close and runs phase 6. Everything below is checked against the tree at the time of writing; verify before relying on it.
 
 ### State of the tree
 

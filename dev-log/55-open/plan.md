@@ -34,7 +34,7 @@ From the first sitting's list and the second's, in `dev-log/54-gnu/notes.md`:
 
 ## How the work runs
 
-* In batches, as the Batches section of `AGENTS.md` describes, each checked before the next starts: compile and style, the review by hand (Codex is not used before 2026-10-04, by the owner's quota), the build from clean with `tests/run all` and the mutation tests of new checks.
+* In batches, as the Batches section of `AGENTS.md` describes, each checked before the next starts: compile and style, the review by hand (Codex is not used before 2026-10-04), the build from clean with `tests/run all` and the mutation tests of new checks.
 * A program that meets a gap of the kernel while it is ported gets the gap fixed in the same batch.
 
 ## Phases

@@ -126,7 +126,7 @@ Labels: `owner-only`. Owns `dev-log/70-wifi-chip/lenovo.md` and a read-only `/sy
 Labels: `owner-only`. Owns the bring-up section of `lenovo.md`. Waits on 2, 3 and 4, and on the manager's merge of 69 into this branch. Silent, over SSH, on trial boots, the release back in both slots afterwards.
 
 * 9a. The boot line and the MAC address, against the sticker or Linux's.
-* 9b. A scan: the list compared with the networks the Mac sees, with signals; TDA-NET, the owner's home network (on 2.4 GHz, the owner confirms), is in it.
+* 9b. A scan: the list compared with the networks the Mac sees, with signals; HOME-NET, the owner's home network (on 2.4 GHz, the owner confirms), is in it.
 * 9c. A forced reset recovers and a second scan still sees them.
 * Done: each result in `lenovo.md`; a failure filed as a fix to the part it names.
 
@@ -134,7 +134,7 @@ Labels: `owner-only`. Owns the bring-up section of `lenovo.md`. Waits on 2, 3 an
 
 Labels: `owner-only`. Owns the traffic section of `lenovo.md`. Waits on 5, 6, 9, 11 and 69's task 16. Silent, over SSH, on trial boots.
 
-* 10a. WPA2-Personal, and WPA3 if the AP offers it, to the owner's home network with DHCP, ping and a transfer to the Mac. The owner gave the network as a wpa_supplicant block in `build/flow/coordinator/wifi/home.conf` on the Mac (mode 600, outside git), ssid "TDA-NET", on 2.4 GHz, whose name 9b's scan confirms. Never print the passphrase or copy it into git, an issue or a log; copy the file to the trial boot only for the run and delete it from the Lenovo afterwards.
+* 10a. WPA2-Personal, and WPA3 if the AP offers it, to the owner's home network with DHCP, ping and a transfer to the Mac. The owner gave the network as a wpa_supplicant block in `build/flow/coordinator/wifi/home.conf` on the Mac (mode 600, outside git), ssid "HOME-NET", on 2.4 GHz, whose name 9b's scan confirms. Never print the passphrase or copy it into git, an issue or a log; copy the file to the trial boot only for the run and delete it from the Lenovo afterwards.
 * 10b. The rate climbs past 1 Mbit/s in `iw dev wlan0 station dump`.
 * 10c. A soak of hours with traffic to the Mac, judged by the kernel's counters: no hang, every reset recovered, the link back after the AP's restart.
 * Done: each result in `lenovo.md`.

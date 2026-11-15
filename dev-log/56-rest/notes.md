@@ -34,7 +34,7 @@ The first batch was the console's answers to queries, its UTF-8 and Chawan's ter
 
 ## The review
 
-Codex was not available until 2026-10-04, by the owner's quota, so phases 1 to 4 were reviewed by hand before the commits were made, and these were found and fixed:
+Codex was not available until 2026-10-04, so phases 1 to 4 were reviewed by hand before the commits were made, and these were found and fixed:
 
 * `ext2_fallocate` wrote zeros over the bytes a file had when the range crossed its size inside a block it already had; it now writes such a block only past the size, and the gnu suite's fallocate row checks the bytes kept.
 * The file page cache could keep a copy of a page read while a write changed it, with the size and the modification time the write left. The VFS now drops a file's pages after the change, each drop counts as a change, and a page read while the count moved is not kept.

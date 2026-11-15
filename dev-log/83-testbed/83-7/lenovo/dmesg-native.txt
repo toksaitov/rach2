@@ -15,7 +15,7 @@
 [    9.863000] net: eth0: IPv4 192.168.0.106/24
 [    9.986000] net: eth0: IPv6 fd91:381e:e667:4a0c:3468:64ee:f156:c3a2/64 added
 [    9.986000] net: eth0: IPv6 fd91:381e:e667:4a0c:8442:6af6:2c87:2abb/64 added
-[   10.192000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[   10.192000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 [   13.447000] console: card0: handed to a master, the keyboard off
 [   15.076000] i915: gmbus dpb: NAK for addr 0050 w(1)
 [   15.076000] i915: gmbus dpb: NAK on first message, retry

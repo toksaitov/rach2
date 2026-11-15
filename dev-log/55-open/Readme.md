@@ -14,7 +14,7 @@ The sitting then added, among the fixes `notes.md` lists: the timer's count of t
 * The fault entries of the milestone's new checks, 20, each put into the tree alone and caught by its row, with the restored build equal to the first: 19 in s50 on `15a99152`, and `proc-dir-global-pid` in s51 on `bad43f65`, after its row in nsmusl was made to read a pipe of its own, since descriptor 0 is the console every process of the emulator shares.
 * The host's mutation scripts of the account merge, fourteen faults, the KRFFS root's lock and the pipe's copy, each fault failing its row and each restoration passing.
 * The machine: the gnu suite's rows on the Lenovo's installed root, 50 of 51, the one left being iproute2's, which checks the emulator's address; `pwck -r` on its account files; Chawan on Wikipedia, Chromium's sandbox and the clock against the CMOS clock under memory exhaustion.
-* No Codex review: the owner's quota allowed none before 2026-10-04, and the batches were reviewed by hand.
+* No Codex review: Codex was not used before 2026-10-04, and the batches were reviewed by hand.
 
 ## The record
 
@@ -22,7 +22,7 @@ The sitting then added, among the fixes `notes.md` lists: the timer's count of t
 * The machine's kernel: `build/rach2/kernel` of the testing host's build of source `bbd958f2`, which no later commit changes, 1463020 bytes, sha256 `b963baeacdad3bc10f752787ee81fb40d7c10f9fe7dce683eeb5689269903527`, in the candidate slot and committed.
 * The machine's root: `os-real-gnu-2g.ext2` of source `b3c6ed95`, whose image no later commit changes, in 2048 MiB, sha256 `41526ec4e926145a92f93d9132092701e0b5a74766edbca657b4d710cc32774e`, written by `rach2-install --update` with that source's installer and grown to 232.8 GiB. The image of sources `15a99152` and `bad43f65`, which change no file of it, is sha256 `487a855941f710e9bae366a8a646e24d37a5c82b456f54a7d8c6f93a3a1f144a`, and differs from it only in the date of tmux's rendered manual page.
 * The machine's recovery partition after the last update: sha256 `72f0a51bae3856ab17a7dc077ba9e66244bb730bc24a4882e9755a5dc8b0581a`. The stick: the root's image, the kernel and the installer on the exFAT volume of the SanDisk stick, not an install stick.
-* Hardware: the Lenovo G50-70 at 192.168.0.106, its Samsung SSD 870 EVO of 488397168 sectors, serial `S6P2NX0T381638Z`, and the SanDisk 3.2Gen1 stick, serial `00014101091624031318`, plugged into it.
+* Hardware: the Lenovo G50-70 at 192.168.0.106, its Samsung SSD 870 EVO of 488397168 sectors, serial `XXXXXXXXXXXXXXX`, and the SanDisk 3.2Gen1 stick, serial `XXXXXXXXXXXXXXXXXXXX`, plugged into it.
 * The testing host's judges: i686 GCC 15.2.0, which also compiled the machine's kernel, QEMU 10.2.1, Cppcheck 2.19.0 and clang-format 21.1.8, on 32 processors. The Mac's cross compiler, i686-elf-gcc 16.2.0, built the trial kernel that checked bbd958f2 on the machine before the testing host's build replaced it.
 
 ## What is still open

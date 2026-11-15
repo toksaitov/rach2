@@ -199,12 +199,12 @@
 <7>[5.198000] vtd: irte: dmar1 index 8: msi of 1:0.0, vector 52 to apic 0, edge, sid 0x0100 svt 1
 <7>[5.198000] pci: msi: 1:0.0 on vector 52, remapped
 <6>[5.198000] rtl8168: interrupts: messages on vector 52
-<6>[5.205000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+<6>[5.205000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 <6>[5.211000] net: ready: RTL8168GU
-<6>[5.218000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/D0:11:E5:C8:0D:59
+<6>[5.218000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
 <6>[5.225000] netconsole: started: network logging, targets 1
-<6>[5.232000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-<7>[5.239000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+<6>[5.232000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+<7>[5.239000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 <6>[5.239000] rtl8168: no link yet
 <6>[5.246000] rtl8168: messages on vector 52: none yet, 0 by the tick
 <6>[5.253000] net: eth0: no address
@@ -213,7 +213,7 @@
 <7>[5.293000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
 <7>[5.293000] pci: msi: 2:0.0 on vector 56, remapped
 <6>[5.293000] ath9k: interrupts: messages on vector 56
-<6>[5.300000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+<6>[5.300000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 <6>[5.311000] drm: start
 <6>[5.318000] i915: uncore: an unclaimed access before the bind, cleared
 <6>[5.326000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it
@@ -280,7 +280,7 @@
 <6>[9.863000] net: eth0: IPv4 192.168.0.106/24
 <6>[9.986000] net: eth0: IPv6 fd91:381e:e667:4a0c:3468:64ee:f156:c3a2/64 added
 <6>[9.986000] net: eth0: IPv6 fd91:381e:e667:4a0c:8442:6af6:2c87:2abb/64 added
-<6>[10.192000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+<6>[10.192000] net: wlan0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 <6>[13.447000] console: card0: handed to a master, the keyboard off
 <7>[15.076000] i915: gmbus dpb: NAK for addr 0050 w(1)
 <7>[15.076000] i915: gmbus dpb: NAK on first message, retry

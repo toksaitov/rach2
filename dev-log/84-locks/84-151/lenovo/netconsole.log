@@ -192,12 +192,12 @@
 <6>[3.969000] net: started
 <7>[3.980000] pci: msi: 1:0.0 on vector 52
 <6>[3.980000] rtl8168: interrupts: messages on vector 52
-<6>[3.983000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+<6>[3.983000] net: eth0: IPv6 fe80::xxxx:xxff:fexx:xxxx/64 added
 <6>[3.986000] net: ready: RTL8168GU
-<6>[3.988000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/D0:11:E5:C8:0D:59
+<6>[3.988000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
 <6>[3.991000] netconsole: started: network logging, targets 1
-<6>[3.994000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
-<7>[3.997000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+<6>[3.994000] net: eth0: RTL8168GU, station xx:xx:xx:xx:xx:xx
+<7>[3.997000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC xx:xx:xx:xx:xx:xx
 <6>[3.997000] rtl8168: no link yet
 <6>[3.999000] rtl8168: messages on vector 52: none yet, 0 by the tick
 <6>[4.002000] net: eth0: no address
@@ -205,7 +205,7 @@
 <6>[4.011000] netconsole: udp: port 6666 of eth0: 0 datagrams, held, 0 characters dropped
 <7>[4.023000] pci: msi: 2:0.0 on vector 56
 <6>[4.023000] ath9k: interrupts: messages on vector 56
-<6>[4.026000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+<6>[4.026000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 <6>[4.032000] drm: start
 <6>[4.035000] i915: uncore: an unclaimed access before the bind, cleared
 <6>[4.038000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region

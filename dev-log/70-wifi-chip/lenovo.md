@@ -126,7 +126,7 @@ Before task 8d was struck, one boot of Alpine's netboot kernel 6.18.58-0-lts ran
 * ath9k printed `Atheros AR9565 Rev:1 mem=..., irq=19`, `WB335 2-ANT card detected`, `Set BT/WLAN RX diversity capability`, `Enable LNA combining` and `ASPM enabled: 0xc43`; the EEPROM's regulatory domain is 0x6a, country 00.
 * `iw list`: antennas TX 0x1, RX 0x3; HT capabilities 0x116e, HT20 and HT40, short guard interval at both, RX STBC of one stream; MCS 0 to 7; channels 1 to 13 at 18 dBm, 12 without initiating radiation, 14 disabled. The interface came up at 15 dBm.
 * The trace has 35,246 lines: 13,255 register reads and 21,975 writes, over the driver's load and two scans. mmiotrace took the other three CPUs offline while it ran.
-* The scans found 21 and 30 networks. The owner's TDA-NET was on 2442 MHz, channel 7, at -27 and -16 dBm.
+* The scans found 21 and 30 networks. The owner's HOME-NET was on 2442 MHz, channel 7, at -27 and -16 dBm.
 
 ## The hang at 04:08
 
@@ -175,10 +175,10 @@ done
 
 ```
 ath9k: interrupts: messages on vector 52
-ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac xx:xx:xx:xx:xx:xx subsys 17aa:4026
 ```
 
-`ip link` shows `wlan0` down with `link/ether b8:ee:65:32:89:15`. Linux's ath9k wrote the same address to the card: `AR_STA_ID0` 0x3265eeb8 and the low half of `AR_STA_ID1` 0x1589, at lines 4566 and 4987 of the mmiotrace. The worker kwlan is pid 3 and init pid 1. The command word reads 0x0006 with messages on: memory decoding and bus mastering, Interrupt Disable clear.
+`ip link` shows `wlan0` down with `link/ether xx:xx:xx:xx:xx:xx`. Linux's ath9k wrote the same address to the card: `AR_STA_ID0` 0x3265eeb8 and the low half of `AR_STA_ID1` 0x1589, at lines 4566 and 4987 of the mmiotrace. The worker kwlan is pid 3 and init pid 1. The command word reads 0x0006 with messages on: memory decoding and bus mastering, Interrupt Disable clear.
 
 ### The radio's start
 
@@ -188,8 +188,8 @@ ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
 
 `iw dev wlan0 scan`, with a static iw 6.17 copied to `/dev/shm`, returned in under a second with 26 BSSes: 12 on channel 1, 1 each on 2, 3, 5, 10, 11 and 13, 2 on 4, 4 on 6 and 3 on 8. Linux's two scans had found 21 and 30.
 
-* TDA-NET, the owner's network, was BSS 60:a4:b7:a4:eb:63 on 2427 MHz, channel 4, at -15 dBm; Linux had found it on channel 7 at -27 and -16 dBm, so the router has changed channel since. A second scan, 7 minutes later, gave it at -57 dBm among 19 BSSes.
-* The Mac (`system_profiler SPAirPortDataType`, which hides the names of networks it has not joined) saw 2.4 GHz networks on channels 1 (two), 4, 5, 6, 8 and 10, and gave a signal only for its channel 4 network, TDA-NET, at -25 dBm. Each of those channels has networks in Rach2's list.
+* HOME-NET, the owner's network, was BSS xx:xx:xx:xx:xx:xx on 2427 MHz, channel 4, at -15 dBm; Linux had found it on channel 7 at -27 and -16 dBm, so the router has changed channel since. A second scan, 7 minutes later, gave it at -57 dBm among 19 BSSes.
+* The Mac (`system_profiler SPAirPortDataType`, which hides the names of networks it has not joined) saw 2.4 GHz networks on channels 1 (two), 4, 5, 6, 8 and 10, and gave a signal only for its channel 4 network, HOME-NET, at -25 dBm. Each of those channels has networks in Rach2's list.
 * Signals run from -15 to -92 dBm, except nine BSSes on channel 1 at -99 to -114 dBm, each heard in the scan itself. The driver reports the noise floor plus `AR_RxRSSICombined`, as ath9k does, so these are frames whose combined RSSI read negative. Only channel 1, where the radio had listened for 80 s before the scan, shows them.
 
 ### A stuck queue
@@ -197,7 +197,7 @@ ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
 * `AR_Q_TXD` cannot hang a queue: on this chip it makes a queue finish what it holds, as ath9k's `ath9k_hw_stop_dma_queue` relies on. With all ten bits set and a scan of the channel the radio sat on, the probe request was sent and no reset followed.
 * Clearing the ten `AR_DnQCUMASK` words (0x1000 to 0x1024) does hang it: a scan of the same channel left `AR_Q_TXE` at 0x8, a frame in QCU 3, the VO queue that probe requests take, for two minutes.
 * No reset came, because the hang check ran only once, a second after the start: it queued its own record again from inside its callback, which the worker refuses (11b2c9de4 fixes it).
-* A full scan's first retune then aborted TX, with its bounded waits, and reset the chip: `AR_Q_TXE` read 0, the masks 1 << n again, and the scan found 19 BSSes, TDA-NET among them. Messages stayed on throughout, 24,911 of them by 07:32, with no `polled` line.
+* A full scan's first retune then aborted TX, with its bounded waits, and reset the chip: `AR_Q_TXE` read 0, the masks 1 << n again, and the scan found 19 BSSes, HOME-NET among them. Messages stayed on throughout, 24,911 of them by 07:32, with no `polled` line.
 
 ### A forced reset and a second scan
 
@@ -205,7 +205,7 @@ The second trial, from 07:37 UTC+6, booted kernel `5b503978...eb72` (11b2c9de4, 
 
 * The start, a full scan (22 BSSes) and a scan of channel 1 ran as on the first trial, with the hang check now running each second; it found nothing in the 36 s before the masks were cleared.
 * At 07:38:12 the ten `AR_DnQCUMASK` words read 1 << n and were written 0, with `AR_Q_TXE` at 0. A scan of channel 1 then left a frame in QCU 3, and the log gave `<6>[76.685000] ath9k: reset: tx-hang: recovered`, the check's second look at the queue. After it `AR_Q_TXE` read 0 and the masks 1 << n, and no other reset followed.
-* At 07:38:32 a full scan returned 20 BSSes, 15 of them heard in the scan itself, TDA-NET among them at -57 dBm on channel 4.
+* At 07:38:32 a full scan returned 20 BSSes, 15 of them heard in the scan itself, HOME-NET among them at -57 dBm on channel 4.
 * At 07:38:57 `ip link set wlan0 down` returned 0, and no message came in the 3 s after it. The trial sent 3,583 messages in all, with no `polled` line.
 
 ### The release back
@@ -214,12 +214,12 @@ The release's kernel was copied from the fallback slot through the FAT, armed wi
 
 ## Traffic and soak
 
-Task 10's trial, from 08:42 to 10:48 UTC+6: Rach2's driver joined the owner's network, TDA-NET, and carried traffic to the Mac's Wi-Fi, 192.168.0.204, for two hours. It booted kernel `86293bcf` (59d3bcde1, x86_64, 2,697,488 bytes) through `bootctl kernel`, silent, with `mixer vol 1`; both slots held the release before it, read through the FAT. On the trial boot `bootctl status` gave `saved_entry: fallback`, `next_entry: empty` and `booted: candidate`. Static `wpa_supplicant`, `wpa_cli` and `iw` from this tree (musl, x86_64) ran from `/dev/shm`, and the network's passphrase was there only for the run, in a file of mode 600 that was never printed.
+Task 10's trial, from 08:42 to 10:48 UTC+6: Rach2's driver joined the owner's network, HOME-NET, and carried traffic to the Mac's Wi-Fi, 192.168.0.204, for two hours. It booted kernel `86293bcf` (59d3bcde1, x86_64, 2,697,488 bytes) through `bootctl kernel`, silent, with `mixer vol 1`; both slots held the release before it, read through the FAT. On the trial boot `bootctl status` gave `saved_entry: fallback`, `next_entry: empty` and `booted: candidate`. Static `wpa_supplicant`, `wpa_cli` and `iw` from this tree (musl, x86_64) ran from `/dev/shm`, and the network's passphrase was there only for the run, in a file of mode 600 that was never printed.
 
 ### The join
 
-* `ip link set wlan0 up` and a scan found TDA-NET at 60:a4:b7:a4:eb:63, now on 2437 MHz, channel 6, at -19 dBm. It offers RSN with CCMP and PSK alone, so the join is WPA2-Personal; WPA3 needs an AP that offers SAE.
-* `wpa_supplicant -B -D nl80211 -i wlan0 -c /dev/shm/home.conf` reached `wpa_state=COMPLETED` within 1 s: SME authentication, association, then `WPA: Key negotiation completed with 60:a4:b7:a4:eb:63 [PTK=CCMP GTK=CCMP]`. `iw dev wlan0 link` gave 2437 MHz at -26 dBm, and the kernel log gained only wlan0's IPv6 address.
+* `ip link set wlan0 up` and a scan found HOME-NET at xx:xx:xx:xx:xx:xx, now on 2437 MHz, channel 6, at -19 dBm. It offers RSN with CCMP and PSK alone, so the join is WPA2-Personal; WPA3 needs an AP that offers SAE.
+* `wpa_supplicant -B -D nl80211 -i wlan0 -c /dev/shm/home.conf` reached `wpa_state=COMPLETED` within 1 s: SME authentication, association, then `WPA: Key negotiation completed with xx:xx:xx:xx:xx:xx [PTK=CCMP GTK=CCMP]`. `iw dev wlan0 link` gave 2437 MHz at -26 dBm, and the kernel log gained only wlan0's IPv6 address.
 
 ### DHCP and the routes
 
