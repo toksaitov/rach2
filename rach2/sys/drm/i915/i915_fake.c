@@ -1358,14 +1358,10 @@ static struct i915_fake *i915_fake_create(struct i915_hw *hw)
     R(f, MCH_SSKPD_HI) = FAKE_SSKPD_HI;
     fake_reset(f, GEN6_GRDOM_FULL);
     f->light = 1;
+    k_memset(hw, 0, sizeof(*hw));
     hw->ops = &fake_ops;
     hw->priv = f;
     hw->size = I915_MMIO_SIZE;
-    hw->timeouts = 0;
-    hw->last_timeout = 0;
-    hw->gtt_entries = 0;
-    hw->gsm = 0;
-    hw->faults = 0;
     return f;
 }
 

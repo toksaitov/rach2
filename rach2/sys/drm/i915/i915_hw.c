@@ -9,6 +9,7 @@
 #include "../../arch/x86/pat.h"
 #include "../../arch/x86/portio.h"
 #include "../../klog.h"
+#include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
 #include "../../mm/paging.h"
 #include "../../udelay.h"
@@ -302,13 +303,9 @@ int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size)
     if (regs == 0) {
         return -ENOMEM;
     }
+    k_memset(hw, 0, sizeof(*hw));
     hw->ops = &i915_mmio_ops;
     hw->priv = (void *)regs;
     hw->size = size;
-    hw->timeouts = 0;
-    hw->last_timeout = 0;
-    hw->gtt_entries = 0;
-    hw->gsm = 0;
-    hw->faults = 0;
     return 0;
 }
