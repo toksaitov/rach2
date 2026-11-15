@@ -854,8 +854,51 @@ static int32_t edid_store(void *data, const char __user *buf, uint32_t len)
     return rc != 0 ? rc : (int32_t)len;
 }
 
+/** `vrr_range`'s text, Linux's vrr_range_show: the refresh range of the
+ * sink's EDID; ENODEV while it is not connected. */
+static int32_t vrr_range_show(void *data, char *buf, uint32_t cap)
+{
+    const struct drm_connector *connector = (const struct drm_connector *)data;
+    struct emit e;
+
+    if (connector->status != DRM_CONNECTOR_CONNECTED) {
+        return -ENODEV;
+    }
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emit_str(&e, "Min: ");
+    emit_u(&e, connector->min_vfreq, 0);
+    emit_str(&e, "\nMax: ");
+    emit_u(&e, connector->max_vfreq, 0);
+    emit_str(&e, "\n");
+    return emit_end(&e);
+}
+
+/** `output_bpc`'s text, Linux's output_bpc_show: the bits a colour the
+ * sink's EDID names, which IGT reads as the connector's most; ENODEV while
+ * it is not connected. */
+static int32_t output_bpc_show(void *data, char *buf, uint32_t cap)
+{
+    const struct drm_connector *connector = (const struct drm_connector *)data;
+    struct emit e;
+
+    if (connector->status != DRM_CONNECTOR_CONNECTED) {
+        return -ENODEV;
+    }
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emit_str(&e, "Maximum: ");
+    emit_u(&e, connector->bpc, 0);
+    emit_str(&e, "\n");
+    return emit_end(&e);
+}
+
 static const struct debugfs_text_ops force_ops = {force_show, force_store};
 static const struct debugfs_text_ops edid_ops = {edid_show, edid_store};
+static const struct debugfs_text_ops vrr_range_ops = {vrr_range_show, NULL};
+static const struct debugfs_text_ops output_bpc_ops = {output_bpc_show, NULL};
 
 /* ------------------------------------------------------------------------
  * Registration
@@ -938,6 +981,29 @@ static void minor_link(char *path, int minor)
     path[at] = '\0';
 }
 
+/** Make `connector`'s files below its device's directory, Linux's
+ * drm_debugfs_connector_add. 0, or the first error. */
+static int32_t connector_files(struct drm_connector *connector)
+{
+    static const struct {
+        const char *name;
+        uint32_t mode;
+        const struct debugfs_text_ops *ops;
+    } files[] = {{"force", 0644u, &force_ops},
+                 {"edid_override", 0644u, &edid_ops},
+                 {"vrr_range", 0444u, &vrr_range_ops},
+                 {"output_bpc", 0444u, &output_bpc_ops}};
+    char path[DRM_DEBUGFS_PATH];
+    int32_t rc = 0;
+    uint32_t i;
+
+    for (i = 0; rc == 0 && i < sizeof(files) / sizeof(files[0]); i++) {
+        connector_path(path, connector, files[i].name);
+        rc = debugfs_create_text(path, files[i].mode, files[i].ops, connector);
+    }
+    return rc;
+}
+
 /** Make `dev`'s files below its directory, which is there. 0, or the
  * first error. */
 static int32_t make_files(struct drm_device *dev)
@@ -986,10 +1052,7 @@ static int32_t make_files(struct drm_device *dev)
         rc = debugfs_create_text(path, 0444u, &bridges_ops, mc->encoders[i]);
     }
     for (i = 0; rc == 0 && i < mc->num_connector && i < DRM_MAX_CONNECTORS; i++) {
-        connector_path(path, mc->connectors[i], "force");
-        rc = debugfs_create_text(path, 0644u, &force_ops, mc->connectors[i]);
-        connector_path(path, mc->connectors[i], "edid_override");
-        rc = rc ? rc : debugfs_create_text(path, 0644u, &edid_ops, mc->connectors[i]);
+        rc = connector_files(mc->connectors[i]);
     }
     return rc;
 }

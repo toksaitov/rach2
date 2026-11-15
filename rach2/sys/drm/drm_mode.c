@@ -2136,6 +2136,7 @@ int drm_helper_probe_single_connector_modes(struct drm_connector *connector, uin
         drm_object_property_set_value(&connector->base, connector->dev->mode_config.edid_property,
                                       0);
         connector->mm_width = connector->mm_height = 0;
+        connector->bpc = connector->min_vfreq = connector->max_vfreq = 0;
         modes_free(&connector->modes);
         return 0;
     }

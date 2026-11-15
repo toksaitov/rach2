@@ -795,6 +795,22 @@ drops it;
 .Er EINVAL
 for bytes that are not a valid EDID.
 A read gives the override's bytes, or nothing.
+.It Pa dri/DEVICE/CONNECTOR/vrr_range
+Mode 0444.
+.Ql Min: N
+and
+.Ql Max: N ,
+a line each, the refresh rates in Hz of the range descriptor of the
+sink's EDID 1.4 that names limits only, 0 without one; a read fails with
+.Er ENODEV
+while the connector is not connected.
+.It Pa dri/DEVICE/CONNECTOR/output_bpc
+Mode 0444.
+.Ql Maximum: N
+and a newline, N the bits a colour the sink's EDID names, 0 when it names
+none, which IGT reads as the most the connector takes;
+.Er ENODEV
+while the connector is not connected.
 .It Pa dri/DEVICE/i915_capabilities
 Mode 0444, for a device bound by
 .Xr i915 4 ,

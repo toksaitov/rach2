@@ -1834,6 +1834,7 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
 {
     struct drm_device *dev = connector->dev;
     struct drm_property_blob *blob = NULL;
+    struct drm_edid_hdmi_info info;
     uint32_t blocks = 0;
     uint8_t *clean;
     int32_t err = 0;
@@ -1855,6 +1856,10 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
                                   blob ? blob->base.id : 0);
     connector->mm_width = clean ? clean[0x15] * 10u : 0;
     connector->mm_height = clean ? clean[0x16] * 10u : 0;
+    drm_edid_hdmi_info(NULL, clean, clean ? blocks * EDID_LENGTH : 0, &info);
+    connector->bpc = info.bpc;
+    connector->min_vfreq = info.min_vfreq;
+    connector->max_vfreq = info.max_vfreq;
     if (clean) {
         n = drm_edid_parse_modes(clean, blocks * EDID_LENGTH, add_probed, connector);
     }
@@ -1934,6 +1939,24 @@ static void do_hdmi_info(struct edid_parse *p, const uint8_t *db, uint32_t len)
 /* The bits a colour of EDID 1.4's digital depth field; 0 undefined. */
 static const uint8_t edid_depth[8] = {0, 6, 8, 10, 12, 14, 16, 0};
 
+/** Linux's get_monitor_range: the refresh limits of a range descriptor of
+ * the "range limits only" kind, the one that takes any timing inside them,
+ * with EDID 1.4's offsets of 255 Hz, into `closure`'s info. */
+static void monitor_range(struct edid_parse *p, const uint8_t *d, void *closure)
+{
+    struct drm_edid_hdmi_info *info = (struct drm_edid_hdmi_info *)closure;
+
+    if (!is_display(d, EDID_DETAIL_MONITOR_RANGE) || d[10] != RANGE_LIMITS_ONLY) {
+        return;
+    }
+    info->min_vfreq = d[5];
+    info->max_vfreq = d[6];
+    if (REVISION(p) >= 4) {
+        info->min_vfreq += (d[4] & 1) ? 255u : 0u;
+        info->max_vfreq += (d[4] & 2) ? 255u : 0u;
+    }
+}
+
 void drm_edid_hdmi_info(const struct drm_connector *connector, const uint8_t *edid, uint32_t len,
                         struct drm_edid_hdmi_info *info)
 {
@@ -1952,6 +1975,11 @@ void drm_edid_hdmi_info(const struct drm_connector *connector, const uint8_t *ed
         return;
     }
     p.edid = clean;
+    /* Linux's drm_get_monitor_range, before the revision and input
+     * checks: EDID 1.4 with continuous frequencies alone. */
+    if (clean[0x13] >= 4 && (clean[0x18] & 1)) {
+        for_each_detailed(&p, monitor_range, info);
+    }
     info->digital = (clean[0x14] & 0x80) != 0;
     /* Linux's update_display_info reads the extensions of a digital
      * EDID 1.3 or later alone. */

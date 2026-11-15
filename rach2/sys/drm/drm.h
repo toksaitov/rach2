@@ -1256,8 +1256,10 @@ struct drm_display_mode {
  * gathers before they are checked. `edid` is the blob of the sink's EDID,
  * or of `edid_override` while debugfs set one (76-18b), which replaces the
  * sink's whenever the modes are read; the override is kept bytes, not a
- * blob, so it has no ID a program could name. `dpms` is the legacy DPMS
- * property's value. `encoder` is the encoder that drives it after the last
+ * blob, so it has no ID a program could name. `bpc`, `min_vfreq` and
+ * `max_vfreq` are what that EDID says (`drm_edid_hdmi_info`), Linux's
+ * display_info.bpc and monitor_range, 0 without one. `dpms` is the legacy
+ * DPMS property's value. `encoder` is the encoder that drives it after the last
  * commit.
  */
 struct drm_connector {
@@ -1282,6 +1284,8 @@ struct drm_connector {
     struct drm_property_blob *edid;
     uint8_t *edid_override; /* kmalloc'd, or NULL */
     uint32_t edid_override_len;
+    uint32_t bpc;
+    uint32_t min_vfreq, max_vfreq;
     const struct drm_connector_funcs *funcs;
     struct drm_connector_state *state;
     struct drm_property *scaling_mode_property, *max_bpc_property; /* NULL until attached */
@@ -2154,10 +2158,11 @@ int drm_crtc_handle_vblank(struct drm_crtc *crtc);
  * not open, or -ENOBUFS when the reader has left no room. */
 int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t frame,
                                const uint32_t *crcs);
-/** Set `connector`'s EDID property and size in millimetres from the sink's
- * `edid` of `len` bytes, or from its override, cleaned as Linux cleans it,
- * and add the modes it names to the probed modes; the number added. NULL
- * `edid` with no override clears the property. */
+/** Set `connector`'s EDID property, size in millimetres, bits a colour and
+ * refresh range from the sink's `edid` of `len` bytes, or from its
+ * override, cleaned as Linux cleans it, and add the modes it names to the
+ * probed modes; the number added. NULL `edid` with no override clears the
+ * property. */
 int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len);
 
 /** The VIC of the CEA-861 mode `mode` is, Linux's drm_match_cea_mode: its
@@ -2180,7 +2185,10 @@ uint32_t drm_match_hdmi_mode(const struct drm_mode_modeinfo *mode);
  * `has_hdmi_infoframe` for a sink that takes HDMI's vendor infoframe;
  * `rgb_quant_selectable` for a Q bit the sink honours (its video
  * capability block's QS); `hdmi2` for an HDMI 2.0 sink, one with SCDC or
- * YCbCr 4:2:0; `vics` a bit for each VIC of its video data blocks. */
+ * YCbCr 4:2:0; `vics` a bit for each VIC of its video data blocks;
+ * `min_vfreq` and `max_vfreq` the refresh rates in Hz of its range
+ * descriptor of limits only, Linux's display_info.monitor_range, 0 for
+ * none. */
 struct drm_edid_hdmi_info {
     int is_hdmi;
     uint32_t bpc;
@@ -2193,6 +2201,7 @@ struct drm_edid_hdmi_info {
     int rgb_quant_selectable;
     int hdmi2;
     uint8_t vics[32];
+    uint32_t min_vfreq, max_vfreq;
 };
 
 /** Read `info` from the EDID `edid` of `len` bytes, or from `connector`'s
@@ -2272,6 +2281,9 @@ int32_t drm_sysfs_connector_add(struct drm_connector *connector);
 void drm_sysfs_connector_remove(struct drm_connector *connector);
 /** The handle (../fs/sysfs.h) of the cardN directory of `dev`, or 0. */
 int drm_sysfs_card_dir(const struct drm_device *dev);
+/** The handle of the cardN-NAME directory of `connector`, or 0, where a
+ * driver adds a device its connector parents, as an AUX channel's. */
+int drm_sysfs_connector_dir(const struct drm_connector *connector);
 
 /* ------------------------------------------------------------------------
  * The device in debugfs, in drm_debugfs.c
