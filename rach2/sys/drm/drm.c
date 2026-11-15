@@ -249,6 +249,7 @@ int32_t drm_dev_register(struct drm_device *dev)
 {
     struct drm_minor *card, *render = NULL;
     int32_t rc;
+    uint32_t j;
     int i;
 
     for (i = 0; i < DRM_MAX_DEVICES && devices[i]; i++) {
@@ -257,6 +258,15 @@ int32_t drm_dev_register(struct drm_device *dev)
         return -ENOSPC;
     }
     (void)drm_atomic_worker_start();
+    /* Linux's fixup_encoder_possible_clones: an encoder clones at least
+     * with itself, which kms_setmode needs of every encoder it drives. */
+    for (j = 0; j < dev->mode_config.num_encoder; j++) {
+        struct drm_encoder *encoder = dev->mode_config.encoders[j];
+
+        if (!encoder->possible_clones) {
+            encoder->possible_clones = 1u << encoder->index;
+        }
+    }
     if (!dev->unique[0]) {
         default_unique(dev);
     }

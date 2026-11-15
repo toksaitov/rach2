@@ -1409,7 +1409,9 @@ int32_t drm_mode_crtc_set_gamma_size(struct drm_crtc *crtc, uint32_t size);
 void drm_crtc_enable_color_mgmt(struct drm_crtc *crtc, uint32_t degamma_lut_size, int has_ctm,
                                 uint32_t gamma_lut_size);
 /** Make `encoder` an encoder of `dev` of DRM_MODE_ENCODER_* `type`; the
- * driver sets `possible_crtcs`. 0 or -EINVAL past the table. */
+ * driver sets `possible_crtcs`, and `possible_clones` when the encoder clones
+ * with others, since `drm_dev_register` makes a 0 its own bit. 0 or -EINVAL
+ * past the table. */
 int32_t drm_encoder_init(struct drm_device *dev, struct drm_encoder *encoder, uint32_t type);
 /** Make `connector` a connector of `dev` of DRM_MODE_CONNECTOR_* `type`,
  * named by the type and the lowest free number of that type, with Linux's
@@ -2036,7 +2038,8 @@ void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver);
  * as Linux's drm_gem_open and drm_syncobj_open make `table_lock` and
  * `syncobj_table_lock`. */
 void drm_file_locks_init(struct drm_file *file);
-/** Register the device under the lowest free card index: its card node,
+/** Register the device under the lowest free card index, with each encoder
+ * whose `possible_clones` is 0 made to clone with itself: its card node,
  * and its render node when it has DRIVER_RENDER, through the devfs
  * registry, with GET_UNIQUE's name made from `pci` or the driver's name
  * when the driver left `unique` empty; then make its /sys entries
