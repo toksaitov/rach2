@@ -102,8 +102,11 @@
 #   as a run of -a may not, is taken over: the new record keeps a Mac run that
 #   has since passed and runs again only the suites of one that has failed,
 #   and it waits for a run that still runs; one that no longer runs and left
-#   no status runs again what its `again` line named. A machine that has
-#   neither a run nor a result there runs everything. A run that -a started
+#   no status runs again what its `again` line named, as does the Lenovo's
+#   run when the release ended during it. A machine that has neither a run
+#   nor a result there, since the rerun that made the record ended before its
+#   step, runs again what its `again` line named, or everything when it had
+#   none. A run that -a started
 #   at a commit of which SHA is an earlier commit is not kept, and its machine
 #   runs again what its `again` line named; a SHA that a rebase onto master
 #   made keeps it, as -r keeps any pass. The native cases run on every
@@ -772,6 +775,8 @@ again()
                 echo "$last"
                 [ "$m" != full ] || grep -E '^run [0-9]+ success$' "$state/record" | tail -n 1 ;;
             "$m started "*) adopt "$m" "$3" ;;
+            # A rerun that ended before MACHINE's step ran nothing on it.
+            *) previous "$m" ;;
         esac
     done
 }
@@ -796,7 +801,8 @@ newer()
 # record: a pass or the failed suites of a Mac run that has since ended, or
 # the run itself while it runs, which the new release then waits for. A run
 # that no longer runs and left no status runs again what its machine's
-# earlier run did.
+# earlier run did, and the Lenovo's, which the release ran itself, is always
+# such a run.
 adopt()
 {
     newer "$1" "$2" && { previous "$1"; return 0; }
@@ -822,6 +828,7 @@ adopt()
         windows)
             previous windows
             ! windows_detached || echo "windows started $2" ;;
+        lenovo) previous lenovo ;;
     esac
 }
 
