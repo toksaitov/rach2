@@ -808,6 +808,17 @@ static const struct drm_driver plain_driver = {
     NULL};
 
 static struct drm_device fake_dev, plain_dev;
+
+static int fake_restores; /* the console's restores of the fake device */
+
+/** The console's restore: counted for the fake device. */
+void drm_client_dev_restore(struct drm_device *dev)
+{
+    if (dev == &fake_dev) {
+        fake_restores++;
+    }
+}
+
 static pci_device_t fake_pci;
 
 /* ---- the processes and their descriptors ---- */
@@ -1261,6 +1272,7 @@ static void test_master(void)
     struct drm_file *fa, *fb;
     struct drm_auth auth, auth2;
     struct fake_echo echo;
+    int restores;
 
     master_changes = 0;
     open_node("dri/card0", &user_a, 0, &a);
@@ -1297,8 +1309,10 @@ static void test_master(void)
     CHECK("DROP_MASTER by root of a client",
           ioc(&b, &root_proc, DRM_IOCTL_DROP_MASTER, NULL) == -EINVAL);
     master_changes = 0;
+    restores = fake_restores;
     CHECK("DROP_MASTER", ioc(&a, &user_a, DRM_IOCTL_DROP_MASTER, NULL) == 0 && !fake_dev.master);
     CHECK("the listener saw the drop", master_changes == 1 && master_seen == NULL);
+    CHECK("DROP_MASTER restores the console", fake_restores == restores + 1);
     CHECK("DROP_MASTER again", ioc(&a, &user_a, DRM_IOCTL_DROP_MASTER, NULL) == -EINVAL);
     CHECK("AUTH_MAGIC needs the master", ioc(&a, &user_a, DRM_IOCTL_AUTH_MAGIC, &auth) == -EACCES);
 
@@ -1313,15 +1327,21 @@ static void test_master(void)
     close_node(&b2);
     CHECK("one descriptor's close keeps the file", fake_dev.master == fb);
     master_changes = 0;
+    restores = fake_restores;
     close_node(&b);
     CHECK("the master's close drops the role",
           !fake_dev.master && master_changes == 1 && master_seen == NULL);
+    CHECK("a close beside another open file restores nothing",
+          fake_restores == restores && fake_dev.open_count == 1);
     CHECK("a former master's process takes it back",
           ioc(&a, &user_a, DRM_IOCTL_SET_MASTER, NULL) == 0 && fake_dev.master == fa);
     ioc(&a, &user_a, DRM_IOCTL_DROP_MASTER, NULL);
     CHECK("a former master's descriptor in another process is refused",
           ioc(&a, &user_b, DRM_IOCTL_SET_MASTER, NULL) == -EACCES);
+    restores = fake_restores;
     close_node(&a);
+    CHECK("the last close restores the console",
+          fake_restores == restores + 1 && fake_dev.open_count == 0);
 }
 
 /* The descriptors and the first mapping the dumb buffer rows share. */

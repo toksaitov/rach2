@@ -405,9 +405,14 @@ then reports, and
 .Dv KDSKBMODE
 sets, the mode that returns.
 .Pp
-The console takes them back when no process holds the master role: after
+The console takes them back after
 .Dv DRM_IOCTL_DROP_MASTER ,
-or when the master closes the card or exits, by a signal or not.
+and when the card's last open file is closed, as when the master closes
+the card or exits, by a signal or not, and no other descriptor of the card
+or its render node is open.
+A master that closes the card while another file of it stays open, as IGT
+keeps one, leaves its framebuffers removed and the console waiting, as
+Linux's fbdev emulation waits for the last close.
 On a native driver it sets a mode on each connected display, scanned out
 from a buffer of its own, and draws its text there again.
 The mode is the size that
@@ -424,7 +429,8 @@ reads
 .Dv FB_EVENT_REGAINED
 and redraws its whole screen, and its writes go on.
 A display connected or disconnected while no master holds the card moves
-the console to the new modes in the same way.
+the console to the new modes in the same way, and takes the screen back
+from a master that has gone.
 .Pp
 The console keeps the columns and rows it had at boot.
 On a screen of another size it draws them at the largest whole scale of

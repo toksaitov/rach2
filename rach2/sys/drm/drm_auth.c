@@ -143,7 +143,8 @@ int32_t drm_setmaster_ioctl(struct drm_device *dev, void *data, struct drm_file 
     return 0;
 }
 
-/** DROP_MASTER: the master gives up the role; EINVAL for any other file. */
+/** DROP_MASTER: the master gives up the role, and the console may take the
+ * screen back; EINVAL for any other file. */
 int32_t drm_dropmaster_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     int32_t rc = master_check_perm(file);
@@ -157,5 +158,6 @@ int32_t drm_dropmaster_ioctl(struct drm_device *dev, void *data, struct drm_file
     }
     dev->master = NULL;
     drm_master_changed(dev, NULL);
+    drm_client_dev_restore(dev);
     return 0;
 }

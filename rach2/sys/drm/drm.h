@@ -2089,7 +2089,8 @@ void drm_master_notifier_unregister(struct drm_master_notifier *n);
 void drm_master_changed(struct drm_device *dev, struct drm_file *master);
 
 /** Release what `file` holds of the master role as its file is released:
- * its magic, and the role, which the listeners are told of. */
+ * its magic, and the role, which the listeners are told of. The console
+ * takes the screen back only at the device's last close. */
 void drm_master_release(struct drm_file *file);
 /** Give `file`, just opened on a card, its master record: the role and a
  * record of its own when the device has no master, else the master's. */
@@ -2306,9 +2307,16 @@ void drm_client_dev_register(struct drm_device *dev);
  * /fb back if a master of it held the screen. Does not sleep. */
 void drm_client_dev_unregister(struct drm_device *dev);
 /** `dev`'s outputs changed: while no master holds the console's device, the
- * console sets its mode again on the outputs connected now. Process
- * context; may sleep. */
+ * console sets its mode again on the outputs connected now, and takes the
+ * screen back if a master left it, as Linux's fbdev emulation does on a
+ * hotplug. Process context; may sleep. */
 void drm_client_dev_hotplug(struct drm_device *dev);
+/** No master holds `dev` and the console may take the screen back, as
+ * Linux's `drm_client_dev_restore`: the last file of the device has closed
+ * (drm.c, as Linux's `drm_lastclose`), or a master dropped the role by
+ * DROP_MASTER. Nothing unless `dev` is the console's device, handed to a
+ * master that has gone. Process context; may sleep, for the commit. */
+void drm_client_dev_restore(struct drm_device *dev);
 /** The loader's framebuffer has gone, with the device whose aperture
  * showed it, which its driver gives to another owner: a console still on
  * it draws nothing from now on, and /fb's native mode has no screen, until

@@ -33,9 +33,10 @@
  * so the console moves to it.
  *
  * Until a master first leaves the device, the console stays where it was at
- * boot: on the loader's framebuffer, or on the VGA's text mode. When a
- * master leaves, or the outputs change while none holds the device, the
- * console probes the connectors and sets its own mode on each connected
+ * boot: on the loader's framebuffer, or on the VGA's text mode. When the
+ * device's last file closes, when a master drops the role by DROP_MASTER,
+ * or when the outputs change while none holds the device, the console
+ * probes the connectors and sets its own mode on each connected
  * one: a buffer of XRGB8888 as large as the largest mode, which every lit
  * CRTC scans out from its top left corner, and the grid drawn in the part
  * that all of them show. Each connector's mode is the size `video=` names,
@@ -64,9 +65,17 @@
  *
  * While a master holds the device the console is handed over: fbcon draws
  * nothing, /fb's writes wait (fb.h's `fb_hold`), and the keyboard is in
- * K_OFF (kd.h's `kd_hold`). The master listener runs in the caller's
- * process context; taking the screen back may sleep for the commit, and a
- * new master may come meanwhile, which `gen` tells.
+ * K_OFF (kd.h's `kd_hold`). A master whose file closes while another file
+ * of the device stays open leaves the console handed over, with the
+ * master's framebuffers off the display, as Linux's fbdev emulation waits
+ * for the device's last close (`drm_lastclose`); IGT keeps a second file of
+ * an i915 card open and reads a CRTC with no framebuffer after a master's
+ * close. DROP_MASTER gives the screen back at once, since Rach2 has no
+ * return to a text VT, through which Linux's fbdev takes the screen back
+ * from a master that dropped the role (`drm_fb_helper_set_par`). The
+ * master listener and `drm_client_dev_restore` run in the caller's process
+ * context; taking the screen back may sleep for the commit, and a new
+ * master may come meanwhile, which `gen` tells.
  */
 
 /* The pixel format of the console's buffer, XRGB8888: red in bits 16 to
@@ -746,7 +755,8 @@ static void con_take_back(struct drm_device *dev)
 }
 
 /** The master listener: hand the screen over when a master of the
- * console's device comes, and take it back when none holds it. */
+ * console's device comes. The screen comes back through
+ * `drm_client_dev_restore` or a hotplug, not when the role merely goes. */
 static void con_master_changed(struct drm_device *dev, struct drm_file *master)
 {
     if (dev != con.dev) {
@@ -755,7 +765,12 @@ static void con_master_changed(struct drm_device *dev, struct drm_file *master)
     con.gen++;
     if (master) {
         con_hand_over(dev);
-    } else if (con.handed) {
+    }
+}
+
+void drm_client_dev_restore(struct drm_device *dev)
+{
+    if (dev == con.dev && con.handed && !dev->master) {
         con_take_back(dev);
     }
 }
@@ -883,6 +898,10 @@ void drm_client_dev_hotplug(struct drm_device *dev)
     uint32_t gen = con.gen, flags;
     int32_t rc;
 
+    if (dev == con.dev && con.handed && !dev->master) {
+        con_take_back(dev);
+        return;
+    }
     if (dev != con.dev || con.handed || con.firmware || dev->master || !fbcon_active) {
         return;
     }
