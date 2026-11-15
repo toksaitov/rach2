@@ -514,12 +514,111 @@ static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, 
     i915_rps_mark_interactive(i915, 0);
 }
 
+/** The sole cursor plane of a legacy move or flip that changes no
+ * watermark input, Linux's intel_legacy_cursor_update, or NULL for its
+ * slow path. A queued update of the cursor or its CRTC's mode or colour
+ * must finish first. The commit lock is held. */
+static struct drm_plane_state *cursor_fast_state(struct drm_atomic_state *state)
+{
+    struct drm_plane_state *ps = NULL, *old;
+    struct drm_crtc_state *cs;
+    int i;
+
+    if (!state->legacy_cursor_update) {
+        return NULL;
+    }
+    for (i = 0; i < DRM_MAX_PLANES; i++) {
+        if (state->planes_new[i]) {
+            if (ps) {
+                return NULL;
+            }
+            ps = state->planes_new[i];
+        }
+    }
+    if (!ps || !ps->crtc || ps->plane != ps->crtc->cursor || !ps->fb) {
+        return NULL;
+    }
+    old = state->planes_old[ps->plane->index];
+    cs = state->crtcs_new[ps->crtc->index];
+    if (!cs || !cs->active || !to_intel_crtc(ps->crtc)->cfg.active ||
+        drm_atomic_crtc_needs_modeset(cs) || cs->color_mgmt_changed || cs->event ||
+        cs->async_flip || old->crtc != ps->crtc || !old->fb || old->src_w != ps->src_w ||
+        old->src_h != ps->src_h || old->crtc_w != ps->crtc_w || old->crtc_h != ps->crtc_h ||
+        old->rotation != ps->rotation || drm_atomic_helper_plane_pending(ps->plane)) {
+        return NULL;
+    }
+    return ps;
+}
+
+/** Free replaced cursor scanouts once their last writes have latched,
+ * Linux's intel_cursor_unpin_work. Runs in the DRM worker; the commit
+ * lock protects the list against cursor updates and teardown. */
+static void cursor_retire_work(struct drm_work *work)
+{
+    struct intel_crtc *c =
+        (struct intel_crtc *)((uintptr_t)work - offsetof(struct intel_crtc, cursor_work));
+    struct intel_cursor_retire **link, *r;
+
+    drm_modeset_lock_nointr(&c->i915->drm);
+    if (c->i915->drm.unplugged) {
+        drm_modeset_unlock(&c->i915->drm);
+        return;
+    }
+    for (link = &c->cursor_retired; (r = *link) != NULL;) {
+        if (!c->cfg.active || frame_past(intel_get_vblank_counter(&c->base), r->frame)) {
+            *link = r->next;
+            scanout_put(&r->scanout);
+            kfree(r);
+        } else {
+            link = &r->next;
+        }
+    }
+    if (c->cursor_retired && !c->i915->drm.unplugged) {
+        drm_dev_work_later_ms(&c->i915->drm, work, 1);
+    }
+    drm_modeset_unlock(&c->i915->drm);
+}
+
+/** Program only `ps`'s cursor, keeping the CRTC state and its pending
+ * flip intact as Linux's intel_legacy_cursor_update does. `next` owns the
+ * new scanout's pin and framebuffer hold; `retire`, when needed, keeps
+ * the previous scanout until the next frame. The commit lock is held. */
+static void cursor_fast_commit(struct drm_atomic_state *state, struct drm_plane_state *ps,
+                               struct intel_scanout next, struct intel_cursor_retire *retire)
+{
+    struct drm_plane *plane = ps->plane;
+    struct intel_crtc *c = to_intel_crtc(ps->crtc);
+    uint32_t from, to;
+
+    plane->state = ps;
+    from = intel_get_vblank_counter(&c->base);
+    plane->funcs->atomic_update(plane, state);
+    to = intel_get_vblank_counter(&c->base);
+    drm_plane_state_destroy(state->planes_old[plane->index]);
+    state->planes_old[plane->index] = state->planes_new[plane->index] = NULL;
+    if (next.vma == c->shown[INTEL_PLANE_CURSOR].vma) {
+        scanout_put(&next);
+    } else {
+        retire->scanout = c->shown[INTEL_PLANE_CURSOR];
+        retire->frame = to;
+        retire->next = c->cursor_retired;
+        c->cursor_retired = retire;
+        c->shown[INTEL_PLANE_CURSOR] = next;
+        c->shown_from[INTEL_PLANE_CURSOR] = from;
+        c->shown_to[INTEL_PLANE_CURSOR] = to;
+        c->cursor_work.fn = cursor_retire_work;
+        drm_dev_work_later_ms(&c->i915->drm, &c->cursor_work, 1);
+    }
+}
+
 int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
 {
     struct drm_i915_private *i915 = to_i915(dev);
     struct i915_vma *pinned[DRM_MAX_PLANES];
     struct drm_framebuffer *fbs[DRM_MAX_PLANES];
     struct drm_plane *planes[DRM_MAX_PLANES];
+    struct drm_plane_state *cursor = cursor_fast_state(state);
+    struct intel_cursor_retire *retire = NULL;
     uint32_t from[DRM_MAX_PLANES], pipes = 0;
     int32_t err = 0;
     int i, slot = 0;
@@ -550,6 +649,20 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
      * pending. */
     if (pipes) {
         i915_rps_mark_interactive(i915, 1);
+    }
+    if (err == 0 && cursor) {
+        struct intel_crtc *c = to_intel_crtc(cursor->crtc);
+        struct intel_scanout next;
+
+        next.fb = fbs[cursor->plane->index];
+        next.vma = pinned[cursor->plane->index];
+        if (next.vma != c->shown[INTEL_PLANE_CURSOR].vma) {
+            retire = (struct intel_cursor_retire *)kmalloc(sizeof(*retire));
+        }
+        if (retire || next.vma == c->shown[INTEL_PLANE_CURSOR].vma) {
+            cursor_fast_commit(state, cursor, next, retire);
+            return 0;
+        }
     }
     if (err == 0) {
         err = drm_atomic_helper_commit(dev, state, nonblock);
@@ -1694,6 +1807,15 @@ void intel_display_fini(struct drm_i915_private *i915)
      * goes off now. */
     intel_pps_vdd_off_unlocked(i915, 1);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        struct intel_crtc *c = &d->crtc[pipe];
+        struct intel_cursor_retire *r;
+
+        (void)drm_dev_work_cancel(&c->cursor_work);
+        while ((r = c->cursor_retired) != NULL) {
+            c->cursor_retired = r->next;
+            scanout_put(&r->scanout);
+            kfree(r);
+        }
         for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
             scanout_put(&d->crtc[pipe].parked[slot]);
             scanout_put(&d->crtc[pipe].shown[slot]);
