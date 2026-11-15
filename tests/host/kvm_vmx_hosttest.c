@@ -93,6 +93,7 @@
 
 extern int printf(const char *format, ...);
 extern int memcmp(const void *a, const void *b, unsigned long n);
+extern int strcmp(const char *a, const char *b);
 extern void *malloc(unsigned long n);
 extern void *calloc(unsigned long n, unsigned long size);
 extern void *aligned_alloc(unsigned long align, unsigned long n);
@@ -1107,9 +1108,20 @@ void kvm_lapic_timer_check(struct kvm_vcpu *v)
     (void)v;
 }
 
+/* The calls of `kvm_pit_check`, which KVM_REQ_TIMER makes, and whether
+ * `kvm_lapic_other_due` finds the PIT's or a synthetic timer's time come. */
+static int pit_checks, other_due;
+
 void kvm_pit_check(struct kvm_vm *vm)
 {
     (void)vm;
+    pit_checks++;
+}
+
+int kvm_lapic_other_due(struct kvm_vcpu *v)
+{
+    (void)v;
+    return other_due;
 }
 
 uint64_t kvm_lapic_next_ns(struct kvm_vcpu *v)
@@ -5728,11 +5740,36 @@ static void reinject_rows(void)
 }
 
 /**
+ * The preemption timer's expiry when the PIT's time has come, on the vCPU
+ * `fd` of `fast_rows`, whose run page is `rp`: the run loop's, which takes
+ * KVM_REQ_TIMER, since the fast path would enter again at a timer of 0.
+ */
+static void fast_pit_row(int fd, struct kvm_run *rp)
+{
+    int runs = m.launches + m.resumes;
+
+    set_regs(fd, 0x1000, 0, 0x6E0, 0);
+    expires = pit_checks = 0;
+    expire_due = 1;
+    other_due = 1;
+    script(EXIT_PREEMPTION_TIMER, 0, 0);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT && m.launches + m.resumes == runs + 2 &&
+              expires == 0 && pit_checks == 1,
+          "the preemption timer's expiry with the PIT's time come goes to the run loop, which "
+          "looks at the timers, and not to the fast path, which would enter at a timer of 0");
+    other_due = 0;
+    expire_due = 0;
+}
+
+/**
  * The exit path's fast path, `vmx_fast`, on a VM with the local APIC in the
  * kernel: a WRMSR of the TSC deadline and the preemption timer's expiry
  * enter the guest again with the run loop not run, each delivering the
  * timer, and kvm/exit_stats counts each as fast; a request the fast path
- * finds ends it, and the run loop does not take its exit again.
+ * finds ends it, and the run loop does not take its exit again; the
+ * preemption timer's expiry when the PIT's time has come is the run loop's,
+ * which takes KVM_REQ_TIMER.
  */
 static void fast_rows(void)
 {
@@ -5783,6 +5820,7 @@ static void fast_rows(void)
               expires == 1,
           "a request the fast path finds ends it, and the WRMSR it took is not stepped again");
     expire_exit = 0;
+    fast_pit_row(fd, rp);
     exitstat_ops->store(exitstat_data, (const char __user *)"0", 1);
     fdclose(fd);
     fdclose(vm);
@@ -5926,7 +5964,9 @@ static void selftest_rows(int vm)
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */
-int main(void)
+/** Run every row, or with --fast the probe and the fast path's rows
+ * alone. */
+int main(int argc, char **argv)
 {
     struct kvm_userspace_memory_region region = {0, 0, 0, sizeof(ram), 0};
     int vm, fd;
@@ -5934,6 +5974,14 @@ int main(void)
     caller.mm = &caller_mm;
     caller.fds = &table;
     probe_rows();
+    if (argc == 2 && strcmp(argv[1], "--fast") == 0) {
+        fast_rows();
+        printf("kvm-vmx-hosttest: fast: %s: %d failures\n", failures ? "fail" : "pass", failures);
+        return failures ? 1 : 0;
+    }
+    if (argc != 1) {
+        return 2;
+    }
     vm = dev(KVM_CREATE_VM, 0);
     CHECK(vm >= 3, "KVM_CREATE_VM");
     region.userspace_addr = (uint64_t)(uintptr_t)ram;
