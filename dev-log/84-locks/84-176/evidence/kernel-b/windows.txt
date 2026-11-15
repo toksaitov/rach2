@@ -1,0 +1,6 @@
+trip-gl-0.loop.txt: 227.8 ms, 11 samples, act median 500 (200 to 500), cur median 500 (450 to 500), rc6 35 ms, parks 15, unparks 14, work 7 (up 0, down 7, timeout 0), boosts 0
+  act: 200 200 500 500 500 500 500 450 500 450 450
+trip-gl-1.loop.txt: 212.5 ms, 10 samples, act median 450.0 (250 to 650), cur median 450.0 (250 to 650), rc6 0 ms, parks 11, unparks 10, work 8 (up 0, down 8, timeout 0), boosts 0
+  act: 650 250 250 450 450 500 500 450 450 350
+trip-gl-2.loop.txt: 279.6 ms, 14 samples, act median 200.0 (200 to 250), cur median 200.0 (200 to 250), rc6 0 ms, parks 12, unparks 11, work 2 (up 0, down 2, timeout 0), boosts 0
+  act: 250 250 200 200 200 200 200 200 200 200 200 200 200 200

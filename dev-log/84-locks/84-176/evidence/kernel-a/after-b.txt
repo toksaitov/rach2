@@ -1,0 +1,205 @@
+==== i915_frequency_info 245.87 619.63
+Video Turbo Mode: yes
+HW control enabled: yes
+SW control enabled: no
+PM IER=0x00000470 IMR=0xffffff8f, MASK=0x0000005a
+PM ISR=0x00000000 IIR=0x00000000
+pm_intrmsk_mbz: 0x00000004
+GT_PERF_STATUS: 0x00000456
+Render p-state ratio: 4
+Render p-state VID: 86
+Render p-state limit: 255
+RPSTAT1: 0x00040200
+RPMODECTL: 0x00000d92
+RPINCLIMIT: 0x00002e63
+RPDECLIMIT: 0x00005302
+RPNSWREQ: 200MHz
+CAGF: 200MHz
+RP CUR UP EI: 657 (840960ns)
+RP CUR UP: 25 (32000ns)
+RP PREV UP: 0 (0ns)
+Up threshold: 95%
+RP UP EI: 12500 (16000000ns)
+RP UP THRESHOLD: 11875 (15200000ns)
+RP CUR DOWN EI: 14823 (18973440ns)
+RP CUR DOWN: 25 (32000ns)
+RP PREV DOWN: 0 (0ns)
+Down threshold: 85%
+RP DOWN EI: 25000 (32000000ns)
+RP DOWN THRESHOLD: 21250 (27200000ns)
+Lowest (RPN) frequency: 200MHz
+Nominal (RP1) frequency: 200MHz
+Max non-overclocked (RP0) frequency: 1000MHz
+Max overclocked frequency: 1000MHz
+Current freq: 200 MHz
+Actual freq: 200 MHz
+Idle freq: 200 MHz
+Min freq: 200 MHz
+Boost freq: 1000 MHz
+Max freq: 1000 MHz
+efficient (RPe) frequency: 500 MHz
+==== i915_rps_boost_info 245.87 619.63
+RPS enabled? yes
+RPS active? yes
+GPU busy? yes
+Boosts outstanding? 0
+Interactive? 0
+Frequency requested 200, actual 200
+  min hard:200, soft:200; max soft:1000, hard:1000
+  idle:200, efficient:500, boost:1000
+Wait boosts: 6
+Work runs: 32, up 0, down 26, timeout 0
+Parks: 51, unparks 52
+==== i915_engine_info 245.87 619.63
+GT awake? yes [1], 93047ms
+GT idle at a retire, awake: 6575
+CS timestamp frequency: 12500000 Hz, 80 ns
+rcs0
+	Awake? 0
+	Barriers?: no
+	Forcewake: 0 domains, 0 active
+	Reset count: 0 (global 0)
+	Properties:
+		heartbeat_interval_ms: 2500 [default 2500]
+		max_busywait_duration_ns: 8000 [default 8000]
+		preempt_timeout_ms: 640 [default 640]
+		stop_timeout_ms: 100 [default 100]
+		timeslice_duration_ms: 1 [default 1]
+	Requests:
+	On hold?: 0
+	MMIO base:  0x00002000
+	CCID: 0x7fdac10d
+	RING_START: 0x7fffb000
+	RING_HEAD:  0x00002b30
+	RING_TAIL:  0x00002b30
+	RING_CTL:   0x00003001
+	RING_MODE:  0x00004200 [idle]
+	RING_IMR:   0xfffffffe
+	RING_ESR:   0x00000000
+	RING_EMR:   0xffffffff
+	RING_EIR:   0x00000000
+	ACTHD:  0x00000000_14202b30
+	BBADDR: 0x00000000_0040a534
+	DMA_FADDR: 0x00000000_7fffdb30
+	IPEIR: 0x00000000
+	IPEHR: 0x780c0000
+	PP_DIR_BASE: 0x7fde0000
+	PP_DIR_BASE_READ: 0x00000000
+	PP_DIR_DCLV: 0xffffffff
+HWSP:
+[0000] 00000001 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[0020] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+[0100] 000024f2 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[0120] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+Idle? yes
+IRQ: enabled
+bcs0
+	Awake? 0
+	Barriers?: no
+	Forcewake: 0 domains, 0 active
+	Reset count: 0 (global 0)
+	Properties:
+		heartbeat_interval_ms: 2500 [default 2500]
+		max_busywait_duration_ns: 8000 [default 8000]
+		preempt_timeout_ms: 640 [default 640]
+		stop_timeout_ms: 100 [default 100]
+		timeslice_duration_ms: 1 [default 1]
+	Requests:
+	On hold?: 0
+	MMIO base:  0x00022000
+	RING_START: 0x7fff6000
+	RING_HEAD:  0x00000000
+	RING_TAIL:  0x00000000
+	RING_CTL:   0x00003001
+	RING_MODE:  0x00000200 [idle]
+	RING_IMR:   0xffffffff
+	RING_ESR:   0x00000000
+	RING_EMR:   0xffffffff
+	RING_EIR:   0x00000000
+	ACTHD:  0x00000000_00000000
+	BBADDR: 0x00000000_00000000
+	DMA_FADDR: 0x00000000_7fff6000
+	IPEIR: 0x00000000
+	IPEHR: 0x00000000
+	PP_DIR_BASE: 0x7fde0000
+	PP_DIR_BASE_READ: 0x00000000
+	PP_DIR_DCLV: 0xffffffff
+HWSP:
+[0000] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+Idle? yes
+IRQ: disabled
+vcs0
+	Awake? 0
+	Barriers?: no
+	Forcewake: 0 domains, 0 active
+	Reset count: 0 (global 0)
+	Properties:
+		heartbeat_interval_ms: 2500 [default 2500]
+		max_busywait_duration_ns: 8000 [default 8000]
+		preempt_timeout_ms: 640 [default 640]
+		stop_timeout_ms: 100 [default 100]
+		timeslice_duration_ms: 1 [default 1]
+	Requests:
+	On hold?: 0
+	MMIO base:  0x00012000
+	RING_START: 0x7fff1000
+	RING_HEAD:  0x00000000
+	RING_TAIL:  0x00000000
+	RING_CTL:   0x00003001
+	RING_MODE:  0x00000200 [idle]
+	RING_IMR:   0xffffffff
+	RING_ESR:   0x00000000
+	RING_EMR:   0xffffffff
+	RING_EIR:   0x00000000
+	ACTHD:  0x00000000_00000000
+	BBADDR: 0x00000000_00000000
+	DMA_FADDR: 0x00000000_7fff1000
+	IPEIR: 0x00000000
+	IPEHR: 0x00000000
+	PP_DIR_BASE: 0x7fde0000
+	PP_DIR_BASE_READ: 0x00000000
+	PP_DIR_DCLV: 0xffffffff
+HWSP:
+[0000] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+Idle? yes
+IRQ: disabled
+vecs0
+	Awake? 0
+	Barriers?: no
+	Forcewake: 0 domains, 0 active
+	Reset count: 0 (global 0)
+	Properties:
+		heartbeat_interval_ms: 2500 [default 2500]
+		max_busywait_duration_ns: 8000 [default 8000]
+		preempt_timeout_ms: 640 [default 640]
+		stop_timeout_ms: 100 [default 100]
+		timeslice_duration_ms: 1 [default 1]
+	Requests:
+	On hold?: 0
+	MMIO base:  0x0001a000
+	RING_START: 0x7ffec000
+	RING_HEAD:  0x00000000
+	RING_TAIL:  0x00000000
+	RING_CTL:   0x00003001
+	RING_MODE:  0x00000200 [idle]
+	RING_IMR:   0xffffffff
+	RING_ESR:   0x00000000
+	RING_EMR:   0xffffffff
+	RING_EIR:   0x00000000
+	ACTHD:  0x00000000_00000000
+	BBADDR: 0x00000000_00000000
+	DMA_FADDR: 0x00000000_7ffec000
+	IPEIR: 0x00000000
+	IPEHR: 0x00000000
+	PP_DIR_BASE: 0x7fde0000
+	PP_DIR_BASE_READ: 0x00000000
+	PP_DIR_DCLV: 0xffffffff
+HWSP:
+[0000] 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+*
+Idle? yes
+IRQ: disabled
