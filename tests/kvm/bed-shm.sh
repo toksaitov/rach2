@@ -12,9 +12,14 @@
 # display frame with virgl in the VM and reads it back, and its CRC must be
 # CRC, llvmpipe's. The doorbells must have carried the round trips with no
 # exit to QEMU: every doorbell the VM rang reached Rach2 through a KVM
-# ioeventfd and every one Rach2 rang through an irqfd. Then QEMU is stopped
-# with fenced submissions pending and killed: ivshmemd must detach with the
-# VM's death, every fence must fail and a wait after the death must too.
+# ioeventfd and every one Rach2 rang through an irqfd. Unless -u is given,
+# piglit.sh, beside this script, then runs the tests of readback.txt, which
+# draw and read back, on the region's card as the desktop user, as the bed's
+# piglit scene runs them: each must pass on virgl, with no refusal of a
+# blob's export on the VM's console and no refused page list in the kernel's
+# log (`readback`). Then QEMU is stopped with fenced submissions pending and
+# killed: ivshmemd must detach with the VM's death, every fence must fail
+# and a wait after the death must too.
 #
 # With -k the draw, the doorbells and the death with fences pending give
 # way to the buffers mapped from the VM's own pages: NOCOPY, nocopy.c, is
@@ -527,13 +532,57 @@ still_counts()
     return 1
 }
 
-# virgl_rows: the frame drawn, the doorbells, and the VM's death with
-# fences pending.
+# refusals: the VM console's refusals of a blob's export for its page list.
+refusals() { tr -d '\r' < "$console" 2>/dev/null | grep -c 'backend: map: resource .*: refused: not exported'; }
+
+# readback: readback.txt's piglit tests on the region's card, one at a time
+# on EGL's surfaceless platform as the desktop user, as the bed's piglit
+# scene runs them (bed/measure/measure.sh), and the refusals they met.
+readback()
+{
+    kit=$(cd "$(dirname "$0")" && pwd)
+    rb=$out/readback
+    mkdir -p "$rb"
+    chown desktop "$rb"
+    exports0=$(refusals) klog0=$(klog_count 'refused: its page list')
+    su -s /bin/sh desktop -c "exec sh $kit/piglit.sh -g -o $rb -l $kit/readback.txt" \
+        > "$out/readback.out" 2>&1
+    piglit_status=$?
+    # The VM's console comes behind its work, at the serial port's pace:
+    # wait until it has been silent for 5 s, 120 s at most.
+    last=-1 still=0 n=120
+    while [ "$n" -gt 0 ] && quiet "$console" 5 "$qemu"; do
+        n=$((n - 1))
+    done
+    exports=$(($(refusals) - exports0)) klog=$(($(klog_count 'refused: its page list') - klog0))
+    renderer=$(sed -n 's/^renderer //p' "$rb/record" 2>/dev/null | head -n 1)
+    results=''
+    passed=0 tests=0
+    while IFS= read -r t; do
+        case $t in '' | '#'*) continue ;; esac
+        tests=$((tests + 1))
+        r=$(awk -v t="$t" 'substr($0, 1, length(t) + 1) == t " " { print substr($0, length(t) + 2) }' \
+            "$rb/readback.results" 2>/dev/null)
+        [ "$r" != pass ] || passed=$((passed + 1))
+        results="$results${results:+, }${t##*@} ${r:-none}"
+    done < "$kit/readback.txt"
+    what="$results; $exports refused exports, $klog refused page lists; renderer ${renderer:-unknown}"
+    if [ "$piglit_status" = 0 ] && [ "$passed" = "$tests" ] && [ "$exports" = 0 ] && [ "$klog" = 0 ] &&
+        echo "$renderer" | grep -q '^virgl'; then
+        pass readback "$what"
+    else
+        fail readback "piglit.sh status $piglit_status: $what"
+    fi
+}
+
+# virgl_rows: the frame drawn, the doorbells, without -u the readbacks, and
+# the VM's death with fences pending.
 virgl_rows()
 {
     if [ "$(info bound)" != 1 ]; then
         fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
         fail doorbell "no device"
+        [ "$unplug" = 1 ] || fail readback "no device"
     else
         # A doorbell is counted twice, by KVM and by the transport, one
         # after the other, so each pair of counts is read with the doorbells
@@ -568,6 +617,7 @@ virgl_rows()
                 fail doorbell "$(cat "$out/counts.txt"), doorbells $(info doorbells)"
             fi
         fi
+        [ "$unplug" = 1 ] || readback
     fi
 
     # The VM's death with fences pending.

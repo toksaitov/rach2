@@ -5,17 +5,22 @@
   "cases": [
     {
       "case_id": "machine.bed-shm.virgl",
-      "behavior": "bed-shm.sh on the x86-64 GNU root attaches a region of 32 MiB to /dev/vgpu-shm with ivshmemd and has two more attaches refused, boots the test bed's VM under Rach2's KVM with the region on an ivshmem-doorbell of two vectors, draws the recorded display frame through virtio-gpu over the region with virgl in the VM and reads back llvmpipe's CRC, sees every doorbell carried by a KVM ioeventfd or irqfd, then stops the VM with four fenced submissions pending and kills it, and every fence fails, as does a wait after the death",
+      "behavior": "bed-shm.sh on the x86-64 GNU root attaches a region of 32 MiB to /dev/vgpu-shm with ivshmemd and has two more attaches refused, boots the test bed's VM under Rach2's KVM with the region on an ivshmem-doorbell of two vectors, draws the recorded display frame through virtio-gpu over the region with virgl in the VM and reads back llvmpipe's CRC, sees every doorbell carried by a KVM ioeventfd or irqfd, runs piglit's fbo-readpixels, glsl-fs-loop and fbo-generatemipmap on the region's card with no blob's export refused, then stops the VM with four fenced submissions pending and kills it, and every fence fails, as does a wait after the death",
       "units": [
         "rach2/sys/virtio/shmem.c",
         "rach2/sys/virtio/virtqueue.c",
         "rach2/sys/drm/virtio_gpu.c",
         "rach2/sys/kvm/iobus.c",
         "rach2/sys/kvm/irq.c",
+        "rach2/sys/drm/virtio_gpu_blob.c",
         "bed/ivshmemd.c",
+        "bed/vm/backend/device.c",
+        "bed/vm/backend/virgl.c",
         "bed/vm/image/vm.sh",
         "tests/vgshmprobe.c",
         "tests/kvm/bed-shm.sh",
+        "tests/kvm/readback.txt",
+        "tests/graphics/runners/piglit.sh",
         "tests/cases/machine/bed_shm_scenario.c"
       ],
       "domain": "machine",
@@ -62,7 +67,7 @@
           "step_id": "stage",
           "stage": "execute",
           "machine": "gnu",
-          "does": "make /tmp/bed-shm-run and copy there from the read-only data disk the runner and the probe"
+          "does": "make /tmp/bed-shm-run and copy there from the read-only data disk the runner, the probe, and piglit.sh with its common.sh and readback.txt"
         },
         {
           "step_id": "run",
@@ -127,6 +132,11 @@
         {
           "assertion_id": "doorbell",
           "checks": "bed-shm.sh prints bed-shm: doorbell: pass: both sides took the doorbells, and across the draw kvm_ioeventfd_signals grew by at least the doorbells the VM rang and kvm_irqfd_raises by at least those Rach2 rang",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "readback",
+          "checks": "bed-shm.sh prints bed-shm: readback: pass: piglit's fbo-readpixels, glsl-fs-loop and fbo-generatemipmap, run by piglit.sh on the region's card as the desktop user, each passed on virgl, the VM's backend refused no blob's export and the kernel logged no refused page list",
           "source": "scenario"
         },
         {

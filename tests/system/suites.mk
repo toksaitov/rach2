@@ -1262,8 +1262,9 @@ $(BED_FORWARD_DIR)/forward.ext2: bed/forward/forward.sh $(BED_FORWARD_DIR)/guest
 # `tests/run bed-shm`: Rach2's virtio-gpu over the region it shares with
 # the test bed's VM, on the x86-64 GNU root under host-svm, as the case of
 # tests/cases/machine.bed-shm.json, which bed_shm_scenario runs
-# (tests/kvm/Readme.md). The machine has bed-shm.ext2, the runner and the
-# probe and nocopy.c, as a read-only data disk, and vm.disk, the VM that
+# (tests/kvm/Readme.md). The machine has bed-shm.ext2, the runner, the
+# probe, nocopy.c, and piglit.sh with its common.sh and readback.txt, as a
+# read-only data disk, and vm.disk, the VM that
 # `bed/vm/image/vm.sh rach2` makes over the prepared image, raw for etude's
 # overlay. The prepared image is the clone's build/cache/bed-vm, which
 # `vm.sh prepare` makes when it is missing or stale: a download of the
@@ -1275,12 +1276,14 @@ ifneq ($(ARCH),x86_64)
 $(BED_SHM_PROBE): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C tests ARCH=x86_64 ../$(BED_SHM_PROBE)
 endif
-build/tests/cases/bed-shm/bed-shm.ext2: tests/kvm/bed-shm.sh tests/kvm/nocopy.c $(BED_SHM_PROBE)
+BED_SHM_FILES = tests/kvm/bed-shm.sh tests/kvm/nocopy.c tests/kvm/readback.txt \
+                tests/graphics/runners/piglit.sh tests/graphics/runners/common.sh
+build/tests/cases/bed-shm/bed-shm.ext2: $(BED_SHM_FILES) $(BED_SHM_PROBE)
 	@set -e; work=; \
 	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
 	mkdir -p $(@D) build/tmp; work=$$(mktemp -d build/tmp/bed-shm-disk.XXXXXX); \
-	cp tests/kvm/bed-shm.sh tests/kvm/nocopy.c $(BED_SHM_PROBE) "$$work"/; \
+	cp $(BED_SHM_FILES) $(BED_SHM_PROBE) "$$work"/; \
 	. tools/setup/e2fsprogs_path.sh; \
 	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
 	    -d "$$work" $@.tmp 8192k; \

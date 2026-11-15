@@ -1,0 +1,8 @@
+# readback.txt: the piglit tests of the bed's piglit scene
+# (bed/measure/piglit.txt) whose readbacks failed in the Lenovo's bed/shm
+# while the VM's backend refused to export persistent buffers, which
+# bed-shm.sh runs on the region's card (`readback`), one name a line as
+# piglit.sh -l takes them.
+spec@ext_framebuffer_object@fbo-readpixels
+shaders@glsl-fs-loop
+spec@ext_framebuffer_object@fbo-generatemipmap
