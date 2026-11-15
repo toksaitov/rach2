@@ -25,12 +25,22 @@
  * mode set prints "DRMPROBE MODE NAME". On the first mode it flips once to a
  * second buffer with PAGE_FLIP, reads the FLIP_COMPLETE event from the card,
  * which the core sends at once on a CRTC without vblanks, reads the CRTC back
- * and prints "DRMPROBE FLIP NAME". Last, it chooses the CRC source "auto"
+ * and prints "DRMPROBE FLIP NAME". Next, it chooses the CRC source "auto"
  * of the first CRTC through debugfs's dri/N/crtc-0/crc/control, as IGT
  * does, shows the first mode again, and reads two lines of crc/data in
  * Linux 6.12's text, a frame number as 0x%08x or ten X's, then each value as
  * " 0x%08x", a newline and a NUL, the second of a later frame; a driver
- * without CRCs, which refuses the source with EINVAL, skips it.
+ * without CRCs, which refuses the source with EINVAL, skips it. Then, as
+ * the master, it leases the first CRTC and connector to a new descriptor
+ * with CREATE_LEASE, as a VR compositor does: the same objects again are
+ * EBUSY, the lessee's GETRESOURCES gives that CRTC and connector alone, it
+ * holds the master role (AUTH_MAGIC of 0 is EINVAL, not EACCES) and cannot
+ * drop it (EINVAL), GET_LEASE gives at least the CRTC, the connector and
+ * the primary plane the CRTC brings, the master's LIST_LESSEES gives the
+ * lessee, and the lessee sets the first mode from a buffer of its own;
+ * after REVOKE_LEASE its GETCRTC is ENOENT, and after its close the master
+ * lists no lessee and a revoke of it is ENOENT. It prints "DRMPROBE
+ * LEASE".
  *
  * With the arguments `hold SECONDS` it is a master that leaves without a
  * word, for the console's handover: it opens the first card with dumb
@@ -43,9 +53,9 @@
  * "DRMPROBE FAIL: what" and exits 1 at the first failure. etude's report
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each check in order: `open`, `version`, `render`, `master`, `auth`,
- * `create`, `map`, `destroy`, `prime`, `kcmp`, `modes` and `crc`. The
- * master rows, `modes` and `crc` skip while another process holds the
- * role. Freestanding; direct system calls (probe.h).
+ * `create`, `map`, `destroy`, `prime`, `kcmp`, `modes`, `crc` and `lease`.
+ * The master rows, `modes`, `crc` and `lease` skip while another process
+ * holds the role. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -247,6 +257,35 @@ struct drm_event_vblank {
 #define DRM_IOCTL_MODE_ADDFB        DRM_IOWR(0xAE, struct drm_mode_fb_cmd)
 #define DRM_IOCTL_MODE_RMFB         DRM_IOWR(0xAF, unsigned int)
 #define DRM_IOCTL_MODE_PAGE_FLIP    DRM_IOWR(0xB0, struct drm_mode_crtc_page_flip)
+
+struct drm_mode_create_lease {
+    u64 object_ids;
+    u32 object_count;
+    u32 flags;
+    u32 lessee_id;
+    u32 fd;
+};
+
+struct drm_mode_list_lessees {
+    u32 count_lessees;
+    u32 pad;
+    u64 lessees_ptr;
+};
+
+struct drm_mode_get_lease {
+    u32 count_objects;
+    u32 pad;
+    u64 objects_ptr;
+};
+
+struct drm_mode_revoke_lease {
+    u32 lessee_id;
+};
+
+#define DRM_IOCTL_MODE_CREATE_LEASE DRM_IOWR(0xC6, struct drm_mode_create_lease)
+#define DRM_IOCTL_MODE_LIST_LESSEES DRM_IOWR(0xC7, struct drm_mode_list_lessees)
+#define DRM_IOCTL_MODE_GET_LEASE    DRM_IOWR(0xC8, struct drm_mode_get_lease)
+#define DRM_IOCTL_MODE_REVOKE_LEASE DRM_IOWR(0xC9, struct drm_mode_revoke_lease)
 
 #define DRM_CAP_DUMB_BUFFER 0x1
 
@@ -962,6 +1001,102 @@ static void crc_row(int fd, int index)
     report_held();
 }
 
+/** LIST_LESSEES of `fd` into `ids`, room for MAX_IDS: their number, or a
+ * negated errno. */
+static long lessees(int fd, u32 *ids)
+{
+    struct drm_mode_list_lessees l;
+    long rc;
+
+    zero(&l, sizeof(l));
+    l.count_lessees = MAX_IDS;
+    l.lessees_ptr = (u64)(unsigned long)ids;
+    rc = drm_ioctl(fd, DRM_IOCTL_MODE_LIST_LESSEES, &l);
+    return rc != 0 ? rc : (long)l.count_lessees;
+}
+
+/** As the master, lease the first CRTC and connector, which bring the
+ * CRTC's primary plane, to a new descriptor, as Linux's CREATE_LEASE: the
+ * same objects again are EBUSY; the lessee sees that CRTC and connector
+ * alone, holds the master role, cannot drop it, lists what it leases and
+ * sets the first mode; the master lists it; a revoke leaves it nothing,
+ * and its close takes it off the list. */
+static void lease_row(int fd)
+{
+    struct drm_mode_create_lease cl;
+    struct drm_mode_get_lease gl;
+    struct drm_mode_revoke_lease rl;
+    struct drm_mode_card_res res;
+    struct drm_mode_crtc get;
+    struct drm_auth auth;
+    u32 ids[2], crtcs[MAX_IDS], conns[MAX_IDS], objs[MAX_IDS];
+    struct mode_fb b;
+    long rc;
+    int lfd;
+
+    if (!first_crtc) {
+        report_skip("no mode was set");
+        return;
+    }
+    ids[0] = first_crtc;
+    ids[1] = first_conn;
+    zero(&cl, sizeof(cl));
+    cl.object_ids = (u64)(unsigned long)ids;
+    cl.object_count = 2;
+    cl.flags = O_CLOEXEC;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_CREATE_LEASE, &cl) != 0 || cl.lessee_id == 0) {
+        fail("CREATE_LEASE of the first CRTC and connector");
+    }
+    lfd = (int)cl.fd;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_CREATE_LEASE, &cl) != -EBUSY) {
+        fail("a second lease of the same objects is not EBUSY");
+    }
+    zero(&res, sizeof(res));
+    res.crtc_id_ptr = (u64)(unsigned long)crtcs;
+    res.connector_id_ptr = (u64)(unsigned long)conns;
+    res.count_crtcs = MAX_IDS;
+    res.count_connectors = MAX_IDS;
+    if (drm_ioctl(lfd, DRM_IOCTL_MODE_GETRESOURCES, &res) != 0 || res.count_crtcs != 1 ||
+        res.count_connectors != 1 || crtcs[0] != first_crtc || conns[0] != first_conn) {
+        fail("the lessee does not see its CRTC and connector alone");
+    }
+    auth.magic = 0;
+    if (drm_ioctl(lfd, DRM_IOCTL_AUTH_MAGIC, &auth) != -EINVAL ||
+        drm_ioctl(lfd, DRM_IOCTL_DROP_MASTER, 0) != -EINVAL) {
+        fail("the lessee is not master, or drops the role");
+    }
+    zero(&gl, sizeof(gl));
+    gl.count_objects = MAX_IDS;
+    gl.objects_ptr = (u64)(unsigned long)objs;
+    if (drm_ioctl(lfd, DRM_IOCTL_MODE_GET_LEASE, &gl) != 0 || gl.count_objects < 3) {
+        fail("GET_LEASE does not give the CRTC, the connector and the primary plane");
+    }
+    rc = lessees(fd, objs);
+    if (rc != 1 || objs[0] != cl.lessee_id) {
+        fail("LIST_LESSEES does not give the lessee");
+    }
+    fb_make(lfd, &first_mode, &b, 0x1EA5E000u);
+    if (set_crtc(lfd, first_crtc, first_conn, &first_mode, b.fb_id) != 0) {
+        fail("the lessee's SETCRTC of the first mode");
+    }
+    fb_drop(lfd, &b);
+    rl.lessee_id = cl.lessee_id;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_REVOKE_LEASE, &rl) != 0) {
+        fail("REVOKE_LEASE");
+    }
+    zero(&get, sizeof(get));
+    get.crtc_id = first_crtc;
+    if (drm_ioctl(lfd, DRM_IOCTL_MODE_GETCRTC, &get) != -ENOENT) {
+        fail("a revoked lessee still finds its CRTC");
+    }
+    syscall1(SYS_CLOSE, lfd);
+    if (lessees(fd, objs) != 0 || drm_ioctl(fd, DRM_IOCTL_MODE_REVOKE_LEASE, &rl) != -ENOENT) {
+        fail("the closed lessee is still listed");
+    }
+    probe_line("DRMPROBE LEASE", 0, 0);
+    report_held();
+}
+
 /** The decimal number `s`, or 0 for one that is not 1 to 3600. */
 static long hold_seconds(const char *s)
 {
@@ -1048,8 +1183,9 @@ PROBE_SP_ENTRY;
 /** Run the rows in order; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
-    static const char *const ids[] = {"open", "version", "render", "master", "auth",  "create",
-                                      "map",  "destroy", "prime",  "kcmp",   "modes", "crc"};
+    static const char *const ids[] = {"open",   "version", "render",  "master", "auth",
+                                      "create", "map",     "destroy", "prime",  "kcmp",
+                                      "modes",  "crc",     "lease"};
     char name[64], path[32];
     char **argv = (char **)(sp + 1);
     int fd, other, index = 0;
@@ -1082,6 +1218,7 @@ void probe_main(unsigned long *sp)
     syscall1(SYS_CLOSE, other);
     modes_row(fd);
     crc_row(fd, index);
+    lease_row(fd);
     syscall1(SYS_CLOSE, fd);
     report_end();
     probe_line("DRMPROBE OK", 0, 0);
