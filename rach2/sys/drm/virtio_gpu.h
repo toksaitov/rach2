@@ -744,7 +744,8 @@ struct virtio_gpu_cmd *vgpu_cmd_new(struct virtio_gpu_device *vg, struct virtque
                                     uint32_t type, uint32_t bytes);
 /** Free an unsubmitted or completed command and its DMA pages. */
 void vgpu_cmd_free(struct virtio_gpu_cmd *cmd);
-/** Send a new control command without a fence; nobody may wait for it. */
+/** Send a new control command without a fence, as Linux sends a command it
+ * gives no fence; a wait for it sleeps on the device's answers alone. */
 void vgpu_cmd_unfence(struct virtio_gpu_cmd *cmd);
 /** Number and initialize a command's fence once, before exporting it. */
 void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd);
@@ -772,9 +773,10 @@ int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes
 /**
  * As vgpu_cmd_send_wait for RESOURCE_MAP_BLOB, whose answer a device may
  * take long to give, as when it pins the blob's pages: the wait has no
- * bound, as Linux's virtio_gpu_vram_mmap, and ends with the answer or the
- * device's death. With `got`, a shorter answer is taken as it is, its
- * length in `*got`.
+ * bound, as Linux's virtio_gpu_vram_mmap, and ends with the answer, the
+ * device's death, or SIGKILL, which returns -EINTR and leaves the command,
+ * response pages and all, to the reaper, as -ETIMEDOUT does. With `got`, a
+ * shorter answer is taken as it is, its length in `*got`.
  */
 int32_t vgpu_cmd_send_wait_map(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes,
                                uint32_t *got);
@@ -826,8 +828,9 @@ extern const struct drm_gem_object_funcs vgpu_host_funcs;
 void vgpu_reap(struct virtio_gpu_device *vg);
 /** Wait, in a caller that may sleep, while the commands started and not yet
  * freed hold VGPU_HELD_MAX DMA pages or more; nothing in one that may not.
- * Process context. */
-void vgpu_room(struct virtio_gpu_device *vg);
+ * With `killable`, for an ioctl, SIGKILL ends the wait with -EINTR; a free
+ * or a close passes 0. 0 or -EINTR. Process context. */
+int32_t vgpu_room(struct virtio_gpu_device *vg, int killable);
 /** Stop DMA, fail commands and free backing and contexts; process context. */
 void vgpu_kill(struct virtio_gpu_device *vg);
 /**

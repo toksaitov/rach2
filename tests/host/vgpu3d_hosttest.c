@@ -485,6 +485,7 @@ int main(void)
     uint32_t h, i;
 
     current_proc = &self;
+    self.tg = &self_tg;
     model_reset();
     gpu.offered |= VIRTIO_BIT(VIRTIO_GPU_F_VIRGL);
     gpu.config.num_capsets = 2;

@@ -444,6 +444,44 @@ static void submit_prepare(struct virtio_gpu_cmd *cmd, const struct drm_virtgpu_
 }
 
 /**
+ * The start of an execbuffer: check its flags and ring, put in `*context`
+ * the fence context its fence takes, the device's or the ring's, and make
+ * room for it and the file's context. 0 or -errno: ENODEV for a dead
+ * device, ENOSYS without virgl, EINVAL for an unknown flag or a ring the
+ * context lacks, EINTR at SIGKILL in the wait for room, or the context's
+ * error. May sleep.
+ */
+static int32_t submit_begin(struct virtio_gpu_device *vg, struct drm_file *file,
+                            const struct drm_virtgpu_execbuffer *a, uint64_t *context)
+{
+    struct vgpu_context *ctx = file->driver_priv;
+    int32_t rc;
+
+    if (vg->dead) {
+        return -ENODEV;
+    }
+    if (!vg->has_virgl) {
+        return -ENOSYS;
+    }
+    if (a->flags & ~VIRTGPU_EXECBUF_FLAGS) {
+        return -EINVAL;
+    }
+    *context = vg->fence_context;
+    if (a->flags & VIRTGPU_EXECBUF_RING_IDX) {
+        if (!ctx || a->ring_idx >= ctx->num_rings || !ctx->base_fence_ctx) {
+            return -EINVAL;
+        }
+        *context = ctx->base_fence_ctx + a->ring_idx;
+    }
+    vgpu_reap(vg);
+    rc = vgpu_room(vg, 1);
+    if (rc) {
+        return rc;
+    }
+    return vgpu_context_ensure(vg, file);
+}
+
+/**
  * Submit copied commands asynchronously after foreign dependencies, as
  * Linux's virtio_gpu_execbuffer_ioctl: with VIRTGPU_EXECBUF_RING_IDX on a
  * ring CONTEXT_INIT gave the file's context, whose fence context the
@@ -459,29 +497,12 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     struct virtio_gpu_submit_3d *req;
     struct vgpu_submit *s = NULL;
     struct vgpu_submit_sync *ins = NULL, *outs = NULL;
-    struct vgpu_context *ctx = file->driver_priv;
-    uint64_t context = vg->fence_context;
+    struct vgpu_context *ctx;
+    uint64_t context;
     uint32_t i;
     int32_t rc, fd = -1;
 
-    if (vg->dead) {
-        return -ENODEV;
-    }
-    if (!vg->has_virgl) {
-        return -ENOSYS;
-    }
-    if (a->flags & ~VIRTGPU_EXECBUF_FLAGS) {
-        return -EINVAL;
-    }
-    if (a->flags & VIRTGPU_EXECBUF_RING_IDX) {
-        if (!ctx || a->ring_idx >= ctx->num_rings || !ctx->base_fence_ctx) {
-            return -EINVAL;
-        }
-        context = ctx->base_fence_ctx + a->ring_idx;
-    }
-    vgpu_reap(vg);
-    vgpu_room(vg);
-    rc = vgpu_context_ensure(vg, file);
+    rc = submit_begin(vg, file, a, &context);
     if (rc) {
         return rc;
     }

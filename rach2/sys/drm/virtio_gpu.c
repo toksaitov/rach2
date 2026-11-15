@@ -16,12 +16,14 @@
 #include "../lib/kdef.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
+#include "../lib/ksignal.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
 #include "../proc/smp.h"
 #include "../proc/sched.h"
+#include "../proc/tgroup.h"
 #include "../rtc.h"
 #include "../timer.h"
 #include "../udelay.h"
@@ -152,8 +154,12 @@ struct virtio_gpu_cmd *vgpu_cmd_new(struct virtio_gpu_device *vg, struct virtque
  * goes without VIRTIO_GPU_FLAG_FENCE, as Linux queues a command it gives no
  * fence. QEMU answers such a command as soon as it has run it, and a fenced
  * one only at its next poll of virgl's fences, on the guest's next notify
- * or its 10 ms timer. Nobody may wait for the command, since a wait sleeps
- * on its fence.
+ * or its 10 ms timer. A device that answers a fenced command at once, as
+ * QEMU and the test bed's backend answer RESOURCE_MAP_BLOB and any error,
+ * signals with it every earlier fence of the device's timeline, the
+ * renderer's work still in flight among them (`cmd_done`). A wait for the
+ * command sleeps on the device's answers, so it must not come before the
+ * device's probe has set them up (`cmd_sleep`).
  */
 void vgpu_cmd_unfence(struct virtio_gpu_cmd *cmd)
 {
@@ -530,30 +536,43 @@ static int32_t answer_error(uint32_t type)
     return type ? -EIO : -ENODEV;
 }
 
-/* What a sleep of the driver's watches: its own condition, and the
- * deadline, of dma_fence_now's clock, at which it ends regardless. */
+/** Whether SIGKILL is pending for the calling thread or its process, as
+ * Linux's fatal_signal_pending: what ends a killable wait for the device. */
+static int vgpu_killed(void)
+{
+    return current_proc != NULL &&
+           ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
+}
+
+/* What a sleep of the driver's watches: its own condition, the deadline,
+ * of dma_fence_now's clock, at which it ends regardless, and whether
+ * SIGKILL ends it too. */
 struct vgpu_sleep_wait {
     int (*cond)(void *arg);
     void *arg;
     int64_t until;
+    int killable;
 };
 
-/** Whether a sleep's condition holds or its deadline has passed; a wait's
- * condition, which wq_wait needs true once the deadline it armed is gone. */
+/** Whether a sleep's condition holds, its deadline has passed, or SIGKILL
+ * ends a killable one; a wait's condition, which wq_wait needs true once
+ * the deadline it armed is gone. */
 static int vgpu_sleep_ready(void *arg)
 {
     struct vgpu_sleep_wait *w = (struct vgpu_sleep_wait *)arg;
 
-    return w->cond(w->arg) || dma_fence_now() >= w->until;
+    return w->cond(w->arg) || dma_fence_now() >= w->until || (w->killable && vgpu_killed());
 }
 
 /**
  * Sleep on vgpu_wake until `cond(arg)` holds or `until` of dma_fence_now's
  * clock passes, with the process's timer armed for `until` and restored
- * after. Every answer of the device wakes vgpu_wake. Process context, with
- * vgpu_wake set up. May sleep.
+ * after. Every answer of the device wakes vgpu_wake. With `killable`, the
+ * name of the wait for /proc/PID/wchan, SIGKILL ends the sleep as well, as
+ * Linux's TASK_KILLABLE; without, NULL, no signal does. Process context,
+ * with vgpu_wake set up. May sleep.
  */
-static void vgpu_sleep(int (*cond)(void *arg), void *arg, int64_t until)
+static void vgpu_sleep(int (*cond)(void *arg), void *arg, int64_t until, const char *killable)
 {
     struct vgpu_sleep_wait w;
     uint64_t saved, delta;
@@ -562,11 +581,16 @@ static void vgpu_sleep(int (*cond)(void *arg), void *arg, int64_t until)
     w.cond = cond;
     w.arg = arg;
     w.until = until;
+    w.killable = killable != NULL;
     left = until - dma_fence_now();
     delta = tick_div64((uint64_t)(left > 0 ? left : 0) + TICK_NS - 1u, TICK_NS, NULL);
     saved = current_proc->wakeup_tick;
     current_proc->wakeup_tick = rtc_ticks_now() + delta + 1;
-    (void)wq_wait_event_nointr(&vgpu_wake, vgpu_sleep_ready, &w);
+    if (killable) {
+        (void)wq_wait_event_killable(&vgpu_wake, vgpu_sleep_ready, &w, killable);
+    } else {
+        (void)wq_wait_event_nointr(&vgpu_wake, vgpu_sleep_ready, &w);
+    }
     current_proc->wakeup_tick = saved;
 }
 
@@ -582,16 +606,18 @@ static int cmd_answered(void *arg)
  * vgpu_wake, so the sleep does not rest on the command's fence, which the
  * answer to a later command may signal before this one's is reaped
  * (cmd_done); a wait on that fence would return at once and the waiter
- * would spin under the big lock, which the device's answer may need. Before
- * the device's probe has set vgpu_wake up, the fence's wait. May sleep.
+ * would spin under the big lock, which the device's answer may need. So
+ * a command without a fence may be waited for too, once vgpu_wake is set
+ * up; before the device's probe has set it up, the fence's wait, never
+ * killable. `killable` is as vgpu_sleep's. May sleep.
  */
-static void cmd_sleep(struct virtio_gpu_cmd *cmd, int64_t until)
+static void cmd_sleep(struct virtio_gpu_cmd *cmd, int64_t until, const char *killable)
 {
     if (!vgpu_wake_ready) {
         (void)dma_fence_wait_until(cmd->fence, 0, until);
         return;
     }
-    vgpu_sleep(cmd_answered, cmd, until);
+    vgpu_sleep(cmd_answered, cmd, until, killable);
 }
 
 /* What a wait for the heap's pages watches: the device, and the count of
@@ -645,12 +671,16 @@ static int held_low(void *arg)
  * sleep reaps, and sleeps on the answers, until fewer than VGPU_HELD_MAX
  * pages are held, as Linux's sender sleeps for room in the queue. The sleep
  * polls the queues every 10 ms, for a device without interrupts, and ends
- * when the device dies or the sender may no longer wait (`vgpu_may_wait`).
+ * when the device dies or the sender may no longer wait (`vgpu_may_wait`),
+ * and with `killable` at SIGKILL, since a device that has stopped answering
+ * would hold the sender for ever. 0, or -EINTR when SIGKILL ended it.
  */
-void vgpu_room(struct virtio_gpu_device *vg)
+int32_t vgpu_room(struct virtio_gpu_device *vg, int killable)
 {
+    int32_t rc = 0;
+
     if (!vgpu_may_wait(vg) || vg->held < VGPU_HELD_MAX) {
-        return;
+        return 0;
     }
     drm_dev_get(&vg->drm);
     for (;;) {
@@ -658,9 +688,15 @@ void vgpu_room(struct virtio_gpu_device *vg)
         if (!vgpu_may_wait(vg) || vg->held < VGPU_HELD_MAX) {
             break;
         }
-        vgpu_sleep(held_low, vg, dma_fence_now() + VGPU_POLL_NS);
+        if (killable && vgpu_killed()) {
+            rc = -EINTR;
+            break;
+        }
+        vgpu_sleep(held_low, vg, dma_fence_now() + VGPU_POLL_NS,
+                   killable ? "virtio_gpu_queue_ctrl_sgs" : NULL);
     }
     drm_dev_put(&vg->drm);
+    return rc;
 }
 
 /* What a wait for a command's pages watches: the device, and the pages its
@@ -706,7 +742,7 @@ static struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, st
         w.seen = vg->held;
         vgpu_reap(vg);
         if (!vg->dead && vg->held == w.seen) {
-            vgpu_sleep(held_moved, &w, dma_fence_now() + VGPU_POLL_NS);
+            vgpu_sleep(held_moved, &w, dma_fence_now() + VGPU_POLL_NS, NULL);
             vgpu_reap(vg);
         }
         cmd = vg->dead ? NULL : vgpu_cmd_new(vg, vq, type, req_len);
@@ -722,11 +758,12 @@ static struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, st
  * a few MiB, and a program that frees and makes buffers faster than the
  * device answers would find it full of pages already let go, which an
  * allocator waits for and does not refuse. The wait wakes at each answer
- * and polls the queues every 10 ms, for a device without interrupts. 0;
- * -ENOMEM once no UNREF is in flight; or -ENODEV when the device has died,
- * which a reset during the wait does, freeing its queues and the
- * transport's heap, so that the caller must not go on to use them. May
- * sleep.
+ * and polls the queues every 10 ms, for a device without interrupts, and
+ * ends at SIGKILL, since a device that has stopped answering would hold the
+ * caller for ever. 0; -ENOMEM once no UNREF is in flight; -EINTR at
+ * SIGKILL; or -ENODEV when the device has died, which a reset during the
+ * wait does, freeing its queues and the transport's heap, so that the
+ * caller must not go on to use them. May sleep.
  */
 static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -748,9 +785,52 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
         if (vg->dead) {
             return -ENODEV;
         }
+        if (vgpu_killed()) {
+            return -EINTR;
+        }
         if (vg->unrefs == w.seen) {
-            vgpu_sleep(unref_moved, &w, dma_fence_now() + VGPU_POLL_NS);
+            vgpu_sleep(unref_moved, &w, dma_fence_now() + VGPU_POLL_NS, "backing_fill");
             vgpu_reap(vg);
+        }
+    }
+}
+
+/**
+ * Wait for the answer to `cmd`, started and marked waited, until it comes
+ * or `deadline` of dma_fence_now's clock passes, as cmd_wait says: asleep
+ * on the device's answers, polling the queue every 10 ms, or, before the
+ * scheduler runs or before vgpu_wake is set up for a command without a
+ * fence, spinning for five seconds. With VGPU_NEVER, SIGKILL ends the
+ * wait too. 1 when SIGKILL ended it, else 0, the command answered or not.
+ * May sleep.
+ */
+static int cmd_await(struct virtio_gpu_cmd *cmd, int64_t deadline)
+{
+    const char *killable = deadline == VGPU_NEVER ? "virtio_gpu_wait_answer" : NULL;
+    int64_t next;
+    uint32_t spins = 0;
+
+    for (;;) {
+        if (!cmd->vg->dead) {
+            (void)virtqueue_reap(cmd->vq);
+        }
+        if (cmd_is_done(cmd)) {
+            return 0;
+        }
+        if (can_sleep() && (cmd->fence || vgpu_wake_ready)) {
+            if (dma_fence_now() >= deadline) {
+                return 0;
+            }
+            if (killable && vgpu_killed()) {
+                return 1;
+            }
+            next = dma_fence_now() + VGPU_POLL_NS;
+            cmd_sleep(cmd, next < deadline ? next : deadline, killable);
+        } else {
+            if (spins++ >= (uint32_t)(VGPU_WAIT_NS / 1000 / VGPU_SPIN_US)) {
+                return 0;
+            }
+            k_udelay(VGPU_SPIN_US);
         }
     }
 }
@@ -764,8 +844,13 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
  * `deadline` of dma_fence_now's clock, or in five seconds before the
  * scheduler runs; the command is then left to the reaper, for the answer
  * that may yet come.
- * With VGPU_NEVER a sleeping wait ends with the answer or with the
- * device's death, which completes every command. A command with response
+ * With VGPU_NEVER a sleeping wait ends with the answer, with the device's
+ * death, which completes every command, or at SIGKILL, as Linux's waits
+ * for the device's fences in an ioctl end at a signal, with -EINTR and the
+ * command left to the reaper as on -ETIMEDOUT: a device that has stopped
+ * answering would otherwise hold the caller in the state D for ever, which
+ * no signal ends. A command without a fence is waited for as one with
+ * one, once vgpu_wake is set up (`cmd_sleep`). A command with response
  * pages stays with the caller after completion. With `got`, an answer
  * shorter than `out_len` is copied as it is and its length put in `*got`;
  * without, it is -EIO. May sleep.
@@ -774,37 +859,22 @@ static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
                         int64_t deadline)
 {
     struct virtio_gpu_device *vg = cmd->vg;
-    int64_t next;
-    uint32_t spins = 0, flags, type = cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type;
+    uint32_t flags, type = cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type;
     int32_t rc;
+    int killed;
 
     cmd->waited = 1;
     cmd->sleepable = 1;
     cmd_submit(cmd);
-    for (;;) {
-        if (!vg->dead) {
-            (void)virtqueue_reap(cmd->vq);
-        }
-        if (cmd_is_done(cmd)) {
-            break;
-        }
-        if (can_sleep() && cmd->fence) {
-            if (dma_fence_now() >= deadline) {
-                break;
-            }
-            next = dma_fence_now() + VGPU_POLL_NS;
-            cmd_sleep(cmd, next < deadline ? next : deadline);
-        } else {
-            if (spins++ >= (uint32_t)(VGPU_WAIT_NS / 1000 / VGPU_SPIN_US)) {
-                break;
-            }
-            k_udelay(VGPU_SPIN_US);
-        }
-    }
+    killed = cmd_await(cmd, deadline);
     flags = spin_lock_irqsave(&vg->lock);
     if (!cmd->done) {
         cmd->waited = 0;
         spin_unlock_irqrestore(&vg->lock, flags);
+        if (killed) {
+            klog(KLOG_WARN, "virtio_gpu", "command 0x%x: no answer before SIGKILL", type);
+            return -EINTR;
+        }
         klog(KLOG_ERR, "virtio_gpu", "command 0x%x: no answer in 5 s", type);
         return -ETIMEDOUT;
     }
@@ -1115,8 +1185,8 @@ static struct virtio_gpu_mem_entry *entry_slot(struct virtio_gpu_cmd *cmd, uint3
  * pages adjacent in the device's addresses as one entry, and set its
  * segments; their count goes in *n. 0; -ENOMEM, -EINVAL for an imported
  * page the device cannot reach, -E2BIG for a chain of more segments than
- * the queue takes, or -ENODEV when the device died while the pages were
- * waited for. May sleep.
+ * the queue takes, -EINTR at SIGKILL while the pages were waited for, or
+ * -ENODEV when the device died meanwhile. May sleep.
  */
 int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_object *bo, uint32_t *n)
 {
@@ -1349,7 +1419,7 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     struct virtio_gpu_device *vg = to_vg(obj->dev);
     struct virtio_gpu_cmd *cmd;
 
-    vgpu_room(vg);
+    (void)vgpu_room(vg, 0);
     vgpu_resource_detach(vg, bo);
     /* The device's pages go before the UNMAP_BLOB that lets it unpin them;
      * no mapping is left to take away, since each held a reference. */
@@ -2124,7 +2194,10 @@ static int32_t vgpu_resource_create_ioctl(struct drm_device *dev, void *data, st
                                    rc->target != 2 || rc->array_size > 1)) {
         return -EINVAL;
     }
-    vgpu_room(to_vg(dev));
+    err = vgpu_room(to_vg(dev), 1);
+    if (err != 0) {
+        return err;
+    }
     if (to_vg(dev)->has_virgl) {
         err = vgpu_context_ensure(to_vg(dev), file);
         if (err != 0) {
@@ -2199,7 +2272,10 @@ static int32_t vgpu_transfer_to_host_ioctl(struct drm_device *dev, void *data,
     if (to_vg(dev)->has_virgl) {
         return vgpu_transfer_3d_ioctl(dev, data, file, 0);
     }
-    vgpu_room(to_vg(dev));
+    rc = vgpu_room(to_vg(dev), 1);
+    if (rc != 0) {
+        return rc;
+    }
     obj = drm_gem_object_lookup(file, args->bo_handle);
     if (!obj) {
         return -ENOENT;

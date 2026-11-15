@@ -67,6 +67,8 @@ extern int strcmp(const char *a, const char *b);
 
 struct percpu cpu_table[NR_CPUS];
 static process_t self;
+static struct tgroup self_tg; /* self's process, whose pending signals the
+                                 driver's killable waits read */
 static int failures;
 #ifdef VGPU_3D_TEST
 static void model_wait_step(void);
@@ -304,6 +306,13 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /** The same, uninterruptible. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    return wq_wait_event(wq, cond, arg);
+}
+
+/** The same, ended by SIGKILL as well, which the condition accepts. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
     return wq_wait_event(wq, cond, arg);
 }
 
@@ -1832,7 +1841,7 @@ static int logged(uint32_t i, uint32_t type)
 
 /** The fence ids of the log are 1, 2, 3 ... for the control queue, 0 for
  * the cursor queue and for the commands that go unfenced: SET_SCANOUT,
- * SET_SCANOUT_BLOB, RESOURCE_FLUSH and UNMAP_BLOB. */
+ * SET_SCANOUT_BLOB, RESOURCE_FLUSH, MAP_BLOB and UNMAP_BLOB. */
 static int fences_in_order(void)
 {
     uint32_t i, next = 1;
@@ -1840,6 +1849,7 @@ static int fences_in_order(void)
     for (i = 0; i < gpu.nlog; i++) {
         if (gpu.log[i] == VIRTIO_GPU_CMD_UPDATE_CURSOR ||
             gpu.log[i] == VIRTIO_GPU_CMD_MOVE_CURSOR ||
+            gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB ||
             gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB ||
             gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_FLUSH ||
             gpu.log[i] == VIRTIO_GPU_CMD_SET_SCANOUT ||
@@ -2794,6 +2804,7 @@ static void row_revoke_no_unref(void)
 int main(void)
 {
     cpu_table[0].current = &self;
+    self.tg = &self_tg;
     row_bind();
     row_no_edid();
     row_scanout();
