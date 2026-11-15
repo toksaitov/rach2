@@ -42,7 +42,8 @@ CAP = 600
 def igt():
     tests = json.load(gzip.open(os.path.join(REF, "igt/results.json.gz"), "rt",
                                 encoding="utf-8"))["tests"]
-    rows = sorted("%s %s" % (name, t["result"]) for name, t in tests.items())
+    rows = sorted("%s %s" % (name, "skip-or-pass" if igt_setup_skip(t) else t["result"])
+                  for name, t in tests.items())
     static = sorted(n for n in tests if n.count("@") <= 2)
     seconds = {n: tests[n]["time"]["end"] - tests[n]["time"]["start"] for n in static}
     programs = {}
@@ -83,6 +84,15 @@ def igt():
     with open(os.path.join(REF, "expect/igt-kms.rows"), "w", encoding="utf-8") as f:
         f.write("\n".join(rows) + "\n")
     return len(parts), len(rows)
+
+
+def igt_setup_skip(test):
+    """Identify skips caused by step 9's absent software-sync device."""
+    out = test.get("out", "")
+    return (test["result"] == "skip"
+            and "Test requirement not met in function igt_require_sw_sync," in out
+            and "Test requirement: kernel_has_sw_sync()\n" in out
+            and "Last errno: 2, No such file or directory\n" in out)
 
 
 def piglit_rows(tests):

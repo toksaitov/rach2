@@ -84,7 +84,8 @@ EOF
             [ "$matched" = 1 ] || echo "igt: $line matches no subtest" >&2
             ;;
         *)
-            grep -q "^igt@$test@" "$root/subtest-list.txt" || echo "igt: $line names no test" >&2
+            grep -q -e "^igt@$test$" -e "^igt@$test@" "$root/subtest-list.txt" ||
+                echo "igt: $line names no test" >&2
             echo "$line"
             ;;
     esac
