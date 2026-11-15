@@ -1631,6 +1631,22 @@ uint64_t kvm_lapic_next_ns(struct kvm_vcpu *v)
     return l ? next_ns(l) : 0;
 }
 
+int kvm_lapic_other_due(struct kvm_vcpu *v)
+{
+    uint64_t now, hv, pit;
+
+    if (!apic_of(v)) {
+        return 0;
+    }
+    hv = kvm_hv_stimer_next(v);
+    pit = kvm_pit_next(v->vm);
+    if (!hv && !pit) {
+        return 0;
+    }
+    now = kvm_host_ns();
+    return (hv && hv <= now) || (pit && pit <= now);
+}
+
 /** Whether the halted or waiting vCPU `arg` has an event to wake it, as
  * Linux's kvm_vcpu_has_events, or a request, or its wait's tick came. A
  * timer changed by another thread, the PIT above all, ends the wait

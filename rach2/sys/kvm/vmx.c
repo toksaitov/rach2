@@ -3045,6 +3045,10 @@ static int exit_reason(struct kvm_vcpu *v)
         v->at_boundary = 1;
         return 0;
     case EXIT_PREEMPTION_TIMER:
+        /* Whichever timer bounded the run, the loop looks at them all, as
+         * Linux's handle_preemption_timer expires the hv timer. */
+        kvm_vcpu_kick(v, KVM_REQ_TIMER);
+        return 0;
     case EXIT_INIT_SIGNAL:
     case EXIT_SIPI:
         return 0;
@@ -3297,7 +3301,11 @@ static void vmx_inject(struct kvm_vcpu *v)
  * injects it, since no APICv does: Linux's start_hv_timer takes a deadline
  * already passed in the same way (lapic.c:2167-2178). Every other exit,
  * and these under the caller's single step, while an event was under
- * delivery, or for a WRMSR the MSR filter denies, is `exit`'s.
+ * delivery, or for a WRMSR the MSR filter denies, is `exit`'s; so is the
+ * preemption timer's expiry when the PIT's or a Hyper-V synthetic timer's
+ * time has come (`kvm_lapic_other_due`), which bounds the run too and
+ * which only the run loop delivers: entered again here, the guest would
+ * exit at once on a timer of 0, ahead of the host's interrupts, for ever.
  */
 static int vmx_fast(struct kvm_vcpu *v)
 {
@@ -3314,7 +3322,7 @@ static int vmx_fast(struct kvm_vcpu *v)
         if (index != MSR_IA32_TSC_DEADLINE || !kvm_msr_allowed(v, index, 1)) {
             return 0;
         }
-    } else if (e->reason != EXIT_PREEMPTION_TIMER) {
+    } else if (e->reason != EXIT_PREEMPTION_TIMER || kvm_lapic_other_due(v)) {
         return 0;
     }
     /* What `exit_reason` does before it names the exit. */
