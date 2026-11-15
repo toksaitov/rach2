@@ -14,14 +14,17 @@ the tools' own output, and writes:
       `NAME RESULT` for each subtest and dynamic subtest of the run
   tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz
       `NAME RESULT` for each piglit test and subtest of the quick run, in
-      piglit.sh's form, with the passes of the reruns put in place of the
-      first run's results where the run's setup made the failure: the tests
-      that failed only beside other work, and the EGL tests that opened the
-      default display without EGL_PLATFORM, which piglit.sh sets
+      piglit.sh's form, with the passes of the EGL reruns put in place of
+      the first run's results: those tests opened the default display
+      without EGL_PLATFORM, which piglit.sh sets
 
-The SPIR-V tests stay as the first run had them: they need spirv-as, which
-neither Debian's root then nor Rach2's has. The output is the same for the
-same input, so a second run changes nothing.
+The tests that failed beside the first run's other tests and passed alone
+stay as the first run had them, since piglit.sh runs a test on each CPU
+through GBM as that run did; arb_timer_query@timestamp-get is one, whose
+query waits behind the other tests' batches on the render ring. The SPIR-V
+tests stay too: they need spirv-as, which neither Debian's root then nor
+Rach2's has. The output is the same for the same input, so a second run
+changes nothing.
 """
 import bz2
 import gzip
@@ -93,10 +96,8 @@ def piglit():
         return json.load(bz2.open(os.path.join(REF, path), "rt", encoding="utf-8"))["tests"]
     first = load("piglit/results.json.bz2")
     rows = piglit_rows(first)
-    for path in ("piglit/rerun/results.json.bz2", "piglit/rerun-egl/results.json.bz2"):
-        for name, t in load(path).items():
-            if t["result"] != "pass" or "spirv" in name:
-                continue
+    for name, t in load("piglit/rerun-egl/results.json.bz2").items():
+        if t["result"] == "pass":
             for key in [k for k in rows if k == name or k.startswith(name + "@")]:
                 del rows[key]
             rows.update(piglit_rows({name: t}))
