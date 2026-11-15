@@ -1438,8 +1438,10 @@ static void row_cursor(void)
 
 /**
  * Cursor images set within one frame through the legacy ioctl, which has
- * no stall: the one the pipe latched stays pinned until a vblank has
- * passed, and one never latched goes at once.
+ * no stall: an image the independent cursor path replaces stays pinned
+ * until the worker finds a vblank passed, as Linux's cursor vblank work,
+ * and one the full path shows and hides within a frame, never latched,
+ * goes at once.
  */
 static void row_cursor_unpin(void)
 {
@@ -1460,18 +1462,23 @@ static void row_cursor_unpin(void)
     CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0, "cursor unpin: K2 set");
     c.handle = k3;
     CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0, "cursor unpin: K3 set in the same frame");
-    CHECK(bo_vma[12].pin_count == 1 && bo_vma[13].pin_count == 0 && bo_vma[14].pin_count == 1,
-          "cursor unpin: K1, which the pipe latched, stays pinned; K2, never latched, goes");
+    CHECK(bo_vma[12].pin_count == 1 && bo_vma[13].pin_count == 1 && bo_vma[14].pin_count == 1,
+          "cursor unpin: K1 and K2, replaced, kept until a vblank has passed, K3 shown");
     frame();
+    (void)drm_atomic_commit_work();
+    CHECK(bo_vma[12].pin_count == 0 && bo_vma[13].pin_count == 0 && bo_vma[14].pin_count == 1,
+          "cursor unpin: after a vblank the worker lets K1 and K2 go, K3 kept");
     c.handle = k1;
     CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0 && bo_vma[12].pin_count == 1 &&
               bo_vma[14].pin_count == 1,
-          "cursor unpin: after a vblank the old K1 goes, K3 kept as the latched one");
+          "cursor unpin: K1 again, K3 kept until the next vblank");
     c.handle = 0;
     CHECK(drm_mode_cursor_ioctl(&gpu.drm, &c, &fa) == 0 && bo_vma[12].pin_count == 0 &&
               bo_vma[14].pin_count == 1,
           "cursor unpin: hidden in the same frame, K1 goes and K3 stays");
     frame();
+    (void)drm_atomic_commit_work();
+    CHECK(bo_vma[14].pin_count == 0, "cursor unpin: K3 let go after the vblank");
 }
 
 /** Whether the pipe takes `m` and the eDP connector, whose list it would
