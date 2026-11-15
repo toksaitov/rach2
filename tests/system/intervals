@@ -92,7 +92,7 @@ tests/musl/clonemusl.c: a sleeper's state is looked at again every 10 ms
 tests/musl/clonemusl.c: the count of woken sleepers is read every 1 ms
 tests/musl/ndwatchmusl.c: the tentative address is tried again every 100 ms
 tests/musl/ip6optmusl.c: the tentative address is tried again every 100 ms
-tests/musl/threadscaling.c: the held threads sleep through 20 ms of ticks
+tests/musl/threadscaling.c: the parent sleeps through 20 ms of ticks
 tests/limitprobe.c: the clone is given 100 ms to fall asleep in its read
 tests/drmprobe.c: the master holds the screen for the seconds asked
 tests/ldtprobe.c: a nap of 10 ms switches the probe out and back in
