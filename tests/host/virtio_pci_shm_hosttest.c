@@ -312,12 +312,12 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
     return va;
 }
 
-void *alloc_kernel_frame(void)
+void *alloc_dma64_frame(void)
 {
     return 0;
 }
 
-void free_kernel_frame(void *frame)
+void free_dma64_frame(void *frame)
 {
     (void)frame;
 }

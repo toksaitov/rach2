@@ -698,8 +698,11 @@ static void vp_irq_release(struct virtio_dev *d)
     vp->mode = VP_IRQ_NONE;
 }
 
-/** A page of the DMA pool, below 4 GiB, which the device reads by its
- * physical address. */
+/** A page the device reads by its physical address, from any memory the
+ * kernel reaches (`alloc_dma64_frame`): every address of virtio 1.x is 64
+ * bits wide, rings and buffers alike, as Linux's virtio-pci sets a DMA mask
+ * of 64 bits, so the device's pages leave the 64 MiB pool below
+ * HARD_MEMORY_LIMIT to the devices whose registers take 32 bits. */
 static void *vp_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 {
     void *frame;
@@ -708,7 +711,7 @@ static void *vp_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
     if (bytes == 0 || bytes > PAGE_SIZE) {
         return 0;
     }
-    frame = alloc_kernel_frame();
+    frame = alloc_dma64_frame();
     if (!frame) {
         return 0;
     }
@@ -722,7 +725,7 @@ static void vp_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
     (void)d;
     (void)bytes;
-    free_kernel_frame(p);
+    free_dma64_frame(p);
 }
 
 /** Shared memory region `id` from the capabilities read at attach; 0, or

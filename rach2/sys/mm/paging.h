@@ -738,6 +738,24 @@ void *alloc_kernel_frame(void);
 /** Return a frame `alloc_kernel_frame` gave. */
 void free_kernel_frame(void *frame);
 
+/**
+ * Take a free frame for a device that is given 64-bit addresses, such as
+ * a virtio 1.x device, with one reference and no user mapping, and return
+ * the kernel's address of it; NULL when none is free. The reserve does not
+ * apply. Where the direct map reaches every frame (`ARCH_DIRECT_MAP_ALL`,
+ * x86-64) the frame is taken as `alloc_frame` takes one, from above the
+ * window first, and from the window's top only when no other is free, as
+ * Linux gives such a device any memory (its DMA mask of 64 bits), so that
+ * the device's pages leave the window to the devices that need it; on
+ * i686 it is `alloc_kernel_frame`'s, the window being the memory with a
+ * kernel address. `virt_to_phys` gives the device its address. The caller
+ * owns it until `free_dma64_frame`.
+ */
+void *alloc_dma64_frame(void);
+
+/** Return a frame `alloc_dma64_frame` gave. */
+void free_dma64_frame(void *frame);
+
 /** Mark `frame` used by a boot reservation, with the counts kept; for
  * `mem_reserve`, which takes memory after the table exists. */
 void paging_mark_reserved(uintptr_t frame);

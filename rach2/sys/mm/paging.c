@@ -3341,6 +3341,40 @@ void *alloc_kernel_frame(void)
     return 0;
 }
 
+/** The frame comes from `find_free_frame`, which keeps WINDOW_KEEP of the
+ * window for `alloc_kernel_frame`, and then from the window's top. Neither
+ * is counted in `_kernel_frames_reserved`, which counts what
+ * `alloc_kernel_frame` holds. */
+void *alloc_dma64_frame(void)
+{
+#ifdef ARCH_DIRECT_MAP_ALL
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
+    uintptr_t frame = find_free_frame();
+
+    if (frame >= _frames_number) {
+        frame = frame_prev_free(_user_frames_start, _window_frames);
+        if (frame < _user_frames_start || frame >= _window_frames) {
+            spin_unlock_irqrestore(&frame_lock, flags);
+            return 0;
+        }
+    }
+    frame_take(frame);
+    spin_unlock_irqrestore(&frame_lock, flags);
+    return phys_to_virt(frame * PAGE_SIZE);
+#else
+    return alloc_kernel_frame();
+#endif
+}
+
+void free_dma64_frame(void *frame)
+{
+#ifdef ARCH_DIRECT_MAP_ALL
+    frame_unref(virt_to_phys(frame));
+#else
+    free_kernel_frame(frame);
+#endif
+}
+
 void paging_mark_reserved(uintptr_t frame)
 {
     uint32_t flags = spin_lock_irqsave(&frame_lock);
