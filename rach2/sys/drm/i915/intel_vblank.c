@@ -46,6 +46,43 @@ uint32_t intel_get_vblank_counter(struct drm_crtc *crtc)
     return i915_read(&c->i915->hw, PIPE_FRMCOUNT_G4X(c->pipe));
 }
 
+void intel_pipe_update_start(struct intel_crtc *c)
+{
+    struct i915_hw *hw = &c->i915->hw;
+    const struct drm_mode_modeinfo *mode = &c->cfg.mode;
+    uint32_t frame, frame_us, waited;
+
+    c->update_frame = 0;
+    if (!c->cfg.active || mode->clock == 0 || mode->htotal == 0 || mode->vtotal == 0) {
+        return;
+    }
+    /* A frame's length rounded up to the millisecond, kept in 32 bits. */
+    frame_us = ((uint32_t)mode->htotal * mode->vtotal / mode->clock + 1u) * 1000u;
+    frame = i915_read(hw, PIPE_FRMCOUNT_G4X(c->pipe));
+    for (waited = 0; waited < 3u * frame_us + 1000u; waited += 20u) {
+        if (i915_read(hw, PIPE_FRMCOUNT_G4X(c->pipe)) != frame) {
+            break;
+        }
+        i915_delay_us(hw, 20);
+    }
+    c->update_frame = i915_read(hw, PIPE_FRMCOUNT_G4X(c->pipe)) + 1u;
+}
+
+void intel_pipe_update_end(struct intel_crtc *c)
+{
+    uint32_t frame;
+
+    if (c->update_frame == 0) {
+        return;
+    }
+    frame = i915_read(&c->i915->hw, PIPE_FRMCOUNT_G4X(c->pipe));
+    if (frame + 1u != c->update_frame) {
+        klog(KLOG_WARN, "i915", "display: pipe %c update: crossed %u vblanks", 'A' + c->pipe,
+             (unsigned)(frame + 1u - c->update_frame));
+    }
+    c->update_frame = 0;
+}
+
 /**
  * The line `c` scans, Linux's __intel_get_crtc_scanline: PIPEDSL, read
  * again for up to 100 us while it gives 0, which Haswell's may just before

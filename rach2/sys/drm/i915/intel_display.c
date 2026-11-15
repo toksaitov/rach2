@@ -1304,7 +1304,11 @@ static int pipe_config_changed(struct intel_crtc *c, struct drm_atomic_state *st
 
 /** Update an eDP pipe's source and panel fitter without stopping its
  * unchanged link and timings, Linux's intel_pipe_fastset. The check has
- * established that its transcoder input and power domains stay the same. */
+ * established that its transcoder input and power domains stay the same.
+ * The writes wait for the vertical blank, so that PIPESRC and the fitter
+ * latch in the frame the planes' writes that follow latch in, as Linux's
+ * commit_pipe_pre_planes writes them inside the planes' evasion; a plane
+ * a frame apart from its pipe's source size underruns the pipe's FIFO. */
 static void crtc_fastset(struct intel_crtc *c, struct drm_atomic_state *state)
 {
     struct intel_crtc_config cfg;
@@ -1317,6 +1321,7 @@ static void crtc_fastset(struct intel_crtc *c, struct drm_atomic_state *state)
     cfg.pll = c->cfg.pll;
     cfg.pll_hw = c->cfg.pll_hw;
     cfg.well = c->cfg.well;
+    intel_pipe_update_start(c);
     i915_write(&c->i915->hw, PIPESRC(c->pipe), (cfg.src_w - 1u) << 16 | (cfg.src_h - 1u));
     if (cfg.pfit) {
         ilk_pfit_enable(c->i915, c->pipe, &cfg);
@@ -1367,6 +1372,7 @@ static void intel_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *sta
     if (cs && drm_atomic_crtc_needs_modeset(cs)) {
         return;
     }
+    intel_pipe_update_end(c);
     /* Linux's intel_update_crtc: a pipe the firmware lit reports its
      * underruns from its first fastset. */
     if (cs && cs->active && c->inherited) {
