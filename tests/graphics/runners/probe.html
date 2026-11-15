@@ -50,9 +50,14 @@ function sync(gl) {
 }
 
 // timed: the milliseconds of ROUNDS runs of draw, after one to warm up, in
-// the order they ran; median() gives the measure.
-function timed(gl, draw) {
+// the order they ran; median() gives the measure. A mark before the first
+// run and after the last has server.py snapshot every thread's run and wait
+// counts, so that probe.sh can say which threads ran during the draws and
+// how long each waited for a processor.
+function timed(gl, api, name, draw) {
   var t = [];
+  sync(gl);
+  post({kind: "mark", api: api, draw: name, at: "start", threads: true});
   for (var i = 0; i <= ROUNDS; i++) {
     sync(gl);
     var t0 = performance.now();
@@ -61,6 +66,7 @@ function timed(gl, draw) {
     if (i > 0)
       t.push(performance.now() - t0);
   }
+  post({kind: "mark", api: api, draw: name, at: "end", threads: true});
   return t;
 }
 
@@ -93,7 +99,7 @@ function measure(api) {
   gl.useProgram(fill);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  result.fill_rounds = timed(gl, function () {
+  result.fill_rounds = timed(gl, api, "fill", function () {
     for (var i = 0; i < FILLS; i++)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   });
@@ -106,7 +112,7 @@ function measure(api) {
                     "for (int i = 0; i < " + LOOPS + "; i++) { a = fract(a * 1.0001 + b); b = sin(a + b); }" +
                     "gl_FragColor = vec4(a, b, 0.0, 1.0); }");
   gl.useProgram(alu);
-  result.alu_rounds = timed(gl, function () {
+  result.alu_rounds = timed(gl, api, "alu", function () {
     for (var i = 0; i < PASSES; i++)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   });

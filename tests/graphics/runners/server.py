@@ -7,7 +7,13 @@ Serves ROOT at / and each PATH at /NAME, a directory's files below it,
 writes the port it took to PORTFILE once it listens, and appends one JSON
 object a line to EVENTS: a `fetch` for each page fetched, the run's sign of
 progress, and the body of each POST to /event, which the runners' pages
-send as each result is known.
+send as each result is known. A POSTed object whose `threads` is true
+gets, before the reply, the run and wait counts of every thread on the
+machine, `threads` then mapping each thread id to [process name, thread
+name, run ns, wait for a processor ns, nice value, scheduling policy] from
+/proc's schedstat and stat and sched_getscheduler, and `snap`
+the monotonic seconds at the snapshot's start and end; the page waits for
+the reply, so the snapshot falls outside what it times.
 The events file is flushed after each line, so that a browser that crashes
 loses only the result it had not sent.
 """
@@ -33,6 +39,38 @@ def record(event):
     with lock:
         events.write(json.dumps(event, sort_keys=True) + "\n")
         events.flush()
+
+
+def threads():
+    """Each thread's schedstat on the machine, by thread id, as the module's
+    docstring gives it; a thread that ends during the walk is left out."""
+    found = {}
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open("/proc/%s/comm" % pid, encoding="utf-8", errors="replace") as f:
+                pname = f.read().strip()
+            tids = os.listdir("/proc/%s/task" % pid)
+        except OSError:
+            continue
+        for tid in tids:
+            base = "/proc/%s/task/%s/" % (pid, tid)
+            try:
+                with open(base + "schedstat", encoding="ascii") as f:
+                    run, wait = f.read().split()[:2]
+                with open(base + "comm", encoding="utf-8", errors="replace") as f:
+                    name = f.read().strip()
+                with open(base + "stat", encoding="utf-8", errors="replace") as f:
+                    nice = int(f.read().rpartition(")")[2].split()[16])
+            except (OSError, ValueError, IndexError):
+                continue
+            try:
+                policy = os.sched_getscheduler(int(tid))
+            except OSError:
+                policy = -1
+            found[tid] = [pname, name, int(run), int(wait), nice, policy]
+    return found
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -65,6 +103,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             event = {"kind": "garbled", "body": body.decode("utf-8", "replace")[:200]}
         if not isinstance(event, dict):
             event = {"kind": "garbled", "body": str(event)[:200]}
+        if event.get("threads") is True:
+            t0 = time.monotonic()
+            event["threads"] = threads()
+            event["snap"] = [round(t0, 4), round(time.monotonic(), 4)]
         record(event)
         self.send_response(204)
         self.end_headers()
