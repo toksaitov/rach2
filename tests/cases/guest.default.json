@@ -7385,7 +7385,7 @@
     },
     {
       "case_id": "guest.default.threadscaling",
-      "behavior": "Creating held threads has bounded process-index work per creation; untimed blocked threads add no timer scan work. VMA gap candidates per creation stay bounded. With two runnable threads, ready entries examined stay within eight per selection plus 64 as blocked threads are added.",
+      "behavior": "Creating held threads has bounded process-index work per creation; untimed blocked threads add no timer scan work. VMA gap candidates per creation stay bounded. With two runnable threads kept on one processor, ready entries examined stay within eight per selection plus 64 as blocked threads are added.",
       "units": [
         "default",
         "musl/threadscaling"

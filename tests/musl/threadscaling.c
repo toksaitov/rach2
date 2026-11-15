@@ -73,16 +73,76 @@ static void *runner(void *arg)
     return NULL;
 }
 
-/** Count selection work with n blocked threads and two runnable threads.
- * Release and join all created threads on success or failure. Return -1
- * when creation, joining or a work bound fails, and zero otherwise. */
+/** Count selection work beside n blocked threads with two runnable
+ * threads, the caller and a runner, both kept on the caller's processor so
+ * that each yield selects: a yield with nothing else ready on its processor
+ * returns without a selection. Restore the caller's affinity and join the
+ * runner before returning. Return -1 when the affinity, the runner or the
+ * bound fails, and zero otherwise. */
+static int selections(unsigned int n)
+{
+    pthread_t running;
+    uint32_t before[7], after[7];
+    cpu_set_t all, one;
+    unsigned int i;
+    int failed = 0, running_made = 0, cpu = sched_getcpu();
+
+    CPU_ZERO(&one);
+    if (cpu < 0 || cpu >= CPU_SETSIZE || sched_getaffinity(0, sizeof(all), &all) != 0) {
+        fprintf(stderr, "threadscaling: cannot read the processor or its affinity\n");
+        return -1;
+    }
+    CPU_SET(cpu, &one);
+    if (sched_setaffinity(0, sizeof(one), &one) != 0) {
+        fprintf(stderr, "threadscaling: cannot keep to processor %d\n", cpu);
+        return -1;
+    }
+    runner_stop = 0;
+    /* the runner inherits the caller's single processor */
+    if (pthread_create(&running, NULL, runner, NULL) == 0) {
+        running_made = 1;
+    } else {
+        failed = 1;
+    }
+    if (counts(before) != 0) {
+        failed = 1;
+    } else {
+        for (i = 0; i < 1024; i++) {
+            sched_yield();
+        }
+        if (counts(after) != 0) {
+            failed = 1;
+        } else {
+            uint32_t picks = after[5] - before[5];
+            uint32_t steps = after[6] - before[6];
+
+            printf("threadscaling: held %u: picks %u entries %u\n", n, picks, steps);
+            if (picks < 1024 || (uint64_t)steps > 8u * (uint64_t)picks + 64u) {
+                failed = 1;
+            }
+        }
+    }
+    __atomic_store_n(&runner_stop, 1, __ATOMIC_SEQ_CST);
+    if (running_made && pthread_join(running, NULL) != 0) {
+        failed = 1;
+    }
+    if (sched_setaffinity(0, sizeof(all), &all) != 0) {
+        failed = 1;
+    }
+    return failed ? -1 : 0;
+}
+
+/** Count process, VMA and timer work with n blocked threads, then the
+ * selection work beside them (`selections`). Release and join all created
+ * threads on success or failure. Return -1 when creation, joining or a
+ * work bound fails, and zero otherwise. */
 static int batch(unsigned int n)
 {
-    pthread_t threads[256], running;
+    pthread_t threads[256];
     uint32_t before[7], after[7], idle[7];
     struct timespec pause = {0, 20000000};
     unsigned int made = 0, i;
-    int failed = 0, rc, running_made = 0;
+    int failed = 0, rc;
 
     waiting = 0;
     go = 0;
@@ -130,34 +190,9 @@ static int batch(unsigned int n)
             (uint32_t)(idle[2] - after[2]) > 16u * ((uint32_t)(idle[4] - after[4]) + 1u)) {
             failed = 1;
         }
-        runner_stop = 0;
-        if (pthread_create(&running, NULL, runner, NULL) == 0) {
-            running_made = 1;
-        } else {
+        if (selections(n) != 0) {
             failed = 1;
         }
-        if (counts(after) != 0) {
-            failed = 1;
-        } else {
-            for (i = 0; i < 1024; i++) {
-                sched_yield();
-            }
-            if (counts(idle) != 0) {
-                failed = 1;
-            } else {
-                uint32_t picks = idle[5] - after[5];
-                uint32_t steps = idle[6] - after[6];
-
-                printf("threadscaling: held %u: picks %u entries %u\n", n, picks, steps);
-                if (picks < 1024 || (uint64_t)steps > 8u * (uint64_t)picks + 64u) {
-                    failed = 1;
-                }
-            }
-        }
-    }
-    __atomic_store_n(&runner_stop, 1, __ATOMIC_SEQ_CST);
-    if (running_made && pthread_join(running, NULL) != 0) {
-        failed = 1;
     }
     pthread_mutex_lock(&lock);
     go = 1;

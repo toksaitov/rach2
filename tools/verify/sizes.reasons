@@ -695,7 +695,6 @@ tests/musl/statmusl.c:main lines 109 a test's rows, each a case, read as one tab
 tests/musl/threadmusl.c:main complexity 37 a test's rows, each a case, read as one table
 tests/musl/threadmusl.c:sharing complexity 36 a test's rows, each a case, read as one table
 
-tests/musl/threadscaling.c:batch complexity 27 a test routine, one stage after another, read from the top
 
 tests/musl/tmpfsmusl.c:placed complexity 34 a test's rows, each a case, read as one table
 
