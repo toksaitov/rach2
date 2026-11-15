@@ -1760,69 +1760,41 @@ igt@kms_pm_dc@deep-pkgc skip
 igt@kms_pm_lpsp@kms-lpsp pass
 igt@kms_pm_lpsp@kms-lpsp@pipe-a-edp-1 pass
 igt@kms_pm_lpsp@screens-disabled pass
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@basic-pci-d3-state xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@basic-rte xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@cursor xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@cursor-dpms xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@dpms-lpsp xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@dpms-mode-unset-lpsp xfail
+igt@kms_pm_rpm@basic-pci-d3-state pass
+igt@kms_pm_rpm@basic-rte pass
+igt@kms_pm_rpm@cursor pass
+igt@kms_pm_rpm@cursor-dpms pass
+igt@kms_pm_rpm@dpms-lpsp pass
+igt@kms_pm_rpm@dpms-mode-unset-lpsp pass
 igt@kms_pm_rpm@dpms-mode-unset-non-lpsp skip
 igt@kms_pm_rpm@dpms-non-lpsp skip
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@drm-resources-equal xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@fences xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@fences-dpms xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@i2c xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@legacy-planes xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@legacy-planes-dpms xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@legacy-planes-dpms@plane-36 xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@legacy-planes@plane-36 xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@modeset-lpsp xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@modeset-lpsp-stress xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@modeset-lpsp-stress-no-wait xfail
+igt@kms_pm_rpm@drm-resources-equal pass
+igt@kms_pm_rpm@fences pass
+igt@kms_pm_rpm@fences-dpms pass
+igt@kms_pm_rpm@i2c pass
+igt@kms_pm_rpm@legacy-planes pass
+igt@kms_pm_rpm@legacy-planes-dpms pass
+igt@kms_pm_rpm@legacy-planes-dpms@plane-36 pass
+igt@kms_pm_rpm@legacy-planes@plane-36 pass
+igt@kms_pm_rpm@modeset-lpsp pass
+igt@kms_pm_rpm@modeset-lpsp-stress pass
+igt@kms_pm_rpm@modeset-lpsp-stress-no-wait pass
 igt@kms_pm_rpm@modeset-non-lpsp skip
 igt@kms_pm_rpm@modeset-non-lpsp-stress skip
 igt@kms_pm_rpm@modeset-non-lpsp-stress-no-wait skip
 igt@kms_pm_rpm@modeset-pc8-residency-stress fail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@modeset-stress-extra-wait xfail
+igt@kms_pm_rpm@modeset-stress-extra-wait pass
 igt@kms_pm_rpm@pc8-residency fail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@pm-caching xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@pm-tiling xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@universal-planes xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@universal-planes-dpms xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@universal-planes-dpms@plane-32 xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@universal-planes-dpms@plane-36 xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@universal-planes-dpms@plane-42 xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@universal-planes@plane-32 xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@universal-planes@plane-36 xfail
-# deferred: msr device and i915 runtime PM (#5235)
-igt@kms_pm_rpm@universal-planes@plane-42 xfail
+igt@kms_pm_rpm@pm-caching pass
+igt@kms_pm_rpm@pm-tiling pass
+igt@kms_pm_rpm@universal-planes pass
+igt@kms_pm_rpm@universal-planes-dpms pass
+igt@kms_pm_rpm@universal-planes-dpms@plane-32 pass
+igt@kms_pm_rpm@universal-planes-dpms@plane-36 pass
+igt@kms_pm_rpm@universal-planes-dpms@plane-42 pass
+igt@kms_pm_rpm@universal-planes@plane-32 pass
+igt@kms_pm_rpm@universal-planes@plane-36 pass
+igt@kms_pm_rpm@universal-planes@plane-42 pass
 igt@kms_prime@basic-crc-hybrid skip
 igt@kms_prime@basic-crc-vgem pass
 igt@kms_prime@basic-crc-vgem@second-to-first pass
@@ -2173,22 +2145,16 @@ igt@kms_vblank@query-forked@pipe-c-edp-1 pass
 igt@kms_vblank@query-idle pass
 igt@kms_vblank@query-idle@pipe-a-edp-1 pass
 igt@kms_vblank@query-idle@pipe-c-edp-1 pass
-# deferred: i915 runtime PM (#5235)
-igt@kms_vblank@ts-continuation-dpms-rpm xfail
-# deferred: i915 runtime PM (#5235)
-igt@kms_vblank@ts-continuation-dpms-rpm@pipe-a-edp-1 xfail
-# deferred: i915 runtime PM (#5235)
-igt@kms_vblank@ts-continuation-dpms-rpm@pipe-c-edp-1 xfail
+igt@kms_vblank@ts-continuation-dpms-rpm pass
+igt@kms_vblank@ts-continuation-dpms-rpm@pipe-a-edp-1 pass
+igt@kms_vblank@ts-continuation-dpms-rpm@pipe-c-edp-1 pass
 igt@kms_vblank@ts-continuation-idle pass
 igt@kms_vblank@ts-continuation-idle@pipe-a-edp-1 pass
 igt@kms_vblank@ts-continuation-idle@pipe-c-edp-1 pass
 igt@kms_vblank@ts-continuation-modeset pass
-# deferred: i915 runtime PM (#5235)
-igt@kms_vblank@ts-continuation-modeset-rpm xfail
-# deferred: i915 runtime PM (#5235)
-igt@kms_vblank@ts-continuation-modeset-rpm@pipe-a-edp-1 xfail
-# deferred: i915 runtime PM (#5235)
-igt@kms_vblank@ts-continuation-modeset-rpm@pipe-c-edp-1 xfail
+igt@kms_vblank@ts-continuation-modeset-rpm pass
+igt@kms_vblank@ts-continuation-modeset-rpm@pipe-a-edp-1 pass
+igt@kms_vblank@ts-continuation-modeset-rpm@pipe-c-edp-1 pass
 igt@kms_vblank@ts-continuation-modeset@pipe-a-edp-1 pass
 igt@kms_vblank@ts-continuation-modeset@pipe-c-edp-1 pass
 igt@kms_vblank@wait-busy pass
