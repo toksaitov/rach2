@@ -1,0 +1,13 @@
+#!/bin/sh
+# qemu-system-x86_64: run QEMU with dredshim's libd3d12.so and the
+# virtio-gpu commands traced, each QEMU's logs named by its PID in DRED_DIR.
+# DRED_SHIM names the directory that holds the shim's libd3d12.so.
+: "${DRED_DIR:?}" "${DRED_SHIM:?}"
+LD_LIBRARY_PATH=$DRED_SHIM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+DRED_SHIM_OUT=$DRED_DIR/dred.$$.log
+export LD_LIBRARY_PATH DRED_SHIM_OUT
+for a; do
+    case $a in --version | -version | -help | --help) exec /usr/bin/qemu-system-x86_64 "$@" ;; esac
+done
+exec /usr/bin/qemu-system-x86_64 -msg timestamp=on -D "$DRED_DIR/trace.$$.log" \
+    -trace 'virtio_gpu_cmd_*' "$@"
