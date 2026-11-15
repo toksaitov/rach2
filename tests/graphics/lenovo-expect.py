@@ -98,7 +98,6 @@ def igt_row(name, test):
         "igt@kms_vblank@ts-continuation-modeset-rpm": "i915 runtime PM (#5235)",
         "igt@kms_pipe_crc_basic@compare-crc-sanitycheck-xr24@pipe-a-edp-1": "pipe CRC after a fastset (#5249)",
         "igt@kms_pipe_crc_basic@compare-crc-sanitycheck-xr24@pipe-b-edp-1": "pipe CRC after a fastset (#5249)",
-        "igt@gem_readwrite@read-write": "IGT compares against an unset stack array (#5254)",
     }
     if test["result"] == "pass":
         for prefix, reason in deferred.items():
