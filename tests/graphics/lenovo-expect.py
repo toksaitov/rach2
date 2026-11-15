@@ -21,6 +21,8 @@ the tools' own output, and writes:
 The 1,033 compiler tests skipped before execution by GL_EXT_gpu_shader4's
 fast-skip check, and two EGL tests skipped for absent displays, accept
 `skip-or-pass`. These are setup skips, not answers about the kernel's device.
+IGT's absent sw_sync device and the cursor and extended-mode tests that
+found no second connected output use the same rule.
 
 The tests that failed beside the first run's other tests and passed alone
 stay as the first run had them, since piglit.sh runs a test on each CPU
@@ -42,7 +44,7 @@ CAP = 600
 def igt():
     tests = json.load(gzip.open(os.path.join(REF, "igt/results.json.gz"), "rt",
                                 encoding="utf-8"))["tests"]
-    rows = sorted("%s %s" % (name, "skip-or-pass" if igt_setup_skip(t) else t["result"])
+    rows = sorted("%s %s" % (name, "skip-or-pass" if igt_setup_skip(name, t) else t["result"])
                   for name, t in tests.items())
     static = sorted(n for n in tests if n.count("@") <= 2)
     seconds = {n: tests[n]["time"]["end"] - tests[n]["time"]["start"] for n in static}
@@ -86,13 +88,20 @@ def igt():
     return len(parts), len(rows)
 
 
-def igt_setup_skip(test):
-    """Identify skips caused by step 9's absent software-sync device."""
+def igt_setup_skip(name, test):
+    """Identify the recorded missing-device and second-output setup skips."""
+    if test["result"] != "skip":
+        return False
     out = test.get("out", "")
-    return (test["result"] == "skip"
-            and "Test requirement not met in function igt_require_sw_sync," in out
+    if ("Test requirement not met in function igt_require_sw_sync," in out
             and "Test requirement: kernel_has_sw_sync()\n" in out
-            and "Last errno: 2, No such file or directory\n" in out)
+            and "Last errno: 2, No such file or directory\n" in out):
+        return True
+    if name.startswith("igt@kms_cursor_legacy@"):
+        return ("Test requirement not met in function find_connected_pipe," in out
+                and "Test requirement: found\nNo second valid output found\n" in out)
+    return (name == "igt@kms_display_modes@extended-mode-basic"
+            and "Test requirement: count > 1\nMinimum 2 outputs are required\n" in out)
 
 
 def piglit_rows(tests):

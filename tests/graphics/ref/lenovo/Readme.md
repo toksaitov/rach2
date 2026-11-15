@@ -22,6 +22,8 @@ In piglit's expectations, `skip-or-pass` marks 1,035 setup skips in step 9's ori
 
 IGT's expectations use `skip-or-pass` for 26 rows whose original output names `igt_require_sw_sync`, `kernel_has_sw_sync()` and the absent device's `ENOENT`. Debian's kernel had no sw_sync device in that boot; Rach2 provides one. The rows cover the fence-parameter, interruptible, fenced plane-transition and busy tests, their dynamic results included. A failure, crash or missing result still fails, and other capability skips remain strict. The original JSON stays unchanged.
 
+Another 29 IGT rows use `skip-or-pass` because the original run found no second connected output: 28 cursor tests whose `find_connected_pipe` reports `No second valid output found`, and `kms_display_modes@extended-mode-basic`, which reports `Minimum 2 outputs are required`. The native run with an HDMI display connected can execute them. Their failures still fail, as do missing results; the single-output rows keep their original requirements. The bandwidth test's forced HDMI output already ran in the original reference, so its required passes are unchanged.
+
 ## Updating
 
 The run's report, with the scripts and how each suite was built, is in the development log's graphics research. A new run replaces a suite's directory whole, and its commit message says what was run and where; `python3 -I tests/graphics/lenovo-expect.py` then makes `expect/igt-kms.rows`, `expect/piglit-quick.rows.gz` and `tests/graphics/igt-lenovo-kms.list` again. The files of the Debian boot are made again by the same commands in a new Debian boot, as the development log's record of the conformance step gives them, each file replaced whole.
