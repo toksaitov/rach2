@@ -751,7 +751,8 @@ int32_t drm_mode_config_init(struct drm_device *dev)
 
     mc->max_width = mc->max_width ? mc->max_width : 8192;
     mc->max_height = mc->max_height ? mc->max_height : 8192;
-    /* Linux's order, which gives EDID the ID 1 as on Linux. */
+    /* Linux 6.12's order, which gives each object the ID Linux gives it:
+     * EDID 1, HDR_OUTPUT_METADATA 7, and the planes and CRTCs after them. */
     mc->edid_property =
         drm_property_create(dev, DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE, "EDID", 0);
     mc->dpms_property = drm_property_create_enum(dev, 0, "DPMS", dpms_names, 4);
@@ -763,6 +764,8 @@ int32_t drm_mode_config_init(struct drm_device *dev)
         drm_property_create_enum(dev, 0, "link-status", link_status_names, 2);
     mc->non_desktop_property =
         drm_property_create_bool(dev, DRM_MODE_PROP_IMMUTABLE, "non-desktop");
+    mc->hdr_output_metadata_property =
+        drm_property_create(dev, DRM_MODE_PROP_BLOB, "HDR_OUTPUT_METADATA", 0);
     mc->plane_type_property =
         drm_property_create_enum(dev, DRM_MODE_PROP_IMMUTABLE, "type", plane_type_names, 3);
     mc->prop_src_x = drm_property_create_range(dev, atomic, "SRC_X", 0, DRM_UINT_MAX);
@@ -798,10 +801,11 @@ int32_t drm_mode_config_init(struct drm_device *dev)
     mc->size_hints_property =
         drm_property_create(dev, DRM_MODE_PROP_IMMUTABLE | DRM_MODE_PROP_BLOB, "SIZE_HINTS", 0);
     if (!mc->edid_property || !mc->dpms_property || !mc->path_property || !mc->tile_property ||
-        !mc->link_status_property || !mc->non_desktop_property || !mc->plane_type_property ||
-        !mc->prop_src_x || !mc->prop_src_y || !mc->prop_src_w || !mc->prop_src_h ||
-        !mc->prop_crtc_x || !mc->prop_crtc_y || !mc->prop_crtc_w || !mc->prop_crtc_h ||
-        !mc->prop_fb_id || !mc->prop_in_fence_fd || !mc->prop_out_fence_ptr || !mc->prop_crtc_id ||
+        !mc->link_status_property || !mc->non_desktop_property ||
+        !mc->hdr_output_metadata_property || !mc->plane_type_property || !mc->prop_src_x ||
+        !mc->prop_src_y || !mc->prop_src_w || !mc->prop_src_h || !mc->prop_crtc_x ||
+        !mc->prop_crtc_y || !mc->prop_crtc_w || !mc->prop_crtc_h || !mc->prop_fb_id ||
+        !mc->prop_in_fence_fd || !mc->prop_out_fence_ptr || !mc->prop_crtc_id ||
         !mc->prop_fb_damage_clips || !mc->prop_active || !mc->prop_mode_id ||
         !mc->prop_vrr_enabled || !mc->degamma_lut_property || !mc->degamma_lut_size_property ||
         !mc->ctm_property || !mc->gamma_lut_property || !mc->gamma_lut_size_property ||

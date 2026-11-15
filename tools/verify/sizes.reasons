@@ -88,7 +88,7 @@ rach2/sys/drm/drm_edid.c:gtf_mode_complex params 10 Linux's drm_gtf_mode_complex
 rach2/sys/drm/drm_edid.c:mode_std complexity 28 Linux's drm_mode_std, one rule of the EDID standard timing each branch, in Linux's order
 
 rach2/sys/drm/drm_mode.c:probe_modes complexity 27 Linux's drm_helper_probe_single_connector_modes, its steps in Linux's order so the two read side by side
-rach2/sys/drm/drm_mode.c:drm_mode_config_init complexity 33 the standard properties made in Linux's order, which fixes their ids, each checked as it is made
+rach2/sys/drm/drm_mode.c:drm_mode_config_init complexity 34 the standard properties made in Linux's order, which fixes their ids, each checked as it is made
 rach2/sys/drm/drm_mode.c:drm_universal_plane_init params 8 Linux's drm_universal_plane_init, with its parameters, which drivers pass as they pass Linux's
 
 rach2/sys/drm/i915/i915_vma.c:i915_ggtt_find params 7 the parameters are one search for a hole, its size, alignment, range and mode, as Linux's drm_mm_insert_node_in_range takes them
