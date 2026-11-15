@@ -831,18 +831,53 @@ static int32_t show_rc6(void *obj, int arg, char *buf, uint32_t cap)
     return sysfs_emit_u32(buf, cap, (uint32_t)i915_rc6_residency_ms(i915), 10);
 }
 
-/* Linux's gen6_gt_attrs, in its order. */
-static const struct sysfs_attr freq_attrs[] = {{"gt_act_freq_mhz", 0444u, show_freq, 0},
-                                               {"gt_cur_freq_mhz", 0444u, show_freq, 0},
-                                               {"gt_boost_freq_mhz", 0644u, show_freq, store_freq},
-                                               {"gt_max_freq_mhz", 0644u, show_freq, store_freq},
-                                               {"gt_min_freq_mhz", 0644u, show_freq, store_freq},
-                                               {"gt_RP0_freq_mhz", 0444u, show_freq, 0},
-                                               {"gt_RP1_freq_mhz", 0444u, show_freq, 0},
-                                               {"gt_RPn_freq_mhz", 0444u, show_freq, 0}};
+/** show_freq with the device held awake, as Linux's frequency reads take
+ * a wakeref. */
+static int32_t show_freq_awake(void *obj, int arg, char *buf, uint32_t cap)
+{
+    int32_t rc;
 
-static const struct sysfs_attr rc6_attrs[] = {{"rc6_enable", 0444u, show_rc6, 0},
-                                              {"rc6_residency_ms", 0444u, show_rc6, 0}};
+    i915_rpm_get((struct drm_i915_private *)obj);
+    rc = show_freq(obj, arg, buf, cap);
+    i915_rpm_put((struct drm_i915_private *)obj);
+    return rc;
+}
+
+/** store_freq with the device held awake. */
+static int32_t store_freq_awake(void *obj, int arg, const char *buf, uint32_t len)
+{
+    int32_t rc;
+
+    i915_rpm_get((struct drm_i915_private *)obj);
+    rc = store_freq(obj, arg, buf, len);
+    i915_rpm_put((struct drm_i915_private *)obj);
+    return rc;
+}
+
+/** show_rc6 with the device held awake, as Linux's residency read. */
+static int32_t show_rc6_awake(void *obj, int arg, char *buf, uint32_t cap)
+{
+    int32_t rc;
+
+    i915_rpm_get((struct drm_i915_private *)obj);
+    rc = show_rc6(obj, arg, buf, cap);
+    i915_rpm_put((struct drm_i915_private *)obj);
+    return rc;
+}
+
+/* Linux's gen6_gt_attrs, in its order. */
+static const struct sysfs_attr freq_attrs[] = {
+    {"gt_act_freq_mhz", 0444u, show_freq_awake, 0},
+    {"gt_cur_freq_mhz", 0444u, show_freq_awake, 0},
+    {"gt_boost_freq_mhz", 0644u, show_freq_awake, store_freq_awake},
+    {"gt_max_freq_mhz", 0644u, show_freq_awake, store_freq_awake},
+    {"gt_min_freq_mhz", 0644u, show_freq_awake, store_freq_awake},
+    {"gt_RP0_freq_mhz", 0444u, show_freq_awake, 0},
+    {"gt_RP1_freq_mhz", 0444u, show_freq_awake, 0},
+    {"gt_RPn_freq_mhz", 0444u, show_freq_awake, 0}};
+
+static const struct sysfs_attr rc6_attrs[] = {{"rc6_enable", 0444u, show_rc6_awake, 0},
+                                              {"rc6_residency_ms", 0444u, show_rc6_awake, 0}};
 
 void i915_sysfs_register(struct drm_i915_private *i915)
 {

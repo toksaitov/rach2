@@ -123,12 +123,13 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
  * frees under it, its own deferred frees among them, which Linux's worker
  * would run beside it. An object whose last put comes here is freed at
  * once, with no give-way (`gem.no_yield`), so that its frames count now,
- * and the lock goes back with the list empty. */
+ * and the lock goes back with the list empty. A device asleep keeps its
+ * bound objects. */
 static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, int may_sleep)
 {
     struct drm_i915_private *i915 = ((struct i915_shrinker *)s)->i915;
     uint32_t got;
-    int taken = 0;
+    int taken = 0, awake;
     uint8_t no_yield;
 
     (void)may_sleep;
@@ -140,10 +141,18 @@ static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, in
     }
     no_yield = i915->gem.no_yield;
     i915->gem.no_yield = 1;
+    /* Bound objects only while the device is awake, as Linux's shrinker
+     * unbinds only under intel_runtime_pm_get_if_in_use. */
+    awake = i915_rpm_get_if_awake(i915);
     got = i915_gem_free_deferred_atomic(i915);
     got += i915_gem_pool_trim(i915, I915_POOL_IDLE);
     if (got < want) {
-        got += i915_gem_shrink(i915, want - got);
+        got += i915_gem_shrink_flags(i915, want - got,
+                                     awake ? I915_SHRINK_BOUND | I915_SHRINK_UNBOUND
+                                           : I915_SHRINK_UNBOUND);
+    }
+    if (awake) {
+        i915_rpm_put(i915);
     }
     i915->gem.no_yield = no_yield;
     i915_gem_unlock_atomic(i915, taken);

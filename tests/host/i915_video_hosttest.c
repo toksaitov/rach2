@@ -14,6 +14,7 @@
  * host-deps: rach2/sys/drm/i915/i915_gtt.c rach2/sys/drm/i915/i915_hw.c
  * host-deps: tests/host/i915_model.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/i915_rpm_host.c
  *
  * The device is brought up as i915_ring_hosttest.c brings it up: a fresh
  * model, forcewake, the global GTT and the interrupts, then the rings.

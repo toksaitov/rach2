@@ -231,12 +231,46 @@ static void init_registers(struct drm_i915_private *i915)
                    ((pps->power_cycle + 999u) / 1000u + 1u));
 }
 
+/** Have the driver's forced VDD hold the device awake, once, as Linux's
+ * VDD holds the AUX power domain. The device is awake. */
+static void vdd_hold(struct drm_i915_private *i915)
+{
+    struct intel_pps *pps = &i915->display.dp.pps;
+
+    if (!pps->vdd_rpm) {
+        pps->vdd_rpm = 1;
+        i915_rpm_get_noresume(i915);
+    }
+}
+
+/** Let the hold of `vdd_hold` go, once VDD is off. */
+static void vdd_release(struct drm_i915_private *i915)
+{
+    struct intel_pps *pps = &i915->display.dp.pps;
+
+    if (pps->vdd_rpm) {
+        pps->vdd_rpm = 0;
+        i915_rpm_put(i915);
+    }
+}
+
+/** Have the VDD work run at `vdd_off_due`. */
+static void vdd_schedule_off(struct drm_i915_private *i915)
+{
+    struct intel_pps *pps = &i915->display.dp.pps;
+    uint64_t now = pps_now_ms();
+
+    drm_dev_work_later_ms(&i915->drm, &pps->vdd_work,
+                          pps->vdd_off_due > now ? (uint32_t)(pps->vdd_off_due - now) : 1u);
+}
+
 void intel_pps_init(struct drm_i915_private *i915)
 {
     struct intel_pps *pps = &i915->display.dp.pps;
     uint64_t now = pps_now_ms();
 
     wait_queue_init(&pps->sleep);
+    pps->vdd_work.fn = intel_pps_vdd_work_fn;
     /* Linux's pps_init_timestamps: the panel's last power off taken as
      * long past, since only a driver that waited out its cycle turned it
      * off before this one. */
@@ -253,6 +287,8 @@ void intel_pps_init(struct drm_i915_private *i915)
     if (have_vdd(i915)) {
         /* The firmware's VDD, let go as an unused one is. */
         pps->vdd_off_due = now + VDD_OFF_CYCLES * pps->power_cycle_ms;
+        vdd_hold(i915);
+        vdd_schedule_off(i915);
     }
 }
 
@@ -264,6 +300,8 @@ void intel_pps_init_late(struct drm_i915_private *i915)
     init_registers(i915);
     if (have_vdd(i915) && !pps->want_vdd) {
         pps->vdd_off_due = pps_now_ms() + VDD_OFF_CYCLES * pps->power_cycle_ms;
+        vdd_hold(i915);
+        vdd_schedule_off(i915);
     }
 }
 
@@ -277,6 +315,7 @@ int intel_pps_vdd_on_unlocked(struct drm_i915_private *i915)
     }
     pps->vdd_off_due = 0;
     pps->want_vdd = 1;
+    vdd_hold(i915);
     if (have_vdd(i915)) {
         return need_off;
     }
@@ -300,14 +339,14 @@ static void vdd_off_sync(struct drm_i915_private *i915)
     uint32_t pp;
 
     pps->vdd_off_due = 0;
-    if (!have_vdd(i915)) {
-        return;
+    if (have_vdd(i915)) {
+        pp = pp_control(i915) & ~EDP_FORCE_VDD;
+        pp_write(i915, pp);
+        if (!(pp & PANEL_POWER_ON)) {
+            pps->power_off_time = pps_now_ms();
+        }
     }
-    pp = pp_control(i915) & ~EDP_FORCE_VDD;
-    pp_write(i915, pp);
-    if (!(pp & PANEL_POWER_ON)) {
-        pps->power_off_time = pps_now_ms();
-    }
+    vdd_release(i915);
 }
 
 void intel_pps_vdd_off_unlocked(struct drm_i915_private *i915, int sync)
@@ -322,6 +361,7 @@ void intel_pps_vdd_off_unlocked(struct drm_i915_private *i915, int sync)
         vdd_off_sync(i915);
     } else {
         pps->vdd_off_due = pps_now_ms() + VDD_OFF_CYCLES * pps->power_cycle_ms;
+        vdd_schedule_off(i915);
     }
 }
 
@@ -332,6 +372,19 @@ void intel_pps_vdd_work(struct drm_i915_private *i915)
     if (pps->ready && !pps->want_vdd && pps->vdd_off_due != 0 && pps_now_ms() >= pps->vdd_off_due) {
         vdd_off_sync(i915);
     }
+}
+
+void intel_pps_vdd_work_fn(struct drm_work *work)
+{
+    struct drm_i915_private *i915 = to_i915(work->dev);
+    struct intel_pps *pps = &i915->display.dp.pps;
+
+    drm_modeset_lock_nointr(work->dev);
+    intel_pps_vdd_work(i915);
+    if (pps->ready && !pps->want_vdd && pps->vdd_off_due != 0) {
+        vdd_schedule_off(i915);
+    }
+    drm_modeset_unlock(work->dev);
 }
 
 void intel_pps_on(struct drm_i915_private *i915)
@@ -369,6 +422,7 @@ void intel_pps_off(struct drm_i915_private *i915)
     pp_write(i915, pp);
     wait_status(i915, "pps power off", IDLE_OFF_MASK, IDLE_OFF_VALUE);
     pps->power_off_time = pps_now_ms();
+    vdd_release(i915);
 }
 
 void intel_pps_backlight_on(struct drm_i915_private *i915)

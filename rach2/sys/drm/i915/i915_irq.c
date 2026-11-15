@@ -40,6 +40,9 @@ static void i915_irq_write_bank(struct drm_i915_private *i915, int bank)
     struct i915_irq *irq = &i915->irq;
     uint32_t ier = irq->ier[bank];
 
+    if (irq->suspended) {
+        return;
+    }
     if (bank == I915_IRQ_DE && irq->installed) {
         ier |= DE_MASTER_IRQ_CONTROL;
     }
@@ -95,6 +98,17 @@ void i915_irq_install(struct drm_i915_private *i915)
     i915->irq.installed = 1;
     i915_irq_write_bank(i915, I915_IRQ_DE);
     spin_unlock_irqrestore(&i915->irq.lock, flags);
+}
+
+/** Write the mask of `bank` from the driver's copy, unless the device
+ * sleeps, whose resume writes it. Under the interrupt mask's lock. */
+static void i915_irq_write_mask(struct drm_i915_private *i915, int bank)
+{
+    if (i915->irq.suspended) {
+        return;
+    }
+    i915_write(&i915->hw, REG_IMR(bank), i915->irq.imr[bank]);
+    i915_posting_read(&i915->hw, REG_IMR(bank));
 }
 
 /** Whether any bit of the south display has a handler. */
@@ -213,8 +227,7 @@ void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits)
     }
     flags = spin_lock_irqsave(&irq->lock);
     irq->imr[bank] &= ~i915_irq_owned(irq, bank, bits);
-    i915_write(&i915->hw, REG_IMR(bank), irq->imr[bank]);
-    i915_posting_read(&i915->hw, REG_IMR(bank));
+    i915_irq_write_mask(i915, bank);
     spin_unlock_irqrestore(&irq->lock, flags);
 }
 
@@ -229,8 +242,7 @@ void i915_irq_mask_locked(struct drm_i915_private *i915, int bank, uint32_t bits
         bits &= ~DE_RESERVED;
     }
     irq->imr[bank] |= bits;
-    i915_write(&i915->hw, REG_IMR(bank), irq->imr[bank]);
-    i915_posting_read(&i915->hw, REG_IMR(bank));
+    i915_irq_write_mask(i915, bank);
 }
 
 void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits)
@@ -304,6 +316,12 @@ void i915_irq_handle(struct drm_i915_private *i915)
     int found = 0;
 
     irq->messages++;
+    if (irq->suspended) {
+        /* A message from before the suspend turned the sources off. */
+        irq->spurious++;
+        spin_unlock_irqrestore(&irq->lock, flags);
+        return;
+    }
     /* The master enable off before any identity is cleared, and the south
      * display's enables off, so that an event behind one cleared raises a
      * new message once they are restored. */
@@ -354,4 +372,49 @@ void i915_irq_handle(struct drm_i915_private *i915)
     if (deferred_display) {
         deferred_display(i915);
     }
+}
+
+void i915_irq_suspend(struct drm_i915_private *i915)
+{
+    struct i915_hw *hw = &i915->hw;
+    struct i915_irq *irq = &i915->irq;
+    uint32_t flags = spin_lock_irqsave(&irq->lock);
+    int bank;
+
+    /* gen5_gt_irq_reset and ilk_irq_reset of Linux's
+     * intel_runtime_pm_disable_interrupts, the copies kept. */
+    for (bank = 0; bank < I915_IRQ_BANKS; bank++) {
+        i915_write(hw, REG_IMR(bank), 0xffffffffu);
+        i915_posting_read(hw, REG_IMR(bank));
+        i915_write(hw, REG_IER(bank), 0);
+        i915_write(hw, REG_IIR(bank), 0xffffffffu);
+        i915_posting_read(hw, REG_IIR(bank));
+        i915_write(hw, REG_IIR(bank), 0xffffffffu);
+        i915_posting_read(hw, REG_IIR(bank));
+    }
+    irq->suspended = 1;
+    spin_unlock_irqrestore(&irq->lock, flags);
+}
+
+void i915_irq_resume(struct drm_i915_private *i915)
+{
+    struct i915_hw *hw = &i915->hw;
+    struct i915_irq *irq = &i915->irq;
+    uint32_t flags = spin_lock_irqsave(&irq->lock);
+    int bank;
+
+    irq->suspended = 0;
+    /* What came in while the sources were off is dropped, as Linux's
+     * irq_reset before its postinstall drops it; then the copies. */
+    for (bank = 0; bank < I915_IRQ_BANKS; bank++) {
+        i915_write(hw, REG_IIR(bank), 0xffffffffu);
+        i915_posting_read(hw, REG_IIR(bank));
+        i915_write(hw, REG_IIR(bank), 0xffffffffu);
+        i915_posting_read(hw, REG_IIR(bank));
+    }
+    i915_irq_write_bank(i915, I915_IRQ_GT);
+    i915_irq_write_bank(i915, I915_IRQ_PM);
+    i915_irq_write_bank(i915, I915_IRQ_SDE);
+    i915_irq_write_bank(i915, I915_IRQ_DE);
+    spin_unlock_irqrestore(&irq->lock, flags);
 }

@@ -786,6 +786,9 @@ static int32_t gmbus_xfer(void *ctx, struct intel_i2c_msg *msgs, int n)
     int32_t ret = -EAGAIN;
     int try;
 
+    /* The device awake for the bus, as Linux's gmbus_xfer holds the
+     * GMBUS power domain. */
+    i915_rpm_get(bus->i915);
     gmbus_lock(bus->i915);
     for (try = 0; try < 2 && ret == -EAGAIN; try++) {
         if (bus->force_bit) {
@@ -803,6 +806,7 @@ static int32_t gmbus_xfer(void *ctx, struct intel_i2c_msg *msgs, int n)
         }
     }
     gmbus_unlock(bus->i915);
+    i915_rpm_put(bus->i915);
     return ret;
 }
 

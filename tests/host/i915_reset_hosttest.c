@@ -23,6 +23,7 @@
  * host-deps: tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/i915_gem_lock_host.c
  * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/i915_rpm_host.c
  *
  * The kernel around the driver is i915_ctx_hosttest.c's: a row makes a
  * fresh model and a device record over it, brought up as the bind does up

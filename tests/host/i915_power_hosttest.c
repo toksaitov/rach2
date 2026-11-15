@@ -11,6 +11,7 @@
  * host-deps: rach2/sys/drm/i915/i915_hw.c tests/host/i915_model.c
  * host-deps: rach2/sys/tick.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/i915_rpm_host.c
  *
  * A row makes a fresh model and a device record over it, brought up as
  * the bind does: forcewake, the interrupts reset and installed, RC6 and

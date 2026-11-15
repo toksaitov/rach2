@@ -137,6 +137,27 @@ void i915_power_put(struct drm_i915_private *i915)
     p->on = 0;
 }
 
+int32_t i915_power_suspend(struct drm_i915_private *i915)
+{
+    struct i915_power *p = &i915->power;
+
+    if (p->count != 0) {
+        return -EBUSY;
+    }
+    if (!i915_power_well_on(i915)) {
+        p->on = 0;
+        p->kept = 0;
+        return 0;
+    }
+    if (i915_power_well_in_use(i915)) {
+        return -EBUSY;
+    }
+    i915_power_disable(i915);
+    p->on = 0;
+    p->kept = 0;
+    return i915_power_well_on(i915) ? -EBUSY : 0;
+}
+
 int32_t i915_power_init(struct drm_i915_private *i915)
 {
     struct i915_hw *hw = &i915->hw;

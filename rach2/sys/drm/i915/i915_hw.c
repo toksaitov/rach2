@@ -17,9 +17,26 @@
  * wait, in microseconds. */
 #define I915_WAIT_STEP_MAX 1000u
 
+/** Count and refuse an access to `reg` while the device sleeps, logging
+ * the first of the sleep (`struct i915_hw`). Any context. */
+static void i915_hw_asleep_access(struct i915_hw *hw, uint32_t reg, const char *what)
+{
+    hw->asleep_accesses++;
+    hw->asleep_reg = reg;
+    if (!hw->asleep_logged) {
+        hw->asleep_logged = 1;
+        klog(KLOG_ERR, "i915", "runtime pm: %s of 0x%x while suspended; refused", what,
+             (unsigned)reg);
+    }
+}
+
 uint32_t i915_read(struct i915_hw *hw, uint32_t reg)
 {
     if (hw->size < 4u || reg > hw->size - 4u || (reg & 3u) != 0) {
+        return 0xffffffffu;
+    }
+    if (hw->asleep) {
+        i915_hw_asleep_access(hw, reg, "read");
         return 0xffffffffu;
     }
     return hw->ops->read32(hw, reg);
@@ -28,6 +45,10 @@ uint32_t i915_read(struct i915_hw *hw, uint32_t reg)
 void i915_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
 {
     if (hw->size < 4u || reg > hw->size - 4u || (reg & 3u) != 0) {
+        return;
+    }
+    if (hw->asleep) {
+        i915_hw_asleep_access(hw, reg, "write");
         return;
     }
     hw->ops->write32(hw, reg, value);
@@ -151,6 +172,10 @@ uint32_t i915_gtt_read(struct i915_hw *hw, uint32_t index)
     if (index >= hw->gtt_entries) {
         return 0xffffffffu;
     }
+    if (hw->asleep) {
+        i915_hw_asleep_access(hw, I915_GSM_OFFSET + index * 4u, "gtt read");
+        return 0xffffffffu;
+    }
     if (hw->gsm) {
         return mmio_read32((uintptr_t)hw->gsm + index * 4u);
     }
@@ -160,6 +185,10 @@ uint32_t i915_gtt_read(struct i915_hw *hw, uint32_t index)
 void i915_gtt_write(struct i915_hw *hw, uint32_t index, uint32_t pte)
 {
     if (index >= hw->gtt_entries) {
+        return;
+    }
+    if (hw->asleep) {
+        i915_hw_asleep_access(hw, I915_GSM_OFFSET + index * 4u, "gtt write");
         return;
     }
     if (hw->gsm) {

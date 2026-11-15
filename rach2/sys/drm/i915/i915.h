@@ -9,6 +9,7 @@
 #include "../../mm/notify.h"
 #include "../../mm/pressure.h"
 #include "../../mm/shmem.h"
+#include "../../pm_runtime.h"
 #include "../../fs/sysfs.h"
 #include "../../lib/spinlock.h"
 #include "../../proc/wait_queue.h"
@@ -239,6 +240,8 @@ struct i915_irq {
     void (*deferred)(struct drm_i915_private *i915);
     void (*deferred_display)(struct drm_i915_private *i915);
     uint32_t inflight; /* handlers running now, under i915_pci.c's table lock */
+    uint8_t suspended; /* runtime suspend turned every source off; changes
+                        * to the copies wait for the resume */
 };
 
 /* The engines the driver starts, by index into `engine`: the render,
@@ -938,6 +941,9 @@ struct intel_pps {
     uint64_t vdd_off_due;
     uint8_t want_vdd;
     uint8_t ready;
+    uint8_t vdd_rpm;          /* the driver's forced VDD holds the device awake,
+                               * as Linux's AUX power domain does */
+    struct drm_work vdd_work; /* lets an unused VDD go at `vdd_off_due` */
     wait_queue_t sleep;
 };
 
@@ -1411,6 +1417,7 @@ struct intel_crtc {
     struct drm_work cursor_work; /* frees retired cursors under mode_lock */
     struct intel_boost *boosts;
     uint8_t rps_mark;
+    uint8_t rpm_held; /* holds the device awake (intel_crtc_rpm_sync) */
 };
 
 /*
@@ -1504,6 +1511,32 @@ struct i915_params {
 #define I915_RESET_PARAM(i915) ((i915)->params.reset_set ? (i915)->params.reset : 3u)
 
 /*
+ * Runtime power management (i915_runtime_pm.c), Linux's intel_runtime_pm
+ * with the PCI core's part of a runtime suspend. `core` counts the holds
+ * that keep the device awake and puts it to sleep once they are gone
+ * (pm_runtime.h), through `work`, which runs the sleep on the DRM core's
+ * worker. A sleep revokes programs' GTT maps, turns the interrupts off,
+ * allows package C8 (`pc8`) and puts the function in D3hot (`d3`), its
+ * configuration saved in `pci`, where it has a power management
+ * capability (`pm_cap`) and the backend is the chip's own. `faults`
+ * counts the GTT faults that mapped a page, under the GEM lock, and
+ * `faults_seen` is its value when the sleep's revoke ran: a fault between
+ * them refuses the sleep. `refused` names the last check of Linux's
+ * assert_can_disable_lcpll that stopped a sleep, logged when it changes.
+ */
+struct i915_rpm {
+    struct pm_runtime core;
+    struct drm_work work;
+    struct pci_saved_state pci;
+    uint32_t faults;
+    uint32_t faults_seen;
+    uint8_t pm_cap;
+    uint8_t d3;
+    uint8_t pc8;
+    const char *refused;
+};
+
+/*
  * A bound device. `drm` is first, and its `driver_priv` points back here.
  * `pci` is the function as the probe found it. `hw` reaches its registers.
  * `mmio_phys` is BAR 0's physical address and `gmadr_phys` BAR 2's, the
@@ -1552,6 +1585,7 @@ struct drm_i915_private {
     struct i915_sseu sseu;
     struct intel_display display;
     struct i915_params params;
+    struct i915_rpm rpm;
 };
 
 /* The driver's device of a DRM device it bound. */
@@ -1608,6 +1642,72 @@ void i915_pci_unmap(struct i915_hw *hw);
  * and the bind goes on, as on Linux.
  */
 void i915_bios_setup(struct drm_i915_private *i915, uint16_t command);
+
+/* ---- i915_runtime_pm.c ---- */
+
+/* Linux's defaults: the autosuspend delay i915 sets, and how long a GTT
+ * fault keeps the device awake (intel_wakeref_auto of userfault_wakeref). */
+#define I915_RPM_DELAY_MS     10000u
+#define I915_RPM_GTT_FAULT_MS 250u
+
+/** Make the record's runtime power management, the device awake and held
+ * by the bind until `i915_rpm_register`. The bind's first step. */
+void i915_rpm_init(struct drm_i915_private *i915);
+
+/** Let the device sleep, as Linux's intel_runtime_pm_enable at the end of
+ * i915_driver_probe: the autosuspend delay set, `power/` added to the PCI
+ * function's directory in /sys, and the bind's hold dropped. */
+void i915_rpm_register(struct drm_i915_private *i915);
+
+/** Wake the device for good and stop its sleeps, the power directory
+ * taken out of /sys: the unplug's first step, after which the device is
+ * awake for whatever tears it down. Process context. */
+void i915_rpm_unplug(struct drm_i915_private *i915);
+
+/**
+ * Hold the device awake, waking it if it sleeps, as Linux's
+ * intel_runtime_pm_get: before any access to its registers, its GTT or its
+ * aperture from a path no other hold covers. Process context, with no
+ * spinlock of the driver's held; it spins while a sleep or a wake runs on
+ * another processor, and never sleeps. Pair with `i915_rpm_put`.
+ */
+void i915_rpm_get(struct drm_i915_private *i915);
+
+/** Hold the device only if it is awake now, as Linux's
+ * intel_runtime_pm_get_if_in_use: 1 with the hold, 0 without. Any
+ * context. */
+int i915_rpm_get_if_awake(struct drm_i915_private *i915);
+
+/** Take a hold for a caller that knows the device is awake and held, as
+ * Linux's intel_runtime_pm_get_noresume. Any context. */
+void i915_rpm_get_noresume(struct drm_i915_private *i915);
+
+/** Let a hold go; the last has the sleep tried once the delay has passed.
+ * Any context. */
+void i915_rpm_put(struct drm_i915_private *i915);
+
+/** Keep the device awake for `I915_RPM_GTT_FAULT_MS` after a GTT fault
+ * mapped a page, and count the fault (`struct i915_rpm`). Under the GEM
+ * lock. */
+void i915_rpm_gtt_fault(struct drm_i915_private *i915);
+
+/** The DRM core's `pm_get` and `pm_put` of the device. */
+void i915_drm_pm_get(struct drm_device *dev);
+void i915_drm_pm_put(struct drm_device *dev);
+
+/**
+ * Have pipe `c` hold the device awake while its configuration is active,
+ * as Linux's CRTC power domains hold their wakeref: a hold taken when it
+ * went active, let go when it went off. After each change of `c->cfg`,
+ * with the device awake.
+ */
+void intel_crtc_rpm_sync(struct intel_crtc *c);
+
+/** debugfs's i915_runtime_pm_status, Linux 6.18's: whether the GT is
+ * parked, whether the interrupts are off, the holds, and the PCI power
+ * state. Reads no register. */
+struct debugfs_text_ops;
+extern const struct debugfs_text_ops i915_runtime_pm_status_ops;
 
 /* ---- i915_fake.c ---- */
 
@@ -1709,6 +1809,12 @@ uint32_t i915_uncore_idle_ticks(struct drm_i915_private *i915);
  * once it is out of the table. */
 void i915_uncore_fini(struct drm_i915_private *i915);
 
+/** Let forcewake go before a runtime suspend, as Linux's
+ * intel_uncore_suspend: the release the timer would make is made now.
+ * 0, or -EBUSY while a reference is held, whose holder keeps the GT
+ * awake. Takes the register lock. */
+int32_t i915_uncore_suspend(struct drm_i915_private *i915);
+
 /**
  * Write `value` to `reg` as Linux's gen6 accessors do: a write below
  * 0x40000 or from 0x116000 waits, 10 ms at most, until the GT FIFO has
@@ -1738,6 +1844,11 @@ int32_t i915_power_get(struct drm_i915_private *i915);
  * off, unless a pipe that needs it runs, as the firmware's may: then it
  * stays on, `kept`, and is logged. */
 void i915_power_put(struct drm_i915_private *i915);
+
+/** Turn a well no reference holds off before a runtime suspend, one kept
+ * on for a pipe that has since gone off among them: 0 with the well off,
+ * or -EBUSY while a reference holds it or a pipe in it runs. */
+int32_t i915_power_suspend(struct drm_i915_private *i915);
 
 /** Whether the display well reports on. */
 int i915_power_well_on(struct drm_i915_private *i915);
@@ -1861,6 +1972,17 @@ void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits);
 
 /** Mask the bits `bits` of `bank` again, with a posting read. */
 void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits);
+
+/** Turn every source off for a runtime suspend, as Linux's
+ * intel_runtime_pm_disable_interrupts: each bank masked, disabled and its
+ * identity cleared, the copies kept; until the resume, masks and enables
+ * change only in the copies and a message is taken as spurious. */
+void i915_irq_suspend(struct drm_i915_private *i915);
+
+/** Write the copies back at the runtime resume, as Linux's
+ * intel_runtime_pm_enable_interrupts, after clearing what the identities
+ * hold. */
+void i915_irq_resume(struct drm_i915_private *i915);
 
 /** Mask the bits `bits` of `bank`, with a posting read, from a source's
  * handler, which runs with the interrupt mask's lock held. */
@@ -2143,6 +2265,10 @@ void i915_gt_pm_disable(struct drm_i915_private *i915);
  * and `i915_gt_park` when the last retires. Process context.
  */
 void i915_gt_unpark(struct drm_i915_private *i915);
+
+/** Write the GT's registers of Linux's hsw_init_clock_gating, at load and
+ * at each runtime resume. Under forcewake. */
+void i915_gt_init_clock_gating(struct drm_i915_private *i915);
 
 /** The GT is idle: RPS's interrupts off and its frequency at the idle
  * frequency, then RC6 at once, as Linux's __gt_park. */
@@ -2923,6 +3049,11 @@ void intel_pipe_readout(struct drm_i915_private *i915, int pipe, struct intel_pi
  */
 int32_t intel_display_init(struct drm_i915_private *i915);
 
+/** Write the display's registers of Linux's hsw_init_clock_gating and
+ * lpt_init_clock_gating: at load and at each runtime resume, since many
+ * do not survive package C8. */
+void hsw_display_clock_gating(struct drm_i915_private *i915);
+
 /**
  * Undo what `intel_display_init` hooked into the hardware's paths: the
  * interrupts, the backlight, given back to the boot's driver, and every
@@ -3266,6 +3397,10 @@ void intel_pps_vdd_off_unlocked(struct drm_i915_private *i915, int sync);
  * Linux's edp_panel_vdd_work. */
 void intel_pps_vdd_work(struct drm_i915_private *i915);
 
+/** The work that lets an unused VDD go once `vdd_off_due` has passed,
+ * under the mode lock, as Linux's edp_panel_vdd_work. */
+void intel_pps_vdd_work_fn(struct drm_work *work);
+
 /** Choose the delays again once the VBT's panel is known and write them,
  * with VDD let go if nothing wants it, Linux's intel_pps_init_late. */
 void intel_pps_init_late(struct drm_i915_private *i915);
@@ -3551,6 +3686,16 @@ int32_t intel_hotplug_init(struct drm_i915_private *i915);
 
 /** Unhook them and let the deferred work go. */
 void intel_hotplug_fini(struct drm_i915_private *i915);
+
+/** At a runtime suspend, which turns the hotplug interrupts off: the
+ * connectors polled every HPD_POLL_MS instead, each poll waking the device,
+ * as Linux's intel_hpd_poll_enable. Any context. */
+void intel_hotplug_suspend(struct drm_i915_private *i915);
+
+/** At a runtime resume: the PCH's hotplug detection written again and
+ * every pin's connectors probed, as Linux's intel_hpd_init and
+ * intel_hpd_poll_disable. Any context. */
+void intel_hotplug_resume(struct drm_i915_private *i915);
 
 /** The deferred work: re-enable pins whose storm is over, then probe the
  * outputs of the pins that pulsed, Linux's i915_digport_work_func and

@@ -121,7 +121,8 @@ const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *c
  * for a source the pipe does not have, or -EIO on a pipe that is off.
  * Takes the commit lock.
  */
-int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name)
+/** intel_crtc_set_crc_source's work, with the device held awake. */
+static int32_t set_crc_source(struct drm_crtc *crtc, const char *name)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
     struct i915_hw *hw = &c->i915->hw;
@@ -153,6 +154,19 @@ int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name)
         crc_workaround(c, 0);
     }
     return 0;
+}
+
+/* PIPE_CRC_CTL is the device's, written whether the pipe runs or not, as
+ * Linux's intel_crtc_set_crc_source holds the pipe's power domain. */
+int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name)
+{
+    struct drm_i915_private *i915 = to_intel_crtc(crtc)->i915;
+    int32_t err;
+
+    i915_rpm_get(i915);
+    err = set_crc_source(crtc, name);
+    i915_rpm_put(i915);
+    return err;
 }
 
 void intel_crtc_crc_frame(struct intel_crtc *c, uint32_t crc0)

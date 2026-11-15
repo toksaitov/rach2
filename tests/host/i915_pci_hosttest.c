@@ -18,6 +18,7 @@
  * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
  * host-deps: tests/host/compat/i915_gem_lock_host.c
  * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/i915_rpm_host.c
  *
  * i915_pci.c is included whole. The bus holds the model's 00:02.0, whose
  * configuration space the PCI calls read and write; the DRM core is a

@@ -286,6 +286,24 @@ void i915_uncore_fini(struct drm_i915_private *i915)
     spin_unlock_irqrestore(&u->lock, flags);
 }
 
+int32_t i915_uncore_suspend(struct drm_i915_private *i915)
+{
+    struct i915_uncore *u = &i915->uncore;
+    uint32_t flags = spin_lock_irqsave(&u->lock);
+
+    if (u->wake_count != 0) {
+        spin_unlock_irqrestore(&u->lock, flags);
+        return -EBUSY;
+    }
+    if (!u->gone && u->timer_armed) {
+        i915_fw_release(i915);
+    }
+    u->timer_armed = 0;
+    u->active = 0;
+    spin_unlock_irqrestore(&u->lock, flags);
+    return 0;
+}
+
 /** The wait's condition: more free entries in the GT FIFO than its
  * reserve, the count left in `*arg`. */
 static int i915_fifo_has_room(struct i915_hw *hw, void *arg)

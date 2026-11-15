@@ -616,7 +616,7 @@ static void error_text(struct emit *e, struct drm_i915_private *i915,
 {
     uint64_t now = rtc_ticks_now(), age = ticks_ms(now - err->ticks);
     int64_t sec, nsec;
-    uint32_t sub;
+    uint32_t sub, rawclk;
     int i;
 
     rtc_realtime(&sec, &nsec);
@@ -662,8 +662,10 @@ static void error_text(struct emit *e, struct drm_i915_private *i915,
     driver_caps(e);
     emit_params(e, &err->params);
     emit_lines(e, display_info, NELEM(display_info));
-    emitf(e, "rawclk rate: %u kHz\n",
-          (i915_read(&i915->hw, PCH_RAWCLK_FREQ) & RAWCLK_FREQ_MASK) * 1000u);
+    i915_rpm_get(i915);
+    rawclk = i915_read(&i915->hw, PCH_RAWCLK_FREQ) & RAWCLK_FREQ_MASK;
+    i915_rpm_put(i915);
+    emitf(e, "rawclk rate: %u kHz\n", rawclk * 1000u);
     emit_lines(e, display_params, NELEM(display_params));
     emitf(e, "DERRMR: 0x%08x\n", err->derrmr);
 }
@@ -758,7 +760,8 @@ static void state_close(fd_entry_t *e)
  * The open of i915_forcewake_user, Linux's i915_forcewake_open: the GT's
  * forcewake is held, and with it the GT kept out of RC6, until the close,
  * so that a program may reach the registers through the BAR's mapping, as
- * IGT's register access does. The device is held until the close. 0,
+ * IGT's register access does. The device is held, and held awake, until
+ * the close. 0,
  * -ENODEV for a device unplugged, or -EIO when the forcewake is not
  * acknowledged.
  */
@@ -770,7 +773,9 @@ static int32_t forcewake_user_open(fd_entry_t *e, int flags)
     if (gone(i915)) {
         return -ENODEV;
     }
+    i915_rpm_get(i915);
     if (i915_forcewake_get(i915) < 0) {
+        i915_rpm_put(i915);
         return -EIO;
     }
     drm_dev_get(&i915->drm);
@@ -787,6 +792,7 @@ static void forcewake_user_close(fd_entry_t *e)
         if (!gone(i915)) {
             i915_forcewake_put(i915);
         }
+        i915_rpm_put(i915);
         drm_dev_put(&i915->drm);
     }
     e->priv = NULL;
@@ -1745,16 +1751,79 @@ static int32_t params_register(struct drm_i915_private *i915)
     return rc;
 }
 
+/** Run `show` on the device `data` held awake, for the files that read
+ * its registers, as Linux's take a wakeref. */
+static int32_t awake_show(int32_t (*show)(void *, char *, uint32_t), void *data, char *buf,
+                          uint32_t cap)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    int32_t rc;
+
+    i915_rpm_get(i915);
+    rc = show(data, buf, cap);
+    i915_rpm_put(i915);
+    return rc;
+}
+
+/** `store` as `awake_show` runs a show. */
+static int32_t awake_store(int32_t (*store)(void *, const char __user *, uint32_t), void *data,
+                           const char __user *buf, uint32_t len)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    int32_t rc;
+
+    i915_rpm_get(i915);
+    rc = store(data, buf, len);
+    i915_rpm_put(i915);
+    return rc;
+}
+
+/** lpsp_status_show with the device awake. */
+static int32_t lpsp_status_awake(void *data, char *buf, uint32_t cap)
+{
+    return awake_show(lpsp_status_show, data, buf, cap);
+}
+
+/** frequency_show with the device awake. */
+static int32_t frequency_awake(void *data, char *buf, uint32_t cap)
+{
+    return awake_show(frequency_show, data, buf, cap);
+}
+
+/** rps_boost_show with the device awake. */
+static int32_t rps_boost_awake(void *data, char *buf, uint32_t cap)
+{
+    return awake_show(rps_boost_show, data, buf, cap);
+}
+
+/** engine_info_show with the device awake. */
+static int32_t engine_info_awake(void *data, char *buf, uint32_t cap)
+{
+    return awake_show(engine_info_show, data, buf, cap);
+}
+
+/** wedged_store with the device awake. */
+static int32_t wedged_awake(void *data, const char __user *buf, uint32_t len)
+{
+    return awake_store(wedged_store, data, buf, len);
+}
+
+/** drop_caches_store with the device awake. */
+static int32_t drop_caches_awake(void *data, const char __user *buf, uint32_t len)
+{
+    return awake_store(drop_caches_store, data, buf, len);
+}
+
 static const struct debugfs_text_ops capabilities_ops = {capabilities_show, NULL};
-static const struct debugfs_text_ops lpsp_status_ops = {lpsp_status_show, NULL};
+static const struct debugfs_text_ops lpsp_status_ops = {lpsp_status_awake, NULL};
 static const struct debugfs_text_ops gem_framebuffer_ops = {gem_framebuffer_show, NULL};
 static const struct debugfs_text_ops gem_objects_ops = {gem_objects_show, NULL};
-static const struct debugfs_text_ops frequency_ops = {frequency_show, NULL};
-static const struct debugfs_text_ops rps_boost_ops = {rps_boost_show, NULL};
-static const struct debugfs_text_ops engine_info_ops = {engine_info_show, NULL};
+static const struct debugfs_text_ops frequency_ops = {frequency_awake, NULL};
+static const struct debugfs_text_ops rps_boost_ops = {rps_boost_awake, NULL};
+static const struct debugfs_text_ops engine_info_ops = {engine_info_awake, NULL};
 static const struct debugfs_text_ops cdclk_info_ops = {cdclk_info_show, NULL};
-static const struct debugfs_text_ops wedged_ops = {wedged_show, wedged_store};
-static const struct debugfs_text_ops drop_caches_ops = {drop_caches_show, drop_caches_store};
+static const struct debugfs_text_ops wedged_ops = {wedged_show, wedged_awake};
+static const struct debugfs_text_ops drop_caches_ops = {drop_caches_show, drop_caches_awake};
 
 /* The text files, with Linux's modes. */
 static const struct {
@@ -1770,7 +1839,8 @@ static const struct {
                   {"i915_cdclk_info", 0444u, &cdclk_info_ops},
                   {"i915_wedged", 0644u, &wedged_ops},
                   {"i915_gem_drop_caches", 0644u, &drop_caches_ops},
-                  {"i915_rps_boost_info", 0444u, &rps_boost_ops}};
+                  {"i915_rps_boost_info", 0444u, &rps_boost_ops},
+                  {"i915_runtime_pm_status", 0444u, &i915_runtime_pm_status_ops}};
 
 /** crtc-N/i915_pipe, Linux's intel_crtc_pipe_show: the pipe's letter, by
  * which IGT maps a CRTC to its pipe. */

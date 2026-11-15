@@ -50,6 +50,7 @@ static void ppgtt_flush_pd(struct drm_i915_private *i915, uint32_t first, uint32
     struct i915_ppgtt *pp = &i915->gt.ppgtt;
     uint32_t base = pp->pd_ggtt / I915_GTT_PAGE_SIZE, pde;
 
+    i915_rpm_get(i915);
     for (pde = first; pde < last; pde++) {
         uint64_t phys = pp->pt[pde] ? pp->pt_phys[pde] : pp->scratch_pt_phys;
 
@@ -57,6 +58,7 @@ static void ppgtt_flush_pd(struct drm_i915_private *i915, uint32_t first, uint32
     }
     (void)i915_gtt_read(&i915->hw, base + last - 1u);
     i915_ggtt_invalidate(i915);
+    i915_rpm_put(i915);
 }
 
 int32_t i915_ppgtt_init(struct drm_i915_private *i915)

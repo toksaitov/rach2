@@ -394,9 +394,15 @@ static void hotplug_work_locked(struct drm_work *work)
  * the mode state, which MODE_ATOMIC changes without the big lock. */
 void intel_hotplug_work(struct drm_work *work)
 {
+    struct drm_i915_private *i915 = to_i915(work->dev);
+
+    /* The probes reach the device, so the work wakes it, as Linux's poll
+     * of a runtime-suspended device does through its detect. */
+    i915_rpm_get(i915);
     drm_modeset_lock_nointr(work->dev);
     hotplug_work_locked(work);
     drm_modeset_unlock(work->dev);
+    i915_rpm_put(i915);
 }
 
 int intel_hotplug_live(struct drm_i915_private *i915, int pin)
@@ -407,18 +413,14 @@ int intel_hotplug_live(struct drm_i915_private *i915, int pin)
     return (i915_read(&i915->hw, SDEISR) & sde_bit[pin]) != 0;
 }
 
-int32_t intel_hotplug_init(struct drm_i915_private *i915)
+/** Enable the PCH's detection on each pin with a port, as Linux's
+ * ibx_hpd_irq_setup does at load and at each runtime resume. */
+static void hotplug_hw_init(struct drm_i915_private *i915)
 {
-    struct intel_hotplug *hp = &i915->display.hotplug;
-    uint32_t bits, clear = 0, set = 0;
-    int32_t err;
+    uint32_t clear = 0, set = 0;
     int pin;
 
-    hp->work.fn = intel_hotplug_work;
     for (pin = 0; pin < HPD_NUM_PINS; pin++) {
-        hp->state[pin] = HPD_ENABLED;
-        hp->storm_count[pin] = 0;
-        hp->retries[pin] = 0;
         clear |= PORT_HOTPLUG_ENABLE(pin) | PORT_PULSE_DURATION_MASK(pin);
         if (pin_port(i915, pin)) {
             set |= PORT_HOTPLUG_ENABLE(pin);
@@ -431,6 +433,22 @@ int32_t intel_hotplug_init(struct drm_i915_private *i915)
         set |= PORTA_HOTPLUG_ENABLE;
     }
     i915_rmw(&i915->hw, PCH_PORT_HOTPLUG, clear, set);
+}
+
+int32_t intel_hotplug_init(struct drm_i915_private *i915)
+{
+    struct intel_hotplug *hp = &i915->display.hotplug;
+    uint32_t bits;
+    int32_t err;
+    int pin;
+
+    hp->work.fn = intel_hotplug_work;
+    for (pin = 0; pin < HPD_NUM_PINS; pin++) {
+        hp->state[pin] = HPD_ENABLED;
+        hp->storm_count[pin] = 0;
+        hp->retries[pin] = 0;
+    }
+    hotplug_hw_init(i915);
     bits = pin_irqs(i915, 0);
     if (bits == 0) {
         return 0;
@@ -458,4 +476,34 @@ void intel_hotplug_fini(struct drm_i915_private *i915)
     i915_irq_unregister(i915, I915_IRQ_SDE, bits);
     hp->ready = 0;
     drm_dev_work_cancel(&hp->work);
+}
+
+void intel_hotplug_suspend(struct drm_i915_private *i915)
+{
+    struct intel_hotplug *hp = &i915->display.hotplug;
+
+    if (hp->ready) {
+        drm_dev_work_later_ms(&i915->drm, &hp->work, HPD_POLL_MS);
+    }
+}
+
+void intel_hotplug_resume(struct drm_i915_private *i915)
+{
+    struct intel_hotplug *hp = &i915->display.hotplug;
+    uint32_t flags, pins = 0;
+    int pin;
+
+    if (!hp->ready) {
+        return;
+    }
+    hotplug_hw_init(i915);
+    for (pin = 0; pin < HPD_NUM_PINS; pin++) {
+        if (pin_port(i915, pin) && hp->state[pin] == HPD_ENABLED) {
+            pins |= 1u << pin;
+        }
+    }
+    flags = spin_lock_irqsave(&i915->irq.lock);
+    hp->event_bits |= pins;
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
+    drm_dev_work_later(&i915->drm, &hp->work);
 }

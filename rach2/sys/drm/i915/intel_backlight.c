@@ -80,7 +80,11 @@ static void bl_power(void *ctx, int on)
     uint32_t flags = spin_lock_irqsave(&d->bl_lock);
 
     d->bl_want_on = on != 0;
-    intelbl_power(&d->bl, on && d->bl_pipe_on && !d->bl_dark);
+    /* The switch is off with the pipe, and the pipe's enable takes what
+     * was asked; the device may sleep meanwhile. */
+    if (d->bl_pipe_on) {
+        intelbl_power(&d->bl, on && !d->bl_dark);
+    }
     spin_unlock_irqrestore(&d->bl_lock, flags);
 }
 

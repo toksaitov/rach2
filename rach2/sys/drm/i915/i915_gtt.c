@@ -148,10 +148,13 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
     if (err < 0) {
         return err;
     }
+    /* The entries are the device's, as Linux's GGTT updates hold a wakeref. */
+    i915_rpm_get(i915);
     for (i = 0; i < n; i++) {
         i915_gtt_write(&i915->hw, first + i, i915_ggtt_pte_encode(pages[i], cache));
     }
     i915_ggtt_invalidate(i915);
+    i915_rpm_put(i915);
     return 0;
 }
 
@@ -196,6 +199,7 @@ int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, ui
     }
     n = (uint32_t)(size / I915_GTT_PAGE_SIZE);
     yield = may_yield && mutex_held(&i915->gem.lock);
+    i915_rpm_get(i915);
     for (i = 0; i < n; i++) {
         i915_gtt_write(&i915->hw, first + i, i915->ggtt.scratch_pte);
         if (yield && (i + 1u) % I915_GGTT_CLEAR_BATCH == 0 && i + 1u < n) {
@@ -203,15 +207,21 @@ int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, ui
         }
     }
     i915_ggtt_invalidate(i915);
+    i915_rpm_put(i915);
     return 0;
 }
 
 uint32_t i915_ggtt_pte(struct drm_i915_private *i915, uint64_t offset)
 {
+    uint32_t pte;
+
     if (offset >= i915->ggtt.total) {
         return 0xffffffffu;
     }
-    return i915_gtt_read(&i915->hw, (uint32_t)(offset / I915_GTT_PAGE_SIZE));
+    i915_rpm_get(i915);
+    pte = i915_gtt_read(&i915->hw, (uint32_t)(offset / I915_GTT_PAGE_SIZE));
+    i915_rpm_put(i915);
+    return pte;
 }
 
 int32_t i915_ggtt_init(struct drm_i915_private *i915)

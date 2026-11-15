@@ -13,6 +13,7 @@
  * host-deps: tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/i915_gem_lock_host.c
  * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/i915_rpm_host.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
  * The model's clock moves only when the driver waits, and the monotonic

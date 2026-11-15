@@ -58,9 +58,9 @@ static void i915_release(struct drm_device *dev);
 
 /* What the driver says of itself: Linux's i915, with its buffer ioctls. */
 static const struct drm_driver i915_drm_driver = {
-    DRM_IDENT_I915,       i915_driver_open,      i915_driver_postclose,
-    i915_gem_dumb_create, i915_gem_prime_import, i915_unplug,
-    i915_ioctls,          I915_NUM_IOCTLS,       i915_release};
+    DRM_IDENT_I915,        i915_driver_open, i915_driver_postclose, i915_gem_dumb_create,
+    i915_gem_prime_import, i915_unplug,      i915_ioctls,           I915_NUM_IOCTLS,
+    i915_release,          i915_drm_pm_get,  i915_drm_pm_put};
 
 const struct i915_id *i915_id_lookup(uint16_t device_id)
 {
@@ -239,7 +239,8 @@ void i915_pci_unmap(struct i915_hw *hw)
 }
 
 /**
- * The DRM core's unplug hook: its requests fail and retire, RPS and RC6
+ * The DRM core's unplug hook: the device woken and kept awake, its
+ * requests fail and retire, RPS and RC6
  * turned off, the device stops interrupting, its message and vector are
  * given back, its rings stop and give their pages back, programs' maps of
  * its buffers are revoked, and forcewake's release timer lets go, since no
@@ -249,7 +250,10 @@ void i915_pci_unmap(struct i915_hw *hw)
 static void i915_unplug(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
-    int taken = i915_gem_lock(i915);
+    int taken;
+
+    i915_rpm_unplug(i915);
+    taken = i915_gem_lock(i915);
 
     i915_handoff_unbound(i915);
     i915_requests_unplug(i915);
@@ -419,8 +423,9 @@ static void i915_display_bringup(struct drm_i915_private *i915)
 }
 
 /** What a registered device adds outside the DRM core: its files of /sys
- * and debugfs, its AUX channels' devices, the shrinker, and the function's
- * "bind" uevent. */
+ * and debugfs, its AUX channels' devices, the shrinker, the function's
+ * "bind" uevent, and its runtime power management, which may then put it
+ * to sleep. */
 static void i915_registered(struct drm_i915_private *i915)
 {
     i915_sysfs_register(i915);
@@ -428,6 +433,7 @@ static void i915_registered(struct drm_i915_private *i915)
     i915_gem_shrinker_register(i915);
     i915_debugfs_register(i915);
     i915_handoff_bound(i915);
+    i915_rpm_register(i915);
 }
 
 /**
@@ -540,6 +546,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     }
     i915_locks_init(i915);
     i915->pci = *pdev;
+    i915_rpm_init(i915);
     i915->hw = *hw;
     i915->id = id;
     i915->revision = revision;

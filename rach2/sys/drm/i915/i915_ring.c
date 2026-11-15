@@ -228,9 +228,10 @@ void i915_gt_init_hw(struct drm_i915_private *i915)
  * WaCatErrorRejectionIssue needs, and the arbitration priority of stream
  * output over the vertex fetch, WaSwitchSolVfFArbitrationPriority. The
  * display's registers of that function are the display's to write
- * (intel_display.c). Under forcewake.
+ * (intel_display.c). Under forcewake. A runtime resume writes them again,
+ * as Linux's hsw_disable_pc8 does through intel_clock_gating_init.
  */
-static void i915_gt_init_clock_gating(struct drm_i915_private *i915)
+void i915_gt_init_clock_gating(struct drm_i915_private *i915)
 {
     (void)i915_rmw(&i915->hw, GEN7_SQ_CHICKEN_MBCUNIT_CONFIG, 0, GEN7_SQ_CHICKEN_MBCUNIT_SQINTMOB);
     (void)i915_rmw(&i915->hw, GAM_ECOCHK, 0, HSW_ECOCHK_ARB_PRIO_SOL);

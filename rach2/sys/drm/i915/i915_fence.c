@@ -35,12 +35,16 @@ void i915_fence_write(struct drm_i915_private *i915, int id, uint64_t start, uin
     }
     /* As Linux's i965_write_fence_reg: the fence off first, so that no
      * half-written pair is ever in force, then the high half, then the low
-     * half with its valid bit, each landing before the next. */
+     * half with its valid bit, each landing before the next. The device is
+     * held awake meanwhile, as Linux's fence update holds a wakeref; a
+     * resume's restore runs inside the wake, whose hold only counts. */
+    i915_rpm_get(i915);
     i915_write(hw, FENCE_REG_GEN6_LO(id), 0);
     i915_posting_read(hw, FENCE_REG_GEN6_LO(id));
     i915_write(hw, FENCE_REG_GEN6_HI(id), (uint32_t)(val >> 32));
     i915_write(hw, FENCE_REG_GEN6_LO(id), (uint32_t)val);
     i915_posting_read(hw, FENCE_REG_GEN6_LO(id));
+    i915_rpm_put(i915);
 }
 
 /**

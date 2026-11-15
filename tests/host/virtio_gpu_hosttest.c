@@ -464,6 +464,18 @@ void drm_dev_put(struct drm_device *d)
     }
 }
 
+/** The driver's runtime power hooks, which virtio-gpu has none of. */
+void drm_dev_pm_get(struct drm_device *d)
+{
+    (void)d;
+}
+
+/** The driver's runtime power hooks let go. */
+void drm_dev_pm_put(struct drm_device *d)
+{
+    (void)d;
+}
+
 /** Count a hotplug uevent. */
 void drm_kms_hotplug_event(struct drm_device *d)
 {

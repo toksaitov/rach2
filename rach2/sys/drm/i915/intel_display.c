@@ -701,7 +701,8 @@ static void commit_scanouts(struct drm_atomic_state *state, struct drm_plane *co
     }
 }
 
-int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
+/** intel_atomic_commit's work, with the device held awake. */
+static int32_t atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
 {
     struct drm_i915_private *i915 = to_i915(dev);
     struct i915_vma *pinned[DRM_MAX_PLANES];
@@ -764,6 +765,19 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
                     err != 0   ? COMMIT_FAILED
                     : nonblock ? COMMIT_NONBLOCK
                                : COMMIT_BLOCKING);
+    return err;
+}
+
+/* The fast cursor's registers, the pins' GTT and the vblank counters are
+ * the device's, as Linux's intel_atomic_commit holds its wakeref; a
+ * nonblocking commit's tail holds the device again on the worker. */
+int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
+{
+    int32_t err;
+
+    i915_rpm_get(to_i915(dev));
+    err = atomic_commit(dev, state, nonblock);
+    i915_rpm_put(to_i915(dev));
     return err;
 }
 
@@ -1280,6 +1294,7 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     flags = spin_lock_irqsave(&i915->drm.event_lock);
     intel_crtc_send_event(c);
     spin_unlock_irqrestore(&i915->drm.event_lock, flags);
+    intel_crtc_rpm_sync(c);
 }
 
 /** Whether this commit changes the pipe's source mode or panel scaling. */
@@ -1359,6 +1374,7 @@ static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *sta
         intel_wm_commit(c, state, 0);
     }
     intel_crtc_arm_flip_done(c, state);
+    intel_crtc_rpm_sync(c);
 }
 
 /** After the planes: the commit's event handed to the vblank path, or,
@@ -1688,6 +1704,7 @@ static void adopt_config(struct drm_i915_private *i915, struct intel_crtc *c)
     dp->link_rate = hw->port_clock;
     dp->lane_count = hw->lanes;
     dp->link_trained = 1;
+    intel_crtc_rpm_sync(c);
 }
 
 /**
@@ -1865,7 +1882,7 @@ static int32_t ports_init(struct drm_i915_private *i915)
  * WADPOClockGatingDisable. The GT's registers of those functions are
  * `i915_gt_init`'s.
  */
-static void hsw_display_clock_gating(struct drm_i915_private *i915)
+void hsw_display_clock_gating(struct drm_i915_private *i915)
 {
     struct i915_hw *hw = &i915->hw;
     int pipe;
@@ -1998,6 +2015,7 @@ void intel_display_fini(struct drm_i915_private *i915)
     /* Linux's intel_dp_encoder_flush_work: VDD that no mode set wants
      * goes off now. */
     intel_pps_vdd_off_unlocked(i915, 1);
+    (void)drm_dev_work_cancel(&d->dp.pps.vdd_work);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &d->crtc[pipe];
         struct intel_cursor_retire *r;
@@ -2011,6 +2029,11 @@ void intel_display_fini(struct drm_i915_private *i915)
         for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
             scanout_put(&d->crtc[pipe].parked[slot]);
             scanout_put(&d->crtc[pipe].shown[slot]);
+        }
+        /* The unplug holds the device for good; the pipe's hold goes. */
+        if (c->rpm_held) {
+            c->rpm_held = 0;
+            i915_rpm_put(i915);
         }
     }
 }

@@ -506,6 +506,24 @@ void drm_dev_put(struct drm_device *dev)
 }
 #endif
 
+/* ---- the driver's runtime power hooks, as drm.c calls them ---- */
+
+/** The driver's `pm_get`, as drm.c calls it. */
+void drm_dev_pm_get(struct drm_device *dev)
+{
+    if (dev->driver && dev->driver->pm_get) {
+        dev->driver->pm_get(dev);
+    }
+}
+
+/** The driver's `pm_put`, as drm.c calls it. */
+void drm_dev_pm_put(struct drm_device *dev)
+{
+    if (dev->driver && dev->driver->pm_put) {
+        dev->driver->pm_put(dev);
+    }
+}
+
 #ifndef KMS_MODEL_KERNEL
 /* ---- the log, dropped, and interrupt flags that are never off ---- */
 
