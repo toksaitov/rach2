@@ -6,7 +6,9 @@
 # These five pages make 17 to 54 contexts each, and after them the testing
 # PC's QEMU holds 240 and fails to make another, which ends it
 # (dev-log/77-vgpu/upstream.md). Chromium shares a few contexts among all
-# its pages and runs them.
+# its pages and runs them. Without them a chunk of 250 pages still holds
+# some 240 at its end, so the virgl cases also start a new Firefox every 100
+# pages, with webgl.sh -n (dev-log/84-locks/84-266z3.md).
 firefox conformance/context/context-creation-and-destruction.html
 firefox conformance/context/context-creation.html
 firefox conformance/context/context-eviction-with-garbage-collection.html

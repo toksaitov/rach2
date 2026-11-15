@@ -2,8 +2,8 @@
 # webgl.sh: the WebGL conformance suite in chunks, each in a new browser,
 # inside a graphics guest, Rach2's or Debian's.
 #
-#   webgl.sh [-g] [-b BROWSER] [-v VERSION] [-k SIZE] [-s SUITE] [-x OMIT]
-#            [-o OUT] CHUNK|all
+#   webgl.sh [-g] [-b BROWSER] [-v VERSION] [-k SIZE] [-n PAGES] [-s SUITE]
+#            [-x OMIT] [-o OUT] CHUNK|all
 #
 # Runs chunk CHUNK, counted from 0, of SIZE pages (250) of the suite's list
 # for VERSION (2.0.1; or 1.0.4), or every chunk one after another with
@@ -12,7 +12,12 @@
 # address. Weston composites with Pixman, or with -g with its GL renderer,
 # as a guest with a GPU needs for both browsers to draw WebGL on it
 # (common.sh's runner_weston). Each chunk starts a new browser with a new
-# profile, which webgl.html drives through the suite's own harness. A
+# profile, which webgl.html drives through the suite's own harness, and with
+# -n a new one every PAGES pages of it. Firefox keeps each finished page's
+# WebGL context, and under virgl the host's GL context behind it, until the
+# browser ends: a whole chunk of 250 pages holds some 240 at its end, the
+# testing PC's bound, so the virgl cases run Firefox with -n 100
+# (dev-log/84-locks/84-266z3.md). A
 # browser that ends before its chunk does, as Chromium did once in a whole
 # 2.0.1 run of the discovery run and failed 163 pages after it, is replaced
 # by a new one for the pages left, and the page it was running is `crash`.
@@ -55,14 +60,15 @@ RUNNER_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=common.sh
 . "$RUNNER_DIR/common.sh"
 
-browser=chromium version=2.0.1 size=250 suite=/usr/share/webgl/sdk/tests out=. omit=
+browser=chromium version=2.0.1 size=250 suite=/usr/share/webgl/sdk/tests out=. omit='' batch=0
 silence=120
 # shellcheck disable=SC2034 # runner_weston reads RUNNER_RENDERER
-while getopts b:v:k:s:x:o:g o; do
+while getopts b:v:k:n:s:x:o:g o; do
     case $o in
         b) browser=$OPTARG ;;
         v) version=$OPTARG ;;
         k) size=$OPTARG ;;
+        n) batch=$OPTARG ;;
         s) suite=$OPTARG ;;
         x) omit=$OPTARG ;;
         o) out=$OPTARG ;;
@@ -71,7 +77,8 @@ while getopts b:v:k:s:x:o:g o; do
     esac
 done
 shift $((OPTIND - 1))
-[ $# -eq 1 ] || { echo "usage: webgl.sh [-g] [-b BROWSER] [-v VERSION] [-k SIZE] [-s SUITE] [-x OMIT] [-o OUT] CHUNK|all" >&2; exit 2; }
+[ $# -eq 1 ] || { echo "usage: webgl.sh [-g] [-b BROWSER] [-v VERSION] [-k SIZE] [-n PAGES] [-s SUITE] [-x OMIT] [-o OUT] CHUNK|all" >&2; exit 2; }
+case $batch in '' | *[!0-9]*) echo "webgl: -n takes a count of pages, not $batch" >&2; exit 2 ;; esac
 which=$1
 case $which in
     all) ;;
@@ -92,6 +99,11 @@ runner_start
 runner_record "case webgl $browser $version chunk $which of $size pages"
 runner_record "warmup 0"
 runner_record "repetitions 1, and each page that does not pass once more"
+if [ "$batch" -gt 0 ]; then
+    runner_record "pages per browser $batch"
+else
+    runner_record "pages per browser all"
+fi
 runner_record "suite $suite"
 runner_record "omitted ${omitted:-none}"
 runner_browser_record "$browser"
@@ -103,16 +115,25 @@ runner_keep "$RUNNER_OUT/record" "$RUNNER_OUT/server.log" "$RUNNER_OUT/browser.l
 lines=0
 count='' listsum=''
 
-# run_pages INDEX...: run the pages in new browsers until each has a result,
-# and leave their lines in $RUNNER_WORK/attempt.
+# run_pages INDEX...: run the pages in new browsers, at most $batch pages
+# in each when it is not 0, until each has a result, and leave their lines
+# in $RUNNER_WORK/attempt.
 run_pages()
 {
     : > "$RUNNER_WORK/attempt"
     todo=$*
     empty=0
     while [ -n "$todo" ]; do
+        # The pages for this browser, and the rest after it.
+        mine=$todo rest=
+        if [ "$batch" -gt 0 ]; then
+            # shellcheck disable=SC2086 # indexes are words
+            mine=$(echo $todo | tr ' ' '\n' | head -n "$batch" | tr '\n' ' ')
+            # shellcheck disable=SC2086 # indexes are words
+            rest=$(echo $todo | tr ' ' '\n' | tail -n +"$((batch + 1))" | tr '\n' ' ')
+        fi
         # shellcheck disable=SC2086 # indexes are words
-        only=$(echo $todo | tr ' ' ,)
+        only=$(echo $mine | tr ' ' ,)
         runner_browser "$browser" "http://127.0.0.1:$RUNNER_PORT/webgl-runner.html?version=$version&only=$only&omit=$omitted" \
             "$RUNNER_OUT/browser.log"
         # shellcheck disable=SC2046 # two words
@@ -138,7 +159,7 @@ run_pages()
         lines=$upto
         echo "webgl: browser: $state after $(($(wc -l < "$RUNNER_WORK/attempt") - before)) pages" >&2
         left=
-        for i in $todo; do
+        for i in $mine; do
             [ -z "$count" ] || [ "$i" -lt "$count" ] || continue
             awk -v i="$i" '$1 == i { found = 1 } END { exit !found }' "$RUNNER_WORK/attempt" || left="$left $i"
         done
@@ -147,15 +168,26 @@ run_pages()
         else
             empty=0
         fi
+        # A page past the list's end has no result to wait for.
+        later=
+        for i in $rest; do
+            [ -z "$count" ] || [ "$i" -lt "$count" ] || continue
+            later="$later $i"
+        done
+        if [ "$empty" -ge 2 ]; then
+            # Two browsers in a row ran nothing; a browser whose list was
+            # dropped ran nothing.
+            left="$left$later" later=
+        fi
         if { [ "$state" = "done" ] && [ -z "$rejected" ]; } || [ "$empty" -ge 2 ]; then
-            # The harness ended on the established list, or two browsers in
-            # a row ran nothing; a browser whose list was dropped ran nothing.
+            # The harness ended on the established list, or nothing runs.
             for i in $left; do
                 echo "$i notrun 0 0 0 0 -" >> "$RUNNER_WORK/attempt"
             done
             left=
         fi
-        todo=$left
+        todo="$left$later"
+        todo=${todo# }
     done
 }
 

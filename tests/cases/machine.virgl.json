@@ -11090,7 +11090,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl1-00",
-      "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -11153,7 +11153,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 1.0.4 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 1.0.4 -n 100 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -11308,7 +11308,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl1-01",
-      "behavior": "pages 250 to 499 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 250 to 499 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -11371,7 +11371,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 1.0.4 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 1.0.4 -n 100 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -11526,7 +11526,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl1-02",
-      "behavior": "pages 500 to 749 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 500 to 749 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -11589,7 +11589,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 1.0.4 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 1.0.4 -n 100 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -11744,7 +11744,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl1-03",
-      "behavior": "pages 750 to 999 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 750 to 999 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -11807,7 +11807,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 1.0.4 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 1.0.4 -n 100 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -11962,7 +11962,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-00",
-      "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -12025,7 +12025,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -12180,7 +12180,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-01",
-      "behavior": "pages 250 to 499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 250 to 499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -12243,7 +12243,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -12398,7 +12398,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-02",
-      "behavior": "pages 500 to 749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 500 to 749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -12461,7 +12461,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -12616,7 +12616,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-03",
-      "behavior": "pages 750 to 999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 750 to 999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -12679,7 +12679,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -12834,7 +12834,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-04",
-      "behavior": "pages 1000 to 1249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 1000 to 1249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -12897,7 +12897,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 04 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 04 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -13052,7 +13052,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-05",
-      "behavior": "pages 1250 to 1499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 1250 to 1499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -13115,7 +13115,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 05 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 05 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -13270,7 +13270,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-06",
-      "behavior": "pages 1500 to 1749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 1500 to 1749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -13333,7 +13333,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 06 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 06 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -13488,7 +13488,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-07",
-      "behavior": "pages 1750 to 1999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 1750 to 1999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -13551,7 +13551,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 07 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 07 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -13706,7 +13706,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-08",
-      "behavior": "pages 2000 to 2249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 2000 to 2249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -13769,7 +13769,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 08 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 08 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -13924,7 +13924,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-09",
-      "behavior": "pages 2250 to 2499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 2250 to 2499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -13987,7 +13987,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 09 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 09 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -14142,7 +14142,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-10",
-      "behavior": "pages 2500 to 2749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 2500 to 2749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -14205,7 +14205,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 10 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 10 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",
@@ -14360,7 +14360,7 @@
     },
     {
       "case_id": "machine.virgl.webgl-firefox-webgl2-11",
-      "behavior": "pages 2750 to 2999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
+      "behavior": "pages 2750 to 2999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox ESR under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser every 100 pages and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [
         "tests/graphics/runners/webgl.sh",
         "tests/graphics/runners/webgl.html",
@@ -14423,7 +14423,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run webgl.sh -g -b firefox -v 2.0.1 11 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+          "does": "run webgl.sh -g -b firefox -v 2.0.1 -n 100 11 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
         },
         {
           "step_id": "judge",

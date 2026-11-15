@@ -86,26 +86,30 @@
  * names, glinfo's lines, piglit's results and its flakes, dEQP-GLES's
  * results by suite, the WebGL pages and what the reset left; the WebGL
  * pages both guests leave out, and the WebGL subtests not judged. */
-#define VIRGL_REF          GRAPHICS_DIR "/ref/virgl-wsl"
-#define VIRGL_PIGLIT       GRAPHICS_DIR "/piglit-virgl.txt.gz"
-#define VIRGL_FLAKES       GRAPHICS_DIR "/piglit-virgl.flakes"
-#define VIRGL_DEQP         GRAPHICS_DIR "/deqp-gles-virgl.txt.gz"
-#define VIRGL_OMIT         GRAPHICS_DIR "/runners/webgl-virgl.omit"
-#define VIRGL_WEBGL_FLAKES GRAPHICS_DIR "/runners/webgl-virgl.flakes"
+#define VIRGL_REF           GRAPHICS_DIR "/ref/virgl-wsl"
+#define VIRGL_PIGLIT        GRAPHICS_DIR "/piglit-virgl.txt.gz"
+#define VIRGL_FLAKES        GRAPHICS_DIR "/piglit-virgl.flakes"
+#define VIRGL_DEQP          GRAPHICS_DIR "/deqp-gles-virgl.txt.gz"
+#define VIRGL_OMIT          GRAPHICS_DIR "/runners/webgl-virgl.omit"
+#define VIRGL_WEBGL_FLAKES  GRAPHICS_DIR "/runners/webgl-virgl.flakes"
+/* The pages each Firefox runs on virgl, since it keeps every page's WebGL
+ * context, a GL context of the host's, until it ends, and a chunk of 250
+ * holds some 240, the testing PC's bound (runners/webgl.sh). */
+#define VIRGL_FIREFOX_PAGES "100"
 /* The parts the release runs the lists in, each in a boot of its own, and
  * the sample, every VIRGL_SAMPLEth test, that one case runs. */
-#define VIRGL_PIGLIT_PARTS 16
-#define VIRGL_GLES2_PARTS  2
-#define VIRGL_GLES3_PARTS  4
-#define VIRGL_GLES31_PARTS 4
-#define VIRGL_SAMPLE       200
+#define VIRGL_PIGLIT_PARTS  16
+#define VIRGL_GLES2_PARTS   2
+#define VIRGL_GLES3_PARTS   4
+#define VIRGL_GLES31_PARTS  4
+#define VIRGL_SAMPLE        200
 /* The dEQP-GLES subset that the virgl and Venus profiles both run, every
  * GLES_SUBSETth case of each suite of the virgl list, sized to run its three
  * suites in each profile within an hour on Rach2; the Venus profile's GL is
  * virgl over the host's llvmpipe, and its references are the Debian guest's
  * run of the same subset there. */
-#define GLES_SUBSET        10
-#define VENUS_GL_REF       GRAPHICS_DIR "/ref/venus-wsl/gles"
+#define GLES_SUBSET         10
+#define VENUS_GL_REF        GRAPHICS_DIR "/ref/venus-wsl/gles"
 /* Fail the judging unless a `renderer` line of the run's record names the
  * renderer in the file `ref`: virgl over the testing PC's adapter, or over
  * the host's llvmpipe in the Venus profile. */
@@ -480,6 +484,12 @@ static void stage(struct graphics_case *s)
              "clips", "the clips' data disk could not be mounted");
 }
 
+/** Give webgl.sh's -n for a virgl case's browser, or "" for one browser. */
+static const char *virgl_pages(const struct graphics_case *s)
+{
+    return strcmp(s->browser, "firefox") == 0 ? " -n " VIRGL_FIREFOX_PAGES : "";
+}
+
 /**
  * Write the runner's command line for the case to `runner`, and the line
  * that begins its result to `*pattern`. Give 1 when the runner runs as
@@ -581,9 +591,9 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         } else {
             *pattern = "webgl: result: ";
             snprintf(runner, size,
-                     "sh " GRAPHICS_DIR "/runners/webgl.sh -g -b %s -v %s -x " VIRGL_OMIT
+                     "sh " GRAPHICS_DIR "/runners/webgl.sh -g -b %s -v %s%s -x " VIRGL_OMIT
                      " -o " GRAPHICS_DIR "/out %s",
-                     s->browser, s->version, s->chunk);
+                     s->browser, s->version, virgl_pages(s), s->chunk);
         }
         return 0;
     }
