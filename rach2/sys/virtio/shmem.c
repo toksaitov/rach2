@@ -280,18 +280,36 @@ static void heap_mark(struct vshm *vs, uint32_t i, uint32_t n, int used)
 }
 
 /**
+ * The heap pages a buffer's backing leaves free for the driver's commands:
+ * a sixteenth of the heap, at most VSHM_KEEP_MAX. A program that makes
+ * buffers until the region is full then has its own buffer refused with
+ * ENOMEM, as the commands that send, detach and free buffers still find
+ * pages; without the reserve those failed and the driver unplugged the
+ * device under every program (`vgpu_obj_free`).
+ */
+#define VSHM_KEEP_MAX 512u
+#define heap_keep(vs) \
+    ((vs)->heap_pages / 16u < VSHM_KEEP_MAX ? (vs)->heap_pages / 16u : VSHM_KEEP_MAX)
+
+/**
  * Take a run of the heap's pages that follow each other, at most `n` and at
  * least `least` of them, the first fit from the rover, which moves past
  * it, so that pieces taken one after another follow each other too and a
- * chain of them is one descriptor; its length goes in `*got`. Returns the
- * first heap page, or the heap's size when no such run is free: a full
- * region is ENOMEM to the driver, never memory from elsewhere.
+ * chain of them is one descriptor; its length goes in `*got`. At least
+ * `keep` pages stay free after it. Returns the first heap page, or the
+ * heap's size when no such run is free: a full region is ENOMEM to the
+ * driver, never memory from elsewhere.
  */
-static uint32_t heap_take(struct vshm *vs, uint32_t n, uint32_t least, uint32_t *got)
+static uint32_t heap_take(struct vshm *vs, uint32_t n, uint32_t least, uint32_t keep, uint32_t *got)
 {
-    uint32_t flags, pass, i, k, start;
+    uint32_t flags, pass, i, k, start, avail;
 
     flags = spin_lock_irqsave(&vs->heap_lock);
+    avail = vs->heap_pages - vs->heap_used;
+    avail = avail > keep ? avail - keep : 0;
+    if (n > avail) {
+        n = avail;
+    }
     for (pass = 0; pass < 2 && least > 0 && least <= n && n <= vs->heap_pages; pass++) {
         start = pass == 0 ? vs->heap_rover : 0;
         for (i = start; i + least <= vs->heap_pages; i++) {
@@ -745,7 +763,7 @@ static void *vs_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
     if (!vs->attached || n == 0) {
         return NULL;
     }
-    i = heap_take(vs, n, n, &got);
+    i = heap_take(vs, n, n, 0, &got);
     if (i >= vs->heap_pages) {
         heap_refused(vs);
         return NULL;
@@ -885,13 +903,13 @@ static int vs_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t byte
         return -ENOMEM;
     }
     n = (uint32_t)(bytes / VGS_PAGE + (bytes % VGS_PAGE != 0));
-    first = heap_take(vs, n, n, &got);
+    first = heap_take(vs, n, n, heap_keep(vs), &got);
     if (first < vs->heap_pages) {
         rc = backing_adopt(vs, sh, 0, first, n);
     } else {
-        rc = heap_free_pages(vs) >= n ? 0 : -ENOMEM;
+        rc = heap_free_pages(vs) >= n + heap_keep(vs) ? 0 : -ENOMEM;
         for (done = 0; rc == 0 && done < n; done += got) {
-            first = heap_take(vs, n - done, 1, &got);
+            first = heap_take(vs, n - done, 1, heap_keep(vs), &got);
             rc = first < vs->heap_pages ? backing_adopt(vs, sh, done, first, got) : -ENOMEM;
         }
     }
