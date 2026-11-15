@@ -188,16 +188,17 @@ and
 .Pa /etc/shadow
 into the ext2 root.
 Each file is written under a separate name and renamed into place.
-The image's system accounts, those with an ID below 1000 and
+The image's system accounts and groups, those with an ID below 1000 and
 .Ql nobody
 and
 .Ql nogroup
-of ID 65534, whose name and ID the new files do not have, are appended
-to them with their groups and shadow lines, so a program of the image
+of ID 65534, whose name the new files do not have, are appended to them
+with their shadow lines, the password locked, so a program of the image
 keeps its account, as the GNU system's OpenSSH server keeps
-.Ql sshd ,
-and a system account the files have by the image's name and ID with no
-shadow line gets the image's, which
+.Ql sshd ;
+an ID the new files use moves as an update moves it, below.
+A system account the files have by the image's name and ID with no
+shadow line gets the image's, locked, which
 .Xr pwck 8
 asks for.
 Create the account's home directory and install its keys.
@@ -460,8 +461,29 @@ An update of another disk is refused while the copy in
 is there.
 These are restored after the write, in place of the image's, preserving
 passwords changed since installation, the console's keymap and the logins
-kept in the homes, and the image's system accounts the restored files lack are
-appended to them, as for an install.
+kept in the homes.
+The account files are then merged with the image's, as a distribution's
+upgrade adds the accounts its packages bring.
+Every account and group of the machine stays as it is, with its ID,
+password and members.
+Each account and group of the image whose name the machine lacks is
+appended, with the image's ID when the machine does not use it, or else
+the next ID free on both, from 1 to 999 for an ID below 1000 or of 65534
+and from 1000 to 65533 for any other; an added account's primary group
+follows its group's ID, and the image's files of a moved ID are given the
+new one, with their modes.
+The members of each system group of the image that the machine's group of
+that name lacks are added to it, so the GNU root's
+.Ql desktop
+account and the machine's accounts keep the
+.Ql video ,
+.Ql render
+and other groups the image gives them.
+An added account's shadow line is the image's with its password locked, as
+.Ql usermod -L
+locks one, and an added account whose home lies under
+.Pa /home
+and is not among the machine's homes gets an empty one of mode 700.
 The absence of account keys is preserved too.
 If the root cannot be read, the account files, policy and keys are taken
 from the recovery partition's archive and the root partition is replaced:

@@ -34,7 +34,9 @@
 # keys, the accounts' own keys and the home directories, root's among them, are
 # copied off the root first and written back afterwards, so a password changed
 # after the install is still the machine's password, a saved network still
-# joins, and an agent signed in there is still signed in. The root is grown again
+# joins, and an agent signed in there is still signed in. The image's accounts,
+# groups and group members that the machine lacks are merged into its account
+# files, as merge_accounts says. The root is grown again
 # into its partition. The machine is saved to its recovery system for the whole
 # of the write and the new root is armed for one trial boot, so an update cut
 # off by a power cut, or one that does not come up, costs a reboot into recovery
@@ -168,6 +170,8 @@ mounted_boot=""
 mounted_data=""
 console_new=""
 key_dir=""
+# The scratch directory an update merges the account files in.
+accounts=""
 echo_off=""
 screen_level=""
 # The archive recover_archive found, and what write_archive records beside
@@ -192,8 +196,8 @@ quiet_screen() {
 }
 # Puts back what the run changed and has not yet put back: the screen's
 # level, the terminal's echo, which a run that ends inside a password question
-# leaves off, the five mounts and the directory of the recovery key's copy.
-# The traps call it; it returns 0.
+# leaves off, the five mounts, the directory of the recovery key's copy and
+# the one an update merges the accounts in. The traps call it; it returns 0.
 cleanup() {
     [ -n "$screen_level" ] && echo "$screen_level" > /dev/screenlog 2>/dev/null
     [ -n "$echo_off" ] && stty echo 2>/dev/null
@@ -204,6 +208,7 @@ cleanup() {
     [ -n "$mounted_boot" ] && umount "$mounted_boot" 2>/dev/null
     [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
     [ -n "$key_dir" ] && rm -rf "$key_dir"
+    [ -n "$accounts" ] && rm -rf "$accounts"
     return 0
 }
 # A signal ends the run. A handler that tidied up and returned would let the
@@ -904,55 +909,243 @@ add_lines() {
     printf '%s\n' "$2" >> "$1"
 }
 
-# keep_image_accounts IMAGE DEST: adds the image's system accounts to the
-# account files under DEST. The files an install writes and an update keeps
-# were made for a root that may not have had these accounts, and a program of
-# the image, such as the GNU root's OpenSSH with its `sshd`, does not start
-# without its own.
+# merge_accounts IMAGE DEST SCOPE: merges the account files of the root at
+# IMAGE into those under DEST, as a Linux distribution's upgrade adds the
+# accounts its packages bring: every account and group DEST has stays as it
+# is, its id, password and members included, and what IMAGE brings is added
+# beside it. SCOPE `all` takes every account and group of IMAGE, as an
+# update does, and SCOPE `system` only those of a system id, below 1000 or
+# 65534, the id of `nobody` and `nogroup` as on Linux, as an install does,
+# whose image accounts above that are a demonstration's.
 #
-# A system account is one of an id below 1000, or of 65534, the id of `nobody`
-# and `nogroup` as on Linux. A system account of IMAGE/etc/passwd is appended
-# to DEST/etc/passwd when DEST has neither its name nor its id. A system group
-# of IMAGE/etc/group is appended to DEST/etc/group when DEST has neither its
-# name nor its id, whether or not an account comes with it, as the GNU root's
-# `crontab` comes alone; but the primary group of an image account whose name
-# or id DEST gives another account stays out. An image shadow line is appended
-# to DEST/etc/shadow for each system account that DEST has by the image's name
-# and id and has no shadow line for: one appended here, or one an older image
-# gave without a line. An id is compared as a number, and a name or an id the
-# image has twice is taken once. Status 0 with nothing done when IMAGE has no
-# etc/passwd, and 1 when a file could not be read or written.
-keep_image_accounts() {
+# A group of IMAGE whose name DEST lacks is appended to DEST/etc/group with
+# its members, and an account so to DEST/etc/passwd, each with the image's
+# id when DEST does not use it, else with the next free id in the same
+# range, 1 to 999 for a system id and 1000 to 65533 for another, wrapping
+# to the range's start, that neither DEST nor IMAGE uses. An added account's
+# group is DEST's id of the image group that has its image id, or that id
+# itself when the image has no group of it and DEST does not use it, else a
+# new id as above. The members a system group of IMAGE has and DEST's group
+# of that name lacks are added to DEST's, so that an account of IMAGE, or of
+# DEST, keeps the devices the image gives it. An added account's shadow line
+# is IMAGE's, its password locked as `usermod -L` locks one, since the image
+# is the same on every machine and its password is no machine's; so is the
+# line of an account DEST has by the image's name and id and in SCOPE with
+# no line of its own, which pwck asks for. Nothing goes in DEST/etc/shadow
+# when DEST has none, or when IMAGE has no line for the account.
+#
+# An id is compared as a number, a name IMAGE has twice is taken at its
+# first line, and a line whose id is not a decimal number is passed over.
+# It prints `uid OLD NEW` and `gid OLD NEW` for an account or a group of
+# IMAGE given a new id, when no other name of IMAGE has OLD, so that the
+# caller can give the image's files of OLD to NEW, and `added NAME UID GID
+# HOME` for each account added. Status 0 with nothing done when IMAGE has no
+# etc/passwd, and 1 when a file could not be read or written or a range has
+# no free id.
+merge_accounts() {
     [ -f "$1/etc/passwd" ] || return 0
-    added=$(awk -F: 'FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }
-        ($3 + 0 < 1000 || $3 + 0 == 65534) && !($1 in name) && !(($3 + 0) in id) {
-            print; name[$1] = 1; id[$3 + 0] = 1
-        }' "$2/etc/passwd" "$1/etc/passwd") || return 1
-    groups=
-    if [ -f "$1/etc/group" ]; then
-        groups=$(awk -F: 'FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }
-            FILENAME == ARGV[2] { uid[$1] = $3 + 0; used[$3 + 0] = 1; next }
-            FILENAME == ARGV[3] {
-                if (($3 + 0 < 1000 || $3 + 0 == 65534) && (($1 in uid) || (($3 + 0) in used)) &&
-                    !(($1 in uid) && uid[$1] == $3 + 0))
-                    refused[$4 + 0] = 1
-                next
+    ma_shadow=""
+    [ -f "$2/etc/shadow" ] && ma_shadow=$2/etc/shadow
+    ma_image_group=/dev/null
+    [ -f "$1/etc/group" ] && ma_image_group=$1/etc/group
+    ma_image_shadow=/dev/null
+    [ -f "$1/etc/shadow" ] && ma_image_shadow=$1/etc/shadow
+    ma_out=$(SCOPE=$3 DG=$2/etc/group DP=$2/etc/passwd DS=$ma_shadow \
+        IG=$ma_image_group IP=$1/etc/passwd IS=$ma_image_shadow awk '
+        function system_id(id) { return id < 1000 || id == 65534 }
+        function wanted(id) { return ENVIRON["SCOPE"] == "all" || system_id(id) }
+        function number(s) { return s ~ /^[0-9]+$/ }
+        function taken(kind, id) {
+            if (kind == "u") return (id in uid_used) || (id in image_uid)
+            return (id in gid_used) || (id in image_gid)
+        }
+        # The next free id after ID in its range, wrapping to the start.
+        function free_id(kind, id,   lo, hi, start, c) {
+            if (system_id(id)) { lo = 1; hi = 999 } else { lo = 1000; hi = 65533 }
+            start = (id >= lo && id < hi) ? id + 1 : lo
+            for (c = start; c <= hi; c++) if (!taken(kind, c)) return c
+            for (c = lo; c < start; c++) if (!taken(kind, c)) return c
+            printf "no free %s id is left in %d to %d\n", kind == "u" ? "user" : "group", lo, hi | "cat 1>&2"
+            exit 1
+        }
+        function join(f, n,   s, i) {
+            s = f[1]
+            for (i = 2; i <= n; i++) s = s ":" f[i]
+            return s
+        }
+        # Reads FILE into lines[KEY, 1..], their count in lines[KEY].
+        function slurp(key, file,   r, n, line) {
+            n = 0
+            if (file == "") { lines[key] = 0; return }
+            while ((r = (getline line < file)) > 0) lines[key, ++n] = line
+            if (r < 0) {
+                printf "%s does not read\n", file | "cat 1>&2"
+                exit 1
             }
-            ($3 + 0 < 1000 || $3 + 0 == 65534) && !($1 in name) && !(($3 + 0) in id) &&
-                !(($3 + 0) in refused) {
-                print; name[$1] = 1; id[$3 + 0] = 1
-            }' "$2/etc/group" "$2/etc/passwd" "$1/etc/passwd" "$1/etc/group") || return 1
+            close(file)
+            lines[key] = n
+        }
+        BEGIN {
+            slurp("dg", ENVIRON["DG"]); slurp("dp", ENVIRON["DP"]); slurp("ds", ENVIRON["DS"])
+            slurp("ig", ENVIRON["IG"]); slurp("ip", ENVIRON["IP"]); slurp("is", ENVIRON["IS"])
+            for (i = 1; i <= lines["dg"]; i++) {
+                group[i] = lines["dg", i]
+                n = split(group[i], f, ":")
+                if (n >= 3 && number(f[3])) gid_used[f[3] + 0] = 1
+                if (f[1] != "" && !(f[1] in group_at)) group_at[f[1]] = i
+            }
+            groups = lines["dg"]
+            for (i = 1; i <= lines["dp"]; i++) {
+                n = split(lines["dp", i], f, ":")
+                if (n >= 3 && number(f[3])) { uid_used[f[3] + 0] = 1; user_id[f[1]] = f[3] + 0 }
+                else user_id[f[1]] = -1
+            }
+            for (i = 1; i <= lines["ds"]; i++) {
+                split(lines["ds", i], f, ":")
+                has_shadow[f[1]] = 1
+            }
+            for (i = 1; i <= lines["is"]; i++) {
+                split(lines["is", i], f, ":")
+                if (!(f[1] in image_shadow)) image_shadow[f[1]] = lines["is", i]
+            }
+            # The image groups and accounts, each name once, and the names of
+            # each image id.
+            ig = 0
+            for (i = 1; i <= lines["ig"]; i++) {
+                n = split(lines["ig", i], f, ":")
+                if (n < 3 || f[1] == "" || !number(f[3]) || (f[1] in seen_group)) continue
+                seen_group[f[1]] = 1
+                ig_line[++ig] = lines["ig", i]
+                id = f[3] + 0
+                if (!(id in image_gid)) gid_name[id] = f[1]
+                image_gid[id]++
+            }
+            ip = 0
+            for (i = 1; i <= lines["ip"]; i++) {
+                n = split(lines["ip", i], f, ":")
+                if (n < 4 || f[1] == "" || !number(f[3]) || !number(f[4]) || (f[1] in seen_user))
+                    continue
+                seen_user[f[1]] = 1
+                ip_line[++ip] = lines["ip", i]
+                image_uid[f[3] + 0]++
+            }
+            for (k = 1; k <= ig; k++) {
+                n = split(ig_line[k], f, ":")
+                id = f[3] + 0
+                if (f[1] in group_at) {
+                    at = group_at[f[1]]
+                    m = split(group[at], g, ":")
+                    if (m >= 3 && number(g[3])) group_id[f[1]] = g[3] + 0
+                    if (!system_id(id) || n < 4 || f[4] == "") continue
+                    if (m < 4) { g[4] = ""; m = 4 }
+                    split(g[4], have, ",")
+                    delete member
+                    for (j in have) member[have[j]] = 1
+                    c = split(f[4], add, ",")
+                    for (j = 1; j <= c; j++) {
+                        if (add[j] == "" || (add[j] in member)) continue
+                        member[add[j]] = 1
+                        g[4] = g[4] == "" ? add[j] : g[4] "," add[j]
+                    }
+                    group[at] = join(g, m)
+                    continue
+                }
+                if (!wanted(id)) continue
+                to = (id in gid_used) ? free_id("g", id) : id
+                gid_used[to] = 1
+                group_id[f[1]] = to
+                f[3] = to
+                group[++groups] = join(f, n)
+                group_at[f[1]] = groups
+                if (to != id && image_gid[id] == 1) print "r:gid " id " " to
+            }
+            for (k = 1; k <= ip; k++) {
+                n = split(ip_line[k], f, ":")
+                id = f[3] + 0
+                gid = f[4] + 0
+                if (f[1] in user_id) {
+                    if (wanted(id) && user_id[f[1]] == id && ma_shadow_wanted(f[1]))
+                        print "s:" locked(image_shadow[f[1]])
+                    continue
+                }
+                if (!wanted(id)) continue
+                to = (id in uid_used) ? free_id("u", id) : id
+                uid_used[to] = 1
+                user_id[f[1]] = to
+                if ((gid in gid_name) && (gid_name[gid] in group_id)) {
+                    to_gid = group_id[gid_name[gid]]
+                } else if (!(gid in gid_used)) {
+                    to_gid = gid
+                    gid_used[gid] = 1
+                } else {
+                    if (!(gid in orphan)) orphan[gid] = free_id("g", gid)
+                    to_gid = orphan[gid]
+                    gid_used[to_gid] = 1
+                }
+                f[3] = to
+                f[4] = to_gid
+                print "p:" join(f, n)
+                if (to != id && image_uid[id] == 1) print "r:uid " id " " to
+                print "r:added " f[1] " " to " " to_gid " " (n >= 6 ? f[6] : "")
+                if (ma_shadow_wanted(f[1])) print "s:" locked(image_shadow[f[1]])
+            }
+            for (i = 1; i <= groups; i++) print "g:" group[i]
+        }
+        # A shadow line of the image is wanted for NAME when DEST has a shadow
+        # file and no line for it and the image has one.
+        function ma_shadow_wanted(name) {
+            if (ENVIRON["DS"] == "" || (name in has_shadow) || !(name in image_shadow)) return 0
+            has_shadow[name] = 1
+            return 1
+        }
+        # LINE with its password locked: a `!` before it, unless it begins
+        # with `!` or `*`, which no password matches.
+        function locked(line,   f, n) {
+            n = split(line, f, ":")
+            if (n < 2) { f[2] = ""; n = 2 }
+            if (f[2] !~ /^[!*]/) f[2] = "!" f[2]
+            return join(f, n)
+        }
+    ') || return 1
+    ma_add=$(printf '%s\n' "$ma_out" | sed -n 's/^p://p')
+    add_lines "$2/etc/passwd" "$ma_add" || return 1
+    if [ -n "$ma_shadow" ]; then
+        ma_add=$(printf '%s\n' "$ma_out" | sed -n 's/^s://p')
+        add_lines "$2/etc/shadow" "$ma_add" || return 1
     fi
-    add_lines "$2/etc/passwd" "$added" || return 1
-    add_lines "$2/etc/group" "$groups" || return 1
-    [ -f "$1/etc/shadow" ] && [ -f "$2/etc/shadow" ] || return 0
-    lines=$(awk -F: '
-        FILENAME == ARGV[1] { if ($3 + 0 < 1000 || $3 + 0 == 65534) uid[$1] = $3 + 0; next }
-        FILENAME == ARGV[2] { if (($1 in uid) && uid[$1] == $3 + 0) same[$1] = 1; next }
-        FILENAME == ARGV[3] { have[$1] = 1; next }
-        ($1 in same) && !($1 in have) { print; have[$1] = 1 }' \
-        "$2/etc/passwd" "$1/etc/passwd" "$2/etc/shadow" "$1/etc/shadow") || return 1
-    add_lines "$2/etc/shadow" "$lines"
+    ma_add=$(printf '%s\n' "$ma_out" | sed -n 's/^g://p')
+    if [ -f "$2/etc/group" ]; then
+        cp -p "$2/etc/group" "$2/etc/group.new" || return 1
+    fi
+    { if [ -n "$ma_add" ]; then printf '%s\n' "$ma_add"; fi; } > "$2/etc/group.new" &&
+        mv "$2/etc/group.new" "$2/etc/group" || return 1
+    printf '%s\n' "$ma_out" | sed -n 's/^r://p'
+}
+
+# give_ids ROOT: reads the `uid OLD NEW` and `gid OLD NEW` lines that
+# merge_accounts prints on standard input, and gives each file of the file
+# system at ROOT that OLD owns to NEW, its mode kept, since chown takes the
+# set-id bits off a file. Status 1 when a file could not be given or one
+# of OLD is left.
+give_ids() { # give_ids ROOT < LIST
+    while read -r gi_kind gi_old gi_new _gi_rest; do
+        case "$gi_kind" in
+            uid) gi_test=-user gi_to=$gi_new ;;
+            gid) gi_test=-group gi_to=:$gi_new ;;
+            *) continue ;;
+        esac
+        find "$1" -xdev "$gi_test" "$gi_old" -exec sh -c '
+            to=$1
+            shift
+            for f; do
+                if [ -L "$f" ]; then
+                    chown -h "$to" "$f" || exit 1
+                    continue
+                fi
+                mode=$(stat -c %a "$f") && chown "$to" "$f" && chmod "$mode" "$f" || exit 1
+            done' sh "$gi_to" {} + < /dev/null || return 1
+        [ -z "$(find "$1" -xdev "$gi_test" "$gi_old" < /dev/null | head -n 1)" ] || return 1
+    done
 }
 
 # nested_home_fault ROOT: prints why the accounts of ROOT/etc/passwd, and
@@ -2820,13 +3013,35 @@ EOF
         die "the new root would not mount"
     mounted_root=$TARGET_MNT
     say "writing the accounts, the policy and the keys back"
-    keep_image_accounts "$TARGET_MNT" "$keep" ||
-        die "the image's system accounts could not be kept beside the machine's"
-    for f in $CONFIG_FILES; do
-        if [ -e "$keep/$f" ]; then
-            keep_copy "$keep/$f" "$TARGET_MNT/$f" || die "$f could not be put back"
+    # The machine's account files are merged with the image's in a copy, so
+    # that the copy at `keep` stays the machine's own for an update run again
+    # after a stop, and the image's files of an id the merge moves are given
+    # the new id before anything of the machine's is in the root.
+    scratch=/tmp
+    [ -d /dev/shm ] && scratch=/dev/shm
+    accounts=$(mktemp -d "$scratch/rach2-install.XXXXXX") ||
+        die "there is nowhere to merge the accounts"
+    mkdir "$accounts/etc" || die "there is nowhere to merge the accounts"
+    for f in passwd group shadow; do
+        if [ -f "$keep/etc/$f" ]; then
+            cp "$keep/etc/$f" "$accounts/etc/$f" || die "the machine's /etc/$f could not be read"
         fi
     done
+    merged=$(merge_accounts "$TARGET_MNT" "$accounts" all) ||
+        die "the image's accounts could not be merged with the machine's"
+    printf '%s\n' "$merged" | give_ids "$TARGET_MNT" ||
+        die "the image's files of an account or group given a new id could not be given it"
+    for f in $CONFIG_FILES; do
+        case "$f" in
+            etc/passwd | etc/group | etc/shadow) from=$accounts ;;
+            *) from=$keep ;;
+        esac
+        if [ -e "$from/$f" ]; then
+            keep_copy "$from/$f" "$TARGET_MNT/$f" || die "$f could not be put back"
+        fi
+    done
+    rm -rf "$accounts"
+    accounts=""
     chmod 600 "$TARGET_MNT/etc/shadow" || die "the shadow file's mode could not be set"
     # The archive's FAT file system keeps no mode, and this file has passphrases.
     if [ -f "$TARGET_MNT/etc/machine-id" ]; then
@@ -2868,7 +3083,7 @@ EOF
     # it. A .ssh of the image's that is a symbolic link is removed and not
     # what it leads to, which may be a directory the copy put back, such as
     # /home; a directory that holds one is left whole and the run ends.
-    { echo "root:x:0:0::/root:"; cat "$keep/etc/passwd"; } |
+    { echo "root:x:0:0::/root:"; cat "$TARGET_MNT/etc/passwd"; } |
         while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
             case "$home" in /*) ;; *) continue ;; esac
             dir=$(root_path "$TARGET_MNT" "$home") || die "$home leads through too many links"
@@ -2886,6 +3101,20 @@ EOF
 update put back, and was not removed; the image's keys there remain"
             rm -rf "$to" || die "the image's keys in $home/.ssh could not be removed"
         done || exit 1
+    # An account the merge added is given its home under /home, empty, owned
+    # by it and of mode 700, as `useradd -m` makes one, unless the machine's
+    # homes put back above have that path: the image's homes went with its
+    # /home.
+    printf '%s\n' "$merged" | while read -r kind name uid gid home; do
+        [ "$kind" = added ] || continue
+        case "$home" in /home/?*) ;; *) continue ;; esac
+        dir=$(root_path "$TARGET_MNT" "$home") || die "$home leads through too many links"
+        if [ -e "$dir" ] || [ -L "$dir" ]; then
+            continue
+        fi
+        { mkdir -p "$dir" && chmod 700 "$dir" && chown "$uid:$gid" "$dir"; } ||
+            die "the home $home of the account $name could not be made"
+    done || exit 1
     sync
     umount "$TARGET_MNT" || die "the new root would not unmount"
     mounted_root=""
@@ -3472,9 +3701,11 @@ $user_name:x:1000:
 put_file "$root_dir/etc/shadow" 600 "root:$root_hash:0:0:99999:7:::
 $user_name:$user_hash:0:0:99999:7:::
 "
-keep_image_accounts "$image_etc" "$root_dir" ||
+merged=$(merge_accounts "$image_etc" "$root_dir" system) ||
     die "the image's system accounts could not be kept beside the new ones"
 rm -rf "$image_etc"
+printf '%s\n' "$merged" | give_ids "$root_dir" ||
+    die "the image's files of an account or group given a new id could not be given it"
 
 # The account's home, and the keys if any were given. The demonstration's home
 # and its keys go, whatever they were called.
