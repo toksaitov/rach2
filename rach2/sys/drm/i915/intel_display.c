@@ -411,7 +411,8 @@ static int frame_past(uint32_t a, uint32_t b)
  * what it showed before is still read and stays. Otherwise what it shows
  * may have latched and is kept until the next update, and what it showed
  * before goes, after the next vblank when none came since the last write
- * ended. May sleep.
+ * ended; a blocking commit then lets go of `parked` through
+ * commit_release. May sleep.
  */
 static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout next, uint32_t from,
                            uint32_t to, int nostall)
@@ -550,20 +551,13 @@ static struct drm_plane_state *cursor_fast_state(struct drm_atomic_state *state)
     return ps;
 }
 
-/** Free replaced cursor scanouts once their last writes have latched,
- * Linux's intel_cursor_unpin_work. Runs in the DRM worker; the commit
- * lock protects the list against cursor updates and teardown. */
-static void cursor_retire_work(struct drm_work *work)
+/** Free `c`'s replaced cursor scanouts that the chip reads no more: every
+ * one while the pipe is off, else those whose last write has latched,
+ * Linux's intel_cursor_unpin_work. The commit lock is held. */
+static void cursor_retire(struct intel_crtc *c)
 {
-    struct intel_crtc *c =
-        (struct intel_crtc *)((uintptr_t)work - offsetof(struct intel_crtc, cursor_work));
     struct intel_cursor_retire **link, *r;
 
-    drm_modeset_lock_nointr(&c->i915->drm);
-    if (c->i915->drm.unplugged) {
-        drm_modeset_unlock(&c->i915->drm);
-        return;
-    }
     for (link = &c->cursor_retired; (r = *link) != NULL;) {
         if (!c->cfg.active || frame_past(intel_get_vblank_counter(&c->base), r->frame)) {
             *link = r->next;
@@ -573,6 +567,22 @@ static void cursor_retire_work(struct drm_work *work)
             link = &r->next;
         }
     }
+}
+
+/** Run cursor_retire until the list is empty, every millisecond. Runs in
+ * the DRM worker; the commit lock protects the list against cursor
+ * updates and teardown. */
+static void cursor_retire_work(struct drm_work *work)
+{
+    struct intel_crtc *c =
+        (struct intel_crtc *)((uintptr_t)work - offsetof(struct intel_crtc, cursor_work));
+
+    drm_modeset_lock_nointr(&c->i915->drm);
+    if (c->i915->drm.unplugged) {
+        drm_modeset_unlock(&c->i915->drm);
+        return;
+    }
+    cursor_retire(c);
     if (c->cursor_retired && !c->i915->drm.unplugged) {
         drm_dev_work_later_ms(&c->i915->drm, work, 1);
     }
@@ -608,6 +618,86 @@ static void cursor_fast_commit(struct drm_atomic_state *state, struct drm_plane_
         c->shown_to[INTEL_PLANE_CURSOR] = to;
         c->cursor_work.fn = cursor_retire_work;
         drm_dev_work_later_ms(&c->i915->drm, &c->cursor_work, 1);
+    }
+}
+
+/**
+ * Let go of what a blocking commit replaced, as Linux's
+ * intel_atomic_commit_tail waits for flip done and then cleans up the old
+ * planes: on each pipe in `pipes` that is on, once a vblank has come since
+ * `to[pipe]`, the frame count read after the commit's writes, waiting for
+ * one when none has; on a pipe that is off, at once. Goes for each parked
+ * scanout of a plane in `planes` and for the replaced cursors of legacy
+ * updates that have latched. The commit lock is held. May sleep.
+ */
+static void commit_release(struct drm_i915_private *i915, struct drm_plane *const *planes,
+                           uint32_t pipes, const uint32_t *to)
+{
+    int i, pipe, slot;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        struct intel_crtc *c = &i915->display.crtc[pipe];
+        int parked = 0;
+
+        if (!(pipes & (1u << pipe))) {
+            continue;
+        }
+        for (i = 0; i < DRM_MAX_PLANES; i++) {
+            if (planes[i] && plane_slot(i915, planes[i], &slot) == c &&
+                (c->parked[slot].fb || c->parked[slot].vma)) {
+                parked = 1;
+            }
+        }
+        if (!parked && !c->cursor_retired) {
+            continue;
+        }
+        if (c->cfg.active && !frame_past(intel_get_vblank_counter(&c->base), to[pipe])) {
+            wait_next_vblank(i915, pipe);
+        }
+        for (i = 0; i < DRM_MAX_PLANES; i++) {
+            if (planes[i] && plane_slot(i915, planes[i], &slot) == c) {
+                scanout_put(&c->parked[slot]);
+            }
+        }
+        cursor_retire(c);
+    }
+}
+
+/* How commit_scanouts ends a commit. */
+#define COMMIT_FAILED   0 /* let every new scanout go */
+#define COMMIT_NONBLOCK 1 /* keep what it replaced until the next commit */
+#define COMMIT_BLOCKING 2 /* let go of what it replaced once latched */
+
+/**
+ * Make each plane's framebuffer in `fbs`, pinned at `pinned`, its scanout
+ * after a commit of `state` that wrote it from the frame count in `from`,
+ * or let it go when `how` is COMMIT_FAILED; after a blocking commit, let go
+ * of what it replaced (commit_release). The commit lock is held.
+ */
+static void commit_scanouts(struct drm_atomic_state *state, struct drm_plane *const *planes,
+                            struct drm_framebuffer *const *fbs, struct i915_vma *const *pinned,
+                            const uint32_t *from, int how)
+{
+    struct drm_i915_private *i915 = to_i915(state->dev);
+    uint32_t to[I915_NUM_PIPES], rotated = 0;
+    int i, slot = 0;
+
+    for (i = 0; i < DRM_MAX_PLANES; i++) {
+        struct intel_crtc *c = planes[i] ? plane_slot(i915, planes[i], &slot) : NULL;
+        struct intel_scanout next;
+
+        next.fb = fbs[i];
+        next.vma = pinned[i];
+        if (how == COMMIT_FAILED || !c) {
+            scanout_put(&next);
+            continue;
+        }
+        to[c->pipe] = intel_get_vblank_counter(&c->base);
+        rotated |= 1u << c->pipe;
+        scanout_rotate(c, slot, next, from[i], to[c->pipe], state->legacy_cursor_update);
+    }
+    if (rotated && how == COMMIT_BLOCKING && !state->legacy_cursor_update) {
+        commit_release(i915, planes, rotated, to);
     }
 }
 
@@ -670,19 +760,10 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
     if (pipes) {
         interactive_handover(i915, pipes, err);
     }
-    for (i = 0; i < DRM_MAX_PLANES; i++) {
-        struct intel_crtc *c = planes[i] ? plane_slot(i915, planes[i], &slot) : NULL;
-        struct intel_scanout next;
-
-        next.fb = fbs[i];
-        next.vma = pinned[i];
-        if (err != 0 || !c) {
-            scanout_put(&next);
-            continue;
-        }
-        scanout_rotate(c, slot, next, from[i], intel_get_vblank_counter(&c->base),
-                       state->legacy_cursor_update);
-    }
+    commit_scanouts(state, planes, fbs, pinned, from,
+                    err != 0   ? COMMIT_FAILED
+                    : nonblock ? COMMIT_NONBLOCK
+                               : COMMIT_BLOCKING);
     return err;
 }
 

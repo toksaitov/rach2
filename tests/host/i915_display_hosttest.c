@@ -732,9 +732,9 @@ static void row_takeover(void)
     frame();
     CHECK(i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(0),
           "takeover: the plane scans the console's buffer after the vblank");
-    CHECK(pa->shown[0].fb && pa->shown[0].fb->base.id == fb_con && pa->parked[0].fb &&
-              pa->parked[0].fb->obj[0] == fw_obj,
-          "takeover: the firmware's framebuffer parked until the next flip");
+    CHECK(pa->shown[0].fb && pa->shown[0].fb->base.id == fb_con && !pa->parked[0].fb &&
+              fw_obj->refs == 0,
+          "takeover: the firmware's framebuffer let go once the commit has latched");
     other.clock = 50000;
     CHECK(setcrtc(&other, fb_con) == -EINVAL, "takeover: a refresh rate the panel lacks refused");
 }
@@ -742,8 +742,8 @@ static void row_takeover(void)
 /* ---- 78-9.4: flips and their events ---- */
 
 /** A flip's event: sent at the vblank that latches it, not before, with
- * the count and a stamp that rises; the firmware's framebuffer, parked,
- * let go by the next one. */
+ * the count and a stamp that rises; a nonblocking flip keeps the buffer
+ * it replaced until the flip after it. */
 static void row_flip(void)
 {
     uint32_t h, fb;
@@ -774,7 +774,6 @@ static void row_flip(void)
                   (model_now_ns + 980131) / 1000 * 1000,
           "flip: the event's count and stamp are the vblank's");
     CHECK(pa->base.flip_pending == DRM_FLIP_NONE && !pa->event, "flip: nothing pending");
-    CHECK(fw_obj->refs == 0, "flip: the firmware's framebuffer let go");
     CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_EVENT, 0x5678) == 0, "flip: back to the console");
     CHECK(bo_vma[1].pin_count == 1 && bo_vma[0].pin_count == 1,
           "flip: the shown and the parked buffers stay pinned");
@@ -1291,8 +1290,8 @@ static int view_reads_source(const struct i915_vma *v, uint32_t surf, uint32_t s
  * An X-tiled framebuffer 16384 pixels wide, whose 64 KiB stride passes the
  * primary plane's 32 KiB, shown from (9000, 100) through a remapped view
  * of the source's tiles alone, as Linux's intel_plane_remap_gtt makes it; a
- * pan binds the next view, and each is unpinned once the flip after the
- * one that replaced it has latched, as the other scanouts are.
+ * pan binds the next view, and each is unpinned once the blocking commit
+ * that replaced it has latched, as the other scanouts are.
  */
 static void row_remap_primary(void)
 {
@@ -1318,27 +1317,23 @@ static void row_remap_primary(void)
     CHECK(i915_model_pipes(&model)->pipe[0].primary.surf == REMAP_GGTT(16, 0),
           "remap: the view scanned after the vblank");
     CHECK(plane_commit(&pa->primary, fb, &pan, 0) == 0 && next->pin_count == 1 &&
-              next->remap.offset == 12u * 128u + 71u && v->pin_count == 1 &&
+              next->remap.offset == 12u * 128u + 71u && v->pin_count == 0 &&
               reg(DSPSURF(0)) == REMAP_GGTT(16, 1) && reg(DSPOFFSET(0)) == (4u << 16 | 12u),
-          "remap: a pan to x 9100 binds the next view, the shown one kept");
+          "remap: a pan to x 9100 binds the next view, the first let go once it latched");
     CHECK(view_reads_source(next, reg(DSPSURF(0)), reg(DSPSTRIDE(0)), reg(DSPOFFSET(0)), &panned),
           "remap: each pixel read after the pan is the source's");
     frame();
     CHECK(plane_commit(&pa->primary, fb_con, &full, 0) == 0 && v->pin_count == 0 &&
-              next->pin_count == 1,
-          "remap: back to the console, the first view unpinned, the latched one kept");
-    frame();
-    CHECK(plane_commit(&pa->primary, fb_con, &full, 0) == 0 && next->pin_count == 0 &&
-              reg(DSPSTRIDE(0)) == 5504 && reg(DSPSURF(0)) == BO_GGTT(0),
-          "remap: the second view unpinned after the next flip, the console as before");
+              next->pin_count == 0 && reg(DSPSTRIDE(0)) == 5504 && reg(DSPSURF(0)) == BO_GGTT(0),
+          "remap: back to the console, the second view unpinned once it latched");
     frame();
 }
 
 /**
  * A linear framebuffer 16384 pixels wide, its 64 KiB stride whole pages
  * past the sprite's 16 KiB, shown from (9000, 300) through a remapped view
- * of a page of each source row; unpinned once the sprite is off and a flip
- * has passed.
+ * of a page of each source row; unpinned once the commit that turns the
+ * sprite off has latched.
  */
 static void row_remap_sprite(void)
 {
@@ -1360,11 +1355,8 @@ static void row_remap_sprite(void)
     CHECK(view_reads_source(v, reg(SPRSURF(0)), reg(SPRSTRIDE(0)), reg(SPROFFSET(0)), &src),
           "remap: each pixel the sprite reads is the source's");
     frame();
-    CHECK(plane_commit(&pa->sprite, 0, &full, 0) == 0 && v->pin_count == 1,
-          "remap: the sprite off, its view kept until the flip latches");
-    frame();
     CHECK(plane_commit(&pa->sprite, 0, &full, 0) == 0 && v->pin_count == 0,
-          "remap: the sprite's view unpinned after the next flip");
+          "remap: the sprite off, its view unpinned once the commit latched");
     frame();
 }
 
