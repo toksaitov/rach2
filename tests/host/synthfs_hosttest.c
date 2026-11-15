@@ -615,6 +615,35 @@ static void paths(void)
 }
 
 /**
+ * /dev/cpu and its row for each processor, cpu/0 to cpu/63, classify with
+ * their row, the second in the first, and a name in one as the device of
+ * the row's path, a slash and the name, as /dev/cpu/N/msr; a name that is
+ * no processor's row is a device of /dev/cpu, which devfs does not have.
+ */
+static void dev_cpu_rows(void)
+{
+    struct vpath vp;
+    char out[64];
+
+    CHECK(synth_classify("dev/cpu", &vp) == VNODE_DEV_SUBDIR &&
+          eq(synth_dev_dir_at(vp.devdir)->name, "cpu"));
+    CHECK(synth_classify("dev/cpu/3", &vp) == VNODE_DEV_SUBDIR &&
+          eq(synth_dev_dir_at(vp.devdir)->name, "cpu/3") &&
+          synth_dev_dir_at(vp.devdir)->parent == synth_dev_dir_find("cpu", 3) &&
+          eq(synth_dev_dir_leaf(synth_dev_dir_at(vp.devdir)), "3"));
+    CHECK(synth_classify("dev/cpu/3/msr", &vp) == VNODE_DEV && eq(vp.name, "cpu/3/msr"));
+    CHECK(synth_classify("dev/cpu/3/msr/x", &vp) == VNODE_ENOTDIR && eq(vp.name, "cpu/3/msr"));
+    CHECK(synth_classify("dev/cpu/x", &vp) == VNODE_DEV && eq(vp.name, "cpu/x"));
+    CHECK(synth_dev_dir_child(-1, "cpu", 3) == synth_dev_dir_find("cpu", 3) &&
+          synth_dev_dir_child(-1, "3", 1) < 0 &&
+          synth_dev_dir_child(synth_dev_dir_find("cpu", 3), "63", 2) ==
+              synth_dev_dir_find("cpu/63", 6) &&
+          synth_dev_dir_find("cpu/64", 6) < 0);
+    synth_dir_path(VNODE_DEV_SUBDIR, synth_dev_dir_find("cpu/3", 5), 0, out, (int)sizeof(out));
+    CHECK(eq(out, "/dev/cpu/3"));
+}
+
+/**
  * /proc/sys/net/ipv6/conf: a directory for `all`, `default` and each
  * interface in a slot, whatever its name, wlan4 among them, and none for a
  * name no slot holds.
@@ -998,6 +1027,7 @@ int main(int argc, char **argv)
 
     bounds();
     past_a_file();
+    dev_cpu_rows();
     past_a_name();
     paths();
     sys_tree();

@@ -320,14 +320,24 @@ static void whole_disk_window(void)
     publishing = 0;
 }
 
-/* /dev's directories as synthfs.c has them: input, always present, and dri,
-   present while it has a node. */
-static const struct synth_dev_dir dev_dirs[] = {{"input", 5u, 1}, {"dri", 6u, 0}};
+/* /dev's directories as synthfs.c has them: input, always present, dri,
+   present while it has a node, and cpu with its row cpu/0, present while a
+   node is in cpu/0. */
+static const struct synth_dev_dir dev_dirs[] = {
+    {"input", 5u, 1, -1}, {"dri", 6u, 0, -1}, {"cpu", 0xF00u, 0, -1}, {"cpu/0", 0xF01u, 0, 2}};
+
+#define DEV_DIRS 4
+
+/** The number of rows of /dev's directories. */
+int synth_dev_dir_count(void)
+{
+    return DEV_DIRS;
+}
 
 /** Row `n` of /dev's directories, or NULL past the last. */
 const struct synth_dev_dir *synth_dev_dir_at(int n)
 {
-    return n >= 0 && n < 2 ? &dev_dirs[n] : NULL;
+    return n >= 0 && n < DEV_DIRS ? &dev_dirs[n] : NULL;
 }
 
 /** The row named by the `len` bytes at `name`, or -1. */
@@ -335,7 +345,7 @@ int synth_dev_dir_find(const char *name, int len)
 {
     int i, k;
 
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < DEV_DIRS; i++) {
         for (k = 0; k < len && dev_dirs[i].name[k] == name[k]; k++) {
         }
         if (k == len && dev_dirs[i].name[k] == '\0') {
@@ -438,9 +448,42 @@ static void registry(void)
 }
 
 /**
+ * A node registered as cpu/0/msr, in the row cpu/0 of the row cpu, is found
+ * by its path and listed in /dev/cpu/0 alone, and makes both rows present,
+ * /dev/cpu through the row in it; a name in a row that has none, cpu/9/msr,
+ * is refused. Unregistered, it takes both rows with it.
+ */
+static void nested_registry(void)
+{
+    static struct devfs_node msr = {"cpu/0/msr", 202, 0, 0600, &node_ops, NULL, NULL};
+    struct devfs_node other = msr;
+    int cpu = synth_dev_dir_find("cpu", 3), cpu0 = synth_dev_dir_find("cpu/0", 5);
+    uint32_t rdev = 0, ino = 0;
+
+    check(cpu >= 0 && cpu0 >= 0 && !devfs_subdir_present(cpu) && !devfs_subdir_present(cpu0),
+          "/dev/cpu and /dev/cpu/0 are absent with no node");
+    check(devfs_node_register(&msr) == 0 && devfs_stat("cpu/0/msr", 0, &rdev, &ino) == 0 &&
+              rdev == (202u << 8),
+          "cpu/0/msr registers and is found by its path at 202:0");
+    check(listed("cpu/0", "msr", ino) && !listed("cpu", "0/msr", ino) &&
+              !listed("", "cpu/0/msr", ino),
+          "and is listed in /dev/cpu/0 alone");
+    check(devfs_subdir_present(cpu0) && devfs_subdir_present(cpu),
+          "and makes /dev/cpu/0 present, and /dev/cpu through it");
+    other.name = "cpu/9/msr";
+    other.minor = 9;
+    check(devfs_node_register(&other) == -EINVAL, "a name in a row the table lacks is refused");
+    devfs_node_unregister(&msr);
+    check(devfs_stat("cpu/0/msr", 0, 0, 0) != 0 && !devfs_subdir_present(cpu0) &&
+              !devfs_subdir_present(cpu),
+          "unregistered, cpu/0/msr is gone, and both rows with it");
+}
+
+/**
  * The rows of an open, then those of `offset_devices`, `grubcore_windows`,
- * `whole_disk_window` and `registry`. An exclusive create of ptmx, null or
- * an absent name, in each access mode and with or without O_DIRECTORY and
+ * `whole_disk_window`, `registry` and `nested_registry`. An exclusive
+ * create of ptmx, null or an absent name, in each access mode and with or
+ * without O_DIRECTORY and
  * O_NONBLOCK, is EEXIST for a device and ENOENT for an absent one, and
  * opens no pty master and takes no descriptor. An open of ptmx with
  * O_DIRECTORY is ENOTDIR and opens nothing, and an ordinary open of ptmx
@@ -468,9 +511,10 @@ int main(void)
     grubcore_windows();
     whole_disk_window();
     registry();
+    nested_registry();
     if (!failures) {
         printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices, "
-               "boot loader windows, the whole-disk window, the registry\n");
+               "boot loader windows, the whole-disk window, the registry, nested rows\n");
     }
     return failures != 0;
 }

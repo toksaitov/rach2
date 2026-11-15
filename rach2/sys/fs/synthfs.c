@@ -114,13 +114,31 @@ static void synth_copy_name(struct vpath *vp, struct comp c)
     vp->name[n] = '\0';
 }
 
-/* The directories of /dev (synthfs.h). The inodes follow /dev/log's, 4,
- * with the slaves of /dev/pts from 0x1000 and devfs's nodes above. */
+/* The row of /dev/cpu, whose rows are each processor's, /dev/cpu/N, for
+ * the devices of the processor, as Linux's msr and cpuid drivers make them. */
+#define SYNTH_ROW_CPU 3
+#define CPU_ROW(n)    {"cpu/" #n, 0xF01u + (n), 0, SYNTH_ROW_CPU},
+
+/* The directories of /dev (synthfs.h). The inodes of those of /dev itself
+ * follow /dev/log's, 4, below devfs's nodes from 16; those of /dev/cpu are
+ * from 0xF00, above devfs's last and below the slaves of /dev/pts, from
+ * 0x1000. One row for each of the NR_CPUS processors. */
 static const struct synth_dev_dir synth_dev_dirs[] = {
-    {"input", 5u, 1},
-    {"dri", 6u, 0},
-    {"vfio", 7u, 0},
-};
+    {"input", 5u, 1, -1},
+    {"dri", 6u, 0, -1},
+    {"vfio", 7u, 0, -1},
+    {"cpu", 0xF00u, 0, -1},
+    CPU_ROW(0) CPU_ROW(1) CPU_ROW(2) CPU_ROW(3) CPU_ROW(4) CPU_ROW(5) CPU_ROW(6) CPU_ROW(7)
+        CPU_ROW(8) CPU_ROW(9) CPU_ROW(10) CPU_ROW(11) CPU_ROW(12) CPU_ROW(13) CPU_ROW(14)
+            CPU_ROW(15) CPU_ROW(16) CPU_ROW(17) CPU_ROW(18) CPU_ROW(19) CPU_ROW(20) CPU_ROW(21)
+                CPU_ROW(22) CPU_ROW(23) CPU_ROW(24) CPU_ROW(25) CPU_ROW(26) CPU_ROW(27) CPU_ROW(28)
+                    CPU_ROW(29) CPU_ROW(30) CPU_ROW(31) CPU_ROW(32) CPU_ROW(33) CPU_ROW(34)
+                        CPU_ROW(35) CPU_ROW(36) CPU_ROW(37) CPU_ROW(38) CPU_ROW(39) CPU_ROW(40)
+                            CPU_ROW(41) CPU_ROW(42) CPU_ROW(43) CPU_ROW(44) CPU_ROW(45) CPU_ROW(46)
+                                CPU_ROW(47) CPU_ROW(48) CPU_ROW(49) CPU_ROW(50) CPU_ROW(51)
+                                    CPU_ROW(52) CPU_ROW(53) CPU_ROW(54) CPU_ROW(55) CPU_ROW(56)
+                                        CPU_ROW(57) CPU_ROW(58) CPU_ROW(59) CPU_ROW(60) CPU_ROW(61)
+                                            CPU_ROW(62) CPU_ROW(63)};
 
 #define SYNTH_DEV_DIRS ((int)(sizeof(synth_dev_dirs) / sizeof(synth_dev_dirs[0])))
 
@@ -150,18 +168,53 @@ int synth_dev_dir_find(const char *name, int len)
     return -1;
 }
 
+const char *synth_dev_dir_leaf(const struct synth_dev_dir *d)
+{
+    const char *leaf = d->name, *p;
+
+    for (p = d->name; *p; p++) {
+        if (*p == '/') {
+            leaf = p + 1;
+        }
+    }
+    return leaf;
+}
+
+int synth_dev_dir_child(int parent, const char *leaf, int len)
+{
+    int i, k;
+
+    for (i = 0; i < SYNTH_DEV_DIRS; i++) {
+        const char *d = synth_dev_dir_leaf(&synth_dev_dirs[i]);
+
+        if (synth_dev_dirs[i].parent != parent) {
+            continue;
+        }
+        for (k = 0; k < len && d[k] == leaf[k]; k++) {
+        }
+        if (k == len && d[k] == '\0') {
+            return i;
+        }
+    }
+    return -1;
+}
+
 /** Classify the components `c` of `n` below row `row` of /dev's directories:
  * the directory, and a device in it as the device of /dev named by the
  * directory, a slash and its name, which devfs decides whether it exists. */
 static int synth_classify_dev_dir(int row, const struct comp *c, int n, struct vpath *vp)
 {
     const char *dir = synth_dev_dirs[row].name;
-    int i, k;
+    int i, k, sub;
 
     if (n == 0) {
         vp->kind = VNODE_DEV_SUBDIR;
         vp->devdir = row;
         return vp->kind;
+    }
+    sub = synth_dev_dir_child(row, c[0].s, c[0].len);
+    if (sub >= 0) {
+        return synth_classify_dev_dir(sub, c + 1, n - 1, vp);
     }
     for (i = 0; dir[i] != '\0'; i++) {
         vp->name[i] = dir[i];
@@ -2109,7 +2162,7 @@ static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
         }
         return vp->kind;
     }
-    row = synth_dev_dir_find(c[1].s, c[1].len);
+    row = synth_dev_dir_child(-1, c[1].s, c[1].len);
     if (row >= 0) {
         return synth_classify_dev_dir(row, c + 2, n - 2, vp);
     }

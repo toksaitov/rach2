@@ -277,14 +277,16 @@ int devfs_lseek_zero(struct fd_entry *e);
 int devfs_dirent(int n, const char **name, uint32_t *ino);
 
 /**
- * The `n`th device present now in the directory `dir` of /dev, "input" or
- * "dri", from 0, as `devfs_dirent` gives those of /dev: its name in the
- * directory, such as eventN, and its inode. Returns 1, or 0 past the last.
+ * The `n`th device present now in the directory `dir` of /dev, "input",
+ * "dri" or "cpu/0", from 0, as `devfs_dirent` gives those of /dev: its name
+ * in the directory, such as eventN, and its inode. Returns 1, or 0 past
+ * the last. A row in the directory is not among them.
  */
 int devfs_subdir_dirent(const char *dir, int n, const char **name, uint32_t *ino);
 
 /** Whether row `row` of /dev's directories (synthfs.h) is present now: 1
- * for a row marked `always` or one with a device present, else 0. */
+ * for a row marked `always`, one with a device present or one with a row
+ * in it present, else 0. */
 int devfs_subdir_present(int row);
 
 /*
@@ -293,8 +295,9 @@ int devfs_subdir_present(int row);
  * /dev/udmabuf, /dev/kvm and /dev/watchdog. The registrant keeps the
  * record while it is registered. `name` is the path below /dev: a name of
  * /dev itself, or "DIR/NAME" for a directory DIR of /dev's table of them
- * (synthfs.h). A registered node is looked up, stat'ed, listed and opened
- * as a node of the table is, a character device owned by root with the
+ * (synthfs.h), such as "cpu/0/msr". A registered node is looked up,
+ * stat'ed, listed and opened as a node of the table is, a character device
+ * owned by root with the
  * permission bits `mode`: an open binds `ops` to the descriptor, with
  * `priv` NULL, and then calls `open`, unless NULL, which may set the
  * descriptor's `priv` and refuse with -errno. Its inode is its slot's,
@@ -303,7 +306,9 @@ int devfs_subdir_present(int row);
  * operations and its `priv`, and fstat gives its name and numbers until
  * its slot is taken again, first by a node of the same name.
  */
-#define DEVFS_NODES_MAX     64
+/* The most nodes at once: 64 for the drivers and one msr for each of the
+ * 64 processors (proc/percpu.h's NR_CPUS). */
+#define DEVFS_NODES_MAX     128
 /* The devices that may have an owner, group or mode of their own at once. */
 #define DEVFS_OWNED_MAX     256
 #define DEVFS_NODE_NAME_MAX 32

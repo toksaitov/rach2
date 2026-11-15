@@ -2934,28 +2934,43 @@ int devfs_subdir_present(int row)
     const struct synth_dev_dir *d = synth_dev_dir_at(row);
     const char *name;
     uint32_t ino;
+    int i;
 
-    return d && (d->always || devfs_subdir_dirent(d->name, 0, &name, &ino));
+    if (!d) {
+        return 0;
+    }
+    if (d->always || devfs_subdir_dirent(d->name, 0, &name, &ino)) {
+        return 1;
+    }
+    for (i = 0; i < synth_dev_dir_count(); i++) {
+        if (synth_dev_dir_at(i)->parent == row && devfs_subdir_present(i)) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /** Whether `name` may name a registered node: not empty, short enough for a
  * slot, and either a name of /dev itself or one name in a directory of
- * /dev's table (`synth_dev_dir_find`), with no empty part. */
+ * /dev's table, "cpu/0/msr" in "cpu/0" among them (`synth_dev_dir_find`),
+ * with no empty part. */
 static int reg_name_ok(const char *name)
 {
     int len = (int)k_strlen(name);
-    int slash;
+    int slash = -1, i;
 
     if (len == 0 || len >= DEVFS_NODE_NAME_MAX) {
         return 0;
     }
-    for (slash = 0; slash < len && name[slash] != '/'; slash++) {
+    for (i = 0; i < len; i++) {
+        if (name[i] == '/') {
+            slash = i;
+        }
     }
-    if (slash == len) {
+    if (slash < 0) {
         return 1;
     }
-    return slash > 0 && slash < len - 1 && !in_subdir(name + slash + 1) &&
-           synth_dev_dir_find(name, slash) >= 0;
+    return slash > 0 && slash < len - 1 && synth_dev_dir_find(name, slash) >= 0;
 }
 
 /** Whether a node of the table, a disk or the registry already has `name`,

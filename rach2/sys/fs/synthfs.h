@@ -298,16 +298,19 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
 /*
  * The directories of /dev, apart from pts, which devpts owns: a row each,
  * in the order /dev lists them. A row's devices are devfs's nodes named
- * "DIR/NAME" (devfs.h). A row marked `always` is present on every machine,
- * as /dev/input is, even when empty; any other only while devfs has a
- * device in it (`devfs_subdir_present`), as /dev/dri is while a display
- * device is bound. A descriptor open on a row's directory has the row in
- * its record's `pid`.
+ * "DIR/NAME" (devfs.h), and a row may be in another, as /dev/cpu/0 is in
+ * /dev/cpu, with its devices named "cpu/0/NAME". A row marked `always` is
+ * present on every machine, as /dev/input is, even when empty; any other
+ * only while devfs has a device in it or in a row in it
+ * (`devfs_subdir_present`), as /dev/dri is while a display device is
+ * bound. A descriptor open on a row's directory has the row in its
+ * record's `pid`.
  */
 struct synth_dev_dir {
-    const char *name; /* the directory's name in /dev */
-    uint32_t ino;     /* its inode, below devfs's numbers */
+    const char *name; /* its path below /dev: "input", or "cpu/0" in a row */
+    uint32_t ino;     /* its inode, apart from devfs's and devpts's numbers */
     int always;       /* 1: present when it has no device */
+    int parent;       /* the row it is in, or -1 for one of /dev itself */
 };
 
 /** The number of rows of /dev's directories. */
@@ -316,8 +319,16 @@ int synth_dev_dir_count(void);
 /** Row `n` of /dev's directories, or NULL past the last. */
 const struct synth_dev_dir *synth_dev_dir_at(int n);
 
-/** The row whose name is the `len` bytes at `name`, or -1 for none. */
+/** The row whose name is the `len` bytes at `name`, a path below /dev
+ * such as "cpu/0", or -1 for none. */
 int synth_dev_dir_find(const char *name, int len);
+
+/** The row named by the `len` bytes at `leaf` in row `parent`, or in /dev
+ * itself when `parent` is -1: its index, or -1 for none. */
+int synth_dev_dir_child(int parent, const char *leaf, int len);
+
+/** The last name of the path of row `d`, "0" for "cpu/0". */
+const char *synth_dev_dir_leaf(const struct synth_dev_dir *d);
 
 /*
  * /proc/sys: a few of Linux's sysctl files, in a table of entries, of which

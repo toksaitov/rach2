@@ -196,7 +196,9 @@ int devtree_resolve(const char *rel, uint32_t len)
         if (n && (n->mode & DT_IFMT) != DT_IFDIR) {
             return -ENOTDIR;
         }
-        if (parent == DEVTREE_ROOT && !n && (row = synth_dev_dir_find(comp, (int)clen)) >= 0) {
+        if (parent <= DEVTREE_ROOT && !n &&
+            (row = synth_dev_dir_child(parent == DEVTREE_ROOT ? -1 : DEVTREE_ROW(0) - parent, comp,
+                                       (int)clen)) >= 0) {
             parent = DEVTREE_ROW(row);
             continue;
         }

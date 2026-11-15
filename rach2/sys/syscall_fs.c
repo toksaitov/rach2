@@ -8431,7 +8431,9 @@ static int32_t synth_dev_make(const struct vfs_ref *parent, const char *leaf, ui
     if (where == DEVTREE_NONE) {
         return -EROFS;
     }
-    if (where == DEVTREE_ROOT && synth_dev_dir_find(leaf, (int)k_strlen(leaf)) >= 0) {
+    if (where <= DEVTREE_ROOT &&
+        synth_dev_dir_child(where == DEVTREE_ROOT ? -1 : DEVTREE_ROW(0) - where, leaf,
+                            (int)k_strlen(leaf)) >= 0) {
         return -EEXIST; /* a directory of the table, absent now */
     }
     rc = cred_access_ref(parent, CRED_W, 0);
@@ -18916,14 +18918,22 @@ static int synth_entry(const char *what, uint32_t inode, uint8_t type, char *nam
 }
 
 /** The `n`th entry, past "." and "..", of row `row` of /dev's directories:
- * its devices present now (`devfs_subdir_dirent`), as `synth_entry` gives
- * one. */
+ * the rows in it present now, /dev/cpu's /dev/cpu/N, then its devices
+ * present now (`devfs_subdir_dirent`), as `synth_entry` gives one. */
 static int synth_dev_dir_dirent(int row, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
     const struct synth_dev_dir *d = synth_dev_dir_at(row);
     const char *dn = NULL;
     uint32_t dino = 0;
+    int i;
 
+    for (i = 0; d && i < synth_dev_dir_count(); i++) {
+        const struct synth_dev_dir *sub = synth_dev_dir_at(i);
+
+        if (sub->parent == row && devfs_subdir_present(i) && n-- == 0) {
+            return synth_entry(synth_dev_dir_leaf(sub), sub->ino, DT_DIR, name, ino, dtype);
+        }
+    }
     if (!d || !devfs_subdir_dirent(d->name, n, &dn, &dino)) {
         dn = NULL;
     }
@@ -19322,7 +19332,7 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
     }
     n -= 4;
     for (i = 0; i < synth_dev_dir_count(); i++) {
-        if (devfs_subdir_present(i) && n-- == 0) {
+        if (synth_dev_dir_at(i)->parent < 0 && devfs_subdir_present(i) && n-- == 0) {
             k_strncpy(name, synth_dev_dir_at(i)->name, 31);
             *ino = synth_dev_dir_at(i)->ino;
             *dtype = DT_DIR;
