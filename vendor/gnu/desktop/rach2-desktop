@@ -14,7 +14,9 @@ removed=/run/rach2-desktop.removed seen=0
 cleanup()
 {
     trap - EXIT HUP INT TERM USR1
-    rm -f /run/rach2-desktop.pid "$removed"
+    # A root gone read-only refuses the removal, and under set -e its
+    # failure would end the trap with the session and the services running.
+    rm -f /run/rach2-desktop.pid "$removed" 2>/dev/null || :
     [ -z "$session" ] || stop_session
     for child in "$watch" "$seat" "$udev"; do
         [ -z "$child" ] || kill -TERM "-$child" 2>/dev/null || :
