@@ -52,9 +52,9 @@
  */
 
 #include <stdarg.h>
-#include <stdio.h>
 
 #include "drm/i915/i915_fake.c"
+#include "arch/x86/portio.h"
 #include "fs/fd.h"
 #include "fs/sysfs.h"
 #include "iommu.h"
@@ -66,6 +66,7 @@
 volatile uint64_t kernel_ticks;
 
 extern int printf(const char *format, ...);
+extern int snprintf(char *s, unsigned long n, const char *format, ...);
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
 extern int posix_memalign(void **p, unsigned long align, unsigned long size);
 extern void *calloc(unsigned long count, unsigned long size);
@@ -85,6 +86,20 @@ static int fails;
     } while (0)
 
 /* ---- the kernel around the driver ---- */
+
+/** The fake backend has no VGA I/O ports and never reads one. */
+uint8_t inb(uint16_t port)
+{
+    (void)port;
+    return 0;
+}
+
+/** The fake backend has no VGA I/O ports and never writes one. */
+void outb(uint16_t port, uint8_t value)
+{
+    (void)port;
+    (void)value;
+}
 
 static char log_text[32768];
 
