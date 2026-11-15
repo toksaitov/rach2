@@ -531,6 +531,42 @@ static uint32_t sprite_format(uint32_t format)
     }
 }
 
+/**
+ * Whether the sprite needs its own gamma for `format`, Linux's
+ * ivb_need_sprite_gamma: an FP16 framebuffer, eight bytes a pixel.
+ */
+static int sprite_needs_gamma(uint32_t format)
+{
+    return format == DRM_FORMAT_XRGB16161616F || format == DRM_FORMAT_XBGR16161616F;
+}
+
+/**
+ * Load the sprite's gamma with a linear ramp of four times its input,
+ * Linux's ivb_sprite_update_gamma with ivb_sprite_linear_gamma. The
+ * registers are single-buffered, and the update writes them after the
+ * surface, as Linux does.
+ */
+static void sprite_load_gamma(struct i915_hw *hw, uint32_t pipe)
+{
+    /* WaFP16GammaEnabling:hsw: the sprite gives an FP16 framebuffer's
+     * channels at a quarter of their amplitude. */
+    uint32_t g, i, c;
+
+    for (i = 0; i < 16; i++) {
+        g = (4u * i << 10) / 16u;
+        if (g > 1023u) {
+            g = 1023u;
+        }
+        i915_write(hw, SPRGAMC(pipe, i), g << 20 | g << 10 | g);
+    }
+    for (c = 0; c < 3; c++) {
+        i915_write(hw, SPRGAMC16(pipe, c), 1u << 10);
+    }
+    for (c = 0; c < 3; c++) {
+        i915_write(hw, SPRGAMC17(pipe, c), 3u << 10);
+    }
+}
+
 /** The sprite's check (`intel_plane_check`). */
 static int32_t sprite_check(struct drm_plane *plane, struct drm_atomic_state *state)
 {
@@ -540,7 +576,8 @@ static int32_t sprite_check(struct drm_plane *plane, struct drm_atomic_state *st
 /**
  * Show the sprite's state, Linux's ivb_sprite_update_noarm and
  * ivb_sprite_update_arm: its stride, place, size, no colour key and no
- * scaling, its offset and control, then its surface, which arms them.
+ * scaling, its offset and control, then its surface, which arms them, and
+ * for FP16 its own gamma.
  */
 static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *state)
 {
@@ -562,7 +599,16 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     surf = plane_surface(ps, 0, &stride, &x, &y);
     w = (uint32_t)(ps->dst.x2 - ps->dst.x1);
     h = (uint32_t)(ps->dst.y2 - ps->dst.y1);
-    ctl = SPRITE_ENABLE | SPRITE_PLANE_GAMMA_DISABLE | sprite_format(ps->fb->format);
+    ctl = SPRITE_ENABLE | sprite_format(ps->fb->format);
+    if (!sprite_needs_gamma(ps->fb->format)) {
+        ctl |= SPRITE_PLANE_GAMMA_DISABLE;
+    }
+    if (ps->color_encoding == DRM_COLOR_YCBCR_BT709) {
+        ctl |= SPRITE_YUV_TO_RGB_CSC_FORMAT_BT709;
+    }
+    if (ps->color_range == DRM_COLOR_YCBCR_FULL_RANGE) {
+        ctl |= SPRITE_YUV_RANGE_CORRECTION_DISABLE;
+    }
     if (intel_fb_modifier(ps->fb) == I915_FORMAT_MOD_X_TILED) {
         ctl |= SPRITE_TILED;
     }
@@ -586,6 +632,9 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     i915_write(hw, SPROFFSET(c->pipe), y << 16 | x);
     i915_write(hw, SPRCTL(c->pipe), ctl);
     i915_write(hw, SPRSURF(c->pipe), surf);
+    if (sprite_needs_gamma(ps->fb->format)) {
+        sprite_load_gamma(hw, c->pipe);
+    }
     c->planes_on |= 1u << INTEL_PLANE_SPRITE;
 }
 
@@ -612,6 +661,10 @@ int32_t intel_planes_init(struct intel_crtc *crtc)
                                       plane_modifiers, DRM_PLANE_TYPE_OVERLAY)) != 0 ||
         (err = drm_plane_create_rotation_property(&crtc->sprite, DRM_MODE_ROTATE_0,
                                                   DRM_MODE_ROTATE_0 | DRM_MODE_ROTATE_180)) != 0 ||
+        (err = drm_plane_create_color_properties(
+             &crtc->sprite, 1u << DRM_COLOR_YCBCR_BT601 | 1u << DRM_COLOR_YCBCR_BT709,
+             1u << DRM_COLOR_YCBCR_LIMITED_RANGE | 1u << DRM_COLOR_YCBCR_FULL_RANGE,
+             DRM_COLOR_YCBCR_BT709, DRM_COLOR_YCBCR_LIMITED_RANGE)) != 0 ||
         (err = drm_plane_create_zpos_property(&crtc->sprite, 1, 1, 1)) != 0) {
         return err;
     }

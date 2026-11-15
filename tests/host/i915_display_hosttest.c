@@ -1104,8 +1104,9 @@ static void row_sprite(void)
     CHECK(fb && plane_commit(&pa->sprite, fb, &at, 0) == 0, "sprite: shown at (10, 20)");
     CHECK(reg(SPRSURF(0)) == BO_GGTT(8) && reg(SPRSTRIDE(0)) == 256 &&
               reg(SPRPOS(0)) == (20u << 16 | 10u) && reg(SPRSIZE(0)) == (63u << 16 | 63u) &&
-              reg(SPRCTL(0)) == (SPRITE_ENABLE | SPRITE_PLANE_GAMMA_DISABLE |
-                                 SPRITE_FORMAT_RGBX888 | SPRITE_RGB_ORDER_RGBX),
+              reg(SPRCTL(0)) ==
+                  (SPRITE_ENABLE | SPRITE_PLANE_GAMMA_DISABLE | SPRITE_FORMAT_RGBX888 |
+                   SPRITE_RGB_ORDER_RGBX | SPRITE_YUV_TO_RGB_CSC_FORMAT_BT709),
           "sprite: its registers");
     CHECK(((reg(WM0_PIPE_ILK(0)) >> 8) & 0xffu) == 6u && reg(WM1S_LP_ILK) == 6u &&
               reg(WM2S_LP_IVB) == 14u && reg(WM3S_LP_IVB) == 18u &&
