@@ -1170,6 +1170,70 @@ static void row_sprite(void)
     frame();
 }
 
+/** SET_SPRITE_COLORKEY's refusals, its keys in the sprite's registers,
+ * kept by a later commit, and the sprite's gamma for an FP16 format. */
+static void row_colorkey(void)
+{
+    static const struct place at = {0, 0, 64, 64, 10, 20, 64, 64};
+    struct drm_intel_sprite_colorkey ck = {0, 0, 0, 0, 0};
+    uint32_t h = bo_new(18, 512u * 64u, I915_TILING_NONE, 0);
+    uint32_t fb = addfb(h, 64, 64, DRM_FORMAT_XBGR8888, 256, NO_MODIFIER);
+
+    CHECK(fb && plane_commit(&pa->sprite, fb, &at, 0) == 0, "colorkey: the sprite shown");
+    ck.plane_id = pa->primary.base.id;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == -ENOENT,
+          "colorkey: the primary plane refused");
+    ck.plane_id = pa->cursor.base.id;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == -ENOENT,
+          "colorkey: the cursor refused");
+    ck.plane_id = 0;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == -ENOENT,
+          "colorkey: plane 0 refused");
+    ck.plane_id = pa->sprite.base.id;
+    ck.flags = I915_SET_COLORKEY_SOURCE | I915_SET_COLORKEY_DESTINATION;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == -EINVAL,
+          "colorkey: both keys refused");
+    ck.flags = 1u << 3;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == -EINVAL,
+          "colorkey: an unknown flag refused");
+    ck.flags = 0;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == 0 &&
+              !(reg(SPRCTL(0)) & (SPRITE_SOURCE_KEY | SPRITE_DEST_KEY)),
+          "colorkey: no key on the sprite taken");
+    ck.min_value = 0x102030;
+    ck.max_value = 0x405060;
+    ck.channel_mask = 0xffffff;
+    ck.flags = I915_SET_COLORKEY_NONE | I915_SET_COLORKEY_SOURCE;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == 0 &&
+              (reg(SPRCTL(0)) & (SPRITE_SOURCE_KEY | SPRITE_DEST_KEY)) == SPRITE_SOURCE_KEY &&
+              reg(SPRKEYVAL(0)) == 0x102030 && reg(SPRKEYMAX(0)) == 0x405060 &&
+              reg(SPRKEYMSK(0)) == 0xffffff,
+          "colorkey: a source key in the sprite's registers, NONE ignored");
+    fb = addfb(h, 64, 64, DRM_FORMAT_XRGB16161616F, 512, NO_MODIFIER);
+    CHECK(fb && plane_commit(&pa->sprite, fb, &at, 0) == 0 &&
+              reg(SPRCTL(0)) == (SPRITE_ENABLE | SPRITE_FORMAT_RGBX161616 | SPRITE_SOURCE_KEY),
+          "fp16: the sprite's gamma on, the key kept by a later commit");
+    CHECK(reg(SPRGAMC(0, 0)) == 0 && reg(SPRGAMC(0, 1)) == (256u << 20 | 256u << 10 | 256u) &&
+              reg(SPRGAMC(0, 3)) == (768u << 20 | 768u << 10 | 768u) &&
+              reg(SPRGAMC(0, 4)) == (1023u << 20 | 1023u << 10 | 1023u) &&
+              reg(SPRGAMC(0, 15)) == (1023u << 20 | 1023u << 10 | 1023u) &&
+              reg(SPRGAMC16(0, 0)) == 1024u && reg(SPRGAMC16(0, 2)) == 1024u &&
+              reg(SPRGAMC17(0, 0)) == 3072u && reg(SPRGAMC17(0, 2)) == 3072u,
+          "fp16: the sprite's gamma a line of slope 4, Linux's");
+    ck.flags = I915_SET_COLORKEY_DESTINATION;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == 0 &&
+              (reg(SPRCTL(0)) & (SPRITE_SOURCE_KEY | SPRITE_DEST_KEY)) == SPRITE_DEST_KEY,
+          "colorkey: a destination key");
+    ck.flags = 0;
+    CHECK(intel_sprite_set_colorkey_ioctl(&gpu.drm, &ck, &fa) == 0 &&
+              !(reg(SPRCTL(0)) & (SPRITE_SOURCE_KEY | SPRITE_DEST_KEY)),
+          "colorkey: the key off");
+    frame();
+    CHECK(plane_commit(&pa->sprite, 0, &full, 0) == 0 && reg(SPRCTL(0)) == 0,
+          "colorkey: the sprite turned off");
+    frame();
+}
+
 /* ---- 78-16: framebuffers wider than a plane's stride ---- */
 
 /** The byte of pixel (`px`, `py`) of a surface of `cpp` bytes a pixel at
@@ -1759,6 +1823,7 @@ int main(void)
     row_primary();
     row_addfb_tiling();
     row_sprite();
+    row_colorkey();
     row_remap_primary();
     row_remap_sprite();
     row_cursor();

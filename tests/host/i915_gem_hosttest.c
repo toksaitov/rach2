@@ -970,11 +970,20 @@ static void table_and_unplug(void)
     vma_t gtt;
 
     for (i = 0; i < I915_NUM_IOCTLS; i++) {
-        /* GET_PIPE_FROM_CRTC_ID is the display's, not a render-node call. */
-        bad +=
-            !i915_ioctls[i].func || (i915_ioctls[i].cmd == DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID
-                                         ? i915_ioctls[i].flags != (DRM_MODESET_LOCK | DRM_UNLOCKED)
-                                         : !(i915_ioctls[i].flags & DRM_RENDER_ALLOW));
+        /* The display's rows are no render-node calls: GET_PIPE_FROM_CRTC_ID
+         * and the sprite's colour key, the master's as on Linux. */
+        uint32_t want = DRM_RENDER_ALLOW;
+
+        if (i915_ioctls[i].cmd == DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID) {
+            want = DRM_MODESET_LOCK | DRM_UNLOCKED;
+        } else if (i915_ioctls[i].cmd == DRM_IOCTL_I915_GET_SPRITE_COLORKEY) {
+            want = DRM_MASTER | DRM_UNLOCKED;
+        } else if (i915_ioctls[i].cmd == DRM_IOCTL_I915_SET_SPRITE_COLORKEY) {
+            want = DRM_MASTER | DRM_MODESET_LOCK | DRM_UNLOCKED | DRM_KMS;
+        }
+        bad += !i915_ioctls[i].func ||
+               (want == DRM_RENDER_ALLOW ? !(i915_ioctls[i].flags & DRM_RENDER_ALLOW)
+                                         : i915_ioctls[i].flags != want);
         for (j = 0; j < i; j++) {
             dup += UAPI_IOC_NR(i915_ioctls[i].cmd) == UAPI_IOC_NR(i915_ioctls[j].cmd);
         }

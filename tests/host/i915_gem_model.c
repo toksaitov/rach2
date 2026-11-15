@@ -141,6 +141,25 @@ int32_t intel_get_pipe_from_crtc_id_ioctl(struct drm_device *dev, void *data, st
     return -ENOENT;
 }
 
+/** SET_SPRITE_COLORKEY, which the table names; the display is not here. */
+int32_t intel_sprite_set_colorkey_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    (void)dev;
+    (void)data;
+    (void)file;
+    return -ENOENT;
+}
+
+/** The DRM core's empty handler, GET_SPRITE_COLORKEY's; drm.c is not
+ * here. */
+int32_t drm_noop(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    (void)dev;
+    (void)data;
+    (void)file;
+    return 0;
+}
+
 /** REG_READ, which the table names and i915_ctx_hosttest.c runs on its
  * register model. */
 int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
