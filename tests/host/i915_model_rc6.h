@@ -34,8 +34,9 @@
  * the ready bit clears and the low byte holds `error`, 0 for success, or
  * GEN6_PCODE_ILLEGAL_CMD for a command the model does not know. It
  * answers the duty cycle control with `ddcc`, the overclocking parameters
- * with `oc_params` and the RC6 voltages with `rc6vids`, and keeps each
- * write of the ring's frequency table in `table`, `ntable` of them.
+ * with `oc_params` and the RC6 voltages with `rc6vids`, writes D_COMP_HSW
+ * with the data of GEN6_PCODE_WRITE_D_COMP, and keeps each write of the
+ * ring's frequency table in `table`, `ntable` of them.
  * `commands` counts the commands taken, `last_cmd` is the last.
  */
 struct i915_model_rc6 {

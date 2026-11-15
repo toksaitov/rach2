@@ -10,10 +10,11 @@
  *
  * Blocks. A register file alone answers what was last written. The parts
  * of the chip with behaviour, forcewake, the rings, the reset, RC6, the
- * pipes, the sinks and the DDI, are blocks, each in a file of its own
- * that one task writes (tasks.md's shared files): `i915_model_base.c`,
- * `i915_model_ring.c`, `i915_model_reset.c`, `i915_model_rc6.c`,
- * `i915_model_pipe.c`, `i915_model_sink.c` and `i915_model_ddi.c`. A block
+ * pipes, the sinks, the DDI, and LCPLL with the sideband, are blocks,
+ * each in a file of its own that one task writes (tasks.md's shared
+ * files): `i915_model_base.c`, `i915_model_ring.c`, `i915_model_reset.c`,
+ * `i915_model_rc6.c`, `i915_model_pipe.c`, `i915_model_sink.c`,
+ * `i915_model_ddi.c` and `i915_model_pc8.c`. A block
  * is a `struct i915_model_block` that i915_model.c includes and lists in
  * its table, one line each. A block answers for a range of registers, may
  * keep state of its own, and sees time pass; the first block of the table
@@ -39,7 +40,7 @@
 #define I915_MODEL_LOG 8192
 
 /* The most blocks the table holds. */
-#define I915_MODEL_BLOCKS 24
+#define I915_MODEL_BLOCKS 28
 
 enum i915_model_op { I915_MODEL_READ, I915_MODEL_WRITE, I915_MODEL_DELAY };
 

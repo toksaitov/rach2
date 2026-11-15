@@ -661,6 +661,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_rpm",
+          "checks": "tests/host/i915_rpm_hosttest.c suspends and resumes the Intel graphics driver's HD 4400 on its host model as Linux's runtime PM does: every interrupt masked and disabled, then hsw_enable_pc8's partition gating, CLKOUT_DP off through the sideband, the CD clock on FCLK, LCPLL off, D_COMP off through the pcode and LCPLL let power down, in Linux's order, every access then refused; hsw_disable_pc8's sequence under forcewake and each bank's mask and enable back on the wake, twice over; the sleep refused before any write by each condition of assert_can_disable_lcpll, forcewake held, the well in use and a GTT fault; and a sideband, LCPLL and pcode that never answer, whose waits end at their bounds with the sleep and wake carried through, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_ctx",
           "checks": "tests/host/i915_ctx_hosttest.c runs the Intel graphics driver's contexts and requests on the HD 4400's host model, whose render ring saves and restores context images: the 17-page image and the default state with Linux's workarounds, MI_SET_CONTEXT's flags and a context's registers across a switch, every context ioctl's refusals as Linux 6.18 gives them, sequence numbers, fences signalled from the interrupt, retirement, waits with timeouts, GETPARAM and I915_QUERY row by row and GET_RESET_STATS, under ASan and UBSan and exits 0",
           "source": "scenario"

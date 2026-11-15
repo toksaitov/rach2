@@ -95,6 +95,9 @@ static void pcu_finish(struct i915_model *m, struct i915_model_rc6 *r, uint32_t 
     case GEN6_PCODE_READ_RC6VIDS:
         i915_model_poke(m, GEN6_PCODE_DATA, r->rc6vids);
         break;
+    case GEN6_PCODE_WRITE_D_COMP:
+        i915_model_poke(m, D_COMP_HSW, i915_model_peek(m, GEN6_PCODE_DATA));
+        break;
     case GEN6_PCODE_WRITE_MIN_FREQ_TABLE:
         if (r->ntable < I915_MODEL_FREQ_TABLE) {
             r->table[r->ntable++] = i915_model_peek(m, GEN6_PCODE_DATA);

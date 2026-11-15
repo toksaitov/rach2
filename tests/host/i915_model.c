@@ -47,6 +47,7 @@ void outb(uint16_t port, uint8_t value)
 #include "i915_model_pipe.c"
 #include "i915_model_sink.c"
 #include "i915_model_ddi.c"
+#include "i915_model_pc8.c"
 
 static const struct i915_model_block *const i915_model_blocks[I915_MODEL_BLOCKS + 1] = {
     &i915_model_ring_rcs,
@@ -65,9 +66,11 @@ static const struct i915_model_block *const i915_model_blocks[I915_MODEL_BLOCKS 
     &i915_model_ddi_hotplug,
     &i915_model_ring_south,
     &i915_model_ddi_gmbus,
+    &i915_model_pc8_sbi,
     &i915_model_ddi_aux,
     &i915_model_panel_block,
     &i915_model_base_fifo,
+    &i915_model_pc8_lcpll,
     &i915_model_rc6_pcu,
     &i915_model_base_gtt,
     &i915_model_reset_state_block,
