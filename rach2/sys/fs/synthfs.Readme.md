@@ -20,6 +20,8 @@ On x86-64, `/proc/stat` also reports KVM's live VM, vCPU, slot, guest-physical t
 
 A namespace file reached through `/proc/PID/ns` has device 4 (`NSFS_DEV`), as on Linux. `statfs` gives each mount Linux's magic number for its type ([statfs(2)](../../../man/man2/statfs.2)).
 
+A description opened by a synthetic path keeps the mount the walk reached in `synth_mnt`. Both statx with `AT_EMPTY_PATH` and `/proc/PID/fdinfo` report that mount's id, including a bind mount or a mount placed over the permanent one. A descriptor opened before another mount covers its path keeps its original mount's id.
+
 The manual pages give what each file contains and what each call on it returns:
 
 * [null(4)](../../../man/man4/null.4) (`null`, `zero`, `full`), [random(4)](../../../man/man4/random.4) (`random`, `urandom`) and [mem(4)](../../../man/man4/mem.4).

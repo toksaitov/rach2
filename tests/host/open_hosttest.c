@@ -54,6 +54,8 @@
  *   last;
  * - a followed /proc/PID/fd/N stat of a pipe, and one that fails, while
  *   the owner closes descriptor N, its description's last;
+ * - the mount ids of synthetic descriptions opened through the permanent
+ *   mount and through a later mount over it;
  * - the release of the last holder of a file of the KRFFS root that lost
  *   its name, by each path a descriptor or a file mapping ends on, while
  *   another process's allocation on the root runs in the reclaim's sleep;
@@ -1866,11 +1868,14 @@ void devfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     *gid = 0;
 }
 
-/** Every mount's id is 1, as the first slot's. */
+/* A later proc mount in synthetic_mount_ids; NULL outside that row. */
+static const struct vfs_mount *stat_overmount;
+
+/** The permanent proc mount's id is 3 and the later mount's 10 in the
+ * synthetic row; every other row has one mount, id 1. */
 uint32_t procfs_mount_id(const struct vfs_mount *m)
 {
-    (void)m;
-    return 1;
+    return stat_overmount ? (m == stat_overmount ? 10 : 3) : 1;
 }
 
 /* The followed stat whose descriptor its owner closes as it runs
@@ -1900,8 +1905,9 @@ static void stat_pipe_close(fd_entry_t *e)
 
 static const struct file_ops stat_pipe_ops = {0, 0, 0, 0, stat_pipe_close, NULL, NULL, 0};
 
-/** No synthetic file system is mounted: 0. A followed stat of a pipe asks
- * this after it reads the pipe, and its owner's close comes then. */
+/** The first proc mount's id, 3, in the synthetic row, or 0 elsewhere.
+ * A followed stat of a pipe asks this after it reads the pipe, and its
+ * owner's close comes then. */
 uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
 {
     (void)dev;
@@ -1909,7 +1915,7 @@ uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
     if (stat_closed_fd >= 0) {
         stat_owner_closes();
     }
-    return 0;
+    return stat_overmount ? 3 : 0;
 }
 
 /** Every attribute of a fixed /sys directory is there. */
@@ -3292,6 +3298,37 @@ static void stats_after_move(void)
         mount.type = &mounted_type;
         row_end();
     }
+}
+
+/** A synthetic descriptor keeps the mount it was opened through, whether
+ * another mount now covers it or it was opened through that later mount.
+ * Both statx with AT_EMPTY_PATH and fdinfo read fstat_fill's mount id. */
+static void synthetic_mount_ids(void)
+{
+    static const int types[] = {FD_TYPE_PROC, FD_TYPE_SYNTH_DIR, FD_TYPE_SYNTH_PATH};
+    struct vfs_mount original, over;
+    struct open_file ofd;
+    fd_entry_t e;
+    struct kstat st;
+    unsigned int i;
+
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&e, 0, sizeof(e));
+    e.ofd = &ofd;
+    stat_overmount = &over;
+    for (i = 0; i < sizeof(types) / sizeof(types[0]); i++) {
+        e.type = types[i];
+        ofd.synth_mnt = &original;
+        check(fstat_fill(&e, &st) == 0 && st.st_mnt_id == 3,
+              "a synthetic descriptor opened before an overmount keeps its mount id");
+        ofd.synth_mnt = &over;
+        check(fstat_fill(&e, &st) == 0 && st.st_mnt_id == 10,
+              "a synthetic descriptor opened through the later mount has its id");
+        ofd.synth_mnt = NULL;
+        check(fstat_fill(&e, &st) == 0 && st.st_mnt_id == 3,
+              "a synthetic descriptor without a recorded mount uses the device's mount");
+    }
+    stat_overmount = NULL;
 }
 
 /** A descriptor on the model file, open for reading and writing. */
@@ -5335,6 +5372,7 @@ int main(int argc, char **argv)
     chdir_pins();
     attrs_after_move();
     stats_after_move();
+    synthetic_mount_ids();
     proc_fd_stat_errors();
     proc_fd_stat_closed();
     times_after_move();

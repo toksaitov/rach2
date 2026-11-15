@@ -167,6 +167,10 @@ writes, as Linux does; a file of
 or
 .Pa /sys
 has the id of that file system's mount.
+With
+.Dv AT_EMPTY_PATH ,
+the id is that of the mount the descriptor was opened through, even when
+another mount now covers its path.
 A descriptor of no mount, a pipe, a socket or an anonymous one, gets no
 .Dv STATX_MNT_ID .
 It reports no birth time and no attributes.

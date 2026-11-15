@@ -11296,7 +11296,8 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
  * Fill `kst` as `fstat_fill_attrs` does, with the id of the mount the
  * object is on: the description's mount for a file or a directory of a
  * mounted type, the root's for the KRFFS root and its nodes, the /dev,
- * /proc or /sys mount for a synthetic node by its device, and none for a
+ * /proc or /sys mount held by a synthetic description, falling back to its
+ * device when no mount was recorded, and none for a
  * pipe, a socket or an anonymous descriptor, which Linux keeps on internal
  * mounts that no mountinfo lists.
  */
@@ -11312,6 +11313,8 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
         kst->st_mnt_id = procfs_mount_id(entry->ofd->vmnt);
     } else if (entry->node || (entry->type == FD_TYPE_DIR && entry->node == NULL)) {
         kst->st_mnt_id = procfs_mount_id(vfs_root_mount());
+    } else if (entry->ofd && entry->ofd->synth_mnt) {
+        kst->st_mnt_id = procfs_mount_id(entry->ofd->synth_mnt);
     } else {
         kst->st_mnt_id = procfs_synth_mount_id(kst->st_dev, NULL);
     }
