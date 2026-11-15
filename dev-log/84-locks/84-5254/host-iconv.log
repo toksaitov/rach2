@@ -1,0 +1,20 @@
+iconvtrace: iconv_open("UTF-8", "ANSI_X3.4-1968")
+/tmp/iconvtrace.so(iconv_open+0x47) [0x7b26c3e001e7]
+/deblib/libglib-2.0.so.0(g_iconv_open+0x1d) [0x7b26c3846a3d]
+/deblib/libglib-2.0.so.0(g_convert+0x4c) [0x7b26c3846e8c]
+/deblib/libglib-2.0.so.0(+0x38001) [0x7b26c3847001]
+/deblib/libglib-2.0.so.0(g_locale_to_utf8+0x94) [0x7b26c38476f4]
+/deblib/libglib-2.0.so.0(g_strerror+0x118) [0x7b26c3891e18]
+/deblib/libglib-2.0.so.0(g_key_file_load_from_file+0xde) [0x7b26c3863d6e]
+/deblib/libigt.so.0(igt_load_igtrc+0x55) [0x7b26c3d4d265]
+/deblib/libigt.so.0(+0xad727) [0x7b26c3d51727]
+/usr/libexec/igt-gpu-tools/gem_readwrite(+0x1188) [0x64b9c84c2188]
+/lib/libc.so.6(+0x2ade7) [0x7b26c3ae0de7]
+/lib/libc.so.6(__libc_start_main+0x87) [0x7b26c3ae0f07]
+IGT-Version: 2.0-NO-GIT (x86_64) (Linux: 6.18.58.1-microsoft-standard-WSL2 x86_64)
+Using IGT_SRANDOM=1794771404 for randomisation
+Test requirement not met in function drm_open_driver, file ../lib/drmtest.c:749:
+Test requirement: !(fd<0)
+No known gpu found for chipset flags 0x1 (intel)
+Last errno: 2, No such file or directory
+Subtest read-write: SKIP (0.000s)
