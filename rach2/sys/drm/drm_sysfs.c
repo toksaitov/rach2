@@ -588,6 +588,15 @@ void drm_kms_hotplug_event(struct drm_device *dev)
     drm_client_dev_hotplug(dev);
 }
 
+void drm_sysfs_lease_event(struct drm_device *dev)
+{
+    struct drm_sysfs_dev *sd = sysdev_of(dev);
+
+    if (sd && sd->dev == dev && sd->card) {
+        sysfs_uevent(sd->card, "change", "LEASE=1\n");
+    }
+}
+
 void drm_sysfs_connector_hotplug_event(struct drm_connector *connector)
 {
     struct drm_sysfs_dev *sd = connector ? sysdev_of(connector->dev) : NULL;

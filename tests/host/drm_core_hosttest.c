@@ -692,6 +692,13 @@ void drm_syncobj_release(struct drm_file *file)
     (void)file;
 }
 
+/** drm_lease.c's release of a file's leases: the model's files lease
+ * nothing. */
+void drm_lease_file_release(struct drm_file *file)
+{
+    (void)file;
+}
+
 /* ---- the fake driver ---- */
 
 struct fake_echo {
