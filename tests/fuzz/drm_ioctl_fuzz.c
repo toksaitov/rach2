@@ -1,6 +1,6 @@
 /**
  * Fuzz harness for the ioctl decoders of the display stack: the DRM core and
- * KMS over vkms, PRIME and sync objects over a render device of the
+ * KMS over vkms, leases, PRIME and sync objects over a render device of the
  * harness's, dma-bufs, sync files, sw_sync's timelines and evdev. The input
  * is a program of opens, ioctls, reads, polls, closes, input events, CRC
  * reads and clock steps, run as one process.
@@ -10,6 +10,7 @@
  * fuzz-deps: rach2/sys/drm/drm_atomic.c rach2/sys/drm/drm_vblank.c
  * fuzz-deps: rach2/sys/drm/drm_legacy.c rach2/sys/drm/drm_edid.c
  * fuzz-deps: rach2/sys/drm/drm_prime.c rach2/sys/drm/drm_syncobj.c
+ * fuzz-deps: rach2/sys/drm/drm_lease.c
  * fuzz-deps: rach2/sys/dmabuf/dmabuf.c rach2/sys/dmabuf/fence.c
  * fuzz-deps: rach2/sys/dmabuf/sync_file.c rach2/sys/dmabuf/sw_sync.c
  * fuzz-deps: rach2/sys/drm/drm_debugfs.c rach2/sys/fs/debugfs.c
@@ -425,6 +426,11 @@ void drm_sysfs_connector_hotplug_event(struct drm_connector *connector)
     (void)connector;
 }
 
+void drm_sysfs_lease_event(struct drm_device *dev)
+{
+    (void)dev;
+}
+
 void arch_drm_probe(int phase)
 {
     (void)phase;
@@ -627,6 +633,18 @@ int fd_free(fd_table_t *table, int fd)
         return -EBADF;
     }
     memset(&table->chunks[0][fd], 0, sizeof(table->chunks[0][fd]));
+    return 0;
+}
+
+int fd_can_alloc(fd_table_t *table)
+{
+    int i;
+
+    for (i = 0; i < table->cap; i++) {
+        if (table->chunks[0][i].type == FD_TYPE_NONE) {
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -931,6 +949,39 @@ static void op_open(unsigned b)
         free(e->ofd);
         fd_free(&fd_table, fd);
     }
+}
+
+/** Open the device node `name` for the kernel, as devfs_open does: the
+ * lessee's card that CREATE_LEASE opens. Returns the descriptor or a
+ * negative errno. */
+int devfs_open(const char *name, int flags)
+{
+    struct devfs_node *node = node_named(name);
+    fd_entry_t *e;
+    int fd;
+    int32_t rc;
+
+    if (!node) {
+        return -ENOENT;
+    }
+    fd = fd_alloc(&fd_table);
+    if (fd < 0) {
+        return fd;
+    }
+    e = &fd_entries[fd];
+    e->type = FD_TYPE_DEVICE;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e->ops = node->ops;
+    e->ofd = (struct open_file *)calloc(1, sizeof(struct open_file));
+    e->ofd->refcount = 1;
+    e->ofd->status_flags = OFD_NONBLOCK;
+    rc = node->open(node, e, flags);
+    if (rc != 0) {
+        free(e->ofd);
+        fd_free(&fd_table, fd);
+        return rc;
+    }
+    return fd;
 }
 
 /** Open the file of debugfs that byte `b` names, as the system call

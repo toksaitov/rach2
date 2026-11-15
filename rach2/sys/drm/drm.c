@@ -406,13 +406,16 @@ void drm_master_changed(struct drm_device *dev, struct drm_file *master)
 /**
  * The open of a node, its registry's `open`: a new file of the device on
  * the descriptor `e`, which the driver's `open` sees, master of a card with
- * none. ENODEV for a device unplugged, EBUSY under O_EXCL, ENOMEM, or the
- * driver's error.
+ * none, or the lessee that CREATE_LEASE opens when its thread opens the
+ * card (`drm_device.lease_open`), as Linux's drm_mode_create_lease_ioctl
+ * makes the file it clones one. ENODEV for a device unplugged, EBUSY under
+ * O_EXCL, ENOMEM, or the driver's error.
  */
 static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
 {
     struct drm_minor *m = (struct drm_minor *)node->priv;
     struct drm_device *dev = m->dev;
+    struct drm_lease_open *lo;
     struct drm_file *file;
     int32_t rc;
 
@@ -434,6 +437,7 @@ static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
     /* Linux: capable(CAP_SYS_ADMIN) at open. */
     file->authenticated = current_proc && proc_privileged(current_proc);
     file->event_space = DRM_EVENT_SPACE;
+    file->open_flags = (uint32_t)flags & (3u | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC);
     wait_queue_init(&file->event_wait);
     drm_dev_get(dev);
     if (dev->driver->open) {
@@ -447,7 +451,19 @@ static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
     file->dev_next = dev->files;
     dev->files = file;
     dev->open_count++;
-    if (file->minor_type == DRM_MINOR_PRIMARY) {
+    lo = dev->lease_open;
+    if (lo && lo->opener == current_proc && !lo->file && file->minor_type == DRM_MINOR_PRIMARY) {
+        /* A lessee: a master record of its own, under its lessor's. */
+        file->master_id = ++dev->next_master_id;
+        file->is_master = 1;
+        file->authenticated = 1;
+        file->lessor_id = lo->lessor_id;
+        file->lessee_id = lo->lessee_id;
+        file->leases = lo->leases;
+        file->lease_count = lo->lease_count;
+        lo->leases = NULL;
+        lo->file = file;
+    } else if (file->minor_type == DRM_MINOR_PRIMARY) {
         drm_master_open(file);
     }
     e->priv = file;
@@ -478,7 +494,8 @@ static void events_release(struct drm_file *file)
 
 /**
  * The release of a file, as Linux's drm_file_free: its events, its
- * display objects, its syncobj and buffer handles, its master role, then
+ * display objects, its syncobj and buffer handles, its master role and its
+ * leases, then
  * the driver's `postclose`; after the device's last file, the console's
  * return, as Linux's drm_release calls drm_lastclose; and the device's
  * reference.
@@ -494,6 +511,7 @@ static void drm_file_release(struct drm_file *file)
     drm_gem_release(file);
     if (file->minor_type == DRM_MINOR_PRIMARY) {
         drm_master_release(file);
+        drm_lease_file_release(file);
     }
     if (dev->driver->postclose) {
         dev->driver->postclose(dev, file);
@@ -907,14 +925,16 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
                   DRM_MODESET_LOCK | DRM_UNLOCKED | DRM_KMS),
     DRM_IOCTL_DEF(DRM_IOCTL_CRTC_QUEUE_SEQUENCE, drm_crtc_queue_sequence_ioctl,
                   DRM_MODESET_LOCK | DRM_UNLOCKED | DRM_KMS),
+    /* The lease rows walk the device's files and open one, under the big
+     * lock that keeps the list. */
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATE_LEASE, drm_mode_create_lease_ioctl,
-                  DRM_MASTER | DRM_MODESET_LOCK | DRM_UNLOCKED | DRM_KMS),
+                  DRM_MASTER | DRM_MODESET_LOCK),
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_LIST_LESSEES, drm_mode_list_lessees_ioctl,
-                  DRM_MASTER | DRM_MODESET_LOCK | DRM_UNLOCKED | DRM_KMS),
+                  DRM_MASTER | DRM_MODESET_LOCK),
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_GET_LEASE, drm_mode_get_lease_ioctl,
-                  DRM_MASTER | DRM_MODESET_LOCK | DRM_UNLOCKED | DRM_KMS),
+                  DRM_MASTER | DRM_MODESET_LOCK),
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_REVOKE_LEASE, drm_mode_revoke_lease_ioctl,
-                  DRM_MASTER | DRM_MODESET_LOCK | DRM_UNLOCKED | DRM_KMS),
+                  DRM_MASTER | DRM_MODESET_LOCK),
 };
 
 #define DRM_CORE_IOCTLS ((int)(sizeof(drm_ioctls) / sizeof(drm_ioctls[0])))

@@ -903,6 +903,18 @@ A write takes the words of
 for anything else.
 While it is set the hotplug work probes no connector for the pulses it
 takes, as Linux's; IGT's link training tests clear it before they run.
+.It Pa dri/DEVICE/i915_fifo_underrun_reset
+Mode 0644, for a device with a display; a read fails with
+.Er EINVAL ,
+as Linux's.
+A write of a true word of
+.Fn kstrtobool
+reports the FIFO underruns of each pipe that is on again, which its first
+underrun stopped; a false word does nothing, and anything else is
+.Er EINVAL .
+Haswell's pipe CRCs come through the error interrupt that reports
+underruns, which stays masked while any pipe's reporting is off; IGT
+writes the file before it starts a CRC.
 .It Pa dri/DEVICE/i915_wedged
 Mode 0644.
 Reads 1 while the GPU is wedged, else 0.

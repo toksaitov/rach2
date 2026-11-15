@@ -206,8 +206,9 @@ static int32_t cursor_universal(struct drm_crtc *crtc, const struct drm_mode_cur
 }
 
 /** Linux's drm_mode_cursor_common: CURSOR and CURSOR2 on a CRTC with a
- * cursor plane; a CRTC without one has no cursor to set (ENXIO) or move
- * (EFAULT), as Linux answers for a driver without cursor hooks. */
+ * cursor plane, EACCES for a lessee that does not lease that plane; a CRTC
+ * without one has no cursor to set (ENXIO) or move (EFAULT), as Linux
+ * answers for a driver without cursor hooks. */
 static int32_t cursor_common(struct drm_device *dev, const struct drm_mode_cursor2 *req,
                              struct drm_file *file)
 {
@@ -229,7 +230,8 @@ static int32_t cursor_common(struct drm_device *dev, const struct drm_mode_curso
         return rc;
     }
     if (crtc->cursor) {
-        rc = cursor_universal(crtc, req, file);
+        rc = drm_lease_held(file, crtc->cursor->base.id) ? cursor_universal(crtc, req, file)
+                                                         : -EACCES;
     } else {
         rc = (req->flags & DRM_MODE_CURSOR_BO) ? -ENXIO : -EFAULT;
     }
@@ -316,7 +318,9 @@ static int32_t setcrtc_fb_mode(struct drm_crtc *crtc, struct drm_file *file,
 }
 
 /** SETCRTC, Linux's drm_mode_setcrtc: set a CRTC's mode, framebuffer and
- * connectors, or turn it off, through `drm_atomic_helper_set_config`. */
+ * connectors, or turn it off, through `drm_atomic_helper_set_config`. A
+ * lessee sets a mode only when it leases the CRTC's primary plane (EACCES),
+ * and may turn the CRTC off without it. */
 int32_t drm_mode_setcrtc(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_mode_crtc *req = (struct drm_mode_crtc *)data;
@@ -338,6 +342,9 @@ int32_t drm_mode_setcrtc(struct drm_device *dev, void *data, struct drm_file *fi
     crtc = drm_crtc_find(dev, file, req->crtc_id);
     if (!crtc) {
         return -ENOENT;
+    }
+    if (req->mode_valid && crtc->primary && !drm_lease_held(file, crtc->primary->base.id)) {
+        return -EACCES;
     }
     rc = drm_modeset_lock(dev);
     if (rc != 0) {
@@ -382,22 +389,15 @@ out:
 }
 
 /**
- * PAGE_FLIP, Linux's drm_mode_page_flip_ioctl with
- * drm_atomic_helper_page_flip: show another framebuffer of the same format
- * on a CRTC's primary plane in a nonblocking commit that may not change the
- * mode, and send FLIP_COMPLETE when asked. A target vblank is refused with
- * EINVAL, as Linux refuses it for a driver without page_flip_target.
+ * The CRTC a PAGE_FLIP request names, after Linux's checks of the request:
+ * EOPNOTSUPP without mode setting, EINVAL for its flags, ENOENT for no CRTC
+ * the caller sees, EACCES for a lessee that does not lease its primary
+ * plane, EINVAL for a CRTC without one or a target vblank. 0 or -errno.
  */
-int32_t drm_mode_page_flip_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+static int32_t page_flip_crtc(struct drm_device *dev, const struct drm_mode_crtc_page_flip *req,
+                              struct drm_file *file, struct drm_crtc **out)
 {
-    struct drm_mode_crtc_page_flip *req = (struct drm_mode_crtc_page_flip *)data;
-    struct drm_pending_event *e = NULL;
-    struct drm_framebuffer *fb = NULL, *old_fb;
-    struct drm_atomic_state *state;
-    struct drm_crtc_state *cs;
-    struct drm_plane_state *ps, *cur;
     struct drm_crtc *crtc;
-    int32_t rc;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
         return -EOPNOTSUPP;
@@ -412,8 +412,38 @@ int32_t drm_mode_page_flip_ioctl(struct drm_device *dev, void *data, struct drm_
     if (!crtc) {
         return -ENOENT;
     }
+    if (crtc->primary && !drm_lease_held(file, crtc->primary->base.id)) {
+        return -EACCES;
+    }
     if (!crtc->primary || (req->flags & DRM_MODE_PAGE_FLIP_TARGET)) {
         return -EINVAL;
+    }
+    *out = crtc;
+    return 0;
+}
+
+/**
+ * PAGE_FLIP, Linux's drm_mode_page_flip_ioctl with
+ * drm_atomic_helper_page_flip: show another framebuffer of the same format
+ * on a CRTC's primary plane in a nonblocking commit that may not change the
+ * mode, and send FLIP_COMPLETE when asked. A target vblank is refused with
+ * EINVAL, as Linux refuses it for a driver without page_flip_target, and a
+ * lessee that does not lease the primary plane with EACCES.
+ */
+int32_t drm_mode_page_flip_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_mode_crtc_page_flip *req = (struct drm_mode_crtc_page_flip *)data;
+    struct drm_pending_event *e = NULL;
+    struct drm_framebuffer *fb = NULL, *old_fb;
+    struct drm_atomic_state *state;
+    struct drm_crtc_state *cs;
+    struct drm_plane_state *ps, *cur;
+    struct drm_crtc *crtc = NULL;
+    int32_t rc;
+
+    rc = page_flip_crtc(dev, req, file, &crtc);
+    if (rc != 0) {
+        return rc;
     }
     rc = drm_modeset_lock(dev);
     if (rc != 0) {

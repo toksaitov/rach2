@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 16, 2026
 .Dt DRM 4
 .Os
 .Sh NAME
@@ -127,6 +127,13 @@ It is
 while another file is master, and 0 for the master itself.
 A file that takes the role for the first time makes a master record of its
 own; one that was master already takes its old record back.
+A lessee, the file
+.Dv DRM_IOCTL_MODE_CREATE_LEASE
+opens, holds the role while the master that made it does, and either call
+by it is
+.Er EINVAL ;
+.Xr drm-kms 7
+describes leases.
 When a file of the console's card takes the role, the console gives it
 the screen and the keyboard, and takes them back when the card's last file
 closes, or a display changes while no file holds the role, as

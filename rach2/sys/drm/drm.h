@@ -18,6 +18,8 @@
 #include "../proc/wait_queue.h"
 #include "uapi.h"
 
+struct drm_lease_open;
+struct process;
 struct sysfs_pci_ident;
 
 /*
@@ -770,6 +772,15 @@ void drm_handles_fini(struct drm_handles *t);
  * bus name, Linux's master->unique, which `set_busid` marks on each file
  * of the record; GET_UNIQUE answers it, or nothing before. A render
  * node's file has no master id, 0.
+ *
+ * A lessee (drm_lease.c), the file CREATE_LEASE opens, has a master record
+ * of its own (`is_master`, authenticated) and names its lessor's record in
+ * `lessor_id`; it holds its device's master role while its lessor's record
+ * does, as Linux's drm_lease_owner gives it, and sees and changes only the
+ * CRTCs, connectors and planes in `leases`. `lessee_id` is its id among its
+ * lessor's lessees, from 1. The leases are under the device's `mode_lock`;
+ * a revoke sets `lease_count` to 0 and leaves the array, which the lessee's
+ * own calls may read without that lock, to the file's release.
  */
 struct drm_file {
     struct drm_device *dev;
@@ -782,8 +793,13 @@ struct drm_file {
     uint32_t master_id;
     int is_master;
     int was_master;
-    int set_busid; /* its master record has the bus name: SET_VERSION 1.1 or later */
-    int console;   /* the console's own file (drm_client.c), never a node's */
+    int set_busid;        /* its master record has the bus name: SET_VERSION 1.1 or later */
+    int console;          /* the console's own file (drm_client.c), never a node's */
+    uint32_t open_flags;  /* the open's access mode and status flags, for a lessee's open */
+    uint32_t lessor_id;   /* a lessee's lessor's master id; 0 for any other file */
+    uint32_t lessee_id;   /* a lessee's id in its lessor's record, from 1 */
+    uint32_t *leases;     /* a lessee's object IDs, ascending, from the heap */
+    uint32_t lease_count; /* how many of them it holds; 0 once revoked */
     int universal_planes, atomic, aspect_ratio, writeback_connectors, stereo_allowed,
         supports_virtualized_cursor_plane;
     struct drm_handles objects;  /* buffer object handles */
@@ -797,8 +813,11 @@ struct drm_file {
     struct drm_file *dev_next; /* the device's open files */
 };
 
-/** Whether `file` holds its device's master role now. */
-#define drm_is_current_master(file) ((file)->dev->master == (file))
+/** Whether `file` holds its device's master role now: it is the master, or
+ * a lessee of the master's record, as Linux's drm_is_current_master. */
+#define drm_is_current_master(file)                                                             \
+    ((file)->dev->master == (file) || ((file)->lessor_id != 0 && (file)->dev->master != NULL && \
+                                       (file)->dev->master->master_id == (file)->lessor_id))
 
 /*
  * Events, Linux's drm_event_reserve, drm_send_event and
@@ -2019,6 +2038,9 @@ struct drm_device {
      * 0 for its PCI function's, or a platform device's without one. */
     int sysfs_parent;
     struct drm_file *master;
+    /* The lease whose file CREATE_LEASE is opening, under the commit lock,
+     * or NULL; `drm_node_open` gives it to the file its opener opens. */
+    struct drm_lease_open *lease_open;
     uint32_t open_count;
     struct drm_file *files;              /* its open files, through `dev_next` */
     uint32_t next_master_id;             /* the last master record's id */
@@ -2251,6 +2273,10 @@ void drm_kms_hotplug_event(struct drm_device *dev);
 /** The same for one connector, with CONNECTOR=its object's ID, as Linux's
  * drm_sysfs_connector_hotplug_event sends after a probe of one output. */
 void drm_sysfs_connector_hotplug_event(struct drm_connector *connector);
+/** Tell user space that a lease of `dev` went: the uevent `change` of its
+ * card with LEASE=1, as Linux's drm_sysfs_lease_event. Process context;
+ * may sleep. */
+void drm_sysfs_lease_event(struct drm_device *dev);
 
 /* ------------------------------------------------------------------------
  * The device in /sys, in drm_sysfs.c
@@ -2419,7 +2445,7 @@ int32_t drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct 
 int32_t drm_prime_fd_to_handle_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 
 /* drm_mode.c (76-5a): mode objects, properties, blobs, framebuffers and
- * leases. */
+ * the lessees' view of them. */
 int32_t drm_mode_getresources(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_mode_getplane_res(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_mode_getcrtc(struct drm_device *dev, void *data, struct drm_file *file);
@@ -2439,10 +2465,40 @@ int32_t drm_mode_addfb_ioctl(struct drm_device *dev, void *data, struct drm_file
 int32_t drm_mode_addfb2_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_mode_rmfb_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_mode_closefb_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+/** Whether `file` may use the mode object `id`: any object for a file that
+ * is no lessee or for the kernel (NULL), and only those it leases for a
+ * lessee, as Linux's drm_lease_held. */
+int drm_lease_held(const struct drm_file *file, uint32_t id);
+/** The CRTC mask `mask`, of `dev`'s CRTCs by index, as `file` sees it: for
+ * a lessee, the bits of the CRTCs it leases, renumbered over those alone,
+ * as Linux's drm_lease_filter_crtcs. */
+uint32_t drm_lease_filter_crtcs(const struct drm_file *file, uint32_t mask);
+
+/* drm_lease.c (5231): leases of CRTCs, connectors and planes. */
 int32_t drm_mode_create_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_mode_list_lessees_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_mode_get_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_mode_revoke_lease_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+/** Release the leases of `file`, as its release does after its master
+ * role, as Linux's drm_master_release and drm_lease_destroy: a lessor's
+ * lessees lose every object, and a lessee's lease goes, with the card's
+ * uevent `change` with LEASE=1. Takes the commit lock; may sleep. */
+void drm_lease_file_release(struct drm_file *file);
+/**
+ * The lease CREATE_LEASE gives the file it opens on its lessor's card
+ * (`drm_device.lease_open`): `opener`, the thread that opens it; the
+ * lessor's master id, the lessee's id and its objects, which the open
+ * gives the new file with the array's ownership; and `file`, the new file,
+ * which the open sets.
+ */
+struct drm_lease_open {
+    const struct process *opener;
+    uint32_t lessor_id;
+    uint32_t lessee_id;
+    uint32_t *leases;
+    uint32_t lease_count;
+    struct drm_file *file;
+};
 
 /* drm_legacy.c (76-5a): the calls before atomic, made atomic commits. */
 int32_t drm_mode_setcrtc(struct drm_device *dev, void *data, struct drm_file *file);

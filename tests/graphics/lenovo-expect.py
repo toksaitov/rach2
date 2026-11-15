@@ -23,7 +23,7 @@ fast-skip check, and two EGL tests skipped for absent displays, accept
 `skip-or-pass`. These are setup skips, not answers about the kernel's device.
 IGT's absent sw_sync device and the cursor, extended-mode and feature
 discovery tests that found no second connected output use the same rule.
-The owner's deferred DRM leases, msr device and runtime PM use `xfail`
+The owner's deferred msr device and runtime PM use `xfail`
 with a comment naming the deferral; a missing parent test still fails.
 
 The tests that failed beside the first run's other tests and passed alone
@@ -92,12 +92,9 @@ def igt():
 def igt_row(name, test):
     """Write a reference row, retaining the owner's deferred requirements."""
     deferred = {
-        "igt@kms_lease": "DRM leases (#5231)",
         "igt@kms_pm_rpm": "msr device and i915 runtime PM (#5235)",
         "igt@kms_vblank@ts-continuation-dpms-rpm": "i915 runtime PM (#5235)",
         "igt@kms_vblank@ts-continuation-modeset-rpm": "i915 runtime PM (#5235)",
-        "igt@kms_pipe_crc_basic@compare-crc-sanitycheck-xr24@pipe-a-edp-1": "pipe CRC after a fastset (#5249)",
-        "igt@kms_pipe_crc_basic@compare-crc-sanitycheck-xr24@pipe-b-edp-1": "pipe CRC after a fastset (#5249)",
     }
     if test["result"] == "pass":
         for prefix, reason in deferred.items():

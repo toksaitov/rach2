@@ -1431,7 +1431,9 @@ struct intel_color {
  * read `parked`. `planes_on` has bit INTEL_PLANE_ for each plane the hardware
  * shows. `underrun_off` says its FIFO underruns are not reported, Linux's
  * cpu_fifo_underrun_disabled, and `inherited` that it shows what the firmware
- * lit, with no commit of its own yet. `boosts` lists, under the interrupts'
+ * lit, with no commit of its own yet. `update_frame` is 1 more than the frame
+ * count at which a fastset began its writes (`intel_pipe_update_start`), 0
+ * while none is under way. `boosts` lists, under the interrupts'
  * masking, the requests drawing flips that the next vblank boosts if the chip
  * has not begun them, one entry for each call of
  * `intel_crtc_boost_after_vblank`, Linux's wait_rps_boost; `rps_mark` is 1 more
@@ -1461,6 +1463,7 @@ struct intel_crtc {
     uint32_t planes_on;
     uint8_t underrun_off;
     uint8_t inherited;
+    uint32_t update_frame;
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
     uint32_t shown_from[INTEL_NUM_PLANES], shown_to[INTEL_NUM_PLANES];
@@ -3285,6 +3288,22 @@ void intel_crtc_arm_flip_done(struct intel_crtc *crtc, struct drm_atomic_state *
  * from `atomic_begin` before the surface write.
  */
 void intel_crtc_arm_event(struct intel_crtc *crtc, struct drm_atomic_state *state);
+
+/**
+ * Wait until `crtc` has just passed the start of its vertical blank, where
+ * its pipe's and planes' double-buffered registers latch, so that a
+ * commit's writes made now latch together at the next one, the purpose of
+ * Linux's intel_pipe_update_start. Linux evades the last 100 us before the
+ * blank with interrupts off; Rach2's plane updates may sleep, so the commit
+ * takes the frame that follows the blank instead. Polls the frame counter
+ * for up to three frames; returns at once on a pipe that is off. Sleeping
+ * context, from `atomic_begin`.
+ */
+void intel_pipe_update_start(struct intel_crtc *crtc);
+/** Log the commit begun by `intel_pipe_update_start` when its writes
+ * crossed a vertical blank and latched in two frames, Linux's
+ * intel_pipe_update_end's "Atomic update failure". From `atomic_flush`. */
+void intel_pipe_update_end(struct intel_crtc *crtc);
 
 /** The CRTC's `enable_vblank`: unmask the pipe's vblank. 0. Any context. */
 int32_t intel_enable_vblank(struct drm_crtc *crtc);
