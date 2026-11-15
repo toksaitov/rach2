@@ -555,14 +555,16 @@ static void put_d(char *buf, uint32_t cap, uint32_t *len, int32_t v)
     put_s(buf, cap, len, &digits[i]);
 }
 
-/** i915_runtime_pm_status, Linux 6.18's i915_runtime_pm_status: four
+/** i915_runtime_pm_status, Linux 6.18's i915_runtime_pm_status: five
  * lines, each from the driver's records. */
 static int32_t runtime_pm_status_show(void *data, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     uint32_t len = 0;
 
-    put_s(buf, cap, &len, "GPU idle: ");
+    put_s(buf, cap, &len, "Runtime power status: ");
+    put_s(buf, cap, &len, i915->rpm.core.enabled ? "enabled" : "disabled");
+    put_s(buf, cap, &len, "\nGPU idle: ");
     put_s(buf, cap, &len, i915->gt.awake ? "no" : "yes");
     put_s(buf, cap, &len, "\nIRQs disabled: ");
     put_s(buf, cap, &len, i915->irq.suspended ? "yes" : "no");
