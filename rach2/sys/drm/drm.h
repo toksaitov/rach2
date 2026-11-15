@@ -1338,7 +1338,11 @@ struct drm_atomic_state {
  * intel_atomic_commit_fence_wait with i915_fence_timeout
  * (intel_display.c:7262-7280); 0 waits as Linux's
  * drm_atomic_helper_wait_for_fences, a blocking commit interruptibly and
- * a deferred one until every fence has signalled.
+ * a deferred one until every fence has signalled. `commit_tail_hold`,
+ * when set, is called with 1 before a commit's tail programs the hooks
+ * and with 0 after, whoever runs the tail, so that the driver keeps its
+ * device awake across it, as i915's runtime PM wakeref that Linux's
+ * intel_atomic_commit_tail holds. Process context; may not sleep.
  */
 struct drm_mode_config {
     uint32_t min_width, max_width, min_height, max_height;
@@ -1374,6 +1378,7 @@ struct drm_mode_config {
     void (*fb_destroy)(struct drm_framebuffer *fb);
     void (*commit_fence_wait)(struct drm_device *dev, struct dma_fence *fence);
     uint32_t commit_fence_timeout_ms;
+    void (*commit_tail_hold)(struct drm_device *dev, int hold);
 };
 
 /* The index masks of Linux's drm_crtc_mask, drm_plane_mask and

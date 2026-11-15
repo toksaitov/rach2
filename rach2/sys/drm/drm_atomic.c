@@ -1374,6 +1374,7 @@ static void commit_signal(struct drm_atomic_state *state)
  * drivers' hooks. */
 static void commit_tail(struct drm_atomic_state *state)
 {
+    void (*hold)(struct drm_device *, int) = state->dev->mode_config.commit_tail_hold;
     int i;
 
     for (i = 0; i < DRM_MAX_PLANES; i++) {
@@ -1384,10 +1385,16 @@ static void commit_tail(struct drm_atomic_state *state)
             ps->fence = NULL;
         }
     }
+    if (hold) {
+        hold(state->dev, 1);
+    }
     commit_disables(state);
     commit_planes(state);
     commit_enables(state);
     commit_signal(state);
+    if (hold) {
+        hold(state->dev, 0);
+    }
     /* The objects own the new states now; the commit owns the old ones. */
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         if (state->planes_new[i]) {
