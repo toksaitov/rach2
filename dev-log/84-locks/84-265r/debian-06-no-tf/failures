@@ -1,0 +1,498 @@
+1601 1 vertex_arrays.single_attribute.normalize.int2_10_10_10.components4_quads256: Image comparison failed
+1663 1 common.abs.vec2_lowp_vertex: Result comparison failed
+1663 1 common.abs.vec2_mediump_vertex: Result comparison failed
+1663 1 common.abs.vec2_highp_vertex: Result comparison failed
+1663 1 common.abs.vec3_lowp_vertex: Result comparison failed
+1663 1 common.abs.vec3_mediump_vertex: Result comparison failed
+1663 1 common.abs.vec3_highp_vertex: Result comparison failed
+1663 1 common.abs.vec4_lowp_vertex: Result comparison failed
+1663 1 common.abs.vec4_mediump_vertex: Result comparison failed
+1663 1 common.abs.vec4_highp_vertex: Result comparison failed
+1663 1 common.abs.ivec2_lowp_vertex: Result comparison failed
+1663 1 common.abs.ivec2_mediump_vertex: Result comparison failed
+1663 1 common.abs.ivec2_highp_vertex: Result comparison failed
+1663 1 common.abs.ivec3_lowp_vertex: Result comparison failed
+1663 1 common.abs.ivec3_mediump_vertex: Result comparison failed
+1663 1 common.abs.ivec3_highp_vertex: Result comparison failed
+1663 1 common.abs.ivec4_lowp_vertex: Result comparison failed
+1663 1 common.abs.ivec4_mediump_vertex: Result comparison failed
+1663 1 common.abs.ivec4_highp_vertex: Result comparison failed
+1663 1 common.sign.vec2_lowp_vertex: Result comparison failed
+1663 1 common.sign.vec2_mediump_vertex: Result comparison failed
+1663 1 common.sign.vec2_highp_vertex: Result comparison failed
+1663 1 common.sign.vec3_lowp_vertex: Result comparison failed
+1663 1 common.sign.vec3_mediump_vertex: Result comparison failed
+1663 1 common.sign.vec3_highp_vertex: Result comparison failed
+1663 1 common.sign.vec4_lowp_vertex: Result comparison failed
+1663 1 common.sign.vec4_mediump_vertex: Result comparison failed
+1663 1 common.sign.vec4_highp_vertex: Result comparison failed
+1663 1 common.sign.ivec2_lowp_vertex: Result comparison failed
+1663 1 common.sign.ivec2_mediump_vertex: Result comparison failed
+1663 1 common.sign.ivec2_highp_vertex: Result comparison failed
+1663 1 common.sign.ivec3_lowp_vertex: Result comparison failed
+1663 1 common.sign.ivec3_mediump_vertex: Result comparison failed
+1663 1 common.sign.ivec3_highp_vertex: Result comparison failed
+1663 1 common.sign.ivec4_lowp_vertex: Result comparison failed
+1663 1 common.sign.ivec4_mediump_vertex: Result comparison failed
+1663 1 common.sign.ivec4_highp_vertex: Result comparison failed
+1663 1 common.floor.vec2_lowp_vertex: Result comparison failed
+1663 1 common.floor.vec2_mediump_vertex: Result comparison failed
+1663 1 common.floor.vec2_highp_vertex: Result comparison failed
+1663 1 common.floor.vec3_lowp_vertex: Result comparison failed
+1663 1 common.floor.vec3_mediump_vertex: Result comparison failed
+1663 1 common.floor.vec3_highp_vertex: Result comparison failed
+1663 1 common.floor.vec4_lowp_vertex: Result comparison failed
+1663 1 common.floor.vec4_mediump_vertex: Result comparison failed
+1663 1 common.floor.vec4_highp_vertex: Result comparison failed
+1663 1 common.trunc.vec2_lowp_vertex: Result comparison failed
+1663 1 common.trunc.vec2_mediump_vertex: Result comparison failed
+1663 1 common.trunc.vec2_highp_vertex: Result comparison failed
+1663 1 common.trunc.vec3_lowp_vertex: Result comparison failed
+1663 1 common.trunc.vec3_mediump_vertex: Result comparison failed
+1663 1 common.trunc.vec3_highp_vertex: Result comparison failed
+1663 1 common.trunc.vec4_lowp_vertex: Result comparison failed
+1663 1 common.trunc.vec4_mediump_vertex: Result comparison failed
+1663 1 common.trunc.vec4_highp_vertex: Result comparison failed
+1663 1 common.round.vec2_lowp_vertex: Result comparison failed
+1663 1 common.round.vec2_mediump_vertex: Result comparison failed
+1663 1 common.round.vec2_highp_vertex: Result comparison failed
+1663 1 common.round.vec3_lowp_vertex: Result comparison failed
+1663 1 common.round.vec3_mediump_vertex: Result comparison failed
+1663 1 common.round.vec3_highp_vertex: Result comparison failed
+1663 1 common.round.vec4_lowp_vertex: Result comparison failed
+1663 1 common.round.vec4_mediump_vertex: Result comparison failed
+1663 1 common.round.vec4_highp_vertex: Result comparison failed
+1663 1 common.roundeven.vec2_lowp_vertex: Result comparison failed
+1663 1 common.roundeven.vec2_mediump_vertex: Result comparison failed
+1663 1 common.roundeven.vec2_highp_vertex: Result comparison failed
+1663 1 common.roundeven.vec3_lowp_vertex: Result comparison failed
+1663 1 common.roundeven.vec3_mediump_vertex: Result comparison failed
+1663 1 common.roundeven.vec3_highp_vertex: Result comparison failed
+1663 1 common.roundeven.vec4_lowp_vertex: Result comparison failed
+1663 1 common.roundeven.vec4_mediump_vertex: Result comparison failed
+1663 1 common.roundeven.vec4_highp_vertex: Result comparison failed
+1663 1 common.ceil.vec2_lowp_vertex: Result comparison failed
+1663 1 common.ceil.vec2_mediump_vertex: Result comparison failed
+1663 1 common.ceil.vec2_highp_vertex: Result comparison failed
+1663 1 common.ceil.vec3_lowp_vertex: Result comparison failed
+1663 1 common.ceil.vec3_mediump_vertex: Result comparison failed
+1663 1 common.ceil.vec3_highp_vertex: Result comparison failed
+1663 1 common.ceil.vec4_lowp_vertex: Result comparison failed
+1663 1 common.ceil.vec4_mediump_vertex: Result comparison failed
+1663 1 common.ceil.vec4_highp_vertex: Result comparison failed
+1663 1 common.fract.vec2_lowp_vertex: Result comparison failed
+1663 1 common.fract.vec2_mediump_vertex: Result comparison failed
+1663 1 common.fract.vec2_highp_vertex: Result comparison failed
+1663 1 common.fract.vec3_lowp_vertex: Result comparison failed
+1663 1 common.fract.vec3_mediump_vertex: Result comparison failed
+1663 1 common.fract.vec3_highp_vertex: Result comparison failed
+1663 1 common.fract.vec4_lowp_vertex: Result comparison failed
+1663 1 common.fract.vec4_mediump_vertex: Result comparison failed
+1663 1 common.fract.vec4_highp_vertex: Result comparison failed
+1663 1 common.modf.float_lowp_vertex: Result comparison failed
+1663 1 common.modf.float_mediump_vertex: Result comparison failed
+1663 1 common.modf.float_highp_vertex: Result comparison failed
+1663 1 common.modf.vec2_lowp_vertex: Result comparison failed
+1663 1 common.modf.vec2_mediump_vertex: Result comparison failed
+1663 1 common.modf.vec2_highp_vertex: Result comparison failed
+1663 1 common.modf.vec3_lowp_vertex: Result comparison failed
+1663 1 common.modf.vec3_mediump_vertex: Result comparison failed
+1663 1 common.modf.vec3_highp_vertex: Result comparison failed
+1663 1 common.modf.vec4_lowp_vertex: Result comparison failed
+1670 1 pack_unpack.unpacksnorm2x16_vertex: Result comparison failed
+1670 1 pack_unpack.unpackunorm2x16_vertex: Result comparison failed
+1670 1 pack_unpack.unpackhalf2x16_vertex: Result comparison failed
+1702 1 approx equal: expected: 64,128,255,64, actual: 64,127,255,64, tolerance: 0
+1717 1 reading with the exact format/type at (0, 0) expected: -2048,-4096 was 0,0
+1717 1 getError expected: NO_ERROR. Was INVALID_OPERATION : texture allocation succeeded
+1717 1 checkFramebufferStatus expected: FRAMEBUFFER_COMPLETE. Was NONE/NO_ERROR/POINTS/ZERO
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 reading with the RGBA format and matching type at (0, 0) expected: -2048,-4096,0,32767 was 0,0,0,0
+1717 1 getError expected: NO_ERROR. Was 0x507 : texture allocation succeeded
+1717 1 checkFramebufferStatus expected: FRAMEBUFFER_INCOMPLETE_ATTACHMENT. Was NONE/NO_ERROR/POINTS/ZERO
+1717 1 getError expected: NO_ERROR. Was 0x507 : renderbuffer allocation succeeded
+1717 1 checkFramebufferStatus expected: FRAMEBUFFER_COMPLETE. Was NONE/NO_ERROR/POINTS/ZERO
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 reading with the RGBA format and matching type at (0, 0) expected: -2048,-4096,-8192,-16384 was 0,0,0,0
+1717 1 getError expected: NO_ERROR. Was 0x507 : texture allocation succeeded
+1717 1 checkFramebufferStatus expected: FRAMEBUFFER_COMPLETE. Was NONE/NO_ERROR/POINTS/ZERO
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 1 reading with the RGBA format and matching type at (0, 0) expected: -2048,-4096,-8192,-16384 was 0,0,0,0
+1719 1 should be 27189,27189,0,65535 at (0, 0) expected: 27189,27189,0,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was INVALID_OPERATION : renderbuffer bindings succeed
+1719 1 should be 65535,65535,0,65535 at (0, 0) expected: 65535,65535,0,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 1 should be 65535,65535,0,65535 at (0, 0) expected: 65535,65535,0,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : rtt bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture bindings succeed
+1719 1 should be 27189,27189,27189,27189 at (0, 0) expected: 27189,27189,27189,27189 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : renderbuffer bindings succeed
+1719 1 should be 65535,65535,65535,65535 at (0, 0) expected: 65535,65535,65535,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 1 should be 65535,65535,65535,65535 at (0, 0) expected: 65535,65535,65535,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : rtt bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture bindings succeed
+1719 1 should be 27189,0,0,65535 at (0, 0) expected: 27189,0,0,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : renderbuffer bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : rtt bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture bindings succeed
+1719 1 should be 27189,27189,0,65535 at (0, 0) expected: 27189,27189,0,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : renderbuffer bindings succeed
+1719 1 should be 65535,65535,0,65535 at (0, 0) expected: 65535,65535,0,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 1 should be 65535,65535,0,65535 at (0, 0) expected: 65535,65535,0,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 1 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with RGB16_EXT texture attached
+1719 1 getError expected: NO_ERROR. Was 0x507 : rtt bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo bindings succeed
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture bindings succeed
+1719 1 should be 27189,27189,27189,27189 at (0, 0) expected: 27189,27189,27189,27189 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : renderbuffer bindings succeed
+1719 1 should be 65535,65535,65535,65535 at (0, 0) expected: 65535,65535,65535,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 1 should be 65535,65535,65535,65535 at (0, 0) expected: 65535,65535,65535,65535 was 65535,0,0,65535
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 1 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with R16_SNORM_EXT texture attached
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 1 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with RG16_SNORM_EXT texture attached
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 1 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with RGB16_SNORM_EXT texture attached
+1719 1 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 1 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 1 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with RGBA16_SNORM_EXT texture attached
+1723 1 COLOR_ATTACHMENT1: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT1: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT2: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT3: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT4: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT5: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT6: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 1 COLOR_ATTACHMENT7: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1736 1 Multiply destination by SRC1 and add SRC0 at (0, 0) expected: 96,128,159,191 was 128,192,254,255
+1736 1 Per-channel color interpolation using SRC1 at (0, 0) expected: 143,171,199,227 was 227,227,227,227
+1737 1 should be red at (8, 0) expected: 255,0,0,255 was 0,255,0,255
+1601 2 vertex_arrays.single_attribute.normalize.int2_10_10_10.components4_quads256: Image comparison failed
+1663 2 common.abs.vec2_lowp_vertex: Result comparison failed
+1663 2 common.abs.vec2_mediump_vertex: Result comparison failed
+1663 2 common.abs.vec2_highp_vertex: Result comparison failed
+1663 2 common.abs.vec3_lowp_vertex: Result comparison failed
+1663 2 common.abs.vec3_mediump_vertex: Result comparison failed
+1663 2 common.abs.vec3_highp_vertex: Result comparison failed
+1663 2 common.abs.vec4_lowp_vertex: Result comparison failed
+1663 2 common.abs.vec4_mediump_vertex: Result comparison failed
+1663 2 common.abs.vec4_highp_vertex: Result comparison failed
+1663 2 common.abs.ivec2_lowp_vertex: Result comparison failed
+1663 2 common.abs.ivec2_mediump_vertex: Result comparison failed
+1663 2 common.abs.ivec2_highp_vertex: Result comparison failed
+1663 2 common.abs.ivec3_lowp_vertex: Result comparison failed
+1663 2 common.abs.ivec3_mediump_vertex: Result comparison failed
+1663 2 common.abs.ivec3_highp_vertex: Result comparison failed
+1663 2 common.abs.ivec4_lowp_vertex: Result comparison failed
+1663 2 common.abs.ivec4_mediump_vertex: Result comparison failed
+1663 2 common.abs.ivec4_highp_vertex: Result comparison failed
+1663 2 common.sign.vec2_lowp_vertex: Result comparison failed
+1663 2 common.sign.vec2_mediump_vertex: Result comparison failed
+1663 2 common.sign.vec2_highp_vertex: Result comparison failed
+1663 2 common.sign.vec3_lowp_vertex: Result comparison failed
+1663 2 common.sign.vec3_mediump_vertex: Result comparison failed
+1663 2 common.sign.vec3_highp_vertex: Result comparison failed
+1663 2 common.sign.vec4_lowp_vertex: Result comparison failed
+1663 2 common.sign.vec4_mediump_vertex: Result comparison failed
+1663 2 common.sign.vec4_highp_vertex: Result comparison failed
+1663 2 common.sign.ivec2_lowp_vertex: Result comparison failed
+1663 2 common.sign.ivec2_mediump_vertex: Result comparison failed
+1663 2 common.sign.ivec2_highp_vertex: Result comparison failed
+1663 2 common.sign.ivec3_lowp_vertex: Result comparison failed
+1663 2 common.sign.ivec3_mediump_vertex: Result comparison failed
+1663 2 common.sign.ivec3_highp_vertex: Result comparison failed
+1663 2 common.sign.ivec4_lowp_vertex: Result comparison failed
+1663 2 common.sign.ivec4_mediump_vertex: Result comparison failed
+1663 2 common.sign.ivec4_highp_vertex: Result comparison failed
+1663 2 common.floor.vec2_lowp_vertex: Result comparison failed
+1663 2 common.floor.vec2_mediump_vertex: Result comparison failed
+1663 2 common.floor.vec2_highp_vertex: Result comparison failed
+1663 2 common.floor.vec3_lowp_vertex: Result comparison failed
+1663 2 common.floor.vec3_mediump_vertex: Result comparison failed
+1663 2 common.floor.vec3_highp_vertex: Result comparison failed
+1663 2 common.floor.vec4_lowp_vertex: Result comparison failed
+1663 2 common.floor.vec4_mediump_vertex: Result comparison failed
+1663 2 common.floor.vec4_highp_vertex: Result comparison failed
+1663 2 common.trunc.vec2_lowp_vertex: Result comparison failed
+1663 2 common.trunc.vec2_mediump_vertex: Result comparison failed
+1663 2 common.trunc.vec2_highp_vertex: Result comparison failed
+1663 2 common.trunc.vec3_lowp_vertex: Result comparison failed
+1663 2 common.trunc.vec3_mediump_vertex: Result comparison failed
+1663 2 common.trunc.vec3_highp_vertex: Result comparison failed
+1663 2 common.trunc.vec4_lowp_vertex: Result comparison failed
+1663 2 common.trunc.vec4_mediump_vertex: Result comparison failed
+1663 2 common.trunc.vec4_highp_vertex: Result comparison failed
+1663 2 common.round.vec2_lowp_vertex: Result comparison failed
+1663 2 common.round.vec2_mediump_vertex: Result comparison failed
+1663 2 common.round.vec2_highp_vertex: Result comparison failed
+1663 2 common.round.vec3_lowp_vertex: Result comparison failed
+1663 2 common.round.vec3_mediump_vertex: Result comparison failed
+1663 2 common.round.vec3_highp_vertex: Result comparison failed
+1663 2 common.round.vec4_lowp_vertex: Result comparison failed
+1663 2 common.round.vec4_mediump_vertex: Result comparison failed
+1663 2 common.round.vec4_highp_vertex: Result comparison failed
+1663 2 common.roundeven.vec2_lowp_vertex: Result comparison failed
+1663 2 common.roundeven.vec2_mediump_vertex: Result comparison failed
+1663 2 common.roundeven.vec2_highp_vertex: Result comparison failed
+1663 2 common.roundeven.vec3_lowp_vertex: Result comparison failed
+1663 2 common.roundeven.vec3_mediump_vertex: Result comparison failed
+1663 2 common.roundeven.vec3_highp_vertex: Result comparison failed
+1663 2 common.roundeven.vec4_lowp_vertex: Result comparison failed
+1663 2 common.roundeven.vec4_mediump_vertex: Result comparison failed
+1663 2 common.roundeven.vec4_highp_vertex: Result comparison failed
+1663 2 common.ceil.vec2_lowp_vertex: Result comparison failed
+1663 2 common.ceil.vec2_mediump_vertex: Result comparison failed
+1663 2 common.ceil.vec2_highp_vertex: Result comparison failed
+1663 2 common.ceil.vec3_lowp_vertex: Result comparison failed
+1663 2 common.ceil.vec3_mediump_vertex: Result comparison failed
+1663 2 common.ceil.vec3_highp_vertex: Result comparison failed
+1663 2 common.ceil.vec4_lowp_vertex: Result comparison failed
+1663 2 common.ceil.vec4_mediump_vertex: Result comparison failed
+1663 2 common.ceil.vec4_highp_vertex: Result comparison failed
+1663 2 common.fract.vec2_lowp_vertex: Result comparison failed
+1663 2 common.fract.vec2_mediump_vertex: Result comparison failed
+1663 2 common.fract.vec2_highp_vertex: Result comparison failed
+1663 2 common.fract.vec3_lowp_vertex: Result comparison failed
+1663 2 common.fract.vec3_mediump_vertex: Result comparison failed
+1663 2 common.fract.vec3_highp_vertex: Result comparison failed
+1663 2 common.fract.vec4_lowp_vertex: Result comparison failed
+1663 2 common.fract.vec4_mediump_vertex: Result comparison failed
+1663 2 common.fract.vec4_highp_vertex: Result comparison failed
+1663 2 common.modf.float_lowp_vertex: Result comparison failed
+1663 2 common.modf.float_mediump_vertex: Result comparison failed
+1663 2 common.modf.float_highp_vertex: Result comparison failed
+1663 2 common.modf.vec2_lowp_vertex: Result comparison failed
+1663 2 common.modf.vec2_mediump_vertex: Result comparison failed
+1663 2 common.modf.vec2_highp_vertex: Result comparison failed
+1663 2 common.modf.vec3_lowp_vertex: Result comparison failed
+1663 2 common.modf.vec3_mediump_vertex: Result comparison failed
+1663 2 common.modf.vec3_highp_vertex: Result comparison failed
+1663 2 common.modf.vec4_lowp_vertex: Result comparison failed
+1670 2 pack_unpack.unpacksnorm2x16_vertex: Result comparison failed
+1670 2 pack_unpack.unpackunorm2x16_vertex: Result comparison failed
+1670 2 pack_unpack.unpackhalf2x16_vertex: Result comparison failed
+1702 2 approx equal: expected: 64,128,255,64, actual: 64,127,255,64, tolerance: 0
+1717 2 reading with the exact format/type at (0, 0) expected: -2048,-4096 was 0,0
+1717 2 getError expected: NO_ERROR. Was INVALID_OPERATION : texture allocation succeeded
+1717 2 checkFramebufferStatus expected: FRAMEBUFFER_COMPLETE. Was NONE/NO_ERROR/POINTS/ZERO
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 reading with the RGBA format and matching type at (0, 0) expected: -2048,-4096,0,32767 was 0,0,0,0
+1717 2 getError expected: NO_ERROR. Was 0x507 : texture allocation succeeded
+1717 2 checkFramebufferStatus expected: FRAMEBUFFER_INCOMPLETE_ATTACHMENT. Was NONE/NO_ERROR/POINTS/ZERO
+1717 2 getError expected: NO_ERROR. Was 0x507 : renderbuffer allocation succeeded
+1717 2 checkFramebufferStatus expected: FRAMEBUFFER_COMPLETE. Was NONE/NO_ERROR/POINTS/ZERO
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 reading with the RGBA format and matching type at (0, 0) expected: -2048,-4096,-8192,-16384 was 0,0,0,0
+1717 2 getError expected: NO_ERROR. Was 0x507 : texture allocation succeeded
+1717 2 checkFramebufferStatus expected: FRAMEBUFFER_COMPLETE. Was NONE/NO_ERROR/POINTS/ZERO
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 getError expected: INVALID_OPERATION. Was 0x507 : reading with unsupported type fails
+1717 2 reading with the RGBA format and matching type at (0, 0) expected: -2048,-4096,-8192,-16384 was 0,0,0,0
+1719 2 should be 27189,27189,0,65535 at (0, 0) expected: 27189,27189,0,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was INVALID_OPERATION : renderbuffer bindings succeed
+1719 2 should be 65535,65535,0,65535 at (0, 0) expected: 65535,65535,0,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 2 should be 65535,65535,0,65535 at (0, 0) expected: 65535,65535,0,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : rtt bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture bindings succeed
+1719 2 should be 27189,27189,27189,27189 at (0, 0) expected: 27189,27189,27189,27189 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : renderbuffer bindings succeed
+1719 2 should be 65535,65535,65535,65535 at (0, 0) expected: 65535,65535,65535,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 2 should be 65535,65535,65535,65535 at (0, 0) expected: 65535,65535,65535,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : rtt bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture bindings succeed
+1719 2 should be 27189,0,0,65535 at (0, 0) expected: 27189,0,0,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : renderbuffer bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : rtt bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture bindings succeed
+1719 2 should be 27189,27189,0,65535 at (0, 0) expected: 27189,27189,0,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : renderbuffer bindings succeed
+1719 2 should be 65535,65535,0,65535 at (0, 0) expected: 65535,65535,0,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 2 should be 65535,65535,0,65535 at (0, 0) expected: 65535,65535,0,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 2 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with RGB16_EXT texture attached
+1719 2 getError expected: NO_ERROR. Was 0x507 : rtt bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo bindings succeed
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture bindings succeed
+1719 2 should be 27189,27189,27189,27189 at (0, 0) expected: 27189,27189,27189,27189 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : renderbuffer bindings succeed
+1719 2 should be 65535,65535,65535,65535 at (0, 0) expected: 65535,65535,65535,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : copy succeed
+1719 2 should be 65535,65535,65535,65535 at (0, 0) expected: 65535,65535,65535,65535 was 65535,0,0,65535
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 2 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with R16_SNORM_EXT texture attached
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 2 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with RG16_SNORM_EXT texture attached
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 2 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with RGB16_SNORM_EXT texture attached
+1719 2 getError expected: NO_ERROR. Was 0x507 : texture definition succeeded
+1719 2 getError expected: NO_ERROR. Was 0x507 : fbo binding succeeded
+1719 2 checkFramebufferStatus expected one of: FRAMEBUFFER_INCOMPLETE_ATTACHMENT or FRAMEBUFFER_UNSUPPORTED. Was NONE/NO_ERROR/POINTS/ZERO: framebuffer should not be complete with RGBA16_SNORM_EXT texture attached
+1723 2 COLOR_ATTACHMENT1: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT1: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT2: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT3: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT4: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT5: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT6: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [255,0,0,0] at (0, 0) expected: 255,0,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [0,255,0,0] at (0, 0) expected: 0,255,0,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [0,0,255,0] at (0, 0) expected: 0,0,255,0 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [0,0,0,255] at (0, 0) expected: 0,0,0,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1723 2 COLOR_ATTACHMENT7: [255,255,255,255] at (0, 0) expected: 255,255,255,255 was 0,0,0,0
+1736 2 Multiply destination by SRC1 and add SRC0 at (0, 0) expected: 96,128,159,191 was 128,192,254,255
+1736 2 Per-channel color interpolation using SRC1 at (0, 0) expected: 143,171,199,227 was 227,227,227,227
+1737 2 should be red at (8, 0) expected: 255,0,0,255 was 0,255,0,255
