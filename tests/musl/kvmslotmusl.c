@@ -8,7 +8,9 @@
  * change of a slot's size, caller's address or READONLY flag, all EINVAL
  * but the overlap's EEXIST, and takes a new slot, a second over the same
  * memory, a move and a change of the dirty-log flag; KVM_GET_DIRTY_LOG of
- * a slot that does not log is ENOENT, and of slot 300 EINVAL.
+ * a slot that does not log is ENOENT, as is that of the last slot below
+ * KVM_CHECK_EXTENSION(KVM_CAP_NR_MEMSLOTS), which does not exist, and of
+ * the slot at that limit EINVAL, as Linux's kvm_get_dirty_log answers.
  *
  * A vCPU then runs a real-mode guest from a slot at guest address 0: at
  * 0x1000 it loads the byte at 0x2000, writes it to port 0x10 and halts.
@@ -49,6 +51,7 @@
 #define KVM_GET_SREGS              0x8138AE83
 #define KVM_SET_SREGS              0x4138AE84
 #define KVM_CAP_USER_MEMORY        3
+#define KVM_CAP_NR_MEMSLOTS        10
 #define KVM_CAP_READONLY_MEM       81
 #define KVM_MEM_LOG_DIRTY_PAGES    1u
 #define KVM_MEM_READONLY           2u
@@ -130,8 +133,9 @@ static int expect(int got, int want, const char *detail)
 }
 
 /** KVM_SET_USER_MEMORY_REGION's and KVM_GET_DIRTY_LOG's rules, over the
- * 16 pages at `mem`: 0, or 1 after a failure. */
-static int region_rows(char *mem)
+ * 16 pages at `mem`, for a VM of `nslots` slots, KVM_CAP_NR_MEMSLOTS: 0,
+ * or 1 after a failure. */
+static int region_rows(char *mem, unsigned int nslots)
 {
     unsigned long long bits[1];
     unsigned long long size = 16 * PAGE;
@@ -155,7 +159,9 @@ static int region_rows(char *mem)
            expect(get_log(0, bits), 0, "the log") ||
            expect(bits[0] != 0, 0, "a log with no guest run is clear") ||
            expect(get_log(1, bits), ENOENT, "the log of a slot that does not log") ||
-           expect(get_log(300, bits), EINVAL, "the log of slot 300") ||
+           expect(get_log(nslots - 1, bits), ENOENT,
+                  "the log of the last slot, which does not exist") ||
+           expect(get_log(nslots, bits), EINVAL, "the log of the slot at KVM_CAP_NR_MEMSLOTS") ||
            expect(set(0, 0, 0, 0, mem), 0, "a deletion") ||
            expect(set(1, 0, 0, 0, mem), 0, "the other deletion");
 }
@@ -301,7 +307,7 @@ int main(void)
 {
     volatile struct run_head *run;
     int kvm, vcpu, r;
-    long size;
+    long size, nslots;
     char *mem;
 
     kvm = open("/dev/kvm", O_RDWR | O_CLOEXEC);
@@ -316,11 +322,16 @@ int main(void)
         ioctl(vm, KVM_CHECK_EXTENSION, KVM_CAP_READONLY_MEM) != 1) {
         return fail("KVM_CAP_USER_MEMORY or KVM_CAP_READONLY_MEM");
     }
+    nslots = ioctl(vm, KVM_CHECK_EXTENSION, KVM_CAP_NR_MEMSLOTS);
+    if (nslots < 3) {
+        printf("KVMSLOTMUSL FAIL (KVM_CAP_NR_MEMSLOTS is %ld)\n", nslots);
+        return 1;
+    }
     mem = mmap(NULL, 16 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED) {
         return fail("mmap");
     }
-    if (region_rows(mem) != 0) {
+    if (region_rows(mem, (unsigned int)nslots) != 0) {
         return 1;
     }
     size = ioctl(kvm, KVM_GET_VCPU_MMAP_SIZE, 0);
