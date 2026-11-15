@@ -533,6 +533,23 @@ int pci_reset_method(const pci_device_t *dev);
 
 /* What a reset loses: the header's sixteen dwords and the PCI Express
  * capability's control registers. */
+/* A function's power states, as its power management capability names
+ * them, and Linux's wait after a change to or from D3hot, in ms
+ * (PCI_PM_D3HOT_WAIT). */
+#define PCI_D0            0
+#define PCI_D3HOT         3
+#define PCI_PM_D3HOT_WAIT 10u
+
+/** The power state `dev` is in, PCI_D0 to PCI_D3HOT, read from its power
+ * management capability, or -1 when it has none. */
+int pci_power_state(const pci_device_t *dev);
+
+/** Put `dev` in the power state `state` through its power management
+ * capability, as Linux's pci_raw_set_power_state, without the wait the
+ * change needs, PCI_PM_D3HOT_WAIT to or from D3hot, which is the caller's.
+ * 0, or -1 when it has no capability. */
+int pci_set_power_state(const pci_device_t *dev, int state);
+
 struct pci_saved_state {
     uint32_t header[16];
     uint16_t pcie[4];   /* device and link control, and their second ones */

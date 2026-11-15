@@ -1557,6 +1557,42 @@ static void reset_by(const pci_device_t *dev, int method, pci_sleep_t msleep)
     }
 }
 
+/** The power management capability's offset in `dev`, or 0 for none or
+ * one too close to the end of the space for its control word. */
+static uint8_t pm_cap(const pci_device_t *dev)
+{
+    uint8_t pm = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PM);
+
+    return pm <= 0xF8u ? pm : 0;
+}
+
+int pci_power_state(const pci_device_t *dev)
+{
+    uint8_t pm = pm_cap(dev);
+
+    if (pm == 0) {
+        return -1;
+    }
+    return (
+        int)(pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(pm + PCI_PM_CTRL)) &
+             PCI_PM_STATE_MASK);
+}
+
+int pci_set_power_state(const pci_device_t *dev, int state)
+{
+    uint8_t pm = pm_cap(dev);
+    uint16_t v;
+
+    if (pm == 0) {
+        return -1;
+    }
+    v = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(pm + PCI_PM_CTRL));
+    /* Bit 15, PME status, clears when written as one. */
+    v = (uint16_t)((v & ~(PCI_PM_STATE_MASK | 0x8000u)) | ((uint16_t)state & PCI_PM_STATE_MASK));
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(pm + PCI_PM_CTRL), v);
+    return 0;
+}
+
 /**
  * As Linux's pci_reset_function: the state saved and the function quieted,
  * every decoding, bus mastering and its line off; the reset; the wait for
