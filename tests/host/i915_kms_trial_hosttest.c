@@ -909,6 +909,20 @@ static void row_underrun(void)
               !pa->underrun_off && !(reg(DEIMR) & DE_ERR_INT_IVB) &&
               !(reg(GEN7_ERR_INT) & ERR_INT_FIFO_UNDERRUN(0)),
           "underrun: the pipe off and on again clears the latch and reports again");
+    /* Pipe B's reporting off masks the interrupt; A's underrun latches. */
+    intel_fifo_underrun_reporting(&disp->crtc[1], 0);
+    i915_model_poke(&model, GEN7_ERR_INT,
+                    i915_model_peek(&model, GEN7_ERR_INT) | ERR_INT_FIFO_UNDERRUN(0));
+    take_messages();
+    CHECK(times_logged(line) == 1 && (reg(DEIMR) & DE_ERR_INT_IVB) &&
+              setcrtc(0, &disp->connector, &pa->hw.mode, fb) == 0 &&
+              times_logged("display: FIFO underrun on pipe A, found after a commit") == 1 &&
+              !pa->underrun_off && !(reg(GEN7_ERR_INT) & ERR_INT_FIFO_UNDERRUN(0)),
+          "underrun: one latched while masked is logged and cleared by the next commit, as "
+          "Linux's intel_check_cpu_fifo_underruns, and its pipe goes on reporting");
+    intel_fifo_underrun_reporting(&disp->crtc[1], 1);
+    CHECK(times_logged(line) == 1 && !(reg(DEIMR) & DE_ERR_INT_IVB),
+          "underrun: unmasked again with nothing latched to report");
     CHECK(!timed_out(), "underrun: no wait at its bound");
     frame();
 }

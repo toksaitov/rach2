@@ -362,6 +362,30 @@ void intel_fifo_underrun_reporting(struct intel_crtc *c, int on)
     }
 }
 
+void intel_check_cpu_fifo_underruns(struct drm_i915_private *i915)
+{
+    uint32_t flags = spin_lock_irqsave(&i915->irq.lock);
+    uint32_t e = i915_read(&i915->hw, GEN7_ERR_INT), found = 0;
+    int pipe;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        if (!i915->display.crtc[pipe].underrun_off && (e & ERR_INT_FIFO_UNDERRUN(pipe))) {
+            found |= ERR_INT_FIFO_UNDERRUN(pipe);
+        }
+    }
+    if (found != 0) {
+        i915_write(&i915->hw, GEN7_ERR_INT, found);
+        i915_posting_read(&i915->hw, GEN7_ERR_INT);
+    }
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        if (found & ERR_INT_FIFO_UNDERRUN(pipe)) {
+            klog(KLOG_ERR, "i915", "display: FIFO underrun on pipe %c, found after a commit",
+                 'A' + pipe);
+        }
+    }
+}
+
 void intel_display_irq_work(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;

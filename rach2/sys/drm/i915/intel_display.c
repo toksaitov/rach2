@@ -765,6 +765,10 @@ static int32_t atomic_commit(struct drm_device *dev, struct drm_atomic_state *st
                     err != 0   ? COMMIT_FAILED
                     : nonblock ? COMMIT_NONBLOCK
                                : COMMIT_BLOCKING);
+    /* Linux's commit tail: underruns do not always raise the interrupt. */
+    if (err == 0) {
+        intel_check_cpu_fifo_underruns(i915);
+    }
     return err;
 }
 

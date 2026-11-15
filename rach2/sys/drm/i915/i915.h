@@ -3070,8 +3070,9 @@ void intel_display_fini(struct drm_i915_private *i915);
  * The commit, with Linux's prepare_fb and cleanup_fb around the core's:
  * each framebuffer of a plane state the commit carries is pinned for
  * scanout, and what each plane showed before the last update is let go
- * once the commit is made, for `mode_config.atomic_commit`. 0, or the
- * pin's or the core's error with nothing changed.
+ * once the commit is made, for `mode_config.atomic_commit`; then, as
+ * Linux's commit tail, `intel_check_cpu_fifo_underruns`. 0, or the pin's
+ * or the core's error with nothing changed.
  */
 int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock);
 
@@ -3301,6 +3302,16 @@ void intel_display_irq_work(struct drm_i915_private *i915);
  * mask's lock; not from a handler.
  */
 void intel_fifo_underrun_reporting(struct intel_crtc *c, int on);
+
+/**
+ * Log and clear the FIFO underrun latched in GEN7_ERR_INT of each pipe
+ * that reports its underruns, Linux's intel_check_cpu_fifo_underruns, which
+ * its commit tail calls after every commit: while another pipe's reporting
+ * is off the error interrupt is masked, and an underrun latched then would
+ * turn its pipe's reporting off once the interrupt is unmasked. The pipe
+ * keeps reporting. Takes the interrupt mask's lock; not from a handler.
+ */
+void intel_check_cpu_fifo_underruns(struct drm_i915_private *i915);
 
 /*
  * The eDP panel's AUX channel (intel_dp_aux.c), under the device's mode
