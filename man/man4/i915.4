@@ -759,13 +759,11 @@ its backlight, and logs
 with the sizes, the clock, the bits a pixel and the link.
 Any pipe may drive the panel.
 A mode of the panel's size and refresh rate is driven as it is; a
-smaller one is scaled to the panel by the pipe's fitter as
+different size is scaled to the panel by the pipe's fitter as
 .Ql scaling mode
 says, and fails with
 .Er EINVAL
-when the source is wider than the fitter takes, or
-.Er ERANGE
-when it scales down by more than 1.125.
+when the source is wider than the fitter takes.
 A mode fails with
 .Er EINVAL
 when its refresh rate is more than a hertz from the panel's, when no link

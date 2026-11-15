@@ -11,22 +11,6 @@
 
 #include "../../lib/kerrno.h"
 
-/* The most a fitter scales down, 1.125 in 16.16 (Linux's max_scale). */
-#define PF_MAX_DOWNSCALE 0x12000
-
-/** Linux's drm_calc_scale: `src` in 16.16 over `dst` pixels, rounded up
- * when it scales down. */
-static uint32_t pf_scale(uint32_t src, uint32_t dst)
-{
-    if (dst == 0) {
-        return 0;
-    }
-    if (src > dst << 16) {
-        return (src + dst - 1u) / dst;
-    }
-    return src / dst;
-}
-
 /* A fitter's window on the pipe, in pixels. */
 struct pf_win {
     int32_t x, y, w, h;
@@ -34,10 +18,10 @@ struct pf_win {
 
 /** Linux 6.18's checks of a fitter's window `win`
  * (display/intel_pfit.c, intel_pch_pfit_check_*): centred on the pipe, not
- * at x 1, a source the fitter of `pipe` takes, a scale down within its
- * limit and at least 7 lines. 0, -EINVAL or -ERANGE. 6.12 has none of
- * them and programs a window the fitter cannot scale; these refuse it at
- * the check, as Bspec limits the fitter. */
+ * at x 1, a source the fitter of `pipe` takes and at least 7 lines.
+ * 0 or -EINVAL. The scale down has no ratio limit, as Linux 6.12's
+ * pch_panel_fitting lets the Lenovo show 1920x1080 and 2560x1440 on its
+ * 1366x768 panel; the pipe's pixel rate still has to fit the CD clock. */
 static int32_t pfit_check(int pipe, const struct drm_mode_modeinfo *m, int32_t src_w, int32_t src_h,
                           const struct pf_win *win)
 {
@@ -49,10 +33,6 @@ static int32_t pfit_check(int pipe, const struct drm_mode_modeinfo *m, int32_t s
     /* Pipe A's fitter is 7x5 and takes 4096 pixels; B's and C's 2048. */
     if (src_w > (pipe == I915_PIPE_A ? 4096 : 2048) || src_h > 4096) {
         return -EINVAL;
-    }
-    if (pf_scale((uint32_t)src_w << 16, (uint32_t)w) > PF_MAX_DOWNSCALE ||
-        pf_scale((uint32_t)src_h << 16, (uint32_t)h) > PF_MAX_DOWNSCALE) {
-        return -ERANGE;
     }
     if (m->vdisplay < 7) {
         return -EINVAL;

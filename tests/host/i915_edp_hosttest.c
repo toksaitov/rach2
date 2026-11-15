@@ -720,9 +720,16 @@ static void row_pfit(void)
     CHECK(window(0, DRM_MODE_SCALE_FULLSCREEN, 800, 600, &pos, &size) == 0 && pos == 0 &&
               size == (PF_WIN_XSIZE(1366) | 768u),
           "pfit: Full stretches it");
-    CHECK(window(0, DRM_MODE_SCALE_FULLSCREEN, 1600, 900, &pos, &size) == -ERANGE,
-          "pfit: a scale down past 1.125 refused");
-    CHECK(window(0, DRM_MODE_SCALE_FULLSCREEN, 2100, 1200, &pos, &size) == -ERANGE &&
+    CHECK(window(0, DRM_MODE_SCALE_ASPECT, 1920, 1080, &pos, &size) == 0 && pos == 0 &&
+              size == (PF_WIN_XSIZE(1366) | 768u),
+          "pfit: Linux's 1920x1080 bandwidth mode fits the panel");
+    CHECK(window(0, DRM_MODE_SCALE_ASPECT, 2160, 1440, &pos, &size) == 0 &&
+              pos == PF_WIN_XPOS(107) && size == (PF_WIN_XSIZE(1152) | 768u),
+          "pfit: Linux's 2160x1440 bandwidth mode keeps its aspect");
+    CHECK(window(0, DRM_MODE_SCALE_ASPECT, 2560, 1440, &pos, &size) == 0 && pos == 0 &&
+              size == (PF_WIN_XSIZE(1366) | 768u),
+          "pfit: Linux's 2560x1440 bandwidth mode fits the panel");
+    CHECK(window(0, DRM_MODE_SCALE_FULLSCREEN, 2100, 1200, &pos, &size) == 0 &&
               window(1, DRM_MODE_SCALE_FULLSCREEN, 2100, 1200, &pos, &size) == -EINVAL,
           "pfit: pipe B's fitter takes no source wider than 2048");
     k_memset(&cfg, 0, sizeof(cfg));
