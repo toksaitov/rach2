@@ -361,7 +361,7 @@ int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
 
 /**
  * Destroy a closing file's context in queue order and free its attachment
- * records.
+ * records, once the commands in flight leave room (`vgpu_room`). May sleep.
  */
 void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
 {
@@ -373,6 +373,7 @@ void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
     if (!ctx) {
         return;
     }
+    vgpu_room(vg);
     if (ctx->created && !vg->dead) {
         cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DESTROY,
                            sizeof(struct virtio_gpu_ctrl_hdr));
@@ -1004,6 +1005,7 @@ int32_t vgpu_transfer_3d_ioctl(struct drm_device *dev, void *data, struct drm_fi
     struct dma_fence *dependency;
     int32_t rc;
 
+    vgpu_room(vg);
     rc = vgpu_context_ensure(vg, file);
     if (rc) {
         return rc;

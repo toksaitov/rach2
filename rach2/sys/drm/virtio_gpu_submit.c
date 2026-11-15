@@ -480,6 +480,7 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
         context = ctx->base_fence_ctx + a->ring_idx;
     }
     vgpu_reap(vg);
+    vgpu_room(vg);
     rc = vgpu_context_ensure(vg, file);
     if (rc) {
         return rc;

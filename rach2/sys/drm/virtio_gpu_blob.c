@@ -756,6 +756,7 @@ int32_t vgpu_blob_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
     if (blob_verify(vg, a, &guest, &host) != 0) {
         return -EINVAL;
     }
+    vgpu_room(vg);
     if (vg->has_virgl) {
         rc = vgpu_context_ensure(vg, file);
         if (rc != 0) {

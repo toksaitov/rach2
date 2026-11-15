@@ -561,6 +561,8 @@ struct virtio_gpu_cmd {
                                 counted when it is freed answered OK */
     int prepared;            /* the fence has its number and one reference */
     int queued;              /* started: its fence is live */
+    uint32_t held;           /* DMA pages it counts in the device's `held`,
+                                from its start to its free */
     int fence_listed;        /* on the device's list of unsignalled fences */
     int done;
     int waited;
@@ -654,7 +656,12 @@ struct virtio_gpu_device {
     struct vgpu_context *contexts;
     struct virtio_gpu_object *resources; /* includes objects awaiting UNREF */
     uint32_t unrefs;                     /* UNREFs sent and not yet answered */
-    uint32_t kicking;                    /* notifies made without the big lock */
+    /* DMA pages of the commands started and not yet freed, answered or
+     * not, which `vgpu_room` bounds. */
+    uint32_t held;
+    int reaping;      /* frees of `vgpu_reap` under way, which never wait; the
+                         big lock's, which a reap keeps */
+    uint32_t kicking; /* notifies made without the big lock */
     char reset_path[48];
     int has_edid;
     int has_indirect;
@@ -817,6 +824,10 @@ void vgpu_hostmem_init(struct virtio_gpu_device *vg);
 extern const struct drm_gem_object_funcs vgpu_host_funcs;
 /** Free completed commands; process context. */
 void vgpu_reap(struct virtio_gpu_device *vg);
+/** Wait, in a caller that may sleep, while the commands started and not yet
+ * freed hold VGPU_HELD_MAX DMA pages or more; nothing in one that may not.
+ * Process context. */
+void vgpu_room(struct virtio_gpu_device *vg);
 /** Stop DMA, fail commands and free backing and contexts; process context. */
 void vgpu_kill(struct virtio_gpu_device *vg);
 /**

@@ -45,6 +45,15 @@
 #define VGPU_POLL_NS 10000000ll
 #define VGPU_SPIN_US 100u
 
+/* The DMA pages the commands started and not yet freed may hold before a
+ * sender that may sleep waits for answers (`vgpu_room`): twice the 128
+ * entries of QEMU's control queue, so that the queue stays full while the
+ * reaper frees what the device answered. Each command holds pages of the
+ * DMA pool, which is HARD_MEMORY_LIMIT's 64 MiB, until it is freed; Linux's
+ * sender sleeps while the queue has no room (virtio_gpu_queue_ctrl_sgs,
+ * virtgpu_vq.c:338-355 in 6.12.115), which bounds its commands the same way. */
+#define VGPU_HELD_MAX 256u
+
 /* VIRTGPU_WAIT's bound, Linux's 15 seconds. */
 #define VGPU_IOCTL_WAIT_NS 15000000000ll
 
@@ -192,6 +201,7 @@ void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
         cmd->live_next->live_prev = cmd->live_prev;
     }
     fence_unlist(vg, cmd);
+    vg->held -= cmd->held;
     copied = cmd->done && cmd->resp_type >= VIRTIO_GPU_RESP_OK_NODATA &&
                      cmd->resp_type < VIRTIO_GPU_RESP_ERR_UNSPEC
                  ? cmd->copied
@@ -333,6 +343,8 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
     vgpu_cmd_prepare(cmd);
     flags = spin_lock_irqsave(&vg->lock);
     cmd->queued = 1;
+    cmd->held = 1u + cmd->nextra + cmd->npayload;
+    vg->held += cmd->held;
     vg->commands++;
     dead = vg->dead;
     if (dead || big) {
@@ -471,6 +483,7 @@ void vgpu_reap(struct virtio_gpu_device *vg)
     list = vg->done_list;
     vg->done_list = vg->done_tail = NULL;
     spin_unlock_irqrestore(&vg->lock, flags);
+    vg->reaping++;
     while ((cmd = list) != NULL) {
         list = cmd->next;
         if (cmd->resp_type >= VIRTIO_GPU_RESP_ERR_UNSPEC) {
@@ -482,6 +495,7 @@ void vgpu_reap(struct virtio_gpu_device *vg)
         }
         vgpu_cmd_free(cmd);
     }
+    vg->reaping--;
     drm_dev_put(&vg->drm);
 }
 
@@ -594,6 +608,103 @@ static int unref_moved(void *arg)
     struct unref_wait *w = (struct unref_wait *)arg;
 
     return w->vg->dead || w->vg->done_list || w->vg->unrefs != w->seen;
+}
+
+/**
+ * Whether a sender may wait here for the device's answers: a process with
+ * interrupts on, so that it holds no spinlock and is no handler, once the
+ * worker's wait queue is set up, outside the reaper's frees, which the wait
+ * would need to run, and on a device still alive.
+ */
+static int vgpu_may_wait(struct virtio_gpu_device *vg)
+{
+    return can_sleep() && kirq_enabled() && vgpu_wake_ready && !vg->reaping && !vg->dead;
+}
+
+/** Whether the commands started and not yet freed hold fewer pages than
+ * VGPU_HELD_MAX, an answer waits to be reaped, or the device has died; a
+ * wait's condition. */
+static int held_low(void *arg)
+{
+    struct virtio_gpu_device *vg = (struct virtio_gpu_device *)arg;
+
+    return vg->dead || vg->done_list || vg->held < VGPU_HELD_MAX;
+}
+
+/**
+ * The commands a process sends faster than the device answers would each
+ * hold their pages of the DMA pool on the list behind the full queue: a
+ * program's exit frees every buffer it made, each with a DETACH and an
+ * UNREF, and piglit's arb_internalformat_query2 makes thousands, which took
+ * the whole pool and made the next allocation fail. So a sender that may
+ * sleep reaps, and sleeps on the answers, until fewer than VGPU_HELD_MAX
+ * pages are held, as Linux's sender sleeps for room in the queue. The sleep
+ * polls the queues every 10 ms, for a device without interrupts, and ends
+ * when the device dies.
+ */
+void vgpu_room(struct virtio_gpu_device *vg)
+{
+    if (!vgpu_may_wait(vg) || vg->held < VGPU_HELD_MAX) {
+        return;
+    }
+    drm_dev_get(&vg->drm);
+    for (;;) {
+        vgpu_reap(vg);
+        if (vg->dead || vg->held < VGPU_HELD_MAX) {
+            break;
+        }
+        vgpu_sleep(held_low, vg, dma_fence_now() + VGPU_POLL_NS);
+    }
+    drm_dev_put(&vg->drm);
+}
+
+/* What a wait for a command's pages watches: the device, and the pages its
+ * commands held when the wait began. */
+struct held_wait {
+    struct virtio_gpu_device *vg;
+    uint32_t seen;
+};
+
+/** Whether the pages the commands hold have changed since `arg`'s count was
+ * taken, an answer waits to be reaped, or the device has died. */
+static int held_moved(void *arg)
+{
+    struct held_wait *w = (struct held_wait *)arg;
+
+    return w->vg->dead || w->vg->done_list || w->vg->held != w->seen;
+}
+
+/**
+ * A new command, as vgpu_cmd_new, for a sender that may sleep and must not
+ * fail, as Linux allocates its commands with __GFP_NOFAIL: while the DMA
+ * pool has no page and commands started before hold some, it reaps and
+ * sleeps on the answers, which free them, and asks again. NULL when none
+ * is held, the caller may not sleep, the device dies, or VGPU_WAIT_NS pass.
+ */
+static struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct virtqueue *vq,
+                                                uint32_t type, uint32_t req_len)
+{
+    struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vq, type, req_len);
+    struct held_wait w;
+    int64_t until;
+
+    if (cmd || !vgpu_may_wait(vg) || vg->held == 0) {
+        return cmd;
+    }
+    until = dma_fence_now() + VGPU_WAIT_NS;
+    w.vg = vg;
+    drm_dev_get(&vg->drm);
+    while (!cmd && !vg->dead && vg->held > 0 && dma_fence_now() < until) {
+        w.seen = vg->held;
+        vgpu_reap(vg);
+        if (!vg->dead && vg->held == w.seen) {
+            vgpu_sleep(held_moved, &w, dma_fence_now() + VGPU_POLL_NS);
+            vgpu_reap(vg);
+        }
+        cmd = vg->dead ? NULL : vgpu_cmd_new(vg, vq, type, req_len);
+    }
+    drm_dev_put(&vg->drm);
+    return cmd;
 }
 
 /**
@@ -1218,9 +1329,11 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
  * placed in host-visible memory, then RESOURCE_UNREF, which also detaches
  * the backing, and the frames and the piece freed once the host has
  * answered, since until then it may use them, as Linux's
- * virtio_gpu_free_object and virtio_gpu_vram_free do. Without memory for
- * the commands, they are freed only after an unplug resets the device and
- * revokes mappings.
+ * virtio_gpu_free_object and virtio_gpu_vram_free do. A caller that may
+ * sleep first waits for room (`vgpu_room`), since an exit frees every
+ * buffer of the program at once, and waits for the UNREF's memory while
+ * earlier commands hold it. Without memory for the commands even so, they
+ * are freed only after an unplug resets the device and revokes mappings.
  */
 void vgpu_obj_free(struct drm_gem_object *obj)
 {
@@ -1228,13 +1341,14 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     struct virtio_gpu_device *vg = to_vg(obj->dev);
     struct virtio_gpu_cmd *cmd;
 
+    vgpu_room(vg);
     vgpu_resource_detach(vg, bo);
     /* The device's pages go before the UNMAP_BLOB that lets it unpin them;
      * no mapping is left to take away, since each held a reference. */
     vgpu_blob_pages_drop(vg, bo, 0);
     if (bo->res_id && !vg->dead) {
-        cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNREF,
-                           sizeof(struct virtio_gpu_resource_unref));
+        cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNREF,
+                                sizeof(struct virtio_gpu_resource_unref));
         if (cmd && bo->host_visible && vgpu_blob_unmap(vg, bo) != 0) {
             vgpu_cmd_free(cmd);
             cmd = NULL;
@@ -1246,8 +1360,11 @@ void vgpu_obj_free(struct drm_gem_object *obj)
             vgpu_cmd_send(cmd, unref_done, bo);
             return;
         }
-        klog(KLOG_WARN, "virtio_gpu", "resource %u: no memory for UNREF; reset", bo->res_id);
-        drm_dev_unplug(&vg->drm);
+        /* A device that died during the wait has detached the backing. */
+        if (!vg->dead) {
+            klog(KLOG_WARN, "virtio_gpu", "resource %u: no memory for UNREF; reset", bo->res_id);
+            drm_dev_unplug(&vg->drm);
+        }
     }
     obj_release(bo);
 }
@@ -1999,6 +2116,7 @@ static int32_t vgpu_resource_create_ioctl(struct drm_device *dev, void *data, st
                                    rc->target != 2 || rc->array_size > 1)) {
         return -EINVAL;
     }
+    vgpu_room(to_vg(dev));
     if (to_vg(dev)->has_virgl) {
         err = vgpu_context_ensure(to_vg(dev), file);
         if (err != 0) {
@@ -2073,6 +2191,7 @@ static int32_t vgpu_transfer_to_host_ioctl(struct drm_device *dev, void *data,
     if (to_vg(dev)->has_virgl) {
         return vgpu_transfer_3d_ioctl(dev, data, file, 0);
     }
+    vgpu_room(to_vg(dev));
     obj = drm_gem_object_lookup(file, args->bo_handle);
     if (!obj) {
         return -ENOENT;
