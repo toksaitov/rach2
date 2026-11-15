@@ -44,7 +44,9 @@
 # LENOVO_IGT, the IGT stage's directory, LENOVO_CTS, VK-GL-CTS's, and
 # LENOVO_WEBGL, the WebGL suite's sdk/tests, other copies of those. A run's
 # environment is guest-env.sh's, with Mesa's shader cache emptied first. It
-# prints the runner's lines and the judge's, and exits 0 when both pass.
+# prints the runner's lines and the judge's, for igt the end of IGT's own
+# output for each subtest worse than the reference, since the case keeps only
+# what it prints, and exits 0 when both pass.
 set -eu
 
 here=$(pwd)
@@ -162,6 +164,39 @@ run()
     return "$status"
 }
 
+# igt_output RESULTS NAMES: print the end of igt's own output for each
+# subtest of the file NAMES that igt_runner's RESULTS hold, its stdout, stderr
+# and the kernel's log, since a case keeps only what it prints. Bounded: the
+# first 20 subtests, the last 30 lines of each stream and 20 of the log, each
+# line cut at 240 bytes.
+igt_output()
+{
+    python3 -I - "$1" "$2" << 'EOF'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+        tests = json.load(f)["tests"]
+except (OSError, ValueError, KeyError) as e:
+    print("igt: output: no results to read: %s" % e)
+    sys.exit(0)
+with open(sys.argv[2], encoding="utf-8") as f:
+    names = [line.strip() for line in f if line.strip()]
+for name in names[:20]:
+    t = tests.get(name)
+    if t is None:
+        print("igt: output: %s: not in the results" % name)
+        continue
+    for stream, keep in (("out", 30), ("err", 30), ("dmesg", 20)):
+        lines = (t.get(stream) or "").splitlines()
+        if len(lines) > keep:
+            print("igt: %s: %s: %d lines before these left out" % (stream, name, len(lines) - keep))
+        for line in lines[-keep:]:
+            print("igt: %s: %s: %s" % (stream, name, line[:240]))
+if len(names) > 20:
+    print("igt: output: %d more subtests worse, their output left out" % (len(names) - 20))
+EOF
+}
+
 # judge KIND ARGUMENT...: judge.py's KIND, with the exclusions when there are
 # any and KIND takes them: results, deqp and webgl do; glmark2's validations
 # and the gate do not, and judge.py refuses an option it does not take.
@@ -216,7 +251,10 @@ case $kind in
         if [ "$ref" != - ]; then
             sed 's/^/=/' "$out/list" > "$work/scope"
             cat "$out"/*.results > "$work/got" 2> /dev/null || : > "$work/got"
-            judge results "$here/$ref" "$work/got" -s "$work/scope" || status=1
+            judge results "$here/$ref" "$work/got" -s "$work/scope" > "$work/judge.out" || status=1
+            cat "$work/judge.out"
+            sed -n 's/^judge: worse: \([^ :]*\): .*/\1/p' "$work/judge.out" > "$work/worse"
+            [ ! -s "$work/worse" ] || igt_output "$out/results.json" "$work/worse" || true
         fi
         ;;
     piglit)
