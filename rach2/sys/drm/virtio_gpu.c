@@ -614,7 +614,12 @@ static int unref_moved(void *arg)
  * Whether a sender may wait here for the device's answers: a process with
  * interrupts on, so that it holds no spinlock and is no handler, once the
  * worker's wait queue is set up, outside the reaper's frees, which the wait
- * would need to run, and on a device still alive.
+ * would need to run, and on a device still alive. `vgpu_room`, which has
+ * no deadline, asks again on each turn: a reap that another thread began
+ * meanwhile, which the big lock lets be seen only while it sleeps, holds
+ * the answers it took until it ends, and may sleep on a lock the waiter
+ * holds, as drm_dev_unplug takes the mode lock that a file's release holds
+ * while it frees framebuffers.
  */
 static int vgpu_may_wait(struct virtio_gpu_device *vg)
 {
@@ -640,7 +645,7 @@ static int held_low(void *arg)
  * sleep reaps, and sleeps on the answers, until fewer than VGPU_HELD_MAX
  * pages are held, as Linux's sender sleeps for room in the queue. The sleep
  * polls the queues every 10 ms, for a device without interrupts, and ends
- * when the device dies.
+ * when the device dies or the sender may no longer wait (`vgpu_may_wait`).
  */
 void vgpu_room(struct virtio_gpu_device *vg)
 {
@@ -650,7 +655,7 @@ void vgpu_room(struct virtio_gpu_device *vg)
     drm_dev_get(&vg->drm);
     for (;;) {
         vgpu_reap(vg);
-        if (vg->dead || vg->held < VGPU_HELD_MAX) {
+        if (!vgpu_may_wait(vg) || vg->held < VGPU_HELD_MAX) {
             break;
         }
         vgpu_sleep(held_low, vg, dma_fence_now() + VGPU_POLL_NS);
@@ -680,6 +685,9 @@ static int held_moved(void *arg)
  * pool has no page and commands started before hold some, it reaps and
  * sleeps on the answers, which free them, and asks again. NULL when none
  * is held, the caller may not sleep, the device dies, or VGPU_WAIT_NS pass.
+ * The bound keeps a wait that a sleeping reap holds up from lasting: its
+ * NULL unplugs the device, which ends that reap's own wait for the mode
+ * lock, whose holder may be this caller.
  */
 static struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct virtqueue *vq,
                                                 uint32_t type, uint32_t req_len)

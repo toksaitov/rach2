@@ -317,16 +317,22 @@ void drm_dev_unplug(struct drm_device *dev)
 {
     struct drm_gem_object *obj;
     struct drm_file *f;
+    int was;
 
     if (dev->unplugged) {
         return;
     }
     /* Set under the mode lock, which a KMS row holds when it tests it, so
-     * that a row under way ends before the display goes. */
+     * that a row under way ends before the display goes. Read again there:
+     * another unplug may have run while this one slept for the lock. */
     if (drm_core_check_feature(dev, DRIVER_MODESET)) {
         drm_modeset_lock_nointr(dev);
+        was = dev->unplugged;
         dev->unplugged = 1;
         drm_modeset_unlock(dev);
+        if (was) {
+            return;
+        }
     } else {
         dev->unplugged = 1;
     }
