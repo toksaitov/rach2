@@ -46,3 +46,12 @@ chromium conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb
 chromium conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-half_float.html
 chromium conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-float.html
 chromium conformance2/uniforms/incompatible-texture-type-for-sampler.html
+#
+# With dEQP's transform feedback pages run in Chromium, the host's GPU engine
+# is reset some 75 pages later and its Direct3D 12 device removed; every page
+# after that reads back black, and QEMU ends as the next browser makes its
+# first context. Chunk 6 of 2.0.1 ends so in the Debian guest under NVIDIA's
+# driver 621.24 as on Rach2. Without these 29 pages it runs whole, and the 7
+# pages after them that fail in Debian's reference too pass more of their
+# subtests (dev-log/84-locks/84-265r.md).
+chromium deqp/functional/gles3/transformfeedback/
