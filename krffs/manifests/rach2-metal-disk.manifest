@@ -295,6 +295,10 @@ file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 # and only a file's owner or root may remove or rename one, so root and the
 # test account can share it.
 dir 1777 /tmp
+# /data, where the data partition, entry 6 of an installed disk, is mounted
+# by hand, and where tests/native/crysis.sh binds its own; the root carries
+# it, since rach2-install --update keeps no directory made on the old root.
+dir 0755 /data
 dir 0755 /home
 dir 0700:1000:1000 /home/test
 dir 0700:1000:1000 /home/test/.ssh
