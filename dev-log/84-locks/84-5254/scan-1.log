@@ -1,0 +1,70 @@
+stackscan: deepest nonzero byte 0x4f40 below main's stack
+stackscan: expected: 2065 nonzero bytes outside [1024,2048), first 12528 last 16381
+stackscan: expected[12536]: 0x7e80888bc888 /lib/libc.so.6 ?+0x1e5888
+stackscan: expected[12552]: 0x7e808877ad0f /lib/libc.so.6 ?+0xa3d0f
+stackscan: expected[12600]: 0x7e80887ead2f /lib/libc.so.6 __tsearch+0xef
+stackscan: expected[12616]: 0x7e80888bc888 /lib/libc.so.6 ?+0x1e5888
+stackscan: expected[12632]: 0x7e8088702b30 /lib/libc.so.6 ?+0x2bb30
+stackscan: expected[12696]: 0x7e80887034c9 /lib/libc.so.6 ?+0x2c4c9
+stackscan: expected[12704]: 0x7e808887d4b1 /lib/libc.so.6 ?+0x1a64b1
+stackscan: expected[12728]: 0x7e80888bb640 /lib/libc.so.6 ?+0x1e4640
+stackscan: expected[12760]: 0x7e8088702fb6 /lib/libc.so.6 ?+0x2bfb6
+stackscan: expected[12768]: 0x7e808887d483 /lib/libc.so.6 ?+0x1a6483
+stackscan: expected[12792]: 0x7e80888bb5d0 /lib/libc.so.6 ?+0x1e45d0
+stackscan: expected[12824]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[12832]: 0x7e808887d453 /lib/libc.so.6 ?+0x1a6453
+stackscan: expected[12856]: 0x7e80888bb560 /lib/libc.so.6 ?+0x1e4560
+stackscan: expected[12888]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[12952]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13016]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13080]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13144]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13208]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13272]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13336]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13400]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13464]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13528]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13592]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13656]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13720]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13784]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13848]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13912]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[13976]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14040]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14104]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14168]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14232]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14296]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14360]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14424]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+stackscan: expected[14488]: 0x7e808870304b /lib/libc.so.6 ?+0x2c04b
+IGT-Version: 2.0-NO-GIT (x86_64) (Linux: 6.18.0-rach2 x86_64)
+Using IGT_SRANDOM=1794750382 for randomisation
+Opened device: /dev/dri/card0
+Starting subtest: read-write
+Testing full write of buffer
+(gem_readwrite:93596) CRITICAL: Test assertion failure function __igt_unique____real_main98, file ../tests/intel/gem_readwrite.c:134:
+(gem_readwrite:93596) CRITICAL: Failed assertion: memcmp(buf, expected, sizeof(buf)) == 0
+Subtest read-write failed.
+**** DEBUG ****
+(gem_readwrite:93596) INFO: Testing full write of buffer
+(gem_readwrite:93596) CRITICAL: Test assertion failure function __igt_unique____real_main98, file ../tests/intel/gem_readwrite.c:134:
+(gem_readwrite:93596) CRITICAL: Failed assertion: memcmp(buf, expected, sizeof(buf)) == 0
+(gem_readwrite:93596) igt_core-INFO: Stack trace:
+(gem_readwrite:93596) igt_core-INFO:   #0 ../lib/igt_core.c:2055 __igt_fail_assert()
+(gem_readwrite:93596) igt_core-INFO:   #1 ../tests/intel/gem_readwrite.c:133 __igt_unique____real_main98()
+(gem_readwrite:93596) igt_core-INFO:   #2 ../tests/intel/gem_readwrite.c:98 main()
+(gem_readwrite:93596) igt_core-INFO:   #3 [__libc_start_call_main+0x67]
+(gem_readwrite:93596) igt_core-INFO:   #4 [__libc_start_main+0x87]
+(gem_readwrite:93596) igt_core-INFO:   #5 [_start+0x21]
+****  END  ****
+Stack trace:
+  #0 ../lib/igt_core.c:2055 __igt_fail_assert()
+  #1 ../tests/intel/gem_readwrite.c:133 __igt_unique____real_main98()
+  #2 ../tests/intel/gem_readwrite.c:98 main()
+  #3 [__libc_start_call_main+0x67]
+  #4 [__libc_start_main+0x87]
+  #5 [_start+0x21]
+Subtest read-write: FAIL (0.135s)

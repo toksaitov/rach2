@@ -453,3 +453,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `vendor/gnu/igt/build_igt.sh` applies `kms-content-protection-plane-size.patch`, which sizes the plane to the output's mode at each of the four places.
 * Status: fixed upstream; IGT's master of 2026-11-15 sets the plane's size to the mode in each of these functions. The commit and the first release that has it are not recorded.
 * Next: find the upstream commit and its release, so that the patch can go when Rach2's IGT moves past it.
+
+## IGT's gem_readwrite read-write compares against an unset stack array
+
+* Project: IGT GPU Tools 2.0 as built by Debian 13.7, the binary staged in the GNU root at /usr/libexec/igt-gpu-tools/gem_readwrite; Rach2 keeps no source tarball of it.
+* Fails: the read-write subtest compares the bytes it reads back with `expected`, a 16 KiB local of main of which it sets only bytes 1024 to 2047 (tests/intel/gem_readwrite.c:126-134), so the memcmp at line 134 passes only when the rest of that stack happens to be zero.
+* Found: 2026-11-15, the Lenovo, milestone 84, in the release's native gpu/igt-gem.1 on the installed 3ffd553f6, where the subtest failed 7 runs of 7 and Linux's reference passes.
+* Reproduction: run `gem_readwrite --run-subtest read-write` as root on the Lenovo's installed system, with and without `LD_PRELOAD` of the stack scan in `dev-log/84-locks/84-5254/`; the scan reports 2062 to 2065 nonzero bytes in `expected` outside 1024 to 2047, return addresses into the C library's start-up among them.
+* Evidence: `dev-log/84-locks/84-5254/plain-1.log`, `plain-2.log`, `scan-1.log`, `scan-2.log`; the scan's source, `stackscan.c`, beside them.
+* Rach2: the row is `xfail` in `tests/graphics/ref/lenovo/expect/igt-gem.rows`, deferred in #5254.
+* Status: unreported.
+* Next: check current upstream IGT's gem_readwrite.c for the same unset `expected`, find which C library start-up path writes that deep below main on Rach2's glibc 2.44 and not on Debian's 2.41, and send a patch that sets `expected` whole.

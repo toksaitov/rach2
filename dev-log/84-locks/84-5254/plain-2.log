@@ -1,0 +1,28 @@
+IGT-Version: 2.0-NO-GIT (x86_64) (Linux: 6.18.0-rach2 x86_64)
+Using IGT_SRANDOM=1794750382 for randomisation
+Opened device: /dev/dri/card0
+Starting subtest: read-write
+Testing full write of buffer
+(gem_readwrite:93597) CRITICAL: Test assertion failure function __igt_unique____real_main98, file ../tests/intel/gem_readwrite.c:134:
+(gem_readwrite:93597) CRITICAL: Failed assertion: memcmp(buf, expected, sizeof(buf)) == 0
+Subtest read-write failed.
+**** DEBUG ****
+(gem_readwrite:93597) INFO: Testing full write of buffer
+(gem_readwrite:93597) CRITICAL: Test assertion failure function __igt_unique____real_main98, file ../tests/intel/gem_readwrite.c:134:
+(gem_readwrite:93597) CRITICAL: Failed assertion: memcmp(buf, expected, sizeof(buf)) == 0
+(gem_readwrite:93597) igt_core-INFO: Stack trace:
+(gem_readwrite:93597) igt_core-INFO:   #0 ../lib/igt_core.c:2055 __igt_fail_assert()
+(gem_readwrite:93597) igt_core-INFO:   #1 ../tests/intel/gem_readwrite.c:133 __igt_unique____real_main98()
+(gem_readwrite:93597) igt_core-INFO:   #2 ../tests/intel/gem_readwrite.c:98 main()
+(gem_readwrite:93597) igt_core-INFO:   #3 [__libc_start_call_main+0x67]
+(gem_readwrite:93597) igt_core-INFO:   #4 [__libc_start_main+0x87]
+(gem_readwrite:93597) igt_core-INFO:   #5 [_start+0x21]
+****  END  ****
+Stack trace:
+  #0 ../lib/igt_core.c:2055 __igt_fail_assert()
+  #1 ../tests/intel/gem_readwrite.c:133 __igt_unique____real_main98()
+  #2 ../tests/intel/gem_readwrite.c:98 main()
+  #3 [__libc_start_call_main+0x67]
+  #4 [__libc_start_main+0x87]
+  #5 [_start+0x21]
+Subtest read-write: FAIL (0.135s)

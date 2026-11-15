@@ -100,7 +100,8 @@ igt@gem_mmap_gtt@zero-extend pass
 igt@gem_readwrite@beyond-eob pass
 igt@gem_readwrite@new-obj pass
 igt@gem_readwrite@read-bad-handle pass
-igt@gem_readwrite@read-write pass
+# deferred: IGT compares against an unset stack array (#5254)
+igt@gem_readwrite@read-write xfail
 igt@gem_readwrite@write-bad-handle pass
 igt@gem_reset_stats@params pass
 igt@gem_reset_stats@params-ctx pass
