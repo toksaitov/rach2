@@ -8,3 +8,9 @@
 # and the test's own row fails with them; its other subtests are judged.
 ^spec@arb_shader_image_load_store@shader-mem-barrier$
 ^spec@arb_shader_image_load_store@shader-mem-barrier@(geometry|tessellation evaluation) shader/'volatile' qualifier memory barrier test/modulus=64$
+# copypixels-draw-sync copies one pixel and draws one at each pixel of its
+# window, then reads one back, whose wait covers the host's run of all of
+# them. Beside other accounts' guests on the testing PC that wait passes
+# Linux's 15 s bound in both guests, with Mesa's "waiting got error - 16"
+# and a black probe (dev-log/84-locks/84-266w.md).
+^spec@!opengl 1\.1@copypixels-draw-sync$

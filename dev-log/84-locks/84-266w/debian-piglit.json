@@ -1,0 +1,170 @@
+{
+    "info": {
+        "system": {
+            "uname": "Linux debian-ref 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux\n",
+            "lspci": "00:00.0 Host bridge [0600]: Intel Corporation 82G33/G31/P35/P31 Express DRAM Controller [8086:29c0]\n00:01.0 Ethernet controller [0200]: Red Hat, Inc. Virtio network device [1af4:1000]\n00:02.0 Unclassified device [00ff]: Red Hat, Inc. Virtio RNG [1af4:1005]\n00:03.0 VGA compatible controller [0300]: Red Hat, Inc. Virtio 1.0 GPU [1af4:1050] (rev 01)\n00:04.0 SCSI storage controller [0100]: Red Hat, Inc. Virtio block device [1af4:1001]\n00:1f.0 ISA bridge [0601]: Intel Corporation 82801IB (ICH9) LPC Interface Controller [8086:2918] (rev 02)\n00:1f.2 SATA controller [0106]: Intel Corporation 82801IR/IO/IH (ICH9R/DO/DH) 6 port SATA Controller [AHCI mode] [8086:2922] (rev 02)\n00:1f.3 SMBus [0c05]: Intel Corporation 82801I (ICH9 Family) SMBus Controller [8086:2930] (rev 02)\n"
+        }
+    },
+    "options": {
+        "execute": true,
+        "valgrind": false,
+        "sync": false,
+        "deqp_mustpass": false,
+        "process_isolation": true,
+        "jobs": null,
+        "force_glsl": false,
+        "env": {
+            "PIGLIT_SOURCE_DIR": "/usr/lib/x86_64-linux-gnu/piglit",
+            "PIGLIT_PLATFORM": "surfaceless_egl"
+        },
+        "profile": [
+            "quick"
+        ],
+        "log_level": "verbose",
+        "concurrent": "none",
+        "include_filter": [],
+        "exclude_filter": [],
+        "dmesg": false,
+        "monitoring": false,
+        "platform": "surfaceless_egl",
+        "forced_test_list": [
+            "spec@!opengl 1.1@copypixels-draw-sync",
+            "spec@!opengl 1.1@copypixels-sync",
+            "spec@!opengl 1.1@draw-copypixels-sync"
+        ],
+        "ignore_missing": false,
+        "timeout": null
+    },
+    "time_elapsed": {
+        "start": 1794714018.6005821,
+        "end": 1794714093.423419,
+        "__type__": "TimeAttribute"
+    },
+    "tests": {
+        "spec@!opengl 1.1@copypixels-draw-sync": {
+            "__type__": "TestResult",
+            "command": "/usr/lib/x86_64-linux-gnu/piglit/bin/copypixels-draw-sync -auto -fbo",
+            "environment": "PIGLIT_SOURCE_DIR=\"/usr/lib/x86_64-linux-gnu/piglit\" PIGLIT_PLATFORM=\"surfaceless_egl\"",
+            "err": "waiting got error - 16, slow gpu or hang?\n",
+            "out": "Probe color at (0,0)\n  Expected: 0 255 0 0\n  Observed: 0 0 0 0\n",
+            "result": "fail",
+            "returncode": 1,
+            "subtests": {
+                "__type__": "Subtests"
+            },
+            "time": {
+                "start": 1794714022.2509499,
+                "end": 1794714037.9188209,
+                "__type__": "TimeAttribute"
+            },
+            "exception": null,
+            "traceback": null,
+            "dmesg": "",
+            "images": null,
+            "pid": [
+                1050
+            ]
+        },
+        "spec@!opengl 1.1@copypixels-sync": {
+            "__type__": "TestResult",
+            "command": "/usr/lib/x86_64-linux-gnu/piglit/bin/copypixels-sync -auto -fbo",
+            "environment": "PIGLIT_SOURCE_DIR=\"/usr/lib/x86_64-linux-gnu/piglit\" PIGLIT_PLATFORM=\"surfaceless_egl\"",
+            "err": "",
+            "out": "",
+            "result": "pass",
+            "returncode": 0,
+            "subtests": {
+                "__type__": "Subtests"
+            },
+            "time": {
+                "start": 1794714037.9199877,
+                "end": 1794714085.166999,
+                "__type__": "TimeAttribute"
+            },
+            "exception": null,
+            "traceback": null,
+            "dmesg": "",
+            "images": null,
+            "pid": [
+                1052
+            ]
+        },
+        "spec@!opengl 1.1@draw-copypixels-sync": {
+            "__type__": "TestResult",
+            "command": "/usr/lib/x86_64-linux-gnu/piglit/bin/draw-copypixels-sync -auto -fbo",
+            "environment": "PIGLIT_SOURCE_DIR=\"/usr/lib/x86_64-linux-gnu/piglit\" PIGLIT_PLATFORM=\"surfaceless_egl\"",
+            "err": "",
+            "out": "",
+            "result": "pass",
+            "returncode": 0,
+            "subtests": {
+                "__type__": "Subtests"
+            },
+            "time": {
+                "start": 1794714085.1679835,
+                "end": 1794714093.4200194,
+                "__type__": "TimeAttribute"
+            },
+            "exception": null,
+            "traceback": null,
+            "dmesg": "",
+            "images": null,
+            "pid": [
+                1054
+            ]
+        }
+    },
+    "totals": {
+        "spec@!opengl 1.1": {
+            "pass": 2,
+            "warn": 0,
+            "dmesg-warn": 0,
+            "fail": 1,
+            "dmesg-fail": 0,
+            "timeout": 0,
+            "crash": 0,
+            "incomplete": 0,
+            "skip": 0,
+            "notrun": 0
+        },
+        "spec": {
+            "pass": 2,
+            "warn": 0,
+            "dmesg-warn": 0,
+            "fail": 1,
+            "dmesg-fail": 0,
+            "timeout": 0,
+            "crash": 0,
+            "incomplete": 0,
+            "skip": 0,
+            "notrun": 0
+        },
+        "": {
+            "pass": 2,
+            "warn": 0,
+            "dmesg-warn": 0,
+            "fail": 1,
+            "dmesg-fail": 0,
+            "timeout": 0,
+            "crash": 0,
+            "incomplete": 0,
+            "skip": 0,
+            "notrun": 0
+        },
+        "root": {
+            "pass": 2,
+            "warn": 0,
+            "dmesg-warn": 0,
+            "fail": 1,
+            "dmesg-fail": 0,
+            "timeout": 0,
+            "crash": 0,
+            "incomplete": 0,
+            "skip": 0,
+            "notrun": 0
+        }
+    },
+    "name": "t5214",
+    "results_version": 10,
+    "__type__": "TestrunResult"
+}
