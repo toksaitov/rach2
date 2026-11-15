@@ -127,8 +127,9 @@ It is
 while another file is master, and 0 for the master itself.
 A file that takes the role for the first time makes a master record of its
 own; one that was master already takes its old record back.
-While a file of the console's card holds the role, the console gives it
-the screen and the keyboard, and takes them back when none does, as
+When a file of the console's card takes the role, the console gives it
+the screen and the keyboard, and takes them back when the card's last file
+closes, or a display changes while no file holds the role, as
 .Xr console 4
 describes under
 .Sx DRM masters .

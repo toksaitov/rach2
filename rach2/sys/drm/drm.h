@@ -2067,7 +2067,7 @@ struct drm_device *drm_dev_at(int index);
 
 /*
  * A listener of the master role: the console (drm_client.c), which gives
- * up the screen while a program holds the role, and the seat's revoke
+ * up the screen when a program takes the role, and the seat's revoke
  * path. Its `changed` runs after each change of a device's master, with
  * the file that holds the role now or NULL when none does: SET_MASTER,
  * DROP_MASTER, the first open of a card with no master, and the release of
@@ -2306,9 +2306,14 @@ void drm_client_dev_register(struct drm_device *dev);
  * /fb back if a master of it held the screen. Does not sleep. */
 void drm_client_dev_unregister(struct drm_device *dev);
 /** `dev`'s outputs changed: while no master holds the console's device, the
- * console sets its mode again on the outputs connected now. Process
- * context; may sleep. */
+ * console sets its mode again on the outputs connected now, taking the
+ * screen back from a program that dropped the role. Process context; may
+ * sleep. */
 void drm_client_dev_hotplug(struct drm_device *dev);
+/** The last open file of `dev` has been released, as Linux's
+ * drm_lastclose: the console takes back the screen, /fb and the keyboard
+ * that it gave a master of its device. Process context; may sleep. */
+void drm_client_dev_lastclose(struct drm_device *dev);
 /** The loader's framebuffer has gone, with the device whose aperture
  * showed it, which its driver gives to another owner: a console still on
  * it draws nothing from now on, and /fb's native mode has no screen, until

@@ -479,7 +479,9 @@ static void events_release(struct drm_file *file)
 /**
  * The release of a file, as Linux's drm_file_free: its events, its
  * display objects, its syncobj and buffer handles, its master role, then
- * the driver's `postclose`, and the device's reference.
+ * the driver's `postclose`; after the device's last file, the console's
+ * return, as Linux's drm_release calls drm_lastclose; and the device's
+ * reference.
  */
 static void drm_file_release(struct drm_file *file)
 {
@@ -504,6 +506,9 @@ static void drm_file_release(struct drm_file *file)
     }
     dev->open_count--;
     kfree(file);
+    if (dev->open_count == 0) {
+        drm_client_dev_lastclose(dev);
+    }
     drm_dev_put(dev);
 }
 

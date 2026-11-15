@@ -16,12 +16,17 @@
  * The rows: a device registered is taken and nothing is set on it; a first
  * open unblanks the console and takes the screen, /fb and the keyboard from
  * it; a master that sets its own mode and exits without dropping the role
- * gives them back, the console's buffer at the loader's size on the CRTC
- * and the console drawing there, the keyboard last, the blank's countdown
- * started again first; DROP_MASTER does the same on
- * the same buffer; a master that comes while the console's commit runs
- * keeps the screen; `video=` and a hotplug move the console to a buffer of
- * the size named; a buffer that cannot be mapped when the master leaves is
+ * gives them back at the device's last close, the console's buffer at the
+ * loader's size on the CRTC and the console drawing there, the keyboard
+ * last, the blank's countdown started again first; DROP_MASTER gives
+ * nothing back while the program holds the card and hands the role to
+ * another of its files, as IGT's kms_flip_event_leak does, nor does the
+ * master's close with another file open, and the last close gives them
+ * back on the same buffer; a master that comes while the console's commit
+ * runs keeps the screen; `video=` and a hotplug move the console to a
+ * buffer of the size named, and a hotplug after DROP_MASTER gives the
+ * screen back while one under a master does not; a buffer that cannot be
+ * mapped when the master leaves is
  * forgotten until the next place, or, on a device whose framebuffers are
  * flushed, drawn through a shadow whose damaged rows a flush copies and
  * commits; the firmware's device is taken back with
@@ -319,6 +324,7 @@ static int32_t fake_dumb_create(struct drm_file *file, struct drm_device *d,
     if (intrude) {
         intrude = 0;
         file_open(&fc, &dev);
+        dev.open_count++;
         drm_master_open(&fc);
     }
     return 0;
@@ -379,7 +385,20 @@ static void open_as_self(struct drm_file *file)
 {
     file_open(file, &dev);
     file->pid = kms_self.tgid;
+    dev.open_count++;
     drm_master_open(file);
+}
+
+/** Close `file` as drm.c's release does: its display objects, its share of
+ * the master role, and the console told when it was the device's last
+ * file. */
+static void file_close(struct drm_file *file)
+{
+    drm_mode_file_release(file);
+    drm_master_release(file);
+    if (--dev.open_count == 0) {
+        drm_client_dev_lastclose(&dev);
+    }
 }
 
 /** The mode on the CRTC now, or NULL when it is off. */
@@ -436,9 +455,8 @@ static void row_master_exits(void)
     drm_framebuffer_put(set.fb);
     CHECK(crtc_mode() && crtc_mode()->hdisplay == 800, "the master's mode is on the CRTC");
 
-    /* The exit: drm.c's release of the file. */
-    drm_mode_file_release(&fa);
-    drm_master_release(&fa);
+    /* The exit: drm.c's release of the file, the device's last. */
+    file_close(&fa);
     CHECK(!dev.master && !con.handed, "the role is free and the console has the screen");
     CHECK(dumb_creates == 1 && con.fb && con.fb->width == 1024 && con.fb->height == 768,
           "the console makes a buffer of the loader's size, not the preferred");
@@ -457,19 +475,34 @@ static void row_master_exits(void)
     CHECK(con.on_buffer, "the console is on its buffer");
 }
 
-/** DROP_MASTER gives the screen back on the same buffer. */
+/** DROP_MASTER leaves the screen to the program while it holds the card,
+ * as Linux's restores no fbdev mode: IGT's kms_flip_event_leak drops the
+ * role and sets it on a second file of its own, then flips on a CRTC it
+ * set up, which a console's mode there would refuse. The close of the
+ * master's file with another open gives nothing back either; the last
+ * close gives the screen back on the same buffer. */
 static void row_drop_master(void)
 {
     struct drm_framebuffer *before = con.fb;
+    int p = plane_updates;
 
     open_as_self(&fb_);
     CHECK(dev.master == &fb_ && detaches == 2 && kd_holds == 2, "a second master takes over");
-    CHECK(drm_dropmaster_ioctl(&dev, NULL, &fb_) == 0, "DROP_MASTER");
-    CHECK(con.fb == before && dumb_creates == 1, "the same buffer, no new one");
+    open_as_self(&fc);
+    CHECK(dev.master == &fb_ && !fc.is_master, "a second file of the program is no master");
+    CHECK(drm_dropmaster_ioctl(&dev, NULL, &fb_) == 0 && !dev.master, "DROP_MASTER");
+    CHECK(con.handed && attaches == 1 && unholds == 1 && kd_unholds == 1 && plane_updates == p,
+          "the program keeps the screen and the keyboard, and nothing is committed");
+    CHECK(drm_setmaster_ioctl(&dev, NULL, &fc) == 0 && dev.master == &fc && detaches == 2 &&
+              kd_holds == 2,
+          "its second file takes the role, and nothing is handed over again");
+    file_close(&fc);
+    CHECK(!dev.master && con.handed && attaches == 1 && kd_unholds == 1 && plane_updates == p,
+          "the master's close with another file open gives nothing back");
+    file_close(&fb_);
+    CHECK(!con.handed && con.fb == before && dumb_creates == 1,
+          "the last close: the same buffer, no new one");
     CHECK(attaches == 2 && unholds == 2 && kd_unholds == 2, "the screen and keyboard come back");
-    drm_mode_file_release(&fb_);
-    drm_master_release(&fb_);
-    CHECK(kd_unholds == 2, "the release of a file that holds no role changes nothing");
 }
 
 /** A master that comes while the console's commit runs keeps the screen,
@@ -479,13 +512,11 @@ static void row_intruder(void)
     video_option = "Virtual-1:800x600@60";
     open_as_self(&fa);
     intrude = 1;
-    drm_mode_file_release(&fa);
-    drm_master_release(&fa);
+    file_close(&fa);
     CHECK(dev.master == &fc && con.handed, "the newcomer holds the screen");
     CHECK(attaches == 2 && kd_unholds == 2 && kd_holds == 3,
           "the console neither draws nor gives the keyboard back meanwhile");
-    drm_mode_file_release(&fc);
-    drm_master_release(&fc);
+    file_close(&fc);
     CHECK(!con.handed && attaches == 3 && kd_unholds == 3, "the newcomer's exit gives it back");
     CHECK(crtc_mode() && crtc_mode()->hdisplay == 800 && con.fb->width == 800,
           "video= names the console's mode");
@@ -502,6 +533,27 @@ static void row_hotplug(void)
     video_option = NULL;
 }
 
+/** A hotplug under a master leaves the screen to it; one after
+ * DROP_MASTER, while the program still holds the card, gives it back, as
+ * Linux's hotplug handler sets the fbdev mode once no master holds the
+ * device. */
+static void row_drop_hotplug(void)
+{
+    int a = attaches, k = kd_unholds;
+
+    open_as_self(&fa);
+    drm_client_dev_hotplug(&dev);
+    CHECK(con.handed && attaches == a, "a hotplug under a master leaves it the screen");
+    CHECK(drm_dropmaster_ioctl(&dev, NULL, &fa) == 0 && con.handed && attaches == a,
+          "DROP_MASTER keeps the screen the program's");
+    drm_client_dev_hotplug(&dev);
+    CHECK(!con.handed && attaches == a + 1 && kd_unholds == k + 1,
+          "a hotplug with no master gives the screen and the keyboard back");
+    file_close(&fa);
+    CHECK(!con.handed && attaches == a + 1 && kd_unholds == k + 1,
+          "the last close then changes nothing");
+}
+
 /** A buffer that cannot be mapped when the master leaves is forgotten,
  * and the next place that succeeds draws again. */
 static void row_unmapped(void)
@@ -511,8 +563,7 @@ static void row_unmapped(void)
     open_as_self(&fa);
     CHECK(con.handed && detaches == d + 1 && forgets == f, "a master takes the screen");
     unmapped = 1;
-    drm_mode_file_release(&fa);
-    drm_master_release(&fa);
+    file_close(&fa);
     CHECK(!con.handed && con.lost && !con.on_buffer && detaches == d + 2 && forgets == f + 1 &&
               attaches == a && unholds == u + 1 && kd_unholds == k + 1,
           "a buffer out of reach is forgotten, and /fb and the keyboard come back");
@@ -533,8 +584,7 @@ static void row_shadow(void)
     mc->fb_dirty = 1;
     unmapped = 1;
     open_as_self(&fa);
-    drm_mode_file_release(&fa);
-    drm_master_release(&fa);
+    file_close(&fa);
     CHECK(con.on_buffer && con.shadow && attached_base == con.shadow && !con.next && !con.spare,
           "the console draws on a shadow");
     pitch = con.fb->pitches[0];
@@ -554,8 +604,7 @@ static void row_shadow(void)
     con_flush();
     CHECK(plane_updates == u + 1 && damage_end == 1 && !con_flush_ready(NULL),
           "nothing is flushed while a master holds the device");
-    drm_mode_file_release(&fb_);
-    drm_master_release(&fb_);
+    file_close(&fb_);
     CHECK(!con.handed && attached_base == con.shadow, "the shadow is kept for the next return");
     damage_top = damage_end = 0;
     k_memset(backing, 0, sizeof(backing));
@@ -583,8 +632,7 @@ static void row_firmware(void)
     CHECK(attaches == a + 2 && attached_base == NULL && dumb_creates == c + 1,
           "the lost console goes to the loader's framebuffer on the firmware's device");
     open_as_self(&fa);
-    drm_mode_file_release(&fa);
-    drm_master_release(&fa);
+    file_close(&fa);
     CHECK(!crtc_mode() && dumb_creates == c + 1,
           "the firmware's CRTC is turned off, no buffer made");
     CHECK(attached_base == NULL && attached.width == 1024 && attached.addr == loader.addr,
@@ -616,8 +664,7 @@ static void row_screen_gone(void)
     drm_client_dev_unregister(&dev);
     CHECK(attaches == a && detaches == d + 1,
           "the device leaves: the console is not put back on the screen that went");
-    drm_mode_file_release(&fa);
-    drm_master_release(&fa);
+    file_close(&fa);
     drm_client_dev_register(&dev);
     CHECK(attaches == a + 1 && attached_base != NULL && dumb_creates == c + 1 && crtc_mode() &&
               con.on_buffer && !con.lost,
@@ -712,15 +759,16 @@ static void row_late_master(void)
     p = plane_updates;
     c = dumb_creates;
     drm_mode_file_release(&fa); /* takes the commit lock, before the role goes */
+    drm_master_release(&fa);
     lock_other = 1;
     model_wait = lock_wait_master;
-    drm_master_release(&fa);
+    dev.open_count--;
+    drm_client_dev_lastclose(&dev);
     CHECK(dev.master == &fc && con.handed && !lock_other && !mutex_held(&dev.mode_lock),
           "the newcomer holds the screen");
     CHECK(plane_updates == p && dumb_creates == c && attaches == a,
           "the console neither commits nor draws over the newcomer");
-    drm_mode_file_release(&fc);
-    drm_master_release(&fc);
+    file_close(&fc);
     CHECK(!con.handed && attaches == a + 1, "the newcomer's exit gives it back");
 }
 
@@ -767,6 +815,7 @@ int main(void)
     row_drop_master();
     row_intruder();
     row_hotplug();
+    row_drop_hotplug();
     row_unmapped();
     row_shadow();
     row_firmware();

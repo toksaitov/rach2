@@ -187,7 +187,7 @@ void arch_drm_probe(int phase)
     (void)phase;
 }
 
-static int client_registers, client_unregisters;
+static int client_registers, client_unregisters, client_lastcloses;
 
 void drm_client_dev_register(struct drm_device *dev)
 {
@@ -199,6 +199,13 @@ void drm_client_dev_unregister(struct drm_device *dev)
 {
     (void)dev;
     client_unregisters++;
+}
+
+/** The device's last file closed: the open count is already 0. */
+void drm_client_dev_lastclose(struct drm_device *dev)
+{
+    CHECK("the console is told of the last close only", dev->open_count == 0);
+    client_lastcloses++;
 }
 
 /** The /sys entries, which drm_sysfs.c's own rows in procfs_hosttest.c
@@ -950,6 +957,7 @@ static void test_identity(void)
     struct drm_set_version sv;
     char name[4], date[16], desc[64], uniq[32];
     int opened = opens, closed = postcloses; /* test_inherited's come first */
+    int lastcloses = client_lastcloses;
 
     CHECK("open card0", open_node("dri/card0", &user_a, 0, &card) == 0);
     CHECK("open renderD128", open_node("dri/renderD128", &user_a, 0, &render) == 0);
@@ -1012,7 +1020,9 @@ static void test_identity(void)
     close_node(&second);
 
     close_node(&render);
+    CHECK("the console is not told while the card is open", client_lastcloses == lastcloses);
     close_node(&card);
+    CHECK("the console is told of the last close", client_lastcloses == lastcloses + 1);
     CHECK("the driver saw each close", postcloses == closed + 3);
     CHECK("no master after the close", fake_dev.master == NULL && fake_dev.open_count == 0);
 }

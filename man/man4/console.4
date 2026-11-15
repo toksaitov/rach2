@@ -405,9 +405,12 @@ then reports, and
 .Dv KDSKBMODE
 sets, the mode that returns.
 .Pp
-The console takes them back when no process holds the master role: after
+The console takes them back when the last open file of the card is
+closed, whether its program closes it or exits, by a signal or not, as
+Linux's fbdev emulation does.
 .Dv DRM_IOCTL_DROP_MASTER ,
-or when the master closes the card or exits, by a signal or not.
+or the close of the master's file while another file of the card stays
+open, gives nothing back: the screen stays as the program left it.
 On a native driver it sets a mode on each connected display, scanned out
 from a buffer of its own, and draws its text there again.
 The mode is the size that
@@ -424,13 +427,14 @@ reads
 .Dv FB_EVENT_REGAINED
 and redraws its whole screen, and its writes go on.
 A display connected or disconnected while no master holds the card moves
-the console to the new modes in the same way.
+the console to the new modes in the same way, and takes the screen back
+from a program that dropped the role.
 .Pp
 The console keeps the columns and rows it had at boot.
 On a screen of another size it draws them at the largest whole scale of
 the font at which they fit, centered, and on one too small for them at
 scale 1 it shows those that fit from the top left corner.
-Until a master first leaves the card, the console stays where it was at
+Until it first takes the card back, the console stays where it was at
 boot: on the loader's framebuffer, or on the VGA's text mode, which it
 then leaves for the card's buffer.
 .Ss Terminal requests
