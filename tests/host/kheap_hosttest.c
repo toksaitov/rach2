@@ -175,6 +175,21 @@ void klog(int level, const char *subsystem, const char *format, ...)
     klogs++;
 }
 
+/* The clock of the refusals' rate limit (`short_may_log`): each reading is
+ * a window past the last, so that every refusal is logged, as the rows that
+ * count the records expect. */
+volatile uint64_t kernel_ticks;
+
+/** The next window's start, in milliseconds. */
+uint64_t tick_msecs(uint64_t ticks)
+{
+    static uint64_t now;
+
+    (void)ticks;
+    now += 10000u;
+    return now;
+}
+
 /* The shrinker the heap registered, which the kept rows call as reclaim. */
 static struct mem_shrinker *shrinker;
 

@@ -9,10 +9,12 @@
 
 #include "../klog.h"
 #include "../panic.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "paging.h"
 #include "pressure.h"
 #include "../proc/smp.h"
+#include "../timer.h"
 
 #define KHEAP_MAGIC   0x4B484550u /* "KHEP" */
 #define KHEAP_CLASSES 8
@@ -124,6 +126,88 @@ static uint32_t lazy_pages;                     /* and their pages */
 static uintptr_t lazy_frames[KHEAP_LAZY_PAGES]; /* their frames, during a purge */
 static uint32_t kept_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep);
 static struct mem_shrinker kept_shrinker = {kept_shrink, NULL};
+
+/* Linux's warn_alloc limits its lines with `nopage_rs`, at the defaults
+ * DEFAULT_RATELIMIT_BURST lines in each DEFAULT_RATELIMIT_INTERVAL, 10 in 5
+ * seconds (mm/page_alloc.c, include/linux/ratelimit_types.h). A heap that
+ * has run out fails thousands of requests a second, and a line for each
+ * buries the first and fills the log. */
+#define SHORT_LOG_BURST     10u
+#define SHORT_LOG_WINDOW_MS 5000u
+static struct spinlock short_lock = SPINLOCK_INIT_NAMED("kheap_short");
+static uint32_t short_begin, short_printed, short_missed;
+static int short_open;
+
+/* The heap's state that a refusal's line gives, as warn_alloc follows its
+ * line with show_mem: the region's pages, those taken, the runs waiting to
+ * be unmapped (`lazy`), the bytes the objects in use asked for, and the
+ * pages carved into each class. The pages taken that no class holds are the
+ * large objects', the buffer cache's, the kernel stacks' and the pages
+ * `kalloc_pages` gave. */
+struct heap_state {
+    uint32_t region, held, waiting;
+    unsigned long used;
+    uint32_t cls[KHEAP_CLASSES];
+};
+#define HEAP_STATE_FMT                                                                          \
+    "; region %u pages, %u taken, %u waiting, %lu bytes in use, class pages %u %u %u %u %u %u " \
+    "%u %u"
+#define HEAP_STATE_ARGS(st)                                                                 \
+    (st).region, (st).held, (st).waiting, (st).used, (st).cls[0], (st).cls[1], (st).cls[2], \
+        (st).cls[3], (st).cls[4], (st).cls[5], (st).cls[6], (st).cls[7]
+
+/**
+ * Whether a refusal's line may be logged now, and the heap's state for it
+ * in `*st` when it may: the first SHORT_LOG_BURST lines of each window of
+ * SHORT_LOG_WINDOW_MS, as Linux's ___ratelimit answers (lib/ratelimit.c).
+ * The first line of a window is preceded by the count the last one held
+ * back. A caller that finds the state taken by another processor is held
+ * back uncounted, as ___ratelimit's trylock holds it back. Called without
+ * `heap_lock`, which it takes to read the state.
+ */
+static int short_may_log(struct heap_state *st)
+{
+    uint32_t now = (uint32_t)tick_msecs((uint32_t)kernel_ticks);
+    uint32_t missed = 0, flags, i;
+    int ok;
+
+    flags = kirq_save();
+    if (!spin_trylock(&short_lock)) {
+        kirq_restore(flags);
+        return 0;
+    }
+    if (!short_open || now - short_begin > SHORT_LOG_WINDOW_MS) {
+        missed = short_missed;
+        short_open = 1;
+        short_begin = now;
+        short_printed = 0;
+        short_missed = 0;
+    }
+    ok = short_printed < SHORT_LOG_BURST;
+    if (ok) {
+        short_printed++;
+    } else {
+        short_missed++;
+    }
+    spin_unlock(&short_lock);
+    kirq_restore(flags);
+    if (missed != 0) {
+        klog(KLOG_ERR, "kheap", "%u lines of refusals suppressed", (unsigned int)missed);
+    }
+    if (!ok) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&heap_lock);
+    st->region = heap_pages;
+    st->held = pages_held;
+    st->waiting = lazy_pages;
+    st->used = (unsigned long)bytes_used;
+    for (i = 0; i < KHEAP_CLASSES; i++) {
+        st->cls[i] = class_pages[i];
+    }
+    spin_unlock_irqrestore(&heap_lock, flags);
+    return 1;
+}
 
 /** Whether page `page` of the region is taken in the map. */
 static int page_taken(uint32_t page)
@@ -559,6 +643,7 @@ static uint32_t take_pages(uint32_t count)
  * on with. */
 static void *pages_or_null(uint32_t count, uintptr_t *phys, int quiet)
 {
+    struct heap_state st;
     uint32_t flags = spin_lock_irqsave(&heap_lock);
     uint32_t page;
     void *va;
@@ -570,8 +655,9 @@ static void *pages_or_null(uint32_t count, uintptr_t *phys, int quiet)
     page = take_pages(count);
     if (page >= heap_pages) {
         spin_unlock_irqrestore(&heap_lock, flags);
-        if (!quiet) {
-            klog(KLOG_ERR, "kheap", "%d pages: no room or no frame", (int)count);
+        if (!quiet && short_may_log(&st)) {
+            klog(KLOG_ERR, "kheap", "%d pages: no room or no frame" HEAP_STATE_FMT, (int)count,
+                 HEAP_STATE_ARGS(st));
         }
         return NULL;
     }
@@ -630,6 +716,7 @@ static uint32_t take_contig_once(uint32_t count)
  * search finds no room or no frames, as `take_pages` does. */
 void *kalloc_contig(uint32_t count, uintptr_t *phys)
 {
+    struct heap_state st;
     uint32_t flags = spin_lock_irqsave(&heap_lock);
     uint32_t page;
     void *va;
@@ -645,7 +732,10 @@ void *kalloc_contig(uint32_t count, uintptr_t *phys)
     }
     if (page >= heap_pages) {
         spin_unlock_irqrestore(&heap_lock, flags);
-        klog(KLOG_ERR, "kheap", "%d consecutive frames: no room or no run free", (int)count);
+        if (short_may_log(&st)) {
+            klog(KLOG_ERR, "kheap", "%d consecutive frames: no room or no run free" HEAP_STATE_FMT,
+                 (int)count, HEAP_STATE_ARGS(st));
+        }
         return NULL;
     }
     va = (void *)(KVA_HEAP + (uintptr_t)page * PAGE_SIZE);
@@ -678,6 +768,7 @@ static uint32_t cache_take(void)
  * has no free page or no frame for it. */
 void *kalloc_cache_page(void)
 {
+    struct heap_state st;
     uint32_t flags = spin_lock_irqsave(&heap_lock);
     uint32_t page = cache_take();
 
@@ -686,7 +777,10 @@ void *kalloc_cache_page(void)
     }
     if (page >= heap_pages) {
         spin_unlock_irqrestore(&heap_lock, flags);
-        klog(KLOG_ERR, "kheap", "a cache page: no room or no frame");
+        if (short_may_log(&st)) {
+            klog(KLOG_ERR, "kheap", "a cache page: no room or no frame" HEAP_STATE_FMT,
+                 HEAP_STATE_ARGS(st));
+        }
         return NULL;
     }
     spin_unlock_irqrestore(&heap_lock, flags);
@@ -734,6 +828,7 @@ static uint32_t guarded_take(uint32_t count)
  * when the region has no such run or no frames for it. */
 void *kalloc_guarded(uint32_t count)
 {
+    struct heap_state st;
     uint32_t flags = spin_lock_irqsave(&heap_lock);
     uint32_t guard = guarded_take(count);
 
@@ -742,7 +837,10 @@ void *kalloc_guarded(uint32_t count)
     }
     if (guard >= heap_pages) {
         spin_unlock_irqrestore(&heap_lock, flags);
-        klog(KLOG_ERR, "kheap", "%d pages and a guard: no room or no frame", (int)count);
+        if (short_may_log(&st)) {
+            klog(KLOG_ERR, "kheap", "%d pages and a guard: no room or no frame" HEAP_STATE_FMT,
+                 (int)count, HEAP_STATE_ARGS(st));
+        }
         return NULL;
     }
     page_set(guard, 1);
@@ -846,6 +944,7 @@ static void drop_class_page(void *base, uint32_t cls)
  * the first, and the header's `used` has 32 bits for the size. */
 void *kmalloc(size_t size)
 {
+    struct heap_state st;
     uint32_t flags, cls;
     void *block;
 
@@ -887,7 +986,10 @@ void *kmalloc(size_t size)
     flags = spin_lock_irqsave(&heap_lock);
     if (!free_list[cls] && add_class_page(cls) != 0) {
         spin_unlock_irqrestore(&heap_lock, flags);
-        klog(KLOG_ERR, "kheap", "%d bytes: no room or no frame", (int)size);
+        if (short_may_log(&st)) {
+            klog(KLOG_ERR, "kheap", "%d bytes: no room or no frame" HEAP_STATE_FMT, (int)size,
+                 HEAP_STATE_ARGS(st));
+        }
         return NULL;
     }
     block = free_list[cls];
