@@ -545,14 +545,16 @@ def vkcube(ref_path, got_path, ref_timing=None, got_timing=None):
 
 
 def gate(gate_path, measures_path):
-    loss, linux = None, {}
+    loss, linux, xfail = None, {}, set()
     for f in lines(gate_path):
         if f[0] == "loss" and len(f) == 2:
             loss = float(f[1]) / 100
-        elif len(f) == 3 and f[2] in ("higher", "lower"):
+        elif len(f) in (3, 4) and f[2] in ("higher", "lower") and f[3:] in ([], ["xfail"]):
             linux[f[0]] = (float(f[1]), f[2])
+            if f[3:]:
+                xfail.add(f[0])
         else:
-            sys.exit("judge: %s: a line that is neither `loss PERCENT` nor `KEY VALUE higher|lower`: %s"
+            sys.exit("judge: %s: a line that is neither `loss PERCENT` nor `KEY VALUE higher|lower [xfail]`: %s"
                      % (gate_path, " ".join(f)))
     if loss is None:
         sys.exit("judge: %s: no `loss` line" % gate_path)
@@ -566,7 +568,9 @@ def gate(gate_path, measures_path):
         ref, better = linux[key]
         ratio = value / ref if better == "higher" else (ref / value if value else 0.0)
         line = "%s: %g here, %g on Linux, %.1f%% of Linux's" % (key, value, ref, 100 * ratio)
-        if ratio < 1 - loss:
+        if ratio < 1 - loss and key in xfail:
+            print("judge: xfail: %s" % line)
+        elif ratio < 1 - loss:
             worse.append(line)
         else:
             print("judge: within: %s" % line)
