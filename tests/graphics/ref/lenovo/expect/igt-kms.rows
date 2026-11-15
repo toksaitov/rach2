@@ -1893,10 +1893,8 @@ igt@kms_pm_rpm@universal-planes@plane-36 xfail
 # deferred: msr device and i915 runtime PM (#5235)
 igt@kms_pm_rpm@universal-planes@plane-42 xfail
 igt@kms_prime@basic-crc-hybrid skip
-# deferred: vgem (#5236)
-igt@kms_prime@basic-crc-vgem xfail
-# deferred: vgem (#5236)
-igt@kms_prime@basic-crc-vgem@second-to-first xfail
+igt@kms_prime@basic-crc-vgem pass
+igt@kms_prime@basic-crc-vgem@second-to-first pass
 igt@kms_prime@basic-modeset-hybrid skip
 igt@kms_prime@d3hot skip
 igt@kms_prop_blob@basic pass
