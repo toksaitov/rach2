@@ -7,9 +7,10 @@ Run from the repository's root. It reads ref/lenovo's IGT and piglit runs,
 the tools' own output, and writes:
 
   tests/graphics/igt-lenovo-kms.list
-      the IGT subtests Linux ran, by static name, in parts of at most CAP
-      seconds of Linux's run each, a part beginning with `# part NAME`;
-      a program whose subtests take longer is split among parts by subtest
+      the IGT subtests Linux ran, by static name, in the order it ran them,
+      in parts of at most CAP seconds of Linux's run each, a part beginning
+      with `# part NAME`; a program whose subtests take longer is split
+      among parts by subtest
   tests/graphics/ref/lenovo/expect/igt-kms.rows
       `NAME RESULT` for each subtest and dynamic subtest of the run
   tests/graphics/ref/lenovo/expect/piglit-quick.rows.gz
@@ -47,7 +48,10 @@ def igt():
     tests = json.load(gzip.open(os.path.join(REF, "igt/results.json.gz"), "rt",
                                 encoding="utf-8"))["tests"]
     rows = [igt_row(name, tests[name]) for name in sorted(tests)]
-    static = sorted(n for n in tests if n.count("@") <= 2)
+    # results.json keeps the order Linux ran the subtests in, which the list
+    # keeps: a subtest can leave the display in a state the next one meets,
+    # as kms_panel_fitting's underruns stop the next pipe CRC's on pipe A.
+    static = [n for n in tests if n.count("@") <= 2]
     seconds = {n: tests[n]["time"]["end"] - tests[n]["time"]["start"] for n in static}
     programs = {}
     for n in static:
@@ -55,7 +59,7 @@ def igt():
     # Each program is one unit, or each of its subtests one unit when the
     # program alone passes the cap; units fill parts in order.
     units = []
-    for p in sorted(programs):
+    for p in programs:
         names = programs[p]
         total = sum(seconds[n] for n in names)
         if total <= CAP:
@@ -74,7 +78,8 @@ def igt():
            "# by part through igt.sh. Made by lenovo-expect.py from",
            "# ref/lenovo/igt/results.json.gz; do not edit.",
            "#",
-           "# A line is `igt@TEST`, a program without subtests, or `igt@TEST@SUBTEST`.",
+           "# A line is `igt@TEST`, a program without subtests, or `igt@TEST@SUBTEST`,",
+           "# in the order Linux ran them, since a subtest meets what the last left.",
            "# A part begins with `# part NAME` and takes at most %d s of Linux's run." % CAP,
            "# Linux left out the subtests that hang the GPU or suspend the machine,",
            "# kms_pm_backlight and kms_frontbuffer_tracking but for its basic subtest."]
