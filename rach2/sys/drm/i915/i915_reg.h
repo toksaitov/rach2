@@ -802,9 +802,10 @@
 #define SPRITE_PIPE_CSC_ENABLE              (1u << 24)
 #define SPRITE_RGB_ORDER_RGBX               (1u << 20)
 #define SPRITE_YUV_TO_RGB_CSC_FORMAT_BT709  (1u << 18)
+/* The packed 4:2:2 byte order; UYVY is 1 and YVYU 2, as in Linux. */
 #define SPRITE_YUV_ORDER_YUYV               (0u << 16)
-#define SPRITE_YUV_ORDER_YVYU               (1u << 16)
-#define SPRITE_YUV_ORDER_UYVY               (2u << 16)
+#define SPRITE_YUV_ORDER_UYVY               (1u << 16)
+#define SPRITE_YUV_ORDER_YVYU               (2u << 16)
 #define SPRITE_YUV_ORDER_VYUY               (3u << 16)
 #define SPRITE_ROTATE_180                   (1u << 15)
 #define SPRITE_PLANE_GAMMA_DISABLE          (1u << 13)
