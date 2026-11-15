@@ -373,7 +373,7 @@ void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
     if (!ctx) {
         return;
     }
-    vgpu_room(vg);
+    (void)vgpu_room(vg, 0);
     if (ctx->created && !vg->dead) {
         cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DESTROY,
                            sizeof(struct virtio_gpu_ctrl_hdr));
@@ -1005,7 +1005,10 @@ int32_t vgpu_transfer_3d_ioctl(struct drm_device *dev, void *data, struct drm_fi
     struct dma_fence *dependency;
     int32_t rc;
 
-    vgpu_room(vg);
+    rc = vgpu_room(vg, 1);
+    if (rc) {
+        return rc;
+    }
     rc = vgpu_context_ensure(vg, file);
     if (rc) {
         return rc;

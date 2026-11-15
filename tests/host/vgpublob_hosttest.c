@@ -11,25 +11,23 @@
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/mutex_none.c
  *
- * The rows: the parameters a device with blobs, UUIDs, context
- * initialization and a host-visible region gives; blobs of host memory,
- * whose commands go before their CREATE_BLOB, which MAP_BLOB places first
- * fit in the region, which map whole with the host's cache type, whose
- * pages and kernel window reach their piece alone, and which unmap before
- * their UNREF; a full region and a refused map, which leak nothing; blobs
- * of guest memory and of both, with their entries, contexts, UUIDs,
- * transfers and refusals; a device without context initialization, UUIDs
- * or virgl; CONTEXT_INIT with capability sets 1, 2, 4 and 6, its refusals,
- * which leave the context as it was, and its name; rings, each its own
- * fence context, whose answers retire only their own ring's fences, whose
- * polled ring alone sends an event, and whose dependencies across rings
- * are waited for; PRIME export and import of a blob; a blob as the
+ * The rows: the parameters a device with blobs, UUIDs, context initialization
+ * and a host-visible region gives; blobs of host memory, whose commands go
+ * before their CREATE_BLOB, which MAP_BLOB, unfenced, places first fit in the
+ * region, which map whole with the host's cache type, whose pages and kernel
+ * window reach their piece alone, and which unmap before their UNREF; a full
+ * region and a refused map, which leak nothing; blobs of guest memory and of
+ * both, with their entries, contexts, UUIDs, transfers and refusals; a device
+ * without context initialization, UUIDs or virgl; CONTEXT_INIT with capability
+ * sets 1, 2, 4 and 6, its refusals, which leave the context as it was, and its
+ * name; rings, each its own fence context, whose answers retire only their own
+ * ring's fences, whose polled ring alone sends an event, and whose dependencies
+ * across rings are waited for; PRIME export and import of a blob; a blob as the
  * scanout; and the copies a submission counts, the boxes of TRANSFER3D,
- * COPY_TRANSFER3D and RESOURCE_INLINE_WRITE at their resources' formats,
- * found in an unsorted buffer list with repeats, on a virgl context, none
- * on a Venus one, and none, with the submission still taken, when the
- * count's table cannot be allocated. Each row ends with nothing allocated
- * and no window mapped.
+ * COPY_TRANSFER3D and RESOURCE_INLINE_WRITE at their resources' formats, found
+ * in an unsorted buffer list with repeats, on a virgl context, none on a Venus
+ * one, and none, with the submission still taken, when the count's table cannot
+ * be allocated. Each row ends with nothing allocated and no window mapped.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -537,6 +535,9 @@ static uint32_t host_first(void)
                   log_find(VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE, 0) &&
               log_find(VIRTIO_GPU_CMD_CTX_CREATE, 0) < at,
           "the context, the commands, CREATE_BLOB, MAP_BLOB and the attach go in order");
+    CHECK(gpu.fence[log_find(VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, 0)] == 0 &&
+              gpu.fence[log_find(VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB, 0)] != 0,
+          "the MAP_BLOB carries no fence, as Linux sends it, and the CREATE_BLOB one");
     CHECK(three.submitted_size == sizeof(words) && !memcmp(three.submitted, words, sizeof(words)),
           "the blob's commands reach the host");
     i = slot_of(a.res_handle);
@@ -1190,6 +1191,7 @@ static void row_copied(void)
 int main(void)
 {
     current_proc = &self;
+    self.tg = &self_tg;
     k_memcpy(self.comm, "vkcube", sizeof("vkcube"));
     row_params();
     row_host();

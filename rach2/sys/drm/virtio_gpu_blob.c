@@ -273,8 +273,12 @@ static uint32_t map_answer_bytes(uint64_t left)
  * `*got`. The answer is written to `bytes` of response pages when that is
  * more than the command's own page holds, or, when it is not, when the
  * transport's memory has not got the pages now or its chain cannot carry
- * them, to the rest of the command's page. 0; -ENOMEM; or the wait's error,
- * after which nothing is in `answer`. May sleep.
+ * them, to the rest of the command's page. The command goes without a
+ * fence, as Linux's virtio_gpu_cmd_map sends it: the device answers it at
+ * once, and a fenced answer would signal every earlier fence of the
+ * device's timeline before the renderer has retired them
+ * (`vgpu_cmd_unfence`). 0; -ENOMEM; or the wait's error, after which
+ * nothing is in `answer`. May sleep.
  */
 static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t first,
                        uint32_t bytes, uint8_t *answer, uint32_t *got)
@@ -290,6 +294,7 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
         if (!cmd) {
             return -ENOMEM;
         }
+        vgpu_cmd_unfence(cmd);
         req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
         req->resource_id = bo->res_id;
         req->offset = first;
@@ -304,7 +309,7 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
         return vgpu_cmd_send_wait_map(cmd, answer, VGPU_MAP_INLINE, got);
     }
     rc = vgpu_cmd_send_wait_map(cmd, NULL, 0, NULL);
-    if (rc == -ETIMEDOUT) {
+    if (rc == -ETIMEDOUT || rc == -EINTR) {
         return rc; /* the reaper frees the command once the device answers */
     }
     *got = rc != 0 ? 0 : cmd->response_len < bytes ? cmd->response_len : bytes;
@@ -324,8 +329,9 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
  * transport. The device pins the blob's pages at its first answer and lets
  * them go at UNMAP_BLOB, which the free sends once any answer came. 0; the
  * answer's error, -EIO for a list that breaks the transport's rules,
- * -EFAULT for pages the transport cannot share, -ENOMEM, -ETIMEDOUT. May
- * sleep.
+ * -EFAULT for pages the transport cannot share, -ENOMEM, -ETIMEDOUT, or
+ * -EINTR at SIGKILL. A refusal fails the blob's make, which then sends its
+ * UNREF, and nothing waits on it after. May sleep.
  */
 static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -339,7 +345,7 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
     g.total = total;
     while (rc == 0 && g.first < g.total) {
         rc = map_ask(vg, bo, g.first, map_answer_bytes(g.total - g.first), answer, &got);
-        if (rc == 0 || rc == -ETIMEDOUT) {
+        if (rc == 0 || rc == -ETIMEDOUT || rc == -EINTR) {
             bo->host_visible = 1; /* the device may hold the pages: UNMAP_BLOB at the free */
         }
         if (rc == 0 && ((const struct virtio_gpu_ctrl_hdr *)(const void *)answer)->type !=
@@ -357,7 +363,7 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
         bo->map_info = g.info & VIRTIO_GPU_MAP_CACHE_MASK;
         bo->map_ok = 1;
         bo->shmem.base.map_wc = bo->map_info == VIRTIO_GPU_MAP_CACHE_WC;
-    } else {
+    } else if (rc != -EINTR) {
         klog(KLOG_WARN, "virtio_gpu", "resource %u: refused: its page list: error %d",
              (unsigned)bo->res_id, (int)rc);
     }
@@ -371,8 +377,9 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
  * host-visible region and have the host map its memory there, waited for,
  * with the cache type the answer gives in `map_info`. 0; -EINVAL without
  * the region, -ENOSPC when no piece fits, -ENOMEM, or the answer's error,
- * after which the piece goes back. On -ETIMEDOUT the piece stays placed for
- * the UNMAP_BLOB the free sends, since the host may yet map it. May sleep.
+ * after which the piece goes back. On -ETIMEDOUT, or -EINTR at SIGKILL, the
+ * piece stays placed for the UNMAP_BLOB the free sends, since the host may
+ * yet map it. The command goes without a fence, as map_ask's. May sleep.
  */
 static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -396,6 +403,7 @@ static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *
         vgpu_cmd_free(cmd);
         return rc;
     }
+    vgpu_cmd_unfence(cmd);
     req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
     req->resource_id = bo->res_id;
     req->offset = bo->hv_offset;
@@ -407,7 +415,7 @@ static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *
         bo->map_info = info.map_info & VIRTIO_GPU_MAP_CACHE_MASK;
         bo->map_ok = 1;
         bo->shmem.base.map_wc = bo->map_info == VIRTIO_GPU_MAP_CACHE_WC;
-    } else if (rc != -ETIMEDOUT) {
+    } else if (rc != -ETIMEDOUT && rc != -EINTR) {
         vgpu_blob_release(vg, bo);
     }
     return rc;
@@ -756,7 +764,10 @@ int32_t vgpu_blob_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
     if (blob_verify(vg, a, &guest, &host) != 0) {
         return -EINVAL;
     }
-    vgpu_room(vg);
+    rc = vgpu_room(vg, 1);
+    if (rc != 0) {
+        return rc;
+    }
     if (vg->has_virgl) {
         rc = vgpu_context_ensure(vg, file);
         if (rc != 0) {

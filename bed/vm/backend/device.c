@@ -817,6 +817,11 @@ static uint32_t cmd_map_blob(struct vd *d, const uint8_t *body, uint8_t *resp, u
     if (err == 0) {
         r->pinned = 1;
         err = runs_fit(&q, p.total - p.first);
+    } else if (d->ops->unpin != 0) {
+        /* The renderer may have pinned the blob before its list failed, and
+         * the driver sends no UNMAP_BLOB for a map it was refused. */
+        d->ops->unpin(d->cookie, c.resource_id);
+        r->pinned = 0;
     }
     if (err == 0) {
         p.map_info = q.map_info;
