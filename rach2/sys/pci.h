@@ -559,4 +559,29 @@ typedef void (*pci_sleep_t)(unsigned int ms);
  */
 int pci_reset_function(const pci_device_t *dev, pci_sleep_t msleep);
 
+/*
+ * Power states, as the power management capability's control word names
+ * them and Linux's pci_power_t counts them.
+ */
+#define PCI_D0    0
+#define PCI_D3HOT 3
+
+/** The power state `dev` reports, PCI_D0 to PCI_D3HOT; PCI_D0 for a
+ * function without the capability, which is always on, and -EIO for one
+ * that reads all ones. */
+int pci_power_state(const pci_device_t *dev);
+
+/**
+ * Put `dev` in `state`, PCI_D0 or PCI_D3HOT, as Linux's pci_set_power_state
+ * does without a platform method: D3hot by its state field, D0 by a zero
+ * control word, which also clears PME_En, each change to or from D3hot
+ * followed by Linux's d3hot_delay of 10 ms through `delay`. The caller
+ * saves the function's state before D3hot. 0; 1 for a return to D0 from
+ * D3hot of a function without No_Soft_Reset, whose configuration the
+ * caller then restores; -EINVAL for another state; -EIO for a function
+ * without the capability or one that reads all ones. A function that does
+ * not take D3hot is logged, as Linux's "Refused to change power state".
+ */
+int pci_set_power_state(const pci_device_t *dev, int state, pci_sleep_t delay);
+
 #endif /* _PCI_H_ */

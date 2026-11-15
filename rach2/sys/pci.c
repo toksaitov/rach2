@@ -1467,6 +1467,75 @@ void pci_restore_state(const pci_device_t *dev, const struct pci_saved_state *st
     pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, (uint16_t)st->header[1]);
 }
 
+/* Linux's d3hot_delay, the wait the PCI PM specification requires after a
+ * change to or from D3hot, in milliseconds. */
+#define PCI_PM_D3HOT_WAIT 10u
+
+/** The power management capability's offset in `dev`, or 0 for none or
+ * one whose control word would run past the 256 bytes. */
+static uint8_t pci_pm_cap(const pci_device_t *dev)
+{
+    uint8_t pm = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PM);
+
+    return pm <= 0xF8u ? pm : 0;
+}
+
+int pci_power_state(const pci_device_t *dev)
+{
+    uint8_t pm = pci_pm_cap(dev);
+    uint16_t pmcsr;
+
+    if (pm == 0) {
+        return PCI_D0;
+    }
+    pmcsr = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(pm + PCI_PM_CTRL));
+    return pmcsr == 0xFFFFu ? -EIO : (int)(pmcsr & PCI_PM_STATE_MASK);
+}
+
+int pci_set_power_state(const pci_device_t *dev, int state, pci_sleep_t delay)
+{
+    uint8_t pm = pci_pm_cap(dev), at;
+    uint16_t pmcsr;
+    int was;
+
+    if (state != PCI_D0 && state != PCI_D3HOT) {
+        return -EINVAL;
+    }
+    if (pm == 0) {
+        return -EIO;
+    }
+    at = (uint8_t)(pm + PCI_PM_CTRL);
+    pmcsr = pci_read_config16(dev->bus, dev->device, dev->function, at);
+    if (pmcsr == 0xFFFFu) {
+        klog(KLOG_WARN, "pci", "pm: %x:%x.%d: inaccessible, power state not changed", dev->bus,
+             dev->device, dev->function);
+        return -EIO;
+    }
+    was = (int)(pmcsr & PCI_PM_STATE_MASK);
+    if (was == state) {
+        return 0;
+    }
+    if (state == PCI_D3HOT) {
+        /* pci_set_low_power_state: the state field alone changed. */
+        pci_write_config16(dev->bus, dev->device, dev->function, at,
+                           (uint16_t)((pmcsr & ~PCI_PM_STATE_MASK) | PCI_D3HOT));
+        delay(PCI_PM_D3HOT_WAIT);
+        pmcsr = pci_read_config16(dev->bus, dev->device, dev->function, at);
+        if ((pmcsr & PCI_PM_STATE_MASK) != PCI_D3HOT) {
+            klog(KLOG_WARN, "pci", "pm: %x:%x.%d refused to change power state from D%d to D3hot",
+                 dev->bus, dev->device, dev->function, was);
+        }
+        return 0;
+    }
+    /* pci_power_up: the whole word 0, which leaves PME_Status, clears
+     * PME_En and selects D0. */
+    pci_write_config16(dev->bus, dev->device, dev->function, at, 0);
+    if (was == PCI_D3HOT) {
+        delay(PCI_PM_D3HOT_WAIT);
+    }
+    return was == PCI_D3HOT && !(pmcsr & PCI_PM_NO_SOFT_RESET);
+}
+
 /**
  * Wait for the bit `mask` of the word at `where` to clear, as Linux's
  * pci_wait_for_pending: read at once, then after 100, 200 and 400 ms. 1
