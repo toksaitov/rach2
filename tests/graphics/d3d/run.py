@@ -474,8 +474,9 @@ def main():
                 # checks on the lines they failed on, as many as its run gives.
                 placed = name in ref.get("placement", ())
                 varying = expected.get("varying_lines")
+                # A unit Linux stalled in has no counts to compare.
                 failed = [int(n) for n in re.findall(VK_FAILED % re.escape(name), text, re.M)]
-                count = counts is not None and (
+                count = not stop and counts is not None and (
                     placed or (len(failed) == counts[1] and set(failed) <= set(varying) if varying else
                                counts[1] in expected["failures"]))
                 matched = (stopped or ended) if stop else flake or (counts is not None and name + " begin" in text and
