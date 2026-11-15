@@ -35,7 +35,12 @@ sets that one too, shows the properties marked
 and allows
 .Dv DRM_IOCTL_MODE_ATOMIC ;
 .Dv DRM_CLIENT_CAP_ASPECT_RATIO
-gives the CEA modes their picture aspect in their flags.
+gives the CEA modes their picture aspect in their flags;
+.Dv DRM_CLIENT_CAP_STEREO_3D
+lists the stereo modes of a connector that takes them, an HDMI one, whose
+layout is in their flags.
+A frame-packed mode's framebuffer holds both eyes, one above the other with
+the vertical blanking between them.
 .Ss Reading the display
 .Bl -tag -width DRM_IOCTL_MODE_OBJ_GETPROPERTIES
 .It Dv DRM_IOCTL_MODE_GETRESOURCES
@@ -367,4 +372,4 @@ A target vblank of a page flip is
 as Linux answers for a driver without one.
 The lease calls are
 .Er EOPNOTSUPP .
-The EDID's quirks, DisplayID blocks, stereo modes and tiles are not read.
+The EDID's quirks, DisplayID blocks and tiles are not read.

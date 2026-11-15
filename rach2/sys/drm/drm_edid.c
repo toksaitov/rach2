@@ -1386,36 +1386,191 @@ static void parse_vdb(struct edid_parse *p, const uint8_t *db, uint32_t len)
     }
 }
 
-/** Linux's add_cea_modes beyond the video data blocks: the HDMI vendor
- * block's 4K VICs, and the VICs of a 4:2:0 video data block. The HDMI
- * block's stereo modes are left out, as no connector takes stereo. */
-static void do_cta_modes(struct edid_parse *p, const uint8_t *db, uint32_t len)
+/* Linux's stereo_mandatory_modes: the stereo layouts an HDMI 1.4 sink with
+ * 3D_Present takes for each of these modes it lists, by size, refresh rate
+ * and whether interlaced. */
+static const struct stereo_mandatory {
+    uint16_t width, height, vrefresh;
+    uint32_t flags;
+} stereo_mandatory[] = {
+    {1920, 1080, 24, DRM_MODE_FLAG_3D_TOP_AND_BOTTOM},
+    {1920, 1080, 24, DRM_MODE_FLAG_3D_FRAME_PACKING},
+    {1920, 1080, 50, DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_3D_SIDE_BY_SIDE_HALF},
+    {1920, 1080, 60, DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_3D_SIDE_BY_SIDE_HALF},
+    {1280, 720, 50, DRM_MODE_FLAG_3D_TOP_AND_BOTTOM},
+    {1280, 720, 50, DRM_MODE_FLAG_3D_FRAME_PACKING},
+    {1280, 720, 60, DRM_MODE_FLAG_3D_TOP_AND_BOTTOM},
+    {1280, 720, 60, DRM_MODE_FLAG_3D_FRAME_PACKING},
+};
+
+/** Linux's add_hdmi_mandatory_stereo_modes: for each mode found so far
+ * that a mandatory layout names, a copy in that layout, after all of them. */
+static void add_mandatory_stereo(struct edid_parse *p)
+{
+    struct drm_display_mode *e, *last = NULL;
+    struct drm_mode_modeinfo n;
+    int i;
+
+    for (e = p->head; e; e = e->next) {
+        last = e;
+    }
+    for (e = p->head; e; e = e->next) {
+        for (i = 0; i < NELEM(stereo_mandatory); i++) {
+            const struct stereo_mandatory *s = &stereo_mandatory[i];
+
+            if (e->info.hdisplay == s->width && e->info.vdisplay == s->height &&
+                (e->info.flags & DRM_MODE_FLAG_INTERLACE) == (s->flags & DRM_MODE_FLAG_INTERLACE) &&
+                drm_mode_vrefresh(&e->info) == s->vrefresh) {
+                n = e->info;
+                n.flags |= s->flags;
+                parse_add(p, &n);
+            }
+        }
+        if (e == last) {
+            break;
+        }
+    }
+}
+
+/** Linux's drm_display_mode_from_vic_index with a stereo layout: add the
+ * mode of the video data blocks' VIC number `index`, if there is one, in
+ * the layout `flag`. */
+static void add_stereo_vic(struct edid_parse *p, uint32_t index, uint32_t flag)
 {
     struct drm_mode_modeinfo m;
-    uint32_t i, offset = 0, vic_len, vic;
+    const struct edid_mode *t;
+
+    if (index >= p->nvics || p->vics[index] == 0 || (t = cea_mode_for_vic(p->vics[index])) == 0) {
+        return;
+    }
+    mode_from_table(&m, t);
+    m.flags |= flag;
+    parse_add(p, &m);
+}
+
+/** Linux's add_3d_struct_modes: the VIC number `index` in each layout that
+ * the 3D_Structure_ALL bits `structure` name. */
+static void add_3d_struct(struct edid_parse *p, uint32_t structure, uint32_t index)
+{
+    if (structure & (1u << 0)) {
+        add_stereo_vic(p, index, DRM_MODE_FLAG_3D_FRAME_PACKING);
+    }
+    if (structure & (1u << 6)) {
+        add_stereo_vic(p, index, DRM_MODE_FLAG_3D_TOP_AND_BOTTOM);
+    }
+    if (structure & (1u << 8)) {
+        add_stereo_vic(p, index, DRM_MODE_FLAG_3D_SIDE_BY_SIDE_HALF);
+    }
+}
+
+/** The 3D_Structure_X entries of HDMI's vendor block, Linux's loop over
+ * them in do_hdmi_vsdb_modes: `n` bytes at `e`, each a 2D_VIC_order_X and
+ * its 3D_Structure_X, followed by a 3D_Detail_X byte for a structure past
+ * 7. Frame packing, top and bottom, and side-by-side (half) with
+ * horizontal subsampling are added; an entry whose detail byte lies past
+ * the end is dropped. */
+static void add_3d_entries(struct edid_parse *p, const uint8_t *e, uint32_t n)
+{
+    uint32_t i, flag, detail;
+
+    for (i = 0; i < n; i++) {
+        detail = (e[i] & 0x0fu) > 7;
+        if (detail && i + 1 == n) {
+            break;
+        }
+        switch (e[i] & 0x0fu) {
+        case 0:
+            flag = DRM_MODE_FLAG_3D_FRAME_PACKING;
+            break;
+        case 6:
+            flag = DRM_MODE_FLAG_3D_TOP_AND_BOTTOM;
+            break;
+        case 8:
+            flag = (e[i + 1] >> 4) == 1 ? DRM_MODE_FLAG_3D_SIDE_BY_SIDE_HALF : 0;
+            break;
+        default:
+            flag = 0;
+            break;
+        }
+        if (flag) {
+            add_stereo_vic(p, (uint32_t)e[i] >> 4, flag);
+        }
+        if (detail) {
+            i++;
+        }
+    }
+}
+
+/** Linux's do_hdmi_vsdb_modes: the modes of HDMI's vendor block `db`, of
+ * `len` payload bytes, whose bytes from 8 on are what HDMI 1.4 calls the
+ * HDMI video fields: the latencies Linux skips, then with 3D_Present the
+ * mandatory stereo modes, the 4K VICs, and the stereo layouts that
+ * 3D_Structure_ALL with its 3D_MASK and each 2D_VIC_order_X give the
+ * video data blocks' modes. */
+static void do_hdmi_vsdb_modes(struct edid_parse *p, const uint8_t *db, uint32_t len)
+{
+    uint32_t offset = 0, i, vic_len, hdmi_3d_len, multi_present = 0, multi_len, mask;
+    uint32_t structure_all, index;
+
+    if (len < 8 || !(db[8] & (1 << 5))) {
+        return;
+    }
+    if (db[8] & (1 << 7)) {
+        offset += (db[8] & (1 << 6)) ? 4 : 2;
+    }
+    if (len < 8 + offset + 2) {
+        return;
+    }
+    offset++;
+    if (db[8 + offset] & (1 << 7)) {
+        add_mandatory_stereo(p);
+        multi_present = (db[8 + offset] & 0x60u) >> 5;
+    }
+    offset++;
+    vic_len = (uint32_t)db[8 + offset] >> 5;
+    hdmi_3d_len = db[8 + offset] & 0x1fu;
+    for (i = 0; i < vic_len && len >= 9 + offset + i; i++) {
+        index = db[9 + offset + i];
+        if (index > 0 && index < (uint32_t)NELEM(hdmi_modes)) {
+            struct drm_mode_modeinfo m;
+
+            mode_from_table(&m, &hdmi_modes[index]);
+            parse_add(p, &m);
+        }
+    }
+    offset += 1 + vic_len;
+    multi_len = multi_present == 1 ? 2 : multi_present == 2 ? 4 : 0;
+    /* The 3D bytes end at db[8 + offset + hdmi_3d_len - 1], within the
+     * block's db[len]. */
+    if (len + 1 < 8 + offset + hdmi_3d_len) {
+        return;
+    }
+    if (hdmi_3d_len < multi_len) {
+        return;
+    }
+    if (multi_len) {
+        structure_all = (uint32_t)db[8 + offset] << 8 | db[9 + offset];
+        mask = multi_present == 2 ? (uint32_t)db[10 + offset] << 8 | db[11 + offset] : 0xffffu;
+        for (i = 0; i < 16; i++) {
+            if (mask & (1u << i)) {
+                add_3d_struct(p, structure_all, i);
+            }
+        }
+    }
+    add_3d_entries(p, db + 8 + offset + multi_len, hdmi_3d_len - multi_len);
+}
+
+/** Linux's add_cea_modes beyond the video data blocks: HDMI's vendor block,
+ * and the VICs of a 4:2:0 video data block. */
+static void do_cta_modes(struct edid_parse *p, const uint8_t *db, uint32_t len)
+{
     int tag = db[0] >> 5;
 
     if (tag == 3 && len >= 5 && db[1] == 0x03 && db[2] == 0x0c && db[3] == 0x00) {
-        /* HDMI_Video_Present, then the latencies Linux skips. */
-        if (len < 8 || !(db[8] & (1 << 5))) {
-            return;
-        }
-        if (db[8] & (1 << 7)) {
-            offset += (db[8] & (1 << 6)) ? 4 : 2;
-        }
-        if (len < 8 + offset + 2) {
-            return;
-        }
-        offset += 2;
-        vic_len = (uint32_t)db[8 + offset] >> 5;
-        for (i = 0; i < vic_len && len >= 9 + offset + i; i++) {
-            vic = db[9 + offset + i];
-            if (vic > 0 && vic < (uint32_t)NELEM(hdmi_modes)) {
-                mode_from_table(&m, &hdmi_modes[vic]);
-                parse_add(p, &m);
-            }
-        }
+        do_hdmi_vsdb_modes(p, db, len);
     } else if (tag == 7 && len >= 1 && db[1] == 14) {
+        uint32_t i;
+
         for (i = 0; i + 1 < len; i++) {
             add_vic(p, svd_to_vic(db[2 + i]));
         }
@@ -1930,13 +2085,15 @@ uint32_t drm_hdmi_avi_infoframe(const struct drm_edid_hdmi_info *info,
 uint32_t drm_hdmi_vendor_infoframe(const struct drm_edid_hdmi_info *info,
                                    const struct drm_mode_modeinfo *mode, uint8_t *buf)
 {
-    uint32_t vic, len;
+    uint32_t vic, len, layout = (mode->flags & DRM_MODE_FLAG_3D_MASK) >> 14;
 
     if (!info->has_hdmi_infoframe) {
         return 0;
     }
     vic = mode_hdmi_vic(info, mode);
-    len = vic ? 5u : 4u;
+    /* HDMI's 3D_Structure is the layout's flag less one, but for
+     * side-by-side (half), 8 for both, which takes 3D_Ext_Data. */
+    len = layout >= 8 ? 6u : vic || layout ? 5u : 4u;
     k_memset(buf, 0, 4 + len);
     buf[0] = 0x81; /* vendor */
     buf[1] = 1;
@@ -1944,7 +2101,11 @@ uint32_t drm_hdmi_vendor_infoframe(const struct drm_edid_hdmi_info *info,
     buf[4] = 0x03;
     buf[5] = 0x0c;
     buf[6] = 0x00;
-    if (vic) {
+    if (layout) {
+        buf[7] = 2u << 5; /* a 3D format */
+        buf[8] = (uint8_t)(((layout >= 8 ? layout : layout - 1u) & 0xfu) << 4);
+        /* buf[9], 3D_Ext_Data, is 0: horizontal subsampling. */
+    } else if (vic) {
         buf[7] = 1u << 5; /* an extended resolution */
         buf[8] = (uint8_t)vic;
     }

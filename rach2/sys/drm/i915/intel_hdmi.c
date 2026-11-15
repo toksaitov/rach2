@@ -351,9 +351,10 @@ static int bpc_possible(const struct intel_hdmi *hdmi, int bpc, int has_hdmi_sin
 }
 
 /** A mode the sink shows, Linux's intel_hdmi_mode_valid for RGB: the
- * transcoder's limits, a clock within the CD clock's, DBLCLK for an HDMI
- * sink at twice the clock, and some depth whose TMDS clock the port, the
- * adaptor and the sink carry. */
+ * transcoder's limits, a clock within the CD clock's, twice the mode's for
+ * a frame-packed stereo mode, DBLCLK for an HDMI sink at twice the clock,
+ * and some depth whose TMDS clock the port, the adaptor and the sink
+ * carry. */
 static int32_t intel_hdmi_mode_valid(struct drm_connector *connector,
                                      const struct drm_mode_modeinfo *mode)
 {
@@ -363,6 +364,9 @@ static int32_t intel_hdmi_mode_valid(struct drm_connector *connector,
 
     if (intel_cpu_transcoder_mode_valid(mode) != 0) {
         return -EINVAL;
+    }
+    if ((mode->flags & DRM_MODE_FLAG_3D_MASK) == DRM_MODE_FLAG_3D_FRAME_PACKING) {
+        clock *= 2u;
     }
     if (clock > intel_max_dotclock(p->dp.i915)) {
         return -EINVAL;
@@ -411,6 +415,7 @@ int32_t intel_hdmi_connector_init(struct drm_i915_private *i915, struct intel_dd
     }
     connector->interlace_allowed = 1;
     connector->doublescan_allowed = 0;
+    connector->stereo_allowed = 1;
     if ((err = drm_connector_attach_encoder(connector, &p->encoder)) != 0 ||
         (err = drm_connector_attach_max_bpc_property(connector, 8, 12)) != 0) {
         return err;
@@ -506,10 +511,11 @@ static uint32_t dip_pack(const uint8_t *frame, uint32_t len, uint8_t *out)
 
 int32_t intel_hdmi_compute_config(struct intel_ddi_port *p, int pipe,
                                   const struct drm_connector_state *conn,
+                                  const struct drm_mode_modeinfo *mode,
                                   struct intel_crtc_config *cfg)
 {
     struct intel_hdmi *hdmi = &p->hdmi;
-    const struct drm_mode_modeinfo *m = &cfg->mode;
+    const struct drm_mode_modeinfo *m = mode;
     uint8_t frame[DRM_INFOFRAME_MAX];
     uint32_t pipe_bpp, len;
     int32_t err;
@@ -532,7 +538,7 @@ int32_t intel_hdmi_compute_config(struct intel_ddi_port *p, int pipe,
     }
     if (err != 0) {
         klog(KLOG_DEBUG, "i915", "hdmi %c: unsupported HDMI clock (%u kHz), rejecting mode",
-             'A' + p->port, (unsigned)m->clock);
+             'A' + p->port, (unsigned)cfg->mode.clock);
         return err;
     }
     /* Linux's intel_hdmi_limited_color_range with "Broadcast RGB" on

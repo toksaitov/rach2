@@ -1840,6 +1840,32 @@ int drm_mode_equal(const struct drm_mode_modeinfo *a, const struct drm_mode_mode
            a->flags == b->flags;
 }
 
+void drm_mode_get_hv_timing(const struct drm_mode_modeinfo *mode, uint32_t *hdisplay,
+                            uint32_t *vdisplay)
+{
+    *hdisplay = mode->hdisplay;
+    *vdisplay = mode->vdisplay;
+    if ((mode->flags & DRM_MODE_FLAG_3D_MASK) == DRM_MODE_FLAG_3D_FRAME_PACKING) {
+        *vdisplay += mode->vtotal;
+    }
+}
+
+int32_t drm_mode_stereo_double(struct drm_mode_modeinfo *mode)
+{
+    if ((mode->flags & DRM_MODE_FLAG_3D_MASK) != DRM_MODE_FLAG_3D_FRAME_PACKING) {
+        return 0;
+    }
+    if (mode->vtotal > 0x7fffu || mode->clock > 0x7fffffffu) {
+        return -EINVAL;
+    }
+    mode->clock *= 2u;
+    mode->vdisplay = (uint16_t)(mode->vdisplay + mode->vtotal);
+    mode->vsync_start = (uint16_t)(mode->vsync_start + mode->vtotal);
+    mode->vsync_end = (uint16_t)(mode->vsync_end + mode->vtotal);
+    mode->vtotal = (uint16_t)(mode->vtotal * 2u);
+    return 0;
+}
+
 int32_t drm_mode_validate_basic(const struct drm_mode_modeinfo *mode)
 {
     uint32_t flags = mode->flags & ~(uint32_t)DRM_MODE_FLAG_PIC_AR_MASK;
@@ -1932,7 +1958,7 @@ static int mode_ok(struct drm_connector *connector, const struct drm_mode_modein
     }
     if (((mode->flags & DRM_MODE_FLAG_INTERLACE) && !connector->interlace_allowed) ||
         ((mode->flags & DRM_MODE_FLAG_DBLSCAN) && !connector->doublescan_allowed) ||
-        (mode->flags & DRM_MODE_FLAG_3D_MASK)) {
+        ((mode->flags & DRM_MODE_FLAG_3D_MASK) && !connector->stereo_allowed)) {
         return 0;
     }
     if (connector->funcs && connector->funcs->mode_valid &&

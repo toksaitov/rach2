@@ -649,10 +649,11 @@ static uint32_t linetime(uint32_t htotal, uint32_t clock)
 /**
  * Compute what the new state `cs` of `c` sets the pipe to into `cfg`,
  * Linux's intel_modeset_pipe_config and intel_crtc_compute_config: the
- * source the user's mode's size, the configuration of the output `state`
- * routes to the pipe (the eDP panel's, a monitor's on DisplayPort or on
- * HDMI), the dot clock and the pixel rate within the CD clock, and the
- * line times. A disabled CRTC gives a zeroed `cfg`. The PLL is chosen
+ * source the user's mode's size, the CRTC's timings for the mode, a
+ * frame-packed stereo mode's doubled, the configuration of the output
+ * `state` routes to the pipe (the eDP panel's, a monitor's on DisplayPort
+ * or on HDMI), the dot clock and the pixel rate within the CD clock, and
+ * the line times. A disabled CRTC gives a zeroed `cfg`. The PLL is chosen
  * apart (intel_dpll_compute). 0, or -EINVAL or -ERANGE for a state the
  * pipe cannot take.
  */
@@ -678,9 +679,14 @@ static int32_t compute_config(struct intel_crtc *c, const struct drm_crtc_state 
         return -EINVAL;
     }
     cfg->active = cs->active != 0;
+    /* The pipe's source holds what the mode shows, both eyes of a
+     * frame-packed one; `cfg->mode` takes the CRTC's timings, Linux's
+     * crtc_ fields of the adjusted mode, which the encoder may change. */
+    drm_mode_get_hv_timing(&cs->mode, &cfg->src_w, &cfg->src_h);
     cfg->mode = cs->mode;
-    cfg->src_w = cs->mode.hdisplay;
-    cfg->src_h = cs->mode.vdisplay;
+    if (drm_mode_stereo_double(&cfg->mode) != 0) {
+        return -EINVAL;
+    }
     cfg->pixel_multiplier = 1;
     if (connector == &d->connector && d->dp.present) {
         err = intel_dp_compute_config(&d->dp, c->pipe, conn, c->crc_wa, cfg);
@@ -689,7 +695,7 @@ static int32_t compute_config(struct intel_crtc *c, const struct drm_crtc_state 
     } else if (connector == &p->dp_connector) {
         err = intel_dp_compute_config(&p->dp, c->pipe, conn, c->crc_wa, cfg);
     } else {
-        err = intel_hdmi_compute_config(p, c->pipe, conn, cfg);
+        err = intel_hdmi_compute_config(p, c->pipe, conn, &cs->mode, cfg);
     }
     if (err != 0) {
         return err;

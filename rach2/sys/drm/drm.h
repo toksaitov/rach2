@@ -1253,7 +1253,9 @@ struct drm_connector {
     int status; /* DRM_CONNECTOR_* */
     int force;  /* DRM_FORCE_* */
     int dpms;   /* DRM_MODE_DPMS_ON or DRM_MODE_DPMS_OFF */
-    int interlace_allowed, doublescan_allowed;
+    /* Whether the connector takes interlaced, doublescan and stereo modes,
+     * Linux's drm_connector fields of the same names. */
+    int interlace_allowed, doublescan_allowed, stereo_allowed;
     uint32_t mm_width, mm_height;
     uint32_t subpixel;
     uint32_t possible_encoders; /* bit N: the encoder of index N */
@@ -1544,6 +1546,21 @@ uint32_t drm_mode_vrefresh(const struct drm_mode_modeinfo *mode);
 void drm_mode_set_name(struct drm_mode_modeinfo *mode);
 /** Whether two modes have the same timings, clock and flags. */
 int drm_mode_equal(const struct drm_mode_modeinfo *a, const struct drm_mode_modeinfo *b);
+/** The size of the picture a CRTC scans out for `mode` into `*hdisplay` and
+ * `*vdisplay`, Linux's drm_mode_get_hv_timing: a frame-packed stereo mode
+ * stacks both eyes with the vertical blanking between them, so its height
+ * is `vdisplay` plus `vtotal`. */
+void drm_mode_get_hv_timing(const struct drm_mode_modeinfo *mode, uint32_t *hdisplay,
+                            uint32_t *vdisplay);
+
+/** Linux's drm_mode_set_crtcinfo with CRTC_STEREO_DOUBLE alone: turn the
+ * user's `mode` in place into the timings the CRTC runs for it. A
+ * frame-packed stereo mode sends both eyes in one frame at twice the
+ * clock, so its clock and vertical total double and its active lines are
+ * `vdisplay` plus `vtotal`; any other mode is kept. 0, or -EINVAL when
+ * the doubled timings do not fit the mode's fields, which are left. */
+int32_t drm_mode_stereo_double(struct drm_mode_modeinfo *mode);
+
 /** Linux's drm_mode_validate_basic: 0 for a mode whose type, flags, clock
  * and timings are sane, else -EINVAL. */
 int32_t drm_mode_validate_basic(const struct drm_mode_modeinfo *mode);
@@ -2172,8 +2189,9 @@ uint32_t drm_hdmi_avi_infoframe(const struct drm_edid_hdmi_info *info,
                                 const struct drm_mode_modeinfo *mode, int limited, uint8_t *buf);
 
 /** Pack HDMI's vendor infoframe of `mode` into `buf`, Linux's
- * drm_hdmi_vendor_infoframe_from_display_mode and its pack: the HDMI VIC
- * of a 4K mode; 0 bytes for a sink that takes no such frame. */
+ * drm_hdmi_vendor_infoframe_from_display_mode and its pack: the 3D
+ * structure of a stereo mode, or the HDMI VIC of a 4K mode; 0 bytes for a
+ * sink that takes no such frame. */
 uint32_t drm_hdmi_vendor_infoframe(const struct drm_edid_hdmi_info *info,
                                    const struct drm_mode_modeinfo *mode, uint8_t *buf);
 

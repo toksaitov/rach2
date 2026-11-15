@@ -3463,20 +3463,23 @@ int intel_i2c_probe_ddc(const struct intel_i2c_bus *bus);
  */
 
 /** Make DDI port `p`'s HDMI connector, Linux's intel_hdmi_init_connector:
- * its DDC pin and level from the VBT, "max bpc" from 8 to 12. 0 or the
- * DRM core's error. */
+ * its DDC pin and level from the VBT, interlaced and stereo modes allowed,
+ * "max bpc" from 8 to 12. 0 or the DRM core's error. */
 int32_t intel_hdmi_connector_init(struct drm_i915_private *i915, struct intel_ddi_port *p);
 
 /**
- * Compute what an HDMI output takes for `cfg`'s mode, Linux's
- * intel_hdmi_compute_config for Haswell on pipe `pipe`'s transcoder: the
- * bits a colour, 12 when the sink, "max bpc" and the clock allow, else 8;
- * the TMDS clock, twice the pixel's for DBLCLK; an HDMI sink's limited
- * range for a CEA mode but the first; and GCP and the AVI, SPD and HDMI
- * vendor infoframes. 0, or -EINVAL for a mode the port cannot drive.
+ * Compute what an HDMI output takes for the user's `mode`, whose CRTC
+ * timings `cfg->mode` holds, Linux's intel_hdmi_compute_config for Haswell
+ * on pipe `pipe`'s transcoder: the bits a colour, 12 when the sink, "max
+ * bpc" and the clock allow, else 8; the TMDS clock from the CRTC's, twice
+ * the pixel's for DBLCLK; an HDMI sink's limited range for a CEA mode but
+ * the first; and GCP and the AVI, SPD and HDMI vendor infoframes of
+ * `mode`, the last with its stereo layout. 0, or -EINVAL for a mode the
+ * port cannot drive.
  */
 int32_t intel_hdmi_compute_config(struct intel_ddi_port *p, int pipe,
                                   const struct drm_connector_state *conn,
+                                  const struct drm_mode_modeinfo *mode,
                                   struct intel_crtc_config *cfg);
 
 /** Turn a DP++ adaptor's TMDS output on or off, Linux's

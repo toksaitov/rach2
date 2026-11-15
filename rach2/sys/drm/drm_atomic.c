@@ -1163,8 +1163,11 @@ int32_t drm_atomic_helper_check_plane_state(struct drm_plane_state *ps,
         return -ERANGE;
     }
     if (crtc_state->enable) {
-        clip.x2 = crtc_state->mode.hdisplay;
-        clip.y2 = crtc_state->mode.vdisplay;
+        uint32_t w, h;
+
+        drm_mode_get_hv_timing(&crtc_state->mode, &w, &h);
+        clip.x2 = (int32_t)w;
+        clip.y2 = (int32_t)h;
     }
     ps->visible = rect_clip_scaled(&ps->src, &ps->dst, &clip);
     rect_rotate_inv(&ps->src, fw, fh, ps->rotation);
@@ -2803,6 +2806,7 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set)
     struct drm_atomic_state *state = drm_atomic_state_alloc(crtc->dev);
     struct drm_crtc_state *cs;
     struct drm_plane_state *ps;
+    uint32_t w, h;
     int32_t rc;
 
     if (!state) {
@@ -2828,18 +2832,20 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set)
         if (rc == 0 && ps) {
             rc = drm_atomic_set_crtc_for_plane(state, ps, crtc);
             drm_atomic_set_fb_for_plane(ps, set->fb);
+            /* The picture's size, both eyes of a frame-packed mode. */
+            drm_mode_get_hv_timing(set->mode, &w, &h);
             ps->crtc_x = 0;
             ps->crtc_y = 0;
-            ps->crtc_w = set->mode->hdisplay;
-            ps->crtc_h = set->mode->vdisplay;
+            ps->crtc_w = w;
+            ps->crtc_h = h;
             ps->src_x = set->x << 16;
             ps->src_y = set->y << 16;
             if (ps->rotation & (DRM_MODE_ROTATE_90 | DRM_MODE_ROTATE_270)) {
-                ps->src_w = (uint32_t)set->mode->vdisplay << 16;
-                ps->src_h = (uint32_t)set->mode->hdisplay << 16;
+                ps->src_w = h << 16;
+                ps->src_h = w << 16;
             } else {
-                ps->src_w = (uint32_t)set->mode->hdisplay << 16;
-                ps->src_h = (uint32_t)set->mode->vdisplay << 16;
+                ps->src_w = w << 16;
+                ps->src_h = h << 16;
             }
         }
     }

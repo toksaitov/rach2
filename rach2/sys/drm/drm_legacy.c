@@ -305,11 +305,12 @@ static int32_t setcrtc_fb_mode(struct drm_crtc *crtc, struct drm_file *file,
     if (!drm_plane_has_format(crtc->primary, (*fb)->format, (*fb)->modifier)) {
         return -EINVAL;
     }
-    w = mode->hdisplay;
-    h = mode->vdisplay;
+    drm_mode_get_hv_timing(mode, &w, &h);
     if (crtc->primary->state->rotation & (DRM_MODE_ROTATE_90 | DRM_MODE_ROTATE_270)) {
-        w = mode->vdisplay;
-        h = mode->hdisplay;
+        uint32_t t = w;
+
+        w = h;
+        h = t;
     }
     return drm_framebuffer_check_src_coords(req->x << 16, req->y << 16, w << 16, h << 16, *fb);
 }
