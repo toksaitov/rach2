@@ -2105,9 +2105,10 @@ static void row_mode_set(int k)
         frame();
     }
     CHECK(
-        err == 0 && display_lit() && i915_model_power(&model)->on &&
+        err == 0 && display_lit() && !i915_model_power(&model)->on &&
             i915->display.crtc[0].base.state->active,
-        "mode set: the panel powered, the link trained, the pipe, the plane and the backlight on");
+        "mode set: the panel powered, the link trained, the pipe, the plane and the backlight on, "
+        "the display well off for pipe A's eDP");
     CHECK(mark.panel_on && mark.panel_on_us >= reset_at_us + cycle_ms * 1000u,
           "mode set: the panel's power on no sooner than its power cycle after the reset");
     CHECK((reg(DSPSURF(I915_PIPE_A)) & ~0xfffu) == BO_GGTT(k) && bo_vma[k].pin_count == 1,
