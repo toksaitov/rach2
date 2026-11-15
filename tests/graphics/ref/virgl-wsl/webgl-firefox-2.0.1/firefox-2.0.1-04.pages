@@ -144,7 +144,7 @@
 1143 fail 724689 24 0 0 fail deqp/functional/gles3/shadertexturefunction/textureprojgradoffset.html
 1144 fail 724593 24 0 0 fail deqp/functional/gles3/shadertexturefunction/texelfetch.html
 1145 fail 724593 24 0 0 fail deqp/functional/gles3/shadertexturefunction/texelfetchoffset.html
-1146 fail 823 1078 0 0 fail deqp/functional/gles3/shadertexturefunction/texturesize.html
+1146 fail 824 1077 0 0 fail deqp/functional/gles3/shadertexturefunction/texturesize.html
 1147 fail 755150 6 0 0 fail deqp/functional/gles3/texturefiltering/2d_formats_00.html
 1148 fail 755150 6 0 0 fail deqp/functional/gles3/texturefiltering/2d_formats_01.html
 1149 fail 755150 6 0 0 fail deqp/functional/gles3/texturefiltering/2d_formats_02.html
@@ -179,7 +179,7 @@
 1178 fail 410376 6 0 0 fail deqp/functional/gles3/texturefiltering/cube_formats_09.html
 1179 fail 224556 6 0 0 fail deqp/functional/gles3/texturefiltering/cube_sizes_00.html
 1180 fail 410376 6 0 0 fail deqp/functional/gles3/texturefiltering/cube_sizes_01.html
-1181 fail 409001 6 0 0 fail deqp/functional/gles3/texturefiltering/cube_sizes_02.html
+1181 fail 409017 6 0 0 fail deqp/functional/gles3/texturefiltering/cube_sizes_02.html
 1182 fail 223691 6 0 0 fail deqp/functional/gles3/texturefiltering/cube_sizes_03.html
 1183 fail 394463 6 0 0 fail deqp/functional/gles3/texturefiltering/cube_sizes_04.html
 1184 fail 637417 18 0 0 fail deqp/functional/gles3/texturefiltering/cube_combinations_00.html
@@ -216,7 +216,7 @@
 1215 fail 1053393 6 0 0 fail deqp/functional/gles3/texturefiltering/3d_formats_03.html
 1216 fail 1053393 6 0 0 fail deqp/functional/gles3/texturefiltering/3d_formats_04.html
 1217 fail 1053393 6 0 0 fail deqp/functional/gles3/texturefiltering/3d_formats_05.html
-1218 fail 1053393 6 0 0 fail deqp/functional/gles3/texturefiltering/3d_formats_06.html
+1218 fail 1053343 6 0 0 fail deqp/functional/gles3/texturefiltering/3d_formats_06.html
 1219 fail 1053393 6 0 0 fail deqp/functional/gles3/texturefiltering/3d_formats_07.html
 1220 fail 1053393 6 0 0 fail deqp/functional/gles3/texturefiltering/3d_formats_08.html
 1221 fail 1053393 6 0 0 fail deqp/functional/gles3/texturefiltering/3d_formats_09.html
@@ -235,7 +235,7 @@
 1234 fail 1262547 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_07.html
 1235 fail 1262547 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_08.html
 1236 fail 1245033 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_09.html
-1237 fail 1262605 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_10.html
+1237 fail 1262547 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_10.html
 1238 fail 1262547 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_11.html
 1239 fail 971380 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_12.html
 1240 fail 971380 9 0 0 fail deqp/functional/gles3/texturefiltering/3d_combinations_13.html

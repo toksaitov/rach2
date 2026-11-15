@@ -2,7 +2,7 @@ webgl: result: firefox 2.0.1 chunk 0 of 12 pages 250 pass 243 fail 2 timeout 0 c
 webgl: result: firefox 2.0.1 chunk 1 of 12 pages 250 pass 248 fail 2 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 2 subtests passed 8778 failed 6
 webgl: result: firefox 2.0.1 chunk 2 of 12 pages 250 pass 247 fail 3 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 3 subtests passed 43424 failed 57
 webgl: result: firefox 2.0.1 chunk 3 of 12 pages 250 pass 247 fail 3 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 3 subtests passed 243510593 failed 6
-webgl: result: firefox 2.0.1 chunk 4 of 12 pages 250 pass 130 fail 120 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 120 subtests passed 463701957 failed 2356
+webgl: result: firefox 2.0.1 chunk 4 of 12 pages 250 pass 130 fail 120 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 120 subtests passed 463701866 failed 2355
 webgl: result: firefox 2.0.1 chunk 5 of 12 pages 250 pass 250 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 0 subtests passed 87787123 failed 0
 webgl: result: firefox 2.0.1 chunk 6 of 12 pages 250 pass 214 fail 36 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 36 subtests passed 391608996 failed 1630
 webgl: result: firefox 2.0.1 chunk 7 of 12 pages 250 pass 243 fail 7 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 7 subtests passed 44704 failed 853
