@@ -123,6 +123,9 @@ awk '$2 == "/data" { found = 1 } END { exit found }' /proc/mounts || fail "/data
 mkdir "$private/owner"
 mount --bind "$private" /data || fail "the workspace would not bind on /data"
 bound=1
+# The workspace is root's and closed; the desktop account, which runs the
+# game, must pass through /data to reach /data/crysis.
+chmod 0755 /data || fail "/data would not open to the desktop account"
 mounted_at /data rw || fail "the workspace is not a writable ext2 file system"
 mount -t ext2 -o ro "$data" "$owner" || fail "$data would not mount read-only on $owner"
 mounted=1
