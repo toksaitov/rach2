@@ -972,7 +972,8 @@ static int restore_gpumins(const char *dir)
 
 /**
  * Put in `pid`, of `max` entries, the processes whose command name, as
- * /proc/PID/stat gives it, is the desktop's compositor's.
+ * /proc/PID/stat gives it, is the desktop's compositor's, leaving out a
+ * zombie, which has closed its files.
  *
  * @return how many there are, which may exceed `max`, or -1 when /proc
  * cannot be read.
@@ -1004,7 +1005,8 @@ static int compositors(pid_t *pid, int max)
         close_paren = strrchr(text, ')');
         if (!open_paren || !close_paren || close_paren < open_paren ||
             (size_t)(close_paren - open_paren - 1) != strlen(DESKTOP_COMPOSITOR) ||
-            strncmp(open_paren + 1, DESKTOP_COMPOSITOR, strlen(DESKTOP_COMPOSITOR)) != 0)
+            strncmp(open_paren + 1, DESKTOP_COMPOSITOR, strlen(DESKTOP_COMPOSITOR)) != 0 ||
+            (close_paren[1] == ' ' && close_paren[2] == 'Z'))
             continue;
         if (n < max)
             pid[n] = (pid_t)atol(e->d_name);
