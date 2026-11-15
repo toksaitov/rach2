@@ -1,4 +1,4 @@
-.Dd November 12, 2026
+.Dd November 15, 2026
 .Dt I915 4
 .Os
 .Sh NAME
@@ -838,22 +838,10 @@ property, as on Linux before display version 12;
 still flushes the rectangles it names.
 A commit fails with
 .Er EINVAL
-for C8 without a 256-entry gamma table; a modifier that
+for a modifier that
 does not match the object's tiling; a stride that is not a multiple of 64
 bytes, or of 512 X-tiled; a YUV source that starts or ends on an odd
 pixel; scaling; and a primary plane that does not cover the CRTC.
-Each CRTC has
-.Ql GAMMA_LUT
-and
-.Ql GAMMA_LUT_SIZE ,
-1024 entries at 10 bits per channel, and also accepts a 256-entry table
-at 8 bits per channel for the legacy palette.
-C8 requires that legacy table and bypasses the RGB gamma stage.
-An absent table bypasses gamma for RGB planes.
-.Dv DRM_IOCTL_MODE_GETGAMMA
-and
-.Dv DRM_IOCTL_MODE_SETGAMMA
-use 256 entries.
 A plane reads a stride of at most 8192 pixels, and at most 32 KiB on the
 primary plane and 16 KiB on the sprite.
 A framebuffer with a wider stride, up to 16384 pixels wide, is shown
@@ -868,6 +856,33 @@ Each framebuffer shown, or its view, is bound in the GTT at a multiple
 of 256 KiB; a whole framebuffer goes inside the aperture when room
 there needs no wait and above it otherwise, as Linux binds it on a
 chip without a GMCH.
+.Pp
+Each CRTC has a legacy gamma table of 256 entries for
+.Dv DRM_IOCTL_MODE_GETGAMMA
+and
+.Dv DRM_IOCTL_MODE_SETGAMMA ,
+the
+.Ql DEGAMMA_LUT
+and
+.Ql GAMMA_LUT
+properties of 1024 entries, which
+.Ql DEGAMMA_LUT_SIZE
+and
+.Ql GAMMA_LUT_SIZE
+give, and
+.Ql CTM ,
+as on Linux.
+A commit fails with
+.Er EINVAL
+for a
+.Ql DEGAMMA_LUT
+of another size, a
+.Ql GAMMA_LUT
+of other than 1024 or 256 entries, and a C8 plane on a CRTC without a
+.Ql GAMMA_LUT
+of 256 entries, which is its palette, or with a
+.Ql DEGAMMA_LUT .
+With both tables set the pipe resamples each to 512 entries.
 .Pp
 Vblanks are counted from the pipe's frame counter.
 A page flip's event comes at the vblank that shows the new framebuffer.
