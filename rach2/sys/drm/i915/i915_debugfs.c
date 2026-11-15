@@ -1105,12 +1105,13 @@ static int32_t frequency_show(void *data, char *buf, uint32_t cap)
  * requested and actual frequency with the limits, the boosts counted, and,
  * past Linux's lines, the work's runs with the up-threshold,
  * down-threshold and down-timeout events among them and RPS's parks and
- * unparks.
+ * unparks, and GEN6_RPNSWREQ's request against RPSTAT1's CAGF.
  */
 static int32_t rps_boost_show(void *data, char *buf, uint32_t cap)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     struct i915_rps *rps = &i915->rps;
+    uint32_t reqf, stat;
     struct emit e;
 
     e.buf = buf;
@@ -1135,6 +1136,17 @@ static int32_t rps_boost_show(void *data, char *buf, uint32_t cap)
     emitf(&e, "Work runs: %u, up %u, down %u, timeout %u\n", rps->work_runs, rps->up_events,
           rps->down_events, rps->timeout_events);
     emitf(&e, "Parks: %u, unparks %u\n", rps->parks, rps->unparks);
+    /* The request in the register against the clock the chip runs, read
+     * under forcewake as i915_frequency_info reads them. */
+    if (i915_forcewake_get(i915) == 0) {
+        reqf =
+            ((i915_uncore_read(i915, GEN6_RPNSWREQ) & ~GEN6_TURBO_DISABLE) >> HSW_FREQUENCY_SHIFT) *
+            FREQ_MHZ;
+        stat = i915_uncore_read(i915, GEN6_RPSTAT1);
+        i915_forcewake_put(i915);
+        emitf(&e, "RPNSWREQ: %uMHz, CAGF: %uMHz\n", reqf,
+              ((stat & HSW_CAGF_MASK) >> HSW_CAGF_SHIFT) * FREQ_MHZ);
+    }
     return emit_end(&e);
 }
 

@@ -899,8 +899,9 @@ flips pending that hold RPS at high power, the requested and actual
 frequency with its limits, in MHz, and the wait boosts counted, as Linux's
 .Fn i915_rps_boost_info ;
 then the runs of RPS's work with the up-threshold, down-threshold and
-down-timeout events among them, and RPS's parks and unparks, which Linux
-does not print.
+down-timeout events among them, RPS's parks and unparks, and the
+frequency in GEN6_RPNSWREQ against the chip's actual frequency, in MHz,
+which Linux does not print.
 .It Pa dri/DEVICE/i915_cdclk_info
 Mode 0444.
 The current and the highest CD clock and the highest dot clock, in kHz.
