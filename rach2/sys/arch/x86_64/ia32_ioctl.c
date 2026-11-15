@@ -706,6 +706,119 @@ static long wext(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigne
 }
 
 /* ------------------------------------------------------------------------
+ * I2C: /dev/i2c-N's I2C_FUNCS, of an `unsigned long`, and I2C_RDWR and
+ * I2C_SMBUS, whose structures hold pointers, as Linux's
+ * compat_i2cdev_ioctl translates them; the other requests pass.
+ */
+
+#define I2C_FUNCS    0x0705u
+#define I2C_RDWR     0x0707u
+#define I2C_SMBUS    0x0720u
+#define I2C_RDWR_MAX 42u
+
+/* i386's struct i2c_msg, i2c_rdwr_ioctl_data and i2c_smbus_ioctl_data. */
+struct i2c_msg32 {
+    uint16_t addr, flags, len;
+    uint32_t buf;
+};
+
+struct i2c_rdwr32 {
+    uint32_t msgs;
+    uint32_t nmsgs;
+};
+
+struct i2c_smbus32 {
+    uint8_t read_write, command;
+    uint32_t size;
+    uint32_t data;
+};
+
+/* The native forms, as i2c.c reads them. */
+struct i2c_msg64 {
+    uint16_t addr, flags, len;
+    void __user *buf;
+};
+
+struct i2c_rdwr64 {
+    struct i2c_msg64 *msgs;
+    uint32_t nmsgs;
+};
+
+struct i2c_smbus64 {
+    uint8_t read_write, command;
+    uint32_t size;
+    void __user *data;
+};
+
+/** I2C_RDWR with i386's messages made native in a window, Linux's
+ * compat_i2cdev_ioctl: -EINVAL for more than 42, -EFAULT, or the native
+ * request's answer. */
+static long i2c_rdwr(unsigned int fd, unsigned int cmd, unsigned long arg)
+{
+    struct {
+        struct i2c_rdwr64 rd;
+        struct i2c_msg64 msgs[I2C_RDWR_MAX];
+    } k;
+    struct i2c_rdwr32 rd;
+    struct i2c_msg32 m;
+    uint32_t i;
+
+    if (copy_from_user(&rd, (const void __user *)arg, sizeof(rd)) != 0) {
+        return -EFAULT;
+    }
+    if (rd.nmsgs > I2C_RDWR_MAX) {
+        return -EINVAL;
+    }
+    for (i = 0; i < rd.nmsgs; i++) {
+        if (copy_from_user(&m, (const void __user *)(uintptr_t)(rd.msgs + i * sizeof(m)),
+                           sizeof(m)) != 0) {
+            return -EFAULT;
+        }
+        k.msgs[i].addr = m.addr;
+        k.msgs[i].flags = m.flags;
+        k.msgs[i].len = m.len;
+        k.msgs[i].buf = (void __user *)(uintptr_t)m.buf;
+    }
+    k.rd.msgs = k.msgs;
+    k.rd.nmsgs = rd.nmsgs;
+    return ia32_ioctl_native(fd, cmd, &k, sizeof(k));
+}
+
+/** The I2C requests, type 0x07: I2C_FUNCS's answer cut to i386's 4-byte
+ * `long`, I2C_RDWR and I2C_SMBUS made native; the rest pass. */
+static long i2c(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned long arg)
+{
+    struct i2c_smbus32 s32;
+    struct i2c_smbus64 s;
+    unsigned long funcs;
+    uint32_t f32;
+    long rc;
+
+    (void)e;
+    switch (cmd) {
+    case I2C_FUNCS:
+        if ((rc = ia32_ioctl_native(fd, cmd, &funcs, sizeof(funcs))) != 0) {
+            return rc;
+        }
+        f32 = (uint32_t)funcs;
+        return copy_to_user((void __user *)arg, &f32, sizeof(f32)) ? -EFAULT : 0;
+    case I2C_RDWR:
+        return i2c_rdwr(fd, cmd, arg);
+    case I2C_SMBUS:
+        if (copy_from_user(&s32, (const void __user *)arg, sizeof(s32)) != 0) {
+            return -EFAULT;
+        }
+        s.read_write = s32.read_write;
+        s.command = s32.command;
+        s.size = s32.size;
+        s.data = (void __user *)(uintptr_t)s32.data;
+        return ia32_ioctl_native(fd, cmd, &s, sizeof(s));
+    default:
+        return pass(fd, cmd, arg);
+    }
+}
+
+/* ------------------------------------------------------------------------
  * The families, by the type of the request's number.
  */
 
@@ -754,6 +867,7 @@ struct family {
 
 static const struct family families[] = {
     {0x03, hdio},    /* HDIO_GETGEO */
+    {0x07, i2c},     /* I2C */
     {0x12, blk},     /* block devices */
     {0x3B, NULL},    /* ';', VFIO */
     {0x3E, gpu},     /* sync_file */

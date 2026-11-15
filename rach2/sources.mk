@@ -26,6 +26,7 @@ C_SRC_SHARED = kernel.c \
     sys/tick.c \
     sys/kbd.c \
     sys/mouse.c \
+    sys/i2c.c \
     sys/pci.c \
     sys/pm_runtime.c \
     sys/kio.c \
