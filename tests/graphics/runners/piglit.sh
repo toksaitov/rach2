@@ -89,7 +89,8 @@
 # standard error `piglit: kept:` lines: the tests ended, each test still
 # running and the log's last lines.
 #
-# OUT (.) gets the record, and for each part, or for the list under the
+# OUT (.) gets the record, `memory`, the memory counts sampled every 5 s
+# (common.sh's runner_memory), and for each part, or for the list under the
 # name of its file without `.txt` and `.gz`, NAME.log, piglit's verbose log
 # (NAME-2.log the second run's), NAME.json, piglit's results whole
 # (NAME-2.json the second run's), and NAME.results, one line a test
@@ -188,6 +189,7 @@ piglit_version()
 
 runner_init piglit "$out"
 runner_start
+runner_memory
 if [ -n "$list" ]; then
     runner_record "case piglit quick every $every from $start of $list"
 else
