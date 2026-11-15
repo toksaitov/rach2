@@ -958,6 +958,14 @@ struct drm_framebuffer {
 #define DRM_PLANE_TYPE_PRIMARY 1
 #define DRM_PLANE_TYPE_CURSOR  2
 
+/* The values of COLOR_ENCODING and COLOR_RANGE, Linux's enum
+ * drm_color_encoding and enum drm_color_range. */
+#define DRM_COLOR_YCBCR_BT601         0
+#define DRM_COLOR_YCBCR_BT709         1
+#define DRM_COLOR_YCBCR_BT2020        2
+#define DRM_COLOR_YCBCR_LIMITED_RANGE 0
+#define DRM_COLOR_YCBCR_FULL_RANGE    1
+
 /*
  * A plane's state: the framebuffer it shows (held), where on its CRTC in
  * pixels, and which part of the framebuffer in 16.16 fixed point; the
@@ -976,7 +984,9 @@ struct drm_plane_state {
     uint32_t src_x, src_y, src_w, src_h;
     uint32_t rotation; /* DRM_MODE_ROTATE_* | DRM_MODE_REFLECT_* */
     uint32_t zpos;
-    uint16_t alpha; /* 0xffff opaque */
+    uint16_t alpha;          /* 0xffff opaque */
+    uint32_t color_encoding; /* DRM_COLOR_YCBCR_BT*, of a YUV framebuffer */
+    uint32_t color_range;    /* DRM_COLOR_YCBCR_*_RANGE */
     int32_t hotspot_x, hotspot_y;
     struct dma_fence *fence;
     struct drm_property_blob *fb_damage_clips;
@@ -1054,6 +1064,7 @@ struct drm_plane {
     const struct drm_plane_funcs *funcs;
     struct drm_plane_state *state;
     struct drm_property *rotation_property, *zpos_property, *alpha_property;
+    struct drm_property *color_encoding_property, *color_range_property;
     struct drm_property *hotspot_x_property, *hotspot_y_property;
 };
 
@@ -1435,6 +1446,12 @@ int32_t drm_plane_create_zpos_property(struct drm_plane *plane, uint32_t zpos, u
 /** Attach "alpha", a range from 0 to 0xffff starting opaque. 0 or
  * -ENOMEM. */
 int32_t drm_plane_create_alpha_property(struct drm_plane *plane);
+/** Attach COLOR_ENCODING and COLOR_RANGE, with the DRM_COLOR_YCBCR_* values
+ * whose bits `encodings` and `ranges` have, starting at `encoding` and
+ * `range`, Linux's drm_plane_create_color_properties. 0, -EINVAL for a
+ * default the masks leave out or a value past the list, or -ENOMEM. */
+int32_t drm_plane_create_color_properties(struct drm_plane *plane, uint32_t encodings,
+                                          uint32_t ranges, uint32_t encoding, uint32_t range);
 
 /* ---- Properties ---- */
 

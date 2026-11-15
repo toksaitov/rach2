@@ -1213,6 +1213,60 @@ int32_t drm_plane_create_alpha_property(struct drm_plane *plane)
     return 0;
 }
 
+/* Linux's color_encoding_name and color_range_name, by value. */
+static const struct drm_prop_enum_list color_encoding_names[] = {
+    {DRM_COLOR_YCBCR_BT601, "ITU-R BT.601 YCbCr"},
+    {DRM_COLOR_YCBCR_BT709, "ITU-R BT.709 YCbCr"},
+    {DRM_COLOR_YCBCR_BT2020, "ITU-R BT.2020 YCbCr"}};
+static const struct drm_prop_enum_list color_range_names[] = {
+    {DRM_COLOR_YCBCR_LIMITED_RANGE, "YCbCr limited range"},
+    {DRM_COLOR_YCBCR_FULL_RANGE, "YCbCr full range"}};
+
+/**
+ * An enum property named `name` of the entries of `names`, `n` of them,
+ * whose bits `mask` has, or NULL with no memory.
+ */
+static struct drm_property *color_enum(struct drm_device *dev, const char *name,
+                                       const struct drm_prop_enum_list *names, uint32_t n,
+                                       uint32_t mask)
+{
+    struct drm_prop_enum_list list[3];
+    uint32_t i, count = 0;
+
+    for (i = 0; i < n; i++) {
+        if (mask & (1u << i)) {
+            list[count++] = names[i];
+        }
+    }
+    return drm_property_create_enum(dev, 0, name, list, count);
+}
+
+int32_t drm_plane_create_color_properties(struct drm_plane *plane, uint32_t encodings,
+                                          uint32_t ranges, uint32_t encoding, uint32_t range)
+{
+    struct drm_property *prop;
+
+    if (encodings == 0 || (encodings & ~7u) || encoding > 2 || !(encodings & (1u << encoding)) ||
+        ranges == 0 || (ranges & ~3u) || range > 1 || !(ranges & (1u << range))) {
+        return -EINVAL;
+    }
+    prop = color_enum(plane->dev, "COLOR_ENCODING", color_encoding_names, 3, encodings);
+    if (!prop) {
+        return -ENOMEM;
+    }
+    drm_object_attach_property(&plane->base, prop, encoding);
+    plane->color_encoding_property = prop;
+    prop = color_enum(plane->dev, "COLOR_RANGE", color_range_names, 2, ranges);
+    if (!prop) {
+        return -ENOMEM;
+    }
+    drm_object_attach_property(&plane->base, prop, range);
+    plane->color_range_property = prop;
+    plane->state->color_encoding = encoding;
+    plane->state->color_range = range;
+    return 0;
+}
+
 /* ------------------------------------------------------------------------
  * Framebuffers
  */

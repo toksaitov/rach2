@@ -360,6 +360,41 @@ int32_t drm_atomic_add_affected_planes(struct drm_atomic_state *state, struct dr
  * Properties in a state
  */
 
+/**
+ * Set one of the properties a driver attaches to a plane, the rest of
+ * Linux's drm_atomic_plane_set_property. 0, or -EINVAL for a rotation of
+ * other than one angle or a property the plane does not have.
+ */
+static int32_t plane_set_optional(struct drm_plane_state *ps, struct drm_property *prop,
+                                  uint64_t val)
+{
+    struct drm_plane *plane = ps->plane;
+    uint32_t rot;
+
+    if (prop == plane->alpha_property) {
+        ps->alpha = (uint16_t)val;
+    } else if (prop == plane->rotation_property) {
+        rot = (uint32_t)val & DRM_MODE_ROTATE_MASK;
+        if (rot == 0 || (rot & (rot - 1)) != 0) {
+            return -EINVAL;
+        }
+        ps->rotation = (uint32_t)val;
+    } else if (prop == plane->zpos_property) {
+        ps->zpos = (uint32_t)val;
+    } else if (prop == plane->color_encoding_property) {
+        ps->color_encoding = (uint32_t)val;
+    } else if (prop == plane->color_range_property) {
+        ps->color_range = (uint32_t)val;
+    } else if (prop == plane->hotspot_x_property) {
+        ps->hotspot_x = (int32_t)(int64_t)val;
+    } else if (prop == plane->hotspot_y_property) {
+        ps->hotspot_y = (int32_t)(int64_t)val;
+    } else {
+        return -EINVAL;
+    }
+    return 0;
+}
+
 /** Set a plane property, Linux's drm_atomic_plane_set_property. */
 static int32_t plane_set_property(struct drm_atomic_state *state, struct drm_file *file,
                                   struct drm_plane_state *ps, struct drm_property *prop,
@@ -371,7 +406,6 @@ static int32_t plane_set_property(struct drm_atomic_state *state, struct drm_fil
     struct drm_framebuffer *fb;
     struct drm_crtc *crtc;
     int replaced = 0;
-    uint32_t rot;
 
     if (prop == mc->prop_fb_id) {
         fb = drm_framebuffer_lookup(dev, file, (uint32_t)val);
@@ -410,25 +444,11 @@ static int32_t plane_set_property(struct drm_atomic_state *state, struct drm_fil
         ps->src_w = (uint32_t)val;
     } else if (prop == mc->prop_src_h) {
         ps->src_h = (uint32_t)val;
-    } else if (prop == plane->alpha_property) {
-        ps->alpha = (uint16_t)val;
-    } else if (prop == plane->rotation_property) {
-        rot = (uint32_t)val & DRM_MODE_ROTATE_MASK;
-        if (rot == 0 || (rot & (rot - 1)) != 0) {
-            return -EINVAL;
-        }
-        ps->rotation = (uint32_t)val;
-    } else if (prop == plane->zpos_property) {
-        ps->zpos = (uint32_t)val;
     } else if (prop == mc->prop_fb_damage_clips) {
         return drm_property_replace_blob_from_id(dev, &ps->fb_damage_clips, val, -1,
                                                  (int32_t)sizeof(struct drm_mode_rect), &replaced);
-    } else if (prop == plane->hotspot_x_property) {
-        ps->hotspot_x = (int32_t)(int64_t)val;
-    } else if (prop == plane->hotspot_y_property) {
-        ps->hotspot_y = (int32_t)(int64_t)val;
     } else {
-        return -EINVAL;
+        return plane_set_optional(ps, prop, val);
     }
     return 0;
 }
@@ -579,6 +599,10 @@ static int32_t plane_get_property(struct drm_plane *plane, struct drm_property *
         *value = ps->rotation;
     } else if (prop == plane->zpos_property) {
         *value = ps->zpos;
+    } else if (prop == plane->color_encoding_property) {
+        *value = ps->color_encoding;
+    } else if (prop == plane->color_range_property) {
+        *value = ps->color_range;
     } else if (prop == mc->prop_fb_damage_clips) {
         *value = ps->fb_damage_clips ? ps->fb_damage_clips->base.id : 0;
     } else if (prop == plane->hotspot_x_property) {
