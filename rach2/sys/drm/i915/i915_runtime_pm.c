@@ -183,6 +183,16 @@ static void rpm_resume(struct drm_i915_private *i915)
  * Wakerefs
  */
 
+/** The caller as a transition's owner: its process, or `rpm` itself where
+ * there is none, so that no caller matches an `owner` of NULL, which means
+ * no transition. */
+static void *rpm_self(struct i915_runtime_pm *rpm)
+{
+    void *self = current_proc;
+
+    return self ? self : (void *)rpm;
+}
+
 /** Whether the autosuspend may suspend now: available, enabled, awake and
  * no wakeref held. Under the lock. */
 static int rpm_may_suspend(const struct i915_runtime_pm *rpm)
@@ -193,7 +203,7 @@ static int rpm_may_suspend(const struct i915_runtime_pm *rpm)
 void i915_rpm_get(struct drm_i915_private *i915)
 {
     struct i915_runtime_pm *rpm = &i915->runtime_pm;
-    void *self = current_proc;
+    void *self = rpm_self(rpm);
     uint32_t flags;
 
     for (;;) {
@@ -226,7 +236,7 @@ void i915_rpm_get(struct drm_i915_private *i915)
 int i915_rpm_get_if_active(struct drm_i915_private *i915)
 {
     struct i915_runtime_pm *rpm = &i915->runtime_pm;
-    void *self = current_proc;
+    void *self = rpm_self(rpm);
     uint32_t flags;
 
     for (;;) {
@@ -277,7 +287,7 @@ uint32_t i915_rpm_usage(struct drm_i915_private *i915)
 int i915_rpm_get_or_defer_clear(struct drm_i915_private *i915, uint64_t offset, uint64_t size)
 {
     struct i915_runtime_pm *rpm = &i915->runtime_pm;
-    void *self = current_proc;
+    void *self = rpm_self(rpm);
     uint32_t flags;
     int lost = 0;
 
@@ -337,11 +347,11 @@ static void rpm_work(struct drm_work *work)
     if (left > 0) {
         spin_unlock_irqrestore(&rpm->lock, flags);
         i915_gem_unlock(i915, taken);
-        rpm_queue(i915, (uint32_t)tick_div((uint64_t)left + NS_PER_MS - 1, NS_PER_MS, NULL));
+        rpm_queue(i915, (uint32_t)tick_div64((uint64_t)left + NS_PER_MS - 1, NS_PER_MS, NULL));
         return;
     }
     rpm_set_status(rpm, I915_RPM_SUSPENDING);
-    rpm->owner = current_proc;
+    rpm->owner = rpm_self(rpm);
     spin_unlock_irqrestore(&rpm->lock, flags);
 
     err = rpm_suspend(i915);
@@ -447,7 +457,7 @@ static int32_t rpm_show(void *obj, int arg, char *buf, uint32_t cap)
         break;
     case RPM_ACTIVE_MS:
     case RPM_SUSP_MS:
-        ms = tick_div(arg == RPM_ACTIVE_MS ? rpm->active_ns : rpm->suspended_ns, NS_PER_MS, NULL);
+        ms = tick_div64(arg == RPM_ACTIVE_MS ? rpm->active_ns : rpm->suspended_ns, NS_PER_MS, NULL);
         spin_unlock_irqrestore(&rpm->lock, flags);
         return emit_num(buf, cap, ms, 0);
     case RPM_USAGE:
