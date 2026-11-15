@@ -266,7 +266,9 @@ static void rps_irq(struct drm_i915_private *i915, uint32_t iir, void *data)
 }
 
 /** Turn the up and down interrupts on, as Linux's rps_enable_interrupts:
- * their handler registered and unmasked, then GEN6_PMINTRMSK. */
+ * their handler registered and unmasked, then GEN6_PMINTRMSK, written
+ * through the GT FIFO as Linux's intel_uncore_write, where the frequency's
+ * own registers are written directly, as Linux's set() writes them. */
 static void rps_enable_interrupts(struct drm_i915_private *i915)
 {
     struct i915_rps *rps = &i915->rps;
@@ -278,22 +280,22 @@ static void rps_enable_interrupts(struct drm_i915_private *i915)
     }
     i915_irq_unmask(i915, I915_IRQ_PM, rps->pm_events);
     flags = spin_lock_irqsave(&rps->lock);
-    i915_write(&i915->hw, GEN6_PMINTRMSK, rps_pm_mask(rps, rps->last_freq));
+    i915_uncore_write(i915, GEN6_PMINTRMSK, rps_pm_mask(rps, rps->last_freq));
     spin_unlock_irqrestore(&rps->lock, flags);
 }
 
 /**
  * Turn the up and down interrupts off, as Linux's rps_disable_interrupts:
- * every RPS event masked in GEN6_PMINTRMSK and in the PM bank and its
- * handler unregistered, then what latched cleared, twice, as Linux's
- * gen6_gt_pm_reset_iir, and the work's events dropped.
+ * every RPS event masked in GEN6_PMINTRMSK, through the GT FIFO, and in
+ * the PM bank and its handler unregistered, then what latched cleared,
+ * twice, as Linux's gen6_gt_pm_reset_iir, and the work's events dropped.
  */
 static void rps_disable_interrupts(struct drm_i915_private *i915)
 {
     struct i915_rps *rps = &i915->rps;
     uint32_t flags;
 
-    i915_write(&i915->hw, GEN6_PMINTRMSK, ~0u & ~rps->pm_intrmsk_mbz);
+    i915_uncore_write(i915, GEN6_PMINTRMSK, ~0u & ~rps->pm_intrmsk_mbz);
     i915_irq_unregister(i915, I915_IRQ_PM, GEN6_PM_RPS_EVENTS);
     flags = spin_lock_irqsave(&i915->irq.lock);
     i915_write(&i915->hw, GEN6_PMIIR, GEN6_PM_RPS_EVENTS);
