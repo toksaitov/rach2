@@ -1128,8 +1128,9 @@ static void native_copy_names(const char *type, const char *ram)
     char spare[PATH_CAP];
     int fd, rc;
 
-    if (syscall1(SYS_UNLINK, (long)ram) != 0) {
-        fail("unlinking the attached tmpfs image");
+    rc = syscall1(SYS_UNLINK, (long)ram);
+    if (rc != 0) {
+        fail_with("unlinking the attached tmpfs image", rc);
     }
     attached_contents(type);
     if (control(detach_a) != 0) {
@@ -1146,8 +1147,9 @@ static void native_copy_names(const char *type, const char *ram)
     if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"x", 1) != 1 || syscall1(SYS_CLOSE, fd) != 0) {
         fail("making a file to replace the attached tmpfs image");
     }
-    if (syscall2(SYS_RENAME, (long)spare, (long)ram) != 0) {
-        fail("renaming over the attached tmpfs image");
+    rc = syscall2(SYS_RENAME, (long)spare, (long)ram);
+    if (rc != 0) {
+        fail_with("renaming over the attached tmpfs image", rc);
     }
 }
 
