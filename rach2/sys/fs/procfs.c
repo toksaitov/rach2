@@ -3944,6 +3944,8 @@ static int procfs_gen_statsys(struct procfs_text *t)
 #ifndef RACH2_HOSTTEST
     ap_str(t, "virtio_gpu_copied_bytes ");
     ap_u64(t, virtio_gpu_copied_bytes());
+    ap_str(t, "\nwindow_free_min ");
+    ap_ulong(t, (unsigned long)frame_window_free_min());
     ap_ch(t, '\n');
 #endif
     ap_str(t, "latency_timer_us ");

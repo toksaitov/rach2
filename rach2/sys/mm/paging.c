@@ -61,6 +61,9 @@ static uintptr_t _next_free_frame;
  * takes from the window's top for the block requests and the page cache. */
 static uintptr_t _next_free_upper;
 static size_t _free_window_frames; /* free frames of the window */
+/* The fewest free frames the window has had since the boot counted them
+ * (`frame_window_free_min`). */
+static size_t _free_window_min;
 #define WINDOW_KEEP 64u
 /* rach2.framehigh, a test switch: the scan for a frame starts at 4 GiB, so
  * the heap's pages and the buffers a device is given of them lie above it
@@ -444,6 +447,7 @@ void init_paging(struct frame_map *map)
             }
         }
     }
+    _free_window_min = _free_window_frames;
     frame_index_build();
 
     register_isr_handler(PAGE_FAULT_VECTOR, &_page_fault_handler, "page fault");
@@ -3038,8 +3042,8 @@ static void frame_take(uintptr_t frame)
 {
     if (_frames[frame] == 0) {
         _free_frames--;
-        if (frame < _window_frames) {
-            _free_window_frames--;
+        if (frame < _window_frames && --_free_window_frames < _free_window_min) {
+            _free_window_min = _free_window_frames;
         }
         frame_index_take(frame);
     }
@@ -3434,6 +3438,11 @@ size_t frame_window_total_count(void)
 size_t frame_window_free_count(void)
 {
     return _free_window_frames;
+}
+
+size_t frame_window_free_min(void)
+{
+    return _free_window_min;
 }
 
 /**
