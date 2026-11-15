@@ -435,12 +435,6 @@ int32_t sysfs_uevent(int dir, const char *action, const char *env)
     return -ENOENT;
 }
 
-/* vgem's registration, which the rows do not run. */
-int kcmdline_has(const char *flag)
-{
-    (void)flag;
-    return 0;
-}
 /** No log on the host. */
 void klog(int level, const char *subsystem, const char *fmt, ...)
 {
@@ -448,12 +442,12 @@ void klog(int level, const char *subsystem, const char *fmt, ...)
     (void)subsystem;
     (void)fmt;
 }
-/** Unused: vgem_probe returns before it. */
+/** Unused: these rows do not probe vgem. */
 void drm_dev_init(struct drm_device *dev, const struct drm_driver *drv)
 {
     dev->driver = drv;
 }
-/** Unused: vgem_probe returns before it. */
+/** Unused: these rows do not probe vgem. */
 int32_t drm_dev_register(struct drm_device *dev)
 {
     (void)dev;

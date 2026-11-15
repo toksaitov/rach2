@@ -1,12 +1,11 @@
 /*
  * vgem.c: Linux's vgem, a device of shmem buffers with no hardware, which
  * IGT's tests export to another driver and hold busy with fences of their
- * own (vgem_drv.c and vgem_fence.c). `rach2.vgem` starts it.
+ * own (vgem_drv.c and vgem_fence.c). It registers at DRM startup.
  */
 
 #include "drm.h"
 
-#include "../cmdline.h"
 #include "../dmabuf/dmabuf.h"
 #include "../klog.h"
 #include "../lib/kdef.h"
@@ -297,9 +296,6 @@ int32_t vgem_probe(void)
     struct drm_device *dev;
     int32_t err;
 
-    if (!kcmdline_has("rach2.vgem")) {
-        return -ENODEV;
-    }
     if (vgem_dev) {
         return -EBUSY;
     }

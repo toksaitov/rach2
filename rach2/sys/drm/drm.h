@@ -2036,7 +2036,7 @@ struct drm_device {
 /** Probe and register the display devices, once, after the PCI drivers
  * have started: in the order the aperture handoff needs, bochs and
  * virtio-gpu, then fbdrm on what they left, then vkms when `rach2.vkms`
- * asks and vgem when `rach2.vgem` asks; and /dev/udmabuf. Logs "drm: start". */
+ * asks, then vgem; and /dev/udmabuf. Logs "drm: start". */
 void drm_start(void);
 
 /** Fill a new device for `driver`, with one reference, the caller's, and
@@ -2366,7 +2366,7 @@ struct virtio_dev;
 int32_t virtio_gpu_bind(struct virtio_dev *vdev);
 /** vkms, a display in software, when the command line has `rach2.vkms`. */
 int32_t vkms_probe(void);
-/** vgem, buffers in memory with no display, with `rach2.vgem`. */
+/** Register vgem, buffers in memory with no display; 1 or -errno. */
 int32_t vgem_probe(void);
 /** vkms's vblank timer, from the boot processor's tick with interrupts
  * off: each vblank due on its CRTC since the last call. Nothing while no

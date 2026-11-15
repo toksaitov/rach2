@@ -1,12 +1,10 @@
-.Dd November 10, 2026
+.Dd November 16, 2026
 .Dt VGEM 4
 .Os
 .Sh NAME
 .Nm vgem
 .Nd virtual GEM provider, buffers and fences with no hardware
 .Sh SYNOPSIS
-.Cm rach2.vgem
-.Pp
 .In drm/drm.h
 .In drm/vgem_drm.h
 .Pp
@@ -22,11 +20,13 @@ driver, and holds them busy with fences it signals itself, which the
 importer waits for as it would for a device's work.
 IGT's tests use it so to hold back the work they give a GPU, and to fill a
 GPU's ring with work that cannot run.
-It starts only when
+It registers one device at startup, after the display drivers.
+Linux loads its module on demand, as IGT does with
+.Ql modprobe vgem ;
+Rach2 builds it in, so no module load or boot option is needed.
+The old
 .Cm rach2.vgem
-is on the kernel command line, after the other display drivers, and binds
-one device; Linux loads its module on demand, as IGT does with
-.Ql modprobe vgem .
+word on a boot line has no effect.
 .Pp
 The device is a DRM device, as
 .Xr drm 4

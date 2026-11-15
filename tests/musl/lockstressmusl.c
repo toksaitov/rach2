@@ -71,7 +71,7 @@
  *            buffer's dma-buf; with no fence the dma-buf is readable and
  *            writable, and a write fence leaves it neither until it is
  *            signalled (drivers/dma-buf/dma-buf.c:253-321). Not run without
- *            a vgem device, which the kernel makes with rach2.vgem.
+ *            a vgem device, which the kernel registers at startup.
  *
  * A CALL of -u is a system call by name in this program's ABI, a number as
  * syscall:N, an entry vector as vector:N, an ioctl request as ioctl:0xN, or
@@ -2108,8 +2108,7 @@ static void mode_drm(void)
 
     dr_fd = dr_open();
     if (dr_fd < 0) {
-        snprintf(mode_skip[M_DRM], sizeof(mode_skip[M_DRM]),
-                 "no vgem device; the kernel makes one with rach2.vgem");
+        snprintf(mode_skip[M_DRM], sizeof(mode_skip[M_DRM]), "no vgem device");
         return;
     }
     memset(&d, 0, sizeof(d));
