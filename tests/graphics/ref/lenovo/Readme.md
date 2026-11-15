@@ -18,6 +18,8 @@ The Lenovo's GPU cases ([tests/native/gpu.cases](../../../native/gpu.cases)) jud
 * `gate`: the speed gate's settings, the most a measure may lose against Linux with translation off and Linux's value of each measure.
 * `exclusions`: the differences from Linux that the owner has approved, `NAME REASON` a line.
 
+In piglit's expectations, `skip-or-pass` marks 1,035 setup skips in step 9's original run. Of these, 1,033 compiler tests were skipped before execution because piglit checked `GL_EXT_gpu_shader4` in the core profile; this extension is available in the compatibility profile that their GLSL versions use. The other two, `egl_ext_client_extensions@conformance test 3` and `egl_ext_surface_compression@create`, could not open their default or Wayland display. The current runner disables fast skips and sets `EGL_PLATFORM=surfaceless`. Both roots use Mesa 25.0.7-2+deb13u1; this is no Mesa upgrade or new extension in Rach2. These rows require skip or pass, rejecting a failure, crash or missing result; every other skip still requires skip. The original JSON stays unchanged.
+
 ## Updating
 
 The run's report, with the scripts and how each suite was built, is in the development log's graphics research. A new run replaces a suite's directory whole, and its commit message says what was run and where; `python3 -I tests/graphics/lenovo-expect.py` then makes `expect/igt-kms.rows`, `expect/piglit-quick.rows.gz` and `tests/graphics/igt-lenovo-kms.list` again. The files of the Debian boot are made again by the same commands in a new Debian boot, as the development log's record of the conformance step gives them, each file replaced whole.

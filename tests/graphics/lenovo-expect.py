@@ -18,6 +18,10 @@ the tools' own output, and writes:
       the first run's results: those tests opened the default display
       without EGL_PLATFORM, which piglit.sh sets
 
+The 1,033 compiler tests skipped before execution by GL_EXT_gpu_shader4's
+fast-skip check, and two EGL tests skipped for absent displays, accept
+`skip-or-pass`. These are setup skips, not answers about the kernel's device.
+
 The tests that failed beside the first run's other tests and passed alone
 stay as the first run had them, since piglit.sh runs a test on each CPU
 through GBM as that run did; arb_timer_query@timestamp-get is one, whose
@@ -91,6 +95,21 @@ def piglit_rows(tests):
     return rows
 
 
+def piglit_setup_skip(name, test):
+    """Identify step 9's setup skips from their recorded diagnostics."""
+    if test["result"] != "skip":
+        return False
+    if (test.get("returncode") is None and not test.get("pid")
+            and test.get("out") ==
+            "Test requires extension GL_EXT_gpu_shader4 which is not available"):
+        return True
+    return ((name == "spec@egl_ext_client_extensions@conformance test 3"
+             and test.get("out") == "Failed to initialize default display\n")
+            or (name == "spec@egl_ext_surface_compression@create"
+                and test.get("out") ==
+                "piglit: error: failed to connect to Wayland display\n\n"))
+
+
 def piglit():
     def load(path):
         return json.load(bz2.open(os.path.join(REF, path), "rt", encoding="utf-8"))["tests"]
@@ -101,6 +120,9 @@ def piglit():
             for key in [k for k in rows if k == name or k.startswith(name + "@")]:
                 del rows[key]
             rows.update(piglit_rows({name: t}))
+    for name, test in first.items():
+        if rows.get(name) == "skip" and piglit_setup_skip(name, test):
+            rows[name] = "skip-or-pass"
     text = "".join("%s %s\n" % (name, rows[name]) for name in sorted(rows))
     with open(os.path.join(REF, "expect/piglit-quick.rows.gz"), "wb") as f:
         f.write(gzip.compress(text.encode("utf-8"), 9, mtime=0))

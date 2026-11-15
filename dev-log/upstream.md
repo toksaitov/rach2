@@ -194,3 +194,5 @@ The bullets state only what the records show. A fact the records do not hold, su
 | WineD3D draws with a destroyed shader's pipeline when a new shader module gets its handle | Wine 11.0, WineD3D | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#wined3d-draws-with-a-destroyed-shaders-pipeline-when-a-new-shader-module-gets-its-handle) |
 | virglrenderer makes a sub-context current whose GL context was never made | virglrenderer 1.2.0, QEMU 10.2.1 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#virglrenderer-makes-a-sub-context-current-whose-gl-context-was-never-made) |
 | QEMU calls GL on a vCPU thread when the guest resets virtio-gpu-gl | QEMU 10.2.1 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemu-calls-gl-on-a-vcpu-thread-when-the-guest-resets-virtio-gpu-gl) |
+
+| Piglit skips legacy GLSL compiler tests using a core-profile extension query | piglit 0.0~git20250409.af62c0dea-2 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#piglit-skips-legacy-glsl-compiler-tests-using-a-core-profile-extension-query) |

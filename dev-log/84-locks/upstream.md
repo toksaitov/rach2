@@ -431,3 +431,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing; virtio-gpu resets the device when it binds and when `vgpu_kill` (`rach2/sys/drm/virtio_gpu.c`) gives it up, and the crashed run's console shows neither.
 * Status: unreported.
 * Next: read `virtio_gpu_gl_reset` in QEMU's master to see whether the scanout's teardown still runs there; then propose deferring it to the main thread's `RS_RESET` handling in `virtio_gpu_gl_handle_ctrl`, as the renderer's own reset already is.
+
+## Piglit skips legacy GLSL compiler tests using a core-profile extension query
+
+* Project: piglit 0.0~git20250409.af62c0dea-2, Debian 13's package. Sources read from sources.debian.org at that version; no source tarball digest is recorded here.
+* Fails: `framework/test/glsl_parser_test.py:115-136` selects the core profile for desktop GLSL without a `compatibility` suffix, even GLSL 1.10. `framework/test/opengl.py:72-92` then skips a test whose extension is absent from that profile. The executable chooses a compatibility context for GL versions below 3.1 (`tests/glslparsertest/glslparsertest.c:74-81`), so the profile queried is different from the one the test uses. GL_EXT_gpu_shader4 is absent from the core profile and available in the compatibility profile.
+* Found: 2026-11-15, reading the Lenovo's Linux reference during milestone 84's release fix 84-266z7, task 5223.
+* Reproduction: on the Lenovo's Debian with Mesa 25.0.7, run quick on GBM with fast skipping enabled: 1,032 EXT_gpu_shader4 compiler tests and EXT_texture_shadow_lod's negative_compile.frag skip with no pid and no return code, while executed EXT_gpu_shader4 tests pass. PIGLIT_NO_FAST_SKIP=1 lets each test check its own context.
+* Evidence: `tests/graphics/ref/lenovo/piglit/results.json.bz2`; `dev-log/84-locks/84-266z7.md`; Debian's source files at https://sources.debian.org/src/piglit/0.0~git20250409.af62c0dea-2/ .
+* Rach2: `tests/graphics/runners/piglit.sh` already sets PIGLIT_NO_FAST_SKIP=1; `lenovo-expect.py` marks the reference's affected skips as skip-or-pass, and `judge.py` still rejects their failures and missing results.
+* Status: unreported.
+* Next: check the profile selection in current upstream, then report the mismatch with the legacy compiler test and the two context selections.

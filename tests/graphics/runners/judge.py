@@ -41,7 +41,9 @@ a line, compressed with gzip when the name ends in .gz, by name: a test or
 subtest that passed in the reference must pass here, one the reference
 skipped must skip here, as Linux's skips are the guest's answers about its
 devices, and one that failed or crashed in the reference may end as it
-likes. A name the reference has and this run lacks is worse, and so is one
+likes. A reference's `skip-or-pass` marks a setup skip, not a device's
+answer, and requires either skip or pass here. A name the reference has
+and this run lacks is worse, and so is one
 this run alone has that neither passes nor skips. SAMPLE, the names a
 list's run of piglit.sh took, its NAME.sample, keeps of the reference those
 tests and their subtests, for a run of a part of the list the reference ran
@@ -347,6 +349,8 @@ def results(ref_path, got_path, sample_path=None, flakes_path=None,
         if g is None:
             worse.append((name, "%s: not run here, %s in the reference" % (name, r)))
         elif r in ("pass", "skip") and g != r:
+            worse.append((name, "%s: %s here, %s in the reference" % (name, g, r)))
+        elif r == "skip-or-pass" and g not in ("skip", "pass"):
             worse.append((name, "%s: %s here, %s in the reference" % (name, g, r)))
     for name in sorted(set(got) - set(ref) - flaky):
         if got[name] not in ("pass", "skip"):
