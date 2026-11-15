@@ -428,6 +428,6 @@ Faults this milestone found in another project's code, one section each, in the 
 * Found: 2026-11-15, the testing PC's WSL, milestone 84, task 84-266z4, reading QEMU's GL paths for the crash of #5219, which this path did not cause: the guest's console shows no reset.
 * Reproduction: not yet run. Under egl-headless, have a guest set a scanout from a virgl resource, reset the device by writing 0 to its status, and count the share group's framebuffer names before and after, for example with a breakpoint on `glDeleteFramebuffers` that reads `eglGetCurrentContext()`.
 * Evidence: the reading on #5219.
-* Rach2: nothing; its virtio layer resets a device when it binds it and when it gives it up (`virtio_halt` and `virtio_teardown` in `rach2/sys/virtio/virtqueue.c`), never while virtio-gpu runs.
+* Rach2: nothing; virtio-gpu resets the device when it binds and when `vgpu_kill` (`rach2/sys/drm/virtio_gpu.c`) gives it up, and the crashed run's console shows neither.
 * Status: unreported.
 * Next: read `virtio_gpu_gl_reset` in QEMU's master to see whether the scanout's teardown still runs there; then propose deferring it to the main thread's `RS_RESET` handling in `virtio_gpu_gl_handle_ctrl`, as the renderer's own reset already is.
