@@ -58,15 +58,15 @@
 # /etc/protocols, /etc/networks, /etc/localtime and /etc/timezone in place,
 # compiles the console's terminfo entry, rach2.ti, checks that ncurses's
 # database has term's xterm-256color, renders the ports' manual pages with
-# render_man.sh, gives every node its owner's write permission, takes the
-# set-id bit off OpenSSH's ssh-keysign, sets the modes of the ports that are
-# narrower than the store keeps, gives /etc/shadow a locked line for each
-# system account of /etc/passwd, and has the root's own ldconfig write
-# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the
-# tree already has is refused rather than replaced, so that what the manifest
-# staged is what the image has; the two files replaced and the one added to
-# are named where they are, and /bin/sh, which the manifest does not stage, is
-# a name of bash's file.
+# render_man.sh, writes glibc's iconv module cache, gives every node its
+# owner's write permission, takes the set-id bit off OpenSSH's ssh-keysign,
+# sets the modes of the ports that are narrower than the store keeps, gives
+# /etc/shadow a locked line for each system account of /etc/passwd, and has
+# the root's own ldconfig write /etc/ld.so.cache from the /etc/ld.so.conf
+# the manifest staged. A file the tree already has is refused rather than
+# replaced, so that what the manifest staged is what the image has; the two
+# files replaced and the one added to are named where they are, and /bin/sh,
+# which the manifest does not stage, is a name of bash's file.
 #
 
 set -e
@@ -679,6 +679,13 @@ awk -v root="$TREE" '{
 }' "$WORK/loaders.cache" > "$pixbuf/2.10.0/loaders.cache"
 "$TREE$GNU_LOADER" --library-path "$libpath" "$TREE/usr/bin/update-mime-database" \
     "$TREE/usr/share/mime"
+# glibc's install leaves out the iconv module cache when it cross-builds.
+# Without it each iconv_open reads gconv-modules and searches the module
+# graph in find_derivation, which allocates each step on the stack: IGT's
+# start-up, through GLib's g_locale_to_utf8, then writes 20 KiB below main
+# against 8 KiB with the cache, which Debian's libc6 ships.
+"$TREE$GNU_LOADER" --library-path "$TREE/lib:$TREE/usr/lib" \
+    "$TREE/usr/sbin/iconvconfig" --prefix="$TREE"
 
 # Debian's D-Bus activation helper has no privileged activation on Rach2.
 if [ -f "$TREE/usr/lib/dbus-1.0/dbus-daemon-launch-helper" ]; then
