@@ -3861,6 +3861,25 @@ static void procfs_work_counts(struct procfs_text *t)
     ap_ch(t, '\n');
 }
 
+#ifndef RACH2_HOSTTEST
+/** Append /proc/stat's `vkms_` lines, which procfs_gen_statsys describes. */
+static void procfs_vkms_counts(struct procfs_text *t)
+{
+    uint32_t overruns, skipped, missed, catchups;
+
+    vkms_stats(&overruns, &skipped, &missed, &catchups);
+    ap_str(t, "vkms_vblank_overruns ");
+    ap_u32(t, overruns);
+    ap_str(t, "\nvkms_vblank_skipped ");
+    ap_u32(t, skipped);
+    ap_str(t, "\nvkms_crc_missed ");
+    ap_u32(t, missed);
+    ap_str(t, "\nvkms_crc_catchups ");
+    ap_u32(t, catchups);
+    ap_ch(t, '\n');
+}
+#endif
+
 /**
  * Render /proc/stat: the tick counters, the interrupt total, the boot epoch,
  * the process counts, and this kernel's own counters: the sleeps a signal
@@ -3881,8 +3900,8 @@ static void procfs_work_counts(struct procfs_text *t)
  *
  * The `vkms_` counts are vkms's (drm.h): its vblank timer's passes that
  * found more than one frame gone and the frames past the first they found,
- * which ask no CRC, and its composer's passes that entered more than one
- * frame's CRC.
+ * the frames that got no CRC request while its CRC source was on, and its
+ * composer's passes that entered more than one frame's CRC.
  *
  * The `namecache_` counts are the name cache's (dcache.h): the resolver's
  * lookups it answered and those it passed to the file system, each a read of
@@ -3911,9 +3930,6 @@ static int procfs_gen_statsys(struct procfs_text *t)
     uint32_t running = 0;
     uint32_t blocked = 0;
     int c;
-#ifndef RACH2_HOSTTEST
-    uint32_t vo, vs, vc;
-#endif
 
     for (c = 0; c < NR_CPUS; c++) {
         sched_cpu_ticks(c, &cu, &cb, &ci, &cs);
@@ -3954,14 +3970,8 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u64(t, virtio_gpu_copied_bytes());
     ap_str(t, "\nwindow_free_min ");
     ap_ulong(t, (unsigned long)frame_window_free_min());
-    vkms_stats(&vo, &vs, &vc);
-    ap_str(t, "\nvkms_vblank_overruns ");
-    ap_u32(t, vo);
-    ap_str(t, "\nvkms_vblank_skipped ");
-    ap_u32(t, vs);
-    ap_str(t, "\nvkms_crc_catchups ");
-    ap_u32(t, vc);
     ap_ch(t, '\n');
+    procfs_vkms_counts(t);
 #endif
     ap_str(t, "latency_timer_us ");
     ap_u32(t, latency_max(LAT_TIMER));

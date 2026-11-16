@@ -2419,9 +2419,10 @@ int32_t vgem_probe(void);
 void vkms_tick(void);
 /** vkms's counts since boot, zero without the device: the vblank timer's
  * passes that found more than one frame gone, the frames past the first
- * they found, which ask no CRC, and the composer's passes that entered more
- * than one frame's CRC. For /proc/stat. */
-void vkms_stats(uint32_t *overruns, uint32_t *skipped, uint32_t *catchups);
+ * they found, the frames that got no CRC request while the CRC source was
+ * on, and the composer's passes that entered more than one frame's CRC.
+ * For /proc/stat. */
+void vkms_stats(uint32_t *overruns, uint32_t *skipped, uint32_t *missed, uint32_t *catchups);
 
 /* ------------------------------------------------------------------------
  * The ioctl handlers of the core's table, one per number, in the files the
