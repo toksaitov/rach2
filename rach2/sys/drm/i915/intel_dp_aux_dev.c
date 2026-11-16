@@ -203,7 +203,7 @@ static int32_t aux_read(fd_entry_t *e, char __user *buf, uint32_t count)
 /** Write the DPCD at the offset (`aux_rw`). */
 static int32_t aux_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return aux_rw(e, (char __user *)(uintptr_t)buf, count, 1);
+    return aux_rw(e, (char __force __user *)(uintptr_t)buf, count, 1);
 }
 
 /** Seek in the DPCD, Linux's fixed_size_llseek of AUX_MAX_OFFSET bytes:
