@@ -76,9 +76,9 @@ struct vkms_scene {
  * (`crc_pending`), which the composer thread composes and enters.
  * `crc_next` is the first frame not yet asked: the one after the vblank
  * count when the source goes on, then the one after the last frame asked;
- * 0 while the source is off and from a change of the CRTC's active state
- * to its next request, so that the count the core adds when the vblanks go
- * on again is not taken for frames left out; `crc_missed`
+ * 0 while the source is off and from a commit that needs a modeset of the
+ * CRTC to its next request, so that the count the core adds when the
+ * vblanks go on again is not taken for frames left out; `crc_missed`
  * counts the frames from `crc_next` that a later vblank, finding no request
  * pending, left out of its own; `catchups` counts the composer's passes
  * that entered more than one frame's CRC. The tick
@@ -792,7 +792,7 @@ static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *stat
     flags = kirq_save();
     old = v->scene;
     v->scene = s;
-    if (old.active != s.active) {
+    if (old.active != s.active || drm_atomic_crtc_needs_modeset(crtc->state)) {
         v->crc_next = 0;
     }
     kirq_restore(flags);
