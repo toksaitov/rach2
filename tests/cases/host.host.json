@@ -1787,7 +1787,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 344
+          "limit": 345
         }
       ],
       "bounds": {
@@ -3843,7 +3843,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a declared scenario step has ended",
-          "limit": 16
+          "limit": 17
         },
         {
           "witness_id": "checks",
