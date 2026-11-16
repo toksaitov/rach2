@@ -8536,7 +8536,8 @@ static unsigned hardlink_pairs(void)
     return matched;
 }
 
-/** More than the old 512-file capacity is valid; a wrong count remains bad. */
+/** More than the old 512-file capacity is valid, and a wrong count is set to
+ * the two names the check finds, as `e2fsck -p` sets it in its pass 4. */
 static void hardlink_check_rows(void)
 {
     const char *img = fix_path("hardlinks.ext2");
@@ -8564,9 +8565,9 @@ static void hardlink_check_rows(void)
     check(debugfs_script(img, "sif /a599 links_count 3\nssv state 0\n"),
           "the independent tool gives the last linked file an incorrect count");
     check(e2fsck_status(img) == 4, "independent e2fsck rejects the incorrect link count");
-    fault_on(img, bytes, "a link count that does not match its names",
-             "the same large link inventory with a wrong count mounts read-only");
-    printf("ext2-hardlinks: checked 600 exact two-name pairs and rejected the bad count\n");
+    count_on(img, bytes, debugfs_number(img, "stat /a599", "Inode: "), 3, 2,
+             "the same large link inventory with a wrong count mounts writable, the count set");
+    printf("ext2-hardlinks: checked 600 exact two-name pairs and set the bad count\n");
 }
 
 /* ---- a directory's inode, and a reused block, before the next step ---- */
@@ -9670,13 +9671,13 @@ static void stop_put_row(void)
 /**
  * A remount writable whose check stops leaves a stopped mount read-only, so
  * that the final puts it held back free nothing on a volume the check found
- * faulty. /dir/big.bin's link count is 3 against its one name, which a clean
- * mount does not check; under `errors=remount-ro` a file is made, held open
- * and removed, and a lookup whose table block cannot be read stops the
- * mount. The remount writable runs while another process closes the file
- * during the check, which stops at the link count. The remount must be
- * EROFS with the mount read-only, and the file's inode stay used, for
- * e2fsck to find.
+ * faulty. /dir/big.bin's link count is 0 against its one name, a fault the
+ * check does not repair and a clean mount does not check; under
+ * `errors=remount-ro` a file is made, held open and removed, and a lookup
+ * whose table block cannot be read stops the mount. The remount writable
+ * runs while another process closes the file during the check, which stops
+ * at the link count. The remount must be EROFS with the mount read-only, and
+ * the file's inode stay used, for e2fsck to find.
  */
 static void stop_check_row(void)
 {
@@ -9684,7 +9685,7 @@ static void stop_check_row(void)
     uint64_t ffree;
     int rc = 0, hits;
 
-    if (!damage_mount(img, "sif /dir/big.bin links_count 3\n", 0,
+    if (!damage_mount(img, "sif /dir/big.bin links_count 0\n", 0,
                       "the stopped check's volume mounts")) {
         return;
     }
