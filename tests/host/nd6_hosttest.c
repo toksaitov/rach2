@@ -339,7 +339,13 @@ int main(void)
     CHECK(nd6_conf_get(ND6_CONF_DEFAULT, ND6_RA_DEFRTR_METRIC, &v) == 0 && v == 1024);
     CHECK(nd6_conf_get(eth0.index, ND6_RA_DEFRTR_METRIC, &v) == 0 && v == 1024);
     CHECK(nd6_conf_set(eth0.index, ND6_RA_DEFRTR_METRIC, 0) == -EINVAL);
-    CHECK(nd6_conf_set(eth0.index, ND6_RA_DEFRTR_METRIC, -5) == -EINVAL);
+    /* The internal int32_t carries an unsigned metric in its bits. */
+    CHECK(nd6_conf_set(eth0.index, ND6_RA_DEFRTR_METRIC, -5) == 0);
+    CHECK(nd6_conf_get(eth0.index, ND6_RA_DEFRTR_METRIC, &v) == 0 && (uint32_t)v == 0xFFFFFFFBu);
+    CHECK(nd6_conf_set(eth0.index, ND6_RA_DEFRTR_METRIC, -1) == 0);
+    CHECK(nd6_conf_get(eth0.index, ND6_RA_DEFRTR_METRIC, &v) == 0 && (uint32_t)v == 0xFFFFFFFFu);
+    CHECK(nd6_conf_set(eth0.index, ND6_RA_DEFRTR_METRIC, 1) == 0);
+    CHECK(nd6_conf_get(eth0.index, ND6_RA_DEFRTR_METRIC, &v) == 0 && v == 1);
     CHECK(nd6_conf_set(9, ND6_RA_DEFRTR_METRIC, 100) == -ENODEV);
 
     /* The cable at 100 and Wi-Fi at 600: each router's default takes its
