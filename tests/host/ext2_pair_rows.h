@@ -229,11 +229,13 @@ static uint64_t pair_bytes;
 /* The run under way: its two sides, process B's operation, the request of
    process A at which B runs and the count A has made, and what B did:
    whether it had ended when A went on, the kind of its first wait, whether
-   that was the buffer of a block A's request moved, and its result. */
+   that was the buffer of a block A's request moved, or of one a later
+   request of A's moved (`pair_held`), and its result. */
 static struct pair_side pair_a, pair_b;
 static const struct pair_op *pair_second_op;
-static int pair_target, pair_seen, pair_fired, pair_ended, pair_in_flight, pair_b_rc;
-static uint64_t pair_block; /* the first block of A's request */
+static int pair_target, pair_seen, pair_fired, pair_ended, pair_in_flight, pair_held, pair_b_rc;
+static uint64_t pair_block;   /* the first block of A's request */
+static uint64_t pair_awaited; /* the buffer B sleeps on, when not A's request's */
 static const char *pair_slept;
 
 /** Process B: its operation on its side. */
@@ -242,14 +244,27 @@ static void pair_second(void)
     pair_b_rc = pair_second_op->run(&pair_b);
 }
 
-/** At process A's disk request numbered `pair_target`, give process B the
+/**
+ * At process A's disk request numbered `pair_target`, give process B the
  * turn, and note whether it ended or what it slept on, and whether that was
- * a buffer of this request. */
+ * a buffer of this request. A buffer B sleeps on that a later request of
+ * A's moves is A's too (`pair_held`): the cache holds a block that waits
+ * while it writes the blocks it waits for and flushes them, and only then
+ * the block itself (`write_follower`), so B sleeps on a block whose write
+ * is under way.
+ */
 static void pair_request(void)
 {
     uint64_t first = request_block, count = request_blocks;
 
-    if (current_proc != &proc_a || second_inside || pair_fired || ++pair_seen != pair_target) {
+    if (current_proc != &proc_a || second_inside) {
+        return;
+    }
+    if (pair_fired) {
+        pair_held = pair_held || (pair_awaited >= first && pair_awaited < first + count);
+        return;
+    }
+    if (++pair_seen != pair_target) {
         return;
     }
     pair_fired = 1;
@@ -259,6 +274,8 @@ static void pair_request(void)
     pair_slept = second_wait;
     pair_in_flight = second_wait && streq(second_wait, "buffer") && second_wait_block >= first &&
                      second_wait_block < first + count;
+    pair_awaited =
+        second_wait && streq(second_wait, "buffer") && !pair_in_flight ? second_wait_block : ~0ull;
 }
 
 /** Make a file of `blocks` blocks of the pattern at `path`'s name under
@@ -431,7 +448,8 @@ static int pair_run(const struct pair_op *a, const struct pair_op *b, int layout
         ok = pair_write(&pair_a) == 0;
     }
     pair_target = k;
-    pair_seen = pair_fired = pair_ended = 0;
+    pair_seen = pair_fired = pair_ended = pair_held = 0;
+    pair_awaited = ~0ull;
     pair_b_rc = 0;
     pair_slept = 0;
     pair_second_op = b;
@@ -456,7 +474,7 @@ static int pair_run(const struct pair_op *a, const struct pair_op *b, int layout
 }
 
 /* The disk requests the rows gave process B at, and how many of them it
-   slept on a node lock, on the rename lock and on a buffer of the request. */
+   slept on a node lock, on the rename lock and on a buffer A writes. */
 static int pair_requests, pair_node_waits, pair_rename_waits, pair_buffer_waits;
 
 /** Whether B, an fsync beside fsync `a`, sleeps on `a`'s list being written
@@ -481,7 +499,8 @@ static int pair_store_wait(const struct pair_op *a, const struct pair_op *b, int
 /**
  * Run `a` against `b` on `layout` at each disk request of `a` in turn and
  * judge what B did at each against `want`: NULL for an end, or the kind of
- * lock B must sleep on; a sleep on a buffer of A's request passes either.
+ * lock B must sleep on; a sleep on a buffer of A's request, or of a later
+ * one (`pair_held`), passes either.
  * Both must succeed on a layout of different files; on one file, B may
  * change what A reads or removes first.
  */
@@ -504,7 +523,8 @@ static void pair_row(const struct pair_op *a, const struct pair_op *b, int layou
             check(0, what);
             good = 0;
         }
-        if (!pair_in_flight && !pair_list_wait(a, b) && !pair_store_wait(a, b, layout) &&
+        if (!pair_in_flight && !pair_held && !pair_list_wait(a, b) &&
+            !pair_store_wait(a, b, layout) &&
             (want ? (pair_ended || !pair_slept || !streq(pair_slept, want)) : !pair_ended)) {
             snprintf(what, sizeof(what), "%s then %s %s at request %d, of block %lu: %s, not %s",
                      a->name, b->name, layouts[layout], k, (unsigned long)pair_block,
@@ -519,7 +539,7 @@ static void pair_row(const struct pair_op *a, const struct pair_op *b, int layou
         if (!pair_ended && pair_slept && streq(pair_slept, "rename")) {
             pair_rename_waits++;
         }
-        pair_buffer_waits += pair_in_flight;
+        pair_buffer_waits += pair_in_flight || pair_held;
     }
     pair_requests += requests;
     if (a->holds && requests == 0 && good) {
@@ -568,7 +588,7 @@ static void pair_rows(void)
         pair_row(&move, &move, PAIR_MOVES, "rename");
     }
     printf("ext2-pairs: result: %d requests, %d slept on a node lock, %d on the rename lock, "
-           "%d on a buffer of the request\n",
+           "%d on a buffer A writes\n",
            pair_requests, pair_node_waits, pair_rename_waits, pair_buffer_waits);
     (void)bcache_invalidate(&dev);
     free(ram_image);
