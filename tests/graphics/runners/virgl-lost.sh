@@ -23,7 +23,10 @@
 # GPU, so that Weston has frames to repaint whatever became of the first
 # client, and once Weston has logged a line or ended reads what is left:
 # whether Weston and its first client still run, what Weston's log says of its
-# repaints, the DRM nodes, the renderer a new Weston gets on the headless
+# repaints, the DRM nodes of any device but vgem, which Rach2 builds in and
+# Debian's guest loads only on demand, so that its card, render node and
+# udev's platform-vgem links in by-path count on neither side, the renderer
+# a new Weston gets on the headless
 # backend with its GL renderer, and how a new Weston on the DRM backend
 # ends.
 #
@@ -213,7 +216,25 @@ first=$(tail -n "+$((logged + 1))" "$out/weston.log" | sed -n '1s/^\[[0-9:.]*\] 
     state client "$client"
     nodes=
     for f in /dev/dri/*; do
-        [ ! -e "$f" ] || nodes="$nodes${nodes:+ }${f##*/}"
+        [ -e "$f" ] || continue
+        case ${f##*/} in
+        by-path)
+            other=
+            for l in "$f"/*; do
+                case ${l##*/} in
+                platform-vgem-*) ;;
+                *) [ ! -e "$l" ] || other=1 ;;
+                esac
+            done
+            [ -n "$other" ] || continue
+            ;;
+        *)
+            case $(readlink -f "/sys/class/drm/${f##*/}/device" 2> /dev/null) in
+            */platform/vgem) continue ;;
+            esac
+            ;;
+        esac
+        nodes="$nodes${nodes:+ }${f##*/}"
     done
     echo "nodes: ${nodes:-none}"
 } > "$RUNNER_WORK/lost"
