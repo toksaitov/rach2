@@ -255,16 +255,26 @@ static int32_t msr_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return copy_to_user(uregs, regs, sizeof(regs)) != 0 ? -EFAULT : 0;
 }
 
-/** Seek, Linux's msr_seek: SEEK_SET and SEEK_CUR alone, with no bound. */
+/** The largest file offset, Linux's OFFSET_MAX. */
+#define MSR_OFFSET_MAX ((int64_t)(((uint64_t)1 << 63) - 1u))
+
+/**
+ * Seek, Linux's no_seek_end_llseek, which its msr device uses: SEEK_SET and
+ * SEEK_CUR alone. -EINVAL for another `whence` and, as vfs_setpos, for a
+ * negative result or a SEEK_CUR sum past MSR_OFFSET_MAX.
+ */
 static int64_t msr_llseek(fd_entry_t *e, int64_t offset, int whence)
 {
-    if (whence == 0) {
-        return offset;
+    int64_t base;
+
+    if (whence != 0 && whence != 1) {
+        return -EINVAL;
     }
-    if (whence == 1) {
-        return (int64_t)e->ofd->offset + offset;
+    base = whence == 1 ? (int64_t)e->ofd->offset : 0;
+    if (offset > 0 && base > MSR_OFFSET_MAX - offset) {
+        return -EINVAL;
     }
-    return -EINVAL;
+    return base + offset < 0 ? -EINVAL : base + offset;
 }
 
 static const struct file_ops msr_fops = {
