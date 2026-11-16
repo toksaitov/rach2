@@ -1,7 +1,7 @@
 /**
  * Check the lock counters' cycle conversion against native division.
  *
- * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  *
  * Reuse the timer calibration's device stubs without running its rows.
  * Whole and fractional ticks, counts above 32 bits and a full-width
