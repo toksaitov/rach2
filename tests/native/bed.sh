@@ -119,8 +119,9 @@ session_start || fail "the session did not start after check.sh"
 status=0
 case $rung in
     shm)
+        # The game scene is deferred until milestone 86 (#5259).
         MEASURE_RUNNERS=$here/kit/measure/runners sh kit/bed-shm.sh -d "$bed/vm.disk" \
-            -p ./vgshmprobe -w -x "$here/kit/measure" -S 'glmark2 piglit game venus:glmark2' \
+            -p ./vgshmprobe -w -x "$here/kit/measure" -S 'glmark2 piglit venus:glmark2' \
             -g "$gpu" -o "$here/out" > run.out 2>&1 || status=$?
         cat run.out
         grep -q '^bed-shm: result: pass' run.out || status=1
