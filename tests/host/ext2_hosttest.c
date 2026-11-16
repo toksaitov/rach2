@@ -203,20 +203,22 @@ static uint64_t request_block, request_blocks;
 /**
  * The kind of the wait on `wq` with argument `arg`: a sleeping lock's kind
  * (sleeplock.h), whose wait passes a `struct sleep_turn` that begins with
- * the lock; "buffer" for the hold of a cache buffer, whose wait passes the
- * buffer; "ext2 node state" for anything else, which in ext2.c is a node's
- * load or death, or the admission of a remount. Each argument here is a
- * structure of at least a pointer. A buffer's block goes in `*block`.
+ * the lock; "buffer" for the hold of a cache buffer, whose wait passes a
+ * `struct buffer_wait` (bcache.c) that begins with the buffer; "ext2 node
+ * state" for anything else, which in ext2.c is a node's load or death, or
+ * the admission of a remount. Each argument here is a structure of at least
+ * a pointer. A buffer's block goes in `*block`.
  */
 static const char *wait_kind(wait_queue_t *wq, void *arg, uint64_t *block)
 {
     const struct sleep_lock *l = arg ? *(struct sleep_lock *const *)arg : 0;
+    const struct bbuf *b = arg ? *(struct bbuf *const *)arg : 0;
 
     if (l && (uintptr_t)l + __builtin_offsetof(struct sleep_lock, wq) == (uintptr_t)wq) {
         return l->record ? l->record->kind : "sleep lock";
     }
-    if (arg && (uintptr_t)arg + __builtin_offsetof(struct bbuf, wq) == (uintptr_t)wq) {
-        *block = ((const struct bbuf *)arg)->blk;
+    if (b && (uintptr_t)b + __builtin_offsetof(struct bbuf, wq) == (uintptr_t)wq) {
+        *block = b->blk;
         return "buffer";
     }
     return "ext2 node state";
