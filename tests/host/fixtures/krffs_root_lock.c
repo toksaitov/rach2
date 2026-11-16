@@ -40,6 +40,7 @@ extern void open_thread_wait(void);
 extern void open_thread_finish(void);
 
 int pc_sync_wait(void);
+uint32_t pc_balance_dirty(void);
 
 #define IMAGE_BYTES 65536u
 
@@ -130,6 +131,12 @@ static const krffs_backend_t watched_backend = {watched_read, watched_write, wat
 int pc_sync_wait(void)
 {
     at_image();
+    return 0;
+}
+
+/** The writer's dirty throttle, which has no cache to write back here. */
+uint32_t pc_balance_dirty(void)
+{
     return 0;
 }
 
