@@ -1,8 +1,9 @@
 /*
  * backend.h: the parts of the VM's backend around device.c: the renderer
  * on libvirglrenderer (virgl.c), the scanout on the VM's KMS (kms.c) and
- * the region's sources and doorbells (main.c), and the probe that imports
- * resources into Vulkan as Venus does (vkprobe.c).
+ * the region's sources and doorbells (main.c), the probe that imports
+ * resources into Vulkan as Venus does (vkprobe.c), and the report of a
+ * stall (stall.c).
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef BACKEND_H
@@ -61,5 +62,15 @@ const struct kms_counts *kms_counts(struct kms *k);
 void kms_close(struct kms *k);
 
 uint32_t crc32_bytes(const uint8_t *p, uint64_t n);
+
+/* The stall report (stall.c): the seconds the serving thread may stay in
+ * one place, or its oldest fenced command wait, before the report, and
+ * between reports while the stall lasts. */
+#define STALL_S       30
+#define STALL_AGAIN_S 300
+
+void stall_start(const struct vd *d);
+void stall_beat(const char *at);
+void stall_report(const char *why);
 
 #endif /* BACKEND_H */

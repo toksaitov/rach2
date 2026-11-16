@@ -17,6 +17,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <linux/vfio.h>
@@ -402,16 +403,58 @@ static void report(struct vd *d, struct src *s, struct vr *r, struct kms *k)
 }
 
 /**
+ * Report a fenced command that has waited STALL_S seconds for its fence,
+ * once for each oldest fence and again every STALL_AGAIN_S while it waits:
+ * the device's counts and the stall report. *seen and *since keep the
+ * oldest fence and when it became the oldest; *next, when to report.
+ */
+static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *seen, time_t *since,
+                        time_t *next)
+{
+    const struct vd_pending *old = 0;
+    time_t t = time(0);
+    char why[160];
+    uint32_t i;
+
+    for (i = 0; i < VD_PENDING && d->npend; i++) {
+        const struct vd_pending *p = &d->pend[i];
+
+        if (p->used && (!old || p->fence_id < old->fence_id)) {
+            old = p;
+        }
+    }
+    if (!old || old->fence_id + 1 != *seen) {
+        *seen = old ? old->fence_id + 1 : 0;
+        *since = t;
+        *next = t + STALL_S;
+        return;
+    }
+    if (t < *next) {
+        return;
+    }
+    snprintf(why, sizeof(why),
+             "%u fenced commands wait; the oldest, fence %llu of context %u, ring %u, for %ld s",
+             (unsigned)d->npend, (unsigned long long)old->fence_id, (unsigned)old->ctx,
+             (unsigned)old->ring, (long)(t - *since));
+    report(d, s, r, 0);
+    stall_report(why);
+    *next = t + STALL_AGAIN_S;
+}
+
+/**
  * Serve the device until the driver detaches with -1, or a signal: step
  * until idle, then wait on the doorbells and virglrenderer's fences. A
  * transport with doorbells sleeps until one rings; without, it polls each
  * millisecond. A step that finds work after a wait no doorbell ended
- * counts as polled.
+ * counts as polled. Each turn beats for the stall report's watch, and a
+ * fenced command that waits too long is reported (`fence_watch`).
  */
 static void serve(struct vd *d, struct src *s, struct vr *r, int once)
 {
     struct pollfd p[VECTORS + 1];
     int i, ret = VD_IDLE, rung = 1, timeout;
+    uint64_t seen = 0;
+    time_t since = 0, next = 0;
 
     for (i = 0; i < VECTORS; i++) {
         p[i].fd = s->efd[i];
@@ -422,6 +465,7 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once)
     while (!stop) {
         int steps = 0;
 
+        stall_beat("step");
         while ((ret = vd_step(d)) == VD_WORKED && steps++ < 64) {
             if (!rung && d->me.state == VGS_DEV_RUNNING) {
                 s->polled++;
@@ -431,14 +475,17 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once)
         if (ret == VD_GONE && once) {
             break;
         }
+        stall_beat("vr_poll");
         vr_poll(r);
         vd_kick(d);
+        fence_watch(d, s, r, &seen, &since, &next);
         timeout = d->npend ? 1 : 1000;
         if (s->efd[0] < 0 || !(d->drv.transport_features & VGS_TF_DOORBELL) ||
             d->me.state != VGS_DEV_RUNNING) {
             timeout = 1;
         }
         rung = 0;
+        stall_beat("poll");
         if (poll(p, VECTORS + 1, timeout) <= 0) {
             continue;
         }
@@ -509,6 +556,7 @@ int main(int argc, char **argv)
             off.transport_features ? "doorbells" : "polling",
             off.transport_features & VGS_TF_PAGES ? ", page lists" : "", (unsigned)off.num_capsets,
             k ? "on the display" : "no display");
+    stall_start(&dev);
     serve(&dev, &s, r, o.once);
     report(&dev, &s, r, k);
     kms_close(k);

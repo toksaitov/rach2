@@ -7,7 +7,7 @@ CFLAGS ?= -O2 -g -Wall -Wextra
 CFLAGS += -std=c99 -fno-strict-aliasing -pthread
 CPPFLAGS += -I../../../rach2/sys/virtio -I../module $(shell pkg-config --cflags virglrenderer libdrm)
 LDLIBS += $(shell pkg-config --libs virglrenderer libdrm vulkan)
-OBJS = main.o device.o virgl.o kms.o vkprobe.o
+OBJS = main.o device.o virgl.o kms.o vkprobe.o stall.o
 
 vgpu-backend: $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
