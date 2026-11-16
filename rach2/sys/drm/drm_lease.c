@@ -140,8 +140,9 @@ static int32_t lease_fill(struct drm_device *dev, struct drm_file *lessor, const
 
 /**
  * CREATE_LEASE, Linux's drm_mode_create_lease_ioctl: lease the objects the
- * caller names to a new file of its card, opened as the caller's was, and
- * give its descriptor and lessee ID. EINVAL for flags but O_CLOEXEC and
+ * caller names to a new file of its card, opened with the caller's access
+ * mode and its description's status flags now, and give its descriptor and
+ * lessee ID. EINVAL for flags but O_CLOEXEC and
  * O_NONBLOCK, for a lessee's call (no sub-leases) and for a list
  * `lease_fill` refuses; EFAULT, ENOMEM or EOVERFLOW for a list that cannot
  * be copied; EMFILE; EBUSY for an object another lessee of the caller holds.
@@ -152,7 +153,7 @@ int32_t drm_mode_create_lease_ioctl(struct drm_device *dev, void *data, struct d
 {
     struct drm_mode_create_lease *cl = (struct drm_mode_create_lease *)data;
     struct drm_lease_open lo;
-    uint32_t *ids, *leases = NULL, n = 0, i, id;
+    uint32_t *ids, *leases = NULL, n = 0, i, id, flags;
     uint64_t bytes;
     char name[24];
     int32_t rc, fd;
@@ -215,9 +216,14 @@ int32_t drm_mode_create_lease_ioctl(struct drm_device *dev, void *data, struct d
     }
     name[i++] = (char)('0' + dev->index % 10);
     name[i] = '\0';
+    /* The lessor's access mode and its description's status flags now, an
+     * O_NONBLOCK set by F_SETFL among them, as Linux's file_clone_open. */
+    flags = file->open_mode | (cl->flags & LEASE_O_CLOEXEC);
+    if (file->ofd) {
+        flags |= file->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK | OFD_SYNC);
+    }
     dev->lease_open = &lo;
-    fd = devfs_open(
-        name, (int)(file->open_flags | ((cl->flags & LEASE_O_CLOEXEC) ? LEASE_O_CLOEXEC : 0u)));
+    fd = devfs_open(name, (int)flags);
     dev->lease_open = NULL;
     /* The open took the set when it made the lessee. */
     kfree(lo.leases);

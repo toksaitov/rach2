@@ -807,9 +807,13 @@ struct drm_file {
     uint32_t master_id;
     int is_master;
     int was_master;
-    int set_busid;        /* its master record has the bus name: SET_VERSION 1.1 or later */
-    int console;          /* the console's own file (drm_client.c), never a node's */
-    uint32_t open_flags;  /* the open's access mode and status flags, for a lessee's open */
+    int set_busid;      /* its master record has the bus name: SET_VERSION 1.1 or later */
+    int console;        /* the console's own file (drm_client.c), never a node's */
+    uint32_t open_mode; /* the open's access mode, O_RDONLY to O_RDWR, for a lessee's open */
+    /* The open file description, whose current status flags a lessee's
+     * open takes, as Linux's file_clone_open takes f_flags; NULL for the
+     * console's file. */
+    struct open_file *ofd;
     uint32_t lessor_id;   /* a lessee's lessor's master id; 0 for any other file */
     uint32_t lessee_id;   /* a lessee's id in its lessor's record, from 1 */
     uint32_t *leases;     /* a lessee's object IDs, ascending, from the heap */

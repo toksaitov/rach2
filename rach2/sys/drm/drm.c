@@ -437,7 +437,8 @@ static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
     /* Linux: capable(CAP_SYS_ADMIN) at open. */
     file->authenticated = current_proc && proc_privileged(current_proc);
     file->event_space = DRM_EVENT_SPACE;
-    file->open_flags = (uint32_t)flags & (3u | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC);
+    file->open_mode = (uint32_t)flags & 3u;
+    file->ofd = e->ofd;
     wait_queue_init(&file->event_wait);
     drm_dev_get(dev);
     if (dev->driver->open) {
