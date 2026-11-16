@@ -46,7 +46,7 @@ static void native_script_inventory_fixture(void)
                     count++ ? "," : "", line, program, source);
         }
         fputs("]}\n", out);
-        CHECK(count == 46 && !ferror(list), "native partition fixture retains all 46 entries");
+        CHECK(count == 47 && !ferror(list), "native partition fixture retains all 47 entries");
     }
     if (list)
         fclose(list);
