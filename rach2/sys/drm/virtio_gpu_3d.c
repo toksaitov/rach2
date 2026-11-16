@@ -8,16 +8,33 @@
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
 
+/** The `n` pages of a command's payload as one block of the DMA pool, its
+ * address at *addr, or NULL where the transport gives no run of `n` pages
+ * (`dma_max`) or none is free. A block longer than the queue's `room` for
+ * a chain is the payload's only way, so it waits for the pool
+ * (`vgpu_dma_alloc_wait`). May sleep. */
+static uint8_t *payload_block(struct virtio_gpu_cmd *cmd, uint32_t n, uint32_t room, uint64_t *addr)
+{
+    struct virtio_dev *vdev = cmd->vg->vdev;
+
+    if (n < 2 || vdev->dma_max / PAGE_SIZE < n) {
+        return NULL;
+    }
+    return n > room ? (uint8_t *)vgpu_dma_alloc_wait(cmd->vg, n * PAGE_SIZE, addr)
+                    : (uint8_t *)virtio_dma_alloc(vdev, n * PAGE_SIZE, addr);
+}
+
 /** Allocate payload pages and their scatter list before submitting a command.
  * The pages are one block that the device sees as one segment where the
  * transport gives more than a page at once (`dma_max`), and a page each
  * otherwise; either way each page is freed alone. The virtqueue's
  * descriptor count bounds a single chain, including its header and
  * response; larger commands return E2BIG, and every command of a dead
- * device, whose queues are freed, ENODEV. Process context. */
+ * device, whose queues are freed, ENODEV, a device that dies while an
+ * allocation sleeps among them. Process context. */
 int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response)
 {
-    uint32_t n, i, left = bytes, off = 0, here;
+    uint32_t n, i, room, left = bytes, off = 0, here;
     struct virtio_sg *sg;
     struct virtio_dev *vdev = cmd->vg->vdev;
     uint8_t *block = NULL;
@@ -30,25 +47,25 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
     if (cmd->vg->dead) {
         return -ENODEV;
     }
-    /* A chain too long for the queue has only the block, so it waits. */
-    if (n > 1 && vdev->dma_max / PAGE_SIZE >= n) {
-        block = n > (uint32_t)cmd->vq->size - 2
-                    ? (uint8_t *)vgpu_dma_alloc_wait(cmd->vg, n * PAGE_SIZE, &addr)
-                    : (uint8_t *)virtio_dma_alloc(vdev, n * PAGE_SIZE, &addr);
+    /* The wait below lets a reset free the queue, so its size is read now. */
+    room = (uint32_t)cmd->vq->size - 2;
+    block = payload_block(cmd, n, room, &addr);
+    if (!block && cmd->vg->dead) {
+        return -ENODEV;
     }
-    if (!block && n > (uint32_t)cmd->vq->size - 2) {
+    if (!block && n > room) {
         return -E2BIG;
     }
     cmd->payload = kzalloc(n * sizeof(*cmd->payload));
     sg = kzalloc((n + 2) * sizeof(*sg));
-    if (!cmd->payload || !sg) {
+    if (!cmd->payload || !sg || cmd->vg->dead) {
         kfree(sg);
         if (block) {
             for (i = 0; i < n; i++) {
                 virtio_dma_free(vdev, block + i * PAGE_SIZE, PAGE_SIZE);
             }
         }
-        return -ENOMEM;
+        return cmd->vg->dead ? -ENODEV : -ENOMEM;
     }
     sg[0] = cmd->sg[0];
     cmd->segments = sg;
@@ -61,7 +78,7 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
         if (!block) {
             cmd->payload[i].page = vgpu_dma_alloc_wait(cmd->vg, PAGE_SIZE, &cmd->payload[i].addr);
             if (!cmd->payload[i].page) {
-                return -ENOMEM;
+                return cmd->vg->dead ? -ENODEV : -ENOMEM;
             }
             cmd->npayload++;
         }
@@ -300,6 +317,7 @@ int32_t vgpu_context_open(struct virtio_gpu_device *vg, struct drm_file *file)
     if (!ctx) {
         return -ENOMEM;
     }
+    mutex_init(&ctx->lock, "vgpu_context");
     ctx->id = 1;
     for (;;) {
         struct vgpu_context *other;
@@ -326,31 +344,31 @@ int32_t vgpu_context_open(struct virtio_gpu_device *vg, struct drm_file *file)
 }
 
 /**
- * Queue the file's CTX_CREATE once, with the capability set CONTEXT_INIT
- * gave, else the device's default set, and the name it gave, an empty one
- * included, else the calling thread's, as Linux's
+ * Queue `ctx`'s CTX_CREATE unless it is created, with the capability set
+ * CONTEXT_INIT gave, else the device's default set, and the name it gave,
+ * an empty one included, else the calling thread's, as Linux's
  * virtio_gpu_create_context_locked keeps the name's presence apart from
  * its contents with explicit_debug_name (virtgpu_ioctl.c:42-60 and
- * 655-667 in 6.12.115); return 0 or -errno without a fence wait.
+ * 655-667 in 6.12.115). The caller holds `ctx->lock`, which keeps a second
+ * thread of the file from sending its own while this one sleeps for the
+ * command's pages. 0, -ENOMEM, or -ENODEV when the device has died; no
+ * fence wait.
  */
-int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
+int32_t vgpu_context_create(struct virtio_gpu_device *vg, struct vgpu_context *ctx)
 {
-    struct vgpu_context *ctx;
     struct virtio_gpu_cmd *cmd;
     struct virtio_gpu_ctx_create *req;
     const char *name;
-    int32_t rc = vgpu_context_open(vg, file);
 
-    if (rc) {
-        return rc;
-    }
-    ctx = file->driver_priv;
-    if (!ctx || ctx->created) {
+    if (ctx->created) {
         return 0;
+    }
+    if (vg->dead) {
+        return -ENODEV;
     }
     cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_CREATE, sizeof(*req));
     if (!cmd) {
-        return -ENOMEM;
+        return vg->dead ? -ENODEV : -ENOMEM;
     }
     req = (struct virtio_gpu_ctx_create *)(void *)cmd->page;
     req->hdr.ctx_id = ctx->id;
@@ -364,8 +382,32 @@ int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
 }
 
 /**
+ * Create the file's context on its first use (`vgpu_context_create`),
+ * under its lock, as Linux's virtio_gpu_create_context; 0 or -errno
+ * without a fence wait. May sleep.
+ */
+int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
+{
+    struct vgpu_context *ctx;
+    int32_t rc = vgpu_context_open(vg, file);
+
+    if (rc) {
+        return rc;
+    }
+    ctx = file->driver_priv;
+    if (!ctx || ctx->created) {
+        return 0;
+    }
+    mutex_lock(&ctx->lock);
+    rc = vgpu_context_create(vg, ctx);
+    mutex_unlock(&ctx->lock);
+    return rc;
+}
+
+/**
  * Destroy a closing file's context in queue order and free its attachment
- * records, once the commands in flight leave room (`vgpu_room`). May sleep.
+ * records, once the commands in flight leave room (`vgpu_room`). A detach
+ * asleep with the record held (`holds`) frees it when it wakes. May sleep.
  */
 void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
 {
@@ -400,11 +442,33 @@ void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
         kfree(a);
     }
     file->driver_priv = NULL;
-    kfree(ctx);
+    if (ctx->holds) {
+        ctx->closed = 1;
+    } else {
+        kfree(ctx);
+    }
     vgpu_reap(vg);
 }
 
-/** Attach a buffer to the context once; borrow the buffer until its detach. */
+/** Whether `bo` is attached to `ctx`. */
+static int vgpu_context_attached(const struct vgpu_context *ctx, const struct virtio_gpu_object *bo)
+{
+    const struct vgpu_attachment *a;
+
+    for (a = ctx->attached; a; a = a->next) {
+        if (a->bo == bo) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Attach a buffer to the file's context once; borrow the buffer until its
+ * detach. The command's allocation may sleep, and another thread of the
+ * file may attach the buffer meanwhile, so the list is read again after
+ * it. 0, -ENOMEM, or -ENODEV without a created context or a live device.
+ */
 int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
                             struct virtio_gpu_object *bo)
 {
@@ -416,10 +480,8 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
     if (vg->dead || !bo->res_id || !ctx || !ctx->created) {
         return -ENODEV;
     }
-    for (a = ctx->attached; a; a = a->next) {
-        if (a->bo == bo) {
-            return 0;
-        }
+    if (vgpu_context_attached(ctx, bo)) {
+        return 0;
     }
     a = kzalloc(sizeof(*a));
     if (!a) {
@@ -428,7 +490,12 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
     cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE, sizeof(*req));
     if (!cmd) {
         kfree(a);
-        return -ENOMEM;
+        return vg->dead ? -ENODEV : -ENOMEM;
+    }
+    if (vgpu_context_attached(ctx, bo)) {
+        kfree(a);
+        vgpu_cmd_free(cmd);
+        return 0;
     }
     a->bo = bo;
     a->next = ctx->attached;
@@ -442,7 +509,12 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
 
 /**
  * Queue every context's detach before UNREF, or forget attachments after
- * reset.
+ * reset. Each command's allocation may sleep, and meanwhile another thread
+ * may close a context's file or change its list of attachments, so the
+ * context is held across the sleep (`holds`) and its list walked again
+ * from the start; a context closed meanwhile has sent its CTX_DESTROY,
+ * which drops its attachments on the host, so its detach is not sent and
+ * the walk begins again from the device's first context. May sleep.
  */
 void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -450,7 +522,9 @@ void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object
     struct vgpu_attachment **p, *a;
     struct virtio_gpu_cmd *cmd;
     struct virtio_gpu_resource_unref *req;
+    int closed;
 
+again:
     for (ctx = vg->contexts; ctx; ctx = ctx->next) {
         for (p = &ctx->attached; *p;) {
             a = *p;
@@ -463,8 +537,14 @@ void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object
             if (vg->dead) {
                 continue;
             }
+            ctx->holds++;
             cmd =
                 vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE, sizeof(*req));
+            ctx->holds--;
+            closed = ctx->closed;
+            if (closed && ctx->holds == 0) {
+                kfree(ctx);
+            }
             if (!cmd) {
                 if (!vg->dead) {
                     klog(KLOG_WARN, "virtio_gpu",
@@ -474,10 +554,15 @@ void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object
                 }
                 return;
             }
+            if (closed) {
+                vgpu_cmd_free(cmd);
+                goto again;
+            }
             req = (struct virtio_gpu_resource_unref *)(void *)cmd->page;
             req->hdr.ctx_id = ctx->id;
             req->resource_id = bo->res_id;
             vgpu_cmd_send(cmd, NULL, NULL);
+            p = &ctx->attached;
         }
     }
 }

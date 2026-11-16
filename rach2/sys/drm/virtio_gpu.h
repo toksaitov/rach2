@@ -627,14 +627,21 @@ struct vgpu_attachment {
 /*
  * A file's context. CONTEXT_INIT sets `context_init`, the rings and the
  * name before the context is created, which the first use does otherwise
- * with the defaults; `created` is set once CTX_CREATE is sent. Ring `i`'s
- * fences are on the fence context `base_fence_ctx + i`.
+ * with the defaults; `created` is set once CTX_CREATE is sent. Both happen
+ * under `lock`, which is held across the CTX_CREATE's allocation, a sleep,
+ * so that two threads of one file create the context once, as Linux's
+ * `context_lock` serializes them. Ring `i`'s fences are on the fence
+ * context `base_fence_ctx + i`.
  */
 struct vgpu_context {
     struct vgpu_context *next;
     uint32_t id;
     struct vgpu_attachment *attached;
     int created;
+    struct mutex lock;                    /* over `created` and the parameters, `vgpu_context` */
+    uint32_t holds;                       /* detaches asleep in an allocation that will use it */
+    int closed;                           /* the file has closed and the record is off the list;
+                                           * the last hold frees it */
     uint32_t context_init;                /* the capability set id, 0 for the default */
     uint32_t num_rings;                   /* 0 when CONTEXT_INIT gave none */
     uint64_t ring_mask;                   /* rings whose fences send the file an event */
@@ -850,6 +857,9 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
 int32_t vgpu_capsets_read(struct virtio_gpu_device *vg);
 /** Create a file's context lazily; 0 or -errno, may sleep. */
 int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file);
+/** Send `ctx`'s CTX_CREATE unless it is created; `ctx->lock` held. 0,
+ * -ENOMEM, or -ENODEV for a device that died; may sleep. */
+int32_t vgpu_context_create(struct virtio_gpu_device *vg, struct vgpu_context *ctx);
 /** Allocate and release a file's context record. */
 int32_t vgpu_context_open(struct virtio_gpu_device *vg, struct drm_file *file);
 void vgpu_context_close(struct drm_device *dev, struct drm_file *file);

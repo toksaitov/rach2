@@ -868,7 +868,11 @@ static int32_t ctx_param(struct virtio_gpu_device *vg,
  * whose fences send an event, and the context's name, then the context
  * created with them. EINVAL without context initialization or virgl, for
  * more than four parameters, one refused (`ctx_param`) or a poll mask past
- * the rings; EEXIST once the context exists; EFAULT; ENOMEM.
+ * the rings; EEXIST once the context exists; EFAULT; ENOMEM; ENODEV. The
+ * parameters are read from the caller first, and installed and the context
+ * created under the context's lock, so that of two threads that pass the
+ * first look the second, which waits there, finds the context created and
+ * fails with EEXIST, as Linux's context_lock makes it.
  */
 int32_t vgpu_context_init_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
@@ -906,6 +910,11 @@ int32_t vgpu_context_init_ioctl(struct drm_device *dev, void *data, struct drm_f
     if (c.rings < 64 && (c.mask >> c.rings) != 0) {
         return -EINVAL;
     }
+    mutex_lock(&ctx->lock);
+    if (ctx->created) {
+        mutex_unlock(&ctx->lock);
+        return -EEXIST;
+    }
     ctx->context_init = c.capset;
     if (c.rings_set) {
         ctx->base_fence_ctx = dma_fence_context_alloc(c.rings);
@@ -916,5 +925,7 @@ int32_t vgpu_context_init_ioctl(struct drm_device *dev, void *data, struct drm_f
         k_memcpy(ctx->debug_name, c.name, sizeof(ctx->debug_name));
         ctx->explicit_debug_name = 1;
     }
-    return vgpu_context_ensure(vg, file);
+    rc = vgpu_context_create(vg, ctx);
+    mutex_unlock(&ctx->lock);
+    return rc;
 }

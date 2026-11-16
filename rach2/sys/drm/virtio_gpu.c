@@ -1497,8 +1497,11 @@ void vgpu_obj_free(struct drm_gem_object *obj)
  * buffer another file made, imported by PRIME or opened by name, is the
  * context's to use, as Venus asks when it imports memory. On a device
  * without CONTEXT_INIT it first makes the file's default context, as Linux
- * does; a file without a context yet on a device with it, or a device
- * without virgl, attaches nothing. 0, or -ENOMEM.
+ * does, unless the caller holds the mode lock, as GETFB does, since the
+ * context's lock is ordered before it (`vgpu_context_create`): the context
+ * is then made, and the buffer attached, at its first use, which attaches
+ * every buffer it names. A file without a context yet on a device with it,
+ * or a device without virgl, attaches nothing. 0, or -ENOMEM.
  */
 int32_t vgpu_obj_open(struct drm_gem_object *obj, struct drm_file *file)
 {
@@ -1508,7 +1511,7 @@ int32_t vgpu_obj_open(struct drm_gem_object *obj, struct drm_file *file)
     if (!vg->has_virgl) {
         return 0;
     }
-    rc = vg->has_context_init ? 0 : vgpu_context_ensure(vg, file);
+    rc = vg->has_context_init || mutex_held(&vg->drm.mode_lock) ? 0 : vgpu_context_ensure(vg, file);
     if (rc == -ENOMEM) {
         return rc;
     }
