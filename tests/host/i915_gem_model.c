@@ -33,32 +33,6 @@ extern void free(void *p);
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern int posix_memalign(void **p, unsigned long align, unsigned long size);
 
-/** The model's device never sleeps, so runtime PM's holds and GTT fault
- * keepalive (i915_runtime_pm.c) have nothing to do; a hold always takes. */
-void i915_rpm_get(struct drm_i915_private *i915)
-{
-    (void)i915;
-}
-
-/** A hold of the always-awake model's device: always taken, 1. */
-int i915_rpm_get_if_awake(struct drm_i915_private *i915)
-{
-    (void)i915;
-    return 1;
-}
-
-/** Let a hold of the model's device go; there is no sleep to try. */
-void i915_rpm_put(struct drm_i915_private *i915)
-{
-    (void)i915;
-}
-
-/** A GTT fault's keepalive, with no sleep to put off. */
-void i915_rpm_gtt_fault(struct drm_i915_private *i915)
-{
-    (void)i915;
-}
-
 static int failures;
 
 /* The name a failure is printed under, which the including test may set. */
