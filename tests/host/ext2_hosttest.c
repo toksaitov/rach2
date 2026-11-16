@@ -3257,22 +3257,26 @@ static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
 }
 
 /**
- * A mount without `sync` or `dirsync` writes back as Linux's ext2 does:
- * creates, writes and a remove leave the files' data, inodes and bitmaps
- * dirty in the cache and send the device only the root's entries, at each
- * change, without a flush, as Linux's `ext2_handle_dirsync` writes a
- * directory's pages (`dir_commit`); an fsync writes the rest and flushes the
- * disk, and the volume
- * unmounts clean. The device is marked write-through, so that a write sent
- * without `BLOCK_REQ_NOFLUSH` would count as a flush; the removed file's
- * inode and blocks are freed at its last put.
+ * A mount without `sync` or `dirsync` writes back: creates, writes and a
+ * remove leave the files' data dirty in the cache and send the device only
+ * the root's entries, at each change, as Linux's `ext2_handle_dirsync`
+ * writes a directory's pages (`dir_commit`), and before a new name the
+ * metadata its inode needs: the inode bitmap and the descriptors, a flush,
+ * and the inode's table block (`inode_commit`), so that a stop never leaves
+ * an entry naming a zeroed inode. Each create makes the one flush, between
+ * the bitmaps and its table block, and every write is of a block at or
+ * before the root's, never the files' data past it. An fsync writes the
+ * rest and flushes the disk, and the volume unmounts clean. The device is
+ * marked write-through, so that a write sent without `BLOCK_REQ_NOFLUSH`
+ * would count as a flush; the removed file's inode and blocks are freed at
+ * its last put.
  */
 static void default_mount_row(void)
 {
     static unsigned char block[3 * 4096];
     void *f, *g;
     uint64_t root = 0;
-    int rc, flushes, i, entries;
+    int rc, flushes, i, k, entries;
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     (void)debugfs_numbers("stat /", "(0):", &root, 1);
@@ -3296,12 +3300,17 @@ static void default_mount_row(void)
     if (g) {
         OPS->put(&mnt, g);
     }
-    entries = root > 0;
-    for (i = 0; i < wlog_n; i++) {
-        entries = entries && wlog_lba[i] == root * 8 && wlog_count[i] == 8;
+    entries = root > 0 && flush_n == 2 && wlog_n > 0;
+    for (i = 0; i < flush_n; i++) {
+        k = flush_log[i];
+        entries =
+            entries && k + 1 < wlog_n && wlog_lba[k] != root * 8 && wlog_lba[k + 1] == root * 8;
     }
-    check(flush_n == 0 && wlog_n > 0 && entries,
-          "send the device the root's entries alone, unflushed, on a mount without dirsync");
+    for (i = 0; i < wlog_n; i++) {
+        entries = entries && wlog_lba[i] <= root * 8 && wlog_count[i] == 8;
+    }
+    check(entries, "send the device each new inode's table block after a flush and before the "
+                   "root's entries, and no file data, on a mount without dirsync");
     flushes = flush_n;
     check(f && OPS->fsync(&mnt, 0) == 0 && wlog_n > 0 && flush_n > flushes,
           "and an fsync writes them and flushes the disk");
