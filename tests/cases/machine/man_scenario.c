@@ -14,16 +14,17 @@
 #include "lifecycle.h"
 
 /* Every staged page by its own name, and every alias of the table against its
- * target's page, each loop one line typed at the shell. A page that differs
- * prints `BAD /...`; the alias line writes its slash in quotes, so that the
- * console's echo of the command does not have the text. */
+ * target's page, each loop one line typed at the shell. Only man's copy goes
+ * to /tmp, on the RAM root; the staged page reaches cmp through a pipe. A page
+ * that differs prints `BAD /...`; the alias line writes its slash in quotes,
+ * so that the console's echo of the command does not have the text. */
 static const char start[] = "n=0; M=/usr/share/man\r";
 static const char pages[] =
-    "for f in $M/cat*/*; do b=${f##*/}; man ${b##*.} ${b%.*} > /tmp/p; gunzip -c $f > /tmp/q; "
-    "cmp -s /tmp/p /tmp/q && test -s /tmp/p || echo BAD $f; n=$((n+1)); done\r";
+    "for f in $M/cat*/*; do b=${f##*/}; man ${b##*.} ${b%.*} > /tmp/p; "
+    "gunzip -c $f | cmp -s - /tmp/p && test -s /tmp/p || echo BAD $f; n=$((n+1)); done\r";
 static const char aliases[] =
     "while read -r a s t; do case $a in '#'*|'') continue;; esac; man $s $a > /tmp/p; "
-    "gunzip -c $M/cat$s/$t.$s > /tmp/q; cmp -s /tmp/p /tmp/q && test -s /tmp/p || "
+    "gunzip -c $M/cat$s/$t.$s | cmp -s - /tmp/p && test -s /tmp/p || "
     "echo BAD \"/\"alias/$a; n=$((n+1)); done < $M/aliases\r";
 static const char total[] = "echo MAN\"\"ALL $n\r";
 
