@@ -397,17 +397,20 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, uint64_
     return -EINVAL;
 }
 
-/** Never called: no timer here counts processor time. */
+/**
+ * The processor time of the exit rows' process, `group`, which lives
+ * throughout: 0, since those rows arm relative times, which the ticks
+ * alone count down. Any other target has been reaped, -ESRCH, as Linux's
+ * posix_cpu_timer_set fails when it finds no task.
+ */
 int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t tid, uint64_t serial, int thread,
                          int user_only, uint64_t *ns)
 {
-    (void)tg;
     (void)tid;
     (void)serial;
-    (void)thread;
     (void)user_only;
     *ns = 0;
-    return -ESRCH;
+    return tg == &group && !thread ? 0 : -ESRCH;
 }
 
 /** Never called: no row forces cputime_test's wait. */
