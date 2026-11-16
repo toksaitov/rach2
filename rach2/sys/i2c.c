@@ -378,7 +378,7 @@ static int32_t i2cdev_read(fd_entry_t *e, char __user *buf, uint32_t count)
 /** write(2) of /dev/i2c-N (`i2cdev_rw`). */
 static int32_t i2cdev_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return i2cdev_rw(e, (char __user *)buf, count, 0);
+    return i2cdev_rw(e, (char __user *)(__force uintptr_t)buf, count, 0);
 }
 
 /* The user's struct i2c_msg and struct i2c_rdwr_ioctl_data, as the
