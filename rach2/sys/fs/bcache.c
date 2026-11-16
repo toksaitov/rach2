@@ -1683,8 +1683,8 @@ static struct bbuf *victim_find(block_device_t *filling, uint32_t *passed, int *
 }
 
 /* How many times a victim search retries a turn in which no buffer went fit
- * before a miss with none fit fails: Linux's allocator counts only the
- * reclaim loops that made no progress, setting the count to 0 after one
+ * before a miss looks for a holder to wait for. Linux's allocator counts
+ * only reclaim loops that made no progress, setting the count to 0 after one
  * that made some, and retries MAX_RECLAIM_RETRIES (16) of them
  * (mm/internal.h:460-464, mm/page_alloc.c:4179-4185). */
 #define SEARCH_TURNS 16
@@ -1717,8 +1717,11 @@ struct victim_search {
  * (`__getblk_slow`, fs/buffer.c:1131-1140). A release of a buffer whose
  * write is barred is not progress, since no search takes it. A turn in
  * which no such buffer was let go is counted, and is retried SEARCH_TURNS
- * times in a row before the miss fails, as Linux gives up once its loops
- * without progress pass MAX_RECLAIM_RETRIES (mm/page_alloc.c:4184).
+ * times in a row before the search ends. A miss then waits for a dirty
+ * buffer another caller holds when the hold order permits (`victim_busy`):
+ * scans without a release do not prove that outstanding I/O cannot finish.
+ * Linux's __bread_gfp uses __GFP_NOFAIL for its buffer allocation
+ * (fs/buffer.c), rather than giving up on a count of scans.
  *
  * A buffer let go at every turn and taken again before the search reaches
  * it keeps the search going, so every turn ends with `s->ended` set, for
@@ -1755,6 +1758,66 @@ static struct bbuf *victim_any(block_device_t *filling, struct victim_search *s,
     s->ended = 1;
     *more = 1;
     return 0;
+}
+
+/**
+ * A dirty buffer another caller holds whose release can let reclaim
+ * proceed, or NULL. Failed writes and devices this miss may not write are
+ * left. The buffer must follow every buffer the caller holds in the hold
+ * order, so waiting cannot make a cycle with its holder. The caller holds
+ * `wb_lock` and `cache_spin`, taken with `*flags`; the walk gives the
+ * spinlock up every WALK_BATCH buffers. A returned buffer stays held under
+ * that lock until the caller files its wait with `wait_unheld`.
+ */
+static struct bbuf *victim_busy(block_device_t *filling, uint32_t *flags)
+{
+    struct bbuf *b;
+    const struct bbuf *held;
+    uint32_t n = 0;
+
+    for (b = bufs; b; b = bufs_next(b, &n, flags)) {
+        stat_visits++;
+        if (!b->dirty || b->holder == -1 || b->holder == caller_pid() || write_barred(b) ||
+            !victim_may_be_written(b->dev, filling)) {
+            continue;
+        }
+        for (held = *held_list(); held; held = held->hold_next) {
+            stat_visits++;
+            if (held->dev &&
+                (held->dev == b->dev ? held->blk >= b->blk : !block_is_below(b->dev, held->dev))) {
+                break;
+            }
+        }
+        if (!held) {
+            return b;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Retry an exhausted search `s` after a dirty holder's release, or a
+ * release during the look for one. The caller holds `cache_spin`, taken
+ * with `*flags`, and `wb_lock` unless `s->clean` forbids sleeping. Returns
+ * 1 with the spinlock given up and the search reset, or 0 with it still
+ * held and no holder to wait for. The write lock is given up for a wait.
+ */
+static int victim_retry(block_device_t *filling, struct victim_search *s, uint32_t *flags)
+{
+    uint32_t seen = fit_gos;
+    struct bbuf *busy = s->clean ? 0 : victim_busy(filling, flags);
+
+    if (busy) {
+        stat_waits++;
+        wait_unheld(busy, *flags);
+    } else if (fit_gos != seen) {
+        cache_unlock(*flags);
+    } else {
+        return 0;
+    }
+    s->passed = 0;
+    s->idle = 0;
+    return 1;
 }
 
 /** Let `cache_spin`, taken with `flags`, go between two batches of a victim
@@ -2085,6 +2148,9 @@ again:
         victim = victim_any(dev, &search, &more);
         if (more) {
             search_pause(&search, flags);
+            goto again;
+        }
+        if (!victim && victim_retry(dev, &search, &flags)) {
             goto again;
         }
         if (!victim) {

@@ -76,6 +76,14 @@ static struct bbuf *reclaim_target;
 static uint32_t release_reclaims;
 static int release_hooks;
 
+/* A first held by another process until the victim search has given way
+ * sixty-four times, including the modeled sleep; every other buffer is
+ * an after behind it. */
+static struct bbuf *delayed_first;
+static process_t delayed_proc;
+static int delayed_turns;
+static int irqs_off;
+
 /** The kernel's panic: print the text and stop. */
 void k_panic(const char *s)
 {
@@ -164,11 +172,28 @@ void wait_queue_init(wait_queue_t *wq)
     __builtin_memset(wq, 0, sizeof(*wq));
 }
 
+/** Advance the delayed holder at a yield or a modeled sleep. */
+static void delayed_progress(void)
+{
+    if (delayed_first && ++delayed_turns == 64) {
+        process_t *was = thread_proc;
+        struct bbuf *b = delayed_first;
+
+        delayed_first = 0;
+        thread_proc = &delayed_proc;
+        bcache_release(b);
+        thread_proc = was;
+    }
+}
+
 /** Sleep until `cond(arg)` holds, yielding the processor meanwhile. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
+    CHECK(!irqs_off && !mutex_held(&wb_lock),
+          "a buffer wait has interrupts on and gives the write lock up");
     while (!cond(arg)) {
+        delayed_progress();
         sched_yield();
     }
     return 0;
@@ -196,13 +221,14 @@ void sched_service_point(void)
 /** Give way: yield. */
 void sched_give_way(void)
 {
+    delayed_progress();
     sched_yield();
 }
 
-/** Interrupts are on: every caller may sleep. */
+/** The interrupt flag: on except in the restricted victim row. */
 int kirq_enabled(void)
 {
-    return 1;
+    return !irqs_off;
 }
 
 /* The takes of the big lock, which no row may make. */
@@ -709,6 +735,77 @@ static void release_reclaim_rows(void)
     reclaim_target = 0;
 }
 
+/**
+ * Keep an ordered first held across more idle turns than the victim
+ * search's retry limit, with the rest of the full cache after it. A miss
+ * must wait for the release and write a victim, without reporting I/O
+ * failure while forty-seven buffers can still be reclaimed. With
+ * `restricted` 1 the caller holds an after above the first; with 2 its
+ * interrupts are off. Neither may wait for the first.
+ */
+static void delayed_first_row(int restricted)
+{
+    struct bbuf *b, *own = 0;
+    process_t *was = thread_proc;
+    uint32_t written = 0;
+    unsigned i;
+
+    delayed_turns = 0;
+    CHECK(bcache_invalidate(&disk) == 0, "the delayed first starts with no disk buffers");
+    (void)bcache_shrink(100000, 0, &written);
+    bcache_set_limit(48);
+    delayed_proc.pid = 50;
+    thread_proc = &delayed_proc;
+    b = bcache_get_blank(&disk, 0);
+    CHECK(b != 0, "the delayed first gets a buffer");
+    if (!b) {
+        thread_proc = was;
+        return;
+    }
+    bcache_dirty_ordered(b, BCACHE_ORDER_FIRST);
+    delayed_first = b;
+    thread_proc = was;
+    for (i = 1; i < 48; i++) {
+        b = bcache_get_blank(&disk, i);
+        CHECK(b != 0, "the delayed first's after gets a buffer");
+        if (!b) {
+            break;
+        }
+        bcache_dirty_ordered(b, BCACHE_ORDER_AFTER);
+        if (restricted == 1 && i == 1) {
+            own = b;
+        } else {
+            bcache_release(b);
+        }
+    }
+    irqs_off = restricted == 2;
+    b = bcache_get_blank(&disk, 100);
+    irqs_off = 0;
+    if (!restricted) {
+        CHECK(b != 0 && delayed_turns == 64,
+              "a miss waits for an ordered first past sixteen idle turns");
+    } else {
+        CHECK(b == 0 && delayed_turns <= 16,
+              "a miss cannot wait below a held buffer or with interrupts off");
+    }
+    printf("bcache_lock_hosttest: delayed first: restricted %d, %d pauses, buffer %d\n", restricted,
+           delayed_turns, b != 0);
+    if (b) {
+        bcache_release(b);
+    }
+    if (own) {
+        bcache_release(own);
+    }
+    if (delayed_first) {
+        thread_proc = &delayed_proc;
+        bcache_release(delayed_first);
+        delayed_first = 0;
+        thread_proc = was;
+    }
+    CHECK(bcache_sync(&disk) == 0, "the delayed first's buffers sync");
+    CHECK(bcache_invalidate(&disk) == 0, "the delayed first leaves no disk buffers");
+}
+
 int main(void)
 {
     static const int dirty_and_sync[6] = {ROLE_WRITER, ROLE_WRITER, ROLE_WRITER,
@@ -724,6 +821,9 @@ int main(void)
     main_proc.pid = 1;
     thread_proc = &main_proc;
     release_reclaim_rows();
+    delayed_first_row(0);
+    delayed_first_row(1);
+    delayed_first_row(2);
     bcache_set_limit(48);
     __builtin_memset(image, 0, sizeof(image));
     bcache_sync_last(&disk, yield_last, 0, 0);
