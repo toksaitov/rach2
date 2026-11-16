@@ -57,13 +57,12 @@ static void set_status(struct pm_runtime *rpm, int status)
     rpm->status = status;
 }
 
-/** Whether a sleep may start now but for its time: no hold, sleeps
- * enabled, no error and a delay that is not negative, the device awake.
- * Under the record's lock. */
+/** Whether a sleep may start now but for its time: no hold, a negative
+ * delay's among them, sleeps enabled, no error, the device awake. Under the
+ * record's lock. */
 static int may_sleep(const struct pm_runtime *rpm)
 {
-    return rpm->usage == 0 && rpm->enabled && !rpm->error && rpm->delay_ms >= 0 &&
-           rpm->status == RPM_ACTIVE;
+    return rpm->usage == 0 && rpm->enabled && !rpm->error && rpm->status == RPM_ACTIVE;
 }
 
 /** The milliseconds until the sleep is due, 0 when it is due now. Under
@@ -143,7 +142,11 @@ static void record_error(struct pm_runtime *rpm, const char *what, int32_t err)
     klog(KLOG_ERR, "pm", "runtime: %s failed: error %d; sleeps stopped", what, (int)err);
 }
 
-int32_t pm_runtime_get_sync(struct pm_runtime *rpm)
+/** Have the device awake when this returns, waking it if it sleeps, as
+ * Linux's rpm_resume; `take` is 1 to take a hold with it, 0 when the caller
+ * has taken one already under the record's lock. Called without the lock,
+ * as `pm_runtime_get_sync`. 0, or the wake's -errno. */
+static int32_t resume(struct pm_runtime *rpm, int take)
 {
     uint32_t flags;
     int32_t err;
@@ -151,7 +154,7 @@ int32_t pm_runtime_get_sync(struct pm_runtime *rpm)
     for (;;) {
         flags = spin_lock_irqsave(&rpm->lock);
         if (rpm->status == RPM_ACTIVE || rpm->mover == rpm_current()) {
-            rpm->usage++;
+            rpm->usage += take;
             spin_unlock_irqrestore(&rpm->lock, flags);
             return 0;
         }
@@ -164,7 +167,7 @@ int32_t pm_runtime_get_sync(struct pm_runtime *rpm)
     }
     set_status(rpm, RPM_RESUMING);
     rpm->mover = rpm_current();
-    rpm->usage++;
+    rpm->usage += take;
     spin_unlock_irqrestore(&rpm->lock, flags);
     err = rpm->ops->resume(rpm->owner);
     flags = spin_lock_irqsave(&rpm->lock);
@@ -177,6 +180,11 @@ int32_t pm_runtime_get_sync(struct pm_runtime *rpm)
     }
     spin_unlock_irqrestore(&rpm->lock, flags);
     return err;
+}
+
+int32_t pm_runtime_get_sync(struct pm_runtime *rpm)
+{
+    return resume(rpm, 1);
 }
 
 int pm_runtime_get_if_active(struct pm_runtime *rpm)
@@ -258,11 +266,25 @@ int32_t pm_runtime_forbid(struct pm_runtime *rpm)
 void pm_runtime_set_delay(struct pm_runtime *rpm, int32_t ms)
 {
     uint32_t flags = spin_lock_irqsave(&rpm->lock);
-    int32_t after;
+    int32_t old = rpm->delay_ms, after = -1;
+    int wake = 0;
 
     rpm->delay_ms = ms;
-    after = idle_after(rpm);
+    if (ms < 0) {
+        if (old >= 0) {
+            rpm->usage++;
+            wake = 1;
+        }
+    } else {
+        if (old < 0 && rpm->usage > 0) {
+            rpm->usage--;
+        }
+        after = idle_after(rpm);
+    }
     spin_unlock_irqrestore(&rpm->lock, flags);
+    if (wake) {
+        (void)resume(rpm, 0);
+    }
     schedule_idle(rpm, after);
 }
 

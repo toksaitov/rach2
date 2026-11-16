@@ -62,8 +62,8 @@ struct pm_runtime {
     uint8_t enabled;       /* the driver lets the device sleep */
     uint8_t forbidden;     /* `control` reads "on", which holds one of `usage` */
     int32_t error;         /* a callback's error that stopped the sleeps, or 0 */
-    int32_t delay_ms;      /* `autosuspend_delay_ms`; below 0 the device stays
-                            * awake */
+    int32_t delay_ms;      /* `autosuspend_delay_ms`; below 0 it holds one of
+                            * `usage`, which keeps the device awake */
     int64_t last_busy;     /* rtc_monotonic_ns of the last put */
     int64_t busy_until;    /* rtc_monotonic_ns before which no sleep starts */
     int64_t accounted;     /* rtc_monotonic_ns up to which the times count */
@@ -138,8 +138,11 @@ void pm_runtime_allow(struct pm_runtime *rpm);
  * pm_runtime_forbid; clears a recorded error. 0, or the wake's -errno. */
 int32_t pm_runtime_forbid(struct pm_runtime *rpm);
 
-/** Set the autosuspend delay to `ms`, and have the sleep tried after it if
- * nothing holds the device. Process context. */
+/** Set the autosuspend delay to `ms`, as Linux's update_autosuspend: a
+ * delay turning negative takes a hold and wakes the device, one turning
+ * nonnegative drops that hold, and the sleep is tried after a nonnegative
+ * delay if nothing holds the device. Process context, as
+ * `pm_runtime_get_sync`. */
 void pm_runtime_set_delay(struct pm_runtime *rpm, int32_t ms);
 
 /**

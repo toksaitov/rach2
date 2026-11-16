@@ -213,7 +213,8 @@ which keeps it awake; root writes either, and a write of
 .Ql on
 wakes it.
 .Pa autosuspend_delay_ms
-takes a number of milliseconds, below 0 to keep the device awake; i915
+takes a number of milliseconds, below 0 to keep the device awake,
+which wakes it if it sleeps; i915
 sets 10000.
 .Pa runtime_status
 reads
