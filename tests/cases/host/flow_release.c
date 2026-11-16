@@ -497,36 +497,45 @@ static int sent_sum(const char *file, const char *name)
     free(text);
     return 0;
 }
+/* The compressed root of a build that RELEASE_TEST_SLOTS installs; the mock's
+ * /dev/shm/root.ext2.gz hashes as this text does. */
+#define PACKED "the build's compressed root\n"
 /**
  * Answer the commands of the install step on a machine whose installer
  * RELEASE_TEST_SLOTS describes: `old`, it has no --slots; `move`, --slots
  * moves the disk to the larger slots; `full`, --slots finds no room; and
  * `reset`, the slots were moved before a reset that left the old root
  * running, whose bootctl cannot arm the trial of recovery, and a reboot
- * comes up in recovery. /dev/shm holds the build's kernel and root, and the
- * installer, once started, ends 1, which ends the row before the trial boot.
+ * comes up in recovery. /dev/shm holds the build's kernel and compressed
+ * root, and the installer, once started, ends 1, which ends the row before
+ * the trial boot.
  */
 static int install_mock(const char *command)
 {
     const char *how = ev("RELEASE_TEST_SLOTS");
-    char line[20000], b[4096];
+    char line[20000], b[4096], packed[4096];
     size_t n;
     FILE *f;
     static const char probe[] = "cat /dev/shm/install.status 2> /dev/null\n",
+                      status[] = "cat /dev/shm/install.status 2> /dev/null ||",
                       installer[] = "setsid sh -c 'rach2-install --console term --update ";
     if (!strncmp(command, probe, strlen(probe))) {
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         puts("answered");
         return 0;
     }
-    if (!strcmp(command, "cat /dev/shm/install.status 2> /dev/null; true")) {
+    if (!strncmp(command, status, strlen(status))) {
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         puts("1");
         return 0;
     }
-    if (!strcmp(command, "sha256sum /dev/shm/root.ext2 /dev/shm/kernel 2> /dev/null")) {
+    if (!strcmp(command, "sha256sum /dev/shm/root.ext2.gz /dev/shm/kernel 2> /dev/null")) {
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
-        puts(ROOT_SUM "  /dev/shm/root.ext2\n" KERNEL_SUM "  /dev/shm/kernel");
+        snprintf(packed, sizeof(packed), "%s/state/wt/build/x86_64/images/os-real-gnu.ext2.gz",
+                 ev("FLOW_WORK"));
+        if (sent_sum(packed, "/dev/shm/root.ext2.gz"))
+            return 1;
+        puts(KERNEL_SUM "  /dev/shm/kernel");
         return 0;
     }
     if (!strcmp(command, "grep -q -e \"--slots DISK\" /bin/rach2-install")) {
@@ -978,6 +987,8 @@ static void run(struct release *r, const struct release_row *spec)
     flow_put(f, "state/wt/build/x86_64/images/release.sha256",
              spec->slots ? KERNEL_SUM "  rach2/kernel\n" ROOT_SUM "  images/os-real-gnu.ext2\n"
                          : "");
+    if (spec->slots)
+        flow_put(f, "state/wt/build/x86_64/images/os-real-gnu.ext2.gz", PACKED);
     flow_put(f, "state/wt/build/x86_64/utils/sbin/bootctl", BOOTCTL);
     flow_put(f, "state/wt/tests/system/accept/metal_accept.sh", "# native acceptance fixture\n");
     flow_put(f, "calls", "");
@@ -1549,11 +1560,14 @@ static int machine_rerun_rows(struct release *r)
          ok;
     /* A rerun that failed before the Lenovo's step, or was stopped during
      * it, has the `again lenovo` line and no Lenovo result; the next -r runs
-     * the same cases, not the whole native set. */
+     * the same cases, not the whole native set. Its install fails at the
+     * transfer, since a record with an installer started and not seen to end
+     * stops -r until its root is checked by hand. */
     snprintf(old, sizeof(old),
-             "%sagain lenovo dirprobe.ext2 fsync.ext2\ninstall started %s\nfailed install: the "
-             "install failed\n",
-             r->built, T);
+             "%sbuild done %s kernel k root r\nrecovery done %s kernel k image i\nagain lenovo "
+             "dirprobe.ext2 fsync.ext2\nfailed transfer: the compressed root on the machine does "
+             "not hash as the build's\n",
+             r->head, T, T);
     run(r, &(struct release_row){
                .record = old, .sha = C, .git = "yes", .machines = LENOVO, .rerun = 1});
     ok = check(r,
@@ -4198,7 +4212,7 @@ static int install_row(struct release *r)
             fx_has(r->script, "if i915; then\n"
                               "            install_words=\"$install_words --i915\"") &&
             fx_has(r->script, "setsid sh -c 'rach2-install $install_words --update "
-                              "/dev/shm/root.ext2 /dev/disk$disk") &&
+                              "/dev/shm/root.ext2.gz /dev/disk$disk") &&
             fx_has(r->script, "fail install \"the installed menu on $p1 lacks "
                               "rach2.i915: $bare\"") &&
             fx_has(r->script, "fail trial \"the trial boot's command line lacks "
