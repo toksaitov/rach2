@@ -2118,7 +2118,9 @@ static int debugfs_says(const char *img, const char *request, const char *text)
            ext2_fixture_contains(fix_path("debugfs.txt"), text);
 }
 
-/** Whether debugfs's `ls -l` of `dir` in `img` lists `name`. */
+/** Whether debugfs's `ls -l` of `dir` in `img` lists `name` with an inode.
+ * The listing shows a removed entry that heads its block, which keeps its
+ * name with inode 0, as e2fsprogs' `DIRENT_FLAG_INCLUDE_EMPTY` makes it. */
 static int debugfs_lists(const char *img, const char *dir, const char *name)
 {
     char request[600], line[4096];
@@ -2133,7 +2135,8 @@ static int debugfs_lists(const char *img, const char *dir, const char *name)
         n = strlen(line);
         if (n && line[n - 1] == '\n')
             line[--n] = 0;
-        if (n > len && line[n - len - 1] == ' ' && !strcmp(line + n - len, name))
+        if (n > len && line[n - len - 1] == ' ' && !strcmp(line + n - len, name) &&
+            strtoul(line, 0, 10) != 0)
             found = 1;
     }
     if (f)
