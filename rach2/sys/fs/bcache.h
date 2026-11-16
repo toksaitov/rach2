@@ -82,6 +82,7 @@ struct bbuf {
      * under the process that holds it. */
     int discard;
     int holder;             /* pid holding it, or -1 */
+    uint64_t releases;      /* holds ended, under cache_spin; kept across reuse */
     uint32_t stamp;         /* last release, for least-recently-released */
     int waiters;            /* processes waiting for the hold to end, woken or not */
     int write_failed;       /* its last write failed: not a victim until one succeeds */

@@ -84,6 +84,12 @@ static process_t delayed_proc;
 static int delayed_turns;
 static int irqs_off;
 
+/* Reuse a waited buffer before the wait condition sees its release. */
+static struct bbuf *reuse_target, *reuse_held;
+static process_t reuse_owner, reuse_taker;
+static int reuse_check;
+static void reuse_progress(void);
+
 /** The kernel's panic: print the text and stop. */
 void k_panic(const char *s)
 {
@@ -192,6 +198,20 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     (void)wq;
     CHECK(!irqs_off && !mutex_held(&wb_lock),
           "a buffer wait has interrupts on and gives the write lock up");
+    if (reuse_check) {
+        reuse_check = 0;
+        CHECK(!cond(arg), "the original holder has not released the buffer");
+        reuse_progress();
+        CHECK(cond(arg), "a release ends the wait even after reuse by a lower block");
+        if (!cond(arg) && reuse_held) {
+            process_t *was = thread_proc;
+
+            thread_proc = &reuse_taker;
+            bcache_release(reuse_held);
+            reuse_held = 0;
+            thread_proc = was;
+        }
+    }
     while (!cond(arg)) {
         delayed_progress();
         sched_yield();
@@ -806,6 +826,128 @@ static void delayed_first_row(int restricted)
     CHECK(bcache_invalidate(&disk) == 0, "the delayed first leaves no disk buffers");
 }
 
+/** Write and release the observed buffer, then reclaim it for block 5 as
+ * another process, before the sleeper tests its condition again. */
+static void reuse_progress(void)
+{
+    process_t *was = thread_proc;
+    struct bbuf *b = reuse_target;
+
+    CHECK(b && b->waiters == 1, "the wait pins its buffer before the release");
+    if (!b) {
+        return;
+    }
+    reuse_target = 0;
+    thread_proc = &reuse_owner;
+    CHECK(bcache_write(b) == 0, "the original holder writes its buffer");
+    bcache_release(b);
+    thread_proc = &reuse_taker;
+    reuse_held = bcache_get_blank(&disk, 5);
+    CHECK(reuse_held == b && b->blk == 5 && b->waiters == 1,
+          "a waiter pin allows the clean buffer to be rekeyed and held");
+    thread_proc = was;
+}
+
+/** Force reuse after release in a direct wait, an exhausted victim search
+ * and a write's deferred wait. Block 5's new holder could wait for
+ * the caller's block 10, so the original wait must end while 5 stays held.
+ * The wait model records a false condition and releases 5 on old code,
+ * making the regression fail without hanging the host process. */
+static void reuse_wait_row(int mode)
+{
+    process_t *was = thread_proc;
+    struct bbuf *own, *b, *top = 0;
+    struct victim_search search = {0, 0, 0, 0, 0};
+    uint32_t flags, written = 0;
+    unsigned i;
+
+    CHECK(bcache_invalidate(&disk) == 0, "the reuse row starts with no disk buffers");
+    (void)bcache_shrink(100000, 0, &written);
+    bcache_set_limit(48);
+    reuse_owner.pid = 50;
+    reuse_taker.pid = 51;
+    own = bcache_get_blank(&disk, 10);
+    CHECK(own != 0, "the waiter gets its lower block");
+    if (!own) {
+        return;
+    }
+    if (mode == 2) {
+        bcache_dirty_owned(own, 2);
+    } else {
+        bcache_dirty_ordered(own, BCACHE_ORDER_FIRST);
+    }
+    thread_proc = &reuse_owner;
+    reuse_target = bcache_get_blank(&disk, 20);
+    CHECK(reuse_target != 0, "the original holder gets its block");
+    if (!reuse_target) {
+        thread_proc = was;
+        bcache_release(own);
+        return;
+    }
+    if (mode == 2) {
+        bcache_dirty_owned(reuse_target, 1);
+    } else {
+        bcache_dirty_ordered(reuse_target, BCACHE_ORDER_FIRST);
+    }
+    thread_proc = was;
+    for (i = 0; i < 46; i++) {
+        b = bcache_get_blank(&disk, 100 + i);
+        CHECK(b != 0, "the reuse row fills the cache");
+        if (!b) {
+            break;
+        }
+        if (mode == 2) {
+            if (i < 2) {
+                bcache_dirty_pointer(b, 1, (int)i + 1);
+                top = b;
+            } else {
+                bcache_dirty_owned(b, 2);
+            }
+        } else {
+            bcache_dirty_ordered(b, BCACHE_ORDER_AFTER);
+        }
+        bcache_release(b);
+    }
+    reuse_check = 1;
+    wb_take();
+    if (mode == 2) {
+        CHECK(top && write_one(top, 0) == 1, "a write returns to look again after reuse");
+    } else {
+        flags = cache_lock();
+        if (mode == 1) {
+            int retry = victim_retry(&disk, &search, &flags);
+
+            CHECK(retry == 1, "a victim search retries after the original release");
+            if (!retry) {
+                cache_unlock(flags);
+            }
+        } else {
+            wait_unheld(reuse_target, flags);
+        }
+    }
+    CHECK(mutex_held(&wb_lock), "the wait restores the caller's write lock");
+    wb_give();
+    CHECK(!reuse_check && reuse_held && reuse_held->holder == reuse_taker.pid &&
+              reuse_held->waiters == 0,
+          "the original wait drops its pin while the new holder keeps block 5");
+    reuse_check = 0;
+    if (reuse_target) {
+        thread_proc = &reuse_owner;
+        bcache_release(reuse_target);
+        reuse_target = 0;
+    }
+    if (reuse_held) {
+        thread_proc = &reuse_taker;
+        bcache_release(reuse_held);
+        reuse_held = 0;
+    }
+    thread_proc = was;
+    bcache_release(own);
+    CHECK(bcache_sync(&disk) == 0, "the reuse row's buffers sync");
+    CHECK(bcache_invalidate(&disk) == 0, "the reuse row leaves no disk buffers");
+    printf("bcache_lock_hosttest: reuse before recheck: mode %d\n", mode);
+}
+
 int main(void)
 {
     static const int dirty_and_sync[6] = {ROLE_WRITER, ROLE_WRITER, ROLE_WRITER,
@@ -824,6 +966,9 @@ int main(void)
     delayed_first_row(0);
     delayed_first_row(1);
     delayed_first_row(2);
+    reuse_wait_row(0);
+    reuse_wait_row(1);
+    reuse_wait_row(2);
     bcache_set_limit(48);
     __builtin_memset(image, 0, sizeof(image));
     bcache_sync_last(&disk, yield_last, 0, 0);

@@ -8,8 +8,9 @@
  * Two locks guard the state, and neither is the big lock. `cache_spin`
  * covers what a reader touches: the index and each buffer's key, the release
  * order, the empties and the list of all buffers, each buffer's holder,
- * waiters, stamp and discard mark, and the run state of a fill. It is held
- * only while those change or are read for a decision, never across a request
+ * release count, waiters, stamp and discard mark, and the run state of a
+ * fill. It is held only while those change or are read for a decision,
+ * never across a request
  * or a wait. `wb_lock`, a mutex, covers the write side: the dirty lists and
  * every field of the order the dirty marks give, and so every dirty mark,
  * write, sync, reserve and eviction of a dirty buffer. It is given up around
@@ -794,11 +795,11 @@ static void hold(struct bbuf *b)
     *head = b;
 }
 
+static int write_barred(const struct bbuf *b);
+
 /** Take `b` off the caller's list and mark it unheld, counted in `fit_gos`
  * when it is not kept for a fill and is clean or dirty with a write that is
  * not barred; `cache_spin` is held. */
-static int write_barred(const struct bbuf *b);
-
 static void unhold(struct bbuf *b)
 {
     struct bbuf **link;
@@ -816,6 +817,7 @@ static void unhold(struct bbuf *b)
     }
     b->hold_next = 0;
     b->holder = -1;
+    b->releases++;
 }
 
 /**
@@ -936,32 +938,55 @@ static int victim_may_be_written(block_device_t *victim, block_device_t *filling
     return !vfs_ns_held_by_caller();
 }
 
-/** The wait condition for a busy buffer: nobody holds it. The wait files
- * the sleeper before it tests, and a release clears `holder` before it
- * wakes, so the read needs no lock. */
+/* A wait keeps the buffer alive and names the hold whose end it awaits. */
+struct buffer_wait {
+    struct bbuf *buf;  /* counted in waiters until the wait ends, or NULL */
+    uint64_t releases; /* the release count when the held buffer was met */
+};
+
+/** Whether the observed hold ended, even if the buffer was reused before
+ * this look. The wait keeps the buffer alive; `cache_spin` covers the
+ * release count, including its two-word read on i686. */
 static int busy_gone(void *arg)
 {
-    struct bbuf *b = arg;
-    return b->holder == -1;
+    const struct buffer_wait *wait = arg;
+    uint32_t flags = cache_lock();
+    int gone = wait->buf->releases != wait->releases;
+
+    cache_unlock(flags);
+    return gone;
 }
 
-/** Sleep until nobody holds `b`, which the caller found held under
+/** Sleep until the hold observed in `wait` ends and drop its waiter pin.
+ * No cache spinlock is held. Give up `wb_lock` while sleeping, and take it
+ * again afterwards when the caller held it. The caller must look up its
+ * block again, since another holder may already have reused the buffer. */
+static void wait_release(struct buffer_wait *wait)
+{
+    int held = wb_out();
+    uint32_t flags;
+
+    wq_wait_event_nointr(&wait->buf->wq, busy_gone, wait);
+    flags = cache_lock();
+    wait->buf->waiters--;
+    cache_unlock(flags);
+    wb_back(held);
+}
+
+/** Sleep until the present holder releases `b`, found held under
  * `cache_spin`, taken with `flags`, and counted among its waiters from that
  * look until the wait ends, so that a shrink does not free it meanwhile.
  * Returns with `cache_spin` given back; `wb_lock`, when the caller holds it,
  * is given up for the sleep, since the holder may need it to let `b` go. */
 static void wait_unheld(struct bbuf *b, uint32_t flags)
 {
-    int held;
+    struct buffer_wait wait;
 
+    wait.buf = b;
+    wait.releases = b->releases;
     b->waiters++;
     cache_unlock(flags);
-    held = wb_out();
-    wq_wait_event_nointr(&b->wq, busy_gone, b);
-    flags = cache_lock();
-    b->waiters--;
-    cache_unlock(flags);
-    wb_back(held);
+    wait_release(&wait);
 }
 
 /** Hold `b` for the caller when nobody holds it, under `cache_spin`: 1 when
@@ -978,8 +1003,8 @@ static int try_hold(struct bbuf *b)
     return got;
 }
 
-/** Sleep until nobody holds `b`, unless the caller does or nobody holds it
- * now: 1 after a wait, 0 with nothing done. */
+/** Sleep until the present holder releases `b`, unless the caller holds
+ * it or nobody holds it now: 1 after a wait, 0 with nothing done. */
 static int wait_other(struct bbuf *b)
 {
     uint32_t flags = cache_lock();
@@ -1263,19 +1288,19 @@ static void let_go(struct bbuf *b)
     sched_kick_cpus(cpus);
 }
 
-static int write_one_met(struct bbuf *b, uint32_t flags, struct bbuf **met);
+static int write_one_met(struct bbuf *b, uint32_t flags, struct buffer_wait *met);
 static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
-                         const struct sync_scope *scope, struct bbuf **met);
+                         const struct sync_scope *scope, struct buffer_wait *met);
 
 /**
  * The end of a write that met `b`, which another process holds, as `met`
- * asks: with `met` NULL, sleep until nobody holds `b`, unless the caller
+ * asks: with `met` NULL, sleep until its holder releases `b`, unless the caller
  * does or nobody holds it now (`wait_other`); with `met`, sleep for
  * nothing, and when another process holds `b`, count it among `b`'s waiters
- * and give it in `*met` for the caller to wait on once it has let its own
+ * and save its release count in `*met` for a wait once it has let its own
  * buffers go (`met_wait`). Returns 1, a write's answer after a wait.
  */
-static int held_met(struct bbuf *b, struct bbuf **met)
+static int held_met(struct bbuf *b, struct buffer_wait *met)
 {
     uint32_t flags;
 
@@ -1286,34 +1311,25 @@ static int held_met(struct bbuf *b, struct bbuf **met)
     flags = cache_lock();
     if (b->holder != -1 && b->holder != caller_pid()) {
         b->waiters++;
-        *met = b;
+        met->buf = b;
+        met->releases = b->releases;
     }
     cache_unlock(flags);
     return 1;
 }
 
 /**
- * Wait for `b`, a buffer a write met held and counted among its waiters
- * (`held_met`), or NULL, now that the caller holds nothing: or, with
- * `met`, give it to the caller's caller in `*met`, which waits on it in
- * turn. Returns 1.
+ * Finish the deferred wait in `wait`, whose buffer is pinned, now that
+ * the caller holds nothing; with `met`, pass the wait to the caller's
+ * caller instead, keeping both its pin and observed release count.
+ * Returns 1, also when no buffer was met.
  */
-static int met_wait(struct bbuf *b, struct bbuf **met)
+static int met_wait(struct buffer_wait *wait, struct buffer_wait *met)
 {
-    uint32_t flags;
-
     if (met) {
-        *met = b;
-        return 1;
-    }
-    if (b) {
-        int held = wb_out();
-
-        wq_wait_event_nointr(&b->wq, busy_gone, b);
-        flags = cache_lock();
-        b->waiters--;
-        cache_unlock(flags);
-        wb_back(held);
+        *met = *wait;
+    } else if (wait->buf) {
+        wait_release(wait);
     }
     return 1;
 }
@@ -1344,10 +1360,11 @@ static int met_wait(struct bbuf *b, struct bbuf **met)
  *         flush, which leaves `b` dirty, or -EIO for a block the caller
  *         holds itself.
  */
-static int write_follower(struct bbuf *b, uint32_t flags, struct bbuf **met)
+static int write_follower(struct bbuf *b, uint32_t flags, struct buffer_wait *met)
 {
     struct sync_scope any;
-    struct bbuf *d, *busy;
+    struct bbuf *d;
+    struct buffer_wait busy;
     uint64_t end;
     int rc = 0;
 
@@ -1365,12 +1382,15 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct bbuf **met)
 
             unhold_wake(b, &cpus);
             d->waiters++;
+            busy.buf = d;
+            busy.releases = d->releases;
             cache_unlock(lf);
             sched_kick_cpus(cpus);
-            return met_wait(d, met);
+            return met_wait(&busy, met);
         }
         cache_unlock(lf);
-        busy = 0;
+        busy.buf = 0;
+        busy.releases = 0;
         if (holder != -1) {
             rc = -EIO;
         } else if (follows(d)) {
@@ -1381,7 +1401,7 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct bbuf **met)
         }
         if (rc == 1) {
             let_go(b);
-            return met_wait(busy, met);
+            return met_wait(&busy, met);
         }
     }
     if (rc == 0) {
@@ -1400,7 +1420,7 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct bbuf **met)
  * that took `b` since the caller's look, or one `write_follower` gave;
  * with `met`, no wait is made, and the buffer to wait on is given in
  * `*met` (`held_met`). The caller holds `wb_lock`. */
-static int write_one_met(struct bbuf *b, uint32_t flags, struct bbuf **met)
+static int write_one_met(struct bbuf *b, uint32_t flags, struct buffer_wait *met)
 {
     int rc;
 
@@ -1526,7 +1546,7 @@ static int run_gather(struct bbuf *first, struct bbuf **run, const struct sync_s
  * 273, 290).
  */
 static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
-                         const struct sync_scope *scope, struct bbuf **met)
+                         const struct sync_scope *scope, struct buffer_wait *met)
 {
     struct bbuf *run[RUN_BLOCKS];
     block_device_t *dev = first->dev;
