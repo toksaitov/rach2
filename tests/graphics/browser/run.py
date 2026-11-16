@@ -177,10 +177,12 @@ class Browser:
             self.child = subprocess.Popen(args, env=env, stdout=self.log, stderr=self.log,
                                           start_new_session=True)
             if self.name == "chromium":
+                # Chromium makes the file before it writes the port and the
+                # path into it, so wait for both lines whole.
                 active = profile / "DevToolsActivePort"
-                self.until(lambda: active.exists())
-                lines = active.read_text().splitlines()
-                self.client = CDP("ws://127.0.0.1:%s%s" % (lines[0], lines[1]))
+                lines = self.until(lambda: active.exists() and re.fullmatch(
+                    r"(\d+)\n(/devtools/browser/[0-9a-f-]{36})\n?", active.read_text()))
+                self.client = CDP("ws://127.0.0.1:%s%s" % (lines[1], lines[2]))
                 self.client.call("Browser.setDownloadBehavior", {
                     "behavior": "allow", "downloadPath": str(self.downloads)})
                 self.target = self.client.call("Target.createTarget", {"url": "about:blank"})["targetId"]
