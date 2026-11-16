@@ -851,6 +851,8 @@ static void reuse_progress(void)
 /** Force reuse after release in a direct wait, an exhausted victim search
  * and a write's deferred wait. Block 5's new holder could wait for
  * the caller's block 10, so the original wait must end while 5 stays held.
+ * The cache fits the clean scan, so the taker finds the released buffer
+ * before the full search can write and reuse another dirty buffer.
  * The wait model records a false condition and releases 5 on old code,
  * making the regression fail without hanging the host process. */
 static void reuse_wait_row(int mode)
@@ -863,7 +865,8 @@ static void reuse_wait_row(int mode)
 
     CHECK(bcache_invalidate(&disk) == 0, "the reuse row starts with no disk buffers");
     (void)bcache_shrink(100000, 0, &written);
-    bcache_set_limit(48);
+    bcache_set_limit(BCACHE_MIN_BUFFERS);
+    CHECK(bcache_capacity() <= CLEAN_LOOK, "the clean scan covers the reuse row's cache");
     reuse_owner.pid = 50;
     reuse_taker.pid = 51;
     own = bcache_get_blank(&disk, 10);
@@ -890,7 +893,7 @@ static void reuse_wait_row(int mode)
         bcache_dirty_ordered(reuse_target, BCACHE_ORDER_FIRST);
     }
     thread_proc = was;
-    for (i = 0; i < 46; i++) {
+    for (i = 0; i < bcache_capacity() - 2; i++) {
         b = bcache_get_blank(&disk, 100 + i);
         CHECK(b != 0, "the reuse row fills the cache");
         if (!b) {
