@@ -356,8 +356,9 @@ int etude_scenario(struct etude_case *c)
         size(&l, strtoull(name + 5, NULL, 10), 0);
     } else if (strcmp(name, "memprobe-64") == 0 || strcmp(name, "memprobe-4096") == 0) {
         lc_begin(&l, c, memprobe_ids);
-        /* 64 MiB leaves some 41 MiB past the kernel and the RAM disk, where
-         * the probe's mapping and the 16 MiB its fresh image reads must fit */
+        /* 72 MiB leaves some 42 MiB past the kernel and the 18 MiB RAM disk,
+         * where the probe's mapping and the 16 MiB its fresh image reads must
+         * fit; 64 MiB left x86-64 34 MiB, too few */
         memprobe(&l, strcmp(name, "memprobe-64") == 0 ? "16" : "1024", 0);
     } else if (strncmp(name, "framefail-", 10) == 0) {
         lc_begin(&l, c, framefail_ids);
