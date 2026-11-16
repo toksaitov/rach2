@@ -3,8 +3,9 @@
 # mac.sh CMD: the Mac's side of the 80-2 session on the Lenovo's Debian, and of
 # its rehearsal in a Debian 13 guest under QEMU.
 #   lock | unlock     take or give back the Lenovo (build/flow/lenovo)
-#   arm               from Rach2: save p1, copy Debian's kernel and initrd
-#                     into its current FAT, stage boot.cfg with
+#   arm               from Rach2: save p1, copy GRUB's linux and ext2
+#                     modules into its current FAT, stage boot.cfg, which
+#                     boots Debian's kernel and initrd from p5, with
 #                     bootctl config, arm one boot with bootctl trial
 #                     recovery, and reboot into Debian
 #   wait-debian | wait-rach2   wait up to 6 min for the system to answer SSH
@@ -24,7 +25,6 @@ M=$(cd "$(git -C "$T" rev-parse --git-common-dir)/.." && pwd)
 KEY=$T/krffs/rach2_demo_ed25519
 K2=$M/build/flow/coordinator/graphics-research/run2
 C=$M/build/cache/80-2
-RUN2=$M/build/cache/run2/lenovo-setup
 OUTDIR=$M/build/runs/80-2
 LOCK=$M/build/flow/lenovo
 HOST=192.168.0.106
@@ -59,7 +59,24 @@ p1write() {
 	  echo 'sync; rm -f /dev/shm/p1-want.img; sha256sum /dev/bootpart'; } | rssh 'sh -s'
 	rm -f $C/p1-now.img
 }
+# grubmods: GRUB's linux, ext2 and fshelp modules in $C/grub, from the
+# grub-efi-amd64-bin package that vendor/grub/manifest.txt pins, whose build
+# made the boot partition's BOOTX64.EFI.
+grubmods() {
+	[ -s $C/grub/ext2.mod ] && [ -s $C/grub/fshelp.mod ] && [ -s $C/grub/linux.mod ] && return 0
+	snap=$(awk '$1 == "snapshot" { print $2 }' $T/vendor/grub/manifest.txt)
+	set -- $(awk '$1 == "package" && $2 == "grub-efi-amd64-bin" { print $3, $5 }' $T/vendor/grub/manifest.txt)
+	g=$(mktemp -d "$C/grub-deb.XXXXXX")
+	curl -sSfL -o $g/bin.deb "$snap/pool/main/g/grub2-unsigned/grub-efi-amd64-bin_${1}_amd64.deb"
+	[ "$(shasum -a 256 $g/bin.deb | cut -d' ' -f1)" = "$2" ] || { echo "mac: grub-efi-amd64-bin $1: wrong SHA-256" >&2; rm -rf $g; exit 1; }
+	(cd $g && ar x bin.deb data.tar.xz && tar xf data.tar.xz ./usr/lib/grub/x86_64-efi/linux.mod \
+	    ./usr/lib/grub/x86_64-efi/ext2.mod ./usr/lib/grub/x86_64-efi/fshelp.mod)
+	mkdir -p $C/grub
+	cp $g/usr/lib/grub/x86_64-efi/linux.mod $g/usr/lib/grub/x86_64-efi/ext2.mod $g/usr/lib/grub/x86_64-efi/fshelp.mod $C/grub/
+	rm -rf $g
+}
 case ${1:-} in
+grubmods) grubmods ;;
 lock)
 	mkdir "$LOCK" || { echo "mac: the Lenovo is taken: $(cat "$LOCK/issue")" >&2; exit 1; }
 	echo 2560 > "$LOCK/issue"; say "lock taken for 2560" ;;
@@ -69,34 +86,20 @@ arm)
 	rssh 'cat /etc/rach2/release; bootctl status' | tee $C/rach2-before.txt
 	rssh 'dd if=/dev/bootpart bs=1048576 2>/dev/null' > $C/p1-before.img
 	shasum -a 256 $C/p1-before.img | tee $C/p1-before.sha256
-	# Allocate in the current FAT: old sector runs can name a new kernel's
+	# Allocate in the current FAT: old sector runs can name a new file's
 	# clusters, and old FAT sectors can discard its allocation chains.
+	# Debian's kernel and initrd stay on p5, since with 16 MiB kernel slots
+	# p1 has 31 MB free and they take 49.
+	grubmods
 	cp $C/p1-before.img $C/p1-debian.img
-	stage=
-	finished=
-	status=0
-	trap 'status=$?; [ -z "$stage" ] || rm -rf "$stage"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
-	trap 'exit 129' HUP
-	trap 'exit 130' INT
-	trap 'exit 143' TERM
-	stage=$(mktemp -d "$C/debian-files.XXXXXX")
-	for f in vmlinuz initrd.img; do
-		mcopy -i $RUN2/p1-run2.img ::/run2/$f "$stage/$f"
-	done
-	mcopy -i $RUN2/p1-run2.img ::/boot/grub/x86_64-efi/linux.mod "$stage/linux.mod"
-	mmd -i $C/p1-debian.img ::/run2 2>/dev/null || mdir -i $C/p1-debian.img ::/run2 > /dev/null
 	mmd -i $C/p1-debian.img ::/boot/grub/x86_64-efi 2>/dev/null ||
 	    mdir -i $C/p1-debian.img ::/boot/grub/x86_64-efi > /dev/null
-	mcopy -o -i $C/p1-debian.img "$stage/vmlinuz" "$stage/initrd.img" ::/run2/
-	mcopy -o -i $C/p1-debian.img "$stage/linux.mod" ::/boot/grub/x86_64-efi/linux.mod
-	rm -rf "$stage"
-	stage=
+	mcopy -o -i $C/p1-debian.img $C/grub/linux.mod $C/grub/ext2.mod $C/grub/fshelp.mod ::/boot/grub/x86_64-efi/
 	p1write $C/p1-debian.img
 	/usr/bin/scp -q $SSHO -o UserKnownHostsFile=$K2/lenovo-known $D/boot.cfg root@$HOST:/dev/shm/boot.cfg
 	rssh 'bootctl config /dev/shm/boot.cfg && bootctl trial recovery && bootctl status && rm -f /dev/shm/boot.cfg' | tee $C/arm.txt
 	say "rebooting Rach2 into Debian"
 	rssh 'nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &'
-	finished=1
 	;;
 wait-debian) waitfor tssh ;;
 wait-rach2) waitfor rssh ;;

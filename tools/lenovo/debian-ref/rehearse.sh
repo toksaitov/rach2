@@ -2,8 +2,8 @@
 # shellcheck disable=SC2086,SC2046 # no path or word list here has a space
 # rehearse.sh up|down: the 80-2 session's rehearsal guest on the Mac. A sparse
 # disk the size of the Lenovo's with its partition table, p1 as mac.sh arm
-# leaves it (run2's image with Debian's kernel and initrd, boot.cfg staged as
-# bootctl config stages it and next_entry=recovery as bootctl trial recovery
+# leaves it (run2's image with GRUB's linux and ext2 modules, boot.cfg staged
+# as bootctl config stages it and next_entry=recovery as bootctl trial recovery
 # sets it), and Debian's root as run2's setup wrote it to p5. OVMF boots it
 # under TCG through the same GRUB and menu, so the boot through next_entry
 # with intel_iommu=off is what the Lenovo will run. SSH on 127.0.0.1:2280.
@@ -28,7 +28,9 @@ up)
 	fi
 	[ "$(wc -c < $H/gpt-head.bin)" -eq 17408 ] && [ "$(wc -c < $H/gpt-tail.bin)" -eq 16896 ] ||
 		{ echo "rehearse: the partition table copies are short" >&2; exit 1; }
+	sh $D/mac.sh grubmods
 	cp $RUN2/p1-run2.img $H/p1.img
+	mcopy -o -i $H/p1.img $C/grub/linux.mod $C/grub/ext2.mod $C/grub/fshelp.mod ::/boot/grub/x86_64-efi/
 	python3 -I - $H/p1.img $D/boot.cfg <<'PY'
 import sys
 img, menu = sys.argv[1], open(sys.argv[2], "rb").read()
