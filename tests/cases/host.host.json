@@ -1641,6 +1641,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "virtio_blk",
+          "checks": "tests/host/virtio_blk_hosttest.c runs the virtio block driver over the virtio core against a model device: bring-up and the features it refuses, 512- and 4096-byte blocks, polled and queued requests direct and through indirect tables, a command the device fails or never answers, the cache mode as Linux's virtblk_get_cache_mode takes it with a cache it cannot flush set to writethrough, a change of capacity, and the device going away while its disk is open or at the machine's stop, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "virtio_pci_shm",
           "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of five functions, shows each function bound with its virtio device and one bind uevent, takes a non-GPU function, leaves a refused function and a failed bus registration unbound, unmapped, with their command word and no number, runs no reset that does not finish with bus mastering on, and has a child whose reset does not finish free its buffers only with bus mastering off, under ASan and UBSan and exits 0",
           "source": "scenario"
