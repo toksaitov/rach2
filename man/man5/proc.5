@@ -1655,6 +1655,17 @@ failing, however briefly.
 .Pa /proc/meminfo Ns 's
 .Li LowFree
 is the count now.
+.It Li vkms_vblank_overruns , vkms_vblank_skipped , vkms_crc_catchups
+For the software display
+.Xr vkms 4
+since boot: the passes of its vblank timer that found more than one
+frame gone, as Linux's
+.Ql vblank timer overrun
+warning counts them; the frames past the first those passes found,
+which the vblank count takes in but for which no CRC is asked; and the
+composer's passes that entered the CRCs of more than one frame at once,
+having fallen behind the vblanks.
+All three are zero without the device.
 .It Li iommu_dma_faults , iommu_irq_faults
 DMA and interrupt faults reported by VT-d since boot, on x86-64.
 .It Li vfio_groups , vfio_devices , vfio_dma_mappings , vfio_dma_pages , vfio_dma_io_pages

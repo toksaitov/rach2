@@ -69,10 +69,12 @@ struct vkms_scene {
  * moves on past the clock by whole periods before it handles the vblank,
  * as Linux's hrtimer_forward_now does, so that the latest vblank ended at
  * `next_ns - period_ns`; `overruns` counts the passes that found more than
- * one period gone. `scene` is what
+ * one period gone, and `skipped` the periods past the first they found,
+ * frames the core counts that ask no CRC. `scene` is what
  * the last commit programmed. While `composer_enabled`, the CRC source is
  * on: each vblank asks for the frames from `frame_start` to `frame_end`
- * (`crc_pending`), which the composer thread composes and enters. The tick
+ * (`crc_pending`), which the composer thread composes and enters;
+ * `catchups` counts its passes that entered more than one frame. The tick
  * changes the timer and the request with interrupts off; everyone else
  * changes them with interrupts off too.
  */
@@ -85,7 +87,7 @@ struct vkms_device {
     struct drm_connector connector;
     int timer_on;
     int64_t period_ns, next_ns;
-    uint32_t overruns;
+    uint32_t overruns, skipped, catchups;
     struct vkms_scene scene;
     int composer_enabled, composer_hold;
     int crc_pending;
@@ -450,6 +452,9 @@ static void vkms_composer_run(struct vkms_device *v)
     start = v->frame_start;
     end = v->frame_end;
     v->crc_pending = 0;
+    if (pending && end > start) {
+        v->catchups++;
+    }
     s = v->scene;
     scene_get(&s);
     kirq_restore(flags);
@@ -576,6 +581,7 @@ void vkms_tick(void)
         n = drm_div64((uint64_t)(now - v->next_ns), (uint64_t)v->period_ns) + 1u;
         if (n != 1u) {
             v->overruns++;
+            v->skipped += (uint32_t)(n - 1u);
         }
         v->next_ns += (int64_t)n * v->period_ns;
         vkms_vblank(v);
@@ -968,6 +974,17 @@ int32_t vkms_probe(void)
     klog(KLOG_INFO, "vkms", "registered: vkms, %u planes%s%s, card %d", (unsigned)v->nplanes,
          cursor ? ", cursor" : "", overlay ? ", overlays" : "", v->drm.index);
     return 1;
+}
+
+void vkms_stats(uint32_t *overruns, uint32_t *skipped, uint32_t *catchups)
+{
+    struct vkms_device *v = vkms_dev;
+    uint32_t flags = kirq_save();
+
+    *overruns = v ? v->overruns : 0;
+    *skipped = v ? v->skipped : 0;
+    *catchups = v ? v->catchups : 0;
+    kirq_restore(flags);
 }
 
 /** Return the next service deadline for the stopped idle tick. */
