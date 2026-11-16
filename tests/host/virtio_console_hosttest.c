@@ -58,6 +58,7 @@ extern unsigned long strlen(const char *s);
 
 #include "virtio/virtio_console.c"
 #include "arch/x86/serial.c"
+#include "mm/kheap.h"
 
 #define ARENA_PAGES 64
 #define DEV_BASE    0x40000000ull
@@ -855,6 +856,26 @@ void virtio_driver_unbind(struct virtio_dev *d)
 #define EMERG 4 /* and F_EMERG_WRITE */
 #define UART  8 /* the machine has a UART */
 
+/**
+ * Free the queue records of the device the last row left bound, before the
+ * model under them is cleared: a machine keeps a bound device for good, so
+ * the driver never frees them, while the rings are the model's arena's. A
+ * record on a device that no longer runs is one the driver failed to free.
+ */
+static void drop_bound(void)
+{
+    int i;
+
+    for (i = 0; i < VIRTIO_MAX_QUEUES; i++) {
+        if (m.dev.queues[i]) {
+            check((m.status & VIRTIO_STATUS_DRIVER_OK) != 0,
+                  "a queue is left only on a running device");
+            kfree(m.dev.queues[i]);
+            m.dev.queues[i] = 0;
+        }
+    }
+}
+
 /** A machine with a fresh model of `kind` plugged in, the boot line
  * `line`, and the driver, the serial console and the counters as a boot
  * finds them. */
@@ -862,6 +883,7 @@ static void fresh(const char *line, int kind)
 {
     int i;
 
+    drop_bound();
     k_memset(&m, 0, sizeof(m));
     k_memset(arena_taken, 0, sizeof(arena_taken));
     k_memset(arena_given, 0, sizeof(arena_given));
@@ -1642,6 +1664,7 @@ int main(void)
         no_memory();
         late_and_absent();
     }
+    drop_bound();
     if (failures) {
         printf("virtio-console-hosttest: FAIL: %d\n", failures);
         return 1;

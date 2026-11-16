@@ -44,6 +44,7 @@ extern int strcmp(const char *a, const char *b);
 #include "lib/kirq.h"
 #include "lib/krandom.h"
 #include "lib/kstring.h"
+#include "mm/kheap.h"
 
 /* The model's memory: page i at device address DEV_BASE + i * 4096. */
 #define ARENA_PAGES 128
@@ -771,12 +772,33 @@ static int rx_irq(void)
 
 static const uint8_t model_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 
+/**
+ * Free the queue records of the device the last row left bound, before the
+ * model under them is cleared: a machine keeps a bound device for good, so
+ * the driver never frees them, while the rings are the model's arena's. A
+ * record on a device that no longer runs is one the driver failed to free.
+ */
+static void drop_bound(void)
+{
+    int i;
+
+    for (i = 0; i < VIRTIO_MAX_QUEUES; i++) {
+        if (m.dev.queues[i]) {
+            check((m.status & VIRTIO_STATUS_DRIVER_OK) != 0,
+                  "a queue is left only on a running device");
+            kfree(m.dev.queues[i]);
+            m.dev.queues[i] = 0;
+        }
+    }
+}
+
 /** A fresh model offering `offered`, with QEMU's queues of 256, 256 and
  * 64, its address and the link up, and a fresh interface. */
 static void fresh(uint64_t offered)
 {
     uint16_t up = VIRTIO_NET_S_LINK_UP;
 
+    drop_bound();
     k_memset(&m, 0, sizeof(m));
     k_memset(arena_taken, 0, sizeof(arena_taken));
     m.dev.ops = &model_ops;
@@ -1333,6 +1355,7 @@ int main(void)
     row_rebind_mtu();
     row_polled();
     check(net_locks > 0, "the sends ran under net_lock");
+    drop_bound();
     if (failures) {
         printf("virtio-net-hosttest: %d failed\n", failures);
         return 1;
