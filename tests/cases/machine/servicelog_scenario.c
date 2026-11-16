@@ -53,13 +53,14 @@ static int command(struct lc *l, struct etude_case_machine *m, uint64_t *at, con
 
 /**
  * Time init's reaping of ORPHANS orphans by /proc/uptime, in hundredths of
- * a second. Each is a `sleep 1` whose
- * subshell has ended; the shell reads its stat file without forking until
- * it is gone, noting the uptime when it is first seen a zombie and when it
- * is gone, and prints the pairs after `REAPS=`. An orphan never seen a
- * zombie was reaped as it ended. Init reaps on SIGCHLD, so the two readings
- * are a hundredth or so apart; an init that looked for its children once a
- * second would leave most of them some fifty hundredths apart.
+ * a second. Each is a `sleep 1` whose subshell has ended; the shell reads its
+ * stat file without forking until it is gone, noting the uptime when it is
+ * first seen a zombie and when it is gone, and prints the pairs after
+ * `REAPS=` in one echo after the last, so that no kernel line written
+ * meanwhile falls between them. An orphan never seen a zombie was reaped as
+ * it ended. Init reaps on SIGCHLD, so the two readings are a hundredth or so
+ * apart; an init that looked for its children once a second would leave most
+ * of them some fifty hundredths apart.
  */
 static void reap(struct lc *l, struct etude_case_machine *m, uint64_t *at)
 {
@@ -67,15 +68,15 @@ static void reap(struct lc *l, struct etude_case_machine *m, uint64_t *at)
         "o(){ p=$( (sleep 1 >/dev/null 2>&1 & echo $!) );z=;"
         "while read a b c r </proc/$p/stat;do [ \"$c\" = Z ]&&[ -z \"$z\" ]&&"
         "read z x </proc/uptime;done 2>/dev/null;read g x </proc/uptime;"
-        "echo -n \" ${z:-$g},$g\";};echo DEFINED\"\"=1\r";
+        "s=\"$s ${z:-$g},$g\";};echo DEFINED\"\"=1\r";
     char run[128], line[512], detail[160], *s, *end;
     double dead, gone;
     int timed = 0, fast = 0, worst = 0, ticks;
     uint64_t from = *at;
 
     snprintf(run, sizeof(run),
-             "echo -n REAPS\"\"=;i=0;while [ $i -lt %d ];do o;i=$((i+1));done;"
-             "echo;echo TIMED\"\"=1\r",
+             "s=;i=0;while [ $i -lt %d ];do o;i=$((i+1));done;"
+             "echo REAPS\"\"=$s;echo TIMED\"\"=1\r",
              ORPHANS);
     if (!command(l, m, at, define, "DEFINED=") || !command(l, m, at, run, "TIMED=") ||
         !lc_text(l, "fixture.1.console", "REAPS=", from, line, sizeof(line)))
