@@ -29,6 +29,7 @@
  * and shown on pipe C (78-10c.4); hotplug's connect and disconnect, a
  * pulse that changed nothing probed again 1 s later, and a storm that
  * masks the pin and polls it until it is turned on again 2 minutes later;
+ * EDID overrides on HDMI and external DP with and without a DDC reply;
  * IGT's kms_hdmi_inject, a connector with no monitor forced on with a 4K
  * EDID override and set at 3840x2160@30 (78-10c.5); and IGT's kms_3d, the
  * same connector forced on with IGT's 3D EDID, its 13 stereo modes in
@@ -1076,6 +1077,79 @@ static void row_dp(void)
     frame();
 }
 
+/** Check that HDMI detects a sink before taking a retained EDID override. */
+static void row_hdmi_override_detect(void)
+{
+    struct drm_connector *hdmi = &disp->ddi[1].hdmi_connector;
+    struct i915_model_ddc *ddc = &ddi->ddc[PIN_C];
+    uint8_t edid[256];
+    struct drm_mode_modeinfo mode;
+    uint32_t bytes, len = make_edid(edid, &dtd_2160p30, 0, cea_2160p30, sizeof(cea_2160p30));
+
+    CHECK(drm_edid_override_set(hdmi, edid, len) == 0, "hdmi override: installed");
+    hdmi->force = DRM_FORCE_ON_DIGITAL;
+    CHECK(find_mode(hdmi, 3840, 2160, 30, &mode) && hdmi->status == DRM_CONNECTOR_CONNECTED,
+          "hdmi override: forced on without a sink, override mode present");
+    hdmi->force = DRM_FORCE_UNSPECIFIED;
+    CHECK(drm_helper_probe_single_connector_modes(hdmi, 8192, 8192) == 0 &&
+              hdmi->status == DRM_CONNECTOR_DISCONNECTED && !hdmi->edid && hdmi->edid_override,
+          "hdmi override: detect clears modes and EDID with no sink, retaining the override");
+    plug_hdmi_ddc(PIN_C);
+    bytes = ddc->gmbus_bytes;
+    CHECK(find_mode(hdmi, 3840, 2160, 30, &mode) && hdmi->status == DRM_CONNECTOR_CONNECTED &&
+              hdmi->edid && hdmi->edid->length == len && memcmp(hdmi->edid->data, edid, len) == 0 &&
+              ddc->gmbus_bytes == bytes + 1,
+          "hdmi override: one DDC byte read from the sink, override EDID and mode returned");
+    hdmi->force = DRM_FORCE_OFF;
+    CHECK(drm_helper_probe_single_connector_modes(hdmi, 8192, 8192) == 0 && !hdmi->edid &&
+              hdmi->status == DRM_CONNECTOR_DISCONNECTED && ddc->gmbus_bytes == bytes + 1,
+          "hdmi override: forced off leaves no modes or EDID and reads no DDC bytes");
+    drm_edid_override_reset(hdmi);
+    ddc->present = 0;
+    hdmi->force = DRM_FORCE_UNSPECIFIED;
+}
+
+/** Check DP overrides after row_dp has read the sink's link rates. */
+static void row_dp_override_detect(void)
+{
+    struct intel_ddi_port *port = &disp->ddi[1];
+    struct drm_connector *dp = &port->dp_connector;
+    struct i915_model_dp_sink *sink = &ddi->sink[INTEL_PORT_C - 1];
+    struct drm_mode_modeinfo mode;
+    uint8_t edid[256];
+    uint32_t hpd = reg(SDEISR), len = make_edid(edid, &dtd_1080p, 1, NULL, 0);
+
+    edid[0x14] = 0xb5;
+    sum_block(edid);
+    i915_model_poke(&model, SDEISR, hpd & ~SDE_PORTC_HOTPLUG_CPT);
+    CHECK(drm_edid_override_set(dp, edid, len) == 0, "dp override: installed");
+    dp->force = DRM_FORCE_ON_DIGITAL;
+    CHECK(find_mode(dp, 1920, 1080, 60, &mode) && dp->status == DRM_CONNECTOR_CONNECTED &&
+              dp->bpc == 10,
+          "dp override: forced on without a sink, override mode and depth present");
+    dp->force = DRM_FORCE_UNSPECIFIED;
+    CHECK(drm_helper_probe_single_connector_modes(dp, 8192, 8192) == 0 &&
+              dp->status == DRM_CONNECTOR_DISCONNECTED && !dp->edid && dp->edid_override,
+          "dp override: detect clears modes and EDID with no sink, retaining the override");
+
+    i915_model_poke(&model, SDEISR, hpd);
+    sink->dpcd[DP_DOWNSTREAMPORT_PRESENT] = DP_DWN_STRM_PORT_PRESENT;
+    sink->dpcd[DP_DOWN_STREAM_PORT_COUNT] = 1;
+    sink->dpcd[DP_DOWNSTREAM_PORT_0] = DP_DS_PORT_TYPE_NON_EDID;
+    sink->edid_len = 0;
+    (void)drm_helper_probe_single_connector_modes(dp, 8192, 8192);
+    CHECK(dp->status == DRM_CONNECTOR_UNKNOWN && !dp->edid && port->dp.edid_bpc == 0,
+          "dp override: a branch without a DDC reply stays unknown, with no EDID");
+
+    plug_dp_sink();
+    CHECK(find_mode(dp, 1920, 1080, 60, &mode) && dp->status == DRM_CONNECTOR_CONNECTED &&
+              dp->edid && dp->edid->length == len && memcmp(dp->edid->data, edid, len) == 0 &&
+              port->dp.edid_bpc == 10 && sink->offset == 1,
+          "dp override: one DDC byte read from the sink, override EDID and depth returned");
+    drm_edid_override_reset(dp);
+    (void)drm_helper_probe_single_connector_modes(dp, 8192, 8192);
+}
+
 /**
  * IGT's kms_hdmi_inject: HDMI-A-2, with no monitor, forced on with a 4K
  * EDID override; its modes those of the override, and 3840x2160@30 set on
@@ -1356,6 +1430,8 @@ int main(void)
     row_hdmi_clone();
     row_hotplug();
     row_dp();
+    row_hdmi_override_detect();
+    row_dp_override_detect();
     row_inject();
     row_3d();
     row_fini();

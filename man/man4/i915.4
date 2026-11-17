@@ -832,6 +832,12 @@ file takes the EDID written to its
 file in place of the monitor's, as IGT's
 .Sy kms_hdmi_inject
 does.
+In
+.Dq detect
+mode the HDMI and external DisplayPort drivers first read one byte from
+the sink's DDC address before taking an EDID, including an override.
+An override remains installed after changing the force setting.
+Forcing the connector off clears its reported EDID and modes.
 A pipe the firmware lit on DDI B to D is turned off at bind.
 .Pp
 The primary plane takes C8, RGB565, XRGB8888, XBGR8888, XRGB2101010,

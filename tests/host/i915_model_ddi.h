@@ -38,6 +38,7 @@ struct i915_model_ddc {
  * A DisplayPort sink behind the AUX channel of a port. `present` says it
  * answers; without it a message times out. `dpcd` is its DPCD from 0x000
  * to 0x7ff, `edid` its EDID of `edid_len` bytes with the I2C pointers.
+ * A sink with no EDID NAKs DDC transfers.
  * Training: the lanes report clock recovery while pattern 1 is set and
  * equalization while pattern 2 or 3 is, on the lanes LANE_COUNT_SET
  * names; `trained` says pattern 2 or 3 was read with every lane done, at

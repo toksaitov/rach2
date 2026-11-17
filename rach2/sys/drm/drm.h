@@ -2201,9 +2201,8 @@ int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t fr
                                const uint32_t *crcs);
 /** Set `connector`'s EDID property, size in millimetres, bits a colour and
  * refresh range from the sink's `edid` of `len` bytes, or from its
- * override, cleaned as Linux cleans it, and add the modes it names to the
- * probed modes; the number added. NULL `edid` with no override clears the
- * property. */
+ * override if connected, and add its modes to the probed modes. Return
+ * the number added. Clear the property when no EDID is available. */
 int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len);
 
 /** The VIC of the CEA-861 mode `mode` is, Linux's drm_match_cea_mode: its

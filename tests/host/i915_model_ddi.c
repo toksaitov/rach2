@@ -427,7 +427,7 @@ static uint32_t sink_i2c(struct i915_model_dp_sink *s, uint32_t req, uint32_t ad
 {
     uint32_t i, at;
 
-    if (addr != DDC_ADDR && addr != DDC_SEGMENT_ADDR) {
+    if (!s->edid_len || (addr != DDC_ADDR && addr != DDC_SEGMENT_ADDR)) {
         rx[0] = DP_AUX_I2C_REPLY_NACK << 4;
         return 1;
     }

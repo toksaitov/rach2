@@ -756,18 +756,15 @@ static int detect_dpcd(struct intel_dp *dp)
 
 /** Whether the EDID in use, the override or the sink's, is EDID 1.4's
  * digital DisplayPort input, Linux's is_edid_digital_input_dp. */
-static int edid_digital_dp(const struct intel_dp *dp)
+static int edid_digital_dp(const uint8_t *edid, uint32_t len)
 {
-    const uint8_t *e = dp->connector->edid_override ? dp->connector->edid_override : dp->edid;
-    uint32_t len = dp->connector->edid_override ? dp->connector->edid_override_len : dp->edid_len;
-
-    return len >= 128 && e[0x13] >= 4 && (e[0x14] & 0x80) && (e[0x14] & 7u) == 5u;
+    return len >= 128 && edid[0x13] >= 4 && (edid[0x14] & 0x80) && (edid[0x14] & 7u) == 5u;
 }
 
 /** A branch's first port's capabilities, Linux's intel_dp_update_dfp with
  * drm_dp_downstream_max_bpc, max_dotclock, min_tmds_clock and
  * max_tmds_clock; 0 each for a sink that is no branch. */
-static void update_dfp(struct intel_dp *dp)
+static void update_dfp(struct intel_dp *dp, int digital_dp)
 {
     const uint8_t *cap = dp->downstream_ports;
     uint32_t detailed = dp->dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE;
@@ -790,7 +787,7 @@ static void update_dfp(struct intel_dp *dp)
     if (type == DP_DS_PORT_TYPE_VGA && detailed) {
         dp->dfp_max_dotclock = cap[1] * 8000u;
     }
-    if (type == DP_DS_PORT_TYPE_DP_DUALMODE && edid_digital_dp(dp)) {
+    if (type == DP_DS_PORT_TYPE_DP_DUALMODE && digital_dp) {
         return;
     }
     switch (type) {
@@ -828,20 +825,33 @@ static void unset_edid(struct intel_dp *dp)
     dp->dfp_max_bpc = dp->dfp_max_dotclock = dp->dfp_min_tmds = dp->dfp_max_tmds = 0;
 }
 
-/** Read a monitor's EDID, the connector's override standing in for it as
- * Linux's drm_edid_read_ddc, and what it says, Linux's intel_dp_set_edid.
- * 1 when there is one. */
+/**
+ * Read the monitor's EDID and its capabilities. Probe DDC first on an
+ * unforced connector, as drm_edid_read_ddc does. Return 1 for an EDID.
+ */
 static int set_edid(struct intel_dp *dp)
 {
+    struct drm_connector *connector = dp->connector;
+    const uint8_t *edid = NULL;
+    uint32_t len = 0;
+
     unset_edid(dp);
-    if (!dp->connector->edid_override &&
-        intel_dp_read_edid(dp, dp->edid, sizeof(dp->edid), &dp->edid_len) != 0) {
-        dp->edid_len = 0;
+    if (connector->force == DRM_FORCE_OFF) {
+        return 0;
     }
-    drm_edid_hdmi_info(dp->connector, dp->edid, dp->edid_len, &dp->info);
+    if (connector->force != DRM_FORCE_UNSPECIFIED || intel_dp_probe_ddc(dp)) {
+        if (connector->edid_override) {
+            edid = connector->edid_override;
+            len = connector->edid_override_len;
+        } else if (intel_dp_read_edid(dp, dp->edid, sizeof(dp->edid), &dp->edid_len) == 0) {
+            edid = dp->edid;
+            len = dp->edid_len;
+        }
+    }
+    drm_edid_hdmi_info(NULL, edid, len, &dp->info);
     dp->edid_bpc = dp->info.bpc;
-    update_dfp(dp);
-    return dp->connector->edid_override || dp->edid_len != 0;
+    update_dfp(dp, edid_digital_dp(edid, len));
+    return len != 0;
 }
 
 /** Read and answer the sink's device service requests, Linux's

@@ -232,9 +232,26 @@ static void dual_mode_probe(struct intel_ddi_port *p, const struct intel_i2c_bus
 }
 
 /**
- * Read the sink's EDID, the connector's override standing in for it, over
- * GMBUS and again by bit-banging when GMBUS fails, and what it says,
- * Linux's intel_hdmi_set_edid. 1 for a digital sink, which is there.
+ * Probe an unforced connector's DDC before taking its override or reading
+ * its EDID, as drm_edid_read_ddc does. Return 0 when either is available.
+ */
+static int32_t hdmi_read_edid(struct intel_ddi_port *p, const struct intel_i2c_bus *bus)
+{
+    struct drm_connector *connector = &p->hdmi_connector;
+    struct intel_hdmi *hdmi = &p->hdmi;
+
+    if (connector->force == DRM_FORCE_UNSPECIFIED && (!bus || !intel_i2c_probe_ddc(bus))) {
+        return -ENXIO;
+    }
+    if (connector->edid_override) {
+        return 0;
+    }
+    return bus ? intel_edid_read(bus, hdmi->edid, sizeof(hdmi->edid), &hdmi->edid_len) : -ENXIO;
+}
+
+/**
+ * Read the EDID over GMBUS and try again by bit-banging on failure,
+ * as intel_hdmi_set_edid does. Return 1 for a digital sink.
  */
 static int hdmi_set_edid(struct intel_ddi_port *p)
 {
@@ -242,20 +259,22 @@ static int hdmi_set_edid(struct intel_ddi_port *p)
     struct intel_hdmi *hdmi = &p->hdmi;
     struct drm_connector *connector = &p->hdmi_connector;
     struct intel_i2c_bus *bus = intel_gmbus_bus(i915, hdmi->ddc_pin);
-    uint32_t len = 0;
     int32_t err;
 
     hdmi_unset_edid(hdmi);
-    if (!connector->edid_override && bus) {
-        err = intel_edid_read(bus, hdmi->edid, sizeof(hdmi->edid), &len);
-        if (err != 0 && !intel_gmbus_is_forced_bit(i915, hdmi->ddc_pin)) {
-            klog(KLOG_DEBUG, "i915",
-                 "%s: HDMI GMBUS EDID read failed, retry using GPIO bit-banging", bus->name);
-            intel_gmbus_force_bit(i915, hdmi->ddc_pin, 1);
-            err = intel_edid_read(bus, hdmi->edid, sizeof(hdmi->edid), &len);
-            intel_gmbus_force_bit(i915, hdmi->ddc_pin, 0);
-        }
-        hdmi->edid_len = err == 0 ? len : 0;
+    if (connector->force == DRM_FORCE_OFF) {
+        return 0;
+    }
+    err = hdmi_read_edid(p, bus);
+    if (err != 0 && bus && !intel_gmbus_is_forced_bit(i915, hdmi->ddc_pin)) {
+        klog(KLOG_DEBUG, "i915", "%s: HDMI GMBUS EDID read failed, retry using GPIO bit-banging",
+             bus->name);
+        intel_gmbus_force_bit(i915, hdmi->ddc_pin, 1);
+        err = hdmi_read_edid(p, bus);
+        intel_gmbus_force_bit(i915, hdmi->ddc_pin, 0);
+    }
+    if (err != 0) {
+        return 0;
     }
     drm_edid_hdmi_info(connector, hdmi->edid, hdmi->edid_len, &hdmi->info);
     if (!hdmi->info.digital) {

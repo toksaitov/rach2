@@ -1840,7 +1840,7 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
     int32_t err = 0;
     int n = 0;
 
-    if (connector->edid_override) {
+    if (connector->status == DRM_CONNECTOR_CONNECTED && connector->edid_override) {
         edid = connector->edid_override;
         len = connector->edid_override_len;
     }
