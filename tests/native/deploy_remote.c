@@ -79,9 +79,10 @@ int nd_stage(struct nd_deploy *d)
  * of this boot, or one with no owner record, is refused by name. The look at
  * the claims and the lock, their removal and the making of this run's claim
  * hold flock(1) on STATE/collection.serial, which the collection holds while
- * it takes its lock, so that no setup removes a claim or a lock made after
- * its reading. The etude boot token is still published for the measurement
- * contexts that read it. */
+ * it takes or releases its lock and the cleanup while it removes a claim, so
+ * that no setup removes a claim or a lock made after its reading. A claim
+ * already gone counts as cleared. The etude boot token is still published for
+ * the measurement contexts that read it. */
 static int run_setup(struct nd_deploy *d, char *setup, size_t size)
 {
     const struct nd_config *c = &d->c;
@@ -103,7 +104,7 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "for old in '%s'/controller-*; do test -f \"$old/identity\" || continue; "
         "oboot=; read opid oborn oboot < \"$old/identity\" || true; "
         "test -n \"$oboot\" && test \"$oboot\" != \"$boot\" || continue; "
-        "rm -f \"$old/identity\" \"$old/owner\"; rmdir \"$old\" || { "
+        "rm -f \"$old/identity\" \"$old/owner\"; rmdir \"$old\" || test ! -e \"$old\" || { "
         "printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$old\" >&2; exit 1; }; "
         "printf 'native-deploy: cleared: %%s: pid %%s of boot %%s\\n' "
         "\"$old\" \"$opid\" \"$oboot\" >&2; done; "
@@ -162,27 +163,39 @@ int nd_run(struct nd_deploy *d)
     d->remote_started = 1;
     return nd_ssh(d, "collection", command, NULL, &process);
 }
+/* Stop this deployment's controller and remove its claim. The wait for the
+ * recorded process to end runs first, outside any lock; the look at the claim
+ * again, at the collection lock, and the claim's removal then hold flock(1) on
+ * STATE/collection.serial, as the setup does, so that a setup after a reboot
+ * and this cleanup never both remove the claim. A claim already gone counts as
+ * removed. A claim whose recorded process still runs in this boot fails the
+ * cleanup, and so does a claim of another deployment. */
 int nd_remote_cleanup(struct nd_deploy *d)
 {
     struct nd_process *process = NULL;
     char guard[4096], command[8192];
     if (!nd_identity(d, guard, sizeof(guard)) ||
         !nd_format(command, sizeof(command),
-                   "%s claim='%s/controller-%s'; receipt=\"$claim/identity\"; "
-                   "if test -d \"$claim\"; then test \"$(cat \"$claim/owner\")\" = '%s'; "
-                   "read pid born boot < \"$receipt\"; "
-                   "case $pid:$born in *[!0-9:]*|:*) exit 1;; esac; "
-                   "test \"$pid\" -gt 1; test \"$born\" -gt 0; "
-                   "while test \"$boot\" = \"$(cat /proc/sys/kernel/random/boot_id)\" && "
-                   "test -r /proc/$pid/stat; do "
-                   "start=$(awk '{print $22}' /proc/$pid/stat) || break; "
-                   "test \"$start\" = \"$born\" || break; kill -TERM \"$pid\" || break; sleep 1; "
-                   "done; fi; "
-                   "test ! -d '%s/state/collection.lock'; "
-                   "if test -d \"$claim\"; then rm -f \"$receipt\" \"$claim/owner\"; rmdir "
-                   "\"$claim\"; fi; "
+                   "%s claim='%s/controller-%s'; receipt=\"$claim/identity\"; state='%s/state'; "
+                   "valid() { case $pid:$born in *[!0-9:]*|:*|*:) return 1;; esac; "
+                   "test \"$pid\" -gt 1 && test \"$born\" -gt 0; }; "
+                   "alive() { test \"$boot\" = \"$(cat /proc/sys/kernel/random/boot_id)\" && "
+                   "test -r /proc/$pid/stat && "
+                   "test \"$(awk '{print $22}' /proc/$pid/stat 2>/dev/null)\" = \"$born\"; }; "
+                   "if test \"$(cat \"$claim/owner\" 2>/dev/null)\" = '%s' && "
+                   "read pid born boot 2>/dev/null < \"$receipt\"; then valid; "
+                   "while alive; do kill -TERM \"$pid\" || break; sleep 1; done; fi; "
+                   "test ! -L \"$state\"; if test -d \"$state\"; then "
+                   "exec 9> \"$state/collection.serial\"; flock 9; fi; "
+                   "test ! -d \"$state/collection.lock\"; "
+                   "if test -d \"$claim\"; then "
+                   "if test -e \"$claim/owner\"; then test \"$(cat \"$claim/owner\")\" = '%s'; fi; "
+                   "if read pid born boot 2>/dev/null < \"$receipt\"; then valid; "
+                   "if alive; then exit 1; fi; fi; "
+                   "rm -f \"$receipt\" \"$claim/owner\"; rmdir \"$claim\" || test ! -e \"$claim\"; "
+                   "fi; exec 9>&-; "
                    "printf 'native-deploy: remote controller ended\\n'",
-                   guard, d->c.target, d->c.run, d->c.nonce, d->c.target))
+                   guard, d->c.target, d->c.run, d->c.target, d->c.nonce, d->c.nonce))
         return 0;
     return nd_ssh(d, "remote-cleanup", command, NULL, &process) == 0;
 }

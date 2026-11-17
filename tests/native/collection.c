@@ -89,41 +89,54 @@ static int lock_make(const char *lock)
     }
     return 1;
 }
-/* Take the collection lock `lock` in the state directory `state` while
- * holding flock(2) on STATE/collection.serial. The setup of `native-deploy
- * run` holds the same flock, through flock(1), while it reads a lock's owner,
- * clears one of an earlier boot and makes its controller claim, so that it
- * never removes a lock taken after its reading. 1, or 0 with no lock left
- * behind. */
-static int lock_take(const char *state, const char *lock)
+/* Open STATE/collection.serial in the state directory `state` and hold
+ * flock(2) on it. The setup of `native-deploy run` and its cleanup hold the
+ * same flock, through flock(1), while they read a lock's owner or a controller
+ * claim and remove one, so that none of them removes a lock taken, or reads
+ * one released, after its reading. The descriptor, which the caller closes to
+ * drop the flock, or -1. */
+static int serial_hold(const char *state)
 {
     char serial[4200];
-    int fd, ok;
+    int fd;
     snprintf(serial, sizeof(serial), "%s/collection.serial", state);
     fd = open(serial, O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
     if (fd < 0) {
         fprintf(stderr, "native: cannot open %s: %s\n", serial, strerror(errno));
-        return 0;
+        return -1;
     }
     while (flock(fd, LOCK_EX))
         if (errno != EINTR) {
             fprintf(stderr, "native: cannot lock %s: %s\n", serial, strerror(errno));
             close(fd);
-            return 0;
+            return -1;
         }
+    return fd;
+}
+/* Take the collection lock `lock` in the state directory `state` under
+ * serial_hold's flock. 1, or 0 with no lock left behind. */
+static int lock_take(const char *state, const char *lock)
+{
+    int fd = serial_hold(state), ok;
+    if (fd < 0)
+        return 0;
     ok = lock_make(lock);
     close(fd);
     return ok;
 }
-/* Remove the collection lock `lock` and its owner record; 0, or -1 when
- * the lock remains. */
-static int lock_release(const char *lock)
+/* Remove the collection lock `lock` in the state directory `state` and its
+ * owner record under serial_hold's flock; 0, or -1 when the lock remains. */
+static int lock_release(const char *state, const char *lock)
 {
     char path[4200];
-    snprintf(path, sizeof(path), "%s/owner", lock);
-    if (unlink(path) && errno != ENOENT)
+    int fd = serial_hold(state), status = -1;
+    if (fd < 0)
         return -1;
-    return rmdir(lock);
+    snprintf(path, sizeof(path), "%s/owner", lock);
+    if (!unlink(path) || errno == ENOENT)
+        status = rmdir(lock);
+    close(fd);
+    return status;
 }
 static void json_string(FILE *fp, const char *s)
 {
@@ -415,19 +428,19 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
     if (!lock_take(conf->state, lock))
         return 2;
     if (etude_history_now(&granted)) {
-        lock_release(lock);
+        lock_release(conf->state, lock);
         return 2;
     }
     conf->granted = &granted;
     snprintf(summary, sizeof(summary), "%s/summary", conf->results);
     int summary_fd = open(summary, O_CREAT | O_EXCL | O_WRONLY, 0600);
     if (summary_fd < 0 || close(summary_fd)) {
-        lock_release(lock);
+        lock_release(conf->state, lock);
         return 2;
     }
     if (!nc_history_open(&history, conf, i, argc, argv, first)) {
         nc_history_close(&history);
-        lock_release(lock);
+        lock_release(conf->state, lock);
         fputs("native: cannot open identified native history\n", stderr);
         return 2;
     }
@@ -437,7 +450,7 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
         failures += status != 0;
         ran++;
     }
-    if (history.unconfirmed || lock_release(lock)) {
+    if (history.unconfirmed || lock_release(conf->state, lock)) {
         failures++;
         history.unconfirmed = 1;
         fprintf(stderr, "native: cleanup unconfirmed; collection claim retained: %s\n", lock);
