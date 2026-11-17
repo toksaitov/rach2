@@ -19,13 +19,22 @@ uint32_t block_max_sectors(block_device_t *device)
 uint32_t blockmax_last_flags;
 int blockmax_flushes;
 int blockmax_flush_rc;
+/* Run once inside the next flush, after the device's part and before the
+ * flush returns, as another processor's write may come then; then cleared. */
+void (*blockmax_flush_hook)(void);
 
 /** The device's flush on the host: a fake device holds nothing back, and the
  * flush answers `blockmax_flush_rc`, which a test sets to make it fail. */
 int block_flush(block_device_t *device)
 {
+    void (*hook)(void) = blockmax_flush_hook;
+
     (void)device;
     blockmax_flushes++;
+    if (hook) {
+        blockmax_flush_hook = 0;
+        hook();
+    }
     return blockmax_flush_rc;
 }
 

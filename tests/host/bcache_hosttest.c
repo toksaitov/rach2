@@ -317,6 +317,7 @@ static uint64_t watch_blk;
 static uint32_t watch_flags;
 extern uint32_t blockmax_last_flags;
 extern int blockmax_flushes, blockmax_flush_rc;
+extern void (*blockmax_flush_hook)(void);
 /* What the cache recorded against the device. */
 static block_device_t *failed_dev;
 static uint64_t failed_lba;
@@ -1594,6 +1595,13 @@ static void ordered_flush_rows(void)
     bcache_invalidate(&vast);
 }
 
+/** Write an ordered `first`, block 39 of `vast`, from inside a flush. */
+static void first_in_flush(void)
+{
+    dirty_for(&vast, 39, 0, BCACHE_ORDER_FIRST);
+    check(bcache_sync_block_ordered(&vast, 39) == 0, "a `first` is written inside a flush");
+}
+
 /**
  * Check on `vast` made a write-through disk that an `after` is flushed
  * before only while a `first` of the device was answered without the
@@ -1636,13 +1644,23 @@ static void flush_skip_rows(void)
           "and an `after` after the wrap is flushed before, and the flush counted");
     vast.firsts_unflushed = 0x40000000u;
     dirty_for(&vast, 38, 0, BCACHE_ORDER_FIRST);
-    check(bcache_sync_block_ordered(&vast, 38) == 0 && vast.firsts_unflushed == 0x40000000u,
-          "the count stops at its bound ahead of the last flush");
+    check(bcache_sync_block_ordered(&vast, 38) == 0 && vast.firsts_unflushed == 0x40000001u &&
+              vast.firsts_flushed == 1,
+          "past its bound ahead of the last flush the count takes that along");
     dirty_for(&vast, 31, 0, BCACHE_ORDER_AFTER);
     blockmax_flushes = 0;
     check(bcache_sync_block(&vast, 31) == 0 && blockmax_flushes == 1 &&
-              vast.firsts_flushed == 0x40000000u,
+              vast.firsts_flushed == 0x40000001u,
           "still unequal, so the next `after` is flushed before");
+    vast.firsts_flushed = 0;
+    vast.firsts_unflushed = 0x40000000u;
+    blockmax_flush_hook = first_in_flush;
+    check(bcache_flush(&vast) == 0 && vast.firsts_unflushed != vast.firsts_flushed,
+          "a `first` answered while a flush at the bound ends stays counted");
+    dirty_for(&vast, 32, 0, BCACHE_ORDER_AFTER);
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&vast, 32) == 0 && blockmax_flushes == 1,
+          "so the next `after` is flushed before");
     vast.flags &= ~BLOCK_WRITE_THROUGH;
     bcache_sync(&vast);
     bcache_invalidate(&vast);

@@ -1233,16 +1233,16 @@ static int flush_before(const struct bbuf *b, uint32_t flags)
     return follows(b) && (!(flags & WRITE_ORDER_ONLY) || b->order == BCACHE_ORDER_AFTER);
 }
 
-/* How far `firsts_unflushed` may run ahead of `firsts_flushed`: the count
- * stops there, still unequal, until a flush catches up, so it never wraps
- * round to equal, and a snapshot older than the last acknowledged one is
- * more than this behind and moves nothing. */
+/* How far `firsts_unflushed` may run ahead of `firsts_flushed`: past it
+ * both move on together, still unequal, so the count never wraps round to
+ * equal and a write counted while a flush is out stays above that flush's
+ * snapshot; a snapshot more than this behind moves nothing. */
 #define FIRSTS_BOUND 0x40000000u
 
 /** Count a write of `n` buffers from `run` that `dev` answered with the
  * request `flags`: one more `first` write answered without the disk's
  * flush, when the request had `BLOCK_REQ_NOFLUSH` and a `first` among its
- * buffers, up to `FIRSTS_BOUND` ahead of the last flush. Called before
+ * buffers, at most `FIRSTS_BOUND` ahead of the last flush. Called before
  * `written_clean` clears their order. */
 static void count_firsts(block_device_t *dev, struct bbuf *const *run, int n, uint32_t flags)
 {
@@ -1258,9 +1258,10 @@ static void count_firsts(block_device_t *dev, struct bbuf *const *run, int n, ui
         return;
     }
     lf = cache_lock();
-    if (dev->firsts_unflushed - dev->firsts_flushed < FIRSTS_BOUND) {
-        dev->firsts_unflushed++;
+    if (dev->firsts_unflushed - dev->firsts_flushed >= FIRSTS_BOUND) {
+        dev->firsts_flushed++;
     }
+    dev->firsts_unflushed++;
     cache_unlock(lf);
 }
 
