@@ -80,7 +80,7 @@
 
 REPO=toksaitov/rach2
 REASONING=high
-CODEX_MODEL=gpt-6.1-sol
+CODEX_MODEL=gpt-6.2-sol
 DOC_BYTES=65536
 DEADLINE=21600
 
