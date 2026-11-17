@@ -146,8 +146,11 @@ void bcache_dirty(struct bbuf *b);
  * for before it; an eviction or the memory reclaim that chose an `after`
  * buffer writes every first of its device before it, or passes it over
  * while one of them is held, failed its write or waits itself
- * (`bcache_sync_last`). On a write-through disk the flush comes between. The
- * marks clear with the write. When ext2 frees a file's blocks its pointer
+ * (`bcache_sync_last`). On a write-through disk a flush comes between while
+ * a first of the device was answered without the disk's flush since the
+ * last flush the cache asked for began; a first written with the flush is
+ * on the medium when answered, and an `after` needs none for it. The marks
+ * clear with the write. When ext2 frees a file's blocks its pointer
  * blocks and inode are first and its bitmaps and descriptors after, so no
  * pointer on the disk names a block whose bit is clear, however the cache is
  * pressed while the free runs.
@@ -261,10 +264,12 @@ int bcache_flush(block_device_t *dev);
  * failed writes none of them: not alone, not in a run, and not ahead of an
  * `after`, which stays dirty with it. On a write-through disk the flush
  * comes between, but in `bcache_sync_block_ordered`, which flushes only
- * before an `after`. A sync still retries them. The callbacks run under the
- * walks of the dirty buffers, under the cache's write lock, and at a
- * release under its spinlock, and must not sleep; the caller clears them
- * before `arg` goes, which waits for a walk that runs them.
+ * before an `after`, and before an `after` only while a first was answered
+ * without the flush (`bcache_dirty_ordered`). A sync still retries them.
+ * The callbacks run under the walks of the dirty buffers, under the cache's
+ * write lock, and at a release under its spinlock, and must not sleep; the
+ * caller clears them before `arg` goes, which waits for a walk that runs
+ * them.
  */
 void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk),
                       int (*names)(void *arg, uint64_t blk, uint64_t owner), void *arg);
@@ -289,8 +294,9 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner);
  * whoever dirtied them, which a file's sync needs before a shared bitmap or
  * descriptor, and a block the device writes last after the blocks it may
  * name (`bcache_sync_last`), with the flush between on a write-through
- * disk. A holder of the block is waited for, and the caller's holds are
- * bound as for `bcache_sync`.
+ * disk, which an `after` needs only as `bcache_dirty_ordered` says. A
+ * holder of the block is waited for, and the caller's holds are bound as
+ * for `bcache_sync`.
  *
  * @return 0, also for a block that is clean or gone from the cache, or the
  *         first failure's -errno with its buffer still dirty.
@@ -305,9 +311,10 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk);
  * writes, `blk`'s included, is flushed out of a disk's own cache. A loss of
  * power on a disk with a volatile cache may keep a later write and lose an
  * earlier one, as Linux's ext2 leaves it under `dirsync`, which writes a
- * directory and its inode without a flush. The flush still comes before an
- * `after` block among them, so a free's cleared pointers and inodes reach
- * the medium before its cleared bits. `fsync`, `sync` and an unmount flush
+ * directory and its inode without a flush. A flush still comes before an
+ * `after` block among them while a first was answered without one, so a
+ * free's cleared pointers and inodes reach the medium before its cleared
+ * bits. `fsync`, `sync` and an unmount flush
  * what this left in the cache.
  *
  * @return as `bcache_sync_block`.

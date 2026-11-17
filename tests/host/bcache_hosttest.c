@@ -596,11 +596,10 @@ static void dirty_it(void *arg)
 /**
  * Check a sync on `wide` made a write-through disk (`BLOCK_WRITE_THROUGH`).
  *
- * The sync writes without the disk's flush, flushes before the `after` at
- * block 140, so that the `first` it follows is on the medium, and once at
- * its end, and writes the `first`, block 135, with the flush. A failure of
- * the flush at the sync's end is recorded against the device as a failed
- * write is.
+ * The sync writes without the disk's flush, but the `first`, block 135,
+ * with it, so the `after` at block 140 that follows it needs no flush of
+ * its own, and flushes once at its end. A failure of the flush at the
+ * sync's end is recorded against the device as a failed write is.
  */
 static void write_through_rows(void)
 {
@@ -618,8 +617,8 @@ static void write_through_rows(void)
     watch_blk = 135;
     watch_flags = BLOCK_REQ_NOFLUSH;
     blockmax_flushes = 0;
-    check(bcache_sync(&wide) == 0 && blockmax_flushes == 2,
-          "a sync on a write-through disk flushes before an `after` and once at its end");
+    check(bcache_sync(&wide) == 0 && blockmax_flushes == 1,
+          "a sync on a write-through disk flushes once, at its end");
     check(watch_flags == 0, "and writes a `first` with the flush");
     b = bcache_get(&wide, 7);
     b->data[0] = 0xB1;
@@ -763,7 +762,8 @@ static void owned_rows(void)
 /**
  * Check `bcache_sync_block`, the write of one shared block, on `vast` made a
  * write-through disk. An `after` goes after the device's firsts marked
- * before it, with the disk flushed between, and the neighbours stay dirty; a
+ * before it, which go with the disk's flush, so none comes between, and the
+ * neighbours stay dirty; a
  * clean block and one not in the cache write nothing; a `first` keeps the
  * disk's flush and a plain block has none; a failed write answers its errno
  * and stays dirty, and a block the caller holds panics.
@@ -783,7 +783,7 @@ static void shared_rows(void)
           "a shared `after` is written after the device's firsts, in a run");
     check(last_write_count == 8 && !dirty_now(&vast, 20) && dirty_now(&vast, 21),
           "alone, with its neighbour left dirty");
-    check(blockmax_flushes == 1, "and the disk flushed before it");
+    check(blockmax_flushes == 0, "with no flush of its own, its firsts written with theirs");
     writes_made = 0;
     blockmax_flushes = 0;
     check(bcache_sync_block(&vast, 20) == 0 && bcache_sync_block(&vast, 300) == 0 &&
@@ -1559,6 +1559,41 @@ static void ordered_flush_rows(void)
     bcache_invalidate(&vast);
 }
 
+/**
+ * Check on `vast` made a write-through disk that an `after` is flushed
+ * before only while a `first` of the device was answered without the
+ * flush since the last flush began: not after a flush, nor after firsts
+ * written with the flush, but after an ordered `first`.
+ */
+static void flush_skip_rows(void)
+{
+    vast.flags |= BLOCK_WRITE_THROUGH;
+    check(bcache_flush(&vast) == 0, "a flush puts every `first` answered before it on the medium");
+    dirty_for(&vast, 35, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 27, 0, BCACHE_ORDER_AFTER);
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&vast, 27) == 0 && writes_made == 2 && writes_lba[0] == 35 * 8 &&
+              writes_lba[1] == 27 * 8 && writes_flags[0] == 0 && blockmax_flushes == 0,
+          "an `after` whose firsts went with the flush is written without one");
+    dirty_for(&vast, 28, 0, BCACHE_ORDER_AFTER);
+    writes_made = 0;
+    check(bcache_sync_block_ordered(&vast, 28) == 0 && writes_made == 1 && blockmax_flushes == 0 &&
+              writes_unflushed(1),
+          "and so is an ordered `after` while no `first` waits for a flush");
+    dirty_for(&vast, 36, 0, BCACHE_ORDER_FIRST);
+    check(bcache_sync_block_ordered(&vast, 36) == 0 && blockmax_flushes == 0,
+          "an ordered `first` is answered without the flush");
+    dirty_for(&vast, 29, 0, BCACHE_ORDER_AFTER);
+    writes_made = 0;
+    check(bcache_sync_block(&vast, 29) == 0 && writes_made == 1 && writes_flushes[0] == 1 &&
+              blockmax_flushes == 1,
+          "so the next `after` has the flush before it");
+    vast.flags &= ~BLOCK_WRITE_THROUGH;
+    bcache_sync(&vast);
+    bcache_invalidate(&vast);
+}
+
 /** The rows of a file's own writeback, of the blocks written last and what
  * they name, of pointer blocks, of the reserve, of a reclaim after a failed
  * write and of a sort's service point. */
@@ -1568,6 +1603,7 @@ static void writeback_rows(void)
     shared_rows();
     ordered_rows();
     ordered_flush_rows();
+    flush_skip_rows();
     last_rows();
     follow_rows();
     pointer_order_rows();

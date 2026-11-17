@@ -1226,10 +1226,33 @@ static void written_clean(struct bbuf **run, int n)
  * the request `flags`: before every block that `follows`, and under
  * `WRITE_ORDER_ONLY` before an `after` alone, so that a free's cleared
  * pointers and inodes stay on the medium ahead of its cleared bits through
- * a loss of power, as the cache's reclaim keeps them. */
+ * a loss of power, as the cache's reclaim keeps them; `order_flush` leaves
+ * the flush out before an `after` whose firsts are on the medium already. */
 static int flush_before(const struct bbuf *b, uint32_t flags)
 {
     return follows(b) && (!(flags & WRITE_ORDER_ONLY) || b->order == BCACHE_ORDER_AFTER);
+}
+
+/** Count a write of `n` buffers from `run` that `dev` answered with the
+ * request `flags`: one more `first` write answered without the disk's
+ * flush, when the request had `BLOCK_REQ_NOFLUSH` and a `first` among its
+ * buffers. Called before `written_clean` clears their order. */
+static void count_firsts(block_device_t *dev, struct bbuf *const *run, int n, uint32_t flags)
+{
+    uint32_t lf;
+    int i;
+
+    if (!(flags & BLOCK_REQ_NOFLUSH)) {
+        return;
+    }
+    for (i = 0; i < n && run[i]->order != BCACHE_ORDER_FIRST; i++) {
+    }
+    if (i == n) {
+        return;
+    }
+    lf = cache_lock();
+    dev->firsts_unflushed++;
+    cache_unlock(lf);
 }
 
 /** Write the buffer `b`, which the caller holds, to the device with the
@@ -1243,6 +1266,9 @@ static int write_buffer_flags(struct bbuf *b, uint32_t flags)
                                  b->bytes / BLOCK_SECTOR_SIZE, b->data, flags & ~WRITE_ORDER_ONLY);
 
     wb_back(held);
+    if (rc == 0) {
+        count_firsts(b->dev, &b, 1, flags);
+    }
     if (rc != 0) {
         klog(KLOG_WARN, "bcache", "write: sector %d failed (%d), kept dirty",
              (int)(b->blk * BCACHE_BLOCK_SECTORS), rc);
@@ -1271,19 +1297,53 @@ static uint32_t reclaim_flags(const struct bbuf *b)
     return b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev);
 }
 
-/** Put what a write-through disk under `dev` holds in its cache on the
- * medium, before a block that must follow what went before it; a disk with
- * nothing unflushed answers at once. A failure is recorded as a failed
- * write's. 0, or -errno. */
-static int order_flush(block_device_t *dev)
+/** Flush `dev`, a write-through disk, for the cache, and on success record
+ * that every `first` answered before the flush began is on the medium. A
+ * failure is the caller's to record. 0, or -errno. */
+static int flush_firsts(block_device_t *dev)
 {
+    uint32_t lf = cache_lock();
+    uint32_t seen = dev->firsts_unflushed;
+    int rc;
+
+    cache_unlock(lf);
+    rc = block_flush(dev);
+    if (rc == 0) {
+        lf = cache_lock();
+        if ((int32_t)(seen - dev->firsts_flushed) > 0) {
+            dev->firsts_flushed = seen;
+        }
+        cache_unlock(lf);
+    }
+    return rc;
+}
+
+/** Put what a write-through disk under `b`'s device holds in its cache on
+ * the medium, before `b`, which must follow what went before it; a disk
+ * with nothing unflushed answers at once. An `after` that names no blocks
+ * follows only the `first` buffers, so it needs the flush only while one
+ * was answered without it since the last flush began: a `first` written
+ * with the flush is on the medium when answered. A failure is recorded as
+ * a failed write's. 0, or -errno. */
+static int order_flush(struct bbuf *b)
+{
+    block_device_t *dev = b->dev;
     int rc, held;
 
     if (!unflushed_flags(dev)) {
         return 0;
     }
+    if (b->order == BCACHE_ORDER_AFTER && !names_blocks(b)) {
+        uint32_t lf = cache_lock();
+        int done = dev->firsts_unflushed == dev->firsts_flushed;
+
+        cache_unlock(lf);
+        if (done) {
+            return 0;
+        }
+    }
     held = wb_out();
-    rc = block_flush(dev);
+    rc = flush_firsts(dev);
     wb_back(held);
     if (rc != 0) {
         klog(KLOG_WARN, "bcache", "write: flush failed (%d)", rc);
@@ -1427,7 +1487,7 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct buffer_wait *me
         }
     }
     if (rc == 0 && flush_before(b, flags)) {
-        rc = order_flush(b->dev);
+        rc = order_flush(b);
     }
     if (rc == 0) {
         rc = write_buffer_flags(b, flags);
@@ -1580,7 +1640,7 @@ static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
     if (n == 1) {
         return write_one_met(first, flags, met);
     }
-    rc = flush_before(first, flags) ? order_flush(dev) : 0;
+    rc = flush_before(first, flags) ? order_flush(first) : 0;
     if (rc != 0) {
         stage_free();
         for (i = 0; i < n; i++) {
@@ -1604,6 +1664,7 @@ static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
         device_failed(dev, first->blk * BCACHE_BLOCK_SECTORS, rc);
     }
     if (rc == 0) {
+        count_firsts(dev, run, n, flags);
         written_clean(run, n); /* before the let_go: a fill may take a buffer once let go */
     }
     *last = run[n - 1]->blk;
@@ -2813,7 +2874,7 @@ int bcache_sync(block_device_t *dev)
 
 int bcache_flush(block_device_t *dev)
 {
-    int rc = block_flush(dev);
+    int rc = flush_firsts(dev);
 
     if (rc != 0) {
         klog(KLOG_WARN, "bcache", "flush: failed (%d)", rc);
