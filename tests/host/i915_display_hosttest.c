@@ -28,7 +28,8 @@
  * offset, the X-tiled offset's split and the sprite's registers and watermarks
  * (78-9.3); a page flip's event at the vblank that shows it, with its count and
  * a rising stamp, an async flip's at flip done, blocking async atomic
- * commits flipping many times a frame, and the count of vblanks the
+ * commits flipping many times a frame, an async flip that would turn the
+ * cursor or the sprite off refused, and the count of vblanks the
  * frame counter kept while the interrupt was off (78-9.4), and the
  * interactive mark of RPS held by each pipe of a commit until its own
  * flip ends (80-46.1); the cursor's
@@ -834,9 +835,59 @@ static void row_async_atomic(uint32_t fb_a, uint32_t fb_b)
           "async atomic: the last buffer shown, the one it replaced unpinned");
 }
 
+/**
+ * Async flips of the primary plane to `fb_a` in commits that also turn the
+ * cursor or the sprite off, which Linux's intel_async_flip_check_uapi
+ * refuses, since an async commit lets go of what it replaced at flip done
+ * and the disable latches only at the next vblank: each EINVAL, with no
+ * plane's registers written, no buffer unpinned and no event sent.
+ */
+static void row_async_others(uint32_t fb_a)
+{
+    static const struct place at = {0, 0, 64, 64, 10, 20, 64, 64};
+    static const uint32_t ctl[2] = {CURCNTR(0), SPRCTL(0)}, base[2] = {CURBASE(0), SPRSURF(0)};
+    struct i915_model_pipe *p = &i915_model_pipes(&model)->pipe[0];
+    uint32_t h = bo_new(19, 64u * 64u * 4u, I915_TILING_NONE, 0);
+    struct drm_plane *others[2];
+    uint32_t fbs[2], surf, c0, b0, pin_shown, pin_other;
+    struct req r;
+    int i, n0;
+
+    others[0] = &pa->cursor;
+    others[1] = &pa->sprite;
+    fbs[0] = addfb(h, 64, 64, DRM_FORMAT_ARGB8888, 256, NO_MODIFIER);
+    fbs[1] = addfb(h, 64, 64, DRM_FORMAT_XRGB8888, 256, NO_MODIFIER);
+    for (i = 0; i < 2; i++) {
+        CHECK(fbs[i] && plane_commit(others[i], fbs[i], &at, 0) == 0,
+              "async others: the cursor, then the sprite, shown");
+        frame();
+        n0 = nsent;
+        surf = p->primary.surf;
+        c0 = reg(ctl[i]);
+        b0 = reg(base[i]);
+        pin_shown = bo_vma[19].pin_count;
+        pin_other = bo_vma[surf == BO_GGTT(3) ? 3 : 2].pin_count;
+        k_memset(&r, 0, sizeof(r));
+        req_add(&r, &pa->primary.base, mc->prop_fb_id, fb_a);
+        req_add(&r, &others[i]->base, mc->prop_fb_id, 0);
+        req_add(&r, &others[i]->base, mc->prop_crtc_id, 0);
+        CHECK(req_commit(&r, DRM_MODE_PAGE_FLIP_ASYNC | DRM_MODE_PAGE_FLIP_EVENT) == -EINVAL,
+              "async others: a flip that turns the cursor or the sprite off refused");
+        CHECK(nsent == n0 && p->primary.surf == surf && reg(ctl[i]) == c0 && c0 != 0 &&
+                  reg(base[i]) == b0 && bo_vma[19].pin_count == pin_shown &&
+                  bo_vma[surf == BO_GGTT(3) ? 3 : 2].pin_count == pin_other &&
+                  others[i]->state->fb && others[i]->state->fb->base.id == fbs[i],
+              "async others: nothing changed by the refused flip");
+        CHECK(plane_commit(others[i], 0, &full, 0) == 0 && reg(ctl[i]) == 0,
+              "async others: turned off by a commit without the async flag");
+        frame();
+    }
+}
+
 /** An async flip of X-tiled buffers: the surface taken at once and its
  * event sent at flip done, without a vblank; a linear one refused. Then
- * blocking async atomic commits (row_async_atomic). */
+ * blocking async atomic commits (row_async_atomic), and async flips that
+ * would turn another plane off refused (row_async_others). */
 static void row_async(void)
 {
     uint32_t h2, h3, fb2, fb3, flips;
@@ -864,6 +915,7 @@ static void row_async(void)
     CHECK(nsent == n0 + 1 && sent[n0].user_data == 0x77, "async: the event sent at flip done");
     CHECK(reg(DEIMR) & DE_PLANE_FLIP_DONE_IVB(0), "async: flip done masked again");
     row_async_atomic(fb2, fb3);
+    row_async_others(fb2);
     CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_ASYNC, 0) == -EINVAL,
           "async: to a linear buffer refused");
     CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_EVENT, 0) == 0, "async: back to the console");

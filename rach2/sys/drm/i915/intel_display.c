@@ -972,9 +972,26 @@ static int32_t compute_config(struct intel_crtc *c, const struct drm_crtc_state 
     return 0;
 }
 
+/**
+ * Whether an async flip on `c` touches a plane other than its primary, or
+ * takes the primary off the pipe, which Linux's intel_async_flip_check_uapi
+ * refuses: an async commit's release skips the vblank wait, which a sprite
+ * or cursor change, a disable among them, needs before its old framebuffer
+ * is unpinned. Each plane belongs to one pipe, so a plane leaving the pipe
+ * is found by its old CRTC as well as its new.
+ */
+static int async_touches_others(const struct intel_crtc *c, const struct drm_atomic_state *state)
+{
+    const struct drm_plane_state *ps = state->planes_new[c->primary.index];
+
+    return state->planes_new[c->sprite.index] || state->planes_new[c->cursor.index] ||
+           (ps && ps->crtc != &c->base);
+}
+
 /** The CRTC's check, Linux's intel_crtc_atomic_check: a mode set must
  * configure; neither it nor a change of colour may come with an async
- * flip, which Linux's drm_atomic_check_prop_changes refuses; the colour
+ * flip, which Linux's drm_atomic_check_prop_changes refuses, nor a change
+ * of any plane but the primary (async_touches_others); the colour
  * must check (`intel_color_check`); and the planes' watermarks must fit,
  * the new alone and with the old. 0, -EINVAL, -ERANGE or -ENOMEM. */
 static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *state)
@@ -990,7 +1007,7 @@ static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *
         return 0;
     }
     modeset = drm_atomic_crtc_needs_modeset(cs);
-    if ((modeset || cs->color_mgmt_changed) && cs->async_flip) {
+    if (cs->async_flip && (modeset || cs->color_mgmt_changed || async_touches_others(c, state))) {
         return -EINVAL;
     }
     cfg = c->cfg;
