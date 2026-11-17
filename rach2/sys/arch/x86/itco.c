@@ -6,18 +6,23 @@
 #include "../../lib/kdef.h"
 
 /* Linux 6.12, drivers/watchdog/iTCO_wdt.c: offsets from PMBASE + 0x60. */
-#define TCO_RLD       0x00
-#define TCO1_STS      0x04
-#define TCO2_STS      0x06
-#define TCO1_CNT      0x08
-#define TCO_TMR       0x12
-#define TCO_HALT      0x0800u
-#define TCO_NO_REBOOT 0x20u
-#define TCO_MASK      0x03FFu
+#define TCO_RLD           0x00
+#define TCO1_STS          0x04
+#define TCO2_STS          0x06
+#define TCO1_CNT          0x08
+#define TCO_TMR           0x12
+#define TCO_HALT          0x0800u
+#define TCO_NO_REBOOT     0x20u
+#define TCO_MASK          0x03FFu
 /* SMI_EN at PMBASE + 0x30, and its TCO_EN, bit 13, through which the first
  * stage's expiry raises an SMI to the firmware (iTCO_wdt.c:541). */
-#define SMI_EN        0x30u
-#define SMI_TCO_EN    0x2000u
+#define SMI_EN            0x30u
+#define SMI_TCO_EN        0x2000u
+/* TCO2_STS's SECOND_TO_STS, bit 1, which the chipset sets when the second
+ * expiry resets the machine and keeps across that reset, and Linux's
+ * WDIOF_CARDRESET, the boot status a driver reports for it. */
+#define TCO_SECOND_TO_STS 0x0002u
+#define WDIOF_CARDRESET   0x0020
 
 /* Linux's WATCHDOG_TIMEOUT, iTCO_wdt.c:118: the heartbeat when none is
  * given or the one given is out of range. */
@@ -51,6 +56,11 @@ struct itco {
      * thread exists and the scheduler runs it */
     int threaded;
     volatile int feed_due; /* set by the tick, cleared by `itco_feed_work` */
+    /* TCO1_STS and TCO2_STS as the attach found them, before it cleared
+     * them, and WDIOF_CARDRESET when the TCO timer reset the machine before
+     * this boot: WDIOC_GETBOOTSTATUS */
+    uint16_t boot_sts1, boot_sts2;
+    int bootstatus;
 };
 
 /** Set NO_REBOOT to `on`; 0 or -EIO when firmware refuses the change. */
@@ -134,16 +144,20 @@ static int itco_timeleft(struct itco *t)
 }
 
 /**
- * Check the register block, clear NO_REBOOT and old status, and set the
- * timeout to `heartbeat` seconds, or to 30 when the chip refuses it, as
- * iTCO_wdt_probe does (Linux 6.12, iTCO_wdt.c:534 to 612); 0, 1 when 30 was
- * taken in place of `heartbeat`, -ENODEV when NO_REBOOT will not clear, as
- * Linux refuses the device there (iTCO_wdt.c:534 to 539), or -EIO. A timer
- * that is not halted is running whatever NO_REBOOT was, as
- * iTCO_wdt_set_running (iTCO_wdt.c:444 to 453) finds it: it is left
+ * Check the register block, clear NO_REBOOT, take the reset reason from the old
+ * status and clear it, and set the timeout to `heartbeat` seconds, or to 30
+ * when the chip refuses it, as iTCO_wdt_probe does (Linux 6.12, iTCO_wdt.c:534
+ * to 612); 0, 1 when 30 was taken in place of `heartbeat`, -ENODEV when
+ * NO_REBOOT will not clear, as Linux refuses the device there (iTCO_wdt.c:534
+ * to 539), or -EIO. A timer that is not halted is running whatever NO_REBOOT
+ * was, as iTCO_wdt_set_running (iTCO_wdt.c:444 to 453) finds it: it is left
  * counting, now toward a reset, for the kernel to feed. A halted one gets
- * NO_REBOOT again (iTCO_wdt.c:593 to 599). All writes are bounded register
- * accesses, with no wait loop.
+ * NO_REBOOT again (iTCO_wdt.c:593 to 599). The status words are read before the
+ * clears that iTCO_wdt_probe makes (iTCO_wdt.c:545 to 563), and a SECOND_TO_STS
+ * found set makes the boot status WDIOF_CARDRESET, as sp5100_tco.c and
+ * wdat_wdt.c report their own reset bits; Linux's iTCO driver clears the bit
+ * unread and reports 0. All writes are bounded register accesses, with no wait
+ * loop.
  */
 static int itco_attach(struct itco *t, int heartbeat)
 {
@@ -155,6 +169,9 @@ static int itco_attach(struct itco *t, int heartbeat)
     if (itco_noreboot(t, 0) != 0) {
         return -ENODEV;
     }
+    t->boot_sts1 = t->rd(t->ctx, TCO1_STS);
+    t->boot_sts2 = t->rd(t->ctx, TCO2_STS);
+    t->bootstatus = t->boot_sts2 & TCO_SECOND_TO_STS ? WDIOF_CARDRESET : 0;
     t->wr(t->ctx, TCO1_STS, 8);
     t->wr(t->ctx, TCO2_STS, 2);
     t->wr(t->ctx, TCO2_STS, 4);
@@ -447,6 +464,7 @@ static int32_t itco_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         value = itco_status(&watchdog);
         break;
     case 0x80045702u: /* WDIOC_GETBOOTSTATUS */
+        value = watchdog.bootstatus;
         break;
     case 0x80045704u: /* WDIOC_SETOPTIONS */
     case 0xC0045706u: /* WDIOC_SETTIMEOUT */
@@ -614,6 +632,9 @@ void itco_init(void)
         klog(KLOG_INFO, "watchdog", "refused: iTCO_wdt.heartbeat=%d: out of range, using %d",
              heartbeat, ITCO_DEFAULT_TIMEOUT);
     }
+    klog(KLOG_INFO, "watchdog", "boot: %s: TCO1_STS %X, TCO2_STS %X",
+         watchdog.bootstatus ? "reset by the TCO timer" : "not reset by the TCO timer",
+         watchdog.boot_sts1, watchdog.boot_sts2);
     itco_smi_option(pm);
     feed_seen = (uint32_t)kernel_ticks;
     registered = 1;

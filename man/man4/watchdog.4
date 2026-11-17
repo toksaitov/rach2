@@ -111,7 +111,17 @@ WDIOF_MAGICCLOSE (0x100) while the last nonempty write held the magic byte,
 and WDIOF_KEEPALIVEPING (0x8000) if the timer was armed or fed since the
 previous call, which clears that flag.
 .It Dv WDIOC_GETBOOTSTATUS
-Return an integer zero, as Linux's iTCO driver does.
+Return WDIOF_CARDRESET (0x20) when the timer reset the machine before this
+boot, and zero otherwise.
+The driver reads SECOND_TO_STS, bit 1 of TCO2_STS, which the chipset sets
+when the second expiry resets the machine and keeps across that reset,
+before it clears the old status at boot, and logs
+.Ql watchdog: boot: reset by the TCO timer
+or
+.Ql watchdog: boot: not reset by the TCO timer
+with both status words.
+Linux's iTCO driver clears the bit unread and returns zero; its
+sp5100_tco and wdat_wdt drivers report their own reset bits this way.
 .It Dv WDIOC_KEEPALIVE
 Feed the timer while it runs; the argument is unused.
 .It Dv WDIOC_SETTIMEOUT
