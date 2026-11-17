@@ -317,6 +317,51 @@ static void wait_hook(wq_cond_fn cond, void *arg)
     }
 }
 
+/* A composition the composer thread took before a commit, which a wait of
+ * the commit lets end, as the thread would while the committer sleeps; and
+ * whether the commit's wait for the composer ran. */
+static struct vkms_job *in_flight;
+static int flush_waited;
+
+/** `wait_hook`, which first ends `in_flight` when the commit waits for the
+ * composer (`composer_caught_up`). */
+static void flush_hook(wq_cond_fn cond, void *arg)
+{
+    if (cond == composer_caught_up) {
+        flush_waited = 1;
+        if (in_flight) {
+            vkms_composer_finish(v, in_flight);
+            in_flight = NULL;
+        }
+    }
+    wait_hook(cond, arg);
+}
+
+/** Read the next entry's frame and value; 0 when there is none. */
+static int next_entry(uint32_t *frame_no, uint32_t *value)
+{
+    char line[64];
+    uint32_t vals[2] = {0, 0};
+    int i, k = 0;
+
+    if (drm_crtc_crc_read(&v->crtc, line, sizeof(line), 1) <= 0) {
+        return 0;
+    }
+    for (i = 0; line[i] && k < 2; i++) {
+        if (line[i] == 'x') {
+            for (i++; (line[i] >= '0' && line[i] <= '9') || (line[i] >= 'a' && line[i] <= 'f');
+                 i++) {
+                vals[k] =
+                    vals[k] << 4 | (uint32_t)(line[i] <= '9' ? line[i] - '0' : line[i] - 'a' + 10);
+            }
+            k++;
+        }
+    }
+    *frame_no = vals[0];
+    *value = vals[1];
+    return k == 2;
+}
+
 /** Compose what the vblanks asked for and read every entry. */
 static void drain(void)
 {
@@ -820,6 +865,64 @@ static void row_crc(void)
     CHECK(next_crc(NULL) == crc_a, "the first frame again, the first CRC");
 }
 
+/** A commit ends the old scene's compositions before it returns, as
+ * Linux's vkms_atomic_commit_tail flushes the old state's composer work:
+ * frames asked for before it get the old scene's CRC, and a composition the
+ * composer began from the old scene ends in the commit's wait. */
+static void row_commit_flush(void)
+{
+    struct req r;
+    struct vkms_job j;
+    uint32_t crc_a, crc_b, f, f0, val;
+    int n_old = 0, n_new = 0, order = 1;
+
+    want_primary(1, 0);
+    want_cursor(100, 50, 0);
+    crc_a = want_crc();
+    want_primary(2, 0);
+    want_cursor(100, 50, 0);
+    crc_b = want_crc();
+    CHECK(next_crc(&f0) == crc_a, "flush/data: the first pattern shown");
+
+    frame();
+    frame();
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &primary->base, mc->prop_fb_id, fb_b);
+    CHECK(req_commit(&r, 0) == 0, "flush/data: a flip with two frames asked for");
+    vkms_composer_run(v);
+    while (next_entry(&f, &val)) {
+        if (f <= f0 + 2u) {
+            n_old += val == crc_a;
+            order &= n_new == 0;
+        } else {
+            n_new += val == crc_b;
+        }
+    }
+    CHECK(n_old == 2 && n_new >= 1 && order,
+          "flush/data: the frames asked before the flip get the old CRC, those after the new");
+
+    frame();
+    vkms_composer_take(v, &j);
+    CHECK(j.pending && v->compose_begun != v->compose_ended, "flush/data: a composition in flight");
+    in_flight = &j;
+    flush_waited = 0;
+    model_wait = flush_hook;
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &primary->base, mc->prop_fb_id, fb_a);
+    CHECK(req_commit(&r, 0) == 0, "flush/data: a flip while the composer composes");
+    model_wait = wait_hook;
+    CHECK(flush_waited && in_flight == NULL && v->compose_begun == v->compose_ended,
+          "flush/data: the flip waited for the old scene's composition to end");
+    CHECK(next_entry(&f, &val) && val == crc_b,
+          "flush/data: that composition's CRC is the old scene's");
+    vkms_composer_run(v);
+    n_new = 0;
+    while (next_entry(&f, &val)) {
+        n_new += val == crc_a;
+    }
+    CHECK(n_new >= 1, "flush/data: the frames after the flip get the new CRC");
+}
+
 /** A gamma table of zeros makes the frame black; 257 entries are
  * refused. */
 static void row_gamma(void)
@@ -937,6 +1040,7 @@ int main(void)
         row_compose();
         row_vblank();
         row_crc();
+        row_commit_flush();
         row_gamma();
         row_turn();
         row_formats();

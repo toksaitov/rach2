@@ -81,7 +81,10 @@ struct vkms_scene {
  * vblanks go on again is not taken for frames left out; `crc_missed`
  * counts the frames from `crc_next` that a later vblank, finding no request
  * pending, left out of its own; `catchups` counts the composer's passes
- * that entered more than one frame's CRC. The tick
+ * that entered more than one frame's CRC. `compose_begun` and
+ * `compose_ended` number the compositions the composer thread has begun and
+ * the last it ended, equal while none is in flight, so that a commit can
+ * wait out one begun from the scene it replaces (`flush_wait`). The tick
  * changes the timer and the request with interrupts off; everyone else
  * changes them with interrupts off too.
  */
@@ -99,7 +102,8 @@ struct vkms_device {
     int composer_enabled, composer_hold;
     int crc_pending;
     uint64_t frame_start, frame_end, crc_next;
-    wait_queue_t composer_wait;
+    uint32_t compose_begun, compose_ended;
+    wait_queue_t composer_wait, flush_wait;
     int composer_started;
 };
 
@@ -439,30 +443,28 @@ static void scene_get(struct vkms_scene *s)
     drm_property_blob_get(s->gamma);
 }
 
-/**
- * Compose the frames the vblanks asked for, Linux's vkms_composer_worker:
- * the request and a copy of the scene taken with interrupts off, the
- * scene composed, and its CRC entered for each frame from `frame_start` to
- * `frame_end`, so that a composer that fell behind catches up. Nothing
- * when no frame is asked for. The composer thread's work, and the host
- * tests'. May sleep.
- */
-static void vkms_composer_run(struct vkms_device *v)
-{
-    struct vkms_scene s;
+/* A composition the composer thread took: the scene, held, the frames
+ * from `start` to `end` it is for, whether a vblank asked for them, and
+ * its number among the compositions begun (`compose_begun`). */
+struct vkms_job {
+    struct vkms_scene scene;
     uint64_t start, end;
-    uint32_t flags, crc, entered = 0;
     int pending;
+    uint32_t seq;
+};
 
-    flags = kirq_save();
-    pending = v->crc_pending;
-    start = v->frame_start;
-    end = v->frame_end;
-    v->crc_pending = 0;
-    s = v->scene;
-    scene_get(&s);
-    kirq_restore(flags);
-    if (pending && s.active && s.width && s.height && vkms_compose(&s, &crc) == 0) {
+/**
+ * Compose the scene `s` once and enter its CRC for each frame from `start`
+ * to `end`, as Linux's vkms_composer_worker does, so that a composer that
+ * fell behind catches up; `catchups` counts a pass that entered more than
+ * one. Nothing for a scene that shows nothing. May sleep.
+ */
+static void compose_enter(struct vkms_device *v, const struct vkms_scene *s, uint64_t start,
+                          uint64_t end)
+{
+    uint32_t flags, crc, entered = 0;
+
+    if (s->active && s->width && s->height && vkms_compose(s, &crc) == 0) {
         while (start <= end) {
             flags = kirq_save();
             if (drm_crtc_add_crc_entry(&v->crtc, 1, (uint32_t)start, &crc) == 0) {
@@ -477,7 +479,53 @@ static void vkms_composer_run(struct vkms_device *v)
         v->catchups++;
         kirq_restore(flags);
     }
-    scene_put(&s);
+}
+
+/** Take the frames the vblanks asked for into `j`, with a hold on the scene
+ * they show and, when there are any, the next composition's number. */
+static void vkms_composer_take(struct vkms_device *v, struct vkms_job *j)
+{
+    uint32_t flags = kirq_save();
+
+    j->pending = v->crc_pending;
+    j->start = v->frame_start;
+    j->end = v->frame_end;
+    v->crc_pending = 0;
+    j->scene = v->scene;
+    scene_get(&j->scene);
+    j->seq = j->pending ? ++v->compose_begun : 0;
+    kirq_restore(flags);
+}
+
+/** Compose what `j` took, end its composition for a commit that waits on it
+ * (`vkms_crtc_flush`), and let go of its scene. May sleep. */
+static void vkms_composer_finish(struct vkms_device *v, struct vkms_job *j)
+{
+    uint32_t flags;
+
+    if (j->pending) {
+        compose_enter(v, &j->scene, j->start, j->end);
+        flags = kirq_save();
+        v->compose_ended = j->seq;
+        kirq_restore(flags);
+        wq_wake_all(&v->flush_wait);
+    }
+    scene_put(&j->scene);
+}
+
+/**
+ * Compose the frames the vblanks asked for, Linux's vkms_composer_worker:
+ * the request and a hold on the scene taken with interrupts off, the scene
+ * composed, and its CRC entered for each frame from `frame_start` to
+ * `frame_end`. Nothing when no frame is asked for. The composer thread's
+ * work, and the host tests'. May sleep.
+ */
+static void vkms_composer_run(struct vkms_device *v)
+{
+    struct vkms_job j;
+
+    vkms_composer_take(v, &j);
+    vkms_composer_finish(v, &j);
 }
 
 #ifndef RACH2_HOSTTEST
@@ -756,11 +804,31 @@ static int32_t vkms_plane_check(struct drm_plane *plane, struct drm_atomic_state
                                                1, 1);
 }
 
+/* What a commit waits for: the device's composer to end composition
+ * number `begun`. */
+struct vkms_flush {
+    const struct vkms_device *v;
+    uint32_t begun;
+};
+
+/** Whether the composer thread has ended every composition up to the one
+ * the `struct vkms_flush` at `arg` names. */
+static int composer_caught_up(void *arg)
+{
+    const struct vkms_flush *w = (const struct vkms_flush *)arg;
+
+    return (int32_t)(w->v->compose_ended - w->begun) >= 0;
+}
+
 /**
  * The CRTC's flush, Linux's vkms_crtc_atomic_flush: the new states become
  * the scene the composer composes, each visible plane of the CRTC with its
- * framebuffer held, bottom first. The scene it replaces is let go once the
- * new one is in place, with interrupts off between.
+ * framebuffer held, bottom first, with interrupts off. As Linux's
+ * vkms_atomic_commit_tail flushes the replaced state's composer work, the
+ * frames asked for before it are composed here from the scene it replaces,
+ * and the commit waits out a composition the composer thread began from
+ * that scene, so that no CRC of the old scene is entered after the commit
+ * returns. The replaced scene is let go after that. May sleep.
  */
 static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
@@ -768,7 +836,10 @@ static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *stat
     struct vkms_scene s, old;
     const struct drm_plane_state *ps;
     struct vkms_frame *f;
+    uint64_t start, end;
+    struct vkms_flush w;
     uint32_t i, flags;
+    int pending;
 
     (void)state;
     k_memset(&s, 0, sizeof(s));
@@ -795,7 +866,17 @@ static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *stat
     if (old.active != s.active || drm_atomic_crtc_needs_modeset(crtc->state)) {
         v->crc_next = 0;
     }
+    pending = v->crc_pending;
+    start = v->frame_start;
+    end = v->frame_end;
+    v->crc_pending = 0;
+    w.v = v;
+    w.begun = v->compose_begun;
     kirq_restore(flags);
+    if (pending) {
+        compose_enter(v, &old, start, end);
+    }
+    (void)wq_wait_event_nointr(&v->flush_wait, composer_caught_up, &w);
     scene_put(&old);
 }
 
@@ -984,6 +1065,7 @@ int32_t vkms_probe(void)
     drm_dev_init(&v->drm, &vkms_driver);
     v->drm.driver_priv = v;
     wait_queue_init(&v->composer_wait);
+    wait_queue_init(&v->flush_wait);
     err = vkms_kms_init(v, cursor, overlay);
     if (err == 0) {
         err = drm_dev_register(&v->drm);
