@@ -1360,7 +1360,7 @@ static int met_wait(struct buffer_wait *wait, struct buffer_wait *met)
  * neighbours when it waits for nothing itself; then, on a
  * write-through disk, the flush; then `b`. With `WRITE_ORDER_ONLY` in
  * `flags`, each of them and `b` is written without the disk's flush, in
- * the same order, each answered before the next is sent, and the flush
+ * the same order, each request answered before the next is sent, and the flush
  * comes only before an `after` (`flush_before`). One of them held by another
  * process lets `b` go for the wait, since that holder may be waiting for
  * `b`, and the caller looks again; so does a `b` that a reader took since

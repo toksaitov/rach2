@@ -260,7 +260,8 @@ int bcache_flush(block_device_t *dev);
  * until nothing is left to wait for, and once a write of the device has
  * failed writes none of them: not alone, not in a run, and not ahead of an
  * `after`, which stays dirty with it. On a write-through disk the flush
- * comes between. A sync still retries them. The callbacks run under the
+ * comes between, but in `bcache_sync_block_ordered`, which flushes only
+ * before an `after`. A sync still retries them. The callbacks run under the
  * walks of the dirty buffers, under the cache's write lock, and at a
  * release under its spinlock, and must not sleep; the caller clears them
  * before `arg` goes, which waits for a walk that runs them.
@@ -298,7 +299,8 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk);
 
 /**
  * `bcache_sync_block` without the disk's flush: the blocks `blk` waits for
- * are written first and each is answered before the next is sent, so a
+ * are written first, and each request that holds them is answered before a
+ * block that waits for it is sent, so a
  * stop of the kernel finds them on the disk in that order, but none of the
  * writes, `blk`'s included, is flushed out of a disk's own cache. A loss of
  * power on a disk with a volatile cache may keep a later write and lose an

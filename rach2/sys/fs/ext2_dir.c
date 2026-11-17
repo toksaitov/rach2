@@ -967,9 +967,10 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
  * failed, as a strict mount's next write is, so that an operation in
  * progress stops there; or the write's -errno, with the block still dirty.
  *
- * As in Linux, the disk's cache is not flushed: the blocks the directory
- * block waits for are written before it, each answered before the next
- * is sent (`bcache_sync_block_ordered`), and `fsync`, `sync` and an
+ * As in Linux, the disk's cache is not flushed but before an `after`: the
+ * blocks the directory block waits for are written before it, their
+ * requests answered before its own is sent (`bcache_sync_block_ordered`),
+ * and `fsync`, `sync` and an
  * unmount put them on the medium. Linux next writes the
  * directory's inode; here `inode_commit` writes it where a later step
  * depends on it and when a mkdir raised its count, and otherwise it writes
@@ -1013,9 +1014,10 @@ static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
  * blocks, and the blocks of a regular file beside it in the table block
  * that allocated or freed since its last write. Those are what the write
  * costs past its own request: a directory's own blocks were written as
- * they changed (`dir_commit`). As there, nothing is flushed: each block
- * is answered before the next is sent (`bcache_sync_block_ordered`), the
- * order a stop of the kernel finds on the disk. A strict mount wrote the
+ * they changed (`dir_commit`). As there, nothing is flushed but before an
+ * `after`: each request is answered before one that waits for it is sent
+ * (`bcache_sync_block_ordered`), the order a stop of the kernel finds on
+ * the disk. A strict mount wrote the
  * inode through already.
  *
  * A file the file-write batch holds was not stored into the table block
