@@ -81,10 +81,12 @@ struct vkms_scene {
  * vblanks go on again is not taken for frames left out; `crc_missed`
  * counts the frames from `crc_next` that a later vblank, finding no request
  * pending, left out of its own; `catchups` counts the composer's passes
- * that entered more than one frame's CRC. `compose_begun` and
- * `compose_ended` number the compositions the composer thread has begun and
- * the last it ended, equal while none is in flight, so that a commit can
- * wait out one begun from the scene it replaces (`flush_wait`). The tick
+ * that entered more than one frame's CRC. `composing` is set while the
+ * composer thread or a commit composes, so that one composes at a time and
+ * the CRCs are entered in frame order, as Linux's ordered composer workqueue
+ * runs one work at a time; a commit waits for it to fall (`flush_wait`), and
+ * the composer thread for it to fall with a request pending
+ * (`composer_wait`). The tick
  * changes the timer and the request with interrupts off; everyone else
  * changes them with interrupts off too.
  */
@@ -102,7 +104,7 @@ struct vkms_device {
     int composer_enabled, composer_hold;
     int crc_pending;
     uint64_t frame_start, frame_end, crc_next;
-    uint32_t compose_begun, compose_ended;
+    int composing;
     wait_queue_t composer_wait, flush_wait;
     int composer_started;
 };
@@ -328,9 +330,17 @@ static void compose_give_way(void)
     sched_service_point();
 }
 #else
-/** The host tests have no big lock and no other thread. */
+/* The host tests have no big lock and no other thread; a test may run here
+ * what another thread would run while the composer gives way. */
+static void (*compose_give_way_hook)(void);
+
+/** Run the test's `compose_give_way_hook`, if any. */
 static void compose_give_way(void)
-{}
+{
+    if (compose_give_way_hook) {
+        compose_give_way_hook();
+    }
+}
 #endif
 
 /**
@@ -443,14 +453,12 @@ static void scene_get(struct vkms_scene *s)
     drm_property_blob_get(s->gamma);
 }
 
-/* A composition the composer thread took: the scene, held, the frames
- * from `start` to `end` it is for, whether a vblank asked for them, and
- * its number among the compositions begun (`compose_begun`). */
+/* A composition the composer thread took: whether it took one, and then
+ * the scene, held, and the frames from `start` to `end` it is for. */
 struct vkms_job {
     struct vkms_scene scene;
     uint64_t start, end;
     int pending;
-    uint32_t seq;
 };
 
 /**
@@ -482,34 +490,38 @@ static void compose_enter(struct vkms_device *v, const struct vkms_scene *s, uin
 }
 
 /** Take the frames the vblanks asked for into `j`, with a hold on the scene
- * they show and, when there are any, the next composition's number. */
+ * they show, and mark the device `composing`; nothing (`j->pending` 0) when
+ * no frame is asked for or a commit composes. */
 static void vkms_composer_take(struct vkms_device *v, struct vkms_job *j)
 {
     uint32_t flags = kirq_save();
 
-    j->pending = v->crc_pending;
-    j->start = v->frame_start;
-    j->end = v->frame_end;
-    v->crc_pending = 0;
-    j->scene = v->scene;
-    scene_get(&j->scene);
-    j->seq = j->pending ? ++v->compose_begun : 0;
+    j->pending = v->crc_pending && !v->composing;
+    if (j->pending) {
+        j->start = v->frame_start;
+        j->end = v->frame_end;
+        v->crc_pending = 0;
+        v->composing = 1;
+        j->scene = v->scene;
+        scene_get(&j->scene);
+    }
     kirq_restore(flags);
 }
 
-/** Compose what `j` took, end its composition for a commit that waits on it
- * (`vkms_crtc_flush`), and let go of its scene. May sleep. */
+/** Compose what `j` took, end the device's `composing` for a commit that
+ * waits on it (`vkms_crtc_flush`), and let go of the scene. May sleep. */
 static void vkms_composer_finish(struct vkms_device *v, struct vkms_job *j)
 {
     uint32_t flags;
 
-    if (j->pending) {
-        compose_enter(v, &j->scene, j->start, j->end);
-        flags = kirq_save();
-        v->compose_ended = j->seq;
-        kirq_restore(flags);
-        wq_wake_all(&v->flush_wait);
+    if (!j->pending) {
+        return;
     }
+    compose_enter(v, &j->scene, j->start, j->end);
+    flags = kirq_save();
+    v->composing = 0;
+    kirq_restore(flags);
+    wq_wake_all(&v->flush_wait);
     scene_put(&j->scene);
 }
 
@@ -529,10 +541,12 @@ static void vkms_composer_run(struct vkms_device *v)
 }
 
 #ifndef RACH2_HOSTTEST
-/** Whether a frame is asked for. */
+/** Whether a frame is asked for and no commit composes. */
 static int composer_ready(void *arg)
 {
-    return ((struct vkms_device *)arg)->crc_pending;
+    const struct vkms_device *v = (const struct vkms_device *)arg;
+
+    return v->crc_pending && !v->composing;
 }
 
 /** The composer thread, kvkms: sleep in an idle wait until a vblank asks for a
@@ -804,20 +818,10 @@ static int32_t vkms_plane_check(struct drm_plane *plane, struct drm_atomic_state
                                                1, 1);
 }
 
-/* What a commit waits for: the device's composer to end composition
- * number `begun`. */
-struct vkms_flush {
-    const struct vkms_device *v;
-    uint32_t begun;
-};
-
-/** Whether the composer thread has ended every composition up to the one
- * the `struct vkms_flush` at `arg` names. */
-static int composer_caught_up(void *arg)
+/** Whether nobody composes for the device at `arg`. */
+static int composer_idle(void *arg)
 {
-    const struct vkms_flush *w = (const struct vkms_flush *)arg;
-
-    return (int32_t)(w->v->compose_ended - w->begun) >= 0;
+    return !((const struct vkms_device *)arg)->composing;
 }
 
 /**
@@ -825,10 +829,11 @@ static int composer_caught_up(void *arg)
  * the scene the composer composes, each visible plane of the CRTC with its
  * framebuffer held, bottom first, with interrupts off. As Linux's
  * vkms_atomic_commit_tail flushes the replaced state's composer work, the
- * frames asked for before it are composed here from the scene it replaces,
- * and the commit waits out a composition the composer thread began from
- * that scene, so that no CRC of the old scene is entered after the commit
- * returns. The replaced scene is let go after that. May sleep.
+ * commit waits out a composition the composer thread began, then marks the
+ * device `composing` while it swaps the scene and composes the frames asked
+ * for before it from the scene it replaces, so that the CRCs keep frame
+ * order and none of the old scene is entered after the commit returns. The
+ * replaced scene is let go after that. May sleep.
  */
 static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
@@ -837,7 +842,6 @@ static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *stat
     const struct drm_plane_state *ps;
     struct vkms_frame *f;
     uint64_t start, end;
-    struct vkms_flush w;
     uint32_t i, flags;
     int pending;
 
@@ -860,7 +864,15 @@ static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *stat
         f->rotation = ps->rotation;
     }
     scene_get(&s);
-    flags = kirq_save();
+    for (;;) {
+        (void)wq_wait_event_nointr(&v->flush_wait, composer_idle, v);
+        flags = kirq_save();
+        if (!v->composing) {
+            break;
+        }
+        kirq_restore(flags);
+    }
+    v->composing = 1;
     old = v->scene;
     v->scene = s;
     if (old.active != s.active || drm_atomic_crtc_needs_modeset(crtc->state)) {
@@ -870,13 +882,14 @@ static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *stat
     start = v->frame_start;
     end = v->frame_end;
     v->crc_pending = 0;
-    w.v = v;
-    w.begun = v->compose_begun;
     kirq_restore(flags);
     if (pending) {
         compose_enter(v, &old, start, end);
     }
-    (void)wq_wait_event_nointr(&v->flush_wait, composer_caught_up, &w);
+    flags = kirq_save();
+    v->composing = 0;
+    kirq_restore(flags);
+    wq_wake_all(&v->composer_wait);
     scene_put(&old);
 }
 

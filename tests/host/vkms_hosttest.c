@@ -318,16 +318,33 @@ static void wait_hook(wq_cond_fn cond, void *arg)
 }
 
 /* A composition the composer thread took before a commit, which a wait of
- * the commit lets end, as the thread would while the committer sleeps; and
- * whether the commit's wait for the composer ran. */
+ * the commit lets end, as the thread would while the committer sleeps;
+ * whether the commit's wait for the composer ran; and whether the composer
+ * thread, tried while the commit composed, took a frame. */
 static struct vkms_job *in_flight;
-static int flush_waited;
+static int flush_waited, gave_way, took_beside;
+
+/** `compose_give_way_hook`: once the commit composes, ask a frame and try
+ * the composer thread, which must take nothing. */
+static void beside_hook(void)
+{
+    struct vkms_job k;
+
+    if (in_flight || gave_way) {
+        return;
+    }
+    gave_way = 1;
+    frame();
+    vkms_composer_take(v, &k);
+    took_beside = k.pending;
+    vkms_composer_finish(v, &k);
+}
 
 /** `wait_hook`, which first ends `in_flight` when the commit waits for the
- * composer (`composer_caught_up`). */
+ * composer (`composer_idle`). */
 static void flush_hook(wq_cond_fn cond, void *arg)
 {
-    if (cond == composer_caught_up) {
+    if (cond == composer_idle) {
         flush_waited = 1;
         if (in_flight) {
             vkms_composer_finish(v, in_flight);
@@ -873,7 +890,7 @@ static void row_commit_flush(void)
 {
     struct req r;
     struct vkms_job j;
-    uint32_t crc_a, crc_b, f, f0, val;
+    uint32_t crc_a, crc_b, f, f0, val, last, prev;
     int n_old = 0, n_new = 0, order = 1;
 
     want_primary(1, 0);
@@ -903,23 +920,38 @@ static void row_commit_flush(void)
 
     frame();
     vkms_composer_take(v, &j);
-    CHECK(j.pending && v->compose_begun != v->compose_ended, "flush/data: a composition in flight");
+    CHECK(j.pending && v->composing, "flush/data: a composition in flight");
+    frame();
+    last = (uint32_t)j.end + 1u;
     in_flight = &j;
-    flush_waited = 0;
+    flush_waited = gave_way = took_beside = 0;
     model_wait = flush_hook;
+    compose_give_way_hook = beside_hook;
     k_memset(&r, 0, sizeof(r));
     req_add(&r, &primary->base, mc->prop_fb_id, fb_a);
     CHECK(req_commit(&r, 0) == 0, "flush/data: a flip while the composer composes");
+    compose_give_way_hook = NULL;
     model_wait = wait_hook;
-    CHECK(flush_waited && in_flight == NULL && v->compose_begun == v->compose_ended,
+    CHECK(flush_waited && in_flight == NULL && !v->composing,
           "flush/data: the flip waited for the old scene's composition to end");
-    CHECK(next_entry(&f, &val) && val == crc_b,
-          "flush/data: that composition's CRC is the old scene's");
+    CHECK(gave_way && !took_beside,
+          "flush/data: the composer takes nothing while the flip composes");
     vkms_composer_run(v);
-    n_new = 0;
+    n_old = n_new = 0;
+    order = 1;
+    prev = (uint32_t)j.end - 1u;
     while (next_entry(&f, &val)) {
-        n_new += val == crc_a;
+        order &= f == prev + 1u;
+        prev = f;
+        if (f <= last) {
+            n_old += val == crc_b;
+        } else {
+            n_new += val == crc_a;
+            order &= val == crc_a;
+        }
     }
+    CHECK(order, "flush/data: the CRCs are entered in frame order, the new CRC after the flip");
+    CHECK(n_old == 2, "flush/data: the frame in flight and the one asked after it get the old CRC");
     CHECK(n_new >= 1, "flush/data: the frames after the flip get the new CRC");
 }
 
