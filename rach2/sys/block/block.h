@@ -149,9 +149,10 @@ struct block_device {
      * buffers that a `BLOCK_WRITE_THROUGH` disk answered without its flush,
      * and that count when the last flush the cache asked for began. While
      * the two are equal every `first` written is on the medium, and an
-     * `after` needs no flush before it (bcache.c, `order_flush`). */
-    uint32_t firsts_unflushed;
-    uint32_t firsts_flushed;
+     * `after` needs no flush before it (bcache.c, `order_flush`). 64 bits,
+     * so that neither wraps. */
+    uint64_t firsts_unflushed;
+    uint64_t firsts_flushed;
 };
 
 /* How long a chain of backing devices may be: a loop device stands on a real
