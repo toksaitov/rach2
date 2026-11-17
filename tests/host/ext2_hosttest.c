@@ -3266,23 +3266,46 @@ static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
  * remove leave the files' data dirty in the cache and send the device only
  * the root's entries, at each change, as Linux's `ext2_handle_dirsync`
  * writes a directory's pages (`dir_commit`), and before a new name the
- * metadata its inode needs: the inode bitmap and the descriptors, and then
- * the inode's table block (`inode_commit`), so that a stop never leaves an
- * entry naming a zeroed inode. No create flushes the disk, as Linux's
- * `ext2_handle_dirsync` does not (`bcache_sync_block_ordered`), and every
- * write is of a block at or before the root's, never the files' data past
- * it. An fsync writes the
+ * table block that holds its inode, with the inode in use there, in the
+ * write just before the root's (`inode_commit`), so that a stop never
+ * leaves an entry naming a zeroed inode. No create flushes the disk, as
+ * Linux's `ext2_handle_dirsync` does not (`bcache_sync_block_ordered`), and
+ * every write is of a block at or before the root's, never the files' data
+ * past it. An fsync writes the
  * rest and flushes the disk, and the volume unmounts clean. The device is
  * marked write-through, so that a write sent without `BLOCK_REQ_NOFLUSH`
  * would count as a flush; the removed file's inode and blocks are freed at
  * its last put.
  */
+static uint64_t node_table_lba(void *node, uint32_t *slot);
+
+/** Whether the writes `wlog[from, to)` of a create hold the table block of
+ * `node`'s inode, with that inode in use, in the write just before the
+ * first write of the root's block `root`, and that write of the root. */
+static int inode_before_name(void *node, int from, int to, uint64_t root)
+{
+    uint32_t slot = 0;
+    uint64_t table = node ? node_table_lba(node, &slot) : 0;
+    const unsigned char *p;
+    int r = from;
+
+    while (r < to && wlog_lba[r] != root * 8) {
+        r++;
+    }
+    if (!node || wlog_overflow || r == to || r == from || wlog_lba[r - 1] != table ||
+        !wlog_data[r - 1] || slot + 28 > wlog_count[r - 1] * 512) {
+        return 0;
+    }
+    p = wlog_data[r - 1] + slot;
+    return (p[0] | p[1] << 8) != 0 && (p[26] | p[27] << 8) != 0;
+}
+
 static void default_mount_row(void)
 {
     static unsigned char block[3 * 4096];
     void *f, *g;
     uint64_t root = 0;
-    int rc, flushes, i, entries, roots, before;
+    int rc, flushes, i, entries, f0, f1, g1;
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     (void)debugfs_numbers("stat /", "(0):", &root, 1);
@@ -3298,30 +3321,24 @@ static void default_mount_row(void)
     wlog_capture = 1;
     dev.flags |= BLOCK_WRITE_THROUGH;
     memset(block, 0x5a, sizeof(block));
+    f0 = wlog_n;
     f = make_file(mnt.root, "plain", &rc);
+    f1 = wlog_n;
     g = f ? make_file(mnt.root, "gone", &rc) : 0;
+    g1 = wlog_n;
+    entries = inode_before_name(f, f0, f1, root) && inode_before_name(g, f1, g1, root);
     check(f && g && write_at(f, block, sizeof(block), 0) == 0 &&
               write_at(g, block, sizeof(block), 0) == 0 && OPS->unlink(&mnt, mnt.root, "gone") == 0,
           "two creates, writes of three blocks to each and the remove of one");
     if (g) {
         OPS->put(&mnt, g);
     }
-    entries = root > 0 && flush_n == 0 && wlog_n > 0;
-    roots = 0;
-    before = 0;
+    entries = entries && root > 0 && flush_n == 0 && !wlog_overflow;
     for (i = 0; i < wlog_n; i++) {
         entries = entries && wlog_lba[i] <= root * 8 && wlog_count[i] == 8;
-        if (wlog_lba[i] != root * 8) {
-            before++;
-        } else if (roots < 2) {
-            entries = entries && before > 0;
-            roots++;
-            before = 0;
-        }
     }
-    check(entries && roots == 2,
-          "send the device each new inode's metadata before the root's entries, with no flush "
-          "and no file data, on a mount without dirsync");
+    check(entries, "send the device each new inode's table block, the inode in use, just before "
+                   "the root's entry, with no flush and no file data, on a mount without dirsync");
     flushes = flush_n;
     check(f && OPS->fsync(&mnt, 0) == 0 && wlog_n > 0 && flush_n > flushes,
           "and an fsync writes them and flushes the disk");
@@ -4578,6 +4595,17 @@ static void overlap_punch_row(void)
 #include "ext2_pair_rows.h"
 #include "ext2_service_rows.h"
 #include "ext2_group_rows.h"
+
+/** The first sector of the table block that holds `node`'s inode on `mnt`,
+ * with the inode's offset in that block in `*slot`. */
+static uint64_t node_table_lba(void *node, uint32_t *slot)
+{
+    const struct ext2_node *n = node;
+    uint64_t off = ext2_inode_offset(ext2_em_of(&mnt), n->ino);
+
+    *slot = (uint32_t)(off % BCACHE_BLOCK_BYTES);
+    return off / BCACHE_BLOCK_BYTES * (BCACHE_BLOCK_BYTES / 512);
+}
 #include "ext2_write_rows.h"
 #include "ext2_names_rows.h"
 
