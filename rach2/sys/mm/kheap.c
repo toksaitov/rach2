@@ -90,11 +90,9 @@ static uint32_t class_live[KHEAP_CLASSES];  /* blocks of each class in use */
 #define KHEAP_CLASS_SPARE 2u
 static uint32_t class_spare[KHEAP_CLASSES];
 
-/* Host tests count the free-list entries visited by a class free. */
-#ifdef KHEAP_COUNT_CLASS_STEPS
-static uint32_t class_steps;
-#define CLASS_STEP() ((void)class_steps++)
-#else
+/* A host test defines CLASS_STEP to count the list links a class free
+ * visits. */
+#ifndef CLASS_STEP
 #define CLASS_STEP() ((void)0)
 #endif
 

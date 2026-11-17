@@ -3,7 +3,9 @@
  * ones, the guarded runs kernel stacks come from, and the two ends the
  * cache's pages and the rest are taken from, the freed runs it keeps, and
  * the runs given back that wait, mapped, for one flush of them all. The
- * class rows count free-list steps in a mass free and check every size.
+ * class rows count free-list steps in a mass free and check every size,
+ * with the free blocks of the first pass poisoned for AddressSanitizer, so
+ * that a free that walks the class's other free blocks stops the test.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -219,8 +221,29 @@ void smp_kernel_flush(uintptr_t start, uintptr_t end)
     flushes++;
 }
 
-#define KHEAP_COUNT_CLASS_STEPS 1
+/* The list links a class free visits, which kheap.c counts through
+ * CLASS_STEP; a heap without that hook counts none. */
+static uint32_t class_steps;
+#define CLASS_STEP() ((void)class_steps++)
+
 #include "../../rach2/sys/mm/kheap.c"
+
+#if defined(__SANITIZE_ADDRESS__)
+#define TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define TEST_ASAN 1
+#endif
+#endif
+#ifdef TEST_ASAN
+void __asan_poison_memory_region(void const volatile *addr, size_t size);
+void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+#define POISON(p, n)   __asan_poison_memory_region((p), (n))
+#define UNPOISON(p, n) __asan_unpoison_memory_region((p), (n))
+#else
+#define POISON(p, n)   ((void)(p), (void)(n))
+#define UNPOISON(p, n) ((void)(p), (void)(n))
+#endif
 
 /** Unmap the waiting runs, as an allocation that finds no room or reclaim
  * would, before a row counts the frames out. */
@@ -671,7 +694,12 @@ static void room_rows(void)
 #define MASS_BLOCKS 240000u
 
 /** Free every other block first, so many pages have free blocks when the
- * second pass empties them. Check each free and count the pages returned. */
+ * second pass empties them. Check each free and count the pages returned.
+ * The blocks the first pass freed are poisoned through the second, which
+ * neither frees nor allocates them: a free that visits the class's free
+ * blocks outside its own page, as a walk of one free list for the class
+ * does when a page goes back, reads one of them, and AddressSanitizer
+ * stops the test there. */
 static void class_row(uint32_t cls, uint32_t count)
 {
     static void *blocks[MASS_BLOCKS];
@@ -696,6 +724,9 @@ static void class_row(uint32_t cls, uint32_t count)
     CHECK(info.live == count && held == (count + info.per_page - 1u) / info.per_page,
           "class accounting matches the blocks and pages taken");
     for (pass = 0; pass < 2; pass++) {
+        for (i = 0; pass == 1 && i < count; i += 2) {
+            POISON(blocks[i], class_size[cls]);
+        }
         for (i = pass; i < count; i += 2) {
             uint32_t before = class_pages[cls];
 
@@ -711,6 +742,9 @@ static void class_row(uint32_t cls, uint32_t count)
                 }
             }
         }
+    }
+    for (i = 0; i < count; i += 2) {
+        UNPOISON(blocks[i], class_size[cls]);
     }
     CHECK(longest > 0 && longest <= 5, "each free visits at most five free-list entries");
     CHECK(longest_return > 0 && longest_return <= 5 && returned + KHEAP_CLASS_SPARE == held,
