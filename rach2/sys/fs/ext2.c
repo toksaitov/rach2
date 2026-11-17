@@ -1548,17 +1548,22 @@ static void node_final(struct ext2_mount *em, struct ext2_node *n)
  * the volume (`em_hold`), which reaps them once it has opened the mount again.
  * Called at the end of an operation, at the last unlock of a node, at a put and
  * in `ext2_sync`, so an unmount leaves none. A caller without the big lock
- * takes it when the list has a node.
+ * looks at the list without it only to return when it is empty, and takes the
+ * lock before it looks again or takes a node, since `node_final` adds to the
+ * list under the lock on another processor meanwhile: two callers that took
+ * the same node would free its inode twice, and the second would give back
+ * the lock of a node the first had freed. A node added after the look is the
+ * next caller's.
  */
 static void em_reap(struct ext2_mount *em)
 {
     struct ext2_node *volatile *reap = &em->reap;
-    int big = 0;
+    int big;
 
-    if (*reap && !file_locks_held() && !bkl_held()) {
-        bkl_enter();
-        big = 1;
+    if (!*reap || file_locks_held()) {
+        return;
     }
+    big = ext2_big_enter();
     while (em->reap && !file_locks_held() && !em->holding) {
         struct ext2_node *n = em->reap;
 
@@ -1570,9 +1575,7 @@ static void em_reap(struct ext2_mount *em)
         }
         node_free(em, n);
     }
-    if (big) {
-        bkl_exit();
-    }
+    ext2_big_exit(big);
 }
 
 /**
