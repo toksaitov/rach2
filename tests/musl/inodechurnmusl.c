@@ -326,7 +326,8 @@ static int log_clean(void)
     int bad = 0;
 
     if (n < 0) {
-        fail("klogctl", "read all", errno);
+        fprintf(stderr, "inodechurnmusl: klogctl: read all: %s\n", strerror(errno));
+        return 1;
     }
     ring[n] = '\0';
     for (p = ring; (p = strstr(p, "whose bit is clear")) != NULL; p = eol) {
