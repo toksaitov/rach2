@@ -245,8 +245,10 @@ void ptimer_times_unlock(uint32_t irq);
 /** Read debugfs's cputime_test: the settings still to wait, those of the
  * last `arm` whose wait a tick came due in and was charged by the arming's
  * end, the carries of the forced torn write since the last `spl`, and
- * those of them a read of a clock of processor time began in, on one line,
- * into `buf` of `cap` bytes; the line's length. */
+ * those of them a read of a clock of processor time was under way in, one
+ * that began while the halves were apart or began before and waited for
+ * `timer_lock` through them, on one line, into `buf` of `cap` bytes; the
+ * line's length. */
 int32_t ptimer_test_show(void *data, char *buf, uint32_t cap);
 
 /**

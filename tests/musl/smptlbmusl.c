@@ -340,10 +340,11 @@ static void untorn_counts(long long ticks, long long need, long long ms)
  * The child of `untorn`: carry the count of a thread spinning on processor
  * 1 past 2^32 ticks and read its clock and the process's on processor 0
  * meanwhile. Exits 0 when every reading followed the one before and a read
- * began while the carry's halves were apart, 2 for a reading that did not
+ * was under way while the carry's halves were apart, one that began then or
+ * began before and waited for the carry's lock, 2 for a reading that did not
  * follow, 3 when the count was not seen past 2^32 within a minute of
- * monotonic time or no read was under way in the carry, and 4 when the thread
- * or cputime_test failed.
+ * monotonic time or no read was under way in the carry, and 4 when the
+ * thread or cputime_test failed.
  */
 static void untorn_child(void)
 {
