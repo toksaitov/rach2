@@ -848,10 +848,10 @@ static void user_entry(const isr_params_t *params)
 
 /**
  * Panic at once for an exception taken while the panic reads the running
- * process (`k_panic_reading`), before the router takes the big lock;
- * return otherwise. Interrupts are off through the panic, so the exception
- * is the read's own, and the panic that follows reports the first one
- * again (`k_panic`). The panic may run without the lock, from
+ * process or walks its stack (`k_panic_reading`), before the router takes
+ * the big lock; return otherwise. Interrupts are off through the panic, so
+ * the exception is the read's own, and the panic that follows reports the
+ * first one again (`k_panic`). The panic may run without the lock, from
  * `_hardware_fault_handler` or a double fault, and a processor it stopped
  * may hold the lock for good, so taking it here could spin for ever and
  * the second report, the countdown and the restart would never come.
@@ -873,7 +873,7 @@ static void panic_if_reading(const isr_params_t *params)
     if (params->vector == 14) {
         k_panic_note_address(arch_fault_address());
     }
-    k_panic("exception in the panic's read of the process");
+    k_panic("exception in the panic's read of the process or its stack");
 }
 
 /**
@@ -982,7 +982,8 @@ void isr_syscall_at(isr_params_t *params, uint64_t start)
  * (`isr_entry_lock`); `isr_leave` gives the lock back. `params` is the
  * saved register frame, so that a handler can change the saved registers,
  * a system call's result for one. An exception during the panic's read of
- * the process panics before the lock is taken (`panic_if_reading`).
+ * the process or its stack panics before the lock is taken
+ * (`panic_if_reading`).
  */
 void _isr_router(isr_params_t *params)
 {

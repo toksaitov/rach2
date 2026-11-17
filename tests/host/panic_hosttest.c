@@ -21,7 +21,8 @@
  * `host_cpu` is the processor a call runs on, so that a row can note a
  * second processor's fault, and `compat/fault_host.c` gives a page that
  * faults on every access, which a row makes the running process, so that the
- * report's read of it faults for real.
+ * walk of the stack and the report's read of it fault for real, or has the
+ * walk read alone.
  */
 #include <setjmp.h>
 
@@ -153,11 +154,22 @@ uint64_t arch_cycles(void)
 void platform_pmu_disable(void)
 {}
 
-/** No kernel stack to walk here. */
+/* A page the walk of the stack reads, as the kernel's walk reads frames a
+ * damaged stack points to, or 0 for none. */
+static volatile char *walk_page;
+
+/** The walk of the stack: it reads the running process's stack top, as the
+ * kernel's does, and `walk_page` when one is set, then logs its heading;
+ * there are no frames here to give. */
 void platform_show_stack(const char *subsystem, int level)
 {
-    (void)subsystem;
-    (void)level;
+    process_t *cur = current_proc;
+    volatile uintptr_t top = cur ? cur->kernel_stack : 0;
+
+    if (walk_page != 0) {
+        top += (uintptr_t)*walk_page;
+    }
+    klog(level, subsystem, "Call Trace:");
 }
 
 /** No lockup detector to touch here. */
@@ -348,8 +360,10 @@ static void restart(void)
     k_memset(&panic_fault, 0, sizeof(panic_fault));
     panic_reason = 0;
     host_cpu = 0;
-    reading_process = 0;
+    panic_reading = 0;
     process_unsafe = 0;
+    stack_unsafe = 0;
+    walk_page = 0;
     first[0] = '\0';
     first_taken = 0;
     wire_len = 0;
@@ -544,7 +558,7 @@ static void edges(void)
     restart();
     panic_timeout = -1;
     panic_reason = "no process"; /* the first panic's, reading the process */
-    reading_process = 1;
+    panic_reading = READ_PROCESS;
     stop("fault: in the read");
     CHECK(restarted && waited_us == 0 && strstr(wire, "rebooting in") == 0,
           "panic=-1 resets at once, with no countdown");
@@ -587,13 +601,22 @@ static void faults(void)
                            0};
     const char *again[] = {"rebooting", "build " RACH2_HEAD,     "cpu 0",        0,
                            0,           "page fault, error 0x2", "panic: first", 0};
+    const char *walked[] = {"rebooting",
+                            "build " RACH2_HEAD,
+                            "cpu 0  pid 42",
+                            "cmd ?[2J?[H",
+                            0,
+                            0,
+                            "page fault, error 0x2",
+                            "panic: first",
+                            0};
     const char *top;
     unsigned int fit, col;
     int bare;
     void *page = host_fault_page();
 
-    owner[4] = again[3] = address("ip ", 0x106000);
-    owner[5] = again[4] = address("addr ", 0xdead0);
+    owner[4] = again[3] = walked[4] = address("ip ", 0x106000);
+    owner[5] = again[4] = walked[5] = address("addr ", 0xdead0);
     restart();
     panic_timeout = 0;
     k_panic_note_fault("page fault", 0x106000, 2);
@@ -621,6 +644,25 @@ static void faults(void)
         CHECK(strstr(wire, "panic: stopped: first") != 0 &&
                   strstr(wire, "panic: stopped: unrecoverable CPU exception") != 0,
               "and the record has both reasons");
+        CHECK(strstr(wire, "Call Trace:") == 0,
+              "the walk of the stack, which reads the process first, faults and is skipped");
+
+        restart();
+        panic_timeout = -1;
+        fault_outside = 0;
+        walk_page = (volatile char *)page;
+        host_fault_catch(read_fault);
+        k_panic_note_fault("page fault", 0x106000, 2);
+        k_panic_note_address(0xdead0);
+        stop("first");
+        host_fault_catch(0);
+        CHECK(!fault_outside && restarted && report_reads(walked),
+              "a fault in the walk of the stack panics again, with the first reason and fault "
+              "and the process");
+        CHECK(strstr(wire, "panic: stopped: first") != 0 &&
+                  strstr(wire, "panic: stopped: unrecoverable CPU exception") != 0 &&
+                  strstr(wire, "Call Trace:") == 0,
+              "and the record has both reasons and no trace");
     }
 
     panic_timeout = 100000;

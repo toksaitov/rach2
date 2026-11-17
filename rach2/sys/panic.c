@@ -284,10 +284,15 @@ static struct {
     int picture_top;
 } report;
 
-/* Set while the report reads the running process: a fault there panics
- * again, and that panic leaves the process out (`process_unsafe`). */
-static volatile int reading_process;
-static int process_unsafe;
+/* What the panic reads, while it reads it, that a fault may be about: the
+ * running process's record for the report (READ_PROCESS), or the panicking
+ * thread's stack, found through that record, for the call trace
+ * (READ_STACK); 0 otherwise. A fault there panics again, and that panic and
+ * any after it leave out what faulted (`process_unsafe`, `stack_unsafe`). */
+#define READ_PROCESS 1
+#define READ_STACK   2
+static volatile int panic_reading;
+static int process_unsafe, stack_unsafe;
 
 /* The reason and the note of the owner's first panic, which a panic that a
  * fault in the read of the process raises reports again in place of its
@@ -297,7 +302,7 @@ static struct fault_note panic_fault;
 
 int k_panic_reading(void)
 {
-    return reading_process && k_panicking();
+    return panic_reading != 0 && k_panicking();
 }
 
 /** Begin a new line of the report, empty, and return it; the last line is
@@ -420,7 +425,7 @@ static void build_report(const char *str, int timeout, int saved)
     put_str(line, "cpu ");
     put_num(line, (long)arch_cpu_id(), 'd');
     if (!process_unsafe) {
-        reading_process = 1;
+        panic_reading = READ_PROCESS;
         k_barrier();
         p = current_proc;
         if (p != NULL) {
@@ -433,7 +438,7 @@ static void build_report(const char *str, int timeout, int saved)
             }
         }
         k_barrier();
-        reading_process = 0;
+        panic_reading = 0;
     }
 
     if (panic_fault.name != NULL) {
@@ -646,11 +651,17 @@ static void draw_report(void)
  * its countdown and the reset all follow the one value even when a write
  * to /proc/sys/kernel/panic raced the panic.
  *
- * A panic raised by a fault in the report's read of the process
- * (`reading_process`) writes its own reason to the record and then reports
- * the first panic's reason and exception again, with the process left out,
- * since the first is what stopped the machine; Linux lets the owner's
- * nested oops go on in the same way (arch/x86/kernel/dumpstack.c:361-366).
+ * The walk of the stack and the report's read of the process both read
+ * through `current_proc`, which may be what the fault is about, and the walk
+ * reads frames a damaged stack may point anywhere; each runs with
+ * `panic_reading` saying so, and a fault in it panics again at once
+ * (`k_panic_reading`), before the exception router takes the big lock. A
+ * panic raised so writes its own reason to the record, skips what faulted,
+ * here and in any panic after it, and reports the first panic's reason and
+ * exception again, since the first is what stopped the machine; Linux lets
+ * the owner's nested oops go on in the same way
+ * (arch/x86/kernel/dumpstack.c:361-366). A bad process pointer faults in
+ * both, so that the report comes from the third panic, with neither.
  */
 void k_panic(const char *str)
 {
@@ -659,9 +670,13 @@ void k_panic(const char *str)
 
     k_panic_begin();
     timeout = *(volatile int *)&panic_timeout;
-    if (reading_process) {
-        process_unsafe = 1;
-        reading_process = 0;
+    if (panic_reading != 0) {
+        if (panic_reading == READ_STACK) {
+            stack_unsafe = 1;
+        } else {
+            process_unsafe = 1;
+        }
+        panic_reading = 0;
     } else {
         panic_reason = str;
         k_memcpy(&panic_fault, &fault_notes[arch_cpu_id()], sizeof(panic_fault));
@@ -671,7 +686,13 @@ void k_panic(const char *str)
     klog_deliver_directly();
     netconsole_panic();
     klog(KLOG_CRIT, "panic", "stopped: %s", str);
-    platform_show_stack("panic", KLOG_CRIT);
+    if (!stack_unsafe) {
+        panic_reading = READ_STACK;
+        k_barrier();
+        platform_show_stack("panic", KLOG_CRIT);
+        k_barrier();
+        panic_reading = 0;
+    }
     str = panic_reason;
 
     build_report(str, timeout, 0);

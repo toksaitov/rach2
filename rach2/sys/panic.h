@@ -86,10 +86,10 @@ int k_panicking(void);
 
 /**
  * Whether this processor's panic is reading the running process for its
- * report. A fault handler tests it before it reads `current_proc` itself,
- * since the record may be what the fault is about, and panics at once
- * when it is set; that panic reports the first one's reason and leaves the
- * process out.
+ * report or walking the thread's stack for its call trace. A fault handler
+ * tests it before it reads `current_proc` itself, since the record may be
+ * what the fault is about, and panics at once when it is set; that panic
+ * reports the first one's reason and leaves out what faulted.
  */
 int k_panic_reading(void);
 

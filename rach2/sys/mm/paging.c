@@ -2404,10 +2404,11 @@ static int user_fault_done(isr_params_t *params, uintptr_t addr, int write, int 
 /**
  * Resolve a page fault, or end what caused it.
  *
- * Tried in order. A fault while the panic reads the running process
- * never gets here: the router panics for it before it takes the big lock
- * (`panic_if_reading` in isr.c). Any fault at a user-space address of
- * a live user process goes to `vm_resolve_in`, but an instruction fetch
+ * Tried in order. A fault while the panic reads the running process or
+ * walks its stack never gets here: the router panics for it before it
+ * takes the big lock (`panic_if_reading` in isr.c). Any fault at a
+ * user-space address of a live user process goes to `vm_resolve_in`, but
+ * an instruction fetch
  * from a region without
  * execute (`fetch_refused`) and a data access that the thread's protection
  * keys refuse (`fault_key`), which no resolution makes legal and which is
