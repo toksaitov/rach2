@@ -324,7 +324,7 @@ static void status(void)
     CHECK(itco_write(NULL, "V", 1) == 1);
     CHECK(itco_ioctl(NULL, 0x80045701u, (uintptr_t)&value) == 0 && value == 0x8100);
     CHECK(itco_write(NULL, "x", 1) == 1);
-    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0);
+    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0x20);
     value = 0;
     CHECK(itco_ioctl(NULL, 0x80045704u, (uintptr_t)&value) == -ENOTTY);
 }
@@ -378,6 +378,31 @@ static void trial(void)
         CHECK(model.regs[i] == TCO_RLD);
     }
     CHECK(model.writes - at == 12);
+}
+
+/** WDIOC_GETBOOTSTATUS is WDIOF_CARDRESET (0x20) after a boot that found
+ * SECOND_TO_STS set, as the second expiry leaves it, and 0 after one that
+ * found only the first stage's TIMEOUT or nothing; the attach reads both
+ * status words before it clears them. */
+static void boot_status(void)
+{
+    int value = -1;
+
+    setup();
+    model.words[TCO1_STS / 2] = 8;
+    model.words[TCO2_STS / 2] = 0;
+    CHECK(itco_attach(&watchdog, 3) == 0 && watchdog.boot_sts1 == 8 && watchdog.boot_sts2 == 0);
+    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0);
+    CHECK(itco_open(NULL, NULL, 0) == 0);
+    advance(&model, 10);
+    CHECK(model.resets == 1 && (model.words[TCO2_STS / 2] & 2));
+    /* The reset halts the timer and starts the next boot's attach. */
+    model.words[TCO1_CNT / 2] |= TCO_HALT;
+    watchdog.opened = watchdog.running = 0;
+    CHECK(itco_attach(&watchdog, 3) == 0 && watchdog.boot_sts2 == 6);
+    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0x20);
+    CHECK(model.words[TCO2_STS / 2] == 0);
+    CHECK(itco_attach(&watchdog, 3) == 0 && watchdog.bootstatus == 0);
 }
 
 /** Run `seconds` of the kernel's tick at 5 a second, the model's 0.6 s
@@ -751,6 +776,7 @@ int main(int argc, char **argv)
     CHECK(itco_write(NULL, bad_user, 3) == -EFAULT);
     halted();
     trial();
+    boot_status();
     boot();
     threaded();
     deadline();
