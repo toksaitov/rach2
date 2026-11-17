@@ -1233,10 +1233,17 @@ static int flush_before(const struct bbuf *b, uint32_t flags)
     return follows(b) && (!(flags & WRITE_ORDER_ONLY) || b->order == BCACHE_ORDER_AFTER);
 }
 
+/* How far `firsts_unflushed` may run ahead of `firsts_flushed`: the count
+ * stops there, still unequal, until a flush catches up, so it never wraps
+ * round to equal, and a snapshot older than the last acknowledged one is
+ * more than this behind and moves nothing. */
+#define FIRSTS_BOUND 0x40000000u
+
 /** Count a write of `n` buffers from `run` that `dev` answered with the
  * request `flags`: one more `first` write answered without the disk's
  * flush, when the request had `BLOCK_REQ_NOFLUSH` and a `first` among its
- * buffers. Called before `written_clean` clears their order. */
+ * buffers, up to `FIRSTS_BOUND` ahead of the last flush. Called before
+ * `written_clean` clears their order. */
 static void count_firsts(block_device_t *dev, struct bbuf *const *run, int n, uint32_t flags)
 {
     uint32_t lf;
@@ -1251,7 +1258,9 @@ static void count_firsts(block_device_t *dev, struct bbuf *const *run, int n, ui
         return;
     }
     lf = cache_lock();
-    dev->firsts_unflushed++;
+    if (dev->firsts_unflushed - dev->firsts_flushed < FIRSTS_BOUND) {
+        dev->firsts_unflushed++;
+    }
     cache_unlock(lf);
 }
 
@@ -1310,7 +1319,7 @@ static int flush_firsts(block_device_t *dev)
     rc = block_flush(dev);
     if (rc == 0) {
         lf = cache_lock();
-        if ((int32_t)(seen - dev->firsts_flushed) > 0) {
+        if (seen - dev->firsts_flushed <= FIRSTS_BOUND) {
             dev->firsts_flushed = seen;
         }
         cache_unlock(lf);
@@ -1318,22 +1327,35 @@ static int flush_firsts(block_device_t *dev)
     return rc;
 }
 
-/** Put what a write-through disk under `b`'s device holds in its cache on
- * the medium, before `b`, which must follow what went before it; a disk
- * with nothing unflushed answers at once. An `after` that names no blocks
- * follows only the `first` buffers, so it needs the flush only while one
- * was answered without it since the last flush began: a `first` written
- * with the flush is on the medium when answered. A failure is recorded as
- * a failed write's. 0, or -errno. */
-static int order_flush(struct bbuf *b)
+/** Whether every buffer of the `n` in `run` that waits for others is an
+ * `after` that names no blocks, and so waits for `first` buffers alone. */
+static int firsts_only(struct bbuf *const *run, int n)
 {
-    block_device_t *dev = b->dev;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (names_blocks(run[i]) || (follows(run[i]) && run[i]->order != BCACHE_ORDER_AFTER)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Put what a write-through disk under `dev` holds in its cache on the
+ * medium, before the `n` buffers of `run`, one of which must follow what
+ * went before it; a disk with nothing unflushed answers at once. An `after`
+ * that names no blocks follows only the `first` buffers, so a run of such
+ * blocks needs the flush only while a first was answered without it since
+ * the last flush began: a `first` written with the flush is on the medium
+ * when answered. A failure is recorded as a failed write's. 0, or -errno. */
+static int order_flush(block_device_t *dev, struct bbuf *const *run, int n)
+{
     int rc, held;
 
     if (!unflushed_flags(dev)) {
         return 0;
     }
-    if (b->order == BCACHE_ORDER_AFTER && !names_blocks(b)) {
+    if (firsts_only(run, n)) {
         uint32_t lf = cache_lock();
         int done = dev->firsts_unflushed == dev->firsts_flushed;
 
@@ -1487,7 +1509,7 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct buffer_wait *me
         }
     }
     if (rc == 0 && flush_before(b, flags)) {
-        rc = order_flush(b);
+        rc = order_flush(b->dev, &b, 1);
     }
     if (rc == 0) {
         rc = write_buffer_flags(b, flags);
@@ -1640,7 +1662,7 @@ static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
     if (n == 1) {
         return write_one_met(first, flags, met);
     }
-    rc = flush_before(first, flags) ? order_flush(first) : 0;
+    rc = flush_before(first, flags) ? order_flush(dev, run, n) : 0;
     if (rc != 0) {
         stage_free();
         for (i = 0; i < n; i++) {

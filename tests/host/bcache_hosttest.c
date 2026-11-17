@@ -276,6 +276,7 @@ static uint64_t writes_lba[8];
 /* The flushes made before each write, and each write's request flags. */
 static int writes_flushes[8];
 static uint32_t writes_flags[8];
+static unsigned writes_counts[8]; /* each write's sectors */
 static unsigned last_write_count; /* sectors of the last write */
 static int writes_made;
 /* A block another caller keys while this write is inside the device, which
@@ -475,6 +476,7 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
         writes_lba[writes_made] = lba;
         writes_flushes[writes_made] = blockmax_flushes;
         writes_flags[writes_made] = blockmax_last_flags;
+        writes_counts[writes_made] = count;
     }
     last_write_count = count;
     writes_made++;
@@ -1189,6 +1191,39 @@ static void failed_at_38(int order, int last)
 }
 
 /**
+ * Check on `wide`, made a write-through disk, with blocks 40 and 41 written
+ * last, that a reserve's run of an `after` beside an `after` that names
+ * blocks has the disk flushed before it although no `first` waits: block
+ * 40 may name the plain block 37, written without the flush.
+ */
+static void run_flush_rows(void)
+{
+    int k, flushed = 1;
+
+    bcache_sync(&wide);
+    bcache_sync_last(&wide, last_block, 0, 0);
+    wide.flags |= BLOCK_WRITE_THROUGH;
+    check(bcache_flush(&wide) == 0, "the run's disk starts flushed");
+    dirty_for(&wide, 37, 0, 0);
+    check(bcache_sync_block_ordered(&wide, 37) == 0, "and takes a plain block without the flush");
+    dirty_for(&wide, 39, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&wide, 40, 0, BCACHE_ORDER_AFTER);
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_reserve(&wide, 16) == 16 && writes_made > 0, "a reserve writes the two");
+    for (k = 0; k < writes_made && k < 8; k++) {
+        if (writes_lba[k] <= 40 * 8 && 40 * 8 < writes_lba[k] + writes_counts[k] &&
+            writes_flushes[k] == 0) {
+            flushed = 0;
+        }
+    }
+    check(flushed && !dirty_now(&wide, 40), "with the disk flushed before block 40");
+    wide.flags &= ~BLOCK_WRITE_THROUGH;
+    bcache_sync(&wide);
+    bcache_sync_last(&wide, 0, 0, 0);
+}
+
+/**
  * Check what a reclaim may write on `wide` once a write has failed, on the
  * cache of 16 buffers `reserve_rows` left. A block written last, barred
  * then, stays dirty: a shrink, a reserve and an eviction each leave the
@@ -1589,6 +1624,25 @@ static void flush_skip_rows(void)
     check(bcache_sync_block(&vast, 29) == 0 && writes_made == 1 && writes_flushes[0] == 1 &&
               blockmax_flushes == 1,
           "so the next `after` has the flush before it");
+
+    vast.firsts_flushed = 0xFFFFFFFFu;
+    vast.firsts_unflushed = 0xFFFFFFFFu;
+    dirty_for(&vast, 37, 0, BCACHE_ORDER_FIRST);
+    check(bcache_sync_block_ordered(&vast, 37) == 0 && vast.firsts_unflushed == 0,
+          "the count of firsts wraps past its top");
+    dirty_for(&vast, 30, 0, BCACHE_ORDER_AFTER);
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&vast, 30) == 0 && blockmax_flushes == 1 && vast.firsts_flushed == 0,
+          "and an `after` after the wrap is flushed before, and the flush counted");
+    vast.firsts_unflushed = 0x40000000u;
+    dirty_for(&vast, 38, 0, BCACHE_ORDER_FIRST);
+    check(bcache_sync_block_ordered(&vast, 38) == 0 && vast.firsts_unflushed == 0x40000000u,
+          "the count stops at its bound ahead of the last flush");
+    dirty_for(&vast, 31, 0, BCACHE_ORDER_AFTER);
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&vast, 31) == 0 && blockmax_flushes == 1 &&
+              vast.firsts_flushed == 0x40000000u,
+          "still unequal, so the next `after` is flushed before");
     vast.flags &= ~BLOCK_WRITE_THROUGH;
     bcache_sync(&vast);
     bcache_invalidate(&vast);
@@ -1610,6 +1664,7 @@ static void writeback_rows(void)
     pointer_wait_rows();
     reserve_rows();
     barred_rows();
+    run_flush_rows();
     sort_rows();
 }
 
