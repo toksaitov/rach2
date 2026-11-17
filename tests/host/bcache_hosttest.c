@@ -893,6 +893,61 @@ static void last_rows(void)
     bcache_invalidate(&vast);
 }
 
+/**
+ * Check `bcache_sync_block_ordered` on `vast` made a write-through disk. A
+ * table block (`bcache_sync_last`) goes after the shared blocks dirtied
+ * before it, with no flush before, between or with any write, and leaves
+ * one dirtied after it; an `after` goes after its firsts with the flush
+ * between, as the cache's reclaim keeps it; a plain block and a `first`
+ * are written without the flush.
+ */
+static void ordered_rows(void)
+{
+    vast.flags |= BLOCK_WRITE_THROUGH;
+    bcache_sync_last(&vast, last_block, 0, 0);
+    dirty_for(&vast, 30, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 31, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 21, 0, 0);
+    dirty_for(&vast, 40, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 24, 0, 0);
+    writes_made = 0;
+    blockmax_flushes = 0;
+    watch_blk = 30;
+    watch_flags = 0;
+    check(bcache_sync_block_ordered(&vast, 40) == 0 && writes_made >= 2 && writes_made <= 8 &&
+              writes_lba[0] == 30 * 8 && writes_lba[writes_made - 1] == 40 * 8 &&
+              !dirty_now(&vast, 31) && !dirty_now(&vast, 21) && dirty_now(&vast, 24),
+          "an ordered table block is written after the blocks dirtied before it");
+    check(blockmax_flushes == 0 && watch_flags == BLOCK_REQ_NOFLUSH &&
+              blockmax_last_flags == BLOCK_REQ_NOFLUSH,
+          "with no flush before, between or with its writes");
+    bcache_sync_last(&vast, 0, 0, 0);
+    dirty_for(&vast, 32, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 20, 0, BCACHE_ORDER_AFTER);
+    writes_made = 0;
+    blockmax_flushes = 0;
+    watch_blk = 32;
+    watch_flags = 0;
+    check(bcache_sync_block_ordered(&vast, 20) == 0 && writes_made == 2 &&
+              writes_lba[0] == 32 * 8 && writes_lba[1] == 20 * 8,
+          "an ordered `after` is written after its firsts");
+    check(blockmax_flushes == 1 && watch_flags == BLOCK_REQ_NOFLUSH &&
+              blockmax_last_flags == BLOCK_REQ_NOFLUSH,
+          "with the flush between them");
+    blockmax_flushes = 0;
+    check(bcache_sync_block_ordered(&vast, 24) == 0 && blockmax_last_flags == BLOCK_REQ_NOFLUSH &&
+              blockmax_flushes == 0,
+          "a plain block is written without the flush");
+    dirty_for(&vast, 33, 0, BCACHE_ORDER_FIRST);
+    check(bcache_sync_block_ordered(&vast, 33) == 0 && blockmax_last_flags == BLOCK_REQ_NOFLUSH &&
+              blockmax_flushes == 0,
+          "and so is a `first`");
+    watch_blk = 0;
+    vast.flags &= ~BLOCK_WRITE_THROUGH;
+    bcache_sync(&vast);
+    bcache_invalidate(&vast);
+}
+
 /** Name blocks 40 and 42 as those `follow_rows` writes last. */
 static int table_block(void *arg, uint64_t blk)
 {
@@ -1454,6 +1509,7 @@ static void writeback_rows(void)
 {
     owned_rows();
     shared_rows();
+    ordered_rows();
     last_rows();
     follow_rows();
     pointer_order_rows();

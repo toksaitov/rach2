@@ -1216,6 +1216,22 @@ static void written_clean(struct bbuf **run, int n)
     cache_unlock(flags);
 }
 
+/* A write's flag, never a request's: what the block waits for is written
+ * and answered before it, but no flush puts it on the medium first, except
+ * before an `after`, whose firsts a free cleared
+ * (`bcache_sync_block_ordered`). */
+#define WRITE_ORDER_ONLY 0x80000000u
+
+/** Whether a write-through disk is flushed before the write of `b` with
+ * the request `flags`: before every block that `follows`, and under
+ * `WRITE_ORDER_ONLY` before an `after` alone, so that a free's cleared
+ * pointers and inodes stay on the medium ahead of its cleared bits through
+ * a loss of power, as the cache's reclaim keeps them. */
+static int flush_before(const struct bbuf *b, uint32_t flags)
+{
+    return follows(b) && (!(flags & WRITE_ORDER_ONLY) || b->order == BCACHE_ORDER_AFTER);
+}
+
 /** Write the buffer `b`, which the caller holds, to the device with the
  * request `flags`, with `wb_lock` given up for the request. A failure is
  * recorded against the device, through `vfs_device_failed`, and leaves the
@@ -1224,7 +1240,7 @@ static int write_buffer_flags(struct bbuf *b, uint32_t flags)
 {
     int held = wb_out();
     int rc = block_request_flags(b->dev, 1, b->blk * BCACHE_BLOCK_SECTORS,
-                                 b->bytes / BLOCK_SECTOR_SIZE, b->data, flags);
+                                 b->bytes / BLOCK_SECTOR_SIZE, b->data, flags & ~WRITE_ORDER_ONLY);
 
     wb_back(held);
     if (rc != 0) {
@@ -1342,7 +1358,10 @@ static int met_wait(struct buffer_wait *wait, struct buffer_wait *met)
  * stored in it meanwhile and what it waits for cannot grow. The blocks are
  * written the earliest dirtied first (`way_to`), each in a run of its
  * neighbours when it waits for nothing itself; then, on a
- * write-through disk, the flush; then `b`. One of them held by another
+ * write-through disk, the flush; then `b`. With `WRITE_ORDER_ONLY` in
+ * `flags`, each of them and `b` is written without the disk's flush, in
+ * the same order, each answered before the next is sent, and the flush
+ * comes only before an `after` (`flush_before`). One of them held by another
  * process lets `b` go for the wait, since that holder may be waiting for
  * `b`, and the caller looks again; so does a `b` that a reader took since
  * the caller's look. At most two buffers are held at once: `b`, and the
@@ -1366,6 +1385,7 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct buffer_wait *me
     struct bbuf *d;
     struct buffer_wait busy;
     uint64_t end;
+    uint32_t quiet = flags & WRITE_ORDER_ONLY;
     int rc = 0;
 
     k_memset(&any, 0, sizeof(any));
@@ -1394,17 +1414,19 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct buffer_wait *me
         if (holder != -1) {
             rc = -EIO;
         } else if (follows(d)) {
-            rc = write_one_met(d, 0, &busy);
+            rc = write_one_met(d, quiet ? quiet | unflushed_flags(b->dev) : 0, &busy);
         } else {
             rc = write_run_met(
-                d, &end, d->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev), &any, &busy);
+                d, &end,
+                quiet || d->order != BCACHE_ORDER_FIRST ? quiet | unflushed_flags(b->dev) : 0, &any,
+                &busy);
         }
         if (rc == 1) {
             let_go(b);
             return met_wait(&busy, met);
         }
     }
-    if (rc == 0) {
+    if (rc == 0 && flush_before(b, flags)) {
         rc = order_flush(b->dev);
     }
     if (rc == 0) {
@@ -1558,7 +1580,7 @@ static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
     if (n == 1) {
         return write_one_met(first, flags, met);
     }
-    rc = follows(first) ? order_flush(dev) : 0;
+    rc = flush_before(first, flags) ? order_flush(dev) : 0;
     if (rc != 0) {
         stage_free();
         for (i = 0; i < n; i++) {
@@ -1572,7 +1594,7 @@ static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
     }
     held = wb_out();
     rc = block_request_flags(dev, 1, first->blk * BCACHE_BLOCK_SECTORS, bytes / BLOCK_SECTOR_SIZE,
-                             run_stage, flags);
+                             run_stage, flags & ~WRITE_ORDER_ONLY);
     stage_free();
     wb_back(held);
     if (rc != 0) {
@@ -2930,7 +2952,7 @@ int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
 /* A block that waits is held while what it waits for is written
  * (`write_follower`), so a steady writer cannot keep the call: what the
  * block waits for stops growing. A wait for another holder looks again. */
-int bcache_sync_block(block_device_t *dev, uint64_t blk)
+static int sync_block(block_device_t *dev, uint64_t blk, uint32_t quiet)
 {
     int rc = 1;
 
@@ -2950,10 +2972,21 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk)
         }
         cache_unlock(flags);
         check_sync_holds(b, dev);
-        rc = write_one(b, b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(dev));
+        rc = write_one(b,
+                       quiet || b->order != BCACHE_ORDER_FIRST ? quiet | unflushed_flags(dev) : 0);
     }
     wb_give();
     return rc;
+}
+
+int bcache_sync_block(block_device_t *dev, uint64_t blk)
+{
+    return sync_block(dev, blk, 0);
+}
+
+int bcache_sync_block_ordered(block_device_t *dev, uint64_t blk)
+{
+    return sync_block(dev, blk, WRITE_ORDER_ONLY);
 }
 
 /* The walk lets `cache_spin` go every WALK_BATCH buffers (`bufs_next`), as

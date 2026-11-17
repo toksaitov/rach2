@@ -297,6 +297,22 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner);
 int bcache_sync_block(block_device_t *dev, uint64_t blk);
 
 /**
+ * `bcache_sync_block` without the disk's flush: the blocks `blk` waits for
+ * are written first and each is answered before the next is sent, so a
+ * stop of the kernel finds them on the disk in that order, but none of the
+ * writes, `blk`'s included, is flushed out of a disk's own cache. A loss of
+ * power on a disk with a volatile cache may keep a later write and lose an
+ * earlier one, as Linux's ext2 leaves it under `dirsync`, which writes a
+ * directory and its inode without a flush. The flush still comes before an
+ * `after` block among them, so a free's cleared pointers and inodes reach
+ * the medium before its cleared bits. `fsync`, `sync` and an unmount flush
+ * what this left in the cache.
+ *
+ * @return as `bcache_sync_block`.
+ */
+int bcache_sync_block_ordered(block_device_t *dev, uint64_t blk);
+
+/**
  * Clear the way for `bcache_sync_block` of the same block, for a caller that
  * must check something in the same step as that call takes the block: it
  * writes what the block waits for, one write a call.
