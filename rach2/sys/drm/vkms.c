@@ -134,30 +134,45 @@ static int64_t vkms_now(void)
  * Composing a frame
  */
 
-/* The frames of a plane's buffer object, which a composition looks up under
- * the big lock before it lets the lock go: `n` pages, each page's frame in
+/* The frames of the pages of a plane's buffer object that its framebuffer
+ * covers, which a composition looks up under the big lock before it lets
+ * the lock go: `n` pages from page `first` of `obj`, each page's frame in
  * `phys`, 0 for one that reads as zeros, with bit 0 set where the
- * composition took a pin on it. */
+ * composition took a pin on it. `live` is set when a frame could not be
+ * pinned, a device's, which a reset of its device may take back: such a
+ * plane's frames are looked up again at each read, and its composition
+ * keeps the lock. */
 struct vkms_pages {
+    struct drm_gem_object *obj;
     uintptr_t *phys;
-    uint32_t n;
+    uint32_t first, n;
+    int live;
 };
 
 /**
  * Read `len` bytes from byte `off` of the buffer object whose frames `pg`
  * holds into `dst`, a page at a time through a temporary mapping; a page
- * past the object or without a frame reads as zeros. Needs no big lock.
+ * outside them or without a frame reads as zeros. Needs no big lock unless
+ * `pg->live`, when a frame without a pin is looked up again.
  */
 static void vkms_read(const struct vkms_pages *pg, uint64_t off, uint8_t *dst, uint32_t len)
 {
     uint32_t n, in;
+    uint64_t at;
     uintptr_t phys;
     uint8_t *va;
 
     while (len > 0) {
         in = (uint32_t)(off & (PAGE_SIZE - 1));
         n = PAGE_SIZE - in < len ? PAGE_SIZE - in : len;
-        phys = (off >> PAGE_SHIFT) < pg->n ? pg->phys[off >> PAGE_SHIFT] & ~(uintptr_t)1u : 0;
+        at = (off >> PAGE_SHIFT) - pg->first;
+        phys = (off >> PAGE_SHIFT) >= pg->first && at < pg->n ? pg->phys[at] : 0;
+        if (phys & 1u) {
+            phys &= ~(uintptr_t)1u;
+        } else if (pg->live && phys) {
+            phys = drm_gem_shmem_page((struct drm_gem_shmem_object *)pg->obj,
+                                      pg->first + (uint32_t)at);
+        }
         va = phys ? (uint8_t *)kmap_temp(phys) : NULL;
         if (va) {
             k_memcpy(dst, va + in, n);
@@ -312,8 +327,7 @@ static void compose_give_way(void)
 }
 
 /** Pin the frame at `phys` for the rows of a frame: 1 when it took a pin,
- * 0 for a frame the pool does not keep, such as a device's, which stays as
- * long as the object that gave it. */
+ * 0 for a frame the pool does not keep, such as a device's. */
 static int compose_pin(uintptr_t phys)
 {
     return frame_pin(phys) == 0;
@@ -352,7 +366,7 @@ static void compose_relock(int depth)
  * what another thread would run while the composer gives way, and read the
  * pins the composition holds and whether its rows run without the lock. */
 static void (*compose_give_way_hook)(void);
-static int compose_pins, compose_unlocked;
+static int compose_pins, compose_unlocked, compose_pin_refuse;
 
 /** Run the test's `compose_give_way_hook`, if any. */
 static void compose_give_way(void)
@@ -362,10 +376,14 @@ static void compose_give_way(void)
     }
 }
 
-/** Count a pin; the model's frames are host memory. */
+/** Count a pin, or refuse it as a device's frame would be while the test
+ * asks (`compose_pin_refuse`); the model's frames are host memory. */
 static int compose_pin(uintptr_t phys)
 {
     (void)phys;
+    if (compose_pin_refuse) {
+        return 0;
+    }
     compose_pins++;
     return 1;
 }
@@ -393,33 +411,54 @@ static void compose_relock(int depth)
 #endif
 
 /**
- * Look up the frames of each plane's buffer object of the scene `s` into
- * `pg`, one for each frame of the scene, and pin each frame the pool keeps,
- * so that the rows may read them without the big lock: 0, or -ENOMEM with
- * what was taken still in `pg` for `compose_pages_put`. Under the big lock,
- * since a page may be given on its first touch (`drm_gem_shmem_page`).
+ * Look up into `pg`, one for each frame of the scene `s`, the frames of the
+ * pages of its buffer object that its framebuffer covers, from its offset
+ * for its height of rows, and pin each frame the pool keeps, so that the
+ * rows may read them without the big lock: 1 when every frame found took a
+ * pin, 0 when one did not (`live`), or -ENOMEM with what was taken still in
+ * `pg` for `compose_pages_put`. Under the big lock, since a page may be
+ * given on its first touch (`drm_gem_shmem_page`).
  */
 static int32_t compose_pages_get(const struct vkms_scene *s, struct vkms_pages *pg)
 {
-    struct drm_gem_object *obj;
+    const struct drm_framebuffer *fb;
+    uint64_t end, first;
     uintptr_t phys;
     uint32_t i, k;
+    int32_t all = 1;
 
     k_memset(pg, 0, VKMS_MAX_PLANES * sizeof(*pg));
     for (i = 0; i < s->nframes; i++) {
-        obj = s->frames[i].fb->obj[0];
-        pg[i].n = (uint32_t)(obj->size >> PAGE_SHIFT);
-        pg[i].phys = pg[i].n ? (uintptr_t *)kmalloc(pg[i].n * (uint32_t)sizeof(uintptr_t)) : NULL;
-        if (pg[i].n && !pg[i].phys) {
-            pg[i].n = 0;
+        fb = s->frames[i].fb;
+        pg[i].obj = fb->obj[0];
+        first = fb->offsets[0] >> PAGE_SHIFT;
+        end = fb->offsets[0] + (uint64_t)fb->pitches[0] * fb->height;
+        if (end > pg[i].obj->size) {
+            end = pg[i].obj->size;
+        }
+        end = (end + PAGE_SIZE - 1u) >> PAGE_SHIFT;
+        if (end <= first) {
+            continue;
+        }
+        if (end - first > 0xffffffffu / (uint32_t)sizeof(uintptr_t)) {
             return -ENOMEM;
         }
+        pg[i].phys = (uintptr_t *)kmalloc((size_t)(end - first) * sizeof(uintptr_t));
+        if (!pg[i].phys) {
+            return -ENOMEM;
+        }
+        pg[i].first = (uint32_t)first;
+        pg[i].n = (uint32_t)(end - first);
         for (k = 0; k < pg[i].n; k++) {
-            phys = drm_gem_shmem_page((struct drm_gem_shmem_object *)obj, k);
+            phys = drm_gem_shmem_page((struct drm_gem_shmem_object *)pg[i].obj, pg[i].first + k);
             pg[i].phys[k] = phys && compose_pin(phys) ? phys | 1u : phys;
+            if (phys && !(pg[i].phys[k] & 1u)) {
+                pg[i].live = 1;
+                all = 0;
+            }
         }
     }
-    return 0;
+    return all;
 }
 
 /** Unpin and free what `compose_pages_get` took into `pg` for `s`. Under the
@@ -448,12 +487,14 @@ static void compose_pages_put(const struct vkms_scene *s, struct vkms_pages *pg)
  * A frame of 1024x768 takes some 11 ms of the testing PC's processor, and in
  * a guest under load more than a frame of 60 Hz. Linux composes under no
  * global lock (vkms_composer_worker), and so does this composer: under the
- * big lock it allocates its rows and looks up and pins the frames of each
- * plane's buffer object, as Linux's prepare_fb maps them before the
+ * big lock it allocates its rows and looks up and pins the frames each
+ * plane's framebuffer covers, as Linux's prepare_fb maps them before the
  * composer runs; then it lets the lock go for the rows, so that neither
  * waits for the other's system calls, and takes it again to unpin. What it
  * reads stays held by `s` and by the pins; it gives way between rows to a
- * thread queued on its processor.
+ * thread queued on its processor. A frame that takes no pin is a device's,
+ * which a reset of the device may take back; a scene with one keeps the
+ * lock for the whole composition and looks such frames up at each read.
  */
 static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
 {
@@ -464,7 +505,7 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
     const struct drm_color_lut *lut = NULL;
     const struct vkms_frame *f;
     struct vkms_pages pg[VKMS_MAX_PLANES];
-    int32_t x0, rc = 0;
+    int32_t x0, rc = 0, pinned;
     int depth;
 
     for (i = 0; i < s->nframes; i++) {
@@ -477,8 +518,8 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
     out = (uint16_t *)kmalloc(w * 8u);
     stage = (uint16_t *)kmalloc(w * 8u);
     row = (uint8_t *)kmalloc(maxrow);
-    rc = compose_pages_get(s, pg);
-    if (!out || !stage || !row || rc != 0) {
+    pinned = compose_pages_get(s, pg);
+    if (!out || !stage || !row || pinned < 0) {
         rc = -ENOMEM;
         goto out;
     }
@@ -488,7 +529,7 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
         ratio = drm_div64((uint64_t)(lut_n - 1u) << 32, 0xffffu);
     }
     *crc = 0;
-    depth = compose_unlock();
+    depth = pinned ? compose_unlock() : 0;
     for (ry = 0; ry < s->height; ry++) {
         if (ry > 0) {
             compose_give_way();

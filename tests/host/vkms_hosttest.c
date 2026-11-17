@@ -32,7 +32,8 @@
  * ARGB16161616 (76-12.3). A framebuffer removed between two rows of a
  * frame a commit composes, the rows composed without the big lock with
  * every page pinned, the old plane state and the scene holding it to the
- * end and the frames getting its CRC.
+ * end and the frames getting its CRC; frames that take no pin, as a
+ * device's, composed under the lock.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1014,6 +1015,13 @@ static void rmfb_hook(void)
     rm_refs = gone->base.refs;
 }
 
+/** `compose_give_way_hook`: note whether the rows run without the lock. */
+static void locked_hook(void)
+{
+    rm_tried = 1;
+    rm_unlocked = compose_unlocked;
+}
+
 /** A framebuffer removed while a commit composes the frames asked before it
  * stays whole to the composition's end: the rows run without the big lock,
  * every page of each plane pinned, the frames get its CRC, and the pins are
@@ -1072,6 +1080,16 @@ static void row_rmfb_composing(void)
     CHECK(compose_pins == 0 && !compose_unlocked,
           "rmfb/data: every pin dropped and the lock taken again");
     CHECK(drm_framebuffer_lookup(&v->drm, &fa, fb_gone) == NULL, "rmfb/data: its ID gone");
+
+    rm_tried = 0;
+    rm_unlocked = 1;
+    compose_pin_refuse = 1;
+    compose_give_way_hook = locked_hook;
+    CHECK(next_crc(NULL) == crc_a, "rmfb/data: frames that take no pin, the same CRC");
+    compose_give_way_hook = NULL;
+    compose_pin_refuse = 0;
+    CHECK(rm_tried && !rm_unlocked && compose_pins == 0,
+          "rmfb/data: frames that take no pin compose under the lock");
 }
 
 /** A gamma table of zeros makes the frame black; 257 entries are
