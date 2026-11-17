@@ -12,6 +12,8 @@ extern int strcmp(const char *a, const char *b);
 #undef RACH2_HOSTTEST
 #include "arch/x86/itco.c"
 
+extern int vsnprintf(char *out, size_t size, const char *format, va_list ap);
+
 struct model {
     uint16_t words[16];
     uint32_t gcs;
@@ -27,6 +29,7 @@ static struct model model;
 static const void *bad_user;
 static const char *refused_keys[8]; /* the options of the first refusals */
 static int refused;                 /* the `refused:` records since `setup` */
+static char boot_line[128];         /* the last `boot:` record, formatted */
 
 #define CHECK(test)                                                  \
     do {                                                             \
@@ -273,8 +276,9 @@ void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
-/** Record the option each `refused: KEY` or `refused: KEY=VALUE` names;
- * other diagnostics have no side effect in the model. */
+/** Record the option each `refused: KEY` or `refused: KEY=VALUE` names,
+ * and keep the last `boot:` record whole; other diagnostics have no side
+ * effect in the model. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     static const char prefix[] = "refused: %s";
@@ -283,6 +287,12 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
     (void)level;
     (void)subsystem;
+    if (format[0] == 'b' && format[1] == 'o' && format[2] == 'o' && format[3] == 't') {
+        va_start(ap, format);
+        vsnprintf(boot_line, sizeof(boot_line), format, ap);
+        va_end(ap);
+        return;
+    }
     for (i = 0; prefix[i] != '\0' && format[i] == prefix[i]; i++) {
         /* compare the format with the refusal's */
     }
@@ -324,7 +334,7 @@ static void status(void)
     CHECK(itco_write(NULL, "V", 1) == 1);
     CHECK(itco_ioctl(NULL, 0x80045701u, (uintptr_t)&value) == 0 && value == 0x8100);
     CHECK(itco_write(NULL, "x", 1) == 1);
-    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0x20);
+    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0);
     value = 0;
     CHECK(itco_ioctl(NULL, 0x80045704u, (uintptr_t)&value) == -ENOTTY);
 }
@@ -380,10 +390,11 @@ static void trial(void)
     CHECK(model.writes - at == 12);
 }
 
-/** WDIOC_GETBOOTSTATUS is WDIOF_CARDRESET (0x20) after a boot that found
- * SECOND_TO_STS set, as the second expiry leaves it, and 0 after one that
- * found only the first stage's TIMEOUT or nothing; the attach reads both
- * status words before it clears them. */
+/** The attach reads TCO1_STS and TCO2_STS before it clears them, and the
+ * boot record logs both and, when SECOND_TO_STS is set, that the second
+ * stage expired, as after the reset the second expiry makes; the first
+ * stage's TIMEOUT alone adds nothing. WDIOC_GETBOOTSTATUS stays 0, as in
+ * Linux's iTCO_wdt, since the bit is set under NO_REBOOT too. */
 static void boot_status(void)
 {
     int value = -1;
@@ -392,6 +403,8 @@ static void boot_status(void)
     model.words[TCO1_STS / 2] = 8;
     model.words[TCO2_STS / 2] = 0;
     CHECK(itco_attach(&watchdog, 3) == 0 && watchdog.boot_sts1 == 8 && watchdog.boot_sts2 == 0);
+    itco_boot_log(&watchdog);
+    CHECK(strcmp(boot_line, "boot: TCO1_STS 8, TCO2_STS 0") == 0);
     CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0);
     CHECK(itco_open(NULL, NULL, 0) == 0);
     advance(&model, 10);
@@ -400,9 +413,15 @@ static void boot_status(void)
     model.words[TCO1_CNT / 2] |= TCO_HALT;
     watchdog.opened = watchdog.running = 0;
     CHECK(itco_attach(&watchdog, 3) == 0 && watchdog.boot_sts2 == 6);
-    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0x20);
+    itco_boot_log(&watchdog);
+    CHECK(strcmp(boot_line, "boot: TCO1_STS 8, TCO2_STS 6: the TCO timer's second stage expired "
+                            "before this boot") == 0);
+    value = -1;
+    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0);
     CHECK(model.words[TCO2_STS / 2] == 0);
-    CHECK(itco_attach(&watchdog, 3) == 0 && watchdog.bootstatus == 0);
+    CHECK(itco_attach(&watchdog, 3) == 0 && watchdog.boot_sts2 == 0);
+    itco_boot_log(&watchdog);
+    CHECK(strcmp(boot_line, "boot: TCO1_STS 0, TCO2_STS 0") == 0);
 }
 
 /** Run `seconds` of the kernel's tick at 5 a second, the model's 0.6 s
