@@ -6,8 +6,9 @@
  *
  * Usage: inodechurnmusl [-t SECONDS] [-p PROCS] [-j THREADS] [-C DIR]
  *
- * PROCS processes (4 by default), each with THREADS threads (4), work in
- * DIR/churn, DIR "." by default, for SECONDS (10; 0 runs until killed).
+ * PROCS processes (4 by default), each with THREADS threads (4), work in a
+ * directory of the run's own, DIR/churn.XXXXXX made new by mkdtemp, DIR "."
+ * by default, for SECONDS (10; 0 runs until killed).
  * Each thread keeps a file of its own open for writing, appends a little to
  * it at each step, renames it over one of 32 shared names while it is still
  * open and writing, and closes it a few steps later, so that a file is
@@ -22,11 +23,13 @@
  * line on stderr that names the call.
  *
  * The parent prints `inodechurnmusl: progress: N s: M operations` once a
- * second. At the end of the time, at SIGINT or SIGTERM, when a process ends
- * early or when a fork fails, it stops every process it started, reaps
- * them, and removes DIR/churn with every name in it, since a process that
- * failed leaves the files it was writing. A signal ends a run of SECONDS 0
- * as its time would; it fails a timed run. Then it reads the
+ * second. At the end of the time, at SIGINT or SIGTERM, when a write of its
+ * output fails (SIGPIPE is ignored, so a closed pipe fails the write), when
+ * a process ends early or when a fork fails, it stops every process it
+ * started, reaps them, and removes its directory with every name in it,
+ * since a process that failed leaves the files it was writing. A signal or
+ * a failed write ends a run of SECONDS 0 as its time would; it fails a
+ * timed run. Then it reads the
  * kernel's log (klogctl), where an inode freed twice shows as `ext2: free of
  * inode N, whose bit is clear`, and a block as `ext2: free of block N, whose
  * bit is clear`, and prints `inodechurnmusl: result: ok`, or `failed` with
@@ -361,12 +364,13 @@ static void on_signal(int signo)
 
 /**
  * Make the shared page the processes' counts and stop flag are in, and
- * `dir`, and start the processes, whose ids go to `pids`. The parent's
- * signal handler is set first, so that no signal ends it with a process
- * running; a process puts SIGTERM back to its default and ignores SIGINT,
- * which a terminal sends the whole group and the parent answers. Returns
- * the number of processes started, fewer than `procs`, with a line on
- * stderr, when a fork failed.
+ * `dir`, new, so that the cleanup removes only names the run made, and
+ * start the processes, whose ids go to `pids`. The parent's signal handler
+ * is set first and SIGPIPE ignored, so that no signal ends it with a
+ * process running; a process puts SIGTERM back to its default and ignores
+ * SIGINT, which a terminal sends the whole group and the parent answers.
+ * Returns the number of processes started, fewer than `procs`, with a line
+ * on stderr, when a fork failed.
  */
 static int start(pid_t *pids)
 {
@@ -383,11 +387,12 @@ static int start(pid_t *pids)
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_signal;
     sigemptyset(&sa.sa_mask);
-    if (sigaction(SIGINT, &sa, 0) < 0 || sigaction(SIGTERM, &sa, 0) < 0) {
+    if (sigaction(SIGINT, &sa, 0) < 0 || sigaction(SIGTERM, &sa, 0) < 0 ||
+        signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
         fail("sigaction", dir, errno);
     }
-    if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
-        fail("mkdir", dir, errno);
+    if (mkdtemp(dir) == NULL) {
+        fail("mkdtemp", dir, errno);
     }
     for (i = 0; i < procs; i++) {
         pids[i] = fork();
@@ -405,8 +410,8 @@ static int start(pid_t *pids)
 }
 
 /** Print the count of operations once a second for the run's seconds, or
- * until a signal when they are 0; 1 when a process ended or a signal came
- * before they were up, and 0 otherwise. */
+ * until a signal or a failed write when they are 0; 1 when a process ended,
+ * or a signal came or a write failed before they were up, and 0 otherwise. */
 static int watch(void)
 {
     long total;
@@ -425,8 +430,14 @@ static int watch(void)
         for (i = 0; i < procs; i++) {
             total += counts[i];
         }
-        printf("inodechurnmusl: progress: %d s: %ld operations\n", c, total);
-        fflush(stdout);
+        if (printf("inodechurnmusl: progress: %d s: %ld operations\n", c, total) < 0 ||
+            fflush(stdout) == EOF) {
+            if (seconds == 0) {
+                return 0;
+            }
+            fprintf(stderr, "inodechurnmusl: write: stdout: %s\n", strerror(errno));
+            return 1;
+        }
         if (waitpid(-1, &status, WNOHANG) > 0) {
             fprintf(stderr, "inodechurnmusl: a process ended before the time was up\n");
             return 1;
@@ -464,7 +475,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "inodechurnmusl: counts out of range\n");
         return 2;
     }
-    snprintf(dir, sizeof(dir), "%s/churn", base);
+    if (snprintf(dir, sizeof(dir), "%s/churn.XXXXXX", base) >= (int)sizeof(dir)) {
+        fprintf(stderr, "inodechurnmusl: directory name too long\n");
+        return 2;
+    }
     started = start(pids);
     failed = started < procs || watch();
     *stop = 1;
