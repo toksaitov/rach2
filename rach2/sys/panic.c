@@ -611,7 +611,10 @@ static void draw_report(void)
 
 /**
  * The full record goes out first, to the ring, the serial port and
- * netconsole, and then the crash record is saved (`k_panic_dump`); the
+ * netconsole: the reason, the return addresses of the panicking thread's
+ * frames, as Linux's `panic` calls `dump_stack` (kernel/panic.c), which
+ * `addr2line -e` of the kernel's image names (`platform_show_stack`), and
+ * the report's lines; then the crash record is saved (`k_panic_dump`); the
  * screen takes neither (`klog_screen_stop`), and shows instead the picture
  * and the short report under it (`build_report`), which is drawn cell by
  * cell, so that nothing scrolls and nothing the log holds, such as an
@@ -668,6 +671,7 @@ void k_panic(const char *str)
     klog_deliver_directly();
     netconsole_panic();
     klog(KLOG_CRIT, "panic", "stopped: %s", str);
+    platform_show_stack("panic", KLOG_CRIT);
     str = panic_reason;
 
     build_report(str, timeout, 0);

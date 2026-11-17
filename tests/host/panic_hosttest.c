@@ -153,6 +153,13 @@ uint64_t arch_cycles(void)
 void platform_pmu_disable(void)
 {}
 
+/** No kernel stack to walk here. */
+void platform_show_stack(const char *subsystem, int level)
+{
+    (void)subsystem;
+    (void)level;
+}
+
 /** No lockup detector to touch here. */
 void touch_nmi_watchdog(void)
 {}
