@@ -16,19 +16,33 @@
 #include "../proc/smp.h"
 #include "../timer.h"
 
-#define KHEAP_MAGIC   0x4B484550u /* "KHEP" */
-#define KHEAP_CLASSES 8
-#define KHEAP_LARGE   0xFFu
-#define KHEAP_HDR     16u
+#define KHEAP_MAGIC     0x4B484550u /* "KHEP" */
+#define KHEAP_CLASSES   8
+#define KHEAP_LARGE     0xFFu
+#define KHEAP_HDR       16u
+#define KHEAP_CLASS_HDR 32u
 
 /* The header at the base of every page a class's blocks are carved from and
  * of the first page of a large object; pages from `kalloc_pages` have none. */
 struct page_hdr {
     uint32_t magic;
-    uint32_t cls;   /* the class index, or KHEAP_LARGE */
-    uint32_t used;  /* blocks in use for a class page; the bytes asked for a large one */
-    uint32_t pages; /* the run's length, for a large object */
+    uint32_t cls;  /* the class index, or KHEAP_LARGE */
+    uint32_t used; /* blocks in use for a class page; the bytes asked for a large one */
 };
+
+struct large_page {
+    struct page_hdr hdr;
+    uint32_t pages; /* the run's length */
+};
+
+struct class_page {
+    struct page_hdr hdr;
+    uint32_t free;                   /* offset of the first free block, or 0 when full */
+    struct class_page *next, **link; /* the class's list of pages with room */
+};
+
+typedef char large_header_fits[sizeof(struct large_page) <= KHEAP_HDR ? 1 : -1];
+typedef char class_header_fits[sizeof(struct class_page) <= KHEAP_CLASS_HDR ? 1 : -1];
 
 static const uint32_t class_size[KHEAP_CLASSES] = {16, 32, 64, 128, 256, 512, 1024, 2048};
 
@@ -53,7 +67,7 @@ static struct spinlock heap_lock = SPINLOCK_INIT_NAMED("heap_lock");
 static uint32_t heap_pages;    /* the region's pages, from kheap_init */
 static uint32_t reserve_first; /* the reserve's first page */
 static uint32_t run_bits;      /* set where a reserve run is taken */
-static void *free_list[KHEAP_CLASSES];
+static struct class_page *class_room[KHEAP_CLASSES];
 /* The map of the region's pages, set where a page is mapped: `floor_bits`
  * in the image for a region of KHEAP_FLOOR, the region's own first pages
  * for a larger one. */
@@ -69,12 +83,20 @@ static uint32_t pages_held;
 static size_t bytes_used;
 static uint32_t class_pages[KHEAP_CLASSES]; /* pages carved into each class */
 static uint32_t class_live[KHEAP_CLASSES];  /* blocks of each class in use */
-/* A class's pages with no block in use, which stay carved with their blocks
- * on the free list, up to KHEAP_CLASS_SPARE, as SLUB keeps min_partial empty
+/* A class's pages with no block in use, which stay on its list of pages
+ * with room, up to KHEAP_CLASS_SPARE, as SLUB keeps min_partial empty
  * slabs (mm/slub.c, __slab_free): a kmalloc and kfree of the last block of
  * a class neither maps a page nor unmaps one. */
 #define KHEAP_CLASS_SPARE 2u
 static uint32_t class_spare[KHEAP_CLASSES];
+
+/* Host tests count the free-list entries visited by a class free. */
+#ifdef KHEAP_COUNT_CLASS_STEPS
+static uint32_t class_steps;
+#define CLASS_STEP() ((void)class_steps++)
+#else
+#define CLASS_STEP() ((void)0)
+#endif
 
 /* A freed large object's run of up to KHEAP_KEEP_PAGES pages, kept mapped
  * for the next kmalloc of its length, as Linux serves kmalloc up to
@@ -90,7 +112,7 @@ static uint32_t class_spare[KHEAP_CLASSES];
 #define KHEAP_KEEP_PAGES 8u
 #define KHEAP_KEEP_RUNS  8u
 struct kept_run {
-    struct page_hdr hdr;
+    struct large_page large;
     struct kept_run *next;
 };
 static struct kept_run *kept[KHEAP_KEEP_PAGES];
@@ -376,7 +398,7 @@ void kheap_init(size_t bytes)
         }
     }
     k_memset(page_bits, 0, heap_pages / 8u);
-    k_memset(free_list, 0, sizeof(free_list));
+    k_memset(class_room, 0, sizeof(class_room));
     for (i = 0; i < map_pages; i++) {
         page_set(i, 1);
     }
@@ -578,7 +600,7 @@ static uint32_t kept_drain(void)
             struct kept_run *k = kept[i];
 
             kept[i] = k->next;
-            release_run((uint32_t)(((uintptr_t)&k->hdr - KVA_HEAP) / PAGE_SIZE), i + 1u, 0);
+            release_run((uint32_t)(((uintptr_t)k - KVA_HEAP) / PAGE_SIZE), i + 1u, 0);
         }
         kept_runs[i] = 0;
     }
@@ -893,51 +915,57 @@ void kfree_guarded(void *p, uint32_t count)
     spin_unlock_irqrestore(&heap_lock, flags);
 }
 
-/** A page carved into blocks of class `cls`, its blocks on the class's
- * free list: 0, or -1 when no page could be had. `heap_lock` is held. */
+/** Put a page at the head of its class's list. `heap_lock` is held. */
+static void class_link(struct class_page *page, uint32_t cls)
+{
+    CLASS_STEP();
+    page->link = &class_room[cls];
+    page->next = *page->link;
+    if (page->next) {
+        CLASS_STEP();
+        page->next->link = &page->next;
+    }
+    *page->link = page;
+}
+
+/** Unlink a page from its class's pages with room. `heap_lock` is held. */
+static void class_unlink(struct class_page *page)
+{
+    CLASS_STEP();
+    *page->link = page->next;
+    if (page->next) {
+        CLASS_STEP();
+        page->next->link = page->link;
+    }
+}
+
+/** Carve a page into blocks of class `cls`, linking its blocks on the page
+ * and the page on the class: 0, or -1 for no page. `heap_lock` is held. */
 static int add_class_page(uint32_t cls)
 {
-    uint32_t page = take_pages(1);
-    struct page_hdr *hdr;
+    uint32_t index = take_pages(1);
+    struct class_page *page;
     uintptr_t base;
     uint32_t size = class_size[cls];
     uint32_t off;
 
-    if (page >= heap_pages) {
+    if (index >= heap_pages) {
         return -1;
     }
-    base = KVA_HEAP + (uintptr_t)page * PAGE_SIZE;
-    hdr = (struct page_hdr *)base;
-    hdr->magic = KHEAP_MAGIC;
-    hdr->cls = cls;
-    hdr->used = 0;
-    hdr->pages = 1;
-    for (off = KHEAP_HDR; off + size <= PAGE_SIZE; off += size) {
-        *(void **)(base + off) = free_list[cls];
-        free_list[cls] = (void *)(base + off);
+    base = KVA_HEAP + (uintptr_t)index * PAGE_SIZE;
+    page = (struct class_page *)base;
+    page->hdr.magic = KHEAP_MAGIC;
+    page->hdr.cls = cls;
+    page->hdr.used = 0;
+    page->free = 0;
+    for (off = KHEAP_CLASS_HDR; off + size <= PAGE_SIZE; off += size) {
+        *(uint32_t *)(base + off) = page->free;
+        page->free = off;
     }
+    class_link(page, cls);
     class_pages[cls]++;
     class_spare[cls]++;
     return 0;
-}
-
-/** Take every block of the page at `base` off its class's free list, so
- * the page can go back. `heap_lock` is held. */
-static void drop_class_page(void *base, uint32_t cls)
-{
-    void **link = &free_list[cls];
-    char *lo = base;
-
-    while (*link) {
-        void *block = *link;
-        char *at = block;
-
-        if (at >= lo && at < lo + PAGE_SIZE) {
-            *link = *(void **)block;
-        } else {
-            link = block;
-        }
-    }
 }
 
 /** A size above the largest class takes whole pages with the header in
@@ -946,6 +974,7 @@ void *kmalloc(size_t size)
 {
     struct heap_state st;
     uint32_t flags, cls;
+    struct class_page *page;
     void *block;
 
     if (size == 0 || size > (size_t)heap_pages * PAGE_SIZE - PAGE_SIZE || size > 0xFFFFFFF0u) {
@@ -954,7 +983,7 @@ void *kmalloc(size_t size)
     if (size > class_size[KHEAP_CLASSES - 1]) {
         uint32_t count = (uint32_t)((size + KHEAP_HDR + PAGE_SIZE - 1) / PAGE_SIZE);
         void *base = NULL;
-        struct page_hdr *hdr;
+        struct large_page *large;
 
         if (count <= KHEAP_KEEP_PAGES) {
             flags = spin_lock_irqsave(&heap_lock);
@@ -971,20 +1000,20 @@ void *kmalloc(size_t size)
         if (!base) {
             return NULL;
         }
-        hdr = base;
-        hdr->magic = KHEAP_MAGIC;
-        hdr->cls = KHEAP_LARGE;
-        hdr->used = (uint32_t)size;
-        hdr->pages = count;
+        large = base;
+        large->hdr.magic = KHEAP_MAGIC;
+        large->hdr.cls = KHEAP_LARGE;
+        large->hdr.used = (uint32_t)size;
+        large->pages = count;
         flags = spin_lock_irqsave(&heap_lock);
-        bytes_used += hdr->used;
+        bytes_used += size;
         spin_unlock_irqrestore(&heap_lock, flags);
         return (uint8_t *)base + KHEAP_HDR;
     }
     for (cls = 0; class_size[cls] < size; cls++) {
     }
     flags = spin_lock_irqsave(&heap_lock);
-    if (!free_list[cls] && add_class_page(cls) != 0) {
+    if (!class_room[cls] && add_class_page(cls) != 0) {
         spin_unlock_irqrestore(&heap_lock, flags);
         if (short_may_log(&st)) {
             klog(KLOG_ERR, "kheap", "%d bytes: no room or no frame" HEAP_STATE_FMT, (int)size,
@@ -992,9 +1021,13 @@ void *kmalloc(size_t size)
         }
         return NULL;
     }
-    block = free_list[cls];
-    free_list[cls] = *(void **)block;
-    if (((struct page_hdr *)((uintptr_t)block & ~(PAGE_SIZE - 1)))->used++ == 0) {
+    page = class_room[cls];
+    block = (uint8_t *)page + page->free;
+    page->free = *(uint32_t *)block;
+    if (page->free == 0) {
+        class_unlink(page);
+    }
+    if (page->hdr.used++ == 0) {
         class_spare[cls]--;
     }
     bytes_used += class_size[cls];
@@ -1017,7 +1050,8 @@ void kfree(void *p)
 {
     uintptr_t va = (uintptr_t)p;
     struct page_hdr *hdr;
-    uint32_t flags;
+    struct class_page *page;
+    uint32_t flags, cls;
 
     if (!p) {
         return;
@@ -1034,7 +1068,7 @@ void kfree(void *p)
         return;
     }
     if (hdr->cls == KHEAP_LARGE) {
-        uint32_t count = hdr->pages;
+        uint32_t count = ((struct large_page *)hdr)->pages;
 
         bytes_used -= hdr->used;
         hdr->magic = 0;
@@ -1050,23 +1084,30 @@ void kfree(void *p)
         spin_unlock_irqrestore(&heap_lock, flags);
         return;
     }
-    if (hdr->cls >= KHEAP_CLASSES || hdr->used == 0) {
+    cls = hdr->cls;
+    if (cls >= KHEAP_CLASSES || hdr->used == 0) {
         spin_unlock_irqrestore(&heap_lock, flags);
         klog(KLOG_ERR, "kheap", "free of a block not in use: %p", p);
         return;
     }
-    *(void **)p = free_list[hdr->cls];
-    free_list[hdr->cls] = p;
-    hdr->used--;
-    bytes_used -= class_size[hdr->cls];
-    class_live[hdr->cls]--;
-    if (hdr->used == 0 && class_spare[hdr->cls] < KHEAP_CLASS_SPARE) {
-        class_spare[hdr->cls]++;
-    } else if (hdr->used == 0) {
-        drop_class_page(hdr, hdr->cls);
-        class_pages[hdr->cls]--;
-        hdr->magic = 0;
-        release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), 1, 0);
+    page = (void *)hdr;
+    if (page->free == 0) {
+        class_link(page, cls);
+    }
+    CLASS_STEP();
+    *(uint32_t *)p = page->free;
+    page->free = (uint32_t)(va - (uintptr_t)page);
+    bytes_used -= class_size[cls];
+    class_live[cls]--;
+    if (--hdr->used == 0) {
+        if (class_spare[cls] < KHEAP_CLASS_SPARE) {
+            class_spare[cls]++;
+        } else {
+            class_unlink(page);
+            class_pages[cls]--;
+            hdr->magic = 0;
+            release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), 1, 0);
+        }
     }
     spin_unlock_irqrestore(&heap_lock, flags);
 }
@@ -1101,7 +1142,7 @@ int kheap_class(uint32_t cls, struct kheap_class *out)
         return -1;
     }
     out->size = class_size[cls];
-    out->per_page = (PAGE_SIZE - KHEAP_HDR) / class_size[cls];
+    out->per_page = (PAGE_SIZE - KHEAP_CLASS_HDR) / class_size[cls];
     flags = spin_lock_irqsave(&heap_lock);
     out->live = class_live[cls];
     out->pages = class_pages[cls];

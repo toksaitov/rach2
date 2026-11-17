@@ -11,10 +11,11 @@
  * x86-64 it is the 512 GiB of the region's PML4 entry, and QEMU's machine
  * of 8 GiB has a heap of 1020 MiB. An object of at most 2048 bytes comes
  * from a page carved into blocks of one size class, 16 to 2048 bytes by
- * doubling, with a free list per class; a larger object takes whole pages.
- * A class page and the first page of a large object start with a 16-byte
- * header that says the class or the page count, which is how `kfree` finds
- * what it was given: the page base of the pointer. Pages from
+ * doubling, with a free list in each page and a list of pages with room
+ * in each class; a larger object takes whole pages. A class page starts
+ * with a 32-byte header, and the first page of a large object starts with
+ * a 16-byte header. `kfree` finds the header at the page base of the
+ * pointer. Pages from
  * `kalloc_pages` have no header. `kalloc_contig` gives a run whose frames
  * are consecutive too, taken together from the frame allocator.
  * `kalloc_guarded` gives pages with a guard below them, a page of the

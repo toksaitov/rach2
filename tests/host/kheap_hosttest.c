@@ -2,7 +2,8 @@
  * kheap_hosttest.c: the heap's size, its page runs, the reserve for large
  * ones, the guarded runs kernel stacks come from, and the two ends the
  * cache's pages and the rest are taken from, the freed runs it keeps, and
- * the runs given back that wait, mapped, for one flush of them all.
+ * the runs given back that wait, mapped, for one flush of them all. The
+ * class rows count free-list steps in a mass free and check every size.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -218,6 +219,7 @@ void smp_kernel_flush(uintptr_t start, uintptr_t end)
     flushes++;
 }
 
+#define KHEAP_COUNT_CLASS_STEPS 1
 #include "../../rach2/sys/mm/kheap.c"
 
 /** Unmap the waiting runs, as an allocation that finds no room or reclaim
@@ -666,6 +668,74 @@ static void room_rows(void)
     settle();
 }
 
+#define MASS_BLOCKS 240000u
+
+/** Free every other block first, so many pages have free blocks when the
+ * second pass empties them. Check each free and count the pages returned. */
+static void class_row(uint32_t cls, uint32_t count)
+{
+    static void *blocks[MASS_BLOCKS];
+    struct kheap_class info;
+    uint32_t i, pass, held, returned = 0, longest = 0, longest_return = 0;
+    int aligned = 1;
+    void *again;
+
+    frames_out = 0;
+    kheap_init(SMALL_REGION);
+    for (i = 0; i < count; i++) {
+        blocks[i] = kmalloc(class_size[cls]);
+        if (!blocks[i]) {
+            break;
+        }
+        aligned = aligned && ((uintptr_t)blocks[i] & 15u) == 0;
+    }
+    CHECK(i == count && aligned, "the class gives all the blocks, aligned to 16 bytes");
+    count = i;
+    kheap_class(cls, &info);
+    held = info.pages;
+    CHECK(info.live == count && held == (count + info.per_page - 1u) / info.per_page,
+          "class accounting matches the blocks and pages taken");
+    for (pass = 0; pass < 2; pass++) {
+        for (i = pass; i < count; i += 2) {
+            uint32_t before = class_pages[cls];
+
+            class_steps = 0;
+            kfree(blocks[i]);
+            if (class_steps > longest) {
+                longest = class_steps;
+            }
+            if (class_pages[cls] < before) {
+                returned++;
+                if (class_steps > longest_return) {
+                    longest_return = class_steps;
+                }
+            }
+        }
+    }
+    CHECK(longest > 0 && longest <= 5, "each free visits at most five free-list entries");
+    CHECK(longest_return > 0 && longest_return <= 5 && returned + KHEAP_CLASS_SPARE == held,
+          "returning each surplus class page visits at most five free-list entries");
+    settle();
+    CHECK(frames_out == KHEAP_CLASS_SPARE && class_live[cls] == 0 && bytes_used == 0,
+          "only the spare pages stay and every block is free");
+    again = kmalloc(class_size[cls]);
+    CHECK(again && frames_out == KHEAP_CLASS_SPARE, "the class reuses a spare page");
+    kfree(again);
+}
+
+/** Exercise every class, with a separate mass free of 64-byte blocks. */
+static void class_rows(void)
+{
+    struct kheap_class info;
+    uint32_t cls;
+
+    for (cls = 0; cls < KHEAP_CLASSES; cls++) {
+        kheap_class(cls, &info);
+        class_row(cls, 5u * info.per_page);
+    }
+    class_row(2, MASS_BLOCKS);
+}
+
 /**
  * Run the rows of the reserve on the small region, then the guard, ends, size
  * and region rows; the count of failures, at most 255.
@@ -683,11 +753,15 @@ static void room_rows(void)
  * reserve run gives the run back: the allocation is refused, and once frames
  * are there again the same run serves.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     unsigned n, i, k;
     void *runs[KHEAP_RUNS + 1];
 
+    if (argc == 2 && __builtin_strcmp(argv[1], "--class-only") == 0) {
+        class_rows();
+        return fails > 255 ? 255 : fails;
+    }
     /* The reserve is closed to single pages from the start. */
     kheap_init(SMALL_REGION);
     n = take_singles();
@@ -735,7 +809,6 @@ int main(void)
     give_singles(n);
     CHECK(frames_out == 0, "and every frame went back after the scatter");
 
-    /* A large object of `kmalloc` beside the scatter. */
     kheap_init(SMALL_REGION);
     n = take_singles();
     for (i = 0; i < n; i += 2) {
@@ -792,6 +865,7 @@ int main(void)
     ends_rows();
     size_rows();
     region_rows();
+    class_rows();
     if (fails == 0) {
         printf("kheap_hosttest: PASS\n");
     }
