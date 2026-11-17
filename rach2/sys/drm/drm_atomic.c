@@ -2613,7 +2613,9 @@ static int32_t out_fence_setup(struct out_fences *out, int i)
  * Give each CRTC of the commit its event when the caller asked for events
  * or an out-fence, Linux's prepare_signaling: a reserved FLIP_COMPLETE, and
  * for OUT_FENCE_PTR a new fence of the CRTC that the event signals, kept
- * in `out` too with its descriptor and sync file (out_fence_setup).
+ * in `out` too with its descriptor and sync file (out_fence_setup). Each
+ * CRTC of a PAGE_FLIP_ASYNC commit is marked async first, a TEST_ONLY one
+ * too, so that the driver's check applies the async rules to both.
  * -EINVAL when no CRTC would send an asked event, -ENOMEM, or the error of
  * the reservation or of out_fence_setup.
  */
@@ -2624,6 +2626,11 @@ static int32_t prepare_signaling(struct drm_atomic_state *state, const struct dr
     int i, crtcs = 0;
     int32_t rc;
 
+    for (i = 0; i < DRM_MAX_CRTCS; i++) {
+        if (state->crtcs_new[i] && (arg->flags & DRM_MODE_PAGE_FLIP_ASYNC)) {
+            state->crtcs_new[i]->async_flip = 1;
+        }
+    }
     if (arg->flags & DRM_MODE_ATOMIC_TEST_ONLY) {
         return 0;
     }
@@ -2634,9 +2641,6 @@ static int32_t prepare_signaling(struct drm_atomic_state *state, const struct dr
             continue;
         }
         crtcs++;
-        if (arg->flags & DRM_MODE_PAGE_FLIP_ASYNC) {
-            cs->async_flip = 1;
-        }
         if (!(arg->flags & DRM_MODE_PAGE_FLIP_EVENT) && !cs->out_fence_ptr) {
             continue;
         }

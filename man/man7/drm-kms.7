@@ -138,6 +138,9 @@ for each CRTC of the state, with the call's
 sent at the vblank that shows the state.
 .It Dv DRM_MODE_PAGE_FLIP_ASYNC
 Flip without waiting for the vblank, on a driver that can.
+With
+.Dv DRM_MODE_ATOMIC_TEST_ONLY ,
+check the state as such a flip.
 .El
 .Pp
 A plane's

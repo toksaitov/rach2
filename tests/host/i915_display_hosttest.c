@@ -839,8 +839,9 @@ static void row_async_atomic(uint32_t fb_a, uint32_t fb_b)
  * Async flips of the primary plane to `fb_a` in commits that also turn the
  * cursor or the sprite off, which Linux's intel_async_flip_check_uapi
  * refuses, since an async commit lets go of what it replaced at flip done
- * and the disable latches only at the next vblank: each EINVAL, with no
- * plane's registers written, no buffer unpinned and no event sent.
+ * and the disable latches only at the next vblank: each EINVAL, by
+ * TEST_ONLY too, with no plane's registers written, no buffer unpinned and
+ * no event sent.
  */
 static void row_async_others(uint32_t fb_a)
 {
@@ -871,6 +872,8 @@ static void row_async_others(uint32_t fb_a)
         req_add(&r, &pa->primary.base, mc->prop_fb_id, fb_a);
         req_add(&r, &others[i]->base, mc->prop_fb_id, 0);
         req_add(&r, &others[i]->base, mc->prop_crtc_id, 0);
+        CHECK(req_commit(&r, DRM_MODE_PAGE_FLIP_ASYNC | DRM_MODE_ATOMIC_TEST_ONLY) == -EINVAL,
+              "async others: such a flip refused by TEST_ONLY too");
         CHECK(req_commit(&r, DRM_MODE_PAGE_FLIP_ASYNC | DRM_MODE_PAGE_FLIP_EVENT) == -EINVAL,
               "async others: a flip that turns the cursor or the sprite off refused");
         CHECK(nsent == n0 && p->primary.surf == surf && reg(ctl[i]) == c0 && c0 != 0 &&
