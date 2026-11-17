@@ -34,12 +34,13 @@
  * may take.
  *
  * `fc_lock`, a spinlock taken with interrupts off, covers both tables, the
- * use order, the count and the counters of changes; the copies of pages and
- * the reads of files run outside it, the frame of a page being read held by
- * a reference. It comes after the page-table locks and before the temporary
- * kernel slots, whose `kmap_temp` a hit copies under it, as Linux takes the
- * `i_pages` lock under the page-table lock (mm/filemap.c:89-92), and no
- * caller needs the big lock.
+ * mount lists, the use order, the count and the counters of changes. Whole
+ * files are detached from lookup before their pages are freed in batches.
+ * The copies of pages and the reads of files run outside it, the frame of a
+ * page being read held by a reference. It comes after the page-table locks
+ * and before the temporary kernel slots, whose `kmap_temp` a hit copies
+ * under it, as Linux takes the `i_pages` lock under the page-table lock
+ * (mm/filemap.c:89-92), and no caller needs the big lock.
  */
 
 #include "filecache.h"
@@ -54,6 +55,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/spinlock.h"
 #include "../block/block.h"
+#include "../proc/sched.h"
 #include "../proc/smp.h"
 #include "../proc/wait_queue.h"
 #include "../arch/arch.h"
@@ -71,13 +73,18 @@
  * few files beside it the pages they were reading. A power of two. */
 #define FC_EPOCHS 256u
 
+/* Pages dropped in one hold during invalidation. */
+#define FC_DROP_BATCH 128u
+
 /* A file that has pages in the cache, the list of those pages, so that a
  * change to the file drops them without a search of the other files' pages,
  * and what the file was when they were read. The record lives while the
- * file has a page. */
+ * file has a page, or until the caller draining a detached record frees
+ * it. */
 struct fc_inode {
-    struct fc_inode *next, **link; /* the slot's list, and what points here */
-    const struct vfs_mount *mnt;
+    struct fc_inode *next, **link;             /* the slot's list; link is NULL once detached */
+    struct fc_inode *mount_next, **mount_link; /* the mount's cached inodes */
+    struct vfs_mount *mnt;
     uint64_t ino;
     uint64_t size;
     int64_t mtime;
@@ -124,7 +131,7 @@ static uint32_t changes[FC_EPOCHS]; /* `filecache_epoch` */
 
 /* What finds a file's pages and what they must still match. */
 struct fc_file {
-    const struct vfs_mount *mnt;
+    struct vfs_mount *mnt;
     uint64_t ino;
     uint32_t generation;
     uint64_t size;
@@ -136,12 +143,17 @@ struct fc_file {
 static int fc_file_of(struct vfs_mount *mnt, void *node, struct fc_file *f)
 {
     struct vfs_stat st;
+    struct vfs_mount *base;
 
-    if (!mnt || !node || vfs_mount_base(mnt)->type != &vfs_ext2_type ||
-        vfs_getattr(mnt, node, &st) != 0 || (st.mode & 0170000u) != 0100000u) {
+    if (!mnt || !node) {
         return 0;
     }
-    f->mnt = vfs_mount_base(mnt);
+    base = mnt->bind_of ? mnt->bind_of : mnt;
+    if (base->type != &vfs_ext2_type || vfs_getattr(mnt, node, &st) != 0 ||
+        (st.mode & 0170000u) != 0100000u) {
+        return 0;
+    }
+    f->mnt = base;
     f->ino = st.ino;
     f->generation = st.generation;
     f->size = st.size;
@@ -204,6 +216,38 @@ static uint32_t *fc_changes(const struct vfs_mount *mnt, uint64_t ino)
     return &changes[fc_hash(mnt, ino) & (FC_EPOCHS - 1u)];
 }
 
+/** Link a file to the inode table and its mount. Under `fc_lock`. */
+static void fc_link_file(struct fc_inode *file)
+{
+    file->link = &files[fc_slot(file->mnt, file->ino)];
+    file->next = *file->link;
+    if (file->next) {
+        file->next->link = &file->next;
+    }
+    *file->link = file;
+    file->mount_link = &file->mnt->filecache_files;
+    file->mount_next = *file->mount_link;
+    if (file->mount_next) {
+        file->mount_next->mount_link = &file->mount_next;
+    }
+    *file->mount_link = file;
+}
+
+/** Remove `file` from the inode table and its mount's list. Its pages cease
+ * to answer lookups and the caller owns the record. Under `fc_lock`. */
+static void fc_detach_file(struct fc_inode *file)
+{
+    *file->link = file->next;
+    if (file->next) {
+        file->next->link = file->link;
+    }
+    file->link = NULL;
+    *file->mount_link = file->mount_next;
+    if (file->mount_next) {
+        file->mount_next->mount_link = file->mount_link;
+    }
+}
+
 /** The record of the file `ino` of `mnt`, or NULL when the cache has none
  * of its pages. Under `fc_lock`. */
 static struct fc_inode *fc_find(const struct vfs_mount *mnt, uint64_t ino)
@@ -230,7 +274,8 @@ static struct fc_page *fc_lookup(const struct fc_file *f, uint32_t pgoff)
     struct fc_page *p;
 
     for (p = *fc_bucket(f->mnt, f->ino, pgoff); p; p = p->next) {
-        if (p->pgoff == pgoff && p->file->mnt == f->mnt && p->file->ino == f->ino) {
+        if (p->pgoff == pgoff && p->file->link && p->file->mnt == f->mnt &&
+            p->file->ino == f->ino) {
             return fc_current(p->file, f) ? p : NULL;
         }
     }
@@ -272,8 +317,8 @@ static void fc_use(struct fc_page *p)
     fc_add_use(p);
 }
 
-/** Take `p` off every list, and free its file's record when it was the
- * file's last page; the record of `p` and its frame are the caller's. */
+/** Take `p` off every list and free its file's record if still in the inode
+ * table and this is its last page. The page and frame are the caller's. */
 static void fc_unlink(struct fc_page *p)
 {
     struct fc_inode *file = p->file;
@@ -289,17 +334,14 @@ static void fc_unlink(struct fc_page *p)
     }
     fc_unlink_use(p);
     pages--;
-    if (!file->pages) {
-        *file->link = file->next;
-        if (file->next) {
-            file->next->link = file->link;
-        }
+    if (!file->pages && file->link) {
+        fc_detach_file(file);
         kfree(file);
     }
 }
 
-/** Free `p`, and its file's record when it was the file's last page; 1 when
- * its frame went back to the pool, 0 when a reader still holds it. */
+/** Free `p` after unlinking it. Return 1 when its frame went back to the
+ * pool, 0 when a reader still holds it. */
 static int fc_drop(struct fc_page *p)
 {
     uint32_t left;
@@ -310,15 +352,36 @@ static int fc_drop(struct fc_page *p)
     return left == 0;
 }
 
-/** Drop every page of `file`, and with the last of them the record. */
-static void fc_drop_file(struct fc_inode *file)
+/** Count a unit of the walk and give way between batches, returning with
+ * `fc_lock` taken again and `*flags` set for the next restore. */
+static void fc_drop_step(uint32_t *steps, uint32_t *flags)
 {
-    struct fc_page *p, *next;
-
-    for (p = file->pages; p; p = next) {
-        next = p->sibling;
-        fc_drop(p);
+    if (++*steps == FC_DROP_BATCH) {
+        spin_unlock_irqrestore(&fc_lock, *flags);
+        sched_give_way();
+        *flags = spin_lock_irqsave(&fc_lock);
+        *steps = 0;
     }
+}
+
+/** Drop the remaining pages of the detached `file` and free its record.
+ * Reclaim may take pages while the lock is out. Only this call can free
+ * the record, and it reads the head again with the lock retaken. */
+static void fc_drain_file(struct fc_inode *file, uint32_t *steps, uint32_t *flags)
+{
+    while (file->pages) {
+        fc_drop(file->pages);
+        fc_drop_step(steps, flags);
+    }
+    kfree(file);
+}
+
+/** Invalidate the whole file, then drain its pages in bounded batches.
+ * Called and returned with `fc_lock` held. */
+static void fc_drop_file(struct fc_inode *file, uint32_t *steps, uint32_t *flags)
+{
+    fc_detach_file(file);
+    fc_drain_file(file, steps, flags);
 }
 
 /** Copy a page to the frame `to`, or to `to_buf` when it is 0, from the
@@ -441,12 +504,15 @@ static void fc_free(struct fc_page *p)
  * `i_pages` lock, and after an allocation made with the lock let go takes
  * it again and checks them anew (mm/filemap.c:867-937, the allocations at
  * 926 and 935, the check again at 872-887).
+ *
+ * If the record describes an older version of the file, publish the new
+ * record before giving way while draining the detached one.
  */
 static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p, uint32_t epoch)
 {
     struct fc_page *old, **bucket;
-    struct fc_inode *file, *spare = NULL;
-    uint32_t flags = spin_lock_irqsave(&fc_lock);
+    struct fc_inode *file, *spare = NULL, *stale = NULL;
+    uint32_t steps = 0, flags = spin_lock_irqsave(&fc_lock);
     int need_spare;
 
     file = fc_find(f->mnt, f->ino);
@@ -459,14 +525,16 @@ static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p,
         }
     }
     flags = spin_lock_irqsave(&fc_lock);
-    if (epoch != *fc_changes(f->mnt, f->ino)) {
+    if (epoch != *fc_changes(f->mnt, f->ino) ||
+        *(const volatile int *)&f->mnt->state == VFS_UNMOUNTING) {
         spin_unlock_irqrestore(&fc_lock, flags);
         kfree(spare);
         return 0;
     }
     file = fc_find(f->mnt, f->ino);
     if (file && !fc_current(file, f)) {
-        fc_drop_file(file);
+        stale = file;
+        fc_detach_file(stale);
         file = NULL;
     }
     bucket = fc_bucket(f->mnt, f->ino, pgoff);
@@ -478,7 +546,10 @@ static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p,
         }
     }
     if (!file && !spare) {
-        /* The file's record went since the look without the lock. */
+        /* The record went or changed while the lock was out. */
+        if (stale) {
+            fc_drain_file(stale, &steps, &flags);
+        }
         spin_unlock_irqrestore(&fc_lock, flags);
         return 0;
     }
@@ -490,12 +561,7 @@ static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p,
         file->generation = f->generation;
         file->size = f->size;
         file->mtime = f->mtime;
-        file->link = &files[fc_slot(f->mnt, f->ino)];
-        file->next = *file->link;
-        if (file->next) {
-            file->next->link = &file->next;
-        }
-        *file->link = file;
+        fc_link_file(file);
     }
     p->pgoff = pgoff;
     p->file = file;
@@ -509,6 +575,9 @@ static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p,
     file->pages = p;
     fc_add_use(p);
     pages++;
+    if (stale) {
+        fc_drain_file(stale, &steps, &flags);
+    }
     spin_unlock_irqrestore(&fc_lock, flags);
     kfree(spare);
     return 1;
@@ -870,7 +939,7 @@ static void fc_done(void *arg, uint32_t index, const uintptr_t *frames, uint32_t
 
     for (i = 0; i < count; i++) {
         for (p = *fc_bucket(w->mnt, w->ino, w->start + index + i); p; p = p->next) {
-            if (p->pgoff == w->start + index + i && p->file->mnt == w->mnt &&
+            if (p->pgoff == w->start + index + i && p->file->link && p->file->mnt == w->mnt &&
                 p->file->ino == w->ino) {
                 break;
             }
@@ -1426,7 +1495,7 @@ void filecache_forget(struct vfs_mount *mnt, void *node)
 {
     struct fc_inode *file;
     struct fc_file f;
-    uint32_t flags;
+    uint32_t steps = 0, flags;
 
     if (!fc_file_of(mnt, node, &f)) {
         return;
@@ -1435,7 +1504,7 @@ void filecache_forget(struct vfs_mount *mnt, void *node)
     (*fc_changes(f.mnt, f.ino))++;
     file = pages ? fc_find(f.mnt, f.ino) : NULL;
     if (file) {
-        fc_drop_file(file);
+        fc_drop_file(file, &steps, &flags);
     }
     spin_unlock_irqrestore(&fc_lock, flags);
 }
@@ -1457,7 +1526,7 @@ void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache
     struct fc_page *p, *next;
     struct fc_file f;
     uint64_t first = from / PAGE_SIZE, last = to > from ? (to - 1u) / PAGE_SIZE : first;
-    uint32_t flags;
+    uint32_t steps = 0, flags;
 
     if (!was->known || !fc_file_of(mnt, node, &f)) {
         filecache_forget(mnt, node);
@@ -1468,8 +1537,9 @@ void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache
     file = pages ? fc_find(f.mnt, f.ino) : NULL;
     if (file && (file->generation != was->generation || file->size != was->size ||
                  file->mtime != was->mtime)) {
-        fc_drop_file(file);
-        file = NULL;
+        fc_drop_file(file, &steps, &flags);
+        spin_unlock_irqrestore(&fc_lock, flags);
+        return;
     }
     for (p = file ? file->pages : NULL; p; p = next) {
         next = p->sibling;
@@ -1488,7 +1558,7 @@ void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache
 void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino)
 {
     struct fc_inode *file;
-    uint32_t flags;
+    uint32_t steps = 0, flags;
 
     if (!buckets) {
         return;
@@ -1498,27 +1568,21 @@ void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino)
     (*fc_changes(mnt, ino))++;
     file = pages ? fc_find(mnt, ino) : NULL;
     if (file) {
-        fc_drop_file(file);
+        fc_drop_file(file, &steps, &flags);
     }
     spin_unlock_irqrestore(&fc_lock, flags);
 }
 
 void filecache_forget_mount(const struct vfs_mount *mnt)
 {
-    struct fc_inode *file, *next;
-    uint32_t i, flags = spin_lock_irqsave(&fc_lock);
+    uint32_t i, steps = 0, flags = spin_lock_irqsave(&fc_lock);
 
     mnt = vfs_mount_base(mnt);
     for (i = 0; i < FC_EPOCHS; i++) {
         changes[i]++;
     }
-    for (i = 0; pages && i <= table_mask; i++) {
-        for (file = files[i]; file; file = next) {
-            next = file->next;
-            if (file->mnt == mnt) {
-                fc_drop_file(file);
-            }
-        }
+    while (mnt->filecache_files) {
+        fc_drop_file(mnt->filecache_files, &steps, &flags);
     }
     spin_unlock_irqrestore(&fc_lock, flags);
 }

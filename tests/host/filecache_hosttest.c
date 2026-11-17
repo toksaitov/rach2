@@ -61,7 +61,7 @@ struct percpu cpu_table[NR_CPUS];
 
 /* The frames: page `i` is the frame at `(i + 1) * PAGE_SIZE`, free while
    its count is 0. */
-#define FRAMES 64u
+#define FRAMES (2u * FC_DROP_BATCH + 8u)
 static uint8_t frame_mem[FRAMES][PAGE_SIZE];
 static uint32_t frame_refs[FRAMES];
 
@@ -347,6 +347,21 @@ static struct vfs_mount mount;
 static struct fake_file file_a = {7, 1, 3 * PAGE_SIZE, 100};
 static struct fake_file file_b = {8, 1, 2 * PAGE_SIZE, 100};
 static struct fake_file file_c = {9, 1, 3 * PAGE_SIZE, 100};
+static struct fake_file large_file = {10, 1, (FC_DROP_BATCH + 3u) * PAGE_SIZE, 100};
+static void (*give_way_hook)(void);
+static uint32_t give_way_below;
+
+/** Run one concurrent operation once the drop has freed some pages. */
+void sched_give_way(void)
+{
+    void (*fn)(void) = give_way_hook;
+
+    check(!fc_lock.locked, "the cache lock is free when the walk gives way");
+    if (fn && filecache_pages() < give_way_below) {
+        give_way_hook = 0;
+        fn();
+    }
+}
 
 /**
  * Insert page `pgoff` of `node`, filled with `fill`, as `fc_store` does,
@@ -624,9 +639,67 @@ static void row_lock_run_fail(void)
     check(frame_free_count() == free_before, "every frame of the run comes back");
 }
 
+/** Cache enough pages of one file to cross a batch boundary. */
+static void fill_large_file(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < FC_DROP_BATCH + 3u; i++) {
+        check(insert_page(&large_file, i, 0x11, 0), "the large file's page is kept");
+    }
+}
+
+/** Reclaim an old page and replace it while its detached inode is drained. */
+static void replace_invalidated_page(void)
+{
+    check(filecache_pages() == 3, "the invalidation gives way after one batch");
+    check(!reads_as(&large_file, 0, 0x11), "the remaining stale pages are hidden");
+    check(filecache_shrink(1) == 1, "reclaim can take a detached page");
+    check(insert_page(&large_file, 0, 0x22, 0), "a new record accepts a replacement page");
+}
+
+/** Try an insertion with the current epoch while unmount is draining. */
+static void store_during_unmount(void)
+{
+    check(!insert_page(&large_file, 0, 0x33, 0), "the unmount refuses even a fresh insertion");
+}
+
+/** A detached file allows a new record, while an unmount bars insertion. */
+static void row_batched_drop(void)
+{
+    static struct vfs_mount other;
+    static uint8_t buf[PAGE_SIZE];
+
+    fill_large_file();
+    give_way_below = filecache_pages();
+    give_way_hook = replace_invalidated_page;
+    filecache_forget(&mount, &large_file);
+    check(!give_way_hook && filecache_pages() == 1 && reads_as(&large_file, 0, 0x22),
+          "the invalidation drains the old record and leaves the new one");
+    filecache_forget(&mount, &large_file);
+
+    other.type = &vfs_ext2_type;
+    other.state = VFS_ACTIVE;
+    filecache_store_node(&other, &large_file, 0, buf, filecache_epoch(&other, &large_file));
+    check(insert_page(&file_a, 0, 0x44, 0), "another file of the same mount is kept");
+    fill_large_file();
+    mount.state = VFS_UNMOUNTING;
+    give_way_below = filecache_pages();
+    give_way_hook = store_during_unmount;
+    filecache_forget_mount(&mount);
+    check(!give_way_hook && filecache_pages() == 1 && frame_free_count() == FRAMES - 1u &&
+              filecache_read_node(&other, &large_file, 0, buf),
+          "the unmount gives way, drops all its pages and leaves the other mount's page");
+    filecache_forget(&other, &large_file);
+    check(filecache_pages() == 0 && frame_free_count() == FRAMES,
+          "every frame comes back after the other mount's page is dropped");
+    give_way_hook = 0;
+}
+
 int main(void)
 {
     mount.type = &vfs_ext2_type;
+    mount.state = VFS_ACTIVE;
     init_filecache();
     check(buckets != NULL, "the tables are made");
 
@@ -658,8 +731,11 @@ int main(void)
     row_done_free();
     row_lock_run_fail();
 
+    mount.state = VFS_UNMOUNTING;
     filecache_forget_mount(&mount);
     check(filecache_pages() == 0 && frame_free_count() == FRAMES,
           "every frame goes back with the mount's pages");
+    mount.state = VFS_ACTIVE;
+    row_batched_drop();
     return fails != 0;
 }

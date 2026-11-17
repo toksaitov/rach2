@@ -108,7 +108,7 @@ void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, con
                           uint32_t epoch);
 
 /** Drop every page of the file `node` of `mnt`, which an allocation or a
- * change of its size has just changed. */
+ * change of its size has just changed. May reschedule between batches. */
 void filecache_forget(struct vfs_mount *mnt, void *node);
 
 /* What a file was before a write or a truncation (`filecache_before`). */
@@ -129,16 +129,19 @@ void filecache_before(struct vfs_mount *mnt, void *node, struct filecache_was *w
  * keep its others, as Linux's page cache keeps the folios a write does not
  * touch. The pages kept were read from the file as `*was`, from
  * `filecache_before`, has it: when the cache's record of the file says
- * otherwise, the file changed some other way too, and every page goes.
+ * otherwise, the file changed some other way too, and every page goes,
+ * with a chance to reschedule between batches.
  */
 void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache_was *was,
                        uint64_t from, uint64_t to);
 
 /** Drop every page of the file numbered `ino` on `mnt`, as
- * `filecache_forget` does, without asking the file system. */
+ * `filecache_forget` does, without asking the file system. May reschedule
+ * between batches. */
 void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino);
 
-/** Drop every page of the files of `mnt`, at its unmount. */
+/** Drop every page of the files of `mnt` after the VFS sets VFS_UNMOUNTING
+ * and drains its users. May reschedule between batches. */
 void filecache_forget_mount(const struct vfs_mount *mnt);
 
 /** The frames the cache holds, which `mem_reclaim` can have back. */

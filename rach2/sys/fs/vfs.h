@@ -110,6 +110,7 @@ struct vfs_xattr {
 };
 
 struct vfs_mount;
+struct fc_inode;
 struct vfs_ino_err;
 struct vfs_name;
 struct block_frames_done;
@@ -500,6 +501,7 @@ struct vfs_mount {
     wait_queue_t drain_wq;
     void *root; /* the mount's root node, held for the mount's life */
     void *priv;
+    struct fc_inode *filecache_files; /* cached inodes on the base, under fc_lock */
     /* The largest offset a file of the volume takes, Linux's `s_maxbytes`,
      * which the constructor of a type that sets `dir_seeks_bytes` sets and
      * lseek(2) of its directories is bounded by; a bind's is its base's. */
