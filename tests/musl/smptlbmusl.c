@@ -315,6 +315,27 @@ static long contested(void)
     return sscanf(line, "%ld %ld %ld %ld", &v[0], &v[1], &v[2], &v[3]) == 4 ? v[3] : -1;
 }
 
+/** Print why `untorn_child` exits 3: the carried thread's last reading in
+ * ticks against the `need` it had to pass, the milliseconds the reads took,
+ * and debugfs's cputime_test line, whose third and fourth numbers are the
+ * carries and the carries a read of the thread's clock or its process's
+ * began in. */
+static void untorn_counts(long long ticks, long long need, long long ms)
+{
+    char line[96];
+    int fd = open("/sys/kernel/debug/cputime_test", O_RDONLY);
+    ssize_t n = fd < 0 ? -1 : read(fd, line, sizeof line - 1);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    line[n > 0 ? n : 0] = 0;
+    printf("smptlbmusl: untorn: thread %lld ticks of %lld after %lld ms, %s; cputime_test %s",
+           ticks, need, ms, ticks < need ? "count short" : "no read in a carry",
+           n > 0 ? line : "unread\n");
+    fflush(stdout);
+}
+
 /**
  * The child of `untorn`: carry the count of a thread spinning on processor
  * 1 past 2^32 ticks and read its clock and the process's on processor 0
@@ -367,9 +388,14 @@ static void untorn_child(void)
     carry_stop = 1;
     pthread_join(carry, NULL);
     if (torn) {
+        fflush(stdout);
         _exit(2);
     }
-    _exit(thread_now >= end && contested() >= 1 ? 0 : 3);
+    if (thread_now < end || contested() < 1) {
+        untorn_counts(thread_now / tick, end / tick, ns_between(&start, &at) / 1000000);
+        _exit(3);
+    }
+    _exit(0);
 }
 
 /** Run `untorn_child` in a child, whose clocks it moves past 2^32 ticks,
