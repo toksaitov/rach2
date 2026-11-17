@@ -1,6 +1,6 @@
 # tmpfs
 
-`tmpfs.c` is a file system in memory, the type `tmpfs` of `mount(2)`: it has no device, and its files go when it is unmounted. The kernel mounts one at `/dev/shm` at boot, where the C libraries' `shm_open` and `sem_open` make their files, and keeps a second, which no path reaches, for the files of `memfd_create(2)` and the segments of System V shared memory. It has every kind of node: regular files, directories, symbolic links, hard links, FIFOs, socket files and device nodes.
+`tmpfs.c` is a file system in memory, the type `tmpfs` of `mount(2)`: it has no device, and its files go when it is unmounted. The kernel mounts one at `/dev/shm` at boot, where the C libraries' `shm_open` and `sem_open` make their files, `init-metal` one at `/tmp` ([init(8)](../../../man/man8/init.8)), and keeps a second, which no path reaches, for the files of `memfd_create(2)` and the segments of System V shared memory. It has every kind of node: regular files, directories, symbolic links, hard links, FIFOs, socket files and device nodes.
 
 ## Interfaces
 

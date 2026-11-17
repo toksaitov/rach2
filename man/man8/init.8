@@ -261,6 +261,17 @@ Neither path starts a shell without a login.
 The sealed disk's menu carries the option, and no test image's does, so
 the machine cases keep their login on COM1.
 .Pp
+The metal and recovery builds first mount a tmpfs at
+.Pa /tmp ,
+mode 1777, nosuid and nodev, which may hold half the machine's memory, as
+Debian's tmp.mount does: what programs keep there is made and removed in
+memory and goes at a reboot, and what the root's own
+.Pa /tmp
+holds is hidden while the mount lasts.
+A failed mount is reported and leaves
+.Pa /tmp
+on the root.
+.Pp
 Every build clears two levels of
 .Pa /var/run
 at boot, so that a directory such as the bus's goes with what is in it,
@@ -625,6 +636,8 @@ The cron daemon, which the metal build runs where the image has it.
 The NTP servers, by which the metal build runs
 .Xr ntpd 1
 while the file names one.
+.It Pa /tmp
+A tmpfs that the metal and recovery builds mount at boot.
 .It Pa /var/run
 Entries cleared at boot, with the entries of its directories, which are
 then removed; a directory deeper than that is reported if it is not empty.

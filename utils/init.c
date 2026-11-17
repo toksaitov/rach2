@@ -18,8 +18,9 @@
  *
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
- * that console behind `/bin/login`, `init-metal` is `init-login` plus the
- * network, ifplugd and ndwatch, which follow its link and its routers,
+ * that console behind `/bin/login`, `init-metal` is `init-login` plus a
+ * tmpfs at /tmp, the network, ifplugd and ndwatch, which follow its link and
+ * its routers,
  * wpa_supplicant on a machine with a Wi-Fi radio, a supervised SSH server, the
  * system log, BusyBox's NTP daemon where /etc/ntp.conf names a server and, on
  * the GNU system's root, D-Bus's system bus and the cron daemon, and
@@ -2797,6 +2798,25 @@ static void clear_var_run(void)
     clear_dir("/var/run", 1);
 }
 
+#ifdef INIT_METAL
+/**
+ * Mount a tmpfs at /tmp, mode 1777, nosuid and nodev, which may hold half
+ * the machine's memory, as Debian 13's tmp.mount does.
+ *
+ * What programs keep in /tmp, a compiler's temporary files or a shader
+ * cache that a browser builds at each start, is then made and removed in
+ * memory, not through the root's creates and their ordered writes, and a
+ * reboot clears it. What the root's own /tmp holds is hidden while the
+ * mount lasts. A failure is reported and leaves /tmp on the root.
+ */
+static void mount_tmp(void)
+{
+    if (mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777") != 0) {
+        fprintf(stderr, "init: /tmp: tmpfs not mounted: %s\n", strerror(errno));
+    }
+}
+#endif
+
 /* glibc's struct utmp, on i386 and on x86-64 alike: 384 bytes, its times 32
  * bits wide. */
 #define UTMP_SIZE 384
@@ -3155,6 +3175,9 @@ static void clear_recordfail(void)
  */
 static void set_up(void)
 {
+#ifdef INIT_METAL
+    mount_tmp();
+#endif
     clear_var_run();
     make_utmp();
     apply_limits();
