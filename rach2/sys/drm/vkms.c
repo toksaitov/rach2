@@ -23,6 +23,7 @@
 #include "../arch/arch.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
+#include "../proc/smp.h"
 #endif
 
 /* Linux's limits (vkms_drv.h): the modes' sizes, the one preferred, the
@@ -133,14 +134,22 @@ static int64_t vkms_now(void)
  * Composing a frame
  */
 
+/* The frames of a plane's buffer object, which a composition looks up under
+ * the big lock before it lets the lock go: `n` pages, each page's frame in
+ * `phys`, 0 for one that reads as zeros, with bit 0 set where the
+ * composition took a pin on it. */
+struct vkms_pages {
+    uintptr_t *phys;
+    uint32_t n;
+};
+
 /**
- * Read `len` bytes of the shmem object `obj` from byte `off` into `dst`, a
- * page at a time through a temporary mapping; a page that cannot be had
- * reads as zeros. May sleep.
+ * Read `len` bytes from byte `off` of the buffer object whose frames `pg`
+ * holds into `dst`, a page at a time through a temporary mapping; a page
+ * past the object or without a frame reads as zeros. Needs no big lock.
  */
-static void vkms_read(struct drm_gem_object *obj, uint64_t off, uint8_t *dst, uint32_t len)
+static void vkms_read(const struct vkms_pages *pg, uint64_t off, uint8_t *dst, uint32_t len)
 {
-    struct drm_gem_shmem_object *s = (struct drm_gem_shmem_object *)obj;
     uint32_t n, in;
     uintptr_t phys;
     uint8_t *va;
@@ -148,7 +157,7 @@ static void vkms_read(struct drm_gem_object *obj, uint64_t off, uint8_t *dst, ui
     while (len > 0) {
         in = (uint32_t)(off & (PAGE_SIZE - 1));
         n = PAGE_SIZE - in < len ? PAGE_SIZE - in : len;
-        phys = off < obj->size ? drm_gem_shmem_page(s, (uint32_t)(off >> PAGE_SHIFT)) : 0;
+        phys = (off >> PAGE_SHIFT) < pg->n ? pg->phys[off >> PAGE_SHIFT] & ~(uintptr_t)1u : 0;
         va = phys ? (uint8_t *)kmap_temp(phys) : NULL;
         if (va) {
             k_memcpy(dst, va + in, n);
@@ -202,14 +211,15 @@ static void to_argb16(uint32_t format, const uint8_t *p, uint16_t *out)
 
 /**
  * Fill `stage` with row `v` of the frame `f`'s destination, `w` pixels,
- * reading the framebuffer through `row`, room for a row of the part shown.
+ * reading the framebuffer's frames `pg` through `row`, room for a row of the
+ * part shown.
  * A destination pixel (u, v) shows the pixel of the part shown that the
  * rotation, undone, and then the reflection, undone, name, as Linux's
  * drm_rect_rotate turns a rectangle: reflect first, then rotate
  * counterclockwise.
  */
-static void compose_row(const struct vkms_frame *f, uint32_t v, uint32_t w, uint16_t *stage,
-                        uint8_t *row)
+static void compose_row(const struct vkms_frame *f, const struct vkms_pages *pg, uint32_t v,
+                        uint32_t w, uint16_t *stage, uint8_t *row)
 {
     const struct drm_framebuffer *fb = f->fb;
     uint32_t cpp = fb->info->cpp[0], rot = f->rotation & DRM_MODE_ROTATE_MASK;
@@ -229,7 +239,7 @@ static void compose_row(const struct vkms_frame *f, uint32_t v, uint32_t w, uint
             if (f->rotation & DRM_MODE_REFLECT_Y) {
                 fy = sh - 1u - fy;
             }
-            vkms_read(fb->obj[0],
+            vkms_read(pg,
                       base + (uint64_t)((uint32_t)f->sy + fy) * fb->pitches[0] +
                           (uint64_t)((uint32_t)f->sx + fx) * cpp,
                       px, cpp);
@@ -243,7 +253,7 @@ static void compose_row(const struct vkms_frame *f, uint32_t v, uint32_t w, uint
     if (f->rotation & DRM_MODE_REFLECT_Y) {
         fy = sh - 1u - fy;
     }
-    vkms_read(fb->obj[0],
+    vkms_read(pg,
               base + (uint64_t)((uint32_t)f->sy + fy) * fb->pitches[0] +
                   (uint64_t)(uint32_t)f->sx * cpp,
               row, sw * cpp);
@@ -294,16 +304,55 @@ static void apply_lut(uint16_t *out, uint32_t w, const struct drm_color_lut *lut
 }
 
 #ifndef RACH2_HOSTTEST
-/** Give way between two rows of a frame: the big lock to a processor that
- * waits for it and this processor to a thread queued on it. */
+/** Give way between two rows of a frame, which hold no big lock: this
+ * processor to a thread queued on it. */
 static void compose_give_way(void)
 {
     sched_service_point();
 }
+
+/** Pin the frame at `phys` for the rows of a frame: 1 when it took a pin,
+ * 0 for a frame the pool does not keep, such as a device's, which stays as
+ * long as the object that gave it. */
+static int compose_pin(uintptr_t phys)
+{
+    return frame_pin(phys) == 0;
+}
+
+/** Drop a pin `compose_pin` took. */
+static void compose_unpin(uintptr_t phys)
+{
+    frame_unpin(phys);
+}
+
+/** Let go of the big lock for the rows of a frame; the depth for
+ * `compose_relock`. */
+static int compose_unlock(void)
+{
+    uint32_t flags = kirq_save();
+    int depth = bkl_drop();
+
+    kirq_restore(flags);
+    return depth;
+}
+
+/** Take the big lock again at the `depth` `compose_unlock` let go of. */
+static void compose_relock(int depth)
+{
+    uint32_t flags;
+
+    if (depth) {
+        flags = kirq_save();
+        bkl_take(depth);
+        kirq_restore(flags);
+    }
+}
 #else
 /* The host tests have no big lock and no other thread; a test may run here
- * what another thread would run while the composer gives way. */
+ * what another thread would run while the composer gives way, and read the
+ * pins the composition holds and whether its rows run without the lock. */
 static void (*compose_give_way_hook)(void);
+static int compose_pins, compose_unlocked;
 
 /** Run the test's `compose_give_way_hook`, if any. */
 static void compose_give_way(void)
@@ -312,20 +361,99 @@ static void compose_give_way(void)
         compose_give_way_hook();
     }
 }
+
+/** Count a pin; the model's frames are host memory. */
+static int compose_pin(uintptr_t phys)
+{
+    (void)phys;
+    compose_pins++;
+    return 1;
+}
+
+/** Count a pin dropped. */
+static void compose_unpin(uintptr_t phys)
+{
+    (void)phys;
+    compose_pins--;
+}
+
+/** Mark the rows as run without the lock. */
+static int compose_unlock(void)
+{
+    compose_unlocked = 1;
+    return 1;
+}
+
+/** Mark the lock taken again. */
+static void compose_relock(int depth)
+{
+    (void)depth;
+    compose_unlocked = 0;
+}
 #endif
+
+/**
+ * Look up the frames of each plane's buffer object of the scene `s` into
+ * `pg`, one for each frame of the scene, and pin each frame the pool keeps,
+ * so that the rows may read them without the big lock: 0, or -ENOMEM with
+ * what was taken still in `pg` for `compose_pages_put`. Under the big lock,
+ * since a page may be given on its first touch (`drm_gem_shmem_page`).
+ */
+static int32_t compose_pages_get(const struct vkms_scene *s, struct vkms_pages *pg)
+{
+    struct drm_gem_object *obj;
+    uintptr_t phys;
+    uint32_t i, k;
+
+    k_memset(pg, 0, VKMS_MAX_PLANES * sizeof(*pg));
+    for (i = 0; i < s->nframes; i++) {
+        obj = s->frames[i].fb->obj[0];
+        pg[i].n = (uint32_t)(obj->size >> PAGE_SHIFT);
+        pg[i].phys = pg[i].n ? (uintptr_t *)kmalloc(pg[i].n * (uint32_t)sizeof(uintptr_t)) : NULL;
+        if (pg[i].n && !pg[i].phys) {
+            pg[i].n = 0;
+            return -ENOMEM;
+        }
+        for (k = 0; k < pg[i].n; k++) {
+            phys = drm_gem_shmem_page((struct drm_gem_shmem_object *)obj, k);
+            pg[i].phys[k] = phys && compose_pin(phys) ? phys | 1u : phys;
+        }
+    }
+    return 0;
+}
+
+/** Unpin and free what `compose_pages_get` took into `pg` for `s`. Under the
+ * big lock. */
+static void compose_pages_put(const struct vkms_scene *s, struct vkms_pages *pg)
+{
+    uint32_t i, k;
+
+    for (i = 0; i < s->nframes; i++) {
+        for (k = 0; k < pg[i].n; k++) {
+            if (pg[i].phys[k] & 1u) {
+                compose_unpin(pg[i].phys[k] & ~(uintptr_t)1u);
+            }
+        }
+        kfree(pg[i].phys);
+    }
+}
 
 /**
  * Compose the scene `s` row by row into Linux's pixel_argb_u16 on an opaque
  * black background, each plane blended over those below as premultiplied,
  * the gamma table applied, and return the CRC of the rows in `*crc`, as
  * Linux 6.12's blend and compose_active_planes do. 0, or -ENOMEM. May
- * sleep.
+ * sleep. Called with the big lock held, which it holds again on return.
  *
- * A frame of 1024x768 takes some 14 ms, and in a guest more than a frame of
- * 60 Hz, so a composer that kept the big lock for a whole frame would keep
- * every ioctl of vkms, a legacy cursor move among them, waiting for one.
- * Linux composes under no global lock; this composer gives way after each
- * row, and what it reads stays held by `s`.
+ * A frame of 1024x768 takes some 11 ms of the testing PC's processor, and in
+ * a guest under load more than a frame of 60 Hz. Linux composes under no
+ * global lock (vkms_composer_worker), and so does this composer: under the
+ * big lock it allocates its rows and looks up and pins the frames of each
+ * plane's buffer object, as Linux's prepare_fb maps them before the
+ * composer runs; then it lets the lock go for the rows, so that neither
+ * waits for the other's system calls, and takes it again to unpin. What it
+ * reads stays held by `s` and by the pins; it gives way between rows to a
+ * thread queued on its processor.
  */
 static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
 {
@@ -335,7 +463,9 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
     uint64_t ratio = 0;
     const struct drm_color_lut *lut = NULL;
     const struct vkms_frame *f;
-    int32_t x0;
+    struct vkms_pages pg[VKMS_MAX_PLANES];
+    int32_t x0, rc = 0;
+    int depth;
 
     for (i = 0; i < s->nframes; i++) {
         f = &s->frames[i];
@@ -347,11 +477,10 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
     out = (uint16_t *)kmalloc(w * 8u);
     stage = (uint16_t *)kmalloc(w * 8u);
     row = (uint8_t *)kmalloc(maxrow);
-    if (!out || !stage || !row) {
-        kfree(out);
-        kfree(stage);
-        kfree(row);
-        return -ENOMEM;
+    rc = compose_pages_get(s, pg);
+    if (!out || !stage || !row || rc != 0) {
+        rc = -ENOMEM;
+        goto out;
     }
     if (s->gamma && s->gamma->length >= sizeof(struct drm_color_lut)) {
         lut = (const struct drm_color_lut *)s->gamma->data;
@@ -359,6 +488,7 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
         ratio = drm_div64((uint64_t)(lut_n - 1u) << 32, 0xffffu);
     }
     *crc = 0;
+    depth = compose_unlock();
     for (ry = 0; ry < s->height; ry++) {
         if (ry > 0) {
             compose_give_way();
@@ -373,7 +503,7 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
                 continue;
             }
             fw = (uint32_t)(f->dst.x2 - f->dst.x1);
-            compose_row(f, ry - (uint32_t)f->dst.y1, fw, stage, row);
+            compose_row(f, &pg[i], ry - (uint32_t)f->dst.y1, fw, stage, row);
             for (col = 0; col < fw; col++) {
                 uint16_t *o, *in = stage + 4u * col;
 
@@ -393,10 +523,13 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
         }
         *crc = crc32_le(*crc, (const uint8_t *)out, w * 8u);
     }
+    compose_relock(depth);
+out:
+    compose_pages_put(s, pg);
     kfree(out);
     kfree(stage);
     kfree(row);
-    return 0;
+    return rc;
 }
 
 /** Drop what a scene holds. */
@@ -520,14 +653,15 @@ static int composer_ready(void *arg)
 }
 
 /** The composer thread, kvkms: sleep in an idle wait until a vblank asks for a
- * frame, then compose it, holding the big lock as kernel code does. Like every
- * kernel thread, it is not switched by the tick (`no_tick_switch`, which
- * `setup_process_stack` sets), since a frame's last put of a framebuffer may
- * free an imported buffer through its exporter, virtio-gpu's among them; it
- * gives way where it sleeps and between frames, as Linux's vkms_composer_worker
- * runs on a workqueue whose kworker gives way between works
- * (kernel/workqueue.c:3298-3299 in 6.12.115), and between the rows of a frame
- * (`vkms_compose`), since Linux's composer holds no global lock. */
+ * frame, then compose it, holding the big lock as kernel code does but for
+ * the rows of the frame, which hold none (`vkms_compose`), as Linux's
+ * composer holds no global lock. Like every kernel thread, it is not
+ * switched by the tick (`no_tick_switch`, which `setup_process_stack` sets),
+ * since a frame's last put of a framebuffer may free an imported buffer
+ * through its exporter, virtio-gpu's among them; it gives way where it
+ * sleeps and between frames, as Linux's vkms_composer_worker runs on a
+ * workqueue whose kworker gives way between works (kernel/workqueue.c:
+ * 3298-3299 in 6.12.115), and between the rows of a frame. */
 static void composer_main(void)
 {
     struct vkms_device *v = vkms_dev;

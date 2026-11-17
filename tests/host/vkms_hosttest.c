@@ -29,7 +29,10 @@
  * one back that restores it, a gamma table of zeros that makes the frame
  * black, a table of 257 entries refused, the primary turned by 180
  * degrees and the cursor by 90 and reflected, and the cursor in RGB565 and
- * ARGB16161616 (76-12.3).
+ * ARGB16161616 (76-12.3). A framebuffer removed between two rows of a
+ * frame a commit composes, the rows composed without the big lock with
+ * every page pinned, the old plane state and the scene holding it to the
+ * end and the frames getting its CRC.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -988,6 +991,89 @@ static void row_commit_flush(void)
     CHECK(n_new >= 1, "flush/data: the frames after the flip get the new CRC");
 }
 
+/* The framebuffer the next row removes while a commit composes the frames
+ * asked before it, its ID and record, and what the hook saw then: whether it
+ * ran, RMFB's result, whether the rows ran without the big lock, the pins
+ * held and the framebuffer's references after the removal. */
+static uint32_t fb_gone;
+static struct drm_framebuffer *gone;
+static int rm_tried, rm_rc, rm_unlocked, rm_pins;
+static uint32_t rm_refs;
+
+/** `compose_give_way_hook`: between two rows of the old scene's frame,
+ * remove its framebuffer, as another thread's RMFB would. */
+static void rmfb_hook(void)
+{
+    if (rm_tried) {
+        return;
+    }
+    rm_tried = 1;
+    rm_unlocked = compose_unlocked;
+    rm_pins = compose_pins;
+    rm_rc = drm_mode_rmfb_ioctl(&v->drm, &fb_gone, &fa);
+    rm_refs = gone->base.refs;
+}
+
+/** A framebuffer removed while a commit composes the frames asked before it
+ * stays whole to the composition's end: the rows run without the big lock,
+ * every page of each plane pinned, the frames get its CRC, and the pins are
+ * dropped after. The sanitizers would see a read of it once freed. */
+static void row_rmfb_composing(void)
+{
+    struct req r;
+    uint32_t crc_g, crc_a, f, f0, val;
+    int x, y, n_old = 0, n_new = 0, order = 1;
+
+    fb_gone = fb_new(5, W, H, DRM_FORMAT_XRGB8888, W * 4);
+    for (y = 0; y < H; y++) {
+        for (x = 0; x < W; x++) {
+            put32(5, W * 4, x, y, pattern(3, x, y));
+        }
+    }
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &primary->base, mc->prop_fb_id, fb_gone);
+    commit_flip(&r, "rmfb/data: a flip to a third pattern");
+    crc_g = next_crc(&f0);
+    want_primary(1, 0);
+    want_cursor(100, 50, 0);
+    crc_a = want_crc();
+    CHECK(crc_g != crc_a, "rmfb/data: the third pattern, its own CRC");
+    gone = drm_framebuffer_lookup(&v->drm, &fa, fb_gone);
+    CHECK(gone != NULL, "rmfb/data: the framebuffer found");
+    drm_framebuffer_put(gone);
+
+    frame();
+    frame();
+    rm_tried = rm_unlocked = rm_pins = 0;
+    rm_rc = -1;
+    rm_refs = 0;
+    compose_give_way_hook = rmfb_hook;
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &primary->base, mc->prop_fb_id, fb_a);
+    CHECK(req_commit(&r, 0) == 0, "rmfb/data: a flip back with two frames asked for");
+    compose_give_way_hook = NULL;
+    CHECK(rm_tried && rm_rc == 0,
+          "rmfb/data: the framebuffer removed while the old scene's frame composes");
+    CHECK(rm_unlocked, "rmfb/data: the rows compose without the big lock");
+    CHECK(rm_pins == (W * 4 * H + 4095) / 4096 + 64 * 64 * 4 / 4096,
+          "rmfb/data: every page of the primary and the cursor pinned");
+    CHECK(rm_refs == 2, "rmfb/data: the old plane state and the old scene still hold it");
+    vkms_composer_run(v);
+    while (next_entry(&f, &val)) {
+        if (f <= f0 + 2u) {
+            n_old += val == crc_g;
+            order &= n_new == 0;
+        } else {
+            n_new += val == crc_a;
+        }
+    }
+    CHECK(n_old == 2 && n_new >= 1 && order,
+          "rmfb/data: the frames asked before the flip get the removed framebuffer's CRC");
+    CHECK(compose_pins == 0 && !compose_unlocked,
+          "rmfb/data: every pin dropped and the lock taken again");
+    CHECK(drm_framebuffer_lookup(&v->drm, &fa, fb_gone) == NULL, "rmfb/data: its ID gone");
+}
+
 /** A gamma table of zeros makes the frame black; 257 entries are
  * refused. */
 static void row_gamma(void)
@@ -1107,6 +1193,7 @@ int main(void)
         row_vblank();
         row_crc();
         row_commit_flush();
+        row_rmfb_composing();
         row_gamma();
         row_turn();
         row_formats();
