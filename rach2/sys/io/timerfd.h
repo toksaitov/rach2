@@ -234,8 +234,9 @@ int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t id, uint64_t serial, 
  * a thread of a process, which the tick adds to under it, so that the
  * reader sees each 64-bit count whole on the i686 (`thread_cpu_time`,
  * `tgroup_cpu_time`); returns the interrupt state for
- * `ptimer_times_unlock`. Nothing may be taken under it but what
- * `timer_lock`'s holders take. */
+ * `ptimer_times_unlock`. Ends, for debugfs's cputime_test, the wait of a
+ * read this processor began (`ptimer_test_read`). Nothing may be taken under
+ * it but what `timer_lock`'s holders take. */
 uint32_t ptimer_times_lock(void);
 
 /** Let go of what `ptimer_times_lock` took. */
@@ -258,7 +259,8 @@ int32_t ptimer_test_show(void *data, char *buf, uint32_t cap);
  * ticks and has each of its ticks, where the upper half changes, wait half a
  * tick before it takes `timer_lock`, so that the other processors' ticks at
  * the same edge have let it go, write the count's lower half, wait until a
- * read of that thread's clock or its process's begins (`ptimer_test_read`)
+ * read of that thread's clock or its process's is under way, one that
+ * begins or one that began and waits for `timer_lock` (`ptimer_test_read`),
  * or 100 ms pass, and write the upper half a millisecond later, under
  * `timer_lock`, as no reader that takes the lock sees. `len`, -ESRCH for no
  * such thread, or -EINVAL or -EFAULT.
@@ -266,11 +268,12 @@ int32_t ptimer_test_show(void *data, char *buf, uint32_t cap);
 int32_t ptimer_test_store(void *data, const char __user *buf, uint32_t len);
 
 /** Note, for debugfs's cputime_test, a read of the clock of processor time
- * of the thread `p`, when `thread`, or of its process otherwise, that
- * begins while a forced torn write is between its halves (`split_add`);
- * only a read of the tested thread's clock or of its process's counts.
- * Called first by each such read, before it takes any lock; reads and
- * writes two words without one. */
+ * of the thread `p`, when `thread`, or of its process otherwise: one that
+ * begins while a forced torn write is between its halves (`split_add`), and
+ * on this processor one that has begun, until `ptimer_times_lock` takes the
+ * lock for it; only a read of the tested thread's clock or of its process's
+ * counts. Called first by each such read, before it takes any lock, on the
+ * processor that then takes it; reads and writes words without one. */
 void ptimer_test_read(const struct process *p, int thread);
 
 /** Add a tick to the processor time of the thread `p`, to its user time

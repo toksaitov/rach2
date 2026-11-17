@@ -296,8 +296,8 @@ static int follows(long long before, long long now)
 }
 
 /** Read the carries of debugfs's cputime_test that a read of the carried
- * thread's clock or its process's began in, the fourth of its numbers, or
- * -1; a read of another process's clock counts for nothing. */
+ * thread's clock or its process's was under way in, the fourth of its
+ * numbers, or -1; a read of another process's clock counts for nothing. */
 static long contested(void)
 {
     char line[96];
@@ -319,7 +319,7 @@ static long contested(void)
  * ticks against the `need` it had to pass, the milliseconds the reads took,
  * and debugfs's cputime_test line, whose third and fourth numbers are the
  * carries and the carries a read of the thread's clock or its process's
- * began in. */
+ * was under way in. */
 static void untorn_counts(long long ticks, long long need, long long ms)
 {
     char line[96];
@@ -342,7 +342,7 @@ static void untorn_counts(long long ticks, long long need, long long ms)
  * meanwhile. Exits 0 when every reading followed the one before and a read
  * began while the carry's halves were apart, 2 for a reading that did not
  * follow, 3 when the count was not seen past 2^32 within a minute of
- * monotonic time or no read began inside the carry, and 4 when the thread
+ * monotonic time or no read was under way in the carry, and 4 when the thread
  * or cputime_test failed.
  */
 static void untorn_child(void)
