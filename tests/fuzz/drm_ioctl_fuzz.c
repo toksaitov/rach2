@@ -18,6 +18,7 @@
  * fuzz-deps: rach2/sys/arch/x86_64/ia32_ioctl_gpu.c
  * fuzz-deps: rach2/sys/evdev.c
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * fuzz-deps: rach2/sys/lib/crc32.c
  * fuzz-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * fuzz-deps: tests/host/compat/fd_flat.c tests/host/compat/bkl_none.c
  * fuzz-deps: tests/host/compat/mutex_none.c
