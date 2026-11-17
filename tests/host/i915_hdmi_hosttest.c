@@ -1077,15 +1077,24 @@ static void row_dp(void)
     frame();
 }
 
-/** Check that HDMI detects a sink before taking a retained EDID override. */
+/**
+ * A retained EDID override on HDMI-A-1, native HDMI on port B, whose 1080p
+ * monitor row_hotplug left plugged in: forced on, the override's modes; on
+ * detect with no sink, none; with the sink answering one DDC byte, the
+ * override's EDID, whose 3840x2160@30 the sink lacks and whose list lacks
+ * the sink's 1280x720; forced off, no DDC read. Port C would not do: it is
+ * DP++, and a sink with no adaptor at 0x40 is a type 1 DVI adaptor capped
+ * at 165 MHz, as on Linux, which drops the 297 MHz mode.
+ */
 static void row_hdmi_override_detect(void)
 {
-    struct drm_connector *hdmi = &disp->ddi[1].hdmi_connector;
-    struct i915_model_ddc *ddc = &ddi->ddc[PIN_C];
+    struct drm_connector *hdmi = &disp->ddi[0].hdmi_connector;
+    struct i915_model_ddc *ddc = &ddi->ddc[PIN_B];
     uint8_t edid[256];
     struct drm_mode_modeinfo mode;
     uint32_t bytes, len = make_edid(edid, &dtd_2160p30, 0, cea_2160p30, sizeof(cea_2160p30));
 
+    ddc->present = 0;
     CHECK(drm_edid_override_set(hdmi, edid, len) == 0, "hdmi override: installed");
     hdmi->force = DRM_FORCE_ON_DIGITAL;
     CHECK(find_mode(hdmi, 3840, 2160, 30, &mode) && hdmi->status == DRM_CONNECTOR_CONNECTED,
@@ -1094,19 +1103,23 @@ static void row_hdmi_override_detect(void)
     CHECK(drm_helper_probe_single_connector_modes(hdmi, 8192, 8192) == 0 &&
               hdmi->status == DRM_CONNECTOR_DISCONNECTED && !hdmi->edid && hdmi->edid_override,
           "hdmi override: detect clears modes and EDID with no sink, retaining the override");
-    plug_hdmi_ddc(PIN_C);
+    ddc->present = 1;
     bytes = ddc->gmbus_bytes;
     CHECK(find_mode(hdmi, 3840, 2160, 30, &mode) && hdmi->status == DRM_CONNECTOR_CONNECTED &&
               hdmi->edid && hdmi->edid->length == len && memcmp(hdmi->edid->data, edid, len) == 0 &&
               ddc->gmbus_bytes == bytes + 1,
           "hdmi override: one DDC byte read from the sink, override EDID and mode returned");
+    CHECK(!find_mode(hdmi, 1280, 720, 60, &mode), "hdmi override: none of the sink's own modes");
+    bytes = ddc->gmbus_bytes;
     hdmi->force = DRM_FORCE_OFF;
     CHECK(drm_helper_probe_single_connector_modes(hdmi, 8192, 8192) == 0 && !hdmi->edid &&
-              hdmi->status == DRM_CONNECTOR_DISCONNECTED && ddc->gmbus_bytes == bytes + 1,
+              hdmi->status == DRM_CONNECTOR_DISCONNECTED && ddc->gmbus_bytes == bytes,
           "hdmi override: forced off leaves no modes or EDID and reads no DDC bytes");
     drm_edid_override_reset(hdmi);
-    ddc->present = 0;
     hdmi->force = DRM_FORCE_UNSPECIFIED;
+    CHECK(find_mode(hdmi, 1920, 1080, 60, &mode) && find_mode(hdmi, 1280, 720, 60, &mode) &&
+              !find_mode(hdmi, 3840, 2160, 30, &mode) && hdmi->status == DRM_CONNECTOR_CONNECTED,
+          "hdmi override: reset, the sink's own EDID and modes back");
 }
 
 /** Check DP overrides after row_dp has read the sink's link rates. */
