@@ -1,6 +1,9 @@
 /* collection.c: serialize the declared native cases and retain every result. */
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE   700
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
 #include "collection.h"
 #include "history.h"
 #include <errno.h>
@@ -9,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -53,13 +57,12 @@ static int first_line(const char *path, char *line, size_t size)
         line[strcspn(line, "\r\n")] = 0;
     return ok && *line;
 }
-/* Take the collection lock `lock`, a directory, and write in it `owner`:
+/* Make the collection lock `lock`, a directory, and write in it `owner`:
  * this process's PID, its start in clock ticks since boot (field 22 of
- * /proc/self/stat) and the boot identity, the fields of the deployment's
- * controller receipt, each `-` where the system gives none. A run's setup
- * clears a lock whose recorded boot is not the running one. 1, or 0 with
- * no lock left behind. */
-static int lock_take(const char *lock)
+ * /proc/self/stat) and the kernel's boot_id, the fields of the deployment's
+ * controller receipt, each `-` where the system gives none. 1, or 0 with no
+ * lock left behind. */
+static int lock_make(const char *lock)
 {
     char path[4200], self[1024], start[32] = "-", boot[128] = "-", record[256];
     if (mkdir(lock, 0700)) {
@@ -74,8 +77,7 @@ static int lock_take(const char *lock)
         if (at && sscanf(at + 1, "%31[0-9]", start) != 1)
             strcpy(start, "-");
     }
-    if (!first_line("/dev/shm/etude-guest-boot", boot, sizeof(boot)) &&
-        !first_line("/proc/sys/kernel/random/boot_id", boot, sizeof(boot)))
+    if (!first_line("/proc/sys/kernel/random/boot_id", boot, sizeof(boot)))
         strcpy(boot, "-");
     snprintf(path, sizeof(path), "%s/owner", lock);
     snprintf(record, sizeof(record), "%ld %s %s\n", (long)getpid(), start, boot);
@@ -86,6 +88,32 @@ static int lock_take(const char *lock)
         return 0;
     }
     return 1;
+}
+/* Take the collection lock `lock` in the state directory `state` while
+ * holding flock(2) on STATE/collection.serial. The setup of `native-deploy
+ * run` holds the same flock, through flock(1), while it reads a lock's owner,
+ * clears one of an earlier boot and makes its controller claim, so that it
+ * never removes a lock taken after its reading. 1, or 0 with no lock left
+ * behind. */
+static int lock_take(const char *state, const char *lock)
+{
+    char serial[4200];
+    int fd, ok;
+    snprintf(serial, sizeof(serial), "%s/collection.serial", state);
+    fd = open(serial, O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        fprintf(stderr, "native: cannot open %s: %s\n", serial, strerror(errno));
+        return 0;
+    }
+    while (flock(fd, LOCK_EX))
+        if (errno != EINTR) {
+            fprintf(stderr, "native: cannot lock %s: %s\n", serial, strerror(errno));
+            close(fd);
+            return 0;
+        }
+    ok = lock_make(lock);
+    close(fd);
+    return ok;
 }
 /* Remove the collection lock `lock` and its owner record; 0, or -1 when
  * the lock remains. */
@@ -384,7 +412,7 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
     if (!conf->results || !nc_mkdir(conf->results) || !nc_mkdir(conf->state))
         return 2;
     snprintf(lock, sizeof(lock), "%s/collection.lock", conf->state);
-    if (!lock_take(lock))
+    if (!lock_take(conf->state, lock))
         return 2;
     if (etude_history_now(&granted)) {
         lock_release(lock);

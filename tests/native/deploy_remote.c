@@ -70,12 +70,18 @@ int nd_stage(struct nd_deploy *d)
     return nd_ssh(d, "stage", command, c->archive, &process) == 0;
 }
 
-/* The receipt records a random owner token plus the PID and kernel start
- * identity across exec. Cleanup cannot signal another deployment's process,
- * or one that reused the recorded PID. A controller claim or a collection
- * lock whose recorded boot is not the running one belongs to a process that
- * no longer exists, and is cleared with a line that names it; a collection
- * lock of this boot, or one with no owner record, is refused by name. */
+/* The receipt records a random owner token plus the PID, the kernel start
+ * identity across exec and the kernel's boot_id, which every boot has and no
+ * program writes. Cleanup cannot signal another deployment's process, or one
+ * that reused the recorded PID. A controller claim or a collection lock whose
+ * recorded boot_id is not the running one belongs to a process that no
+ * longer exists, and is cleared with a line that names it; a collection lock
+ * of this boot, or one with no owner record, is refused by name. The look at
+ * the claims and the lock, their removal and the making of this run's claim
+ * hold flock(1) on STATE/collection.serial, which the collection holds while
+ * it takes its lock, so that no setup removes a claim or a lock made after
+ * its reading. The etude boot token is still published for the measurement
+ * contexts that read it. */
 static int run_setup(struct nd_deploy *d, char *setup, size_t size)
 {
     const struct nd_config *c = &d->c;
@@ -89,10 +95,11 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "trap 'exit 130' INT; trap 'exit 129' HUP; umask 022; "
         "printf '%%s' '%s' > \"$scratch/value\"; "
         "ln \"$scratch/value\" \"$bootfile\" || test -f \"$bootfile\"); fi; "
-        "test ! -L \"$bootfile\"; test -f \"$bootfile\"; "
-        "case $(stat -c '%%u:%%a:%%s' \"$bootfile\") in "
-        "0:644:64|0:600:64|0:444:64|0:400:64) ;; *) exit 1;; esac; "
-        "boot=$(cat \"$bootfile\"); case $boot in *[!0-9a-f]*|'') exit 1;; esac; "
+        "boot=$(cat /proc/sys/kernel/random/boot_id); "
+        "case $boot in *[!0-9a-f-]*|'') exit 1;; esac; "
+        "state='%s/state'; test ! -L \"$state\"; "
+        "if test ! -d \"$state\"; then mkdir -m 700 \"$state\"; fi; "
+        "exec 9> \"$state/collection.serial\"; flock 9; "
         "for old in '%s'/controller-*; do test -f \"$old/identity\" || continue; "
         "oboot=; read opid oborn oboot < \"$old/identity\" || true; "
         "test -n \"$oboot\" && test \"$oboot\" != \"$boot\" || continue; "
@@ -100,7 +107,7 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$old\" >&2; exit 1; }; "
         "printf 'native-deploy: cleared: %%s: pid %%s of boot %%s\\n' "
         "\"$old\" \"$opid\" \"$oboot\" >&2; done; "
-        "lock='%s/state/collection.lock'; held='held with no owner record'; "
+        "lock=\"$state/collection.lock\"; held='held with no owner record'; "
         "if test -d \"$lock\" && test -f \"$lock/owner\"; then "
         "lpid=; lboot=; read lpid lborn lboot < \"$lock/owner\" || true; "
         "held=\"held by pid $lpid of boot $lboot\"; "
@@ -113,7 +120,8 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "exit 1; fi; "
         "mkdir -m 700 \"$claim\"; printf '%%s\\n' '%s' > \"$claim/owner\"; "
         "start=$(awk '{print $22}' /proc/$$/stat); "
-        "printf '%%s %%s %%s\\n' \"$$\" \"$start\" \"$boot\" > \"$claim/identity\"; ",
+        "printf '%%s %%s %%s\\n' \"$$\" \"$start\" \"$boot\" > \"$claim/identity\"; "
+        "exec 9>&-; ",
         c->target, c->archive_sha, c->archive_sha, c->target, c->run, c->target, c->run, c->nonce,
         c->nonce, c->target, c->target, c->nonce);
 }
@@ -165,9 +173,8 @@ int nd_remote_cleanup(struct nd_deploy *d)
                    "read pid born boot < \"$receipt\"; "
                    "case $pid:$born in *[!0-9:]*|:*) exit 1;; esac; "
                    "test \"$pid\" -gt 1; test \"$born\" -gt 0; "
-                   "while test \"$boot\" = \"$(cat /dev/shm/etude-guest-boot 2>/dev/null || "
-                   "true)\" && test -r "
-                   "/proc/$pid/stat; do "
+                   "while test \"$boot\" = \"$(cat /proc/sys/kernel/random/boot_id)\" && "
+                   "test -r /proc/$pid/stat; do "
                    "start=$(awk '{print $22}' /proc/$pid/stat) || break; "
                    "test \"$start\" = \"$born\" || break; kill -TERM \"$pid\" || break; sleep 1; "
                    "done; fi; "
