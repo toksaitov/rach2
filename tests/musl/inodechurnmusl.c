@@ -22,7 +22,11 @@
  * line on stderr that names the call.
  *
  * The parent prints `inodechurnmusl: progress: N s: M operations` once a
- * second, reaps the processes and removes DIR/churn. Then it reads the
+ * second. At the end of the time, at SIGINT or SIGTERM, when a process ends
+ * early or when a fork fails, it stops every process it started, reaps
+ * them, and removes DIR/churn with every name in it, since a process that
+ * failed leaves the files it was writing. A signal ends a run of SECONDS 0
+ * as its time would; it fails a timed run. Then it reads the
  * kernel's log (klogctl), where an inode freed twice shows as `ext2: free of
  * inode N, whose bit is clear`, and a block as `ext2: free of block N, whose
  * bit is clear`, and prints `inodechurnmusl: result: ok`, or `failed` with
@@ -30,9 +34,11 @@
  * panics the kernel instead, and the result never comes.
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,8 +60,9 @@ static int procs = 4;
 static int threads = 4;
 static const char *base = ".";
 static char dir[4096];
-static volatile long *counts; /* each process's operations, shared */
-static volatile int *stop;    /* set by the parent when the time is up */
+static volatile long *counts;             /* each process's operations, shared */
+static volatile int *stop;                /* set by the parent when the time is up */
+static volatile sig_atomic_t interrupted; /* the parent took SIGINT or SIGTERM */
 static char ring[RING + 1];
 
 /* A thread's state: its numbers, its seed, the files it holds open to read,
@@ -289,27 +296,31 @@ static void proc_run(int p)
     _exit(0);
 }
 
-/** Remove every file left in `dir`, then `dir` itself; 0, or 1 when one
- * could not be removed. */
+/** Remove every name in `dir`, whatever process left it, then `dir`
+ * itself; 0, or 1, with a line on stderr, when one could not be removed. */
 static int cleanup(void)
 {
-    char name[PATH_LEN];
-    int p, t, k, bad = 0;
+    char name[sizeof(dir) + 257];
+    struct dirent *e;
+    DIR *d;
+    int bad = 0;
 
-    for (k = 0; k < SHARED; k++) {
-        snprintf(name, sizeof(name), "%s/c%d", dir, k);
+    d = opendir(dir);
+    if (d == NULL) {
+        fprintf(stderr, "inodechurnmusl: opendir: %s: %s\n", dir, strerror(errno));
+        return 1;
+    }
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+            continue;
+        }
+        snprintf(name, sizeof(name), "%s/%s", dir, e->d_name);
         if (unlink(name) < 0 && errno != ENOENT) {
+            fprintf(stderr, "inodechurnmusl: unlink: %s: %s\n", name, strerror(errno));
             bad = 1;
         }
-        for (p = 0; p < procs; p++) {
-            for (t = 0; t < threads; t++) {
-                snprintf(name, sizeof(name), "%s/l%d_%d_%d", dir, k, p, t);
-                if (unlink(name) < 0 && errno != ENOENT) {
-                    bad = 1;
-                }
-            }
-        }
     }
+    closedir(d);
     if (rmdir(dir) < 0) {
         fprintf(stderr, "inodechurnmusl: rmdir: %s: %s\n", dir, strerror(errno));
         return 1;
@@ -341,35 +352,61 @@ static int log_clean(void)
     return bad;
 }
 
-/** Start the processes and the shared page their counts and stop flag are
- * in; the processes' ids go to `pids`. */
-static void start(pid_t *pids)
+/** Note SIGINT or SIGTERM, which ends the parent's watch. */
+static void on_signal(int signo)
 {
+    (void)signo;
+    interrupted = 1;
+}
+
+/**
+ * Make the shared page the processes' counts and stop flag are in, and
+ * `dir`, and start the processes, whose ids go to `pids`. The parent's
+ * signal handler is set first, so that no signal ends it with a process
+ * running; a process puts SIGTERM back to its default and ignores SIGINT,
+ * which a terminal sends the whole group and the parent answers. Returns
+ * the number of processes started, fewer than `procs`, with a line on
+ * stderr, when a fork failed.
+ */
+static int start(pid_t *pids)
+{
+    struct sigaction sa;
     void *shared;
     int i;
 
-    if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
-        fail("mkdir", dir, errno);
-    }
     shared = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (shared == MAP_FAILED) {
         fail("mmap", dir, errno);
     }
     stop = shared;
     counts = (volatile long *)((char *)shared + 64);
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_signal;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGINT, &sa, 0) < 0 || sigaction(SIGTERM, &sa, 0) < 0) {
+        fail("sigaction", dir, errno);
+    }
+    if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
+        fail("mkdir", dir, errno);
+    }
     for (i = 0; i < procs; i++) {
         pids[i] = fork();
         if (pids[i] < 0) {
-            fail("fork", dir, errno);
+            fprintf(stderr, "inodechurnmusl: fork: %s: %s\n", dir, strerror(errno));
+            return i;
         }
         if (pids[i] == 0) {
+            signal(SIGTERM, SIG_DFL);
+            signal(SIGINT, SIG_IGN);
             proc_run(i);
         }
     }
+    return procs;
 }
 
-/** Print the count of operations once a second for the run's seconds; 1
- * when a process ended before them, and 0 otherwise. */
+/** Print the count of operations once a second for the run's seconds, or
+ * until a signal when they are 0; 1 when a process ended or a signal came
+ * before they were up, and 0 otherwise. */
 static int watch(void)
 {
     long total;
@@ -377,6 +414,13 @@ static int watch(void)
 
     for (c = 1; seconds == 0 || c <= seconds; c++) {
         sleep(1); /* interval: the load runs for its seconds, its count printed each second */
+        if (interrupted) {
+            if (seconds == 0) {
+                return 0;
+            }
+            fprintf(stderr, "inodechurnmusl: stopped by a signal before the time was up\n");
+            return 1;
+        }
         total = 0;
         for (i = 0; i < procs; i++) {
             total += counts[i];
@@ -393,8 +437,8 @@ static int watch(void)
 
 int main(int argc, char **argv)
 {
-    pid_t pids[MAXJOBS];
-    int i, c, status, failed;
+    pid_t pids[MAXJOBS], w;
+    int i, c, status, failed, started;
 
     while ((c = getopt(argc, argv, "t:p:j:C:")) != -1) {
         switch (c) {
@@ -421,12 +465,13 @@ int main(int argc, char **argv)
         return 2;
     }
     snprintf(dir, sizeof(dir), "%s/churn", base);
-    start(pids);
-    failed = watch();
+    started = start(pids);
+    failed = started < procs || watch();
     *stop = 1;
-    for (i = 0; i < procs; i++) {
-        if (waitpid(pids[i], &status, 0) == pids[i] &&
-            (!WIFEXITED(status) || WEXITSTATUS(status) != 0)) {
+    for (i = 0; i < started; i++) {
+        while ((w = waitpid(pids[i], &status, 0)) < 0 && errno == EINTR) {
+        }
+        if (w == pids[i] && (!WIFEXITED(status) || WEXITSTATUS(status) != 0)) {
             failed = 1;
         }
     }
