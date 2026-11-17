@@ -27,7 +27,8 @@
  * formats, Linux's Haswell lists, and their checks of stride, tiling and
  * offset, the X-tiled offset's split and the sprite's registers and watermarks
  * (78-9.3); a page flip's event at the vblank that shows it, with its count and
- * a rising stamp, an async flip's at flip done, and the count of vblanks the
+ * a rising stamp, an async flip's at flip done, blocking async atomic
+ * commits flipping many times a frame, and the count of vblanks the
  * frame counter kept while the interrupt was off (78-9.4), and the
  * interactive mark of RPS held by each pipe of a commit until its own
  * flip ends (80-46.1); the cursor's
@@ -790,8 +791,52 @@ static void row_flip(void)
           "flip: a buffer two flips back unpinned");
 }
 
+/** A wait that takes the pending interrupts first, as the processor takes
+ * them before the waiter sleeps, and then sleeps frames as sleep_frames. */
+static void take_then_sleep(wq_cond_fn cond, void *arg)
+{
+    take_messages();
+    if (!cond(arg)) {
+        sleep_frames(cond, arg);
+    }
+}
+
+/* The blocking async atomic commits row_async_atomic makes. */
+#define ASYNC_COMMITS 8
+
+/**
+ * Blocking atomic commits with PAGE_FLIP_ASYNC and PAGE_FLIP_EVENT between
+ * X-tiled `fb_a` and `fb_b`, which IGT's kms_async_flips makes on its
+ * atomic path: each ends at flip done, without a vblank, so that many
+ * flips go in a frame as Linux's do, more than two a frame as the test's
+ * frame_count * 2 < flip_count asks, and the buffer each replaced is
+ * unpinned at once. `fb_b` is shown when it starts.
+ */
+static void row_async_atomic(uint32_t fb_a, uint32_t fb_b)
+{
+    void (*wait)(wq_cond_fn cond, void *arg) = model_wait;
+    struct i915_model_pipe *p = &i915_model_pipes(&model)->pipe[0];
+    uint32_t vblanks = p->vblanks, flips = p->flips;
+    int i, n0 = nsent, ok = 1;
+
+    model_wait = take_then_sleep;
+    for (i = 0; i < ASYNC_COMMITS; i++) {
+        ok &= plane_commit(&pa->primary, i % 2 ? fb_b : fb_a, &full,
+                           DRM_MODE_PAGE_FLIP_ASYNC | DRM_MODE_PAGE_FLIP_EVENT) == 0;
+    }
+    model_wait = wait;
+    CHECK(ok && p->flips == flips + ASYNC_COMMITS && nsent == n0 + ASYNC_COMMITS,
+          "async atomic: each blocking commit flipped and sent its event");
+    CHECK((p->vblanks - vblanks) * 2u < (uint32_t)ASYNC_COMMITS,
+          "async atomic: more than two flips a frame");
+    CHECK(pa->base.flip_pending == DRM_FLIP_NONE && p->primary.surf == BO_GGTT(3) &&
+              bo_vma[3].pin_count == 1 && bo_vma[2].pin_count == 0,
+          "async atomic: the last buffer shown, the one it replaced unpinned");
+}
+
 /** An async flip of X-tiled buffers: the surface taken at once and its
- * event sent at flip done, without a vblank; a linear one refused. */
+ * event sent at flip done, without a vblank; a linear one refused. Then
+ * blocking async atomic commits (row_async_atomic). */
 static void row_async(void)
 {
     uint32_t h2, h3, fb2, fb3, flips;
@@ -818,6 +863,7 @@ static void row_async(void)
     take_messages();
     CHECK(nsent == n0 + 1 && sent[n0].user_data == 0x77, "async: the event sent at flip done");
     CHECK(reg(DEIMR) & DE_PLANE_FLIP_DONE_IVB(0), "async: flip done masked again");
+    row_async_atomic(fb2, fb3);
     CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_ASYNC, 0) == -EINVAL,
           "async: to a linear buffer refused");
     CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_EVENT, 0) == 0, "async: back to the console");

@@ -626,12 +626,13 @@ static void cursor_fast_commit(struct drm_atomic_state *state, struct drm_plane_
  * intel_atomic_commit_tail waits for flip done and then cleans up the old
  * planes: on each pipe in `pipes` that is on, once a vblank has come since
  * `to[pipe]`, the frame count read after the commit's writes, waiting for
- * one when none has; on a pipe that is off, at once. Goes for each parked
- * scanout of a plane in `planes` and for the replaced cursors of legacy
- * updates that have latched. The commit lock is held. May sleep.
+ * one when none has; on a pipe that is off, or in `flipped`, whose async
+ * flip is done and so reads the old surface no more, at once. Goes for
+ * each parked scanout of a plane in `planes` and for the replaced cursors
+ * of legacy updates that have latched. The commit lock is held. May sleep.
  */
 static void commit_release(struct drm_i915_private *i915, struct drm_plane *const *planes,
-                           uint32_t pipes, const uint32_t *to)
+                           uint32_t pipes, uint32_t flipped, const uint32_t *to)
 {
     int i, pipe, slot;
 
@@ -651,7 +652,8 @@ static void commit_release(struct drm_i915_private *i915, struct drm_plane *cons
         if (!parked && !c->cursor_retired) {
             continue;
         }
-        if (c->cfg.active && !frame_past(intel_get_vblank_counter(&c->base), to[pipe])) {
+        if (c->cfg.active && !(flipped & (1u << pipe)) &&
+            !frame_past(intel_get_vblank_counter(&c->base), to[pipe])) {
             wait_next_vblank(i915, pipe);
         }
         for (i = 0; i < DRM_MAX_PLANES; i++) {
@@ -668,36 +670,81 @@ static void commit_release(struct drm_i915_private *i915, struct drm_plane *cons
 #define COMMIT_NONBLOCK 1 /* keep what it replaced until the next commit */
 #define COMMIT_BLOCKING 2 /* let go of what it replaced once latched */
 
+/** The pipes of `state`'s async flips, read before the commit's tail
+ * takes the new states from it. */
+static uint32_t async_pipes(struct drm_i915_private *i915, const struct drm_atomic_state *state)
+{
+    uint32_t pipes = 0;
+    int pipe;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        const struct drm_crtc_state *cs = state->crtcs_new[i915->display.crtc[pipe].base.index];
+
+        if (cs && cs->async_flip) {
+            pipes |= 1u << pipe;
+        }
+    }
+    return pipes;
+}
+
+/** Those of the pipes in `async`, whose commit was an async flip, whose
+ * flip is done: flip done come and the event sent, which the blocking
+ * commit's wait may have given up on. */
+static uint32_t async_flipped(struct drm_i915_private *i915, uint32_t async)
+{
+    uint32_t pipes = 0;
+    int pipe;
+
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        if ((async & (1u << pipe)) && i915->display.crtc[pipe].base.flip_pending == DRM_FLIP_NONE) {
+            pipes |= 1u << pipe;
+        }
+    }
+    return pipes;
+}
+
+/* What a commit pins, by plane index: each plane of the commit, the
+ * framebuffer it shows and that framebuffer's binding, and the frame count
+ * read before the commit's writes; and the pipes of its async flips, read
+ * before the commit's tail takes the new states. */
+struct commit_pins {
+    struct drm_plane *planes[DRM_MAX_PLANES];
+    struct drm_framebuffer *fbs[DRM_MAX_PLANES];
+    struct i915_vma *pinned[DRM_MAX_PLANES];
+    uint32_t from[DRM_MAX_PLANES];
+    uint32_t async;
+};
+
 /**
- * Make each plane's framebuffer in `fbs`, pinned at `pinned`, its scanout
- * after a commit of `state` that wrote it from the frame count in `from`,
- * or let it go when `how` is COMMIT_FAILED; after a blocking commit, let go
- * of what it replaced (commit_release). The commit lock is held.
+ * Make each plane's framebuffer in `p` its scanout after a commit of
+ * `state` that wrote it from the frame count `p` keeps, or let it go when
+ * `how` is COMMIT_FAILED; after a blocking commit, let go of what it
+ * replaced (commit_release), at once on a pipe of the commit's async flips
+ * whose flip is done, as Linux's commit tail waits for no vblank after
+ * flip done. The commit lock is held.
  */
-static void commit_scanouts(struct drm_atomic_state *state, struct drm_plane *const *planes,
-                            struct drm_framebuffer *const *fbs, struct i915_vma *const *pinned,
-                            const uint32_t *from, int how)
+static void commit_scanouts(struct drm_atomic_state *state, const struct commit_pins *p, int how)
 {
     struct drm_i915_private *i915 = to_i915(state->dev);
     uint32_t to[I915_NUM_PIPES], rotated = 0;
     int i, slot = 0;
 
     for (i = 0; i < DRM_MAX_PLANES; i++) {
-        struct intel_crtc *c = planes[i] ? plane_slot(i915, planes[i], &slot) : NULL;
+        struct intel_crtc *c = p->planes[i] ? plane_slot(i915, p->planes[i], &slot) : NULL;
         struct intel_scanout next;
 
-        next.fb = fbs[i];
-        next.vma = pinned[i];
+        next.fb = p->fbs[i];
+        next.vma = p->pinned[i];
         if (how == COMMIT_FAILED || !c) {
             scanout_put(&next);
             continue;
         }
         to[c->pipe] = intel_get_vblank_counter(&c->base);
         rotated |= 1u << c->pipe;
-        scanout_rotate(c, slot, next, from[i], to[c->pipe], state->legacy_cursor_update);
+        scanout_rotate(c, slot, next, p->from[i], to[c->pipe], state->legacy_cursor_update);
     }
     if (rotated && how == COMMIT_BLOCKING && !state->legacy_cursor_update) {
-        commit_release(i915, planes, rotated, to);
+        commit_release(i915, p->planes, rotated, async_flipped(i915, p->async), to);
     }
 }
 
@@ -705,28 +752,27 @@ static void commit_scanouts(struct drm_atomic_state *state, struct drm_plane *co
 static int32_t atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
 {
     struct drm_i915_private *i915 = to_i915(dev);
-    struct i915_vma *pinned[DRM_MAX_PLANES];
-    struct drm_framebuffer *fbs[DRM_MAX_PLANES];
-    struct drm_plane *planes[DRM_MAX_PLANES];
+    struct commit_pins p;
     struct drm_plane_state *cursor = cursor_fast_state(state);
     struct intel_cursor_retire *retire = NULL;
-    uint32_t from[DRM_MAX_PLANES], pipes = 0;
+    uint32_t pipes = 0;
     int32_t err = 0;
     int i, slot = 0;
 
+    p.async = async_pipes(i915, state);
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = state->planes_new[i];
         struct intel_crtc *c = ps ? plane_slot(i915, ps->plane, &slot) : NULL;
 
-        pinned[i] = NULL;
-        fbs[i] = NULL;
-        planes[i] = ps ? ps->plane : NULL;
-        from[i] = c ? intel_get_vblank_counter(&c->base) : 0;
+        p.pinned[i] = NULL;
+        p.fbs[i] = NULL;
+        p.planes[i] = ps ? ps->plane : NULL;
+        p.from[i] = c ? intel_get_vblank_counter(&c->base) : 0;
         if (ps && ps->fb && err == 0) {
-            err = fb_pin(ps, &pinned[i]);
+            err = fb_pin(ps, &p.pinned[i]);
             if (err == 0) {
-                fbs[i] = ps->fb;
-                drm_framebuffer_get(fbs[i]);
+                p.fbs[i] = ps->fb;
+                drm_framebuffer_get(p.fbs[i]);
                 /* Linux's legacy cursor update neither marks nor boosts. */
                 if (c && !state->legacy_cursor_update) {
                     pipes |= 1u << c->pipe;
@@ -745,8 +791,8 @@ static int32_t atomic_commit(struct drm_device *dev, struct drm_atomic_state *st
         struct intel_crtc *c = to_intel_crtc(cursor->crtc);
         struct intel_scanout next;
 
-        next.fb = fbs[cursor->plane->index];
-        next.vma = pinned[cursor->plane->index];
+        next.fb = p.fbs[cursor->plane->index];
+        next.vma = p.pinned[cursor->plane->index];
         if (next.vma != c->shown[INTEL_PLANE_CURSOR].vma) {
             retire = (struct intel_cursor_retire *)kmalloc(sizeof(*retire));
         }
@@ -761,7 +807,7 @@ static int32_t atomic_commit(struct drm_device *dev, struct drm_atomic_state *st
     if (pipes) {
         interactive_handover(i915, pipes, err);
     }
-    commit_scanouts(state, planes, fbs, pinned, from,
+    commit_scanouts(state, &p,
                     err != 0   ? COMMIT_FAILED
                     : nonblock ? COMMIT_NONBLOCK
                                : COMMIT_BLOCKING);
