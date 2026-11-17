@@ -41,6 +41,62 @@ static int write_bytes(const char *path, const void *data, size_t size)
     ok = !size || (data && fwrite(data, 1, size, fp) == size);
     return !fclose(fp) && ok;
 }
+/* Read the first line of `path`, up to `size` - 1 bytes; 1, or 0 when
+ * it cannot be read or is empty. */
+static int first_line(const char *path, char *line, size_t size)
+{
+    FILE *fp = fopen(path, "r");
+    int ok = fp && fgets(line, (int)size, fp) != NULL;
+    if (fp)
+        fclose(fp);
+    if (ok)
+        line[strcspn(line, "\r\n")] = 0;
+    return ok && *line;
+}
+/* Take the collection lock `lock`, a directory, and write in it `owner`:
+ * this process's PID, its start in clock ticks since boot (field 22 of
+ * /proc/self/stat) and the boot identity, the fields of the deployment's
+ * controller receipt, each `-` where the system gives none. A run's setup
+ * clears a lock whose recorded boot is not the running one. 1, or 0 with
+ * no lock left behind. */
+static int lock_take(const char *lock)
+{
+    char path[4200], self[1024], start[32] = "-", boot[128] = "-", record[256];
+    if (mkdir(lock, 0700)) {
+        fprintf(stderr, "native: another collection owns %s\n", lock);
+        return 0;
+    }
+    if (first_line("/proc/self/stat", self, sizeof(self))) {
+        char *at = strrchr(self, ')');
+        int field = 2;
+        for (; at && field < 22; field++)
+            at = strchr(at + 1, ' ');
+        if (at && sscanf(at + 1, "%31[0-9]", start) != 1)
+            strcpy(start, "-");
+    }
+    if (!first_line("/dev/shm/etude-guest-boot", boot, sizeof(boot)) &&
+        !first_line("/proc/sys/kernel/random/boot_id", boot, sizeof(boot)))
+        strcpy(boot, "-");
+    snprintf(path, sizeof(path), "%s/owner", lock);
+    snprintf(record, sizeof(record), "%ld %s %s\n", (long)getpid(), start, boot);
+    if (!write_bytes(path, record, strlen(record))) {
+        fprintf(stderr, "native: cannot record the owner of %s\n", lock);
+        unlink(path);
+        rmdir(lock);
+        return 0;
+    }
+    return 1;
+}
+/* Remove the collection lock `lock` and its owner record; 0, or -1 when
+ * the lock remains. */
+static int lock_release(const char *lock)
+{
+    char path[4200];
+    snprintf(path, sizeof(path), "%s/owner", lock);
+    if (unlink(path) && errno != ENOENT)
+        return -1;
+    return rmdir(lock);
+}
 static void json_string(FILE *fp, const char *s)
 {
     fputc('"', fp);
@@ -328,24 +384,22 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
     if (!conf->results || !nc_mkdir(conf->results) || !nc_mkdir(conf->state))
         return 2;
     snprintf(lock, sizeof(lock), "%s/collection.lock", conf->state);
-    if (mkdir(lock, 0700)) {
-        fprintf(stderr, "native: another collection owns %s\n", lock);
+    if (!lock_take(lock))
         return 2;
-    }
     if (etude_history_now(&granted)) {
-        rmdir(lock);
+        lock_release(lock);
         return 2;
     }
     conf->granted = &granted;
     snprintf(summary, sizeof(summary), "%s/summary", conf->results);
     int summary_fd = open(summary, O_CREAT | O_EXCL | O_WRONLY, 0600);
     if (summary_fd < 0 || close(summary_fd)) {
-        rmdir(lock);
+        lock_release(lock);
         return 2;
     }
     if (!nc_history_open(&history, conf, i, argc, argv, first)) {
         nc_history_close(&history);
-        rmdir(lock);
+        lock_release(lock);
         fputs("native: cannot open identified native history\n", stderr);
         return 2;
     }
@@ -355,7 +409,7 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
         failures += status != 0;
         ran++;
     }
-    if (history.unconfirmed || rmdir(lock)) {
+    if (history.unconfirmed || lock_release(lock)) {
         failures++;
         history.unconfirmed = 1;
         fprintf(stderr, "native: cleanup unconfirmed; collection claim retained: %s\n", lock);
