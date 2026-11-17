@@ -1,6 +1,7 @@
 /**
  * Host test of the file page cache, mm/filecache.c: the insertion of a page
- * read while another processor frees the file's record.
+ * read while another processor frees the file's record, and invalidations
+ * that drop a batch of pages in each hold of the cache's lock.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
@@ -39,8 +40,21 @@
  * between two of `fc_lock_run`'s, and checks that each frame left over is
  * freed once.
  *
+ * The batch rows set a batch of four pages, so that the drops cross
+ * several holds of `fc_lock`. The interrupt flag's model clears the flag at
+ * each save and puts back what was saved at each restore, and counts the
+ * pages each outermost hold drops. A whole-file drop of 14 pages and the
+ * range walks of POSIX_FADV_DONTNEED and of a truncation drop at most a
+ * batch in a hold, give way with interrupts on after each batch of entries
+ * examined, those out of the range included, and keep their place while
+ * another processor drops the page after the walk's place, adds a page or
+ * drops the whole file during a give.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
+
+/* The batch rows' batch, so that a few pages cross several holds. */
+#define FC_DROP_BATCH 4u
 
 #include "mm/filecache.c"
 
@@ -61,7 +75,7 @@ struct percpu cpu_table[NR_CPUS];
 
 /* The frames: page `i` is the frame at `(i + 1) * PAGE_SIZE`, free while
    its count is 0. */
-#define FRAMES (2u * FC_DROP_BATCH + 8u)
+#define FRAMES (8u * FC_DROP_BATCH + 8u)
 static uint8_t frame_mem[FRAMES][PAGE_SIZE];
 static uint32_t frame_refs[FRAMES];
 
@@ -315,18 +329,40 @@ void wq_wake_all(wait_queue_t *wq)
 static void (*restore_hook)(void);
 static int restore_countdown;
 
-/** No interrupt can come, so there is no flag to save. */
+/* The interrupt flag, 1 while interrupts are on; the cache's pages when
+   the outermost hold began; the holds that ended, and the most pages one
+   of them dropped. */
+static uint32_t irq_on = 1;
+static uint32_t hold_start;
+static uint32_t holds;
+static uint32_t hold_most;
+
+/** Turn interrupts off and return the flag they had. */
 uint32_t kirq_save(void)
 {
-    return 0;
+    uint32_t was = irq_on;
+
+    if (was) {
+        hold_start = pages;
+    }
+    irq_on = 0;
+    return was;
 }
 
-/** Run and clear `restore_hook` at the restore a row named. */
+/** Put back the flag `flags`, count a hold that turns interrupts on again,
+ *  then run and clear `restore_hook` at the restore a row named. */
 void kirq_restore(uint32_t flags)
 {
     void (*fn)(void) = restore_hook;
 
-    (void)flags;
+    check(flags <= 1, "a restore puts back a flag that a save gave");
+    irq_on = flags;
+    if (flags) {
+        holds++;
+        if (hold_start > pages && hold_start - pages > hold_most) {
+            hold_most = hold_start - pages;
+        }
+    }
     if (fn && --restore_countdown == 0) {
         restore_hook = 0;
         fn();
@@ -350,14 +386,19 @@ static struct fake_file file_c = {9, 1, 3 * PAGE_SIZE, 100};
 static struct fake_file large_file = {10, 1, (FC_DROP_BATCH + 3u) * PAGE_SIZE, 100};
 static void (*give_way_hook)(void);
 static uint32_t give_way_below;
+static uint32_t give_way_at; /* when not 0, the give that runs the hook */
+static uint32_t gives;
 
-/** Run one concurrent operation once the drop has freed some pages. */
+/** Count the give and run one concurrent operation, at the give
+ *  `give_way_at` names, or once the drop has freed some pages. */
 void sched_give_way(void)
 {
     void (*fn)(void) = give_way_hook;
 
     check(!fc_lock.locked, "the cache lock is free when the walk gives way");
-    if (fn && filecache_pages() < give_way_below) {
+    check(irq_on, "interrupts are on when the walk gives way");
+    gives++;
+    if (fn && (give_way_at ? gives == give_way_at : filecache_pages() < give_way_below)) {
         give_way_hook = 0;
         fn();
     }
@@ -696,6 +737,137 @@ static void row_batched_drop(void)
     give_way_hook = 0;
 }
 
+/* The batch rows' file: 14 pages, three batches and a half. */
+#define WIDE_PAGES (3u * FC_DROP_BATCH + 2u)
+static struct fake_file wide_file = {11, 1, WIDE_PAGES *PAGE_SIZE, 100};
+
+/** Cache every page of the wide file, page `i` filled with `i + 1`. */
+static void fill_wide_file(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < WIDE_PAGES; i++) {
+        check(insert_page(&wide_file, i, (int)i + 1, 0), "the wide file's page is kept");
+    }
+}
+
+/** Start counting holds, drops in a hold and gives. */
+static void count_holds(void)
+{
+    holds = 0;
+    hold_most = 0;
+    gives = 0;
+}
+
+/** Whether the pages of the wide file that read back are exactly those
+ *  set in `want`, a bit for each page. */
+static int wide_holds(uint32_t want)
+{
+    uint32_t i;
+
+    for (i = 0; i < WIDE_PAGES; i++) {
+        if (reads_as(&wide_file, i, (int)i + 1) != (int)((want >> i) & 1u)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The page the hook below drops, the walk's next one. */
+static uint32_t drop_pgoff;
+
+/** Drop page `drop_pgoff` of the wide file and add page 0 back, as
+ *  reclaim and a reader on other processors would while a walk gives
+ *  way. */
+static void drop_next_and_add(void)
+{
+    struct fc_file f;
+    struct fc_page *p;
+    uint32_t flags;
+
+    check(fc_file_of(&mount, &wide_file, &f), "the wide file is a cached file");
+    flags = spin_lock_irqsave(&fc_lock);
+    p = fc_lookup(&f, drop_pgoff);
+    check(p != NULL, "the walk's next page is cached");
+    if (p) {
+        fc_drop(p);
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+    check(insert_page(&wide_file, 0, 1, 0), "a page added during the walk is kept");
+}
+
+/** Drop the whole wide file while a range walk gives way. */
+static void forget_wide(void)
+{
+    filecache_forget(&mount, &wide_file);
+}
+
+/**
+ * The batch rows. The list of a file's pages has the newest first, so a
+ * walk of the full file examines pages 13, 12, ... and gives way after 13
+ * to 10, 9 to 6 and 5 to 2; the second DONTNEED gives way before page 9,
+ * which the hook drops.
+ */
+static void row_batched_holds(void)
+{
+    static struct open_file ofd;
+    struct filecache_was was;
+    uint32_t all = (1u << WIDE_PAGES) - 1u;
+
+    mount.state = VFS_ACTIVE;
+    fill_wide_file();
+    count_holds();
+    filecache_forget(&mount, &wide_file);
+    check(filecache_pages() == 0 && frame_free_count() == FRAMES,
+          "a whole-file drop drops every page");
+    check(gives >= 3 && holds >= 4 && hold_most <= FC_DROP_BATCH && irq_on,
+          "a whole-file drop gives way, interrupts on, after each batch of pages");
+
+    ofd.vmnt = &mount;
+    ofd.vnode = &wide_file;
+    fill_wide_file();
+    count_holds();
+    filecache_dontneed(&ofd, 0, PAGE_SIZE);
+    check(wide_holds(all & ~1u), "DONTNEED drops only the page of its range");
+    check(gives >= 3 && hold_most <= 1u && irq_on,
+          "DONTNEED gives way after each batch of pages examined, kept pages included");
+
+    count_holds();
+    drop_pgoff = 9;
+    give_way_at = 1;
+    give_way_hook = drop_next_and_add;
+    filecache_dontneed(&ofd, 8u * PAGE_SIZE, 4u * PAGE_SIZE);
+    check(!give_way_hook && wide_holds(all & ~(0xFu << 8)),
+          "DONTNEED goes on past a page dropped during its give, and keeps a page added");
+    check(hold_most <= FC_DROP_BATCH && irq_on, "and drops at most a batch in a hold");
+
+    filecache_before(&mount, &wide_file, &was);
+    wide_file.size = 4u * PAGE_SIZE;
+    count_holds();
+    give_way_at = 0;
+    filecache_changed(&mount, &wide_file, &was, 4u * PAGE_SIZE, WIDE_PAGES * PAGE_SIZE);
+    check(wide_holds(0xFu), "a truncation drops the pages past its new size and keeps the others");
+    check(gives >= 2 && hold_most <= FC_DROP_BATCH && irq_on,
+          "a truncation's range walk gives way after each batch of pages examined");
+    filecache_forget(&mount, &wide_file);
+    check(filecache_pages() == 0 && frame_free_count() == FRAMES, "every frame comes back");
+
+    wide_file.size = WIDE_PAGES * PAGE_SIZE;
+    fill_wide_file();
+    filecache_before(&mount, &wide_file, &was);
+    wide_file.size = 2u * PAGE_SIZE;
+    count_holds();
+    give_way_at = 1;
+    give_way_hook = forget_wide;
+    filecache_changed(&mount, &wide_file, &was, 2u * PAGE_SIZE, WIDE_PAGES * PAGE_SIZE);
+    check(!give_way_hook && filecache_pages() == 0 && frame_free_count() == FRAMES,
+          "a whole-file drop during a truncation's give drains the record the walk holds");
+    check(hold_most <= FC_DROP_BATCH && irq_on, "and each drops at most a batch in a hold");
+    give_way_at = 0;
+    give_way_hook = 0;
+    wide_file.size = WIDE_PAGES * PAGE_SIZE;
+}
+
 int main(void)
 {
     mount.type = &vfs_ext2_type;
@@ -737,5 +909,6 @@ int main(void)
           "every frame goes back with the mount's pages");
     mount.state = VFS_ACTIVE;
     row_batched_drop();
+    row_batched_holds();
     return fails != 0;
 }

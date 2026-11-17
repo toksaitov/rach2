@@ -80,7 +80,7 @@ void filecache_willneed(struct open_file *ofd, uint64_t offset, uint64_t len);
  * `offset` of the file `ofd` is open on, and of a last partial page that
  * ends the file, as Linux's POSIX_FADV_DONTNEED drops clean pages
  * (mm/fadvise.c:113-167); every page here is clean, since a write drops
- * its file's pages.
+ * its file's pages. May reschedule between batches.
  */
 void filecache_dontneed(struct open_file *ofd, uint64_t offset, uint64_t len);
 
@@ -129,8 +129,8 @@ void filecache_before(struct vfs_mount *mnt, void *node, struct filecache_was *w
  * keep its others, as Linux's page cache keeps the folios a write does not
  * touch. The pages kept were read from the file as `*was`, from
  * `filecache_before`, has it: when the cache's record of the file says
- * otherwise, the file changed some other way too, and every page goes,
- * with a chance to reschedule between batches.
+ * otherwise, the file changed some other way too, and every page goes.
+ * Either way it may reschedule between batches.
  */
 void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache_was *was,
                        uint64_t from, uint64_t to);

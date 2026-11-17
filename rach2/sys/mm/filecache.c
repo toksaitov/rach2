@@ -73,14 +73,17 @@
  * few files beside it the pages they were reading. A power of two. */
 #define FC_EPOCHS 256u
 
-/* Pages dropped in one hold during invalidation. */
+/* The pages an invalidation examines in one hold of `fc_lock`, those it
+ * keeps included. A host test sets a smaller batch of its own. */
+#ifndef FC_DROP_BATCH
 #define FC_DROP_BATCH 128u
+#endif
 
 /* A file that has pages in the cache, the list of those pages, so that a
  * change to the file drops them without a search of the other files' pages,
  * and what the file was when they were read. The record lives while the
- * file has a page, or until the caller draining a detached record frees
- * it. */
+ * file has a page or a range walk's cursor, and a detached record until
+ * both its drain and its last cursor are done. */
 struct fc_inode {
     struct fc_inode *next, **link;             /* the slot's list; link is NULL once detached */
     struct fc_inode *mount_next, **mount_link; /* the mount's cached inodes */
@@ -89,12 +92,15 @@ struct fc_inode {
     uint64_t size;
     int64_t mtime;
     uint32_t generation;
+    uint32_t cursors; /* range walks whose cursor is on `pages` */
+    uint32_t drained; /* 1 once a detached record's drain has ended */
     struct fc_page *pages;
 };
 
 /* A cached page: which page of which file and the frame of the copy. The
  * record is kept to 64 bytes on x86-64 and 32 on i686, a block of the
- * heap's class of that size, since the cache may hold millions. */
+ * heap's class of that size, since the cache may hold millions. A range
+ * walk's cursor is a record on the file's list alone, with `file` NULL. */
 struct fc_page {
     struct fc_page *next;                    /* the bucket's list */
     struct fc_page *sibling, **sibling_link; /* the file's list */
@@ -364,16 +370,28 @@ static void fc_drop_step(uint32_t *steps, uint32_t *flags)
     }
 }
 
-/** Drop the remaining pages of the detached `file` and free its record.
- * Reclaim may take pages while the lock is out. Only this call can free
- * the record, and it reads the head again with the lock retaken. */
+/** Drop the remaining pages of the detached `file` and free its record,
+ * or leave the record to its last range walk when one has a cursor on it.
+ * Reclaim may take pages while the lock is out, so the head is read again
+ * with the lock retaken; cursors stay on the list. */
 static void fc_drain_file(struct fc_inode *file, uint32_t *steps, uint32_t *flags)
 {
-    while (file->pages) {
-        fc_drop(file->pages);
+    struct fc_page *p;
+
+    for (;;) {
+        for (p = file->pages; p && !p->file; p = p->sibling) {
+        }
+        if (!p) {
+            break;
+        }
+        fc_drop(p);
         fc_drop_step(steps, flags);
     }
-    kfree(file);
+    if (file->cursors) {
+        file->drained = 1;
+    } else {
+        kfree(file);
+    }
 }
 
 /** Invalidate the whole file, then drain its pages in bounded batches.
@@ -382,6 +400,64 @@ static void fc_drop_file(struct fc_inode *file, uint32_t *steps, uint32_t *flags
 {
     fc_detach_file(file);
     fc_drain_file(file, steps, flags);
+}
+
+/** Put the cursor `c` on a file's list at `*at`. Under `fc_lock`. */
+static void fc_cursor_put(struct fc_page *c, struct fc_page **at)
+{
+    c->sibling_link = at;
+    c->sibling = *at;
+    if (c->sibling) {
+        c->sibling->sibling_link = &c->sibling;
+    }
+    *at = c;
+}
+
+/** Take the cursor `c` off its file's list. Under `fc_lock`. */
+static void fc_cursor_take(struct fc_page *c)
+{
+    *c->sibling_link = c->sibling;
+    if (c->sibling) {
+        c->sibling->sibling_link = c->sibling_link;
+    }
+}
+
+/**
+ * Drop the pages of `file` from `first` to `last`, examining at most
+ * FC_DROP_BATCH entries of its list in one hold of `fc_lock`, those out of
+ * the range included, as Linux's truncate and invalidate loops give way
+ * between batches. A cursor on the list behind the last page examined
+ * keeps the walk's place while the lock is out, since a drop of any page
+ * fixes the link of what follows it, and keeps the record: it lives while
+ * its list is not empty, and a drain leaves it to the last cursor. A page
+ * added while the lock is out goes to the head, behind the walk, and is
+ * kept. Called and returned with `fc_lock` held.
+ */
+static void fc_drop_range(struct fc_inode *file, uint64_t first, uint64_t last, uint32_t *flags)
+{
+    struct fc_page cursor, *p;
+    uint32_t steps = 0;
+
+    k_memset(&cursor, 0, sizeof(cursor));
+    file->cursors++;
+    fc_cursor_put(&cursor, &file->pages);
+    while ((p = cursor.sibling) != NULL) {
+        fc_cursor_take(&cursor);
+        fc_cursor_put(&cursor, &p->sibling);
+        if (p->file && p->pgoff >= first && p->pgoff <= last) {
+            fc_drop(p);
+        }
+        fc_drop_step(&steps, flags);
+    }
+    fc_cursor_take(&cursor);
+    if (--file->cursors == 0 && !file->pages) {
+        if (file->link) {
+            fc_detach_file(file);
+            kfree(file);
+        } else if (file->drained) {
+            kfree(file);
+        }
+    }
 }
 
 /** Copy a page to the frame `to`, or to `to_buf` when it is 0, from the
@@ -1419,7 +1495,6 @@ void filecache_willneed(struct open_file *ofd, uint64_t offset, uint64_t len)
 void filecache_dontneed(struct open_file *ofd, uint64_t offset, uint64_t len)
 {
     struct fc_inode *file;
-    struct fc_page *p, *next;
     struct fc_file f;
     uint64_t endbyte = fc_endbyte(offset, len), first, final;
     uint32_t flags;
@@ -1440,15 +1515,12 @@ void filecache_dontneed(struct open_file *ofd, uint64_t offset, uint64_t len)
     }
     flags = spin_lock_irqsave(&fc_lock);
     file = pages ? fc_find(f.mnt, f.ino) : NULL;
-    for (p = file ? file->pages : NULL; p; p = next) {
-        /* The last page frees the record, and has no sibling to go on to. */
-        next = p->sibling;
-        if (p->pgoff >= first && p->pgoff <= final) {
-            fc_drop(p);
-        }
+    if (file) {
+        fc_drop_range(file, first, final, &flags);
     }
     spin_unlock_irqrestore(&fc_lock, flags);
 }
+
 uint32_t filecache_epoch(struct vfs_mount *mnt, void *node)
 {
     struct fc_file f;
@@ -1523,7 +1595,6 @@ void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache
                        uint64_t from, uint64_t to)
 {
     struct fc_inode *file;
-    struct fc_page *p, *next;
     struct fc_file f;
     uint64_t first = from / PAGE_SIZE, last = to > from ? (to - 1u) / PAGE_SIZE : first;
     uint32_t steps = 0, flags;
@@ -1541,11 +1612,8 @@ void filecache_changed(struct vfs_mount *mnt, void *node, const struct filecache
         spin_unlock_irqrestore(&fc_lock, flags);
         return;
     }
-    for (p = file ? file->pages : NULL; p; p = next) {
-        next = p->sibling;
-        if (p->pgoff >= first && p->pgoff <= last) {
-            fc_drop(p);
-        }
+    if (file) {
+        fc_drop_range(file, first, last, &flags);
     }
     file = pages ? fc_find(f.mnt, f.ino) : NULL;
     if (file) {
