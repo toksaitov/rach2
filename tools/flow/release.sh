@@ -82,12 +82,13 @@
 #   Windows' copy; while that is not confirmed, the release waits, as exit
 #   75 says.
 # * A failed run adds a line `failure MACHINE RUN WORD...` to the record, the
-#   WORDs being the failed `ARCH:SUITE`s or native cases, or `runner` when
-#   the run named none, and the release goes on with the other machines'
-#   runs. Once the runs of WSL, the Mac and Windows have ended, a failure of
-#   any of them ends the release before the install, and a failure of the
-#   Lenovo's ends it with the trial uncommitted. The last line printed is
-#   then `release: failed: MACHINE run RUN: WORD...; ...`.
+#   WORDs being the failed `ARCH:SUITE`s or native cases, the Lenovo's
+#   selected cases with no result among them when the machine is lost
+#   mid-run, or `runner` when the run named none, and the release goes on
+#   with the other machines' runs. Once the runs of WSL, the Mac and Windows
+#   have ended, a failure of any of them ends the release before the install,
+#   and a failure of the Lenovo's ends it with the trial uncommitted. The last
+#   line printed is then `release: failed: MACHINE run RUN: WORD...; ...`.
 # * -r: the new record keeps the passes of WSL, the Mac and Windows that the
 #   last record of M has, and runs again on each machine only what failed
 #   there, at SHA: the record says `again MACHINE WORD...`. A machine whose
@@ -2550,10 +2551,32 @@ lenovo_run()
     for f in "$state/$id"/collection-*.out; do
         [ ! -f "$f" ] || collection=$f
     done
-    # shellcheck disable=SC2046 # the cases are words
-    failure lenovo "$id" $({ [ -z "$collection" ] ||
-        sed -n 's/^native: \([^:]*\): \([a-z]*\).*/\1 \2/p' "$collection"; } |
-        awk '$1 != "result" && $2 != "pass" { print $1 }' | grep . || echo runner)
+    # shellcheck disable=SC2046,SC2086 # the cases are words
+    failure lenovo "$id" $(lenovo_failed "$collection" $words)
+}
+
+# lenovo_failed COLLECTION [CASE...]: print the cases the native run whose
+# output is COLLECTION did not pass: each whose result is not a pass, then
+# each of CASE, or of every case the payload's inventory declares, with no
+# result at all, as when the machine is lost mid-run and the case under way
+# and those after it never report; `runner` when there is no collection or
+# it names none of these.
+lenovo_failed()
+{
+    lf_out=$1
+    shift
+    lf_inv=$files/../tests/native/prepared/tree/tests/native
+    { [ -z "$lf_out" ] ||
+        sed -n 's/^native: \([^:]*\): \([a-z]*\).*/got \1 \2/p' "$lf_out"
+      [ -z "$lf_out" ] ||
+        if [ "$#" -gt 0 ]; then
+            printf 'want %s\n' "$@"
+        else
+            cat "$lf_inv/probes.cases" "$lf_inv/musl.cases" "$lf_inv/rows.cases" \
+                "$lf_inv/gpu.cases" | sed -n 's/^case \([^ ]*\).*/want \1/p'
+        fi; } |
+        awk '$1 == "got" && $2 != "result" { seen[$2] = 1; if ($3 != "pass") print $2; next }
+            $1 == "want" && !($2 in seen) && !named[$2]++ { print $2 }' | grep . || echo runner
 }
 
 # failing FILE: print, indented, the lines of FILE that say what failed, or
