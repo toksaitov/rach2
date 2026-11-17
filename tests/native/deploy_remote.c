@@ -72,29 +72,50 @@ int nd_stage(struct nd_deploy *d)
 
 /* The receipt records a random owner token plus the PID and kernel start
  * identity across exec. Cleanup cannot signal another deployment's process,
- * or one that reused the recorded PID. */
+ * or one that reused the recorded PID. A controller claim or a collection
+ * lock whose recorded boot is not the running one belongs to a process that
+ * no longer exists, and is cleared with a line that names it; a collection
+ * lock of this boot, or one with no owner record, is refused by name. */
 static int run_setup(struct nd_deploy *d, char *setup, size_t size)
 {
     const struct nd_config *c = &d->c;
-    return nd_format(setup, size,
-                     "dest='%s/p-%.16s'; test \"$(cat \"$dest/archive.sha256\")\" = '%s'; "
-                     "claim='%s/controller-%s'; test ! -e '%s/results-%s'; "
-                     "test ! -d '%s/state/collection.lock'; umask 077; mkdir -m 700 \"$claim\"; "
-                     "printf '%%s\\n' '%s' > \"$claim/owner\"; "
-                     "start=$(awk '{print $22}' /proc/$$/stat); "
-                     "bootfile=/dev/shm/etude-guest-boot; if test ! -e \"$bootfile\"; then "
-                     "(scratch=/dev/shm/etude-boot-%s; mkdir -m 700 \"$scratch\"; "
-                     "trap 'rm -rf \"$scratch\"' EXIT; trap 'exit 143' TERM; "
-                     "trap 'exit 130' INT; trap 'exit 129' HUP; umask 022; "
-                     "printf '%%s' '%s' > \"$scratch/value\"; "
-                     "ln \"$scratch/value\" \"$bootfile\" || test -f \"$bootfile\"); fi; "
-                     "test ! -L \"$bootfile\"; test -f \"$bootfile\"; "
-                     "case $(stat -c '%%u:%%a:%%s' \"$bootfile\") in "
-                     "0:644:64|0:600:64|0:444:64|0:400:64) ;; *) exit 1;; esac; "
-                     "boot=$(cat \"$bootfile\"); case $boot in *[!0-9a-f]*|'') exit 1;; esac; "
-                     "printf '%%s %%s %%s\\n' \"$$\" \"$start\" \"$boot\" > \"$claim/identity\"; ",
-                     c->target, c->archive_sha, c->archive_sha, c->target, c->run, c->target,
-                     c->run, c->target, c->nonce, c->nonce, c->nonce);
+    return nd_format(
+        setup, size,
+        "dest='%s/p-%.16s'; test \"$(cat \"$dest/archive.sha256\")\" = '%s'; "
+        "claim='%s/controller-%s'; test ! -e '%s/results-%s'; umask 077; "
+        "bootfile=/dev/shm/etude-guest-boot; if test ! -e \"$bootfile\"; then "
+        "(scratch=/dev/shm/etude-boot-%s; mkdir -m 700 \"$scratch\"; "
+        "trap 'rm -rf \"$scratch\"' EXIT; trap 'exit 143' TERM; "
+        "trap 'exit 130' INT; trap 'exit 129' HUP; umask 022; "
+        "printf '%%s' '%s' > \"$scratch/value\"; "
+        "ln \"$scratch/value\" \"$bootfile\" || test -f \"$bootfile\"); fi; "
+        "test ! -L \"$bootfile\"; test -f \"$bootfile\"; "
+        "case $(stat -c '%%u:%%a:%%s' \"$bootfile\") in "
+        "0:644:64|0:600:64|0:444:64|0:400:64) ;; *) exit 1;; esac; "
+        "boot=$(cat \"$bootfile\"); case $boot in *[!0-9a-f]*|'') exit 1;; esac; "
+        "for old in '%s'/controller-*; do test -f \"$old/identity\" || continue; "
+        "oboot=; read opid oborn oboot < \"$old/identity\" || true; "
+        "test -n \"$oboot\" && test \"$oboot\" != \"$boot\" || continue; "
+        "rm -f \"$old/identity\" \"$old/owner\"; rmdir \"$old\" || { "
+        "printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$old\" >&2; exit 1; }; "
+        "printf 'native-deploy: cleared: %%s: pid %%s of boot %%s\\n' "
+        "\"$old\" \"$opid\" \"$oboot\" >&2; done; "
+        "lock='%s/state/collection.lock'; held='held with no owner record'; "
+        "if test -d \"$lock\" && test -f \"$lock/owner\"; then "
+        "lpid=; lboot=; read lpid lborn lboot < \"$lock/owner\" || true; "
+        "held=\"held by pid $lpid of boot $lboot\"; "
+        "if test -n \"$lboot\" && test \"$lboot\" != - && test \"$lboot\" != \"$boot\"; then "
+        "rm -f \"$lock/owner\"; rmdir \"$lock\" || { "
+        "printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$lock\" >&2; exit 1; }; "
+        "printf 'native-deploy: cleared: %%s: %%s\\n' \"$lock\" \"$held\" >&2; fi; fi; "
+        "if test -d \"$lock\"; then "
+        "printf 'native-deploy: refused: %%s: %%s\\n' \"$lock\" \"$held\" >&2; "
+        "exit 1; fi; "
+        "mkdir -m 700 \"$claim\"; printf '%%s\\n' '%s' > \"$claim/owner\"; "
+        "start=$(awk '{print $22}' /proc/$$/stat); "
+        "printf '%%s %%s %%s\\n' \"$$\" \"$start\" \"$boot\" > \"$claim/identity\"; ",
+        c->target, c->archive_sha, c->archive_sha, c->target, c->run, c->target, c->run, c->nonce,
+        c->nonce, c->target, c->target, c->nonce);
 }
 static int run_arguments(struct nd_deploy *d, char *command, size_t size)
 {
@@ -125,7 +146,7 @@ static int run_arguments(struct nd_deploy *d, char *command, size_t size)
 int nd_run(struct nd_deploy *d)
 {
     struct nd_process *process = NULL;
-    char guard[4096], setup[4096], arguments[8192], command[20480];
+    char guard[4096], setup[8192], arguments[8192], command[24576];
     if (!nd_identity(d, guard, sizeof(guard)) || !run_setup(d, setup, sizeof(setup)) ||
         !run_arguments(d, arguments, sizeof(arguments)) ||
         !nd_format(command, sizeof(command), "%s%s%s", guard, setup, arguments))
