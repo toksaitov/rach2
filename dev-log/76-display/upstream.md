@@ -144,3 +144,14 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `rach2/sys/arch/x86/elantech.c`'s `store_etd` and `show_etd` do as Linux does, so that programs see the same answers, in task 3455's commit.
 * Status: unreported.
 * Next: check master's `elantech.c`, then send a patch that returns -EIO from `elantech_set_int_attr` and `elantech_show_int_attr` when the register access fails.
+
+## Chromium answers a WebGPU adapter request with null after a slow GPU process start
+
+* Project: Chromium 156.0.8078.79, Debian 13's build, with Dawn and Mesa as Debian ships them; the source of that exact build was not read.
+* Fails: when the GPU process spends several seconds in start-up, here in Mesa's shader-cache database (50 part directories, each with `mesa_cache.db` and `mesa_cache.idx`, under `MESA_SHADER_CACHE_DIR`), before it enters its sandbox, a page's `navigator.gpu.requestAdapter({forceFallbackAdapter: true})` with `--enable-unsafe-webgpu --use-webgpu-adapter=swiftshader` resolves to null. The renderer logs "ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer" and the page console "A valid external Instance reference no longer exists", Dawn's message for an adapter request cancelled when its wire client disconnects. Which deadline or disconnect ends the request is not known; no Chromium process exits or is signalled.
+* Found: 2026-11-17, on the testing host's WSL, at the end of milestones 13 to 21, while bisecting `machine.browser.chromium-webgpu` to the commit that made ext2's creates write their inode synchronously with disk flushes, which stretched the GPU process's start to about 8 s.
+* Reproduction: in the Debian reference guest (`tests/graphics/browser/debian.sh chromium webgpu OUT`), put `MESA_SHADER_CACHE_DIR` on an ext2 mounted `sync,dirsync` over a dm-delay target of 20 ms a request, so that the GPU process's 52 mkdirs and 101 creates there take 5.1 s; the case fails 2 of 2 with "no fallback WebGPU adapter". With the cache on tmpfs it passes. On Rach2 an 80 ms sleep before each of those creates, with nothing else changed, fails it the same way.
+* Evidence: the runs are kept on the testing host only, under the prepare copy's `build/runs/alone-results.local-1117-s` (Debian `d3`, `d4` with tracefs syscall times; Rach2 `kept`), and are not in the repository.
+* Rach2: nothing in Chromium; the ext2 writes that slowed the start no longer flush the disk (`bcache_sync_block_ordered`), and the case passes.
+* Status: unreported.
+* Next: read Chromium 156's GPU channel set-up and Blink's `GPU::RequestAdapter` for the deadline or the reconnect that drops the request, reproduce on current Chromium with the dm-delay cache, then report it with the reproduction.
