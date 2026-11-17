@@ -11,7 +11,7 @@ The Debian reference guest's results for the graphics runners, which the `webgl`
 * `virtio-vga/piglit/`: every part, `piglit.sh all`: `record`, `results`, `status` and `PART.results` for each part.
 * `virtio-vga/glmark2/`: `glmark2.sh`: `record`, `results`, `status`, `validations` and `scores`.
 
-The video references ran beside three bound Debian guests of eight processors each, each with eight busy CPU workers, through `browser/loaded.py`. Their records retain the live admission ledger: the load group's 24-processor reservation and the browser guest's four. The same load is used for the Rach2 video comparison. Chromium's h264-720p plays are the fourth of five runs without the load, which dropped up to 1 frame in a counted play where the single run beside the load dropped none; the most of the fourth is the most of all five, and the record's `reference` line names each run's drops.
+The video references ran beside three bound Debian guests of eight processors each, each with eight busy CPU workers, through `browser/loaded.py`. Their records retain the live admission ledger: the load group's 24-processor reservation and the browser guest's four. One Rach2 comparison was run under the same load by hand; the `video` cases do not use it, and run as bound cases beside whatever else the run schedules. Chromium's h264-720p plays are the fourth of five runs without the load, which dropped up to 1 frame in a counted play where the single run beside the load dropped none; the most of the fourth is the most of all five, and the record's `reference` line names each run's drops.
 
 The formats are those of [the runners' results](../../Readme.md#results). The runners' logs, igt_runner's and piglit's whole JSON results and glmark2's output are left out.
 
