@@ -135,3 +135,4 @@ host_ledger process keeper 2778249 13153258 1
 host_ledger process case 2778250 13153258 1
 host_ledger end
 host_fixture three bound guests of 8 processors and 1024 MiB each, 8 independent CPU workers per guest
+reference chromium-h264-720p.mp4.plays from the fourth of five runs of debian.sh video -t -b chromium h264-720p.mp4 on 2026-11-17, without the load, whose counted plays dropped 0,0,0, 1,0,0, 0,0,0, 1,0,1 and 0,0,1 frames after warm-ups of 21, 1, 0, 0 and 0; its most in a counted play, 1, is the most of all five
