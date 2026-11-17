@@ -587,6 +587,13 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk)
     return 0;
 }
 
+/** The model's write of one block keeps no flush, so the ordered write is
+ * the same write. */
+int bcache_sync_block_ordered(block_device_t *dev, uint64_t blk)
+{
+    return bcache_sync_block(dev, blk);
+}
+
 /** Return 0: the model starts every write at once. */
 int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
 {
