@@ -12,6 +12,7 @@
 #include "../cmdline.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/crc32.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
@@ -131,36 +132,6 @@ static int64_t vkms_now(void)
 /* ------------------------------------------------------------------------
  * Composing a frame
  */
-
-/* Linux's crc32_le table, of the reflected polynomial 0xedb88320. */
-static uint32_t crc_table[256];
-
-/** Fill the CRC table once. */
-static void crc_init(void)
-{
-    uint32_t i, c;
-    int k;
-
-    if (crc_table[1]) {
-        return;
-    }
-    for (i = 0; i < 256; i++) {
-        c = i;
-        for (k = 0; k < 8; k++) {
-            c = (c & 1) ? (c >> 1) ^ 0xedb88320u : c >> 1;
-        }
-        crc_table[i] = c;
-    }
-}
-
-/** Linux's crc32_le: `crc` carried over `len` bytes, with no inversion. */
-static uint32_t crc32_le(uint32_t crc, const uint8_t *p, uint32_t len)
-{
-    while (len-- > 0) {
-        crc = (crc >> 8) ^ crc_table[(crc ^ *p++) & 0xffu];
-    }
-    return crc;
-}
 
 /**
  * Read `len` bytes of the shmem object `obj` from byte `off` into `dst`, a
@@ -387,7 +358,6 @@ static int32_t vkms_compose(const struct vkms_scene *s, uint32_t *crc)
         lut_n = s->gamma->length / (uint32_t)sizeof(struct drm_color_lut);
         ratio = drm_div64((uint64_t)(lut_n - 1u) << 32, 0xffffu);
     }
-    crc_init();
     *crc = 0;
     for (ry = 0; ry < s->height; ry++) {
         if (ry > 0) {

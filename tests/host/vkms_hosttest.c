@@ -5,6 +5,7 @@
  * vkms64_hosttest.c runs the same rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/crc32.c
  * host-deps: tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/mutex_none.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -236,6 +237,38 @@ static uint32_t crc_bits(uint32_t crc, const uint8_t *p, size_t len)
         }
     }
     return crc;
+}
+
+/** The kernel's crc32_le, which the composer runs, gives the CRC-32 check
+ * values and agrees with `crc_bits` on every length to 300 from each of eight
+ * alignments, from either start, and split at any byte. */
+static void row_crc32(void)
+{
+    static uint8_t buf[308];
+    const char *nine = "123456789";
+    const char *fox = "The quick brown fox jumps over the lazy dog";
+    uint32_t len, off, cut, x = 12345u, bad = 0;
+
+    CHECK(~crc32_le(~0u, (const uint8_t *)nine, 9) == 0xcbf43926u,
+          "crc32: the check value of \"123456789\"");
+    CHECK(~crc32_le(~0u, (const uint8_t *)fox, 43) == 0x414fa339u,
+          "crc32: the check value of the fox");
+    CHECK(crc32_le(0x1234u, buf, 0) == 0x1234u, "crc32: no bytes, the CRC as given");
+    for (len = 0; len < sizeof(buf); len++) {
+        x = x * 1103515245u + 12345u;
+        buf[len] = (uint8_t)(x >> 16);
+    }
+    for (off = 0; off < 8; off++) {
+        for (len = 0; len <= 300; len++) {
+            bad += crc32_le(0, buf + off, len) != crc_bits(0, buf + off, len);
+            bad += crc32_le(~0u, buf + off, len) != crc_bits(~0u, buf + off, len);
+        }
+    }
+    for (cut = 0; cut <= 300; cut++) {
+        bad += crc32_le(crc32_le(0, buf, cut), buf + cut, 300 - cut) != crc_bits(0, buf, 300);
+    }
+    CHECK(bad == 0,
+          "crc32: eight bytes at a time as a bit at a time, at every length and alignment");
 }
 
 /** The CRC of `want`, row by row, each pixel's channels little-endian. */
@@ -1067,6 +1100,7 @@ int main(void)
     row_probe();
     row_objects();
     row_modes();
+    row_crc32();
     if (vga) {
         row_params();
         row_compose();

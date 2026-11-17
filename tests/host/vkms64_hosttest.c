@@ -3,6 +3,7 @@
  * whose structures are 64 bits wide.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/crc32.c
  * host-deps: tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/mutex_none.c
  * host-deps: tests/host/compat/spinlock_host.c

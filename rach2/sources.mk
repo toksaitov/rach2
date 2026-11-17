@@ -255,6 +255,7 @@ C_SRC_SHARED = kernel.c \
     sys/lib/lockdep.c \
     sys/lib/krandom.c \
     sys/lib/ksha256.c \
+    sys/lib/crc32.c \
     $(DRM_C_SRC) \
     $(DMABUF_C_SRC) \
     $(VIRTIO_C_SRC)
