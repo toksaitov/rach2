@@ -1,0 +1,40 @@
+--- a/rach2/sys/fs/ext2.c
++++ b/rach2/sys/fs/ext2.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "ext2_internal.h"
++#include "../udelay.h"
+ #include "../lib/kirq.h"
+ #include "../mm/filemap.h"
+ 
+@@ -1529,6 +1530,11 @@
+     em->writers++;
+     spin_unlock_irqrestore(&em->admit_lock, flags);
+     if (held || file_locks_held()) {
++        static unsigned int widen_queued;
++
++        if (++widen_queued % 256 == 0) {
++            klog(KLOG_WARN, "ext2", "widen: queued %u", widen_queued);
++        }
+         n->queued = 1;
+         n->reap_next = em->reap;
+         em->reap = n;
+@@ -1563,10 +1569,17 @@
+     if (!*reap || file_locks_held()) {
+         return;
+     }
++    if (!bkl_held()) {
++        k_udelay(50);
++    }
+     big = ext2_big_enter();
+     while (em->reap && !file_locks_held() && !em->holding) {
+         struct ext2_node *n = em->reap;
+ 
++        if (!bkl_held()) {
++            klog(KLOG_WARN, "ext2", "widen: pop without the big lock: inode %d", (int)n->ino);
++            k_udelay(200);
++        }
+         em->reap = n->reap_next;
+         em->reap_count--;
+         n->queued = 0;
