@@ -39,6 +39,7 @@ shelltest selfbuild-ext2
 usbdiskprobe usbdisk
 ext2probe ext2
 lockwaitprobe ext2
+musl/inodechurnmusl ext2
 krffsprobe krffsmount
 loopdevprobe loopdev
 diskfull diskfull

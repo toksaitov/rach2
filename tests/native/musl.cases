@@ -35,6 +35,8 @@ case musl/fifomusl root:krffs -- musl/fifomusl
 # Left out: the enumerated report, the codec and the tone.
 case musl/hdaprobe -- musl/hdaprobe machine=native
 case musl/hello -- musl/hello
+# In the workspace, on the installed root: the machine's own ext2, written back.
+case musl/inodechurnmusl log -- musl/inodechurnmusl -t 30
 case musl/inotifymusl tmpfs:1M -- musl/inotifymusl dir=tmpfs/inotifymusl
 # Left out: the kernel's heap after a thousand refused segments.
 case musl/ipcmusl ipcns mountns -- musl/ipcmusl machine=native

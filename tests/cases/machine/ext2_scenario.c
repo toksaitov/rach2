@@ -34,8 +34,9 @@ struct probe {
 };
 
 static const struct probe probes[] = {
-    {"dirprobe", "/dirprobe"}, {"unlinkdirprobe", "/unlinkdirprobe"}, {"mvtest", "/mvtest"},
-    {"vfsprobe", "/vfsprobe"}, {"mapmusl", "/musl/mapmusl"},
+    {"dirprobe", "/dirprobe"},    {"unlinkdirprobe", "/unlinkdirprobe"},
+    {"mvtest", "/mvtest"},        {"vfsprobe", "/vfsprobe"},
+    {"mapmusl", "/musl/mapmusl"}, {"inodechurnmusl", "/musl/inodechurnmusl"},
 };
 
 /*
