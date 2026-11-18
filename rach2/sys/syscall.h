@@ -47,13 +47,13 @@ int syscall_entry_locked(const isr_params_t *params);
 
 /**
  * Deliver what the loopback backlog holds, at a return to user mode whose
- * thread's work asks for it (WORK_LOOP), marked when the thread put a
- * datagram on the backlog or a drain left some. It runs under the big lock,
- * the return's own or the lock waited for here, as Linux's sender runs the
- * softirq it raised: the drain runs over what the call put on the backlog
- * before the program runs again, unless its budgets end it first
- * (`ip_loop_drain_from`), which leaves the rest marked. The wait answers
- * other processors' requests (`bkl_acquire`). Interrupts are off.
+ * thread's work asks for it (WORK_LOOP, which `ip_loop_put_parts` and
+ * `ip_loop_drain_from` set). It runs under the big lock, the return's own or
+ * the lock waited for here, as Linux's sender runs the softirq it raised: the
+ * drain runs over what the call put on the backlog before the program runs
+ * again, unless its budgets end it first (`ip_loop_drain_from`), which
+ * leaves the rest marked. The wait answers other processors' requests
+ * (`bkl_acquire`). Interrupts are off.
  */
 void syscall_loop_drain(void);
 
