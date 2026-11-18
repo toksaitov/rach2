@@ -1119,7 +1119,7 @@ static int check_orphan_parent(struct ext2_check *c, const struct ext2_link *lin
     struct ext2_link *up;
     int rc;
 
-    if (link->empty) {
+    if (link->empty && !link->kept) {
         rc = check_empty_parent(c, link);
         if (rc == 1) {
             return check_count_add(c, link->ino, link->expect, 0);
@@ -1127,6 +1127,8 @@ static int check_orphan_parent(struct ext2_check *c, const struct ext2_link *lin
         if (rc < 0) {
             return rc;
         }
+    } else if (link->empty && link->expect != 2) {
+        return check_fault(c, link->ino, "a directory link count that does not match its entries");
     } else if (link->parent == EXT2_ROOT_INO) {
         return 0;
     } else {
@@ -1136,6 +1138,22 @@ static int check_orphan_parent(struct ext2_check *c, const struct ext2_link *lin
         }
     }
     return check_fault(c, link->ino, "an orphan directory whose .. names no orphan directory");
+}
+
+/**
+ * Mark `kept` each empty orphan directory that the `..` of orphan directory
+ * `link`, which holds entries, names, and each that the `..` of one so
+ * marked names in turn, so that `check_orphan_parent` keeps its count. Each
+ * record is marked once, so a loop of `..` ends.
+ */
+static void check_keep_parents(struct ext2_check *c, const struct ext2_link *link)
+{
+    struct ext2_link *up = check_link_find(c, link->parent);
+
+    while (up && up->dir && up->orphan && up->empty && !up->kept) {
+        up->kept = 1;
+        up = check_link_find(c, up->parent);
+    }
 }
 
 /**
@@ -1151,7 +1169,11 @@ static int check_orphan_parent(struct ext2_check *c, const struct ext2_link *lin
  * judged further: e2fsck clears such an inode and reads nothing in it, so
  * that no later rmdir of the directory its `..` names leaves e2fsck a `..`
  * to repair against whatever reused that inode. Its `..` must still name
- * what such a stop leaves (`check_empty_parent`).
+ * what such a stop leaves (`check_empty_parent`). The exception is one that
+ * the `..` of a kept orphan directory names (`check_keep_parents`), which
+ * no operation of the driver leaves: set to 0, it would leave that `..`
+ * naming a removed inode, which the next check finds no orphan directory.
+ * It is kept as one that holds entries is, and its count must be 2.
  *
  * Any other must name the root or a directory of an orphan tree
  * (`check_orphan_dirs`), which keeps a record: inodes no path from the root
@@ -1171,6 +1193,13 @@ static int check_orphan_parents(struct ext2_check *c)
     uint32_t i;
     int rc;
 
+    for (i = 0; i < EXT2_CHECK_LINK_BUCKETS; i++) {
+        for (link = c->link[i]; link; link = link->next) {
+            if (link->dir && link->orphan && !link->empty) {
+                check_keep_parents(c, link);
+            }
+        }
+    }
     for (i = 0; i < EXT2_CHECK_LINK_BUCKETS; i++) {
         for (link = c->link[i]; link; link = link->next) {
             if (!link->dir || !link->orphan) {

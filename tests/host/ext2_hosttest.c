@@ -7260,6 +7260,7 @@ static void orphan_reached_row(const char *img);
 static void orphan_free_parent_row(const char *img, long links);
 static void orphan_tree_row(const char *img, long links);
 static void orphan_full_row(const char *img);
+static void orphan_kept_row(const char *img, long ino, long links);
 static void orphan_named_row(const char *img, long blk, long ino, long links);
 
 /**
@@ -7290,6 +7291,9 @@ static void orphan_named_row(const char *img, long blk, long ino, long links);
  *   directory named from the root, must stop the check, since no operation
  *   leaves it and an rmdir of /p would free an inode the kept directory
  *   names;
+ * - an orphan directory holding /dir/big.bin's second name whose `..`
+ *   names an empty orphan directory must keep that one's count, so that a
+ *   second mount finds its `..` naming an orphan directory still;
  * - an orphan directory whose entry is /dir/big.bin's only name, with the
  *   file's inode bit and a block's bit clear, must have both bits set and
  *   the file named, the directory the one orphan, so that filling the
@@ -7316,6 +7320,7 @@ static void orphan_rows(void)
     orphan_free_parent_row(img, links);
     orphan_tree_row(img, links);
     orphan_full_row(img);
+    orphan_kept_row(img, ino, links);
     orphan_named_row(img, blk, ino, links);
 }
 
@@ -7501,6 +7506,47 @@ static void orphan_full_row(const char *img)
               "an orphan directory whose .. names no orphan directory",
               "an orphan directory holding a name whose .. names a named directory mounts "
               "read-only");
+}
+
+/** The eighth row of `orphan_rows`: the empty orphan directory /p, its
+ * count 2, and the orphan directory /p/d, both names gone, whose entry f
+ * names /dir/big.bin, inode `ino`, of one link, and whose `..` names /p;
+ * `links` is the root's link count without /p. */
+static void orphan_kept_row(const char *img, long ino, long links)
+{
+    char script[256], want[96];
+    uint64_t bytes;
+    int rc;
+
+    snprintf(script, sizeof(script),
+             "mkdir /p\nmkdir /p/d\nln /dir/big.bin /p/d/f\nunlink /p/d\nsif /p links_count 2\n"
+             "unlink /p\nsif / links_count %ld\n",
+             links);
+    bytes = dirty_image(img, script);
+    snprintf(want, sizeof(want), "check: test: inode %ld: link count 1, set to 2\n", ino);
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check_log[0] = 0;
+    rc = mount_rw();
+    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 || !strstr(check_log, want) ||
+        strstr(check_log, ", set to 0\n") ||
+        !strstr(last_check, "0 lost blocks, 2 orphan inodes")) {
+        printf("  mount %d, flags 0x%x, check: %s", rc, (unsigned)mnt.flags, check_log);
+        check(0, "an empty orphan directory a kept orphan's .. names keeps its count");
+    } else {
+        check(1, "an empty orphan directory a kept orphan's .. names keeps its count");
+    }
+    if (rc != 0) {
+        return;
+    }
+    rc = unmount_rw();
+    last_check[0] = 0;
+    check(rc == 0 && mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(last_check, "0 lost blocks, 2 orphan inodes") != 0,
+          "and a second mount finds the same and is writable");
+    check(unmount_rw() == 0 && disk_state(img) == 2 &&
+              ext2_fixture_fsck(img, "-fy", fix_path("repair.out")) == 1 && e2fsck_clean(img),
+          "and e2fsck -fy repairs the volume clean");
 }
 
 /** The first row of `orphan_rows`: /dir/big.bin, inode `ino`, with its
