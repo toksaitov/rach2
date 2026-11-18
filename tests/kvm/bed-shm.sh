@@ -784,12 +784,13 @@ desk_rows()
     fi
 
     # The VM's death under the load, with fences pending; the load must
-    # still run once the VM is stopped with its fences pending, just before
-    # the death, which with -g gpu.sh brings within a second. udev's events
-    # for the cards are kept, the monitor listening before the death, for a
-    # death after which the session stays on the gone card; udevadm names
-    # its kernel source last, once it has subscribed to both.
-    dead=$(wc -c < "$services")
+    # still run once the VM is stopped and the probe has its fences pending,
+    # just before the death, which with -g gpu.sh brings within a second.
+    # udev's events for the cards are kept, the monitor listening before
+    # the death, for a death after which the session stays on the gone
+    # card; udevadm names its kernel source last, once it has subscribed to
+    # both.
+    dead=$(command stat -c %s "$services")
     udevadm monitor --kernel --udev --subsystem-match=drm > "$out/udev-death.txt" 2>&1 &
     umon=$!
     until_line "$out/udev-death.txt" '^KERNEL - ' 30 "$umon" || true
@@ -803,7 +804,7 @@ desk_rows()
     waiter=$!
     until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 || true
     alive=no
-    ! kill -0 "$load" 2>/dev/null || alive=yes
+    ! grep -q 'VGSHMPROBE PENDING' "$out/pending.out" || ! kill -0 "$load" 2>/dev/null || alive=yes
     kill_vm
     wait "$waiter" 2>/dev/null
     waiter=''
@@ -817,14 +818,12 @@ desk_rows()
         quiet "$loadout" 300 "$load" || break
         [ "$(refused)" -lt 100000 ] || break
     done
-    if kill "$umon" 2>/dev/null; then
-        wait "$umon" 2>/dev/null
-    else
-        ustatus=0
-        wait "$umon" 2>/dev/null || ustatus=$?
-        [ "$monitor" != listening ] ||
-            monitor="ended with status $ustatus before the row's end: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
-    fi
+    # SIGTERM ends a monitor still listening with 143.
+    kill "$umon" 2>/dev/null
+    ustatus=0
+    wait "$umon" 2>/dev/null || ustatus=$?
+    [ "$ustatus" = 143 ] || [ "$monitor" != listening ] ||
+        monitor="ended with status $ustatus before the row's end: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
     umon=''
     if [ "$alive" = no ]; then
         ended="ended before the death"
