@@ -3585,11 +3585,10 @@ void syscall_loop_drain(void)
     }
     if (bkl_held()) {
         ip_loop_drain_from(IP_LOOP_FROM_CALL);
-    } else if (bkl_try_enter()) {
+    } else {
+        bkl_enter();
         ip_loop_drain_from(IP_LOOP_FROM_CALL);
         bkl_exit();
-    } else {
-        proc_work_set(current_proc, WORK_LOOP);
     }
 }
 
