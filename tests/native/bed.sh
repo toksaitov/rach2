@@ -25,8 +25,8 @@
 #            the load, the VM killed under it, the session headless on
 #            llvmpipe and back on Rach2's driver (83-7.5's shm rows, 83-7.6)
 #   forward  forward.sh's glmark2 scene in the Debian guest of QEMU on
-#            Rach2's render node, through virgl or Venus (83-7.5's forward
-#            rows)
+#            the render node check.sh finds for i915, through virgl or
+#            Venus (83-7.5's forward rows)
 #
 # Before the run check.sh reads the GPU's state and the panel's pipe CRC,
 # and after it reads them again: the driver i915, the same CRC, Crocus and

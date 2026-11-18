@@ -48,8 +48,9 @@
 # `venus:SCENE`, whose GL goes through Zink on Venus, and its lines are
 # printed as figures. Then QEMU is stopped, four fenced submissions are
 # left pending and QEMU is killed under the load, which must still run:
-# every fence must fail, the load must end, glmark2 before it has failed
-# 100000 frames, and ivshmemd must detach (`death`); and the session must
+# every fence must fail, the load must end, glmark2 before Mesa's virgl
+# has said the kernel refused 100000 of its submissions since the death,
+# and ivshmemd must detach (`death`); and the session must
 # start again, headless with GL on llvmpipe, where glmark2 draws again
 # (`fallback`). With -g as well, the session must come back to Rach2's
 # driver on the GPU gpu.sh gave back, with the pipe's CRC the same over four
@@ -200,6 +201,18 @@ until_line()
     until grep -q "$2" "$1" 2>/dev/null; do
         quiet "$1" "$3" "${4:-}" || return 1
     done
+}
+
+# refused: how many of the load's submissions Mesa's virgl has said the
+# kernel refused since the death, "got error from kernel" in the load's
+# output from byte `at` on, read up to the output's size at the call and
+# counted to 100000 at most; 0 for a load other than glmark2.
+refused()
+{
+    [ "$loadscene" = glmark2 ] || { echo 0; return 0; }
+    to=$(wc -c < "$loadout")
+    tail -c "+$((at + 1))" "$loadout" | head -c "$((to - at))" |
+        grep -m 100000 -c 'got error from kernel' || :
 }
 
 # klog_count PATTERN: how many lines of the kernel's log match PATTERN.
@@ -770,13 +783,19 @@ desk_rows()
     fi
 
     # The VM's death under the load, with fences pending; the load must
-    # still run when the VM dies. udev's view of the cards is kept for a
-    # death after which the session stays on the gone card.
+    # still run when the VM dies. udev's events for the cards are kept, the
+    # monitor listening before the death, for a death after which the
+    # session stays on the gone card; udevadm names each of its sources
+    # once it has subscribed to it.
     dead=$(wc -c < "$services")
     alive=no
     ! kill -0 "$load" 2>/dev/null || alive=yes
     udevadm monitor --kernel --udev --subsystem-match=drm > "$out/udev-death.txt" 2>&1 &
     umon=$!
+    until_line "$out/udev-death.txt" '^UDEV - ' 30 "$umon" || true
+    monitor=listening
+    { grep -q '^UDEV - ' "$out/udev-death.txt" && kill -0 "$umon" 2>/dev/null; } ||
+        monitor="not listening: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
     at=$(wc -c < "$loadout")
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
@@ -787,16 +806,15 @@ desk_rows()
     waiter=''
     wait "$daemon" 2>/dev/null
     daemon=''
-    # glmark2 ends with the session that leaves the gone card. One that has
-    # failed 100000 frames since the death, at some 10000 a second, draws
-    # on a session still on that card.
+    # glmark2 ends with the session that leaves the gone card; one whose
+    # submissions the kernel has refused 100000 times since the death, at
+    # some 10000 a second, draws on a session still on that card.
     last=-1 still=0
     while kill -0 "$load" 2>/dev/null; do
         quiet "$loadout" 300 "$load" || break
-        [ "$loadscene" != glmark2 ] ||
-            [ "$(tail -c "+$((at + 1))" "$loadout" | grep -c 'got error from kernel')" -lt 100000 ] ||
-            break
+        [ "$(refused)" -lt 100000 ] || break
     done
+    spun=$(refused)
     kill "$umon" 2>/dev/null
     wait "$umon" 2>/dev/null
     umon=''
@@ -810,18 +828,21 @@ desk_rows()
         wait "$load" || load_status=$?
         ended="ended with status $load_status"
     fi
+    spinning=''
+    [ "$spun" -lt 100000 ] || spinning=", after $spun refused submissions on the gone card"
     if grep -q 'VGSHMPROBE OK' "$out/pending.out" && [ "$ended" != "still running" ] &&
-        [ "$alive" = yes ] && grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
+        [ -z "$spinning" ] && [ "$alive" = yes ] &&
+        grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
         pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1); $loadscene $ended"
     else
-        fail death "$loadscene $ended: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
-        [ "$ended" != "still running" ] || {
-            echo "bed-shm: death: udev: $(grep -c ' remove ' "$out/udev-death.txt") removals: $(grep ' remove .*/card[0-9]* (drm)' "$out/udev-death.txt" | tr '\n' ' ')"
+        fail death "$loadscene $ended$spinning: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
+        if [ "$ended" = "still running" ] || [ -n "$spinning" ]; then
+            echo "bed-shm: death: udev: monitor $monitor; $(grep -c ' remove ' "$out/udev-death.txt") removals: $(grep ' remove .*/card[0-9]* (drm)' "$out/udev-death.txt" | tr '\n' ' ')"
             echo "bed-shm: death: session: $(since "$dead" | grep 'rach2-desktop: ' | tr '\n' ' ')"
             # shellcheck disable=SC2009 # pgrep gives no state or wait channel
-            ps -o pid,pgid,stat,wchan,args | grep -E 'weston|rach2-session|rach2-desktop|glmark2' | grep -v grep |
-                sed 's/^/bed-shm: death: process: /'
-        }
+            ps -e -o pid,pgid,stat,wchan,args | grep -E 'weston|rach2-session|rach2-desktop|glmark2' |
+                grep -v grep | sed 's/^/bed-shm: death: process: /'
+        fi
     fi
     # What is left of the load's group, so that nothing of it draws on.
     end_group "$load"
