@@ -94,15 +94,17 @@ static const char umount_line[] = "umount /mnt/s && echo UMOUNT\"\"OK; echo UMOU
 
 /* The tree of the case rmtree: /mnt/s/tree, three directories under it, three
  * under each, and two under each of those, 31 directories in all (TREE_DIRS),
- * with 54 files, written and synced by syncfs (`sync -f`), which reports a
- * failed writeback, each directory then printed as `DIR=INODE:LINKS`; TREEOK
- * only when every step succeeded. */
+ * with 54 files, written, synced, and each file fsynced, which reports a
+ * failed writeback where BusyBox's `sync -f` does not, each directory then
+ * printed as `DIR=INODE:LINKS`; TREEOK only when every step succeeded. */
 #define TREE_DIRS 31
 static const char tree_line[] =
     "ok=1; for a in 0 1 2; do for b in 0 1 2; do d=/mnt/s/tree/a$a/b$b; mkdir -p $d/c0 $d/c1 "
     "|| ok=0; for f in 0 1 2; do echo x$a$b$f > $d/f$f || ok=0; head -c 9000 /dev/zero > "
-    "$d/c0/g$f || ok=0; done; done; done; sync -f /mnt/s || ok=0; t=$(find /mnt/s/tree -type d) "
-    "|| ok=0; for d in $t; do stat -c DIR=%i:%h $d || ok=0; done; [ $ok -eq 1 ] && echo "
+    "$d/c0/g$f || ok=0; done; done; done; sync; t=$(find /mnt/s/tree -type f) || ok=0; busybox "
+    "fsync "
+    "$t || ok=0; t=$(find /mnt/s/tree -type d) || ok=0; for d in $t; do stat -c DIR=%i:%h $d || "
+    "ok=0; done; [ $ok -eq 1 ] && echo "
     "TREE\"\"OK; echo TREE\"\"END\r";
 
 /* The removal of the case rmtree: the flusher's turns off, so that nothing the
