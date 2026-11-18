@@ -131,8 +131,12 @@ case $rung in
         if [ "$profile" = venus ]; then
             export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_hasvk_icd.json
         fi
-        sh kit/forward.sh -o "$here/out" -f qcow2 -d "$bed/guest.qcow2" -k key \
-            -g "$bed/guest.tar" -M glmark2 "$profile" > run.out 2>&1 || status=$?
+        # i915's render node as check.sh found it, since a card that has
+        # not gone yet may hold renderD128.
+        node=$(sed -n 's/^check: before: driver i915, card[0-9]*, \(renderD[0-9]*\)$/\1/p' check-before.txt)
+        RENDER_NODE=/dev/dri/${node:-renderD128} sh kit/forward.sh -o "$here/out" -f qcow2 \
+            -d "$bed/guest.qcow2" -k key -g "$bed/guest.tar" -M glmark2 "$profile" > run.out 2>&1 ||
+            status=$?
         cat run.out
         ;;
 esac

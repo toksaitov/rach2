@@ -48,15 +48,15 @@
 # `venus:SCENE`, whose GL goes through Zink on Venus, and its lines are
 # printed as figures. Then QEMU is stopped, four fenced submissions are
 # left pending and QEMU is killed under the load, which must still run:
-# every fence must fail, the load must end and ivshmemd must detach
-# (`death`); and the session must start again, headless with GL on
-# llvmpipe, where glmark2 draws again (`fallback`). With -g as well, the
-# session must come back to Rach2's driver on the GPU gpu.sh gave back,
-# with the pipe's CRC the same over four frames after the first two
-# (`return`); when gpu.sh gave the GPU back before the old session had
-# gone, the session starts on it at once, which is both its fallback and
-# its return. Each load and each figure runs in a process group of its
-# own, which the script ends with the run.
+# every fence must fail, the load must end, glmark2 before it has failed
+# 100000 frames, and ivshmemd must detach (`death`); and the session must
+# start again, headless with GL on llvmpipe, where glmark2 draws again
+# (`fallback`). With -g as well, the session must come back to Rach2's
+# driver on the GPU gpu.sh gave back, with the pipe's CRC the same over four
+# frames after the first two (`return`); when gpu.sh gave the GPU back
+# before the old session had gone, the session starts on it at once, which
+# is both its fallback and its return. Each load and each figure runs in a
+# process group of its own, which the script ends with the run.
 #
 # With -u the console first loses a card of the host's own, as it does on
 # the Lenovo when gpu.sh takes the GPU from the Intel driver: Weston is
@@ -130,7 +130,7 @@ esac
 [ -z "$nocopy" ] || [ "$desk" = 0 ] || { echo "bed-shm: -k and -w are apart" >&2; exit 2; }
 [ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
     { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
-daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' bad=0
+daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0
 # NOCOPY_INTEL, for nocopy: with -g, the GPU's Venus device or a failure.
 intel=''
 [ -z "$bdf" ] || intel=1
@@ -152,7 +152,7 @@ end_group()
     wait "$1" 2>/dev/null
 }
 # gpu.sh, sent SIGTERM, kills its QEMU and gives the function back.
-trap 'end_group "$load"; end_group "$figpid"; kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon $gpu 2>/dev/null; wait 2>/dev/null' EXIT
+trap 'end_group "$load"; end_group "$figpid"; kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon $gpu $umon 2>/dev/null; wait 2>/dev/null' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -770,10 +770,14 @@ desk_rows()
     fi
 
     # The VM's death under the load, with fences pending; the load must
-    # still run when the VM dies.
+    # still run when the VM dies. udev's view of the cards is kept for a
+    # death after which the session stays on the gone card.
     dead=$(wc -c < "$services")
     alive=no
     ! kill -0 "$load" 2>/dev/null || alive=yes
+    udevadm monitor --kernel --udev --subsystem-match=drm > "$out/udev-death.txt" 2>&1 &
+    umon=$!
+    at=$(wc -c < "$loadout")
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
@@ -783,10 +787,19 @@ desk_rows()
     waiter=''
     wait "$daemon" 2>/dev/null
     daemon=''
+    # glmark2 ends with the session that leaves the gone card. One that has
+    # failed 100000 frames since the death, at some 10000 a second, draws
+    # on a session still on that card.
     last=-1 still=0
     while kill -0 "$load" 2>/dev/null; do
         quiet "$loadout" 300 "$load" || break
+        [ "$loadscene" != glmark2 ] ||
+            [ "$(tail -c "+$((at + 1))" "$loadout" | grep -c 'got error from kernel')" -lt 100000 ] ||
+            break
     done
+    kill "$umon" 2>/dev/null
+    wait "$umon" 2>/dev/null
+    umon=''
     if [ "$alive" = no ]; then
         ended="ended before the death"
         wait "$load" 2>/dev/null
@@ -802,6 +815,13 @@ desk_rows()
         pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1); $loadscene $ended"
     else
         fail death "$loadscene $ended: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
+        [ "$ended" != "still running" ] || {
+            echo "bed-shm: death: udev: $(grep -c ' remove ' "$out/udev-death.txt") removals: $(grep ' remove .*/card[0-9]* (drm)' "$out/udev-death.txt" | tr '\n' ' ')"
+            echo "bed-shm: death: session: $(since "$dead" | grep 'rach2-desktop: ' | tr '\n' ' ')"
+            # shellcheck disable=SC2009 # pgrep gives no state or wait channel
+            ps -o pid,pgid,stat,wchan,args | grep -E 'weston|rach2-session|rach2-desktop|glmark2' | grep -v grep |
+                sed 's/^/bed-shm: death: process: /'
+        }
     fi
     # What is left of the load's group, so that nothing of it draws on.
     end_group "$load"
