@@ -184,7 +184,7 @@ quiet()
 {
     [ -z "${3:-}" ] || kill -0 "$3" 2>/dev/null || return 1
     sleep 1
-    size=$({ wc -c < "$1"; } 2>/dev/null || echo 0):$([ -z "${3:-}" ] || busy "$3")
+    size=$(stat -c %s "$1" 2>/dev/null || echo 0):$([ -z "${3:-}" ] || busy "$3")
     if [ "$size" = "$last" ]; then
         still=$((still + 1))
         [ "$still" -lt "$2" ] || return 1
@@ -205,12 +205,13 @@ until_line()
 
 # refused: how many of the load's submissions Mesa's virgl has said the
 # kernel refused since the death, "got error from kernel" in the load's
-# output from byte `at` on, read up to the output's size at the call and
-# counted to 100000 at most; 0 for a load other than glmark2.
+# output from byte `at` on, read up to the output's size at the call, which
+# stat reads without reading the file, and counted to 100000 at most; 0 for
+# a load other than glmark2.
 refused()
 {
     [ "$loadscene" = glmark2 ] || { echo 0; return 0; }
-    to=$(wc -c < "$loadout")
+    to=$(stat -c %s "$loadout")
     tail -c "+$((at + 1))" "$loadout" | head -c "$((to - at))" |
         grep -m 100000 -c 'got error from kernel' || :
 }
@@ -785,22 +786,23 @@ desk_rows()
     # The VM's death under the load, with fences pending; the load must
     # still run when the VM dies. udev's events for the cards are kept, the
     # monitor listening before the death, for a death after which the
-    # session stays on the gone card; udevadm names each of its sources
-    # once it has subscribed to it.
+    # session stays on the gone card; udevadm names its kernel source last,
+    # once it has subscribed to both.
     dead=$(wc -c < "$services")
-    alive=no
-    ! kill -0 "$load" 2>/dev/null || alive=yes
     udevadm monitor --kernel --udev --subsystem-match=drm > "$out/udev-death.txt" 2>&1 &
     umon=$!
-    until_line "$out/udev-death.txt" '^UDEV - ' 30 "$umon" || true
+    until_line "$out/udev-death.txt" '^KERNEL - ' 30 "$umon" || true
     monitor=listening
-    { grep -q '^UDEV - ' "$out/udev-death.txt" && kill -0 "$umon" 2>/dev/null; } ||
+    { grep -q '^UDEV - ' "$out/udev-death.txt" && grep -q '^KERNEL - ' "$out/udev-death.txt" &&
+        kill -0 "$umon" 2>/dev/null; } ||
         monitor="not listening: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
-    at=$(wc -c < "$loadout")
+    at=$(stat -c %s "$loadout")
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
     until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 || true
+    alive=no
+    ! kill -0 "$load" 2>/dev/null || alive=yes
     kill_vm
     wait "$waiter" 2>/dev/null
     waiter=''
@@ -814,7 +816,8 @@ desk_rows()
         quiet "$loadout" 300 "$load" || break
         [ "$(refused)" -lt 100000 ] || break
     done
-    spun=$(refused)
+    kill -0 "$umon" 2>/dev/null || [ "$monitor" != listening ] ||
+        monitor="ended before the load: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
     kill "$umon" 2>/dev/null
     wait "$umon" 2>/dev/null
     umon=''
@@ -828,6 +831,8 @@ desk_rows()
         wait "$load" || load_status=$?
         ended="ended with status $load_status"
     fi
+    # Counted once the load has ended, or once it went silent.
+    spun=$(refused)
     spinning=''
     [ "$spun" -lt 100000 ] || spinning=", after $spun refused submissions on the gone card"
     if grep -q 'VGSHMPROBE OK' "$out/pending.out" && [ "$ended" != "still running" ] &&
@@ -837,13 +842,14 @@ desk_rows()
     else
         fail death "$loadscene $ended$spinning: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
         if [ "$ended" = "still running" ] || [ -n "$spinning" ]; then
-            echo "bed-shm: death: udev: monitor $monitor; $(grep -c ' remove ' "$out/udev-death.txt") removals: $(grep ' remove .*/card[0-9]* (drm)' "$out/udev-death.txt" | tr '\n' ' ')"
+            echo "bed-shm: death: udev: $(grep -c ' remove ' "$out/udev-death.txt") removals: $(grep ' remove .*/card[0-9]* (drm)' "$out/udev-death.txt" | tr '\n' ' ')"
             echo "bed-shm: death: session: $(since "$dead" | grep 'rach2-desktop: ' | tr '\n' ' ')"
             # shellcheck disable=SC2009 # pgrep gives no state or wait channel
             ps -e -o pid,pgid,stat,wchan,args | grep -E 'weston|rach2-session|rach2-desktop|glmark2' |
                 grep -v grep | sed 's/^/bed-shm: death: process: /'
         fi
     fi
+    [ "$monitor" = listening ] || echo "bed-shm: death: udev: monitor $monitor"
     # What is left of the load's group, so that nothing of it draws on.
     end_group "$load"
     load=''
