@@ -427,7 +427,8 @@ struct i915_ppgtt {
  * first light's page, which take the global GTT from its top down, from
  * `ggtt_top` to `ggtt_bottom`, the lowest offset they use. An allocator
  * of the GTT leaves [ggtt_bottom, total) alone. Space comes back only when
- * the last taken is given back, and all of it when the rings stop.
+ * the last taken is given back, and all of it when the rings stop but for
+ * a status page whose writes were not masked, which `i915_gt_fini` keeps.
  *
  * What the requests need, made with the first (i915_request.c): `scratch`,
  * the GT's scratch page at `scratch_ggtt`, which flushes and the context
@@ -2071,7 +2072,9 @@ void i915_gt_init_hw(struct drm_i915_private *i915);
  * free its pages, then the PPGTT; for the unplug and a failed bind. Each
  * ring's RING_HWSTAM is written all ones and read back before its status
  * page goes, as Linux's cleanup_status_page, so that the chip writes no
- * more into the page. Takes forcewake. */
+ * more into the page. Takes forcewake; without it, or when the read back
+ * is not all ones, the status page keeps its GTT entry and its range and
+ * is never freed, and the leak is logged. */
 void i915_gt_fini(struct drm_i915_private *i915);
 
 /**
@@ -2287,13 +2290,13 @@ uint64_t i915_rc6_residency_ms(struct drm_i915_private *i915);
  */
 void i915_gt_pm_enable(struct drm_i915_private *i915);
 
-/** Turn RPS and RC6 off, for the release before its reset, the unplug
- * and a failed bind. */
+/** Turn RPS and RC6 off, for the release before its display's commit,
+ * the unplug and a failed bind. Under the GEM lock. */
 void i915_gt_pm_disable(struct drm_i915_private *i915);
 
 /**
  * Turn RPS and RC6 on again after `i915_gt_pm_disable` on a GT that stays
- * bound, as a release whose reset failed does: both enabled, then the GT
+ * bound, as a release that is refused does: both enabled, then the GT
  * unparked when it is awake and parked when it is not, as each would have
  * been. Under the GEM lock.
  */

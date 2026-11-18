@@ -52,9 +52,10 @@
  * The rows: the bind as the firmware leaves the chip, with the driver
  * shown in /sys; the refusals of both files; a release refused while a
  * program holds a window of the aperture, which leaves the panel lit; the
- * release, with the display taken down in Linux's order, RC6 and RPS off
- * and the GPU reset before the rings' pages go back, each ring's status
- * page masked before its page goes, every interrupt masked and the message
+ * release, with RC6 and RPS off before the display's commit, the display
+ * taken down in Linux's order, no sleep from the commit to the unplug, the
+ * GPU reset before the rings' pages go back, each ring's status page
+ * masked before its page goes, every interrupt masked and the message
  * off, bus mastering off, the function without an owner, the console told
  * that its screen has gone before it leaves the device, the backlight on a
  * stand-in, and a record that a program still holds reaching no register;
@@ -69,9 +70,12 @@
  * and the PWM's period from the VBT; a full mode set of the panel by
  * SETCRTC, with the panel powered, the link trained and frames counted;
  * the release, the bring-up and the mode set a second time, from a lit
- * panel that a master holds; and a GPU that will not reset, which refuses
- * the release and leaves the driver bound, RC6 and RPS on again and the
- * GPU wedged until it does. The rows that expect no failure also find no
+ * panel that a master holds; a window of the aperture taken during the
+ * release's commit, which refuses the release with RC6 and RPS on again;
+ * a GPU that will not reset, which refuses the release and leaves the
+ * driver bound, RC6 and RPS on again and the GPU wedged until it does; and
+ * then a release whose render ring does not keep its status page's mask,
+ * which keeps that page. The rows that expect no failure also find no
  * wait at its bound.
  *
  * Returns 0 when every row passes, 1 otherwise.
@@ -1040,6 +1044,9 @@ int32_t drm_dev_register(struct drm_device *dev)
     return 0;
 }
 
+/* Whether an unplug began since a row cleared it. */
+static int unplug_begun;
+
 /** As drm.c's, less the nodes and entries this kernel has not: the console
  * leaves, the vblanks' waiters go, and the driver's unplug runs. */
 void drm_dev_unplug(struct drm_device *dev)
@@ -1047,6 +1054,7 @@ void drm_dev_unplug(struct drm_device *dev)
     if (dev->unplugged) {
         return;
     }
+    unplug_begun = 1;
     dev->unplugged = 1;
     if (dev->registered) {
         drm_client_dev_unregister(dev);
@@ -1361,15 +1369,24 @@ static int first_access_seen;
  * since `marks_clear`, 0 for none: the backlight's enable cleared, the
  * eDP transcoder disabled, DDI A's buffer disabled, the panel's power
  * taken, the GPU's reset, the message's master enable cleared; RC6 and
- * RPS turned off, RC6 asked for after the reset; and of each ring, its
+ * RPS turned off, RC6 asked for after it went off; and of each ring, its
  * status page's writes masked after the reset, and its status page's
- * entry in the GTT written. */
+ * entry in the GTT written. `slept` is set at a take of the GEM lock, where
+ * the release could sleep, after the display's commit and before the
+ * unplug. */
 static struct {
     uint32_t blc_off, trans_off, ddi_off, panel_off, gdrst, master_off, panel_on;
     uint32_t rc6_off, rps_off, rc6_late;
     uint32_t hwstam[4], hws_gone[4];
+    int slept;
     uint64_t panel_on_us;
 } mark;
+
+/* A ring, by its index in `ring_bases`, whose RING_HWSTAM drops a write of
+ * all ones, or -1; and a count a program's window of the aperture takes
+ * when the commit takes the panel's power, or NULL. */
+static int hwstam_stuck = -1;
+static uint32_t *hold_in_commit;
 
 /* Each ring's status page's index in the GTT, which `marks_take` notes. */
 static uint32_t hws_entry[4];
@@ -1380,20 +1397,40 @@ static void marks_clear(void)
     k_memset(&mark, 0, sizeof(mark));
 }
 
-/** Forget the marks and note where each ring of `i915` has its status
- * page, before a release. */
+/* compat/i915_gem_lock_host.c's hook at each take of the GEM lock. */
+extern void (*i915_gem_lock_host_hook)(void);
+
+/* The device whose release a row watches. */
+static struct drm_device *released_dev;
+
+/** Note a take of the GEM lock after the watched release's commit, which
+ * holds the commit lock through its last write, and before its unplug;
+ * once the unplug began the device may be gone. */
+static void note_gem_take(void)
+{
+    if (!unplug_begun && released_dev && mark.panel_off && !mutex_held(&released_dev->mode_lock)) {
+        mark.slept = 1;
+    }
+}
+
+/** Forget the marks and whether an unplug began, watch the GEM lock's
+ * takes, and note where each ring of `i915` has its status page, before
+ * a release. */
 static void marks_take(struct drm_i915_private *i915)
 {
     int i;
 
     marks_clear();
+    unplug_begun = 0;
+    released_dev = &i915->drm;
+    i915_gem_lock_host_hook = note_gem_take;
     for (i = 0; i < 4; i++) {
         hws_entry[i] = i915->gt.engine[i].hws_ggtt / I915_GTT_PAGE_SIZE;
     }
 }
 
 /** Note the marks of the GT's writes `chip_write` passes on: RC6 and RPS
- * turned off, RC6 asked for after the reset, and of each ring its status
+ * turned off, RC6 asked for after it went off, and of each ring its status
  * page's writes masked after the reset and its entry in the GTT. */
 static void note_gt_write(uint32_t reg, uint32_t value)
 {
@@ -1402,7 +1439,7 @@ static void note_gt_write(uint32_t reg, uint32_t value)
     if (reg == GEN6_RC_CONTROL && value == 0 && !mark.rc6_off) {
         mark.rc6_off = accesses;
     }
-    if ((reg == GEN6_RC_CONTROL || reg == GEN6_RC_STATE) && value != 0 && mark.gdrst &&
+    if ((reg == GEN6_RC_CONTROL || reg == GEN6_RC_STATE) && value != 0 && mark.rc6_off &&
         !mark.rc6_late) {
         mark.rc6_late = accesses;
     }
@@ -1437,6 +1474,26 @@ static uint32_t chip_read(struct i915_hw *hw, uint32_t reg)
     return model_ops->read32(hw, reg);
 }
 
+/** Note the marks of a write of `value` over `old` to PP_CONTROL: the
+ * backlight's enable cleared, the panel's power taken, which takes a
+ * window of the aperture when a row asks, and the panel's power given. */
+static void note_panel_write(uint32_t old, uint32_t value)
+{
+    if ((old & EDP_BLC_ENABLE) && !(value & EDP_BLC_ENABLE) && !mark.blc_off) {
+        mark.blc_off = accesses;
+    }
+    if ((old & PANEL_POWER_ON) && !(value & PANEL_POWER_ON) && !mark.panel_off) {
+        mark.panel_off = accesses;
+        if (hold_in_commit) {
+            *hold_in_commit = 1;
+        }
+    }
+    if (!(old & PANEL_POWER_ON) && (value & PANEL_POWER_ON) && !mark.panel_on) {
+        mark.panel_on = accesses;
+        mark.panel_on_us = model.now_us;
+    }
+}
+
 /** A write, counted and noted, then passed on to the model. */
 static void chip_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
 {
@@ -1444,16 +1501,7 @@ static void chip_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
 
     note_access();
     if (reg == PP_CONTROL) {
-        if ((old & EDP_BLC_ENABLE) && !(value & EDP_BLC_ENABLE) && !mark.blc_off) {
-            mark.blc_off = accesses;
-        }
-        if ((old & PANEL_POWER_ON) && !(value & PANEL_POWER_ON) && !mark.panel_off) {
-            mark.panel_off = accesses;
-        }
-        if (!(old & PANEL_POWER_ON) && (value & PANEL_POWER_ON) && !mark.panel_on) {
-            mark.panel_on = accesses;
-            mark.panel_on_us = model.now_us;
-        }
+        note_panel_write(old, value);
     } else if (reg == TRANSCONF(I915_TRANS_EDP)) {
         if ((old & TRANSCONF_ENABLE) && !(value & TRANSCONF_ENABLE) && !mark.trans_off) {
             mark.trans_off = accesses;
@@ -1472,6 +1520,9 @@ static void chip_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
         }
     }
     note_gt_write(reg, value);
+    if (hwstam_stuck >= 0 && reg == RING_HWSTAM(ring_bases[hwstam_stuck]) && value == 0xffffffffu) {
+        return;
+    }
     model_ops->write32(hw, reg, value);
 }
 
@@ -1900,6 +1951,8 @@ static void row_held(void)
     CHECK(bound() == i915 && sys_bound() && display_lit() && !mark.blc_off && !mark.gdrst &&
               i915->display.crtc[0].base.state->active && strcmp(console_calls, "h") == 0,
           "held: the driver bound, the panel lit, the GPU not reset, the console told");
+    CHECK(!mark.rc6_off && !mark.rps_off && i915->rc6.enabled && i915->rps.enabled,
+          "held: RC6 and RPS left on");
 }
 
 static uint32_t cycle_ms; /* the panel's power cycle, as the driver had it */
@@ -1914,13 +1967,16 @@ static int down_in_order(void)
 }
 
 /** Whether the release since `marks_take` ended the GT's power management
- * and its status pages in Linux's order: RC6 and RPS off before the reset,
- * and RC6 not asked for after it; then each ring's status page's writes
- * masked, the mask read back, before its entry in the GTT goes. */
+ * and its status pages in Linux's order: RC6 and RPS off before the
+ * display's commit, and RC6 not asked for after; no take of the GEM lock,
+ * where the release could sleep, from the commit's end to the unplug; then
+ * each ring's status page's writes masked, the mask read back, before its
+ * entry in the GTT goes. */
 static int gt_down_in_order(void)
 {
-    int i, ok = mark.rc6_off && mark.rc6_off < mark.gdrst && mark.rps_off &&
-                mark.rps_off < mark.gdrst && !mark.rc6_late;
+    int i, ok = mark.rc6_off && mark.rc6_off < mark.blc_off && mark.rps_off &&
+                mark.rps_off < mark.blc_off && !mark.rc6_late && mark.panel_off && unplug_begun &&
+                !mark.slept;
 
     for (i = 0; i < 4; i++) {
         ok &= mark.hwstam[i] && mark.hwstam[i] < mark.hws_gone[i] &&
@@ -1978,8 +2034,9 @@ static void row_release(void)
           "release: the backlight, the transcoder, the DDI and the panel's power off in that "
           "order, then the GPU reset");
     CHECK(gt_down_in_order(),
-          "release: RC6 and RPS off before the GPU reset and RC6 not asked for after it, every "
-          "ring's status page writes masked before its page went");
+          "release: RC6 and RPS off before the display's commit and RC6 not asked for after, no "
+          "sleep from the commit to the unplug, every ring's status page writes masked before its "
+          "page went");
     CHECK(request_unplugs == 1 && gem_unplugs == 1 &&
               i915_model_reset_state(&model)->resets[0] >= 1 && released(),
           "release: the display off, the rings reset before their pages went, interrupts and the "
@@ -2219,7 +2276,8 @@ static void row_release_lit(int k)
     CHECK(down_in_order() && request_unplugs == unplugs + 1 && released(),
           "release, lit: the display down in order, the GPU reset, the function let go");
     CHECK(gt_down_in_order(),
-          "release, lit: RC6 and RPS off before the GPU reset, every status page masked first");
+          "release, lit: RC6 and RPS off before the commit, no sleep from the commit to the "
+          "unplug, every status page masked first");
     CHECK(strcmp(console_calls, "u") == 0 && bo_vma[k].pin_count == 0,
           "release, lit: the console told the device left, the master's scanout unpinned");
     CHECK(releases == r && held && cut_off(held),
@@ -2231,15 +2289,40 @@ static void row_release_lit(int k)
 }
 
 /**
- * A GPU that will not reset: the release fails with the reset's error and
- * the driver stays bound, the display off, the GPU wedged and the console
- * told to look again. Once the reset works, the release does.
+ * A window of the aperture taken while the release's commit runs, from a
+ * panel a master lit: EBUSY after the commit, the GPU not reset, the driver
+ * bound with its display off, RC6 and RPS on again and the console told.
  */
-static void row_stuck(int k)
+static void row_held_late(void)
 {
     struct drm_i915_private *i915 = bound();
-    struct drm_device *held = fa_dev;
-    int r = releases;
+
+    if (!i915) {
+        return;
+    }
+    console_clear();
+    marks_take(i915);
+    hold_in_commit = &i915->gem.aperture.win[0].users;
+    CHECK(driver_write("unbind", CHIP "\n") == -EBUSY, "held late: unbind: EBUSY");
+    hold_in_commit = 0;
+    i915->gem.aperture.win[0].users = 0;
+    CHECK(mark.rc6_off && mark.rps_off && mark.rc6_off < mark.blc_off && mark.panel_off &&
+              !mark.gdrst && i915->rc6.enabled && i915->rps.enabled,
+          "held late: RC6 and RPS off before the commit and on again after the refusal, the GPU "
+          "not reset");
+    CHECK(bound() == i915 && sys_bound() && display_off() && strcmp(console_calls, "h") == 0 &&
+              logged("handoff: " CHIP ": not released: error"),
+          "held late: the driver bound, the display off, the console told");
+}
+
+/**
+ * A GPU that will not reset: the release fails with the reset's error and
+ * the driver stays bound, the display off, the GPU wedged and the console
+ * told to look again.
+ */
+static void row_stuck(void)
+{
+    struct drm_i915_private *i915 = bound();
 
     console_clear();
     i915_model_reset_state(&model)->stuck = GEN6_GRDOM_FULL;
@@ -2251,14 +2334,44 @@ static void row_stuck(int k)
               (command() & PCI_CMD_BUS_MASTER) && i915 && i915->gt.wedged && display_off() &&
               strcmp(console_calls, "h") == 0 && logged("handoff: " CHIP ": not released: error"),
           "stuck: the driver bound, the GPU wedged, the display off, the console told");
+}
+
+/**
+ * The release once the GPU resets again, with the render ring's RING_HWSTAM
+ * keeping its old mask: released, that ring's status page kept with its
+ * entry in the GTT and its frame, the other rings' pages gone, and the
+ * master's record cut off and freed when it closes the card.
+ */
+static void row_kept(int k)
+{
+    struct drm_i915_private *i915 = bound();
+    struct drm_device *held = fa_dev;
+    int r = releases;
+    uint32_t *kept;
+
+    if (!i915) {
+        return;
+    }
     log_text[0] = 0;
     console_clear();
+    marks_take(i915);
+    kept = i915->gt.engine[0].hws;
+    hwstam_stuck = 0;
     CHECK(driver_write("unbind", CHIP "\n") == 13 && released() && strcmp(console_calls, "u") == 0,
-          "stuck: released once the GPU resets");
+          "kept: released once the GPU resets");
+    hwstam_stuck = -1;
+    CHECK(logged("rings: rcs0: status page kept at 0x") && logged(": its writes not masked") &&
+              !mark.hws_gone[0] && mark.hws_gone[1] && mark.hws_gone[2] && mark.hws_gone[3],
+          "kept: rcs0's status page, whose mask did not hold, kept with its GTT entry, the "
+          "others gone");
     CHECK(bo_vma[k].pin_count == 0 && releases == r && held && cut_off(held),
-          "stuck: the master's scanout unpinned, its record cut off");
+          "kept: the master's scanout unpinned, its record cut off");
     master_close();
-    CHECK(releases == r + 1 && pages_live == 0, "stuck: the record and every page freed");
+    CHECK(releases == r + 1 && pages_live == 1,
+          "kept: the record and every page freed but the kept status page");
+    if (kept && pages_live == 1) {
+        kfree_pages(kept, 1);
+    }
 }
 
 /* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
@@ -2300,7 +2413,9 @@ int main(void)
         row_bring_up("bring-up, again: bind taken with driver_override naming i915");
         override = "";
         row_mode_set(1);
-        row_stuck(1);
+        row_held_late();
+        row_stuck();
+        row_kept(1);
     }
     if (failures != 0) {
         show_log();

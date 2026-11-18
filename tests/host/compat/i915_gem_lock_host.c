@@ -3,10 +3,17 @@
  * which has nothing for the lock to keep out. */
 #include "../../../rach2/sys/drm/i915/i915.h"
 
+/* Called at each take of the lock, a place where the kernel's caller may
+ * sleep, when a row that asks whether a path sleeps sets it. */
+void (*i915_gem_lock_host_hook)(void);
+
 /** Take the GEM lock: nothing to wait for, and nothing to give back. */
 int i915_gem_lock(struct drm_i915_private *i915)
 {
     (void)i915;
+    if (i915_gem_lock_host_hook) {
+        i915_gem_lock_host_hook();
+    }
     return 0;
 }
 

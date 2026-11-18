@@ -473,6 +473,7 @@ void i915_gt_fini(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
     int fw = i915_forcewake_get(i915) == 0;
+    uint64_t kept = gt->ggtt_top;
     int i;
 
     for (i = 0; i < I915_NUM_ENGINES; i++) {
@@ -490,21 +491,28 @@ void i915_gt_fini(struct drm_i915_private *i915)
         e->ring = 0;
         if (e->hws) {
             /* cleanup_status_page: no write into the status page once it
-             * has gone back. */
+             * has gone back. A page whose writes the chip may still make
+             * stays mapped and is never freed. */
             i915_write(&i915->hw, RING_HWSTAM(e->mmio_base), 0xffffffffu);
-            if (i915_read(&i915->hw, RING_HWSTAM(e->mmio_base)) != 0xffffffffu) {
-                klog(KLOG_WARN, "i915", "%s: HWSTAM reads 0x%08x after all ones were written",
-                     e->name, (unsigned)i915_read(&i915->hw, RING_HWSTAM(e->mmio_base)));
+            if (fw && i915_read(&i915->hw, RING_HWSTAM(e->mmio_base)) == 0xffffffffu) {
+                i915_gt_pages_unmap(i915, e->hws, 1, e->hws_ggtt);
+            } else {
+                klog(KLOG_WARN, "i915",
+                     "rings: %s: status page kept at 0x%x: its writes not masked", e->name,
+                     (unsigned)e->hws_ggtt);
+                if (e->hws_ggtt < kept) {
+                    kept = e->hws_ggtt;
+                }
             }
+            e->hws = 0;
         }
-        i915_gt_pages_unmap(i915, e->hws, 1, e->hws_ggtt);
-        e->hws = 0;
     }
     i915_ppgtt_fini(i915);
     if (fw) {
         i915_forcewake_put(i915);
     }
-    gt->ggtt_bottom = gt->ggtt_top;
+    /* A kept status page keeps its range of the GTT from other users. */
+    gt->ggtt_bottom = kept;
 }
 
 /** The free bytes of a ring of `size` bytes between `tail` and `head`,

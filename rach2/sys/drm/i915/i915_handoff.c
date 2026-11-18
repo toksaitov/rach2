@@ -30,13 +30,13 @@
  * binds, so a kernel booted without `rach2.i915` has none.
  *
  * The release leaves nothing of the driver on the device, in the order of
- * Linux's i915_driver_remove: the display off by one commit
+ * Linux's i915_driver_remove: RPS and RC6 off, as intel_gt_suspend_late
+ * turns them off before its reset, so that no park after the reset sends
+ * the GT into RC6; the display off by one commit
  * (drm_atomic_helper_shutdown), which takes the planes, pipes, ports,
- * clocks and the panel down as a mode set does; RPS and RC6 off, as
- * intel_gt_suspend_late turns them off before its reset; every ring
- * stopped and the GPU reset, as intel_engines_release does before the
- * rings' pages go back, so that the chip reads none of them again; then
- * the device
+ * clocks and the panel down as a mode set does; every ring stopped and the
+ * GPU reset, as intel_engines_release does before the rings' pages go
+ * back, so that the chip reads none of them again; then the device
  * unplugged from the DRM core, which fails what was queued, masks every
  * interrupt, gives the message and its vector back and frees the rings.
  * Bus mastering goes off and the kernel's claim on the function is given
@@ -285,17 +285,31 @@ static void backlight_stand_in(void)
 }
 
 /**
+ * Turn RPS and RC6 on again on a device whose release was refused after
+ * `i915_gt_pm_disable`, unless an unplug has taken it meanwhile. Takes the
+ * GEM lock, so the caller holds no commit lock.
+ */
+static void handoff_pm_restore(struct drm_i915_private *i915)
+{
+    int taken = i915_gem_lock(i915);
+
+    if (!i915->drm.unplugged) {
+        i915_gt_pm_restore(i915);
+    }
+    i915_gem_unlock(i915, taken);
+}
+
+/**
  * Release the device `i915` so that another driver may have its function,
- * as the comment at the top says. May sleep, in the display's commit and
- * for the GEM lock, which keeps a retire pass from parking the GT between
- * the power management's end and the reset; from there to the end it does
- * not, so that nothing reaches the device between the last look at it and
- * its unplug.
+ * as the comment at the top says. May sleep, for the GEM lock under which
+ * RPS and RC6 go off and in the display's commit; from the commit's end to
+ * the unplug it does not, so that no master's commit comes between the
+ * last look at the device and its unplug.
  *
  * @return 0; the commit's error; -EBUSY while a program sleeps with a
  *         window of the aperture; -EIO or -ETIMEDOUT when the GPU did not
- *         reset. On an error the device stays bound, its display off until
- *         the console or a master sets a mode again.
+ *         reset. On an error the device stays bound, RPS and RC6 on again
+ *         and its display off until the console or a master sets a mode.
  */
 static int32_t handoff_release(struct drm_i915_private *i915)
 {
@@ -303,12 +317,25 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     pci_device_t pdev = i915->pci;
     char name[HANDOFF_NAME];
     int32_t err;
-    int taken;
+    int taken, pm_off = 0;
 
     bdf_name(pdev.bus, devfn_of(&pdev), name);
     drm_dev_get(dev);
-    err = aperture_held(i915) ? -EBUSY : drm_atomic_helper_shutdown(dev);
-    taken = i915_gem_lock(i915);
+    err = aperture_held(i915) ? -EBUSY : 0;
+    if (err == 0) {
+        /* Linux's intel_gt_suspend_late: RPS and RC6 off before the last
+         * reset. Once they are off a park or an unpark writes nothing, so
+         * none after the reset sends the GT into RC6. Under the GEM lock,
+         * as every park, and before the commit, after which the release
+         * must not sleep. */
+        taken = i915_gem_lock(i915);
+        if (!dev->unplugged) {
+            i915_gt_pm_disable(i915);
+            pm_off = 1;
+        }
+        i915_gem_unlock(i915, taken);
+        err = drm_atomic_helper_shutdown(dev);
+    }
     if (err == 0 && dev->unplugged) {
         err = -ENODEV;
     }
@@ -316,16 +343,12 @@ static int32_t handoff_release(struct drm_i915_private *i915)
         err = -EBUSY;
     }
     if (err == 0) {
-        /* Linux's intel_gt_suspend_late: RPS and RC6 off before the last
-         * reset, so that no park after it sends the GT into RC6. */
-        i915_gt_pm_disable(i915);
         err = i915_gt_quiesce(i915);
-        if (err != 0) {
-            i915_gt_pm_restore(i915);
-        }
     }
     if (err != 0) {
-        i915_gem_unlock(i915, taken);
+        if (pm_off) {
+            handoff_pm_restore(i915);
+        }
         klog(KLOG_ERR, "i915", "handoff: %s: not released: error %d", name, (int)err);
         if (!dev->unplugged) {
             drm_client_dev_hotplug(dev);
@@ -333,7 +356,6 @@ static int32_t handoff_release(struct drm_i915_private *i915)
         drm_dev_put(dev);
         return err;
     }
-    i915_gem_unlock_atomic(i915, taken);
     if (i915->display.dp.pps.ready && i915->display.dp.pps.power_cycle_ms > power_cycle_ms) {
         power_cycle_ms = i915->display.dp.pps.power_cycle_ms;
     }
