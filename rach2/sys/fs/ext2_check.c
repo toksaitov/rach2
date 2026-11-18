@@ -257,7 +257,7 @@ static int check_past(struct ext2_check *c, uint32_t ino, uint32_t b)
 {
     struct ext2_mount *em = c->em;
     uint64_t at = (uint64_t)b * em->block_size;
-    uint32_t off, rec, i;
+    uint32_t off, rec = 0, i;
     uint8_t raw[64];
     int rc;
 
