@@ -6913,6 +6913,7 @@ static void orphan_freed_row(const char *img)
 static void kept_size_row(const char *img, const char *script, const char *finding,
                           const char *what);
 static void past_entry_row(const char *img);
+static void tail_end_row(const char *img, int past);
 
 /** The rows of `dirty_rows` whose volume has a file or a directory with a
  * size or i_blocks apart from its pointers, which the check keeps for
@@ -6939,8 +6940,8 @@ static void kept_size_rows(const char *img)
  * Make /g grown to 13 blocks through its indirect block, its size and
  * i_blocks behind, as a stop leaves them, with /dir/big.bin's count 2, and
  * write the `n` bytes of `e` at the start of the block past the size, the
- * first four given /dir/big.bin's inode number when `name` is set. @return
- * the bytes of the volume, or 0 when it was not made.
+ * four at `name` given /dir/big.bin's inode number unless `name` is -1.
+ * @return the bytes of the volume, or 0 when it was not made.
  */
 static uint64_t past_block_image(const char *img, unsigned char *e, int n, int name)
 {
@@ -6956,20 +6957,58 @@ static uint64_t past_block_image(const char *img, unsigned char *e, int n, int n
         check(0, "the directory of a past-size row is made");
         return 0;
     }
-    if (name) {
-        e[0] = (unsigned char)ino;
-        e[1] = (unsigned char)(ino >> 8);
-        e[2] = (unsigned char)(ino >> 16);
-        e[3] = (unsigned char)(ino >> 24);
+    if (name >= 0) {
+        e[name] = (unsigned char)ino;
+        e[name + 1] = (unsigned char)(ino >> 8);
+        e[name + 2] = (unsigned char)(ino >> 16);
+        e[name + 3] = (unsigned char)(ino >> 24);
     }
     poke(img, blk * 4096, e, n);
     return bytes;
 }
 
+/**
+ * The directory /t whose second block, the device's last, starts with an
+ * empty record of 4092 bytes, which leaves four bytes, too few for another
+ * header: past its size when `past` is set, else within it. The check must
+ * stop at the record before it reads past the block, and so past the
+ * device.
+ */
+static void tail_end_row(const char *img, int past)
+{
+    unsigned char tail[8] = {0, 0, 0, 0, 0xFC, 0x0F, 0, 0};
+    char script[128];
+    uint64_t bytes = dirty_image(img, "mkdir /t\n");
+    long last = (long)(bytes / 4096) - 1;
+
+    snprintf(script, sizeof(script), "testb %ld", last);
+    if (!ext2_fixture_debugfs(img, script, 0, fix_path("dbg.out")) ||
+        !ext2_fixture_contains(fix_path("dbg.out"), "not in use")) {
+        check(0, "the device's last block is free for the tail row");
+        return;
+    }
+    snprintf(script, sizeof(script), "setb %ld\nsif /t block[1] %ld\nsif /t i_blocks 16\n%s", last,
+             last, past ? "" : "sif /t size 8192\n");
+    if (!debugfs_script(img, script)) {
+        check(0, "the directory of the tail row is made");
+        return;
+    }
+    poke(img, last * 4096, tail, 8);
+    if (past) {
+        fault_on(img, bytes, "an entry past a directory's size",
+                 "a directory's block past its size at the device's end whose record leaves four "
+                 "bytes mounts read-only");
+    } else {
+        fault_on(img, bytes, "an entry of the wrong form",
+                 "a directory's block at the device's end whose record leaves four bytes mounts "
+                 "read-only");
+    }
+}
+
 /** The rows of `kept_size_rows` for /g's block past its size
  * (`past_block_image`): a name of /dir/big.bin there, an empty record
- * whose name length passes its record, one that leaves four bytes of the
- * block, and a zero header with a name after it, must stop the check,
+ * whose name length passes its record, and a zero header with a name of
+ * /dir/big.bin after its first 64 bytes must stop the check,
  * since it reads no entry there and e2fsck would; zeros throughout, as a
  * stop leaves a new block before its first record, are kept, for
  * `e2fsck -fy`, since `e2fsck -n` stops at the block it may not salvage. */
@@ -6978,36 +7017,33 @@ static void past_entry_row(const char *img)
     static unsigned char zero[4096];
     unsigned char e[12] = {0, 0, 0, 0, 0, 0x10, 1, 1, 'x', 0, 0, 0};
     unsigned char bad[20] = {0, 0, 0, 0, 12, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF4, 0x0F, 0, 0};
-    unsigned char tail[8] = {0, 0, 0, 0, 0xFC, 0x0F, 0, 0};
-    unsigned char later[24] = {0};
+    unsigned char later[112] = {0};
     unsigned char back[4096];
     uint64_t bytes;
     long blk;
 
-    if ((bytes = past_block_image(img, e, 12, 1)) != 0) {
+    if ((bytes = past_block_image(img, e, 12, 0)) != 0) {
         fault_on(img, bytes, "an entry past a directory's size",
                  "a directory's block past its size that names an inode mounts read-only");
     }
-    if ((bytes = past_block_image(img, bad, 20, 0)) != 0) {
+    if ((bytes = past_block_image(img, bad, 20, -1)) != 0) {
         fault_on(img, bytes, "an entry past a directory's size",
                  "a directory's block past its size with a malformed empty record mounts "
                  "read-only");
     }
-    if ((bytes = past_block_image(img, tail, 8, 0)) != 0) {
-        fault_on(img, bytes, "an entry past a directory's size",
-                 "a directory's block past its size whose record leaves four bytes mounts "
-                 "read-only");
-    }
-    later[16] = 1;
-    later[20] = 0xE8;
-    later[21] = 0x0F;
-    later[22] = 1;
-    if ((bytes = past_block_image(img, later, 24, 0)) != 0) {
+    tail_end_row(img, 1);
+    tail_end_row(img, 0);
+    later[104] = 0x9C; /* rec_len 3996, to the block's end */
+    later[105] = 0x0F;
+    later[106] = 1;
+    later[107] = 1;
+    later[108] = 'x';
+    if ((bytes = past_block_image(img, later, 112, 100)) != 0) {
         fault_on(img, bytes, "an entry past a directory's size",
                  "a directory's block past its size of a zero header and a name after it mounts "
                  "read-only");
     }
-    if ((bytes = past_block_image(img, zero, 4096, 0)) == 0) {
+    if ((bytes = past_block_image(img, zero, 4096, -1)) == 0) {
         return;
     }
     blk = debugfs_number(img, "bmap /g 12", "");
