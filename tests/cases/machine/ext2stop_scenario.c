@@ -93,12 +93,15 @@ static const char after_line[] =
 static const char umount_line[] = "umount /mnt/s && echo UMOUNT\"\"OK; echo UMOUNT\"\"END\r";
 
 /* The tree of the case rmtree: /mnt/s/tree, three directories under it, three
- * under each, and two under each of those, 31 directories in all, with 54
- * files, written and synced. */
+ * under each, and two under each of those, 31 directories in all (TREE_DIRS),
+ * with 54 files, written and synced, each directory then printed as
+ * `DIR=INODE:LINKS`; TREEOK only when every step succeeded. */
+#define TREE_DIRS 31
 static const char tree_line[] =
-    "for a in 0 1 2; do for b in 0 1 2; do d=/mnt/s/tree/a$a/b$b; mkdir -p $d/c0 $d/c1 && "
-    "for f in 0 1 2; do echo x$a$b$f > $d/f$f; head -c 9000 /dev/zero > $d/c0/g$f; done; done; "
-    "done; sync && echo TREE\"\"OK; echo TREE\"\"END\r";
+    "ok=1; for a in 0 1 2; do for b in 0 1 2; do d=/mnt/s/tree/a$a/b$b; mkdir -p $d/c0 $d/c1 "
+    "|| ok=0; for f in 0 1 2; do echo x$a$b$f > $d/f$f || ok=0; head -c 9000 /dev/zero > "
+    "$d/c0/g$f || ok=0; done; done; done; sync && [ $ok -eq 1 ] && find /mnt/s/tree -type d | "
+    "while read d; do stat -c DIR=%i:%h $d; done && echo TREE\"\"OK; echo TREE\"\"END\r";
 
 /* The removal of the case rmtree: the flusher's turns off, so that nothing the
  * removal leaves dirty reaches the disk before the stop, then rm -rf. */
@@ -878,80 +881,118 @@ static void judge(struct lc *l, const char *disk, const char *output, const long
 }
 
 /*
- * What the check of the volume an rm -rf left counted, from its records:
- * the empty orphan directories whose count it set to 0 (`zeroed`), the
- * smallest count it found in one (`least`), and its orphans, -1 when there
- * is no record of that form.
+ * The directories of the tree the case rmtree removes, each its inode and
+ * its link count when synced (`DIR=INODE:LINKS`), and what the check of the
+ * volume the removal left did with them: whether it set each one's count,
+ * which must be the synced one, to 0 (`zeroed`), how many other counts it
+ * set to 0 (`stray`), and its orphans, -1 when there is no record of that
+ * form.
  */
 struct cut {
-    long zeroed, least, orphans;
+    long ino[TREE_DIRS], links[TREE_DIRS];
+    int zeroed[TREE_DIRS], dirs;
+    long stray, orphans;
 };
+
+/**
+ * Parse the `DIR=INODE:LINKS` lines of `w` into `*k`. @return 1 when there
+ * are TREE_DIRS of them, each an inode above 10 with at least 2 links.
+ */
+static int parse_dirs(const char *w, struct cut *k)
+{
+    const char *p = w;
+    long ino, links;
+
+    k->dirs = 0;
+    while ((p = strstr(p, "DIR=")) != NULL) {
+        p += 4;
+        if (sscanf(p, "%ld:%ld", &ino, &links) != 2 || ino <= 10 || links < 2)
+            continue;
+        if (k->dirs == TREE_DIRS)
+            return 0;
+        k->ino[k->dirs] = ino;
+        k->links[k->dirs] = links;
+        k->zeroed[k->dirs++] = 0;
+    }
+    return k->dirs == TREE_DIRS;
+}
+
+/** Whether `record` is all of `format`, which ends in `%n` and takes `n`
+ * numbers into `v`. */
+static int whole(const char *record, const char *format, int n, long v[3])
+{
+    int end = -1;
+
+    return sscanf(record, format, &v[0], &v[1], &v[2], &end) == n && end > 0 && record[end] == '\0';
+}
+
+/** Mark in `*k` the count of directory `ino`, `was`, set to 0: one of the
+ * tree's with its synced count, or a stray. */
+static void cut_mark(struct cut *k, long ino, long was)
+{
+    int i;
+
+    for (i = 0; i < k->dirs; i++) {
+        if (k->ino[i] == ino && k->links[i] == was && !k->zeroed[i]) {
+            k->zeroed[i] = 1;
+            return;
+        }
+    }
+    k->stray++;
+}
 
 /**
  * Read the kernel's records of a check in `w` into `*k`, printing each:
  * link counts set, the bits of blocks and inodes set, files kept and the
- * lost blocks and orphans. @return NULL when each has one of those forms,
- * else the first that has not, copied into `bad` of `size` bytes.
+ * lost blocks and orphans. @return NULL when each is all of one of those
+ * forms, else the first that is not, copied into `bad` of `size` bytes.
  */
 static const char *cut_counts(const char *w, struct cut *k, char *bad, size_t size)
 {
     char record[200];
     const char *p;
-    long a, b, ino;
-    int end;
+    long v[3];
 
-    k->zeroed = 0;
-    k->least = -1;
+    k->stray = 0;
     k->orphans = -1;
     for (p = w; (p = strstr(p, "ext2: check: ")) != NULL; p += strlen("ext2: check: ")) {
         snprintf(record, sizeof(record), "%.*s", (int)strcspn(p, "\r\n"), p);
         printf("ext2stop: rmtree: %s\n", record);
-        end = -1;
-        if (sscanf(record, "ext2: check: %*s inode %ld: link count %ld, set to %ld%n", &ino, &a, &b,
-                   &end) == 3 &&
-            end > 0 && record[end] == '\0') {
-            if (b == 0) {
-                k->zeroed++;
-                k->least = k->least == -1 || a < k->least ? a : k->least;
-            }
-            continue;
+        if (whole(record, "ext2: check: %*s inode %ld: link count %ld, set to %ld%n", 3, v)) {
+            if (v[2] == 0)
+                cut_mark(k, v[0], v[1]);
+        } else if (whole(record,
+                         "ext2: check: %ld lost blocks, %ld orphan inodes, kept for e2fsck%n", 2,
+                         v)) {
+            k->orphans = v[1];
+        } else if (!whole(record, "ext2: check: %ld blocks named by files were free, marked used%n",
+                          1, v) &&
+                   !whole(record, "ext2: check: %ld live inodes were free, marked used%n", 1, v) &&
+                   !whole(record,
+                          "ext2: check: %ld files with a size or i_blocks that does not match "
+                          "their blocks, kept for e2fsck%n",
+                          1, v)) {
+            snprintf(bad, size, "%s", record);
+            return bad;
         }
-        end = -1;
-        if (sscanf(record, "ext2: check: %ld lost blocks, %ld orphan inodes, kept for e2fsck%n", &a,
-                   &b, &end) == 2 &&
-            end > 0 && record[end] == '\0') {
-            k->orphans = b;
-            continue;
-        }
-        end = -1;
-        if ((sscanf(record, "ext2: check: %ld blocks named by files were free, marked used%n", &a,
-                    &end) == 1 ||
-             sscanf(record, "ext2: check: %ld live inodes were free, marked used%n", &a, &end) ==
-                 1 ||
-             sscanf(record,
-                    "ext2: check: %ld files with a size or i_blocks that does not match their "
-                    "blocks, kept for e2fsck%n",
-                    &a, &end) == 1) &&
-            end > 0 && record[end] == '\0')
-            continue;
-        snprintf(bad, size, "%s", record);
-        return bad;
     }
     return NULL;
 }
 
 /**
- * The boot after the rm -rf's stop: the volume mounted, its check judged,
- * the tree gone, a write and the unmount. Assertions rmtree-writable,
- * rmtree-check, rmtree-gone, rmtree-wrote and rmtree-umount.
+ * The boot after the rm -rf's stop: the volume mounted, its check judged
+ * against the tree's directories in `*k`, which the check must each set to
+ * 0 from its synced count, the tree gone, a write and the unmount.
+ * Assertions rmtree-writable, rmtree-check, rmtree-gone, rmtree-wrote and
+ * rmtree-umount.
  */
-static void rmtree_check(struct lc *l)
+static void rmtree_check(struct lc *l, struct cut *k)
 {
     static const char *const disks[] = {"stop", NULL};
     char line[160], record[200], why[240];
     struct boot b;
-    struct cut k;
     char *w;
+    int i, zeroed;
 
     if (!lc_step(l, "check") || !start(l, "check", disks, &b))
         return;
@@ -959,16 +1000,19 @@ static void rmtree_check(struct lc *l)
     if ((w = run(l, &b, line, "MOUNTEND")) == NULL)
         return;
     seen(l, w, "rmtree-writable", "/dev/disk0p1 /mnt/s ext2 rw 0 0");
-    if (cut_counts(w, &k, record, sizeof(record)) != NULL) {
+    if (cut_counts(w, k, record, sizeof(record)) != NULL) {
         snprintf(why, sizeof(why), "the check said %s", record);
         lc_assert(l, "rmtree-check", 0, why);
     } else {
+        for (i = zeroed = 0; i < k->dirs; i++)
+            zeroed += k->zeroed[i];
         snprintf(why, sizeof(why),
-                 "the check set %ld directories' counts to 0, the least from %ld, and counted %ld "
-                 "orphans",
-                 k.zeroed, k.least, k.orphans);
+                 "the check set %d of the tree's %d directories' synced counts to 0, %ld other "
+                 "counts, and counted %ld orphans",
+                 zeroed, TREE_DIRS, k->stray, k->orphans);
         printf("ext2stop: rmtree: %s\n", why);
-        lc_assert(l, "rmtree-check", k.zeroed >= 1 && k.least >= 2 && k.orphans >= k.zeroed, why);
+        lc_assert(l, "rmtree-check",
+                  zeroed == TREE_DIRS && k->stray == 0 && k->orphans >= TREE_DIRS, why);
     }
     free(w);
     expect(l, &b, gone_line, "GONEEND", "rmtree-gone", "TREEGONE");
@@ -994,23 +1038,29 @@ static int rmtree(struct etude_case *c)
         "rmtree-repaired", "rmtree-clean",   NULL};
     static const char *const disks[] = {"stop", NULL};
     char line[160], vol[1100], why[96];
+    char *w;
+    struct cut k;
     char *repair[] = {"e2fsck", "-fy", vol, NULL}, *clean[] = {"e2fsck", "-fn", vol, NULL};
     struct boot b;
     struct lc l;
     int st;
 
     lc_begin(&l, c, ids);
+    k.dirs = 0;
     if (lc_step(&l, "volume"))
         lc_assert(&l, "rmtree-volume", make_volume(&l, "stop"), "mkmbr or mke2fs did not exit 0");
     if (lc_ok(&l) && lc_step(&l, "stop") && start(&l, "stop", disks, &b)) {
         snprintf(line, sizeof(line), "mkdir -p /mnt/s && mount -t ext2 /dev/disk0p1%s", mount_tail);
         expect(&l, &b, line, "MOUNTEND", "rmtree-mounted", "/dev/disk0p1 /mnt/s ext2 rw 0 0");
-        expect(&l, &b, tree_line, "TREEEND", "rmtree-tree", "TREEOK");
+        if ((w = run(&l, &b, tree_line, "TREEEND")) != NULL)
+            lc_assert(&l, "rmtree-tree", strstr(w, "TREEOK") != NULL && parse_dirs(w, &k),
+                      "the tree was not made, synced and listed whole");
+        free(w);
         expect(&l, &b, rm_line, "RMEND", "rmtree-removed", "RMOK");
         if (lc_quit(&l, b.m, NULL))
             state(&l, "stop", "rmtree-dirty", 0);
     }
-    rmtree_check(&l);
+    rmtree_check(&l, &k);
     if (lc_step(&l, "judge") && disk_path(&l, "stop", AT_PART, vol, sizeof(vol))) {
         st = tool(&l, repair, "rmtree.repair");
         snprintf(why, sizeof(why), "e2fsck -fy exits %d", st);

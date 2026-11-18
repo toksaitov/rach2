@@ -595,7 +595,7 @@
         },
         {
           "assertion_id": "rmtree-tree",
-          "checks": "the tree's 31 directories and 54 files are written and synced",
+          "checks": "every mkdir and write of the tree's 31 directories and 54 files succeeds, the sync succeeds, and stat lists each directory's inode and link count, 31 of them",
           "source": "scenario"
         },
         {
@@ -615,7 +615,7 @@
         },
         {
           "assertion_id": "rmtree-check",
-          "checks": "the kernel's check says ext2: check: /dev/disk0p1: inode N: link count W, set to 0 for at least one removed directory, each W at least 2, and ext2: check: L lost blocks, M orphan inodes, kept for e2fsck with M at least as many; its other records set link counts, set bits, or keep files, and none is a fault",
+          "checks": "the kernel's check says ext2: check: /dev/disk0p1: inode N: link count W, set to 0 for each of the tree's 31 directories, with N and W the inode and link count it had when synced, and for no other inode, and ext2: check: L lost blocks, M orphan inodes, kept for e2fsck with M at least 31; its other records set link counts above 0, set bits, or keep files, and none is a fault",
           "source": "scenario"
         },
         {
