@@ -74,9 +74,11 @@
  * release's commit, which refuses the release with RC6 and RPS on again;
  * a GPU that will not reset, which refuses the release and leaves the
  * driver bound, RC6 and RPS on again and the GPU wedged until it does; and
- * then a release whose render ring does not keep its status page's mask,
- * which keeps that page. The rows that expect no failure also find no
- * wait at its bound.
+ * then a release whose render ring does not keep its status page's mask
+ * and whose function's reset fails, which keeps that page and the GTT's
+ * scratch page; and, after a third bring-up, a release of a function with
+ * no reset method, which keeps the scratch page. The rows that expect no
+ * failure also find no wait at its bound.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -497,6 +499,7 @@ int iommu_reserved_regions(uint8_t b, uint8_t devfn, struct iommu_region *out, i
 
 static const char *owner; /* the function's, or NULL */
 static int vectors_live, resets, reset_error;
+static int reset_none;       /* set while the function offers no reset method */
 static uint64_t reset_at_us; /* the model's time of the last reset */
 static int reset_owner_bad;  /* a reset ran while the function had an owner */
 static void model_function_reset(void);
@@ -644,22 +647,26 @@ static int msi_on(void)
     return model.config[LENOVO_GPU_CAP_MSI + 2] & 1u;
 }
 
-/** The chip's method: its Advanced Features capability's reset. */
+/** The chip's method: its Advanced Features capability's reset, or none
+ * while a row sets `reset_none`. */
 int pci_reset_method(const pci_device_t *dev)
 {
     (void)dev;
-    return PCI_RESET_AF_FLR;
+    return reset_none ? PCI_RESET_NONE : PCI_RESET_AF_FLR;
 }
 
 /** The function's reset as pci.c runs it, with the header kept: the test's
  * reset of the model after the 100 ms the function is given, slept through
- * the caller's sleep; or the error a row asks for, with nothing reset. */
+ * the caller's sleep; ENOTTY, as pci.c, for a function with no method; or
+ * the error a row asks for, with nothing reset. */
 int pci_reset_function(const pci_device_t *dev, pci_sleep_t msleep)
 {
-    (void)dev;
     resets++;
     if (owner) {
         reset_owner_bad++;
+    }
+    if (pci_reset_method(dev) == PCI_RESET_NONE) {
+        return -ENOTTY;
     }
     if (reset_error) {
         return reset_error;
@@ -2420,8 +2427,8 @@ static void row_stuck(void)
  * keeping its old mask and the function's reset failing: released, that
  * ring's status page kept with its entry in the GTT and its frame, the
  * other rings' pages gone, the failed reset logged before the release's
- * line, which leaves the reset out, and the master's record cut off and
- * freed when it closes the card.
+ * line, which leaves the reset out, the scratch page kept, and the
+ * master's record cut off and freed when it closes the card.
  */
 static void row_kept(int k)
 {
@@ -2454,14 +2461,50 @@ static void row_kept(int k)
               !mark.hws_gone[0] && mark.hws_gone[1] && mark.hws_gone[2] && mark.hws_gone[3],
           "kept: rcs0's status page, whose mask did not hold, kept with its GTT entry, the "
           "others gone");
+    CHECK(logged("handoff: " CHIP ": scratch page kept at 0x7f000000: the function was not reset"),
+          "kept: the scratch page kept, logged");
     CHECK(bo_vma[k].pin_count == 0 && releases == r && held && cut_off(held),
           "kept: the master's scanout unpinned, its record cut off");
     master_close();
-    CHECK(releases == r + 1 && pages_live == 1,
-          "kept: the record and every page freed but the kept status page");
+    CHECK(releases == r + 1 && pages_live == 1 && !pci_mark.scratch_freed,
+          "kept: the record and every page freed but the kept status page, the scratch page "
+          "not freed");
     if (kept && pages_live == 1) {
         kfree_pages(kept, 1);
     }
+}
+
+/**
+ * The release of a function with no reset method: released, the reset's
+ * ENOTTY logged before the release's line, which leaves the reset out, and
+ * the scratch page kept, never freed with the record.
+ */
+static void row_no_reset(void)
+{
+    struct drm_i915_private *i915 = bound();
+    int r = releases, before = resets;
+
+    if (!i915) {
+        return;
+    }
+    log_text[0] = 0;
+    console_clear();
+    marks_take(i915);
+    reset_none = 1;
+    CHECK(driver_write("unbind", CHIP "\n") == 13 && released(),
+          "no reset: released with no reset method");
+    reset_none = 0;
+    CHECK(resets == before + 1 && !pci_mark.fn_reset && pci_mark.bm_off &&
+              pci_mark.bm_off < pci_mark.unclaimed &&
+              logged("handoff: " CHIP ": not reset at the release: error -") &&
+              newest_handoff("handoff: " CHIP
+                             ": released: the display off, the GPU reset, interrupts and bus "
+                             "mastering off"),
+          "no reset: the missing reset logged, then the release's line without it");
+    CHECK(
+        logged("handoff: " CHIP ": scratch page kept at 0x7f000000: the function was not reset") &&
+            releases == r + 1 && pages_live == 0 && !pci_mark.scratch_freed,
+        "no reset: the record and every page freed, the scratch page kept, logged");
 }
 
 /* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
@@ -2506,6 +2549,8 @@ int main(void)
         row_held_late();
         row_stuck();
         row_kept(1);
+        row_bring_up("bring-up, third: bind taken after a kept release");
+        row_no_reset();
     }
     if (failures != 0) {
         show_log();

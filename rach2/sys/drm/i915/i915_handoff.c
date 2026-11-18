@@ -311,7 +311,7 @@ static void handoff_pm_restore(struct drm_i915_private *i915)
  * gives the same from the release on. The fake chip has no state to reset.
  * May sleep.
  *
- * @return 1 when the function was reset; 0 for the fake chip, or with the
+ * @return 1 when the function was reset; 0 for the fake chip; -1, with the
  *         failure logged, for a function with no reset or one that failed.
  */
 static int handoff_release_reset(const pci_device_t *pdev, const char *name)
@@ -324,9 +324,25 @@ static int handoff_release_reset(const pci_device_t *pdev, const char *name)
     err = pci_reset_function(pdev, handoff_msleep);
     if (err != 0) {
         klog(KLOG_WARN, "i915", "handoff: %s: not reset at the release: error %d", name, (int)err);
-        return 0;
+        return -1;
     }
     return 1;
+}
+
+/**
+ * Keep the GTT's scratch page of `i915`, named `name`, whose function the
+ * release could not reset: the GPU may still reach it, so the record's
+ * release does not free it and the frame is never used again, as a status
+ * page whose writes were not masked is kept.
+ */
+static void handoff_scratch_keep(struct drm_i915_private *i915, const char *name)
+{
+    if (i915->ggtt.scratch == 0) {
+        return;
+    }
+    klog(KLOG_WARN, "i915", "handoff: %s: scratch page kept at 0x%lx: the function was not reset",
+         name, (unsigned long)i915->ggtt.scratch);
+    i915->ggtt.scratch = 0;
 }
 
 /**
@@ -401,6 +417,9 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     i915_pci_unmap(&i915->hw);
     pci_disable_bus_master(&pdev);
     reset = handoff_release_reset(&pdev, name);
+    if (reset < 0) {
+        handoff_scratch_keep(i915, name);
+    }
     pci_unclaim(pdev.bus, devfn_of(&pdev), PCI_OWNER_KERNEL);
     if (pdev.vendor_id == PCI_VENDOR_INTEL && pdev.bus == 0 && pdev.device == 2 &&
         pdev.function == 0) {
@@ -409,7 +428,7 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     klog(KLOG_INFO, "i915",
          "handoff: %s: released: the display off, the GPU reset, interrupts and bus mastering "
          "off%s",
-         name, reset ? ", the function reset" : "");
+         name, reset > 0 ? ", the function reset" : "");
     drm_dev_put(dev);
     return 0;
 }
