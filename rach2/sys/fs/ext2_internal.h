@@ -591,6 +591,7 @@ struct ext2_link {
     uint8_t orphan; /* an orphan no entry of a live directory has named yet */
     uint8_t dir;    /* the orphan is a directory, its entries walked apart */
     uint8_t bit;    /* the inode bitmap calls it free, so the check sets its bit */
+    uint8_t empty;  /* the orphan directory, walked as no entry's, has only . and .. */
 };
 
 /* Set field `f` of node `n` to `v` and mark the node (`ext2_node_dirty`) in
