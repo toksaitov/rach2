@@ -132,9 +132,9 @@ struct ext2_check {
     struct ext2_fix *fix, **fix_tail;
     uint64_t at;
     uint32_t root;
-    int keep;      /* the inode being marked keeps a mismatch for e2fsck */
-    int past;      /* and `check_level` met a pointer block past its size */
-    uint32_t last; /* the highest data index `check_blocks` found named */
+    int keep; /* the inode being marked keeps a mismatch for e2fsck */
+    int past; /* and `check_level` met a pointer block past its size */
+    int dir;  /* the inode being marked is a directory, its blocks past the size read */
     int link_nomem;
     struct ext2_link *link[EXT2_CHECK_LINK_BUCKETS];
     struct ext2_attr attr[EXT2_CHECK_ATTRS];
@@ -245,6 +245,68 @@ static int check_mark(struct ext2_check *c, uint32_t ino, uint32_t b)
 }
 
 /**
+ * Require block `b`, which directory `ino` names past its size, to hold no
+ * entry: records of the form `check_dir` requires, each of inode 0, as a
+ * growth writes a new block before its first name, or zeros throughout, as
+ * a stop leaves a new block whose zeros reached the disk before its first
+ * record. The walk reads no entry past the size and counts no name there,
+ * and e2fsck, which takes the size up to the blocks, would read one. 0, or
+ * -EIO with the fault recorded or for a failed read.
+ */
+static int check_past(struct ext2_check *c, uint32_t ino, uint32_t b)
+{
+    struct ext2_mount *em = c->em;
+    uint64_t at = (uint64_t)b * em->block_size;
+    uint32_t off, rec, i;
+    uint8_t raw[64];
+    int rc;
+
+    for (off = 0; off < em->block_size; off += rec) {
+        rc = ext2_read_bytes(em, READ_QUIET, 0, at + off, raw, 8);
+        if (rc != 0) {
+            return rc;
+        }
+        rec = ext2_le16(raw + 4);
+        if (off == 0 && rec == 0 && ext2_le32(raw) == 0) {
+            break;
+        }
+        if (rec < 8 || (rec & 3) != 0 || off + rec > em->block_size || raw[6] + 8u > rec ||
+            ext2_le32(raw) != 0) {
+            return check_fault(c, ino, "an entry past a directory's size");
+        }
+    }
+    for (off = 0; off < em->block_size && rec == 0; off += sizeof(raw)) {
+        rc = ext2_read_bytes(em, READ_QUIET, 0, at + off, raw, sizeof(raw));
+        for (i = 0; rc == 0 && i < sizeof(raw); i++) {
+            if (raw[i] != 0) {
+                return check_fault(c, ino, "an entry past a directory's size");
+            }
+        }
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Mark data block `b` of inode `ino`, at data index `index`, and, for a
+ * directory (`c->dir`) at or past `limit`, the blocks its size covers,
+ * require it empty (`check_past`). 0, or -EIO with the fault recorded or
+ * for a failed read.
+ */
+static int check_data(struct ext2_check *c, uint32_t ino, uint32_t b, uint32_t index,
+                      uint32_t limit)
+{
+    int rc = check_mark(c, ino, b);
+
+    if (rc == 0 && c->dir && index >= limit) {
+        rc = check_past(c, ino, b);
+    }
+    return rc;
+}
+
+/**
  * Mark pointer block `b` of inode `ino`, at `level`, and what it names,
  * `index` being the data index its first entry stands for; `*count` gains
  * every block, data and pointer, and `*last` is the highest data index
@@ -289,7 +351,7 @@ static int check_level(struct ext2_check *c, uint32_t ino, uint32_t b, int level
             continue;
         }
         if (level == 1) {
-            rc = check_mark(c, ino, p);
+            rc = check_data(c, ino, p, index + j, limit);
             if (rc != 0) {
                 return rc;
             }
@@ -406,6 +468,7 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
 
     limit = (uint32_t)((n->size + em->block_size - 1) >> em->block_shift);
     c->keep = !as_data && (type == S_IFREG_ || type == S_IFDIR_);
+    c->dir = !as_data && type == S_IFDIR_;
     c->past = 0;
     if (n->file_acl != 0) {
         rc = check_attr(c, n);
@@ -424,7 +487,7 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
         if (n->block[i] == 0) {
             continue;
         }
-        rc = check_mark(c, n->ino, n->block[i]);
+        rc = check_data(c, n->ino, n->block[i], i, limit);
         if (rc != 0) {
             return rc;
         }
@@ -445,7 +508,6 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
         }
         named = 1;
     }
-    c->last = last;
     return check_size(c, n, n->blocks != count * (em->block_size / 512) + attr,
                       named && last >= limit);
 }
@@ -816,41 +878,6 @@ static int check_dir_count(struct ext2_check *c, const struct ext2_node *n, uint
 }
 
 /**
- * Require the blocks directory `n` names past its size, from index `from`
- * to the highest it names, which a stop leaves when a growth's pointer
- * reached the disk before the inode, to hold no entry: a block whose
- * entries are all of inode 0, as a growth writes it first, is kept for
- * e2fsck with the directory (`check_blocks`), while one naming an inode, or
- * not of the form of entries, is a fault, since the walk reads no entry
- * past the size and counts no name there, and e2fsck, which takes the size
- * up to the blocks, would read it. 0, or -EIO with the fault recorded or
- * for a failed read.
- */
-static int check_past(struct ext2_check *c, const struct ext2_node *n, uint32_t from)
-{
-    struct ext2_mount *em = c->em;
-    uint32_t last = c->last, i, b, off, rec;
-    uint8_t raw[8];
-    int rc;
-
-    for (i = from; i <= last && last >= from; i++) {
-        rc = ext2_block_at(em, n, i, &b);
-        for (off = 0; rc == 0 && b != 0 && off < em->block_size; off += rec) {
-            rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)b * em->block_size + off, raw, 8);
-            rec = ext2_le16(raw + 4);
-            if (rc == 0 &&
-                (rec < 8 || (rec & 3) != 0 || off + rec > em->block_size || ext2_le32(raw) != 0)) {
-                return check_fault(c, n->ino, "an entry past a directory's size");
-            }
-        }
-        if (rc != 0) {
-            return rc;
-        }
-    }
-    return 0;
-}
-
-/**
  * Walk directory `ino`, loaded at `c->node[depth]`, whose parent is
  * `parent`: its blocks, those past its size empty (`check_past`), every
  * entry's form, `.` and `..` in their places, each other entry's inode, and
@@ -877,10 +904,6 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
         return check_fault(c, ino, "a directory size that is not whole blocks");
     }
     nblocks = (uint32_t)(n->size >> em->block_shift);
-    rc = check_past(c, n, nblocks);
-    if (rc != 0) {
-        return rc;
-    }
     for (i = 0; i < nblocks; i++) {
         uint32_t b, off = 0;
 
