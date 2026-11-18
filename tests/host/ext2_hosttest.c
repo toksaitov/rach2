@@ -6935,13 +6935,15 @@ static void kept_size_rows(const char *img)
                   "is kept for e2fsck");
 }
 
-/** A row of `kept_size_rows`: /g grown to 13 blocks through its indirect
- * block, its size and i_blocks behind, as a stop leaves them, with a name
- * of /dir/big.bin, whose count is 2, in the block past the size: the check
- * must stop, since it reads no entry there and e2fsck would. */
-static void past_entry_row(const char *img)
+/**
+ * Make /g grown to 13 blocks through its indirect block, its size and
+ * i_blocks behind, as a stop leaves them, with /dir/big.bin's count 2, and
+ * write the `n` bytes of `e` at the start of the block past the size, the
+ * first four given /dir/big.bin's inode number when `name` is set. @return
+ * the bytes of the volume, or 0 when it was not made.
+ */
+static uint64_t past_block_image(const char *img, unsigned char *e, int n, int name)
 {
-    unsigned char e[12] = {0, 0, 0, 0, 0, 0x10, 1, 1, 'x', 0, 0, 0};
     uint64_t bytes = dirty_image(img, "mkdir /g\nexpand /g\nexpand /g\nexpand /g\nexpand /g\n"
                                       "expand /g\nexpand /g\nexpand /g\nexpand /g\nexpand /g\n"
                                       "expand /g\nexpand /g\nexpand /g\n"
@@ -6951,16 +6953,53 @@ static void past_entry_row(const char *img)
     long ino = debugfs_number(img, "stat /dir/big.bin", "Inode: ");
 
     if (blk <= 0 || ino <= 0) {
-        check(0, "the directory of the past-entry row is made");
+        check(0, "the directory of a past-size row is made");
+        return 0;
+    }
+    if (name) {
+        e[0] = (unsigned char)ino;
+        e[1] = (unsigned char)(ino >> 8);
+        e[2] = (unsigned char)(ino >> 16);
+        e[3] = (unsigned char)(ino >> 24);
+    }
+    poke(img, blk * 4096, e, n);
+    return bytes;
+}
+
+/** The rows of `kept_size_rows` for /g's block past its size
+ * (`past_block_image`): a name of /dir/big.bin there, and an empty record
+ * whose name length passes its record, must stop the check, since it reads
+ * no entry there and e2fsck would; zeros throughout, as a stop leaves a new
+ * block before its first record, are kept, for `e2fsck -fy`, since
+ * `e2fsck -n` stops at the block it may not salvage. */
+static void past_entry_row(const char *img)
+{
+    static unsigned char zero[4096];
+    unsigned char e[12] = {0, 0, 0, 0, 0, 0x10, 1, 1, 'x', 0, 0, 0};
+    unsigned char bad[20] = {0, 0, 0, 0, 12, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF4, 0x0F, 0, 0};
+    uint64_t bytes;
+
+    if ((bytes = past_block_image(img, e, 12, 1)) != 0) {
+        fault_on(img, bytes, "an entry past a directory's size",
+                 "a directory's block past its size that names an inode mounts read-only");
+    }
+    if ((bytes = past_block_image(img, bad, 20, 0)) != 0) {
+        fault_on(img, bytes, "an entry past a directory's size",
+                 "a directory's block past its size with a malformed empty record mounts "
+                 "read-only");
+    }
+    if ((bytes = past_block_image(img, zero, 4096, 0)) == 0) {
         return;
     }
-    e[0] = (unsigned char)ino;
-    e[1] = (unsigned char)(ino >> 8);
-    e[2] = (unsigned char)(ino >> 16);
-    e[3] = (unsigned char)(ino >> 24);
-    poke(img, blk * 4096, e, 12);
-    fault_on(img, bytes, "an entry past a directory's size",
-             "a directory's block past its size that names an inode mounts read-only");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(last_check, "check: 1 files with a size or i_blocks that does not match their "
+                                 "blocks, kept for e2fsck") != 0,
+          "a directory's zeroed block past its size is kept for e2fsck");
+    check(unmount_rw() == 0 && disk_state(img) == 2 &&
+              ext2_fixture_fsck(img, "-fy", fix_path("repair.out")) == 1 && e2fsck_clean(img),
+          "and its unmount leaves it to e2fsck -fy, which repairs the volume clean");
 }
 
 /**
