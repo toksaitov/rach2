@@ -94,14 +94,16 @@ static const char umount_line[] = "umount /mnt/s && echo UMOUNT\"\"OK; echo UMOU
 
 /* The tree of the case rmtree: /mnt/s/tree, three directories under it, three
  * under each, and two under each of those, 31 directories in all (TREE_DIRS),
- * with 54 files, written and synced, each directory then printed as
- * `DIR=INODE:LINKS`; TREEOK only when every step succeeded. */
+ * with 54 files, written and synced by syncfs (`sync -f`), which reports a
+ * failed writeback, each directory then printed as `DIR=INODE:LINKS`; TREEOK
+ * only when every step succeeded. */
 #define TREE_DIRS 31
 static const char tree_line[] =
     "ok=1; for a in 0 1 2; do for b in 0 1 2; do d=/mnt/s/tree/a$a/b$b; mkdir -p $d/c0 $d/c1 "
     "|| ok=0; for f in 0 1 2; do echo x$a$b$f > $d/f$f || ok=0; head -c 9000 /dev/zero > "
-    "$d/c0/g$f || ok=0; done; done; done; sync && [ $ok -eq 1 ] && find /mnt/s/tree -type d | "
-    "while read d; do stat -c DIR=%i:%h $d; done && echo TREE\"\"OK; echo TREE\"\"END\r";
+    "$d/c0/g$f || ok=0; done; done; done; sync -f /mnt/s || ok=0; t=$(find /mnt/s/tree -type d) "
+    "|| ok=0; for d in $t; do stat -c DIR=%i:%h $d || ok=0; done; [ $ok -eq 1 ] && echo "
+    "TREE\"\"OK; echo TREE\"\"END\r";
 
 /* The removal of the case rmtree: the flusher's turns off, so that nothing the
  * removal leaves dirty reaches the disk before the stop, then rm -rf. */
@@ -896,12 +898,14 @@ struct cut {
 
 /**
  * Parse the `DIR=INODE:LINKS` lines of `w` into `*k`. @return 1 when there
- * are TREE_DIRS of them, each an inode above 10 with at least 2 links.
+ * are TREE_DIRS of them, each a distinct inode above 10, with the tree's
+ * counts: 18 directories of 2 links, 9 of 4 and 4 of 5.
  */
 static int parse_dirs(const char *w, struct cut *k)
 {
     const char *p = w;
     long ino, links;
+    int i, j, two = 0, four = 0, five = 0;
 
     k->dirs = 0;
     while ((p = strstr(p, "DIR=")) != NULL) {
@@ -914,16 +918,31 @@ static int parse_dirs(const char *w, struct cut *k)
         k->links[k->dirs] = links;
         k->zeroed[k->dirs++] = 0;
     }
-    return k->dirs == TREE_DIRS;
+    for (i = 0; i < k->dirs; i++) {
+        two += k->links[i] == 2;
+        four += k->links[i] == 4;
+        five += k->links[i] == 5;
+        for (j = 0; j < i; j++) {
+            if (k->ino[j] == k->ino[i])
+                return 0;
+        }
+    }
+    return k->dirs == TREE_DIRS && two == 18 && four == 9 && five == 4;
 }
 
-/** Whether `record` is all of `format`, which ends in `%n` and takes `n`
- * numbers into `v`. */
+/** Whether `record` is all of `format`, which takes `n` numbers, 1 to 3,
+ * into `v` and ends in `%n`. */
 static int whole(const char *record, const char *format, int n, long v[3])
 {
-    int end = -1;
+    int end = -1, got;
 
-    return sscanf(record, format, &v[0], &v[1], &v[2], &end) == n && end > 0 && record[end] == '\0';
+    if (n == 1)
+        got = sscanf(record, format, &v[0], &end);
+    else if (n == 2)
+        got = sscanf(record, format, &v[0], &v[1], &end);
+    else
+        got = sscanf(record, format, &v[0], &v[1], &v[2], &end);
+    return got == n && end > 0 && record[end] == '\0';
 }
 
 /** Mark in `*k` the count of directory `ino`, `was`, set to 0: one of the

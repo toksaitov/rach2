@@ -595,7 +595,7 @@
         },
         {
           "assertion_id": "rmtree-tree",
-          "checks": "every mkdir and write of the tree's 31 directories and 54 files succeeds, the sync succeeds, and stat lists each directory's inode and link count, 31 of them",
+          "checks": "every mkdir and write of the tree's 31 directories and 54 files succeeds, syncfs of the volume (sync -f) succeeds, and find and stat list each directory's inode and link count without an error: 31 distinct inodes, 18 of 2 links, 9 of 4 and 4 of 5",
           "source": "scenario"
         },
         {
