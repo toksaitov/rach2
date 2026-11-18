@@ -54,6 +54,8 @@
  * Returns 0 when every row passes, 1 otherwise.
  */
 
+#include <stdarg.h>
+
 #include "drm/i915/i915_pci.c"
 #include "fs/sysfs.h"
 #include "iommu.h"
@@ -104,12 +106,38 @@ static pte_t gsm_cache;
 static uint32_t udelays;
 static int frames, frames_freed;
 
-/** The boot log: nothing to keep. */
+/* The heap address each made-up physical page stands for, by its index
+ * (`paging_virt_to_phys`), and the status pages the rings' teardown kept,
+ * which `done` frees. On the probe's buffer, which never acknowledges
+ * forcewake, the bind's rings fail and their teardown cannot confirm a
+ * status page's mask, so it keeps the page, as on a chip that does not
+ * answer. */
+static uintptr_t page_of[0x10000];
+static unsigned npage_of;
+static void *hws_kept[64];
+static int nhws_kept;
+
+/** The boot log: nothing kept but the status pages the rings' teardown
+ * kept, found through their GTT entries in `gsm_buffer`. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
+    va_list ap;
+    uint32_t ggtt, pte;
+
     (void)level;
     (void)subsystem;
-    (void)format;
+    if (strcmp(format, "rings: %s: status page kept at 0x%x: its writes not masked") != 0) {
+        return;
+    }
+    va_start(ap, format);
+    (void)va_arg(ap, const char *);
+    ggtt = va_arg(ap, unsigned);
+    va_end(ap);
+    pte = gsm_buffer ? gsm_buffer[ggtt / I915_GTT_PAGE_SIZE] : 0;
+    if ((pte & 1u) != 0 && pte >= 0x60000000u && ((pte - 0x60000000u) >> 12) < npage_of &&
+        nhws_kept < 64) {
+        hws_kept[nhws_kept++] = (void *)page_of[(pte - 0x60000000u) >> 12];
+    }
 }
 
 int kcmdline_has(const char *flag)
@@ -275,11 +303,24 @@ int iommu_present(void)
     return 0;
 }
 
-/** A made-up physical page for the heap's address `va`, never 0; the
+/** A made-up physical page for the heap's address `va`, never 0, one for
+ * each address, so that `klog` can find a page from its GTT entry; the
  * host's heap does not align its pages, so the offset is dropped. */
 uintptr_t paging_virt_to_phys(uintptr_t va)
 {
-    return (uintptr_t)(0x60000000u + ((va >> 12) & 0xffffu) * 4096u);
+    unsigned i;
+
+    for (i = 0; i < npage_of && page_of[i] != va; i++) {
+    }
+    if (i == npage_of) {
+        CHECK("a made-up physical page for each heap page",
+              npage_of < sizeof(page_of) / sizeof(page_of[0]));
+        if (npage_of == sizeof(page_of) / sizeof(page_of[0])) {
+            return 0x60000000u;
+        }
+        page_of[npage_of++] = va;
+    }
+    return (uintptr_t)(0x60000000u + i * 4096u);
 }
 
 void arch_dma_fence(void)
@@ -679,6 +720,9 @@ static void done(struct i915_model *m)
         i915_unplug(last_registered);
         drm_dev_put(last_registered);
         last_registered = 0;
+    }
+    while (nhws_kept > 0) {
+        kfree_pages(hws_kept[--nhws_kept], 1);
     }
     i915_model_free(m);
     bus = 0;
