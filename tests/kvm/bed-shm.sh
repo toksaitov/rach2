@@ -818,18 +818,18 @@ desk_rows()
         quiet "$loadout" 300 "$load" || break
         [ "$(refused)" -lt 100000 ] || break
     done
-    # SIGTERM ends a monitor still listening with 143.
+    # udevadm ends on SIGTERM with 0, or 143 when the signal comes first.
     kill "$umon" 2>/dev/null
     ustatus=0
     wait "$umon" 2>/dev/null || ustatus=$?
-    [ "$ustatus" = 143 ] || [ "$monitor" != listening ] ||
+    [ "$ustatus" = 0 ] || [ "$ustatus" = 143 ] || [ "$monitor" != listening ] ||
         monitor="ended with status $ustatus before the row's end: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
     umon=''
-    if [ "$alive" = no ]; then
+    if kill -0 "$load" 2>/dev/null; then
+        ended="still running"
+    elif [ "$alive" = no ]; then
         ended="ended before the death"
         wait "$load" 2>/dev/null
-    elif kill -0 "$load" 2>/dev/null; then
-        ended="still running"
     else
         load_status=0
         wait "$load" || load_status=$?
