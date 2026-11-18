@@ -89,7 +89,8 @@ static const char same_line[] =
     "i=0; ok=1; while [ $i -lt 8 ]; do yes keep$i | head -c 65536 | cmp -s - /mnt/s/keep/f$i "
     "|| ok=0; i=$((i+1)); done; [ $ok -eq 1 ] && echo KEEP\"\"SAME; echo SAME\"\"END\r";
 static const char after_line[] =
-    "echo after > /mnt/s/after && sync && echo AFTER\"\"OK; echo AFTER\"\"END\r";
+    "echo after > /mnt/s/after && busybox fsync /mnt/s/after && echo AFTER\"\"OK; echo "
+    "AFTER\"\"END\r";
 static const char umount_line[] = "umount /mnt/s && echo UMOUNT\"\"OK; echo UMOUNT\"\"END\r";
 
 /* The tree of the case rmtree: /mnt/s/tree, three directories under it, three

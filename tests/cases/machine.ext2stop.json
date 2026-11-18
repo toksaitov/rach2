@@ -286,7 +286,7 @@
         },
         {
           "assertion_id": "check-wrote",
-          "checks": "a file is written there and synced",
+          "checks": "a file is written there and its fsync succeeds",
           "source": "scenario"
         },
         {
@@ -311,7 +311,7 @@
         },
         {
           "assertion_id": "again-wrote",
-          "checks": "a file is written on the control and synced",
+          "checks": "a file is written on the control and its fsync succeeds",
           "source": "scenario"
         },
         {
@@ -625,7 +625,7 @@
         },
         {
           "assertion_id": "rmtree-wrote",
-          "checks": "a file is written there and synced",
+          "checks": "a file is written there and its fsync succeeds",
           "source": "scenario"
         },
         {
