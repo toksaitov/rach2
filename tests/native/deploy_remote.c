@@ -79,10 +79,10 @@ int nd_stage(struct nd_deploy *d)
  * of this boot, or one with no owner record, is refused by name. The look at
  * the claims and the lock, their removal and the making of this run's claim
  * hold flock(1) on STATE/collection.serial, which the collection holds while
- * it takes or releases its lock and the cleanup while it removes a claim, so
- * that no setup removes a claim or a lock made after its reading. A claim
- * already gone counts as cleared. The etude boot token is still published for
- * the measurement contexts that read it. */
+ * it takes or releases its lock and the cleanup while it looks at or removes
+ * its claim, so that no setup removes a claim or a lock made after its
+ * reading. A claim already gone counts as cleared. The etude boot token is
+ * still published for the measurement contexts that read it. */
 static int run_setup(struct nd_deploy *d, char *setup, size_t size)
 {
     const struct nd_config *c = &d->c;
@@ -99,7 +99,7 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "boot=$(cat /proc/sys/kernel/random/boot_id); "
         "case $boot in *[!0-9a-f-]*|'') exit 1;; esac; "
         "state='%s/state'; test ! -L \"$state\"; "
-        "if test ! -d \"$state\"; then mkdir -m 700 \"$state\"; fi; "
+        "mkdir -m 700 \"$state\" 2>/dev/null || test -d \"$state\"; "
         "exec 9> \"$state/collection.serial\"; flock 9; "
         "for old in '%s'/controller-*; do test -f \"$old/identity\" || continue; "
         "oboot=; read opid oborn oboot < \"$old/identity\" || true; "
@@ -163,13 +163,17 @@ int nd_run(struct nd_deploy *d)
     d->remote_started = 1;
     return nd_ssh(d, "collection", command, NULL, &process);
 }
-/* Stop this deployment's controller and remove its claim. The wait for the
- * recorded process to end runs first, outside any lock; the look at the claim
- * again, at the collection lock, and the claim's removal then hold flock(1) on
- * STATE/collection.serial, as the setup does, so that a setup after a reboot
- * and this cleanup never both remove the claim. A claim already gone counts as
- * removed. A claim whose recorded process still runs in this boot fails the
- * cleanup, and so does a claim of another deployment. */
+/* Stop this deployment's controller and remove its claim. Every look at the
+ * claim holds flock(1) on STATE/collection.serial, as the setup does, which
+ * makes STATE if it is absent; the setup writes a claim whole under that lock,
+ * so a claim seen under it is complete or was left by a writer that died. The
+ * first look reads the receipt; the wait for the recorded process to end then
+ * runs outside the lock, since the collection takes it to release its own;
+ * the second look checks the collection lock and the claim again and removes
+ * the claim. A claim absent at the second look counts as removed, and one with
+ * no owner record, which only a dead writer leaves, is removed with a line
+ * that says so. A claim whose recorded process still runs in this boot fails
+ * the cleanup, and so does a claim of another deployment. */
 int nd_remote_cleanup(struct nd_deploy *d)
 {
     struct nd_process *process = NULL;
@@ -182,17 +186,22 @@ int nd_remote_cleanup(struct nd_deploy *d)
                    "alive() { test \"$boot\" = \"$(cat /proc/sys/kernel/random/boot_id)\" && "
                    "test -r /proc/$pid/stat && "
                    "test \"$(awk '{print $22}' /proc/$pid/stat 2>/dev/null)\" = \"$born\"; }; "
-                   "if test \"$(cat \"$claim/owner\" 2>/dev/null)\" = '%s' && "
-                   "read pid born boot 2>/dev/null < \"$receipt\"; then valid; "
+                   "serial() { exec 9> \"$state/collection.serial\"; flock 9; }; "
+                   "umask 077; test ! -L \"$state\"; "
+                   "mkdir -m 700 \"$state\" 2>/dev/null || test -d \"$state\"; "
+                   "serial; waiting=; if test -d \"$claim\" && test -f \"$claim/owner\"; then "
+                   "test \"$(cat \"$claim/owner\")\" = '%s'; "
+                   "if read pid born boot 2>/dev/null < \"$receipt\"; then valid; waiting=yes; fi; "
+                   "fi; exec 9>&-; "
+                   "if test -n \"$waiting\"; then "
                    "while alive; do kill -TERM \"$pid\" || break; sleep 1; done; fi; "
-                   "test ! -L \"$state\"; if test -d \"$state\"; then "
-                   "exec 9> \"$state/collection.serial\"; flock 9; fi; "
-                   "test ! -d \"$state/collection.lock\"; "
+                   "serial; test ! -d \"$state/collection.lock\"; "
                    "if test -d \"$claim\"; then "
-                   "if test -e \"$claim/owner\"; then test \"$(cat \"$claim/owner\")\" = '%s'; fi; "
+                   "if test -f \"$claim/owner\"; then test \"$(cat \"$claim/owner\")\" = '%s'; "
                    "if read pid born boot 2>/dev/null < \"$receipt\"; then valid; "
-                   "if alive; then exit 1; fi; fi; "
-                   "rm -f \"$receipt\" \"$claim/owner\"; rmdir \"$claim\" || test ! -e \"$claim\"; "
+                   "if alive; then exit 1; fi; fi; else "
+                   "printf 'native-deploy: cleared: %%s: no owner record\\n' \"$claim\" >&2; fi; "
+                   "rm -f \"$receipt\" \"$claim/owner\"; rmdir \"$claim\"; "
                    "fi; exec 9>&-; "
                    "printf 'native-deploy: remote controller ended\\n'",
                    guard, d->c.target, d->c.run, d->c.target, d->c.nonce, d->c.nonce))
