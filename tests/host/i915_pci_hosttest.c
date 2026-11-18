@@ -102,6 +102,7 @@ static size_t map_size;
 static pte_t map_cache;
 static int maps;
 static uint32_t *map_buffer, *gsm_buffer;
+static size_t gsm_entries; /* in `gsm_buffer` */
 static pte_t gsm_cache;
 static uint32_t udelays;
 static int frames, frames_freed;
@@ -111,7 +112,8 @@ static int frames, frames_freed;
  * which `done` frees. On the probe's buffer, which never acknowledges
  * forcewake, the bind's rings fail and their teardown cannot confirm a
  * status page's mask, so it keeps the page, as on a chip that does not
- * answer. */
+ * answer. `done` clears both, so that no address left in them hides a leak
+ * from LeakSanitizer, which scans global memory for pointers. */
 static uintptr_t page_of[0x10000];
 static unsigned npage_of;
 static void *hws_kept[64];
@@ -122,7 +124,9 @@ static int nhws_kept;
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     va_list ap;
-    uint32_t ggtt, pte;
+    uint32_t ggtt, pte = 0;
+    void *page;
+    int i;
 
     (void)level;
     (void)subsystem;
@@ -133,10 +137,17 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)va_arg(ap, const char *);
     ggtt = va_arg(ap, unsigned);
     va_end(ap);
-    pte = gsm_buffer ? gsm_buffer[ggtt / I915_GTT_PAGE_SIZE] : 0;
-    if ((pte & 1u) != 0 && pte >= 0x60000000u && ((pte - 0x60000000u) >> 12) < npage_of &&
-        nhws_kept < 64) {
-        hws_kept[nhws_kept++] = (void *)page_of[(pte - 0x60000000u) >> 12];
+    if (gsm_buffer && ggtt / I915_GTT_PAGE_SIZE < gsm_entries) {
+        pte = gsm_buffer[ggtt / I915_GTT_PAGE_SIZE];
+    }
+    if ((pte & 1u) == 0 || pte < 0x60000000u || ((pte - 0x60000000u) >> 12) >= npage_of) {
+        return;
+    }
+    page = (void *)page_of[(pte - 0x60000000u) >> 12];
+    for (i = 0; i < nhws_kept && hws_kept[i] != page; i++) {
+    }
+    if (i == nhws_kept && nhws_kept < 64) {
+        hws_kept[nhws_kept++] = page;
     }
 }
 
@@ -207,6 +218,7 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
         gsm_cache = cache;
         free(gsm_buffer);
         gsm_buffer = (uint32_t *)calloc(size / 4, sizeof(uint32_t));
+        gsm_entries = gsm_buffer ? size / 4 : 0;
         return (uintptr_t)gsm_buffer;
     }
     map_phys = phys_addr;
@@ -723,7 +735,13 @@ static void done(struct i915_model *m)
     }
     while (nhws_kept > 0) {
         kfree_pages(hws_kept[--nhws_kept], 1);
+        hws_kept[nhws_kept] = 0;
     }
+    k_memset(page_of, 0, npage_of * sizeof(page_of[0]));
+    npage_of = 0;
+    free(gsm_buffer);
+    gsm_buffer = 0;
+    gsm_entries = 0;
     i915_model_free(m);
     bus = 0;
 }
