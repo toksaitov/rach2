@@ -488,6 +488,15 @@ void i915_gt_fini(struct drm_i915_private *i915)
         }
         i915_gt_pages_unmap(i915, e->ring, e->ring_size / I915_GTT_PAGE_SIZE, e->ring_ggtt);
         e->ring = 0;
+        if (e->hws) {
+            /* cleanup_status_page: no write into the status page once it
+             * has gone back. */
+            i915_write(&i915->hw, RING_HWSTAM(e->mmio_base), 0xffffffffu);
+            if (i915_read(&i915->hw, RING_HWSTAM(e->mmio_base)) != 0xffffffffu) {
+                klog(KLOG_WARN, "i915", "%s: HWSTAM reads 0x%08x after all ones were written",
+                     e->name, (unsigned)i915_read(&i915->hw, RING_HWSTAM(e->mmio_base)));
+            }
+        }
         i915_gt_pages_unmap(i915, e->hws, 1, e->hws_ggtt);
         e->hws = 0;
     }

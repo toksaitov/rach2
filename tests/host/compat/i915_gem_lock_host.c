@@ -38,3 +38,10 @@ void i915_gem_lock_retake(struct drm_i915_private *i915, int dropped)
     (void)i915;
     (void)dropped;
 }
+
+/** Give the GEM lock back without giving way. */
+void i915_gem_unlock_atomic(struct drm_i915_private *i915, int taken)
+{
+    (void)i915;
+    (void)taken;
+}

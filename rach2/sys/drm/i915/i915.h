@@ -2068,7 +2068,10 @@ int32_t i915_gt_init(struct drm_i915_private *i915);
 void i915_gt_init_hw(struct drm_i915_private *i915);
 
 /** Stop every ring, unregister its interrupt, clear its GTT entries and
- * free its pages, then the PPGTT; for the unplug and a failed bind. */
+ * free its pages, then the PPGTT; for the unplug and a failed bind. Each
+ * ring's RING_HWSTAM is written all ones and read back before its status
+ * page goes, as Linux's cleanup_status_page, so that the chip writes no
+ * more into the page. Takes forcewake. */
 void i915_gt_fini(struct drm_i915_private *i915);
 
 /**
@@ -2284,8 +2287,17 @@ uint64_t i915_rc6_residency_ms(struct drm_i915_private *i915);
  */
 void i915_gt_pm_enable(struct drm_i915_private *i915);
 
-/** Turn RPS and RC6 off, for the unplug and a failed bind. */
+/** Turn RPS and RC6 off, for the release before its reset, the unplug
+ * and a failed bind. */
 void i915_gt_pm_disable(struct drm_i915_private *i915);
+
+/**
+ * Turn RPS and RC6 on again after `i915_gt_pm_disable` on a GT that stays
+ * bound, as a release whose reset failed does: both enabled, then the GT
+ * unparked when it is awake and parked when it is not, as each would have
+ * been. Under the GEM lock.
+ */
+void i915_gt_pm_restore(struct drm_i915_private *i915);
 
 /**
  * The GT takes work: RC6 under its timers and RPS active from the last

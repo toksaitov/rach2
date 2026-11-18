@@ -32,9 +32,11 @@
  * The release leaves nothing of the driver on the device, in the order of
  * Linux's i915_driver_remove: the display off by one commit
  * (drm_atomic_helper_shutdown), which takes the planes, pipes, ports,
- * clocks and the panel down as a mode set does; every ring stopped and the
- * GPU reset, as intel_engines_release does before the rings' pages go
- * back, so that the chip reads none of them again; then the device
+ * clocks and the panel down as a mode set does; RPS and RC6 off, as
+ * intel_gt_suspend_late turns them off before its reset; every ring
+ * stopped and the GPU reset, as intel_engines_release does before the
+ * rings' pages go back, so that the chip reads none of them again; then
+ * the device
  * unplugged from the DRM core, which fails what was queued, masks every
  * interrupt, gives the message and its vector back and frees the rings.
  * Bus mastering goes off and the kernel's claim on the function is given
@@ -284,9 +286,11 @@ static void backlight_stand_in(void)
 
 /**
  * Release the device `i915` so that another driver may have its function,
- * as the comment at the top says. May sleep, in the display's commit;
- * from there to the end it does not, so that nothing reaches the device
- * between the last look at it and its unplug.
+ * as the comment at the top says. May sleep, in the display's commit and
+ * for the GEM lock, which keeps a retire pass from parking the GT between
+ * the power management's end and the reset; from there to the end it does
+ * not, so that nothing reaches the device between the last look at it and
+ * its unplug.
  *
  * @return 0; the commit's error; -EBUSY while a program sleeps with a
  *         window of the aperture; -EIO or -ETIMEDOUT when the GPU did not
@@ -299,10 +303,12 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     pci_device_t pdev = i915->pci;
     char name[HANDOFF_NAME];
     int32_t err;
+    int taken;
 
     bdf_name(pdev.bus, devfn_of(&pdev), name);
     drm_dev_get(dev);
     err = aperture_held(i915) ? -EBUSY : drm_atomic_helper_shutdown(dev);
+    taken = i915_gem_lock(i915);
     if (err == 0 && dev->unplugged) {
         err = -ENODEV;
     }
@@ -310,9 +316,16 @@ static int32_t handoff_release(struct drm_i915_private *i915)
         err = -EBUSY;
     }
     if (err == 0) {
+        /* Linux's intel_gt_suspend_late: RPS and RC6 off before the last
+         * reset, so that no park after it sends the GT into RC6. */
+        i915_gt_pm_disable(i915);
         err = i915_gt_quiesce(i915);
+        if (err != 0) {
+            i915_gt_pm_restore(i915);
+        }
     }
     if (err != 0) {
+        i915_gem_unlock(i915, taken);
         klog(KLOG_ERR, "i915", "handoff: %s: not released: error %d", name, (int)err);
         if (!dev->unplugged) {
             drm_client_dev_hotplug(dev);
@@ -320,6 +333,7 @@ static int32_t handoff_release(struct drm_i915_private *i915)
         drm_dev_put(dev);
         return err;
     }
+    i915_gem_unlock_atomic(i915, taken);
     if (i915->display.dp.pps.ready && i915->display.dp.pps.power_cycle_ms > power_cycle_ms) {
         power_cycle_ms = i915->display.dp.pps.power_cycle_ms;
     }

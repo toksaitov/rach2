@@ -52,8 +52,9 @@
  * The rows: the bind as the firmware leaves the chip, with the driver
  * shown in /sys; the refusals of both files; a release refused while a
  * program holds a window of the aperture, which leaves the panel lit; the
- * release, with the display taken down in Linux's order, the GPU reset
- * before the rings' pages go back, every interrupt masked and the message
+ * release, with the display taken down in Linux's order, RC6 and RPS off
+ * and the GPU reset before the rings' pages go back, each ring's status
+ * page masked before its page goes, every interrupt masked and the message
  * off, bus mastering off, the function without an owner, the console told
  * that its screen has gone before it leaves the device, the backlight on a
  * stand-in, and a record that a program still holds reaching no register;
@@ -69,8 +70,9 @@
  * SETCRTC, with the panel powered, the link trained and frames counted;
  * the release, the bring-up and the mode set a second time, from a lit
  * panel that a master holds; and a GPU that will not reset, which refuses
- * the release and leaves the driver bound and the GPU wedged until it
- * does. The rows that expect no failure also find no wait at its bound.
+ * the release and leaves the driver bound, RC6 and RPS on again and the
+ * GPU wedged until it does. The rows that expect no failure also find no
+ * wait at its bound.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1163,15 +1165,19 @@ void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
     (void)file;
 }
 
+/* The rings' register bases, in the driver's order of its engines. */
+static const uint32_t ring_bases[] = {RENDER_RING_BASE, BLT_RING_BASE, GEN6_BSD_RING_BASE,
+                                      VEBOX_RING_BASE};
+
 /** The requests' unplug, the first thing the driver's unplug does: note
- * whether the chip still had a ring enabled then. */
+ * whether the chip still had a ring enabled then, and park the GT, as the
+ * driver's parks a GT that is awake, so that a park after the release's
+ * reset that would send the GT into RC6 shows. */
 void i915_requests_unplug(struct drm_i915_private *i915)
 {
-    static const uint32_t bases[] = {RENDER_RING_BASE, BLT_RING_BASE, GEN6_BSD_RING_BASE,
-                                     VEBOX_RING_BASE};
+    const uint32_t *bases = ring_bases;
     unsigned i;
 
-    (void)i915;
     request_unplugs++;
     rings_running_at_unplug = 0;
     for (i = 0; i < 4; i++) {
@@ -1179,6 +1185,7 @@ void i915_requests_unplug(struct drm_i915_private *i915)
             rings_running_at_unplug |= 1u << i;
         }
     }
+    i915_gt_park(i915);
 }
 
 /* The reset of a hung GPU, i915_reset.c's other half, which
@@ -1353,16 +1360,64 @@ static int first_access_seen;
 /* The writes a row asks about, each the count of accesses at its first
  * since `marks_clear`, 0 for none: the backlight's enable cleared, the
  * eDP transcoder disabled, DDI A's buffer disabled, the panel's power
- * taken, the GPU's reset, the message's master enable cleared. */
+ * taken, the GPU's reset, the message's master enable cleared; RC6 and
+ * RPS turned off, RC6 asked for after the reset; and of each ring, its
+ * status page's writes masked after the reset, and its status page's
+ * entry in the GTT written. */
 static struct {
     uint32_t blc_off, trans_off, ddi_off, panel_off, gdrst, master_off, panel_on;
+    uint32_t rc6_off, rps_off, rc6_late;
+    uint32_t hwstam[4], hws_gone[4];
     uint64_t panel_on_us;
 } mark;
+
+/* Each ring's status page's index in the GTT, which `marks_take` notes. */
+static uint32_t hws_entry[4];
 
 /** Forget the marks. */
 static void marks_clear(void)
 {
     k_memset(&mark, 0, sizeof(mark));
+}
+
+/** Forget the marks and note where each ring of `i915` has its status
+ * page, before a release. */
+static void marks_take(struct drm_i915_private *i915)
+{
+    int i;
+
+    marks_clear();
+    for (i = 0; i < 4; i++) {
+        hws_entry[i] = i915->gt.engine[i].hws_ggtt / I915_GTT_PAGE_SIZE;
+    }
+}
+
+/** Note the marks of the GT's writes `chip_write` passes on: RC6 and RPS
+ * turned off, RC6 asked for after the reset, and of each ring its status
+ * page's writes masked after the reset and its entry in the GTT. */
+static void note_gt_write(uint32_t reg, uint32_t value)
+{
+    int i;
+
+    if (reg == GEN6_RC_CONTROL && value == 0 && !mark.rc6_off) {
+        mark.rc6_off = accesses;
+    }
+    if ((reg == GEN6_RC_CONTROL || reg == GEN6_RC_STATE) && value != 0 && mark.gdrst &&
+        !mark.rc6_late) {
+        mark.rc6_late = accesses;
+    }
+    if (reg == GEN6_RP_CONTROL && value == 0 && !mark.rps_off) {
+        mark.rps_off = accesses;
+    }
+    for (i = 0; i < 4; i++) {
+        if (reg == RING_HWSTAM(ring_bases[i]) && value == 0xffffffffu && mark.gdrst &&
+            !mark.hwstam[i]) {
+            mark.hwstam[i] = accesses;
+        }
+        if (reg == I915_GSM_OFFSET + hws_entry[i] * 4u && !mark.hws_gone[i]) {
+            mark.hws_gone[i] = accesses;
+        }
+    }
 }
 
 /** Note the model's time of the first access after a reset. */
@@ -1416,6 +1471,7 @@ static void chip_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
             mark.master_off = accesses;
         }
     }
+    note_gt_write(reg, value);
     model_ops->write32(hw, reg, value);
 }
 
@@ -1857,6 +1913,22 @@ static int down_in_order(void)
            mark.ddi_off < mark.panel_off && mark.panel_off < mark.gdrst;
 }
 
+/** Whether the release since `marks_take` ended the GT's power management
+ * and its status pages in Linux's order: RC6 and RPS off before the reset,
+ * and RC6 not asked for after it; then each ring's status page's writes
+ * masked, the mask read back, before its entry in the GTT goes. */
+static int gt_down_in_order(void)
+{
+    int i, ok = mark.rc6_off && mark.rc6_off < mark.gdrst && mark.rps_off &&
+                mark.rps_off < mark.gdrst && !mark.rc6_late;
+
+    for (i = 0; i < 4; i++) {
+        ok &= mark.hwstam[i] && mark.hwstam[i] < mark.hws_gone[i] &&
+              reg(RING_HWSTAM(ring_bases[i])) == 0xffffffffu;
+    }
+    return ok;
+}
+
 /** Whether the function is as a release leaves it: the display off, the
  * rings stopped and empty, every interrupt masked with the message off and
  * its vector back, bus mastering off, no owner, and /sys without the
@@ -1900,11 +1972,14 @@ static void row_release(void)
     cycle_ms = i915->display.dp.pps.power_cycle_ms;
     drm_dev_get(held);
     console_clear();
-    marks_clear();
+    marks_take(i915);
     CHECK(driver_write("unbind", CHIP "\n") == 13, "release: unbind taken");
     CHECK(down_in_order(),
           "release: the backlight, the transcoder, the DDI and the panel's power off in that "
           "order, then the GPU reset");
+    CHECK(gt_down_in_order(),
+          "release: RC6 and RPS off before the GPU reset and RC6 not asked for after it, every "
+          "ring's status page writes masked before its page went");
     CHECK(request_unplugs == 1 && gem_unplugs == 1 &&
               i915_model_reset_state(&model)->resets[0] >= 1 && released(),
           "release: the display off, the rings reset before their pages went, interrupts and the "
@@ -2139,10 +2214,12 @@ static void row_release_lit(int k)
     int r = releases, unplugs = request_unplugs;
 
     console_clear();
-    marks_clear();
+    marks_take(bound());
     CHECK(driver_write("unbind", CHIP "\n") == 13, "release, lit: unbind taken");
     CHECK(down_in_order() && request_unplugs == unplugs + 1 && released(),
           "release, lit: the display down in order, the GPU reset, the function let go");
+    CHECK(gt_down_in_order(),
+          "release, lit: RC6 and RPS off before the GPU reset, every status page masked first");
     CHECK(strcmp(console_calls, "u") == 0 && bo_vma[k].pin_count == 0,
           "release, lit: the console told the device left, the master's scanout unpinned");
     CHECK(releases == r && held && cut_off(held),
@@ -2168,6 +2245,8 @@ static void row_stuck(int k)
     i915_model_reset_state(&model)->stuck = GEN6_GRDOM_FULL;
     CHECK(driver_write("unbind", CHIP "\n") == -ETIMEDOUT, "stuck: unbind: ETIMEDOUT");
     i915_model_reset_state(&model)->stuck = 0;
+    CHECK(i915 && i915->rc6.enabled && i915->rps.enabled,
+          "stuck: RC6 and RPS on again after the failed release");
     CHECK(bound() == i915 && sys_bound() && owner && msi_on() && vectors_live == 1 &&
               (command() & PCI_CMD_BUS_MASTER) && i915 && i915->gt.wedged && display_off() &&
               strcmp(console_calls, "h") == 0 && logged("handoff: " CHIP ": not released: error"),

@@ -167,6 +167,17 @@ void i915_gt_pm_disable(struct drm_i915_private *i915)
     i915_rc6_disable(i915);
 }
 
+void i915_gt_pm_restore(struct drm_i915_private *i915)
+{
+    i915_rps_enable(i915);
+    i915_rc6_enable(i915);
+    if (i915->gt.awake) {
+        i915_gt_unpark(i915);
+    } else {
+        i915_gt_park(i915);
+    }
+}
+
 void i915_gt_unpark(struct drm_i915_private *i915)
 {
     i915_rc6_unpark(i915);
