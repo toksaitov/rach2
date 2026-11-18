@@ -184,7 +184,7 @@ quiet()
 {
     [ -z "${3:-}" ] || kill -0 "$3" 2>/dev/null || return 1
     sleep 1
-    size=$(stat -c %s "$1" 2>/dev/null || echo 0):$([ -z "${3:-}" ] || busy "$3")
+    size=$(command stat -c %s "$1" 2>/dev/null || echo 0):$([ -z "${3:-}" ] || busy "$3")
     if [ "$size" = "$last" ]; then
         still=$((still + 1))
         [ "$still" -lt "$2" ] || return 1
@@ -211,7 +211,7 @@ until_line()
 refused()
 {
     [ "$loadscene" = glmark2 ] || { echo 0; return 0; }
-    to=$(stat -c %s "$loadout")
+    to=$(command stat -c %s "$loadout")
     tail -c "+$((at + 1))" "$loadout" | head -c "$((to - at))" |
         grep -m 100000 -c 'got error from kernel' || :
 }
@@ -784,10 +784,11 @@ desk_rows()
     fi
 
     # The VM's death under the load, with fences pending; the load must
-    # still run when the VM dies. udev's events for the cards are kept, the
-    # monitor listening before the death, for a death after which the
-    # session stays on the gone card; udevadm names its kernel source last,
-    # once it has subscribed to both.
+    # still run once the VM is stopped with its fences pending, just before
+    # the death, which with -g gpu.sh brings within a second. udev's events
+    # for the cards are kept, the monitor listening before the death, for a
+    # death after which the session stays on the gone card; udevadm names
+    # its kernel source last, once it has subscribed to both.
     dead=$(wc -c < "$services")
     udevadm monitor --kernel --udev --subsystem-match=drm > "$out/udev-death.txt" 2>&1 &
     umon=$!
@@ -796,7 +797,7 @@ desk_rows()
     { grep -q '^UDEV - ' "$out/udev-death.txt" && grep -q '^KERNEL - ' "$out/udev-death.txt" &&
         kill -0 "$umon" 2>/dev/null; } ||
         monitor="not listening: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
-    at=$(stat -c %s "$loadout")
+    at=$(command stat -c %s "$loadout")
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
@@ -816,10 +817,14 @@ desk_rows()
         quiet "$loadout" 300 "$load" || break
         [ "$(refused)" -lt 100000 ] || break
     done
-    kill -0 "$umon" 2>/dev/null || [ "$monitor" != listening ] ||
-        monitor="ended before the load: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
-    kill "$umon" 2>/dev/null
-    wait "$umon" 2>/dev/null
+    if kill "$umon" 2>/dev/null; then
+        wait "$umon" 2>/dev/null
+    else
+        ustatus=0
+        wait "$umon" 2>/dev/null || ustatus=$?
+        [ "$monitor" != listening ] ||
+            monitor="ended with status $ustatus before the row's end: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
+    fi
     umon=''
     if [ "$alive" = no ]; then
         ended="ended before the death"
@@ -849,7 +854,7 @@ desk_rows()
                 grep -v grep | sed 's/^/bed-shm: death: process: /'
         fi
     fi
-    [ "$monitor" = listening ] || echo "bed-shm: death: udev: monitor $monitor"
+    [ "$monitor" = listening ] || echo "bed-shm: death: udev monitor $monitor" >&2
     # What is left of the load's group, so that nothing of it draws on.
     end_group "$load"
     load=''
