@@ -6967,17 +6967,22 @@ static uint64_t past_block_image(const char *img, unsigned char *e, int n, int n
 }
 
 /** The rows of `kept_size_rows` for /g's block past its size
- * (`past_block_image`): a name of /dir/big.bin there, and an empty record
- * whose name length passes its record, must stop the check, since it reads
- * no entry there and e2fsck would; zeros throughout, as a stop leaves a new
- * block before its first record, are kept, for `e2fsck -fy`, since
- * `e2fsck -n` stops at the block it may not salvage. */
+ * (`past_block_image`): a name of /dir/big.bin there, an empty record
+ * whose name length passes its record, one that leaves four bytes of the
+ * block, and a zero header with a name after it, must stop the check,
+ * since it reads no entry there and e2fsck would; zeros throughout, as a
+ * stop leaves a new block before its first record, are kept, for
+ * `e2fsck -fy`, since `e2fsck -n` stops at the block it may not salvage. */
 static void past_entry_row(const char *img)
 {
     static unsigned char zero[4096];
     unsigned char e[12] = {0, 0, 0, 0, 0, 0x10, 1, 1, 'x', 0, 0, 0};
     unsigned char bad[20] = {0, 0, 0, 0, 12, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF4, 0x0F, 0, 0};
+    unsigned char tail[8] = {0, 0, 0, 0, 0xFC, 0x0F, 0, 0};
+    unsigned char later[24] = {0};
+    unsigned char back[4096];
     uint64_t bytes;
+    long blk;
 
     if ((bytes = past_block_image(img, e, 12, 1)) != 0) {
         fault_on(img, bytes, "an entry past a directory's size",
@@ -6988,18 +6993,35 @@ static void past_entry_row(const char *img)
                  "a directory's block past its size with a malformed empty record mounts "
                  "read-only");
     }
+    if ((bytes = past_block_image(img, tail, 8, 0)) != 0) {
+        fault_on(img, bytes, "an entry past a directory's size",
+                 "a directory's block past its size whose record leaves four bytes mounts "
+                 "read-only");
+    }
+    later[16] = 1;
+    later[20] = 0xE8;
+    later[21] = 0x0F;
+    later[22] = 1;
+    if ((bytes = past_block_image(img, later, 24, 0)) != 0) {
+        fault_on(img, bytes, "an entry past a directory's size",
+                 "a directory's block past its size of a zero header and a name after it mounts "
+                 "read-only");
+    }
     if ((bytes = past_block_image(img, zero, 4096, 0)) == 0) {
         return;
     }
+    blk = debugfs_number(img, "bmap /g 12", "");
     use_image(img, bytes);
     last_check[0] = 0;
     check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
               strstr(last_check, "check: 1 files with a size or i_blocks that does not match their "
                                  "blocks, kept for e2fsck") != 0,
           "a directory's zeroed block past its size is kept for e2fsck");
-    check(unmount_rw() == 0 && disk_state(img) == 2 &&
-              ext2_fixture_fsck(img, "-fy", fix_path("repair.out")) == 1 && e2fsck_clean(img),
-          "and its unmount leaves it to e2fsck -fy, which repairs the volume clean");
+    check(unmount_rw() == 0 && disk_state(img) == 2 && blk > 0 &&
+              host_read(img, back, 4096, blk * 4096) == 4096 && memcmp(back, zero, 4096) == 0,
+          "and its unmount leaves the block's zeros and the error bit");
+    check(ext2_fixture_fsck(img, "-fy", fix_path("repair.out")) == 1 && e2fsck_clean(img),
+          "and e2fsck -fy repairs the volume clean");
 }
 
 /**
