@@ -158,15 +158,19 @@ start_session()
 # seconds gets KILL. No wait blocks before that: the session's own cleanup
 # waits for Weston and PulseAudio, so a member that holds off TERM would hold
 # a wait for the leader too. The shell reaps the leader as it exits, so that
-# the group's end shows to kill -0; the wait then gives its status.
+# the group's end shows to kill -0; the wait then gives its status. The
+# leader is signalled by its pid as well as its group, since a stop that
+# comes just after start_session may find it before its setsid, with no
+# group yet, and a wait for it would then last as long as the session.
 stop_session()
 {
     local left=100
     [ -n "$session" ] || return 0
-    kill -TERM "-$session" 2>/dev/null || :
-    kill -CONT "-$session" 2>/dev/null || :
-    while kill -0 "-$session" 2>/dev/null; do
+    kill -TERM "-$session" 2>/dev/null || kill -TERM "$session" 2>/dev/null || :
+    kill -CONT "-$session" 2>/dev/null || kill -CONT "$session" 2>/dev/null || :
+    while kill -0 "$session" 2>/dev/null || kill -0 "-$session" 2>/dev/null; do
         if [ "$left" -eq 0 ]; then
+            kill -KILL "$session" 2>/dev/null || :
             kill -KILL "-$session" 2>/dev/null || :
         else
             left=$((left - 1))
