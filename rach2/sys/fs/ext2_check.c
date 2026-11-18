@@ -33,12 +33,14 @@
  * `e2fsck -p` sets it in its pass 4, unless it is 0 or its inode is an
  * orphan directory, whose count is judged once every orphan tree is walked:
  * an orphan directory no entry names that holds only `.` and `..`, which an
- * rmdir or a mkdir cut off on a mount that writes back leaves, has its
+ * rmdir or a mkdir cut off on a mount that writes back leaves, with holes
+ * where the free of its blocks was cut off too, has its
  * count set to 0, whatever it was, so that it is a removed inode e2fsck
  * clears, unless the `..` of a kept orphan directory names it, and any
  * other orphan directory keeps its count, which must match its
- * subdirectories. All are written only once the check ends without a fault.
- * Nothing else is repaired.
+ * subdirectories. All are written only once the check ends without a fault,
+ * and synced to the medium before the mount takes a write. Nothing else is
+ * repaired.
  * Lost blocks, orphans, regular files and directories whose size or `i_blocks`
  * disagrees with their pointers, which a stop leaves when the pointers reached
  * the disk before the inode, and shared attribute blocks whose reference count
@@ -54,12 +56,13 @@
  * range, an inode neither a regular file nor a directory whose pointers do not
  * match its size or its `i_blocks`, an attribute block of the wrong form or
  * named by more inodes than its count, a directory with two parents or without
- * its parent, a kept orphan directory whose `..` names anything but the root or
- * a directory of an orphan tree, or whose link count does not match its
- * subdirectories, an empty one whose `..` names no inode a volume can have, an
- * entry of the wrong form or naming a reserved inode, a link count of 0 that an
- * entry names, a block of the volume's tables or a reached
- * inode the bitmap calls free. So does one of
+ * its parent, a hole in a directory but an empty orphan one, an entry naming an
+ * inode in a directory's block past its size, a kept orphan directory whose
+ * `..` names anything but the root or a directory of an orphan tree, or whose
+ * link count does not match its subdirectories, an empty one whose `..` names
+ * no inode a volume can have, an entry of the wrong form or naming a reserved
+ * inode, a link count of 0 that an entry names, a block of the volume's tables
+ * or a reached inode the bitmap calls free. So does one of
  * the check's own limits, below. A check that stops has not compared the
  * bitmaps with the blocks files name, and the faults it stops at are the
  * ones under which a free could take a block or an inode something else
@@ -129,8 +132,9 @@ struct ext2_check {
     struct ext2_fix *fix, **fix_tail;
     uint64_t at;
     uint32_t root;
-    int keep; /* the inode being marked keeps a mismatch for e2fsck */
-    int past; /* and `check_level` met a pointer block past its size */
+    int keep;      /* the inode being marked keeps a mismatch for e2fsck */
+    int past;      /* and `check_level` met a pointer block past its size */
+    uint32_t last; /* the highest data index `check_blocks` found named */
     int link_nomem;
     struct ext2_link *link[EXT2_CHECK_LINK_BUCKETS];
     struct ext2_attr attr[EXT2_CHECK_ATTRS];
@@ -441,6 +445,7 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
         }
         named = 1;
     }
+    c->last = last;
     return check_size(c, n, n->blocks != count * (em->block_size / 512) + attr,
                       named && last >= limit);
 }
@@ -708,6 +713,9 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_
             if (!link || !link->orphan || ino == c->root || link->parent != dir) {
                 return check_fault(c, ino, "a directory with two parents");
             }
+            if (link->holes) {
+                return check_fault(c, ino, "a hole in a directory");
+            }
             check_adopt(c, link);
             (*subdirs)++;
             if (link->expect != 2 + link->subdirs) {
@@ -782,16 +790,16 @@ static int check_dots(struct ext2_check *c, uint32_t ino, uint32_t parent, uint3
  * Judge the link count of directory `n`, whose parent is `parent`, against
  * two plus its `subdirs` subdirectories: a count that differs is set to that
  * (`check_count_add`). A `parent` of 0 is an orphan directory's, walked as
- * no entry's: its subdirectories and whether it holds anything but `.` and
+ * no entry's: its subdirectories, whether it holds anything but `.` and
  * `..` once the check's repairs are made, `others` being the entries it
- * keeps, go in its record, and its count is judged once every orphan tree
- * is walked, by `check_child` when an entry of another names it and by
- * `check_orphan_parents` otherwise, so that the order of the walk changes
- * nothing. 0, or -EIO with the fault or the check's limit recorded or for a
- * failed read.
+ * keeps, and whether it has `holes` go in its record, and its count is
+ * judged once every orphan tree is walked, by `check_child` when an entry
+ * of another names it and by `check_orphan_parents` otherwise, so that the
+ * order of the walk changes nothing. 0, or -EIO with the fault or the
+ * check's limit recorded or for a failed read.
  */
 static int check_dir_count(struct ext2_check *c, const struct ext2_node *n, uint32_t parent,
-                           uint32_t subdirs, uint32_t others)
+                           uint32_t subdirs, uint32_t others, uint32_t holes)
 {
     struct ext2_link *link;
 
@@ -802,23 +810,63 @@ static int check_dir_count(struct ext2_check *c, const struct ext2_node *n, uint
     if (link) {
         link->subdirs = subdirs;
         link->empty = others == 0;
+        link->holes = holes != 0;
+    }
+    return 0;
+}
+
+/**
+ * Require the blocks directory `n` names past its size, from index `from`
+ * to the highest it names, which a stop leaves when a growth's pointer
+ * reached the disk before the inode, to hold no entry: a block whose
+ * entries are all of inode 0, as a growth writes it first, is kept for
+ * e2fsck with the directory (`check_blocks`), while one naming an inode, or
+ * not of the form of entries, is a fault, since the walk reads no entry
+ * past the size and counts no name there, and e2fsck, which takes the size
+ * up to the blocks, would read it. 0, or -EIO with the fault recorded or
+ * for a failed read.
+ */
+static int check_past(struct ext2_check *c, const struct ext2_node *n, uint32_t from)
+{
+    struct ext2_mount *em = c->em;
+    uint32_t last = c->last, i, b, off, rec;
+    uint8_t raw[8];
+    int rc;
+
+    for (i = from; i <= last && last >= from; i++) {
+        rc = ext2_block_at(em, n, i, &b);
+        for (off = 0; rc == 0 && b != 0 && off < em->block_size; off += rec) {
+            rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)b * em->block_size + off, raw, 8);
+            rec = ext2_le16(raw + 4);
+            if (rc == 0 &&
+                (rec < 8 || (rec & 3) != 0 || off + rec > em->block_size || ext2_le32(raw) != 0)) {
+                return check_fault(c, n->ino, "an entry past a directory's size");
+            }
+        }
+        if (rc != 0) {
+            return rc;
+        }
     }
     return 0;
 }
 
 /**
  * Walk directory `ino`, loaded at `c->node[depth]`, whose parent is
- * `parent`: its blocks, every entry's form, `.` and `..` in their places,
- * each other entry's inode, and its link count against two plus its
- * subdirectories (`check_dir_count`). A `parent` of 0 is an orphan
- * directory's, whose `..` is kept in its record and judged later
- * (`check_dots`). 0, or -EIO with the fault recorded or for a failed read.
+ * `parent`: its blocks, those past its size empty (`check_past`), every
+ * entry's form, `.` and `..` in their places, each other entry's inode, and
+ * its link count against two plus its subdirectories (`check_dir_count`).
+ * A `parent` of 0 is an orphan directory's, whose `..` is kept in its
+ * record and judged later (`check_dots`), and whose holes, which a stop in
+ * the free of a removed directory's blocks leaves before its count of 0
+ * reached the disk, are counted for `check_orphan_parent`; any other
+ * directory's hole is a fault. 0, or -EIO with the fault recorded or for a
+ * failed read.
  */
 static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int depth)
 {
     struct ext2_mount *em = c->em;
     const struct ext2_node *n = &c->node[depth];
-    uint32_t nblocks, i, subdirs = 0, entry = 0, others = 0;
+    uint32_t nblocks, i, subdirs = 0, entry = 0, others = 0, holes = 0;
     int rc;
 
     rc = check_blocks(c, n, 0);
@@ -829,6 +877,10 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
         return check_fault(c, ino, "a directory size that is not whole blocks");
     }
     nblocks = (uint32_t)(n->size >> em->block_shift);
+    rc = check_past(c, n, nblocks);
+    if (rc != 0) {
+        return rc;
+    }
     for (i = 0; i < nblocks; i++) {
         uint32_t b, off = 0;
 
@@ -836,10 +888,11 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
         if (rc != 0) {
             return rc;
         }
-        if (b == 0) {
+        if (b == 0 && parent != 0) {
             return check_fault(c, ino, "a hole in a directory");
         }
-        while (off < em->block_size) {
+        holes += b == 0;
+        while (b != 0 && off < em->block_size) {
             uint8_t raw[10];
             uint64_t at = (uint64_t)b * em->block_size + off;
             uint32_t eino, rec, nlen;
@@ -880,7 +933,7 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
     if (entry < 2) {
         return check_fault(c, ino, "a directory without . and ..");
     }
-    return check_dir_count(c, n, parent, subdirs, others);
+    return check_dir_count(c, n, parent, subdirs, others, holes);
 }
 
 /**
@@ -1096,6 +1149,8 @@ static int check_orphan_parent(struct ext2_check *c, const struct ext2_link *lin
             (link->parent >= em->first_ino && link->parent <= em->inodes)) {
             return check_count_add(c, link->ino, link->expect, 0);
         }
+    } else if (link->holes) {
+        return check_fault(c, link->ino, "a hole in a directory");
     } else if (link->expect != 2 + link->subdirs) {
         return check_fault(c, link->ino, "a directory link count that does not match its entries");
     } else if (link->parent == EXT2_ROOT_INO) {
@@ -1534,7 +1589,8 @@ static int check_volume(struct ext2_mount *em)
     }
     check_report(c);
     check_state_free(c);
-    return ext2_sb_store(em);
+    rc = ext2_sb_store(em);
+    return rc != 0 ? rc : bcache_sync(em->dev);
 }
 
 /**

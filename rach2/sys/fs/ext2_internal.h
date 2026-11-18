@@ -596,6 +596,7 @@ struct ext2_link {
     uint8_t bit;      /* the inode bitmap calls it free, so the check sets its bit */
     uint8_t empty;    /* the orphan directory, walked as no entry's, has only . and .. */
     uint8_t kept;     /* and a kept orphan directory's .. names it, so its count stays */
+    uint8_t holes;    /* the orphan directory, walked as no entry's, has a hole */
 };
 
 /* Set field `f` of node `n` to `v` and mark the node (`ext2_node_dirty`) in
