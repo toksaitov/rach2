@@ -7006,11 +7006,12 @@ static void tail_end_row(const char *img, int past)
 }
 
 /** The rows of `kept_size_rows` for /g's block past its size
- * (`past_block_image`): a name of /dir/big.bin there, an empty record
- * whose name length passes its record, and a zero header with a name of
- * /dir/big.bin after its first 64 bytes must stop the check,
- * since it reads no entry there and e2fsck would; zeros throughout, as a
- * stop leaves a new block before its first record, are kept, for
+ * (`past_block_image`): a name of /dir/big.bin there and an empty record
+ * whose name length passes its record must stop the check, since it reads
+ * no entry there and e2fsck would; a zero header with a name of
+ * /dir/big.bin after the block's first 64 bytes must stop it too, since it
+ * keeps a zero header only in a block of zeros throughout; such a block, as
+ * a stop leaves a new block before its first record, is kept, for
  * `e2fsck -fy`, since `e2fsck -n` stops at the block it may not salvage. */
 static void past_entry_row(const char *img)
 {
