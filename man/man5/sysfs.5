@@ -241,8 +241,8 @@ or
 A function's name written to
 .Pa unbind
 releases the device for another driver, vfio-pci above all: its display
-goes off, the GPU is reset, its interrupts and bus mastering go off, and
-programs that have the card open get
+goes off, the GPU is reset, its interrupts and bus mastering go off, the
+function is reset, and programs that have the card open get
 .Er ENODEV
 from it, as after an unplug.
 The write is

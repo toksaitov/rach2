@@ -39,10 +39,13 @@
  * back, so that the chip reads none of them again; then the device
  * unplugged from the DRM core, which fails what was queued, masks every
  * interrupt, gives the message and its vector back and frees the rings.
- * Bus mastering goes off and the kernel's claim on the function is given
- * up, which is what vfio-pci's bind waits for. Programs that still hold
- * the card keep a record that reaches no hardware: its registers read all
- * ones and take no write (`i915_pci_unmap`).
+ * Bus mastering goes off and the function is reset, as the bring-up resets
+ * it, since the GPU goes on reaching memory until a reset stops it, and
+ * its pages, the GTT's scratch page among them, go back with the last
+ * reference. Last, the kernel's claim on the function is given up, which
+ * is what vfio-pci's bind waits for. Programs that still hold the card
+ * keep a record that reaches no hardware: its registers read all ones and
+ * take no write (`i915_pci_unmap`).
  *
  * Two things outside the driver drew through the device and stop with it.
  * The console may still be on the loader's framebuffer, which the Lenovo's
@@ -300,11 +303,39 @@ static void handoff_pm_restore(struct drm_i915_private *i915)
 }
 
 /**
+ * Reset the released function `pdev`, named `name`, with bus mastering
+ * off and the kernel's claim still held, as the bring-up does: the GPU
+ * goes on reaching memory after the release until a reset stops it, and
+ * its pages, the GTT's scratch page among them, go back at the last
+ * reference. Linux keeps an unopened vfio-pci device quiet in D3hot; this
+ * gives the same from the release on. The fake chip has no state to reset.
+ * May sleep.
+ *
+ * @return 1 when the function was reset; 0 for the fake chip, or with the
+ *         failure logged, for a function with no reset or one that failed.
+ */
+static int handoff_release_reset(const pci_device_t *pdev, const char *name)
+{
+    int32_t err;
+
+    if (pdev->vendor_id != PCI_VENDOR_INTEL || !i915_id_lookup(pdev->device_id)) {
+        return 0;
+    }
+    err = pci_reset_function(pdev, handoff_msleep);
+    if (err != 0) {
+        klog(KLOG_WARN, "i915", "handoff: %s: not reset at the release: error %d", name, (int)err);
+        return 0;
+    }
+    return 1;
+}
+
+/**
  * Release the device `i915` so that another driver may have its function,
  * as the comment at the top says. May sleep, for the GEM lock under which
- * RPS and RC6 go off and in the display's commit; from the commit's end to
- * the unplug it does not, so that no master's commit comes between the
- * last look at the device and its unplug.
+ * RPS and RC6 go off, in the display's commit and in the function's reset
+ * after the unplug; from the commit's end to the unplug it does not, so
+ * that no master's commit comes between the last look at the device and
+ * its unplug.
  *
  * @return 0; the commit's error; -EBUSY while a program sleeps with a
  *         window of the aperture; -EIO or -ETIMEDOUT when the GPU did not
@@ -317,7 +348,7 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     pci_device_t pdev = i915->pci;
     char name[HANDOFF_NAME];
     int32_t err;
-    int taken, pm_off = 0;
+    int taken, pm_off = 0, reset;
 
     bdf_name(pdev.bus, devfn_of(&pdev), name);
     drm_dev_get(dev);
@@ -369,6 +400,7 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     i915->gem.aperture.size = 0;
     i915_pci_unmap(&i915->hw);
     pci_disable_bus_master(&pdev);
+    reset = handoff_release_reset(&pdev, name);
     pci_unclaim(pdev.bus, devfn_of(&pdev), PCI_OWNER_KERNEL);
     if (pdev.vendor_id == PCI_VENDOR_INTEL && pdev.bus == 0 && pdev.device == 2 &&
         pdev.function == 0) {
@@ -376,8 +408,8 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     }
     klog(KLOG_INFO, "i915",
          "handoff: %s: released: the display off, the GPU reset, interrupts and bus mastering "
-         "off",
-         name);
+         "off%s",
+         name, reset ? ", the function reset" : "");
     drm_dev_put(dev);
     return 0;
 }

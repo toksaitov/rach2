@@ -171,6 +171,20 @@ static int logged(const char *text)
     return strstr(log_text, text) != 0;
 }
 
+/** Whether the newest handoff line of the chip is `text`, as
+ * tests/assign/gpu.sh reads the driver's verdict from it. */
+static int newest_handoff(const char *text)
+{
+    const char *at = 0, *p = log_text;
+    size_t n = strlen(text);
+
+    while ((p = strstr(p, "handoff: " CHIP ": ")) != 0) {
+        at = p;
+        p++;
+    }
+    return at && strncmp(at, text, n) == 0 && at[n] == '\n';
+}
+
 /** Whether the log holds a wait of the driver that reached its bound. */
 static int timed_out(void)
 {
@@ -377,6 +391,26 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
 #define TEST_SCRATCH 0x7f000000u
 static uint32_t scratch_page[1024];
 
+/* The release's steps outside the chip's registers, each the count of
+ * `pci_steps` at its first since `marks_clear`, 0 for none: bus mastering
+ * turned off, the function reset, the kernel's claim given up and the
+ * scratch page's frame freed. `reset_owned` is set when the reset ran
+ * while the kernel still had the function. */
+static uint32_t pci_steps;
+static struct {
+    uint32_t bm_off, fn_reset, unclaimed, scratch_freed;
+    int reset_owned;
+} pci_mark;
+
+/** Note the step `*at`, the first of its kind since the marks were last
+ * cleared. */
+static void pci_note(uint32_t *at)
+{
+    if (!*at) {
+        *at = ++pci_steps;
+    }
+}
+
 uintptr_t alloc_frame(void)
 {
     return TEST_SCRATCH;
@@ -384,7 +418,9 @@ uintptr_t alloc_frame(void)
 
 void free_frame(uintptr_t phys)
 {
-    (void)phys;
+    if (phys == TEST_SCRATCH) {
+        pci_note(&pci_mark.scratch_freed);
+    }
 }
 
 int paging_zero_frame(uintptr_t phys)
@@ -518,6 +554,7 @@ void pci_enable_memory_space(pci_device_t *dev)
 
 void pci_disable_bus_master(pci_device_t *dev)
 {
+    pci_note(&pci_mark.bm_off);
     pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND,
                        (uint16_t)(command() & ~PCI_CMD_BUS_MASTER));
 }
@@ -537,6 +574,7 @@ int pci_claim(uint8_t b, uint8_t devfn, const char *who)
 void pci_unclaim(uint8_t b, uint8_t devfn, const char *who)
 {
     if (is_chip(b, (uint8_t)(devfn >> 3), devfn & 7u) && owner && strcmp(owner, who) == 0) {
+        pci_note(&pci_mark.unclaimed);
         owner = 0;
     }
 }
@@ -626,6 +664,10 @@ int pci_reset_function(const pci_device_t *dev, pci_sleep_t msleep)
     if (reset_error) {
         return reset_error;
     }
+    if (!pci_mark.fn_reset) {
+        pci_mark.reset_owned = owner && strcmp(owner, PCI_OWNER_KERNEL) == 0;
+    }
+    pci_note(&pci_mark.fn_reset);
     model_function_reset();
     msleep(100);
     return 0;
@@ -1395,6 +1437,7 @@ static uint32_t hws_entry[4];
 static void marks_clear(void)
 {
     k_memset(&mark, 0, sizeof(mark));
+    k_memset(&pci_mark, 0, sizeof(pci_mark));
 }
 
 /* compat/i915_gem_lock_host.c's hook at each take of the GEM lock. */
@@ -1953,6 +1996,8 @@ static void row_held(void)
           "held: the driver bound, the panel lit, the GPU not reset, the console told");
     CHECK(!mark.rc6_off && !mark.rps_off && i915->rc6.enabled && i915->rps.enabled,
           "held: RC6 and RPS left on");
+    CHECK(resets == 0 && !pci_mark.bm_off && owner,
+          "held: bus mastering on, the function not reset");
 }
 
 static uint32_t cycle_ms; /* the panel's power cycle, as the driver had it */
@@ -1984,6 +2029,23 @@ static int gt_down_in_order(void)
     }
     return ok;
 }
+
+/** Whether the release since `marks_take` reset the function after bus
+ * mastering went off and before the kernel gave up its claim, while the
+ * scratch page was still the GPU's; `freed` asks also that the scratch
+ * page has since been freed, which it is with the record's last
+ * reference. */
+static int reset_in_order(int freed)
+{
+    return pci_mark.bm_off && pci_mark.bm_off < pci_mark.fn_reset && pci_mark.reset_owned &&
+           pci_mark.fn_reset < pci_mark.unclaimed &&
+           (freed ? pci_mark.fn_reset < pci_mark.scratch_freed : !pci_mark.scratch_freed);
+}
+
+/* The release's line when the function was reset. */
+#define RELEASED_RESET                                                                           \
+    "handoff: " CHIP ": released: the display off, the GPU reset, interrupts and bus mastering " \
+    "off, the function reset"
 
 /** Whether the function is as a release leaves it: the display off, the
  * rings stopped and empty, every interrupt masked with the message off and
@@ -2023,7 +2085,7 @@ static void row_release(void)
     struct drm_i915_private *i915 = bound();
     struct drm_device *held = card();
     uint32_t n;
-    int sets;
+    int sets, before = resets;
 
     cycle_ms = i915->display.dp.pps.power_cycle_ms;
     drm_dev_get(held);
@@ -2043,8 +2105,12 @@ static void row_release(void)
           "message off, bus mastering off, no owner, /sys without the driver on the function");
     CHECK(strcmp(console_calls, "gu") == 0,
           "release: the console told its screen has gone, then that the device left");
-    CHECK(logged("handoff: " CHIP ": released") && cycle_ms >= 500,
-          "release: logged, the panel's power cycle of half a second or more remembered");
+    CHECK(resets == before + 1 && reset_in_order(0),
+          "release: the function reset once, after bus mastering went off and before the claim "
+          "was given up, the scratch page still held");
+    CHECK(newest_handoff(RELEASED_RESET) && cycle_ms >= 500,
+          "release: logged with the function's reset, the panel's power cycle of half a second "
+          "or more remembered");
     sets = boot_sets;
     n = accesses;
     CHECK(boot_has && bl_show(BACKLIGHT_LEVELS) == 937 &&
@@ -2054,7 +2120,9 @@ static void row_release(void)
     CHECK(releases == 0 && cut_off(held),
           "release: the record a program holds reaches no register");
     drm_dev_put(held);
-    CHECK(releases == 1 && pages_live == 0, "release: the record and every page freed at its end");
+    CHECK(releases == 1 && pages_live == 0 && reset_in_order(1),
+          "release: the record and every page freed at its end, the scratch page after the "
+          "function's reset");
     CHECK(!timed_out(), "release: no wait at its bound");
 }
 
@@ -2063,6 +2131,7 @@ static void row_release(void)
 static void row_other_owner(void)
 {
     uint32_t n = accesses;
+    int before = resets;
 
     owner = "vfio-pci";
     CHECK(driver_write("bind", CHIP "\n") == -EBUSY, "owner: bind while vfio-pci has it: EBUSY");
@@ -2073,7 +2142,7 @@ static void row_other_owner(void)
     CHECK(driver_write("bind", CHIP "\n") == -ENODEV,
           "owner: bind while driver_override names vfio-pci: ENODEV");
     override = "";
-    CHECK(resets == 0 && accesses == n && probe_maps == 0 && owner == NULL && !sys_bound(),
+    CHECK(resets == before && accesses == n && probe_maps == 0 && owner == NULL && !sys_bound(),
           "owner: no reset, no access, nothing bound");
 }
 
@@ -2120,13 +2189,14 @@ static void row_guest(void)
 static void row_reset_fails(void)
 {
     uint32_t n = accesses;
+    int before = resets;
 
     log_text[0] = 0;
     reset_error = -ETIMEDOUT;
     CHECK(driver_write("bind", CHIP "\n") == -ETIMEDOUT, "reset fails: bind: the reset's error");
     reset_error = 0;
-    CHECK(resets == 1 && accesses == n && probe_maps == 0 && owner == NULL && !sys_bound() &&
-              bound() == NULL && (reg(DEIER) & DE_MASTER_IRQ_CONTROL) &&
+    CHECK(resets == before + 1 && accesses == n && probe_maps == 0 && owner == NULL &&
+              !sys_bound() && bound() == NULL && (reg(DEIER) & DE_MASTER_IRQ_CONTROL) &&
               logged("handoff: " CHIP ": not reset: error"),
           "reset fails: no access, no owner, nothing bound, logged");
 }
@@ -2136,12 +2206,12 @@ static void row_reset_fails(void)
  * without an owner, for the next bind to take. */
 static void row_bind_fails(void)
 {
-    int r = releases;
+    int r = releases, before = resets;
 
     log_text[0] = 0;
     register_error = -ENOSPC;
     CHECK(driver_write("bind", CHIP "\n") == -ENOSPC, "bind fails: bind: the registration's error");
-    CHECK(resets == 2 && owner == NULL && !(command() & PCI_CMD_BUS_MASTER) && !msi_on() &&
+    CHECK(resets == before + 1 && owner == NULL && !(command() & PCI_CMD_BUS_MASTER) && !msi_on() &&
               vectors_live == 0 && interrupts_off() && !sys_bound() && bound() == NULL &&
               releases == r + 1 && pages_live == 0 && logged("handoff: " CHIP ": not bound: error"),
           "bind fails: no owner, bus mastering, the message and interrupts off, the record freed");
@@ -2153,14 +2223,14 @@ static void row_bind_fails(void)
  * fails. */
 static void row_link_fails(void)
 {
-    int r = releases, tried = registrations, binds = bind_events;
+    int r = releases, tried = registrations, binds = bind_events, before = resets;
 
     log_text[0] = 0;
     link_error = -ENOMEM;
     CHECK(driver_write("bind", CHIP "\n") == -ENOMEM, "link fails: bind: the binding's error");
     CHECK(link_error == 0 && registrations == tried && card() == NULL && bind_events == binds,
           "link fails: no card registered and no bind uevent");
-    CHECK(resets == 3 && owner == NULL && !(command() & PCI_CMD_BUS_MASTER) && !msi_on() &&
+    CHECK(resets == before + 1 && owner == NULL && !(command() & PCI_CMD_BUS_MASTER) && !msi_on() &&
               vectors_live == 0 && interrupts_off() && !sys_bound() && bound() == NULL &&
               releases == r + 1 && pages_live == 0 &&
               logged("handoff: refused: driver link not added: error"),
@@ -2177,7 +2247,7 @@ static void row_link_fails(void)
 static void row_bring_up(const char *name)
 {
     struct drm_i915_private *i915;
-    int before = resets, maps = probe_maps;
+    int before = resets, bad = reset_owner_bad, maps = probe_maps;
     uint32_t i, left = 0;
 
     log_text[0] = 0;
@@ -2189,7 +2259,7 @@ static void row_bring_up(const char *name)
     if (!i915) {
         return;
     }
-    CHECK(resets == before + 1 && reset_owner_bad == 0 && probe_maps == maps + 1,
+    CHECK(resets == before + 1 && reset_owner_bad == bad && probe_maps == maps + 1,
           "bring-up: the function reset once, while it had no owner, and mapped once");
     CHECK(first_access_seen && first_access_us >= reset_at_us + (100u + cycle_ms) * 1000u,
           "bring-up: no access until the reset's 100 ms and the panel's power cycle had passed");
@@ -2268,7 +2338,7 @@ static void row_mode_set(int k)
 static void row_release_lit(int k)
 {
     struct drm_device *held = fa_dev;
-    int r = releases, unplugs = request_unplugs;
+    int r = releases, unplugs = request_unplugs, before = resets;
 
     console_clear();
     marks_take(bound());
@@ -2278,13 +2348,17 @@ static void row_release_lit(int k)
     CHECK(gt_down_in_order(),
           "release, lit: RC6 and RPS off before the commit, no sleep from the commit to the "
           "unplug, every status page masked first");
+    CHECK(resets == before + 1 && reset_in_order(0) && newest_handoff(RELEASED_RESET),
+          "release, lit: the function reset between bus mastering off and the claim given up, "
+          "logged");
     CHECK(strcmp(console_calls, "u") == 0 && bo_vma[k].pin_count == 0,
           "release, lit: the console told the device left, the master's scanout unpinned");
     CHECK(releases == r && held && cut_off(held),
           "release, lit: the master's record reaches no register");
     master_close();
-    CHECK(releases == r + 1 && pages_live == 0,
-          "release, lit: the record and every page freed when the master closed");
+    CHECK(releases == r + 1 && pages_live == 0 && reset_in_order(1),
+          "release, lit: the record and every page freed when the master closed, the scratch "
+          "page after the function's reset");
     CHECK(!timed_out(), "release, lit: no wait at its bound");
 }
 
@@ -2296,6 +2370,7 @@ static void row_release_lit(int k)
 static void row_held_late(void)
 {
     struct drm_i915_private *i915 = bound();
+    int before = resets;
 
     if (!i915) {
         return;
@@ -2313,6 +2388,8 @@ static void row_held_late(void)
     CHECK(bound() == i915 && sys_bound() && display_off() && strcmp(console_calls, "h") == 0 &&
               logged("handoff: " CHIP ": not released: error"),
           "held late: the driver bound, the display off, the console told");
+    CHECK(resets == before && !pci_mark.bm_off && owner,
+          "held late: bus mastering on, the function not reset");
 }
 
 /**
@@ -2323,6 +2400,7 @@ static void row_held_late(void)
 static void row_stuck(void)
 {
     struct drm_i915_private *i915 = bound();
+    int before = resets;
 
     console_clear();
     i915_model_reset_state(&model)->stuck = GEN6_GRDOM_FULL;
@@ -2334,19 +2412,22 @@ static void row_stuck(void)
               (command() & PCI_CMD_BUS_MASTER) && i915 && i915->gt.wedged && display_off() &&
               strcmp(console_calls, "h") == 0 && logged("handoff: " CHIP ": not released: error"),
           "stuck: the driver bound, the GPU wedged, the display off, the console told");
+    CHECK(resets == before, "stuck: the function not reset");
 }
 
 /**
  * The release once the GPU resets again, with the render ring's RING_HWSTAM
- * keeping its old mask: released, that ring's status page kept with its
- * entry in the GTT and its frame, the other rings' pages gone, and the
- * master's record cut off and freed when it closes the card.
+ * keeping its old mask and the function's reset failing: released, that
+ * ring's status page kept with its entry in the GTT and its frame, the
+ * other rings' pages gone, the failed reset logged before the release's
+ * line, which leaves the reset out, and the master's record cut off and
+ * freed when it closes the card.
  */
 static void row_kept(int k)
 {
     struct drm_i915_private *i915 = bound();
     struct drm_device *held = fa_dev;
-    int r = releases;
+    int r = releases, before = resets;
     uint32_t *kept;
 
     if (!i915) {
@@ -2357,9 +2438,18 @@ static void row_kept(int k)
     marks_take(i915);
     kept = i915->gt.engine[0].hws;
     hwstam_stuck = 0;
+    reset_error = -ETIMEDOUT;
     CHECK(driver_write("unbind", CHIP "\n") == 13 && released() && strcmp(console_calls, "u") == 0,
           "kept: released once the GPU resets");
     hwstam_stuck = -1;
+    reset_error = 0;
+    CHECK(resets == before + 1 && !pci_mark.fn_reset && pci_mark.bm_off &&
+              pci_mark.bm_off < pci_mark.unclaimed &&
+              logged("handoff: " CHIP ": not reset at the release: error -") &&
+              newest_handoff("handoff: " CHIP
+                             ": released: the display off, the GPU reset, interrupts and bus "
+                             "mastering off"),
+          "kept: the function's failed reset logged, then the release's line without it");
     CHECK(logged("rings: rcs0: status page kept at 0x") && logged(": its writes not masked") &&
               !mark.hws_gone[0] && mark.hws_gone[1] && mark.hws_gone[2] && mark.hws_gone[3],
           "kept: rcs0's status page, whose mask did not hold, kept with its GTT entry, the "
