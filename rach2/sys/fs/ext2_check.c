@@ -270,8 +270,9 @@ static int check_past(struct ext2_check *c, uint32_t ino, uint32_t b)
         if (off == 0 && rec == 0 && ext2_le32(raw) == 0) {
             break;
         }
-        if (rec < 8 || (rec & 3) != 0 || off + rec > em->block_size || raw[6] + 8u > rec ||
-            ext2_le32(raw) != 0) {
+        if (rec < 8 || (rec & 3) != 0 ||
+            off + rec + 8 > em->block_size + (off + rec == em->block_size ? 8 : 0) ||
+            raw[6] + 8u > rec || ext2_le32(raw) != 0) {
             return check_fault(c, ino, "an entry past a directory's size");
         }
     }
@@ -927,7 +928,9 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
             eino = ext2_le32(raw);
             rec = ext2_le16(raw + 4);
             nlen = raw[6];
-            if (rec < 8 || (rec & 3) != 0 || off + rec > em->block_size || nlen + 8 > rec) {
+            /* a record ends the block or leaves room for the next header */
+            if (rec < 8 || (rec & 3) != 0 || nlen + 8 > rec ||
+                off + rec + 8 > em->block_size + (off + rec == em->block_size ? 8 : 0)) {
                 return check_fault(c, ino, "an entry of the wrong form");
             }
             if (entry < 2) {
