@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.ext2stop",
-  "summary": "An ext2 volume stopped under writes, judged by Rach2's next writable mount and its check first, then the host's e2fsck -fn and the sentinel files, against the same volume powered off in order; the program is tests/cases/machine/ext2stop_scenario.c",
+  "summary": "An ext2 volume stopped under writes, judged by Rach2's next writable mount and its check first, then the host's e2fsck -fn and the sentinel files, against the same volume powered off in order, and one stopped at the end of an rm -rf of a tree, judged by the next mount's check and e2fsck; the program is tests/cases/machine/ext2stop_scenario.c",
   "cases": [
     {
       "case_id": "machine.ext2stop.writes",
@@ -428,6 +428,315 @@
         "plan": "none",
         "class": "disk",
         "reason": "the case stops a machine under writes to a disk of its own and checks the disk on the host after, which the installed machine's disk cannot be"
+      }
+    },
+    {
+      "case_id": "machine.ext2stop.rmtree",
+      "behavior": "An ext2 volume that QEMU's quit stops at the end of an rm -rf of a synced tree of 31 directories and 54 files, with the flusher's turns off, so that every removed entry is on the disk and no removed directory's count of 0 is, mounts writable at the next boot, its check setting the count of each removed directory it finds to 0 and keeping them with the files for e2fsck, the tree gone; and e2fsck -fy leaves a volume e2fsck -fn calls clean",
+      "units": [
+        "ext2",
+        "rach2/sys/fs/ext2.c",
+        "rach2/sys/fs/ext2_alloc.c",
+        "rach2/sys/fs/ext2_batch.c",
+        "rach2/sys/fs/ext2_check.c",
+        "rach2/sys/fs/ext2_dir.c",
+        "rach2/sys/fs/ext2_file.c",
+        "rach2/sys/fs/bcache.c",
+        "rach2/kernel.c",
+        "utils/init.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "volume_mib": 64,
+          "directories": 31,
+          "files": 54,
+          "file_bytes": 9000
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "ext2stop_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "image-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the disks, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "volume",
+          "stage": "execute",
+          "does": "write the stop disk's MBR with mkmbr and make its 64 MiB ext2 volume with mke2fs, as the case writes makes it"
+        },
+        {
+          "step_id": "stop",
+          "stage": "execute",
+          "machine": "stop",
+          "does": "boot os-real from its RAM image, log in as root, mount the volume, write and sync the tree, set /proc/sys/vm/dirty_writeback_centisecs to 0, remove the tree with rm -rf and end the machine with QMP's quit at once"
+        },
+        {
+          "step_id": "check",
+          "stage": "execute",
+          "machine": "check",
+          "does": "boot with the stopped disk, mount it, look for the tree, write a file, unmount it, and power off"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "does": "run e2fsck -fy and then e2fsck -fn on the stopped volume, in the image helper machine"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "stop",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [
+              {
+                "name": "stop",
+                "bus": "ide",
+                "size_bytes": 68157440
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "check",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [
+              {
+                "name": "stop",
+                "bus": "ide",
+                "size_bytes": 68157440
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "image-helper",
+          "qemu": {
+            "kernel": "image-kernel",
+            "initrd": "image-tools",
+            "disks": [
+              {
+                "name": "image-disk",
+                "bus": "ide",
+                "size_bytes": 512
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "rmtree-volume",
+          "checks": "mkmbr and mke2fs make the stop disk's volume, each exiting 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-mounted",
+          "checks": "/proc/mounts has /dev/disk0p1 /mnt/s ext2 rw 0 0, a mount that writes back",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-tree",
+          "checks": "the tree's 31 directories and 54 files are written and synced",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-removed",
+          "checks": "the flusher's turns are set off and rm -rf removes the tree",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-dirty",
+          "checks": "the stop left the superblock state 0, the valid bit clear",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-writable",
+          "checks": "the next boot mounts the stopped volume as /dev/disk0p1 /mnt/s ext2 rw 0 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-check",
+          "checks": "the kernel's check says ext2: check: /dev/disk0p1: inode N: link count W, set to 0 for at least one removed directory, each W at least 2, and ext2: check: L lost blocks, M orphan inodes, kept for e2fsck with M at least as many; its other records set link counts, set bits, or keep files, and none is a fault",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-gone",
+          "checks": "/mnt/s/tree does not exist",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-wrote",
+          "checks": "a file is written there and synced",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-umount",
+          "checks": "the volume unmounts",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-repaired",
+          "checks": "e2fsck -fy on the volume after that mount exits 0 or 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rmtree-clean",
+          "checks": "e2fsck -fn after it exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 4
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 5400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 2400000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 1610612736,
+        "disk_bytes": 402653184,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "os-real",
+          "node": "images/os-real.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "mkmbr",
+          "node": "tools/image/mkmbr",
+          "per_architecture": false
+        },
+        {
+          "name": "ext2stop_scenario",
+          "node": "tests/cases/machine/ext2stop_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "image-kernel",
+          "node": "rach2-recovery/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "image-tools",
+          "node": "images/etude-image.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "disk",
+        "reason": "the case stops a machine in the middle of a removal on a disk of its own and checks the disk on the host after, which the installed machine's disk cannot be"
       }
     }
   ]

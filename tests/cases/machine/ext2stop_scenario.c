@@ -2,7 +2,8 @@
  * ext2stop_scenario.c: the scenario of machine.ext2stop, an ext2 volume
  * stopped under writes and judged against an orderly shutdown: Rach2's next
  * writable mount and its check first, then the host's e2fsck -fn, then the
- * sentinel files.
+ * sentinel files; and of its case rmtree, a volume stopped at the end of an
+ * rm -rf of a tree, judged by the next mount's check and by e2fsck.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,6 +91,20 @@ static const char same_line[] =
 static const char after_line[] =
     "echo after > /mnt/s/after && sync && echo AFTER\"\"OK; echo AFTER\"\"END\r";
 static const char umount_line[] = "umount /mnt/s && echo UMOUNT\"\"OK; echo UMOUNT\"\"END\r";
+
+/* The tree of the case rmtree: /mnt/s/tree, three directories under it, three
+ * under each, and two under each of those, 31 directories in all, with 54
+ * files, written and synced. */
+static const char tree_line[] =
+    "for a in 0 1 2; do for b in 0 1 2; do d=/mnt/s/tree/a$a/b$b; mkdir -p $d/c0 $d/c1 && "
+    "for f in 0 1 2; do echo x$a$b$f > $d/f$f; head -c 9000 /dev/zero > $d/c0/g$f; done; done; "
+    "done; sync && echo TREE\"\"OK; echo TREE\"\"END\r";
+
+/* The removal of the case rmtree: the flusher's turns off, so that nothing the
+ * removal leaves dirty reaches the disk before the stop, then rm -rf. */
+static const char rm_line[] = "echo 0 > /proc/sys/vm/dirty_writeback_centisecs && "
+                              "rm -rf /mnt/s/tree && echo RM\"\"OK; echo RM\"\"END\r";
+static const char gone_line[] = "[ -e /mnt/s/tree ] || echo TREE\"\"GONE; echo GONE\"\"END\r";
 
 /* One boot of a machine, as the scenario drives it. */
 struct boot {
@@ -862,6 +877,159 @@ static void judge(struct lc *l, const char *disk, const char *output, const long
     free(text);
 }
 
+/*
+ * What the check of the volume an rm -rf left counted, from its records:
+ * the empty orphan directories whose count it set to 0 (`zeroed`), the
+ * smallest count it found in one (`least`), and its orphans, -1 when there
+ * is no record of that form.
+ */
+struct cut {
+    long zeroed, least, orphans;
+};
+
+/**
+ * Read the kernel's records of a check in `w` into `*k`, printing each:
+ * link counts set, the bits of blocks and inodes set, files kept and the
+ * lost blocks and orphans. @return NULL when each has one of those forms,
+ * else the first that has not, copied into `bad` of `size` bytes.
+ */
+static const char *cut_counts(const char *w, struct cut *k, char *bad, size_t size)
+{
+    char record[200];
+    const char *p;
+    long a, b, ino;
+    int end;
+
+    k->zeroed = 0;
+    k->least = -1;
+    k->orphans = -1;
+    for (p = w; (p = strstr(p, "ext2: check: ")) != NULL; p += strlen("ext2: check: ")) {
+        snprintf(record, sizeof(record), "%.*s", (int)strcspn(p, "\r\n"), p);
+        printf("ext2stop: rmtree: %s\n", record);
+        end = -1;
+        if (sscanf(record, "ext2: check: %*s inode %ld: link count %ld, set to %ld%n", &ino, &a, &b,
+                   &end) == 3 &&
+            end > 0 && record[end] == '\0') {
+            if (b == 0) {
+                k->zeroed++;
+                k->least = k->least == -1 || a < k->least ? a : k->least;
+            }
+            continue;
+        }
+        end = -1;
+        if (sscanf(record, "ext2: check: %ld lost blocks, %ld orphan inodes, kept for e2fsck%n", &a,
+                   &b, &end) == 2 &&
+            end > 0 && record[end] == '\0') {
+            k->orphans = b;
+            continue;
+        }
+        end = -1;
+        if ((sscanf(record, "ext2: check: %ld blocks named by files were free, marked used%n", &a,
+                    &end) == 1 ||
+             sscanf(record, "ext2: check: %ld live inodes were free, marked used%n", &a, &end) ==
+                 1 ||
+             sscanf(record,
+                    "ext2: check: %ld files with a size or i_blocks that does not match their "
+                    "blocks, kept for e2fsck%n",
+                    &a, &end) == 1) &&
+            end > 0 && record[end] == '\0')
+            continue;
+        snprintf(bad, size, "%s", record);
+        return bad;
+    }
+    return NULL;
+}
+
+/**
+ * The boot after the rm -rf's stop: the volume mounted, its check judged,
+ * the tree gone, a write and the unmount. Assertions rmtree-writable,
+ * rmtree-check, rmtree-gone, rmtree-wrote and rmtree-umount.
+ */
+static void rmtree_check(struct lc *l)
+{
+    static const char *const disks[] = {"stop", NULL};
+    char line[160], record[200], why[240];
+    struct boot b;
+    struct cut k;
+    char *w;
+
+    if (!lc_step(l, "check") || !start(l, "check", disks, &b))
+        return;
+    snprintf(line, sizeof(line), "mkdir -p /mnt/s && mount -t ext2 /dev/disk0p1%s", mount_tail);
+    if ((w = run(l, &b, line, "MOUNTEND")) == NULL)
+        return;
+    seen(l, w, "rmtree-writable", "/dev/disk0p1 /mnt/s ext2 rw 0 0");
+    if (cut_counts(w, &k, record, sizeof(record)) != NULL) {
+        snprintf(why, sizeof(why), "the check said %s", record);
+        lc_assert(l, "rmtree-check", 0, why);
+    } else {
+        snprintf(why, sizeof(why),
+                 "the check set %ld directories' counts to 0, the least from %ld, and counted %ld "
+                 "orphans",
+                 k.zeroed, k.least, k.orphans);
+        printf("ext2stop: rmtree: %s\n", why);
+        lc_assert(l, "rmtree-check", k.zeroed >= 1 && k.least >= 2 && k.orphans >= k.zeroed, why);
+    }
+    free(w);
+    expect(l, &b, gone_line, "GONEEND", "rmtree-gone", "TREEGONE");
+    expect(l, &b, after_line, "AFTEREND", "rmtree-wrote", "AFTEROK");
+    expect(l, &b, umount_line, "UMOUNTEND", "rmtree-umount", "UMOUNTOK");
+    free(run(l, &b, "poweroff\r", "Goodbye"));
+    lc_quit(l, b.m, NULL);
+}
+
+/**
+ * The case rmtree: a volume made as the others, the tree written and synced,
+ * the flusher's turns off and the tree removed by rm -rf, and QEMU ended by
+ * QMP's quit at once, which leaves the disk as a panic would, every
+ * removed entry on it and none of the removed directories' counts. The next
+ * boot's check must set those counts to 0 and mount the volume writable, and
+ * e2fsck -fy must leave a volume e2fsck -fn calls clean.
+ */
+static int rmtree(struct etude_case *c)
+{
+    static const char *const ids[] = {
+        "rmtree-volume",   "rmtree-mounted", "rmtree-tree", "rmtree-removed", "rmtree-dirty",
+        "rmtree-writable", "rmtree-check",   "rmtree-gone", "rmtree-wrote",   "rmtree-umount",
+        "rmtree-repaired", "rmtree-clean",   NULL};
+    static const char *const disks[] = {"stop", NULL};
+    char line[160], vol[1100], why[96];
+    char *repair[] = {"e2fsck", "-fy", vol, NULL}, *clean[] = {"e2fsck", "-fn", vol, NULL};
+    struct boot b;
+    struct lc l;
+    int st;
+
+    lc_begin(&l, c, ids);
+    if (lc_step(&l, "volume"))
+        lc_assert(&l, "rmtree-volume", make_volume(&l, "stop"), "mkmbr or mke2fs did not exit 0");
+    if (lc_ok(&l) && lc_step(&l, "stop") && start(&l, "stop", disks, &b)) {
+        snprintf(line, sizeof(line), "mkdir -p /mnt/s && mount -t ext2 /dev/disk0p1%s", mount_tail);
+        expect(&l, &b, line, "MOUNTEND", "rmtree-mounted", "/dev/disk0p1 /mnt/s ext2 rw 0 0");
+        expect(&l, &b, tree_line, "TREEEND", "rmtree-tree", "TREEOK");
+        expect(&l, &b, rm_line, "RMEND", "rmtree-removed", "RMOK");
+        if (lc_quit(&l, b.m, NULL))
+            state(&l, "stop", "rmtree-dirty", 0);
+    }
+    rmtree_check(&l);
+    if (lc_step(&l, "judge") && disk_path(&l, "stop", AT_PART, vol, sizeof(vol))) {
+        st = tool(&l, repair, "rmtree.repair");
+        snprintf(why, sizeof(why), "e2fsck -fy exits %d", st);
+        lc_assert(&l, "rmtree-repaired", st == 0 || st == 1, why);
+        st = tool(&l, clean, "rmtree.clean");
+        snprintf(why, sizeof(why), "e2fsck -fn exits %d", st);
+        lc_assert(&l, "rmtree-clean", st == 0, why);
+    }
+    return lc_finish(&l);
+}
+
+/** Give the last part of the attempt's case identity. */
+static const char *case_name(struct etude_case *c)
+{
+    const char *id = etude_case_id(c), *dot = strrchr(id, '.');
+
+    return dot != NULL ? dot + 1 : id;
+}
+
 int etude_scenario(struct etude_case *c)
 {
     static const char *const ids[] = {"control-volume", "control-mounted", "control-kept",
@@ -877,6 +1045,8 @@ int etude_scenario(struct etude_case *c)
     struct counted k;
     struct lc l;
 
+    if (strcmp(case_name(c), "rmtree") == 0)
+        return rmtree(c);
     lc_begin(&l, c, ids);
     control(&l, kept);
     stop(&l, held);
