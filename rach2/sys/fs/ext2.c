@@ -3421,8 +3421,14 @@ static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
  * sequence first (`vfs_ino_err_forget`), since nothing can open the file
  * again and the number its freed bit gives up may name the next file made,
  * whose sequence starts empty, as Linux's new inode's does (fs/inode.c:209);
- * then the blocks of a regular file, a directory or a long symbolic link
- * from the end (`ext2_punch`), then the inode written zeroed with its
+ * then the inode of a directory with a pointer block written through to
+ * the medium with its count of 0, since the punch clears pointers in its
+ * pointer blocks and the inode in one class with no order between them, and
+ * a pointer block cleared on the disk under a live directory's inode is one
+ * the next writable mount's check stops at, while a count of 0 there makes
+ * it a removed inode whose pointers nothing reads; then the blocks of a
+ * regular file, a directory or a long symbolic link from the end
+ * (`ext2_punch`), then the inode written zeroed with its
  * deletion time, through on a strict mount and `first` on one that writes
  * back, so that it reaches the device before its cleared bit, which goes
  * `after` it (`ext2_inode_bit_free`), then its reference to its
@@ -3447,6 +3453,12 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
     vfs_ino_err_forget(em->mnt, n->ino);
     if (n->fenced) {
         return -EIO;
+    }
+    if (was_dir && (n->block[EXT2_NDIR] | n->block[EXT2_NDIR + 1] | n->block[EXT2_NDIR + 2])) {
+        rc = ext2_inode_write(em, n, 0, WRITE_DURABLE);
+        if (rc != 0) {
+            return rc;
+        }
     }
     if ((n->mode & S_IFMT_) == S_IFREG_ || was_dir ||
         ((n->mode & S_IFMT_) == S_IFLNK_ && !ext2_fast_link(em, n))) {

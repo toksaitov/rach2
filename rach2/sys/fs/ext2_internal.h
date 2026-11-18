@@ -582,17 +582,20 @@ struct punch_list {
 /* A file the check counts names for, one with more than one link or a live
  * inode the walk from the root did not reach: its inode, its link count, the
  * names found for it, and, for such an orphan, the flags below and the `..`
- * of an orphan directory, which a directory that names it must be. */
+ * of an orphan directory, which a directory that names it must be, and its
+ * subdirectories, against which its count is judged once every orphan tree
+ * is walked. */
 struct ext2_link {
     struct ext2_link *next;
     uint32_t ino;
     uint32_t expect, found;
     uint32_t parent;
-    uint8_t orphan; /* an orphan no entry of a live directory has named yet */
-    uint8_t dir;    /* the orphan is a directory, its entries walked apart */
-    uint8_t bit;    /* the inode bitmap calls it free, so the check sets its bit */
-    uint8_t empty;  /* the orphan directory, walked as no entry's, has only . and .. */
-    uint8_t kept;   /* and a kept orphan directory's .. names it, so its count stays */
+    uint32_t subdirs; /* an orphan directory's, found when walked as no entry's */
+    uint8_t orphan;   /* an orphan no entry of a live directory has named yet */
+    uint8_t dir;      /* the orphan is a directory, its entries walked apart */
+    uint8_t bit;      /* the inode bitmap calls it free, so the check sets its bit */
+    uint8_t empty;    /* the orphan directory, walked as no entry's, has only . and .. */
+    uint8_t kept;     /* and a kept orphan directory's .. names it, so its count stays */
 };
 
 /* Set field `f` of node `n` to `v` and mark the node (`ext2_node_dirty`) in
