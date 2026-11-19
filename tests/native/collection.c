@@ -57,38 +57,54 @@ static int first_line(const char *path, char *line, size_t size)
         line[strcspn(line, "\r\n")] = 0;
     return ok && *line;
 }
-/* Remove `dir`, a name under STATE/gone. of this PID that a dead process of
- * the same PID left, with the owner record it may hold. The caller holds
- * serial_hold's flock. */
-static void gone_clear(const char *dir)
+/* Write STATE/collection.journal in the state directory `state`: `what`, the
+ * change of the collection lock about to begin, and this process's PID. The
+ * caller holds serial_hold's flock and removes the journal once the change is
+ * whole, before it drops the flock, so that a journal seen under the flock was
+ * left by a process stopped midway; the next run's setup then removes the
+ * lock, with or without its owner record, and the journal. 1, or 0 when it
+ * cannot be written. */
+static int journal_begin(const char *state, const char *what)
 {
-    char path[4300];
-    snprintf(path, sizeof(path), "%s/owner", dir);
+    char path[4200], record[64];
+    snprintf(path, sizeof(path), "%s/collection.journal", state);
+    snprintf(record, sizeof(record), "%s %ld\n", what, (long)getpid());
+    if (write_bytes(path, record, strlen(record)))
+        return 1;
+    fprintf(stderr, "native: cannot write %s\n", path);
     unlink(path);
-    rmdir(dir);
+    return 0;
 }
-/* Make the collection lock `lock` in the state directory `state`: a
- * directory holding `owner`, this process's PID, its start in clock ticks
- * since boot (field 22 of /proc/self/stat) and the kernel's boot_id, the
- * fields of the deployment's controller receipt, each `-` where the system
- * gives none. The directory is made whole as STATE/gone.make-PID and renamed
- * to `lock`, so that a stop at any point leaves no lock without its owner; a
- * left name under `gone.` is removed by the next run's setup. The caller
- * holds serial_hold's flock, which every taker of the lock holds, so that no
- * lock appears between the look and the rename. 1, or 0 with no lock left
- * behind. */
+/* Remove the journal of journal_begin; 1, or 0 when it remains. */
+static int journal_end(const char *state)
+{
+    char path[4200];
+    snprintf(path, sizeof(path), "%s/collection.journal", state);
+    return !unlink(path) || errno == ENOENT;
+}
+/* Make the collection lock `lock` in the state directory `state`, a directory,
+ * and write in it `owner`: this process's PID, its start in clock ticks since
+ * boot (field 22 of /proc/self/stat) and the kernel's boot_id, the fields of
+ * the deployment's controller receipt, each `-` where the system gives none.
+ * The change is journalled, since a stop between the mkdir and the owner's
+ * write would leave a lock with no owner record, which a setup refuses. A
+ * journal already there is refused and kept for the setup. 1, or 0 with no
+ * lock left behind. */
 static int lock_make(const char *state, const char *lock)
 {
-    char made[4200], path[4300], self[1024], start[32] = "-", boot[128] = "-", record[256];
+    char path[4200], self[1024], start[32] = "-", boot[128] = "-", record[256];
     struct stat st;
-    if (!lstat(lock, &st) || errno != ENOENT) {
-        fprintf(stderr, "native: another collection owns %s\n", lock);
+    snprintf(path, sizeof(path), "%s/collection.journal", state);
+    if (!lstat(path, &st)) {
+        fprintf(stderr, "native: %s: a stopped change of %s; a deployment's setup clears it\n",
+                path, lock);
         return 0;
     }
-    snprintf(made, sizeof(made), "%s/gone.make-%ld", state, (long)getpid());
-    gone_clear(made);
-    if (mkdir(made, 0700)) {
-        fprintf(stderr, "native: cannot make %s: %s\n", made, strerror(errno));
+    if (!journal_begin(state, "make"))
+        return 0;
+    if (mkdir(lock, 0700)) {
+        fprintf(stderr, "native: another collection owns %s\n", lock);
+        journal_end(state);
         return 0;
     }
     if (first_line("/proc/self/stat", self, sizeof(self))) {
@@ -101,14 +117,16 @@ static int lock_make(const char *state, const char *lock)
     }
     if (!first_line("/proc/sys/kernel/random/boot_id", boot, sizeof(boot)))
         strcpy(boot, "-");
-    snprintf(path, sizeof(path), "%s/owner", made);
+    snprintf(path, sizeof(path), "%s/owner", lock);
     snprintf(record, sizeof(record), "%ld %s %s\n", (long)getpid(), start, boot);
-    if (!write_bytes(path, record, strlen(record)) || rename(made, lock)) {
+    if (!write_bytes(path, record, strlen(record))) {
         fprintf(stderr, "native: cannot record the owner of %s\n", lock);
         unlink(path);
-        rmdir(made);
+        rmdir(lock);
+        journal_end(state);
         return 0;
     }
+    journal_end(state);
     return 1;
 }
 /* Open STATE/collection.serial in the state directory `state` and hold
@@ -147,23 +165,19 @@ static int lock_take(const char *state, const char *lock)
     return ok;
 }
 /* Remove the collection lock `lock` in the state directory `state` and its
- * owner record under serial_hold's flock: the lock is first renamed to
- * STATE/gone.lock-PID, so that a stop before its removal leaves no lock
- * without its owner at `lock`, and the next run's setup removes the left
- * name. 0, or -1 when the lock remains. */
+ * owner record under serial_hold's flock, journalled as lock_make's change is.
+ * A removal that fails keeps the journal, so that the next run's setup
+ * removes the lock. 0, or -1 when the lock remains. */
 static int lock_release(const char *state, const char *lock)
 {
-    char gone[4200], path[4300];
+    char path[4200];
     int fd = serial_hold(state), status = -1;
     if (fd < 0)
         return -1;
-    snprintf(gone, sizeof(gone), "%s/gone.lock-%ld", state, (long)getpid());
-    gone_clear(gone);
-    if (!rename(lock, gone)) {
-        snprintf(path, sizeof(path), "%s/owner", gone);
-        if (!unlink(path) || errno == ENOENT)
-            rmdir(gone);
-        status = 0;
+    if (journal_begin(state, "release")) {
+        snprintf(path, sizeof(path), "%s/owner", lock);
+        if ((!unlink(path) || errno == ENOENT) && !rmdir(lock) && journal_end(state))
+            status = 0;
     }
     close(fd);
     return status;
