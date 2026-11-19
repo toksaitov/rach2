@@ -268,6 +268,11 @@ uint32_t procfs_ino_lockwait(void);
  * `card` 0; and that of /proc/asound. */
 uint32_t procfs_ino_asound(int file, int card);
 uint32_t procfs_ino_asounddir(void);
+/** The inode of /proc/bus/input's file `file` (evdev.h's EVDEV_PROC_), or
+ * with `file` negative of /proc/bus, `dir` -1, or of its input, `dir` 0;
+ * and that of /proc/bus. */
+uint32_t procfs_ino_bus(int file, int dir);
+uint32_t procfs_ino_busdir(void);
 
 /** Whether `e`, a descriptor of type FD_TYPE_PROC, is open on a file of
  * /sys, which fstat and fstatfs report as sysfs's. */

@@ -5487,6 +5487,15 @@ uint32_t vfs_setattr_events(int what)
     return mask;
 }
 
+/** Fail the row: no row stats a file of /proc/bus. */
+uint32_t procfs_ino_bus(int file, int dir)
+{
+    (void)file;
+    (void)dir;
+    check(0, "unexpected stat of a /proc/bus file");
+    return 0;
+}
+
 /** Fail the row: no row stats a file of /proc/asound. */
 uint32_t procfs_ino_asound(int file, int card)
 {
