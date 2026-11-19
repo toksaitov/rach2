@@ -914,7 +914,7 @@ static int vnet_tx(void *dev, const uint8_t *data, uint16_t len)
     uint32_t flags;
     int i;
 
-    if (!v || !v->up || len == 0 || len > VNET_FRAME_MAX) {
+    if (!v || len == 0 || len > VNET_FRAME_MAX) {
         if (len > VNET_FRAME_MAX) {
             klog(KLOG_WARN, "virtio_net", "tx: frame of %d bytes is too large, dropped", (int)len);
         }
