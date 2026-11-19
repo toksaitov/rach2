@@ -168,11 +168,12 @@ static unsigned long long spin_switches(void)
 /** Wait until the spinner's loop turns, which it does only while it runs. */
 static void spin_running(void)
 {
-    unsigned long seen = spin_turns;
+    unsigned long seen = spin_turns, now;
 
-    while (spin_turns == seen) {
+    do {
         __asm__ __volatile__("" ::: "memory");
-    }
+        now = spin_turns;
+    } while (now == seen);
 }
 
 /** Fork this process, with its BIG bytes of pages, on processor 1 until
