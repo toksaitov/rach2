@@ -50,9 +50,12 @@ static int failures, depth, sync_error, flush_error, sync_calls, flush_calls;
 static int check_clean_order, clean_writes, reuse_fd, truncating;
 static int fail_after_move, syncs_after_free, fail_flush_at;
 static int refuse_block = -1;
+static int reclaim_error, recovery_active;
+static int refuse_skip; /* matching gets before the one to fail */
 /* Blocks copied from the cache to the device cache, by any of the syncs. */
 static int block_writes;
 static void (*flush_hook)(void);
+static struct krffs_open *close_at_unlink;
 static void *original;
 static char payload[8192];
 struct percpu cpu_table[NR_CPUS];
@@ -104,11 +107,14 @@ void console_printf(const char *format, ...)
     (void)format;
 }
 
-/** Use a fixed timestamp. */
+static int64_t clock_seconds = 1000;
+static int64_t clock_nanoseconds;
+
+/** Report the time set by the row. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = 1000;
-    *nanoseconds = 0;
+    *seconds = clock_seconds;
+    *nanoseconds = clock_nanoseconds;
 }
 
 #ifndef KRFFS_OPEN_TEST
@@ -204,17 +210,30 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 {
     check(dev == &disk && blk < IMAGE_BLOCKS, "cache block in volume");
-    if (refuse_block >= 0 && blk == (uint64_t)refuse_block) {
+    if (reclaim_error && --reclaim_error == 0) {
+        dev->flags |= BLOCK_WRITE_FAILED;
+        if (recovery_active) {
+            dev->flags |= BLOCK_WRITES_HALTED;
+        }
+    }
+    if (refuse_block >= 0 && blk == (uint64_t)refuse_block && refuse_skip-- == 0) {
+        refuse_skip = 0;
         refuse_block = -1;
         return NULL;
     }
     return blk < IMAGE_BLOCKS ? &buffers[blk] : NULL;
 }
 
-/** No cache eviction occurs in this model. */
+/** Complete a pending last close when its name leaves the cache. */
 void bcache_release(struct bbuf *b)
 {
     (void)b;
+    if (close_at_unlink && !cached[close_at_unlink->offset + KRFFS_FIELD_NAME]) {
+        struct krffs_open *o = close_at_unlink;
+
+        close_at_unlink = NULL;
+        kv_release(&mount, o);
+    }
 }
 
 /** Record a pending cache write; a tag the block has stays. */
@@ -272,19 +291,40 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk)
     return 0;
 }
 
+/* Set by `bcache_halt_writes`: the cache writes none of the device's blocks. */
+static int writes_halted;
+
+/** The core halted the volume: no sync writes a block after this. */
+void bcache_halt_writes(block_device_t *dev)
+{
+    dev->flags |= BLOCK_WRITES_HALTED;
+    writes_halted = 1;
+}
+
+/** Mark the interval in which a failed cache victim stops the device. */
+void bcache_recovering(block_device_t *dev, int active)
+{
+    check(dev == &disk, "set recovery on the claimed device");
+    recovery_active = active;
+}
+
 /**
  * Copy the dirty blocks to the device cache. Fails with -EIO, keeping the
- * blocks dirty, under `sync_error` or at the fault `fail_after_move` sets.
+ * blocks dirty, after a halt (`writes_halted`), under `sync_error` or at the
+ * fault `fail_after_move` sets.
  * With `check_clean_order`, a write of block 0 with the dirty flag clear
  * requires the earlier data on the medium, and is counted in
  * `clean_writes`.
  */
-int bcache_sync(block_device_t *dev)
+int bcache_sync_unflushed(block_device_t *dev)
 {
     unsigned i;
 
     (void)dev;
     sync_calls++;
+    if (writes_halted || (dev->flags & BLOCK_WRITES_HALTED)) {
+        return -EIO;
+    }
     if (fail_after_move &&
         ((krffs_node_t *)(cached + offset_of(&mount, original)))->type == KRFFS_FREE_NODE &&
         ++syncs_after_free == 1) {
@@ -306,6 +346,19 @@ int bcache_sync(block_device_t *dev)
         }
     }
     return 0;
+}
+
+/** A durable cache sync also flushes a write-through device on error. */
+int bcache_sync(block_device_t *dev)
+{
+    int rc = bcache_sync_unflushed(dev);
+
+    if (dev->flags & BLOCK_WRITE_THROUGH) {
+        int flushed = bcache_flush(dev);
+
+        return rc ? rc : flushed;
+    }
+    return rc;
 }
 
 /**
@@ -334,6 +387,24 @@ int bcache_flush(block_device_t *dev)
     return block_flush(dev);
 }
 
+/** Discard a refused constructor's buffers without issuing device I/O. */
+int bcache_drop(block_device_t *dev)
+{
+    unsigned i;
+    int dirty = 0;
+
+    check(dev == &disk, "discard the constructor's own device");
+    for (i = 0; i < IMAGE_BLOCKS; i++) {
+        dirty += buffers[i].dirty;
+        buffers[i].dirty = 0;
+        buffers[i].owner = 0;
+    }
+    k_memcpy(cached, device, sizeof(cached));
+    writes_halted = 0;
+    dev->flags &= ~(BLOCK_WRITE_FAILED | BLOCK_WRITES_HALTED);
+    return dirty;
+}
+
 /**
  * Format a 64 KiB volume of a root and one free node, mount it through the
  * block backend of krffsmount.c, make a descriptor table, and clear the
@@ -350,10 +421,12 @@ static void setup_on_phase(uint32_t phase)
     k_memset(&disk, 0, sizeof(disk));
     k_memset(buffers, 0, sizeof(buffers));
     depth = sync_error = flush_error = check_clean_order = clean_writes = 0;
+    writes_halted = 0;
     waiting = NULL;
     flush_hook = NULL;
     fail_flush_at = 0;
     refuse_block = -1;
+    refuse_skip = 0;
     fail_after_move = syncs_after_free = block_writes = 0;
     root->magic = space->magic = KRFFS_FILE_SYSTEM_MAGIC;
     root->type = KRFFS_ROOT_NODE;
@@ -560,13 +633,14 @@ static void pinned(void)
 
 /**
  * Fail the first sync after a grow has moved the target and stored its old
- * node's type as free, the removal's own: the operation must return `EIO`,
- * and the file must stay at its new place, which holds the bytes, with every
- * description repointed there. With `truncate`, the grow is a truncate.
+ * node's type as free. A write counts the bytes in the live copy, and a
+ * truncate returns EIO. Both leave a stamped copy on disk with every open
+ * description pointing to it.
  */
 static void failed_relocation(int truncate)
 {
-    void *current;
+    void *current = NULL;
+    krffs_node_t *copy;
     int i, rc;
 
     setup();
@@ -577,12 +651,19 @@ static void failed_relocation(int truncate)
     check(kv_write(&mount, descs[0]->fhandle, "A", 1, 0) == 1, "seed failed relocation");
     create("block-a");
     fail_after_move = 1;
+    clock_seconds++;
     k_memset(payload, 'F', sizeof(payload));
     rc = truncate ? kv_truncate(&mount, descs[0]->fhandle, sizeof(payload))
                   : kv_write(&mount, descs[0]->fhandle, payload, sizeof(payload), 0);
-    check(rc == -EIO && syncs_after_free == 1, "the removal's sync fails after relocation");
+    check(rc == (truncate ? -EIO : (int)sizeof(payload)) && syncs_after_free == 1,
+          "a failed removal sync counts a visible write and fails a truncate");
     check(kv_lookup(&mount, mount.root, "target", &current) == 0 && current != original,
           "failed operation retains relocated node");
+    copy = (krffs_node_t *)(medium + offset_of(&mount, current));
+    check(copy->type == KRFFS_RESERVED_NODE && copy->modification_time.seconds == clock_seconds &&
+              copy->attribute_change_time.seconds == clock_seconds,
+          "both timestamps reached the medium with the published copy");
+    clock_seconds--;
     {
         char byte = 0;
 
@@ -947,7 +1028,8 @@ static void refused_rename_keeps_destination(void)
  * A mount the core halted, whose moved file's copy could not be withdrawn,
  * takes no change through the adapter until the next mount: an unlink of an
  * open file and a rename answer EROFS, and an fsync EIO, since the copy may
- * still be on the medium beside the file.
+ * still be on the medium beside the file; and the halt stops the cache's
+ * writes of the volume, so that a sync answers EIO.
  */
 static void halted_refusals(void)
 {
@@ -965,18 +1047,18 @@ static void halted_refusals(void)
     vfs_ns_unlock(&mount);
     check(rename_name("file", "other") == -EROFS, "and a rename");
     check(kv_fsync(&mount, handle) == -EIO, "and answers EIO to an fsync");
-    check(kv_sync(&mount) == 0, "but writes the volume back for its unmount");
     vfs_ns_lock(&mount);
     check(kv_mknod(&mount, mount.root, "dev", 0020644, 0, &found) == -EROFS,
           "and answers EROFS to a device node before EPERM");
     vfs_ns_unlock(&mount);
     halts = 0;
     vol_of(&mount)->fs.on_halt(&vol_of(&mount)->fs);
-    check(halts == 1 && (mount.flags & VFS_MS_RDONLY),
-          "a halt turns the mounts that show the volume read-only");
-    check(kv_sync(&mount) == 0, "and the volume still writes back");
+    check(halts == 1 && (mount.flags & VFS_MS_RDONLY) && writes_halted,
+          "a halt turns the mounts that show the volume read-only and halts its writes");
+    check(kv_sync(&mount) == -EIO, "and the volume writes nothing back");
     mount.flags &= ~(uint32_t)VFS_MS_RDONLY;
     vol_of(&mount)->fs.halted = 0;
+    writes_halted = 0;
     kv_release(&mount, handle);
     teardown();
 }
@@ -1013,8 +1095,8 @@ static unsigned block_of(uint64_t at)
 /**
  * An fsync writes one file. `one` and `other` each fill blocks of their own;
  * a chmod dirties `other`'s header and eight of its data blocks are left
- * dirty as a neighbour's writeback, and a write to `one` that changes no
- * length leaves its header dirty after the core's sync point. The fsync of
+ * dirty as a neighbour's writeback. A truncate of `one` to its current
+ * length leaves its timestamps dirty. The fsync of
  * `one` writes its header block alone and leaves every block of `other`
  * dirty; the sync of the volume then writes them.
  */
@@ -1044,14 +1126,14 @@ static void owned_fsync(void)
               block_of(offset_of(&mount, other)),
           "fsync row: one's header shares no block with other");
     first = block_of(offset_of(&mount, other) + sizeof(krffs_node_t)) + 1;
-    check(kv_write(&mount, fd_slot(&table, fd_one)->ofd->fhandle, "o", 1, 0) == 1,
-          "fsync row: overwrite one");
+    check(kv_truncate(&mount, fd_slot(&table, fd_one)->ofd->fhandle, 4096) == 0,
+          "fsync row: stamp one at its current length");
     st.mode = 0600;
     check(kv_setattr(&mount, other, VFS_SET_MODE, &st) == 0, "fsync row: chmod other");
     for (i = first; i < first + 8; i++) {
         buffers[i].dirty = 1;
     }
-    check(buffers[block_of(offset_of(&mount, one))].dirty, "write leaves one's header dirty");
+    check(buffers[block_of(offset_of(&mount, one))].dirty, "truncate leaves one's header dirty");
     block_writes = 0;
     check(kv_fsync(&mount, fd_slot(&table, fd_one)->ofd->fhandle) == 0, "fsync of one succeeds");
     check(block_writes == 1 && !buffers[block_of(offset_of(&mount, one))].dirty,
@@ -1584,6 +1666,329 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 }
 
 /**
+ * Refuse one fetch of the header block for mtime or ctime. The overwrite
+ * starts in the next block, so its payload never fetches the header.
+ */
+static void stamp_fetch_failure(int skip)
+{
+    struct vfs_stat st;
+    void *node, *handle;
+    uint64_t at;
+    int64_t before = clock_seconds;
+
+    setup();
+    node = create("file");
+    handle = fd_slot(&table, open_node(node))->ofd->fhandle;
+    k_memset(payload, 'a', sizeof(payload));
+    check(kv_write(&mount, handle, payload, sizeof(payload), 0) == (int)sizeof(payload),
+          "stamp row: seed two blocks");
+    at = follow_moves(handle);
+    refuse_block = (int)block_of(at);
+    refuse_skip = skip; /* the header read and, for ctime, the mtime store */
+    clock_seconds++;
+    k_memset(payload, 'b', BCACHE_BLOCK_BYTES);
+    check(kv_write(&mount, handle, payload, BCACHE_BLOCK_BYTES, BCACHE_BLOCK_BYTES) == -EIO &&
+              refuse_block == -1,
+          "the overwrite reports the one failed timestamp fetch");
+    check(kv_getattr(&mount, handle_of(at), &st) == 0 && st.size == sizeof(payload) &&
+              st.mtime_sec == (skip == 1 ? before : clock_seconds) && st.ctime_sec == before,
+          "only timestamps stored before the failure changed");
+    k_memset(payload, 'a', sizeof(payload));
+    check(kv_fsync(&mount, handle) == 0 && bcache_flush(&disk) == 0 &&
+              __builtin_memcmp(medium + at + sizeof(krffs_node_t), payload, sizeof(payload)) == 0,
+          "fsync after the transient error leaves all original bytes on disk");
+    clock_seconds--;
+    teardown();
+}
+
+/**
+ * Place the seconds of `field` at 4088 and its nanoseconds at 4096.
+ * Fail a fetch with only the seconds changing, then change both halves
+ * in an overwrite or a same-length truncate and check the durable file.
+ */
+static void split_stamp(uint32_t field, int truncate)
+{
+    uint32_t at = BCACHE_BLOCK_BYTES - sizeof(int64_t) - field;
+    const char *expected = truncate ? "abcdef" : "abXdef";
+    struct open_file *file;
+    const krffs_node_t *head;
+    void *node;
+    int fd, rc;
+
+    setup();
+    fd = open_node(create("spacer"));
+    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, at - 2 * sizeof(*head)) == 0,
+          "place the next node at the timestamp boundary");
+    file = fd_slot(&table, open_node(create("edge")))->ofd;
+    check(kv_write(&mount, file->fhandle, "abcdef", 6, 0) == 6 &&
+              offset_of(&mount, file->vnode) == at,
+          "seed a file with seconds and nanoseconds on opposite blocks");
+    clock_seconds++;
+    refuse_block = 1;
+    refuse_skip = 1; /* fetch the header, then fail the split field's fetch */
+    rc = truncate ? kv_truncate(&mount, file->fhandle, 2)
+                  : kv_write(&mount, file->fhandle, "Y", 1, 2);
+    check(rc == -EIO && refuse_block == -1 && offset_of(&mount, file->vnode) == at,
+          "a failed fetch stops the operation on the original node");
+    head = (const krffs_node_t *)(medium + at);
+    check(kv_fsync(&mount, file->fhandle) == 0 && bcache_flush(&disk) == 0 &&
+              head->data_size == 6 && !__builtin_memcmp(head + 1, "abcdef", 6),
+          "the failed fetch leaves the original length and bytes on disk");
+
+    clock_nanoseconds = 1;
+    rc = truncate ? kv_truncate(&mount, file->fhandle, 6)
+                  : kv_write(&mount, file->fhandle, "X", 1, 2);
+    check(rc == (truncate ? 0 : 1) && kv_lookup(&mount, mount.root, "edge", &node) == 0 &&
+              file->vnode == node && offset_of(&mount, node) != at &&
+              follow_moves(file->fhandle) == offset_of(&mount, node),
+          "the open file and its name reach the relocated node");
+    head = (const krffs_node_t *)(medium + offset_of(&mount, file->vnode));
+    check(kv_fsync(&mount, file->fhandle) == 0 && bcache_flush(&disk) == 0 &&
+              head->type == KRFFS_RESERVED_NODE && head->data_size == 6 &&
+              !__builtin_memcmp(head + 1, expected, 6),
+          "the full file including its untouched tail reaches disk");
+    check(head->modification_time.seconds == clock_seconds &&
+              head->modification_time.nanoseconds == clock_nanoseconds &&
+              head->attribute_change_time.seconds == clock_seconds &&
+              head->attribute_change_time.nanoseconds == clock_nanoseconds,
+          "both timestamps reach disk with the new seconds and nanoseconds");
+    clock_nanoseconds = 0;
+    clock_seconds--;
+    teardown();
+}
+
+/** Exercise an overwrite and a same-length truncate at each split stamp. */
+static void split_stamp_rows(void)
+{
+    split_stamp(KRFFS_FIELD_MTIME, 0);
+    split_stamp(KRFFS_FIELD_MTIME, 1);
+    split_stamp(KRFFS_FIELD_CTIME, 0);
+    split_stamp(KRFFS_FIELD_CTIME, 1);
+}
+
+/** Fail the length store's second block after its comparison read. */
+static void refuse_length_end(void)
+{
+    flush_hook = NULL;
+    refuse_block = 1;
+    refuse_skip = 1;
+}
+
+/** Check the byte count and EOF after an append at a split length field. */
+static void split_length_failure(void)
+{
+    const uint32_t at = BCACHE_BLOCK_BYTES - KRFFS_FIELD_DATA_SIZE - 4;
+    krffs_node_t *head;
+    struct krffs_open *o;
+    char back[512];
+    int rc;
+
+    k_memset(cached, 0, sizeof(cached));
+    place(0, KRFFS_ROOT_NODE, at, IMAGE_BYTES - at, NULL);
+    place(at, KRFFS_RESERVED_NODE, IMAGE_BYTES - at, at, "edge");
+    head = (krffs_node_t *)(cached + at);
+    head->data_size = 256;
+    check(mount_cached(0) == 0, "mount for split length");
+    check(kv_open(&mount, handle_of(at), 0, (void **)&o) == 0, "open at block edge");
+    k_memset(payload, 'x', 256);
+    flush_hook = refuse_length_end;
+    rc = kv_write(&mount, o, payload, 256, 256);
+    check(refuse_block == -1 && rc == -EIO && kv_read(&mount, o, back, sizeof(back), 0) == 256,
+          "a failed length store publishes no bytes of the append");
+    check(kv_write(&mount, o, payload, 256, 256) == 256 &&
+              kv_read(&mount, o, back, sizeof(back), 0) == 512 && back[511] == 'x',
+          "the append succeeds after the block recovers");
+    kv_release(&mount, o);
+    kv_unmount(&mount);
+}
+
+/** Exercise each failure after the first half of a field was acquired. */
+static void field_failure_rows(void)
+{
+    const uint32_t at = BCACHE_BLOCK_BYTES - 2;
+    const uint32_t data = 0x11223344;
+    struct krffs_volume *vol;
+    int i;
+
+    setup();
+    vol = vol_of(&mount);
+    for (i = 0; i < 2; i++) {
+        k_memset(cached + at, 0, sizeof(data));
+        buffers[0].dirty = buffers[1].dirty = 0;
+        if (i == 0) {
+            refuse_block = 1;
+        } else {
+            buffers[1].bytes = 1;
+        }
+        check(volume_write(vol, at, &data, sizeof(data)) != 0 && !cached[at] && !cached[at + 1] &&
+                  !buffers[0].dirty && !buffers[1].dirty,
+              "a missing or short second block leaves both field blocks alone");
+    }
+    buffers[1].bytes = BCACHE_BLOCK_BYTES;
+    teardown();
+}
+
+/** Refuse a dirty mount during its orphan free and mount it again. */
+static void refused_repair_row(void)
+{
+    uint32_t n = sizeof(krffs_node_t);
+    int rc;
+
+    setup();
+    teardown();
+    k_memset(cached, 0, sizeof(cached));
+    place(0, KRFFS_ROOT_NODE, n, IMAGE_BYTES - 2 * n, NULL);
+    place(n, KRFFS_RESERVED_NODE, n, n, NULL);
+    place(2 * n, KRFFS_FREE_NODE, IMAGE_BYTES - 2 * n, n, NULL);
+    k_memcpy(device, cached, sizeof(cached));
+    k_memcpy(medium, cached, sizeof(cached));
+    sync_error = 1;
+    block_writes = 0;
+    rc = krffs_volume_mount(&mount, &disk, 0, NULL);
+    check(rc == -EIO && !mount.priv && !buffers[0].dirty && !writes_halted && !block_writes &&
+              __builtin_memcmp(cached, medium, sizeof(cached)) == 0,
+          "refusing an orphan repair drops its dirty blocks and its device halt");
+    sync_error = 0;
+    mount.flags = 0;
+    rc = krffs_volume_mount(&mount, &disk, 0, NULL);
+    check(rc == 0 && !(mount.flags & VFS_MS_RDONLY) && block_writes &&
+              ((krffs_node_t *)(medium + n))->type == KRFFS_FREE_NODE,
+          "a fresh writable mount repairs the recovered device");
+    if (!rc) {
+        kv_unmount(&mount);
+    }
+}
+
+/** Fail validation before and after the dirty-volume repair. */
+static void refused_chain_rows(void)
+{
+    static const int skips[] = {1, 2, 4, 5};
+    unsigned i;
+    int rc;
+
+    setup();
+    teardown();
+    ((krffs_node_t *)cached)->mode &= ~KRFFS_MODE_DIRTY;
+    k_memcpy(device, cached, sizeof(device));
+    for (i = 0; i < sizeof(skips) / sizeof(skips[0]); i++) {
+        refuse_skip = skips[i];
+        refuse_block = 0;
+        rc = krffs_volume_mount(&mount, &disk, 0, NULL);
+        check(rc == -EIO && !mount.priv, "volume validation preserves a header read error");
+    }
+    sync_error = 1;
+    rc = krffs_volume_mount(&mount, &disk, 0, NULL);
+    check(rc == -EIO && !buffers[0].dirty && !(((krffs_node_t *)cached)->mode & KRFFS_MODE_DIRTY),
+          "a refused dirty flag store leaves no dirty buffer for a later mount");
+    sync_error = 0;
+}
+
+/** Fail the free at the last close of an unlinked file. */
+static void last_close_failure(void)
+{
+    void *node, *handle;
+    struct krffs_volume *vol;
+
+    setup();
+    node = create("open");
+    vol = vol_of(&mount);
+    check(kv_open(&mount, node, 0, &handle) == 0 && kv_unlink(&mount, mount.root, "open") == 0,
+          "unlink while open");
+    refuse_block = 0;
+    kv_release(&mount, handle);
+    check(vol->fs.halted && vol->fs.check_owed && writes_halted && !vol->opens,
+          "a last close that cannot read the orphan halts its volume");
+    teardown();
+}
+
+/** Fail the reap when the last close lands during unlink or replacement. */
+static void close_during_unlink_row(int replace)
+{
+    void *handle;
+    int rc;
+
+    setup();
+    if (replace) {
+        create("new");
+    }
+    original = create("old");
+    check(kv_open(&mount, original, 0, &handle) == 0, "open the name being removed");
+    close_at_unlink = handle;
+    fail_after_move = 1;
+    rc = replace ? kv_rename(&mount, mount.root, "new", mount.root, "old")
+                 : kv_unlink(&mount, mount.root, "old");
+    check(!close_at_unlink && rc == -EIO && vol_of(&mount)->fs.halted && writes_halted,
+          "a failed reap after a concurrent last close stops the volume");
+    teardown();
+}
+
+/** Fail a buffered repair write on a disk whose normal sync always flushes. */
+static void repair_flush_row(void)
+{
+    setup();
+    disk.flags |= BLOCK_WRITE_THROUGH;
+    sync_error = 1;
+    check(volume_sync(vol_of(&mount)) != 0 && flush_calls == 0,
+          "a failed ordered write issues no trailing drive flush");
+    teardown();
+}
+
+/** Fail reclaim while fetching the victim header at the last close. */
+static void reclaim_during_reap(void)
+{
+    void *node, *handle;
+    krffs_node_t *h;
+
+    setup();
+    node = create("held");
+    h = (krffs_node_t *)(cached + offset_of(&mount, node));
+    check(kv_open(&mount, node, 0, &handle) == 0 && kv_unlink(&mount, mount.root, "held") == 0,
+          "hold an unlinked node");
+    reclaim_error = 1;
+    kv_release(&mount, handle);
+    check(!reclaim_error && !recovery_active && vol_of(&mount)->fs.halted &&
+              h->type == KRFFS_RESERVED_NODE,
+          "a failed cache victim halts the reap even when the requested block is supplied");
+    teardown();
+}
+
+/** Halt while acquiring the second block of a field that spans two. */
+static void reclaim_during_store(void)
+{
+    uint32_t data = 0x11223344;
+    uint32_t at = BCACHE_BLOCK_BYTES - 2;
+    struct krffs_volume *vol;
+
+    setup();
+    vol = vol_of(&mount);
+    bcache_recovering(&disk, 1);
+    reclaim_error = 2;
+    check(volume_write(vol, at, &data, sizeof(data)) < 0 && !reclaim_error && !cached[at] &&
+              !cached[at + 2] && !buffers[0].dirty && !buffers[1].dirty,
+          "a halt while fetching the second block leaves the entire field alone");
+    bcache_recovering(&disk, 0);
+    teardown();
+}
+
+/** Run the independent volume failure rows. */
+static void volume_failure_rows(void)
+{
+    stamp_fetch_failure(1);
+    stamp_fetch_failure(2);
+    split_stamp_rows();
+    split_length_failure();
+    field_failure_rows();
+    refused_repair_row();
+    refused_chain_rows();
+    last_close_failure();
+    close_during_unlink_row(0);
+    close_during_unlink_row(1);
+    repair_flush_row();
+    reclaim_during_reap();
+    reclaim_during_store();
+}
+
+/**
  * Run every row: relocation by a write and by a truncate, a directory read,
  * an O_PATH pin, a failed relocation of each kind, the unmount's order of
  * writes, a failed clean flush, the errors of a creation, an owner across a
@@ -1594,8 +1999,28 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * the dirty flag an owed check of names keeps.
  * Returns 1 when a row failed, else 0.
  */
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2 && __builtin_strcmp(argv[1], "split-timestamps") == 0) {
+        split_stamp_rows();
+        printf("krffsmount-hosttest: split timestamp rows: %d failures\n", failures);
+        return failures != 0;
+    }
+    if (argc == 2 && __builtin_strcmp(argv[1], "timestamps") == 0) {
+        stamp_fetch_failure(1);
+        stamp_fetch_failure(2);
+        split_stamp_rows();
+        failed_relocation(0);
+        failed_relocation(1);
+        owned_fsync();
+        printf("krffsmount-hosttest: timestamp rows: %d failures\n", failures);
+        return failures != 0;
+    }
+    volume_failure_rows();
+    if (argc == 2 && __builtin_strcmp(argv[1], "failures") == 0) {
+        printf("krffsmount-hosttest: failure rows: %d failures\n", failures);
+        return failures != 0;
+    }
     relocation(0);
     relocation(1);
     directory();

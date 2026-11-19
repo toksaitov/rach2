@@ -2467,20 +2467,17 @@ static int _krffs_on_disk;
  * off, keeps the flag set too: its writes stop where a power cut would
  * stop them, and only the next mount's repair finishes them.
  *
- * The root's page is brought in by `pc_fault` before either flush, so that
- * a page that cannot be read or given a frame is an error that keeps the
- * flag set, and not the panic a fault in the demand-paged window would
- * be. The store which clears the bit then needs no disk I/O: it is a write
- * fault on a resident frame, which is a remap, and `pc_sync` protects
- * frames again but evicts none, so the frame is still resident when the
- * store arrives.
+ * The root's mode is read through the page cache (`pc_copy_out`) before
+ * either flush, so that a page that cannot be read or given a frame is an
+ * error that keeps the flag set, and not the panic a fault in the
+ * demand-paged window would be. The cleared mode is copied back the same
+ * way (`pc_copy_in`), which needs no disk I/O, since `pc_sync` protects
+ * frames again but evicts none, and an answer that it failed keeps the flag
+ * set too.
  */
 static int krffs_disk_mark_clean(void)
 {
-    krffs_node_t *root;
     uint16_t mode;
-    int bkl;
-    int resident;
 
     if (!_krffs_on_disk) {
         return -1;
@@ -2493,27 +2490,21 @@ static int krffs_disk_mark_clean(void)
         (void)pc_sync();
         return -1;
     }
-    bkl = !bkl_held();
-    if (bkl) {
-        bkl_enter();
-    }
-    resident = pc_fault(PCWIN_BASE, 0);
-    if (bkl) {
-        bkl_exit();
-    }
-    if (!resident) {
+    if (pc_copy_out(KRFFS_FIELD_MODE, &mode, sizeof(mode)) != 0) {
         klog(KLOG_WARN, "krffs", "the root's page cannot be read; image stays dirty");
         (void)pc_sync();
         return -1;
     }
-    root = (krffs_node_t *)PCWIN_BASE;
-    mode = root->mode;
 
     if (pc_sync() != 0) {
         klog(KLOG_WARN, "krffs", "flush failed before the clear; image stays dirty");
         return -1;
     }
-    root->mode = (uint16_t)(mode & ~KRFFS_MODE_DIRTY);
+    mode = (uint16_t)(mode & ~KRFFS_MODE_DIRTY);
+    if (pc_copy_in_checked(KRFFS_FIELD_MODE, &mode, sizeof(mode), krffs_root_halted) != 0) {
+        klog(KLOG_WARN, "krffs", "the root's page cannot be written; image stays dirty");
+        return -1;
+    }
     if (pc_sync() != 0) {
         klog(KLOG_WARN, "krffs", "flush failed after the clear; image stays dirty");
         return -1;
@@ -2740,6 +2731,42 @@ void kernel_shutdown(int how)
     power_stop(how);
 }
 
+/** The disk root's backend: copy `size` bytes at `offset` of the root into
+ * `buffer` through the page cache (`pc_copy_out`), so that a read the disk
+ * fails is -1 to the walk that asked and not a fault's panic. `ctx` is the
+ * window's base, where the backing's offset 0 is mapped. */
+static int krffs_window_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
+{
+    (void)ctx;
+    if (offset > 0xFFFFFFFFu) {
+        return -1;
+    }
+    return pc_copy_out((uint32_t)offset, buffer, size) == 0 ? 0 : -1;
+}
+
+/** Copy `size` bytes of `buffer` to `offset` of the disk root through the
+ * page cache. Return -1 if a fetch fails or the root halts during it. */
+static int krffs_window_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
+{
+    (void)ctx;
+    if (offset > 0xFFFFFFFFu) {
+        return -1;
+    }
+    return pc_copy_in_checked((uint32_t)offset, buffer, size, krffs_root_halted);
+}
+
+/** Nothing: the root's barrier is its flush (`pc_sync_wait`), which the
+ * mount names apart from the backend. 0. */
+static int krffs_window_sync(void *ctx)
+{
+    (void)ctx;
+    return 0;
+}
+
+/* A store inside one page is whole or not at all (`pc_copy_in`). */
+static const krffs_backend_t krffs_window_backend = {krffs_window_read, krffs_window_write,
+                                                     krffs_window_sync, PAGE_SIZE};
+
 /** The page cache's backing on the disk: read the page at byte `off` of the
  * KRFFS partition. Returns 0, or the device's error. */
 static int krffs_disk_read(uint32_t off, void *page)
@@ -2753,6 +2780,11 @@ static int krffs_disk_read(uint32_t off, void *page)
  * in as few writes of the device as its limit allows, each of which is on
  * the medium when it returns. Returns 0, or the device's error, after which
  * the pages are in no known state.
+ *
+ * A halted root (`krffs_root_halted`) takes no write, from the flusher, an
+ * eviction or a sync alike: -EIO, and the pages stay dirty in the cache, as
+ * Linux's ext4_writepages answers -EIO after a shutdown. What the cache
+ * holds then is a state only the next mount's repair may put on the disk.
  */
 static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
 {
@@ -2766,10 +2798,16 @@ static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
         most = 1;
     }
     while (count > 0) {
+        if (krffs_root_halted()) {
+            return -EIO;
+        }
         chunk = count < most ? count : most;
         rc =
             dev->write(dev, off / BLOCK_SECTOR_SIZE, chunk * (PAGE_SIZE / BLOCK_SECTOR_SIZE), from);
         if (rc != 0) {
+            if (!_krffs_on_disk || krffs_root_reaping()) {
+                krffs_root_halt();
+            }
             return rc;
         }
         off += chunk * PAGE_SIZE;
@@ -3125,6 +3163,51 @@ static int init_krffs_disk(void)
 }
 
 /**
+ * The disk root's start once it is mounted: set the dirty flag and write it
+ * through, logging one an unclean shutdown left, and then free the orphans,
+ * as `krffs_root_mount` describes. -1 when the flag cannot be read, set or
+ * written, which refuses the mount; 0 otherwise, a scan that halted the
+ * root included, which keeps the flag and refuses writes until the next
+ * mount.
+ */
+static int krffs_root_mark_and_reap(void)
+{
+    uint32_t reaped;
+    uint16_t mode = 0;
+    int read;
+
+    if (krffs_root_halted()) {
+        return 0;
+    }
+    read = pc_copy_out(KRFFS_FIELD_MODE, &mode, sizeof(mode));
+
+    if (read == 0 && (mode & KRFFS_MODE_DIRTY)) {
+        klog(KLOG_WARN, "krffs", "not cleanly unmounted last time; run fsck.krffs");
+    }
+    mode |= KRFFS_MODE_DIRTY;
+    if (read != 0 ||
+        pc_copy_in_checked(KRFFS_FIELD_MODE, &mode, sizeof(mode), krffs_root_halted) != 0 ||
+        pc_sync() != 0) {
+        krffs_root_halt();
+        klog(KLOG_WARN, "krffs", "mount: refused: dirty flag or repair writeback failed");
+        return -1;
+    }
+
+    reaped = krffs_reap_orphans();
+    if (reaped != 0) {
+        klog(KLOG_INFO, "krffs", "reaped %d orphan(s) with no descriptor left", (int)reaped);
+    }
+    if (krffs_root_halted()) {
+        klog(KLOG_WARN, "krffs",
+             "orphan scan: a read or a free failed; writes refused until the next mount");
+    } else if (reaped != 0 && pc_sync() != 0) {
+        krffs_root_halt();
+        klog(KLOG_WARN, "krffs", "the orphan repair did not reach the disk");
+    }
+    return 0;
+}
+
+/**
  * Mount the KRFFS root at `start_lba` of `disk`, `sector_count` sectors,
  * through the page-cache window. `found` is the entry of `disc_parts` that
  * `init_krffs_disk` chose, or -1 for a root named by identity, whose overlap
@@ -3145,18 +3228,23 @@ static int init_krffs_disk(void)
  * crash could leave an image fsck.krffs reads as clean. `krffs_fs` is
  * cleared before the backing is dropped.
  *
+ * The root is read and written through the page cache's copies
+ * (`krffs_window_backend`), so a read the disk fails, at the mount or later, is
+ * an error the walk answers and not a fault in the window, which would panic.
  * The orphans a previous shutdown left, nodes that only descriptors kept and
- * that nothing freed once those were gone, are reclaimed only after the bit
- * is on the disk. No descriptor exists at mount, so a reserved node with no
- * name is garbage. The repair rewrites the allocator's metadata, and on an
- * image larger than the cache those pages can be evicted part way through,
- * so a reset during it must leave an image marked dirty, which fsck.krffs
- * then finishes. It runs whatever the bit said before the mount: a clean
- * halt closes no descriptors, so a cleanly unmounted image can have an orphan
- * too, and one left for later would remain once fsck.krffs cleared the bit.
- * A repair write that fails leaves the mount up with its pages dirty, and the
- * page cache holds the failure until `vfs_init` installs the root's hook
- * (`pc_on_failure`), which records it for the root's syncs to report.
+ * that nothing freed once those were gone, are reclaimed only after the bit is
+ * on the disk; a read that fails during that scan leaves the nodes it could not
+ * judge counted and halts the root, which keeps the bit and refuses writes
+ * until the next mount. No descriptor exists at mount, so a reserved node with
+ * no name is garbage. The repair rewrites the allocator's metadata, and on an
+ * image larger than the cache those pages can be evicted part way through, so a
+ * reset during it must leave an image marked dirty, which fsck.krffs then
+ * finishes. It runs whatever the bit said before the mount: a clean halt closes
+ * no descriptors, so a cleanly unmounted image can have an orphan too, and one
+ * left for later would remain once fsck.krffs cleared the bit. A repair write
+ * that fails leaves the mount up with its pages dirty, and the page cache holds
+ * the failure until `vfs_init` installs the root's hook (`pc_on_failure`),
+ * which records it for the root's syncs to report.
  *
  * The boot partition was judged and published before any root was chosen
  * (`discover_boot_devices`), so a machine that mounts nothing still has it.
@@ -3191,34 +3279,16 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
 
     block_partition_init(&_krffs_disk_part, disk, start_lba, sector_count);
     pc_set_backing(krffs_disk_read, krffs_disk_write, part_bytes);
-    if (init_krffs_disk_root((void *)PCWIN_BASE, part_bytes, BLOCK_SECTOR_SIZE, pc_sync_wait) !=
-        0) {
+    if (init_krffs_disk_root((void *)PCWIN_BASE, part_bytes, BLOCK_SECTOR_SIZE, pc_sync_wait,
+                             &krffs_window_backend) != 0) {
         pc_set_backing(0, 0, 0);
         return -1;
     }
 
-    {
-        krffs_node_t *root = (krffs_node_t *)PCWIN_BASE;
-        uint32_t reaped;
-
-        if (root->mode & KRFFS_MODE_DIRTY) {
-            klog(KLOG_WARN, "krffs", "not cleanly unmounted last time; run fsck.krffs");
-        }
-        root->mode |= KRFFS_MODE_DIRTY;
-        if (pc_sync() != 0) {
-            klog(KLOG_WARN, "krffs", "mount: refused: dirty flag or repair writeback failed");
-            krffs_fs = 0;
-            pc_set_backing(0, 0, 0);
-            return -1;
-        }
-
-        reaped = krffs_reap_orphans();
-        if (reaped != 0) {
-            klog(KLOG_INFO, "krffs", "reaped %d orphan(s) with no descriptor left", (int)reaped);
-            if (pc_sync() != 0) {
-                klog(KLOG_WARN, "krffs", "the orphan repair did not reach the disk");
-            }
-        }
+    if (krffs_root_mark_and_reap() != 0) {
+        krffs_fs = 0;
+        pc_set_backing(0, 0, 0);
+        return -1;
     }
     _krffs_on_disk = 1;
 
@@ -4209,16 +4279,23 @@ static void process_command(const char *cmd)
             console_puts("No file system mounted.");
         } else {
             krffs_node_t *node;
+            krffs_node_t head;
             uint32_t count = 0;
 
             console_puts("Files in the file system:");
             node = krffs_fs->node;
             do {
-                if (node->type == KRFFS_RESERVED_NODE && node->name[0] != '\0') {
-                    console_printf("  %s  (%d bytes)\n", node->name, (uint32_t)node->data_size);
+                if (krffs_node_head(node, &head) != 0) {
+                    console_puts("  (a header cannot be read)");
+                    break;
+                }
+                head.name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
+                if (head.type == KRFFS_RESERVED_NODE && head.name[0] != '\0') {
+                    console_printf("  %s  (%d bytes)\n", (const char *)head.name,
+                                   (uint32_t)head.data_size);
                     count++;
                 }
-            } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
+            } while ((node = krffs_next_node(node, &head)) != krffs_fs->node);
 
             if (count == 0) {
                 console_puts("  (no files)");

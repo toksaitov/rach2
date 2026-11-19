@@ -122,6 +122,9 @@ static wait_queue_t vn_wq;        /* the thread sleeps here */
 static volatile uint32_t vn_work; /* a kick came since the thread looked */
 static process_t *vn_thread;
 static wait_queue_t vn_idle_wq; /* a table's change waits for a refill */
+/* The attachments that have ended and their frames, under the big lock. */
+static uint32_t vn_detaches;
+static uint64_t vn_detached_to, vn_detached_from;
 
 /** The region that holds `a`, a guest-physical address, or QEMU's with
  * `va`; NULL for none. */
@@ -1116,6 +1119,9 @@ static void vn_detach(struct vnet *n)
         flags = spin_lock_irqsave(&n->lock);
         n->tap = 0;
         spin_unlock_irqrestore(&n->lock, flags);
+        vn_detaches++;
+        vn_detached_to += n->to_guest;
+        vn_detached_from += n->from_guest;
         klog(KLOG_INFO, "vhost-net", "detached: %s: %u frames to the guest, %u from it",
              tap_name(t), n->to_guest, n->from_guest);
     }
@@ -1560,6 +1566,13 @@ static const struct file_ops vn_ops = {NULL, NULL, NULL, vn_ioctl, vn_close, NUL
  * /dev/kvm is; a root that runs udev gives both the group and mode its
  * rules name. */
 static struct devfs_node vn_node = {"vhost-net", 10, 238, 0666, &vn_ops, vn_open, NULL, 0};
+
+void vhost_net_detached_frames(uint32_t *n, uint64_t *to, uint64_t *from)
+{
+    *n = vn_detaches;
+    *to = vn_detached_to;
+    *from = vn_detached_from;
+}
 
 void vhost_net_start(void)
 {

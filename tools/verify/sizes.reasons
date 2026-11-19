@@ -210,7 +210,7 @@ rach2/sys/network/socket/netlink.c:answer complexity 52 a dispatcher, one arm pe
 rach2/sys/network/socket/netlink.c:neigh_dump complexity 26 a dump, one test for each filter the request may carry
 rach2/sys/network/socket/netlink.c:watch_compare complexity 27 a comparison of two states, one test for each kind of change
 
-rach2/sys/network/tcp/tcp.c:tcp_send_rst_unmatched params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
+rach2/sys/network/tcp/tcp.c:tcp_send_rst_unmatched params 9 the parameters are the fields of one packet and the card it leaves by; a struct for them would be filled and unpacked once
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr lines 349 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr nesting 6 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr complexity 91 a state machine, one arm per state, read as a table
@@ -245,7 +245,6 @@ rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one 
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 142 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_stat_node lines 252 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:copy_from_file params 8 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
 rach2/sys/syscall_fs.c:copy_from_pipe params 7 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
 rach2/sys/syscall_fs.c:sys_copy_file_range complexity 27 one system call's contract, its checks in the order the manual page lists the errors
@@ -261,7 +260,6 @@ rach2/sys/syscall_net.c:raw6_sendto complexity 31 one system call's contract, it
 rach2/sys/syscall_net.c:do_sendto_opt lines 127 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendto_opt params 7 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendto_opt complexity 36 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_setsockopt lines 133 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:put_cmsg params 8 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
@@ -434,8 +432,8 @@ tests/host/krffs_hosttest.c:every_stop_file_is_whole nesting 6 a test's rows, ea
 tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_is_zero_filled nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_keeps_its_bytes nesting 6 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main lines 479 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:image_rows complexity 59 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:image_rows lines 479 a test's rows, each a case, read as one table
 
 tests/host/kstring_hosttest.c:main complexity 71 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main lines 154 a test's rows, each a case, read as one table

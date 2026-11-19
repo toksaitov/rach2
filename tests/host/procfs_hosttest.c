@@ -990,11 +990,29 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
     return 0;
 }
 
+/** The header of `node`, a node in this file's memory: a copy, 0. */
+int krffs_node_head(const krffs_node_t *node, krffs_node_t *out)
+{
+    *out = *node;
+    return 0;
+}
+
 /** The node at `path`: the program at `program_path`, and NULL for any
  *  other path. */
 krffs_node_t *krffs_resolve(const char *path)
 {
     return program_path && __builtin_strcmp(path, program_path) == 0 ? &program : NULL;
+}
+
+/** `krffs_resolve`, with `*err` 0 when found and -ENOENT when not. */
+krffs_node_t *krffs_resolve_err(const char *path, int *err)
+{
+    krffs_node_t *node = krffs_resolve(path);
+
+    if (err) {
+        *err = node ? 0 : -ENOENT;
+    }
+    return node;
 }
 
 const struct vfs_type vfs_tmpfs_type = {0};

@@ -77,8 +77,8 @@ static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath,
 static int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
 static int fd_node_check(fd_entry_t *entry);
 static int cred_privileged(void);
-static void cred_kill_setid(krffs_node_t *node);
-static void vfs_kill_setid(struct vfs_mount *mnt, void *node);
+static int cred_kill_setid(krffs_node_t *node);
+static int vfs_kill_setid(struct vfs_mount *mnt, void *node);
 static int mnt_is_root(const struct vfs_mount *mnt);
 static int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real);
 static int32_t cred_access_node(const krffs_node_t *node, int want, int use_real);
@@ -896,6 +896,61 @@ uint64_t krffs_node_ino(const krffs_node_t *node)
 {
     (void)node;
     return 0;
+}
+
+/** Fail the row: no row reads a header of the KRFFS root. */
+int krffs_node_head(const krffs_node_t *node, krffs_node_t *out)
+{
+    (void)node;
+    (void)out;
+    check(0, "unexpected root header read");
+    return -1;
+}
+
+/** Fail the row: no row asks the type of a node of the KRFFS root. */
+int krffs_node_is_dir(const krffs_node_t *node)
+{
+    (void)node;
+    check(0, "unexpected root type read");
+    return -1;
+}
+
+/** No node of the KRFFS root is in a row: 0. */
+uint64_t krffs_ino_of(const krffs_node_t *node)
+{
+    (void)node;
+    return 0;
+}
+
+/** Fail the row: no row stores a mode on the KRFFS root. */
+int krffs_node_set_mode(krffs_node_t *node, uint16_t mode)
+{
+    (void)node;
+    (void)mode;
+    check(0, "unexpected root mode store");
+    return -1;
+}
+
+/** Fail the row: no row stores an owner on the KRFFS root. */
+int krffs_node_set_owner(krffs_node_t *node, uint32_t uid, uint32_t gid, int which)
+{
+    (void)node;
+    (void)uid;
+    (void)gid;
+    (void)which;
+    check(0, "unexpected root owner store");
+    return -1;
+}
+
+/** Fail the row: no row stores a time on the KRFFS root. */
+int krffs_node_set_time(krffs_node_t *node, uint32_t field, int64_t seconds, int64_t nanoseconds)
+{
+    (void)node;
+    (void)field;
+    (void)seconds;
+    (void)nanoseconds;
+    check(0, "unexpected root time store");
+    return -1;
 }
 
 /** The file type bits of `mode`. */

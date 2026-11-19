@@ -1,0 +1,1495 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.netguest",
+  "summary": "The wired card given through VFIO to a Debian/nftables or FreeBSD/pf gateway guest, the network reached over a tap link with and without vhost-net, and the card taken back, judged by the kernel's and the guest's counts",
+  "cases": [
+    {
+      "case_id": "machine.netguest.cycle",
+      "behavior": "Exercise the tap device and the card let go and taken back three times",
+      "units": [
+        "tests/netguest",
+        "tests/cases/machine/netguest_scenario.c",
+        "rach2/sys/network/driver",
+        "rach2/sys/vfio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "tests/netguest/run.sh"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "netguest_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root in the private GNU guest, which gives its card to a nested guest",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the peer and the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "start the nettput peer on the case's port, boot the GNU root on NVMe by its MBR identity with remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the netguest payload's read-only AHCI data disk"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the case with run.sh against the peer at 10.0.3.2 and require its pass token"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "nvme",
+                "serial": "assign-root"
+              },
+              {
+                "name": "netguest-payload",
+                "base": "netguest-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max-svm",
+            "processors": 4,
+            "memory_bytes": 6442450944,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "intel-iommu",
+                "properties": {
+                  "intremap": "on",
+                  "caching-mode": "on"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.2.0/24",
+                "host": "10.0.2.2",
+                "dhcpstart": "10.0.2.15"
+              },
+              {
+                "model": "pcie-root-port",
+                "id": "cardport",
+                "properties": {
+                  "addr": "06.0",
+                  "chassis": "1"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "properties": {
+                  "addr": "00.0"
+                },
+                "bus": "cardport"
+              }
+            ],
+            "boot_options": [
+              "rach2.root=MBRID=82274701,1"
+            ],
+            "display": "none",
+            "machine": "q35",
+            "emulator": "assign-qemu"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "peer",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "netguest",
+          "checks": "run.sh's cycle case: tap9, absent before, made, addressed and removed by iproute2; the e1000 unbound and bound three times, the peer answering after each; the free interrupt vectors as before",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 7516192768,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 2,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "tests/cases/assign/gnu.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-data",
+          "node": "tests/cases/netguest/netguest.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-nettput",
+          "node": "tests/cases/netguest/nettput-host",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest_scenario",
+          "node": "tests/cases/machine/netguest_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "gives the machine's card away and needs a network of its own; the Lenovo form is tests/netguest/lenovo.sh"
+      }
+    },
+    {
+      "case_id": "machine.netguest.debian",
+      "behavior": "Exercise the card given to a Debian guest with nftables over the tap link",
+      "units": [
+        "tests/netguest",
+        "tests/cases/machine/netguest_scenario.c",
+        "rach2/sys/network/driver",
+        "rach2/sys/vfio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "tests/netguest/run.sh"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "netguest_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root in the private GNU guest, which gives its card to a nested guest",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the peer and the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "start the nettput peer on the case's port, boot the GNU root on NVMe by its MBR identity with remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the netguest payload's read-only AHCI data disk"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the case with run.sh against the peer at 10.0.3.2 and require its pass token"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "nvme",
+                "serial": "assign-root"
+              },
+              {
+                "name": "netguest-payload",
+                "base": "netguest-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max-svm",
+            "processors": 4,
+            "memory_bytes": 6442450944,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "intel-iommu",
+                "properties": {
+                  "intremap": "on",
+                  "caching-mode": "on"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.2.0/24",
+                "host": "10.0.2.2",
+                "dhcpstart": "10.0.2.15"
+              },
+              {
+                "model": "pcie-root-port",
+                "id": "cardport",
+                "properties": {
+                  "addr": "06.0",
+                  "chassis": "1"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "properties": {
+                  "addr": "00.0"
+                },
+                "bus": "cardport"
+              }
+            ],
+            "boot_options": [
+              "rach2.root=MBRID=82274701,1"
+            ],
+            "display": "none",
+            "machine": "q35",
+            "emulator": "assign-qemu"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "peer",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "netguest",
+          "checks": "run.sh's debian case: transfers through the guest counted by tap0 each way, ten attempts at the peer's second port, where it serves, unanswered and unrefused, the guest's deny count grown by at least one SYN of each, and netguest.sh's checks of the card, the peer and the VFIO, KVM, IOMMU and vector counts",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 7516192768,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 2,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "tests/cases/assign/gnu.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-data",
+          "node": "tests/cases/netguest/netguest.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-nettput",
+          "node": "tests/cases/netguest/nettput-host",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest_scenario",
+          "node": "tests/cases/machine/netguest_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "gives the machine's card away and needs a network of its own; the Lenovo form is tests/netguest/lenovo.sh"
+      }
+    },
+    {
+      "case_id": "machine.netguest.debian-vhost",
+      "behavior": "Exercise the card given to a Debian guest whose tap queues are on vhost-net",
+      "units": [
+        "tests/netguest",
+        "tests/cases/machine/netguest_scenario.c",
+        "rach2/sys/network/driver",
+        "rach2/sys/vfio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "tests/netguest/run.sh"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "netguest_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root in the private GNU guest, which gives its card to a nested guest",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the peer and the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "start the nettput peer on the case's port, boot the GNU root on NVMe by its MBR identity with remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the netguest payload's read-only AHCI data disk"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the case with run.sh against the peer at 10.0.3.2 and require its pass token"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "nvme",
+                "serial": "assign-root"
+              },
+              {
+                "name": "netguest-payload",
+                "base": "netguest-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max-svm",
+            "processors": 4,
+            "memory_bytes": 6442450944,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "intel-iommu",
+                "properties": {
+                  "intremap": "on",
+                  "caching-mode": "on"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.2.0/24",
+                "host": "10.0.2.2",
+                "dhcpstart": "10.0.2.15"
+              },
+              {
+                "model": "pcie-root-port",
+                "id": "cardport",
+                "properties": {
+                  "addr": "06.0",
+                  "chassis": "1"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "properties": {
+                  "addr": "00.0"
+                },
+                "bus": "cardport"
+              }
+            ],
+            "boot_options": [
+              "rach2.root=MBRID=82274701,1"
+            ],
+            "display": "none",
+            "machine": "q35",
+            "emulator": "assign-qemu"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "peer",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "netguest",
+          "checks": "run.sh's debian-vhost case: transfers through the guest counted by tap0 each way, at least 5541 frames each way in vhost-net's /proc/stat counts of the attachments that ended, no vhost line on QEMU's stderr, no packet to the denied port counted, and netguest.sh's checks",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 7516192768,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 2,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "tests/cases/assign/gnu.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-data",
+          "node": "tests/cases/netguest/netguest.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-nettput",
+          "node": "tests/cases/netguest/nettput-host",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest_scenario",
+          "node": "tests/cases/machine/netguest_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "gives the machine's card away and needs a network of its own; the Lenovo form is tests/netguest/lenovo.sh"
+      }
+    },
+    {
+      "case_id": "machine.netguest.freebsd",
+      "behavior": "Exercise the card given to a FreeBSD guest with pf over the tap link",
+      "units": [
+        "tests/netguest",
+        "tests/cases/machine/netguest_scenario.c",
+        "rach2/sys/network/driver",
+        "rach2/sys/vfio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "tests/netguest/run.sh"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "netguest_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root in the private GNU guest, which gives its card to a nested guest",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the peer and the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "start the nettput peer on the case's port, boot the GNU root on NVMe by its MBR identity with remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the netguest payload's read-only AHCI data disk"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the case with run.sh against the peer at 10.0.3.2 and require its pass token"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "nvme",
+                "serial": "assign-root"
+              },
+              {
+                "name": "netguest-payload",
+                "base": "netguest-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max-svm",
+            "processors": 4,
+            "memory_bytes": 6442450944,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "intel-iommu",
+                "properties": {
+                  "intremap": "on",
+                  "caching-mode": "on"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.2.0/24",
+                "host": "10.0.2.2",
+                "dhcpstart": "10.0.2.15"
+              },
+              {
+                "model": "pcie-root-port",
+                "id": "cardport",
+                "properties": {
+                  "addr": "06.0",
+                  "chassis": "1"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "properties": {
+                  "addr": "00.0"
+                },
+                "bus": "cardport"
+              }
+            ],
+            "boot_options": [
+              "rach2.root=MBRID=82274701,1"
+            ],
+            "display": "none",
+            "machine": "q35",
+            "emulator": "assign-qemu"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "peer",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "netguest",
+          "checks": "run.sh's freebsd case: transfers through the guest counted by tap0 each way, ten attempts at the peer's second port, where it serves, unanswered and unrefused, pf's deny label count grown by at least one SYN of each, and netguest.sh's checks of the card, the peer and the VFIO, KVM, IOMMU and vector counts",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 7516192768,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 2,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "tests/cases/assign/gnu.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-data",
+          "node": "tests/cases/netguest/netguest.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-nettput",
+          "node": "tests/cases/netguest/nettput-host",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest_scenario",
+          "node": "tests/cases/machine/netguest_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "gives the machine's card away and needs a network of its own; the Lenovo form is tests/netguest/lenovo.sh"
+      }
+    },
+    {
+      "case_id": "machine.netguest.freebsd-vhost",
+      "behavior": "Exercise the card given to a FreeBSD guest whose tap queues are on vhost-net",
+      "units": [
+        "tests/netguest",
+        "tests/cases/machine/netguest_scenario.c",
+        "rach2/sys/network/driver",
+        "rach2/sys/vfio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "tests/netguest/run.sh"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "netguest_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root in the private GNU guest, which gives its card to a nested guest",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the peer and the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "start the nettput peer on the case's port, boot the GNU root on NVMe by its MBR identity with remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the netguest payload's read-only AHCI data disk"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the case with run.sh against the peer at 10.0.3.2 and require its pass token"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "nvme",
+                "serial": "assign-root"
+              },
+              {
+                "name": "netguest-payload",
+                "base": "netguest-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max-svm",
+            "processors": 4,
+            "memory_bytes": 6442450944,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "intel-iommu",
+                "properties": {
+                  "intremap": "on",
+                  "caching-mode": "on"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.2.0/24",
+                "host": "10.0.2.2",
+                "dhcpstart": "10.0.2.15"
+              },
+              {
+                "model": "pcie-root-port",
+                "id": "cardport",
+                "properties": {
+                  "addr": "06.0",
+                  "chassis": "1"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "properties": {
+                  "addr": "00.0"
+                },
+                "bus": "cardport"
+              }
+            ],
+            "boot_options": [
+              "rach2.root=MBRID=82274701,1"
+            ],
+            "display": "none",
+            "machine": "q35",
+            "emulator": "assign-qemu"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "peer",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "netguest",
+          "checks": "run.sh's freebsd-vhost case: transfers through the guest counted by tap0 each way, at least 5541 frames each way in vhost-net's /proc/stat counts of the attachments that ended, no vhost line on QEMU's stderr, no packet to the denied port counted, and netguest.sh's checks",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 7516192768,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 2,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "tests/cases/assign/gnu.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-data",
+          "node": "tests/cases/netguest/netguest.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-nettput",
+          "node": "tests/cases/netguest/nettput-host",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest_scenario",
+          "node": "tests/cases/machine/netguest_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "gives the machine's card away and needs a network of its own; the Lenovo form is tests/netguest/lenovo.sh"
+      }
+    },
+    {
+      "case_id": "machine.netguest.kill",
+      "behavior": "Exercise the card taken back after QEMU is killed under a transfer",
+      "units": [
+        "tests/netguest",
+        "tests/cases/machine/netguest_scenario.c",
+        "rach2/sys/network/driver",
+        "rach2/sys/vfio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "tests/netguest/run.sh"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "netguest_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root in the private GNU guest, which gives its card to a nested guest",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the peer and the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "start the nettput peer on the case's port, boot the GNU root on NVMe by its MBR identity with remapped interrupts, wait for the root and login prompt, log in as root and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the netguest payload's read-only AHCI data disk"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run the case with run.sh against the peer at 10.0.3.2 and require its pass token"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "nvme",
+                "serial": "assign-root"
+              },
+              {
+                "name": "netguest-payload",
+                "base": "netguest-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max-svm",
+            "processors": 4,
+            "memory_bytes": 6442450944,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "intel-iommu",
+                "properties": {
+                  "intremap": "on",
+                  "caching-mode": "on"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.2.0/24",
+                "host": "10.0.2.2",
+                "dhcpstart": "10.0.2.15"
+              },
+              {
+                "model": "pcie-root-port",
+                "id": "cardport",
+                "properties": {
+                  "addr": "06.0",
+                  "chassis": "1"
+                }
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "properties": {
+                  "addr": "00.0"
+                },
+                "bus": "cardport"
+              }
+            ],
+            "boot_options": [
+              "rach2.root=MBRID=82274701,1"
+            ],
+            "display": "none",
+            "machine": "q35",
+            "emulator": "assign-qemu"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "peer",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "netguest",
+          "checks": "run.sh's kill case: QEMU killed once tap0 has carried a mebibyte of a send through the Debian guest, then the card back with its driver, the peer answering and every VFIO, KVM, IOMMU and vector count as before",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 7516192768,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 2,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "tests/cases/assign/gnu.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-data",
+          "node": "tests/cases/netguest/netguest.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "assign-qemu",
+          "node": "tests/cases/assign/qemu/bin/qemu-system-x86_64",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest-nettput",
+          "node": "tests/cases/netguest/nettput-host",
+          "per_architecture": false
+        },
+        {
+          "name": "netguest_scenario",
+          "node": "tests/cases/machine/netguest_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "gives the machine's card away and needs a network of its own; the Lenovo form is tests/netguest/lenovo.sh"
+      }
+    }
+  ]
+}

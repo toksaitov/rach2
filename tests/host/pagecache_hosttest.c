@@ -1,6 +1,7 @@
 /**
  * pagecache_hosttest.c: the bookkeeping of the page cache,
- * rach2/sys/mm/pagecache.c, over a model disk of 64 pages.
+ * rach2/sys/mm/pagecache.c, over a model disk of 64 pages, and the copies
+ * that answer a read the disk fails.
  *
  * host-deps:
  *
@@ -21,7 +22,8 @@
  * is the kernel's: pagecache.c's `pc_wait_release` and its queue, built
  * with PAGECACHE_HOST_WAIT, over proc/wait_queue.c, included whole with
  * WAIT_QUEUE_HOSTTEST, and a model `schedule` that lets the pin go only once
- * the caller is blocked on the queue.
+ * the caller is blocked on the queue. The same fixture extracts the root
+ * write and boot scan from kernel.c and the device flush from bcache.c.
  */
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u
@@ -89,14 +91,16 @@ static void (*fake_write_pause)(uint32_t disk_off, const void *page);
 #define FAKE_NO_FAIL 0xFFFFFFFFu
 static uint32_t fake_write_fail = FAKE_NO_FAIL;
 static int fake_write_fail_all;
+/* The page whose reads fail, as a disk's read error does. */
+static uint32_t fake_read_fail = FAKE_NO_FAIL;
 
 /** The backing's read: copy the page at `disk_off` into `page`, counting
- *  the read. Returns 0, or -1 past the disk. */
+ *  the read. Returns 0, or -1 past the disk and for `fake_read_fail`. */
 static int fake_read(uint32_t disk_off, void *page)
 {
     uint32_t p = disk_off / PC_PAGE_SIZE;
     uint32_t i;
-    if (p >= FAKE_PAGES) {
+    if (p >= FAKE_PAGES || p == fake_read_fail) {
         return -1;
     }
     for (i = 0; i < PC_PAGE_SIZE; ++i) {
@@ -163,6 +167,69 @@ static void touch(uint32_t p, int write, uint8_t marker)
             page[0] = marker;
         }
     }
+}
+
+/**
+ * The copies a file system reads and writes the window with when it must
+ * answer a disk's error (`pc_copy_out`, `pc_copy_in`): a copy across two
+ * pages brings both in; a page whose read fails is -1 with nothing of it
+ * resident, where a fault in the window would have panicked, and a later
+ * read that succeeds brings it in; a copy into the cache marks its page
+ * dirty for the sync to write; a store across two pages whose second
+ * cannot be read changes neither, and stores both once it can; a range
+ * past the backing is -1; and a read across two pages needs one free slot,
+ * as a fault does, since it goes a page at a time.
+ */
+static void test_copies(void)
+{
+    uint8_t buf[4] = {0, 0, 0, 0};
+    const uint8_t mark = 0xABu;
+    const uint8_t two[2] = {0xA1u, 0xA2u};
+
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    fake_disk[50][PC_PAGE_SIZE - 2] = 0x11u;
+    fake_disk[50][PC_PAGE_SIZE - 1] = 0x22u;
+    fake_disk[51][0] = 0x33u;
+    fake_disk[51][1] = 0x44u;
+    CHECK(pc_copy_out(51 * PC_PAGE_SIZE - 2, buf, 4) == 0);
+    CHECK(buf[0] == 0x11u && buf[1] == 0x22u && buf[2] == 0x33u && buf[3] == 0x44u);
+    CHECK(pc_test_page(50 * PC_PAGE_SIZE) != 0 && pc_test_page(51 * PC_PAGE_SIZE) != 0);
+
+    fake_read_fail = 53;
+    CHECK(pc_copy_out(53 * PC_PAGE_SIZE + 7, buf, 1) == -1);
+    CHECK(pc_test_page(53 * PC_PAGE_SIZE) == 0);
+    CHECK(pc_copy_out(53 * PC_PAGE_SIZE - 1, buf, 2) == -1);
+    CHECK(pc_test_page(52 * PC_PAGE_SIZE) != 0 && pc_test_page(53 * PC_PAGE_SIZE) == 0);
+    CHECK(pc_copy_in(53 * PC_PAGE_SIZE, &mark, 1) == -1);
+    CHECK(pc_test_page(53 * PC_PAGE_SIZE) == 0);
+    fake_read_fail = FAKE_NO_FAIL;
+    CHECK(pc_copy_out(53 * PC_PAGE_SIZE, buf, 1) == 0 && pc_test_page(53 * PC_PAGE_SIZE) != 0);
+
+    CHECK(pc_copy_in(54 * PC_PAGE_SIZE + 3, &mark, 1) == 0);
+    CHECK(pc_dirty_count() == 1);
+    CHECK(pc_sync() == 0 && fake_disk[54][3] == mark && pc_dirty_count() == 0);
+
+    fake_disk[55][PC_PAGE_SIZE - 1] = 0x55u;
+    fake_read_fail = 56;
+    CHECK(pc_copy_in(56 * PC_PAGE_SIZE - 1, two, 2) == -1);
+    CHECK(pc_dirty_count() == 0);
+    fake_read_fail = FAKE_NO_FAIL;
+    CHECK(pc_copy_out(56 * PC_PAGE_SIZE - 1, buf, 1) == 0 && buf[0] == 0x55u);
+    CHECK(pc_copy_in(56 * PC_PAGE_SIZE - 1, two, 2) == 0 && pc_dirty_count() == 2);
+    CHECK(pc_sync() == 0 && fake_disk[55][PC_PAGE_SIZE - 1] == two[0] &&
+          fake_disk[56][0] == two[1]);
+
+    CHECK(pc_copy_out(FAKE_PAGES * PC_PAGE_SIZE - 1, buf, 2) == -1);
+    CHECK(pc_copy_in(FAKE_PAGES * PC_PAGE_SIZE, &mark, 1) == -1);
+
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_slots[1].pinned = pc_slots[2].pinned = pc_slots[3].pinned = 1;
+    fake_disk[60][PC_PAGE_SIZE - 1] = 0x66u;
+    fake_disk[61][0] = 0x77u;
+    CHECK(pc_copy_out(61 * PC_PAGE_SIZE - 1, buf, 2) == 0 && buf[0] == 0x66u && buf[1] == 0x77u);
+    pc_slots[1].pinned = pc_slots[2].pinned = pc_slots[3].pinned = 0;
 }
 
 /* What the failure hook was told: its calls and the last answer. */
@@ -361,6 +428,13 @@ void bkl_enter(void)
 void bkl_exit(void)
 {}
 
+/** Exchange `*p` for `value`, a full barrier, as the kernel's does: the wait
+ * queue's barrier (`sched_mb`) is one. The old value. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    return __atomic_exchange_n(p, value, __ATOMIC_SEQ_CST);
+}
+
 /**
  * The scheduler, entered when the caller of the kernel's `pc_wait_release`
  * gives up the processor. The caller must be blocked, uninterruptibly, on
@@ -496,6 +570,194 @@ static void test_sync_wait(void)
         }
     }
 }
+
+#include "block/block.h"
+#include "fs/krffs.h"
+#include "fs/bcache.h"
+#include "lib/kerrno.h"
+
+static block_partition_t _krffs_disk_part;
+static int _krffs_on_disk, last_holder;
+static int root_stopped, device_calls, reap_calls;
+
+#ifndef KLOG_WARN
+#define KLOG_WARN 4
+#define KLOG_INFO 6
+#endif
+
+/** The mount's writeback gate, which a sleeping device request can close. */
+int krffs_root_halted(void)
+{
+    return root_stopped;
+}
+
+/** Model a last holder in the root namespace lock. */
+int krffs_root_reaping(void)
+{
+    return last_holder;
+}
+
+/** Record a failed recovery writeback. */
+void krffs_root_halt(void)
+{
+    root_stopped = 1;
+}
+
+/** The reaper left one dirty page and completed one removal. */
+uint32_t krffs_reap_orphans(void)
+{
+    reap_calls++;
+    touch(1, 1, 77);
+    return 1;
+}
+
+/** The device accepts one page per request. */
+uint32_t block_max_sectors(block_device_t *dev)
+{
+    (void)dev;
+    return PC_PAGE_SIZE / BLOCK_SECTOR_SIZE;
+}
+
+/** Halt while the first device write sleeps and let that request finish. */
+static int halt_during_write(block_device_t *dev, uint64_t lba, uint32_t count, const void *data)
+{
+    (void)dev;
+    (void)lba;
+    (void)count;
+    (void)data;
+    device_calls++;
+    root_stopped = 1;
+    return 0;
+}
+
+/** Fail only the first device request. Any later request would succeed. */
+static int fail_first_write(block_device_t *dev, uint64_t lba, uint32_t count, const void *data)
+{
+    (void)dev;
+    (void)lba;
+    (void)count;
+    (void)data;
+    return ++device_calls == 1 ? -EIO : 0;
+}
+
+/** This single-threaded block-cache fixture has no competing lock holder. */
+static uint32_t cache_lock(void)
+{
+    return 0;
+}
+
+/** Release the model cache lock. */
+static void cache_unlock(uint32_t flags)
+{
+    (void)flags;
+}
+
+/** Count each flush that reaches the device. */
+int block_flush(block_device_t *dev)
+{
+    (void)dev;
+    device_calls++;
+    return 0;
+}
+
+#include "disk_recovery.inc"
+
+/** The first failed device write ends boot recovery even within one sync. */
+static void recovery_write_rows(void)
+{
+    block_device_t *dev = &_krffs_disk_part.device;
+
+    init_pagecache();
+    dev->write = fail_first_write;
+    pc_set_backing(fake_read, krffs_disk_write, sizeof(fake_disk));
+    root_stopped = device_calls = _krffs_on_disk = 0;
+    touch(0, 1, 77);
+    touch(2, 1, 88);
+    CHECK(pc_sync() == PC_SYNC_FAILED && device_calls == 1 && root_stopped &&
+          pc_dirty_count() == 2);
+    root_stopped = device_calls = 0;
+    _krffs_on_disk = 1;
+    CHECK(pc_sync() == PC_SYNC_FAILED && !root_stopped);
+    last_holder = 1;
+    device_calls = 0;
+    touch(2, 1, 88);
+    CHECK(pc_sync() == PC_SYNC_FAILED && device_calls == 1 && root_stopped);
+    last_holder = 0;
+    _krffs_on_disk = 0;
+    pc_set_backing(NULL, NULL, 0);
+
+    dev->flags = 0;
+#ifdef BLOCK_RECOVERING
+    dev->flags |= BLOCK_RECOVERING;
+#endif
+    write_failed_mark(dev, NULL);
+    device_calls = 0;
+    CHECK(flush_firsts(dev) == -EIO && !device_calls);
+    dev->flags = 0;
+}
+
+/** The second page becomes available after the mount has halted. */
+static int halt_during_fetch(uint32_t off, void *page)
+{
+    if (off == PC_PAGE_SIZE) {
+        root_stopped = 1;
+    }
+    return fake_read(off, page);
+}
+
+/** A halt during the second fetch must leave both halves of a field clean. */
+static void halted_field_row(void)
+{
+    const uint8_t bytes[2] = {57, 89};
+    uint8_t before[2], after[2];
+
+    before[0] = fake_disk[0][PC_PAGE_SIZE - 1];
+    before[1] = fake_disk[1][0];
+    init_pagecache();
+    pc_set_backing(halt_during_fetch, fake_write, sizeof(fake_disk));
+    root_stopped = 0;
+    CHECK(krffs_window_write(NULL, PC_PAGE_SIZE - 1, bytes, sizeof(bytes)) < 0 && root_stopped &&
+          !pc_dirty_count());
+    CHECK(pc_copy_out(PC_PAGE_SIZE - 1, after, sizeof(after)) == 0 && after[0] == before[0] &&
+          after[1] == before[1]);
+    pc_set_backing(NULL, NULL, 0);
+}
+
+/** Check device submissions, the boot dirty mark and final repair sync. */
+static void disk_recovery_rows(void)
+{
+    static uint8_t pages[2 * PC_PAGE_SIZE];
+    block_device_t *dev = &_krffs_disk_part.device;
+
+    recovery_write_rows();
+    halted_field_row();
+    dev->write = halt_during_write;
+    root_stopped = device_calls = 0;
+    CHECK(krffs_disk_write(0, pages, 2) == -EIO && device_calls == 1);
+    dev->flags |= BLOCK_WRITES_HALTED;
+    device_calls = 0;
+    CHECK(flush_firsts(dev) == -EIO && device_calls == 0);
+    dev->flags &= ~BLOCK_WRITES_HALTED;
+    device_calls = 0;
+    CHECK(flush_firsts(dev) == 0 && device_calls == 1);
+
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, sizeof(fake_disk));
+    device_calls = reap_calls = 0;
+    root_stopped = 1;
+    CHECK(krffs_root_mark_and_reap() == 0 && !reap_calls && !pc_stat_reads());
+    root_stopped = 0;
+    fake_write_fail = 1;
+    CHECK(krffs_root_mark_and_reap() == 0 && root_stopped && pc_dirty_count() == 1);
+    fake_write_fail = 0;
+    root_stopped = 0;
+    pc_set_backing(fake_read, fake_write, sizeof(fake_disk));
+    CHECK(krffs_root_mark_and_reap() < 0 && root_stopped);
+    fake_write_fail = FAKE_NO_FAIL;
+    root_stopped = 0;
+    pc_set_backing(NULL, NULL, 0);
+}
+
 #endif
 
 /**
@@ -524,7 +786,7 @@ static void test_sync_wait(void)
  * - `test_sleeping_writeback`, `test_failure_hook`, and with
  *   PAGECACHE_SYNC_HOSTTEST `test_sync_wait`.
  */
-int main(void)
+static int page_rows(void)
 {
     uint32_t p;
     uint32_t i;
@@ -619,8 +881,10 @@ int main(void)
 
     test_sleeping_writeback();
     test_failure_hook();
+    test_copies();
 #ifdef PAGECACHE_SYNC_HOSTTEST
     test_sync_wait();
+    disk_recovery_rows();
 #endif
 #ifdef _WIN32
     printf("pagecache-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
@@ -628,4 +892,19 @@ int main(void)
     dprintf(1, "pagecache-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
 #endif
     return fails ? 1 : 0;
+}
+
+/** Select the isolated disk failures or all page-cache cases. */
+int main(int argc, char **argv)
+{
+#ifdef PAGECACHE_SYNC_HOSTTEST
+    if (argc == 2 && __builtin_strcmp(argv[1], "failures") == 0) {
+        disk_recovery_rows();
+        return fails != 0;
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
+    return page_rows();
 }

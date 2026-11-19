@@ -1,0 +1,6 @@
+# image: the pinned FreeBSD 15.1 VM image of the gateway guest, the one with
+# nuageinit, FreeBSD's cloud-init, and its digest as the directory's
+# CHECKSUM.SHA256 gives it. A line is NAME VALUE; prepare.sh reads it.
+url https://download.freebsd.org/releases/VM-IMAGES/15.1-RELEASE/amd64/Latest/FreeBSD-15.1-RELEASE-amd64-BASIC-CLOUDINIT-ufs.qcow2.xz
+size 664729340
+sha256 e4ca4db889f8559c9b9dfcacc70405c038476f4b6d41649b152d3809a2ed9e1f

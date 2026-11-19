@@ -250,6 +250,10 @@ struct tcb {
     uint16_t local_port;
     net_addr_t remote_ip;
     uint16_t remote_port;
+    /* The card its segments leave by, its socket's SO_BINDTODEVICE index
+     * when it connected or its listener's when it was accepted, or 0 for
+     * the card the route chooses. */
+    int ifindex;
 
     /* Send sequence space. */
     uint32_t iss;
@@ -726,6 +730,15 @@ int tcp_is_connected(struct socket *sock);
  * `net_lock` itself.
  */
 void tcp_window_update(struct socket *sock);
+
+/**
+ * Bind the stream socket `sock`, and its connection or listener, to the
+ * card of index `ifindex`, 0 for none (SO_BINDTODEVICE), so that the
+ * connection's later segments leave by that card and only those that come
+ * by it are its own, matched by their addresses without IPv6 scopes, as
+ * Linux matches a bound socket. The caller holds net_lock.
+ */
+void tcp_bind_device(struct socket *sock, int ifindex);
 
 /** Set TCP_QUICKACK on the stream socket `sock`: 0 holds acknowledgements
  * for this side's answers to carry, any other value acknowledges as a read

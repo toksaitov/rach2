@@ -1386,6 +1386,19 @@ extern uint32_t proc_dead_threads;
 void proc_thread_gone(process_t *p);
 
 /**
+ * Send SIGHUP and then SIGCONT to the process group of `member` when the
+ * change at hand leaves it orphaned with a member stopped, as Linux 6.12.115's
+ * kill_orphaned_pgrp does (kernel/exit.c:379-403), since no shell is left in
+ * the session to continue it. `parent` was the group's link outside it: the
+ * parent of `member`, which ends (`ignored` is `member`), or the process that
+ * ends and leaves `member`, its child, to another (`ignored` NULL), after
+ * the child has its new parent. The link counted only when `parent` is in
+ * another group of the same session. The caller holds the big lock; called
+ * by `reparent_children`. Defined in orphan.c.
+ */
+void pgrp_orphan_signal(const process_t *member, const process_t *parent, const process_t *ignored);
+
+/**
  * Give every child of the process `dead_pid` to the nearest ancestor of that
  * process that is a child subreaper (prctl's PR_SET_CHILD_SUBREAPER) and has
  * not ended, short of an init; with none, to the init of the ending
@@ -1394,8 +1407,10 @@ void proc_thread_gone(process_t *p);
  * A child that has already ended is reported to its new parent with SIGCHLD
  * and a wake of the parent's wait. No child goes to the system's init when
  * there is none (`init_pid` 0, a boot that runs the debug shell alone) or
- * init itself is the one ending. Called from the end of a process's last
- * thread, before its record can be reaped.
+ * init itself is the one ending. A process group the end leaves orphaned
+ * with a member stopped, a child's or the ending process's own, is sent
+ * SIGHUP and then SIGCONT, as Linux sends them. Called from the end of a
+ * process's last thread, before its record can be reaped.
  */
 void reparent_children(uint32_t dead_pid);
 

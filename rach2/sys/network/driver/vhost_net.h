@@ -3,6 +3,8 @@
 #ifndef _VHOST_NET_H_
 #define _VHOST_NET_H_
 
+#include "../../lib/kint.h"
+
 /*
  * QEMU's `-netdev tap,...,vhost=on` opens /dev/vhost-net, gives it the
  * guest's memory and the two rings of a virtio-net queue pair, an eventfd
@@ -61,5 +63,11 @@
  * boot, after devfs is up; a failure is logged and leaves the machine
  * without the device. */
 void vhost_net_start(void);
+
+/** The attachments of a tap that have ended since boot in `*n`, and the
+ * frames they moved, each attachment's added when the device lets its tap
+ * go and counted modulo 2^32: to the guests in `*to`, from them in `*from`.
+ * Under the big lock. */
+void vhost_net_detached_frames(uint32_t *n, uint64_t *to, uint64_t *from);
 
 #endif /* _VHOST_NET_H_ */

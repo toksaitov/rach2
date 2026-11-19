@@ -561,6 +561,13 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
+/** Rebind a TCP socket's connection to a card: no TCP runs in this model. */
+void tcp_bind_device(struct socket *sock, int ifindex)
+{
+    (void)sock;
+    (void)ifindex;
+}
+
 /** Take the network lock: a no-op, since no interrupt runs in this model. */
 uint32_t net_lock(void)
 {

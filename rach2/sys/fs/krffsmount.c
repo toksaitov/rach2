@@ -79,7 +79,7 @@ static uint64_t offset_of(struct vfs_mount *mnt, void *handle)
  *
  * The offsets are from the start of the volume, which is the start of the
  * device the mount was given, so a partition window needs no arithmetic here.
- * One buffer is held at a time, which is inside the cache's hold rules.
+ * A store across a block edge holds two buffers in increasing block order.
  */
 
 /**
@@ -105,8 +105,9 @@ static int volume_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
         if (!b) {
             return -1;
         }
-        if (within + take > b->bytes) {
-            bcache_release(b); /* past the device's short last block */
+        if (within + take > b->bytes ||
+            (!vol->fs.halted && (vol->dev->flags & BLOCK_WRITES_HALTED))) {
+            bcache_release(b);
             return -1;
         }
         k_memcpy(out, b->data + within, take);
@@ -125,54 +126,63 @@ static uint64_t owner_of(const struct krffs_open *o)
     return (uint64_t)(uintptr_t)o;
 }
 
+/** Copy into a held, checked range and tag its block for file writeback. */
+static void volume_store(struct krffs_volume *vol, struct bbuf *b, uint32_t at, const uint8_t *src,
+                         uint32_t n)
+{
+    k_memcpy(b->data + at, src, n);
+    if (vol->writer) {
+        bcache_dirty_owned(b, owner_of(vol->writer));
+    } else {
+        bcache_dirty(b);
+    }
+}
+
 /**
- * Copy `size` bytes of `buffer` to `offset` of the volume `ctx`, into the
- * cache's buffers, which it marks dirty, as blocks of `vol->writer` while a
- * write or truncate of an open file runs. 0, or -1 for a volume mounted
- * read-only, a block the cache cannot give, or bytes past the end of the
- * device.
- *
- * A write goes into the cache and reaches the device at the format's next
- * sync point, which is what keeps the order a stop must survive: the file
- * system syncs between a write and the field that publishes it.
+ * Store a field or one unit of file data in the volume's buffer cache.
+ * The core cuts payload writes at block boundaries. A header, field or
+ * internal copy fits in one block's worth of bytes but may cross an edge.
+ * Take both blocks in ascending order and check the short final block
+ * before changing either. Return 0 or -1 with no part of the store made.
  */
 static int volume_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
 {
     struct krffs_volume *vol = ctx;
-    const uint8_t *in = buffer;
+    uint64_t block = offset / BCACHE_BLOCK_BYTES;
+    uint32_t at = (uint32_t)(offset % BCACHE_BLOCK_BYTES);
+    uint32_t first = BCACHE_BLOCK_BYTES - at;
+    struct bbuf *b, *next = NULL;
+    int rc = -1;
 
-    if (!vol->writable) {
+    if (!vol->writable || vol->fs.halted || size > BCACHE_BLOCK_BYTES) {
         return -1;
     }
-    while (size > 0) {
-        uint64_t block = offset / BCACHE_BLOCK_BYTES;
-        uint32_t within = (uint32_t)(offset % BCACHE_BLOCK_BYTES);
-        uint32_t take = BCACHE_BLOCK_BYTES - within;
-        struct bbuf *b;
-
-        if (take > size) {
-            take = size;
-        }
-        b = bcache_get(vol->dev, block);
-        if (!b) {
-            return -1;
-        }
-        if (within + take > b->bytes) {
-            bcache_release(b); /* past the device's short last block */
-            return -1;
-        }
-        k_memcpy(b->data + within, in, take);
-        if (vol->writer) {
-            bcache_dirty_owned(b, owner_of(vol->writer));
-        } else {
-            bcache_dirty(b);
-        }
-        bcache_release(b);
-        in += take;
-        offset += take;
-        size -= take;
+    if (!size) {
+        return 0;
     }
-    return 0;
+    if (first > size) {
+        first = size;
+    }
+    b = bcache_get(vol->dev, block);
+    if (!b) {
+        return -1;
+    }
+    if (first < size) {
+        next = bcache_get(vol->dev, block + 1);
+    }
+    if (!(vol->dev->flags & BLOCK_WRITES_HALTED) && at + first <= b->bytes &&
+        (first == size || (next && size - first <= next->bytes))) {
+        volume_store(vol, b, at, buffer, first);
+        if (next) {
+            volume_store(vol, next, 0, (const uint8_t *)buffer + first, size - first);
+        }
+        rc = 0;
+    }
+    if (next) {
+        bcache_release(next);
+    }
+    bcache_release(b);
+    return rc;
 }
 
 /**
@@ -186,7 +196,7 @@ static int volume_sync(void *ctx)
 {
     struct krffs_volume *vol = ctx;
 
-    if (bcache_sync(vol->dev) != 0) {
+    if (bcache_sync_unflushed(vol->dev) != 0) {
         return -1;
     }
     return bcache_flush(vol->dev) == 0 ? 0 : -1;
@@ -196,14 +206,29 @@ static int volume_sync(void *ctx)
  * The core halted the volume (`krffs_withdraw`): every mount that shows it
  * turns read-only (`vfs_mount_halted`), so that an open for writing, a
  * creation or a link is refused with -EROFS before it reaches the core.
- * The cache still writes back whole for a sync and for the unmount, which
- * keeps the dirty flag.
+ * The cache writes none of the volume's blocks after this
+ * (`bcache_halt_writes`), for a sync, an eviction or the flusher, so the
+ * medium keeps what the last sync point wrote, the dirty flag the mount set
+ * among it, and the unmount drops what is left dirty.
  */
 static void kv_halted(krffs_mount_t *fs)
 {
     struct krffs_volume *vol = fs->ctx;
 
+    bcache_halt_writes(vol->dev);
     vfs_mount_halted(vol->mnt);
+}
+
+/** Reap a last holder's node under the mount lock. A failed writeback
+ * during the reap blocks later requests, including other cache victims. */
+static int kv_reap(struct krffs_volume *vol, uint64_t offset)
+{
+    int rc;
+
+    bcache_recovering(vol->dev, 1);
+    rc = krffs_reap_at(&vol->fs, offset);
+    bcache_recovering(vol->dev, 0);
+    return rc;
 }
 
 /**
@@ -240,18 +265,19 @@ static int begin_write(struct vfs_mount *mnt)
  *
  * The core's namespace operations take a path, which is what the ring is
  * searched by; the mount table hands out a directory and a name, so they are
- * put back together here, as the root's adapter does. 0, or -ENAMETOOLONG
- * when the path does not fit in `cap` bytes or the directory's path cannot
- * be made.
+ * put back together here, as the root's adapter does. 0, -EIO when the
+ * directory's path cannot be read, or -ENAMETOOLONG when the path does not
+ * fit in `cap` bytes or the directory's path cannot be made.
  */
 static int join(struct vfs_mount *mnt, void *dir, const char *name, char *path, uint32_t cap)
 {
     struct krffs_volume *vol = vol_of(mnt);
     uint32_t dlen;
     uint32_t nlen;
+    int rc = krffs_node_path_at(&vol->fs, offset_of(mnt, dir), path, cap);
 
-    if (krffs_node_path_at(&vol->fs, offset_of(mnt, dir), path, cap) != 0) {
-        return -ENAMETOOLONG;
+    if (rc != 0) {
+        return rc == -EIO ? -EIO : -ENAMETOOLONG;
     }
     dlen = (uint32_t)k_strlen(path);
     nlen = (uint32_t)k_strlen(name);
@@ -268,7 +294,10 @@ static int join(struct vfs_mount *mnt, void *dir, const char *name, char *path, 
     return 0;
 }
 
-static const krffs_backend_t volume_backend = {volume_read, volume_write, volume_sync};
+/* A write inside one block is whole or not at all: the block is read before
+ * a byte is copied (`volume_write`). */
+static const krffs_backend_t volume_backend = {volume_read, volume_write, volume_sync,
+                                               BCACHE_BLOCK_BYTES};
 
 /* The operations. */
 
@@ -447,7 +476,7 @@ static void open_drop(struct vfs_mount *mnt, struct krffs_open *o)
     kfree(o);
     if (reap && vol->writable && !(mnt->flags & VFS_MS_RDONLY)) {
         vfs_ns_lock(mnt);
-        krffs_remove_at(&vol->fs, at);
+        (void)kv_reap(vol, at);
         vfs_ns_unlock(mnt);
     }
 }
@@ -978,8 +1007,8 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
             o = open_at(vol, at);
             if (o) {
                 o->nameless = 1;
-            } else {
-                krffs_remove_at(&vol->fs, at);
+            } else if (kv_reap(vol, at) != 0) {
+                return -EIO;
             }
             return 0;
         }
@@ -1152,8 +1181,8 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
 
         if (o) {
             o->nameless = 1;
-        } else {
-            krffs_remove_at(&vol->fs, orphaned);
+        } else if (kv_reap(vol, orphaned) != 0) {
+            return -EIO;
         }
     }
     return rc == 0 ? 0 : -EIO;
@@ -1217,7 +1246,7 @@ static int kv_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 }
 
 /** Write every dirty buffer of the volume under the mount lock, even after a
- * write failure. */
+ * write failure, but none once the core halted it (`kv_halted`): -EIO. */
 static int kv_sync(struct vfs_mount *mnt)
 {
     return kv_fsync(mnt, NULL);
@@ -1307,13 +1336,15 @@ static void kv_unmount(struct vfs_mount *mnt)
     mnt->priv = 0;
 }
 
-/** The canonical path of the directory `node` within the volume; 0, or
- * -ENAMETOOLONG for any path the core cannot make. */
+/** The canonical path of the directory `node` within the volume; 0, -EIO
+ * for a read that fails, or -ENAMETOOLONG for any other path the core
+ * cannot make. */
 static int kv_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct krffs_volume *vol = vol_of(mnt);
+    int rc = krffs_node_path_at(&vol->fs, offset_of(mnt, node), buf, cap);
 
-    return krffs_node_path_at(&vol->fs, offset_of(mnt, node), buf, cap) == 0 ? 0 : -ENAMETOOLONG;
+    return rc == 0 ? 0 : rc == -EIO ? -EIO : -ENAMETOOLONG;
 }
 
 static const struct vfs_ops krffs_volume_ops = {
@@ -1379,9 +1410,13 @@ static int kv_repair(struct krffs_volume *vol, struct vfs_mount *mnt)
     uint32_t links = 0;
     uint32_t orphans = 0;
     uint32_t doubles = 0;
+    int rc;
 
     klog(KLOG_WARN, "krffs", "check: the volume was not unmounted cleanly");
-    if (krffs_repair_at(&vol->fs, &links, &orphans, &doubles) != 0) {
+    bcache_recovering(vol->dev, 1);
+    rc = krffs_repair_at(&vol->fs, &links, &orphans, &doubles);
+    bcache_recovering(vol->dev, 0);
+    if (rc != 0) {
         klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be repaired here");
         return -1;
     }
@@ -1417,9 +1452,9 @@ static int kv_repair(struct krffs_volume *vol, struct vfs_mount *mnt)
  *
  * Returns 0; -EINVAL for a volume smaller than two headers, one whose first
  * node lacks the magic number or the root type, or a malformed ring; -EFBIG
- * for a volume of 4 GiB or more; -ENOMEM; or -EIO when the first node cannot
- * be read, a repair fails, or the dirty flag cannot be set. A failed mount
- * frees what it made.
+ * for a volume of 4 GiB or more; -ENOMEM; or -EIO for a failed header
+ * read, repair or dirty flag update. Refusal drops the private buffers
+ * before giving up the device claim.
  */
 static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                               const char *options)
@@ -1427,6 +1462,7 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
     struct krffs_volume *vol;
     uint64_t bytes;
     krffs_node_t root;
+    int rc = -EINVAL;
 
     (void)options;
     bytes = dev->sector_count * (uint64_t)dev->sector_size;
@@ -1456,29 +1492,24 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
 
     if (krffs_head(&vol->fs, 0, &root) != 0) {
         klog(KLOG_ERR, "krffs", "mount: refused: the first node cannot be read");
-        kfree(vol);
-        mnt->priv = 0;
-        return -EIO;
+        rc = -EIO;
+        goto refused;
     }
     if (root.magic != KRFFS_FILE_SYSTEM_MAGIC) {
         klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X", root.magic,
              KRFFS_FILE_SYSTEM_MAGIC);
-        kfree(vol);
-        mnt->priv = 0;
-        return -EINVAL;
+        goto refused;
     }
     if (root.type != KRFFS_ROOT_NODE) {
         klog(KLOG_ERR, "krffs", "mount: refused: the first node is type %d, not the root",
              root.type);
-        kfree(vol);
-        mnt->priv = 0;
-        return -EINVAL;
+        goto refused;
     }
-    if (!krffs_chain_is_walkable(&vol->fs)) {
-        klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
-        kfree(vol);
-        mnt->priv = 0;
-        return -EINVAL;
+    rc = krffs_chain_walk(&vol->fs, 0);
+    if (rc != 1) {
+        klog(KLOG_ERR, "krffs", "mount: refused: %s",
+             rc < 0 ? "the node chain cannot be read" : "the node chain is malformed");
+        goto refused;
     }
 
     vol->writable = !(flags & VFS_MS_RDONLY) && !(dev->flags & BLOCK_READ_ONLY);
@@ -1488,28 +1519,35 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
             klog(KLOG_WARN, "krffs", "mount: a check is owed and this mount is read-only");
         }
     } else if ((root.mode & KRFFS_MODE_DIRTY) && kv_repair(vol, mnt) != 0) {
-        kfree(vol);
-        mnt->priv = 0;
-        return -EIO;
+        rc = -EIO;
+        goto refused;
     }
 
-    if (vol->writable && !krffs_chain_is_valid(&vol->fs)) {
-        klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
-        kfree(vol);
-        mnt->priv = 0;
-        return -EINVAL;
+    rc = vol->writable ? krffs_chain_walk(&vol->fs, 1) : 1;
+    if (rc != 1) {
+        klog(KLOG_ERR, "krffs", "mount: refused: %s",
+             rc < 0 ? "the node chain cannot be read" : "the node chain is malformed");
+        goto refused;
     }
     if (vol->writable && krffs_set_dirty(&vol->fs, 1) != 0) {
         klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be written");
-        kfree(vol);
-        mnt->priv = 0;
-        return -EIO;
+        rc = -EIO;
+        goto refused;
     }
 
     mnt->root = handle_of(0);
     klog(KLOG_INFO, "krffs", "mount: %d bytes, %s", (int)vol->fs.size,
          vol->writable ? "read-write" : "read-only");
     return 0;
+
+refused:
+    if (vol->writable) {
+        /* The constructor still owns the writable device claim. */
+        (void)bcache_drop(dev);
+    }
+    kfree(vol);
+    mnt->priv = NULL;
+    return rc < 0 ? rc : -EINVAL;
 }
 
 const struct vfs_type vfs_krffs_volume_type = {

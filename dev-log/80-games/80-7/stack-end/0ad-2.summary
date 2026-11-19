@@ -1,0 +1,14 @@
+window 330 8957
+seconds 150.014
+frames 8627
+fps 57.51
+median 16.57
+p90 20.05
+p99 36.36
+p99.9 58.76
+max 128.10
+over16.7 3486
+over33.3 150
+over50 16
+over100 3
+end window

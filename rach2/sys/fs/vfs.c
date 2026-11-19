@@ -793,7 +793,8 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
     int r;
 
     if (mnt == mounts[0] && root_krffs) {
-        return krffs_node_path((krffs_node_t *)node, out, cap) == 0 ? 0 : -ENAMETOOLONG;
+        r = krffs_node_path((krffs_node_t *)node, out, cap);
+        return r == 0 ? 0 : r == -EIO ? -EIO : -ENAMETOOLONG;
     }
     if ((!root_krffs && !mnt->type->ops->path) || mnt == vfs_memfd_mount()) {
         return -ENOENT;
@@ -813,9 +814,12 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
         return -ENAMETOOLONG;
     }
     k_memcpy(out, mnt->covered_path, ml);
-    r = root_krffs
-            ? (krffs_node_path((krffs_node_t *)node, out + ml, cap - ml) == 0 ? 0 : -ENAMETOOLONG)
-            : mnt->type->ops->path(mount_base(mnt), node, out + ml, cap - ml);
+    if (root_krffs) {
+        r = krffs_node_path((krffs_node_t *)node, out + ml, cap - ml);
+        r = r == 0 ? 0 : r == -EIO ? -EIO : -ENAMETOOLONG;
+    } else {
+        r = mnt->type->ops->path(mount_base(mnt), node, out + ml, cap - ml);
+    }
     if (r != 0) {
         return r;
     }
@@ -4182,11 +4186,14 @@ int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 
 /** The `lookup` of the KRFFS root: `.`, `..`, which at the root directory
  * is the root directory, or a child by name, -ENOENT when there is none.
- * `dir` NULL is the root directory. */
+ * `dir` NULL is the root directory. A read that fails is -EIO, never taken
+ * for a name that is not there or for `..` of a directory that has none,
+ * which goes to the root. */
 static int kfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     krffs_node_t *d = dir ? dir : krffs_fs->node;
     krffs_node_t *n;
+    int rc;
 
     (void)mnt;
     if (name[0] == '.' && name[1] == '\0') {
@@ -4194,13 +4201,16 @@ static int kfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
         return 0;
     }
     if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
-        n = krffs_parent_node(d);
+        n = krffs_parent_node_err(d, &rc);
+        if (rc != 0) {
+            return rc;
+        }
         *node = n ? n : krffs_fs->node;
         return 0;
     }
-    n = krffs_child(d, name);
+    n = krffs_child_err(d, name, &rc);
     if (!n) {
-        return -ENOENT;
+        return rc;
     }
     *node = n;
     return 0;
@@ -4209,30 +4219,34 @@ static int kfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
 /** The `getattr` of the KRFFS root: a node's mode, owner, size and times,
  * one link, and the inode number `krffs_node_ino` gives, as
  * `krffs_fill_stat64` reports them for the boot root. The root directory
- * reports mode 0755 whatever its stored mode says. */
+ * reports mode 0755 whatever its stored mode says. -EIO when the node's
+ * header cannot be read. */
 static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
-    krffs_node_t *n = node;
+    krffs_node_t h;
 
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
-    if (n == krffs_fs->node) {
+    if (krffs_node_head(node, &h) != 0) {
+        return -EIO;
+    }
+    if (node == krffs_fs->node) {
         /* The root's stored mode has the dirty flag, KRFFS_MODE_DIRTY. */
         st->mode = VFS_S_IFDIR | 0755u;
     } else {
-        st->mode = krffs_mode_type(n->mode) | (uint32_t)(n->mode & 07777u);
+        st->mode = krffs_mode_type(h.mode) | (uint32_t)(h.mode & 07777u);
     }
-    st->uid = n->uid;
-    st->gid = n->gid;
+    st->uid = h.uid;
+    st->gid = h.gid;
     st->nlink = 1;
-    st->ino = krffs_node_ino(n);
-    st->size = n->data_size;
-    st->atime_sec = n->access_time.seconds;
-    st->atime_nsec = n->access_time.nanoseconds;
-    st->mtime_sec = n->modification_time.seconds;
-    st->mtime_nsec = n->modification_time.nanoseconds;
-    st->ctime_sec = n->attribute_change_time.seconds;
-    st->ctime_nsec = n->attribute_change_time.nanoseconds;
+    st->ino = krffs_node_ino(&h);
+    st->size = h.data_size;
+    st->atime_sec = h.access_time.seconds;
+    st->atime_nsec = h.access_time.nanoseconds;
+    st->mtime_sec = h.modification_time.seconds;
+    st->mtime_nsec = h.modification_time.nanoseconds;
+    st->ctime_sec = h.attribute_change_time.seconds;
+    st->ctime_nsec = h.attribute_change_time.nanoseconds;
     return 0;
 }
 
@@ -4356,7 +4370,8 @@ static int kfs_fsync_locked(struct vfs_mount *mnt, void *handle)
 
 /**
  * The entry of the directory `handle` at or after `*cursor`, with the
- * mount's lock held: 1 with `ent` filled, or 0 at the end.
+ * mount's lock held: 1 with `ent` filled, 0 at the end, or -EIO when a
+ * header cannot be read.
  *
  * The cursor is the entry node's byte offset in the image plus one, so a
  * deletion between calls never renumbers the survivors; the traversal
@@ -4369,29 +4384,43 @@ static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cur
                               struct vfs_dirent *ent)
 {
     krffs_node_t *dirn = handle;
-    uint64_t dir_id = (dirn == krffs_fs->node) ? (uint64_t)KRFFS_ROOT_ID : dirn->id;
     krffs_node_t *node = krffs_fs->node;
+    krffs_node_t h;
+    uint64_t dir_id;
+    uint32_t steps = 0;
 
     (void)mnt;
+    if (dirn == krffs_fs->node) {
+        dir_id = (uint64_t)KRFFS_ROOT_ID;
+    } else if (krffs_node_head(dirn, &h) != 0) {
+        return -EIO;
+    } else {
+        dir_id = h.id;
+    }
     do {
         uint32_t node_off = (uint32_t)((uintptr_t)node - (uintptr_t)krffs_fs->node);
 
-        if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id &&
-            node->name[0] != '\0' && node_off >= *cursor) {
-            uint32_t nlen = (uint32_t)k_strlen((const char *)node->name);
+        if (krffs_node_head(node, &h) != 0) {
+            return -EIO;
+        }
+        if (h.type == KRFFS_RESERVED_NODE && h.parent_id == dir_id && h.name[0] != '\0' &&
+            node_off >= *cursor) {
+            uint32_t nlen = 0;
 
-            if (nlen > VFS_NAME_MAX) {
-                nlen = VFS_NAME_MAX;
+            while (nlen < VFS_NAME_MAX && nlen < KRFFS_FILE_NAME_BUFFER_SIZE &&
+                   h.name[nlen] != '\0') {
+                nlen++;
             }
-            k_memcpy(ent->name, node->name, nlen);
+            k_memcpy(ent->name, h.name, nlen);
             ent->name[nlen] = '\0';
-            ent->ino = krffs_node_ino(node);
-            ent->is_dir = KRFFS_IS_DIR(node->mode) ? 1 : 0;
-            ent->type = (int)VFS_DT_OF(krffs_mode_type(node->mode));
+            ent->ino = krffs_node_ino(&h);
+            ent->is_dir = KRFFS_IS_DIR(h.mode) ? 1 : 0;
+            ent->type = (int)VFS_DT_OF(krffs_mode_type(h.mode));
             *cursor = node_off + 1;
             return 1;
         }
-    } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
+        node = krffs_next_node(node, &h);
+    } while (node != krffs_fs->node && ++steps < krffs_fs->size / sizeof(krffs_node_t) + 1u);
     return 0;
 }
 
@@ -4408,14 +4437,16 @@ static int kfs_made_errno(int rc)
 
 /** Join `name` to the path of the directory `dir`, NULL for the root
  * directory, in `path` of `cap` bytes: the namespace operations call the
- * core by path. 0, or -ENAMETOOLONG. */
+ * core by path. 0, -EIO when the directory's path cannot be read, or
+ * -ENAMETOOLONG. */
 static int kfs_join(void *dir, const char *name, char *path, uint32_t cap)
 {
     krffs_node_t *d = dir ? dir : krffs_fs->node;
     uint32_t dlen, nlen;
+    int rc = krffs_node_path(d, path, cap);
 
-    if (krffs_node_path(d, path, cap) != 0) {
-        return -ENAMETOOLONG;
+    if (rc != 0) {
+        return rc == -EIO ? -EIO : -ENAMETOOLONG;
     }
     dlen = (uint32_t)k_strlen(path);
     nlen = (uint32_t)k_strlen(name);
@@ -4559,8 +4590,11 @@ static int kfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (type != KRFFS_S_IFIFO && type != KRFFS_S_IFSOCK) {
         return -EPERM;
     }
-    if (krffs_child(dir ? dir : krffs_fs->node, name)) {
+    if (krffs_child_err(dir ? dir : krffs_fs->node, name, &rc)) {
         return -EEXIST;
+    }
+    if (rc != -ENOENT) {
+        return rc;
     }
     rc = kfs_join(dir, name, path, sizeof(path));
     if (rc != 0) {
@@ -6218,9 +6252,9 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         cov.node = m->covered;
         vfs_ref_put(&cov);
         vfs_mount_put(m->parent);
+        mount_refused(dev);
         devfs_release_claim(claim);
         mount_release(m);
-        mount_refused(dev);
         return rc;
     }
     m->state = VFS_ACTIVE;

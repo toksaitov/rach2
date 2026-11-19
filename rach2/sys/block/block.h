@@ -56,6 +56,13 @@ struct block_request;
  * NVMe namespace, on their interrupts. `block_read_frames` reads any other
  * device through a buffer. */
 #define BLOCK_FRAMES        0x100u
+/* A file system on the device halted after an error (`bcache_halt_writes`):
+ * the cache writes none of its blocks, for a sync, an eviction or the
+ * flusher alike, as Linux's ext4 writes nothing after a shutdown. Cleared
+ * when the cache drops the device at unmount. */
+#define BLOCK_WRITES_HALTED 0x200u
+/* While repairing metadata, the first cache write error halts the device. */
+#define BLOCK_RECOVERING    0x400u
 
 /**
  * A sector-addressed storage device behind a small table of functions.

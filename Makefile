@@ -998,6 +998,7 @@ NET_SCENARIOS = build/tests/cases/machine/d3d_scenario build/tests/cases/machine
                 build/tests/cases/machine/bed_vtest_scenario \
                 build/tests/cases/machine/bed_shm_scenario \
                 build/tests/cases/machine/assign_scenario \
+                build/tests/cases/machine/netguest_scenario \
                 build/tests/cases/machine/menu_scenario \
                 build/tests/cases/machine/seabios_scenario \
                 build/tests/cases/machine/termconsole_scenario \

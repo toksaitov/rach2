@@ -1,0 +1,4 @@
+games: result: supertuxkart frames 6858 seconds 90.013 fps 76.19 median 12.69 p90 14.94 p99 18.00 p99.9 18.75 max 20.79 over50 0 end profile
+free: result: supertuxkart median 12.69 p90 14.94 p99 18.00, min 200 MHz, at 1000 MHz 85 of 106 samples, mean 914 MHz
+free: games.sh status 0
+0
