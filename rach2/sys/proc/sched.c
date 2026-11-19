@@ -750,17 +750,43 @@ static void sched_arrive(process_t *p)
     }
 }
 
+static int sched_resched_cur(process_t *cur, int cpu);
+
+/** Ask the thread running on each processor, other than an idle task and
+ * the suspender, to switch away, so that a suspend to idle's hold takes it
+ * at its switch (`sched_prepare_old`). Returns the mask of processors to
+ * kick. sched_lock is held. */
+static uint64_t sched_hold_running(void)
+{
+    uint64_t kicks = 0;
+    process_t *p;
+    int c, kick;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        p = cpu_table[c].current;
+        if (p && p != cpu_table[c].idle && !suspend_lets_run(p)) {
+            kick = sched_resched_cur(p, c);
+            if (kick >= 0) {
+                kicks |= (uint64_t)1 << kick;
+            }
+        }
+    }
+    return kicks;
+}
+
 /**
  * A hold takes every ordinary thread but the suspender that is ready and
  * not running off its fair queue (FAIR_DEQ_FORCED) onto the held list, and
  * finishes the dequeue of every delayed one, as Linux's frozen tasks sleep
- * in a state that is never delayed; one running elsewhere joins the list
- * at its switch away (`schedule`), and one woken meanwhile at its wake
- * (`sched_enqueue`). Real-time threads stay on their lists, where selection
- * passes over them (`sched_may_run`). The end of the hold puts every held
- * thread back as a wake does, and asks its processor to select. Each
- * ready thread's wait so far is counted at the start, and starts again at
- * the end. The caller holds the big lock, which keeps `proc_list` still.
+ * in a state that is never delayed; one running elsewhere is asked to
+ * switch, as Linux's freezer sends every task a fake signal
+ * (kernel/freezer.c, freeze_task), and joins the list at its switch away
+ * (`schedule`), and one woken meanwhile at its wake (`sched_enqueue`).
+ * Real-time threads stay on their lists, where selection passes over them
+ * (`sched_may_run`). The end of the hold puts every held thread back as a
+ * wake does, and asks its processor to select. Each ready thread's wait so
+ * far is counted at the start, and starts again at the end. The caller
+ * holds the big lock, which keeps `proc_list` still.
  */
 void sched_hold_waits(int hold)
 {
@@ -793,6 +819,9 @@ void sched_hold_waits(int hold)
             p->run_queued = 1;
             p->queued_ns = now;
         }
+    }
+    if (hold) {
+        kicks = sched_hold_running();
     }
     while (!hold && held_threads) {
         p = held_threads;
@@ -1078,8 +1107,6 @@ void sched_cache_join(uint64_t shared, uint64_t core)
  */
 static uint8_t balance_active[NR_CPUS];
 static uint8_t balance_stopped[NR_CPUS];
-
-static int sched_resched_cur(process_t *cur, int cpu);
 
 /** The threads on processor `cpu`'s queues, a running one included and the
  * idle task left out (rq->nr_running). */
