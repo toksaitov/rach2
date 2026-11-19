@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 19, 2026
 .Dt MIXER 1
 .Os
 .Sh NAME
@@ -108,9 +108,10 @@ later
 .Cm mute
 records the new level.
 .Pp
-The levels set are kept across a halt, a power-off or a reboot, which
+The levels set are kept across a halt, a power-off, a reboot and a reset:
 .Xr init 8
-saves them at, and lost to a power cut; the record source is not kept.
+saves them within a second of a change and at shutdown, as alsactl does.
+The record source is not kept.
 .Pp
 acpid's volume actions run
 .Nm
