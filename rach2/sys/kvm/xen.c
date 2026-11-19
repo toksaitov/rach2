@@ -521,21 +521,19 @@ static void inject_pending(struct kvm_vcpu *v)
 {
     struct xen_vm *x = xvm(v->vm);
     struct xen_vcpu *xv = xvc(v);
-    uint32_t w;
+    uint32_t w, i;
     uint8_t one = 1;
 
     if (!xv->pending_sel || !xv->info.active) {
         return;
     }
     if (x->long_mode) {
-        w = (uint32_t)xv->pending_sel;
-        if (w && mem_page(v->vm, v, xv->info.hva, xv->info.addr + INFO_SEL_64, &w, 4, MEM_OR)) {
-            return;
-        }
-        w = (uint32_t)(xv->pending_sel >> 32);
-        if (w &&
-            mem_page(v->vm, v, xv->info.hva, xv->info.addr + INFO_SEL_64 + 4u, &w, 4, MEM_OR)) {
-            return;
+        for (i = 0; i < 2u; i++) {
+            w = (uint32_t)(xv->pending_sel >> (32u * i));
+            if (w && mem_page(v->vm, v, xv->info.hva, xv->info.addr + INFO_SEL_64 + 4u * i, &w, 4,
+                              MEM_OR)) {
+                return;
+            }
         }
     } else {
         w = (uint32_t)xv->pending_sel;
@@ -944,9 +942,7 @@ uint64_t kvm_xen_timers(struct kvm_vcpu *v)
     now = kvm_host_ns();
     if (xv->timer_host && now >= xv->timer_host) {
         mutex_lock(&xvm(v->vm)->lock);
-        if (xv->timer_host && now >= xv->timer_host) {
-            timer_fire(v);
-        }
+        timer_fire(v);
         mutex_unlock(&xvm(v->vm)->lock);
     }
     if (xv->poll_host && now >= xv->poll_host) {
