@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/virtio/virtqueue.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-cflags: -DRACH2_HOST_CPU
  *
  * The model is a virtio network device as virtio 1.2, 5.1 describes one: a
  * status byte, the feature bits a row offers, the configuration with the
@@ -49,9 +50,9 @@ extern int strcmp(const char *a, const char *b);
 #include "mm/kheap.h"
 
 /* The model's memory: page i at device address DEV_BASE + i * 4096. */
-#define ARENA_PAGES 128
+#define ARENA_PAGES 512
 #define DEV_BASE    0x40000000ull
-#define NQ          3
+#define NQ          9 /* four pairs and the control queue, the most a row has */
 
 static int failures;
 static char logged[4096];
@@ -152,6 +153,8 @@ static struct model {
     uint8_t config[32];
     uint16_t qmax[NQ];
     struct mq q[NQ];
+    int nq;                  /* the queues the driver must number: 2 * pairs + 1 */
+    int ctrl_q;              /* the control queue's number, 2 * pairs */
     int polled;              /* the transport has no interrupt for it */
     int inits;               /* irq_setup calls, one a negotiation */
     int dma_left;            /* pages it still gives; -1 for any */
@@ -183,6 +186,17 @@ static virtio_probe_t registered;
 static uint32_t udelays;
 
 static int dev_tx(uint8_t *out, uint32_t *len);
+
+/* The processor a row runs as, for `arch_cpu_id`, and the processors the
+ * machine has. */
+unsigned int host_cpu;
+static int cpus = 1;
+
+/** The processors the row gives the machine. */
+int smp_cpu_count(void)
+{
+    return cpus;
+}
 
 /** Count a wait, during which the model sends what a row lets it. */
 void k_udelay(uint32_t usec)
@@ -331,7 +345,7 @@ static void m_notify(struct virtio_dev *d, struct virtqueue *vq)
         m.limit = n->mtu_max;
         m.mtu = n->mtu;
     }
-    if (vq->index == VNET_Q_CTRL && !m.ctrl_mute) {
+    if (vq->index == m.ctrl_q && !m.ctrl_mute) {
         dev_ctrl();
     }
 }
@@ -339,7 +353,7 @@ static void m_notify(struct virtio_dev *d, struct virtqueue *vq)
 /** Count a negotiation, and say whether the device interrupts. */
 static int m_irq_setup(struct virtio_dev *d, uint16_t nqueues)
 {
-    check(nqueues == NQ, "interrupts are prepared for three queues");
+    check(nqueues == m.nq, "interrupts are prepared for every queue the device numbers");
     m.inits++;
     d->polled = m.polled;
     return 0;
@@ -769,7 +783,7 @@ static uint32_t dev_hdr = VNET_HDR;
  * first share of the frame in the first buffer, the rest in equal shares.
  * Returns 0 when the driver had not offered the buffers.
  */
-static int dev_rx(const uint8_t *frame, uint32_t len, int nbufs, uint16_t stated)
+static int dev_rx_on(int qi, const uint8_t *frame, uint32_t len, int nbufs, uint16_t stated)
 {
     uint32_t share = (len + (uint32_t)nbufs - 1u) / (uint32_t)nbufs, done = 0;
     struct virtio_net_hdr hdr;
@@ -783,7 +797,7 @@ static int dev_rx(const uint8_t *frame, uint32_t len, int nbufs, uint16_t stated
         uint32_t take = len - done < share ? len - done : share;
         uint8_t *buf;
 
-        if (!q_pop(VNET_Q_RX, &head, seg, &n)) {
+        if (!q_pop(qi, &head, seg, &n)) {
             return 0;
         }
         check(n == 1 && (seg[0].flags & VIRTQ_DESC_F_WRITE) && seg[0].len == VNET_BUF,
@@ -798,14 +812,20 @@ static int dev_rx(const uint8_t *frame, uint32_t len, int nbufs, uint16_t stated
         }
         k_memcpy(buf, frame + done, take);
         done += take;
-        q_push(VNET_Q_RX, head, take + (b == 0 ? dev_hdr : 0u));
+        q_push(qi, head, take + (b == 0 ? dev_hdr : 0u));
     }
     return 1;
 }
 
+/** `dev_rx_on` the first pair's receive queue. */
+static int dev_rx(const uint8_t *frame, uint32_t len, int nbufs, uint16_t stated)
+{
+    return dev_rx_on(VNET_Q_RX, frame, len, nbufs, stated);
+}
+
 /** Take one transmit buffer: its header must be zeros, and the frame goes
  * to `out` with its length when `out` is given. 0 when none is offered. */
-static int dev_tx(uint8_t *out, uint32_t *len)
+static int dev_tx_on(int qi, uint8_t *out, uint32_t *len)
 {
     static const uint8_t zeros[VNET_HDR];
     struct virtq_desc seg[4];
@@ -813,7 +833,7 @@ static int dev_tx(uint8_t *out, uint32_t *len)
     uint8_t *buf;
     int n;
 
-    if (!q_pop(VNET_Q_TX, &head, seg, &n)) {
+    if (!q_pop(qi, &head, seg, &n)) {
         return 0;
     }
     check(n == 1 && !(seg[0].flags & VIRTQ_DESC_F_WRITE) && seg[0].len > dev_hdr,
@@ -826,8 +846,14 @@ static int dev_tx(uint8_t *out, uint32_t *len)
             *len = seg[0].len - dev_hdr;
         }
     }
-    q_push(VNET_Q_TX, head, 0);
+    q_push(qi, head, 0);
     return 1;
+}
+
+/** `dev_tx_on` the first pair's transmit queue. */
+static int dev_tx(uint8_t *out, uint32_t *len)
+{
+    return dev_tx_on(VNET_Q_TX, out, len);
 }
 
 /** Answer every control command offered: keep its class, command and
@@ -838,7 +864,7 @@ static void dev_ctrl(void)
     uint16_t head;
     int n;
 
-    while (q_pop(VNET_Q_CTRL, &head, seg, &n)) {
+    while (q_pop(m.ctrl_q, &head, seg, &n)) {
         struct ctrl_rec *r = &m.ctrl[m.nctrl < 8 ? m.nctrl : 7];
         uint8_t *p;
 
@@ -861,33 +887,38 @@ static void dev_ctrl(void)
             *p = m.ctrl_ack;
         }
         m.nctrl++;
-        q_push(VNET_Q_CTRL, head, 1);
+        q_push(m.ctrl_q, head, 1);
     }
 }
 
-/** Deliver the receive queue's interrupt when the device raised one since
+/** Deliver receive queue `qi`'s interrupt when the device raised one since
  * the last call, as virtio-pci's handler does; returns whether it did. */
-static int rx_irq(void)
+static int rx_irq_on(int qi)
 {
-    static uint32_t seen;
-    int raised = m.q[VNET_Q_RX].raised != seen;
+    static uint32_t seen[NQ];
+    int raised = m.q[qi].raised != seen[qi];
 
-    seen = m.q[VNET_Q_RX].raised;
+    seen[qi] = m.q[qi].raised;
     if (raised) {
-        virtio_interrupt_queue(m.dev.queues[VNET_Q_RX]);
+        virtio_interrupt_queue(m.dev.queues[qi]);
     }
     return raised;
 }
 
+/** `rx_irq_on` the first pair's receive queue. */
+static int rx_irq(void)
+{
+    return rx_irq_on(VNET_Q_RX);
+}
+
 /* Every feature QEMU's virtio-net-pci offers, the offloads among them, and
  * the three the rows turn on by hand. */
-#define OFFLOADS                                                                    \
-    (VIRTIO_BIT(VIRTIO_NET_F_CSUM) | VIRTIO_BIT(VIRTIO_NET_F_GUEST_CSUM) |          \
-     VIRTIO_BIT(VIRTIO_NET_F_GUEST_TSO4) | VIRTIO_BIT(VIRTIO_NET_F_GUEST_TSO6) |    \
-     VIRTIO_BIT(VIRTIO_NET_F_GUEST_UFO) | VIRTIO_BIT(VIRTIO_NET_F_HOST_TSO4) |      \
-     VIRTIO_BIT(VIRTIO_NET_F_HOST_TSO6) | VIRTIO_BIT(VIRTIO_NET_F_HOST_UFO) |       \
-     VIRTIO_BIT(VIRTIO_NET_F_CTRL_VLAN) | VIRTIO_BIT(VIRTIO_NET_F_GUEST_ANNOUNCE) | \
-     VIRTIO_BIT(VIRTIO_NET_F_MQ))
+#define OFFLOADS                                                                 \
+    (VIRTIO_BIT(VIRTIO_NET_F_CSUM) | VIRTIO_BIT(VIRTIO_NET_F_GUEST_CSUM) |       \
+     VIRTIO_BIT(VIRTIO_NET_F_GUEST_TSO4) | VIRTIO_BIT(VIRTIO_NET_F_GUEST_TSO6) | \
+     VIRTIO_BIT(VIRTIO_NET_F_GUEST_UFO) | VIRTIO_BIT(VIRTIO_NET_F_HOST_TSO4) |   \
+     VIRTIO_BIT(VIRTIO_NET_F_HOST_TSO6) | VIRTIO_BIT(VIRTIO_NET_F_HOST_UFO) |    \
+     VIRTIO_BIT(VIRTIO_NET_F_CTRL_VLAN) | VIRTIO_BIT(VIRTIO_NET_F_GUEST_ANNOUNCE))
 #define QEMU_OFFER                                                              \
     (VIRTIO_BIT(VIRTIO_F_VERSION_1) | VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) |      \
      VIRTIO_BIT(VIRTIO_F_EVENT_IDX) | OFFLOADS | VIRTIO_BIT(VIRTIO_NET_F_MAC) | \
@@ -898,10 +929,11 @@ static int rx_irq(void)
 static const uint8_t model_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 
 /**
- * Free the queue records of the device the last row left bound, before the
- * model under them is cleared: a machine keeps a bound device for good, so
- * the driver never frees them, while the rings are the model's arena's. A
- * record on a device that no longer runs is one the driver failed to free.
+ * Free the queue and pair records of the device the last row left bound,
+ * before the model under them is cleared: a machine keeps a bound device
+ * for good, so the driver never frees them, while the rings are the model's
+ * arena's. A record on a device that no longer runs is one the driver
+ * failed to free.
  */
 static void drop_bound(void)
 {
@@ -914,6 +946,11 @@ static void drop_bound(void)
             kfree(m.dev.queues[i]);
             m.dev.queues[i] = 0;
         }
+    }
+    for (i = 0; i < VNET_MAX; i++) {
+        check(!vnets[i].pairs || vnets[i].up, "pairs are left only on a running device");
+        kfree(vnets[i].pairs);
+        vnets[i].pairs = 0;
     }
 }
 
@@ -936,6 +973,8 @@ static void fresh(uint64_t offered)
     m.qmax[0] = 256;
     m.qmax[1] = 256;
     m.qmax[2] = 64;
+    m.nq = 3;
+    m.ctrl_q = VNET_Q_CTRL;
     m.dma_left = -1;
     m.sys_dir = 55;
     sys_links = sys_unlinks = sys_link_parent = sys_link_target = sys_fail = 0;
@@ -1150,6 +1189,159 @@ static void row_legacy_header(void)
               len == 61,
           "has the header of 12 bytes both ways");
     check(rx_errors == 0, "no frame was refused");
+}
+
+/** A fresh model of `pairs` queue pairs with VIRTIO_NET_F_MQ on a machine
+ * of `n` processors: queues of 256, the control queue of 64 after the last
+ * pair, and the pairs in the configuration. */
+static void fresh_mq(int pairs, int n)
+{
+    uint16_t max = (uint16_t)pairs;
+    int i;
+
+    fresh(QEMU_OFFER | VIRTIO_BIT(VIRTIO_NET_F_MQ));
+    cpus = n;
+    for (i = 0; i < 2 * pairs; i++) {
+        m.qmax[i] = 256;
+    }
+    m.qmax[2 * pairs] = 64;
+    m.nq = 2 * pairs + 1;
+    m.ctrl_q = 2 * pairs;
+    k_memcpy(m.config + VNET_CFG_MAX_PAIRS, &max, 2);
+}
+
+/** Whether the last command was VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET of `n`. */
+static int pairs_set(uint16_t n)
+{
+    const struct ctrl_rec *c = &m.ctrl[m.nctrl > 0 ? m.nctrl - 1 : 0];
+    uint16_t got_n;
+
+    k_memcpy(&got_n, c->data, 2);
+    return m.nctrl > 0 && c->class == VIRTIO_NET_CTRL_MQ &&
+           c->cmd == VIRTIO_NET_CTRL_MQ_PAIRS_SET && c->len == 2 && got_n == n;
+}
+
+/**
+ * VIRTIO_NET_F_MQ on four processors and four pairs, as Linux's
+ * virtnet_probe takes it: every pair's queues set up and their receive
+ * queues filled, the control queue after the last pair, the pairs set
+ * through it, a frame on any receive queue delivered, and each send on the
+ * transmit queue of the processor's pair.
+ */
+static void row_multiqueue(void)
+{
+    uint8_t out[VNET_FRAME_MAX];
+    uint32_t len = 0;
+    int k, filled = 1;
+
+    fresh_mq(4, 4);
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP &&
+              (m.driver & VIRTIO_BIT(VIRTIO_NET_F_MQ)) != 0,
+          "mq: a device of four pairs comes up with VIRTIO_NET_F_MQ");
+    for (k = 0; k < 4; k++) {
+        filled &= m.q[2 * k].enabled && m.q[2 * k + 1].enabled && q_avail(&m.q[2 * k])[1] == 128 &&
+                  m.q[2 * k].notified == 1;
+    }
+    check(filled && m.q[8].enabled, "mq: four pairs, each receive queue filled and told of once, "
+                                    "and the control queue at 8");
+    check(pairs_set(4), "mq: the device is told of four pairs through the control queue");
+    check(dev_rx_on(4, frame_of(60, 3), 60, 1, 1) && rx_irq_on(4) && ngot == 1 && got_is(0, 60, 3),
+          "mq: a frame on the third pair's receive queue is delivered");
+    check(dev_rx_on(6, frame_of(1514, 4), 1514, 2, 2) && rx_irq_on(6) && ngot == 2 &&
+              got_is(1, 1514, 4),
+          "mq: a frame across two buffers of the fourth pair is put together there");
+    host_cpu = 2;
+    check(nd.ops->tx(nd.dev, frame_of(70, 5), 70) == NETDEV_TX_OK && !dev_tx_on(1, 0, 0) &&
+              dev_tx_on(5, out, &len) && len == 70,
+          "mq: processor 2 sends on the third pair's transmit queue");
+    host_cpu = 7;
+    check(nd.ops->tx(nd.dev, frame_of(71, 5), 71) == NETDEV_TX_OK && dev_tx_on(7, out, &len) &&
+              len == 71,
+          "mq: processor 7 sends on the fourth pair's, its number modulo the pairs");
+    host_cpu = 0;
+    check(nd.ops->tx(nd.dev, frame_of(72, 5), 72) == NETDEV_TX_OK && dev_tx_on(1, out, &len) &&
+              len == 72 && rx_errors == 0,
+          "mq: processor 0 sends on the first pair's");
+    nd.ops->stop(nd.dev);
+    check(m.dma_out == 0 && m.status == 0, "mq: a stop resets the device and frees every pair");
+}
+
+/**
+ * A device bound while one processor runs, as the boot's probe binds it
+ * before the others start, uses one pair, and is given the rest once they
+ * have started: each new receive queue filled and told of, the pairs set
+ * again, and sends spread over them.
+ */
+static void row_multiqueue_grow(void)
+{
+    uint8_t out[VNET_FRAME_MAX];
+    uint32_t len = 0;
+    int k, sent, filled = 1;
+
+    fresh_mq(4, 1);
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && pairs_set(1) && q_avail(&m.q[2])[1] == 0 &&
+              m.q[2].notified == 0,
+          "mq grow: one processor uses one pair of four");
+    cpus = 4;
+    virtio_net_cpus_started();
+    for (k = 1; k < 4; k++) {
+        filled &= q_avail(&m.q[2 * k])[1] == 128 && m.q[2 * k].notified == 1;
+    }
+    check(filled && pairs_set(4), "mq grow: four processors fill and use the other three pairs");
+    host_cpu = 3;
+    check(nd.ops->tx(nd.dev, frame_of(66, 2), 66) == NETDEV_TX_OK && dev_tx_on(7, out, &len) &&
+              len == 66,
+          "mq grow: processor 3 sends on the fourth pair's transmit queue");
+    host_cpu = 0;
+    sent = m.nctrl;
+    virtio_net_cpus_started();
+    check(m.nctrl == sent, "mq grow: a second call sends nothing");
+    nd.ops->stop(nd.dev);
+    check(m.dma_out == 0 && m.status == 0, "mq grow: a stop frees the pairs filled later");
+    cpus = 1;
+}
+
+/**
+ * The pairs used are the lesser of the processors and the device's: on two
+ * processors every pair of four is set up, as Linux's virtnet_find_vqs
+ * sets them up, and two filled and given to the device; a device
+ * that refuses the count sends on its first pair alone; a count of 0, or
+ * VIRTIO_NET_F_MQ without the control queue, is one pair, as Linux reads
+ * them.
+ */
+static void row_multiqueue_limits(void)
+{
+    fresh_mq(4, 2);
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && m.q[3].enabled && m.q[7].enabled &&
+              q_avail(&m.q[2])[1] == 128 && q_avail(&m.q[4])[1] == 0 && q_avail(&m.q[6])[1] == 0 &&
+              m.q[8].enabled && pairs_set(2),
+          "mq: two processors use two of four pairs set up, the control queue still at 8");
+    nd.ops->stop(nd.dev);
+    fresh_mq(4, 4);
+    m.ctrl_ack = 1;
+    host_cpu = 3;
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && strstr(logged, "did not take 4 pairs") &&
+              nd.ops->tx(nd.dev, frame_of(60, 1), 60) == NETDEV_TX_OK && dev_tx_on(1, 0, 0),
+          "mq: a device that refuses the pairs is sent to on the first alone");
+    host_cpu = 0;
+    nd.ops->stop(nd.dev);
+    fresh_mq(1, 4);
+    m.qmax[2] = 64;
+    k_memset(m.config + VNET_CFG_MAX_PAIRS, 0, 2);
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && m.q[2].enabled && pairs_set(1),
+          "mq: a count of 0 is one pair, with the control queue at 2");
+    nd.ops->stop(nd.dev);
+    fresh_mq(1, 4);
+    m.offered &= ~VIRTIO_BIT(VIRTIO_NET_F_CTRL_VQ);
+    {
+        uint16_t four = 4;
+
+        k_memcpy(m.config + VNET_CFG_MAX_PAIRS, &four, 2);
+    }
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && m.nctrl == 0 && !m.q[2].enabled,
+          "mq: without the control queue the device has one pair");
+    nd.ops->stop(nd.dev);
+    cpus = 1;
 }
 
 /**
@@ -1625,6 +1817,9 @@ int main(void)
     row_receive();
     row_mergeable();
     row_legacy_header();
+    row_multiqueue();
+    row_multiqueue_limits();
+    row_multiqueue_grow();
     row_transmit();
     row_no_event_idx();
     row_link();

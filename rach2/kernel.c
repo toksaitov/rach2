@@ -80,6 +80,7 @@
 #include "sys/block/recovery.h"
 #include "sys/network/driver/netdev.h"
 #include "sys/network/driver/tap.h"
+#include "sys/network/driver/virtio_net.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
 #include "sys/network/ip/ip.h"
@@ -4671,8 +4672,9 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
                                                            lockdep_inject_store};
 #endif
 
-/** Start the processors past the first (`smp_start`) and register their
- * devices (`platform_cpus_started`), the lockup detectors on all of them
+/** Start the processors past the first (`smp_start`), register their
+ * devices (`platform_cpus_started`), give virtio-net a queue pair for each
+ * (`virtio_net_cpus_started`), and start the lockup detectors on all of them
  * (`watchdog_init`), the grace-period thread (`rcu_init`), the flusher
  * (`writeback_init`) and khugepaged (`thp_init`), then register bkl/calls,
  * bkl/profile, bkl/long, bkl/tick, cputime_test and, with the checker,
@@ -4682,6 +4684,7 @@ static void start_processors(void)
     smp_start();
     platform_cpus_started();
     pci_msi_rebalance();
+    virtio_net_cpus_started();
     watchdog_init();
     rcu_init();
     writeback_init();

@@ -42,6 +42,9 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/krandom.h"
 #include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
+#include "../../proc/percpu.h"
+#include "../../proc/smp.h"
 #include "../../udelay.h"
 #include "../../virtio/virtio.h"
 #include "../ethernet/ethernet.h"
@@ -55,6 +58,29 @@ struct vnet_buf {
     struct vnet_buf *next;
 };
 
+struct vnet;
+
+/* A pair of queues, Linux's receive_queue and send_queue: the receive
+ * queue kept full of `rxb`, the transmit queue fed from the pool `txb`,
+ * their pages, and the frame the receive queue's buffers put together.
+ * Each pair has its own, so that the pairs' interrupts and sends share
+ * nothing but the stack. */
+struct vnet_pair {
+    struct vnet *v;
+    struct virtqueue *rx, *tx;
+    void *page[(VNET_RX_BUFS + VNET_TX_BUFS) / 2];
+    int npages;
+    struct vnet_buf rxb[VNET_RX_BUFS], txb[VNET_TX_BUFS];
+    struct vnet_buf *tx_free;
+    int tx_out; /* transmit buffers the device has */
+    /* A frame that spans receive buffers is put together here: the buffers
+     * still to come, the bytes so far, and whether it outgrew the frame. */
+    uint8_t frame[VNET_FRAME_MAX];
+    uint16_t rx_left;
+    uint32_t rx_len;
+    int rx_over;
+};
+
 /* A device. `vdev` is NULL once the device was unbound, and `nd` once its
  * interface was withdrawn or the probe took it back (`vnet_stop`); a record
  * with neither is free. The interface of a device the boot's probe found is
@@ -65,7 +91,16 @@ struct vnet {
     struct virtio_dev *vdev;
     struct netdev *nd;
     struct netdev own;
-    struct virtqueue *rx, *tx, *ctrl;
+    struct virtqueue *ctrl;
+    /* The pairs set up, `nset` of the device's `max_pairs`, no more than
+     * NR_CPUS, as Linux's virtnet_find_vqs sets up every pair; `npairs` of
+     * them in use, with buffers, one for each processor online, as Linux's
+     * curr_queue_pairs; `txpairs` of those carry frames sent, which is
+     * `npairs` once the device has taken VIRTIO_NET_CTRL_MQ_PAIRS_SET and 1
+     * before or without it. */
+    struct vnet_pair *pairs;
+    int nset, npairs, txpairs;
+    uint16_t max_pairs;
     int up;           /* DRIVER_OK is set and the queues carry frames */
     int key;          /* the PCI function as bus << 8 | devfn, or -1 */
     int sys_link;     /* the interface's `device` link in /sys, or 0 */
@@ -78,17 +113,6 @@ struct vnet {
     uint32_t speed;   /* Mb/s, or 0 when the device does not say */
     int duplex;       /* 1 full, 0 half, -1 when the device does not say */
     uint32_t mtu_max; /* the device's largest MTU, or 0 for none given */
-    void *page[(VNET_RX_BUFS + VNET_TX_BUFS) / 2];
-    int npages;
-    struct vnet_buf rxb[VNET_RX_BUFS], txb[VNET_TX_BUFS];
-    struct vnet_buf *tx_free;
-    int tx_out; /* transmit buffers the device has */
-    /* A frame that spans receive buffers is put together here: the buffers
-     * still to come, the bytes so far, and whether it outgrew the frame. */
-    uint8_t frame[VNET_FRAME_MAX];
-    uint16_t rx_left;
-    uint32_t rx_len;
-    int rx_over;
     /* The control queue's one command at a time, in a page of its own. */
     uint8_t *cmd;
     uint64_t cmd_addr;
@@ -109,14 +133,14 @@ static void vnet_interface(struct vnet *v, struct netdev *nd);
 #define VNET_CMD_DATA 16u
 #define VNET_CMD_ACK  64u
 
-/** Give `b` to the receive queue, empty. */
-static int vnet_rx_give(struct vnet *v, struct vnet_buf *b)
+/** Give `b` to the receive queue of `p`, empty. */
+static int vnet_rx_give(struct vnet_pair *p, struct vnet_buf *b)
 {
     struct virtio_sg sg;
 
     sg.addr = b->addr;
     sg.len = VNET_BUF;
-    return virtqueue_add(v->rx, &sg, 0, 1, b);
+    return virtqueue_add(p->rx, &sg, 0, 1, b);
 }
 
 /** Give the frame of `len` bytes at `data` to the stack, or count one that
@@ -137,10 +161,11 @@ static void vnet_deliver(struct vnet *v, const uint8_t *data, uint32_t len)
  * The first buffer of a frame, `len` bytes the device wrote: the header,
  * then the frame or its start. A frame in one buffer is delivered from the
  * buffer; one that spans more, as `num_buffers` says with
- * VIRTIO_NET_F_MRG_RXBUF, begins the frame put together in `v->frame`.
+ * VIRTIO_NET_F_MRG_RXBUF, begins the frame put together in `p->frame`.
  */
-static void vnet_rx_first(struct vnet *v, const uint8_t *data, uint32_t len)
+static void vnet_rx_first(struct vnet_pair *p, const uint8_t *data, uint32_t len)
 {
+    struct vnet *v = p->v;
     struct virtio_net_hdr hdr;
     uint16_t bufs;
 
@@ -156,34 +181,34 @@ static void vnet_rx_first(struct vnet *v, const uint8_t *data, uint32_t len)
         vnet_deliver(v, data + v->hdr, len - v->hdr);
         return;
     }
-    v->rx_left = (uint16_t)(bufs - 1u);
-    v->rx_len = 0;
-    v->rx_over = len - v->hdr > VNET_FRAME_MAX;
-    if (!v->rx_over) {
-        v->rx_len = len - v->hdr;
-        k_memcpy(v->frame, data + v->hdr, v->rx_len);
+    p->rx_left = (uint16_t)(bufs - 1u);
+    p->rx_len = 0;
+    p->rx_over = len - v->hdr > VNET_FRAME_MAX;
+    if (!p->rx_over) {
+        p->rx_len = len - v->hdr;
+        k_memcpy(p->frame, data + v->hdr, p->rx_len);
     }
 }
 
 /** A later buffer of a frame that spans buffers, which has no header: add
  * its `len` bytes, and deliver the frame at its last buffer, or count it
  * when it outgrew a frame. */
-static void vnet_rx_more(struct vnet *v, const uint8_t *data, uint32_t len)
+static void vnet_rx_more(struct vnet_pair *p, const uint8_t *data, uint32_t len)
 {
-    if (!v->rx_over && len <= VNET_FRAME_MAX - v->rx_len) {
-        k_memcpy(v->frame + v->rx_len, data, len);
-        v->rx_len += len;
+    if (!p->rx_over && len <= VNET_FRAME_MAX - p->rx_len) {
+        k_memcpy(p->frame + p->rx_len, data, len);
+        p->rx_len += len;
     } else {
-        v->rx_over = 1;
+        p->rx_over = 1;
     }
-    if (--v->rx_left != 0) {
+    if (--p->rx_left != 0) {
         return;
     }
-    if (v->rx_over) {
-        v->rx_errors++;
-        ethernet_note_rx_error(v->nd);
+    if (p->rx_over) {
+        p->v->rx_errors++;
+        ethernet_note_rx_error(p->v->nd);
     } else {
-        vnet_deliver(v, v->frame, v->rx_len);
+        vnet_deliver(p->v, p->frame, p->rx_len);
     }
 }
 
@@ -196,17 +221,17 @@ static void vnet_rx_more(struct vnet *v, const uint8_t *data, uint32_t len)
  */
 static void vnet_rx_done(struct virtqueue *vq, void *token, uint32_t len)
 {
-    struct vnet *v = (struct vnet *)vq->priv;
+    struct vnet_pair *p = (struct vnet_pair *)vq->priv;
     struct vnet_buf *b = (struct vnet_buf *)token;
 
-    if (v->up && v->nd) {
-        if (v->rx_left == 0) {
-            vnet_rx_first(v, b->data, len);
+    if (p->v->up && p->v->nd) {
+        if (p->rx_left == 0) {
+            vnet_rx_first(p, b->data, len);
         } else {
-            vnet_rx_more(v, b->data, len);
+            vnet_rx_more(p, b->data, len);
         }
     }
-    (void)vnet_rx_give(v, b);
+    (void)vnet_rx_give(p, b);
 }
 
 /** The receive queue's `batch`: tell the device of the buffers a reap gave
@@ -220,13 +245,13 @@ static void vnet_rx_batch(struct virtqueue *vq)
  * buffer is free again. */
 static void vnet_tx_done(struct virtqueue *vq, void *token, uint32_t len)
 {
-    struct vnet *v = (struct vnet *)vq->priv;
+    struct vnet_pair *p = (struct vnet_pair *)vq->priv;
     struct vnet_buf *b = (struct vnet_buf *)token;
 
     (void)len;
-    b->next = v->tx_free;
-    v->tx_free = b;
-    v->tx_out--;
+    b->next = p->tx_free;
+    p->tx_free = b;
+    p->tx_out--;
 }
 
 /** The control queue's `done`: the device has answered the command. */
@@ -375,71 +400,87 @@ static void vnet_config_changed(struct virtio_dev *d)
     }
 }
 
-/** Give back the buffers' pages and the command page, once the device can
- * no longer write them: after `virtio_teardown`. */
+/** Give back the pairs, their buffers' pages and the command page, once
+ * the device can no longer write them: after `virtio_teardown`. */
 static void vnet_free(struct vnet *v)
 {
-    int i;
+    int i, k;
 
-    for (i = 0; i < v->npages; i++) {
-        virtio_dma_free(v->vdev, v->page[i], 2u * VNET_BUF);
+    for (k = 0; v->pairs && k < v->nset; k++) {
+        for (i = 0; i < v->pairs[k].npages; i++) {
+            virtio_dma_free(v->vdev, v->pairs[k].page[i], 2u * VNET_BUF);
+        }
     }
-    v->npages = 0;
+    kfree(v->pairs);
+    v->pairs = 0;
+    v->nset = v->npairs = v->txpairs = 0;
     virtio_dma_free(v->vdev, v->cmd, 2u * VNET_BUF);
     v->cmd = 0;
-    v->tx_free = 0;
-    v->tx_out = 0;
 }
 
-/** Take a page for the two buffers `a` and `b`; `b` is NULL for an odd
- * buffer's page. 0, or -ENOMEM. */
-static int vnet_page(struct vnet *v, struct vnet_buf *a, struct vnet_buf *b)
+/** Take a page of `p` for the two buffers `a` and `b`; `b` is NULL for an
+ * odd buffer's page. 0, or -ENOMEM. */
+static int vnet_page(struct vnet_pair *p, struct vnet_buf *a, struct vnet_buf *b)
 {
     uint64_t addr;
-    uint8_t *p = (uint8_t *)virtio_dma_alloc(v->vdev, 2u * VNET_BUF, &addr);
+    uint8_t *page = (uint8_t *)virtio_dma_alloc(p->v->vdev, 2u * VNET_BUF, &addr);
 
-    if (!p) {
+    if (!page) {
         return -ENOMEM;
     }
-    v->page[v->npages++] = p;
-    a->data = p;
+    p->page[p->npages++] = page;
+    a->data = page;
     a->addr = addr;
     if (b) {
-        b->data = p + VNET_BUF;
+        b->data = page + VNET_BUF;
         b->addr = addr + VNET_BUF;
     }
     return 0;
 }
 
 /**
- * Take the buffers and fill the receive queue: a buffer for each of its
- * entries, at most VNET_RX_BUFS, and a transmit pool of at most
+ * Take the buffers of `p` and fill its receive queue: a buffer for each of
+ * its entries, at most VNET_RX_BUFS, and a transmit pool of at most
  * VNET_TX_BUFS, no more than the transmit queue holds, so that a pool
  * buffer always has a descriptor. 0, or -ENOMEM with what was taken left
  * for `vnet_free`.
  */
-static int vnet_buffers(struct vnet *v)
+static int vnet_pair_buffers(struct vnet_pair *p)
 {
-    int nrx = v->rx->size < VNET_RX_BUFS ? v->rx->size : VNET_RX_BUFS;
-    int ntx = v->tx->size < VNET_TX_BUFS ? v->tx->size : VNET_TX_BUFS;
+    int nrx = p->rx->size < VNET_RX_BUFS ? p->rx->size : VNET_RX_BUFS;
+    int ntx = p->tx->size < VNET_TX_BUFS ? p->tx->size : VNET_TX_BUFS;
     int i;
 
     for (i = 0; i < nrx; i += 2) {
-        if (vnet_page(v, &v->rxb[i], i + 1 < nrx ? &v->rxb[i + 1] : 0) != 0) {
+        if (vnet_page(p, &p->rxb[i], i + 1 < nrx ? &p->rxb[i + 1] : 0) != 0) {
             return -ENOMEM;
         }
     }
     for (i = 0; i < ntx; i += 2) {
-        if (vnet_page(v, &v->txb[i], i + 1 < ntx ? &v->txb[i + 1] : 0) != 0) {
+        if (vnet_page(p, &p->txb[i], i + 1 < ntx ? &p->txb[i + 1] : 0) != 0) {
             return -ENOMEM;
         }
     }
     for (i = 0; i < ntx; i++) {
-        v->txb[i].next = v->tx_free;
-        v->tx_free = &v->txb[i];
+        p->txb[i].next = p->tx_free;
+        p->tx_free = &p->txb[i];
     }
     for (i = 0; i < nrx; i++) {
-        if (vnet_rx_give(v, &v->rxb[i]) != 0) {
+        if (vnet_rx_give(p, &p->rxb[i]) != 0) {
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
+/** Take the buffers of every pair in use (`vnet_pair_buffers`); 0, or
+ * -ENOMEM. */
+static int vnet_buffers(struct vnet *v)
+{
+    int k;
+
+    for (k = 0; k < v->npairs; k++) {
+        if (vnet_pair_buffers(&v->pairs[k]) != 0) {
             return -ENOMEM;
         }
     }
@@ -447,17 +488,54 @@ static int vnet_buffers(struct vnet *v)
 }
 
 /**
- * Negotiate the features. A device whose largest MTU is below the least an
- * interface may have is taken without VIRTIO_NET_F_MTU, as Linux's
- * virtnet_validate clears the bit before the features are settled: the
- * device is reset and the negotiation run again without it. 0 with
- * `v->mtu_max` set, or `virtio_init`'s error.
+ * The queue pairs the device has, as Linux's virtnet_probe reads
+ * max_virtqueue_pairs: the configuration's with VIRTIO_NET_F_MQ and the
+ * control queue, else 1, and 1 for a count outside VNET_PAIRS_MIN to
+ * VNET_PAIRS_MAX. A count whose queues the core cannot number, past
+ * VIRTIO_MAX_QUEUES, is 0: the device is then driven without
+ * VIRTIO_NET_F_MQ, with a record. Read from the offer, before the
+ * negotiation, since the queues the core is given depend on it.
+ */
+static uint16_t vnet_max_pairs(struct vnet *v)
+{
+    uint64_t offered = virtio_offered(v->vdev);
+    uint16_t n = 1;
+
+    if (!(offered & VIRTIO_BIT(VIRTIO_NET_F_MQ)) || !(offered & VIRTIO_BIT(VIRTIO_NET_F_CTRL_VQ))) {
+        return 1;
+    }
+    virtio_config_read(v->vdev, VNET_CFG_MAX_PAIRS, &n, sizeof(n));
+    if (n < VNET_PAIRS_MIN || n > VNET_PAIRS_MAX) {
+        return 1;
+    }
+    if (2u * n + 1u > VIRTIO_MAX_QUEUES) {
+        klog(KLOG_WARN, "virtio_net", "queues: %s: %d pairs are more than the core numbers",
+             v->vdev->name, (int)n);
+        return 0;
+    }
+    return n;
+}
+
+/**
+ * Negotiate the features, with the queues of every pair the device has and
+ * the control queue after them. A device whose largest MTU is below the
+ * least an interface may have is taken without VIRTIO_NET_F_MTU, as
+ * Linux's virtnet_validate clears the bit before the features are settled:
+ * the device is reset and the negotiation run again without it. 0 with
+ * `v->mtu_max` and `v->max_pairs` set, or `virtio_init`'s error.
  */
 static int vnet_negotiate(struct vnet *v)
 {
+    uint64_t want = VNET_FEATURES;
     uint16_t mtu = 0;
-    int rc = virtio_init(v->vdev, VNET_FEATURES, 3);
+    int rc;
 
+    v->max_pairs = vnet_max_pairs(v);
+    if (v->max_pairs == 0) {
+        want &= ~VIRTIO_BIT(VIRTIO_NET_F_MQ);
+        v->max_pairs = 1;
+    }
+    rc = virtio_init(v->vdev, want, (uint16_t)(2u * v->max_pairs + 1u));
     v->mtu_max = 0;
     if (rc != 0 || !virtio_has(v->vdev, VIRTIO_NET_F_MTU)) {
         return rc;
@@ -470,7 +548,8 @@ static int vnet_negotiate(struct vnet *v)
     klog(KLOG_WARN, "virtio_net", "mtu: %s: the device's %d is too small, ignored", v->vdev->name,
          (int)mtu);
     virtio_teardown(v->vdev);
-    return virtio_init(v->vdev, VNET_FEATURES & ~VIRTIO_BIT(VIRTIO_NET_F_MTU), 3);
+    return virtio_init(v->vdev, want & ~VIRTIO_BIT(VIRTIO_NET_F_MTU),
+                       (uint16_t)(2u * v->max_pairs + 1u));
 }
 
 /** The station address: the configuration's with VIRTIO_NET_F_MAC, else a
@@ -485,34 +564,124 @@ static void vnet_mac_read(struct vnet *v)
     v->mac[0] = (uint8_t)((v->mac[0] & 0xFEu) | 0x02u);
 }
 
+/** The pairs to use: one for each processor online, up to those set up,
+ * as Linux's virtnet_probe sets curr_queue_pairs. */
+static int vnet_pairs_wanted(const struct vnet *v)
+{
+    int n = smp_cpu_count();
+
+    return n < 1 ? 1 : n < v->nset ? n : v->nset;
+}
+
 /**
- * Set up the queues: receive and transmit, and the control queue when the
- * device has one, with a page for its commands. The transmit and control
- * queues ask for no interrupt, and on a device without interrupts the
- * receive queue needs none either. 0 or -errno.
+ * Set up the queues: every pair the device has, up to NR_CPUS, of which
+ * one for each processor online is used (`vnet_pairs_wanted`), and the
+ * control queue when the device has one, with a page for its commands. The
+ * transmit and control queues ask for no interrupt, and on a device
+ * without interrupts the receive queues need none either. 0 or -errno;
+ * -ENOMEM for no memory for the pairs' records.
  */
 static int vnet_queues(struct vnet *v)
 {
-    int rc = virtio_queue_setup(v->vdev, VNET_Q_RX, vnet_rx_done, v, &v->rx);
+    int n = v->max_pairs < NR_CPUS ? v->max_pairs : NR_CPUS, k, rc = 0;
 
-    if (rc == 0) {
-        rc = virtio_queue_setup(v->vdev, VNET_Q_TX, vnet_tx_done, v, &v->tx);
+    v->pairs = (struct vnet_pair *)kzalloc((size_t)n * sizeof(*v->pairs));
+    if (!v->pairs) {
+        return -ENOMEM;
     }
-    if (rc != 0) {
+    v->nset = n;
+    v->npairs = vnet_pairs_wanted(v);
+    v->txpairs = 1;
+    for (k = 0; k < n && rc == 0; k++) {
+        struct vnet_pair *p = &v->pairs[k];
+
+        p->v = v;
+        rc = virtio_queue_setup(v->vdev, (uint16_t)VNET_Q_PAIR(k), vnet_rx_done, p, &p->rx);
+        if (rc == 0) {
+            rc = virtio_queue_setup(v->vdev, (uint16_t)(VNET_Q_PAIR(k) + 1), vnet_tx_done, p,
+                                    &p->tx);
+        }
+        if (rc == 0) {
+            p->rx->batch = vnet_rx_batch;
+            (void)virtqueue_irq(p->tx, 0);
+        }
+    }
+    if (rc != 0 || !virtio_has(v->vdev, VIRTIO_NET_F_CTRL_VQ)) {
         return rc;
     }
-    v->rx->batch = vnet_rx_batch;
-    (void)virtqueue_irq(v->tx, 0);
-    if (!virtio_has(v->vdev, VIRTIO_NET_F_CTRL_VQ)) {
-        return 0;
-    }
     v->cmd = (uint8_t *)virtio_dma_alloc(v->vdev, 2u * VNET_BUF, &v->cmd_addr);
-    if (v->cmd && virtio_queue_setup(v->vdev, VNET_Q_CTRL, vnet_ctrl_done, v, &v->ctrl) == 0) {
+    if (v->cmd && virtio_queue_setup(v->vdev, (uint16_t)VNET_Q_PAIR(v->max_pairs), vnet_ctrl_done,
+                                     v, &v->ctrl) == 0) {
         (void)virtqueue_irq(v->ctrl, 0);
     } else {
         v->ctrl = 0;
     }
     return 0;
+}
+
+/**
+ * Tell a device of several pairs how many carry frames, as Linux's
+ * virtnet_set_queues sends VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET: until then the
+ * device uses the first pair alone (virtio 1.2, 5.1.6.5.5). Sends then
+ * spread over the pairs by processor; a device that refuses the command
+ * keeps one pair for them, with a record, and receives on the first. Process
+ * context.
+ */
+static void vnet_pairs_set(struct vnet *v)
+{
+    uint16_t n = (uint16_t)v->npairs;
+
+    if (!virtio_has(v->vdev, VIRTIO_NET_F_MQ)) {
+        return;
+    }
+    if (vnet_command(v, VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_PAIRS_SET, &n, sizeof(n)) != 0) {
+        klog(KLOG_WARN, "virtio_net", "queues: %s: the device did not take %d pairs", v->vdev->name,
+             v->npairs);
+        return;
+    }
+    v->txpairs = v->npairs;
+}
+
+/**
+ * Bring the pairs in use up to the processors online: fill each new pair's
+ * receive queue, put it in use, then tell the device (`vnet_pairs_set`). A
+ * pair whose buffers cannot be had is not used, with a record; what it
+ * took is given back with the rest (`vnet_free`). Process context.
+ */
+static void vnet_grow(struct vnet *v)
+{
+    int want, k;
+    uint32_t flags;
+
+    if (!v->vdev || !v->up || !virtio_has(v->vdev, VIRTIO_NET_F_MQ)) {
+        return;
+    }
+    want = vnet_pairs_wanted(v);
+    if (want <= v->npairs) {
+        return;
+    }
+    for (k = v->npairs; k < want; k++) {
+        if (vnet_pair_buffers(&v->pairs[k]) != 0) {
+            klog(KLOG_WARN, "virtio_net", "queues: %s: no memory for pair %d", v->vdev->name, k);
+            break;
+        }
+        flags = net_lock();
+        v->npairs = k + 1;
+        virtqueue_kick(v->pairs[k].rx);
+        net_unlock(flags);
+    }
+    vnet_pairs_set(v);
+    klog(KLOG_INFO, "virtio_net", "%s: %d of %d queue pairs, %d carrying sends", v->vdev->name,
+         v->npairs, (int)v->max_pairs, v->txpairs);
+}
+
+void virtio_net_cpus_started(void)
+{
+    int i;
+
+    for (i = 0; i < VNET_MAX; i++) {
+        vnet_grow(&vnets[i]);
+    }
 }
 
 /**
@@ -563,13 +732,14 @@ static int vnet_sysfs_link(struct vnet *v, struct netdev *nd)
 static int vnet_start(struct vnet *v, struct netdev *nd)
 {
     struct virtio_dev *d = v->vdev;
-    int rc;
+    int rc, k;
 
     d->priv = v;
     d->irq_unlocked = 0;
     d->config_changed = 0;
-    v->rx = v->tx = v->ctrl = 0;
-    v->rx_left = 0;
+    v->ctrl = 0;
+    v->pairs = 0;
+    v->nset = v->npairs = v->txpairs = 0;
     v->polls = 0;
     vnet_err = "the virtio network device could not be shown bound";
     rc = virtio_driver_bind(d, "virtio_net");
@@ -607,8 +777,11 @@ static int vnet_start(struct vnet *v, struct netdev *nd)
     }
     vnet_interface(v, nd);
     v->up = 1;
-    virtqueue_kick(v->rx);
+    for (k = 0; k < v->npairs; k++) {
+        virtqueue_kick(v->pairs[k].rx);
+    }
     vnet_rx_mode(v);
+    vnet_pairs_set(v);
     d->config_changed = vnet_config_changed;
     (void)vnet_link_read(v);
     virtio_driver_bound(d);
@@ -633,7 +806,7 @@ static void vnet_down(struct vnet *v)
     }
     v->vdev->config_changed = 0;
     virtio_teardown(v->vdev);
-    v->rx = v->tx = v->ctrl = 0;
+    v->ctrl = 0;
     vnet_free(v);
 }
 
@@ -680,10 +853,15 @@ static void vnet_print_info(void *dev)
         return;
     }
     klog(KLOG_INFO, "virtio_net", "%s: rx %d, tx %d buffers%s%s%s%s", v->vdev->name,
-         v->rx->size < VNET_RX_BUFS ? (int)v->rx->size : VNET_RX_BUFS,
-         v->tx->size < VNET_TX_BUFS ? (int)v->tx->size : VNET_TX_BUFS, v->mrg ? ", mergeable" : "",
+         v->pairs[0].rx->size < VNET_RX_BUFS ? (int)v->pairs[0].rx->size : VNET_RX_BUFS,
+         v->pairs[0].tx->size < VNET_TX_BUFS ? (int)v->pairs[0].tx->size : VNET_TX_BUFS,
+         v->mrg ? ", mergeable" : "",
          virtio_has(v->vdev, VIRTIO_F_EVENT_IDX) ? ", event index" : "",
          v->ctrl ? ", control queue" : "", v->polled ? ", polled" : "");
+    if (v->npairs > 1 || v->max_pairs > 1) {
+        klog(KLOG_INFO, "virtio_net", "%s: %d of %d queue pairs, %d carrying sends", v->vdev->name,
+             v->npairs, (int)v->max_pairs, v->txpairs);
+    }
     if (!v->link_up) {
         klog(KLOG_INFO, "virtio_net", "no link yet");
     } else if (v->speed) {
@@ -708,10 +886,10 @@ static const char *vnet_error(void)
     return vnet_err;
 }
 
-/** Take back the transmit buffers the device has returned. */
-static void vnet_tx_reclaim(struct vnet *v)
+/** Take back the transmit buffers the device has returned to `p`. */
+static void vnet_tx_reclaim(struct vnet_pair *p)
 {
-    (void)virtqueue_reap(v->tx);
+    (void)virtqueue_reap(p->tx);
 }
 
 /**
@@ -722,12 +900,15 @@ static void vnet_tx_reclaim(struct vnet *v)
  * drops the frame and counts a stall, where Linux stops the queue; the
  * stack sends a dropped segment again. The frame is not padded to 60
  * bytes, as Linux's driver does not pad: no wire is behind the device.
+ * The pair is the running processor's, among those that carry sends, as
+ * Linux's virtnet_set_affinity gives each processor a transmit queue.
  * Runs under `net_lock`, which nests, since a sender in a handler shares
  * the pool.
  */
 static int vnet_tx(void *dev, const uint8_t *data, uint16_t len)
 {
     struct vnet *v = (struct vnet *)dev;
+    struct vnet_pair *p;
     struct vnet_buf *b;
     struct virtio_sg sg;
     uint32_t flags;
@@ -740,12 +921,17 @@ static int vnet_tx(void *dev, const uint8_t *data, uint16_t len)
         return NETDEV_TX_DROPPED;
     }
     flags = net_lock();
-    vnet_tx_reclaim(v);
-    for (i = 0; !v->tx_free && i < VNET_TX_WAIT_STEPS; i++) {
-        k_udelay(VNET_TX_WAIT_USEC);
-        vnet_tx_reclaim(v);
+    if (!v->up) {
+        net_unlock(flags);
+        return NETDEV_TX_DROPPED;
     }
-    b = v->tx_free;
+    p = &v->pairs[(int)arch_cpu_id() % v->txpairs];
+    vnet_tx_reclaim(p);
+    for (i = 0; !p->tx_free && i < VNET_TX_WAIT_STEPS; i++) {
+        k_udelay(VNET_TX_WAIT_USEC);
+        vnet_tx_reclaim(p);
+    }
+    b = p->tx_free;
     if (!b) {
         v->tx_stalls++;
         net_unlock(flags);
@@ -755,21 +941,21 @@ static int vnet_tx(void *dev, const uint8_t *data, uint16_t len)
     k_memcpy(b->data + v->hdr, data, len);
     sg.addr = b->addr;
     sg.len = v->hdr + len;
-    if (virtqueue_add(v->tx, &sg, 1, 0, b) != 0) {
+    if (virtqueue_add(p->tx, &sg, 1, 0, b) != 0) {
         v->tx_stalls++;
         net_unlock(flags);
         return NETDEV_TX_DROPPED;
     }
-    v->tx_free = b->next;
-    v->tx_out++;
+    p->tx_free = b->next;
+    p->tx_out++;
     v->tx_packets++;
-    virtqueue_kick(v->tx);
+    virtqueue_kick(p->tx);
     net_unlock(flags);
     return NETDEV_TX_OK;
 }
 
 /**
- * The polled table's `poll`: reap both queues, for a device that cannot
+ * The polled table's `poll`: reap every queue, for a device that cannot
  * interrupt, and every VNET_LINK_POLLS polls read its link, which no
  * interrupt reports, so that a cable put in or pulled out is seen as on a
  * device that interrupts. The status word itself is read, not the
@@ -780,15 +966,31 @@ static int vnet_tx(void *dev, const uint8_t *data, uint16_t len)
 static void vnet_poll(void *dev)
 {
     struct vnet *v = (struct vnet *)dev;
+    int k;
 
     if (v && v->up) {
-        (void)virtqueue_reap(v->rx);
-        vnet_tx_reclaim(v);
+        for (k = 0; k < v->npairs; k++) {
+            (void)virtqueue_reap(v->pairs[k].rx);
+            vnet_tx_reclaim(&v->pairs[k]);
+        }
         if (v->vdev->config_atomic && ++v->polls >= VNET_LINK_POLLS) {
             v->polls = 0;
             vnet_link_refresh(v);
         }
     }
+}
+
+/** Take back every pair's returned transmit buffers; the buffers the
+ * device still has. */
+static int vnet_tx_out(struct vnet *v)
+{
+    int k, n = 0;
+
+    for (k = 0; k < v->npairs; k++) {
+        vnet_tx_reclaim(&v->pairs[k]);
+        n += v->pairs[k].tx_out;
+    }
+    return n;
 }
 
 /**
@@ -809,11 +1011,8 @@ static void vnet_stop(void *dev)
         return;
     }
     if (v->up) {
-        for (i = 0; i < VNET_DRAIN_STEPS && v->tx_out > 0; i++) {
-            vnet_tx_reclaim(v);
-            if (v->tx_out > 0) {
-                k_udelay(VNET_TX_WAIT_USEC);
-            }
+        for (i = 0; i < VNET_DRAIN_STEPS && vnet_tx_out(v) > 0; i++) {
+            k_udelay(VNET_TX_WAIT_USEC);
         }
         vnet_down(v);
     }
