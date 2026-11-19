@@ -453,6 +453,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->cpu = -1;
     v->clock_cpu = -1;
     v->xs_row = -1;
+    v->poll_control = 1; /* polling allowed, as Linux's kvm_arch_vcpu_postcreate sets it */
     v->hlt_in_guest = (vm->disable_exits & KVM_X86_DISABLE_EXITS_HLT) != 0;
     v->cr4_reserved = cr4_reserved_by(NULL);
     k_memcpy(v->name, "kvm-vcpu:", 9);
