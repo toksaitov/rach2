@@ -4067,9 +4067,9 @@ void intel_crtc_crc_frame(struct intel_crtc *crtc, uint32_t crc);
 void intel_backlight_setup(struct drm_i915_private *i915);
 
 /** Turn the PWM on at the level kept, Linux's intel_backlight_enable with
- * lpt_enable_backlight: a level at or below the VBT's least comes on at the
- * most, which the backlight class then keeps as its brightness. Takes
- * bl_lock and then the class's lock, so the caller holds neither. */
+ * lpt_enable_backlight: a level above the VBT's least is kept, and one at
+ * or below it comes on at the most, which the backlight class is told
+ * (`backlight_driver_level`). Process context. */
 void intel_backlight_enable(struct drm_i915_private *i915);
 
 /** Turn the PWM off, its duty cycle 0, Linux's intel_backlight_disable

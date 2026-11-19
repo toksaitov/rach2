@@ -203,7 +203,7 @@ void intel_backlight_enable(struct drm_i915_private *i915)
     }
     flags = spin_lock_irqsave(&d->bl_lock);
     /* Linux's __intel_backlight_enable: a level at or below the least
-     * comes on at the most, and lit, and the class is told below. */
+     * comes on at the most, and lit. Any other level is kept. */
     if (d->bl_level <= d->bl_min) {
         d->bl_level = d->bl.max;
         d->bl_dark = 0;
@@ -225,11 +225,12 @@ void intel_backlight_enable(struct drm_i915_private *i915)
     intelbl_set(&d->bl, d->bl_level);
     d->bl_enabled = 1;
     spin_unlock_irqrestore(&d->bl_lock, flags);
-    /* The class's level, which brightness reads and each blank and unblank
-     * gives back to bl_set, is the most now, as Linux sets props.brightness;
-     * its lock is taken before bl_lock, so only once bl_lock is let go. */
+    /* As Linux sets props.brightness, so that the class shows the level
+     * lit and a later write or unblank does not darken it again. */
     if (raised) {
-        backlight_level_changed(d->bl_index, d->bl.max);
+        backlight_driver_level(
+            d->bl_index, d->bl.max,
+            "raised to the most at the panel's enable from at or below its least");
     }
 }
 

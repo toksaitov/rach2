@@ -31,7 +31,7 @@
 #define BACKLIGHT_POWER      1 /* bl_power: BACKLIGHT_ON or BACKLIGHT_OFF; root writes it */
 #define BACKLIGHT_BRIGHTNESS 2 /* brightness: the level set; root writes it */
 #define BACKLIGHT_LEVELS     3 /* max_brightness: the highest level */
-#define BACKLIGHT_TYPE       4 /* type: "raw", a level of the hardware's own */
+#define BACKLIGHT_TYPE       4 /* type: "raw", "platform" or "firmware" */
 #define BACKLIGHT_NATTR      5
 
 /* The values of bl_power, Linux's FB_BLANK_UNBLANK and FB_BLANK_POWERDOWN. */
@@ -67,23 +67,31 @@ int backlight_register(const char *name, int max, const struct backlight_ops *op
  * `max` its highest level, as a driver does that takes the panel over from
  * the one that registered it: i915 from the boot's intelbl, and intelbl
  * again when i915's device goes. The level is read from the new driver,
- * whose units it is in, clamped to `max`; bl_power as root set it is
- * kept, and nothing is written to the hardware. Returns the
- * backlight's index, or -1 for no backlight of that name or a `max` that is
- * not positive. Any context; it does not sleep.
+ * whose units it is in, clamped to `max`, when the driver reads one above
+ * 0. A driver that reads 0, which has no lit level to read, as i915 after
+ * its device's reset or a stand-in, is given the level the class kept,
+ * taken to `max`, through its `set` alone, so that a level root set
+ * survives the change of driver; its switch is left as it is. bl_power as
+ * root set it is kept. Returns the backlight's index, or -1 for no
+ * backlight of that name or a `max` that is not positive. Any context; it
+ * does not sleep.
  */
 int backlight_rebind(const char *name, int max, const struct backlight_ops *ops, void *ctx);
 
 /**
- * Record `level`, in the class's units, as the level of backlight `i`, one
- * its driver set by itself, as Linux's i915 sets the device's brightness
- * when it lights a panel whose level was at or below its least; nothing is
- * written to the hardware, so that brightness reads what the panel shows
- * and the next blank or unblank keeps it. Nothing for no such backlight; a
- * level past the highest is clamped. The caller holds none of the locks its
- * driver's `ops` take. Any context; it does not sleep.
+ * Take `level`, 0 to the backlight's highest, as backlight `i`'s level
+ * without giving it to the driver, which set it itself: i915 raises a
+ * level at or below the panel's least to the most when it turns the
+ * backlight on, as Linux's __intel_backlight_enable does, and the class
+ * then shows that level, as Linux's props.brightness does. Logged with
+ * `why`. Process context, with no lock of the driver's held.
  */
-void backlight_level_changed(int i, int level);
+void backlight_driver_level(int i, int level, const char *why);
+
+/** Name backlight `i`'s type, as its `type` file shows it: "raw" (the
+ * default), "platform" or "firmware", as Linux's. At boot, before any
+ * reader. */
+void backlight_set_type(int i, const char *type);
 
 /** Probe the drivers of the panels' backlights, which register what they
  * find: `intelbl_init` on a PC. Once, at boot, after PCI and paging. */
