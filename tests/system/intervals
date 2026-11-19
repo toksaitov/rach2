@@ -102,3 +102,4 @@ tests/wow64probe.c: a sleep of a millisecond that completes
 tests/musl/kvmipimusl.c: the guest's counts are looked at every 50 ms
 tests/musl/unixmusl.c: the bytes are paced, a quarter of the time limit apart
 tests/musl/inodechurnmusl.c: the load runs for its seconds, its count printed each second
+tests/musl/hvcmusl.c: the node is looked at again every 100 ms

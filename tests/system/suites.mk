@@ -224,9 +224,13 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # /dev/vport0p1 is the console terminal and the log names the port, by
 # hvcmusl; a boot whose options name ttyS0 keeps the UART and has no
 # virtio console; a restart from the debug shell with the log on a
-# virtconsole beside COM1 resets the device before the kernel restarts; and
+# virtconsole beside COM1 resets the device before the kernel restarts;
 # a panic with the driver's transmit lock held (rach2.vconpanic) gives the
-# host its record through the virtserialport. They are the cases of
+# host its record through the virtserialport; and a virtconsole and a third
+# port added through QMP after the boot to a device of four ports, with
+# hvc0 named beside COM1, give a generic port its byte device and name,
+# hvc0 its terminal and its host's end the record emerg_wr carried, and the
+# late port its node until it is removed. They are the cases of
 # tests/cases/guest.hvc.json, which etude runs, and have no target here.
 # `tests/run ia32`: an i386 and an x86-64 program on the x86-64 kernel exec
 # each other, pass descriptors, share a futex, trace each other, run under
