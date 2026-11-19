@@ -779,7 +779,7 @@
         },
         {
           "assertion_id": "mouse",
-          "checks": "evprobe mouse reads the injected motion, button and wheel",
+          "checks": "evprobe reads the injected motion, button and wheel on VMMouse's two devices under KVM and on the Explorer device under other accelerators",
           "source": "scenario"
         },
         {

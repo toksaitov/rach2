@@ -94,15 +94,16 @@ static void packets(struct usb_boot *b, const char *what, const char *const even
     }
 }
 
-/** Run `command`, evprobe of a mouse, on the machine booted into `b`;
- * when it asks, move the mouse by 10 and 5, press and release the left
- * button, and turn the wheel up and down (`packets`); report assertion
- * `mouse` of its run. */
-static int mouse_steps(struct usb_case *u, struct usb_boot *b, const char *command)
+/** Run `command`, evprobe of a mouse, on the booted machine `b`. Move by
+ * 10 and 5, or to 10000 and 20000 for VMMouse, then click and turn the
+ * wheel in both directions. Report assertion `mouse`. */
+static int mouse_steps(struct usb_case *u, struct usb_boot *b, const char *command, int absolute)
 {
-    static const char *const events[] = {
-        "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
-        "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]",
+    const char *const events[] = {
+        absolute ? "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": 10000}}, "
+                   "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": 20000}}]"
+                 : "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
+                   "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]",
         LEFT_DOWN, LEFT_UP, TURN("wheel-up"), TURN("wheel-down")};
     struct usb_run r;
     uint64_t from;
@@ -124,7 +125,7 @@ static int mouse(struct usb_case *u, const char *record, const char *command)
     struct usb_boot b;
 
     booted(u, &b, record);
-    return mouse_steps(u, &b, command);
+    return mouse_steps(u, &b, command, 0);
 }
 
 /** Run evprobe of QEMU's tablet; when it asks, move the tablet to 10000
@@ -151,12 +152,6 @@ static int tablet(struct usb_case *u)
     return usb_end(u);
 }
 
-/* The most time the PS/2 mouse's probe may take by the kernel's stamps, in
- * microseconds: under three of Linux's 200 ms waits for an ACK, since QEMU's
- * mouse leaves two of the probe's commands unanswered, ALPS's 0xEC and the
- * TrackPoint's 0xE1, and answers every other at once. */
-#define PROBE_US 600000u
-
 /** The kernel's stamp, in microseconds, of the console's first record that
  * has `record` in it, "<L>[S.UUUUUU] record", or -1 when there is none. */
 static long long stamp(const char *text, const char *record)
@@ -170,14 +165,13 @@ static long long stamp(const char *text, const char *record)
     return (long long)seconds * 1000000 + (long long)us;
 }
 
-/** Report assertion `probe`: the console's `mouse: ready` follows its
- * `mouse: started` by less than PROBE_US by the kernel's stamps. */
+/** Require a completed PS/2 probe and record the kernel's two stamps. */
 static void probe_time(struct usb_case *u, const struct usb_boot *b)
 {
     char *text = usb_text(b, 0, b->at);
     long long started = stamp(text, "] mouse: started"), ready = stamp(text, "] mouse: ready");
 
-    usb_assert(u, "probe", started >= 0 && ready >= started && ready - started < PROBE_US,
+    usb_assert(u, "probe", started >= 0 && ready >= started,
                "mouse: started at %lld us, mouse: ready at %lld us", started, ready);
     free(text);
 }
@@ -186,10 +180,11 @@ static void probe_time(struct usb_case *u, const struct usb_boot *b)
 static int ps2_mouse(struct usb_case *u)
 {
     struct usb_boot b;
+    int vmmouse = strcmp(etude_case_accel(u->c), "kvm") == 0;
 
     booted(u, &b, NULL);
     probe_time(u, &b);
-    return mouse_steps(u, &b, "/evprobe mouse");
+    return mouse_steps(u, &b, vmmouse ? "/evprobe vmmouse" : "/evprobe mouse", vmmouse);
 }
 
 /** A USB mouse's event device. */

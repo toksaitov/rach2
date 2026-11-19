@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.games-wm.place",
-      "behavior": "xplace and a Wine Direct3D 9 fullscreen window at the output's 1366x768 sit at 0,0 unframed with focus and fullscreen state, the screen shows each window's halves from edge to edge, xplace's confining grab holds and its raw relative motion sums to what QMP sent while the pointer stays at the window's edge",
+      "behavior": "xplace and a Wine Direct3D 9 fullscreen window at the output's 1366x768 sit at 0,0 unframed with focus and fullscreen state, the screen shows each window's halves from edge to edge, xplace's confining grab holds and its raw relative motion from the Explorer protocol sums to what QMP sent while the pointer stays at the window's edge",
       "units": [
         "tests/system/games/wm.py",
         "tests/system/games/xplace.c",

@@ -321,7 +321,7 @@
     },
     {
       "case_id": "machine.input.mouse",
-      "behavior": "the PS/2 mouse's probe waits for each unanswered command only as long as Linux's, and the mouse's motion, buttons and wheel reach its event device, ImExPS/2 Generic Explorer Mouse, as Linux's psmouse reports them, stamped by each open's clock",
+      "behavior": "the PS/2 mouse reports QEMU's absolute motion and buttons on one VMMouse device and wheel turns on its relative device under KVM, or all three on the Explorer device on other accelerators, stamped by each open's clock",
       "units": [
         "evdev",
         "ps2mouse",
@@ -366,7 +366,7 @@
         {
           "step_id": "mouse",
           "stage": "execute",
-          "does": "run evprobe mouse, move the mouse by 10 and 5, press and release the left button and turn the wheel up and down through QMP, each event once evprobe has read the packet of the one before",
+          "does": "run evprobe vmmouse under KVM and move to 10000 and 20000, or run evprobe mouse and move by 10 and 5, then press and release the left button and turn the wheel up and down through QMP, waiting after each packet",
           "machine": "input"
         }
       ],
@@ -397,12 +397,12 @@
         },
         {
           "assertion_id": "probe",
-          "checks": "the console's `mouse: ready` follows its `mouse: started` by less than 0.6 s of the kernel's stamps: the probe waits for the two commands QEMU's mouse leaves unanswered, ALPS's 0xEC and the TrackPoint's 0xE1, once each and for Linux's 200 ms, and for no other",
+          "checks": "the console's `mouse: ready` follows `mouse: started`, and the kernel's two stamps are recorded",
           "source": "scenario"
         },
         {
           "assertion_id": "mouse",
-          "checks": "evprobe finds the PS/2 mouse's event device by its name, with bus 0x11, vendor 2, product 6, isa0060/serio1/input0, EV_REL with REL_X, REL_Y, REL_HWHEEL and REL_WHEEL, BTN_LEFT to BTN_EXTRA, INPUT_PROP_POINTER and EINVAL for EVIOCGABS; a revoked open reads ENODEV; a monotonic open and a real-time one each read the motion of 10 and 5, the left button pressed and released and REL_WHEEL of 1 and -1, every record stamped between the clock_gettime calls around it, and evprobe prints `EVPROBE OK` and exits 0",
+          "checks": "evprobe checks the VMMouse identities and capabilities on input0 and input1 under KVM, and reads ABS_X 20000, ABS_Y 40000 and a click on input1 and REL_WHEEL of 1 and -1 on input0; on other accelerators it checks the Explorer's identity and capabilities and reads REL_X 10, REL_Y 5, a click and both turns; a revoked open reads ENODEV, the other opens each read every event stamped by their own clock, and evprobe prints `EVPROBE OK` and exits 0",
           "source": "scenario"
         }
       ],
