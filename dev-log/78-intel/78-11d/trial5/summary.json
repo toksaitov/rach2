@@ -1,0 +1,40 @@
+[
+  {
+    "after_frame": 2,
+    "callback_end_ms": 46.1,
+    "callback_start_ms": 45.9,
+    "first_gaps_ms": [
+      16.7,
+      16.7,
+      33.3,
+      16.6,
+      14.7,
+      16.2,
+      16.6,
+      16.5,
+      16.6,
+      16.5,
+      16.6,
+      16.6,
+      16.5,
+      16.6,
+      16.5
+    ],
+    "frames": 480,
+    "gap_ms": 33.3,
+    "kind": "bare",
+    "late_after_steady": 2,
+    "next_start_ms": 87.7,
+    "next_time_ms": 78,
+    "phases": {
+      "adapter": 100,
+      "begin": 72.3,
+      "configured": 106.2,
+      "device": 104.7,
+      "pipeline": 106.3
+    },
+    "run": 0,
+    "seconds": 7.994200000000001,
+    "steady_fps": 60.12
+  }
+]

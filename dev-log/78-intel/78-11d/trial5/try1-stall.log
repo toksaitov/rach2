@@ -1,0 +1,21 @@
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t3504s/tests/graphics/guest-env.sh && graphics_env'"'"''
+hasvk: child: /data/trial/t3504s/out/environment.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t3504s/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 300'"'"''
+hasvk: child: /data/trial/t3504s/out/cube.log: exit 0
+hasvk: action: python3 /data/trial/t3504s/tests/graphics/browser/sandbox.py desktop chromium /data/trial/t3504s/out/run-0/browser webgpu-frames
+hasvk: child: /data/trial/t3504s/out/run-0/browser.log: exit 1
+stall: evidence: /data/trial/t3504s/out
+Traceback (most recent call last):
+  File "/data/trial/t3504s/tests/graphics/lenovo/stall.py", line 321, in <module>
+    main()
+    ~~~~^^
+  File "/data/trial/t3504s/tests/graphics/lenovo/stall.py", line 249, in main
+    run(["python3", str(GRAPHICS / "browser/sandbox.py"), user, "chromium",
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+         str(here / "browser"), mode], here / "browser.log", env)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/trial/t3504s/tests/graphics/lenovo/hasvk.py", line 45, in run
+    assert status == 0, "%s: exit %d; read %s" % (args[0], status, log)
+           ^^^^^^^^^^^
+AssertionError: python3: exit 1; read /data/trial/t3504s/out/run-0/browser.log
+status 1

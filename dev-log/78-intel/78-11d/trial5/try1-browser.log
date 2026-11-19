@@ -1,0 +1,9 @@
+mktemp: failed to create directory via template ‘/data/trial/t3504s/tmp/browser.XXXXXX’: Permission denied
+Traceback (most recent call last):
+  File "/data/trial/t3504s/tests/graphics/browser/sandbox.py", line 80, in <module>
+    main()
+    ~~~~^^
+  File "/data/trial/t3504s/tests/graphics/browser/sandbox.py", line 74, in main
+    assert player.wait() == 0, "sandbox runner failed"
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: sandbox runner failed
