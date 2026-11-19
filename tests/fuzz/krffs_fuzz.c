@@ -79,7 +79,7 @@ static int memory_sync(void *ctx)
     return 0;
 }
 
-static const krffs_backend_t memory_backend = {memory_read, memory_write, memory_sync};
+static const krffs_backend_t memory_backend = {memory_read, memory_write, memory_sync, 0};
 
 /**
  * Take the input, cut to `IMAGE_MAX` bytes, as the volume, and list up to

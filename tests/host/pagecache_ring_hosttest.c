@@ -5,7 +5,7 @@
  * host-deps:
  *
  * A lookup on a KRFFS volume reads the header of every node in the ring
- * (`krffs_find_child`), and on a disk root each of those reads goes through
+ * (`krffs_find_child_err`), and on a disk root each of those reads goes through
  * the page cache. A compile on such a root needs the ring's header pages and
  * its own pages resident together; when they do not fit, every lookup
  * refills the cache from the disk.

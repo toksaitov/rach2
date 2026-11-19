@@ -163,6 +163,7 @@ struct pc_entry {
     uint8_t accessed; /* touched since the clock hand last passed */
     uint8_t pinned;   /* a fill or a writeback is in flight */
     uint8_t waited;   /* a sync passed it pinned and waits for its release */
+    uint8_t held;     /* a store (`pc_copy_in`) brought it in and copies next */
     /* The pass whose write of the page failed, 0 for none: that pass's
      * other runs leave it out, and a sync's pass tries it once. */
     uint32_t failed_pass;
@@ -596,8 +597,8 @@ static int pc_writeback(struct pc_entry *e, uint32_t pass)
  * Write back the page of `slot` if it is dirty, as `pc_writeback` does in
  * `pass`, and then unmap it and empty the slot, which keeps its frame.
  * Returns 0 when the slot is emptied or was empty, and -1, with the page
- * kept, when the slot is pinned, the writeback fails, or a store dirtied the
- * page again during the write.
+ * kept, when the slot is pinned or held for a store (`pc_copy_in`), the
+ * writeback fails, or a store dirtied the page again during the write.
  *
  * The slot is emptied before its hash entry is removed, since the removal
  * may rebuild the hash from the valid slots.
@@ -609,7 +610,7 @@ static int pc_evict(uint32_t slot, uint32_t pass)
     if (!e->valid) {
         return 0;
     }
-    if (pc_writeback(e, pass) != 0 || e->dirty) {
+    if (e->held || pc_writeback(e, pass) != 0 || e->dirty) {
         return -1;
     }
     pc_platform_unmap(PCWIN_BASE + e->disk_off);
@@ -742,15 +743,20 @@ int pc_fault(uintptr_t fault_address, int write)
     return pc_bring((uint32_t)(page_va - PCWIN_BASE), write) >= 0;
 }
 
+/** Pages a store holds at once (`pc_copy_in`): a field that crosses an edge. */
+#define PC_COPY_HOLD 2u
+
 /**
- * Copy `size` bytes at byte `off` of the backing, a page at a time through the
- * slot that holds it (`pc_bring`): into `to` for a read, or out of `from`
- * into the slot's frame, marked dirty, for a write; the other is NULL. Each
- * page is brought in and copied with interrupts off and the big lock held,
- * as a window fault is served, so that no eviction comes between the two.
- * Returns 0, or -1 with no backing, for a range past the backed size, or
- * when a page cannot be read or given a slot; the pages before it are
- * copied.
+ * Copy `size` bytes at byte `off` of the backing, in pieces of at most
+ * PC_COPY_HOLD pages, through the slots that hold them (`pc_bring`): into
+ * `to` for a read, or out of `from` into the slots' frames, marked dirty,
+ * for a write; the other is NULL. Each piece is brought in and copied with
+ * interrupts off and the big lock held, as a window fault is served. A
+ * write brings in every page of its piece, held so that no slot search
+ * takes one for the next, before it copies a byte, so that a page that
+ * cannot be read or given a slot leaves the piece as it was. Returns 0,
+ * or -1 with no backing, for a range past the backed size, or when a page
+ * cannot be read or given a slot; the pieces before it are copied.
  */
 static int pc_copy(uint32_t off, uint8_t *to, const uint8_t *from, uint32_t size)
 {
@@ -758,35 +764,57 @@ static int pc_copy(uint32_t off, uint8_t *to, const uint8_t *from, uint32_t size
         return -1;
     }
     while (size != 0) {
-        uint32_t page = off & ~(PC_PAGE_SIZE - 1u);
-        uint32_t in = off - page;
-        uint32_t n = PC_PAGE_SIZE - in < size ? PC_PAGE_SIZE - in : size;
-        int bkl;
+        uint32_t first = off & ~(PC_PAGE_SIZE - 1u);
+        uint32_t span = PC_COPY_HOLD * PC_PAGE_SIZE - (off - first);
+        uint32_t n = span < size ? span : size;
+        uint32_t pages = (off - first + n + PC_PAGE_SIZE - 1u) / PC_PAGE_SIZE;
+        int32_t slots[PC_COPY_HOLD];
+        uint32_t i, k, at;
+        int bkl, failed = 0;
         uint32_t flags = pc_enter(&bkl);
-        int32_t slot = pc_bring(page, from != 0);
-        uint8_t *frame;
-        uint32_t i;
 
-        if (slot < 0) {
+        for (k = 0; k < pages; ++k) {
+            slots[k] = pc_bring(first + k * PC_PAGE_SIZE, 0);
+            if (slots[k] < 0) {
+                failed = 1;
+                break;
+            }
+            pc_slots[slots[k]].held = 1;
+        }
+        for (i = 0; i < k; ++i) {
+            pc_slots[slots[i]].held = 0;
+        }
+        if (failed) {
             pc_leave(flags, bkl);
             return -1;
         }
-        frame = (uint8_t *)pc_slots[slot].page + in;
-        for (i = 0; i < n; ++i) {
+        at = off - first;
+        for (k = 0; k < pages; ++k) {
+            uint8_t *frame;
+            uint32_t m = PC_PAGE_SIZE - at < n ? PC_PAGE_SIZE - at : n;
+
             if (from) {
-                frame[i] = from[i];
-            } else {
-                to[i] = frame[i];
+                (void)pc_bring(first + k * PC_PAGE_SIZE, 1); /* a hit: dirty, writable */
             }
+            frame = (uint8_t *)pc_slots[slots[k]].page + at;
+            for (i = 0; i < m; ++i) {
+                if (from) {
+                    frame[i] = from[i];
+                } else {
+                    to[i] = frame[i];
+                }
+            }
+            if (from) {
+                from += m;
+            } else {
+                to += m;
+            }
+            off += m;
+            size -= m;
+            n -= m;
+            at = 0;
         }
         pc_leave(flags, bkl);
-        if (from) {
-            from += n;
-        } else {
-            to += n;
-        }
-        off += n;
-        size -= n;
     }
     return 0;
 }
@@ -1050,6 +1078,7 @@ void init_pagecache(void)
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
         pc_slots[i].waited = 0;
+        pc_slots[i].held = 0;
         pc_slots[i].failed_pass = 0;
     }
     pc_capacity = PC_SLOTS;
@@ -1143,6 +1172,7 @@ void init_pagecache(void)
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
         pc_slots[i].waited = 0;
+        pc_slots[i].held = 0;
         pc_slots[i].failed_pass = 0;
     }
     pc_capacity =
