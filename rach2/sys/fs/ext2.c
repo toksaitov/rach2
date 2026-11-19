@@ -2882,7 +2882,12 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
  * batch holds it to list an image and the drain to copy one over the
  * block, so a reader that holds the buffer or copies under the batch's
  * spinlock sees each write whole; the cache's write lock keeps the marks
- * and writes (bcache.h), so the caller needs no big lock. This is the
+ * and writes (bcache.h), so the caller needs no big lock. A block of an
+ * inode table, or of a directory's entries or a symlink's target, waits
+ * from the change on for the orders the caller's operation keeps
+ * (`bcache_change`, `bcache_order_after`), a failure of which is -ENOMEM
+ * before a byte changes; and a directory's block is marked as entries
+ * (`bcache_dirty_entry`), which only an order waits for. This is the
  * write funnel: a mount that does not write (`ext2_writes`), read-only
  * outside the check and the opening of a writable mount or remount, or
  * failed, writes nothing: -EROFS, logged as `ext2: write refused: the mount
@@ -2892,6 +2897,41 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
  * is (`read_failed`), and -EIO. Its zone was checked by the read of the
  * same block that gave the caller what it writes. 0, or -errno.
  */
+/**
+ * Write through or mark dirty the held buffer `b`, just changed by
+ * `ext2_write_owned` for `owner`, as the way `sync` (WRITE_WAY's bits), the
+ * pointer level `level` and the kind `kind` of its request say. 0, or the
+ * -errno of a write through.
+ */
+static int write_mark(struct ext2_mount *em, struct bbuf *b, uint32_t owner, int sync, int level,
+                      int kind)
+{
+    if (sync == WRITE_DURABLE || (sync == WRITE_THROUGH && ext2_em_strict(em))) {
+        return bcache_write(b);
+    }
+    if (sync == WRITE_UNFLUSHED && ext2_em_strict(em)) {
+        return bcache_write_unflushed(b);
+    }
+    if (sync == WRITE_FIRST || sync == WRITE_AFTER) {
+        bcache_dirty_ordered(b, sync == WRITE_FIRST ? BCACHE_ORDER_FIRST : BCACHE_ORDER_AFTER);
+        if (b->owner != owner) {
+            bcache_dirty_owned(b, owner);
+        }
+    } else if (level) {
+        bcache_dirty_pointer(b, owner, level);
+    } else if (owner == 0 && kind == READ_DATA) {
+        if (b->owner) {
+            bcache_dirty_owned(b, 0);
+        }
+        bcache_dirty_entry(b);
+    } else if (owner || b->owner) {
+        bcache_dirty_owned(b, owner);
+    } else {
+        bcache_dirty(b);
+    }
+    return 0;
+}
+
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync)
 {
@@ -2926,6 +2966,13 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
             rc = -EIO;
             break;
         }
+        if (owner == 0 && (kind == READ_SLOT || kind == READ_DATA) && level == 0) {
+            rc = bcache_change(b);
+            if (rc != 0) {
+                bcache_release(b);
+                break;
+            }
+        }
         if (in) {
             k_memcpy(b->data + at, in, take);
             in += take;
@@ -2933,22 +2980,7 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
             k_memset(b->data + at, 0, take);
         }
         (void)ext2_writeback_copy(em, (uint32_t)blk, at, b->data + at, take, 1);
-        if (sync == WRITE_DURABLE || (sync == WRITE_THROUGH && ext2_em_strict(em))) {
-            rc = bcache_write(b);
-        } else if (sync == WRITE_UNFLUSHED && ext2_em_strict(em)) {
-            rc = bcache_write_unflushed(b);
-        } else if (sync == WRITE_FIRST || sync == WRITE_AFTER) {
-            bcache_dirty_ordered(b, sync == WRITE_FIRST ? BCACHE_ORDER_FIRST : BCACHE_ORDER_AFTER);
-            if (b->owner != owner) {
-                bcache_dirty_owned(b, owner);
-            }
-        } else if (level) {
-            bcache_dirty_pointer(b, owner, level);
-        } else if (owner || b->owner) {
-            bcache_dirty_owned(b, owner);
-        } else {
-            bcache_dirty(b);
-        }
+        rc = write_mark(em, b, owner, sync, level, kind);
         bcache_release(b);
         off += take;
         len -= take;
@@ -3866,6 +3898,7 @@ static void em_finish_node(struct ext2_mount *em, struct ext2_node *n)
  */
 static int names_begin(struct ext2_mount *em)
 {
+    bcache_order_end();
     em_enter(em);
     if (bkl_held()) {
         bkl_exit();
@@ -3879,6 +3912,7 @@ static int names_begin(struct ext2_mount *em)
  * `gave` says. */
 static void names_end(struct ext2_mount *em, int gave)
 {
+    bcache_order_end();
     if (gave) {
         bkl_enter();
     }
