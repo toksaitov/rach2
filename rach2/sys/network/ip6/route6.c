@@ -354,6 +354,11 @@ static struct netdev *by_index(int ifindex)
  * has one only on a machine with one card, which is the link it means. Any
  * other unicast destination is the table's. An interface that is down or
  * has IPv6 disabled carries nothing, as `netdev_route` judges IPv4's.
+ *
+ * An address of this machine's goes by `lo`, except a link-scoped one that
+ * `ifindex` places on a card other than the one that holds it: that is
+ * another host's on the named link, and goes out by that card, as Linux
+ * finds the local route only on the address's own interface.
  */
 struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via)
 {
@@ -365,11 +370,26 @@ struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via)
     return nd;
 }
 
+/**
+ * Whether `dst`, a unicast address an interface holds, goes by `lo`: not
+ * when it is link-scoped and `ifindex` names a card other than its holder.
+ */
+static int is_local(const uint8_t *dst, int ifindex)
+{
+    struct netdev *owner = ip6_is_multicast(dst) ? 0 : netdev_owner6(dst);
+    struct netdev *named = ifindex != 0 ? by_index(ifindex) : 0;
+
+    if (!owner) {
+        return 0;
+    }
+    return !ip6_link_scoped(dst) || !named || named == owner || named->loopback;
+}
+
 struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via)
 {
     struct netdev *nd = 0;
 
-    if (ip6_is_loopback(dst) || (!ip6_is_multicast(dst) && netdev_owner6(dst))) {
+    if (ip6_is_loopback(dst) || is_local(dst, ifindex)) {
         nd = netdev_loopback();
     } else if (ip6_link_scoped(dst)) {
         if (ifindex != 0) {
