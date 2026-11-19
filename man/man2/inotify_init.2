@@ -56,7 +56,7 @@ goes after its first event.
 .Dv IN_EXCL_UNLINK
 keeps from the watch the opens, reads, writes and closes
 a descriptor gives of a file once the name it was opened by has been removed;
-a change of attributes through the descriptor is still reported, as on Linux.
+a change of attributes or a truncation through the descriptor is still reported.
 Descriptors count up from 1.
 .Fn inotify_rm_watch ,
 number 293 on i386 and 255 on x86-64, removes the watch
@@ -146,15 +146,17 @@ where root may change them, as
 .Xr proc 5
 says.
 .Pp
-Where Linux differs: a file is gone for its watches when its last link
-is removed, where Linux waits for its last close; the events of a file
-reach the watch of its directory through the name a call gave, and
-through a descriptor only when it was opened by a name in that directory
-while a watch existed, so a file opened before any watch existed, and a
-file named through a symbolic link, are reported to the file's own
-watches alone; and a watch is found by the
-file's inode number, which a rename changes on a FAT volume, so a watch
-of a file there does not follow it.
+For a file with a saved directory entry, descriptor events use that entry
+even when the watch is added after the open.
+A directory opened through a final dot or dot-dot reports under the name
+of the directory the path reached.
+On file systems where the open saves no entry, the directory's watch hears
+descriptor events when its name was recorded at open time.
+.Pp
+A file is gone for its watches when its last link is removed, where Linux
+waits for its last close.
+A rename changes the inode number of a file on a FAT volume, so a watch of
+that file does not follow it.
 .Sh RETURN VALUES
 .Fn inotify_init ,
 .Fn inotify_init1

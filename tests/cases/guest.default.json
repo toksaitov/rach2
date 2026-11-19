@@ -5775,7 +5775,10 @@
         {"assertion_id": "poll-empty", "checks": "Poll of an empty instance shows nothing.", "source": "program"},
         {"assertion_id": "oneshot-watch", "checks": "A one-shot watch of the directory has descriptor 3.", "source": "program"},
         {"assertion_id": "poll-readable", "checks": "Poll of an instance with an event queued shows POLLIN.", "source": "program"},
-        {"assertion_id": "oneshot-events", "checks": "The one-shot watch reports the first file made, then IN_IGNORED, and not the second.", "source": "program"}
+        {"assertion_id": "oneshot-events", "checks": "The one-shot watch reports the first file made, then IN_IGNORED, and not the second.", "source": "program"},
+        {"assertion_id": "excl-unlink-truncate", "checks": "With IN_EXCL_UNLINK, the watch reports an unlinked file's truncation by name and skips its write and last close.", "source": "program"},
+        {"assertion_id": "late-watch-dot", "checks": "A watch added after an open through a final dot reports the resolved directory's last close by name.", "source": "program"},
+        {"assertion_id": "late-watch-dotdot", "checks": "A watch added after an open through dot-dot reports the resolved directory's last close under its new name after a rename.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

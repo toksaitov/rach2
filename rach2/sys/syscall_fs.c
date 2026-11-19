@@ -1574,6 +1574,7 @@ static int size_guarded(struct vfs_mount *mnt, void *node);
 static int ofd_append_only(const struct open_file *ofd);
 static int fd_change_lock(int fd);
 static int rw_call_lock(const fd_entry_t *e, uint32_t free);
+static void attr_told_desc(struct open_file *ofd, uint32_t mask, int self);
 
 /**
  * A change clears set-user-ID, and set-group-ID where group execute is set, for
@@ -1653,7 +1654,7 @@ static long ftruncate_fd(int fd, long long length)
             if (!big) {
                 big = big_take();
             }
-            inotify_desc(entry->ofd, IN_MODIFY);
+            attr_told_desc(entry->ofd, IN_MODIFY, 1);
         }
     }
     big_give(big);
@@ -5484,7 +5485,9 @@ static void attr_told(const char *name, struct vfs_mount *mnt, void *node, uint3
  * `attr_told` for a change made through the description `ofd`: its
  * directory's watches hear of it when its open recorded the directory and
  * name (`open_record_parent`) or its name record holds them
- * (`inotify_desc_dir`), and with `self` its own watches as well.
+ * (`inotify_desc_dir`), and with `self` its own watches as well. Attribute
+ * changes, including truncation, bypass IN_EXCL_UNLINK, as in Linux's
+ * `fsnotify_change`.
  */
 static void attr_told_desc(struct open_file *ofd, uint32_t mask, int self)
 {
@@ -5517,9 +5520,8 @@ static int open_is_tmpfile(int flags)
  * a file the open did not create.
  *
  * The description records whether it was opened for writing, which its
- * close reports, and, while a watch exists, its directory and name
- * (`open_record_parent`), so that the directory's watches hear of what is
- * done through it.
+ * close reports, and looks up a fallback directory and name while a watch
+ * exists when the walk gave no name record (`open_record_parent`).
  */
 static void open_done(int fd, const char *name, int flags)
 {
@@ -5540,9 +5542,11 @@ static void open_done(int fd, const char *name, int flags)
     if (!inotify_mount_watched(ofd->vmnt)) {
         return;
     }
-    open_record_parent(ofd, name);
+    if (!ofd->name) {
+        open_record_parent(ofd, name);
+    }
     if (truncated) {
-        inotify_desc(ofd, IN_MODIFY);
+        attr_told_desc(ofd, IN_MODIFY, 1);
     }
     inotify_desc(ofd, IN_OPEN);
 }

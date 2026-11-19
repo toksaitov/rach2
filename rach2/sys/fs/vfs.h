@@ -716,10 +716,10 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
  * caller resolves again under the big lock. `flags` takes VFS_WALK_NOFOLLOW,
  * VFS_WALK_REAL_IDS and VFS_WALK_LOCK; any other is a miss. With `entry` not
  * NULL a regular file or a directory at the last name has its directory
- * entry recorded
- * there, as `vfs_resolve_entry` records it, and a change of names that the
- * walk may have raced makes it a miss (`vfs_name_capture_at`); `*entry` is
- * NULL on every other answer.
+ * entry recorded there, as `vfs_resolve_entry` records it. A final dot
+ * keeps that entry. A walk that needs to reconstruct a directory's entry
+ * or may have raced a change of names is a miss (`vfs_name_capture_at`);
+ * `*entry` is NULL on every other answer.
  */
 int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry);
 
@@ -823,8 +823,8 @@ void vfs_replay(int magic, uint32_t seq, struct vfs_mount *xdev);
  */
 int vfs_replay_end(void);
 
-/* Resolve and capture the final entry of a regular file or a directory,
- * not "." or "..", in the same walk.
+/* Resolve and capture the selected entry of a regular file or a directory.
+ * After a final "." or "..", capture the resolved directory's own entry.
  * The returned name owns its parent and mount; the caller puts or transfers
  * it even if a later open fails. No entry is returned for a mount root.
  * With `dir` not NULL, the attributes of the directory the path's last name

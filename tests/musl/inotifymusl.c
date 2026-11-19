@@ -12,7 +12,10 @@
  * returns, and poll shows when an event is queued. A second watch of the same
  * file changes the first and returns its descriptor, with IN_MASK_CREATE it
  * fails with EEXIST, a one-shot watch is removed after its first event, and
- * inotify_rm_watch queues IN_IGNORED. inotify_init made with inline assembly
+ * inotify_rm_watch queues IN_IGNORED. An IN_EXCL_UNLINK watch reports
+ * truncation after unlink, and a watch added after an open through a final
+ * dot or dot-dot reports the resolved directory's last close.
+ * inotify_init made with inline assembly
  * leaves the caller's EBX, which i386 code keeps its global offset table in, as
  * it was, and on x86-64 its RDI, where inotify_init1 takes its flags.
  *
@@ -30,6 +33,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
@@ -44,6 +48,7 @@ extern char **environ;
 /* On tmpfs, which has hard links, where the KRFFS root has none. */
 static const char *dir_path = "/dev/shm/inotifymusl";
 #define DIR_PATH dir_path
+static int dir_created;
 
 /**
  * The path of `name` in `DIR_PATH`, in one of four buffers used in turn, so
@@ -57,6 +62,25 @@ static const char *at(const char *name)
 
     snprintf(p, sizeof(paths[0]), "%s/%s", DIR_PATH, name);
     return p;
+}
+
+/** Remove the files and directories made by this probe on any exit. */
+static void cleanup(void)
+{
+    if (dir_created) {
+        unlink(at("a"));
+        unlink(at("b"));
+        unlink(at("c"));
+        unlink(at("e"));
+        unlink(at("f"));
+        unlink(at("g"));
+        unlink(at("trunc"));
+        rmdir(at("d/sub"));
+        rmdir(at("d"));
+        rmdir(at("renamed/sub"));
+        rmdir(at("renamed"));
+        rmdir(DIR_PATH);
+    }
 }
 
 /* An event a read must return: its watch, its mask, and its name or "". */
@@ -92,6 +116,9 @@ enum {
     ONESHOT_WATCH,
     POLL_READABLE,
     ONESHOT_EVENTS,
+    EXCL_UNLINK_TRUNCATE,
+    LATE_WATCH_DOT,
+    LATE_WATCH_DOTDOT,
     CHECKS
 };
 
@@ -122,6 +149,9 @@ static const struct {
     {"oneshot-watch", "a one-shot watch"},
     {"poll-readable", "an instance with an event did not poll readable"},
     {"oneshot-events", "a one-shot watch"},
+    {"excl-unlink-truncate", "truncation after unlink"},
+    {"late-watch-dot", "last close after a final dot"},
+    {"late-watch-dotdot", "last close after a final dot-dot and a rename"},
 };
 
 /** In the process that began the report, report every check before `check`
@@ -344,6 +374,55 @@ static int refusals(int fd, int wd)
     }
 }
 
+/** A directory watch with IN_EXCL_UNLINK hears ftruncate of an unlinked
+ * file through its old name. It hears neither write nor close. */
+static int excl_unlink_truncate(int fd)
+{
+    struct want w = {0, IN_MODIFY, "trunc"};
+    char buf[64];
+    int f = open(at("trunc"), O_CREAT | O_RDWR | O_EXCL, 0600);
+
+    w.wd = inotify_add_watch(fd, DIR_PATH, IN_MODIFY | IN_CLOSE_WRITE | IN_EXCL_UNLINK);
+    if (f < 0 || w.wd < 0 || unlink(at("trunc")) != 0 || write(f, "x", 1) != 1 ||
+        read(fd, buf, sizeof buf) != -1 || errno != EAGAIN || ftruncate(f, 0) != 0 ||
+        close(f) != 0) {
+        return fail(EXCL_UNLINK_TRUNCATE);
+    }
+    return expect(fd, &w, 1, EXCL_UNLINK_TRUNCATE);
+}
+
+/** A watch added after two directory opens hears the last closes by the
+ * resolved entry. The second close reports the name after a rename. */
+static int late_dir_closes(int fd)
+{
+    struct want w = {0, IN_CLOSE_NOWRITE | IN_ISDIR, "d"};
+    int dot, dotdot;
+
+    if (mkdir(at("d"), 0755) != 0 || mkdir(at("d/sub"), 0755) != 0) {
+        return fail(LATE_WATCH_DOT);
+    }
+    dot = open(at("d/."), O_RDONLY | O_DIRECTORY);
+    if (dot < 0) {
+        return fail(LATE_WATCH_DOT);
+    }
+    dotdot = open(at("d/sub/../."), O_RDONLY | O_DIRECTORY);
+    if (dotdot < 0) {
+        return fail_as(LATE_WATCH_DOT, "open of d/sub/../.");
+    }
+    w.wd = inotify_add_watch(fd, DIR_PATH, IN_CLOSE_NOWRITE);
+    if (w.wd < 0 || close(dot) != 0) {
+        return fail(LATE_WATCH_DOT);
+    }
+    if (expect(fd, &w, 1, LATE_WATCH_DOT)) {
+        return 1;
+    }
+    if (rename(at("d"), at("renamed")) != 0 || close(dotdot) != 0) {
+        return fail(LATE_WATCH_DOTDOT);
+    }
+    w.name = "renamed";
+    return expect(fd, &w, 1, LATE_WATCH_DOTDOT);
+}
+
 #if defined __x86_64__
 /**
  * Check that inotify_init (253), which the kernel serves as inotify_init1
@@ -393,19 +472,19 @@ int main(int argc, char **argv)
     probe_args(argc, argv);
     report_begin(report_case(environ, "guest.default.inotifymusl"));
     dir_path = probe_arg("dir", dir_path);
-    mkdir(DIR_PATH, 0755);
+    if (atexit(cleanup) != 0 || mkdir(DIR_PATH, 0755) != 0) {
+        return fail_as(INIT1, "probe directory setup");
+    }
+    dir_created = 1;
     fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (fd < 0 || fcntl(fd, F_GETFD) != FD_CLOEXEC) {
         return fail(INIT1);
     }
-    if (register_kept() || events(fd, &wd) || refusals(fd, wd)) {
+    if (register_kept() || events(fd, &wd) || refusals(fd, wd) || excl_unlink_truncate(fd) ||
+        late_dir_closes(fd)) {
         return 1;
     }
     close(fd);
-    unlink(at("e"));
-    unlink(at("f"));
-    unlink(at("g"));
-    rmdir(DIR_PATH);
     report_at(CHECKS, NULL);
     printf("INOTIFYMUSL OK\n");
     return 0;

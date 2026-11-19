@@ -1685,23 +1685,32 @@ static int leaf_dots(const char *leaf)
     return leaf[0] == '.' && (leaf[1] == '\0' || (leaf[1] == '.' && leaf[2] == '\0'));
 }
 
+/** Whether the walk stays at the current entry through the rest of `p`:
+ * only slashes and components of a single dot follow it. */
+static int walk_stays(const char *p)
+{
+    for (;;) {
+        while (*p == '/') {
+            p++;
+        }
+        if (*p != '.' || (p[1] != '/' && p[1] != '\0')) {
+            return *p == '\0';
+        }
+        p++;
+    }
+}
+
 /** Capture the final entry of a regular file or a directory before its
  * parent hold is released. A directory's record lets inotify report what is
  * done through a descriptor of it to its directory's watches, as a file's
- * does (`inotify_desc_dir`); a path that ends in "." or ".." records none. */
+ * does (`inotify_desc_dir`). A final "." keeps the directory's entry. */
 static int walk_record_entry(struct walk_record *record, const struct vfs_ref *parent, void *found,
                              const char *leaf, const char *rest)
 {
     struct vfs_stat st;
     int rc;
 
-    if (!record || !record->entry) {
-        return 0;
-    }
-    while (*rest == '/') {
-        rest++;
-    }
-    if (*rest || leaf_dots(leaf) ||
+    if (!record || !record->entry || leaf_dots(leaf) || !walk_stays(rest) ||
         (mount_base(parent->mnt) == mounts[0] && parent->mnt->type == &vfs_krffs_type)) {
         return 0;
     }
@@ -1710,6 +1719,63 @@ static int walk_record_entry(struct walk_record *record, const struct vfs_ref *p
         return rc;
     }
     return vfs_name_capture(parent, leaf, record->entry);
+}
+
+/** Record the name of `ino` in the directory `parent` when a walk arrived
+ * at the inode without going through that name. The name sequence read
+ * before finding `parent` covers the scan and capture. A directory moved
+ * or removed in the meantime may have no name to record. */
+static int walk_parent_entry(const struct vfs_ref *parent, uint64_t ino, uint32_t seq,
+                             struct vfs_name **entry)
+{
+    struct vfs_dirent ent;
+    uint32_t cursor = 0;
+    void *handle;
+    int rc;
+
+    if (vfs_open_node(parent->mnt, parent->node, 0, &handle) != 0) {
+        return 0;
+    }
+    while ((rc = vfs_readdir(parent->mnt, handle, &cursor, &ent)) > 0) {
+        if (ent.ino == ino && !leaf_dots(ent.name)) {
+            break;
+        }
+    }
+    rc = rc > 0 ? vfs_name_capture_at(parent, ent.name, seq, entry) : 0;
+    vfs_release(parent->mnt, handle);
+    return rc == -EAGAIN ? 0 : rc;
+}
+
+/** Whether the walk was asked to record an entry and still needs one for
+ * `cur`. A mount root has no entry in that mount. */
+static int walk_needs_entry(const struct vfs_ref *cur, struct vfs_name **entry)
+{
+    return entry && !*entry && cur->node != cur->mnt->root;
+}
+
+/** Find and record the resolved directory's entry after a final dot or
+ * dot-dot when the walk has no record for it. Read the parent on the same
+ * file system without another walk from the process's root. */
+static int walk_record_dots(struct walk_record *record, const struct vfs_ref *cur)
+{
+    struct vfs_mount *base = mount_base(cur->mnt);
+    const struct vfs_ops *ops = cur->mnt->type->ops;
+    struct vfs_ref parent;
+    struct vfs_stat st;
+    uint32_t seq;
+    int rc;
+
+    if (!record || !walk_needs_entry(cur, record->entry) ||
+        (base == mounts[0] && cur->mnt->type == &vfs_krffs_type) || !ops->hold || !ops->put ||
+        !ops->lookup || !ops->readdir || !vfs_name_seq(&seq) ||
+        vfs_getattr(cur->mnt, cur->node, &st) != 0 || (st.mode & 0170000u) != 0040000u ||
+        ops->lookup(base, cur->node, "..", &parent.node) != 0) {
+        return 0;
+    }
+    parent.mnt = cur->mnt;
+    rc = walk_parent_entry(&parent, st.ino, seq, record->entry);
+    vfs_ref_put(&parent);
+    return rc;
 }
 
 /** Release an unsuccessful walk's entry, or initialize its empty slot, and
@@ -1728,10 +1794,13 @@ static void walk_record_clear(struct walk_record *record, int release)
 }
 
 /** Move to a looked-up node after recording its final directory entry and,
- * for the last name of the path, its directory's attributes. */
+ * for the last name of the path, its directory's attributes. Cross the
+ * mounts over the node and drop the record on a crossing, since the entry
+ * names the covered node and the walk is on the covering mount's root. */
 static int walk_record_move(struct walk_record *record, struct vfs_ref *cur, void *found,
-                            const char *leaf, const char *rest)
+                            const char *leaf, const char *rest, int locked)
 {
+    struct vfs_mount *from = cur->mnt;
     int rc = walk_record_entry(record, cur, found, leaf, rest);
 
     if (rc == 0 && record && record->dir) {
@@ -1745,23 +1814,10 @@ static int walk_record_move(struct walk_record *record, struct vfs_ref *cur, voi
 
     if (rc != 0) {
         node_put(cur->mnt, found);
-    } else {
-        ref_move_node(cur, found);
+        return rc;
     }
-    return rc;
-}
-
-/**
- * Cross the mounts over the node the walk has just moved to (`walk_cross`).
- * A file bound over the recorded entry is the bind's root, on another mount,
- * which the entry does not name, so a crossing drops the record. 0, or
- * `walk_cross`'s error.
- */
-static int walk_record_cross(struct walk_record *record, struct vfs_ref *cur, int locked)
-{
-    struct vfs_mount *from = cur->mnt;
-    int rc = walk_cross(cur, locked);
-
+    ref_move_node(cur, found);
+    rc = walk_cross(cur, locked);
     if (rc == 0 && cur->mnt != from) {
         walk_record_clear(record, 1);
     }
@@ -1818,8 +1874,8 @@ static void cached_put(struct vfs_mount *mnt, void *node)
 
 /** Record the directory entry `leaf` of `parent` in `*entry` when `found`,
  * the walk's last node, is a regular file or a directory, as
- * `walk_record_entry` does for
- * the full walk; `seq` is the count of changes of names the walk began at.
+ * `walk_record_entry` does for the full walk. `seq` is the count of
+ * changes of names the walk began at.
  * 0, or nonzero with nothing recorded, for the full walk. */
 static int cached_entry(const struct vfs_ref *parent, void *found, const char *leaf, uint32_t seq,
                         struct vfs_name **entry)
@@ -1827,9 +1883,6 @@ static int cached_entry(const struct vfs_ref *parent, void *found, const char *l
     struct vfs_stat st;
     int rc;
 
-    if (leaf_dots(leaf)) {
-        return 0;
-    }
     rc = parent->mnt->type->ops->getattr(mount_base(parent->mnt), found, &st);
     if (rc != 0 || ((st.mode & 0170000u) != 0100000u && (st.mode & 0170000u) != 0040000u)) {
         return rc;
@@ -1851,7 +1904,7 @@ struct cached_record {
  * The cached walk's checks on `found`, the node of the name `leaf` it just
  * looked up in `cur`, with `rest` the path after it: 0, with a regular
  * file's or a directory's entry recorded at the last name as `rec` asks
- * (`cached_entry`);
+ * (`cached_entry`), including before trailing dots;
  * WALK_LINK, with `found` held, for a symbolic link the walk follows,
  * which fs.protected_symlinks allows at the last name (`may_follow_link`),
  * as Linux's pick_link asks (fs/namei.c:1837); or WALK_FULL, with `found`
@@ -1877,7 +1930,8 @@ static int cached_found(const struct vfs_ref *cur, void *found, const char *leaf
             return WALK_FULL;
         }
     }
-    if (rec->entry && !*rest && cached_entry(cur, found, leaf, rec->seq, rec->entry) != 0) {
+    if (rec->entry && walk_stays(rest) &&
+        cached_entry(cur, found, leaf, rec->seq, rec->entry) != 0) {
         cached_put(cur->mnt, found);
         return WALK_FULL;
     }
@@ -2099,7 +2153,7 @@ static void cached_dots_push(struct cached_dots *dd, const struct vfs_ref *cur)
  * cross the mounts over it (`cached_cross`); the directory it leaves is
  * kept in `dd` for a `..`. A file bound over the last name's entry in
  * `*entry` moves the walk onto another mount, which the entry does not
- * name, so the entry is dropped, as the full walk's `walk_record_cross`
+ * name, so the entry is dropped, as the full walk's `walk_record_move`
  * drops it and Linux's `__follow_mount_rcu` replaces the mount and the
  * dentry together (fs/namei.c:1544-1556). 0, or WALK_FULL as
  * `cached_cross` returns it, or with `found` put when the mount cannot be
@@ -2237,6 +2291,14 @@ struct cached_links {
     struct cached_root root;
 };
 
+/** Release the saved directories and link buffers at the end of a walk. */
+static void cached_end(struct cached_dots *dd, const struct cached_links *lk)
+{
+    cached_dots_drop(dd);
+    path_buf_put(lk->linkpath);
+    path_buf_put(lk->target);
+}
+
 /**
  * Splice the target of the link `found` on `cur`'s mount in front of `rest`
  * in `lk->linkpath`, as `walk_link` does for the full walk; `found` is put.
@@ -2315,6 +2377,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
     struct cached_links lk;
     struct cached_dots dd;
     uint32_t found_names = 0;
+    int dots = 0;
     int rc;
 
     k_memset(&lk, 0, sizeof(lk));
@@ -2349,8 +2412,10 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         k_memcpy(comp, p, len);
         comp[len] = '\0';
         p += len;
+        dots = 0;
         rc = cached_dots_step(&cur, comp, &dd, &lk.root);
         if (rc == 0) {
+            dots = leaf_dots(comp);
             continue;
         }
         if (rc > 0) {
@@ -2361,9 +2426,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
             dcache_count_hits(found_names + 1);
             cached_put(cur.mnt, cur.node);
             vfs_leave(cur.mnt);
-            cached_dots_drop(&dd);
-            path_buf_put(lk.linkpath);
-            path_buf_put(lk.target);
+            cached_end(&dd, &lk);
             return rc;
         }
         if (rc != 0) {
@@ -2387,26 +2450,22 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
             goto full;
         }
     }
-    if (vfs_mount_gone(cur.mnt)) {
+    if (vfs_mount_gone(cur.mnt) || (dots && walk_needs_entry(&cur, entry))) {
         goto full;
     }
     dcache_count_hits(found_names);
     *out = cur;
-    cached_dots_drop(&dd);
-    path_buf_put(lk.linkpath);
-    path_buf_put(lk.target);
+    cached_end(&dd, &lk);
     return 0;
 
 full:
     cached_put(cur.mnt, cur.node);
     vfs_leave(cur.mnt);
-    cached_dots_drop(&dd);
+    cached_end(&dd, &lk);
     if (entry) {
         vfs_name_put(*entry);
         *entry = NULL;
     }
-    path_buf_put(lk.linkpath);
-    path_buf_put(lk.target);
     return WALK_FULL;
 }
 
@@ -2501,6 +2560,7 @@ static int resolve_full(const struct vfs_ref *start, const char *path, int flags
     int kind;
     int locked = (flags & VFS_WALK_LOCK) != 0;
     int missing = 0;
+    int dots;
     char *linkpath = 0;
     char *target = 0;
     int rc;
@@ -2523,6 +2583,7 @@ static int resolve_full(const struct vfs_ref *start, const char *path, int flags
 
 begin:
     p = path;
+    dots = 0;
     last_comp = leaf_comp;
     links = 0;
     nocwd = rules.scope != NULL;
@@ -2564,6 +2625,7 @@ begin:
             goto out_err;
         }
 
+        dots = 0;
         if (cur.mnt->type->ops->lookup_rest && !named_in_rest(&cur, p) && !climbs(&cur, p)) {
             const char *from = p;
             const char *left = 0;
@@ -2665,6 +2727,7 @@ begin:
         comp[len] = '\0';
         p += len;
 
+        dots = leaf_dots(comp);
         if (comp[0] == '.' && comp[1] == '\0') {
             continue;
         }
@@ -2766,12 +2829,7 @@ begin:
                 continue;
             }
         }
-        rc = walk_record_move(record, &cur, found, comp, p);
-        if (rc != 0) {
-            goto out_err;
-        }
-
-        rc = walk_record_cross(record, &cur, locked);
+        rc = walk_record_move(record, &cur, found, comp, p, locked);
         if (rc != 0) {
             goto out_err;
         }
@@ -2779,6 +2837,7 @@ begin:
 
     rc = walk_finish(&cur, missing ? flags | VFS_WALK_PARENT : flags);
     rc = rc == 0 ? walk_end_ok(&rules, cur.mnt) : rc;
+    rc = rc == 0 && dots ? walk_record_dots(record, &cur) : rc;
     if (rc != 0) {
         goto out_err;
     }
