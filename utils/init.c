@@ -47,6 +47,7 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <sys/file.h>
 #include <sys/mount.h>
 #include <dirent.h>
 #include <stdio.h>
@@ -275,15 +276,14 @@ static const char *const sysctl_dirs[] = {"/etc/sysctl.d", "/run/sysctl.d",
 #define BACKLIGHT_KEPT  "/var/lib/backlight"
 #define BACKLIGHT_MAX   4
 
-/* A backlight whose level init keeps: the paths of the level, of the file
- * that keeps it, and of that file's replacement while it is written, and
- * the text the file holds, empty when there is none. The paths are made at
- * boot, so that the shutdown handler only opens, reads, writes and renames,
- * which a signal handler may. */
+/* A backlight whose level init keeps: the sysfs path, the saved file and
+ * its two replacement paths, and the text last saved, empty if none. The
+ * paths are made at boot for the shutdown handler. */
 struct backlight {
     char level[128];
     char kept[128];
     char fresh[128];
+    char pending[128];
     char saved[24];
 };
 
@@ -305,6 +305,7 @@ static int backlight_count;
 #define MIXER_DEVICE   "/dev/mixer"
 #define MIXER_KEPT     "/var/lib/mixer"
 #define MIXER_FRESH    "/var/lib/mixer.new"
+#define MIXER_PENDING  "/var/lib/mixer.tmp"
 #define MIXER_MUTE     "/var/run/mixer.mute"
 #define MIXER_OLD_MUTE "/var/lib/mixer.mute"
 
@@ -312,6 +313,7 @@ static int backlight_count;
  * channel's percentage in the low byte and the right's in the next, and the
  * mask of the channels the device has. */
 #define MIXER_CHANNELS     25 /* SOUND_MIXER_NRDEVICES */
+#define MIXER_VOLUME       0
 #define MIXER_READ(n)      _IOR('M', n, int)
 #define MIXER_WRITE(n)     _IOWR('M', n, int)
 #define MIXER_READ_DEVMASK MIXER_READ(0xFE)
@@ -492,14 +494,16 @@ static void configure_console(void)
 static int read_text(const char *path, char *text, int size)
 {
     int fd = open(path, O_RDONLY);
-    int n;
+    int n, error;
 
     if (fd < 0) {
         return -1;
     }
     n = (int)read(fd, text, (size_t)(size - 1));
+    error = errno;
     close(fd);
     if (n < 0) {
+        errno = error;
         return -1;
     }
     text[n] = '\0';
@@ -510,8 +514,8 @@ static int read_text(const char *path, char *text, int size)
  * Read the settings file `kept` into `text`, as `read_text` does, or, when
  * there is none, its replacement `fresh`, when that ends in a newline:
  * KRFFS's rename removes the old file before the new one takes its name,
- * so a stop between leaves only `fresh`, which `replace_file` flushed
- * whole before the rename. Returns the count, or -1 for neither; sets
+ * so a stop between can leave only `fresh`, which `replace_file` flushes
+ * before touching `kept`. Returns the count, or -1 for neither; sets
  * `*from_fresh` when the text is `fresh`'s.
  */
 static int read_kept(const char *kept, const char *fresh, char *text, int size, int *from_fresh)
@@ -631,7 +635,9 @@ static void keep_backlights(void)
             snprintf(b->kept, sizeof(b->kept), BACKLIGHT_KEPT "/%s", e->d_name) >=
                 (int)sizeof(b->kept) ||
             snprintf(b->fresh, sizeof(b->fresh), BACKLIGHT_KEPT "/%s.new", e->d_name) >=
-                (int)sizeof(b->fresh)) {
+                (int)sizeof(b->fresh) ||
+            snprintf(b->pending, sizeof(b->pending), BACKLIGHT_KEPT "/%s.tmp", e->d_name) >=
+                (int)sizeof(b->pending)) {
             continue;
         }
         backlight_count++;
@@ -641,33 +647,70 @@ static void keep_backlights(void)
 }
 
 /**
- * Write the `n` bytes of `text` to `fresh`, flush it, rename it to `kept`
- * and flush their directory `dir`, so that a power loss leaves the old file
- * or the new one, or on KRFFS only `fresh` (`read_kept`), and the new one
- * once this returns, as ext2 writes the rename's directory block only at
- * the directory's fsync. Returns 0, or -1 on a failure, which leaves `kept`
- * as it was. Uses only system calls a signal handler may make.
+ * Make `path` if missing and flush the entry in `parent`. Flush an existing
+ * entry too, since the last attempt may have made it and failed to flush it.
+ * Returns 0 once the entry is durable, or -1 on failure.
  */
-static int replace_file(const char *fresh, const char *kept, const char *dir, const char *text,
-                        int n)
+static int keep_directory(const char *path, const char *parent)
 {
-    int fd = open(fresh, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    int ok;
+    int fd, rc;
 
+    if ((mkdir(path, 0755) != 0 && errno != EEXIST) ||
+        (fd = open(parent, O_RDONLY | O_DIRECTORY)) < 0) {
+        return -1;
+    }
+    rc = fsync(fd);
+    return close(fd) == 0 ? rc : -1;
+}
+
+/**
+ * Make a new file at `path` and flush its `n` bytes of `text`. The caller
+ * holds another copy of any settings that are needed from that path.
+ * Returns 0, or -1 on failure.
+ */
+static int write_replacement(const char *path, const char *text, int n)
+{
+    int fd, ok;
+
+    if (unlink(path) != 0 && errno != ENOENT) {
+        return -1;
+    }
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
     if (fd < 0) {
         return -1;
     }
     ok = write(fd, text, (size_t)n) == n && fsync(fd) == 0;
-    close(fd);
-    if (!ok || rename(fresh, kept) != 0) {
-        (void)unlink(fresh);
+    ok = close(fd) == 0 && ok;
+    if (!ok) {
+        (void)unlink(path);
+    }
+    return ok ? 0 : -1;
+}
+
+/**
+ * Replace `kept` with `n` bytes of `text`, using `pending` and `fresh` in
+ * the same open directory `dir`. KRFFS can lose both names in a rename
+ * over an existing file. Flush a separate copy at `fresh` before that
+ * rename, and preserve an existing `fresh` when `kept` is missing. Return
+ * 0 once the final directory flush succeeds, or -1 on failure.
+ */
+static int replace_file(int dir, const char *kept, const char *fresh, const char *pending,
+                        const char *text, int n)
+{
+    struct stat st;
+
+    if (stat(kept, &st) == 0) {
+        if (fsync(dir) != 0 || write_replacement(fresh, text, n) != 0) {
+            return -1;
+        }
+    } else if (errno != ENOENT) {
         return -1;
     }
-    fd = open(dir, O_RDONLY | O_DIRECTORY);
-    if (fd >= 0) {
-        (void)fsync(fd);
-        close(fd);
+    if (write_replacement(pending, text, n) != 0 || fsync(dir) != 0 || rename(pending, kept) != 0 ||
+        fsync(dir) != 0) {
+        return -1;
     }
+    (void)unlink(fresh);
     return 0;
 }
 
@@ -715,23 +758,26 @@ static void note_saved(char *saved, int size, const char *text, int n)
  */
 static void save_backlights(int all)
 {
-    int i;
+    int dir = -1, i;
 
-    if (backlight_count == 0) {
-        return;
-    }
-    (void)mkdir("/var/lib", 0755);
-    (void)mkdir(BACKLIGHT_KEPT, 0755);
     for (i = 0; i < backlight_count; i++) {
         struct backlight *b = &backlights[i];
         char text[24];
         int n = read_text(b->level, text, sizeof(text));
 
         if (n > 0 && (all || text_differs(text, n, b->saved))) {
-            if (replace_file(b->fresh, b->kept, BACKLIGHT_KEPT, text, n) == 0) {
+            if (dir < 0 && (keep_directory("/var/lib", "/var") != 0 ||
+                            keep_directory(BACKLIGHT_KEPT, "/var/lib") != 0 ||
+                            (dir = open(BACKLIGHT_KEPT, O_RDONLY | O_DIRECTORY)) < 0)) {
+                return;
+            }
+            if (replace_file(dir, b->kept, b->fresh, b->pending, text, n) == 0) {
                 note_saved(b->saved, (int)sizeof(b->saved), text, n);
             }
         }
+    }
+    if (dir >= 0) {
+        close(dir);
     }
 }
 
@@ -800,7 +846,7 @@ static int parse_mixer(const char *text, int levels[MIXER_CHANNELS], char *mute,
             }
             start = p;
             if (mixer_percentage(&p) < 0 || *p++ != ':' || mixer_percentage(&p) < 0 ||
-                *p++ != '\n') {
+                *p++ != '\n' || (size_t)(p - start) >= MUTE_RECORD_MAX) {
                 return -1;
             }
             memcpy(mute, start, (size_t)(p - start));
@@ -907,26 +953,38 @@ static char *put_decimal(char *p, int v)
  * a mute as the `mute` line, to `MIXER_KEPT` in one file: when `all`, as
  * the shutdown handler asks, else only when it differs from what the file
  * holds. Once the file is written, `MIXER_OLD_MUTE` goes. Makes only
- * system calls a handler may make; a channel whose level cannot be read is
- * left out, and a mixer that cannot be read keeps the file it had.
+ * system calls a handler may make. Hold a shared flock on the mixer while
+ * reading its levels and the mute record, which mixer(1) changes under an
+ * exclusive flock. A busy device is left to the next pass.
  */
 static void save_mixer(int all)
 {
     char text[MIXER_TEXT];
     char mute[MUTE_RECORD_MAX + 1];
-    const char *q;
+    const char *q = "none\n";
     char *p = text;
-    int fd, i, n;
+    int dir, fd, i, n, volume = -1;
 
     if (mixer_mask == 0 || (fd = open(MIXER_DEVICE, O_RDWR)) < 0) {
+        return;
+    }
+    if (flock(fd, LOCK_SH | LOCK_NB) != 0) {
+        close(fd);
         return;
     }
     for (i = 0; i < MIXER_CHANNELS; i++) {
         const char *name = mixer_names[i];
         int level;
 
-        if (!(mixer_mask & 1 << i) || ioctl(fd, MIXER_READ(i), &level) != 0) {
+        if (!(mixer_mask & 1 << i)) {
             continue;
+        }
+        if (ioctl(fd, MIXER_READ(i), &level) != 0) {
+            close(fd);
+            return;
+        }
+        if (i == MIXER_VOLUME) {
+            volume = level;
         }
         while (*name != '\0') {
             *p++ = *name++;
@@ -937,29 +995,40 @@ static void save_mixer(int all)
         p = put_decimal(p, level >> 8 & 0xFF);
         *p++ = '\n';
     }
-    close(fd);
-    if (p == text) {
-        return;
+    if (volume == 0) {
+        n = read_text(MIXER_MUTE, mute, sizeof(mute));
+        if (n < 0 && errno != ENOENT) {
+            close(fd);
+            return;
+        }
+        if (n > 0 && n < (int)sizeof(mute) - 1 && mute_record(mute)) {
+            q = mute;
+        }
     }
-    q = read_text(MIXER_MUTE, mute, sizeof(mute)) > 0 && mute_record(mute) ? mute : "none\n";
+    close(fd);
     for (i = 0; i < 5; i++) {
         *p++ = "mute "[i];
     }
     while (*q != '\0') {
         *p++ = *q++;
     }
-    (void)mkdir("/var", 0755);
-    (void)mkdir("/var/lib", 0755);
     n = (int)(p - text);
-    if ((all || text_differs(text, n, mixer_saved)) &&
-        replace_file(MIXER_FRESH, MIXER_KEPT, "/var/lib", text, n) == 0) {
+    if ((!all && !text_differs(text, n, mixer_saved)) || keep_directory("/var", "/") != 0 ||
+        keep_directory("/var/lib", "/var") != 0 ||
+        (dir = open("/var/lib", O_RDONLY | O_DIRECTORY)) < 0) {
+        return;
+    }
+    if (replace_file(dir, MIXER_KEPT, MIXER_FRESH, MIXER_PENDING, text, n) == 0) {
         note_saved(mixer_saved, (int)sizeof(mixer_saved), text, n);
         if (mixer_old_mute) {
             (void)unlink(MIXER_OLD_MUTE);
             mixer_old_mute = 0;
         }
     }
+    close(dir);
 }
+
+static int shutdown_block(sigset_t *saved);
 
 /**
  * Save the backlights' and the mixer's levels that changed since they were
@@ -972,13 +1041,15 @@ static void save_changed_levels(void)
 {
     static time_t last;
     time_t now = time(0);
+    sigset_t saved;
 
-    if (now == last) {
+    if (now == last || shutdown_block(&saved) != 0) {
         return;
     }
     last = now;
     save_backlights(0);
     save_mixer(0);
+    (void)sigprocmask(SIG_SETMASK, &saved, NULL);
 }
 
 /* How long a shutdown waits for the processes to end, in milliseconds:
@@ -1032,19 +1103,13 @@ static void end_processes(void)
  * send to pid 1, with busybox's own mapping: SIGUSR1 halts, SIGUSR2 powers off,
  * SIGTERM restarts.
  *
- * The work is done in the handler and not left to the loop through a flag, the
- * usual rule for a handler. That rule keeps a handler from doing what the
- * interrupted code was in the middle of; this one saves the backlights' and
- * the mixer's levels (`save_backlights`, `save_mixer`) with system calls
- * alone and then calls `reboot`, which is async-signal-safe and does not
- * return when it succeeds, so there is nothing to return to. A failed
- * `reboot` falls to `_exit`, and the kernel panics when init dies. The
- * handler is installed with all three signals blocked while it runs, so a
- * second request, such as the second `poweroff` of a power button the
- * firmware reports twice, waits and is never answered.
+ * The periodic save blocks these signals while it replaces the files. This
+ * handler saves the final levels with system calls alone and calls `reboot`.
+ * A failed `reboot` falls to `_exit`, and the kernel panics when init dies.
+ * All three shutdown signals are blocked while the handler runs.
  *
- * Every other process is ended first (`end_processes`), so that the files
- * they hold are closed and a removed one is freed. The kernel then disables
+ * Every other process is ended first (`end_processes`), so that its files
+ * and mixer locks are released before the final save. The kernel disables
  * scheduling and writes out each file system on a disk, the root last,
  * before it stops the machine, and stops it even when a write fails.
  */
@@ -1057,9 +1122,9 @@ static void shutdown_handler(int sig)
     } else if (sig == SIGUSR2) {
         command = RB_POWER_OFF;
     }
+    end_processes();
     save_backlights(1);
     save_mixer(1);
-    end_processes();
     reboot(command);
     _exit(1);
 }
