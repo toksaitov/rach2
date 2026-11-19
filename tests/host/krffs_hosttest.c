@@ -344,15 +344,15 @@ static void build(uint8_t *image, const uint8_t *before, int count, uint32_t siz
     }
 }
 
-/** The distinct cache blocks the writes in [from, to) touched. */
-static int touched_blocks(int from, int to, uint64_t *seen, int cap)
+/** The distinct units of `grain` bytes the writes in [from, to) touched. */
+static int touched_blocks(int from, int to, uint32_t grain, uint64_t *seen, int cap)
 {
     int count = 0;
     int i;
 
     for (i = from; i < to; i++) {
-        uint64_t first = recorded[i].offset / CACHE_BLOCK;
-        uint64_t last = (recorded[i].offset + recorded[i].size - 1) / CACHE_BLOCK;
+        uint64_t first = recorded[i].offset / grain;
+        uint64_t last = (recorded[i].offset + recorded[i].size - 1) / grain;
         uint64_t blk;
 
         for (blk = first; blk <= last; blk++) {
@@ -429,7 +429,7 @@ static int every_stop_is_sound(const uint8_t *before, uint32_t size)
     for (prefix = 0; prefix <= recorded_count; prefix++) {
         uint64_t seen[64];
         int mark = epoch_of(prefix);
-        int seen_count = touched_blocks(mark, prefix, seen, 64);
+        int seen_count = touched_blocks(mark, prefix, CACHE_BLOCK, seen, 64);
         int variant;
 
         build(epoch, before, mark, size);
@@ -523,7 +523,7 @@ static int every_stop_file_is_whole(const uint8_t *before, uint32_t size, const 
     for (prefix = 0; prefix <= recorded_count; prefix++) {
         uint64_t seen[64];
         int mark = epoch_of(prefix);
-        int seen_count = touched_blocks(mark, prefix, seen, 64);
+        int seen_count = touched_blocks(mark, prefix, CACHE_BLOCK, seen, 64);
         int variant;
 
         build(epoch, before, mark, size);
@@ -620,7 +620,7 @@ static int every_stop_keeps_its_bytes(const uint8_t *before, uint32_t size, cons
     for (prefix = 0; prefix <= recorded_count; prefix++) {
         uint64_t seen[64];
         int mark = epoch_of(prefix);
-        int seen_count = touched_blocks(mark, prefix, seen, 64);
+        int seen_count = touched_blocks(mark, prefix, CACHE_BLOCK, seen, 64);
         int variant;
 
         build(epoch, before, mark, size);
@@ -693,7 +693,7 @@ static int every_stop_is_zero_filled(const uint8_t *before, uint32_t size, uint6
     for (prefix = 0; prefix <= recorded_count; prefix++) {
         uint64_t seen[64];
         int mark = epoch_of(prefix);
-        int seen_count = touched_blocks(mark, prefix, seen, 64);
+        int seen_count = touched_blocks(mark, prefix, CACHE_BLOCK, seen, 64);
         int variant;
 
         build(epoch, before, mark, size);
@@ -1358,6 +1358,155 @@ static void freed_write_rows(void)
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the refusal");
 }
 
+/* A disk-root fixture, in forward order, with NULL for a free node. */
+struct unlink_extent {
+    uint32_t start;
+    const char *name;
+};
+
+/** Write a dirty image with these extents and one byte in each file. */
+static void make_unlink_image(const struct unlink_extent *extents, unsigned count)
+{
+    uint32_t previous_size = IMAGE_SIZE - extents[count - 1].start;
+    unsigned i;
+
+    k_memset(image, 0, IMAGE_SIZE);
+    for (i = 0; i < count; i++) {
+        uint32_t start = extents[i].start;
+        uint32_t end = i + 1 < count ? extents[i + 1].start : IMAGE_SIZE;
+        krffs_node_t *head = (krffs_node_t *)(image + start);
+        const char *name = extents[i].name;
+
+        head->magic = KRFFS_FILE_SYSTEM_MAGIC;
+        head->size = end - start;
+        head->previous_node_size = previous_size;
+        if (i == 0) {
+            head->type = KRFFS_ROOT_NODE;
+            head->mode = 0755 | KRFFS_MODE_DIRTY;
+        } else if (name) {
+            head->type = KRFFS_RESERVED_NODE;
+            head->mode = 0644;
+            head->data_size = 1;
+            k_memcpy(head->name, name, k_strlen(name) + 1);
+            image[start + sizeof(*head)] = (uint8_t)name[0];
+        } else {
+            head->type = KRFFS_FREE_NODE;
+        }
+        previous_size = end - start;
+    }
+}
+
+/** Mount each cut of the recorded unlink and read the file it must keep. */
+static void mount_unlink_cuts(const uint8_t *before, uint32_t grain)
+{
+    static uint8_t after[IMAGE_SIZE];
+    static uint8_t state[IMAGE_SIZE];
+    int prefix;
+
+    for (prefix = 0; prefix <= recorded_count; prefix++) {
+        uint64_t units[8];
+        int count = touched_blocks(0, prefix, grain, units, 8);
+        unsigned mask;
+
+        if (count == 8) {
+            check(0, "unlink recorder touched too many units");
+            return;
+        }
+        build(after, before, prefix, IMAGE_SIZE);
+        for (mask = 0; mask < (1u << count); mask++) {
+            unsigned i;
+            char byte;
+            uint64_t kept;
+
+            k_memcpy(state, before, IMAGE_SIZE);
+            for (i = 0; i < (unsigned)count; i++) {
+                if (mask & (1u << i)) {
+                    uint32_t at = (uint32_t)units[i] * grain;
+
+                    k_memcpy(state + at, after + at, grain);
+                }
+            }
+            if (init_krffs_disk_root(state, IMAGE_SIZE, 512) != 0 ||
+                !krffs_chain_is_valid(&krffs_root_mount)) {
+                printf("krffs_hosttest: unlink cut after %d writes, unit %u, mask %u\n", prefix,
+                       grain, mask);
+                check(0, "disk root mounts and repairs its links after an unlink cut");
+                return;
+            }
+            kept = krffs_walk(&krffs_root_mount, "/kept");
+            check(krffs_read_at(&krffs_root_mount, kept, &byte, 1, 0) == 1 && byte == 'k',
+                  "every unlink cut keeps the neighbouring file's data");
+            check(krffs_is_dirty(&krffs_root_mount), "repair keeps the disk root dirty");
+        }
+    }
+}
+
+/** Record a disk-root unlink and check the completed merge and its cuts. */
+static void disk_unlink_case(const struct unlink_extent *extents, unsigned count, uint32_t free_at,
+                             uint32_t free_size)
+{
+    static uint8_t before[IMAGE_SIZE];
+    krffs_node_t head;
+    int result;
+
+    make_unlink_image(extents, count);
+    k_memcpy(before, image, IMAGE_SIZE);
+    result = init_krffs_disk_root(image, IMAGE_SIZE, 512);
+    check(result == 0, "disk unlink fixture mounts");
+    if (result != 0) {
+        return;
+    }
+    krffs_root_mount.backend = &recording_backend;
+    recorded_count = 0;
+    sync_count = 0;
+    recording = 1;
+    result = krffs_unlink_at(&krffs_root_mount, "/victim");
+    recording = 0;
+    check(result == 0 && krffs_walk(&krffs_root_mount, "/victim") == KRFFS_NO_NODE &&
+              krffs_chain_is_valid(&krffs_root_mount),
+          "completed disk-root unlink leaves a valid ring without the victim");
+    check(krffs_head(&krffs_root_mount, free_at, &head) == 0 && head.type == KRFFS_FREE_NODE &&
+              head.size == free_size,
+          "unlink coalesces free space only where its size cannot tear");
+    mount_unlink_cuts(before, CACHE_BLOCK);
+    mount_unlink_cuts(before, 512);
+}
+
+/** Check page and sector writeback cuts, and the limits of disk-root repair. */
+static void disk_unlink_rows(void)
+{
+    static const struct unlink_extent both[] = {
+        {0, NULL}, {1024, NULL}, {5125, "victim"}, {9227, NULL}, {16050, "kept"}};
+    static const struct unlink_extent tail[] = {
+        {0, NULL}, {1024, "kept"}, {5125, NULL}, {9227, "victim"}, {16050, NULL}};
+    static const struct unlink_extent split_next[] = {
+        {0, NULL}, {1024, "kept"}, {3770, "victim"}, {4795, NULL}, {6074, "last"}};
+    static const struct unlink_extent split_previous[] = {
+        {0, NULL}, {1024, "kept"}, {3770, NULL}, {4795, "victim"}, {6074, "last"}};
+    krffs_node_t *root;
+    krffs_node_t *free_node;
+
+    disk_unlink_case(both, sizeof(both) / sizeof(both[0]), 1024, 16050 - 1024);
+    disk_unlink_case(tail, sizeof(tail) / sizeof(tail[0]), 5125, IMAGE_SIZE - 5125);
+    disk_unlink_case(split_next, sizeof(split_next) / sizeof(split_next[0]), 3770, 1025);
+    disk_unlink_case(split_previous, sizeof(split_previous) / sizeof(split_previous[0]), 3770,
+                     1025);
+
+    make_image(image, IMAGE_SIZE);
+    root = (krffs_node_t *)image;
+    free_node = (krffs_node_t *)(image + sizeof(*root));
+    free_node->previous_node_size = 0;
+    check(init_krffs_disk_root(image, IMAGE_SIZE, 512) != 0,
+          "a clean disk root with a bad link is refused");
+    root->mode |= KRFFS_MODE_DIRTY;
+    check(init_krffs(image, IMAGE_SIZE) != 0, "a RAM root with a bad link is refused");
+    root->previous_node_size = 0;
+    free_node->size--;
+    check(init_krffs_disk_root(image, IMAGE_SIZE, 512) != 0 && free_node->previous_node_size == 0 &&
+              root->previous_node_size == 0,
+          "a dirty disk root with a broken forward chain is refused before repair");
+}
+
 int main(void)
 {
     static uint8_t before[IMAGE_SIZE];
@@ -1378,6 +1527,7 @@ int main(void)
     parent_id_collision_rows();
     across_rows();
     freed_write_rows();
+    disk_unlink_rows();
 
     make_image(image, IMAGE_SIZE);
     mount = mount_over(&memory_backend, image, IMAGE_SIZE);

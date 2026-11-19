@@ -582,16 +582,16 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t origina
 uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size);
 
 /**
- * Free the reserved node at `offset` and merge it with a free node after it
- * and a free node before it, so that no two free nodes are adjacent.
+ * Free the reserved node at `offset` and merge it with its free neighbours
+ * where each change of size can reach the medium whole.
  *
  * The type is stored as free first, and each merge is published by one
  * size, so a machine that stops between them leaves a ring that can still
  * be walked; the backward link of the node after the merged one is repaired
  * last, and a sync ends the call. Returns the sync's answer, or -1 for an
  * offset that is no reserved node or a store of the type that failed, which
- * leaves the node reserved. A merge whose store failed leaves two free nodes
- * side by side.
+ * leaves the node reserved. A merge that cannot write its size leaves the
+ * free nodes side by side.
  */
 int krffs_remove_at(krffs_mount_t *mount, uint64_t offset);
 
@@ -861,13 +861,22 @@ uint64_t krffs_calculate_djb_hash(const uint8_t *str);
  *
  * The base is wherever the image can be addressed: the Multiboot module in
  * place, or `PCWIN_BASE`, where the page-cache window maps the module
- * (`rach2.fswindow`) or a disk partition (kernel.c). The first node must
+ * (`rach2.fswindow`). The first node must
  * have KRFFS_FILE_SYSTEM_MAGIC and the type KRFFS_ROOT_NODE, and the ring
  * must pass `krffs_chain_is_valid`. On success `krffs_fs` is the mounted
  * file system. Returns 0, or -1 with a log record for an image that is
  * missing, smaller than a header or malformed.
  */
 int init_krffs(void *ramdisk_base, uint32_t ramdisk_size);
+
+/**
+ * Mount the disk boot root at `base`, a page-cache window of `size` bytes.
+ * As `init_krffs`, but a dirty image with a valid forward chain can have
+ * its backward links repaired before publication. The caller writes them
+ * back when marking the mount dirty. `sector_bytes` is the disk write unit
+ * used to check each coalesced size on removal.
+ */
+int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes);
 
 /** `krffs_count_at` on the boot root: its named reserved nodes, 0 before the
  * mount. */
