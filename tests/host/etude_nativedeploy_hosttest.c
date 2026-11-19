@@ -12,11 +12,12 @@
  * controller claim or a collection lock that an older deployment recorded
  * with the etude boot token of this boot must be kept, and the lock refused
  * by name; a claim or a lock of another boot must be cleared with a line that
- * names it, leaving no name under STATE/gone.; a setup killed just after it
- * renamed a stale lock must leave no lock at STATE/collection.lock, and the
- * next setup must pass and remove what it left; names under STATE/gone. that
- * the collection left must be removed; and a lock with no owner record must
- * still be refused.
+ * names it, leaving no STATE/collection.journal; a setup killed once it has
+ * removed a stale lock's owner record must leave its journal, and the next
+ * setup must pass and remove the lock and the journal; a journal that a
+ * stopped collection left must have its lock removed, even one whose owner
+ * names this boot, and with no lock must be removed alone; and a lock with no
+ * owner record and no journal must still be refused.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <stdarg.h>
@@ -194,12 +195,12 @@ static int says(const char *path, const char *text)
     return strstr(buf, text) != NULL;
 }
 
-/** Whether STATE of `target` holds no name under gone. */
-static int no_gone(const char *target)
+/** Whether STATE of `target` holds no journal. */
+static int no_journal(const char *target)
 {
-    char command[1024];
-    fix_format(command, sizeof(command), "ls -a %s/state | grep -q '^gone\\.'", target);
-    return system(command) != 0;
+    char path[1024];
+    fix_format(path, sizeof(path), "%s/state/collection.journal", target);
+    return !exists(path);
 }
 
 /** Write a claim of run `run` in `target`, its receipt `identity`. */
@@ -244,11 +245,10 @@ static void machine(const char *plain, const char *killer)
         put(fix_path("bin/flock"), "#!/bin/sh\nexit 0\n");
         chmod(fix_path("bin/flock"), 0755);
     }
-    /* Kill the setup as it starts to remove a lock it has renamed, or once it
-     * has removed the owner record of a lock it has not. */
+    /* Kill the setup once it has removed a lock's owner record. */
     fix_format(path, sizeof(path), "%s/rm", killer);
-    put(path, "#!/bin/sh\ncase \"$*\" in *gone.collection.lock*) kill -KILL $PPID; exit 1;; "
-              "*collection.lock/owner*) /bin/rm \"$@\"; kill -KILL $PPID; exit 1;; "
+    put(path, "#!/bin/sh\ncase \"$*\" in *collection.lock/owner*) /bin/rm \"$@\"; kill -KILL "
+              "$PPID; exit 1;; "
               "esac\nexec /bin/rm \"$@\"\n");
     chmod(path, 0755);
 }
@@ -282,7 +282,7 @@ static void claim_rows(const char *plain)
     CHECK(!exists(path), "the setup keeps a claim of another boot");
     CHECK(says(out, "cleared: ") && says(out, "controller-old: pid 4243 of boot " OTHER_ID),
           "the setup clears a claim of another boot without naming it");
-    CHECK(no_gone(t), "the setup leaves a cleared claim under gone.");
+    CHECK(no_journal(t), "the setup leaves a journal after a cleared claim");
 }
 
 /** Run the setup on collection locks, `killer` first on the PATH of a setup
@@ -304,20 +304,23 @@ static void lock_rows(const char *plain, const char *killer)
     CHECK(says(out, "refused: ") && says(out, "held by pid 4244 of boot " TOKEN),
           "the setup refuses a lock of this boot's etude token without naming it");
 
-    /* A lock of another boot, cleared by a setup killed after its rename. */
+    /* A lock of another boot, cleared by a setup killed midway. */
     t = tree("killed");
     lock(t, "4245 80 " OTHER_ID "\n");
     fix_format(out, sizeof(out), "%s/out", t);
     status = setup(t, killer, out);
     CHECK(status != 0, "the setup outlives its kill");
-    fix_format(path, sizeof(path), "%s/state/collection.lock", t);
-    CHECK(!exists(path), "a setup killed while it clears a lock leaves it at its name");
-    fix_format(path, sizeof(path), "%s/state/gone.collection.lock/owner", t);
-    CHECK(exists(path), "the killed setup did not stop where it removes the lock");
+    fix_format(path, sizeof(path), "%s/state/collection.lock/owner", t);
+    CHECK(!exists(path), "the killed setup did not stop after it removed the owner record");
+    CHECK(!no_journal(t), "a setup killed while it clears a lock leaves no journal");
     fix_format(out, sizeof(out), "%s/out2", t);
     status = setup(t, plain, out);
     CHECK(status == 0, "a setup after a killed one fails");
-    CHECK(no_gone(t), "the setup keeps what a killed setup left under gone.");
+    fix_format(path, sizeof(path), "%s/state/collection.lock", t);
+    CHECK(!exists(path), "a setup after a killed one keeps the lock");
+    CHECK(says(out, "collection.lock: left by a stopped change: clear "),
+          "a setup after a killed one clears its lock without naming it");
+    CHECK(no_journal(t), "a setup after a killed one keeps its journal");
 
     /* A lock of another boot is cleared by name. */
     t = tree("otherlock");
@@ -329,28 +332,39 @@ static void lock_rows(const char *plain, const char *killer)
     CHECK(!exists(path), "the setup keeps a lock of another boot");
     CHECK(says(out, "collection.lock: held by pid 4246 of boot " OTHER_ID),
           "the setup clears a lock of another boot without naming it");
-    CHECK(no_gone(t), "the setup leaves a cleared lock under gone.");
+    CHECK(no_journal(t), "the setup leaves a journal after a cleared lock");
 }
 
-/** Run the setup on names under STATE/gone. and on a lock with no owner. */
+/** Run the setup on journals a collection left and on a lock with no owner. */
 static void left_rows(const char *plain)
 {
     char path[1024], out[1024];
     const char *t;
     int status;
 
-    /* What a stopped collection left under gone. is removed. */
-    t = tree("leftover");
-    fix_format(path, sizeof(path), "%s/state/gone.make-9", t);
-    dir(path);
-    fix_format(path, sizeof(path), "%s/state/gone.make-9/owner", t);
-    put(path, "9 1 " BOOT_ID "\n");
-    fix_format(path, sizeof(path), "%s/state/gone.lock-9", t);
-    dir(path);
+    /* A collection stopped in its release, its owner record still there. */
+    t = tree("release");
+    lock(t, "4247 82 " BOOT_ID "\n");
+    fix_format(path, sizeof(path), "%s/state/collection.journal", t);
+    put(path, "release 4247\n");
     fix_format(out, sizeof(out), "%s/out", t);
     status = setup(t, plain, out);
-    CHECK(status == 0, "names under gone. fail the setup");
-    CHECK(no_gone(t), "the setup keeps names under gone.");
+    CHECK(status == 0, "a journal of a stopped release fails the setup");
+    fix_format(path, sizeof(path), "%s/state/collection.lock", t);
+    CHECK(!exists(path), "the setup keeps the lock of a stopped release");
+    CHECK(says(out, "collection.lock: left by a stopped change: release 4247"),
+          "the setup clears the lock of a stopped release without naming it");
+    CHECK(no_journal(t), "the setup keeps the journal of a stopped release");
+
+    /* A journal with no lock. */
+    t = tree("journal");
+    fix_format(path, sizeof(path), "%s/state/collection.journal", t);
+    put(path, "make 4248\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    status = setup(t, plain, out);
+    CHECK(status == 0, "a journal with no lock fails the setup");
+    CHECK(!says(out, "cleared"), "the setup clears a lock that is not there");
+    CHECK(no_journal(t), "the setup keeps a journal with no lock");
 
     /* A lock with no owner record is still refused. */
     t = tree("ownerless");
