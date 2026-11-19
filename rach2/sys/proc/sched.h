@@ -34,6 +34,36 @@ static __inline__ unsigned int sched_priority(const process_t *p)
  * interrupts masked. */
 void sched_priority_changed(process_t *p);
 
+/**
+ * Give `p` the policy `policy`, the real-time priority `rt_priority`, the
+ * inherited priority `pi_priority` and the nice value `nice`, and move it
+ * between the classes' queues as `sched_priority_changed` does, all under
+ * the run queues' lock, as Linux changes a task's policy and priority under
+ * its run queue's lock (__sched_setscheduler, set_user_nice and
+ * rt_mutex_setprio, kernel/sched/syscalls.c and core.c): a selection on
+ * another processor, which takes that lock, never finds a thread whose
+ * class has changed while it is still on the other class's queue. A
+ * thread on a fair queue that enters or leaves SCHED_IDLE leaves the queue
+ * under its old policy and comes back under its new one, so that the
+ * queues' counts of SCHED_IDLE threads stay right. Every change of these
+ * four fields of a thread the scheduler may see goes through here. The
+ * caller holds the big lock, which orders the changes.
+ */
+void sched_set_priority(process_t *p, int policy, unsigned int rt_priority,
+                        unsigned int pi_priority, int32_t nice);
+
+/** Give `p` the nice value `nice` (`sched_set_priority`). */
+static __inline__ void sched_set_nice(process_t *p, int32_t nice)
+{
+    sched_set_priority(p, p->sched_policy, p->rt_priority, p->pi_priority, nice);
+}
+
+/** Give `p` the inherited priority `prio` (`sched_set_priority`). */
+static __inline__ void sched_set_inherited(process_t *p, unsigned int prio)
+{
+    sched_set_priority(p, p->sched_policy, p->rt_priority, prio, p->nice);
+}
+
 /** Initialize empty ready lists before any process is made ready, with the
  * scheduler off and the next selection allowed to prefer a woken process,
  * and mark the boot's current process, process 0, as on its processor. */

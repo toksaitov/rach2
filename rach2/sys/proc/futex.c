@@ -1258,22 +1258,41 @@ static struct futex_q *pi_top(struct futex_pi *pi)
     return best;
 }
 
-/** The priority of pi's top waiter, read under its bucket's lock, or -1
- * when it has none. */
+/** The effective priority of `p` as `futex_pi_recalculate` sees it: its
+ * base and the donation computed so far when it owns a PI state, else its
+ * base and the donation it has (`sched_priority`). */
+static unsigned int pi_next_priority(const process_t *p)
+{
+    unsigned int pi = p->pi_next ? p->pi_next - 1u : p->pi_priority;
+
+    return pi > p->rt_priority ? pi : p->rt_priority;
+}
+
+/** The highest priority among pi's waiters as `pi_next_priority` gives
+ * them, read under its bucket's lock, or -1 when it has none. */
 static int pi_top_priority(struct futex_pi *pi)
 {
     struct futex_hb *hb = futex_hash(pi->space, pi->key);
     uint32_t flags = futex_hb_lock(hb);
-    struct futex_q *q = pi_top(pi);
-    int prio = q ? (int)sched_priority(q->task) : -1;
+    struct futex_q *q;
+    int prio = -1;
 
+    for (q = hb->head; q; q = q->next) {
+        if (q->pi == pi && (int)pi_next_priority(q->task) > prio) {
+            prio = (int)pi_next_priority(q->task);
+        }
+    }
     futex_hb_unlock(hb, flags);
     return prio;
 }
 
 /** Rebuild donations along every blocked-owner chain, without recursion,
- * under the big lock and no bucket's lock. Removing all donations first also
- * removes a timed-out waiter's boost. */
+ * under the big lock and no bucket's lock. Starting every owner's donation
+ * from none also removes a timed-out waiter's boost. The donations are
+ * built in `pi_next` and only then given to the owners, each under the
+ * run queues' lock (`sched_set_inherited`), so that no selection sees an
+ * owner's priority while it is built, as Linux's rt_mutex_setprio changes
+ * a task's priority under its run queue's lock. */
 void futex_pi_recalculate(void)
 {
     struct futex_pi *pi;
@@ -1282,7 +1301,7 @@ void futex_pi_recalculate(void)
 
     for (pi = pi_states; pi; pi = pi->next) {
         if (pi->owner) {
-            pi->owner->pi_priority = 0;
+            pi->owner->pi_next = 1;
         }
     }
     do {
@@ -1292,15 +1311,20 @@ void futex_pi_recalculate(void)
                 continue;
             }
             prio = pi_top_priority(pi);
-            if (prio > (int)pi->owner->pi_priority) {
-                pi->owner->pi_priority = (uint8_t)prio;
+            if (prio + 1 > (int)pi->owner->pi_next) {
+                pi->owner->pi_next = (uint8_t)(prio + 1);
                 changed = 1;
             }
         }
     } while (changed);
     for (pi = pi_states; pi; pi = pi->next) {
         if (pi->owner) {
-            sched_priority_changed(pi->owner);
+            sched_set_inherited(pi->owner, pi->owner->pi_next - 1u);
+        }
+    }
+    for (pi = pi_states; pi; pi = pi->next) {
+        if (pi->owner) {
+            pi->owner->pi_next = 0;
         }
     }
     kirq_restore(flags);
@@ -1322,8 +1346,7 @@ static void pi_put(struct futex_pi *pi)
     *pp = pi->next;
     kfree(pi);
     if (owner) {
-        owner->pi_priority = 0;
-        sched_priority_changed(owner);
+        sched_set_inherited(owner, 0);
     }
     futex_pi_recalculate();
 }
@@ -1463,8 +1486,7 @@ static void pi_handoff(struct futex_pi *pi)
     }
     futex_hb_unlock(hb, flags);
     if (old) {
-        old->pi_priority = 0;
-        sched_priority_changed(old);
+        sched_set_inherited(old, 0);
     }
     futex_pi_recalculate();
 }

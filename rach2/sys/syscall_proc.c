@@ -10355,8 +10355,7 @@ long sys_setpriority(isr_params_t *params)
         if (rc == -ESRCH) {
             rc = 0;
         }
-        p->nice = nice;
-        sched_priority_changed(p);
+        sched_set_nice(p, nice);
     }
     return rc;
 }
@@ -10730,26 +10729,29 @@ static int32_t sched_check(const process_t *p, const struct sched_req *a, int po
 
 /** Store in `p` the parameters `a` gives `policy`: a deadline thread's
  * runtime, deadline, period and flags, or an ordinary thread's nice value
- * and slice, clamped to 0.1 to 100 ms; and the policy and priority. A
- * real-time or deadline policy has no timer slack, and a return from one
- * restores the default, as Linux's __setscheduler_params does. */
+ * and slice, clamped to 0.1 to 100 ms; and the policy and priority, which
+ * the scheduler takes with the nice value under its lock and moves the
+ * thread between its queues for (`sched_set_priority`). A real-time or
+ * deadline policy has no timer slack, and a return from one restores the
+ * default, as Linux's __setscheduler_params does. */
 static void sched_store(process_t *p, const struct sched_req *a, int policy)
 {
+    int32_t nice = p->nice;
+
     if (policy == SCHED_DEADLINE) {
         p->dl_runtime = a->runtime;
         p->dl_deadline = a->deadline;
         p->dl_period = a->period ? a->period : a->deadline;
         p->dl_flags = a->flags & SCHED_DL_FLAGS;
     } else if (sched_policy_fair(policy)) {
-        p->nice = a->nice;
+        nice = a->nice;
         p->sched_slice = a->runtime == 0                ? 0
                          : a->runtime < SCHED_SLICE_MIN ? SCHED_SLICE_MIN
                          : a->runtime > SCHED_SLICE_MAX ? SCHED_SLICE_MAX
                                                         : (uint32_t)a->runtime;
         sched_set_slice(p, p->sched_slice);
     }
-    p->sched_policy = (uint8_t)policy;
-    p->rt_priority = (uint8_t)a->priority;
+    sched_set_priority(p, policy, a->priority, p->pi_priority, nice);
     if (sched_policy_rt(policy) || policy == SCHED_DEADLINE) {
         p->timer_slack_ns = 0;
     } else if (p->timer_slack_ns == 0) {
@@ -10799,7 +10801,6 @@ static int32_t sched_apply(process_t *p, const struct sched_req *a)
     if (!(a->flags & SCHED_FLAG_KEEP_PARAMS)) {
         sched_store(p, a, policy);
         futex_pi_recalculate();
-        sched_priority_changed(p);
     }
     return 0;
 }
