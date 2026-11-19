@@ -774,6 +774,202 @@ static void sizes(void)
     CHECK(tmpfs_mount(&m2, NULL, 0, "size=lots") == -EINVAL);
 }
 
+/** Run the attribute call `op` of `name` on `n` with `size` bytes of `buf`
+ *  and `flags`, as the VFS passes it. Returns what the type answers. */
+static int xattr(void *n, int op, const char *name, void *buf, uint32_t size, int flags)
+{
+    struct vfs_xattr a;
+
+    a.op = op;
+    a.name = name;
+    a.value = buf;
+    a.size = size;
+    a.flags = flags;
+    return tmpfs_xattr(&mnt, n, &a);
+}
+
+/**
+ * The inode flags: a new file has none and no generation; it keeps the
+ * immutable, append-only, no-dump and no-atime flags it is given, refuses
+ * any other with EOPNOTSUPP and keeps what it had, and a read of a file
+ * with no-atime leaves its access time. A directory passes no-dump and
+ * no-atime, and not the other two, to a node made in it.
+ */
+static void flags(void)
+{
+    struct vfs_stat st;
+    char buf[4];
+    void *f = make(NULL, "fl", 0644);
+    void *d = NULL, *g;
+
+    CHECK(tmpfs_getattr(&mnt, f, &st) == 0 && st.flags_known && !st.generation_known &&
+          st.flags == 0);
+    st.flags = VFS_FL_IMMUTABLE | FL_NOATIME;
+    CHECK(tmpfs_setattr(&mnt, f, VFS_SET_FLAGS, &st) == 0);
+    st.flags = 0x1u;
+    CHECK(tmpfs_setattr(&mnt, f, VFS_SET_FLAGS, &st) == -EOPNOTSUPP);
+    CHECK(tmpfs_getattr(&mnt, f, &st) == 0 && st.flags == (VFS_FL_IMMUTABLE | FL_NOATIME));
+    CHECK(tmpfs_write(&mnt, f, "ab", 2, 0) == 2);
+    st.atime_sec = 7;
+    st.atime_nsec = 0;
+    CHECK(tmpfs_setattr(&mnt, f, VFS_SET_ATIME, &st) == 0);
+    CHECK(tmpfs_read(&mnt, f, buf, 2, 0) == 2 && tmpfs_getattr(&mnt, f, &st) == 0 &&
+          st.atime_sec == 7);
+    st.flags = 0;
+    CHECK(tmpfs_setattr(&mnt, f, VFS_SET_FLAGS, &st) == 0);
+    CHECK(tmpfs_read(&mnt, f, buf, 2, 0) == 2 && tmpfs_getattr(&mnt, f, &st) == 0 &&
+          st.atime_sec != 7);
+    CHECK(tmpfs_mkdir(&mnt, NULL, "fd", 0755) == 0 && (d = look(NULL, "fd")) != NULL);
+    st.flags = VFS_FL_IMMUTABLE | VFS_FL_APPEND | FL_NODUMP | FL_NOATIME;
+    CHECK(tmpfs_setattr(&mnt, d, VFS_SET_FLAGS, &st) == 0);
+    g = make(d, "in", 0644);
+    CHECK(tmpfs_getattr(&mnt, g, &st) == 0 && st.flags == (FL_NODUMP | FL_NOATIME));
+    tmpfs_put(&mnt, g);
+    CHECK(tmpfs_unlink(&mnt, d, "in") == 0);
+    tmpfs_put(&mnt, d);
+    CHECK(tmpfs_rmdir(&mnt, NULL, "fd") == 0);
+    tmpfs_put(&mnt, f);
+    CHECK(tmpfs_unlink(&mnt, NULL, "fl") == 0);
+}
+
+/**
+ * Extended attributes: a value set, read whole, its length asked with no
+ * buffer, and ERANGE for a buffer too small; EEXIST with XATTR_CREATE and
+ * ENODATA with XATTR_REPLACE or a removal of a missing one; an empty value
+ * kept; EINVAL for a bare prefix and EOPNOTSUPP for another namespace; the
+ * names listed in the order they were made, the trusted ones only to a
+ * privileged caller, and ERANGE for a list too small; a replaced value
+ * keeps its place; and the node's attributes go with it.
+ */
+static void attributes(void)
+{
+    char buf[64];
+    void *f = make(NULL, "xa", 0644);
+
+    CHECK(xattr(f, VFS_XATTR_SET, "user.a", "hello", 5, 0) == 0);
+    CHECK(xattr(f, VFS_XATTR_GET, "user.a", buf, 0, 0) == 5);
+    CHECK(xattr(f, VFS_XATTR_GET, "user.a", buf, sizeof(buf), 0) == 5 &&
+          k_memcmp(buf, "hello", 5) == 0);
+    CHECK(xattr(f, VFS_XATTR_GET, "user.a", buf, 2, 0) == -ERANGE);
+    CHECK(xattr(f, VFS_XATTR_SET, "user.a", "x", 1, 1) == -EEXIST);
+    CHECK(xattr(f, VFS_XATTR_SET, "user.b", "x", 1, 2) == -ENODATA);
+    CHECK(xattr(f, VFS_XATTR_REMOVE, "user.b", NULL, 0, 0) == -ENODATA);
+    CHECK(xattr(f, VFS_XATTR_GET, "user.b", buf, sizeof(buf), 0) == -ENODATA);
+    CHECK(xattr(f, VFS_XATTR_SET, "user.", "x", 1, 0) == -EINVAL);
+    CHECK(xattr(f, VFS_XATTR_SET, "system.x", "x", 1, 0) == -EOPNOTSUPP);
+    CHECK(xattr(f, VFS_XATTR_GET, "other", buf, sizeof(buf), 0) == -EOPNOTSUPP);
+    CHECK(xattr(f, VFS_XATTR_SET, "trusted.t", "tt", 2, 1) == 0);
+    CHECK(xattr(f, VFS_XATTR_SET, "security.s", buf, 0, 0) == 0);
+    CHECK(xattr(f, VFS_XATTR_GET, "security.s", buf, sizeof(buf), 0) == 0);
+    CHECK(xattr(f, VFS_XATTR_LIST, NULL, buf, 0, 0) == 28);
+    CHECK(xattr(f, VFS_XATTR_LIST, NULL, buf, sizeof(buf), 0) == 28 &&
+          k_memcmp(buf, "user.a\0trusted.t\0security.s\0", 28) == 0);
+    CHECK(xattr(f, VFS_XATTR_LIST, NULL, buf, 27, 0) == -ERANGE);
+    process.euid = 1000;
+    CHECK(xattr(f, VFS_XATTR_LIST, NULL, buf, sizeof(buf), 0) == 18 &&
+          k_memcmp(buf, "user.a\0security.s\0", 18) == 0);
+    process.euid = 0;
+    CHECK(xattr(f, VFS_XATTR_SET, "user.a", "bye", 3, 2) == 0);
+    CHECK(xattr(f, VFS_XATTR_LIST, NULL, buf, sizeof(buf), 0) == 28 &&
+          k_memcmp(buf, "user.a\0", 7) == 0);
+    CHECK(xattr(f, VFS_XATTR_GET, "user.a", buf, sizeof(buf), 0) == 3 &&
+          k_memcmp(buf, "bye", 3) == 0);
+    CHECK(xattr(f, VFS_XATTR_REMOVE, "trusted.t", NULL, 0, 0) == 0);
+    CHECK(xattr(f, VFS_XATTR_LIST, NULL, buf, 0, 0) == 18);
+    tmpfs_put(&mnt, f);
+    CHECK(tmpfs_unlink(&mnt, NULL, "xa") == 0);
+}
+
+/**
+ * nr_inodes's space, on the mount `m2` of `inodes` with the file `b` and
+ * two inodes free: an attribute takes its 40 bytes, name and value of it,
+ * and one that does not fit is ENOSPC. A remount below what is used is
+ * EINVAL, one above it gives the difference, and nr_inodes=0 lifts the
+ * limit for good, after which statfs, whose record the VFS zeroes, gives no
+ * count. Puts `b` and unmounts `m2`.
+ */
+static void inode_space(struct vfs_mount *m2, void *b)
+{
+    static char big[1000];
+    struct vfs_xattr set = {VFS_XATTR_SET, "user.x", big, 1000, 0};
+    struct vfs_xattr drop = {VFS_XATTR_REMOVE, "user.x", NULL, 0, 0};
+    struct vfs_statfs sf;
+
+    CHECK(tmpfs_xattr(m2, b, &set) == 0);
+    CHECK(tmpfs_statfs(m2, &sf) == 0 && sf.ffree == 0);
+    set.name = "user.y";
+    CHECK(tmpfs_xattr(m2, b, &set) == -ENOSPC);
+    CHECK(tmpfs_remount(m2, 0, "nr_inodes=2") == -EINVAL);
+    CHECK(tmpfs_remount(m2, 0, "nr_inodes=8") == 0 && tmpfs_statfs(m2, &sf) == 0 && sf.files == 8 &&
+          sf.ffree == (8u * 1024u - 2u * 1024u - 1046u) / 1024u);
+    CHECK(tmpfs_xattr(m2, b, &drop) == 0);
+    CHECK(tmpfs_statfs(m2, &sf) == 0 && sf.ffree == 6);
+    k_memset(&sf, 0, sizeof(sf));
+    CHECK(tmpfs_remount(m2, 0, "nr_inodes=0") == 0 && tmpfs_statfs(m2, &sf) == 0 && sf.files == 0 &&
+          sf.ffree == 0);
+    CHECK(tmpfs_remount(m2, 0, "nr_inodes=8") == -EINVAL);
+    tmpfs_put(m2, b);
+    CHECK(tmpfs_unlink(m2, NULL, "a2") == 0);
+    tmpfs_unmount(m2);
+}
+
+/**
+ * nr_inodes: the root takes one inode of four, each node one more, and a
+ * second name of a file one, so a fifth is ENOSPC for a file, a directory,
+ * a link and a hard link, and a removal, by unlink or by a rename over a
+ * name, gives one back. Then `inode_space`.
+ */
+static void inodes(void)
+{
+    struct vfs_mount m2;
+    struct vfs_statfs sf;
+    void *a = NULL, *b = NULL, *c = NULL, *d = NULL;
+
+    k_memset(&m2, 0, sizeof(m2));
+    CHECK(tmpfs_mount(&m2, NULL, 0, "nr_inodes=4") == 0);
+    CHECK(tmpfs_statfs(&m2, &sf) == 0 && sf.files == 4 && sf.ffree == 3);
+    CHECK(tmpfs_create(&m2, NULL, "a", 0644, &a) == 0);
+    CHECK(tmpfs_create(&m2, NULL, "b", 0644, &b) == 0);
+    CHECK(tmpfs_create(&m2, NULL, "c", 0644, &c) == 0);
+    CHECK(tmpfs_statfs(&m2, &sf) == 0 && sf.ffree == 0);
+    CHECK(tmpfs_create(&m2, NULL, "d", 0644, &d) == -ENOSPC);
+    CHECK(tmpfs_mkdir(&m2, NULL, "e", 0755) == -ENOSPC);
+    CHECK(tmpfs_symlink(&m2, NULL, "f", "a") == -ENOSPC);
+    CHECK(tmpfs_link(&m2, NULL, "a2", a) == -ENOSPC);
+    tmpfs_put(&m2, c);
+    CHECK(tmpfs_unlink(&m2, NULL, "c") == 0 && tmpfs_statfs(&m2, &sf) == 0 && sf.ffree == 1);
+    CHECK(tmpfs_link(&m2, NULL, "a2", a) == 0 && tmpfs_statfs(&m2, &sf) == 0 && sf.ffree == 0);
+    CHECK(tmpfs_unlink(&m2, NULL, "a") == 0 && tmpfs_statfs(&m2, &sf) == 0 && sf.ffree == 1);
+    CHECK(tmpfs_rename(&m2, NULL, "b", NULL, "a2") == 0 && tmpfs_statfs(&m2, &sf) == 0 &&
+          sf.ffree == 1);
+    tmpfs_put(&m2, a);
+    CHECK(tmpfs_statfs(&m2, &sf) == 0 && sf.ffree == 2);
+    inode_space(&m2, b);
+}
+
+/**
+ * The options of the limits: nr_inodes= takes a suffix of a power of 1024,
+ * defaults to half the machine's pages, and is EINVAL when it is no number
+ * or too large; size= sets no limit on a mount that has none.
+ */
+static void limit_options(void)
+{
+    struct vfs_mount m2;
+    struct vfs_statfs sf;
+
+    k_memset(&m2, 0, sizeof(m2));
+    CHECK(tmpfs_mount(&m2, NULL, 0, "nr_inodes=1k") == 0 && tmpfs_statfs(&m2, &sf) == 0 &&
+          sf.files == 1024);
+    tmpfs_unmount(&m2);
+    CHECK(tmpfs_mount(&m2, NULL, 0, "size=0") == 0 && tmpfs_statfs(&m2, &sf) == 0 &&
+          sf.files == POOL / 2);
+    CHECK(tmpfs_remount(&m2, 0, "size=8k") == -EINVAL);
+    tmpfs_unmount(&m2);
+    CHECK(tmpfs_mount(&m2, NULL, 0, "nr_inodes=lots") == -EINVAL);
+    CHECK(tmpfs_mount(&m2, NULL, 0, "nr_inodes=4q") == -EINVAL);
+    CHECK(tmpfs_mount(&m2, NULL, 0, "nr_inodes=99999999999999999999") == -EINVAL);
+}
+
 /**
  * fallocate: the range's pages made and the size grown to its end, or kept
  * with FALLOC_FL_KEEP_SIZE; a punched hole reads as zeros, frees the pages
@@ -918,6 +1114,10 @@ int main(void)
     removed_directory();
     rename_refused();
     sizes();
+    flags();
+    attributes();
+    inodes();
+    limit_options();
     allocation();
     give_way_per_leaf();
     tmpfs_unmount(&mnt);

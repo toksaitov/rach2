@@ -4,13 +4,17 @@
 
 ## Interfaces
 
-[mount(2)](../../../man/man2/mount.2) gives the options `mode=` and `size=`, the remount and what `statfs(2)` reports; [memfd_create(2)](../../../man/man2/memfd_create.2) and [fcntl(2)](../../../man/man2/fcntl.2) give memfds and seals; and [fallocate(2)](../../../man/man2/fallocate.2) gives allocation and holes. To the rest of the kernel `tmpfs.h` gives `vfs_tmpfs_type`; `tmpfs_shmem`, a regular file's bytes, which a shared mapping maps (`mmap` in `../syscall_proc.c`, and `../ipc/sysv.c`); `tmpfs_memfd`, which makes a file in no directory; `tmpfs_secret_file` and `tmpfs_secret`, which make and recognize a file of `memfd_secret(2)`; `tmpfs_seals` and `tmpfs_add_seals`; and `tmpfs_label`, the name `/proc/PID/fd` shows for a memfd. Everything else is reached through the operations table of [vfs.Readme.md](vfs.Readme.md).
+[mount(2)](../../../man/man2/mount.2) gives the options `mode=`, `size=` and `nr_inodes=`, the remount and what `statfs(2)` reports; [ioctl(2)](../../../man/man2/ioctl.2) gives the inode flags and [getxattr(2)](../../../man/man2/getxattr.2) the extended attributes; [memfd_create(2)](../../../man/man2/memfd_create.2) and [fcntl(2)](../../../man/man2/fcntl.2) give memfds and seals; and [fallocate(2)](../../../man/man2/fallocate.2) gives allocation and holes. To the rest of the kernel `tmpfs.h` gives `vfs_tmpfs_type`; `tmpfs_shmem`, a regular file's bytes, which a shared mapping maps (`mmap` in `../syscall_proc.c`, and `../ipc/sysv.c`); `tmpfs_memfd`, which makes a file in no directory; `tmpfs_secret_file` and `tmpfs_secret`, which make and recognize a file of `memfd_secret(2)`; `tmpfs_seals` and `tmpfs_add_seals`; and `tmpfs_label`, the name `/proc/PID/fd` shows for a memfd. Everything else is reached through the operations table of [vfs.Readme.md](vfs.Readme.md).
 
 ## Design
 
 ### Nodes
 
 A node (`struct tmpfs_node`) is a record from the heap. Inode numbers count up from 1, the root's, and are not reused while the mount lasts. A new node takes the caller's effective ids, but the group of a set-group-ID directory it is made in, which also gives a new directory the bit, as Linux's `inode_init_owner` does.
+
+A node has the inode flags of Linux 6.12's tmpfs (`SHMEM_FL_USER_MODIFIABLE`): immutable and append-only, which the VFS enforces once `getattr` reports them, no-dump, and no-access-time, under which a read leaves the access time. `setattr` refuses any other with `EOPNOTSUPP` before it changes anything, and a new node takes the last two from its directory. `getattr` gives no generation, so `FS_IOC_GETVERSION` is `ENOTTY`, as on Linux.
+
+Its extended attributes are a list of `struct tmpfs_xattr`, each a full name and its value in one block from the heap, in the order they were made; a replaced value keeps its place. `tmpfs_xattr` keeps the user, trusted and security namespaces, as Linux's tmpfs has handlers for them, and answers `EOPNOTSUPP` for any other. The access rules of each namespace are the VFS's (`xattr_access` in `../syscall_fs.c`), but a listing leaves the trusted names out for a caller without privilege, as Linux's `simple_xattr_list` does. A node's attributes go with it.
 
 Two counts keep a node. `refs` counts the holds of lookups, descriptions, working directories and mounts, and for a directory one for each subdirectory, through the subdirectory's `parent`; `links` counts the names. `settle` frees a node when both are 0 and lets go of its parent, which may free the parent in turn, in a loop. A file's pages go with `shmem_free_yielding`, which gives way after each 1024 pages, as Linux's `shmem_undo_range` calls `cond_resched` between batches ([memory](../mm/Readme.md)): nothing reaches the node by then, since a mapping holds its file's description, and the parent stays held until the node is gone. A type's unlink and last put may sleep, as ext2's do, so its callers already let the big lock go there. So a file unlinked while open stays readable until its last close, and a removed directory that a process still has keeps its removed parent, which its `..` looks up. A directory reports two links and one per subdirectory, or none once it is removed, and a size of 20 bytes for each name and for `.` and `..` (`DIRENT_BYTES`), as Linux's tmpfs does.
 
@@ -28,6 +32,10 @@ A regular file's bytes are a `struct shmem` (`../mm/shmem.c`, in [../mm/Readme.m
 
 `cachestat` counts resident entries through `shmem_count`, skipping absent leaves and offering scheduling between leaves during a long walk. Both ordinary and secret pages count as clean: Linux's shmem dirty folio bit does not set the page-cache dirty tag that this call counts.
 
+### Inodes
+
+A mount has at most the inodes `nr_inodes=` gives, half the machine's pages by default, as Linux's `shmem_default_max_inodes` on a machine with no high memory. As in Linux 6.12, the limit is kept as space, `free_ispace`, of `INODE_SPACE`, 1024 bytes, for each inode: a node takes one from its making to its free, the root's among them, a name of a file past its first another until it is removed, and an extended attribute 40 bytes and its name and value (`XATTR_SPACE`, Linux's `simple_xattr_space`). What does not fit is `ENOSPC`. `statfs` gives the limit and the whole inodes left. A remount refuses a limit below what is taken and one on a mount with none; `nr_inodes=0` lifts it, after which no space is counted. Entry 4, the mount of memfds, has no limit, as Linux's internal `shm_mnt` has none.
+
 ### Calls and locking
 
 `vfs_tmpfs_type` sets `ns_serialised`, so the calls that use a description of a tmpfs file, a read, a write and a truncation among them, take the mount's namespace lock before the description's ([Readme.md](Readme.md)); the operations take no lock of their own. A read advances the access time. `tmpfs_open` answers `ENXIO` for a device node, since `open(2)` opens the `/dev` device with the node's number before it calls the type. `fsync`, `sync` and the first half of an unmount do nothing and succeed; the unmount then frees the tree in a loop over the parent links (`free_tree`), not by recursion, since a tree may be as deep as a path is long and the kernel stack is 16 KiB.
@@ -36,7 +44,7 @@ A regular file's bytes are a `struct shmem` (`../mm/shmem.c`, in [../mm/Readme.m
 
 `/dev/shm` is entry 3 of the permanent mounts, with the mode and flags Linux systems give it ([vfs.Readme.md](vfs.Readme.md) has the table). `/dev` is synthetic and has no directory to cover, so `/dev/shm` is a nameless mount in `/dev`'s root directory, entered by its name, and `umount2` of it fails with `EBUSY`.
 
-Entry 4, mounted with `mode=0555,size=0`, has no parent and no path, and `/proc/mounts` does not list it (`vfs_memfd_mount`). Its root stays empty. Each memfd, and each System V segment, a file named `SYSV`, is a node in no directory (`tmpfs_memfd`), made with one hold that its description takes, so it goes with the description's last reference as an unlinked file does.
+Entry 4, mounted with `mode=0555,size=0,nr_inodes=0`, has no parent and no path, and `/proc/mounts` does not list it (`vfs_memfd_mount`). Its root stays empty. Each memfd, and each System V segment, a file named `SYSV`, is a node in no directory (`tmpfs_memfd`), made with one hold that its description takes, so it goes with the description's last reference as an unlinked file does.
 
 A file of `memfd_secret` is a node of the same mount (`tmpfs_secret_file`), mode 0600 with one link, whose `secret` points at the record of its user's pages (`struct secret_user`). Its `struct shmem` counts its pages against that record's quota, whose limit is read at each page from the `RLIMIT_MEMLOCK` of the process that touches it, in place of the mount's `size=`. `tmpfs_read` and `tmpfs_write` refuse it with `EINVAL`, a truncation or `setattr` of its size once the size is set with `EINVAL`, and `tmpfs_fallocate` with `EOPNOTSUPP`, as Linux's secretmem has none of these operations; its pages count as clean for `cachestat`. The record goes with its user's last such file.
 
@@ -48,10 +56,11 @@ A regular file's seals are the `TMPFS_SEAL_` bits, which have the values of `fcn
 
 * The files are in memory only: an unmount or a reboot loses them.
 * The seals do not reach a shared mapping: `mmap(2)` maps a file sealed against writing writable, a mapping made before the seal goes on writing, and `F_SEAL_WRITE` is added while one exists. On Linux the three fail.
-* The only limit is the mount's pages; there is no count of inodes and no per-user quota.
+* There is no per-user quota, which Linux's tmpfs has with `usrquota`.
+* The `system.` namespace, Linux's POSIX ACLs, is `EOPNOTSUPP`.
 * A lookup and a rename take time in proportion to the names in the directory, and a whole listing in proportion to their square.
 
 ## Tests
 
-* `tests/run host` runs `tmpfs_hosttest`, which includes `tmpfs.c` and `../mm/shmem.c` over a pool of host pages and covers file bytes and holes, links, renames, the kinds of node, listings, held and removed nodes, the mount's limit, `fallocate`, truncation of mapped pages, and memfds and seals.
+* `tests/run host` runs `tmpfs_hosttest`, which includes `tmpfs.c` and `../mm/shmem.c` over a pool of host pages and covers file bytes and holes, links, renames, the kinds of node, listings, held and removed nodes, the mount's limits of pages and inodes, the inode flags, extended attributes, `fallocate`, truncation of mapped pages, and memfds and seals.
 * `tests/run default` runs `musl/tmpfsmusl` (a mount of its own, its unmount, remount and binds, and `/dev/shm`), `musl/memfdmusl` (each flag and seal), `musl/memcallmusl` (`memfd_secret` and `cachestat`), `musl/mknodmusl` and `musl/chrootmusl`.

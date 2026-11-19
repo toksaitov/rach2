@@ -33,7 +33,34 @@
 /* Format: the size Linux's tmpfs gives each name in a directory's size. */
 #define DIRENT_BYTES 20u
 
+/* The inode flags of FS_IOC_SETFLAGS a tmpfs keeps, as Linux 6.12's
+ * SHMEM_FL_USER_MODIFIABLE: immutable, append-only, no dump and no access
+ * time. A new node takes the last two from its directory
+ * (SHMEM_FL_INHERITED). */
+#define FL_NODUMP     0x00000040u
+#define FL_NOATIME    0x00000080u
+#define FL_MODIFIABLE (VFS_FL_IMMUTABLE | VFS_FL_APPEND | FL_NODUMP | FL_NOATIME)
+#define FL_INHERITED  (FL_NODUMP | FL_NOATIME)
+
+/* What a node, and each name of a file past its first, takes of the space
+ * nr_inodes= gives a mount: Linux's BOGO_INODE_SIZE. An extended attribute
+ * takes XATTR_SPACE and the bytes of its name and value, as Linux's
+ * simple_xattr_space counts it, on 32-bit and 64-bit machines alike. */
+#define INODE_SPACE 1024u
+#define XATTR_SPACE 40u
+
 struct tmpfs_node;
+struct tmpfs_mount;
+
+/* An extended attribute of a node: its full name, with its namespace's
+ * prefix, and `size` bytes of value, in the one block from the heap the
+ * record heads. */
+struct tmpfs_xattr {
+    struct tmpfs_xattr *next;
+    char *name;
+    unsigned char *value;
+    uint32_t size;
+};
 
 /* A name in a directory. `off` is its place there, which readdir's cursor
  * counts: 2 on, rising along the list, and kept while the name is there, so
@@ -64,14 +91,17 @@ struct tmpfs_node {
     uint32_t mode;
     uint32_t uid;
     uint32_t gid;
-    uint32_t rdev;  /* a device node's number, in the kernel's encoding */
-    uint32_t seals; /* the TMPFS_SEAL_ bits a regular file has */
+    uint32_t rdev;    /* a device node's number, in the kernel's encoding */
+    uint32_t seals;   /* the TMPFS_SEAL_ bits a regular file has */
+    uint32_t fsflags; /* the inode flags it has, of FL_MODIFIABLE */
     uint64_t ino;
     int64_t atime, atime_ns, mtime, mtime_ns, ctime, ctime_ns;
     struct shmem data; /* a regular file's bytes */
     char *target;
     char *label;                /* a memfd's name, for /proc/PID/fd; NULL for a named file */
     struct secret_user *secret; /* memfd_secret's: its pages' count; or NULL */
+    struct tmpfs_xattr *xattrs; /* in the order they were made */
+    struct tmpfs_mount *tm;     /* the mount's state, which its space goes back to */
 };
 
 /*
@@ -88,12 +118,49 @@ struct secret_user {
 };
 static struct secret_user *secret_users;
 
-/* The state of a mount, in its `priv`. */
+/*
+ * The state of a mount, in its `priv`. `max_inodes` is nr_inodes=, 0 for no
+ * limit, and `free_ispace` the bytes of its INODE_SPACE each that no node,
+ * extra name or extended attribute has taken, which statfs gives as free
+ * inodes; it means nothing while there is no limit, as in Linux's
+ * shmem_sb_info.
+ */
 struct tmpfs_mount {
     struct tmpfs_node *root;
     uint64_t next_ino;        /* the last inode number given; the root's is 1 */
     struct shmem_quota quota; /* the pages its files hold, against size= */
+    uint64_t max_inodes;
+    uint64_t free_ispace;
 };
+
+/** Take `bytes` of the space nr_inodes= gives `tm`: 0, or -ENOSPC when
+ * less is left, as Linux's shmem_reserve_inode answers. A mount with no
+ * limit gives every request. */
+static int ispace_take(struct tmpfs_mount *tm, uint64_t bytes)
+{
+    if (tm->max_inodes == 0) {
+        return 0;
+    }
+    if (tm->free_ispace < bytes) {
+        return -ENOSPC;
+    }
+    tm->free_ispace -= bytes;
+    return 0;
+}
+
+/** Give back `bytes` that `ispace_take` took of `tm`. */
+static void ispace_give(struct tmpfs_mount *tm, uint64_t bytes)
+{
+    if (tm->max_inodes != 0) {
+        tm->free_ispace += bytes;
+    }
+}
+
+/** What the attribute `xa` takes of its mount's inode space. */
+static uint64_t xattr_space(const struct tmpfs_xattr *xa)
+{
+    return XATTR_SPACE + (uint64_t)xa->size + k_strlen(xa->name);
+}
 
 /* The times `stamp` sets: access, modification and change. */
 #define STAMP_A 1
@@ -136,20 +203,29 @@ static int removed(const struct tmpfs_node *d)
 }
 
 /** A new node of `mode` for the directory `dir`, or of no directory for the
- * root and a memfd, with no hold, no name, the next inode number and the
- * seal TMPFS_SEAL_SEAL; NULL when the heap has no room. It is owned as
- * Linux's `inode_init_owner` owns one: by the caller's file-system ids, but
- * with the group of a setgid directory, which passes the bit on to a new
- * directory. */
+ * root and a memfd, with no hold, no name, the next inode number, the seal
+ * TMPFS_SEAL_SEAL and the inode flags of `dir` that FL_INHERITED names; NULL
+ * when the heap has no room or the mount no inode left (`ispace_take`). It
+ * is owned as Linux's `inode_init_owner` owns one: by the caller's
+ * file-system ids, but with the group of a setgid directory, which passes
+ * the bit on to a new directory. A node that gets no name goes with
+ * `discard`. */
 static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_node *dir,
                                    uint32_t mode)
 {
     struct tmpfs_mount *tm = (struct tmpfs_mount *)mnt->priv;
-    struct tmpfs_node *n = kzalloc(sizeof(*n));
+    struct tmpfs_node *n;
 
-    if (!n) {
+    if (ispace_take(tm, INODE_SPACE) != 0) {
         return NULL;
     }
+    n = kzalloc(sizeof(*n));
+    if (!n) {
+        ispace_give(tm, INODE_SPACE);
+        return NULL;
+    }
+    n->tm = tm;
+    n->fsflags = dir ? dir->fsflags & FL_INHERITED : 0u;
     n->uid = current_proc ? proc_fsuid(current_proc) : 0u;
     n->gid = current_proc ? proc_fsgid(current_proc) : 0u;
     if (dir && (dir->mode & T_ISGID)) {
@@ -164,6 +240,16 @@ static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_nod
     n->data.quota = &tm->quota;
     stamp(n, STAMP_A | STAMP_M | STAMP_C);
     return n;
+}
+
+/** Free the node `n` of `new_node` that got no name, no hold and no
+ * pages, and give back its inode. */
+static void discard(struct tmpfs_node *n)
+{
+    ispace_give(n->tm, INODE_SPACE);
+    kfree(n->target);
+    kfree(n->label);
+    kfree(n);
 }
 
 /** The pages of memfd_secret the current process lets its user hold: its
@@ -236,6 +322,14 @@ static void settle(struct tmpfs_node *n)
         if (n->secret) {
             secret_put(n->secret);
         }
+        while (n->xattrs) {
+            struct tmpfs_xattr *xa = n->xattrs;
+
+            n->xattrs = xa->next;
+            ispace_give(n->tm, xattr_space(xa));
+            kfree(xa);
+        }
+        ispace_give(n->tm, INODE_SPACE);
         kfree(n->target);
         kfree(n->label);
         kfree(n);
@@ -434,7 +528,9 @@ static void tmpfs_put(struct vfs_mount *mnt, void *node)
  * each name and for `.` and `..`; a symbolic link's size is its target's
  * length; any other node has the size of its bytes and the 512-byte blocks
  * of the pages that hold them, but a file of memfd_secret one link and no
- * blocks, as Linux's anonymous inode has. */
+ * blocks, as Linux's anonymous inode has. Every node has its inode flags,
+ * and none a generation, which Linux's tmpfs does not give
+ * FS_IOC_GETVERSION. */
 static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
@@ -468,6 +564,8 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->mtime_nsec = n->mtime_ns;
     st->ctime_sec = n->ctime;
     st->ctime_nsec = n->ctime_ns;
+    st->flags = n->fsflags;
+    st->flags_known = 1;
     return 0;
 }
 
@@ -491,13 +589,18 @@ static int seals_allow_size(const struct tmpfs_node *n, uint64_t size)
  * -EINVAL on any other node but a regular file and on a file of
  * memfd_secret whose size is set already, -EPERM where the seals
  * forbid the size, or what `shmem_truncate` answers, and on success sets
- * the modification time. Every call that succeeds sets the change time.
+ * the modification time. New inode flags with one outside FL_MODIFIABLE
+ * are -EOPNOTSUPP, as Linux's shmem_fileattr_set answers, before anything
+ * changes. Every call that succeeds sets the change time.
  */
 static int tmpfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
 
     (void)mnt;
+    if ((what & VFS_SET_FLAGS) && (st->flags & ~FL_MODIFIABLE)) {
+        return -EOPNOTSUPP;
+    }
     if ((what & VFS_SET_MODE) && (n->seals & TMPFS_SEAL_EXEC) && ((st->mode ^ n->mode) & 0111u)) {
         return -EPERM;
     }
@@ -536,6 +639,9 @@ static int tmpfs_setattr(struct vfs_mount *mnt, void *node, int what, const stru
         n->mtime = st->mtime_sec;
         n->mtime_ns = st->mtime_nsec;
     }
+    if (what & VFS_SET_FLAGS) {
+        n->fsflags = st->flags;
+    }
     stamp(n, STAMP_C);
     return 0;
 }
@@ -564,8 +670,8 @@ static void tmpfs_release(struct vfs_mount *mnt, void *handle)
 }
 
 /** The `read` of tmpfs: bytes of a regular file (`shmem_read`), which sets
- * its access time; -EISDIR for a directory, -EINVAL for any other node and
- * for a file of memfd_secret. */
+ * its access time unless it has FL_NOATIME; -EISDIR for a directory,
+ * -EINVAL for any other node and for a file of memfd_secret. */
 static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                           uint64_t offset)
 {
@@ -578,7 +684,9 @@ static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32
     if ((n->mode & T_IFMT) != T_IFREG || n->secret) {
         return -EINVAL;
     }
-    stamp(n, STAMP_A);
+    if (!(n->fsflags & FL_NOATIME)) {
+        stamp(n, STAMP_A);
+    }
     return shmem_read(&n->data, buf, count, offset);
 }
 
@@ -692,7 +800,8 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
  * regular file for none, with the device number `rdev` for a device. The
  * node comes back held. A directory and a symbolic link have operations of
  * their own and are -EINVAL here; a removed `dir` is -ENOENT, a name
- * already there -EEXIST, and a heap with no room -ENOSPC.
+ * already there -EEXIST, and a heap with no room or a mount with no inode
+ * left -ENOSPC.
  */
 static int make_node(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                      uint32_t rdev, void **node)
@@ -723,7 +832,7 @@ static int make_node(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     }
     rc = add_entry(d, name, n);
     if (rc != 0) {
-        kfree(n);
+        discard(n);
         return rc;
     }
     n->refs = 1;
@@ -745,12 +854,23 @@ static int tmpfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint3
     return make_node(mnt, dir, name, mode, rdev, node);
 }
 
+/** Give back the inode a name of the file `n` took past its first
+ * (`tmpfs_link`), once the name is gone and `n` keeps another, as Linux's
+ * shmem_unlink does. */
+static void name_gone(struct tmpfs_node *n)
+{
+    if (!is_dir(n) && n->links > 0) {
+        ispace_give(n->tm, INODE_SPACE);
+    }
+}
+
 /** The `unlink` of tmpfs: the name `name` taken out of `dir`, and its node
  * freed when nothing holds it; -ENOENT, or -EISDIR for a directory. */
 static int tmpfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
     struct tmpfs_dirent **link = find(d, name);
+    struct tmpfs_node *n;
 
     if (!link) {
         return -ENOENT;
@@ -758,13 +878,15 @@ static int tmpfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     if (is_dir((*link)->node)) {
         return -EISDIR;
     }
-    settle(remove_entry(d, link));
+    n = remove_entry(d, link);
+    name_gone(n);
+    settle(n);
     return 0;
 }
 
 /** The `mkdir` of tmpfs: a new directory `name` in `dir` with the permission
  * bits of `mode`, owned as `new_node` says; -ENOENT for a removed `dir`,
- * -EEXIST, or -ENOSPC when the heap has no room. */
+ * -EEXIST, or -ENOSPC when the heap has no room or the mount no inode. */
 static int tmpfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -783,7 +905,7 @@ static int tmpfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint3
     }
     rc = add_entry(d, name, n);
     if (rc != 0) {
-        kfree(n);
+        discard(n);
     }
     return rc;
 }
@@ -879,13 +1001,18 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
     to = find(nd, newname);
     replaced = to ? remove_entry(nd, to) : NULL;
     link_entry(nd, e, n);
+    if (replaced) {
+        name_gone(replaced);
+    }
     settle(replaced);
     return 0;
 }
 
 /** The `link` of tmpfs: a new name `name` in `dir` for the file `node`,
  * which has a new change time; -ENOENT for a removed `dir`, -EPERM for a
- * directory, -EEXIST, or -ENOSPC. */
+ * directory, -EEXIST, or -ENOSPC. A name past the file's first takes an
+ * inode of the mount, as in Linux's shmem_link, since each pins memory
+ * until it is removed; the first name of a file that has none does not. */
 static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -901,9 +1028,14 @@ static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *
     if (find(d, name)) {
         return -EEXIST;
     }
+    if (n->links > 0 && ispace_take(n->tm, INODE_SPACE) != 0) {
+        return -ENOSPC;
+    }
     rc = add_entry(d, name, n);
     if (rc == 0) {
         stamp(n, STAMP_C);
+    } else if (n->links > 0) {
+        ispace_give(n->tm, INODE_SPACE);
     }
     return rc;
 }
@@ -931,11 +1063,15 @@ static int tmpfs_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
  * The `statfs` of tmpfs, in blocks of a page. The mount's limit is its
  * blocks and the pages its files hold the blocks in use, as Linux counts a
  * tmpfs's use, so that df shows an empty /dev/shm empty; a mount without a
- * limit has the machine's frames as its blocks.
+ * limit has the machine's frames as its blocks. Its inodes are nr_inodes=
+ * and the free ones what is left of their space in whole INODE_SPACE, as
+ * Linux's shmem_statfs gives them; a mount without that limit gives 0 for
+ * both.
  */
 static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
-    const struct shmem_quota *q = &((struct tmpfs_mount *)mnt->priv)->quota;
+    const struct tmpfs_mount *tm = (const struct tmpfs_mount *)mnt->priv;
+    const struct shmem_quota *q = &tm->quota;
     size_t total = q->limit ? q->limit : frame_total_count();
 
     st->magic = TMPFS_MAGIC;
@@ -943,6 +1079,10 @@ static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     st->blocks = total;
     st->bfree = q->used < total ? total - q->used : 0;
     st->namelen = VFS_NAME_MAX;
+    if (tm->max_inodes != 0) {
+        st->files = tm->max_inodes;
+        st->ffree = tm->free_ispace / INODE_SPACE;
+    }
     return 0;
 }
 
@@ -1117,7 +1257,7 @@ static int tmpfs_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap
 
 /** The `symlink` of tmpfs: a link `name` in `dir`, mode 0777, to a copy of
  * `target`; -ENOENT for a removed `dir`, -EEXIST, or -ENOSPC when the heap
- * has no room. */
+ * has no room or the mount no inode. */
 static int tmpfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -1137,14 +1277,13 @@ static int tmpfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, con
     }
     n->target = kmalloc(len + 1u);
     if (!n->target) {
-        kfree(n);
+        discard(n);
         return -ENOSPC;
     }
     k_memcpy(n->target, target, len + 1u);
     rc = add_entry(d, name, n);
     if (rc != 0) {
-        kfree(n->target);
-        kfree(n);
+        discard(n);
     }
     return rc;
 }
@@ -1234,26 +1373,83 @@ static int64_t size_pages(const char *options)
     return (int64_t)(n > (size_t)~(size_t)0 ? (size_t)~(size_t)0 : n);
 }
 
+/**
+ * The inodes a mount may have, from nr_inodes=: a count, with k, m, g, t, p
+ * or e after it for a power of 1024, as Linux's memparse reads it; 0, for
+ * nr_inodes=0, is no limit. Without nr_inodes= the limit is half the
+ * machine's pages, as Linux's shmem_default_max_inodes gives it on a
+ * machine with no high memory. -EINVAL for a value that is no number or
+ * whose space, INODE_SPACE for each, passes what an unsigned long holds, as
+ * Linux refuses it. `*seen` is set when the option is given.
+ */
+static int64_t inode_count(const char *options, int *seen)
+{
+    const char *p = option(options, "nr_inodes");
+    uint64_t n = 0;
+    uint64_t most = (uint64_t)(unsigned long)~0ul / INODE_SPACE;
+    const char *units = "kmgtpe";
+    int i;
+
+    *seen = p != NULL;
+    if (!p) {
+        return (int64_t)(frame_total_count() / 2u);
+    }
+    if (*p < '0' || *p > '9') {
+        return -EINVAL;
+    }
+    for (; *p >= '0' && *p <= '9'; p++) {
+        if (n > most) {
+            return -EINVAL;
+        }
+        n = n * 10u + (uint64_t)(*p - '0');
+    }
+    for (i = 0; units[i] && *p != units[i] && *p != units[i] - ('a' - 'A'); i++) {
+    }
+    if (units[i]) {
+        int k;
+
+        for (k = 0; k <= i; k++) {
+            if (n > most) {
+                return -EINVAL;
+            }
+            n <<= 10;
+        }
+        p++;
+    }
+    if ((*p != '\0' && *p != ',') || n > most) {
+        return -EINVAL;
+    }
+    return (int64_t)n;
+}
+
 /** The constructor of tmpfs: a mount whose files may hold the pages size=
- * gives, with a root directory of the mode mode= gives, owned by the caller;
- * -EINVAL for a size that is no number, or -ENOMEM. */
+ * gives and which may have the inodes nr_inodes= gives, the root's among
+ * them, with a root directory of the mode mode= gives, owned by the caller;
+ * -EINVAL for a size or a count that is no number, or -ENOMEM. */
 static int tmpfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                        const char *options)
 {
     struct tmpfs_mount *tm;
     struct tmpfs_node *root;
     int64_t limit = size_pages(options);
+    int seen;
+    int64_t inodes = inode_count(options, &seen);
 
     (void)dev;
     (void)flags;
     if (limit < 0) {
         return (int)limit;
     }
+    if (inodes < 0) {
+        return (int)inodes;
+    }
     tm = kzalloc(sizeof(*tm));
     if (!tm) {
         return -ENOMEM;
     }
     tm->quota.limit = (size_t)limit;
+    tm->max_inodes = (uint64_t)inodes;
+    tm->free_ispace = tm->max_inodes * INODE_SPACE;
     mnt->priv = tm;
     root = new_node(mnt, NULL, T_IFDIR | root_mode(options));
     if (!root) {
@@ -1286,7 +1482,7 @@ int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t
     }
     n->label = kmalloc(len + 1u);
     if (!n->label) {
-        kfree(n);
+        discard(n);
         return -ENOMEM;
     }
     k_memcpy(n->label, name, len + 1u);
@@ -1310,7 +1506,7 @@ int tmpfs_secret_file(struct vfs_mount *mnt, void **node)
     }
     n->secret = secret_get();
     if (!n->secret) {
-        kfree(n);
+        discard(n);
         return -ENOMEM;
     }
     n->data.quota = &n->secret->quota;
@@ -1379,29 +1575,216 @@ static void tmpfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, u
     cs->cache = shmem_count(&n->data, (uint32_t)first, (uint32_t)last);
 }
 
+/** Whether `name` begins with `prefix`; the part after it in `*rest`. */
+static int has_prefix(const char *name, const char *prefix, const char **rest)
+{
+    while (*prefix && *name == *prefix) {
+        name++;
+        prefix++;
+    }
+    *rest = name;
+    return *prefix == '\0';
+}
+
 /**
- * The `remount` of tmpfs takes a new size=, as Linux's tmpfs does; one
- * smaller than the pages the files hold is -EINVAL. A tmpfs has nothing on
- * a device to settle, and the wrappers answer EROFS to every write to a
- * read-only mount, so the flags change nothing here.
+ * Whether a tmpfs keeps the attribute `name`, as Linux's has handlers for
+ * it: 0 for a name of the user, trusted or security namespace,
+ * -EOPNOTSUPP for any other, and -EINVAL for a prefix with no name after
+ * it, as Linux's xattr_resolve_name answers.
+ */
+static int xattr_name_ok(const char *name)
+{
+    const char *rest;
+
+    if (!has_prefix(name, "user.", &rest) && !has_prefix(name, "trusted.", &rest) &&
+        !has_prefix(name, "security.", &rest)) {
+        return -EOPNOTSUPP;
+    }
+    return *rest ? 0 : -EINVAL;
+}
+
+/** The link in the attributes of `n` that points at the one named `name`,
+ * or the link at the end of the list when there is none. */
+static struct tmpfs_xattr **xattr_find(struct tmpfs_node *n, const char *name)
+{
+    struct tmpfs_xattr **link;
+
+    for (link = &n->xattrs; *link; link = &(*link)->next) {
+        const char *a = (*link)->name;
+        const char *b = name;
+
+        while (*a && *a == *b) {
+            a++;
+            b++;
+        }
+        if (*a == *b) {
+            break;
+        }
+    }
+    return link;
+}
+
+/**
+ * The names of the attributes of `n`, each with its NUL, into `buf` of
+ * `size` bytes, as Linux's simple_xattr_list gives them: those of the
+ * trusted namespace only to a privileged caller, CAP_SYS_ADMIN's. Their
+ * length; with `size` 0 the length alone, and -ERANGE when they do not fit.
+ */
+static int xattr_list(const struct tmpfs_node *n, char *buf, uint32_t size)
+{
+    const struct tmpfs_xattr *xa;
+    int trusted = current_proc && proc_privileged(current_proc);
+    uint32_t used = 0;
+
+    for (xa = n->xattrs; xa; xa = xa->next) {
+        const char *rest;
+        uint32_t len = (uint32_t)k_strlen(xa->name) + 1u;
+
+        if (!trusted && has_prefix(xa->name, "trusted.", &rest)) {
+            continue;
+        }
+        if (size != 0) {
+            if (size - used < len) {
+                return -ERANGE;
+            }
+            k_memcpy(buf + used, xa->name, len);
+        }
+        used += len;
+    }
+    return (int)used;
+}
+
+/**
+ * Set or remove the attribute `arg->name` of `n`, as Linux's
+ * shmem_xattr_handler_set and simple_xattr_set do: a new value first takes
+ * its space of a mount with nr_inodes= (`xattr_space`), -ENOSPC when less is
+ * left, and then replaces the old one or is added after the others, the old
+ * one's space given back; -EEXIST with XATTR_CREATE for a name there,
+ * -ENODATA with XATTR_REPLACE, and for a removal, for one that is not, and
+ * -ENOMEM when the heap has no room, each giving back what was taken. A
+ * change sets the change time.
+ */
+static int xattr_set(struct tmpfs_node *n, const struct vfs_xattr *arg)
+{
+    struct tmpfs_xattr **link = xattr_find(n, arg->name);
+    struct tmpfs_xattr *old = *link, *xa = NULL;
+    uint32_t len = (uint32_t)k_strlen(arg->name);
+    uint64_t space = 0;
+
+    if (arg->op == VFS_XATTR_SET) {
+        space = XATTR_SPACE + (uint64_t)arg->size + len;
+        if (ispace_take(n->tm, space) != 0) {
+            return -ENOSPC;
+        }
+    }
+    if ((old && (arg->flags & 1)) || (!old && ((arg->flags & 2) || arg->op == VFS_XATTR_REMOVE))) {
+        ispace_give(n->tm, space);
+        return old ? -EEXIST : -ENODATA;
+    }
+    if (arg->op == VFS_XATTR_SET) {
+        xa = kmalloc(sizeof(*xa) + len + 1u + arg->size);
+        if (!xa) {
+            ispace_give(n->tm, space);
+            return -ENOMEM;
+        }
+        xa->name = (char *)(xa + 1);
+        xa->value = (unsigned char *)xa->name + len + 1u;
+        xa->size = arg->size;
+        k_memcpy(xa->name, arg->name, len + 1u);
+        k_memcpy(xa->value, arg->value, arg->size);
+        xa->next = old ? old->next : NULL;
+    }
+    if (xa) {
+        *link = xa;
+    } else {
+        *link = old->next;
+    }
+    if (old) {
+        ispace_give(n->tm, xattr_space(old));
+        kfree(old);
+    }
+    stamp(n, STAMP_C);
+    return 0;
+}
+
+/**
+ * The `xattr` of tmpfs: the attributes of the user, trusted and security
+ * namespaces on every kind of node, kept in memory as Linux's tmpfs keeps
+ * them. The caller has checked the access, the namespace's rules among it,
+ * and holds the node lock. A GET answers the value's length, -ERANGE when
+ * `arg->size` is not 0 and is smaller, or -ENODATA; LIST answers as
+ * `xattr_list`, SET and REMOVE as `xattr_set`; a name of another namespace
+ * is -EOPNOTSUPP.
+ */
+static int tmpfs_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
+{
+    struct tmpfs_node *n = (struct tmpfs_node *)node;
+    struct tmpfs_xattr *xa;
+    int rc;
+
+    (void)mnt;
+    if (arg->op == VFS_XATTR_LIST) {
+        return xattr_list(n, (char *)arg->value, arg->size);
+    }
+    rc = xattr_name_ok(arg->name);
+    if (rc != 0) {
+        return rc;
+    }
+    if (arg->op != VFS_XATTR_GET) {
+        return xattr_set(n, arg);
+    }
+    xa = *xattr_find(n, arg->name);
+    if (!xa) {
+        return -ENODATA;
+    }
+    if (arg->size != 0) {
+        if (arg->size < xa->size) {
+            return -ERANGE;
+        }
+        k_memcpy(arg->value, xa->value, xa->size);
+    }
+    return (int)xa->size;
+}
+
+/**
+ * The `remount` of tmpfs takes a new size= and nr_inodes=, as Linux's
+ * shmem_reconfigure does, and changes neither unless both hold: each is
+ * -EINVAL when it is no number, when it sets a limit on a mount that has
+ * none, or when it is smaller than what the files hold, their pages or the
+ * space their inodes and attributes take. 0 for either lifts its limit for
+ * good. A tmpfs has nothing on a device to settle, and the wrappers answer
+ * EROFS to every write to a read-only mount, so the flags change nothing
+ * here.
  */
 static int tmpfs_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
     struct tmpfs_mount *tm = (struct tmpfs_mount *)mnt->priv;
-    int64_t limit;
+    int sized = option(options, "size") != NULL;
+    int64_t limit = sized ? size_pages(options) : 0;
+    int counted;
+    int64_t inodes = inode_count(options, &counted);
+    uint64_t used = tm->max_inodes * INODE_SPACE - tm->free_ispace;
 
     (void)flags;
-    if (!option(options, "size")) {
-        return 0;
-    }
-    limit = size_pages(options);
     if (limit < 0) {
         return (int)limit;
     }
-    if (limit != 0 && (size_t)limit < tm->quota.used) {
+    if (inodes < 0) {
+        return (int)inodes;
+    }
+    if (sized && limit != 0 && (tm->quota.limit == 0 || (size_t)limit < tm->quota.used)) {
         return -EINVAL;
     }
-    tm->quota.limit = (size_t)limit;
+    if (counted && inodes != 0 && (tm->max_inodes == 0 || (uint64_t)inodes * INODE_SPACE < used)) {
+        return -EINVAL;
+    }
+    if (sized) {
+        tm->quota.limit = (size_t)limit;
+    }
+    if (counted) {
+        tm->max_inodes = (uint64_t)inodes;
+        tm->free_ispace = inodes != 0 ? (uint64_t)inodes * INODE_SPACE - used : 0u;
+    }
     return 0;
 }
 
@@ -1442,7 +1825,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* lock_node */
     0, /* unlock_node */
     0, /* shutdown */
-    0, /* xattr */
+    tmpfs_xattr,
     tmpfs_cachestat,
     0, /* put_unless_last */
     0, /* readlink_cached */

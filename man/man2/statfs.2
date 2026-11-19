@@ -1,4 +1,4 @@
-.Dd October 15, 2026
+.Dd November 19, 2026
 .Dt STATFS 2
 .Os
 .Sh NAME
@@ -53,7 +53,10 @@ The free count an unprivileged caller may use: on ext2,
 less the blocks the superblock reserves for root, and elsewhere equal to
 .Va f_bfree .
 .It Va f_files , f_ffree
-The inodes and the free inodes on ext2; zero on the other types, which keep
+The inodes and the free inodes on ext2, and on a tmpfs its
+.Ql nr_inodes=
+and what is left of their space in inodes of 1024 bytes, as Linux counts
+them; zero on a tmpfs with no such limit and on the other types, which keep
 no fixed count of them.
 .It Va f_fsid
 Zero.
