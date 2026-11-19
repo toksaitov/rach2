@@ -534,8 +534,9 @@ pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va)
 /**
  * The table's address goes to the directory's second page before the page
  * replaces it, so that a walk that finds the page finds the table too
- * (`table_for`). The two map the same frames, and the caller flushes or
- * knows that no translation of the table's entries is cached.
+ * (`table_for`). The two map the same frames, and the caller has flushed
+ * every translation of the table's entries that may disagree with the
+ * page, or knows that none is cached (`huge_promote`).
  */
 int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf)
 {
