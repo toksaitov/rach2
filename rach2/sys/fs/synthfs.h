@@ -197,6 +197,9 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_ASOUND        75
 /* A file of /proc/bus/input, which the descriptor's `origin_pid` names. */
 #define SYNTH_PROC_BUS_INPUT     76
+/* /proc/<pid>/sched, the scheduler's record of a thread, whose
+ * statistics a write clears. */
+#define SYNTH_PROC_SCHED         77
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -459,6 +462,9 @@ int synth_sys_count(void);
  * whose values are ip.h's `netdev_budget` and `netdev_budget_usecs`. */
 #define SYNTH_SYS_NETDEV_BUDGET          88
 #define SYNTH_SYS_NETDEV_BUDGET_USECS    89
+/* The entry of kernel/sched_schedstats, whose value is proc/fair.h's
+ * `fair_schedstats`. */
+#define SYNTH_SYS_SCHED_SCHEDSTATS       90
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

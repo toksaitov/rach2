@@ -46,6 +46,7 @@
 #include "sys/tty/pty.h"
 #include "sys/ipc/pipe.h"
 #include "sys/proc/sched.h"
+#include "sys/proc/sched_debug.h"
 #include "sys/proc/smp.h"
 #include "sys/power.h"
 #include "sys/evdev.h"
@@ -4686,8 +4687,9 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
  * (`virtio_net_cpus_started`), and start the lockup detectors on all of them
  * (`watchdog_init`), the grace-period thread (`rcu_init`), the flusher
  * (`writeback_init`) and khugepaged (`thp_init`), then register bkl/calls,
- * bkl/profile, bkl/long, bkl/tick, cputime_test and, with the checker,
- * lockdep/inject in debugfs; a failure there is logged. */
+ * bkl/profile, bkl/long, bkl/tick, cputime_test, the scheduler's files
+ * (`sched_debugfs_init`) and, with the checker, lockdep/inject in debugfs;
+ * a failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4707,6 +4709,7 @@ static void start_processors(void)
     if (debugfs_create_text("cputime_test", 0600u, &cputime_test_ops, NULL) != 0) {
         klog(KLOG_WARN, "cputime", "debugfs: cputime_test not registered");
     }
+    sched_debugfs_init();
 #ifdef RACH2_LOCKDEP
     if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {
         klog(KLOG_WARN, "lockdep", "debugfs: inject not registered");
