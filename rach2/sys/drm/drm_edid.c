@@ -91,8 +91,16 @@
 #define RANGE_CVT           0x04
 
 /* The extension blocks' tags. */
-#define CEA_EXT 0x02
-#define VTB_EXT 0x10
+#define CEA_EXT       0x02
+#define VTB_EXT       0x10
+#define DISPLAYID_EXT 0x70
+
+/* A DisplayID section's header of four bytes, its blocks' header of three,
+ * and the tag of the block that holds CTA data blocks (Linux's
+ * drm_displayid.h). */
+#define DISPLAYID_HEADER 4u
+#define DISPLAYID_BLOCK  3u
+#define DATA_BLOCK_CTA   0x81
 
 /* How standard timings are made when no DMT mode matches, Linux's
  * LEVEL_*. */
@@ -1361,9 +1369,53 @@ static uint32_t svd_to_vic(uint8_t svd)
 
 typedef void (*cta_db_cb)(struct edid_parse *p, const uint8_t *db, uint32_t len);
 
-/** Call `cb` on every data block of every CTA extension of revision 3 or
- * later with the block's payload length, Linux's cea_db_iter over the EDID's
- * extensions. */
+/** Call `cb` on each CTA data block of `coll` from byte `at` to `end`,
+ * stopping at the first that runs past `end`, Linux's
+ * __cea_db_iter_current_block. */
+static void cta_dbs(struct edid_parse *p, const uint8_t *coll, uint32_t at, uint32_t end,
+                    cta_db_cb cb)
+{
+    uint32_t len;
+
+    for (; at + 1 <= end; at += 1 + len) {
+        len = coll[at] & 0x1fu;
+        if (at + 1 + len > end) {
+            break;
+        }
+        cb(p, coll + at, len);
+    }
+}
+
+/**
+ * The end, from the extension block's start, of the blocks of the DisplayID
+ * section in extension `ext`, Linux's validate_displayid and
+ * find_next_displayid_extension: the section starts at byte 1, after the
+ * extension's tag, and with its checksum byte must fit in the 126 bytes
+ * before the extension's own checksum, its bytes summing to 0; 0 for a
+ * section that does not.
+ */
+static uint32_t displayid_end(const uint8_t *ext)
+{
+    uint32_t len = DISPLAYID_HEADER + ext[2] + 1u, i;
+    uint8_t sum = 0;
+
+    if (len > EDID_LENGTH - 2u) {
+        return 0;
+    }
+    for (i = 0; i < len; i++) {
+        sum = (uint8_t)(sum + ext[1 + i]);
+    }
+    return sum == 0 ? 1u + DISPLAYID_HEADER + ext[2] : 0u;
+}
+
+/**
+ * Call `cb` on every data block of every CTA extension of revision 3 or
+ * later, then on those of every CTA block of every DisplayID extension,
+ * with the block's payload length: Linux's cea_db_iter, which walks the
+ * EDID's CTA extensions and then its DisplayID sections. A DisplayID
+ * section's walk stops at the first block that runs past its end, as
+ * displayid_iter_block's does.
+ */
 static void for_each_cta_db(struct edid_parse *p, cta_db_cb cb)
 {
     const uint8_t *ext;
@@ -1374,13 +1426,19 @@ static void for_each_cta_db(struct edid_parse *p, cta_db_cb cb)
         if (ext[0] != CEA_EXT || ext[1] < 3 || ext[2] < 4 || ext[2] > 127) {
             continue;
         }
-        end = ext[2];
-        for (at = 4; at + 1 <= end; at += 1 + len) {
-            len = ext[at] & 0x1fu;
-            if (at + 1 + len > end) {
+        cta_dbs(p, ext, 4, ext[2], cb);
+    }
+    for (b = 1; b < p->blocks; b++) {
+        ext = p->edid + b * EDID_LENGTH;
+        end = ext[0] == DISPLAYID_EXT ? displayid_end(ext) : 0;
+        for (at = 1u + DISPLAYID_HEADER; end && at + DISPLAYID_BLOCK <= end; at += len) {
+            len = DISPLAYID_BLOCK + ext[at + 2];
+            if (at + len > end) {
                 break;
             }
-            cb(p, ext + at, len);
+            if (ext[at] == DATA_BLOCK_CTA) {
+                cta_dbs(p, ext, at + DISPLAYID_BLOCK, at + len, cb);
+            }
         }
     }
 }
@@ -2136,6 +2194,7 @@ void drm_edid_hdmi_info(const struct drm_connector *connector, const uint8_t *ed
     struct edid_parse p;
     uint8_t *clean;
     uint32_t b;
+    int cta = 0;
 
     k_memset(info, 0, sizeof(*info));
     if (connector && connector->edid_override) {
@@ -2161,6 +2220,7 @@ void drm_edid_hdmi_info(const struct drm_connector *connector, const uint8_t *ed
         return;
     }
     for (b = 1; b < p.blocks; b++) {
+        cta |= clean[b * EDID_LENGTH] == CEA_EXT;
         if (clean[b * EDID_LENGTH] == CEA_EXT && clean[b * EDID_LENGTH + 1] >= 2 &&
             (clean[b * EDID_LENGTH + 3] & (1 << 6))) {
             info->has_audio = 1;
@@ -2168,6 +2228,11 @@ void drm_edid_hdmi_info(const struct drm_connector *connector, const uint8_t *ed
     }
     p.hdmi = info;
     for_each_cta_db(&p, do_hdmi_info);
+    /* Linux's _drm_detect_monitor_audio finds no audio in an EDID without
+     * a CTA extension, whatever its DisplayID's CTA blocks hold. */
+    if (!cta) {
+        info->has_audio = 0;
+    }
     /* A DFP 1.x sink of EDID 1.3 takes 8 bits; EDID 1.4 names its depth,
      * which stands over the HDMI block's. */
     if (info->bpc == 0 && clean[0x13] == 3 && (clean[0x14] & 1)) {
