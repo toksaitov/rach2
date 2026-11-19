@@ -964,6 +964,17 @@ static const struct edid_mode *cea_mode_for_vic(uint32_t vic)
     return NULL;
 }
 
+int drm_display_mode_from_cea_vic(uint32_t vic, struct drm_mode_modeinfo *out)
+{
+    const struct edid_mode *t = cea_mode_for_vic(vic);
+
+    if (!t) {
+        return 0;
+    }
+    mode_from_table(out, t);
+    return 1;
+}
+
 /** The VIC after `vic` in the walk of all of them. */
 static uint32_t cea_next_vic(uint32_t vic)
 {

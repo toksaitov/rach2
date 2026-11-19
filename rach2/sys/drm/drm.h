@@ -2211,6 +2211,10 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
 void drm_connector_update_edid_property(struct drm_connector *connector, const uint8_t *edid,
                                         uint32_t len);
 
+/** The CEA-861 mode of VIC `vic` into `out`, of type DRIVER and named,
+ * Linux's drm_display_mode_from_cea_vic: 1, or 0 for a VIC the tables
+ * lack. */
+int drm_display_mode_from_cea_vic(uint32_t vic, struct drm_mode_modeinfo *out);
 /** The VIC of the CEA-861 mode `mode` is, Linux's drm_match_cea_mode: its
  * timings, a clock of the same period in picoseconds as the table's or its
  * 1000/1001 one, and its picture aspect when the mode names one; 0 for
