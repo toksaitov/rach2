@@ -1797,6 +1797,8 @@ static void vcon_port_add(struct vcon_port *p)
                  p->dev->vdev->name, p->vname, VCON_MINORS);
         }
     }
+    klog(KLOG_INFO, "virtio_console", "port: %s: port %u added", p->dev->vdev->name,
+         (unsigned)p->id);
     vcon_ctl_reply(p, VCON_DUE_READY);
 }
 
@@ -1860,6 +1862,8 @@ static void vcon_ctl_message(struct vcon *d, const struct virtio_console_control
         break;
     case VIRTIO_CONSOLE_PORT_REMOVE:
         vcon_port_remove(p, "its port has gone");
+        klog(KLOG_INFO, "virtio_console", "port: %s: port %u removed", d->vdev->name,
+             (unsigned)m->id);
         break;
     case VIRTIO_CONSOLE_CONSOLE_PORT:
         if (m->value && !p->console) {
