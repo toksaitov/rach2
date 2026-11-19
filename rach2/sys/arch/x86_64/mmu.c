@@ -21,6 +21,7 @@
 #include "../../panic.h"
 #include "../../mm/heap.h"
 #include "../../mm/paging.h"
+#include "../../mm/thp.h"
 #include "../../lib/kstring.h"
 #include "../../proc/sched.h"
 
@@ -93,12 +94,50 @@ static uintptr_t table_alloc(void)
     return phys;
 }
 
+/*
+ * Bit 9 of a user page directory pointer table entry, which the processor
+ * ignores: the page directory it names is the first of two consecutive
+ * pages, and the second keeps, for each entry of the first, the physical
+ * address of the leaf table that entry names, set when a 2 MiB page takes
+ * the entry's place (`mmu_user_huge_set`). The table is kept in step with
+ * the page, each of its entries naming the frame and the rights a 4 KiB
+ * entry would, so that every walk of the user's tables reads it unchanged,
+ * and a split puts it back (`mmu_user_huge_clear`), as Linux deposits a
+ * page table with each huge page (pgtable_trans_huge_deposit). A directory
+ * for which no two consecutive frames could be had has no bit, and no
+ * entry of it is ever a 2 MiB page.
+ */
+#define PDPT_KEEPS 0x200UL
+
+/** Two zeroed consecutive pages for a user page directory and the tables it
+ * keeps, by the physical address of the first; 0 when there are none. */
+static uintptr_t pd_alloc(void)
+{
+    uintptr_t phys = alloc_frames(2);
+
+    if (phys) {
+        k_memset(MMU_VIRT(phys), 0, 2 * PAGE_SIZE);
+    }
+    return phys;
+}
+
+/** The kept leaf table of the user directory entry `e`, which a 2 MiB page
+ * holds: the second page of the directory, at `e`'s index. */
+static pte_t *kept_table(const pte_t *e)
+{
+    return MMU_VIRT(PTE_ADDR(e[MMU_TABLE_ENTRIES]));
+}
+
 /**
  * The table of `level` under `pml4` that holds the entry of `va`, or NULL.
  *
  * With `create`, a missing table on the way is made, and the entry naming it
  * gets `flags` with the present bit; NULL then when there was no memory. A
- * large page on the way has no table below it, and gives NULL too.
+ * user page directory is made with the page that keeps its tables
+ * (PDPT_KEEPS) once the frame allocator runs, and without it when no two
+ * consecutive frames are free. A large page on the way has no table below
+ * it, and gives NULL too, but for a user 2 MiB page, below which the leaf
+ * table it keeps is the one asked for.
  */
 static pte_t *table_for(pte_t *pml4, uintptr_t va, int level, int create, pte_t flags)
 {
@@ -109,17 +148,27 @@ static pte_t *table_for(pte_t *pml4, uintptr_t va, int level, int create, pte_t 
         pte_t *e = &table[LEVEL_INDEX(va, l)];
 
         if (!(*e & PTE_P)) {
-            uintptr_t phys;
+            uintptr_t phys = 0;
+            pte_t keeps = 0;
 
             if (!create) {
                 return NULL;
             }
-            phys = table_alloc();
+            if (l == 3 && va < USER_ADDR_MAX && _heap_ready) {
+                phys = pd_alloc();
+                keeps = phys ? PDPT_KEEPS : 0;
+            }
+            if (!phys) {
+                phys = table_alloc();
+            }
             if (!phys) {
                 return NULL;
             }
-            *e = phys | PTE_P | flags;
+            *e = phys | PTE_P | flags | keeps;
         } else if (*e & PTE_PS) {
+            if (l == 2 && level == 1 && va < USER_ADDR_MAX) {
+                return kept_table(e);
+            }
             return NULL;
         }
         table = MMU_VIRT(PTE_ADDR(*e));
@@ -435,6 +484,9 @@ uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
     for (l = 4; l > 1; l--) {
         pte_t e = table[LEVEL_INDEX(va, l)];
 
+        if (l == 2 && (e & (PTE_P | PTE_PS)) == (PTE_P | PTE_PS)) {
+            return va; /* a 2 MiB page, which keeps its table */
+        }
         if (!(e & PTE_P) || (e & PTE_PS)) {
             uintptr_t span = (uintptr_t)1 << (3 + 9 * l);
 
@@ -443,6 +495,72 @@ uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
         table = MMU_VIRT(PTE_ADDR(e));
     }
     return va;
+}
+
+/**
+ * The directory entry of `dir` over the user address `va` when its
+ * directory keeps its tables (PDPT_KEEPS), so that the entry may be a 2 MiB
+ * page; NULL otherwise.
+ */
+static pte_t *user_pde(page_dir_t *dir, uintptr_t va)
+{
+    pte_t e4, e3;
+    pte_t *pdpt;
+
+    if (va >= USER_ADDR_MAX) {
+        return NULL;
+    }
+    e4 = dir->entries[LEVEL_INDEX(va, 4)];
+    if (!(e4 & PTE_P)) {
+        return NULL;
+    }
+    pdpt = MMU_VIRT(PTE_ADDR(e4));
+    e3 = pdpt[LEVEL_INDEX(va, 3)];
+    if ((e3 & (PTE_P | PTE_PS | PDPT_KEEPS)) != (PTE_P | PDPT_KEEPS)) {
+        return NULL;
+    }
+    return &((pte_t *)MMU_VIRT(PTE_ADDR(e3)))[LEVEL_INDEX(va, 2)];
+}
+
+pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va)
+{
+    pte_t *e = user_pde(dir, va);
+    pte_t v = e ? *(volatile pte_t *)e : 0;
+
+    return (v & (PTE_P | PTE_PS)) == (PTE_P | PTE_PS) ? v : 0;
+}
+
+/**
+ * The table's address goes to the directory's second page before the page
+ * replaces it, so that a walk that finds the page finds the table too
+ * (`table_for`). The two map the same frames, and the caller flushes or
+ * knows that no translation of the table's entries is cached.
+ */
+int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf)
+{
+    pte_t *e = user_pde(dir, va);
+
+    if (!e || (*e & (PTE_P | PTE_PS)) != PTE_P) {
+        return -1;
+    }
+    e[MMU_TABLE_ENTRIES] = PTE_ADDR(*e);
+    __asm__ __volatile__("" ::: "memory");
+    *(volatile pte_t *)e = leaf | PTE_PS;
+    return 0;
+}
+
+/** The entry is exchanged at once, so that an accessed or dirty bit the
+ * processor sets in the page meanwhile is in what comes back. */
+pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
+{
+    pte_t *e = user_pde(dir, va);
+
+    if (!e || (*e & (PTE_P | PTE_PS)) != (PTE_P | PTE_PS)) {
+        return 0;
+    }
+    return (pte_t)arch_atomic_xchg_ptr(
+        (volatile uintptr_t *)e,
+        (uintptr_t)(PTE_ADDR(e[MMU_TABLE_ENTRIES]) | PTE_P | PTE_W | PTE_U));
 }
 
 pte_t *mmu_kernel_table(uintptr_t va)
@@ -539,8 +657,10 @@ static pte_t *entry_table(pte_t e)
  * so the pages are flushed once, at the end. The walk gives way after each
  * leaf table, 512 pages, as Linux's zap_pmd_range calls cond_resched after
  * each PMD entry (mm/memory.c:1740); `dir` is unreachable then (paging.h),
- * so the pointers into it stay valid. The tables stay, for
- * `free_page_directory`.
+ * so the pointers into it stay valid. A 2 MiB page gives its directory
+ * entry back to the table it keeps, whose entries hold the references, and
+ * leaves the count of huge pages mapped (`thp_mapped`). The
+ * tables stay, for `free_page_directory`.
  */
 void free_user_pages(page_dir_t *dir)
 {
@@ -570,6 +690,10 @@ void free_user_pages(page_dir_t *dir)
                 if (!(pd[i2] & PTE_P)) {
                     continue;
                 }
+                if (pd[i2] & PTE_PS) {
+                    pd[i2] = PTE_ADDR(pd[i2 + MMU_TABLE_ENTRIES]) | PTE_P | PTE_W | PTE_U;
+                    thp_mapped_add(-1);
+                }
                 pt = entry_table(pd[i2]);
                 for (i1 = 0; i1 < MMU_TABLE_ENTRIES; i1++) {
                     pte_t pte = pt[i1];
@@ -593,11 +717,13 @@ void free_user_pages(page_dir_t *dir)
 }
 
 /**
- * The PML4 and its lower half's tables go back to the allocator; the upper
- * half's tables are the kernel's and stay. The kernel's directory and the
- * one in use are left in place: a caller switches to another first. The
- * walk gives way after each page directory's tables, at most 512, as
- * `free_user_pages` does after each table.
+ * The PML4 and its lower half's tables go back to the allocator, a 2 MiB
+ * page's kept table and a directory's page of kept tables (PDPT_KEEPS)
+ * among them; the upper half's tables are the kernel's and stay. The
+ * kernel's directory and the one in use are left in place: a caller
+ * switches to another first. The walk gives way after each page
+ * directory's tables, at most 512, as `free_user_pages` does after each
+ * table.
  */
 void free_page_directory(page_dir_t *dir)
 {
@@ -621,9 +747,14 @@ void free_page_directory(page_dir_t *dir)
             }
             pd = entry_table(pdpt[i3]);
             for (i2 = 0; i2 < MMU_TABLE_ENTRIES; i2++) {
-                if (pd[i2] & PTE_P) {
+                if ((pd[i2] & (PTE_P | PTE_PS)) == (PTE_P | PTE_PS)) {
+                    frame_unref(PTE_ADDR(pd[i2 + MMU_TABLE_ENTRIES]));
+                } else if (pd[i2] & PTE_P) {
                     frame_unref(PTE_ADDR(pd[i2]));
                 }
+            }
+            if (pdpt[i3] & PDPT_KEEPS) {
+                frame_unref(PTE_ADDR(pdpt[i3]) + PAGE_SIZE);
             }
             frame_unref(PTE_ADDR(pdpt[i3]));
             sched_give_way();

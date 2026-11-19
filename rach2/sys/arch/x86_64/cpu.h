@@ -200,6 +200,11 @@ extern pte_t mmu_nx;
  * time is seen by every process. */
 #define KVA_MMIO_LARGE 1
 
+/* Whether a user directory entry may map a 2 MiB page of anonymous memory,
+ * a transparent huge page (mm/paging.c, `mmu_user_huge_set`), as Linux's
+ * HAVE_ARCH_TRANSPARENT_HUGEPAGE on x86-64. */
+#define MMU_HUGE 1
+
 /*
  * The kernel's virtual layout, the upper half of the 48-bit address space.
  * Each region has PML4 entries of its own, and every one of the upper

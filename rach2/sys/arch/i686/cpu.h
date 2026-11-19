@@ -179,6 +179,10 @@ typedef uint32_t pte_t;
  * directory entries when it is made, so an entry changed later would not
  * reach the directories made before. */
 #define KVA_MMIO_LARGE   0
+/* Whether a user directory entry may map a huge page of anonymous memory:
+ * not with 32-bit paging, as Linux has no transparent huge pages on i386
+ * without PAE (HAVE_ARCH_TRANSPARENT_HUGEPAGE needs X86_64 or X86_PAE). */
+#define MMU_HUGE         0
 #define KVA_TEMP         0xF8000000u
 /* Policy: the region's 4 MiB of temporary mappings, one page each: the
  * pools `kmap_temp` gives out, whose caller is told when it finds none

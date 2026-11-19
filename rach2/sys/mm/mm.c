@@ -450,6 +450,7 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     k_memcpy(to->auxv, from->auxv, sizeof(to->auxv));
     to->dumpable = from->dumpable;
     to->membarrier = from->membarrier;
+    to->thp_disable = from->thp_disable;
     to->compat = from->compat;
     to->vdso = from->vdso;
     to->pkeys = from->pkeys;

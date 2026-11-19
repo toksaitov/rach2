@@ -60,6 +60,7 @@
 #include "fs/procfs.h"
 #include "mm/paging.h"
 #include "mm/pressure.h"
+#include "mm/thp.h"
 #include "mm/pagecache.h"
 #include "mm/heap.h"
 #include "mm/notify.h"
@@ -2526,6 +2527,9 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s, const struct
     if (rc == 0) {
         s->mm = mm_new();
         rc = s->mm == NULL ? -ENOMEM : 0;
+    }
+    if (rc == 0 && current_proc->mm) {
+        s->mm->thp_disable = current_proc->mm->thp_disable;
     }
     if (rc == 0) {
         rc = exec_open(&s->prog, s->path, s->path_end, how, &s->id, s->mm);
@@ -9253,6 +9257,8 @@ long sys_mremap(isr_params_t *params)
 
 #define MADV_DONTNEED        4
 #define MADV_FREE            8
+#define MADV_HUGEPAGE        14
+#define MADV_NOHUGEPAGE      15
 #define MADV_REMOVE          9
 #define MADV_DONTFORK        10
 #define MADV_DOFORK          11
@@ -9379,6 +9385,36 @@ static uint32_t madvise_mark_bit(uint32_t advice)
     }
 }
 
+/**
+ * Set or clear the mark of the regions of `vm` over [addr, end) that
+ * `advice` names: the fork marks of `madvise_mark_bit`, or MADV_HUGEPAGE's
+ * and MADV_NOHUGEPAGE's, each of which clears the other and wakes
+ * khugepaged for the first. 0, or -1 when a region cannot be split.
+ */
+static int madvise_mark(vm_space_t *vm, uintptr_t addr, uintptr_t end, uint32_t advice)
+{
+    uint32_t set, clear;
+
+    if (advice == MADV_HUGEPAGE || advice == MADV_NOHUGEPAGE) {
+        set = advice == MADV_HUGEPAGE ? VM_PROT_HUGEPAGE : VM_PROT_NOHUGEPAGE;
+        clear = VM_PROT_HUGEPAGE | VM_PROT_NOHUGEPAGE;
+    } else {
+        int on = advice == MADV_DONTFORK || advice == MADV_WIPEONFORK;
+
+        set = on ? madvise_mark_bit(advice) : 0u;
+        clear = on ? 0u : madvise_mark_bit(advice);
+        mm_note_anon(current_proc->mm, addr, end);
+    }
+    if (vm_advise(vm, addr, end, set, clear) != 0) {
+        vma_exhausted("madvise");
+        return -1;
+    }
+    if (advice == MADV_HUGEPAGE) {
+        thp_policy_changed();
+    }
+    return 0;
+}
+
 /** The change of `sys_madvise` in the regions `vm`, under their lock held
  * to write. */
 static long madvise_locked(isr_params_t *params, vm_space_t *vm)
@@ -9412,13 +9448,9 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
             mmn_notify(current_proc->mm, MMN_DROP, addr, end);
             unmap_user_range(_curr_dir, addr, end);
         }
-    } else if (madvise_mark_bit(advice) != 0) {
-        uint32_t bit = madvise_mark_bit(advice);
-        int set = advice == MADV_DONTFORK || advice == MADV_WIPEONFORK;
-
-        mm_note_anon(current_proc->mm, addr, end);
-        if (vm_advise(vm, addr, end, set ? bit : 0u, set ? 0u : bit) != 0) {
-            vma_exhausted("madvise");
+    } else if (madvise_mark_bit(advice) != 0 || advice == MADV_HUGEPAGE ||
+               advice == MADV_NOHUGEPAGE) {
+        if (madvise_mark(vm, addr, end, advice) != 0) {
             return -ENOMEM;
         }
     } else if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
@@ -9448,7 +9480,12 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
  * that a fork's child gets them without their pages, reading zeros, and
  * MADV_KEEPONFORK clears the mark (VM_PROT_WIPEONFORK, vm.h); WIPEONFORK is
  * EINVAL over a region that is not private anonymous memory, as on Linux,
- * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
+ * and either is ENOMEM when a region cannot be split. MADV_HUGEPAGE marks
+ * the regions so that their faults and khugepaged may give them huge pages
+ * while `enabled` is madvise, and MADV_NOHUGEPAGE marks them so that
+ * neither does, each clearing the other's mark and leaving device memory as
+ * it is (VM_PROT_HUGEPAGE, vm.h); either is ENOMEM when a region cannot be
+ * split, and leaves the huge pages there. MADV_GUARD_INSTALL
  * makes the range's pages guard pages (`vm_guard_set`, vm.h), which lose
  * their frames and whose every access is SIGSEGV with SEGV_MAPERR, and
  * MADV_GUARD_REMOVE makes them ordinary pages again, which read as zeros in
@@ -11031,6 +11068,10 @@ long sys_sched_setaffinity(isr_params_t *params)
 
 #define PR_CAP_AMBIENT 47
 
+#define PR_SET_THP_DISABLE 41
+
+#define PR_GET_THP_DISABLE 42
+
 /* PR_CAP_AMBIENT's operations, its second argument. */
 #define PR_CAP_AMBIENT_IS_SET    1
 #define PR_CAP_AMBIENT_RAISE     2
@@ -11145,6 +11186,11 @@ static long prctl_bset(unsigned long option, unsigned long cap)
  * bounding set (`prctl_bset`), and PR_CAP_AMBIENT reads and changes the
  * ambient set (`prctl_ambient`).
  *
+ * PR_SET_THP_DISABLE, with the last three arguments 0, turns transparent
+ * huge pages off in the address space when the second argument is not 0
+ * and back on when it is, and PR_GET_THP_DISABLE, with every argument 0,
+ * returns the setting, 0 or 1 (mm.h, `thp_disable`).
+ *
  * PR_SET_TIMERSLACK sets the thread's timer slack to the second argument in
  * nanoseconds, or with 0 to its default, the slack it had at fork, and
  * changes nothing for a real-time or deadline thread, whose slack stays 0;
@@ -11216,6 +11262,17 @@ long sys_prctl(isr_params_t *params)
         return prctl_bset(SC_ARG(params, 0), arg2);
     case PR_CAP_AMBIENT:
         return prctl_ambient(arg2, SC_ARG(params, 2), SC_ARG(params, 3) | SC_ARG(params, 4));
+    case PR_SET_THP_DISABLE:
+        if (rest != 0) {
+            return -EINVAL;
+        }
+        current_proc->mm->thp_disable = arg2 != 0;
+        return 0;
+    case PR_GET_THP_DISABLE:
+        if (arg2 != 0 || rest != 0) {
+            return -EINVAL;
+        }
+        return current_proc->mm->thp_disable ? 1 : 0;
     case PR_GET_TIMERSLACK:
         return current_proc->timer_slack_ns > (uint64_t)(unsigned long)-1
                    ? (long)(unsigned long)-1

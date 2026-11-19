@@ -91,6 +91,7 @@ static uint32_t procfs_mount_id(const struct vfs_mount *m);
 static uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint);
 static int sysfs_attr_present(int node, int attr);
 #include "fs/procfs.c"
+#include "mm/thp.c"
 #include "drm/drm.h"
 #include "evdev.h"
 #include "arch/i686/mmu.h"
@@ -168,6 +169,10 @@ size_t frame_total_count(void)
 {
     return model_frames;
 }
+
+/** Nothing: no row reclaims memory. */
+void paging_thp_init(void)
+{}
 
 /* The clock, which only the wakealarm rows start: whether it reads, the
  * seconds since 1970 it reads, the alarm set, -1 for none, and the alarms
@@ -2783,7 +2788,7 @@ static void wakealarm_writes(void)
  * write each policy as Linux's stores parse it. */
 static void thp_rows(void)
 {
-    static const char *const expected[] = {"always madvise [never]\n",
+    static const char *const expected[] = {"always [madvise] never\n",
                                            "always defer defer+madvise [madvise] never\n",
                                            "1\n",
 #if ELF_CLASS == 2
@@ -2858,25 +2863,27 @@ static void thp_rows(void)
     thp_long_writes();
     sysattr_number_writes();
     wakealarm_writes();
-    thp_enabled = 2;
-    thp_defrag = 3;
-    thp_shmem = 1;
-    thp_zero_page = 1;
-    thp_shrink_underused = 1;
+    thp_policy.enabled = THP_MADVISE;
+    thp_policy.defrag = THP_DEFRAG_MADVISE;
+    thp_policy.shmem = 1;
+    thp_policy.zero_page = 1;
+    thp_policy.shrink_underused = 1;
     model_frames = (512u << 20) / PAGE_SIZE;
-    procfs_thp_boot();
-    check(thp_reads(1, "always defer defer+madvise [madvise] never\n") && thp_reads(2, "1\n"),
+    thp_boot();
+    check(thp_reads(0, "always [madvise] never\n") &&
+              thp_reads(1, "always defer defer+madvise [madvise] never\n") && thp_reads(2, "1\n"),
           "with 512 MiB the THP defaults are Linux's");
     model_frames--;
-    procfs_thp_boot();
+    thp_boot();
     check(
         thp_reads(0, "always madvise [never]\n") &&
             thp_reads(1, "always defer defer+madvise madvise [never]\n") && thp_reads(2, "0\n") &&
             thp_reads(4, "always within_size advise [never] deny force\n") && thp_reads(5, "1\n"),
         "under 512 MiB defrag is never and use_zero_page 0, as Linux's hugepage_init leaves them");
     model_frames = 0;
-    thp_defrag = 3;
-    thp_zero_page = 1;
+    thp_policy.enabled = THP_MADVISE;
+    thp_policy.defrag = THP_DEFRAG_MADVISE;
+    thp_policy.zero_page = 1;
 }
 
 /** The entry below `dir` named `name`. */

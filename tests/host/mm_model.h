@@ -5,7 +5,10 @@
  * x86-64's.
  *
  * A user page directory is a run of leaf tables over a window of user
- * space, which is all `mmu_user_table` and `mmu_user_skip` are asked for.
+ * space, which is all `mmu_user_table` and `mmu_user_skip` are asked for;
+ * on x86-64 each table has a directory entry that `mmu_user_huge_set` makes
+ * a 2 MiB page over the table it keeps and `mmu_user_huge_clear` gives back,
+ * as x86-64's mmu.c does, unless a row sets `model_no_keep`.
  * The kernel's tables are those of the MMIO region alone, made whole as the
  * boot makes them; on x86-64 each has a directory entry that
  * `mmu_kernel_large` replaces with a 2 MiB page and `mmu_kernel_unlarge`
@@ -32,6 +35,7 @@ static void *model_memcpy(void *d, const void *s, size_t n);
 #endif
 
 #include "mm/paging.c"
+#include "mm/thp.c"
 
 #ifndef RACH2_HOST_X86_64
 #undef k_memset
@@ -77,6 +81,7 @@ static int resolve_held(struct mm *mm, uintptr_t addr, int write, uintptr_t as_l
 
 struct page_dir {
     pte_t *tables[WIN_TABLES];
+    pte_t huge[WIN_TABLES]; /* the 2 MiB page over each table, 0 for none */
 };
 
 /** The leaf table of `dir` for `va`, made with `create`; NULL outside the
@@ -104,6 +109,52 @@ uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
     return (va & ~(SPAN - 1)) + SPAN;
 }
 
+#if MMU_HUGE
+/* Set by a row whose directories keep no table, as one x86-64 made without
+ * two consecutive frames: no entry becomes a 2 MiB page. */
+static int model_no_keep;
+
+/** The window's index of `va`, or -1 outside it. */
+static int model_span(uintptr_t va)
+{
+    return va < WIN_BASE || va >= WIN_BASE + WIN_TABLES * SPAN ? -1 : (int)((va - WIN_BASE) / SPAN);
+}
+
+/** The 2 MiB page over `va`, or 0. */
+pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va)
+{
+    int i = model_span(va);
+
+    return i < 0 ? 0 : dir->huge[i];
+}
+
+/** As x86-64's mmu.c: the entry must name a table. */
+int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf)
+{
+    int i = model_span(va);
+
+    if (i < 0 || model_no_keep || !dir->tables[i] || dir->huge[i]) {
+        return -1;
+    }
+    dir->huge[i] = leaf | PTE_PS;
+    return 0;
+}
+
+/** The page as it was, its table back. */
+pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
+{
+    int i = model_span(va);
+    pte_t was;
+
+    if (i < 0) {
+        return 0;
+    }
+    was = dir->huge[i];
+    dir->huge[i] = 0;
+    return was;
+}
+#endif
+
 /** 0: no row loads a directory. */
 uintptr_t get_page_dir_phys(page_dir_t *dir)
 {
@@ -119,6 +170,7 @@ static void dir_free(page_dir_t *dir)
     for (i = 0; i < WIN_TABLES; i++) {
         free(dir->tables[i]);
         dir->tables[i] = NULL;
+        dir->huge[i] = 0;
     }
 }
 
@@ -537,6 +589,18 @@ int mem_may_take(int user_page)
 {
     (void)user_page;
     return 1;
+}
+
+/** 0: nothing is kept back. */
+size_t mem_reserve_frames(void)
+{
+    return 0;
+}
+
+/** Nothing: memory is never short, so no shrinker is asked. */
+void mem_shrinker_register(struct mem_shrinker *s)
+{
+    (void)s;
 }
 #endif
 
