@@ -142,6 +142,10 @@ struct tgroup {
      * pollers of those whose id's lifetime it changed (`pidfd.h`). */
     struct pidfd *pidfds;
     struct fork_pending *forks; /* children being built by threads of this group */
+    /* The session's scheduling group, which setsid makes and a fork passes
+     * on, or NULL for the root group, as Linux's signal->autogroup
+     * (autogroup.h). The group keeps a reference for each group naming it. */
+    struct autogroup *autogroup;
 };
 
 /** A new group with `leader` as its one thread; NULL when the heap has no
