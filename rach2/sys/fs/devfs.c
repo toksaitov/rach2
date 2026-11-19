@@ -31,7 +31,6 @@
 #include "../block/recovery.h"
 #include "../block/disk.h"
 #include "../serial.h"
-#include "../virtio/virtio_console.h"
 #include "../rtc.h"
 #include "../lib/spinlock.h"
 #include "../irq.h"
@@ -2005,12 +2004,9 @@ static struct disk *window_disk(const struct devfs_entry *dev)
  *
  * An entry with NULL operations is a terminal, which `devfs_open` opens
  * itself: console and tty give an FD_TYPE_CONSOLE descriptor, tty a pty's
- * when the caller's session is on one, and ptmx a new pty pair. hvc0 and
- * hvc1, at Linux's 229:N, and vport0p0 and vport0p1, at 245:N, are a
- * virtio console's ports, present while the port is the console's input
- * (virtio/Readme.md); each gives the
- * console terminal, as console does, since the port then carries it, and
- * is root's with write access for its group, as udev makes a terminal.
+ * when the caller's session is on one, and ptmx a new pty pair. A virtio
+ * console's nodes, /dev/hvcN and /dev/vportNpM, are registered by its
+ * driver (virtio/Readme.md).
  */
 static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"null", 1, 3, 1, 0666, &null_ops},
@@ -2036,10 +2032,6 @@ static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"mixer", 14, 0, 0, 0666, &mixer_ops},
                                                {"dsp", 14, 3, 0, 0666, &dsp_ops},
                                                {"rfkill", 10, 242, 0, 0644, &rfkill_ops},
-                                               {"hvc0", 229, 0, 0, 0620, NULL},
-                                               {"hvc1", 229, 1, 0, 0620, NULL},
-                                               {"vport0p0", 245, 0, 0, 0620, NULL},
-                                               {"vport0p1", 245, 1, 0, 0620, NULL},
                                                {"input/event0", 13, 64, 0, 0600, &evdev_ops},
                                                {"input/event1", 13, 65, 0, 0600, &evdev_ops},
                                                {"input/event2", 13, 66, 0, 0600, &evdev_ops},
@@ -2087,9 +2079,8 @@ static int devfs_loop_index(const struct devfs_entry *dev)
 /** Whether `dev`, an entry of the table or a slot of the registry, is
  * present now: a slot while its node is registered; bootpart and grubcore
  * only while published; the mixer, dsp and an event device only while
- * `mixer_present`, `dspdev_present` and `evdev_present` say; a virtio
- * console's port, hvcN or vport0pN, only while it is the console's input
- * (`virtio_console_node`); and every other entry always. */
+ * `mixer_present`, `dspdev_present` and `evdev_present` say; and every
+ * other entry always. */
 static int devfs_entry_present(const struct devfs_entry *dev)
 {
     if (reg_slot_of(dev)) {
@@ -2109,9 +2100,6 @@ static int devfs_entry_present(const struct devfs_entry *dev)
     }
     if (dev->ops == &grubcore_ops) {
         return grubcore.present;
-    }
-    if (dev->ops == NULL && dev->major != 5) {
-        return virtio_console_node(dev->name);
     }
     return 1;
 }
@@ -2771,7 +2759,8 @@ const char *devfs_name_of(int block, uint32_t rdev)
     for (i = 0; i < reg_slot_count && !block; i++) {
         const struct devfs_entry *dev = &reg_slots[i].entry;
 
-        if (devfs_entry_present(dev) && (((uint32_t)dev->major << 8) | dev->minor) == rdev) {
+        if (devfs_entry_present(dev) && !reg_slots[i].node->alias &&
+            (((uint32_t)dev->major << 8) | dev->minor) == rdev) {
             return reg_slots[i].name;
         }
     }
@@ -2984,8 +2973,9 @@ static int reg_name_ok(const char *name)
 }
 
 /** Whether a node of the table, a disk or the registry already has `name`,
- * present or not, or a present character device has `major` and `minor`. */
-static int reg_taken(const char *name, uint16_t major, uint16_t minor)
+ * present or not, or, unless `alias`, a present character device has
+ * `major` and `minor`. */
+static int reg_taken(const char *name, uint16_t major, uint16_t minor, int alias)
 {
     uint32_t rdev = ((uint32_t)major << 8) | minor;
     int i;
@@ -3005,7 +2995,7 @@ static int reg_taken(const char *name, uint16_t major, uint16_t minor)
             return 1;
         }
     }
-    return devfs_name_of(0, rdev) != NULL;
+    return !alias && devfs_name_of(0, rdev) != NULL;
 }
 
 int32_t devfs_node_register(struct devfs_node *node)
@@ -3016,7 +3006,7 @@ int32_t devfs_node_register(struct devfs_node *node)
     if (!node->name || !reg_name_ok(node->name)) {
         return -EINVAL;
     }
-    if (reg_taken(node->name, node->major, node->minor)) {
+    if (reg_taken(node->name, node->major, node->minor, node->alias)) {
         return -EEXIST;
     }
     for (i = 0; i < reg_slot_count && !slot; i++) {

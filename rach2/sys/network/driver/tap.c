@@ -834,7 +834,7 @@ static int32_t tap_open(struct devfs_node *node, struct fd_entry *e, int flags)
 }
 
 /* Linux's numbers for the device, 10:200. */
-static struct devfs_node tap_node = {"net/tun", 10, 200, 0666, &tap_file_ops, tap_open, NULL};
+static struct devfs_node tap_node = {"net/tun", 10, 200, 0666, &tap_file_ops, tap_open, NULL, 0};
 
 void tap_start(void)
 {

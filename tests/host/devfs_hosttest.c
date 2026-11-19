@@ -389,16 +389,18 @@ static int listed(const char *dir, const char *name, uint32_t ino)
  * A node registered as dri/card0 at 226:0 is found by its path and by its
  * number, listed in /dev/dri and not in /dev, and makes /dev/dri present;
  * its open calls the registrant's. A second node of that name or number, a
- * name in no directory of /dev's table, and a name too long are refused.
- * Unregistered, it is gone by path, number and listing, and /dev/dri with
- * it, while /dev/input, a row always present, stays; registered again, it
- * has its slot and its inode back.
+ * name in no directory of /dev's table, and a name too long are refused;
+ * a second name of its number, an alias, is taken, and the number still
+ * names the first. Unregistered, it is gone by path, number and listing,
+ * and /dev/dri with it, while /dev/input, a row always present, stays;
+ * registered again, it has its slot and its inode back.
  */
 static void registry(void)
 {
     static int card_state;
-    static struct devfs_node card = {"dri/card0", 226, 0, 0666, &node_ops, node_open, &card_state};
-    static struct devfs_node render = {"dri/renderD128", 226, 128, 0666, &node_ops, NULL, NULL};
+    static struct devfs_node card = {"dri/card0", 226,       0,           0666,
+                                     &node_ops,   node_open, &card_state, 0};
+    static struct devfs_node render = {"dri/renderD128", 226, 128, 0666, &node_ops, NULL, NULL, 0};
     struct devfs_node other = card;
     const struct devfs_entry *dev;
     uint32_t mode = 0, rdev = 0, ino = 0, ino2 = 0;
@@ -430,8 +432,15 @@ static void registry(void)
     check(devfs_node_register(&other) == -EINVAL, "a name in no directory of /dev is refused");
     other.name = "dri/card1/x";
     check(devfs_node_register(&other) == -EINVAL, "and one two levels down");
-    other.name = "dri/a-name-longer-than-the-slot-keeps";
+    other.name = "dri/a-name-that-is-longer-than-the-sixty-three-bytes-a-slot-keeps";
     check(devfs_node_register(&other) == -EINVAL, "and one too long for a slot");
+    other.name = "dri/by-name";
+    other.alias = 1;
+    check(devfs_node_register(&other) == 0 && devfs_stat("dri/by-name", 0, &rdev, 0) == 0 &&
+              rdev == (226u << 8) && name_eq(devfs_name_of(0, 226u << 8), "dri/card0"),
+          "a second name of 226:0 registers, and the number still names dri/card0");
+    devfs_node_unregister(&other);
+    other.alias = 0;
     check(devfs_node_register(&render) == 0 && devfs_stat("dri/renderD128", 0, &rdev, &ino2) == 0 &&
               rdev == ((226u << 8) | 128u) && ino2 != ino,
           "dri/renderD128 registers at 226:128 with an inode of its own");
@@ -456,7 +465,7 @@ static void registry(void)
  */
 static void nested_registry(void)
 {
-    static struct devfs_node msr = {"cpu/0/msr", 202, 0, 0600, &node_ops, NULL, NULL};
+    static struct devfs_node msr = {"cpu/0/msr", 202, 0, 0600, &node_ops, NULL, NULL, 0};
     struct devfs_node other = msr;
     int cpu = synth_dev_dir_find("cpu", 3), cpu0 = synth_dev_dir_find("cpu/0", 5);
     uint32_t rdev = 0, ino = 0;
@@ -543,13 +552,6 @@ int mixer_present(void)
 /** No audio driver offers streams. */
 int dspdev_present(void)
 {
-    return 0;
-}
-
-/** No virtio console's port is the console's input. */
-int virtio_console_node(const char *name)
-{
-    (void)name;
     return 0;
 }
 
@@ -1107,6 +1109,15 @@ int pty_session_slave(int sid)
 {
     (void)sid;
     return unexpected();
+}
+
+/** The node of a session's terminal whose master the kernel holds, which
+ * no row looks up. */
+const char *pty_session_node(int sid)
+{
+    (void)sid;
+    (void)unexpected();
+    return 0;
 }
 
 /** Whether a recovery kernel publishes the disks, which no row reads. */
