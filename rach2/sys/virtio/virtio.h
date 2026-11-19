@@ -638,6 +638,17 @@ int virtio_pci_probe(void);
 int virtio_pci_bind(uint8_t bus, uint8_t devfn);
 
 /**
+ * Let go of the function `bus` and `devfn` as a write of its name to
+ * /sys/bus/pci/drivers/virtio-pci/unbind does, before a hot plug
+ * controller ejects it: its child driver removed, the device reset and its
+ * interrupts, windows and claim given back. May sleep.
+ *
+ * @return 0; -ENODEV for a function the transport does not have; -EBUSY
+ *         while a write of the driver's files sleeps.
+ */
+int virtio_pci_unbind(uint8_t bus, uint8_t devfn);
+
+/**
  * Find the `nth` virtio-pci function of device type `id` that the transport
  * took (`virtio_pci_probe`, which this runs first when nothing has), counting
  * from zero in the order of the bus. A second call for the same function

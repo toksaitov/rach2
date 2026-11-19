@@ -1818,6 +1818,24 @@ int virtio_pci_bind(uint8_t bus, uint8_t devfn)
     return -ENODEV;
 }
 
+int virtio_pci_unbind(uint8_t bus, uint8_t devfn)
+{
+    struct virtio_pci *vp;
+
+    for (vp = vp_list; vp; vp = vp->next) {
+        if (vp->pci.bus == bus && (uint8_t)(vp->pci.device << 3 | vp->pci.function) == devfn) {
+            if (vp_busy) {
+                return -EBUSY;
+            }
+            vp_busy = 1;
+            vp_unbind(vp);
+            vp_busy = 0;
+            return 0;
+        }
+    }
+    return -ENODEV;
+}
+
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
 {
     struct virtio_pci *vp;
