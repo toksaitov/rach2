@@ -984,9 +984,8 @@ static void add_device(struct line *l, const struct etude_qemu_profile *p,
         } else if (d->tap_queues != 0) {
             snprintf(hub, sizeof(hub), "%u", d->tap_queues);
             add(l, 0, "-netdev");
-            add(l, 0,
-                "tap,id=%s,ifname=" ETUDE_TAP_NAME ",queues=%s,script=no,downscript=no,vhost=off",
-                id, hub);
+            add(l, 0, "tap,id=%s,ifname=%s,queues=%s,script=no,downscript=no,vhost=off", id,
+                ETUDE_TAP_NAME, hub);
         } else {
             add_network(l, p, d, id);
         }

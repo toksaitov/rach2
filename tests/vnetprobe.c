@@ -420,7 +420,7 @@ static long if_ioctl(const char *ifname, uint32_t request, unsigned char *ifr,
     for (i = 0; i < IFREQ_SIZE; i++) {
         ifr[i] = 0;
     }
-    for (i = 0; ifname[i] != '\0' && i < 15; i++) {
+    for (i = 0; i < 15 && ifname[i] != '\0'; i++) {
         ifr[i] = (unsigned char)ifname[i];
     }
     if (fill) {
@@ -524,7 +524,7 @@ static int configure(const char *ifname, uint32_t gateway)
 /** Sleep for 10 ms. */
 static void nap(void)
 {
-    long ts[2] = {0, 10000000};
+    static const long ts[2] = {0, 10000000};
 
     syscall2(SYS_NANOSLEEP, (long)ts, 0); /* interval: poll the interface's directory every 10 ms */
 }
