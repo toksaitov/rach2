@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a row of the games-wm family in the boot session's Weston on kiosk-shell.
+"""Run a row of the games-wm family in the desktop session's Weston on kiosk-shell.
 
 Run as root through the guest channel. Each row prints `wm: result:` lines,
 `wm: ready: NAME` where the scenario must act on the machine by QMP before
@@ -90,13 +90,27 @@ def log_from(offset):
         return f.read().decode(errors="replace")
 
 
+def westons():
+    """Tell whether a compositor runs."""
+    for entry in Path("/proc").iterdir():
+        try:
+            if entry.name.isdigit() and (entry / "comm").read_text().strip() == "weston":
+                return True
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    return False
+
+
 def session(mode):
     """
-    Wait for the boot session's Weston to light its DRM output, give the
+    Have the desktop's supervisor start its session by SIGHUP unless a
+    compositor runs, wait for Weston to light its DRM output, give the
     output MODE through weston.ini, start the session again and wait until
     Weston lights the output in that mode and its Xwayland listens. Returns
     the output's name.
     """
+    if not westons():
+        os.kill(int(SUPERVISOR.read_text()), signal.SIGHUP)
     while True:
         text = log_from(0)
         output = re.findall(r"Output (\S+) \(crtc \d+\) video modes:\n", text)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Accept Crysis on a trial root: the flyby, the suit's reboot and the saves.
 
-Usage, as root, in the boot session of the GNU root with the game in
+Usage, as root, in the desktop session of the GNU root with the game in
 /data/crysis, which the native case crysis.sh (tests/native) makes a private
 copy of the owner's, since every command but `key` writes there:
 
@@ -13,14 +13,14 @@ copy of the owner's, since every command but `key` writes there:
 
 ROUTE is direct, umu or 32: crysis.sh run, run --umu or run --32. The
 desktop account, which runs the game, must be able to write /data/crysis.
-`prepare` sets the boot session's output to 1366x768 with Weston's
-screenshots on, and writes the settings of Linux's runs on the Lenovo
-(dev-log/80-games/80-2.md): Low, 1366x768, fullscreen, no vsync, sound on. A
-file the script writes or removes under /data/crysis is replaced or removed
-as a name, so that a symbolic link to a file of the owner's goes, never the
-file. Each later command writes under OUT/NAME and prints one result line,
-`crysis: result: NAME: ok` or `crysis: result: NAME: FAILED` with what
-failed.
+`prepare` starts the desktop session, by SIGHUP when none runs, sets its
+output to 1366x768 with Weston's screenshots on, and writes the settings of
+Linux's runs on the Lenovo (dev-log/80-games/80-2.md): Low, 1366x768,
+fullscreen, no vsync, sound on. A file the script writes or removes under
+/data/crysis is replaced or removed as a name, so that a symbolic link to a
+file of the owner's goes, never the file. Each later command writes under
+OUT/NAME and prints one result line, `crysis: result: NAME: ok` or
+`crysis: result: NAME: FAILED` with what failed.
 
 `flyby` runs Linux's island flyby, `-devmode +map island +exec benchmark_gpu`,
 and ends the game after LOOPS of its four loops; each loop's rate is judged
@@ -85,7 +85,7 @@ def check(name, ok, detail):
 
 
 def desktop(line):
-    """Form LINE as a command of the desktop account in the boot session."""
+    """Form LINE as a command of the desktop account in the desktop session."""
     return ["su", "-s", "/bin/bash", "desktop", "-c", ENV + line]
 
 
