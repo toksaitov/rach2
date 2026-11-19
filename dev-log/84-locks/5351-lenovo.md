@@ -22,6 +22,8 @@ Codex's review of `a5a9c6a54..9e22f50d1` settled three of the four and the node'
 
 Codex's reviews of `9e22f50d1..69d81165e` and of the fixes after it found that `vhostmusl` could still pass with a call missing: an extra call for one frame, read with another frame's used entry, could cover it, whenever another frame reached the ring while the probe counted. The probe now offers one receive buffer at a time; after each frame's call it sets the receive call again, which takes the lock the device signals under, reads what the eventfd holds without waiting, and requires the calls read to equal the used entries before it offers the next buffer, so a missing or extra call fails the frame it belongs to; after the detach the counts must still be equal. It passes over any number of the stack's other frames, and a frame or call that never comes leaves it waiting, for the suite's watchdog, as the suites set no clock. None touches the kernel.
 
+Codex's review of a2f77742bb settled those and found that the probe compared its running counts with the ring's 16-bit used index, so a correct device would fail it at the 65,536th received frame, where the index wraps to 0. The probe now counts offered buffers, used entries and calls from the start, reads the used index as its distance past the entries seen, and refuses an index past the buffers offered. The case's summary in `tests/cases/guest.default.json` now says that the second datagram, when a frame waits in the tap, is queued and written by the thread. None touches the kernel.
+
 ## Build
 
 On the owner's Mac, before taking the lock. `HEAD5351` is the head of `task/5351` the go names; the trial builds it rebased onto `milestone/76-display` as it stands.
