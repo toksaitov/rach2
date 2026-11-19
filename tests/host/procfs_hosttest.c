@@ -227,11 +227,13 @@ int sysfs_attr_uevent(int node, int attr)
 
 /** Whether a /sys file takes writes, as synthfs.c judges it: a registered
  * attribute by sysfs.c, and of the fixed files those of transparent huge
- * pages but the page-directory size. */
+ * pages but the page-directory size and khugepaged's two counts. */
 int sysfs_file_writable(int node, int key, int attr)
 {
     return node == SYSFS_REG ? sysfs_node_writable(key)
-                             : node == SYSFS_THP && attr != SYSFS_THP_PMD_SIZE;
+           : node == SYSFS_THP_KHUGEPAGED
+               ? attr != SYSFS_KHP_FULL_SCANS && attr != SYSFS_KHP_COLLAPSED
+               : node == SYSFS_THP && attr != SYSFS_THP_PMD_SIZE;
 }
 
 /** The DMI fields that are root's alone, mode 0400, as synthfs.c has them. */
@@ -364,6 +366,7 @@ int netdev_seen_count(void)
 const char *sysfs_attr(int node, int n)
 {
     int count = node == SYSFS_THP               ? 6
+                : node == SYSFS_THP_KHUGEPAGED  ? 9
                 : node == SYSFS_CPU_CACHE_INDEX ? 10
                 : node == SYSFS_NODE            ? 5
                 : node == SYSFS_NODE0           ? 3
@@ -2789,6 +2792,8 @@ static void wakealarm_writes(void)
     clock_came = 0;
 }
 
+static void khugepaged_rows(void);
+
 /** Read the THP files at Linux 6.12's defaults with the policy never, and
  * write each policy as Linux's stores parse it. */
 static void thp_rows(void)
@@ -2866,6 +2871,7 @@ static void thp_rows(void)
               "THP file reads back the stored policy");
     }
     thp_long_writes();
+    khugepaged_rows();
     sysattr_number_writes();
     wakealarm_writes();
     thp_policy.enabled = THP_MADVISE;
@@ -2889,6 +2895,78 @@ static void thp_rows(void)
     thp_policy.enabled = THP_MADVISE;
     thp_policy.defrag = THP_DEFRAG_MADVISE;
     thp_policy.zero_page = 1;
+}
+
+/**
+ * The files of transparent_hugepage/khugepaged read Linux 6.12's defaults
+ * and counts, and their stores take and refuse what Linux's do: the sleeps
+ * and pages_to_scan any unsigned int but pages_to_scan 0, the max_ptes_
+ * files at most 511, defrag 0 or 1, the two counts nothing; each write
+ * taken wakes khugepaged.
+ */
+static void khugepaged_rows(void)
+{
+    static const char *const expected[] = {"60000\n", "1\n", "0\n",    "511\n",  "256\n",
+                                           "64\n",    "0\n", "4096\n", "10000\n"};
+    static const struct {
+        int attr;
+        const char *text;
+        int32_t rc;
+        const char *after;
+    } writes[] = {
+        {7, "0", -EINVAL, "4096\n"},
+        {7, "8\n", 2, "8\n"},
+        {7, "+4096", 5, "4096\n"},
+        {7, "4294967296", -EINVAL, "4096\n"},
+        {8, "4294967295", 10, "4294967295\n"},
+        {8, "10000", 5, "10000\n"},
+        {0, "-1", -EINVAL, "60000\n"},
+        {3, "512", -EINVAL, "511\n"},
+        {3, "0", 1, "0\n"},
+        {3, "511\n", 4, "511\n"},
+        {4, "511", 3, "511\n"},
+        {4, "256", 3, "256\n"},
+        {5, "1000", -EINVAL, "64\n"},
+        {1, "2", -EINVAL, "1\n"},
+        {1, "0", 1, "0\n"},
+        {1, "1", 1, "1\n"},
+        {SYSFS_KHP_FULL_SCANS, "5", -EINVAL, "0\n"},
+        {SYSFS_KHP_COLLAPSED, "5", -EINVAL, "0\n"},
+    };
+    char out[128];
+    char text[32];
+    int i, changes;
+
+    for (i = 0; i < (int)(sizeof(expected) / sizeof(expected[0])); i++) {
+        check(sys_text(SYSFS_THP_KHUGEPAGED, 0, i, out, sizeof(out)) > 0 && eq(out, expected[i]),
+              "khugepaged attribute at Linux's default in Linux's format");
+    }
+    check(sys_text(SYSFS_THP_KHUGEPAGED, 0, 9, out, sizeof(out)) == -ENOENT,
+          "no attribute past the khugepaged files");
+    check(!sysfs_file_writable(SYSFS_THP_KHUGEPAGED, 0, SYSFS_KHP_FULL_SCANS) &&
+              sysfs_file_writable(SYSFS_THP_KHUGEPAGED, 0, 7),
+          "full_scans is read-only and pages_to_scan writable");
+    for (i = 0; i < (int)(sizeof(writes) / sizeof(writes[0])); i++) {
+        uint32_t n = (uint32_t)__builtin_strlen(writes[i].text);
+
+        k_memset(text, 0, sizeof(text));
+        k_memcpy(text, writes[i].text, n);
+        changes = thp_changes;
+        check(khugepaged_store(writes[i].attr, text, n) == writes[i].rc,
+              "khugepaged store takes and refuses what Linux's does");
+        check(thp_changes == changes + (writes[i].rc > 0), "a write taken wakes khugepaged");
+        check(sys_text(SYSFS_THP_KHUGEPAGED, 0, writes[i].attr, out, sizeof(out)) > 0 &&
+                  eq(out, writes[i].after),
+              "khugepaged file reads back the stored value");
+    }
+    thp_note(THP_FULL_SCANS);
+    thp_note(THP_PAGES_COLLAPSED);
+    thp_note(THP_PAGES_COLLAPSED);
+    check(sys_text(SYSFS_THP_KHUGEPAGED, 0, SYSFS_KHP_FULL_SCANS, out, sizeof(out)) > 0 &&
+              eq(out, "1\n") &&
+              sys_text(SYSFS_THP_KHUGEPAGED, 0, SYSFS_KHP_COLLAPSED, out, sizeof(out)) > 0 &&
+              eq(out, "2\n"),
+          "full_scans and pages_collapsed read the counts");
 }
 
 /** The entry below `dir` named `name`. */

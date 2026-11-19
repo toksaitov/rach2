@@ -126,6 +126,12 @@ int mmap_held(const struct mm *mm, int write)
     return i >= 0 && (!write || host_holds[i].write);
 }
 
+/** Whether the test may take one more address space's lock. */
+int mmap_hold_free(void)
+{
+    return host_hold(NULL) >= 0;
+}
+
 /** Whether the test holds `mm`'s regions' lock to read and once. */
 int mmap_may_drop(const struct mm *mm)
 {

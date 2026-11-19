@@ -606,9 +606,12 @@ void mem_shrinker_register(struct mem_shrinker *s)
 
 /* ---- the frames, the address spaces and the processes ---- */
 
-/* The frames the allocator counts, the first USER_FRAME0 of them kept back
- * so that a frame a row names stays apart from those faults take. */
-#define FRAMES      2048u
+/* The frames the allocator counts, which a test may set first, the first
+ * USER_FRAME0 of them kept back so that a frame a row names stays apart
+ * from those faults take. */
+#ifndef FRAMES
+#define FRAMES 2048u
+#endif
 #define USER_FRAME0 64u
 
 static struct mm mm_a, mm_b;

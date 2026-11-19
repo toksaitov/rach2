@@ -1516,6 +1516,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "thp64",
+          "checks": "tests/host/thp64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "tlb",
           "checks": "tests/host/tlb_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
