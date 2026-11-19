@@ -534,7 +534,9 @@ extern int tcp_ack_batch;
  * the acknowledgement of in-order data waits, up to TCP_BATCH_ACK_MAX
  * bytes a connection. The depth and the list of blocks owed are global, so
  * a bracket is one receive pass under the big kernel lock that does not
- * sleep or yield it. Takes `net_lock` itself.
+ * sleep or yield it; a frame an interrupt delivers inside it joins the
+ * batch, which acknowledges it at its end or at the deadline its first
+ * segment set. Takes `net_lock` itself.
  */
 void tcp_batch_begin(void);
 
