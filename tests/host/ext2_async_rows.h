@@ -110,11 +110,11 @@ static int async_make(int op, const char *name)
  * On a mount that writes back, under a cache of 8192 buffers, 64 files
  * made by each of a create, a mkdir, a fast and a slow symlink, a FIFO and
  * a link, in a directory that grows past its first block: none writes the
- * device, where each waited for two writes, its inode's table block and
- * its directory's block, while they were written before the call
- * returned. The disk requests each waited for, reads of blocks the cache
- * lacks among them, and the writes are printed, as `ext2-create: result:`.
- * A sync then writes them all, and the volume is clean.
+ * device. The disk requests each waited for, reads of blocks the cache
+ * lacks, and the writes are printed, as `ext2-create: result:`, and
+ * `--creates-only` runs the row alone, so that its counts can be read over
+ * other sources of the driver. A sync then writes them all, and the volume
+ * is clean.
  */
 static void async_create_row(void)
 {
