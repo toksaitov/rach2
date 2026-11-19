@@ -647,7 +647,7 @@
           "step_id": "restored",
           "stage": "execute",
           "machine": "fixture",
-          "does": "boot the same copy, read the levels, the kept files and _BQC, set the backlight to 9 and run mixer vol 6, wait until init has kept both, and send QMP quit while the guest is still running"
+          "does": "boot the same copy, read the levels, the kept files and _BQC, set the backlight to 9 and run mixer vol 6, wait until init publishes both files and removes their fallbacks, and send QMP quit while the guest is still running"
         },
         {
           "step_id": "blank",
@@ -735,7 +735,7 @@
         },
         {
           "assertion_id": "saved",
-          "checks": "init writes 9 and vol 6:6 to the kept files while the machine runs",
+          "checks": "init writes 9 and vol 6:6 to the kept files and removes both fallback files while the machine runs",
           "source": "scenario"
         },
         {
@@ -745,7 +745,7 @@
         },
         {
           "assertion_id": "reset-kept",
-          "checks": "after the reset the backlight reads 9 and mixer vol 6:6",
+          "checks": "after the abrupt stop the saved files and the running system both report backlight 9 and mixer vol 6:6",
           "source": "scenario"
         },
         {
