@@ -110,7 +110,7 @@
         },
         {
           "assertion_id": "nohz-pull",
-          "checks": "With processor 2 idle, a spinner allowed processors 1 and 2 beside one pinned to processor 1 is pulled to processor 2 and migrates at least once, and both run at least 90% of 3 s after 1 s",
+          "checks": "With processor 2 idle, a spinner allowed processors 1 and 2 beside one pinned to processor 1 migrates at least once, and both run at least 90% of 3 s after 1 s, which only a pull to processor 2 can give them",
           "source": "program"
         },
         {
