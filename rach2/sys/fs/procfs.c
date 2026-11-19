@@ -97,6 +97,7 @@
 #include "../lib/kerrno.h"
 #include "../serial.h"
 #include "../rtc.h"
+#include "../proc/autogroup.h"
 #include "../proc/sched.h"
 #include "../proc/smp.h"
 #include "../mm/paging.h"
@@ -627,6 +628,102 @@ static int procfs_task_prio(const process_t *p)
     return 120 + (int)p->nice;
 }
 
+static int procfs_may_read_mem(const process_t *p);
+
+/* The bits of Linux's task_struct.flags that stat's field 9 shows: a
+ * kernel thread, PF_KTHREAD (include/linux/sched.h). */
+#define PROC_PF_KTHREAD 0x00200000u
+
+/** Append `v` after a space. */
+static void ap_sp_u64(struct procfs_text *t, uint64_t v)
+{
+    ap_ch(t, ' ');
+    ap_u64(t, v);
+}
+
+/** Append `v` after a space. */
+static void ap_sp_int(struct procfs_text *t, int v)
+{
+    ap_ch(t, ' ');
+    ap_int(t, v);
+}
+
+/**
+ * Append the fields of thread `p`'s /proc/<pid>/stat from the 23rd, vsize,
+ * to the 52nd, exit_code, as Linux 6.12's `do_task_stat` prints them
+ * (fs/proc/array.c:582-650), for the whole process when `whole` is set.
+ *
+ * The addresses of the program's code, data, break, stack, arguments and
+ * environment, and the exit code, are shown only to a caller that passes
+ * the ptrace read check (`procfs_may_read_mem`); another sees 1 for the
+ * code's bounds of a process with an address space and 0 for the rest, as
+ * Linux shows them. The stack and instruction pointers, which Linux shows
+ * only for a thread dumping core, are 0, as are the swap counts, the block
+ * I/O delay (task_delayacct is off) and the guest times. The signal sets
+ * are the first 31 signals, the pending one the thread's own. wchan is 1
+ * for a thread that is not running or ready, of a process of one thread
+ * for the process's file. RLIMIT_RSS, which Rach2 does not keep, is
+ * RLIM_INFINITY, its value on Linux.
+ */
+static void ap_stat_tail(struct procfs_text *t, const process_t *p, int whole)
+{
+    uintptr_t vsize = 0, rss = 0, code[2] = {0, 0}, data[7] = {0, 0, 0, 0, 0, 0, 0}, stack = 0;
+    int permitted = procfs_may_read_mem(p), running, sig;
+    uint64_t pending, shared, blocked, ignored = 0, caught = 0;
+    struct mm *mm = p->mm;
+
+    if (mm) {
+        mm_read_begin(mm);
+        vsize = vm_total(&mm->vm);
+        rss = mm_resident(mm);
+        mm_read_end(mm);
+        code[0] = permitted ? mm->start_code : 1;
+        code[1] = permitted ? mm->end_code : 1;
+        if (permitted) {
+            stack = mm->start_stack;
+            data[0] = mm->start_data;
+            data[1] = mm->end_data;
+            data[2] = mm->start_brk;
+            data[3] = mm->arg_start;
+            data[4] = mm->arg_end;
+            data[5] = mm->env_start;
+            data[6] = mm->env_end;
+        }
+    }
+    signal_sets_of(p, &pending, &shared, &blocked);
+    for (sig = 1; sig <= KSIG_MAX; sig++) {
+        if (p->sigacts[sig].handler == KSIG_IGN) {
+            ignored |= KSIG_BIT(sig);
+        } else if (p->sigacts[sig].handler != KSIG_DFL) {
+            caught |= KSIG_BIT(sig);
+        }
+    }
+    running = p->state == PROC_RUNNING || p->state == PROC_READY;
+    ap_sp_u64(t, (uint64_t)vsize);                                      /* 23 vsize */
+    ap_sp_u64(t, (uint64_t)rss);                                        /* 24 rss */
+    ap_sp_u64(t, (uint64_t)RLIM_INFINITY);                              /* 25 rsslim */
+    ap_sp_u64(t, (uint64_t)code[0]);                                    /* 26 startcode */
+    ap_sp_u64(t, (uint64_t)code[1]);                                    /* 27 endcode */
+    ap_sp_u64(t, (uint64_t)stack);                                      /* 28 startstack */
+    ap_str(t, " 0 0");                                                  /* 29 kstkesp, 30 kstkeip */
+    ap_sp_u64(t, pending & 0x7FFFFFFFu);                                /* 31 signal */
+    ap_sp_u64(t, blocked & 0x7FFFFFFFu);                                /* 32 blocked */
+    ap_sp_u64(t, ignored & 0x7FFFFFFFu);                                /* 33 sigignore */
+    ap_sp_u64(t, caught & 0x7FFFFFFFu);                                 /* 34 sigcatch */
+    ap_sp_int(t, permitted && (!whole || p->tg->live < 2) && !running); /* 35 wchan */
+    ap_str(t, " 0 0");                                                  /* 36 nswap, 37 cnswap */
+    ap_sp_int(t, p != p->tg->leader ? -1 : p->tg->no_child_signal ? 0 : SIGCHLD); /* 38 */
+    ap_sp_int(t, p->cpu);                                                         /* 39 processor */
+    ap_sp_u64(t, p->rt_priority);                      /* 40 rt_priority */
+    ap_sp_u64(t, (uint64_t)(uint32_t)p->sched_policy); /* 41 policy */
+    ap_str(t, " 0 0 0");                               /* 42 blkio delay, 43-44 guest times */
+    for (sig = 0; sig < 7; sig++) {                    /* 45-51 start_data to env_end */
+        ap_sp_u64(t, (uint64_t)data[sig]);
+    }
+    ap_sp_int(t, permitted ? (int)p->exit_code : 0); /* 52 exit_code */
+    ap_ch(t, '\n');
+}
+
 /**
  * Format /proc/<pid>/stat into `t`: its length, or -ENOENT for no such
  * process.
@@ -644,13 +741,13 @@ static int procfs_task_prio(const process_t *p)
  * virtual size in
  * bytes and the resident pages are the address space's, as statm has them.
  * The page faults are counted as the CPU times are, the children's being
- * the process's in both. The fields end at the 24th, rss; the flags and
- * itrealvalue, which the kernel does not keep, are 0.
+ * the process's in both. The flags show a kernel thread's PF_KTHREAD;
+ * itrealvalue is 0, as on Linux. The 52 fields end with
+ * `ap_stat_tail`'s, field 39 the processor the thread last ran on.
  */
 static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
 {
     process_t *p;
-    struct mm *mm;
     uint64_t user;
     uint64_t sys;
     unsigned long minor, major;
@@ -689,7 +786,9 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
         major = p->maj_flt;
     }
     /* 9 flags; 10-13 minflt, cminflt, majflt, cmajflt; 14-17 the CPU times */
-    ap_str(t, " 0 ");
+    ap_ch(t, ' ');
+    ap_u32(t, proc_is_kthread(p) ? PROC_PF_KTHREAD : 0u);
+    ap_ch(t, ' ');
     ap_u64(t, (uint64_t)minor);
     ap_ch(t, ' ');
     ap_u64(t, (uint64_t)p->tg->cmin_flt);
@@ -714,18 +813,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_u32(t, p->tg->live); /* 20 num_threads */
     ap_str(t, " 0 ");       /* 21 itrealvalue */
     ap_u64(t, TICKS_TO_CLOCK(p->start_ticks));
-    ap_ch(t, ' ');
-    mm = p->mm;
-    if (mm) {
-        mm_read_begin(mm);
-    }
-    ap_ulong(t, mm ? vm_total(&mm->vm) : 0);
-    ap_ch(t, ' ');
-    ap_ulong(t, mm ? mm_resident(mm) : 0);
-    if (mm) {
-        mm_read_end(mm);
-    }
-    ap_ch(t, '\n');
+    ap_stat_tail(t, p, whole);
     if (!t->nomem) {
         t->buf[t->len] = '\0';
     }
@@ -1746,6 +1834,31 @@ static int procfs_gen_sched(struct procfs_text *t, int pid)
     t0 = rtc_monotonic_ns();
     t1 = rtc_monotonic_ns();
     ap_sched_num(t, "clock-delta", t1 - t0);
+    return t->nomem ? -1 : t->len;
+}
+
+/**
+ * /proc/<pid>/autogroup, as Linux's `proc_sched_autogroup_show_task`
+ * prints it (kernel/sched/autogroup.c:271-283): the session group's id and
+ * nice value, "/autogroup-ID nice N", or nothing for a process in the root
+ * group. Its length, -ENOENT for no such process, or -1 for no memory.
+ */
+static int procfs_gen_autogroup(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    unsigned long id;
+    int nice;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (autogroup_show(p, &id, &nice)) {
+        ap_str(t, "/autogroup-");
+        ap_ulong(t, id);
+        ap_str(t, " nice ");
+        ap_int(t, nice);
+        ap_ch(t, '\n');
+    }
     return t->nomem ? -1 : t->len;
 }
 
@@ -2938,6 +3051,8 @@ static const char *procfs_pid_file_name(int kind)
         return "schedstat";
     case SYNTH_PROC_SCHED:
         return "sched";
+    case SYNTH_PROC_AUTOGROUP:
+        return "autogroup";
     default:
         return "stat";
     }
@@ -8845,7 +8960,8 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     *uid = f->own.uid;
     *gid = f->own.gid;
     return f->origin_file == SYNTH_PROC_OOM_ADJ || f->origin_file == SYNTH_PROC_COMM ||
-           f->origin_file == SYNTH_PROC_SCHED || procfs_is_idmap(f->origin_file);
+           f->origin_file == SYNTH_PROC_SCHED || f->origin_file == SYNTH_PROC_AUTOGROUP ||
+           procfs_is_idmap(f->origin_file);
 }
 
 int procfs_fd_writable(struct fd_entry *e)
@@ -9069,9 +9185,9 @@ static int procfs_gen_idmap(struct procfs_text *t, int pid, int file)
     return t->len;
 }
 
-/** Read a user namespace's file, a `comm` or a `sched` opened for writing
- * as well: its text at this read, from the description's offset; -ESRCH
- * once the process has been reaped. */
+/** Read a user namespace's file, a `comm`, a `sched` or an `autogroup`
+ * opened for writing as well: its text at this read, from the description's
+ * offset; -ESRCH once the process has been reaped. */
 static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -9083,7 +9199,9 @@ static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count
     procfs_text_init(&t);
     rc = f->origin_file == SYNTH_PROC_COMM    ? procfs_gen_comm(&t, f->origin_pid)
          : f->origin_file == SYNTH_PROC_SCHED ? procfs_gen_sched(&t, f->origin_pid)
-                                              : procfs_gen_idmap(&t, f->origin_pid, f->origin_file);
+         : f->origin_file == SYNTH_PROC_AUTOGROUP
+             ? procfs_gen_autogroup(&t, f->origin_pid)
+             : procfs_gen_idmap(&t, f->origin_pid, f->origin_file);
     if (rc < 0 || t.nomem) {
         kfree(t.buf);
         return t.nomem ? -ENOMEM : -ESRCH;
@@ -9184,6 +9302,64 @@ static int32_t procfs_sched_write(fd_entry_t *e, const char __user *buf, uint32_
 static const struct file_ops procfs_sched_ops = {
     procfs_idmap_read, procfs_sched_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
 
+/* Linux's PROC_NUMBUF, the bytes of a number written to a /proc/<pid> file
+ * with its NUL. */
+#define PROCFS_NUMBUF 13
+
+/**
+ * Set the nice value of the session group of the process `e` names, as a
+ * write to /proc/<pid>/autogroup does on Linux 6.12 (`sched_autogroup_write`,
+ * fs/proc/base.c:1550-1579): the first 12 bytes, with the white space
+ * around them taken off, are an int by kstrtoint with base 0, which
+ * `autogroup_nice` checks and stores. `count`, whatever the offset, which
+ * stays; -EINVAL or -ERANGE for text that is no such int, -ESRCH once the
+ * process has been reaped, -EFAULT, or `autogroup_nice`'s error.
+ */
+static int32_t procfs_autogroup_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    char text[PROCFS_NUMBUF];
+    uint32_t n = count < PROCFS_NUMBUF - 1 ? count : PROCFS_NUMBUF - 1;
+    char *cmp = text, *end;
+    long long v;
+    process_t *p;
+    int rc;
+
+    k_memset(text, 0, sizeof(text));
+    if (copy_from_user(text, buf, n) != 0) {
+        return -EFAULT;
+    }
+    while (*cmp == ' ' || (*cmp >= '\t' && *cmp <= '\r')) {
+        cmp++;
+    }
+    end = cmp + k_strlen(cmp);
+    while (end > cmp && (end[-1] == ' ' || (end[-1] >= '\t' && end[-1] <= '\r'))) {
+        *--end = '\0';
+    }
+    rc = k_strtoll(cmp, (size_t)(end - cmp), &v);
+    if (rc != 0) {
+        return rc;
+    }
+    if (v < -0x7FFFFFFFLL - 1 || v > 0x7FFFFFFFLL) {
+        return -ERANGE;
+    }
+    p = procfs_proc(f->origin_pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    rc = autogroup_nice(p, (int)v);
+    return rc != 0 ? rc : (int32_t)count;
+}
+
+static const struct file_ops procfs_autogroup_ops = {procfs_idmap_read,
+                                                     procfs_autogroup_write,
+                                                     procfs_poll,
+                                                     procfs_ioctl,
+                                                     procfs_close,
+                                                     NULL,
+                                                     NULL,
+                                                     0};
+
 /**
  * Open /proc/<pid>/uid_map, gid_map, setgroups, comm or sched, `file` of
  * the path `vp`, for writing, or for reading and writing. Who may write a
@@ -9207,7 +9383,7 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
     if (procfs_oom_owner(pid, &uid, &gid) != 0) {
         return -ENOENT;
     }
-    if ((file == SYNTH_PROC_COMM || file == SYNTH_PROC_SCHED) &&
+    if ((file == SYNTH_PROC_COMM || file == SYNTH_PROC_SCHED || file == SYNTH_PROC_AUTOGROUP) &&
         !proc_fs_privileged(current_proc) && proc_fsuid(current_proc) != uid) {
         return -EACCES;
     }
@@ -9226,9 +9402,10 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
-    e->ops = file == SYNTH_PROC_COMM    ? &procfs_comm_ops
-             : file == SYNTH_PROC_SCHED ? &procfs_sched_ops
-                                        : &procfs_idmap_ops;
+    e->ops = file == SYNTH_PROC_COMM        ? &procfs_comm_ops
+             : file == SYNTH_PROC_SCHED     ? &procfs_sched_ops
+             : file == SYNTH_PROC_AUTOGROUP ? &procfs_autogroup_ops
+                                            : &procfs_idmap_ops;
     e->priv = f;
     procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
@@ -9454,6 +9631,58 @@ static const struct {
      0x7FFFFFFF},
     {SYNTH_SYS_SCHED_SCHEDSTATS, &fair_schedstats, SYSCTL_INT, 0, 1}};
 
+/** The value of the scheduler's /proc/sys file `entry`, from
+ * SYNTH_SYS_SCHED_AUTOGROUP to SYNTH_SYS_SCHED_RT_RUNTIME, as the
+ * scheduler holds it. */
+static int sysctl_sched_value(int entry)
+{
+    int period, runtime;
+
+    switch (entry) {
+    case SYNTH_SYS_SCHED_AUTOGROUP:
+        return autogroup_enabled();
+    case SYNTH_SYS_SCHED_RR_TIMESLICE:
+        return sched_rr_timeslice_ms();
+    default:
+        sched_rt_bandwidth(&period, &runtime);
+        return entry == SYNTH_SYS_SCHED_RT_PERIOD ? period : runtime;
+    }
+}
+
+/**
+ * Store `v`, written to the scheduler's /proc/sys file `entry`, as Linux
+ * 6.12's handlers do: kernel/sched_autogroup_enabled takes 0 or 1
+ * (`proc_dointvec_minmax`, kernel/sched/autogroup.c:12-21);
+ * sched_rr_timeslice_ms takes any int, of which one at or below 0 restores
+ * the default (`sched_rr_handler`, kernel/sched/rt.c:2966-2987);
+ * sched_rt_period_us takes 1 to INT_MAX and sched_rt_runtime_us -1 to the
+ * period, and either is refused when it would leave the runtime, other
+ * than -1, above the period (`sched_rt_handler`, rt.c:2906-2964). 0 or
+ * -EINVAL, which changes nothing.
+ */
+static int sysctl_sched_store(int entry, int32_t v)
+{
+    int period, runtime;
+
+    switch (entry) {
+    case SYNTH_SYS_SCHED_AUTOGROUP:
+        if (v < 0 || v > 1) {
+            return -EINVAL;
+        }
+        autogroup_set_enabled((int)v);
+        return 0;
+    case SYNTH_SYS_SCHED_RR_TIMESLICE:
+        sched_set_rr_timeslice_ms((int)v);
+        return 0;
+    case SYNTH_SYS_SCHED_RT_PERIOD:
+        sched_rt_bandwidth(&period, &runtime);
+        return v < 1 ? -EINVAL : sched_set_rt_bandwidth((int)v, runtime);
+    default:
+        sched_rt_bandwidth(&period, &runtime);
+        return v < -1 || v > period ? -EINVAL : sched_set_rt_bandwidth(period, (int)v);
+    }
+}
+
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
 {
@@ -9469,8 +9698,9 @@ static int sysctl_int(int entry)
 
 /**
  * Store `v`, written to the /proc/sys file `entry`, in the variable of its
- * row of `sysctl_ints`: -EINVAL out of the row's range, and for a file
- * without a row, 0, its only value, is taken and any other is -EINVAL. A
+ * row of `sysctl_ints`: -EINVAL out of the row's range; a scheduler's file
+ * as `sysctl_sched_store` takes it; and for another file without a row, 0,
+ * its only value, is taken and any other is -EINVAL. A
  * write that changes `watchdog`, `soft_watchdog`, `nmi_watchdog` or
  * `watchdog_thresh` restarts the lockup detectors, as Linux's
  * `proc_watchdog_common` and `proc_watchdog_thresh` do (kernel/watchdog.c,
@@ -9492,6 +9722,9 @@ static int sysctl_int_write(int entry, int32_t v)
     int i, old, restart;
 
     i = sysctl_int(entry);
+    if (i < 0 && entry >= SYNTH_SYS_SCHED_AUTOGROUP && entry <= SYNTH_SYS_SCHED_RT_RUNTIME) {
+        return sysctl_sched_store(entry, v);
+    }
     if (i < 0) {
         return v == 0 ? 0 : -EINVAL;
     }
@@ -9717,6 +9950,9 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry, struct userns *u
         ap_ch(t, '\n');
     } else if (i >= 0) {
         ap_int(t, *sysctl_ints[i].var);
+        ap_ch(t, '\n');
+    } else if (entry >= SYNTH_SYS_SCHED_AUTOGROUP && entry <= SYNTH_SYS_SCHED_RT_RUNTIME) {
+        ap_int(t, sysctl_sched_value(entry));
         ap_ch(t, '\n');
     } else if (sysctl_ulong_text(t, entry)) {
         return 0;
@@ -11203,6 +11439,8 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
         return procfs_gen_schedstat(t, pid);
     case SYNTH_PROC_SCHED:
         return procfs_gen_sched(t, pid);
+    case SYNTH_PROC_AUTOGROUP:
+        return procfs_gen_autogroup(t, pid);
     default:
         return procfs_is_idmap(vp->procfile) ? procfs_gen_idmap(t, pid, vp->procfile)
                                              : procfs_gen_cmdline(t, pid);
@@ -11458,7 +11696,7 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
         *fd = procfs_open_oom(vp, pid, flags);
     } else if (vp->kind == VNODE_PROC_FILE &&
                (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM ||
-                vp->procfile == SYNTH_PROC_SCHED) &&
+                vp->procfile == SYNTH_PROC_SCHED || vp->procfile == SYNTH_PROC_AUTOGROUP) &&
                acc != 0) {
         *fd = procfs_open_idmap(vp, vp->procfile, pid, flags);
     } else if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {

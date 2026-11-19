@@ -200,6 +200,9 @@ const char *synth_ns_name(int kind);
 /* /proc/<pid>/sched, the scheduler's record of a thread, whose
  * statistics a write clears. */
 #define SYNTH_PROC_SCHED         77
+/* /proc/<pid>/autogroup, the id and nice value of the process's session
+ * group, whose nice value a write sets. */
+#define SYNTH_PROC_AUTOGROUP     78
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -465,6 +468,14 @@ int synth_sys_count(void);
 /* The entry of kernel/sched_schedstats, whose value is proc/fair.h's
  * `fair_schedstats`. */
 #define SYNTH_SYS_SCHED_SCHEDSTATS       90
+/* The entries of kernel/sched_autogroup_enabled (proc/autogroup.h's
+ * `autogroup_enabled`), sched_rr_timeslice_ms, sched_rt_period_us and
+ * sched_rt_runtime_us (proc/sched.h's `sched_rr_timeslice_ms` and
+ * `sched_rt_bandwidth`). */
+#define SYNTH_SYS_SCHED_AUTOGROUP        91
+#define SYNTH_SYS_SCHED_RR_TIMESLICE     92
+#define SYNTH_SYS_SCHED_RT_PERIOD        93
+#define SYNTH_SYS_SCHED_RT_RUNTIME       94
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

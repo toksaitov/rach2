@@ -511,6 +511,13 @@ process_t *get_process(uint32_t pid)
     return pid == 7 ? &process : NULL;
 }
 
+/** The model's threads have no signal pending or blocked. */
+void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uint64_t *blocked)
+{
+    (void)t;
+    *pending = *shared = *blocked = 0;
+}
+
 /** Whether `p` is a kernel thread, as process.c judges it. */
 int proc_is_kthread(const process_t *p)
 {
@@ -1377,6 +1384,32 @@ static int stat_faults(const char *line, unsigned minor, unsigned cminor, unsign
            f[0] == minor && f[1] == cminor && f[2] == major && f[3] == cmajor;
 }
 
+/** Field `n`, from the third on, of the stat line `line` as a number in
+ * `*v`: 1, or 0 when the line has fewer fields. The fields counted from the
+ * third follow the last ')'. */
+static int stat_field(const char *line, int n, long long *v)
+{
+    const char *at = __builtin_strrchr(line, ')');
+    int i;
+
+    if (!at) {
+        return 0;
+    }
+    at++;
+    for (i = 3; i < n; i++) {
+        while (*at == ' ') {
+            at++;
+        }
+        while (*at && *at != ' ' && *at != '\n') {
+            at++;
+        }
+        if (*at != ' ') {
+            return 0;
+        }
+    }
+    return sscanf(at, " %lld", v) == 1;
+}
+
 /* The processors' idle ticks summed, which the uptime row sets. */
 static uint64_t idle_sum;
 
@@ -1508,6 +1541,7 @@ static void netdev_rows(void)
 static void thread_times(void)
 {
     struct procfs_text text;
+    long long field;
 
     thread.state = PROC_READY;
     thread.tg = &group;
@@ -1542,6 +1576,14 @@ static void thread_times(void)
     check(procfs_gen_stat(&text, 9, 0) > 0 && stat_faults(text.buf, 70, 500, 2, 4),
           "a thread's stat has its own faults and the process's children's");
     kfree(text.buf);
+    thread.cpu = 3;
+    procfs_text_init(&text);
+    check(procfs_gen_stat(&text, 9, 0) > 0 && stat_field(text.buf, 39, &field) && field == 3 &&
+              stat_field(text.buf, 38, &field) && field == -1 && stat_field(text.buf, 52, &field) &&
+              !stat_field(text.buf, 53, &field),
+          "a thread's stat has 52 fields, its processor the 39th and -1 its exit signal");
+    kfree(text.buf);
+    thread.cpu = 0;
     process.utime = process.stime = thread.utime = thread.stime = 0;
     process.min_flt = process.maj_flt = thread.min_flt = thread.maj_flt = 0;
     group.cmin_flt = group.cmaj_flt = 0;
