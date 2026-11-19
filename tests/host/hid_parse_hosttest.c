@@ -1361,19 +1361,23 @@ static void rows_multitouch(void)
     drop(hid);
 }
 
-/* One complete contact record without opening or closing a collection. */
-#define TEST_CONTACT                                                                               \
-    0x05, 0x0d, 0x09, 0x42, 0x15, 0, 0x25, 1, 0x75, 8, 0x95, 1, 0x81, 2, 0x09, 0x51, 0x26, 0xff,   \
-        0, 0x81, 2, 0x05, 1, 0x09, 0x30, 0x09, 0x31, 0x26, 0xff, 0x7f, 0x75, 16, 0x95, 2, 0x81, 2, \
-        0x05, 0x0d, 0x09, 0x47, 0x09, 0x32, 0x25, 1, 0x75, 8, 0x95, 2, 0x81, 2
+/* One contact with two declared Contact ID usages and one data element. */
+#define TEST_CONTACT                                                                              \
+    0x05, 0x0d, 0x09, 0x42, 0x15, 0, 0x25, 1, 0x75, 8, 0x95, 1, 0x81, 2, 0x05, 1, 0x09, 0x30,     \
+        0x09, 0x31, 0x26, 0xff, 0x7f, 0x75, 16, 0x95, 2, 0x81, 2, 0x05, 0x0d, 0x09, 0x47, 0x09,   \
+        0x32, 0x25, 1, 0x75, 8, 0x95, 2, 0x81, 2, 0x09, 0x51, 0x09, 0x51, 0x26, 0xff, 0, 0x95, 1, \
+        0x81, 2
 
-/* A precision touchpad with two contact records in one Finger collection. */
+/* A precision touchpad with two records in one Finger collection in
+ * report 1, and one record and no buttons in report 2. */
 static const uint8_t precision_pad[] = {
     0x05,
     0x0d,
     0x09,
     5,
     0xa1,
+    1,
+    0x85,
     1,
     0x09,
     0x22,
@@ -1390,6 +1394,8 @@ static const uint8_t precision_pad[] = {
     2,
     0x09,
     3,
+    0x25,
+    1,
     0x95,
     3,
     0x81,
@@ -1404,6 +1410,24 @@ static const uint8_t precision_pad[] = {
     1,
     0x81,
     2, /* Contact Count */
+    0x85,
+    2,
+    0x09,
+    0x22,
+    0xa1,
+    2,
+    TEST_CONTACT,
+    0xc0,
+    0x09,
+    0x54,
+    0x25,
+    16,
+    0x95,
+    1,
+    0x81,
+    2, /* Contact Count */
+    0x85,
+    3,
     0x09,
     0x55,
     0x27,
@@ -1436,43 +1460,93 @@ static const uint8_t precision_pad[] = {
     0xc0 /* Microsoft profile */
 };
 
-/** Read the feature before publishing slots and preserve its other bytes. */
-static void mt_feature_rows(void)
+/* The Feature reply, with its report ID, maximum, mode and vendor byte. */
+static const uint8_t pad_feature[] = {3, 16, 0, 0, 0x83};
+
+/** Open the model feature exchange with its numbered GET_REPORT. */
+static struct hid_dev *mt_feature_open(void)
 {
-    static const uint8_t feature[] = {16, 0, 0, 0x83};
     struct hid_dev *hid;
-    struct evdev *d = &devs[0];
     int value = 0, write = 0;
-    uint8_t data[4];
+    uint8_t data[sizeof(pad_feature)];
 
     ndevs = 0;
     if (parse(precision_pad, sizeof(precision_pad), &hid) != 0) {
         CHECK("the precision touchpad descriptor parses", 0);
-        return;
+        return NULL;
     }
     CHECK("the interface is ready for GET_REPORT before registration",
           hidinput_mt_features(hid) == 1 &&
-              hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) == 4 &&
-              value == 0x300 && !write && ndevs == 0);
-    hidinput_mt_feature_answer(hid, feature, sizeof(feature));
+              hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) ==
+                  sizeof(data) &&
+              value == 0x303 && !write && ndevs == 0);
+    return hid;
+}
+
+/** Read the feature before publishing slots and preserve its other bytes. */
+static void mt_feature_rows(void)
+{
+    struct hid_dev *hid = mt_feature_open();
+    struct evdev *d = &devs[0];
+    int value = 0, write = 0;
+    uint8_t data[sizeof(pad_feature)];
+
+    if (!hid) {
+        return;
+    }
+    hidinput_mt_feature_answer(hid, pad_feature, sizeof(pad_feature));
     CHECK("SET_REPORT changes only Input Mode to the touchpad value",
-          hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) == 4 &&
-              value == 0x300 && write && data[0] == 16 && data[1] == 0 && data[2] == 3 &&
-              data[3] == 0x83);
-    hidinput_mt_feature_answer(hid, NULL, 0);
+          hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) == sizeof(data) &&
+              value == 0x303 && write && data[0] == 3 && data[1] == 16 && data[2] == 0 &&
+              data[3] == 3 && data[4] == 0x83);
+    hidinput_mt_feature_answer(hid, NULL, sizeof(data));
     CHECK("finish with the reported slot count", hidinput_connect(hid) == 1 && d->slots == 16);
+    drop(hid);
+}
+
+/** A refused mode cannot publish a node for contact reports. */
+static void mt_failed_mode_rows(void)
+{
+    struct hid_dev *hid = mt_feature_open();
+    int value = 0, write = 0;
+    uint8_t data[sizeof(pad_feature)];
+
+    if (!hid) {
+        return;
+    }
+    hidinput_mt_feature_answer(hid, pad_feature, sizeof(pad_feature) - 1);
+    CHECK("short GET leaves the shared feature unmodified and the node unpublished",
+          hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) == 0 &&
+              hidinput_connect(hid) < 0 && ndevs == 0);
+    drop(hid);
+
+    hid = mt_feature_open();
+    if (!hid) {
+        return;
+    }
+    hidinput_mt_feature_answer(hid, pad_feature, sizeof(pad_feature));
+    CHECK("a successful GET can be followed by an attempted SET",
+          hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) == sizeof(data) &&
+              write);
+    hidinput_mt_feature_answer(hid, NULL, -1);
+    CHECK("refused SET leaves the touch node unpublished", hidinput_connect(hid) < 0 && ndevs == 0);
     drop(hid);
 }
 
 /** Process repeated records, palm and hover, and first-packet buttons. */
 static void mt_precision_rows(void)
 {
-    static const uint8_t first[] = {1,   17, 100, 0, 120, 0, 0, 1, 0, 42,
-                                    180, 0,  220, 0, 1,   1, 0, 1, 0, 3};
-    static const uint8_t next[] = {1, 51, 75, 0, 90, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    static const uint8_t lifts[] = {0, 42, 0, 0, 0, 0, 1, 0, 0, 17, 0, 0, 0, 0, 1, 0, 0, 0, 1, 2};
+    static const uint8_t first[] = {1, 1,   100, 0, 120, 0,  0, 1, 17, 0, 180,
+                                    0, 220, 0,   1, 1,   42, 0, 1, 0,  3};
+    static const uint8_t next[] = {2, 1, 75, 0, 90, 0, 1, 1, 51, 0};
+    static const uint8_t buttonless[] = {2, 1, 80, 0, 90, 0, 1, 1, 51, 1};
+    static const uint8_t lifts[] = {1, 0, 0, 0, 0, 0,  1, 0, 42, 0, 0,
+                                    0, 0, 0, 1, 0, 17, 0, 0, 1,  2};
+    static const uint8_t hover[] = {2, 0, 80, 0, 90, 0, 1, 1, 51, 1};
     struct hid_dev *hid;
     struct evdev *d = &devs[0];
+    struct evdev_keymap_entry ke;
+    uint16_t old;
     int inputs;
 
     ndevs = 0;
@@ -1480,6 +1554,10 @@ static void mt_precision_rows(void)
     CHECK("the precision touchpad has the mapped buttons", inputs == 1 && bit(d->keys, BTN_LEFT) &&
                                                                bit(d->keys, BTN_RIGHT) &&
                                                                !bit(d->keys, BTN_MIDDLE));
+    k_memset(&ke, 0, sizeof(ke));
+    ke.scancode = 0x00090002u;
+    ke.keycode = 30;
+    CHECK("the frame's button mapping stays fixed", d->km.set(d->km.ctx, &ke, &old) == -EINVAL);
     feed(hid, first, sizeof(first));
     CHECK("both records are read before the continuation",
           d->id[0] == 0 && d->id[1] == 1 && !saw(EV_SYN, SYN_REPORT, 0) &&
@@ -1487,11 +1565,43 @@ static void mt_precision_rows(void)
     feed(hid, next, sizeof(next));
     CHECK("the continuation completes the frame and keeps the first packet's left button",
           d->id[2] == 2 && saw(EV_SYN, SYN_REPORT, 0) && saw(EV_KEY, BTN_LEFT, 1));
+    feed(hid, buttonless, sizeof(buttonless));
+    CHECK("a new frame with no button fields keeps the held left button",
+          bit(d->down, BTN_LEFT) && !saw(EV_KEY, BTN_LEFT, 0));
     feed(hid, lifts, sizeof(lifts));
     CHECK("the two lift records carry their separate slot selectors",
           is(0, EV_ABS, ABS_MT_SLOT, 1) && is(1, EV_ABS, ABS_MT_TRACKING_ID, -1) &&
               is(2, EV_ABS, ABS_MT_SLOT, 0) && is(3, EV_ABS, ABS_MT_TRACKING_ID, -1) &&
               saw(EV_KEY, BTN_RIGHT, 1) && d->id[2] == 2);
+    feed(hid, hover, sizeof(hover));
+    CHECK("hover keeps the slot and pointer BTN_TOUCH as Linux does",
+          d->id[2] == 2 && saw(EV_ABS, ABS_MT_DISTANCE, 1) && bit(d->down, BTN_TOUCH));
+    drop(hid);
+}
+
+/** An active-contact report lifts a slot omitted by the device. */
+static void mt_implicit_lift_rows(void)
+{
+    static const uint8_t two[] = {1, 1,   100, 0, 120, 0,  1, 1, 17, 1, 180,
+                                  0, 220, 0,   1, 1,   42, 0, 0, 0,  2};
+    static const uint8_t one[] = {2, 1, 180, 0, 220, 0, 1, 1, 42, 1};
+    struct hid_dev *hid;
+    struct evdev *d = &devs[0];
+
+    ndevs = 0;
+    if (parse(precision_pad, sizeof(precision_pad), &hid) != 0) {
+        CHECK("the model contact descriptor parses", 0);
+        return;
+    }
+    hid->vendor = 0x1aad;
+    hid->product = 0x000f;
+    CHECK("the GoodTouch profile publishes its input device", hidinput_connect(hid) == 1);
+    feed(hid, two, sizeof(two));
+    CHECK("two contacts start", d->id[0] == 0 && d->id[1] == 1);
+    feed(hid, one, sizeof(one));
+    CHECK("the contact absent from the frame is lifted by the profile",
+          d->id[0] == -1 && d->id[1] == 1 && saw(EV_ABS, ABS_MT_SLOT, 0) &&
+              saw(EV_ABS, ABS_MT_TRACKING_ID, -1));
     drop(hid);
 }
 
@@ -1512,7 +1622,9 @@ int main(void)
     rows_gamepad();
     rows_multitouch();
     mt_feature_rows();
+    mt_failed_mode_rows();
     mt_precision_rows();
+    mt_implicit_lift_rows();
     if (fails) {
         printf("hid_parse_hosttest: %d failed\n", fails);
         return 1;
