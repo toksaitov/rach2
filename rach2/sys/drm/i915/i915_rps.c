@@ -312,6 +312,7 @@ void i915_rps_init(struct drm_i915_private *i915)
     uint32_t cap, ddcc = 0, params = 0;
 
     k_memset(rps, 0, sizeof(*rps));
+    spin_lock_init(&rps->lock, "i915_rps");
     cap = i915_uncore_read(i915, GEN6_RP_STATE_CAP);
     rps->rp0_freq = (int)(cap & 0xffu);
     rps->rp1_freq = (int)((cap >> 8) & 0xffu);
