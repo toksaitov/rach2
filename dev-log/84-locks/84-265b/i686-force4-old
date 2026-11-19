@@ -1,0 +1,213 @@
+run: default: guest.default.smptlbmusl: starting
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 18 of 1143, most overrun 13806 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 27 of 1080, most overrun 13787 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 19 of 1106, most overrun 13534 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 32 of 1056, most overrun 14103 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 27 of 1063, most overrun 15150 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 29 of 1140, most overrun 21467 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 20 of 1163, most overrun 14893 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+run: default: guest.default.smptlbmusl: evidence: /home/toksaitov-a/rach2/build/tests/failed/tests.i686.20261119T054045Z.2430388.guest.default.smptlbmusl.r0
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 16 of 1140, most overrun 14196 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 21 of 1151, most overrun 20092 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 20 of 1152, most overrun 22909 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 14 of 1122, most overrun 13798 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 20 of 1132, most overrun 15672 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 14 of 1138, most overrun 20975 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 20 of 1200, most overrun 20535 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 20 of 1093, most overrun 10813 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 18 of 1033, most overrun 10727 us
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+run: default: FAIL in 20s
+run: result: failed: default
+run: result: failed
