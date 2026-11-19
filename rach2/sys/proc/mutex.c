@@ -598,6 +598,49 @@ void down_write(struct rwsem *s)
     spin_unlock_irqrestore(&s->spin, flags);
 }
 
+/** The wait condition of `down_write_killable`: no reader or writer holds
+ * `arg`, or the caller has SIGKILL pending. */
+static int rwsem_free_or_killed(void *arg)
+{
+    return rwsem_free(arg) || mutex_killed();
+}
+
+/** A writer that SIGKILL ends wakes the readers its wait held back, when
+ * it was the last writer waiting. */
+int down_write_killable(struct rwsem *s)
+{
+    uint32_t flags;
+    int rc = 0;
+
+    DEP_ACQUIRE(&s->dep);
+    if (arch_atomic_cmpxchg(&s->state, 0, RWSEM_WRITER) == 0) {
+        s->wowner = mutex_me();
+        return 0;
+    }
+    flags = spin_lock_irqsave(&s->spin);
+    if (s->writers++ == 0) {
+        (void)state_change(s, 0, RWSEM_WAITING);
+    }
+    while (!write_take(s)) {
+        if (mutex_killed()) {
+            rc = -EINTR;
+            break;
+        }
+        spin_unlock_irqrestore(&s->spin, flags);
+        (void)wq_wait_event_killable(&s->wq, rwsem_free_or_killed, s, "rwsem_down_write_slowpath");
+        flags = spin_lock_irqsave(&s->spin);
+    }
+    if (--s->writers == 0) {
+        (void)state_change(s, RWSEM_WAITING, 0);
+    }
+    spin_unlock_irqrestore(&s->spin, flags);
+    if (rc != 0) {
+        wake_waiters(&s->wq);
+        DEP_RELEASE(&s->dep);
+    }
+    return rc;
+}
+
 int down_write_trylock(struct rwsem *s)
 {
     if (!write_take(s)) {

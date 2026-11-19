@@ -11276,10 +11276,11 @@ static long prctl_bset(unsigned long option, unsigned long cap)
  *
  * PR_SET_THP_DISABLE, with the last three arguments 0, turns transparent
  * huge pages off in the address space when the second argument is not 0
- * and back on when it is, under the regions' lock held to write, as Linux
- * sets it, so that no fault or collapse under way maps a huge page after
- * it returns, and PR_GET_THP_DISABLE, with every argument 0,
- * returns the setting, 0 or 1 (mm.h, `thp_disable`).
+ * and back on when it is, under the regions' lock held to write and
+ * without the big lock, as Linux sets it, so that no fault or collapse
+ * under way maps a huge page after it returns, -EINTR when SIGKILL ends the
+ * wait for that lock; PR_GET_THP_DISABLE, with every argument 0, returns
+ * the setting, 0 or 1 (mm.h, `thp_disable`).
  *
  * PR_SET_TIMERSLACK sets the thread's timer slack to the second argument in
  * nanoseconds, or with 0 to its default, the slack it had at fork, and
@@ -11357,11 +11358,21 @@ long sys_prctl(isr_params_t *params)
             return -EINVAL;
         }
         {
-            struct mm *mm = regions_begin(); /* no fault maps a huge page across it */
+            uint32_t flags = kirq_save();
+            int depth = bkl_drop(), rc;
 
-            mm->thp_disable = arg2 != 0;
-            regions_end(mm);
-            return 0;
+            /* the regions' lock before the big lock, and SIGKILL ends the
+             * wait, as Linux's; no fault maps a huge page across it */
+            kirq_restore(flags);
+            rc = mmap_write_lock_killable(current_proc->mm);
+            if (rc == 0) {
+                current_proc->mm->thp_disable = arg2 != 0;
+                mmap_unlock(current_proc->mm);
+            }
+            flags = kirq_save();
+            bkl_take(depth);
+            kirq_restore(flags);
+            return rc;
         }
     case PR_GET_THP_DISABLE:
         if (arg2 != 0 || rest != 0) {

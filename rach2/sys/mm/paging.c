@@ -1236,11 +1236,13 @@ static void balance_unlocked(struct mm *mm)
  * entries reads that table unchanged. A change of an entry splits the page
  * first (`huge_split`), which gives the directory entry back to the table.
  * The page and the table agree on every address, frame and right, so a
- * processor may hold a 2 MiB and a 4 KiB translation of one address
- * meanwhile, which the Intel and AMD manuals allow when the two agree; AMD's
- * family 0x10 fails with them (Erratum 383), and makes no huge page
- * (`mmu_huge_usable`, `thp_refuse`). The caller flushes each entry it then
- * changes, as for any page. Each frame keeps its own reference count, so a
+ * processor may hold a 2 MiB and a 4 KiB translation of one address that
+ * agree, which the Intel and AMD manuals allow; AMD's family 0x10 fails
+ * with them (Erratum 383), and makes no huge page (`mmu_huge_usable`,
+ * `thp_refuse`). So that no two translations disagree, a split drops the
+ * 2 MiB translation before any entry beneath it changes, and a promotion
+ * drops the 4 KiB ones of a table whose entries changed before it sets the
+ * page. Each frame keeps its own reference count, so a
  * split frees nothing, and a partial unmap frees its frames at once where
  * Linux splits the folio later (deferred_split_folio).
  *
@@ -1324,9 +1326,11 @@ static void huge_unref(uintptr_t base)
 /**
  * Split the huge page of `dir` over the user address `va`, when there is
  * one: the directory entry names its kept table again, whose entries take
- * the accessed and dirty bits the processor set in the page. The caller
- * holds the regions' lock to write, or the page-table lock, and flushes the
- * entries it then changes. 1 when a page was split, 0 when there was none.
+ * the accessed and dirty bits the processor set in the page, and every
+ * processor drops its translation of the page, so that none keeps it beside
+ * an entry changed next. The caller holds the regions' lock to write, or the
+ * page-table lock, and flushes the entries it then changes. 1 when a page
+ * was split, 0 when there was none.
  */
 static int huge_split(page_dir_t *dir, uintptr_t va)
 {
@@ -1345,6 +1349,7 @@ static int huge_split(page_dir_t *dir, uintptr_t va)
             }
         }
     }
+    paging_flush_dir(dir, va); /* one address drops the 2 MiB translation */
     paging_huge_mapped(leaf, -1);
     thp_note(THP_SPLIT_PMD);
     return 1;
@@ -1369,8 +1374,10 @@ static void huge_split_mm(struct mm *mm, uintptr_t va)
  * when the entries of its table each map a present user page of RAM, the
  * HUGE_PAGES frames from a 2 MiB boundary in order, with the same rights
  * and marks; the page takes the accessed and dirty bits any of them has.
- * The caller holds the regions' lock to write and found a huge page here,
- * or made one. 1 when promoted, 0 when the entries differ or the directory
+ * Every processor drops its translations of the range first, which may
+ * hold the rights the entries had before the caller changed them. The
+ * caller holds the regions' lock to write and found a huge page here, or
+ * made one. 1 when promoted, 0 when the entries differ or the directory
  * keeps no table (`mmu_user_huge_set`).
  */
 static int huge_promote(page_dir_t *dir, uintptr_t start)
@@ -1396,7 +1403,10 @@ static int huge_promote(page_dir_t *dir, uintptr_t start)
             ((e ^ first) & (pte_t)PTE_FLAGS & ~HUGE_AD) != 0) {
             return 0;
         }
-        ad |= e & HUGE_AD;
+    }
+    paging_flush_range(dir, start, start + HUGE_SPAN);
+    for (i = 0; i < HUGE_PAGES; i++) {
+        ad |= table[i] & HUGE_AD;
     }
     if (mmu_user_huge_set(dir, start, (pte_t)base | (first & (pte_t)PTE_FLAGS & ~HUGE_AD) | ad) !=
         0) {

@@ -160,6 +160,14 @@ void down_write(struct rwsem *s)
     rw_downs++;
 }
 
+/** Count a write take, which no signal ends in the host test. */
+int down_write_killable(struct rwsem *s)
+{
+    (void)s;
+    rw_downs++;
+    return 0;
+}
+
 /** Count a write take, or refuse it when the row says another holds it. */
 int down_write_trylock(struct rwsem *s)
 {
