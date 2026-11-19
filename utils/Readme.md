@@ -26,7 +26,7 @@ A program's options and behavior are in its manual page, linked below. This sect
 
 ### init
 
-[init(8)](../man/man8/init.8) is process 1: it reaps orphans and keeps a console session running; it runs no periodic sync, since the kernel writes dirty data back by itself ([rach2/sys/fs/Readme.md](../rach2/sys/fs/Readme.md)). On an image that has `/etc/acpid.conf` it keeps BusyBox's `acpid` running, which runs the actions under `/etc/acpi` for the power, volume and brightness keys. It keeps each backlight's level across a reboot in `/var/lib/backlight`, and the mixer's levels, every channel in `/dev/mixer`'s device mask, in `/var/lib/mixer`, with mixer(1)'s record of a mute in `/var/lib/mixer.mute`: it saves them when it stops the machine and sets them back at boot, before acpid or any session starts, so a level lost to a power cut is not kept. It keeps IPv6's stable secret in `/var/lib/ipv6-stable-secret`. `init.c` builds four programs, and an image stages one of them as `/sbin/init`:
+[init(8)](../man/man8/init.8) is process 1: it reaps orphans and keeps a console session running; it runs no periodic sync, since the kernel writes dirty data back by itself ([rach2/sys/fs/Readme.md](../rach2/sys/fs/Readme.md)). On an image that has `/etc/acpid.conf` it keeps BusyBox's `acpid` running, which runs the actions under `/etc/acpi` for the power, volume and brightness keys. It keeps each backlight's level across a reboot in `/var/lib/backlight`, and the mixer's levels, every channel in `/dev/mixer`'s device mask, in `/var/lib/mixer`, with mixer(1)'s record of a mute in `/var/lib/mixer.mute`: it saves them within a second of each change, as alsactl's daemon mode does, and again when it stops the machine, and sets them back at boot, before acpid or any session starts, so a level set survives a reset or a power cut. It keeps IPv6's stable secret in `/var/lib/ipv6-stable-secret`. `init.c` builds four programs, and an image stages one of them as `/sbin/init`:
 
 * `init-shell` starts a shell on the console with no login. Only test images stage it.
 * `init-login` starts `/bin/login` and nothing else. os-simple and os-real use it.
@@ -66,6 +66,7 @@ The BusyBox images take `su`, `passwd` and `login` from BusyBox's set-id build i
 * [loopctl(8)](../man/man8/loopctl.8) attaches a file to a loop device, so that a file system in a file can be mounted, detaches one, or lists them.
 * [audiotest(1)](../man/man1/audiotest.1) plays a test tone through the console's audio interface, on HDA or SB16, or a scale through `/dev/dsp`, and records through `/dev/dsp`.
 * [mixer(1)](../man/man1/mixer.1) reads and sets the levels of `/dev/mixer`, the volume and PCM, the input levels and the record source, and mutes and unmutes the volume; acpid's volume actions run it for the volume keys.
+* [setterm(1)](../man/man1/setterm.1) sets the console's blank time with util-linux's `--blank`, or blanks, unblanks or asks the console, which BusyBox has no applet for.
 
 ### Which images stage them
 
@@ -178,5 +179,6 @@ A suite below runs as `tests/run NAME`.
 * `installer`, `sealed`, `drill`, `uefi` and `datapart` install and repair disks with `rach2-install`, `reflash`, `diskctl` and `init-recovery`. The installer's stick-update case checks that an ordinary update keeps the menu, applies `--console term` twice, checks each installed-root line and the recovery lines, then boots the changed menu and sees init start `term`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
 * `acpid` presses the volume keys on os-real and reads `mixer vol`, and powers the machine off through acpid and init.
-* `audio`'s case `kept` sets `mixer vol 5`, reboots and reads `vol 5:5` back from init's kept levels, then reboots past init with the file removed and reads the driver's level.
+* `audio`'s case `kept` sets `mixer vol 5`, reboots and reads `vol 5:5` back from init's kept levels, then removes the file with no level changed, which init therefore does not write again, reboots past init and reads the driver's level.
+* `screen`'s case `levels` sets the backlight `acpi_video0` and the volume, reboots and reads both back, sets them again, waits for init to keep them and reboots past init, and reads them back once more; that boot's console then blanks with the backlight at 0 and a key gives it its level again.
 * `audio` runs `audiotest -s` on HDA, `audiotest -d` on HDA and the SB16, `audiotest -r`, which counts what it reads from `/dev/dsp` against `/proc/audio`, and `audiotest -R`, whose printed samples `wavcheck` measures; no suite runs its tone.

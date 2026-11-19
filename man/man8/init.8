@@ -392,8 +392,10 @@ kept between a twentieth of its
 .Pa max_brightness ,
 and at least 1, and that maximum, so that a level saved at 0 does not
 start the machine with its screen dark.
-When it stops the machine, it saves each backlight's level there, under a
-temporary name renamed into place.
+It saves each backlight's level there within a second of each change, so
+that a reset or a power cut keeps the level set, and again when it stops
+the machine, each time under a temporary name renamed into place and only
+when the level differs from what the file holds.
 It keeps at most four backlights, those present at boot.
 .Pp
 Every build keeps the mixer's levels across a reboot, as alsactl store and
@@ -422,9 +424,10 @@ to
 .Pa /var/run/mixer.mute ,
 so that a volume muted at the halt is still muted, and can be unmuted,
 after it.
-When it stops the machine, it saves each channel's level and the record
-there, under temporary names renamed into place, or removes the kept record
-when there is none.
+Within a second of each change of a level or of the record, as alsactl's
+daemon mode does, and again when it stops the machine, it saves each
+channel's level and the record there, under temporary names renamed into
+place, or removes the kept record when there is none.
 .Nm
 saves only when it stops the machine and
 .Xr mixer 1
@@ -642,14 +645,14 @@ The actions acpid runs.
 .It Pa /var/run/acpi.lock
 The lock the volume and brightness actions hold while they run.
 .It Pa /var/lib/backlight
-Each backlight's level, saved when the machine stops and written back at
-boot.
+Each backlight's level, saved when it changes and when the machine stops,
+and written back at boot.
 .It Pa /var/lib/ipv6-stable-secret
 IPv6's stable secret, an address's text, mode 0600, made at the first
 boot.
 .It Pa /var/lib/mixer , Pa /var/lib/mixer.mute
-The mixer's levels and its record of a mute, saved when the machine stops
-and written back at boot.
+The mixer's levels and its record of a mute, saved when they change and
+when the machine stops, and written back at boot.
 .It Pa /etc/rach2/limits
 Initial resource limits.
 .It Pa /etc/sysctl.conf , Pa /etc/sysctl.d , Pa /usr/lib/sysctl.d
