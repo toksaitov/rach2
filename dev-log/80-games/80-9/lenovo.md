@@ -1,5 +1,7 @@
 # 80-9's Lenovo step
 
+This procedure ran once, on 2026-11-11, and no longer runs: since 83-17, `crysis.py` leaves `/data/crysis` owned by its owner and has no `restore`, and the release's native cases of `tests/native/crysis.sh` run what it left open ([80-9.md](../80-9.md), In the release's boot).
+
 The step of 80-9.3 to 80-9.6: Crysis accepted on the Lenovo's GPU through [`crysis.py`](../../../tests/system/games/crysis.py), on trial boots of the milestone branch's kernel and a trial root from the data partition, with the game already installed in `/data/crysis` (80-6). The first boot runs the flyby through umu and directly, the suit's reboot from a save, the 32-bit game and the saves; a second boot of the same root is the restart; a third, after the root image is written again from its archive, as an update writes it, is the update. [80-9.md](../80-9.md) has the rehearsal in QEMU and the results.
 
 It takes the screen and plays sound: the boot session's Weston drives the panel, and the game plays its sound through PulseAudio at volume 1. Post the notice of step 4 on #2665 and wait ten minutes before the first reboot.
