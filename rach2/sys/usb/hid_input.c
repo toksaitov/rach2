@@ -805,25 +805,27 @@ static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field
     }
 }
 
-/** Whether `application` describes a touch surface. */
-static int touch_surface(uint32_t application)
+/** The bit for a touch surface's application type, or zero. */
+static unsigned int touch_surface(uint32_t application)
 {
-    return application == HID_DG_TOUCHSCREEN || application == HID_DG_TOUCHPAD;
+    if (application == HID_DG_TOUCHSCREEN) {
+        return 1u;
+    }
+    return application == HID_DG_TOUCHPAD ? 2u : 0u;
 }
 
 /** Whether Input Mode permits publishing field `f`. */
 static int input_field_enabled(const struct hid_dev *hid, const struct hid_field *f)
 {
-    return !(hid->mt_mode_failed && hid->desc.reports[f->report].multitouch &&
-             touch_surface(f->application));
+    return !(hid->mt_mode_failed && (hid->mt_surfaces & touch_surface(f->application)));
 }
 
 /** The number of usages to map. A variable contact field can only
  * report its declared data elements. */
 static uint32_t input_usage_count(const struct hid_dev *hid, const struct hid_field *f)
 {
-    if (hid->desc.reports[f->report].multitouch && touch_surface(f->application) &&
-        (f->flags & HID_MAIN_ITEM_VARIABLE)) {
+    if (hid->desc.reports[f->report].multitouch &&
+        (hid->mt_surfaces & touch_surface(f->application)) && (f->flags & HID_MAIN_ITEM_VARIABLE)) {
         return f->count;
     }
     return f->maxusage;
@@ -923,7 +925,6 @@ static void mt_map_button(struct hid_input *in, const struct hid_field *f, struc
     if (in->mt_precision && source < 32) {
         u->mt_group = HID_MT_BUTTON;
         in->mt_button_codes |= 1u << (code - BTN_LEFT);
-        in->mt_button_target[source] = (uint8_t)(code - BTN_LEFT);
     }
 }
 
@@ -937,7 +938,7 @@ static int configure_mt(struct hid_dev *hid, struct hid_input *in, struct hid_fi
     unsigned code;
     int i;
 
-    if (!hid->desc.reports[f->report].multitouch || !touch_surface(f->application) ||
+    if (!r->multitouch || !(hid->mt_surfaces & touch_surface(f->application)) ||
         !(f->flags & HID_MAIN_ITEM_VARIABLE)) {
         return 0;
     }
@@ -1192,6 +1193,7 @@ static struct hid_input *allocate_input(struct hid_dev *hid, uint32_t applicatio
     }
     in = &hid->inputs[hid->ninputs++];
     k_memset(in, 0, sizeof(*in));
+    in->hid = hid;
     in->application = application;
     in->mt_precision = hid->mt_precision;
     in->mt_drop_unused = hid->mt_drop_unused;
@@ -1349,19 +1351,21 @@ static void setup_multipliers(struct hid_dev *hid, int use_max)
 }
 
 /**
- * The usage of report `r` of `hid` that keymap entry `ke` names, counting
- * the places of the usages mapped to a key or to nothing in `*at` over the
- * report's fields in turn. NULL when the report has none.
+ * The usage of report `r` on input device `in` that keymap entry `ke`
+ * names, counting its fields' usages mapped to a key or to nothing in
+ * `*at`. NULL when the report has none.
  */
-static struct hid_usage *find_key_in(struct hid_dev *hid, uint32_t r,
+static struct hid_usage *find_key_in(struct hid_input *in, uint32_t r,
                                      const struct evdev_keymap_entry *ke, uint32_t *at)
 {
+    struct hid_dev *hid = in->hid;
+    uint8_t input = input_index(hid, in);
     uint32_t i, j;
 
     for (i = 0; i < hid->desc.nfields; i++) {
         struct hid_field *f = field_at(hid, i);
 
-        if (f->report != r || !input_field_enabled(hid, f)) {
+        if (f->report != r || f->input != input) {
             continue;
         }
         for (j = 0; j < input_usage_count(hid, f); j++) {
@@ -1380,16 +1384,17 @@ static struct hid_usage *find_key_in(struct hid_dev *hid, uint32_t r,
 }
 
 /**
- * The usage of `hid` that keymap entry `ke` names, as Linux's
+ * The usage of input device `in` that keymap entry `ke` names, as Linux's
  * hidinput_find_key finds it: over the input reports, then the output
  * reports, each in the order the descriptor first names it, and over each
  * report's fields in turn, the usages mapped to a key or to nothing are
  * counted, and the one at place `ke->index`, or with usage `ke->scancode`,
  * is the entry, its place stored in `*index`. NULL for none.
  */
-static struct hid_usage *find_key(struct hid_dev *hid, const struct evdev_keymap_entry *ke,
+static struct hid_usage *find_key(struct hid_input *in, const struct evdev_keymap_entry *ke,
                                   uint32_t *index)
 {
+    struct hid_dev *hid = in->hid;
     struct hid_usage *u;
     uint32_t type, r, at = 0;
 
@@ -1398,7 +1403,7 @@ static struct hid_usage *find_key(struct hid_dev *hid, const struct evdev_keymap
             if (hid->desc.reports[r].type != type) {
                 continue;
             }
-            u = find_key_in(hid, r, ke, &at);
+            u = find_key_in(in, r, ke, &at);
             if (u) {
                 *index = at;
                 return u;
@@ -1412,7 +1417,7 @@ static struct hid_usage *find_key(struct hid_dev *hid, const struct evdev_keymap
  * usage is its scan code, and an unmapped one has KEY_RESERVED. */
 static int keymap_get(void *ctx, struct evdev_keymap_entry *ke)
 {
-    struct hid_usage *u = find_key((struct hid_dev *)ctx, ke, &ke->index);
+    struct hid_usage *u = find_key((struct hid_input *)ctx, ke, &ke->index);
 
     if (!u) {
         return -EINVAL;
@@ -1427,7 +1432,7 @@ static int keymap_get(void *ctx, struct evdev_keymap_entry *ke)
 static int keymap_set(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *old)
 {
     uint32_t index;
-    struct hid_usage *u = find_key((struct hid_dev *)ctx, ke, &index);
+    struct hid_usage *u = find_key((struct hid_input *)ctx, ke, &index);
 
     if (!u || u->mt_group == HID_MT_BUTTON) {
         return -EINVAL;
@@ -1441,14 +1446,15 @@ static int keymap_set(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *
 /** Whether a usage of the HID device at `ctx` is mapped to key `code`. */
 static int keymap_maps(void *ctx, uint16_t code)
 {
-    struct hid_dev *hid = (struct hid_dev *)ctx;
+    struct hid_input *in = (struct hid_input *)ctx;
+    struct hid_dev *hid = in->hid;
+    uint8_t input = input_index(hid, in);
     uint32_t i, j;
 
     for (i = 0; i < hid->desc.nfields; i++) {
         struct hid_field *f = field_at(hid, i);
 
-        if (!input_field_enabled(hid, f) ||
-            hid->desc.reports[f->report].type == HID_FEATURE_REPORT) {
+        if (f->input != input) {
             continue;
         }
         for (j = 0; j < input_usage_count(hid, f); j++) {
@@ -1563,7 +1569,7 @@ static int register_input(struct hid_dev *hid, struct hid_input *in)
     km.get = keymap_get;
     km.set = keymap_set;
     km.maps = keymap_maps;
-    km.ctx = hid;
+    km.ctx = in;
     evdev_set_keymap(dev, &km);
     evdev_set_uniq(dev, hid->uniq);
     evdev_set_version(dev, hid->version);
@@ -1628,8 +1634,8 @@ static int mt_drop_unused(const struct hid_dev *hid)
 static int detect_mt_reports(struct hid_dev *hid)
 {
     uint32_t i, j;
-    int any = 0;
 
+    hid->mt_surfaces = 0;
     for (i = 0; i < hid->desc.nfields; i++) {
         const struct hid_field *f = field_at(hid, i);
         struct hid_report *r = &hid->desc.reports[f->report];
@@ -1645,12 +1651,12 @@ static int detect_mt_reports(struct hid_dev *hid)
         for (j = 0; j < f->count; j++) {
             if (u[j].hid == HID_DG_CONTACTID) {
                 r->multitouch = 1;
-                any = 1;
+                hid->mt_surfaces |= touch_surface(f->application);
             }
         }
     }
     hid->mt_drop_unused = mt_drop_unused(hid);
-    return any;
+    return hid->mt_surfaces != 0;
 }
 
 /* Feature reports to read, and whether their value can be built from
@@ -1747,7 +1753,9 @@ static int mt_input_mode(struct hid_dev *hid)
         const struct hid_field *f = field_at(hid, i);
         const struct hid_usage *u = usages_of(hid, f);
 
-        if (!hid->desc.reports[f->report].multitouch || (f->flags & HID_MAIN_ITEM_CONSTANT)) {
+        if (!hid->desc.reports[f->report].multitouch ||
+            !(hid->mt_surfaces & touch_surface(f->application)) ||
+            (f->flags & HID_MAIN_ITEM_CONSTANT)) {
             continue;
         }
         if (f->application == HID_DG_TOUCHPAD) {
@@ -1872,7 +1880,7 @@ static void configure_input_field(struct hid_dev *hid, struct hid_input *in, str
     }
 }
 
-/** Map fields in a shared multitouch report to their own applications. */
+/** Map fields on a multitouch interface to their own applications. */
 static void configure_mixed_report(struct hid_dev *hid, uint32_t report)
 {
     uint32_t i, app;
@@ -1910,7 +1918,7 @@ static void configure_reports(struct hid_dev *hid)
             if (r->type != k) {
                 continue;
             }
-            if (r->multitouch && per_app) {
+            if (hid->mt_surfaces && per_app) {
                 configure_mixed_report(hid, i);
                 continue;
             }
@@ -2254,12 +2262,10 @@ static void mt_contact(struct hid_input *in, struct hid_mt_contact *c)
 /** Report the frame buttons, combining the left-button sources of a pad. */
 static void mt_report_buttons(struct hid_input *in)
 {
-    unsigned int i, buttons = 0;
+    unsigned int i, buttons = in->mt_frame_buttons;
 
-    for (i = 0; i < 32; i++) {
-        if (in->mt_frame_buttons & (1u << i)) {
-            buttons |= 1u << in->mt_button_target[i];
-        }
+    if (in->application == HID_DG_TOUCHPAD) {
+        buttons = (buttons >> 1) | (buttons & 1u);
     }
     for (i = 0; i < 32; i++) {
         if (in->mt_button_codes & (1u << i)) {
