@@ -97,8 +97,32 @@ static void bl_power(void *ctx, int on)
     spin_unlock_irqrestore(&d->bl_lock, flags);
 }
 
-static const struct backlight_ops bl_ops = {bl_get, bl_set, bl_power};
-static const struct backlight_ops bl_ops_noswitch = {bl_get, bl_set, NULL};
+/** The class's `panic_on`: `bl_set` and `bl_power` on, as one region, but
+ * only when `bl_lock` is free, since a processor the panic stopped may
+ * hold it; a backlight whose lock is held is left as it is. */
+static void bl_panic_on(void *ctx, int level)
+{
+    struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
+
+    if (!spin_trylock(&d->bl_lock)) {
+        return;
+    }
+    d->bl_dark = level <= 0;
+    d->bl_level = bl_scale(level, 0, d->bl.max, d->bl_min, d->bl.max);
+    if (d->bl_enabled) {
+        intelbl_set(&d->bl, d->bl_dark && !d->bl.switched ? 0 : d->bl_level);
+    }
+    if (d->bl.switched) {
+        d->bl_want_on = 1;
+        if (d->bl_pipe_on) {
+            intelbl_power(&d->bl, !d->bl_dark);
+        }
+    }
+    spin_unlock(&d->bl_lock);
+}
+
+static const struct backlight_ops bl_ops = {bl_get, bl_set, bl_power, bl_panic_on};
+static const struct backlight_ops bl_ops_noswitch = {bl_get, bl_set, NULL, bl_panic_on};
 
 /** A backlight whose driver is gone: level 0, and nothing written. */
 static int gone_get(void *ctx)
@@ -114,7 +138,7 @@ static void gone_set(void *ctx, int level)
     (void)level;
 }
 
-static const struct backlight_ops gone_ops = {gone_get, gone_set, NULL};
+static const struct backlight_ops gone_ops = {gone_get, gone_set, NULL, NULL};
 
 /** The PWM's period in its clock's steps for `hz`, Linux's
  * lpt_hz_to_pwm: the PCH's clock is 24 MHz on Lynx Point LP, the ULT's,
@@ -193,15 +217,16 @@ void intel_backlight_setup(struct drm_i915_private *i915)
          bl_get(i915), d->bl_enabled ? "" : ", off", d->bl.switched ? ", off with the pipe" : "");
 }
 
-void intel_backlight_enable(struct drm_i915_private *i915)
+/** The PWM's enable, under the class's lock (`backlight_driver_change`)
+ * with `bl_lock` taken inside it: the level the enable raised, to show in
+ * the class, or -1 for none. */
+static int bl_enable(void *ctx)
 {
+    struct drm_i915_private *i915 = (struct drm_i915_private *)ctx;
     struct intel_display *d = &i915->display;
     uint32_t ctl1, flags;
     int raised = 0;
 
-    if (d->bl_index < 0) {
-        return;
-    }
     flags = spin_lock_irqsave(&d->bl_lock);
     /* Linux's __intel_backlight_enable: a level at or below the least
      * comes on at the most, and lit. Any other level is kept, and so is
@@ -228,13 +253,19 @@ void intel_backlight_enable(struct drm_i915_private *i915)
     intelbl_set(&d->bl, d->bl_dark && !d->bl.switched ? 0 : d->bl_level);
     d->bl_enabled = 1;
     spin_unlock_irqrestore(&d->bl_lock, flags);
-    /* As Linux sets props.brightness, so that the class shows the level
-     * lit and a later write or unblank does not darken it again. */
-    if (raised) {
-        backlight_driver_level(
-            d->bl_index, d->bl.max,
-            "raised to the most at the panel's enable from at or below its least");
+    return raised ? d->bl.max : -1;
+}
+
+void intel_backlight_enable(struct drm_i915_private *i915)
+{
+    if (i915->display.bl_index < 0) {
+        return;
     }
+    /* As Linux sets props.brightness, so that the class shows the level
+     * lit and a later write or unblank does not darken it again; under
+     * the class's lock, so that root's write of 0 is not lost to it. */
+    backlight_driver_change(i915->display.bl_index, bl_enable, i915,
+                            "raised to the most at the panel's enable from at or below its least");
 }
 
 void intel_backlight_disable(struct drm_i915_private *i915)

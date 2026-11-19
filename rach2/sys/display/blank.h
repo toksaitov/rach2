@@ -61,9 +61,10 @@ void console_unblank_now(void);
 /**
  * Show the console and give the backlights their levels again, blank or
  * not, for a panic, without the console's lock or the backlights' (`lock`
- * in backlight.c), which the interrupted code may hold, and without a
- * record. Only the processor that panics calls it, with the others stopped
- * and interrupts off (`k_panic_begin`).
+ * in backlight.c and each driver's, which `panic_on` only tries), which
+ * the interrupted code may hold, and without a record. Only the processor
+ * that panics calls it, with the others stopped and interrupts off
+ * (`k_panic_begin`).
  */
 void console_panic_unblank(void);
 

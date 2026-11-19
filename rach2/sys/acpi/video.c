@@ -195,7 +195,7 @@ static void video_set(void *ctx, int level)
     osl_queue_work(&light.bcm);
 }
 
-static const struct backlight_ops video_ops = {video_get, video_set, NULL};
+static const struct backlight_ops video_ops = {video_get, video_set, NULL, NULL};
 
 /**
  * Read the output `output`'s _BCL into `light`'s levels, as Linux's

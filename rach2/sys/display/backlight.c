@@ -127,18 +127,24 @@ int backlight_rebind(const char *name, int max, const struct backlight_ops *ops,
     return i;
 }
 
-void backlight_driver_level(int i, int level, const char *why)
+void backlight_driver_change(int i, int (*change)(void *ctx), void *ctx, const char *why)
 {
     uint32_t flags;
+    int level;
 
     if (i < 0 || i >= nlights) {
         return;
     }
     flags = spin_lock_irqsave(&lock);
-    lights[i].level = level < 0 ? 0 : level > lights[i].max ? lights[i].max : level;
-    level = lights[i].level;
+    level = change(ctx);
+    if (level >= 0) {
+        lights[i].level = level > lights[i].max ? lights[i].max : level;
+        level = lights[i].level;
+    }
     spin_unlock_irqrestore(&lock, flags);
-    klog(KLOG_INFO, "backlight", "%s: level %d: %s", lights[i].name, level, why);
+    if (level >= 0) {
+        klog(KLOG_INFO, "backlight", "%s: level %d: %s", lights[i].name, level, why);
+    }
 }
 
 void backlight_set_type(int i, const char *type)
@@ -190,7 +196,9 @@ void backlight_panic_unblank(void)
 
     console_blank = 0;
     for (i = 0; i < nlights; i++) {
-        apply(&lights[i]);
+        if (lights[i].ops->panic_on != NULL && lit(&lights[i])) {
+            lights[i].ops->panic_on(lights[i].ctx, lights[i].level);
+        }
     }
 }
 

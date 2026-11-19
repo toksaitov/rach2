@@ -52,6 +52,12 @@ struct backlight_ops {
     /** Turn the backlight on or off and leave its level as it is, or NULL
      * for a driver with no switch. */
     void (*power)(void *ctx, int on);
+    /** Light the panel at `level` for a panic, with interrupts off and the
+     * other processors stopped, as `set` and then `power` on would: take
+     * no lock a stopped processor may hold but by a try, and leave the
+     * backlight as it is when the try fails. NULL for a driver that
+     * cannot, whose backlight a panic leaves as it is. */
+    void (*panic_on)(void *ctx, int level);
 };
 
 /**
@@ -82,14 +88,19 @@ int backlight_register(const char *name, int max, const struct backlight_ops *op
 int backlight_rebind(const char *name, int max, const struct backlight_ops *ops, void *ctx);
 
 /**
- * Take `level`, 0 to the backlight's highest, as backlight `i`'s level
- * without giving it to the driver, which set it itself: i915 raises a
- * level at or below the panel's least to the most when it turns the
- * backlight on, as Linux's __intel_backlight_enable does, and the class
- * then shows that level, as Linux's props.brightness does. Logged with
- * `why`. Process context, with no lock of the driver's held.
+ * Run `change(ctx)` under the class's lock and take the level it returns,
+ * 0 to the backlight's highest, as backlight `i`'s level without giving
+ * it to the driver, which set it itself; a negative return changes
+ * nothing. i915 raises a level at or below the panel's least to the most
+ * when it turns the backlight on, as Linux's __intel_backlight_enable
+ * does, and the class then shows that level, as Linux's props.brightness
+ * does. The change and its record are one region under the class's lock,
+ * so that a level root writes comes before both or after both, never
+ * between. `change` may take the driver's own lock, which nests inside
+ * the class's as in every `set`, and must not sleep. A level taken is
+ * logged with `why`. Any context; it does not sleep.
  */
-void backlight_driver_level(int i, int level, const char *why);
+void backlight_driver_change(int i, int (*change)(void *ctx), void *ctx, const char *why);
 
 /** Name backlight `i`'s type, as its `type` file shows it: "raw" (the
  * default), "platform" or "firmware", as Linux's. At boot, before any
@@ -120,9 +131,12 @@ void intelbl_init(void);
  */
 void backlight_console_blank(int blank);
 
-/** Turn every backlight on at its own level again, as
- * `backlight_console_blank(0)` does but without the class's lock, which the
- * code a panic interrupted may hold; for `console_panic_unblank` alone. */
+/** Turn every backlight that bl_power leaves on at its own level again,
+ * as `backlight_console_blank(0)` does, but without the class's lock,
+ * which the code a panic interrupted may hold, and through each driver's
+ * `panic_on`, which takes no lock a stopped processor may hold; a
+ * backlight whose driver has none is left as it is. For
+ * `console_panic_unblank` alone. */
 void backlight_panic_unblank(void);
 
 /** The number of backlights registered. */
