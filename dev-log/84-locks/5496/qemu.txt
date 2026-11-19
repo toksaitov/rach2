@@ -1,0 +1,1514 @@
+5496: the cost of a ptrace syscall stop in QEMU under KVM on the testing PC,
+four processors, 2 GiB, serial console, one machine at a time, 2026-11-19
+between 21:06 and 21:21 UTC+6 (the testing host's clock reads an hour
+behind). bench.c is the init of a KRFFS root for Rach2 and of an initramfs
+for Linux, with the same static strace 7.2, built from
+vendor/gnu/downloads/strace-7.2.tar.xz with LDFLAGS=-static.
+
+Kernels and programs (SHA-256):
+  base   x86-64 kernel of a4fe27cf4, the milestone head this task began on
+  step1  base with the wait walking its children and tracees by index
+  step2  step1 with a wait's report summing usage only when asked
+  fix    x86-64 kernel of this task's change on a4fe27cf4   31e33a7fbfec3eec...
+  linux  Debian 6.12.107+deb13-cloud-amd64 from the GNU cache 75d7f9be0da1b6f6...
+  strace 7.2, static                                       f096e301a1cb7e15...
+  bench  the last version, with the profiled rows          93a07902b6da8c6c...
+
+Each load runs plain, then under `strace -f -c -w`, `strace -f -e
+trace=ioctl` and `strace -f --seccomp-bpf -e trace=ioctl`, in that order;
+a row's time is the load's own, from its first call to its last. getppid
+and ioctl make 20000 calls; pingpong makes 5000 round trips between two
+threads over two pipes. The first bench had rounds 0 to 2 with no other
+process; the later one runs rounds 0 and 1 alone and rounds 2 and 3 with
+500 processes asleep in pause(2), and the last adds one `strace -f` run of
+getppid before rounds 0 and 2 with bkl/calls zeroed before it and printed
+after it (rach2.cycleaccount on the kernel's line).
+
+== rach2-base: base, no other process ==
+bench: Linux 6.18.0-rach2, 4 processors
+== round 0, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.9 ms, status 0
+bench: getppid 20000: 650.8 ms, 32.54 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 656.4 ms, status 0
+bench: getppid 20000: 651.4 ms, 32.57 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 656.9 ms, status 0
+bench: getppid 20000: 3.0 ms, 0.15 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.6 ms, status 0
+== round 0, ioctl ==
+bench: ioctl 20000: 1.2 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: ioctl 20000: 630.1 ms, 31.51 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 635.8 ms, status 0
+bench: ioctl 20000: 713.3 ms, 35.67 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 718.5 ms, status 0
+bench: ioctl 20000: 720.9 ms, 36.05 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 726.1 ms, status 0
+== round 0, pingpong ==
+bench: pingpong 5000: 10.5 ms, 2.10 us an iteration, 1137 voluntary, 0 involuntary
+bench: plain: whole run 13.9 ms, status 0
+bench: pingpong 5000: 462.6 ms, 92.53 us an iteration, 45210 voluntary, 0 involuntary
+bench: strace -f -c: whole run 468.0 ms, status 0
+bench: pingpong 5000: 463.3 ms, 92.66 us an iteration, 45223 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 469.7 ms, status 0
+bench: pingpong 5000: 368.8 ms, 73.75 us an iteration, 25031 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 374.5 ms, status 0
+== round 1, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.7 ms, status 0
+bench: getppid 20000: 639.1 ms, 31.96 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 644.5 ms, status 0
+bench: getppid 20000: 675.8 ms, 33.79 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 681.4 ms, status 0
+bench: getppid 20000: 3.0 ms, 0.15 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.8 ms, status 0
+== round 1, ioctl ==
+bench: ioctl 20000: 1.2 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.1 ms, status 0
+bench: ioctl 20000: 664.7 ms, 33.23 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 669.8 ms, status 0
+bench: ioctl 20000: 696.4 ms, 34.82 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 701.9 ms, status 0
+bench: ioctl 20000: 694.7 ms, 34.73 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 700.4 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 7.6 ms, 1.51 us an iteration, 686 voluntary, 0 involuntary
+bench: plain: whole run 13.1 ms, status 0
+bench: pingpong 5000: 482.8 ms, 96.56 us an iteration, 45182 voluntary, 0 involuntary
+bench: strace -f -c: whole run 490.1 ms, status 0
+bench: pingpong 5000: 430.3 ms, 86.06 us an iteration, 45210 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 435.8 ms, status 0
+bench: pingpong 5000: 343.8 ms, 68.76 us an iteration, 25038 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 349.0 ms, status 0
+== round 2, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.7 ms, status 0
+bench: getppid 20000: 636.3 ms, 31.82 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 642.1 ms, status 0
+bench: getppid 20000: 660.2 ms, 33.01 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 665.5 ms, status 0
+bench: getppid 20000: 3.0 ms, 0.15 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.7 ms, status 0
+== round 2, ioctl ==
+bench: ioctl 20000: 1.2 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.1 ms, status 0
+bench: ioctl 20000: 658.4 ms, 32.92 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 663.7 ms, status 0
+bench: ioctl 20000: 710.2 ms, 35.51 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 715.8 ms, status 0
+bench: ioctl 20000: 659.6 ms, 32.98 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 664.8 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 5.5 ms, 1.09 us an iteration, 449 voluntary, 0 involuntary
+bench: plain: whole run 8.5 ms, status 0
+bench: pingpong 5000: 476.7 ms, 95.33 us an iteration, 45207 voluntary, 0 involuntary
+bench: strace -f -c: whole run 482.2 ms, status 0
+bench: pingpong 5000: 410.2 ms, 82.04 us an iteration, 45145 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 415.9 ms, status 0
+bench: pingpong 5000: 366.5 ms, 73.29 us an iteration, 25024 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 371.8 ms, status 0
+BENCH DONE
+
+== linux: linux, no other process ==
+bench: Linux 6.12.107+deb13-cloud-amd64, 4 processors
+== round 0, getppid ==
+bench: getppid 20000: 3.0 ms, 0.15 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: getppid 20000: 601.0 ms, 30.05 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -c: whole run 603.8 ms, status 0
+bench: getppid 20000: 622.5 ms, 31.13 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 627.3 ms, status 0
+bench: getppid 20000: 3.6 ms, 0.18 us an iteration, 7 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.2 ms, status 0
+== round 0, ioctl ==
+bench: ioctl 20000: 5.2 ms, 0.26 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 7.2 ms, status 0
+bench: ioctl 20000: 610.8 ms, 30.54 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -c: whole run 616.4 ms, status 0
+bench: ioctl 20000: 722.8 ms, 36.14 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 727.6 ms, status 0
+bench: ioctl 20000: 678.6 ms, 33.93 us an iteration, 40007 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 683.1 ms, status 0
+== round 0, pingpong ==
+bench: pingpong 5000: 74.5 ms, 14.89 us an iteration, 9937 voluntary, 0 involuntary
+bench: plain: whole run 75.8 ms, status 0
+bench: pingpong 5000: 477.4 ms, 95.47 us an iteration, 45158 voluntary, 0 involuntary
+bench: strace -f -c: whole run 482.4 ms, status 0
+bench: pingpong 5000: 361.8 ms, 72.36 us an iteration, 45088 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 366.0 ms, status 0
+bench: pingpong 5000: 338.3 ms, 67.66 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 341.4 ms, status 0
+== round 1, getppid ==
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 6.4 ms, status 0
+bench: getppid 20000: 649.1 ms, 32.45 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -c: whole run 653.0 ms, status 0
+bench: getppid 20000: 592.9 ms, 29.65 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 596.9 ms, status 0
+bench: getppid 20000: 3.7 ms, 0.18 us an iteration, 7 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 6.9 ms, status 0
+== round 1, ioctl ==
+bench: ioctl 20000: 5.1 ms, 0.25 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 8.1 ms, status 0
+bench: ioctl 20000: 628.5 ms, 31.43 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -c: whole run 631.8 ms, status 0
+bench: ioctl 20000: 666.1 ms, 33.30 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 670.3 ms, status 0
+bench: ioctl 20000: 684.6 ms, 34.23 us an iteration, 40007 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 688.6 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 99.6 ms, 19.92 us an iteration, 9938 voluntary, 1 involuntary
+bench: plain: whole run 102.3 ms, status 0
+bench: pingpong 5000: 393.8 ms, 78.76 us an iteration, 45136 voluntary, 0 involuntary
+bench: strace -f -c: whole run 397.7 ms, status 0
+bench: pingpong 5000: 341.1 ms, 68.22 us an iteration, 45098 voluntary, 1 involuntary
+bench: strace -f -e ioctl: whole run 345.0 ms, status 0
+bench: pingpong 5000: 339.5 ms, 67.90 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 343.9 ms, status 0
+== round 2, getppid ==
+bench: getppid 20000: 3.0 ms, 0.15 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.1 ms, status 0
+bench: getppid 20000: 608.2 ms, 30.41 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -c: whole run 612.9 ms, status 0
+bench: getppid 20000: 601.8 ms, 30.09 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 605.7 ms, status 0
+bench: getppid 20000: 3.6 ms, 0.18 us an iteration, 7 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.4 ms, status 0
+== round 2, ioctl ==
+bench: ioctl 20000: 5.2 ms, 0.26 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 7.4 ms, status 0
+bench: ioctl 20000: 608.8 ms, 30.44 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -c: whole run 612.5 ms, status 0
+bench: ioctl 20000: 676.3 ms, 33.82 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 679.2 ms, status 0
+bench: ioctl 20000: 687.2 ms, 34.36 us an iteration, 40007 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 691.6 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 68.7 ms, 13.74 us an iteration, 9966 voluntary, 0 involuntary
+bench: plain: whole run 71.3 ms, status 0
+bench: pingpong 5000: 386.8 ms, 77.36 us an iteration, 45140 voluntary, 0 involuntary
+bench: strace -f -c: whole run 390.6 ms, status 0
+bench: pingpong 5000: 375.8 ms, 75.17 us an iteration, 45142 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 383.3 ms, status 0
+bench: pingpong 5000: 331.4 ms, 66.27 us an iteration, 25024 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 335.3 ms, status 0
+BENCH DONE
+
+== rach2-base2: base, rounds 2 and 3 with 500 sleepers ==
+bench: Linux 6.18.0-rach2, 4 processors
+== round 0, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.8 ms, status 0
+bench: getppid 20000: 619.8 ms, 30.99 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 625.4 ms, status 0
+bench: getppid 20000: 649.2 ms, 32.46 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 655.0 ms, status 0
+bench: getppid 20000: 3.1 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.2 ms, status 0
+== round 0, ioctl ==
+bench: ioctl 20000: 1.4 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.4 ms, status 0
+bench: ioctl 20000: 644.9 ms, 32.25 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 650.4 ms, status 0
+bench: ioctl 20000: 687.2 ms, 34.36 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 692.7 ms, status 0
+bench: ioctl 20000: 723.9 ms, 36.19 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 728.9 ms, status 0
+== round 0, pingpong ==
+bench: pingpong 5000: 4.7 ms, 0.94 us an iteration, 302 voluntary, 0 involuntary
+bench: plain: whole run 7.5 ms, status 0
+bench: pingpong 5000: 432.5 ms, 86.50 us an iteration, 45168 voluntary, 0 involuntary
+bench: strace -f -c: whole run 438.0 ms, status 0
+bench: pingpong 5000: 467.3 ms, 93.46 us an iteration, 45274 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 476.9 ms, status 0
+bench: pingpong 5000: 338.5 ms, 67.69 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 344.0 ms, status 0
+== round 1, getppid ==
+bench: getppid 20000: 0.7 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 8.3 ms, status 0
+bench: getppid 20000: 639.9 ms, 31.99 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 647.5 ms, status 0
+bench: getppid 20000: 657.9 ms, 32.89 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 663.5 ms, status 0
+bench: getppid 20000: 2.9 ms, 0.15 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.6 ms, status 0
+== round 1, ioctl ==
+bench: ioctl 20000: 1.2 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: ioctl 20000: 686.5 ms, 34.33 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 691.9 ms, status 0
+bench: ioctl 20000: 717.5 ms, 35.88 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 722.9 ms, status 0
+bench: ioctl 20000: 703.9 ms, 35.19 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 709.9 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 6.5 ms, 1.29 us an iteration, 570 voluntary, 0 involuntary
+bench: plain: whole run 9.5 ms, status 0
+bench: pingpong 5000: 487.6 ms, 97.53 us an iteration, 45177 voluntary, 0 involuntary
+bench: strace -f -c: whole run 493.2 ms, status 0
+bench: pingpong 5000: 457.2 ms, 91.44 us an iteration, 45237 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 462.7 ms, status 0
+bench: pingpong 5000: 362.7 ms, 72.54 us an iteration, 25026 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 368.2 ms, status 0
+bench: 500 sleeping processes started
+== round 2, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.6 ms, status 0
+bench: getppid 20000: 1440.6 ms, 72.03 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1447.7 ms, status 0
+bench: getppid 20000: 1416.7 ms, 70.83 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1423.4 ms, status 0
+bench: getppid 20000: 3.0 ms, 0.15 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.5 ms, status 0
+== round 2, ioctl ==
+bench: ioctl 20000: 1.2 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: ioctl 20000: 1408.7 ms, 70.44 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1415.2 ms, status 0
+bench: ioctl 20000: 1509.1 ms, 75.45 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1515.9 ms, status 0
+bench: ioctl 20000: 1510.7 ms, 75.54 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 1524.5 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 9.9 ms, 1.98 us an iteration, 1020 voluntary, 0 involuntary
+bench: plain: whole run 13.3 ms, status 0
+bench: pingpong 5000: 1032.3 ms, 206.47 us an iteration, 45142 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1039.1 ms, status 0
+bench: pingpong 5000: 1021.1 ms, 204.21 us an iteration, 45124 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1027.6 ms, status 0
+bench: pingpong 5000: 722.3 ms, 144.46 us an iteration, 25030 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 728.6 ms, status 0
+== round 3, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.8 ms, status 0
+bench: getppid 20000: 1416.0 ms, 70.80 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1422.7 ms, status 0
+bench: getppid 20000: 1418.1 ms, 70.90 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1424.8 ms, status 0
+bench: getppid 20000: 3.1 ms, 0.15 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.7 ms, status 0
+== round 3, ioctl ==
+bench: ioctl 20000: 1.3 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: ioctl 20000: 1416.1 ms, 70.81 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1422.8 ms, status 0
+bench: ioctl 20000: 1529.8 ms, 76.49 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1536.7 ms, status 0
+bench: ioctl 20000: 1519.0 ms, 75.95 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 1525.0 ms, status 0
+== round 3, pingpong ==
+bench: pingpong 5000: 5.4 ms, 1.08 us an iteration, 408 voluntary, 0 involuntary
+bench: plain: whole run 8.4 ms, status 0
+bench: pingpong 5000: 1044.6 ms, 208.92 us an iteration, 45136 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1051.1 ms, status 0
+bench: pingpong 5000: 1044.5 ms, 208.90 us an iteration, 45105 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1051.5 ms, status 0
+bench: pingpong 5000: 729.0 ms, 145.80 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 735.3 ms, status 0
+BENCH DONE
+
+== linux2: linux, rounds 2 and 3 with 500 sleepers ==
+bench: Linux 6.12.107+deb13-cloud-amd64, 4 processors
+== round 0, getppid ==
+bench: getppid 20000: 3.4 ms, 0.17 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.6 ms, status 0
+bench: getppid 20000: 627.9 ms, 31.39 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -c: whole run 632.3 ms, status 0
+bench: getppid 20000: 621.4 ms, 31.07 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 625.4 ms, status 0
+bench: getppid 20000: 3.7 ms, 0.19 us an iteration, 7 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.6 ms, status 0
+== round 0, ioctl ==
+bench: ioctl 20000: 5.3 ms, 0.27 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 6.3 ms, status 0
+bench: ioctl 20000: 626.3 ms, 31.32 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -c: whole run 630.8 ms, status 0
+bench: ioctl 20000: 712.1 ms, 35.60 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 715.8 ms, status 0
+bench: ioctl 20000: 694.8 ms, 34.74 us an iteration, 40007 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 698.5 ms, status 0
+== round 0, pingpong ==
+bench: pingpong 5000: 72.0 ms, 14.40 us an iteration, 9961 voluntary, 0 involuntary
+bench: plain: whole run 73.9 ms, status 0
+bench: pingpong 5000: 424.7 ms, 84.95 us an iteration, 45131 voluntary, 0 involuntary
+bench: strace -f -c: whole run 428.8 ms, status 0
+bench: pingpong 5000: 381.0 ms, 76.20 us an iteration, 45138 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 385.3 ms, status 0
+bench: pingpong 5000: 349.0 ms, 69.80 us an iteration, 25023 voluntary, 1 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 352.1 ms, status 0
+== round 1, getppid ==
+bench: getppid 20000: 3.0 ms, 0.15 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: getppid 20000: 622.4 ms, 31.12 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -c: whole run 627.1 ms, status 0
+bench: getppid 20000: 625.5 ms, 31.27 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 628.8 ms, status 0
+bench: getppid 20000: 3.7 ms, 0.18 us an iteration, 7 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.9 ms, status 0
+== round 1, ioctl ==
+bench: ioctl 20000: 5.2 ms, 0.26 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 6.1 ms, status 0
+bench: ioctl 20000: 654.8 ms, 32.74 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -c: whole run 659.5 ms, status 0
+bench: ioctl 20000: 693.3 ms, 34.67 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 697.3 ms, status 0
+bench: ioctl 20000: 721.6 ms, 36.08 us an iteration, 40007 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 727.3 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 77.4 ms, 15.48 us an iteration, 9959 voluntary, 0 involuntary
+bench: plain: whole run 79.8 ms, status 0
+bench: pingpong 5000: 388.7 ms, 77.73 us an iteration, 45123 voluntary, 0 involuntary
+bench: strace -f -c: whole run 392.5 ms, status 0
+bench: pingpong 5000: 410.9 ms, 82.18 us an iteration, 45138 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 415.1 ms, status 0
+bench: pingpong 5000: 326.5 ms, 65.29 us an iteration, 25026 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 330.3 ms, status 0
+bench: 500 sleeping processes started
+== round 2, getppid ==
+bench: getppid 20000: 3.1 ms, 0.15 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: getppid 20000: 649.0 ms, 32.45 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -c: whole run 652.8 ms, status 0
+bench: getppid 20000: 622.0 ms, 31.10 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 627.2 ms, status 0
+bench: getppid 20000: 3.6 ms, 0.18 us an iteration, 7 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.1 ms, status 0
+== round 2, ioctl ==
+bench: ioctl 20000: 5.2 ms, 0.26 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 6.2 ms, status 0
+bench: ioctl 20000: 646.9 ms, 32.35 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -c: whole run 650.9 ms, status 0
+bench: ioctl 20000: 742.0 ms, 37.10 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 746.4 ms, status 0
+bench: ioctl 20000: 720.3 ms, 36.02 us an iteration, 40007 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 724.6 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 94.6 ms, 18.91 us an iteration, 9955 voluntary, 0 involuntary
+bench: plain: whole run 96.7 ms, status 0
+bench: pingpong 5000: 412.9 ms, 82.59 us an iteration, 45158 voluntary, 0 involuntary
+bench: strace -f -c: whole run 416.9 ms, status 0
+bench: pingpong 5000: 389.3 ms, 77.85 us an iteration, 45112 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 393.3 ms, status 0
+bench: pingpong 5000: 338.6 ms, 67.71 us an iteration, 25024 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 342.5 ms, status 0
+== round 3, getppid ==
+bench: getppid 20000: 3.1 ms, 0.16 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.3 ms, status 0
+bench: getppid 20000: 657.8 ms, 32.89 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -c: whole run 662.5 ms, status 0
+bench: getppid 20000: 615.9 ms, 30.80 us an iteration, 40034 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 620.1 ms, status 0
+bench: getppid 20000: 3.7 ms, 0.19 us an iteration, 7 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.4 ms, status 0
+== round 3, ioctl ==
+bench: ioctl 20000: 5.4 ms, 0.27 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 6.4 ms, status 0
+bench: ioctl 20000: 669.5 ms, 33.47 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -c: whole run 674.2 ms, status 0
+bench: ioctl 20000: 709.3 ms, 35.46 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 713.1 ms, status 0
+bench: ioctl 20000: 718.1 ms, 35.91 us an iteration, 40007 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 722.3 ms, status 0
+== round 3, pingpong ==
+bench: pingpong 5000: 87.4 ms, 17.49 us an iteration, 9950 voluntary, 0 involuntary
+bench: plain: whole run 88.7 ms, status 0
+bench: pingpong 5000: 430.0 ms, 86.00 us an iteration, 45130 voluntary, 0 involuntary
+bench: strace -f -c: whole run 435.6 ms, status 0
+bench: pingpong 5000: 400.0 ms, 80.00 us an iteration, 45131 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 403.6 ms, status 0
+bench: pingpong 5000: 333.4 ms, 66.68 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 337.3 ms, status 0
+BENCH DONE
+
+== rach2-fix: step1, rounds 2 and 3 with 500 sleepers ==
+bench: Linux 6.18.0-rach2, 4 processors
+== round 0, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: getppid 20000: 638.0 ms, 31.90 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 643.7 ms, status 0
+bench: getppid 20000: 643.7 ms, 32.19 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 649.4 ms, status 0
+bench: getppid 20000: 3.1 ms, 0.15 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.9 ms, status 0
+== round 0, ioctl ==
+bench: ioctl 20000: 1.2 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: ioctl 20000: 704.1 ms, 35.21 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 709.8 ms, status 0
+bench: ioctl 20000: 698.5 ms, 34.93 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 703.8 ms, status 0
+bench: ioctl 20000: 745.8 ms, 37.29 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 751.0 ms, status 0
+== round 0, pingpong ==
+bench: pingpong 5000: 11.6 ms, 2.33 us an iteration, 1348 voluntary, 0 involuntary
+bench: plain: whole run 14.9 ms, status 0
+bench: pingpong 5000: 443.9 ms, 88.77 us an iteration, 45184 voluntary, 0 involuntary
+bench: strace -f -c: whole run 449.3 ms, status 0
+bench: pingpong 5000: 470.5 ms, 94.10 us an iteration, 45233 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 476.8 ms, status 0
+bench: pingpong 5000: 349.2 ms, 69.85 us an iteration, 25027 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 354.4 ms, status 0
+== round 1, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.8 ms, status 0
+bench: getppid 20000: 681.6 ms, 34.08 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 687.6 ms, status 0
+bench: getppid 20000: 641.4 ms, 32.07 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 646.9 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.0 ms, status 0
+== round 1, ioctl ==
+bench: ioctl 20000: 1.3 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: ioctl 20000: 665.3 ms, 33.26 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 671.1 ms, status 0
+bench: ioctl 20000: 698.9 ms, 34.95 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 704.6 ms, status 0
+bench: ioctl 20000: 713.3 ms, 35.66 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 718.6 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 12.2 ms, 2.44 us an iteration, 1352 voluntary, 0 involuntary
+bench: plain: whole run 15.5 ms, status 0
+bench: pingpong 5000: 479.0 ms, 95.79 us an iteration, 45214 voluntary, 0 involuntary
+bench: strace -f -c: whole run 484.5 ms, status 0
+bench: pingpong 5000: 435.1 ms, 87.01 us an iteration, 45196 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 440.6 ms, status 0
+bench: pingpong 5000: 364.7 ms, 72.93 us an iteration, 25026 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 370.0 ms, status 0
+bench: 500 sleeping processes started
+== round 2, getppid ==
+bench: getppid 20000: 0.8 ms, 0.04 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: getppid 20000: 987.1 ms, 49.36 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 993.2 ms, status 0
+bench: getppid 20000: 1002.5 ms, 50.12 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1010.0 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.8 ms, status 0
+== round 2, ioctl ==
+bench: ioctl 20000: 1.2 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.1 ms, status 0
+bench: ioctl 20000: 993.3 ms, 49.67 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 999.7 ms, status 0
+bench: ioctl 20000: 1066.7 ms, 53.34 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1073.3 ms, status 0
+bench: ioctl 20000: 1136.4 ms, 56.82 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 1150.3 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 4.8 ms, 0.97 us an iteration, 203 voluntary, 0 involuntary
+bench: plain: whole run 9.1 ms, status 0
+bench: pingpong 5000: 843.3 ms, 168.65 us an iteration, 45170 voluntary, 0 involuntary
+bench: strace -f -c: whole run 849.7 ms, status 0
+bench: pingpong 5000: 827.1 ms, 165.41 us an iteration, 45144 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 833.9 ms, status 0
+bench: pingpong 5000: 533.9 ms, 106.78 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 539.9 ms, status 0
+== round 3, getppid ==
+bench: getppid 20000: 1.3 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 5.2 ms, status 0
+bench: getppid 20000: 1032.0 ms, 51.60 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1038.4 ms, status 0
+bench: getppid 20000: 1020.0 ms, 51.00 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1026.4 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.7 ms, status 0
+== round 3, ioctl ==
+bench: ioctl 20000: 1.3 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: ioctl 20000: 1007.6 ms, 50.38 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1014.3 ms, status 0
+bench: ioctl 20000: 1087.0 ms, 54.35 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1093.7 ms, status 0
+bench: ioctl 20000: 1097.7 ms, 54.88 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 1104.0 ms, status 0
+== round 3, pingpong ==
+bench: pingpong 5000: 5.8 ms, 1.15 us an iteration, 453 voluntary, 0 involuntary
+bench: plain: whole run 9.0 ms, status 0
+bench: pingpong 5000: 863.4 ms, 172.69 us an iteration, 45149 voluntary, 0 involuntary
+bench: strace -f -c: whole run 870.0 ms, status 0
+bench: pingpong 5000: 823.9 ms, 164.78 us an iteration, 45147 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 830.2 ms, status 0
+bench: pingpong 5000: 539.7 ms, 107.95 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 547.3 ms, status 0
+BENCH DONE
+
+== rach2-prof: step1, the profiled runs ==
+bench: Linux 6.18.0-rach2, 4 processors
+bench: getppid 20000: 679.6 ms, 33.98 us an iteration, 40033 voluntary, 0 involuntary
+bench: profiled strace -f: whole run 693.1 ms, status 0
+calls alone: syscall 0 1 1 1 0 0
+calls alone: syscall 1 40042 45741 40041 33955 3
+calls alone: syscall 3 10 7 6 3 0
+calls alone: syscall 5 3 98 3 19 0
+calls alone: syscall 10 2 35 2 5 0
+calls alone: syscall 12 10 200 10 42 0
+calls alone: syscall 13 9 2 9 2 0
+calls alone: syscall 14 10 9 0 0 0
+calls alone: syscall 16 2 140 2 23 0
+calls alone: syscall 39 4 0 0 0 0
+calls alone: syscall 56 3 144 3 144 0
+calls alone: syscall 59 2 309 2 66 0
+calls alone: syscall 61 80094 1115794 80094 30646 232
+calls alone: syscall 62 3 11 3 55 0
+calls alone: syscall 63 1 0 1 0 0
+calls alone: syscall 72 8 9 0 0 0
+calls alone: syscall 80 1 46 1 8 0
+calls alone: syscall 98 1 108 1 20 0
+calls alone: syscall 101 80097 204996 80097 205838 2
+calls alone: syscall 102 3 0 0 0 0
+calls alone: syscall 104 1 0 0 0 0
+calls alone: syscall 107 2 0 0 0 0
+calls alone: syscall 110 20000 674911 20000 110075 174
+calls alone: syscall 158 2 42 2 5 0
+calls alone: syscall 186 1 26 1 4 0
+calls alone: syscall 218 2 31 2 4 0
+calls alone: syscall 231 0 0 3 74 0
+calls alone: syscall 257 3 41 4 34 0
+calls alone: syscall 262 1 1 1 0 0
+calls alone: syscall 267 2 55 2 9 0
+calls alone: syscall 273 5 32 1 4 0
+calls alone: syscall 293 3 3 3 3 0
+calls alone: syscall 302 2 34 2 5 0
+calls alone: syscall 310 12 19 12 19 0
+calls alone: syscall 318 2 36 2 5 0
+calls alone: syscall 334 2 44 2 5 0
+calls alone: vector 0 0 0 118 6 0
+calls alone: vector 14 430 0 353 623 0
+calls alone: vector 32 379 0 152 270 0
+calls alone: take 1 0 0 59859 31262 5067
+calls alone: slept 1 0 0 2 10044 1
+calls alone: slept 5 0 0 2 5 1
+calls alone: slept 10 0 0 2 6 0
+calls alone: slept 12 0 0 10 28 0
+calls alone: slept 16 0 0 2 22 1
+calls alone: slept 59 0 0 3 62 0
+calls alone: slept 61 0 0 39834 23784 4158
+calls alone: slept 62 0 0 4 26 0
+calls alone: slept 80 0 0 2 15 0
+calls alone: slept 98 0 0 2 18 0
+calls alone: slept 110 0 0 40000 117159 1997
+calls alone: slept 158 0 0 2 5 0
+calls alone: slept 186 0 0 2 5 0
+calls alone: slept 218 0 0 2 4 0
+calls alone: slept 231 0 0 3 103 0
+calls alone: slept 267 0 0 2 10 0
+calls alone: slept 273 0 0 2 5 0
+calls alone: slept 302 0 0 2 5 0
+calls alone: slept 318 0 0 2 5 0
+calls alone: slept 334 0 0 2 5 0
+calls alone: kthread 0 0 0 22639 120901 1093 idle
+calls alone: ioctl 0x802c542a 2 140 4 45 1
+== round 0, getppid ==
+bench: getppid 20000: 1.0 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: getppid 20000: 627.4 ms, 31.37 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 633.0 ms, status 0
+bench: getppid 20000: 639.9 ms, 32.00 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 645.7 ms, status 0
+bench: getppid 20000: 3.3 ms, 0.17 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 14.5 ms, status 0
+== round 0, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.08 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 10.8 ms, status 0
+bench: ioctl 20000: 655.3 ms, 32.76 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 661.1 ms, status 0
+bench: ioctl 20000: 723.5 ms, 36.17 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 728.9 ms, status 0
+bench: ioctl 20000: 715.8 ms, 35.79 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 724.9 ms, status 0
+== round 0, pingpong ==
+bench: pingpong 5000: 9.1 ms, 1.82 us an iteration, 893 voluntary, 0 involuntary
+bench: plain: whole run 12.1 ms, status 0
+bench: pingpong 5000: 485.3 ms, 97.05 us an iteration, 45265 voluntary, 0 involuntary
+bench: strace -f -c: whole run 490.7 ms, status 0
+bench: pingpong 5000: 443.0 ms, 88.59 us an iteration, 45213 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 455.4 ms, status 0
+bench: pingpong 5000: 333.9 ms, 66.77 us an iteration, 25025 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 342.0 ms, status 0
+== round 1, getppid ==
+bench: getppid 20000: 1.0 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: getppid 20000: 680.9 ms, 34.04 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 686.5 ms, status 0
+bench: getppid 20000: 686.5 ms, 34.32 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 691.9 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.0 ms, status 0
+== round 1, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.3 ms, status 0
+bench: ioctl 20000: 661.5 ms, 33.07 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 667.0 ms, status 0
+bench: ioctl 20000: 724.1 ms, 36.21 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 729.7 ms, status 0
+bench: ioctl 20000: 721.9 ms, 36.09 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 729.5 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 3.5 ms, 0.69 us an iteration, 27 voluntary, 0 involuntary
+bench: plain: whole run 11.4 ms, status 0
+bench: pingpong 5000: 463.8 ms, 92.76 us an iteration, 45215 voluntary, 0 involuntary
+bench: strace -f -c: whole run 474.1 ms, status 0
+bench: pingpong 5000: 456.1 ms, 91.22 us an iteration, 45207 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 463.7 ms, status 0
+bench: pingpong 5000: 366.7 ms, 73.34 us an iteration, 25024 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 372.0 ms, status 0
+bench: 500 sleeping processes started
+bench: getppid 20000: 1140.0 ms, 57.00 us an iteration, 40033 voluntary, 0 involuntary
+bench: profiled strace -f: whole run 1146.3 ms, status 0
+calls sleepers: syscall 0 1 1 1 1 0
+calls sleepers: syscall 1 40042 41514 40041 36070 14
+calls sleepers: syscall 3 10 13 6 3 5
+calls sleepers: syscall 5 3 76 3 8 0
+calls sleepers: syscall 10 2 65 2 5 0
+calls sleepers: syscall 12 10 320 10 43 0
+calls sleepers: syscall 13 9 39 9 39 0
+calls sleepers: syscall 14 10 1 0 0 0
+calls sleepers: syscall 16 2 96 2 5 0
+calls sleepers: syscall 39 4 0 0 0 0
+calls sleepers: syscall 56 3 85 3 85 0
+calls sleepers: syscall 59 2 211 2 38 0
+calls sleepers: syscall 61 80094 1981670 80094 40644 507
+calls sleepers: syscall 62 3 37 3 60 0
+calls sleepers: syscall 63 1 0 1 0 0
+calls sleepers: syscall 72 8 1 0 0 0
+calls sleepers: syscall 80 1 90 1 43 0
+calls sleepers: syscall 98 1 134 1 5 0
+calls sleepers: syscall 101 80097 233092 80097 233876 13
+calls sleepers: syscall 102 3 0 0 0 0
+calls sleepers: syscall 104 1 0 0 0 0
+calls sleepers: syscall 107 2 0 0 0 0
+calls sleepers: syscall 110 20000 1135339 20000 115481 357
+calls sleepers: syscall 158 2 59 2 5 0
+calls sleepers: syscall 186 1 61 1 5 0
+calls sleepers: syscall 218 2 50 2 5 0
+calls sleepers: syscall 231 0 0 3 49 0
+calls sleepers: syscall 257 3 29 4 24 0
+calls sleepers: syscall 262 1 1 1 1 0
+calls sleepers: syscall 267 2 76 2 12 0
+calls sleepers: syscall 273 5 50 1 4 0
+calls sleepers: syscall 293 3 2 3 2 0
+calls sleepers: syscall 302 2 53 2 5 0
+calls sleepers: syscall 310 12 16 12 16 0
+calls sleepers: syscall 318 2 61 2 6 0
+calls sleepers: syscall 334 2 59 2 5 0
+calls sleepers: vector 0 0 0 118 6 0
+calls sleepers: vector 14 414 0 338 429 0
+calls sleepers: vector 32 830 0 162 386 85
+calls sleepers: take 1 0 0 59700 416475 4230
+calls sleepers: slept 1 0 0 2 3077 0
+calls sleepers: slept 5 0 0 2 8 0
+calls sleepers: slept 10 0 0 2 9 0
+calls sleepers: slept 12 0 0 10 29 0
+calls sleepers: slept 16 0 0 2 7 0
+calls sleepers: slept 59 0 0 3 38 0
+calls sleepers: slept 61 0 0 39675 410508 2463
+calls sleepers: slept 62 0 0 4 12 27
+calls sleepers: slept 80 0 0 2 8 0
+calls sleepers: slept 98 0 0 2 26 1
+calls sleepers: slept 110 0 0 40000 118055 3111
+calls sleepers: slept 158 0 0 2 5 0
+calls sleepers: slept 186 0 0 2 7 0
+calls sleepers: slept 218 0 0 2 5 0
+calls sleepers: slept 231 0 0 3 91 0
+calls sleepers: slept 267 0 0 2 11 0
+calls sleepers: slept 273 0 0 2 5 0
+calls sleepers: slept 302 0 0 2 5 0
+calls sleepers: slept 318 0 0 2 5 0
+calls sleepers: slept 334 0 0 2 5 0
+calls sleepers: kthread 0 0 0 22049 116401 1396 idle
+calls sleepers: ioctl 0x802c542a 2 96 4 12 0
+== round 2, getppid ==
+bench: getppid 20000: 1.1 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.6 ms, status 0
+bench: getppid 20000: 1043.5 ms, 52.18 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1050.1 ms, status 0
+bench: getppid 20000: 1045.3 ms, 52.27 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1051.7 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.9 ms, status 0
+== round 2, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.5 ms, status 0
+bench: ioctl 20000: 1052.8 ms, 52.64 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1062.3 ms, status 0
+bench: ioctl 20000: 1139.4 ms, 56.97 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1146.0 ms, status 0
+bench: ioctl 20000: 1145.9 ms, 57.30 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 1152.0 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 3.3 ms, 0.67 us an iteration, 105 voluntary, 0 involuntary
+bench: plain: whole run 6.4 ms, status 0
+bench: pingpong 5000: 854.2 ms, 170.83 us an iteration, 45130 voluntary, 0 involuntary
+bench: strace -f -c: whole run 861.1 ms, status 0
+bench: pingpong 5000: 846.0 ms, 169.21 us an iteration, 45121 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 852.2 ms, status 0
+bench: pingpong 5000: 542.2 ms, 108.43 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 548.2 ms, status 0
+== round 3, getppid ==
+bench: getppid 20000: 1.1 ms, 0.06 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.3 ms, status 0
+bench: getppid 20000: 1090.0 ms, 54.50 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1096.3 ms, status 0
+bench: getppid 20000: 1047.9 ms, 52.39 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1054.3 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.7 ms, status 0
+== round 3, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.3 ms, status 0
+bench: ioctl 20000: 1057.6 ms, 52.88 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1064.4 ms, status 0
+bench: ioctl 20000: 1161.2 ms, 58.06 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 1167.9 ms, status 0
+bench: ioctl 20000: 1142.9 ms, 57.14 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 1149.5 ms, status 0
+== round 3, pingpong ==
+bench: pingpong 5000: 3.9 ms, 0.78 us an iteration, 190 voluntary, 0 involuntary
+bench: plain: whole run 7.1 ms, status 0
+bench: pingpong 5000: 888.8 ms, 177.75 us an iteration, 45148 voluntary, 0 involuntary
+bench: strace -f -c: whole run 895.2 ms, status 0
+bench: pingpong 5000: 804.8 ms, 160.95 us an iteration, 45113 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 811.2 ms, status 0
+bench: pingpong 5000: 558.1 ms, 111.63 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 564.6 ms, status 0
+BENCH DONE
+
+== rach2-fix2: step2, rounds 2 and 3 with 500 sleepers, with the profiled runs ==
+bench: Linux 6.18.0-rach2, 4 processors
+bench: getppid 20000: 615.7 ms, 30.79 us an iteration, 40033 voluntary, 0 involuntary
+bench: profiled strace -f: whole run 621.4 ms, status 0
+calls alone: syscall 0 1 1 1 1 0
+calls alone: syscall 1 40042 33404 40041 28953 9
+calls alone: syscall 3 10 6 6 2 0
+calls alone: syscall 5 3 45 3 7 0
+calls alone: syscall 10 2 36 2 5 0
+calls alone: syscall 12 10 191 10 40 0
+calls alone: syscall 13 9 2 9 2 0
+calls alone: syscall 14 10 9 0 0 0
+calls alone: syscall 16 2 60 2 6 0
+calls alone: syscall 39 4 0 0 0 0
+calls alone: syscall 56 3 132 3 132 0
+calls alone: syscall 59 2 297 2 63 0
+calls alone: syscall 61 80094 996340 80094 27945 129
+calls alone: syscall 62 3 12 3 44 0
+calls alone: syscall 63 1 0 1 0 0
+calls alone: syscall 72 8 8 0 0 0
+calls alone: syscall 80 1 58 1 8 0
+calls alone: syscall 98 1 60 1 5 0
+calls alone: syscall 101 80097 183430 80097 184233 7
+calls alone: syscall 102 3 0 0 0 0
+calls alone: syscall 104 1 0 0 0 0
+calls alone: syscall 107 2 0 0 0 0
+calls alone: syscall 110 20000 611391 20000 98133 108
+calls alone: syscall 158 2 41 2 5 0
+calls alone: syscall 186 1 33 1 4 0
+calls alone: syscall 218 2 70 2 30 0
+calls alone: syscall 231 0 0 3 51 0
+calls alone: syscall 257 3 35 4 30 0
+calls alone: syscall 262 1 1 1 0 0
+calls alone: syscall 267 2 53 2 9 0
+calls alone: syscall 273 5 53 1 5 0
+calls alone: syscall 293 3 3 3 3 0
+calls alone: syscall 302 2 33 2 4 0
+calls alone: syscall 310 12 15 12 15 0
+calls alone: syscall 318 2 36 2 5 0
+calls alone: syscall 334 2 48 2 5 0
+calls alone: vector 0 0 0 118 6 0
+calls alone: vector 14 431 0 353 598 0
+calls alone: vector 32 444 0 106 279 21
+calls alone: take 1 0 0 59955 22873 2131
+calls alone: slept 1 0 0 2 2875 0
+calls alone: slept 5 0 0 2 7 0
+calls alone: slept 10 0 0 2 6 0
+calls alone: slept 12 0 0 10 27 0
+calls alone: slept 16 0 0 2 6 0
+calls alone: slept 59 0 0 3 64 0
+calls alone: slept 61 0 0 39930 15583 1544
+calls alone: slept 62 0 0 4 7 0
+calls alone: slept 80 0 0 2 30 0
+calls alone: slept 98 0 0 2 8 0
+calls alone: slept 110 0 0 40000 107386 1249
+calls alone: slept 158 0 0 2 5 0
+calls alone: slept 186 0 0 2 11 0
+calls alone: slept 218 0 0 2 6 0
+calls alone: slept 231 0 0 3 52 0
+calls alone: slept 267 0 0 2 10 0
+calls alone: slept 273 0 0 2 5 0
+calls alone: slept 302 0 0 2 5 0
+calls alone: slept 318 0 0 2 5 0
+calls alone: slept 334 0 0 2 5 0
+calls alone: kthread 0 0 0 22785 103960 662 idle
+calls alone: ioctl 0x802c542a 2 60 4 12 0
+== round 0, getppid ==
+bench: getppid 20000: 1.0 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.8 ms, status 0
+bench: getppid 20000: 689.6 ms, 34.48 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 694.9 ms, status 0
+bench: getppid 20000: 601.6 ms, 30.08 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 606.9 ms, status 0
+bench: getppid 20000: 3.1 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.5 ms, status 0
+== round 0, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: ioctl 20000: 656.8 ms, 32.84 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 662.2 ms, status 0
+bench: ioctl 20000: 685.8 ms, 34.29 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 691.0 ms, status 0
+bench: ioctl 20000: 662.8 ms, 33.14 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 668.1 ms, status 0
+== round 0, pingpong ==
+bench: pingpong 5000: 8.0 ms, 1.61 us an iteration, 748 voluntary, 0 involuntary
+bench: plain: whole run 14.7 ms, status 0
+bench: pingpong 5000: 446.2 ms, 89.25 us an iteration, 45217 voluntary, 0 involuntary
+bench: strace -f -c: whole run 456.4 ms, status 0
+bench: pingpong 5000: 425.0 ms, 85.00 us an iteration, 45187 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 431.1 ms, status 0
+bench: pingpong 5000: 328.5 ms, 65.69 us an iteration, 25026 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 333.8 ms, status 0
+== round 1, getppid ==
+bench: getppid 20000: 1.1 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: getppid 20000: 621.6 ms, 31.08 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 626.9 ms, status 0
+bench: getppid 20000: 639.2 ms, 31.96 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 644.6 ms, status 0
+bench: getppid 20000: 3.1 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.7 ms, status 0
+== round 1, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.08 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.3 ms, status 0
+bench: ioctl 20000: 668.1 ms, 33.41 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 673.6 ms, status 0
+bench: ioctl 20000: 651.8 ms, 32.59 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 657.4 ms, status 0
+bench: ioctl 20000: 692.1 ms, 34.60 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 696.9 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 9.1 ms, 1.82 us an iteration, 1037 voluntary, 0 involuntary
+bench: plain: whole run 12.4 ms, status 0
+bench: pingpong 5000: 470.7 ms, 94.14 us an iteration, 45189 voluntary, 0 involuntary
+bench: strace -f -c: whole run 475.9 ms, status 0
+bench: pingpong 5000: 439.5 ms, 87.91 us an iteration, 45213 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 448.8 ms, status 0
+bench: pingpong 5000: 304.9 ms, 60.98 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 310.3 ms, status 0
+bench: 500 sleeping processes started
+bench: getppid 20000: 703.0 ms, 35.15 us an iteration, 40033 voluntary, 0 involuntary
+bench: profiled strace -f: whole run 708.7 ms, status 0
+calls sleepers: syscall 0 1 1 1 1 0
+calls sleepers: syscall 1 40042 34674 40041 30293 1
+calls sleepers: syscall 3 10 14 6 3 5
+calls sleepers: syscall 5 3 70 3 9 0
+calls sleepers: syscall 10 2 35 2 4 0
+calls sleepers: syscall 12 10 241 10 27 0
+calls sleepers: syscall 13 9 41 9 41 0
+calls sleepers: syscall 14 10 1 0 0 0
+calls sleepers: syscall 16 2 53 2 5 0
+calls sleepers: syscall 34 0 0 1 2 4
+calls sleepers: syscall 39 4 0 0 0 0
+calls sleepers: syscall 56 3 96 3 96 0
+calls sleepers: syscall 59 2 206 2 39 0
+calls sleepers: syscall 61 80094 1140573 80094 29606 363
+calls sleepers: syscall 62 3 34 3 83 0
+calls sleepers: syscall 63 1 0 1 0 0
+calls sleepers: syscall 72 8 1 0 0 0
+calls sleepers: syscall 80 1 33 1 7 0
+calls sleepers: syscall 98 1 163 1 4 0
+calls sleepers: syscall 101 80097 212063 80097 211658 1240
+calls sleepers: syscall 102 3 0 0 0 0
+calls sleepers: syscall 104 1 0 0 0 0
+calls sleepers: syscall 107 2 0 0 0 0
+calls sleepers: syscall 110 20000 698438 20000 112835 235
+calls sleepers: syscall 158 2 65 2 5 0
+calls sleepers: syscall 186 1 25 1 4 0
+calls sleepers: syscall 218 2 78 2 5 0
+calls sleepers: syscall 231 0 0 3 46 0
+calls sleepers: syscall 257 3 28 4 23 0
+calls sleepers: syscall 262 1 1 1 0 0
+calls sleepers: syscall 267 2 52 2 11 0
+calls sleepers: syscall 273 5 52 1 5 0
+calls sleepers: syscall 293 3 3 3 3 0
+calls sleepers: syscall 302 2 42 2 4 0
+calls sleepers: syscall 310 12 15 12 15 0
+calls sleepers: syscall 318 2 36 2 5 0
+calls sleepers: syscall 334 2 55 2 5 0
+calls sleepers: vector 0 0 0 118 6 0
+calls sleepers: vector 14 417 0 338 455 0
+calls sleepers: vector 32 388 0 169 208 39
+calls sleepers: take 1 0 0 59826 23083 4551
+calls sleepers: slept 1 0 0 2 2760 0
+calls sleepers: slept 5 0 0 2 8 0
+calls sleepers: slept 10 0 0 2 6 0
+calls sleepers: slept 12 0 0 10 22 3
+calls sleepers: slept 16 0 0 2 6 0
+calls sleepers: slept 59 0 0 3 41 0
+calls sleepers: slept 61 0 0 39801 16289 3343
+calls sleepers: slept 62 0 0 4 14 21
+calls sleepers: slept 80 0 0 2 6 0
+calls sleepers: slept 98 0 0 2 90 0
+calls sleepers: slept 110 0 0 40000 117829 2582
+calls sleepers: slept 158 0 0 2 6 0
+calls sleepers: slept 186 0 0 2 5 0
+calls sleepers: slept 218 0 0 2 5 0
+calls sleepers: slept 231 0 0 3 129 0
+calls sleepers: slept 267 0 0 2 10 0
+calls sleepers: slept 273 0 0 2 5 0
+calls sleepers: slept 302 0 0 2 1 5
+calls sleepers: slept 318 0 0 2 5 0
+calls sleepers: slept 334 0 0 2 5 0
+calls sleepers: kthread 0 0 0 23165 116313 2660 idle
+calls sleepers: ioctl 0x802c542a 2 53 4 11 0
+== round 2, getppid ==
+bench: getppid 20000: 1.1 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: getppid 20000: 967.8 ms, 48.39 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 974.0 ms, status 0
+bench: getppid 20000: 641.6 ms, 32.08 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 647.6 ms, status 0
+bench: getppid 20000: 3.1 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.3 ms, status 0
+== round 2, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.3 ms, status 0
+bench: ioctl 20000: 976.2 ms, 48.81 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 982.3 ms, status 0
+bench: ioctl 20000: 781.7 ms, 39.09 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 787.5 ms, status 0
+bench: ioctl 20000: 691.7 ms, 34.59 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 697.8 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 5.7 ms, 1.15 us an iteration, 479 voluntary, 0 involuntary
+bench: plain: whole run 8.7 ms, status 0
+bench: pingpong 5000: 788.2 ms, 157.65 us an iteration, 45075 voluntary, 0 involuntary
+bench: strace -f -c: whole run 794.2 ms, status 0
+bench: pingpong 5000: 385.9 ms, 77.18 us an iteration, 45124 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 391.8 ms, status 0
+bench: pingpong 5000: 351.1 ms, 70.22 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 356.8 ms, status 0
+== round 3, getppid ==
+bench: getppid 20000: 1.0 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: getppid 20000: 972.6 ms, 48.63 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 978.9 ms, status 0
+bench: getppid 20000: 643.4 ms, 32.17 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 649.4 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.1 ms, status 0
+== round 3, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.5 ms, status 0
+bench: ioctl 20000: 999.1 ms, 49.95 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 1005.4 ms, status 0
+bench: ioctl 20000: 660.6 ms, 33.03 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 666.4 ms, status 0
+bench: ioctl 20000: 676.6 ms, 33.83 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 682.6 ms, status 0
+== round 3, pingpong ==
+bench: pingpong 5000: 17.7 ms, 3.53 us an iteration, 2233 voluntary, 0 involuntary
+bench: plain: whole run 21.2 ms, status 0
+bench: pingpong 5000: 796.7 ms, 159.34 us an iteration, 45207 voluntary, 0 involuntary
+bench: strace -f -c: whole run 802.9 ms, status 0
+bench: pingpong 5000: 421.7 ms, 84.34 us an iteration, 45157 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 427.6 ms, status 0
+bench: pingpong 5000: 326.0 ms, 65.20 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 331.8 ms, status 0
+BENCH DONE
+
+== rach2-fix3: fix, rounds 2 and 3 with 500 sleepers, with the profiled runs ==
+bench: Linux 6.18.0-rach2, 4 processors
+bench: getppid 20000: 623.8 ms, 31.19 us an iteration, 40033 voluntary, 0 involuntary
+bench: profiled strace -f: whole run 631.7 ms, status 0
+calls alone: syscall 0 1 1 1 0 0
+calls alone: syscall 1 40042 35772 40041 29085 4
+calls alone: syscall 3 10 15 6 2 7
+calls alone: syscall 5 3 47 3 7 0
+calls alone: syscall 10 2 35 2 5 0
+calls alone: syscall 12 10 187 10 39 0
+calls alone: syscall 13 9 2 9 2 0
+calls alone: syscall 14 10 9 0 0 0
+calls alone: syscall 16 2 61 2 4 0
+calls alone: syscall 39 4 0 0 0 0
+calls alone: syscall 56 3 124 3 124 0
+calls alone: syscall 59 2 258 2 62 0
+calls alone: syscall 61 80094 1016121 80094 28414 145
+calls alone: syscall 62 3 21 3 52 0
+calls alone: syscall 63 1 0 1 0 0
+calls alone: syscall 72 8 9 0 0 0
+calls alone: syscall 80 1 127 1 22 0
+calls alone: syscall 98 1 77 1 4 0
+calls alone: syscall 101 80097 184579 80097 185284 9
+calls alone: syscall 102 3 0 0 0 0
+calls alone: syscall 104 1 0 0 0 0
+calls alone: syscall 107 2 0 0 0 0
+calls alone: syscall 110 20000 619329 20000 100194 113
+calls alone: syscall 158 2 58 2 4 0
+calls alone: syscall 186 1 33 1 5 0
+calls alone: syscall 218 2 31 2 4 0
+calls alone: syscall 231 0 0 3 34 0
+calls alone: syscall 257 3 41 4 36 0
+calls alone: syscall 262 1 1 1 0 0
+calls alone: syscall 267 2 52 2 10 0
+calls alone: syscall 273 5 31 1 4 0
+calls alone: syscall 293 3 2 3 2 0
+calls alone: syscall 302 2 32 2 4 0
+calls alone: syscall 310 12 16 12 16 0
+calls alone: syscall 318 2 33 2 5 0
+calls alone: syscall 334 2 42 2 5 0
+calls alone: vector 0 0 0 118 5 0
+calls alone: vector 14 431 0 353 618 0
+calls alone: vector 32 341 0 92 111 31
+calls alone: take 1 0 0 59955 23595 3338
+calls alone: slept 1 0 0 2 5020 0
+calls alone: slept 5 0 0 2 8 0
+calls alone: slept 10 0 0 2 5 0
+calls alone: slept 12 0 0 10 26 0
+calls alone: slept 16 0 0 2 6 0
+calls alone: slept 59 0 0 3 45 0
+calls alone: slept 61 0 0 39930 16154 2743
+calls alone: slept 62 0 0 4 14 13
+calls alone: slept 80 0 0 2 18 0
+calls alone: slept 98 0 0 2 6 0
+calls alone: slept 110 0 0 40000 108693 1489
+calls alone: slept 158 0 0 2 6 1
+calls alone: slept 186 0 0 2 11 0
+calls alone: slept 218 0 0 2 4 0
+calls alone: slept 231 0 0 3 83 0
+calls alone: slept 267 0 0 2 10 0
+calls alone: slept 273 0 0 2 4 0
+calls alone: slept 302 0 0 2 4 0
+calls alone: slept 318 0 0 2 4 0
+calls alone: slept 334 0 0 2 5 0
+calls alone: kthread 0 0 0 23224 107364 909 idle
+calls alone: ioctl 0x802c542a 2 61 4 11 0
+== round 0, getppid ==
+bench: getppid 20000: 1.0 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.9 ms, status 0
+bench: getppid 20000: 602.2 ms, 30.11 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 607.8 ms, status 0
+bench: getppid 20000: 646.2 ms, 32.31 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 651.3 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.7 ms, status 0
+== round 0, ioctl ==
+bench: ioctl 20000: 1.4 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.1 ms, status 0
+bench: ioctl 20000: 641.6 ms, 32.08 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 646.8 ms, status 0
+bench: ioctl 20000: 645.3 ms, 32.27 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 650.5 ms, status 0
+bench: ioctl 20000: 677.0 ms, 33.85 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 682.1 ms, status 0
+== round 0, pingpong ==
+bench: pingpong 5000: 8.5 ms, 1.69 us an iteration, 849 voluntary, 0 involuntary
+bench: plain: whole run 11.3 ms, status 0
+bench: pingpong 5000: 418.6 ms, 83.71 us an iteration, 45170 voluntary, 0 involuntary
+bench: strace -f -c: whole run 423.7 ms, status 0
+bench: pingpong 5000: 459.3 ms, 91.85 us an iteration, 45189 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 465.5 ms, status 0
+bench: pingpong 5000: 310.4 ms, 62.09 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 315.9 ms, status 0
+== round 1, getppid ==
+bench: getppid 20000: 1.1 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.1 ms, status 0
+bench: getppid 20000: 619.0 ms, 30.95 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 624.8 ms, status 0
+bench: getppid 20000: 635.4 ms, 31.77 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 640.8 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.4 ms, status 0
+== round 1, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: ioctl 20000: 616.1 ms, 30.80 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 621.5 ms, status 0
+bench: ioctl 20000: 679.6 ms, 33.98 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 684.7 ms, status 0
+bench: ioctl 20000: 697.3 ms, 34.86 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 702.2 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 6.8 ms, 1.36 us an iteration, 629 voluntary, 0 involuntary
+bench: plain: whole run 9.7 ms, status 0
+bench: pingpong 5000: 435.7 ms, 87.14 us an iteration, 45184 voluntary, 0 involuntary
+bench: strace -f -c: whole run 441.2 ms, status 0
+bench: pingpong 5000: 412.8 ms, 82.56 us an iteration, 45176 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 418.0 ms, status 0
+bench: pingpong 5000: 332.1 ms, 66.41 us an iteration, 25031 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 337.2 ms, status 0
+bench: 500 sleeping processes started
+bench: getppid 20000: 661.9 ms, 33.09 us an iteration, 40033 voluntary, 0 involuntary
+bench: profiled strace -f: whole run 667.4 ms, status 0
+calls sleepers: syscall 0 1 1 1 1 0
+calls sleepers: syscall 1 40042 34679 40042 30061 13
+calls sleepers: syscall 3 10 8 6 3 0
+calls sleepers: syscall 5 3 47 3 7 0
+calls sleepers: syscall 10 2 34 2 4 0
+calls sleepers: syscall 12 10 160 10 24 0
+calls sleepers: syscall 13 9 45 9 44 0
+calls sleepers: syscall 14 10 1 0 0 0
+calls sleepers: syscall 16 2 54 2 5 0
+calls sleepers: syscall 39 4 0 0 0 0
+calls sleepers: syscall 56 3 113 3 113 0
+calls sleepers: syscall 59 2 225 2 39 0
+calls sleepers: syscall 61 80094 1074231 80094 30631 233
+calls sleepers: syscall 62 3 30 3 73 0
+calls sleepers: syscall 63 1 0 1 0 0
+calls sleepers: syscall 72 8 1 0 0 0
+calls sleepers: syscall 80 1 30 1 7 0
+calls sleepers: syscall 98 1 52 1 4 0
+calls sleepers: syscall 101 80097 196919 80097 197549 11
+calls sleepers: syscall 102 3 0 0 0 0
+calls sleepers: syscall 104 1 0 0 0 0
+calls sleepers: syscall 107 2 0 0 0 0
+calls sleepers: syscall 110 20000 657677 20000 106042 134
+calls sleepers: syscall 158 2 37 2 4 0
+calls sleepers: syscall 186 1 25 1 4 0
+calls sleepers: syscall 218 2 30 2 4 0
+calls sleepers: syscall 231 0 0 3 71 0
+calls sleepers: syscall 257 3 27 4 23 0
+calls sleepers: syscall 262 1 1 1 1 0
+calls sleepers: syscall 267 2 51 2 11 0
+calls sleepers: syscall 273 5 30 1 4 0
+calls sleepers: syscall 293 3 3 3 3 0
+calls sleepers: syscall 302 2 32 2 5 0
+calls sleepers: syscall 310 12 15 12 15 0
+calls sleepers: syscall 318 2 33 2 5 0
+calls sleepers: syscall 334 2 39 2 5 0
+calls sleepers: vector 0 0 0 119 6 0
+calls sleepers: vector 14 414 0 338 408 0
+calls sleepers: vector 32 482 0 122 279 1597
+calls sleepers: take 1 0 0 59949 26965 3964
+calls sleepers: slept 1 0 0 2 2869 0
+calls sleepers: slept 5 0 0 2 8 0
+calls sleepers: slept 10 0 0 2 6 0
+calls sleepers: slept 12 0 0 10 25 0
+calls sleepers: slept 16 0 0 2 6 0
+calls sleepers: slept 59 0 0 3 58 0
+calls sleepers: slept 61 0 0 39923 17676 3226
+calls sleepers: slept 62 0 0 4 9 0
+calls sleepers: slept 80 0 0 2 6 0
+calls sleepers: slept 98 0 0 2 5 0
+calls sleepers: slept 110 0 0 40000 113606 1624
+calls sleepers: slept 158 0 0 2 4 0
+calls sleepers: slept 186 0 0 2 5 0
+calls sleepers: slept 218 0 0 2 5 0
+calls sleepers: slept 231 0 0 3 143 0
+calls sleepers: slept 267 0 0 2 10 0
+calls sleepers: slept 273 0 0 2 4 0
+calls sleepers: slept 302 0 0 2 5 0
+calls sleepers: slept 318 0 0 2 5 0
+calls sleepers: slept 334 0 0 2 5 0
+calls sleepers: kthread 0 0 0 22619 109239 1908 idle
+calls sleepers: ioctl 0x802c542a 2 54 4 11 0
+== round 2, getppid ==
+bench: getppid 20000: 1.0 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.0 ms, status 0
+bench: getppid 20000: 606.7 ms, 30.33 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 619.4 ms, status 0
+bench: getppid 20000: 622.5 ms, 31.13 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 630.3 ms, status 0
+bench: getppid 20000: 3.2 ms, 0.16 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 8.2 ms, status 0
+== round 2, ioctl ==
+bench: ioctl 20000: 1.5 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.3 ms, status 0
+bench: ioctl 20000: 634.9 ms, 31.74 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 640.7 ms, status 0
+bench: ioctl 20000: 661.6 ms, 33.08 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 667.4 ms, status 0
+bench: ioctl 20000: 672.8 ms, 33.64 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 678.3 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 5.8 ms, 1.16 us an iteration, 427 voluntary, 0 involuntary
+bench: plain: whole run 8.6 ms, status 0
+bench: pingpong 5000: 395.6 ms, 79.12 us an iteration, 45144 voluntary, 0 involuntary
+bench: strace -f -c: whole run 401.4 ms, status 0
+bench: pingpong 5000: 435.8 ms, 87.16 us an iteration, 45172 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 441.5 ms, status 0
+bench: pingpong 5000: 326.6 ms, 65.33 us an iteration, 25034 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 332.1 ms, status 0
+== round 3, getppid ==
+bench: getppid 20000: 1.0 ms, 0.05 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 3.8 ms, status 0
+bench: getppid 20000: 591.5 ms, 29.58 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -c: whole run 597.1 ms, status 0
+bench: getppid 20000: 625.4 ms, 31.27 us an iteration, 40033 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 633.9 ms, status 0
+bench: getppid 20000: 3.1 ms, 0.15 us an iteration, 6 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 7.9 ms, status 0
+== round 3, ioctl ==
+bench: ioctl 20000: 1.4 ms, 0.07 us an iteration, 0 voluntary, 0 involuntary
+bench: plain: whole run 4.2 ms, status 0
+bench: ioctl 20000: 604.7 ms, 30.23 us an iteration, 40035 voluntary, 0 involuntary
+bench: strace -f -c: whole run 616.0 ms, status 0
+bench: ioctl 20000: 673.6 ms, 33.68 us an iteration, 40036 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 681.9 ms, status 0
+bench: ioctl 20000: 694.2 ms, 34.71 us an iteration, 40006 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 699.6 ms, status 0
+== round 3, pingpong ==
+bench: pingpong 5000: 13.0 ms, 2.61 us an iteration, 1503 voluntary, 0 involuntary
+bench: plain: whole run 16.4 ms, status 0
+bench: pingpong 5000: 437.4 ms, 87.47 us an iteration, 45176 voluntary, 0 involuntary
+bench: strace -f -c: whole run 444.0 ms, status 0
+bench: pingpong 5000: 431.7 ms, 86.33 us an iteration, 45186 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 437.4 ms, status 0
+bench: pingpong 5000: 328.6 ms, 65.72 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 334.6 ms, status 0
+BENCH DONE
+
+== pp-rach2: fix, two-thread ping-pong alone, eight rounds, at 21:33 UTC+6 ==
+bench: Linux 6.18.0-rach2, 4 processors
+== round 0, pingpong ==
+bench: pingpong 5000: 6.2 ms, 1.25 us an iteration, 640 voluntary, 0 involuntary
+bench: plain: whole run 9.0 ms, status 0
+bench: pingpong 5000: 373.5 ms, 74.71 us an iteration, 45156 voluntary, 0 involuntary
+bench: strace -f -c: whole run 378.5 ms, status 0
+bench: pingpong 5000: 366.8 ms, 73.35 us an iteration, 45201 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 372.1 ms, status 0
+bench: pingpong 5000: 288.3 ms, 57.67 us an iteration, 25031 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 293.8 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 2.9 ms, 0.58 us an iteration, 89 voluntary, 0 involuntary
+bench: plain: whole run 5.7 ms, status 0
+bench: pingpong 5000: 390.6 ms, 78.12 us an iteration, 45220 voluntary, 0 involuntary
+bench: strace -f -c: whole run 395.6 ms, status 0
+bench: pingpong 5000: 373.1 ms, 74.62 us an iteration, 45161 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 378.4 ms, status 0
+bench: pingpong 5000: 289.3 ms, 57.86 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 294.3 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 4.9 ms, 0.98 us an iteration, 419 voluntary, 0 involuntary
+bench: plain: whole run 7.7 ms, status 0
+bench: pingpong 5000: 387.8 ms, 77.56 us an iteration, 45257 voluntary, 0 involuntary
+bench: strace -f -c: whole run 393.2 ms, status 0
+bench: pingpong 5000: 373.4 ms, 74.67 us an iteration, 45184 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 378.6 ms, status 0
+bench: pingpong 5000: 290.2 ms, 58.05 us an iteration, 25030 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 295.2 ms, status 0
+== round 3, pingpong ==
+bench: pingpong 5000: 11.0 ms, 2.21 us an iteration, 1363 voluntary, 0 involuntary
+bench: plain: whole run 14.2 ms, status 0
+bench: pingpong 5000: 394.5 ms, 78.90 us an iteration, 45149 voluntary, 0 involuntary
+bench: strace -f -c: whole run 399.6 ms, status 0
+bench: pingpong 5000: 390.4 ms, 78.08 us an iteration, 45172 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 395.4 ms, status 0
+bench: pingpong 5000: 290.2 ms, 58.04 us an iteration, 25032 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 297.3 ms, status 0
+== round 4, pingpong ==
+bench: pingpong 5000: 5.7 ms, 1.14 us an iteration, 565 voluntary, 0 involuntary
+bench: plain: whole run 8.4 ms, status 0
+bench: pingpong 5000: 392.1 ms, 78.41 us an iteration, 45157 voluntary, 0 involuntary
+bench: strace -f -c: whole run 397.4 ms, status 0
+bench: pingpong 5000: 387.2 ms, 77.45 us an iteration, 45173 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 392.3 ms, status 0
+bench: pingpong 5000: 292.6 ms, 58.52 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 297.2 ms, status 0
+== round 5, pingpong ==
+bench: pingpong 5000: 19.2 ms, 3.85 us an iteration, 2683 voluntary, 0 involuntary
+bench: plain: whole run 22.5 ms, status 0
+bench: pingpong 5000: 398.9 ms, 79.78 us an iteration, 45199 voluntary, 0 involuntary
+bench: strace -f -c: whole run 404.3 ms, status 0
+bench: pingpong 5000: 381.2 ms, 76.24 us an iteration, 45202 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 386.5 ms, status 0
+bench: pingpong 5000: 292.7 ms, 58.53 us an iteration, 25031 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 297.5 ms, status 0
+== round 6, pingpong ==
+bench: pingpong 5000: 5.2 ms, 1.05 us an iteration, 446 voluntary, 0 involuntary
+bench: plain: whole run 8.0 ms, status 0
+bench: pingpong 5000: 399.1 ms, 79.82 us an iteration, 45151 voluntary, 0 involuntary
+bench: strace -f -c: whole run 404.4 ms, status 0
+bench: pingpong 5000: 385.2 ms, 77.04 us an iteration, 45207 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 390.5 ms, status 0
+bench: pingpong 5000: 292.1 ms, 58.43 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 296.9 ms, status 0
+== round 7, pingpong ==
+bench: pingpong 5000: 5.5 ms, 1.10 us an iteration, 459 voluntary, 0 involuntary
+bench: plain: whole run 8.4 ms, status 0
+bench: pingpong 5000: 396.1 ms, 79.22 us an iteration, 45184 voluntary, 0 involuntary
+bench: strace -f -c: whole run 401.3 ms, status 0
+bench: pingpong 5000: 374.1 ms, 74.83 us an iteration, 45156 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 379.3 ms, status 0
+bench: pingpong 5000: 298.0 ms, 59.59 us an iteration, 25024 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 303.1 ms, status 0
+BENCH DONE
+
+== pp-linux: linux, the same ==
+bench: Linux 6.12.107+deb13-cloud-amd64, 4 processors
+== round 0, pingpong ==
+bench: pingpong 5000: 65.8 ms, 13.17 us an iteration, 9964 voluntary, 0 involuntary
+bench: plain: whole run 71.7 ms, status 0
+bench: pingpong 5000: 356.0 ms, 71.21 us an iteration, 45116 voluntary, 0 involuntary
+bench: strace -f -c: whole run 359.7 ms, status 0
+bench: pingpong 5000: 319.0 ms, 63.81 us an iteration, 45107 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 322.8 ms, status 0
+bench: pingpong 5000: 297.7 ms, 59.53 us an iteration, 25024 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 301.2 ms, status 0
+== round 1, pingpong ==
+bench: pingpong 5000: 65.6 ms, 13.11 us an iteration, 9968 voluntary, 0 involuntary
+bench: plain: whole run 68.4 ms, status 0
+bench: pingpong 5000: 349.9 ms, 69.98 us an iteration, 45117 voluntary, 0 involuntary
+bench: strace -f -c: whole run 354.2 ms, status 0
+bench: pingpong 5000: 326.3 ms, 65.27 us an iteration, 45086 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 329.9 ms, status 0
+bench: pingpong 5000: 289.7 ms, 57.94 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 292.2 ms, status 0
+== round 2, pingpong ==
+bench: pingpong 5000: 65.5 ms, 13.09 us an iteration, 9966 voluntary, 1 involuntary
+bench: plain: whole run 66.0 ms, status 0
+bench: pingpong 5000: 341.6 ms, 68.32 us an iteration, 45137 voluntary, 0 involuntary
+bench: strace -f -c: whole run 346.9 ms, status 0
+bench: pingpong 5000: 328.5 ms, 65.71 us an iteration, 45117 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 332.1 ms, status 0
+bench: pingpong 5000: 288.7 ms, 57.74 us an iteration, 25024 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 292.3 ms, status 0
+== round 3, pingpong ==
+bench: pingpong 5000: 65.5 ms, 13.09 us an iteration, 9961 voluntary, 0 involuntary
+bench: plain: whole run 66.9 ms, status 0
+bench: pingpong 5000: 352.3 ms, 70.46 us an iteration, 45130 voluntary, 0 involuntary
+bench: strace -f -c: whole run 355.9 ms, status 0
+bench: pingpong 5000: 335.8 ms, 67.15 us an iteration, 45115 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 339.3 ms, status 0
+bench: pingpong 5000: 290.4 ms, 58.08 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 293.8 ms, status 0
+== round 4, pingpong ==
+bench: pingpong 5000: 65.5 ms, 13.10 us an iteration, 9960 voluntary, 0 involuntary
+bench: plain: whole run 66.0 ms, status 0
+bench: pingpong 5000: 337.9 ms, 67.59 us an iteration, 45101 voluntary, 0 involuntary
+bench: strace -f -c: whole run 341.3 ms, status 0
+bench: pingpong 5000: 329.0 ms, 65.80 us an iteration, 45089 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 332.5 ms, status 0
+bench: pingpong 5000: 289.3 ms, 57.87 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 292.7 ms, status 0
+== round 5, pingpong ==
+bench: pingpong 5000: 65.6 ms, 13.12 us an iteration, 9967 voluntary, 0 involuntary
+bench: plain: whole run 67.4 ms, status 0
+bench: pingpong 5000: 351.1 ms, 70.22 us an iteration, 45131 voluntary, 0 involuntary
+bench: strace -f -c: whole run 354.7 ms, status 0
+bench: pingpong 5000: 330.4 ms, 66.07 us an iteration, 45116 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 333.7 ms, status 0
+bench: pingpong 5000: 288.9 ms, 57.77 us an iteration, 25025 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 292.3 ms, status 0
+== round 6, pingpong ==
+bench: pingpong 5000: 65.6 ms, 13.12 us an iteration, 9960 voluntary, 0 involuntary
+bench: plain: whole run 66.2 ms, status 0
+bench: pingpong 5000: 347.0 ms, 69.40 us an iteration, 45113 voluntary, 0 involuntary
+bench: strace -f -c: whole run 351.8 ms, status 0
+bench: pingpong 5000: 329.2 ms, 65.85 us an iteration, 45108 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 332.7 ms, status 0
+bench: pingpong 5000: 288.4 ms, 57.68 us an iteration, 25022 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 292.4 ms, status 0
+== round 7, pingpong ==
+bench: pingpong 5000: 65.7 ms, 13.15 us an iteration, 9963 voluntary, 0 involuntary
+bench: plain: whole run 67.4 ms, status 0
+bench: pingpong 5000: 345.7 ms, 69.13 us an iteration, 45117 voluntary, 0 involuntary
+bench: strace -f -c: whole run 349.3 ms, status 0
+bench: pingpong 5000: 338.8 ms, 67.75 us an iteration, 45096 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 342.2 ms, status 0
+bench: pingpong 5000: 288.8 ms, 57.77 us an iteration, 25025 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 292.4 ms, status 0
+BENCH DONE
+
+== ppprof-rach2: fix, one profiled strace -f -e trace=ioctl run of the ping-pong ==
+bench: Linux 6.18.0-rach2, 4 processors
+bench: pingpong 5000: 367.5 ms, 73.51 us an iteration, 45136 voluntary, 0 involuntary
+bench: profiled strace -f: whole run 373.5 ms, status 0
+calls alone: syscall 0 10001 368507 10001 29265 3983
+calls alone: syscall 1 10007 364933 10006 31786 3758
+calls alone: syscall 3 10 6 6 3 0
+calls alone: syscall 5 3 32 3 8 0
+calls alone: syscall 9 1 24 1 4 0
+calls alone: syscall 10 2 26 2 4 0
+calls alone: syscall 12 10 162 10 55 0
+calls alone: syscall 13 10 31 10 7 0
+calls alone: syscall 14 15 135 5 24 0
+calls alone: syscall 16 2 833 2 4 0
+calls alone: syscall 28 2 58 2 8 0
+calls alone: syscall 39 4 0 0 0 0
+calls alone: syscall 56 3 125 3 126 0
+calls alone: syscall 59 2 118 2 56 0
+calls alone: syscall 60 0 0 1 4 0
+calls alone: syscall 61 65224 564489 65224 21294 13507
+calls alone: syscall 62 3 11 3 61 0
+calls alone: syscall 63 1 0 1 0 0
+calls alone: syscall 72 8 8 0 0 0
+calls alone: syscall 80 1 38 1 7 0
+calls alone: syscall 98 1 27 1 6 0
+calls alone: syscall 101 60130 165857 60130 166114 145
+calls alone: syscall 102 3 0 0 0 0
+calls alone: syscall 104 1 0 0 0 0
+calls alone: syscall 107 2 0 0 0 0
+calls alone: syscall 158 2 24 2 5 0
+calls alone: syscall 186 1 29 1 4 0
+calls alone: syscall 202 1 195 1 4 0
+calls alone: syscall 218 2 24 2 4 0
+calls alone: syscall 231 0 0 3 38 0
+calls alone: syscall 257 3 32 4 28 0
+calls alone: syscall 262 1 1 1 0 0
+calls alone: syscall 267 2 38 2 8 0
+calls alone: syscall 273 6 55 2 9 0
+calls alone: syscall 293 5 117 5 26 0
+calls alone: syscall 302 2 65 2 23 0
+calls alone: syscall 310 2 4 2 4 0
+calls alone: syscall 318 2 25 2 5 0
+calls alone: syscall 334 3 58 3 15 0
+calls alone: syscall 435 1 59 1 4 0
+calls alone: vector 0 0 0 123 6 5
+calls alone: vector 14 424 0 346 593 11
+calls alone: vector 32 297 0 22 25 109
+calls alone: take 1 0 0 35502 28217 95549
+calls alone: slept 0 0 0 25068 14410 79842
+calls alone: slept 1 0 0 20002 54840 51901
+calls alone: slept 5 0 0 2 6 0
+calls alone: slept 9 0 0 2 5 0
+calls alone: slept 10 0 0 2 5 0
+calls alone: slept 12 0 0 10 25 0
+calls alone: slept 13 0 0 2 4 0
+calls alone: slept 14 0 0 10 21 4
+calls alone: slept 16 0 0 2 6 0
+calls alone: slept 28 0 0 4 19 0
+calls alone: slept 59 0 0 3 35 0
+calls alone: slept 60 0 0 2 28 0
+calls alone: slept 61 0 0 15461 22020 23857
+calls alone: slept 62 0 0 4 12 0
+calls alone: slept 80 0 0 2 13 0
+calls alone: slept 98 0 0 2 5 0
+calls alone: slept 158 0 0 2 4 0
+calls alone: slept 186 0 0 2 10 0
+calls alone: slept 202 0 0 3 4 3
+calls alone: slept 218 0 0 2 4 0
+calls alone: slept 231 0 0 3 61 0
+calls alone: slept 267 0 0 2 11 0
+calls alone: slept 273 0 0 4 12 0
+calls alone: slept 293 0 0 4 40 0
+calls alone: slept 302 0 0 2 6 0
+calls alone: slept 318 0 0 2 4 0
+calls alone: slept 334 0 0 4 11 0
+calls alone: slept 435 0 0 3 32 0
+calls alone: kthread 0 0 0 25187 63527 60062 idle
+calls alone: ioctl 0x802c542a 2 833 4 11 0
+bench: pingpong 5000: 5.5 ms, 1.10 us an iteration, 507 voluntary, 0 involuntary
+bench: plain: whole run 8.3 ms, status 0
+bench: pingpong 5000: 381.3 ms, 76.25 us an iteration, 45186 voluntary, 0 involuntary
+bench: strace -f -c: whole run 386.5 ms, status 0
+bench: pingpong 5000: 364.7 ms, 72.95 us an iteration, 45143 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 370.0 ms, status 0
+bench: pingpong 5000: 284.4 ms, 56.88 us an iteration, 25028 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 289.1 ms, status 0
+bench: /strace 5000: 8.4 ms, 1.68 us an iteration, 953 voluntary, 0 involuntary
+bench: plain: whole run 11.1 ms, status 0
+bench: /strace 5000: 389.3 ms, 77.87 us an iteration, 45184 voluntary, 0 involuntary
+bench: strace -f -c: whole run 394.4 ms, status 0
+bench: /strace 5000: 377.8 ms, 75.56 us an iteration, 45157 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 383.0 ms, status 0
+bench: /strace 5000: 287.2 ms, 57.45 us an iteration, 25032 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 292.3 ms, status 0
+bench: /tmp/bpf.txt 5000: 4.2 ms, 0.85 us an iteration, 284 voluntary, 0 involuntary
+bench: plain: whole run 7.5 ms, status 0
+bench: /tmp/bpf.txt 5000: 389.1 ms, 77.83 us an iteration, 45166 voluntary, 0 involuntary
+bench: strace -f -c: whole run 394.5 ms, status 0
+bench: /tmp/bpf.txt 5000: 379.8 ms, 75.96 us an iteration, 45198 voluntary, 0 involuntary
+bench: strace -f -e ioctl: whole run 385.5 ms, status 0
+bench: /tmp/bpf.txt 5000: 289.4 ms, 57.89 us an iteration, 25023 voluntary, 0 involuntary
+bench: strace -f --seccomp-bpf -e ioctl: whole run 294.1 ms, status 0
+BENCH DONE
