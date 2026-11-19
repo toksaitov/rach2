@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Check the boot session and measure browser and ALSA tones through OSS."""
+"""Start the desktop session, check it and measure browser and ALSA tones through OSS."""
 import array
 import fcntl
 import http.server
@@ -66,7 +66,7 @@ finally:
 
 
 def session():
-    """Wait for the compositor and check its identity, seat and input database."""
+    """Start the compositor and check its identity, seat and input database."""
     original = os.open("/sys/class/net", os.O_PATH | os.O_DIRECTORY)
     reopened = None
     try:
@@ -102,6 +102,12 @@ def session():
             if reopened is not None:
                 os.close(reopened)
     runtime = Path("/run/user/1001")
+    # The supervisor starts the session on SIGHUP, not at boot; its pid
+    # file is there once the seat socket exists.
+    supervisor = Path("/run/rach2-desktop.pid")
+    while not supervisor.exists() or not supervisor.read_text().endswith("\n"):
+        time.sleep(0.1)
+    os.kill(int(supervisor.read_text()), signal.SIGHUP)
     while not (runtime / "wayland-0").is_socket():
         time.sleep(0.1)
     found = False

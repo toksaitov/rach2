@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Drive the boot session on a display: its output, GL, modes, death and input.
+"""Drive the desktop session on a display: its start, output, GL, modes, death and input.
 
 Each subcommand prints `desktop: result: ...` lines that the desktop family's
 scenario judges, and `desktop: ready: ...` where the scenario must act on the
@@ -119,10 +119,23 @@ def ended(offset):
         time.sleep(0.2)
 
 
+def supervisor():
+    """Wait for the supervisor's pid file, whole, and give its pid."""
+    while True:
+        try:
+            text = SUPERVISOR.read_text()
+        except FileNotFoundError:
+            text = ""
+        if text.endswith("\n"):
+            return int(text)
+        time.sleep(0.2)
+
+
 def restart():
-    """Start the session again through the supervisor and wait for its output."""
+    """Start the session, or start it again, through the supervisor and wait
+    for its output."""
     offset = log_size()
-    os.kill(int(SUPERVISOR.read_text()), signal.SIGHUP)
+    os.kill(supervisor(), signal.SIGHUP)
     result = drm_output(offset)
     sockets()
     return result
@@ -140,9 +153,9 @@ def kill():
 
 
 def cmd_drm():
-    """Report the boot session's output on DRM."""
-    renderer, output, mode = drm_output(0)
-    sockets()
+    """Start the session, which the boot does not, and report its output on
+    DRM."""
+    renderer, output, mode = restart()
     print("desktop: result: drm: %s renderer, output %s, mode %s" % (renderer.lower(), output,
                                                                     mode), flush=True)
 
@@ -165,7 +178,7 @@ def capture(program):
 def cmd_console(program):
     """Compare the console's frame before Weston starts and after its SIGKILL.
 
-    The session started at boot is killed first, so that the console has the
+    A session that runs is killed first, so that the console has the
     screen; the session is started again and killed again. The console
     mirrors the serial line, so nothing is printed until the end, and the
     console's text is the same at both captures.
