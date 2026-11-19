@@ -415,6 +415,19 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk);
 int bcache_sync_block_ordered(block_device_t *dev, uint64_t blk);
 
 /**
+ * Write, as `bcache_sync_block` writes each, the dirty blocks of `dev` that
+ * wait by an order for block `blk` (`bcache_order_after`), so that a block
+ * just written takes with it to the device what was ordered after it: an
+ * inode table's block the entries that name its new inodes. The blocks are
+ * gathered once, at most BCACHE_WAITING of them, and one that comes to
+ * wait meanwhile is left, so a steady writer does not keep the call.
+ *
+ * @return 0, or the first failure's -errno with its buffer still dirty.
+ */
+#define BCACHE_WAITING 64
+int bcache_sync_waiting(block_device_t *dev, uint64_t blk);
+
+/**
  * Clear the way for `bcache_sync_block` of the same block, for a caller that
  * must check something in the same step as that call takes the block: it
  * writes what the block waits for, one write a call.
