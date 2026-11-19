@@ -426,8 +426,8 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
  *
  * Returns 0; KRFFS_EBAD for KRFFS_NO_NODE, the root, a directory, a node
  * that is not reserved, or a write that failed; KRFFS_ENOSPACE when the
- * file could not grow; or KRFFS_EIO when a shrink's length or writeback
- * failed.
+ * file could not grow; or KRFFS_EIO when a shrink's length, header or
+ * writeback failed.
  */
 int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
                            uint64_t *node_out);

@@ -1098,6 +1098,32 @@ static void failed_link(void)
     }
 }
 
+/** A failed second shrink flush leaves the old extent and shortened data. */
+static void failed_shrink_flush(void)
+{
+    krffs_mount_t *fs;
+    krffs_node_t head;
+    uint64_t at;
+    int fd;
+    void *handle;
+
+    setup();
+    fd = open_node(create("a"));
+    handle = fd_slot(&table, fd)->ofd->fhandle;
+    k_memset(payload, 'a', sizeof(payload));
+    check(kv_write(&mount, handle, payload, 4096, 0) == 4096, "shrink flush: seed a");
+    at = follow_moves(handle);
+    fs = &vol_of(&mount)->fs;
+    flush_calls = 0;
+    fail_flush_at = 2;
+    check(kv_truncate(&mount, handle, 100) == -EIO && flush_calls == 2,
+          "shrink flush: the failed header flush returns EIO");
+    check(krffs_head(fs, at, &head) == 0 && head.size == sizeof(head) + 4096 &&
+              head.data_size == 100 && krffs_chain_is_valid(fs),
+          "shrink flush: the old extent and shorter length stay consistent");
+    teardown();
+}
+
 /**
  * A mount a failed write made read-only syncs the whole device at an fsync
  * of one file, since the failed sync point may have left any file's blocks
@@ -1175,6 +1201,7 @@ int main(void)
     shrink_link(0);
     shrink_link(1);
     failed_link();
+    failed_shrink_flush();
     owned_after_failure();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");

@@ -1287,13 +1287,11 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
     if (next->type == KRFFS_FREE_NODE) {
         free_size += next->size;
     }
-    if (krffs_write_free_header(mount, surplus, free_size, size) != 0) {
-        return 0;
-    }
-    if (krffs_flush_shrink(mount) != 0) {
+    if (krffs_write_free_header(mount, surplus, free_size, size) != 0 ||
+        krffs_flush_shrink(mount) != 0 || krffs_sync_point(mount) != 0) {
         return -1;
     }
-    if (krffs_sync_point(mount) == 0 && krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size) == 0) {
+    if (krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size) == 0) {
         krffs_fix_backward_link(mount, surplus, free_size);
     }
     return 0;
