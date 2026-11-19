@@ -222,12 +222,11 @@ static int user_poke(process_t *t, unsigned long off, unsigned long v)
 }
 
 /** PTRACE_GETFPREGS, SETFPREGS, GETFPXREGS and SETFPXREGS: copy the
- * floating-point state of `t`, the thread `pid`, to or from the user at
+ * floating-point state of the frozen thread `t`, to or from the user at
  * `data`, as the 108-byte `user_i387_struct` or, with `fx`, the 512-byte
  * `fxsave` image. -EIO for the image on a processor without FXSR, -EINVAL for
- * one `fxrstor` would fault on, -ESRCH for a thread that left its stop during
- * the copy. */
-static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int fx, int set)
+ * one `fxrstor` would fault on. */
+static int fp_access(process_t *t, uintptr_t data, int fx, int set)
 {
     uint8_t buf[FX_SIZE];
     uint32_t len = fx ? FX_SIZE : FPU_ENV_SIZE;
@@ -245,10 +244,6 @@ static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int fx, int set
     }
     if (copy_from_user(buf, (const void __user *)data, len) != 0) {
         return -EFAULT;
-    }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
     }
     if (fx) {
         return fpu_fx_set(t->fpu, buf) == 0 ? 0 : -EINVAL;
@@ -347,14 +342,14 @@ long arch_regset_set(process_t *t, unsigned long type, const uint8_t *in, uint32
 
 /**
  * PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA: the TLS entry `idx` of
- * `t`, the thread `pid`, as a `user_desc` at `data`.
+ * the frozen thread `t`, as a `user_desc` at `data`.
  *
  * Linux i386 has three TLS entries, 6 to 8, and GDB reads and writes back all
  * three. The kernel has one, GDT_TLS_ENTRY; the other two read as Linux reads
  * an unused entry, and a write to them may only leave them unused, in either
  * of the two forms Linux takes for that.
  */
-static int tls_access(uint32_t pid, process_t *t, unsigned long idx, uintptr_t data, int set)
+static int tls_access(process_t *t, unsigned long idx, uintptr_t data, int set)
 {
     user_desc_t desc;
     uint32_t base;
@@ -384,21 +379,17 @@ static int tls_access(uint32_t pid, process_t *t, unsigned long idx, uintptr_t d
             (kind != 0 && kind != (UD_READ_EXEC_ONLY | UD_SEG_NOT_PRESENT))) {
             return -EINVAL;
         }
-        return ptrace_tracee(pid) ? 0 : -ESRCH;
+        return 0;
     }
     desc.entry_number = (uint32_t)idx;
     if (tls_resolve_base(&desc, &base) != 0) {
         return -EINVAL;
     }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
-    }
     t->tls_base = base;
     return 0;
 }
 
-long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, unsigned long data)
+long arch_ptrace(process_t *t, long request, unsigned long addr, unsigned long data)
 {
     unsigned long word;
     unsigned long r[R_COUNT];
@@ -421,10 +412,6 @@ long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, u
         if (copy_from_user(r, (const void __user *)data, sizeof(r)) != 0) {
             return -EFAULT;
         }
-        t = ptrace_tracee(pid);
-        if (!t) {
-            return -ESRCH;
-        }
         for (i = 0; i < R_COUNT; i++) {
             rc = regs_set(t, i, r[i]);
             if (rc != 0) {
@@ -434,13 +421,13 @@ long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, u
         return 0;
     case PTRACE_GETFPREGS:
     case PTRACE_SETFPREGS:
-        return fp_access(pid, t, data, 0, request == PTRACE_SETFPREGS);
+        return fp_access(t, data, 0, request == PTRACE_SETFPREGS);
     case PTRACE_GETFPXREGS:
     case PTRACE_SETFPXREGS:
-        return fp_access(pid, t, data, 1, request == PTRACE_SETFPXREGS);
+        return fp_access(t, data, 1, request == PTRACE_SETFPXREGS);
     case PTRACE_GET_THREAD_AREA:
     case PTRACE_SET_THREAD_AREA:
-        return tls_access(pid, t, addr, data, request == PTRACE_SET_THREAD_AREA);
+        return tls_access(t, addr, data, request == PTRACE_SET_THREAD_AREA);
     default:
         return -EIO;
     }

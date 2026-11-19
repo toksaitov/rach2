@@ -403,11 +403,10 @@ static int user_poke(process_t *t, unsigned long off, unsigned long v)
 }
 
 /** PTRACE_GETFPREGS and PTRACE_SETFPREGS: copy the floating-point state of
- * `t`, the thread `pid`, to or from the user at `data` as the 512-byte
+ * the frozen thread `t`, to or from the user at `data` as the 512-byte
  * `user_i387_struct`, which is the `fxsave64` image. -EFAULT for a buffer
- * that cannot be copied, -EINVAL for an image `fxrstor64` would fault on,
- * and -ESRCH for a thread that left its stop during the copy. */
-static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int set)
+ * that cannot be copied, -EINVAL for an image `fxrstor64` would fault on. */
+static int fp_access(process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[FX_SIZE];
 
@@ -417,10 +416,6 @@ static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int set)
     }
     if (copy_from_user(buf, (const void __user *)data, sizeof(buf)) != 0) {
         return -EFAULT;
-    }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
     }
     return fpu_fx_set(t->fpu, buf) == 0 ? 0 : -EINVAL;
 }
@@ -483,10 +478,10 @@ static long regs32_set_all(process_t *t, const uint8_t *in, uint32_t len)
 }
 
 /** An i386 tracer's PTRACE_GETFPREGS and PTRACE_SETFPREGS: the 108-byte
- * `user_i387_ia32_struct` of `t`, the thread `pid`, at `data`, with the
- * selectors `fpu_env32_get` takes. -EFAULT, or -ESRCH for a thread that
- * left its stop during the copy. */
-static int fp32_access(uint32_t pid, process_t *t, uintptr_t data, int set)
+ * `user_i387_ia32_struct` of the frozen thread `t` at `data`, with the
+ * selectors `fpu_env32_get` takes. -EFAULT for a buffer that cannot be
+ * copied. */
+static int fp32_access(process_t *t, uintptr_t data, int set)
 {
     uint8_t env[FPU_ENV_SIZE];
 
@@ -497,24 +492,20 @@ static int fp32_access(uint32_t pid, process_t *t, uintptr_t data, int set)
     if (copy_from_user(env, (const void __user *)data, sizeof(env)) != 0) {
         return -EFAULT;
     }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
-    }
     fpu_env32_set(t->fpu, env);
     return 0;
 }
 
 /**
  * PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA: TLS entry `idx`, 12 to
- * 14, of `t`, the thread `pid`, as the `user_desc` at `data`, as Linux's
+ * 14, of the frozen thread `t`, as the `user_desc` at `data`, as Linux's
  * `do_get_thread_area` and `do_set_thread_area` take it from a tracer: a
  * write takes the descriptor set_thread_area takes, and FS or GS holding
  * the entry's selector, at any RPL, take its base. -EIO for an entry
  * negative as an int, -EINVAL for another entry or a descriptor refused,
- * -EFAULT, -ESRCH.
+ * -EFAULT for a buffer that cannot be copied.
  */
-static int tls_access(uint32_t pid, process_t *t, unsigned long idx, uintptr_t data, int set)
+static int tls_access(process_t *t, unsigned long idx, uintptr_t data, int set)
 {
     struct user_desc u;
     int rc;
@@ -531,10 +522,6 @@ static int tls_access(uint32_t pid, process_t *t, unsigned long idx, uintptr_t d
     }
     if (copy_from_user(&u, (const void __user *)data, sizeof(u)) != 0) {
         return -EFAULT;
-    }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
     }
     rc = tls_entry_set(t, (uint32_t)idx, &u);
     if (rc == 0 && TLS_SEL_NAMES(t->regs.fs_sel, idx)) {
@@ -787,8 +774,7 @@ static int prctl_access(process_t *t, unsigned long addr, unsigned long code)
  * and SETFPXREGS as the `fxsave` image, and the TLS entries; any other,
  * PTRACE_ARCH_PRCTL among them, is -EIO.
  */
-static long ia32_arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr,
-                             unsigned long data)
+static long ia32_arch_ptrace(process_t *t, long request, unsigned long addr, unsigned long data)
 {
     uint32_t word;
     uint32_t r[R32_COUNT];
@@ -811,17 +797,16 @@ static long ia32_arch_ptrace(process_t *t, uint32_t pid, long request, unsigned 
         if (copy_from_user(buf, (const void __user *)data, sizeof(buf)) != 0) {
             return -EFAULT;
         }
-        t = ptrace_tracee(pid);
-        return t ? regs32_set_all(t, buf, sizeof(buf)) : -ESRCH;
+        return regs32_set_all(t, buf, sizeof(buf));
     case PTRACE_GETFPREGS:
     case PTRACE_SETFPREGS:
-        return fp32_access(pid, t, data, request == PTRACE_SETFPREGS);
+        return fp32_access(t, data, request == PTRACE_SETFPREGS);
     case PTRACE_GETFPXREGS:
     case PTRACE_SETFPXREGS:
-        return fp_access(pid, t, data, request == PTRACE_SETFPXREGS);
+        return fp_access(t, data, request == PTRACE_SETFPXREGS);
     case PTRACE_GET_THREAD_AREA:
     case PTRACE_SET_THREAD_AREA:
-        return tls_access(pid, t, addr, data, request == PTRACE_SET_THREAD_AREA);
+        return tls_access(t, addr, data, request == PTRACE_SET_THREAD_AREA);
     default:
         return -EIO;
     }
@@ -831,12 +816,11 @@ static long ia32_arch_ptrace(process_t *t, uint32_t pid, long request, unsigned 
  * x86-64's requests are PEEKUSER, POKEUSER, GETREGS, SETREGS, GETFPREGS,
  * SETFPREGS, ARCH_PRCTL and, as on a Linux with i386 emulation,
  * GET_THREAD_AREA and SET_THREAD_AREA; an i386 tracer's are
- * `ia32_arch_ptrace`'s. A request that copies from the tracer looks the
- * tracee up again by `pid` after the copy, which may sleep, and answers
- * -ESRCH when it has left its stop. SETREGS sets the registers in order and
+ * `ia32_arch_ptrace`'s. The stop stays frozen across copies.
+ * SETREGS sets the registers in order and
  * stops at the first one `regs_set` refuses, with those before it set.
  */
-long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, unsigned long data)
+long arch_ptrace(process_t *t, long request, unsigned long addr, unsigned long data)
 {
     unsigned long word;
     unsigned long r[R_COUNT];
@@ -844,7 +828,7 @@ long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, u
     int i;
 
     if (in_compat_syscall()) {
-        return ia32_arch_ptrace(t, pid, request, addr, data);
+        return ia32_arch_ptrace(t, request, addr, data);
     }
     switch (request) {
     case PTRACE_PEEKUSER:
@@ -862,10 +846,6 @@ long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, u
         if (copy_from_user(r, (const void __user *)data, sizeof(r)) != 0) {
             return -EFAULT;
         }
-        t = ptrace_tracee(pid);
-        if (!t) {
-            return -ESRCH;
-        }
         for (i = 0; i < R_COUNT; i++) {
             rc = regs_set(t, i, r[i]);
             if (rc != 0) {
@@ -875,12 +855,12 @@ long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, u
         return 0;
     case PTRACE_GETFPREGS:
     case PTRACE_SETFPREGS:
-        return fp_access(pid, t, data, request == PTRACE_SETFPREGS);
+        return fp_access(t, data, request == PTRACE_SETFPREGS);
     case PTRACE_ARCH_PRCTL:
         return prctl_access(t, addr, data);
     case PTRACE_GET_THREAD_AREA:
     case PTRACE_SET_THREAD_AREA:
-        return tls_access(pid, t, addr, data, request == PTRACE_SET_THREAD_AREA);
+        return tls_access(t, addr, data, request == PTRACE_SET_THREAD_AREA);
     default:
         return -EIO;
     }

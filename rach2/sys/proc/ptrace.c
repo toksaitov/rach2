@@ -8,6 +8,7 @@
 #include "pidfd.h"
 #include "sched.h"
 #include "sigframe.h"
+#include "smp.h"
 #include "tgroup.h"
 #include "../fs/krffs.h"
 #include "../fs/vfs.h"
@@ -54,10 +55,10 @@
 #define PTRACE_O_EXITKILL     0x00100000u
 #define PTRACE_O_MASK         0x001000FFu
 
-/** Whether the current thread has SIGKILL pending, its own or its process's. */
-static int kill_pending(void)
+/** Whether `t` has SIGKILL pending, with the signal state locked. */
+static int kill_pending(const process_t *t)
 {
-    return ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
+    return ((t->sig_pending | t->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
 }
 
 /**
@@ -78,13 +79,19 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
     process_t *self = current_proc;
     process_t *tracer = get_process(self->tracer);
     struct k_siginfo chld;
-    uint32_t flags;
+    uint32_t irq, flags;
+    int sig;
 
     if (tracer == NULL || tracer->tg->live == 0) {
+        flags = signal_state_lock();
         self->ptrace = 0;
+        signal_state_unlock(flags);
         proc_set_tracer(self, 0);
         return (int)((status >> 8) & 0x7F);
     }
+    irq = kirq_save();
+    flags = signal_state_lock();
+    self->ptrace &= ~PT_LISTEN;
     if (info) {
         self->ptrace_info = *info;
         self->ptrace_info_signo = (int32_t)((status >> 8) & 0x7F);
@@ -94,7 +101,10 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
         self->ptrace |= PT_NOINFO;
     }
     self->ptrace_signo = 0;
-    signal_trap_publish(self, status);
+    self->ptrace_reported = 0;
+    self->ptrace_status = status;
+    sched_set_current_state(PROC_STOPPED);
+    signal_state_unlock(flags);
     k_memset(&chld, 0, sizeof(chld));
     chld.code = CLD_TRAPPED;
     chld.pid = pid_seen_by(tracer, self->pid);
@@ -103,24 +113,24 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
     signal_post_info(tracer, SIGCHLD, &chld);
     wq_wake_all(&tracer->tg->chld);
 
-    flags = kirq_save();
     for (;;) {
-        sched_set_current_state(PROC_STOPPED);
-        if (self->ptrace_status == 0 || kill_pending()) {
+        flags = signal_state_lock();
+        if (!(self->ptrace & PT_FROZEN) && (self->ptrace_status == 0 || kill_pending(self))) {
+            sig = self->ptrace_status == 0 ? self->ptrace_signo : 0;
+            self->ptrace_status = 0;
+            self->state = PROC_RUNNING;
+            signal_state_unlock(flags);
             break;
         }
+        sched_set_current_state(PROC_STOPPED);
+        signal_state_unlock(flags);
         schedule();
         if (current_proc->state == PROC_STOPPED) {
             idle_wait_irq_off();
         }
     }
-    self->state = PROC_RUNNING;
-    kirq_restore(flags);
-    if (self->ptrace_status != 0) {
-        self->ptrace_status = 0;
-        return 0;
-    }
-    return self->ptrace_signo;
+    kirq_restore(irq);
+    return sig;
 }
 
 /**
@@ -154,12 +164,18 @@ static int ptrace_notify(uint32_t status)
 void ptrace_return_stops(void)
 {
     process_t *self = current_proc;
-    uint32_t signo;
+    uint32_t signo, flags;
 
-    while ((self->ptrace & PT_TRACED) && (self->ptrace & (PT_START | PT_INTERRUPT)) &&
-           !kill_pending()) {
+    for (;;) {
+        flags = signal_state_lock();
+        if (!(self->ptrace & PT_TRACED) || !(self->ptrace & (PT_START | PT_INTERRUPT)) ||
+            kill_pending(self)) {
+            signal_state_unlock(flags);
+            return;
+        }
         signo = self->tg->stop ? self->tg->stop : SIGTRAP;
         self->ptrace &= ~(PT_START | PT_INTERRUPT);
+        signal_state_unlock(flags);
         (void)ptrace_notify(((uint32_t)PTRACE_EVENT_STOP << 16) | (signo << 8) | 0x7F);
     }
 }
@@ -209,15 +225,20 @@ int ptrace_signal_stop(int signo, struct k_siginfo *info)
 int ptrace_group_stop(int signo)
 {
     process_t *self = current_proc;
-    uint32_t status;
+    uint32_t status, flags;
+    int seized;
 
+    flags = signal_state_lock();
     if (!(self->ptrace & PT_TRACED) || self->stop_seen) {
+        signal_state_unlock(flags);
         return 0;
     }
     self->stop_seen = 1;
     self->ptrace &= ~PT_INTERRUPT;
+    seized = (self->ptrace & PT_SEIZED) != 0;
+    signal_state_unlock(flags);
     status = ((uint32_t)signo << 8) | 0x7F;
-    if (self->ptrace & PT_SEIZED) {
+    if (seized) {
         (void)ptrace_notify(status | (uint32_t)PTRACE_EVENT_STOP << 16);
     } else {
         (void)ptrace_stop(status, NULL);
@@ -237,7 +258,7 @@ int ptrace_group_stop(int signo)
  * `signal_pending`, which answers yes for the request, only once it is set;
  * a wake without it finds the wait's condition false and sleeps again. The
  * work's barrier comes between the flag and the read of the state, which a
- * sleeper sets before it tests the flag. The big lock is held.
+ * sleeper sets before it tests the flag. The signal state is locked.
  */
 static void ptrace_signal_wake(process_t *t)
 {
@@ -252,13 +273,14 @@ static void ptrace_signal_wake(process_t *t)
  * Request a new PTRACE_EVENT_STOP of the seized thread `t`, and wake it if
  * it sleeps, as Linux's ptrace_trap_notify does. A thread that
  * PTRACE_LISTEN keeps in its stop is let out of it at once, so that it
- * makes the new one.
+ * makes the new one. The signal state is locked. A frozen stop is left
+ * for the request to release.
  */
 static void ptrace_restop(process_t *t)
 {
     t->ptrace |= PT_INTERRUPT;
     ptrace_signal_wake(t);
-    if ((t->ptrace & PT_LISTEN) && t->ptrace_status != 0) {
+    if ((t->ptrace & PT_LISTEN) && !(t->ptrace & PT_FROZEN) && t->ptrace_status != 0) {
         t->ptrace &= ~PT_LISTEN;
         t->ptrace_signo = 0;
         t->ptrace_status = 0;
@@ -319,8 +341,13 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     if (!stepping) {
         self->ptrace_msg = 0;
     }
-    if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
-        self->orig_nr = -1;
+    if (!leaving) {
+        uint32_t flags = signal_state_lock();
+
+        if (kill_pending(self)) {
+            self->orig_nr = -1;
+        }
+        signal_state_unlock(flags);
     }
     if (sig > 0 && sig <= KSIG_MAX) {
         if (stepping) {
@@ -439,22 +466,28 @@ static void ptrace_parent_notify(process_t *t)
 static void ptrace_detach(process_t *t, int sig)
 {
     uint32_t tracer = t->tracer;
+    uint32_t flags = signal_state_lock();
 
     if (t->ptrace & PT_STEP) {
         arch_ptrace_step(t, 0);
     }
-    t->ptrace = 0;
+    t->ptrace &= PT_FROZEN;
+    signal_state_unlock(flags);
     proc_set_tracer(t, 0);
+    flags = signal_state_lock();
+    t->ptrace = 0;
     t->ptrace_opts = 0;
     t->stop_seen = 0;
     k_memset(t->debugreg, 0, sizeof(t->debugreg));
     proc_work_set(t, WORK_DEBUGREG);
     if (t->state == PROC_ZOMBIE && t->pid != t->tgid) {
+        signal_state_unlock(flags);
         proc_dead_threads++;
         pidfd_id_gone(t);
         return;
     }
     if (t->state == PROC_ZOMBIE && t->tg->live == 0) {
+        signal_state_unlock(flags);
         if (t->parent_pid != tracer) {
             ptrace_parent_notify(t);
         }
@@ -470,6 +503,7 @@ static void ptrace_detach(process_t *t, int sig)
     if (t->tg->stop && !t->exit_begun) {
         ptrace_signal_wake(t);
     }
+    signal_state_unlock(flags);
 }
 
 void ptrace_exit_release(process_t *t)
@@ -498,7 +532,8 @@ void ptrace_tracer_gone(uint32_t tgid)
 
 /** Resume the stopped thread `t` with the signal `sig`, stepping one
  * instruction with `step` and stopping at system calls with `syscalls`, and
- * clear PT_LISTEN; 0, or -EIO for a signal past KSIG_MAX. */
+ * clear PT_LISTEN. The signal state is locked and releasing the request's
+ * hold makes the tracee runnable. 0, or -EIO for a signal past KSIG_MAX. */
 static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls)
 {
     if (sig > KSIG_MAX) {
@@ -521,9 +556,6 @@ static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls
     t->ptrace &= ~PT_LISTEN;
     t->ptrace_signo = (int32_t)sig;
     t->ptrace_status = 0;
-    if (t->state == PROC_STOPPED) {
-        sched_make_ready(t);
-    }
     return 0;
 }
 
@@ -533,8 +565,9 @@ static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls
  * group stop begins again or ends (`ptrace_group_change`), when it makes a
  * new PTRACE_EVENT_STOP; at once, when such a change came before the
  * request. Any other stop, or a thread not seized, is -EIO, as on Linux.
+ * The signal state is locked.
  */
-static long ptrace_listen(process_t *t)
+static int ptrace_listen(process_t *t)
 {
     if (!(t->ptrace & PT_SEIZED) || (t->ptrace_status >> 16) != PTRACE_EVENT_STOP) {
         return -EIO;
@@ -612,6 +645,7 @@ int ptrace_tracer_privileged(const process_t *t)
 static int ptrace_attach(process_t *t, int seize, unsigned long opts)
 {
     struct k_siginfo info;
+    uint32_t flags;
 
     if (t->tg == current_proc->tg || t->mm == NULL || t->tgid == 1 || (t->ptrace & PT_TRACED)) {
         return -EPERM;
@@ -629,11 +663,13 @@ static int ptrace_attach(process_t *t, int seize, unsigned long opts)
     if (seize && (opts & ~(unsigned long)PTRACE_O_MASK)) {
         return -EINVAL;
     }
-    t->ptrace = PT_TRACED | (seize ? PT_SEIZED : 0);
-    proc_work_set(t, WORK_SIGNAL);
     proc_set_tracer(t, current_proc->tgid);
+    flags = signal_state_lock();
     t->ptrace_opts = seize ? (uint32_t)opts : 0;
     t->ptrace_exit_seen = 0;
+    t->ptrace = PT_TRACED | (seize ? PT_SEIZED : 0);
+    proc_work_set(t, WORK_SIGNAL);
+    signal_state_unlock(flags);
     if (!seize) {
         k_memset(&info, 0, sizeof(info));
         info.code = SI_USER;
@@ -655,38 +691,67 @@ static int ptrace_attach(process_t *t, int seize, unsigned long opts)
 static int ptrace_traceme(void)
 {
     process_t *parent = get_process(current_proc->parent_pid);
+    uint32_t flags;
 
     if ((current_proc->ptrace & PT_TRACED) || parent == NULL ||
         (proc_privileged(current_proc) && !group_privileged(parent->tg))) {
         return -EPERM;
     }
-    current_proc->ptrace = PT_TRACED;
-    proc_work_set(current_proc, WORK_SIGNAL);
     proc_set_tracer(current_proc, parent->tgid);
+    flags = signal_state_lock();
     current_proc->ptrace_opts = 0;
     current_proc->ptrace_exit_seen = 0;
+    current_proc->ptrace = PT_TRACED;
+    proc_work_set(current_proc, WORK_SIGNAL);
+    signal_state_unlock(flags);
     return 0;
 }
 
-process_t *ptrace_tracee(uint32_t pid)
+/** Whether `t`, which the caller holds, is still its tracee under kernel
+ * id `pid`. The list and signal locks are held, in that order. */
+static int ptrace_ours(const process_t *t, uint32_t pid)
 {
-    process_t *t = get_process(pid);
+    return t->pid == pid && t->state != PROC_UNUSED && t->state != PROC_ZOMBIE &&
+           (t->ptrace & PT_TRACED) && t->tracer == current_proc->tgid;
+}
 
-    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE || !(t->ptrace & PT_TRACED) ||
-        t->tracer != current_proc->tgid || t->ptrace_status == 0) {
-        return NULL;
+/** Take `t`'s stop for this request, like Linux 6.12's
+ * ptrace_freeze_traced. The signal lock is held. A listening stop is
+ * available only to INTERRUPT and KILL. Another request, a resume, or a
+ * pending SIGKILL can prevent the hold. */
+static int ptrace_freeze(process_t *t)
+{
+    if (t->ptrace_status == 0 || t->state != PROC_STOPPED ||
+        (t->ptrace & (PT_FROZEN | PT_LISTEN)) || kill_pending(t)) {
+        return 0;
     }
-    return t;
+    t->ptrace |= PT_FROZEN;
+    return 1;
+}
+
+/** End a request's hold on `t`. Make it runnable for a resume, a fatal
+ * signal held pending, or a group change during PTRACE_LISTEN. */
+static void ptrace_unfreeze(process_t *t)
+{
+    uint32_t flags = signal_state_lock();
+
+    t->ptrace &= ~PT_FROZEN;
+    if (t->ptrace_status == 0 || kill_pending(t)) {
+        if (t->state == PROC_STOPPED) {
+            sched_make_ready(t);
+        }
+    } else if ((t->ptrace & (PT_LISTEN | PT_INTERRUPT)) == (PT_LISTEN | PT_INTERRUPT)) {
+        ptrace_restop(t);
+    }
+    signal_state_unlock(flags);
 }
 
 /**
  * PTRACE_PEEKTEXT and friends: read the `len` bytes at `addr` of the stopped
  * thread `t`'s memory into `word`, or with `write` write them there: a word
  * of the caller's ABI, 4 bytes for an i386 tracer on x86-64, forced as
- * Linux's ptrace_access_vm forces it (`paging_access`). The
- * address space has a reference of the caller's while it is used, since
- * bringing a page in may sleep, and the thread may end and drop its own
- * meanwhile; nothing of `t` is read after the access.
+ * Linux's ptrace_access_vm forces it (`paging_access`). The frozen thread
+ * keeps its address space through page faults under the regions' lock.
  *
  * A caller that is not privileged (`proc_privileged`) gets -EIO, as from
  * Linux's `ptrace_access_vm`, for an address space that is not dumpable:
@@ -697,34 +762,29 @@ process_t *ptrace_tracee(uint32_t pid)
 static int32_t tracee_memory(process_t *t, uintptr_t addr, void *word, uint32_t len, int write)
 {
     struct mm *mm = t->mm;
-    int32_t rc;
 
     if (!mm || (!proc_privileged(current_proc) && !mm->dumpable)) {
         return -EIO;
     }
-    mm_get(mm);
-    rc =
-        paging_access(mm, addr, word, len, PAGING_ACCESS_FORCE | (write ? PAGING_ACCESS_WRITE : 0));
-    mm_put(mm);
-    return rc;
+    return paging_access(mm, addr, word, len,
+                         PAGING_ACCESS_FORCE | (write ? PAGING_ACCESS_WRITE : 0));
 }
 
-/** PTRACE_GETSIGINFO and PTRACE_SETSIGINFO: the siginfo of the stop of `t`,
- * the thread `pid`, as the 128-byte `siginfo_t` at `data`, in the tracer's
+/** PTRACE_GETSIGINFO and PTRACE_SETSIGINFO: the siginfo of the frozen stop
+ * of `t`, as the 128-byte `siginfo_t` at `data`, in the tracer's
  * layout, the i386 one for an i386 tracer on x86-64 whatever the tracee
  * runs, as Linux's `compat_ptrace_request` has it, with its own si_signo:
  * the stop's, or the one PTRACE_SETSIGINFO gave, by whose layout it read
  * the rest, as Linux keeps last_siginfo whole. 0, -EFAULT, -EINVAL for
  * a stop that has no siginfo (`PT_NOINFO`), as Linux's ptrace_getsiginfo
- * and ptrace_setsiginfo refuse a stop without last_siginfo, or -ESRCH
- * for a thread gone from its stop during the copy in. PTRACE_SETSIGINFO
+ * and ptrace_setsiginfo refuse a stop without last_siginfo. PTRACE_SETSIGINFO
  * copies and reads its siginfo before it looks for one to replace, so that
  * a bad pointer is -EFAULT, and a code of a layout Linux does not know with
  * bytes past the kept union -E2BIG (`siginfo_from_caller`), at any stop,
  * as Linux's copy_siginfo_from_user runs before ptrace_setsiginfo; a
  * native siginfo of a known layout is read only as far as the kept union,
  * so its extension may lie on a page the tracer cannot read. */
-static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
+static int siginfo_access(process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[SIGINFO_SIZE];
     struct k_siginfo info;
@@ -742,10 +802,6 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
     if (rc != 0) {
         return rc;
     }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
-    }
     if (t->ptrace & PT_NOINFO) {
         return -EINVAL;
     }
@@ -755,25 +811,21 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 }
 
 /**
- * PTRACE_GETREGSET and PTRACE_SETREGSET: the register set `type` of `t`, the
- * thread `pid`, to or from the buffer the `struct iovec` at `data` names,
+ * PTRACE_GETREGSET and PTRACE_SETREGSET: the register set `type` of frozen
+ * thread `t`, to or from the buffer the `struct iovec` at `data` names,
  * as Linux's `ptrace_regset` moves it: the iovec in the tracer's layout,
  * two 32-bit words from an i386 tracer on x86-64, and the set in the
  * layout of the tracee's code, which on x86-64 is i386's while it runs
  * 32-bit code (`arch_regset_size`). The length must be a multiple of the
  * set's unit; it is cut to the set's size, and the iovec's length becomes
  * the bytes moved. The set goes through the heap, since an XSAVE image is
- * larger than a frame of the kernel's stack should be. The copy of the iovec
- * may sleep, and the thread may be reaped meanwhile, so both directions find
- * it again after their copies from the caller (`ptrace_tracee`). 0, or
- * -EFAULT, -EINVAL, -ENOMEM, -ESRCH, -EIO if the set changed shape while
- * a copy slept, or the architecture's error.
+ * larger than a frame of the kernel's stack should be. 0, or -EFAULT,
+ * -EINVAL, -ENOMEM, or the architecture's error.
  */
-static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintptr_t data, int set)
+static long regset_access(process_t *t, unsigned long type, uintptr_t data, int set)
 {
     struct kernel_iovec iov;
     uint32_t unit = 1;
-    uint32_t copied_unit;
     uint32_t len;
     uint8_t *buf;
     long size;
@@ -790,10 +842,6 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
     } else if (copy_from_user(&iov, (const void __user *)data, sizeof(iov)) != 0) {
         return -EFAULT;
     }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
-    }
     size = arch_regset_size(t, type, &unit);
     if (size < 0) {
         return size;
@@ -807,28 +855,14 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
         return -ENOMEM;
     }
     if (!set) {
-        t = ptrace_tracee(pid);
-        if (!t) {
-            rc = -ESRCH;
-        } else if (arch_regset_size(t, type, &copied_unit) != size || copied_unit != unit) {
-            rc = -EIO;
-        } else {
-            arch_regset_get(t, type, buf);
-            if (copy_to_user((void __user *)iov.iov_base, buf, len) != 0) {
-                rc = -EFAULT;
-            }
+        arch_regset_get(t, type, buf);
+        if (copy_to_user((void __user *)iov.iov_base, buf, len) != 0) {
+            rc = -EFAULT;
         }
     } else if (copy_from_user(buf, (const void __user *)iov.iov_base, len) != 0) {
         rc = -EFAULT;
     } else {
-        t = ptrace_tracee(pid);
-        if (!t) {
-            rc = -ESRCH;
-        } else if (arch_regset_size(t, type, &copied_unit) != size || copied_unit != unit) {
-            rc = -EIO;
-        } else {
-            rc = arch_regset_set(t, type, buf, len);
-        }
+        rc = arch_regset_set(t, type, buf, len);
     }
     kfree(buf);
     iov.iov_len = len;
@@ -935,20 +969,16 @@ static long syscall_info(const process_t *t, uintptr_t size, uintptr_t data)
 }
 
 /**
- * The requests that need `t`, the thread `pid`, stopped for the caller, as
- * Linux has them. No request uses `t` after a copy that may sleep: one that
- * copies from the caller's memory finds the thread again after the copy
- * (`ptrace_tracee`), one that copies out takes what it copies first, and
- * the memory requests take a reference to the address space themselves
- * (`tracee_memory`). A word of memory or of the event message is the
+ * Serve `request` with the stop of `t` held. The tracee stays off CPU
+ * across copies and faults. A word of memory or of the event message is the
  * tracer's, 4 bytes for an i386 tracer on x86-64, whose word moves the low
  * half of `data`, as Linux's `compat_ptrace_request` moves it.
  */
-static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t addr,
-                           unsigned long data)
+static long ptrace_stopped(process_t *t, long request, uintptr_t addr, unsigned long data)
 {
     unsigned long word = 0;
     uint32_t wlen = (uint32_t)sizeof(word);
+    uint32_t flags;
     int32_t rc;
 
     if (in_compat_syscall()) {
@@ -966,85 +996,163 @@ static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t a
     case PTRACE_POKEDATA:
         return tracee_memory(t, addr, &data, wlen, 1);
     case PTRACE_CONT:
-        return ptrace_resume(t, data, 0, 0);
     case PTRACE_SYSCALL:
-        return ptrace_resume(t, data, 0, 1);
     case PTRACE_SINGLESTEP:
-        return ptrace_resume(t, data, 1, 0);
-    case PTRACE_DETACH:
-        if (data > KSIG_MAX) {
-            return -EIO;
-        }
-        ptrace_detach(t, (int)data);
-        return 0;
     case PTRACE_LISTEN:
-        return ptrace_listen(t);
+        flags = signal_state_lock();
+        rc = request == PTRACE_LISTEN
+                 ? ptrace_listen(t)
+                 : ptrace_resume(t, data, request == PTRACE_SINGLESTEP, request == PTRACE_SYSCALL);
+        signal_state_unlock(flags);
+        return rc;
     case PTRACE_SETOPTIONS:
         if (data & ~(unsigned long)PTRACE_O_MASK) {
             return -EINVAL;
         }
+        flags = signal_state_lock();
         t->ptrace_opts = (uint32_t)data;
+        signal_state_unlock(flags);
         return 0;
     case PTRACE_GETEVENTMSG:
         word = t->ptrace_msg;
         return copy_to_user((void __user *)data, &word, wlen) == 0 ? 0 : -EFAULT;
     case PTRACE_GETSIGINFO:
     case PTRACE_SETSIGINFO:
-        return siginfo_access(pid, t, data, request == PTRACE_SETSIGINFO);
+        return siginfo_access(t, data, request == PTRACE_SETSIGINFO);
     case PTRACE_GETREGSET:
     case PTRACE_SETREGSET:
-        return regset_access(pid, t, addr, data, request == PTRACE_SETREGSET);
+        return regset_access(t, addr, data, request == PTRACE_SETREGSET);
     case PTRACE_GET_SYSCALL_INFO:
         return syscall_info(t, addr, data);
     default:
-        return arch_ptrace(t, pid, request, addr, data);
+        return arch_ptrace(t, request, addr, data);
     }
 }
 
-long sys_ptrace(isr_params_t *params)
+/** Serve an infrequent tracing-link request or KILL with the big lock
+ * held. `pid` is in the caller's PID namespace. */
+static long ptrace_locked(long request, uint32_t pid, unsigned long data)
 {
-    long request = (long)SC_ARG(params, 0);
-    uintptr_t addr = SC_ARG(params, 2);
-    unsigned long data = SC_ARG(params, 3);
     process_t *t;
     struct k_siginfo info;
+    uint32_t flags;
 
-    if (!current_proc) {
-        return -ESRCH;
-    }
     if (request == PTRACE_TRACEME) {
         return ptrace_traceme();
     }
-    t = proc_named((uint32_t)SC_ARG(params, 1));
+    t = proc_named(pid);
     if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE) {
         return -ESRCH;
     }
     if (request == PTRACE_ATTACH || request == PTRACE_SEIZE) {
         return ptrace_attach(t, request == PTRACE_SEIZE, data);
     }
-    if (!(t->ptrace & PT_TRACED) || t->tracer != current_proc->tgid) {
+    flags = signal_state_lock();
+    if (!ptrace_ours(t, t->pid) || (request == PTRACE_DETACH && !ptrace_freeze(t))) {
+        signal_state_unlock(flags);
         return -ESRCH;
     }
+    signal_state_unlock(flags);
     if (request == PTRACE_KILL) {
         k_memset(&info, 0, sizeof(info));
         info.code = SI_KERNEL;
         signal_post_thread(t, SIGKILL, &info);
         return 0;
     }
-    if (request == PTRACE_INTERRUPT) {
-        if (!(t->ptrace & PT_SEIZED)) {
-            return -EIO;
+    if (data > KSIG_MAX) {
+        ptrace_unfreeze(t);
+        return -EIO;
+    }
+    ptrace_detach(t, (int)data);
+    return 0;
+}
+
+/** Find the caller's `pid` and hold its record, returning its kernel id
+ * in `kid`. The first PID namespace can use the RCU index directly. A
+ * nested namespace translates process IDs under the list lock. */
+static process_t *ptrace_lookup(uint32_t pid, uint32_t *kid)
+{
+    process_t *t;
+    uint32_t flags;
+
+    if (pid == 0) {
+        return NULL;
+    }
+    if (proc_pidns(current_proc) == &init_pidns) {
+        *kid = pid;
+        return get_process_ref(pid);
+    }
+    flags = tasklist_read_lock();
+    for (t = proc_list; t; t = t->next) {
+        if (t->state != PROC_UNUSED && pid_seen_by(current_proc, t->pid) == pid) {
+            *kid = t->pid;
+            proc_ref_get(t);
+            break;
         }
-        if (t->ptrace_status == 0) {
-            t->ptrace |= PT_INTERRUPT;
-            ptrace_signal_wake(t);
-        } else if (t->ptrace & PT_LISTEN) {
-            ptrace_restop(t);
-        }
-        return 0;
+    }
+    tasklist_read_unlock(flags);
+    return t;
+}
+
+/** Request a seized tracee's next stop, with its signal state locked. */
+static long ptrace_interrupt(process_t *t)
+{
+    if (!(t->ptrace & PT_SEIZED)) {
+        return -EIO;
     }
     if (t->ptrace_status == 0) {
+        t->ptrace |= PT_INTERRUPT;
+        ptrace_signal_wake(t);
+    } else if (t->ptrace & PT_LISTEN) {
+        ptrace_restop(t);
+    }
+    return 0;
+}
+
+/** Serve a ptrace request with the same arguments in both ABIs. */
+static long ptrace_request(long request, uint32_t pid, uintptr_t addr, unsigned long data)
+{
+    process_t *t;
+    uint32_t kid, list_flags, sig_flags;
+    long rc = -ESRCH;
+    int frozen = 0;
+
+    if (!current_proc) {
         return -ESRCH;
     }
-    return ptrace_stopped(t, t->pid, request, addr, data);
+    if (request == PTRACE_TRACEME || request == PTRACE_ATTACH || request == PTRACE_SEIZE ||
+        request == PTRACE_DETACH || request == PTRACE_KILL) {
+        bkl_enter();
+        rc = ptrace_locked(request, pid, data);
+        bkl_exit();
+        return rc;
+    }
+    t = ptrace_lookup(pid, &kid);
+    if (!t) {
+        return -ESRCH;
+    }
+    list_flags = tasklist_read_lock();
+    sig_flags = signal_state_lock();
+    if (ptrace_ours(t, kid)) {
+        if (request == PTRACE_INTERRUPT) {
+            rc = ptrace_interrupt(t);
+        } else {
+            frozen = ptrace_freeze(t);
+        }
+    }
+    signal_state_unlock(sig_flags);
+    tasklist_read_unlock(list_flags);
+    if (frozen) {
+        sched_wait_off_cpu(t);
+        rc = ptrace_stopped(t, request, addr, data);
+        ptrace_unfreeze(t);
+    }
+    proc_ref_put(t);
+    return rc;
+}
+
+long sys_ptrace(isr_params_t *params)
+{
+    return ptrace_request((long)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), SC_ARG(params, 2),
+                          SC_ARG(params, 3));
 }
