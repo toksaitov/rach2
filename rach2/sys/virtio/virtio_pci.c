@@ -146,15 +146,15 @@ struct virtio_pci {
     uint32_t notify_mult; /* bytes between queues' notification addresses */
     struct vp_shm shm[VP_SHM];
     int nshm;
-    int mode;                          /* VP_IRQ_* */
-    uintptr_t msix_table;              /* mapped, 0 until needed */
-    uint32_t msix_entries;             /* its entries */
-    int vector[VIRTIO_MAX_QUEUES + 1]; /* by MSI-X entry, -1 when none */
-    int slot[VIRTIO_MAX_QUEUES + 1];   /* by MSI-X entry, -1 when none */
-    int nentries;                      /* entries in use */
-    int line;                          /* the INTx line, while on it */
-    uint16_t io;                       /* a legacy function's first port, BAR0 */
-    uint16_t io_len;                   /* its ports */
+    int mode;              /* VP_IRQ_* */
+    uintptr_t msix_table;  /* mapped, 0 until needed */
+    uint32_t msix_entries; /* its entries */
+    int vector[VP_SLOTS];  /* by MSI-X entry, -1 when none */
+    int slot[VP_SLOTS];    /* by MSI-X entry, -1 when none */
+    int nentries;          /* entries in use */
+    int line;              /* the INTx line, while on it */
+    uint16_t io;           /* a legacy function's first port, BAR0 */
+    uint16_t io_len;       /* its ports */
 };
 
 /* An interrupt slot: which device and target its vector serves, and how
@@ -614,7 +614,7 @@ static void vp_msix_free(struct virtio_pci *vp)
     uint32_t flags, n;
 
     pci_msix_disable(&vp->pci);
-    for (e = 0; e <= VIRTIO_MAX_QUEUES; e++) {
+    for (e = 0; e < VP_SLOTS; e++) {
         if (vp->vector[e] >= 0) {
             isr_free_vector(vp->vector[e]);
         }
@@ -1510,7 +1510,7 @@ static int vp_probe_one(const pci_device_t *p, struct virtio_pci **out)
     vp->dev.transport = vp;
     vp->dev.id = vp_type(p);
     vp->dev.name = "virtio";
-    for (k = 0; k <= VIRTIO_MAX_QUEUES; k++) {
+    for (k = 0; k < VP_SLOTS; k++) {
         vp->vector[k] = -1;
         vp->slot[k] = -1;
     }
