@@ -549,6 +549,10 @@ int hid_setup_finish(int device, int iface)
         return -ENODEV;
     }
     hid = state->hid;
+    if (hid->mt_mode_failed) {
+        klog(KLOG_WARN, "usb", "hid: device %d interface %d: multitouch mode unavailable", device,
+             state->number);
+    }
     if (hidinput_connect(hid) < 0) {
         klog(KLOG_INFO, "usb", "hid: device %d interface %d: %s: no input device in its descriptor",
              device, state->number, hid->name);
