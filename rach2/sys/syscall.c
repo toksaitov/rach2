@@ -247,33 +247,27 @@ void syscall_unlock(int abi, syscall_fn_t handler)
     }
 }
 
-/** Whether call number `nr` of the table the call in `params` is numbered
- * in runs under the big lock: nonzero unless its handler is marked
- * (`syscall_unlock`). */
-static int syscall_nr_locked(const isr_params_t *params, uint32_t nr)
+int syscall_entry_locked(const isr_params_t *params)
 {
+    const process_t *p = current_proc;
     const uint32_t *bits = _syscall_unlocked;
-    uint32_t size = SYSCALL_TABLE_SIZE;
+    uint32_t nr = (uint32_t)SC_NR(params), size = SYSCALL_TABLE_SIZE;
 
-    (void)params;
 #if defined(IA32_SYSCALL_TABLE_SIZE)
     if (SC_COMPAT(params)) {
         bits = _ia32_syscall_unlocked;
         size = IA32_SYSCALL_TABLE_SIZE;
     }
 #endif
-    /* A number is marked only where its table has a handler. */
-    return nr >= size || !(bits[nr / 32] & (1u << (nr % 32)));
-}
-
-int syscall_entry_locked(const isr_params_t *params)
-{
-    const process_t *p = current_proc;
-
     if (!p || p->fd_holding || usbdisk_waiting) {
         return 1;
     }
-    return syscall_nr_locked(params, (uint32_t)SC_NR(params));
+    if ((p->work & WORK_ENTRY) &&
+        ((p->ptrace & (PT_SYSCALL | PT_STEP)) || p->seccomp_mode != SECCOMP_MODE_DISABLED)) {
+        return 1;
+    }
+    /* A number is marked only where its table has a handler. */
+    return nr >= size || !(bits[nr / 32] & (1u << (nr % 32)));
 }
 
 int in_compat_syscall(void)
@@ -3793,12 +3787,7 @@ static void syscall_futex_unlock(void)
  * for a call that holds the lock. The entry's work, the tracer's stop and
  * the filters, is behind the thread's WORK_ENTRY bits, and the exit's
  * tracer stop behind WORK_TRACE, so that a call with none tests one word
- * at each end. A tracer or a filter may change the call's number, so a
- * call with entry work is judged again on the number they leave
- * (`syscall_nr_locked`) and its handler runs under the lock only when that
- * number's needs it; a traced pipe read or ioctl then runs as an untraced
- * one does, as Linux's syscall_trace_enter returns the number the call
- * then runs (kernel/entry/common.c:28-75).
+ * at each end.
  *
  * The rest of the exit's work is the return's (`isr_leave`): a switch an
  * interrupt asked for, and whatever the loopback backlog holds, a lone
@@ -3822,7 +3811,7 @@ static void _syscall_handler(isr_params_t *params)
     syscall_fn_t *table = syscall_table_of(params, &size);
     syscall_fn_t fn = NULL;
     long ret = -ENOSYS;
-    int skip = 0, relock, relock_call = 0;
+    int skip = 0, relock;
 
     if (!p) {
         arch_irq_enable();
@@ -3866,15 +3855,12 @@ static void _syscall_handler(isr_params_t *params)
         }
         p->restart_kind = RESTART_SYS;
         p->restart_due = 0;
-        relock_call = !skip && syscall_nr_locked(params, syscall_num);
     }
     if (skip) {
         ret = (long)SC_RET(params);
     } else if (syscall_num < size && table[syscall_num]) {
         fn = table[syscall_num];
-        relock = relock_call ? syscall_relock() : 0;
         ret = fn(params);
-        syscall_relock_end(relock);
     } else {
         syscall_missing(syscall_num, SC_COMPAT(params));
     }
