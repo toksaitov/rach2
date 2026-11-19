@@ -43,7 +43,8 @@
  * written; and pages a fork's child joins, splits or maps beside written
  * ones; and it grows the heap with brk three times. Linux 6.18 lists one
  * region for the pages at each step but the second and fourth, and one
- * [heap].
+ * [heap], and two [heap] regions in a fork's child that grows the heap its
+ * parent wrote.
  *
  * The fourth half makes guard pages with MADV_GUARD_INSTALL in a mapping of
  * `GUARD_PAGES` pages, one at its first page and two inside, as glibc puts
@@ -587,6 +588,38 @@ static int check_identity_merges(char *detail, size_t size)
 }
 
 /**
+ * Grow the heap from the break `brk0` by a page and write it, and count the
+ * [heap] regions in a fork's child after it grows the heap by two pages
+ * more. Linux gives the child's heap region an anon_vma of its own whose
+ * chain holds the parent's too, so the growth may not join it
+ * (`fork_trial`): two regions. Returns the count, or -1 when a call failed.
+ * Leaves the break at `brk0`.
+ */
+static int brk_fork_trial(long brk0, long pg)
+{
+    int status, got = -1;
+    pid_t child;
+
+    if (syscall(SYS_brk, brk0 + pg) != brk0 + pg) {
+        return -1;
+    }
+    *(volatile char *)brk0 = 1;
+    fflush(stdout);
+    child = fork();
+    if (child == 0) {
+        _exit(syscall(SYS_brk, brk0 + 3 * pg) == brk0 + 3 * pg
+                  ? count_regions(0, 0, "[heap]") & 0xff
+                  : 0xff);
+    }
+    if (child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+        WEXITSTATUS(status) != 0xff) {
+        got = WEXITSTATUS(status);
+    }
+    syscall(SYS_brk, brk0);
+    return got;
+}
+
+/**
  * Run the third half's calls and check the regions after each against
  * Linux's. Returns 0, or 1 with what differed in `detail`.
  */
@@ -679,6 +712,12 @@ static int check_merges(char *detail, size_t size)
     syscall(SYS_brk, brk0);
     if (got != 1) {
         snprintf(detail, size, "%d [heap] regions after three brk calls, where Linux has 1", got);
+        return 1;
+    }
+    got = brk_fork_trial(brk0, pg);
+    if (got != 2) {
+        snprintf(detail, size, "%d [heap] regions after brk in a fork's child, where Linux has 2",
+                 got);
         return 1;
     }
 
