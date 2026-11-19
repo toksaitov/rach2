@@ -617,22 +617,21 @@ static int ssh_mock(int argc, char **argv)
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         return 1;
     }
-    /* While RELEASE_TEST_BOOT is set, the console's login 4711 stands in for
-     * term in the boot whose ID is aaaa, and the boot is another once it is
-     * `again`. */
-    if (strstr(command, "kill -HUP ")) {
-        if (!strcmp(ev("RELEASE_TEST_BOOT"), "again") || !strstr(command, "= 'aaaa' ]") ||
-            !strstr(command, "= 'login' ]") || !strstr(command, "kill -HUP 4711")) {
-            append(ev("RELEASE_TEST_CALLS"), "machine read\n");
-            return 1;
-        }
-        append(ev("RELEASE_TEST_CALLS"), "machine write hup 4711\n");
+    if (!strcmp(command, "sh -s -- free")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write stop term\n");
+        puts("aaaa");
         return 0;
     }
-    if (strstr(command, "(term)")) {
-        append(ev("RELEASE_TEST_CALLS"), "machine write stop term\n");
-        if (*ev("RELEASE_TEST_BOOT"))
-            puts("4711 login aaaa");
+    /* In the same boot the login that stood in for term has been replaced
+     * by 4812. On a different boot no console process is signalled. */
+    if (!strncmp(command, "sh -s -- back ", 14)) {
+        if (strcmp(command, "sh -s -- back aaaa") || !strcmp(ev("RELEASE_TEST_BOOT"), "again")) {
+            append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+            puts("the machine booted again");
+            return 1;
+        }
+        if (!strcmp(ev("RELEASE_TEST_BOOT"), "same"))
+            append(ev("RELEASE_TEST_CALLS"), "machine write hup 4812\n");
         return 0;
     }
     if (!strcmp(command, "bootctl status")) {
@@ -3935,9 +3934,9 @@ static int lenovo_rows(struct release *r)
     fx_env("RELEASE_TEST_BOOT", "same");
     run(r, &(struct release_row){
                .record = r->tried, .accept = "pass", .machines = LENOVO, .native = "fail"});
-    ok = check(r, called(r, "^machine write hup 4711$"),
-               "the console's login that took term's place is ended by its number in the boot "
-               "whose ID the release read") &&
+    ok = check(r, called(r, "^machine write hup 4812$"),
+               "screen restoration uses the current login in the boot where the release "
+               "stopped term") &&
          ok;
     fx_env("RELEASE_TEST_BOOT", "again");
     run(r, &(struct release_row){
@@ -3945,9 +3944,9 @@ static int lenovo_rows(struct release *r)
     fx_env("RELEASE_TEST_BOOT", NULL);
     ok = check(r,
                !called(r, "^machine write hup") && f->out &&
-                   strstr(f->out, "lenovo: the console's login 4711 was gone, "
-                                  "or the machine had booted again"),
-               "no signal goes to the login's number once the Lenovo has booted again") &&
+                   strstr(f->out, "lenovo: could not restore the console's term: "
+                                  "the machine booted again"),
+               "screen restoration leaves the console alone once the Lenovo has booted again") &&
          ok;
     return ok;
 }
