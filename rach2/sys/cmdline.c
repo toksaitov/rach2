@@ -501,6 +501,23 @@ int kcmdline_param_int(const char *key, int dflt)
     return value;
 }
 
+unsigned int kcmdline_param_uint(const char *key, unsigned int dflt)
+{
+    size_t klen = k_strlen(key);
+    const char *p = kcmdline;
+    struct arg a;
+    unsigned long v;
+    unsigned int value = dflt;
+
+    while (next_arg(&p, &a)) {
+        if (a.val != 0 && arg_is(&a, key, klen) && k_strtoul(a.val, a.vlen, &v) == 0 &&
+            v <= 0xFFFFFFFFul) {
+            value = (unsigned int)v;
+        }
+    }
+    return value;
+}
+
 int kcmdline_param_nth(const char *key, int nth, char *out, unsigned int outlen)
 {
     size_t klen = k_strlen(key);
