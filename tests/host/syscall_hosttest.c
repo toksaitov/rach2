@@ -2390,6 +2390,18 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
     return old;
 }
 
+/** Store `value` at `p` when it holds `old`, and return what was there: one
+ * thread. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    unsigned int was = *p;
+
+    if (was == old) {
+        *p = value;
+    }
+    return was;
+}
+
 /** 0: no USB disk has work. */
 int usbdisk_pending(void)
 {
@@ -2420,6 +2432,10 @@ int bkl_try_enter(void)
 {
     return 0;
 }
+
+/** The big lock a CPU clock's reading takes (`clock_get`): one thread. */
+void bkl_enter(void)
+{}
 
 void bkl_exit(void)
 {}
