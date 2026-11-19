@@ -1982,6 +1982,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
         platform_threads_start();
         hda_thread_start();
         tty_console_thread_start();
+        virtio_console_thread_start();
         evdev_sysfs_start();
     }
 
