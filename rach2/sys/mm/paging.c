@@ -4625,7 +4625,9 @@ static void wrprotect_user_range(struct mm *mm, struct flush_batch *b, uintptr_t
 
 /**
  * Change each region of `mm` that `match` picks, for `walk_where`: unmap
- * it for MMN_TRUNCATE, or take write access from it for MMN_PROTECT. A
+ * it for MMN_TRUNCATE, once its private copies have given it an anonymous
+ * identity (`mm_note_anon`), which Linux's region keeps after truncation,
+ * or take write access from it for MMN_PROTECT. A
  * write-protecting walk counts the space under way once, from before its
  * first region's notice to after its one flush, and moves its count of
  * zaps first, under the page-table lock, under which a fault that gives a
@@ -4650,6 +4652,7 @@ static void walk_space(struct mm *mm,
             continue;
         }
         if (event == MMN_TRUNCATE) {
+            mm_note_anon(mm, lo, hi);
             mmn_change_begin(mm);
             mmn_notify(mm, event, lo, hi);
             unmap_user_range(mm->dir, lo, hi);
