@@ -90,6 +90,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     mount.ctx = 0;
     mount.size = image_size;
     mount.grain = 0;
+    mount.stale_links = 0;
     for (i = 0; i < 64; i++) {
         uint64_t node;
         unsigned j;

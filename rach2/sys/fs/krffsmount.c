@@ -1186,9 +1186,9 @@ static void kv_abort_unmount(struct vfs_mount *mnt)
  * Flush the volume, then clear and flush its dirty flag.
  *
  * Earlier writes must reach the medium before the cleared flag can.
- * A mount made read-only before preparation keeps its dirty flag. If the
- * clear fails, the flag may already be on the device, and the mount takes no
- * more writes. Returns 0, the sync's -errno, or -EIO.
+ * A mount made read-only or with stale backward links keeps its dirty flag.
+ * If the clear fails, the flag may already be on the device, and the mount
+ * takes no more writes. Returns 0, the sync's -errno, or -EIO.
  */
 static int kv_prepare_unmount(struct vfs_mount *mnt)
 {
@@ -1200,6 +1200,10 @@ static int kv_prepare_unmount(struct vfs_mount *mnt)
     }
     if (bcache_flush(vol->dev) != 0) {
         return -EIO;
+    }
+    if (vol->fs.stale_links) {
+        klog(KLOG_WARN, "krffs", "unmount: backward link repair owed");
+        return 0;
     }
     if (krffs_set_dirty(&vol->fs, 0) != 0) {
         mnt->flags |= VFS_MS_RDONLY;

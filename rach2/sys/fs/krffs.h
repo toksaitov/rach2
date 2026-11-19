@@ -161,6 +161,8 @@ typedef struct krffs_mount {
      * value that was never written; the core fails such a write rather
      * than publish something no reader could make sense of. */
     uint32_t grain;
+    /* A failed backward-link write forces removals to walk forward. */
+    int stale_links;
 } krffs_mount_t;
 
 /* The offset that is no node, since every real one is a byte of the region. */
@@ -423,8 +425,9 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
  * caller's holders keep what they have.
  *
  * Returns 0; KRFFS_EBAD for KRFFS_NO_NODE, the root, a directory, a node
- * that is not reserved, or a write that failed; or KRFFS_ENOSPACE when the
- * resize failed.
+ * that is not reserved, or a write that failed; KRFFS_ENOSPACE when the
+ * file could not grow; or KRFFS_EIO when a shrink's length or writeback
+ * failed.
  */
 int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
                            uint64_t *node_out);
