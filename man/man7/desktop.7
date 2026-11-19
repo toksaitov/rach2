@@ -1,11 +1,12 @@
-.Dd November 11, 2026
+.Dd November 19, 2026
 .Dt DESKTOP 7
 .Os
 .Sh NAME
 .Nm desktop
 .Nd Weston session, input and sound on the GNU system
 .Sh DESCRIPTION
-The GNU root starts Weston with kiosk-shell as the ordinary account
+The GNU root runs Weston with kiosk-shell, on request, as the ordinary
+account
 .Ql desktop ,
 uid 1001, with a locked password.
 The account belongs to the seat, video, render, kvm, input and audio groups.
@@ -25,7 +26,17 @@ their events, then starts seatd as root with
 .Ql SEATD_VTBOUND=0 .
 The kernel has no virtual terminal interface.
 The seat socket belongs to the seat group.
-The user's session starts after the socket exists.
+.Pp
+No session starts at boot, so that the console's login keeps the screen
+and the keyboard.
+.Ql kill -HUP $(cat /run/rach2-desktop.pid)
+starts the user's session, once the seat socket exists, and
+.Ql kill -USR2 $(cat /run/rach2-desktop.pid)
+ends it, waits until none of it is left, logs
+.Dq rach2-desktop: session: stopped; SIGHUP starts it again
+and starts none until SIGHUP.
+A test that starts the session ends it again the same way, so that it
+leaves the console as it found it.
 .Pp
 The session has its own D-Bus bus and runtime directory,
 .Pa /run/user/1001 ,
@@ -65,9 +76,8 @@ name=Virtual-1
 mode=1024x768
 .Ed
 .Pp
-.Ql kill -HUP $(cat /run/rach2-desktop.pid)
-ends the session and starts it again; Weston reads the file when it
-starts.
+SIGHUP to the supervisor ends a running session and starts it again;
+Weston reads the file when it starts.
 .Pp
 When Weston ends, by quitting or by a signal, SIGKILL among them, the
 console takes the screen and the keyboard back and redraws its text, so
@@ -95,6 +105,7 @@ the supervisor looks counts as gone.
 A start on a card, whichever way it came, ends the wait for one: a card
 that appears while the session draws on another, or headless since boot,
 changes nothing; SIGHUP chooses the display anew.
+SIGUSR2 ends that wait with the session.
 Each start logs
 .Dq rach2-desktop: session: started as PID on BACKEND CARD RENDERER .
 udev's events for the cards, which
@@ -132,7 +143,8 @@ The kernel mixes both routes.
 .It Pa /etc/xdg/weston/weston.ini
 Compositor shell, Xwayland, idle and output settings.
 .It Pa /run/rach2-desktop.pid
-The supervisor's process id, which SIGHUP restarts the session by.
+The supervisor's process id, which SIGHUP starts or restarts the session
+by and SIGUSR2 ends it by.
 .It Pa /etc/pulse/rach2.pa
 PulseAudio modules.
 .It Pa /etc/asound.conf
