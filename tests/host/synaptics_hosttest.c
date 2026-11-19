@@ -1073,6 +1073,31 @@ static void packet_rows(void)
           take() > 0 && got_events(again, 12));
 }
 
+/** Read the Lenovo pad's slot state through a two-finger contact and lift. */
+static void tracking_rows(void)
+{
+    int32_t slots[3] = {ABS_MT_TRACKING_ID, 0, 0};
+    uint32_t request = EVIOCGMTSLOTS(sizeof(slots));
+
+    model_reset(KIND_PAD);
+    if (init_mouse() != 0 || open_pad() != 0) {
+        CHECK("the Lenovo model comes up with an event device", 0);
+        return;
+    }
+    send_packet(3000, 2500, 50, 8, 0, 0);
+    send_agm(4000, 1800, 40);
+    send_packet(3010, 2500, 60, 0, 0, 0);
+    CHECK("two contact IDs through the PS/2 IRQ handler",
+          evdev_ioctl(&open_e, request, (uintptr_t)slots) == 0 && slots[1] == 0 && slots[2] == 1);
+    send_packet(3020, 2500, 60, 8, 0, 0);
+    CHECK("the first contact keeps its ID when the second lifts",
+          evdev_ioctl(&open_e, request, (uintptr_t)slots) == 0 && slots[1] == 0 && slots[2] == -1);
+    send_packet(0, 0, 0, 0, 0, 0);
+    CHECK("the last lift clears the remaining tracking ID",
+          evdev_ioctl(&open_e, request, (uintptr_t)slots) == 0 && slots[1] == -1 && slots[2] == -1);
+    model_reset(KIND_PAD);
+}
+
 /** Read the mouse device's packets into `buf`; returns their count. */
 static int mouse_packets(struct mouse_packet *buf, int max)
 {
@@ -1266,6 +1291,7 @@ int main(void)
     mouse_rows();
     written_rows();
     fallback_rows();
+    tracking_rows();
     if (fails == 0) {
         printf("synaptics-test: pass\n");
     }

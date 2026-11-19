@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 19, 2026
 .Dt INPUT 4
 .Os
 .Sh NAME
@@ -78,6 +78,27 @@ protocol, as
 or
 .Dq USB HIDBP Mouse VVVV:PPPP
 when it has no strings, as Linux's usbkbd and usbmouse name it.
+.Pp
+A USB HID touchscreen or touchpad with Contact Identifier reports uses
+type B multitouch slots.
+Contact positions and the pressure or contact area the descriptor gives
+are reported per slot.
+A touchscreen has
+.Dv INPUT_PROP_DIRECT ;
+a touchpad has
+.Dv INPUT_PROP_POINTER .
+.Pp
+The virtio tablet and multitouch device take their event capabilities,
+axis limits and properties from the device configuration.
+QEMU's
+.Cm virtio-tablet-pci
+gives
+.Dv ABS_X
+and
+.Dv ABS_Y ;
+.Cm virtio-multitouch-pci
+gives eleven type B slots and
+.Dv INPUT_PROP_DIRECT .
 .Pp
 The PS/2 mouse is named for the protocol it answers, as Linux's psmouse
 names it: a mouse that answers Microsoft's IntelliMouse Explorer knock is
@@ -1044,13 +1065,12 @@ or
 .Xr mixer 4 ,
 .Xr sysfs 5
 .Sh CAVEATS
-A USB device's digitizer usages are not mapped, so a touchscreen or pen
-that reports through them has no node, and no more than eight
-human-interface interfaces of a device are read.
-The touchpad drivers are Synaptics', ALPS's and Elantech's alone: another
-touchpad, or an ALPS pad of version 9, is driven as the PS/2 mouse it also
-is, and a Synaptics or Elantech pad that offers its SMBus bus is driven
-over PS/2.
+USB digitizer support covers contact reports from touchscreens and
+touchpads.
+Pens and vendor-specific digitizer modes are unsupported.
+The PS/2 touchpad drivers support Synaptics, ALPS versions 1 to 8, and
+Elantech.
+A Synaptics or Elantech pad that offers SMBus uses PS/2.
 Of Linux's machine quirks for Synaptics pads only the Toshiba rate of 40
 is taken: the Cr-48's profile sensor is read as any pad with the advanced
 gesture mode.

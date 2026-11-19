@@ -285,6 +285,14 @@ int evdev_init_slots(struct evdev *dev, int num_slots, unsigned int flags);
  */
 int evdev_mt_report_slot_state(struct evdev *dev, int tool, int active);
 
+/** Return the active slot for the driver's contact `key`, or assign its key
+ * to the first inactive slot unused in this frame. Returns -1 when full.
+ * The reporter selects that slot and reports its state before the next call. */
+int evdev_mt_get_slot_by_key(struct evdev *dev, int32_t key);
+
+/** End the slots' frame, keeping contacts that had no update in it. */
+void evdev_mt_end_frame(struct evdev *dev);
+
 /** Report `count` fingers with BTN_TOOL_FINGER to BTN_TOOL_QUINTTAP, as
  * Linux's `input_mt_report_finger_count`. */
 void evdev_mt_report_finger_count(struct evdev *dev, int count);

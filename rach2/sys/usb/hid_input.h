@@ -36,10 +36,17 @@ struct hid_input {
     uint8_t abs[8];
     uint8_t led[2];
     uint8_t msc[1];
-    unsigned int buttons; /* the mouse queue's packet under way: its buttons, */
-    int dx;               /* its motion to the right, */
-    int dy;               /* and toward the user */
+    unsigned int buttons;       /* the mouse queue's packet under way: its buttons, */
+    int dx;                     /* its motion to the right, */
+    int dy;                     /* and toward the user */
+    unsigned int mt_flags;      /* INPUT_MT_* for a multitouch application */
+    uint16_t mt_first, mt_last; /* the contact groups in this packet */
+    int mt_count;               /* frame size in the packet, or -1 if absent */
+    int mt_left;                /* contacts still due in a counted frame */
+    unsigned int mt_buttons;    /* the buttons described by the touch application */
 };
+
+struct hid_mt_contact;
 
 /* A HID device's parsed descriptor and its input devices. */
 struct hid_dev {
@@ -51,11 +58,12 @@ struct hid_dev {
     uint16_t product;
     uint16_t version; /* bcdHID, which usbhid gives as the version */
     uint32_t ninputs;
-    uint8_t *inbuf;   /* a report padded to its full length, `insize` bytes */
-    uint32_t insize;  /* the longest input report with its ID, plus slack */
-    uint8_t *outbuf;  /* two of the longest output or Feature report, for hid.c */
-    uint32_t outsize; /* the longest output or Feature report with its ID */
-    int multiplier;   /* a Resolution Multiplier report to send, or -1 */
+    uint8_t *inbuf;                  /* a report padded to its full length, `insize` bytes */
+    uint32_t insize;                 /* the longest input report with its ID, plus slack */
+    uint8_t *outbuf;                 /* two of the longest output or Feature report, for hid.c */
+    uint32_t outsize;                /* the longest output or Feature report with its ID */
+    int multiplier;                  /* a Resolution Multiplier report to send, or -1 */
+    struct hid_mt_contact *contacts; /* one per collection, only for multitouch */
     struct hid_input inputs[HID_MAX_INPUTS];
 };
 
