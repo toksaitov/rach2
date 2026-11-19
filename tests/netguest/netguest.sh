@@ -30,8 +30,8 @@
 #
 # Once the guest prints its ready line on its serial console and, with a
 # PEER, NETTPUT (nettput beside this script, else on PATH) has had an answer
-# from PEER through it, COMMAND runs in sh with NETGUEST_QEMU_PID,
-# NETGUEST_OUT, NETGUEST_PEER and NETGUEST_PORT set. Then the guest ends, in
+# from PEER through it, COMMAND runs with NETGUEST_QEMU_PID, NETGUEST_OUT,
+# NETGUEST_PEER and NETGUEST_PORT set. Then the guest ends, in
 # one of three ways: it powers itself off when QEMU's monitor presses its
 # power button, so that its driver shuts the card down as it would on any
 # machine; with -q QEMU quits at SIGTERM under a running guest; with -k QEMU
@@ -48,23 +48,28 @@
 #
 # The kernel's counts are printed at each step as `netguest: counts: STEP
 # NAME=VALUE...`, with STEP one of start, given, ready, measured and back:
-# of /proc/stat kvm_vms, kvm_vcpus, kvm_exits, kvm_irqfd_raises,
-# kvm_ioeventfd_signals, vfio_groups, vfio_devices, vfio_dma_mappings,
-# vfio_dma_pages, iommu_dma_faults, iommu_irq_faults and msi_vectors_free,
+# of /proc/stat kvm_vms, kvm_vcpus, kvm_run_mappings, kvm_exits,
+# kvm_irqfd_raises, kvm_ioeventfd_signals, vfio_groups, vfio_devices,
+# vfio_dma_mappings, vfio_dma_pages, vfio_dma_io_pages, iommu_dma_faults,
+# iommu_irq_faults and msi_vectors_free,
 # and of /proc/net/dev tap_rx_bytes, tap_tx_bytes, tap_rx_packets and
 # tap_tx_packets, tap0's. With -V the kernel's record of the backend's work,
 # `vhost-net: detached: tap0: N frames to the guest, M from it`, gives
-# `netguest: vhost: to_guest=N from_guest=M`.
+# `netguest: vhost: to_guest=N from_guest=M`, the sums of the records
+# logged since the start.
 #
-# The run passes when the card is back with its driver and its interface has
-# its address again, PEER answers on it, the VFIO and KVM counts and the
-# free interrupt vectors are what they were at the start, no IOMMU fault was
-# counted, COMMAND exited 0, and with -V the backend logged its frames and
-# QEMU's stderr has no line on vhost, which QEMU writes when it falls back
-# to moving the frames itself. The last line is `netguest: result: pass` or
-# `netguest: result: fail: REASON`, and OUT, a new directory under TMPDIR
-# unless -o names one, keeps the guest's console and QEMU's messages. Exit
-# status 0, 1, or 2 for a usage error.
+# The run passes when the guest's ready line names the filter asked for,
+# QEMU was still running when its end was asked and ended as asked, the card
+# is back with its driver and its interface has its address and default
+# route again, PEER answers on it by that interface, the VFIO and KVM counts
+# and the free interrupt vectors are what they were at the start, no IOMMU
+# fault was counted, COMMAND exited 0, and with -V the backend logged its
+# frames and QEMU's stderr has no line on vhost, which QEMU writes when it
+# falls back to moving the frames itself. The last line is `netguest:
+# result: pass` or `netguest: result: fail: REASON`. OUT, a new directory
+# under TMPDIR unless -o names one, keeps the guest's console and QEMU's
+# messages; a new one is removed after a pass and named after a failure, as
+# `netguest: evidence: OUT`. Exit status 0, 1, or 2 for a usage error.
 
 bdf='' image='' iface='' accel=kvm mib=512 cpus=1 rules=0 filter=1 fwd=22 vhost=0
 peer='' port=5201 nettput='' out='' deadline=0 death=0 quit=0
@@ -99,6 +104,7 @@ while getopts c:i:n:a:m:s:r:F:f:Vp:P:N:o:d:kq o; do
 done
 shift $((OPTIND - 1))
 [ -n "$bdf" ] && [ -n "$image" ] || usage
+case $image in /*) ;; *) image=$PWD/$image ;; esac
 for n in "$mib" "$cpus" "$rules" "$fwd" "$port" "$deadline"; do
     case $n in
         '' | *[!0-9]*) usage ;;
@@ -121,8 +127,11 @@ sys=/sys/bus/pci/devices/$bdf
 
 # What must be undone: the card with vfio-pci, the interface without its
 # address, and the processes.
-given=0 stripped=0 qemu='' watchdog='' waiter='' made='' job=''
-owner='' addr='' gw='' start_counts=''
+given=0 stripped=0 qemu='' watchdog='' waiter='' made='' job='' new_out=0 passed=0
+owner='' addr='' gw='' metric='' start_counts=''
+# The counts that must be as at the start once the guest is gone.
+kept='kvm_vms kvm_vcpus kvm_run_mappings vfio_groups vfio_devices vfio_dma_mappings
+vfio_dma_pages vfio_dma_io_pages iommu_dma_faults iommu_irq_faults msi_vectors_free'
 
 # counts: print the counts the header comment names, as NAME=VALUE words.
 counts()
@@ -132,7 +141,7 @@ counts()
         awk -v t="$tap:" '$1 == t {
             print "tap_rx_bytes", $2; print "tap_rx_packets", $3
             print "tap_tx_bytes", $10; print "tap_tx_packets", $11 }' /proc/net/dev
-    } | awk '$1 ~ /^(kvm_vms|kvm_vcpus|kvm_exits|kvm_irqfd_raises|kvm_ioeventfd_signals|vfio_groups|vfio_devices|vfio_dma_mappings|vfio_dma_pages|iommu_dma_faults|iommu_irq_faults|msi_vectors_free|tap_rx_bytes|tap_rx_packets|tap_tx_bytes|tap_tx_packets)$/ {
+    } | awk '$1 ~ /^(kvm_vms|kvm_vcpus|kvm_run_mappings|kvm_exits|kvm_irqfd_raises|kvm_ioeventfd_signals|vfio_groups|vfio_devices|vfio_dma_mappings|vfio_dma_pages|vfio_dma_io_pages|iommu_dma_faults|iommu_irq_faults|msi_vectors_free|tap_rx_bytes|tap_rx_packets|tap_tx_bytes|tap_tx_packets)$/ {
             printf "%s%s=%s", sep, $1, $2; sep = " " } END { print "" }'
 }
 
@@ -140,6 +149,15 @@ counts()
 count()
 {
     echo "$2" | tr ' ' '\n' | sed -n "s/^$1=//p"
+}
+
+# default_route: print the gateway and the metric of the interface's
+# default route, as `GATEWAY METRIC`, or nothing.
+default_route()
+{
+    ip -4 route show default dev "$iface" | awk '{ g = ""; m = 0
+        for (i = 1; i < NF; i++) { if ($i == "via") g = $(i + 1); if ($i == "metric") m = $(i + 1) }
+        if (g != "") { print g, m; exit } }'
 }
 
 # driver_now: print the name of the driver that has the card, or nothing.
@@ -175,13 +193,11 @@ take_back_once()
             ip -4 -o addr show dev "$iface" | grep -q " $addr " || return 1
         fi
         if [ -n "$gw" ]; then
-            ip route add default via "$gw" dev "$iface" 2> /dev/null
-            ip -4 route show default dev "$iface" |
-                awk -v g="$gw" '{ for (i = 1; i < NF; i++) if ($i == "via" && $(i + 1) == g) f = 1 }
-                    END { exit !f }' || return 1
+            ip route add default via "$gw" dev "$iface" metric "$metric" 2> /dev/null
+            [ "$(default_route)" = "$gw $metric" ] || return 1
         fi
         stripped=0
-        echo "netguest: $iface is up${addr:+ with $addr}${gw:+, default route by $gw}"
+        echo "netguest: $iface is up${addr:+ with $addr}${gw:+, default route by $gw metric $metric}"
     fi
     return 0
 }
@@ -197,23 +213,38 @@ take_back()
     return 1
 }
 
+# stop_sender: kill the send that traffic.sh's kill left running.
+stop_sender()
+{
+    [ ! -s "$out/sender" ] || kill "$(cat "$out/sender")" 2> /dev/null
+    rm -f "$out/sender"
+}
+
 # shellcheck disable=SC2317 # the traps call it
 cleanup()
 {
     [ -z "$watchdog" ] || kill "$watchdog" 2> /dev/null
     [ -z "$waiter" ] || kill "$waiter" 2> /dev/null
-    [ -z "$job" ] || kill "$job" 2> /dev/null
+    if [ -n "$job" ]; then
+        pkill -P "$job" 2> /dev/null
+        kill "$job" 2> /dev/null
+    fi
+    [ -z "$out" ] || stop_sender
     if [ -n "$qemu" ]; then
         kill -KILL "$qemu" 2> /dev/null
         wait "$qemu" 2> /dev/null
         qemu=''
+    elif [ -n "$made" ]; then
+        # A QEMU started just before a signal, whose process ID was not kept.
+        pkill -KILL -f "file=$out/run.qcow2," 2> /dev/null
     fi
     take_back || echo "netguest: result: fail: $bdf or $iface is not back"
     exec 3>&- 4>&-
     [ -z "$made" ] || rm -f "$out/run.qcow2" "$out/param.img" "$out/mon.in" "$out/mon.out"
+    [ "$new_out" = 0 ] || [ "$passed" = 0 ] || rm -rf "$out"
 }
 trap cleanup EXIT
-trap 'echo "netguest: result: fail: stopped by a signal or the deadline"; exit 143' TERM
+trap 'fail "stopped by a signal or the deadline"' TERM
 trap 'exit 129' HUP
 trap 'exit 130' INT
 
@@ -227,6 +258,7 @@ fail()
         tr -d '\r' < "$out/console" | tail -n 25 | sed 's/^/netguest: console: /'
         sed 's/^/netguest: qemu: /' "$out/qemu.err" 2> /dev/null
     fi
+    [ "$new_out" = 0 ] || echo "netguest: evidence: $out"
     echo "netguest: result: fail: $*"
     exit 1
 }
@@ -258,6 +290,7 @@ owner=$(driver_now)
 [ -e "/sys/bus/pci/drivers/$owner/unbind" ] || fail "the driver $owner lets no card go"
 if [ -z "$out" ]; then
     out=$(mktemp -d "${TMPDIR:-/tmp}/rach2-netguest.XXXXXX") || fail "no scratch directory"
+    new_out=1
 else
     mkdir -p "$out" || fail "no directory $out"
 fi
@@ -269,10 +302,48 @@ if [ "$deadline" -gt 0 ]; then
     watchdog=$!
 fi
 
+# in_background COMMAND...: run COMMAND as a child that the traps can stop,
+# since a shell runs no trap until its foreground command ends; its status.
+in_background()
+{
+    "$@" &
+    waiter=$!
+    wait "$waiter"
+    rc=$?
+    waiter=''
+    return "$rc"
+}
+
+# klog_time: print the time of the kernel log's last record, or 0.
+klog_time()
+{
+    dmesg | tail -n 1 | sed -n 's/^[^[]*\[ *\([0-9]*\.[0-9]*\)\].*/\1/p' | grep . || echo 0
+}
+
+# detached_since T: print the frames of vhost-net's records of tap0 logged
+# after the time T, summed, as `TO FROM`, or nothing when there is none.
+detached_since()
+{
+    dmesg | awk -v t="$1" -v pat="vhost-net: detached: $tap: " '
+        index($0, pat) {
+            s = $0; sub(/^[^[]*\[ */, "", s); sub(/\].*/, "", s)
+            if (s + 0 <= t + 0) next
+            r = substr($0, index($0, pat) + length(pat))
+            split(r, f, " "); to += f[1]; from += f[6]; n++
+        }
+        END { if (n) print to, from }'
+}
+
 echo "netguest: card $bdf, driver $owner, interface $iface, guest image ${image##*/}, vhost $vhost"
+! ip link show "$tap" > /dev/null 2>&1 || fail "$tap is there before QEMU makes it"
 start_counts=$(counts)
 echo "netguest: counts: start $start_counts"
-detaches=$(dmesg | grep -c "vhost-net: detached: $tap: ")
+for name in $kept; do
+    case $(count "$name" "$start_counts") in
+        '' | *[!0-9]*) fail "the kernel gives no count $name" ;;
+    esac
+done
+klog_start=$(klog_time)
 
 # The guest's disks and its monitor are made while the card is still here.
 made=1
@@ -291,9 +362,10 @@ fi
 
 # The interface's address and default route, to put back.
 addr=$(ip -4 -o addr show dev "$iface" | awk '{ print $4; exit }')
-gw=$(ip -4 route show default dev "$iface" |
-    awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')
-echo "netguest: $iface has ${addr:-no address}${gw:+, default route by $gw}"
+route=$(default_route)
+gw=${route% *} metric=${route#* }
+[ -n "$route" ] || gw='' metric=''
+echo "netguest: $iface has ${addr:-no address}${gw:+, default route by $gw metric $metric}"
 stripped=1
 [ -z "$addr" ] || ip addr del "$addr" dev "$iface" || fail "the address of $iface did not come off"
 ip link set "$iface" down || fail "$iface did not go down"
@@ -337,14 +409,20 @@ while ! grep -a -q 'NETGUEST READY' "$out/console"; do
     kill -0 "$qemu" 2> /dev/null || fail "QEMU ended before the guest was ready"
     sleep 0.5
 done
-echo "netguest: guest: $(grep -a 'NETGUEST READY' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST //')"
+ready=$(grep -a 'NETGUEST READY' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST //')
+echo "netguest: guest: $ready"
+case " $ready " in
+    *" filter=$filter "*) ;;
+    *) fail "the guest is ready with another filter than filter=$filter" ;;
+esac
 grep -a 'NETGUEST LOADED' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST /netguest: guest: /'
 echo "netguest: counts: ready $(counts)"
 
 # The guest's address translation may still be settling: the peer is asked
 # until it answers through the guest, each attempt counted.
 if [ -n "$peer" ]; then
-    "$nettput" -c "$peer" -p "$port" -n 1000000 wait > "$out/first" 2>&1 ||
+    ip route get "$peer" | grep -q " dev $tap " || fail "$peer is not routed by $tap"
+    in_background "$nettput" -c "$peer" -p "$port" -n 1000000 wait > "$out/first" 2>&1 ||
         fail "$peer did not answer through the guest: $(tail -n 1 "$out/first")"
     echo "netguest: first answer through the guest: $(sed -n 's/^nettput: result: //p' "$out/first")"
 fi
@@ -352,8 +430,7 @@ fi
 status=0
 if [ $# -gt 0 ]; then
     echo "netguest: run: $*"
-    NETGUEST_QEMU_PID=$qemu NETGUEST_OUT=$out NETGUEST_PEER=$peer NETGUEST_PORT=$port \
-        sh -c "$*" &
+    NETGUEST_QEMU_PID=$qemu NETGUEST_OUT=$out NETGUEST_PEER=$peer NETGUEST_PORT=$port "$@" &
     job=$!
     wait "$job" || status=$?
     job=''
@@ -363,10 +440,17 @@ echo "netguest: guest: $(grep -a -c 'NETGUEST STATS' "$out/console") reports"
 grep -a 'NETGUEST STATS' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST STATS/netguest: guest: stats/'
 echo "netguest: counts: measured $(counts)"
 
-# The guest ends, and the card comes back.
+# The guest ends, and the card comes back. QEMU must still be running, and
+# end as it was asked: by itself, 0, or at SIGKILL, 137.
+kill -0 "$qemu" 2> /dev/null || fail "QEMU ended before the guest was ended"
+want=0
 if [ "$death" = 1 ]; then
+    if [ -f "$out/sender" ]; then
+        kill -0 "$(cat "$out/sender")" 2> /dev/null || fail "the send ended before QEMU was killed"
+    fi
     echo "netguest: end: QEMU is killed under the running guest"
     kill -KILL "$qemu"
+    want=137
 elif [ "$quit" = 1 ] || [ "$monitor" = none ]; then
     echo "netguest: end: QEMU quits under the running guest"
     kill -TERM "$qemu"
@@ -374,20 +458,23 @@ else
     echo "netguest: end: the guest's power button is pressed"
     echo system_powerdown >&3
 fi
-wait "$qemu" 2> /dev/null
+ended=0
+wait "$qemu" 2> /dev/null || ended=$?
 qemu=''
+stop_sender
 take_back || fail "$bdf or $iface did not come back"
+[ "$ended" = "$want" ] || fail "QEMU exited $ended, not $want"
 back=$(counts)
 echo "netguest: counts: back $back"
 if [ -n "$peer" ]; then
-    "$nettput" -c "$peer" -p "$port" -n 1000000 wait > "$out/back" 2>&1 ||
+    ip route get "$peer" | grep -q " dev $iface " || fail "$peer is not routed by $iface after the card came back"
+    in_background "$nettput" -c "$peer" -p "$port" -n 1000000 wait > "$out/back" 2>&1 ||
         fail "$peer did not answer on $iface after the card came back: $(tail -n 1 "$out/back")"
     echo "netguest: first answer on $iface: $(sed -n 's/^nettput: result: //p' "$out/back")"
 fi
 [ "$(driver_now)" = "$owner" ] || fail "$bdf is not back with $owner"
 
-for name in kvm_vms kvm_vcpus vfio_groups vfio_devices vfio_dma_mappings vfio_dma_pages \
-    iommu_dma_faults iommu_irq_faults msi_vectors_free; do
+for name in $kept; do
     was=$(count "$name" "$start_counts")
     now=$(count "$name" "$back")
     [ "$was" = "$now" ] || fail "$name is $now after the guest, $was before it"
@@ -396,11 +483,10 @@ if [ "$vhost" = 1 ]; then
     if grep -i vhost "$out/qemu.err" > /dev/null 2>&1; then
         fail "QEMU moved the frames itself: $(grep -i vhost "$out/qemu.err" | head -n 1)"
     fi
-    [ "$(dmesg | grep -c "vhost-net: detached: $tap: ")" -gt "$detaches" ] ||
-        fail "vhost-net logged no detach of $tap"
-    line=$(dmesg | grep "vhost-net: detached: $tap: " | tail -n 1)
-    echo "netguest: vhost: $(echo "$line" |
-        sed -n 's/.*detached: [^:]*: \([0-9]*\) frames to the guest, \([0-9]*\) from it.*/to_guest=\1 from_guest=\2/p')"
+    frames=$(detached_since "$klog_start")
+    [ -n "$frames" ] || fail "vhost-net logged no detach of $tap"
+    echo "netguest: vhost: to_guest=${frames% *} from_guest=${frames#* }"
 fi
 [ "$status" = 0 ] || fail "the command exited $status"
+passed=1
 echo "netguest: result: pass"
