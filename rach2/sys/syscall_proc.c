@@ -23,6 +23,7 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/autogroup.h"
 #include "proc/futex.h"
 #include "proc/seccomp.h"
 #include "proc/ns.h"
@@ -6954,7 +6955,10 @@ static uint64_t pgrp_serial_in_session(uint32_t pgid, uint32_t sid)
  * its group for another while members stayed in it cannot make a second
  * group of that id. Returns the new session id (the caller's pid). The new
  * session has no controlling terminal, and the caller is no longer detached
- * from one (`tty_detached` in tgroup.h).
+ * from one (`tty_detached` in tgroup.h). The session has a scheduling group
+ * of its own, into which every thread of the caller's process moves
+ * (`autogroup_setsid`), as Linux's ksys_setsid calls
+ * sched_autogroup_create_attach (kernel/sys.c:1252).
  */
 long sys_setsid(isr_params_t *params)
 {
@@ -6968,6 +6972,7 @@ long sys_setsid(isr_params_t *params)
     }
     group_set_ids(current_proc, current_proc->tgid, current_proc->tgid, current_proc->tg->serial);
     current_proc->tg->tty_detached = 0;
+    autogroup_setsid(current_proc);
     return (int32_t)pid_seen(current_proc->tgid);
 }
 
