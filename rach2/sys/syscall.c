@@ -716,7 +716,7 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *id, uint64_t
         return -EINVAL;
     }
     *tg = c.proc->tg;
-    (*tg)->refs++;
+    tgroup_get(*tg);
     *id = c.thread ? c.proc->pid : c.proc->tgid;
     *serial = c.proc->serial;
     *thread = c.thread;
