@@ -174,6 +174,12 @@ void i915_ggtt_invalidate(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void i915_ggtt_carry(struct drm_i915_private *i915, uint64_t offset)
+{
+    (void)i915;
+    (void)offset;
+}
+
 uint32_t i915_ggtt_pte_encode(uint64_t addr, int cache)
 {
     return GEN6_PTE_VALID | HSW_GTT_ADDR_ENCODE(addr) |
