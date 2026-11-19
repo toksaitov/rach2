@@ -12,15 +12,18 @@
 #include "../lib/spinlock.h"
 
 /* A registered backlight: its driver, its highest level, the level root set
- * and bl_power as root wrote it, and its type, NULL for "raw". */
+ * and whether root has written one, bl_power as root wrote it, its type,
+ * NULL for "raw", and whether its level 0 still lights the panel. */
 struct backlight {
     char name[32];
     const struct backlight_ops *ops;
     void *ctx;
     int max;
     int level;
+    int written;
     int power; /* BACKLIGHT_ON or BACKLIGHT_OFF */
     const char *type;
+    int lit_at_zero;
 };
 
 static struct backlight lights[BACKLIGHT_MAX];
@@ -99,7 +102,7 @@ int backlight_rebind(const char *name, int max, const struct backlight_ops *ops,
     kept = kept > max ? max : kept;
     if (level > 0) {
         b->level = level > max ? max : level;
-    } else {
+    } else if (kept > 0 || b->written) {
         b->level = kept;
         if (ops->power != NULL) {
             ops->set(ctx, kept);
@@ -132,6 +135,25 @@ void backlight_set_type(int i, const char *type)
     if (i >= 0 && i < nlights) {
         lights[i].type = type;
     }
+}
+
+void backlight_set_lit_at_zero(int i)
+{
+    if (i >= 0 && i < nlights) {
+        lights[i].lit_at_zero = 1;
+    }
+}
+
+int backlight_can_darken(void)
+{
+    int i;
+
+    for (i = 0; i < nlights; i++) {
+        if (lights[i].ops->power != NULL || !lights[i].lit_at_zero) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void backlight_init(void)
@@ -258,6 +280,7 @@ int backlight_store(int i, int attr, const char *text, int len)
     flags = spin_lock_irqsave(&lock);
     if (attr == BACKLIGHT_BRIGHTNESS) {
         b->level = v;
+        b->written = 1;
     } else {
         b->power = v;
     }

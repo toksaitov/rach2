@@ -16,12 +16,15 @@
  * (drm_blank.h); the next key or mouse move restores them, except after a
  * blank that `console_blank_now` forced, which only `console_unblank_now`
  * undoes. A program's picture on /fb, such as term's, blanks as well, but
- * is not painted over: the backlights and the display going off darken it.
+ * is not painted over: the backlights and the display going off darken it,
+ * and where neither can (`backlight_can_darken`, `drm_client_can_blank`)
+ * the console does not blank and counts the time again.
  * While a DRM master holds the screen (fb.h's `fb_hold`) the console does
  * not blank and no backlight changes; taking /fb or the screen unblanks it,
  * and the console that has the screen back counts the time again
- * (`console_poke`); a panic unblanks it too. Output goes on while it is
- * blank and is shown at the unblank.
+ * (`console_poke`); a panic unblanks it too, but a native display the
+ * blank turned off stays off, since its commit may sleep. Output goes on
+ * while it is blank and is shown at the unblank.
  */
 
 /**

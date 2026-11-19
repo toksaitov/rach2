@@ -178,6 +178,7 @@ void intel_backlight_setup(struct drm_i915_private *i915)
     if (d->bl_enabled) {
         intelbl_attach_switch(&d->bl);
     }
+    d->bl_dark = 0;
     d->bl_pipe_on = d->pps.panel_on;
     d->bl_want_on = d->pps.backlight_on;
     ops = d->bl.switched ? &bl_ops : &bl_ops_noswitch;
@@ -203,10 +204,11 @@ void intel_backlight_enable(struct drm_i915_private *i915)
     }
     flags = spin_lock_irqsave(&d->bl_lock);
     /* Linux's __intel_backlight_enable: a level at or below the least
-     * comes on at the most, and lit. Any other level is kept. */
-    if (d->bl_level <= d->bl_min) {
+     * comes on at the most, and lit. Any other level is kept, and so is
+     * the dark of a class level 0, which the user or the console's blank
+     * set, so that a wake never raises it and init never saves the raise. */
+    if (d->bl_level <= d->bl_min && !d->bl_dark) {
         d->bl_level = d->bl.max;
-        d->bl_dark = 0;
         raised = 1;
     }
     /* Linux's lpt_enable_backlight: a PWM left on is turned off first. */
@@ -221,8 +223,9 @@ void intel_backlight_enable(struct drm_i915_private *i915)
     bl_wr(i915, BLC_PWM_PCH_CTL1, ctl1);
     i915_posting_read(&i915->hw, BLC_PWM_PCH_CTL1);
     bl_wr(i915, BLC_PWM_PCH_CTL1, ctl1 | BLM_PCH_PWM_ENABLE);
-    /* The level sticks only once the PWM is on. */
-    intelbl_set(&d->bl, d->bl_level);
+    /* The level sticks only once the PWM is on; dark with no switch is a
+     * duty cycle of 0, as `bl_set` gives it. */
+    intelbl_set(&d->bl, d->bl_dark && !d->bl.switched ? 0 : d->bl_level);
     d->bl_enabled = 1;
     spin_unlock_irqrestore(&d->bl_lock, flags);
     /* As Linux sets props.brightness, so that the class shows the level
