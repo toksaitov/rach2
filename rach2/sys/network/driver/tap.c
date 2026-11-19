@@ -334,23 +334,39 @@ static const char *tap_percent(const char *s)
     return 0;
 }
 
+/** The number sscanf reads back, through a template, from the name the
+ * template gives the digit `i`: the digit and the digits that follow the
+ * template's `%d`, or -1 past two digits. */
+static int tap_scan_back(int i, const char *tail)
+{
+    int v = i;
+
+    for (; *tail >= '0' && *tail <= '9'; tail++) {
+        v = v * 10 + (*tail - '0');
+        if (v > 99) {
+            return -1;
+        }
+    }
+    return v;
+}
+
 /**
  * The name TUNSETIFF's `name` asks for, in `out`. An empty name is
  * "tap%d", as Linux's; a name with a '%' is a template, whose one `%d`
- * takes the first digit no interface has, as Linux's dev_alloc_name fills
- * it in. Linux finds the numbers in use by reading each interface's name
- * back through the template with sscanf, which takes a digit after the
- * `%d` into the number, so with such a digit no number is in use and the
- * name is 0's, or ENFILE when that one exists. 0; -EINVAL for a name, or
- * a template once filled in, longer than the kernel's interfaces hold, one
- * dev_valid_name refuses, or a '%' that is not one `%d`; -ENFILE when no
- * digit is free. `*fresh` is 1 for a name made from a template.
+ * takes a digit as Linux's __dev_alloc_name chooses it: a number is taken
+ * when the name it gives exists and reads back through the template, with
+ * sscanf, as that number, and the first number not taken is the one, or
+ * ENFILE when its name exists. A digit after the `%d` is read back with
+ * the number, so a00 takes 0 from a%d0 and a01 takes none from a%d1.
+ * 0; -EINVAL for a name, or a template once filled in, longer than the
+ * kernel's interfaces hold, one dev_valid_name refuses, or a '%' that is
+ * not one `%d`; -ENFILE. `*fresh` is 1 for a name made from a template.
  */
 static int32_t tap_pick_name(const char *name, char *out, int *fresh)
 {
     const char *pct, *tail;
     uint32_t max = (uint32_t)sizeof(taps[0].nd.name) - 1;
-    int i, last, head;
+    int i, head;
 
     if (name[0] == '\0') {
         name = "tap%d";
@@ -373,16 +389,15 @@ static int32_t tap_pick_name(const char *name, char *out, int *fresh)
         return -EINVAL;
     }
     head = (int)(pct - name);
-    last = *tail >= '0' && *tail <= '9' ? 0 : 9;
-    for (i = 0; i <= last; i++) {
+    for (i = 0; i < 10; i++) {
         k_memcpy(out, name, (size_t)head);
         out[head] = (char)('0' + i);
         k_memcpy(out + head + 1, tail, k_strlen(tail) + 1);
-        if (!netdev_by_name(out)) {
-            return 0;
+        if (!netdev_by_name(out) || tap_scan_back(i, tail) != i) {
+            break;
         }
     }
-    return -ENFILE;
+    return i == 10 || netdev_by_name(out) ? -ENFILE : 0;
 }
 
 /**
