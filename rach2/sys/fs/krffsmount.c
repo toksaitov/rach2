@@ -127,8 +127,8 @@ static uint64_t owner_of(const struct krffs_open *o)
 }
 
 /** Copy into a held, checked range and tag its block for file writeback. */
-static void volume_store(struct krffs_volume *vol, struct bbuf *b, uint32_t at,
-                         const uint8_t *src, uint32_t n)
+static void volume_store(struct krffs_volume *vol, struct bbuf *b, uint32_t at, const uint8_t *src,
+                         uint32_t n)
 {
     k_memcpy(b->data + at, src, n);
     if (vol->writer) {

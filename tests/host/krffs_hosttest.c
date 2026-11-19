@@ -3828,8 +3828,8 @@ static int repair_sync(void *ctx)
 static void repair_io_rows(int boot)
 {
     static const krffs_backend_t backend = {repair_read, repair_store, repair_sync, 0};
-    static const struct unlink_extent layout[] = {
-        {0, NULL}, {600, "same"}, {1200, NULL}, {1800, "same"}, {2400, NULL}, {3000, "keep"}};
+    static const struct unlink_extent layout[] = {{0, NULL},      {600, "same"}, {1200, NULL},
+                                                  {1800, "same"}, {2400, NULL},  {3000, "keep"}};
     int i, n = 0;
 
     for (i = 0; i <= n; i++) {
@@ -3919,7 +3919,8 @@ static void header_failure_rows(void)
     read_fails_at = (uint64_t)-1;
     read_fails_once = 0;
     check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) == 0 &&
-              krffs_orphan_at(&krffs_root_mount, node) == 0, "mount root and orphan its file");
+              krffs_orphan_at(&krffs_root_mount, node) == 0,
+          "mount root and orphan its file");
     read_fails_at = node + KRFFS_FIELD_TYPE;
     krffs_remove_reserved_node(krffs_fs, krffs_node_of(node));
     check(krffs_root_halted() && krffs_root_check_owed() && krffs_root_has_orphans(),
