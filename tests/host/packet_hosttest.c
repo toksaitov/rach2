@@ -2,7 +2,8 @@
  * packet_hosttest.c: the receive parsers against frames no peer would send.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/kheap_host.c rach2/sys/arch/x86/pit.c
+ * host-deps: tests/host/compat/kirq_none.c tests/host/compat/spinlock_host.c
  *
  * A machine on a real network is handed whatever arrives, and what arrives is
  * not always well formed: a header cut short by a bad cable, a length field
@@ -28,7 +29,8 @@
  * miss while the card's MTU falls, a driver's refusal, the
  * loopback backlog filled past its limit, an echo answered through it at a
  * limit of 0, its drain ended by its budgets of datagrams and of time
- * against a clock the deliveries move, and the interface a broadcast
+ * on pit.c's stopwatch, over a reference counter of the PM timer's rate
+ * and width that the deliveries move, and the interface a broadcast
  * leaves by on a machine with two cards. `ipfrag.c` is compiled in too, and
  * the receive rows reassemble a datagram from its fragments.
  */
@@ -45,6 +47,13 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 #include "../../rach2/sys/network/ip/ip.h"
 #include "../../rach2/sys/arch/arch.h"
 #include "../../rach2/sys/timer.h"
+#include "../../rach2/sys/arch/x86/pit.h"
+#include "../../rach2/sys/arch/x86/refclock.h"
+#include "../../rach2/sys/arch/x86/kvmclock.h"
+#include "../../rach2/sys/arch/x86/tsc.h"
+#include "../../rach2/sys/arch/x86/kcpu.h"
+#include "../../rach2/sys/cmdline.h"
+#include "../../rach2/sys/vdso.h"
 
 /* ---- what the layers under the parsers record ---- */
 
@@ -142,30 +151,181 @@ static struct {
     uint16_t number, len;
 } udp_seen[UDP_SEEN_MAX];
 
-/* The time each UDP delivery moves by `udp_cost` microseconds, which the
- * drain's stopwatch reads (`timer_watch_us`); and the most `timer_now_us`
- * reads of it, as the clock under the tick stops where the PM timer has
- * wrapped since the last tick while interrupts stay off. */
-static uint32_t fake_us, udp_cost, now_cap = 0xFFFFFFFFu;
+/* ---- the reference counter under pit.c's stopwatch ---- */
 
-/** Read the clock under the tick, up to `now_cap`. */
-uint32_t timer_now_us(void)
+/* The reference that keeps the clock, as the ACPI PM timer: 3,579,545 Hz in
+ * 24 bits, which wrap every 4.69 s. Each UDP delivery moves it by
+ * `udp_cost` counts. Until the loopback time row starts it, the stopwatch
+ * reads pit.c's clock under the 8254, which stands still here. */
+#define REF_HZ 3579545u
+static uint32_t ref_now = 0xFFF000u, udp_cost;
+
+/** Name the test's reference. */
+const char *refclock_name(void)
 {
-    return fake_us < now_cap ? fake_us : now_cap;
+    return "pmtimer";
 }
 
-/** Start the stopwatch `w` at the time the deliveries move. */
-void timer_watch_start(struct timer_watch *w)
+/** The reference's count, in its 24 bits. */
+uint32_t refclock_read(void)
 {
-    w->last = fake_us;
-    w->us = 0;
+    return ref_now & 0xFFFFFFu;
 }
 
-/** The time the deliveries moved since `w` started, past `now_cap`. */
-uint32_t timer_watch_us(struct timer_watch *w)
+/** The reference's rate. */
+uint32_t refclock_hz(void)
 {
-    w->us = fake_us - (uint32_t)w->last;
-    return w->us;
+    return REF_HZ;
+}
+
+/** The reference's width. */
+uint32_t refclock_mask(void)
+{
+    return 0xFFFFFFu;
+}
+
+/** `a * b / c`, rounded down. */
+uint32_t refclock_scale(uint32_t a, uint32_t b, uint32_t c)
+{
+    return (uint32_t)((uint64_t)a * b / c);
+}
+
+/** No row waits on the reference. */
+uint32_t refclock_wait_us(uint32_t usec)
+{
+    (void)usec;
+    __builtin_trap();
+}
+
+/* What else pit.c reaches: the 8254, whose latch reads a count of 0 and
+ * whose tick is never pending, and no TSC, KVM clock, vDSO or command line,
+ * so that only the test's reference starts (`timer_tick_clock`). */
+uint32_t (*udelay_wait)(uint32_t usec);
+
+/** Write nothing to the 8254. */
+void outb(uint16_t port, uint8_t value)
+{
+    (void)port;
+    (void)value;
+}
+
+/** Latch the 8254's status and count, all 0. */
+int pit_latch(uint8_t command, uint8_t *bytes, int n)
+{
+    (void)command;
+    while (n-- > 0) {
+        bytes[n] = 0;
+    }
+    return 1;
+}
+
+/** No row waits on the 8254. */
+uint32_t pit_wait_counts(uint32_t counts)
+{
+    (void)counts;
+    __builtin_trap();
+}
+
+/** No row waits on the 8254. */
+uint32_t pit_wait_us(uint32_t usec)
+{
+    (void)usec;
+    __builtin_trap();
+}
+
+/** The tick is never pending. */
+int pic_irq_pending(uint8_t irq)
+{
+    (void)irq;
+    return 0;
+}
+
+/** Nothing to wait for. */
+void arch_relax(void)
+{}
+
+/** A TSC that reads 0. */
+void host_tsc_read(uint32_t *lo, uint32_t *hi)
+{
+    *lo = 0;
+    *hi = 0;
+}
+
+/** No TSC agrees across processors. */
+int tsc_synced(int *cpu, uint64_t *behind)
+{
+    *cpu = 0;
+    *behind = 0;
+    return 0;
+}
+
+/** A processor with no leaf of note. */
+void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
+{
+    (void)leaf;
+    *a = *b = *c = *d = 0;
+}
+
+/** An empty command line. */
+int kcmdline_has(const char *flag)
+{
+    (void)flag;
+    return 0;
+}
+
+/** No KVM clock. */
+uint32_t kvmclock_counts_per_tick(void)
+{
+    return 0;
+}
+
+/** No KVM clock. */
+int kvmclock_kept(void)
+{
+    return 0;
+}
+
+/** No KVM clock. */
+int kvmclock_sample(struct kvmclock_sample *s)
+{
+    (void)s;
+    return KVMCLOCK_NONE;
+}
+
+/** No KVM clock. */
+int kvmclock_now(uint64_t *tsc, uint64_t *ns)
+{
+    (void)tsc;
+    (void)ns;
+    return 0;
+}
+
+/** No vDSO clock. */
+uint32_t vclock_mode(void)
+{
+    return 0;
+}
+
+/** The tick's sequence count, which no other processor moves. */
+uint32_t tick_read_begin(void)
+{
+    return 0;
+}
+
+/** Nothing moved the tick meanwhile. */
+int tick_read_retry(uint32_t seq)
+{
+    (void)seq;
+    return 0;
+}
+
+/** `n / d`, with the remainder in `*rem`. */
+uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    if (rem) {
+        *rem = n % d;
+    }
+    return n / d;
 }
 
 /** Record and count a UDP datagram received; return 0. */
@@ -178,7 +338,7 @@ int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
         udp_seen[to_udp].len = len;
     }
     to_udp++;
-    fake_us += udp_cost;
+    ref_now += udp_cost;
     return 0;
 }
 
@@ -1054,16 +1214,17 @@ static void test_loop_echo_zero(void)
 /**
  * End a drain of costly deliveries on time.
  *
- * Each UDP delivery here moves the time by `udp_cost` microseconds. As
- * Linux's net_rx_action checks netdev_budget_usecs, the drain ends after
- * the first turn of 64 that ends past `netdev_budget_usecs`, counts the
- * squeeze, and marks the rest as the current thread's work (WORK_LOOP), as
- * Linux raises its softirq again. A limit of 0 ends every drain after its
- * first turn, a squeeze even when that turn emptied the backlog, as Linux
- * counts it. A budget of 10 s ends a drain whose turns of 6.4 s each pass
- * the 4.7 s at which the clock under the tick stops, as the PM timer wraps
- * with interrupts off (`now_cap`), so that only the drain's stopwatch sees
- * it end; the rest is delivered by the next drain.
+ * The drain's time is pit.c's stopwatch over the test's PM timer, which
+ * each UDP delivery moves by `udp_cost` counts. As Linux's net_rx_action
+ * checks netdev_budget_usecs, the drain ends after the first turn of 64
+ * that ends past `netdev_budget_usecs`, counts the squeeze, and marks the
+ * rest as the current thread's work (WORK_LOOP), as Linux raises its
+ * softirq again. A limit of 0 ends every drain after its first turn, a
+ * squeeze even when that turn emptied the backlog, as Linux counts it. A
+ * budget of 10 s ends a drain after its second turn of 6.4 s, each longer
+ * than the 4.69 s in which the PM timer wraps with no tick between; a
+ * stopwatch read once a turn would count 1.7 s of each and deliver all 200
+ * datagrams. The rest is delivered by the next drain.
  */
 static void test_loop_time(void)
 {
@@ -1075,8 +1236,9 @@ static void test_loop_time(void)
     reset();
     loop_reset();
     cpu_table[0].current = &thread;
+    CHECK("pit.c's first tick takes the PM timer as its reference", timer_tick_clock() == 1u);
     netdev_budget_usecs = 1000;
-    udp_cost = 100;
+    udp_cost = 358; /* 100 us */
     for (i = 0; i < 200; i++) {
         (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
     }
@@ -1086,7 +1248,7 @@ static void test_loop_time(void)
     CHECK("a drain of deliveries of 100 us ends after its first turn past 1000 us",
           to_udp == 64 && sn.squeezed == 1 && loop_proc == 136);
     CHECK("and marks the rest as the thread's work", (thread.work & WORK_LOOP) != 0);
-    udp_cost = 1;
+    udp_cost = 0;
     thread.work = 0;
     ip_loop_drain_from(IP_LOOP_FROM_CALL);
     ip_loop_softnet(0, &sn);
@@ -1101,23 +1263,20 @@ static void test_loop_time(void)
     CHECK("a limit of 0 counts a squeeze after a turn that emptied the backlog",
           to_udp == 210 && sn.squeezed == 2 && !ip_loop_pending());
     netdev_budget_usecs = 10000000;
-    udp_cost = 100000;
+    udp_cost = REF_HZ / 10u; /* 100 ms */
     for (i = 0; i < 200; i++) {
         (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
     }
-    now_cap = fake_us + 4700000u;
     thread.work = 0;
     ip_loop_drain_from(IP_LOOP_FROM_TICK);
     ip_loop_softnet(0, &sn);
-    CHECK("a drain of 10 s ends after its second turn of 6.4 s, past where the clock stops",
+    CHECK("a drain of 10 s ends after its second turn of 6.4 s, each past the PM timer's wrap",
           to_udp == 338 && sn.squeezed == 3 && loop_proc == 72 && (thread.work & WORK_LOOP) != 0);
-    udp_cost = 1;
+    udp_cost = 0;
     ip_loop_drain_from(IP_LOOP_FROM_CALL);
     ip_loop_softnet(0, &sn);
     CHECK("and the next drain delivers the rest",
           to_udp == 410 && sn.squeezed == 3 && !ip_loop_pending());
-    now_cap = 0xFFFFFFFFu;
-    udp_cost = 0;
     netdev_budget_usecs = 2 * 1000000 / TICK_HZ;
     cpu_table[0].current = 0;
     loop_reset();

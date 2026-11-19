@@ -850,15 +850,17 @@ static void loop_deliver(unsigned cpu, int from)
 /**
  * Deliver up to `quota` datagrams, as Linux's process_backlog does: from
  * the process queue, and once it is empty from the whole input queue moved
- * onto it, until both are empty. Returns the datagrams delivered.
+ * onto it, until both are empty. Each delivery is followed by a reading of
+ * the drain's stopwatch `watch`. Returns the datagrams delivered.
  */
-static int loop_poll(unsigned cpu, int from, int quota)
+static int loop_poll(unsigned cpu, int from, int quota, struct timer_watch *watch)
 {
     int work = 0;
 
     for (;;) {
         while (loop_proc != 0) {
             loop_deliver(cpu, from);
+            (void)timer_watch_us(watch);
             if (++work >= quota) {
                 return work;
             }
@@ -881,12 +883,17 @@ static int loop_poll(unsigned cpu, int from, int quota)
  * The turns and their budgets are Linux's net_rx_action's: after each turn
  * the drain ends when `netdev_budget` is spent or `netdev_budget_usecs` have
  * passed since it began, and counts the end as a squeeze whether or not
- * datagrams are left. Its time is a stopwatch's (`timer_watch_us`), which
- * reads the reference that keeps the clock, the HPET, the PM timer, KVM's
- * clock or a trusted TSC, and adds each turn's counts to the last, so that
- * it runs on while interrupts are off, as no tick does, for as long as any
- * budget `netdev_budget_usecs` takes, whether or not the processor's cycle
- * counter has a measured rate.
+ * datagrams are left. Linux counts that time in jiffies, which go on
+ * through its softirq; the drain keeps interrupts off, so no tick counts
+ * here, and its time is a stopwatch's (`timer_watch_us`) instead. The
+ * stopwatch reads the reference that keeps the clock, the HPET, the PM
+ * timer, KVM's clock or a trusted TSC, and adds each reading's counts to
+ * the last, whether or not the processor's cycle counter has a measured
+ * rate. It is read after every delivery, not once a turn: the readings are
+ * then a datagram's delivery apart, far closer than the 4.7 s in which the
+ * 24-bit PM timer wraps, so that a turn of any length counts whole and the
+ * stopwatch reaches any budget `netdev_budget_usecs` takes, up to its
+ * 71 minutes.
  * What is left is marked as the current thread's work
  * (WORK_LOOP), as Linux raises NET_RX_SOFTIRQ again, so that its next
  * return to user mode, after the interrupts held off meanwhile, drains it,
@@ -905,7 +912,7 @@ void ip_loop_drain_from(int from)
     loop_draining = 1;
     timer_watch_start(&watch);
     while (loop_first) {
-        budget -= loop_poll(cpu, from, LOOP_WEIGHT);
+        budget -= loop_poll(cpu, from, LOOP_WEIGHT, &watch);
         if (budget <= 0 || timer_watch_us(&watch) >= usecs) {
             loop_softnet[cpu].squeezed++;
             break;
