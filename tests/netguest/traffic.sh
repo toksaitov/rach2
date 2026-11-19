@@ -10,12 +10,12 @@
 # then waits for the guest's next report on its console,
 # NETGUEST_OUT/console, and prints it as `traffic: report: LINE`, the
 # report the case is judged by. `deny` does the same, then makes ten
-# attempts at once at the peer's port 9, each of which must go unanswered
-# and unrefused until Rach2's TCP gives its handshake up, waits for the
-# guest's next report and prints it the same way; the guest's deny9 count
-# must have grown by at least the SYNs Rach2 sent meanwhile, the
-# connections it opened and the segments it sent again as /proc/net/snmp
-# counts them, so that the guest dropped every SYN of every attempt. `kill`
+# attempts at once at the peer's port NETGUEST_DENY, where the peer serves
+# too, each of which must go unanswered and unrefused until Rach2's TCP
+# gives its handshake up, so that the guest let no SYN of any attempt
+# through; it waits for the guest's next report, prints it the same way,
+# and requires the guest's deny count to have grown by at least one SYN of
+# each attempt, so that its rule, not another, dropped them. `kill`
 # starts a send that
 # does not end, writes its process ID to NETGUEST_OUT/sender, and returns
 # once tap0 has sent a mebibyte more than it had, leaving the send running
@@ -25,7 +25,7 @@
 
 here=$(cd "$(dirname "$0")" && pwd)
 nettput=$here/nettput
-peer=${NETGUEST_PEER:?} port=${NETGUEST_PORT:?}
+peer=${NETGUEST_PEER:?} port=${NETGUEST_PORT:?} deny=${NETGUEST_DENY:?}
 
 # tap_sent: the bytes tap0 has sent, as /proc/net/dev counts them.
 tap_sent()
@@ -62,25 +62,11 @@ report_after()
         sed 's/^.*NETGUEST STATS/traffic: report:/'
 }
 
-# report_deny N: the deny9 count of the guest's report N, or nothing.
+# report_deny N: the deny count of the guest's report N, or nothing.
 report_deny()
 {
     tr -d '\r' < "$NETGUEST_OUT/console" | grep -a 'NETGUEST STATS' | sed -n "${1}p" |
-        sed -n 's/.*deny9=\([0-9][0-9]*\).*/\1/p'
-}
-
-# The SYNs each of drop's attempts sends before Rach2's TCP gives the
-# handshake up with ETIMEDOUT: the first and TCP_SYN_RETRIES (7) more
-# (rach2/sys/network/tcp/tcp.h), less any a full queue refused to send.
-syns_each=8
-
-# syns_sent: the connections Rach2's TCP has opened and the segments it has
-# sent again, summed, as /proc/net/snmp counts them; a retransmission the
-# driver refused is not among them.
-syns_sent()
-{
-    awk '$1 == "Tcp:" { if (!h) { for (i = 2; i <= NF; i++) c[$i] = i; h = 1; next }
-        print $(c["ActiveOpens"]) + $(c["RetransSegs"]); exit }' /proc/net/snmp
+        sed -n 's/.* deny=\([0-9][0-9]*\).*/\1/p'
 }
 
 transfers()
@@ -100,26 +86,21 @@ case ${1:-} in
         transfers
         before=$(report_deny "$judged")
         [ -n "$before" ] || {
-            echo "traffic: the guest's report after the transfers has no deny9 count" >&2
+            echo "traffic: the guest's report after the transfers has no deny count" >&2
             exit 1
         }
-        sent=$(syns_sent)
-        "$nettput" -c "$peer" -p 9 -n 10 drop || exit 1
-        sent=$(($(syns_sent) - sent))
-        # Every SYN the attempts sent: the machine's count, which leaves out
-        # a retransmission the driver refused, and is no more than the
-        # attempts can send, so that other connections cannot raise it.
-        least=$((10 * syns_each))
-        [ "$sent" -ge "$least" ] || least=$sent
+        # The peer answers on this port too, so that a SYN the guest let
+        # through would be answered and fail drop.
+        "$nettput" -c "$peer" -p "$deny" -n 10 drop || exit 1
         report_after "$(reports)"
         after=$(report_deny "$judged")
         [ -n "$after" ] || {
-            echo "traffic: the guest's report after the attempts has no deny9 count" >&2
+            echo "traffic: the guest's report after the attempts has no deny count" >&2
             exit 1
         }
-        echo "traffic: port 9: $least SYNs sent, $((after - before)) counted by the guest"
-        [ $((after - before)) -ge "$least" ] || {
-            echo "traffic: the guest counted $((after - before)) of the $least SYNs sent to port 9" >&2
+        echo "traffic: port $deny: 10 attempts unanswered, $((after - before)) SYNs counted by the guest"
+        [ $((after - before)) -ge 10 ] || {
+            echo "traffic: the guest counted $((after - before)) SYNs to port $deny, fewer than the 10 attempts" >&2
             exit 1
         }
         ;;

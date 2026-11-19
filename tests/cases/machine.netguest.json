@@ -141,6 +141,12 @@
           "program": "netguest-nettput",
           "ready": "nettput: serving on",
           "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
         }
       ],
       "assertions": [
@@ -198,7 +204,7 @@
         "memory_bytes": 7516192768,
         "disk_bytes": 8589934592,
         "locks": [],
-        "ports": 1,
+        "ports": 2,
         "loop_devices": 0
       },
       "prepare": [
@@ -383,12 +389,18 @@
           "program": "netguest-nettput",
           "ready": "nettput: serving on",
           "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
         }
       ],
       "assertions": [
         {
           "assertion_id": "netguest",
-          "checks": "run.sh's debian case: transfers through the guest counted by tap0 each way, ten attempts at port 9 unanswered and unrefused, the guest's deny9 count grown by every SYN they sent, and netguest.sh's checks of the card, the peer and the VFIO, KVM, IOMMU and vector counts",
+          "checks": "run.sh's debian case: transfers through the guest counted by tap0 each way, ten attempts at the peer's second port, where it serves, unanswered and unrefused, the guest's deny count grown by at least one SYN of each, and netguest.sh's checks of the card, the peer and the VFIO, KVM, IOMMU and vector counts",
           "source": "scenario"
         }
       ],
@@ -440,7 +452,7 @@
         "memory_bytes": 7516192768,
         "disk_bytes": 8589934592,
         "locks": [],
-        "ports": 1,
+        "ports": 2,
         "loop_devices": 0
       },
       "prepare": [
@@ -625,12 +637,18 @@
           "program": "netguest-nettput",
           "ready": "nettput: serving on",
           "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
         }
       ],
       "assertions": [
         {
           "assertion_id": "netguest",
-          "checks": "run.sh's debian-vhost case: transfers through the guest counted by tap0 each way, at least 5541 frames each way in vhost-net's /proc/stat counts of the attachments that ended, no vhost line on QEMU's stderr, no packet to port 9 counted, and netguest.sh's checks",
+          "checks": "run.sh's debian-vhost case: transfers through the guest counted by tap0 each way, at least 5541 frames each way in vhost-net's /proc/stat counts of the attachments that ended, no vhost line on QEMU's stderr, no packet to the denied port counted, and netguest.sh's checks",
           "source": "scenario"
         }
       ],
@@ -682,7 +700,7 @@
         "memory_bytes": 7516192768,
         "disk_bytes": 8589934592,
         "locks": [],
-        "ports": 1,
+        "ports": 2,
         "loop_devices": 0
       },
       "prepare": [
@@ -867,12 +885,18 @@
           "program": "netguest-nettput",
           "ready": "nettput: serving on",
           "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
         }
       ],
       "assertions": [
         {
           "assertion_id": "netguest",
-          "checks": "run.sh's freebsd case: transfers through the guest counted by tap0 each way, ten attempts at port 9 unanswered and unrefused, pf's deny9 label count grown by every SYN they sent, and netguest.sh's checks of the card, the peer and the VFIO, KVM, IOMMU and vector counts",
+          "checks": "run.sh's freebsd case: transfers through the guest counted by tap0 each way, ten attempts at the peer's second port, where it serves, unanswered and unrefused, pf's deny label count grown by at least one SYN of each, and netguest.sh's checks of the card, the peer and the VFIO, KVM, IOMMU and vector counts",
           "source": "scenario"
         }
       ],
@@ -924,7 +948,7 @@
         "memory_bytes": 7516192768,
         "disk_bytes": 8589934592,
         "locks": [],
-        "ports": 1,
+        "ports": 2,
         "loop_devices": 0
       },
       "prepare": [
@@ -1109,12 +1133,18 @@
           "program": "netguest-nettput",
           "ready": "nettput: serving on",
           "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
         }
       ],
       "assertions": [
         {
           "assertion_id": "netguest",
-          "checks": "run.sh's freebsd-vhost case: transfers through the guest counted by tap0 each way, at least 5541 frames each way in vhost-net's /proc/stat counts of the attachments that ended, no vhost line on QEMU's stderr, no packet to port 9 counted, and netguest.sh's checks",
+          "checks": "run.sh's freebsd-vhost case: transfers through the guest counted by tap0 each way, at least 5541 frames each way in vhost-net's /proc/stat counts of the attachments that ended, no vhost line on QEMU's stderr, no packet to the denied port counted, and netguest.sh's checks",
           "source": "scenario"
         }
       ],
@@ -1166,7 +1196,7 @@
         "memory_bytes": 7516192768,
         "disk_bytes": 8589934592,
         "locks": [],
-        "ports": 1,
+        "ports": 2,
         "loop_devices": 0
       },
       "prepare": [
@@ -1351,6 +1381,12 @@
           "program": "netguest-nettput",
           "ready": "nettput: serving on",
           "does": "serve nettput's tests on 127.0.0.1 at the case's port, which the machine and its nested guest reach at 10.0.3.2, one client at a time until stopped"
+        },
+        {
+          "service_id": "deny",
+          "program": "netguest-nettput",
+          "ready": "nettput: serving on",
+          "does": "serve nettput's tests on 127.0.0.1 at the case's second port, the port the guests deny, so that a SYN a guest lets through is answered"
         }
       ],
       "assertions": [
@@ -1408,7 +1444,7 @@
         "memory_bytes": 7516192768,
         "disk_bytes": 8589934592,
         "locks": [],
-        "ports": 1,
+        "ports": 2,
         "loop_devices": 0
       },
       "prepare": [

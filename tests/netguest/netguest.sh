@@ -3,7 +3,7 @@
 # through the guest over a tap link, and take the card back.
 #
 # Usage: netguest.sh -c BDF -i IMAGE [-n IFACE] [-a kvm|tcg] [-m MIB]
-#                    [-s CPUS] [-r RULES] [-F 0|1] [-f PORT] [-V]
+#                    [-s CPUS] [-r RULES] [-F 0|1] [-f PORT] [-Z PORT] [-V]
 #                    [-p PEER] [-P PORT] [-N NETTPUT] [-o OUT] [-d SECONDS]
 #                    [-k|-q] [-- COMMAND...]
 #
@@ -23,25 +23,25 @@
 # them. With -V the tap's queues go to /dev/vhost-net, the kernel's backend,
 # and QEMU moves no frame itself. The guest's parameters, which its boot
 # script reads from its second disk, are RULES filler rules (0), the filter
-# on or, with -F 0, forwarding and address translation alone (1), and the
-# port it forwards to Rach2's port 22 (22). Rach2 takes 10.77.0.2/24 on
-# tap0, the guest has 10.77.0.1, and Rach2 routes PEER, the machine that
-# runs `nettput -s` on PORT (5201), through the guest.
+# on or, with -F 0, forwarding and address translation alone (1), the
+# port it forwards to Rach2's port 22 (22), and the port -Z names (9), TCP
+# to which its filter drops and its deny rule counts. Rach2 takes
+# 10.77.0.2/24 on tap0, the guest has 10.77.0.1, and Rach2 routes PEER, the
+# machine that runs `nettput -s` on PORT (5201), through the guest.
 #
-# Once the guest prints its ready line on its serial console and, with a
-# PEER, NETTPUT (nettput beside this script, else on PATH) has had an answer
-# from PEER through it, COMMAND runs with NETGUEST_QEMU_PID, NETGUEST_OUT,
-# NETGUEST_PEER and NETGUEST_PORT set. Then the guest ends, in
-# one of three ways: it powers itself off when QEMU's monitor presses its
-# power button, so that its driver shuts the card down as it would on any
-# machine; with -q QEMU quits at SIGTERM under a running guest; with -k QEMU
-# is killed, the guest's death. Then the card goes back: vfio-pci lets it
-# go, Rach2's driver takes it and the interface gets its addresses, the
-# first still its primary, and its default routes, metrics and all, again,
-# each step read back and tried three times before the run fails. The waits
-# judge nothing by the clock: a guest that never readies, or never powers
-# off, is ended by the caller's bound, and the card comes back on that way
-# out too.
+# Once the guest prints its ready line on its serial console and, with a PEER,
+# NETTPUT (nettput beside this script, else on PATH) has had an answer from PEER
+# through it, COMMAND runs with NETGUEST_QEMU_PID, NETGUEST_OUT, NETGUEST_PEER,
+# NETGUEST_PORT and NETGUEST_DENY, -Z's port, set. Then the guest ends, in one
+# of three ways: it powers itself off when QEMU's monitor presses its power
+# button, so that its driver shuts the card down as it would on any machine;
+# with -q QEMU quits at SIGTERM under a running guest; with -k QEMU is killed,
+# the guest's death. Then the card goes back: vfio-pci lets it go, Rach2's
+# driver takes it and the interface gets its addresses, the first still its
+# primary, and its default routes, metrics and all, again, each step read back
+# and tried three times before the run fails. The waits judge nothing by the
+# clock: a guest that never readies, or never powers off, is ended by the
+# caller's bound, and the card comes back on that way out too.
 #
 # The card goes back on every way out: at the end, after a failure, at a
 # signal, and, with -d, once SECONDS have passed since the start, which is
@@ -77,16 +77,16 @@
 # messages; a new one is removed after a pass and named after a failure, as
 # `netguest: evidence: OUT`. Exit status 0, 1, or 2 for a usage error.
 
-bdf='' image='' iface='' accel=kvm mib=512 cpus=1 rules=0 filter=1 fwd=22 vhost=0
+bdf='' image='' iface='' accel=kvm mib=512 cpus=1 rules=0 filter=1 fwd=22 deny=9 vhost=0
 peer='' port=5201 nettput='' out='' deadline=0 death=0 quit=0
 usage()
 {
     echo "usage: netguest.sh -c BDF -i IMAGE [-n IFACE] [-a kvm|tcg] [-m MIB] [-s CPUS]" >&2
-    echo "                   [-r RULES] [-F 0|1] [-f PORT] [-V] [-p PEER] [-P PORT]" >&2
+    echo "                   [-r RULES] [-F 0|1] [-f PORT] [-Z PORT] [-V] [-p PEER] [-P PORT]" >&2
     echo "                   [-N NETTPUT] [-o OUT] [-d SECONDS] [-k|-q] [-- COMMAND...]" >&2
     exit 2
 }
-while getopts c:i:n:a:m:s:r:F:f:Vp:P:N:o:d:kq o; do
+while getopts c:i:n:a:m:s:r:F:f:Z:Vp:P:N:o:d:kq o; do
     case $o in
         c) bdf=$OPTARG ;;
         i) image=$OPTARG ;;
@@ -97,6 +97,7 @@ while getopts c:i:n:a:m:s:r:F:f:Vp:P:N:o:d:kq o; do
         r) rules=$OPTARG ;;
         F) filter=$OPTARG ;;
         f) fwd=$OPTARG ;;
+        Z) deny=$OPTARG ;;
         V) vhost=1 ;;
         p) peer=$OPTARG ;;
         P) port=$OPTARG ;;
@@ -111,7 +112,7 @@ done
 shift $((OPTIND - 1))
 [ -n "$bdf" ] && [ -n "$image" ] || usage
 case $image in /*) ;; *) image=$PWD/$image ;; esac
-for n in "$mib" "$cpus" "$rules" "$fwd" "$port" "$deadline"; do
+for n in "$mib" "$cpus" "$rules" "$fwd" "$deny" "$port" "$deadline"; do
     case $n in
         '' | *[!0-9]*) usage ;;
     esac
@@ -452,7 +453,7 @@ done
 
 # The guest's disks and its monitor are made while the card is still here.
 made=1
-printf 'rules=%s opt=none state=1 fwd=%s filter=%s\n' "$rules" "$fwd" "$filter" |
+printf 'rules=%s opt=none state=1 fwd=%s deny=%s filter=%s\n' "$rules" "$fwd" "$deny" "$filter" |
     dd of="$out/param.img" bs=512 count=1 conv=sync 2> /dev/null || fail "no parameter disk"
 dd if=/dev/zero of="$out/param.img" bs=512 seek=1 count=127 conv=notrunc 2> /dev/null ||
     fail "no parameter disk"
@@ -517,8 +518,8 @@ done
 ready=$(grep -a 'NETGUEST READY' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST //')
 echo "netguest: guest: $ready"
 case " $ready " in
-    *" filter=$filter "*) ;;
-    *) fail "the guest is ready with another filter than filter=$filter" ;;
+    *" deny=$deny filter=$filter "*) ;;
+    *) fail "the guest is ready with another filter than deny=$deny filter=$filter" ;;
 esac
 grep -a 'NETGUEST LOADED' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST /netguest: guest: /'
 echo "netguest: counts: ready $(counts)"
@@ -534,7 +535,8 @@ fi
 status=0
 if [ $# -gt 0 ]; then
     echo "netguest: run: $*"
-    NETGUEST_QEMU_PID=$qemu NETGUEST_OUT=$out NETGUEST_PEER=$peer NETGUEST_PORT=$port "$@" &
+    NETGUEST_QEMU_PID=$qemu NETGUEST_OUT=$out NETGUEST_PEER=$peer NETGUEST_PORT=$port \
+        NETGUEST_DENY=$deny "$@" &
     job=$!
     wait "$job" || status=$?
     job=''

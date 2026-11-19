@@ -11,8 +11,9 @@
 #          gateway images, freebsd.qcow2 and debian.qcow2, of STAGE
 #          (build/tests/cases/netguest of this tree), each file checked by
 #          SHA-256 and skipped when it is there already.
-#   run    start the Mac's nettput peer on PORT (5201), require the machine
-#          to reach it, start run.sh detached on the machine with CASES
+#   run    start the Mac's nettput peer on PORT (5201) and on PORT+1, the
+#          port the guests deny, require the machine to reach it, start
+#          run.sh detached on the machine with CASES
 #          (`cycle debian debian-vhost freebsd freebsd-vhost kill`), wait
 #          for its status, fetch its directory into OUT, and judge it by the
 #          status, which must be 0, and the log's result line, which must
@@ -89,11 +90,12 @@ command=$1
 case $command in stage | run | fetch | clean) ;; *) usage ;; esac
 case $port$deadline in '' | *[!0-9]*) usage ;; esac
 
-peerpid=''
+peerpid='' denypid=''
 # shellcheck disable=SC2317,SC2329 # the traps call it
 cleanup()
 {
     [ -z "$peerpid" ] || kill "$peerpid" 2> /dev/null
+    [ -z "$denypid" ] || kill "$denypid" 2> /dev/null
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -187,8 +189,17 @@ case $command in
         mkdir -p "$out" || fail "no directory $out"
         "$nettput" -s -p "$port" > "$out/peer.out" 2> "$out/peer.err" &
         peerpid=$!
+        # The port the guests deny, served too, so that a SYN a guest lets
+        # through is answered.
+        deny=$((port + 1))
+        "$nettput" -s -p "$deny" > "$out/deny.out" 2> "$out/deny.err" &
+        denypid=$!
         until grep -q 'nettput: serving on' "$out/peer.out" 2> /dev/null; do
             kill -0 "$peerpid" 2> /dev/null || fail "the Mac's nettput did not start: $(cat "$out/peer.err")"
+            sleep 0.2
+        done
+        until grep -q 'nettput: serving on' "$out/deny.out" 2> /dev/null; do
+            kill -0 "$denypid" 2> /dev/null || fail "the Mac's nettput on $deny did not start: $(cat "$out/deny.err")"
             sleep 0.2
         done
         # The card is still the machine's own here, and -d bounds the probe.
@@ -196,7 +207,7 @@ case $command in
             fail "the machine does not reach the Mac's nettput at $peer:$port; see the header on Local Network"
         echo "lenovo: peer $peer:$port answers the machine; starting the cases: $cases"
         # shellcheck disable=SC2086 # the cases are words
-        on "sh $remote/run.sh -D -B -W -n $iface -d $deadline -o $remote/run $peer $port $cases" ||
+        on "sh $remote/run.sh -D -B -W -n $iface -d $deadline -z $deny -o $remote/run $peer $port $cases" ||
             fail "run.sh did not start"
         until [ -n "$(on "cat $remote/run/status 2> /dev/null" 2> /dev/null)" ]; do
             # 1 from kill is a run that has ended; 255 is a machine that
