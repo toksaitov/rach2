@@ -2552,6 +2552,8 @@ static void row_stuck(void)
     CHECK(resets == before, "stuck: the function not reset");
 }
 
+static uint32_t kept_hws_ggtt, kept_hws_pte; /* rcs0's kept status page's offset and entry */
+
 /**
  * The release once the GPU resets again, with the render ring's RING_HWSTAM
  * keeping its old mask and the function's reset failing: released, that
@@ -2560,8 +2562,6 @@ static void row_stuck(void)
  * line, which leaves the reset out, the scratch page kept, and the
  * master's record cut off and freed when it closes the card.
  */
-static uint32_t kept_hws_ggtt, kept_hws_pte; /* rcs0's kept status page's offset and entry */
-
 static void row_kept(int k)
 {
     struct drm_i915_private *i915 = bound_i915();
