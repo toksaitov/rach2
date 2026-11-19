@@ -4,6 +4,7 @@
  * delivery.
  *
  * host-deps: rach2/sys/kvm/decode.c
+ * host-deps: tests/host/compat/kvm_xen_none.c
  * host-cflags: -DRACH2_HOST_X86_64
  *
  * svm.c is the kernel's, included whole, over stubs of the run loop, the

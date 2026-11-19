@@ -3,6 +3,7 @@
  * TLFS and Linux's arch/x86/kvm/hyperv.c.
  *
  * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/kvm_xen_none.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * hyperv.c is the kernel's, included whole. The VM is a record of three

@@ -9,6 +9,7 @@
  * host-deps: rach2/sys/kvm/dirty.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/mutex_none.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/kvm_xen_none.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * kvm.c and vcpu.c are the kernel's, included whole; cpuid.c, msr.c and
