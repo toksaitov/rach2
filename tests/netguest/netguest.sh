@@ -53,22 +53,24 @@
 # of /proc/stat kvm_vms, kvm_vcpus, kvm_run_mappings, kvm_exits,
 # kvm_irqfd_raises, kvm_ioeventfd_signals, vfio_groups, vfio_devices,
 # vfio_dma_mappings, vfio_dma_pages, vfio_dma_io_pages, iommu_dma_faults,
-# iommu_irq_faults, msi_vectors_free, vhost_net_detached_to_guest and
-# vhost_net_detached_from_guest, and of /proc/net/dev tap_rx_bytes,
-# tap_tx_bytes, tap_rx_packets and tap_tx_packets, tap0's. With -V the
-# frames the backend moved, what the vhost_net_detached_ counts grew by from
-# the start to the guest's end, are printed as `netguest: vhost:
-# to_guest=N from_guest=M`.
+# iommu_irq_faults, msi_vectors_free, vhost_net_detaches,
+# vhost_net_detached_to_guest and vhost_net_detached_from_guest, and of
+# /proc/net/dev tap_rx_bytes, tap_tx_bytes, tap_rx_packets and
+# tap_tx_packets, tap0's. With -V the frames the backend moved, what the
+# vhost_net_detached_ counts grew by from the start to the guest's end, are
+# printed as `netguest: vhost: to_guest=N from_guest=M`; one attachment
+# must have ended meanwhile, tap0's, so that the frames are its own.
 #
 # The run passes when the guest's ready line names the filter asked for,
 # QEMU was still running when its end was asked and ended as asked, the card
 # is back with its driver and its interface has its addresses and default
-# routes again, PEER answers on it with the kernel routing each attempt by
-# that interface, the VFIO and KVM counts and the free interrupt vectors are
-# what they were at the start, no IOMMU fault was counted, COMMAND exited 0,
-# and with -V QEMU's stderr has no line on vhost, which QEMU writes when it
-# falls back to moving the frames itself. The last line is `netguest:
-# result: pass` or `netguest: result: fail: REASON`. OUT, a new directory
+# routes again, PEER answers on it by a connection bound to that interface,
+# the VFIO and KVM counts and the free interrupt vectors are what they were
+# at the start, no IOMMU fault was counted, COMMAND exited 0, the power
+# button's end came with the guest's own power-off on its console, and with
+# -V QEMU's stderr has no line on vhost, which QEMU writes when it falls
+# back to moving the frames itself. The last line is `netguest: result:
+# pass` or `netguest: result: fail: REASON`. OUT, a new directory
 # under TMPDIR unless -o names one, keeps the guest's console and QEMU's
 # messages; a new one is removed after a pass and named after a failure, as
 # `netguest: evidence: OUT`. Exit status 0, 1, or 2 for a usage error.
@@ -135,7 +137,7 @@ owner='' addrs='' routes='' start_counts='' launched=0
 kept='kvm_vms kvm_vcpus kvm_run_mappings vfio_groups vfio_devices vfio_dma_mappings
 vfio_dma_pages vfio_dma_io_pages iommu_dma_faults iommu_irq_faults msi_vectors_free'
 # The counts that must be numbers at the start.
-needed="$kept vhost_net_detached_to_guest vhost_net_detached_from_guest"
+needed="$kept vhost_net_detaches vhost_net_detached_to_guest vhost_net_detached_from_guest"
 
 # counts: print the counts the header comment names, as NAME=VALUE words.
 counts()
@@ -145,7 +147,7 @@ counts()
         awk -v t="$tap:" '$1 == t {
             print "tap_rx_bytes", $2; print "tap_rx_packets", $3
             print "tap_tx_bytes", $10; print "tap_tx_packets", $11 }' /proc/net/dev
-    } | awk '$1 ~ /^(kvm_vms|kvm_vcpus|kvm_run_mappings|kvm_exits|kvm_irqfd_raises|kvm_ioeventfd_signals|vfio_groups|vfio_devices|vfio_dma_mappings|vfio_dma_pages|vfio_dma_io_pages|iommu_dma_faults|iommu_irq_faults|msi_vectors_free|vhost_net_detached_to_guest|vhost_net_detached_from_guest|tap_rx_bytes|tap_rx_packets|tap_tx_bytes|tap_tx_packets)$/ {
+    } | awk '$1 ~ /^(kvm_vms|kvm_vcpus|kvm_run_mappings|kvm_exits|kvm_irqfd_raises|kvm_ioeventfd_signals|vfio_groups|vfio_devices|vfio_dma_mappings|vfio_dma_pages|vfio_dma_io_pages|iommu_dma_faults|iommu_irq_faults|msi_vectors_free|vhost_net_detaches|vhost_net_detached_to_guest|vhost_net_detached_from_guest|tap_rx_bytes|tap_rx_packets|tap_tx_bytes|tap_tx_packets)$/ {
             printf "%s%s=%s", sep, $1, $2; sep = " " } END { print "" }'
 }
 
@@ -162,12 +164,24 @@ addrs_of()
     ip -4 -o addr show dev "$1" | awk '{ printf "%s%s", sep, $4; sep = " " } END { print "" }'
 }
 
-# routes_of IF: print IF's default routes as GATEWAY/METRIC words.
+# routes_of IF: print IF's default routes as GATEWAY/METRIC words, GATEWAY
+# - for a route by the interface alone.
 routes_of()
 {
-    ip -4 route show default dev "$1" | awk '{ g = ""; m = 0
+    ip -4 route show default dev "$1" | awk '$1 == "default" { g = "-"; m = 0
         for (i = 1; i < NF; i++) { if ($i == "via") g = $(i + 1); if ($i == "metric") m = $(i + 1) }
-        if (g != "") { printf "%s%s/%s", sep, g, m; sep = " " } } END { print "" }'
+        printf "%s%s/%s", sep, g, m; sep = " " } END { print "" }'
+}
+
+# route_words IF ROUTE: print the words of `ip route` that name the default
+# route ROUTE, a GATEWAY/METRIC word, of IF.
+route_words()
+{
+    if [ "${2%/*}" = - ]; then
+        echo "default dev $1 metric ${2#*/}"
+    else
+        echo "default via ${2%/*} dev $1 metric ${2#*/}"
+    fi
 }
 
 # put_addrs IF ADDRS: give IF the addresses ADDRS, the first its primary,
@@ -195,7 +209,8 @@ put_addrs()
 put_routes()
 {
     for r in $2; do
-        ip route add default via "${r%/*}" dev "$1" metric "${r#*/}" 2> /dev/null
+        # shellcheck disable=SC2046 # the route's words
+        ip route add $(route_words "$1" "$r") 2> /dev/null
     done
     now=$(routes_of "$1")
     for r in $2; do
@@ -203,14 +218,31 @@ put_routes()
     done
 }
 
-# stop_tree PID: stop PID and its children at once, so that it starts no
-# other child meanwhile, and reap it.
-stop_tree()
+# children_of PIDS: print the processes whose parent is one of PIDS.
+children_of()
 {
-    kill -STOP "$1" 2> /dev/null
-    pkill -KILL -P "$1" 2> /dev/null
-    kill -KILL "$1" 2> /dev/null
-    kill -CONT "$1" 2> /dev/null
+    cat /proc/[0-9]*/stat 2> /dev/null |
+        awk -v p=" $1 " '{ s = $0; sub(/^.*\) /, "", s); split(s, f, " ")
+            if (index(p, " " f[2] " ")) print $1 }'
+}
+
+# kill_tree PID: stop PID and every process under it, each before its
+# children are looked for, so that none starts another or is orphaned
+# meanwhile, then kill them all and reap PID.
+kill_tree()
+{
+    all='' new=$1
+    while [ -n "$new" ]; do
+        for x in $new; do
+            kill -STOP "$x" 2> /dev/null
+        done
+        all="$all $new"
+        new=$(children_of "$new" | tr '\n' ' ')
+    done
+    for x in $all; do
+        kill -KILL "$x" 2> /dev/null
+        kill -CONT "$x" 2> /dev/null
+    done
     wait "$1" 2> /dev/null
 }
 
@@ -278,9 +310,9 @@ stop_sender()
 # shellcheck disable=SC2317 # the traps call it
 cleanup()
 {
-    [ -z "$watchdog" ] || stop_tree "$watchdog"
-    [ -z "$waiter" ] || stop_tree "$waiter"
-    [ -z "$job" ] || stop_tree "$job"
+    [ -z "$watchdog" ] || kill_tree "$watchdog"
+    [ -z "$waiter" ] || kill_tree "$waiter"
+    [ -z "$job" ] || kill_tree "$job"
     [ -z "$out" ] || stop_sender
     if [ -n "$qemu" ]; then
         kill -KILL "$qemu" 2> /dev/null
@@ -289,8 +321,11 @@ cleanup()
     fi
     if [ "$launched" = 1 ]; then
         # A child started just before a signal, whose process ID was not
-        # kept, QEMU's among them, ends before the card is taken back.
-        pkill -KILL -P $$ 2> /dev/null
+        # kept, QEMU's among them, ends before the card is taken back, with
+        # everything under it.
+        for c in $(children_of $$); do
+            kill_tree "$c"
+        done
         wait 2> /dev/null
     fi
     take_back || echo "netguest: result: fail: $bdf or $iface is not back"
@@ -370,19 +405,14 @@ in_background()
     return "$rc"
 }
 
-# reach DEV: ask PEER's nettput until it answers, each attempt made only
-# while the kernel routes PEER by DEV; prints nettput's result line, or why
-# not, and fails when an attempt finds PEER routed otherwise.
+# reach DEV: ask PEER's nettput until it answers, each connection bound to
+# DEV; prints nettput's result line.
 reach()
 {
     n=0
     while :; do
         n=$((n + 1))
-        if ! ip route get "$peer" | grep -q " dev $1 "; then
-            echo "nettput: $peer is not routed by $1 at attempt $n"
-            return 1
-        fi
-        if "$nettput" -c "$peer" -p "$port" -n 1 wait > /dev/null 2>&1; then
+        if "$nettput" -c "$peer" -I "$1" -p "$port" -n 1 wait > /dev/null 2>&1; then
             echo "nettput: result: wait attempts=$n"
             return 0
         fi
@@ -509,6 +539,7 @@ elif [ "$quit" = 1 ]; then
     kill -TERM "$qemu"
 else
     echo "netguest: end: the guest's power button is pressed"
+    seen=$(wc -c < "$out/console")
     echo system_powerdown >&3
 fi
 ended=0
@@ -517,6 +548,11 @@ qemu=''
 stop_sender
 take_back || fail "$bdf or $iface did not come back"
 [ "$ended" = "$want" ] || fail "QEMU exited $ended, not $want"
+if [ "$death" = 0 ] && [ "$quit" = 0 ]; then
+    # FreeBSD's and Linux's last words at a power-off by ACPI.
+    tail -c +$((seen + 1)) "$out/console" | tr -d '\r' | grep -a -q -E 'Powering system off|reboot: Power down' ||
+        fail "the guest's console shows no power-off after the power button"
+fi
 back=$(counts)
 echo "netguest: counts: back $back"
 if [ -n "$peer" ]; then
@@ -535,6 +571,8 @@ if [ "$vhost" = 1 ]; then
     if grep -i vhost "$out/qemu.err" > /dev/null 2>&1; then
         fail "QEMU moved the frames itself: $(grep -i vhost "$out/qemu.err" | head -n 1)"
     fi
+    ends=$(($(count vhost_net_detaches "$back") - $(count vhost_net_detaches "$start_counts")))
+    [ "$ends" = 1 ] || fail "$ends vhost-net attachments ended during the boot, not tap0's alone"
     to=$(($(count vhost_net_detached_to_guest "$back") - $(count vhost_net_detached_to_guest "$start_counts")))
     from=$(($(count vhost_net_detached_from_guest "$back") - $(count vhost_net_detached_from_guest "$start_counts")))
     echo "netguest: vhost: to_guest=$to from_guest=$from"
