@@ -5486,3 +5486,12 @@ uint32_t vfs_setattr_events(int what)
         mask |= IN_MODIFY;
     return mask;
 }
+
+/** Fail the row: no row stats a file of /proc/asound. */
+uint32_t procfs_ino_asound(int file, int card)
+{
+    (void)file;
+    (void)card;
+    check(0, "unexpected stat of a /proc/asound file");
+    return 0;
+}
