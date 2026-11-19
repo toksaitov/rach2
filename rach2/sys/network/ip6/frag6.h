@@ -52,10 +52,13 @@ void ip6_set_class(uint8_t *buf, uint8_t tclass);
 /**
  * Hand the whole datagram of `len` bytes at `buf` to `out`, toward the next
  * hop `via`: onto the loopback backlog for `lo`, to the station address of a
- * group, or to a unicast hop by the neighbour cache (`nd6_output`). Returns
- * 0, or -EMSGSIZE or -ENOBUFS as `ip6_tx` says. Called with interrupts off.
+ * group, or to a unicast hop by the neighbour cache (`nd6_output`), which
+ * takes `mtu` as the most its fragments may be, or 0 when it may not be
+ * cut. Returns 0, or -EMSGSIZE or -ENOBUFS as `ip6_tx` says. Called with
+ * interrupts off.
  */
-int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len);
+int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len,
+             uint32_t mtu);
 
 /**
  * Take the fragment whose fragment header is at offset `off` of the

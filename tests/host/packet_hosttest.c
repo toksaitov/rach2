@@ -24,7 +24,8 @@
  * the sanitizer says what was touched.
  *
  * The send rows run `ip_tx` against the same recorders: the MTU on every
- * path, with the fragments of a datagram past it, a driver's refusal, the
+ * path, with the fragments of a datagram past it, datagrams held on an ARP
+ * miss while the card's MTU falls, a driver's refusal, the
  * loopback backlog filled past its limit, an echo answered through it at a
  * limit of 0, its drain ended by its budgets of datagrams and of time
  * against a clock the deliveries move, and the interface a broadcast
@@ -377,11 +378,12 @@ int netdev_running(const struct netdev *nd)
     return nd && !link_down;
 }
 
-/* What the driver answers a frame with, how many it was handed, and the
- * length, the card and the first bytes of the last one. */
+/* What the driver answers a frame with, how many it was handed, the
+ * length of the longest, and the length, the card and the first bytes of
+ * the last one. */
 static int tx_answer;
 static unsigned tx_frames;
-static uint16_t tx_len;
+static uint16_t tx_len, tx_longest;
 static struct netdev *tx_card;
 static uint8_t tx_frame[64];
 
@@ -416,6 +418,9 @@ int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
         tx_whole_bytes += n;
     }
     tx_card = nd;
+    if (len > tx_longest) {
+        tx_longest = len;
+    }
     for (i = 0; i < len && i < sizeof(tx_frame); i++) {
         tx_frame[i] = frame[i];
     }
@@ -785,6 +790,79 @@ static void test_tx_hold_fragments(void)
               memcmp(tx_whole, payload, sizeof(payload)) == 0);
     ip_hold_resolved(&the_iface, 0x0A000202u, mac);
     CHECK("and only once", tx_frames == 109);
+    the_iface.mtu = 1500;
+}
+
+/** Forget the datagram the frames sent so far made up. */
+static void tx_whole_reset(void)
+{
+    memset(tx_whole, 0, sizeof(tx_whole));
+    tx_whole_bytes = 0;
+    tx_whole_last = 0;
+    tx_longest = 0;
+    tx_frames = 0;
+}
+
+/**
+ * Check datagrams held while the card's MTU falls from 1500 to 1300, as a
+ * virtio device bound again with a smaller limit lowers it: one of 1400
+ * bytes, held whole with DF under IP_PMTUDISC_WANT, and one of 3000 bytes
+ * held whole to be cut at 1500, each leave in fragments of 1300 bytes at
+ * most, as Linux's ip_finish_output cuts to the MTU as it is when the
+ * datagram leaves, and carry the whole datagram; one sent under
+ * IP_PMTUDISC_DO, whose sender forbade fragments, is dropped and counted
+ * in FragFails, and no frame past the MTU reaches the driver.
+ */
+static void test_tx_hold_mtu_falls(void)
+{
+    static const uint8_t mac[6] = {0x02, 0x22, 0x33, 0x44, 0x55, 0x66};
+    static uint8_t payload[2980];
+    uint32_t i, fails_before;
+
+    reset();
+    ip_hold_forget(0);
+    for (i = 0; i < sizeof(payload); i++) {
+        payload[i] = (uint8_t)(i * 5u + i / 247u);
+    }
+    arp_known = 0;
+    tx_answer = NETDEV_TX_OK;
+    kernel_ticks = 9000;
+    tx_whole_reset();
+    CHECK("a send of 1400 bytes on an ARP miss is taken and held",
+          ip_tx(0x0A000202u, IP_PROTO_UDP, payload, 1380, IP_TTL_DEFAULT) == 0 && tx_frames == 0);
+    the_iface.mtu = 1300;
+    ip_hold_resolved(&the_iface, 0x0A000202u, mac);
+    CHECK("after the MTU falls to 1300 it leaves in two fragments, none past the MTU",
+          tx_frames == 2 && tx_longest == 14 + 1300 && tx_len == 14 + 20 + 100);
+    CHECK("which carry the whole datagram under one identification, the last without MF",
+          tx_whole_bytes == 1380 && tx_whole_ids_agree && tx_whole_last &&
+              memcmp(tx_whole, payload, 1380) == 0);
+
+    the_iface.mtu = 1500;
+    tx_whole_reset();
+    CHECK("a send of 3000 bytes at MTU 1500 on an ARP miss is taken and held whole",
+          ip_tx(0x0A000202u, IP_PROTO_UDP, payload, (uint16_t)sizeof(payload), IP_TTL_DEFAULT) ==
+                  0 &&
+              tx_frames == 0);
+    the_iface.mtu = 1300;
+    ip_hold_resolved(&the_iface, 0x0A000202u, mac);
+    CHECK("after the MTU falls to 1300 it leaves in three fragments of 1300 bytes at most",
+          tx_frames == 3 && tx_longest == 14 + 1300 && tx_len == 14 + 20 + 2980 - 2 * 1280);
+    CHECK("which carry the whole datagram, the last without MF",
+          tx_whole_bytes == sizeof(payload) && tx_whole_ids_agree && tx_whole_last &&
+              memcmp(tx_whole, payload, sizeof(payload)) == 0);
+
+    the_iface.mtu = 1500;
+    tx_whole_reset();
+    fails_before = net_mib.ip_frag_fails;
+    CHECK("a send of 1400 bytes under IP_PMTUDISC_DO on an ARP miss is taken and held",
+          ip_tx_opts(0, 0x0A000202u, IP_PROTO_UDP, payload, 1380, IP_TTL_DEFAULT, IP_PMTUDISC_DO,
+                     0) == 0 &&
+              tx_frames == 0);
+    the_iface.mtu = 1300;
+    ip_hold_resolved(&the_iface, 0x0A000202u, mac);
+    CHECK("after the MTU falls to 1300 it is dropped, not cut, and counted in FragFails",
+          tx_frames == 0 && net_mib.ip_frag_fails == fails_before + 1);
     the_iface.mtu = 1500;
 }
 
@@ -1182,6 +1260,7 @@ int main(void)
     test_tx_errors();
     test_tx_hold();
     test_tx_hold_fragments();
+    test_tx_hold_mtu_falls();
     test_loop_full();
     test_loop_budget();
     test_loop_echo_zero();
