@@ -1976,11 +1976,14 @@ static void sched_switch_out(struct percpu *cpu, process_t *old, process_t *next
  * Selection and publication run with interrupts disabled and the run
  * queues' lock held, so a wake cannot race the selection or a timer
  * re-enter partially updated state. The outgoing thread's request
- * (`need_resched`) is cleared in the same hold, once selection is done
- * and before either return without a switch, as Linux's __schedule
- * clears it (kernel/sched/core.c:6705-6707): a request made after the
- * selection is kept, and one the selection has answered is not taken
- * again.
+ * (`need_resched`) and the fair class's (`fair_resched`), which the
+ * charge of the outgoing thread may raise during the selection, are
+ * cleared in the same hold, once selection is done and before either
+ * return without a switch, as Linux's __schedule clears it
+ * (kernel/sched/core.c:6705-6707): a request made after the selection is
+ * kept, and one the selection has answered is not taken again, by the
+ * incoming thread's slice event above all, which would switch it out at
+ * once.
  *
  * The switch runs with interrupts disabled: a timer interrupt between the
  * publication of the new current process and the change of stacks inside
@@ -2055,6 +2058,7 @@ void schedule(void)
     yielded = old->sched_yielded;
     next = sched_select(me, old);
     old->need_resched = 0;
+    (void)fair_resched(me);
 
     if (!next) {
         if (old == cpu->idle || old->state == PROC_RUNNING || !cpu->idle) {
