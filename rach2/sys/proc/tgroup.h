@@ -20,7 +20,8 @@
  * record until the whole group has ended, so the parent reaps the process
  * once, when the last thread is gone; the other threads' records are freed
  * after they end, at the next return to user mode or, for a traced thread,
- * by its tracer's wait. `refs` counts the records that point at the group.
+ * by its tracer's wait. `refs` counts the records that point at the group,
+ * and the pidfds and CPU clocks that name it.
  */
 struct ktimer;
 struct pidfd;
@@ -34,7 +35,10 @@ struct fork_pending {
 };
 
 struct tgroup {
-    uint32_t refs;
+    /* Changed by atomic operations alone (`tgroup_get`, `tgroup_put`), since
+     * the last reference to a record drops the record's without the big
+     * lock (`proc_ref_put`). */
+    volatile unsigned int refs;
     uint32_t live;          /* threads that have not ended */
     struct process *leader; /* its id is the process id */
     /* Every published record of the process, oldest first, by
@@ -156,7 +160,13 @@ struct tgroup {
  * room. */
 struct tgroup *tgroup_new(struct process *leader);
 
-/** Drop a record's reference to `tg`; the last one frees it. */
+/** Take one more reference to `tg`, which the caller keeps already. Any
+ * context. */
+void tgroup_get(struct tgroup *tg);
+
+/** Drop a reference to `tg`; the last one frees it. A NULL `tg` is
+ * ignored. Process context, with no spinlock held; the big lock is not
+ * needed. */
 void tgroup_put(struct tgroup *tg);
 
 #endif /* _TGROUP_H_ */
