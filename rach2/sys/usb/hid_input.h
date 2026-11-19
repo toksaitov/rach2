@@ -48,6 +48,7 @@ struct hid_input {
     unsigned int mt_button_fields; /* button sources present in this packet */
     unsigned int mt_frame_buttons; /* precision buttons from the first packet */
     unsigned int mt_button_codes;  /* mapped codes handled at frame end */
+    uint8_t mt_button_target[32];  /* per-source code, relative to BTN_LEFT */
     uint8_t mt_precision;          /* uses the Microsoft multitouch profile */
     uint8_t mt_drop_unused;        /* the device omits lifted contacts */
 };
