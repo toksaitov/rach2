@@ -321,7 +321,13 @@ void *kzalloc(size_t n)
     return calloc(1, n);
 }
 
-/** Free what `kzalloc` gave. */
+/** An allocation, from the C library. */
+void *kmalloc(size_t n)
+{
+    return malloc(n);
+}
+
+/** Free what `kzalloc` or `kmalloc` gave. */
 void kfree(void *p)
 {
     free(p);
