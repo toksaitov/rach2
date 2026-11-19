@@ -577,7 +577,7 @@ static void test_sync_wait(void)
 #include "lib/kerrno.h"
 
 static block_partition_t _krffs_disk_part;
-static int _krffs_on_disk;
+static int _krffs_on_disk, last_holder;
 static int root_stopped, device_calls, reap_calls;
 
 #ifndef KLOG_WARN
@@ -589,6 +589,12 @@ static int root_stopped, device_calls, reap_calls;
 int krffs_root_halted(void)
 {
     return root_stopped;
+}
+
+/** Model a last holder in the root namespace lock. */
+int krffs_root_reaping(void)
+{
+    return last_holder;
 }
 
 /** Record a failed recovery writeback. */
@@ -672,6 +678,11 @@ static void recovery_write_rows(void)
     root_stopped = device_calls = 0;
     _krffs_on_disk = 1;
     CHECK(pc_sync() == PC_SYNC_FAILED && !root_stopped);
+    last_holder = 1;
+    device_calls = 0;
+    touch(2, 1, 88);
+    CHECK(pc_sync() == PC_SYNC_FAILED && device_calls == 1 && root_stopped);
+    last_holder = 0;
     _krffs_on_disk = 0;
     pc_set_backing(NULL, NULL, 0);
 

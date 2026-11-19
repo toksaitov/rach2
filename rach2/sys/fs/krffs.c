@@ -95,6 +95,9 @@ static const krffs_backend_t krffs_memory_backend = {krffs_memory_read, krffs_me
 
 /* The root's mount, and the mount every facade function below works on. */
 static krffs_mount_t krffs_root_mount;
+/* The root namespace lock serializes last-close removals. A device write
+ * during one must halt before reclaim can try another dirty page. */
+static int krffs_root_in_reap;
 /* Writes the disk root's dirty pages to the disk, or NULL for a root in
  * memory; 0 on success. */
 static int (*krffs_root_flush)(void);
@@ -4760,7 +4763,9 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
     if (!fs || fs != krffs_fs || !fs->node || !node) {
         return;
     }
+    krffs_root_in_reap = 1;
     (void)krffs_reap_at(&krffs_root_mount, krffs_offset_of(node));
+    krffs_root_in_reap = 0;
 }
 
 uint32_t krffs_count_files(void)
@@ -4924,6 +4929,12 @@ int krffs_root_check_owed(void)
 void krffs_root_halt(void)
 {
     krffs_halt(&krffs_root_mount);
+}
+
+/** Whether a last holder is removing its orphan on the mounted root. */
+int krffs_root_reaping(void)
+{
+    return krffs_root_in_reap;
 }
 
 int krffs_root_halted(void)

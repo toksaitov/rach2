@@ -2805,7 +2805,7 @@ static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
         rc =
             dev->write(dev, off / BLOCK_SECTOR_SIZE, chunk * (PAGE_SIZE / BLOCK_SECTOR_SIZE), from);
         if (rc != 0) {
-            if (!_krffs_on_disk) {
+            if (!_krffs_on_disk || krffs_root_reaping()) {
                 krffs_root_halt();
             }
             return rc;
