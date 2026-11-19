@@ -3891,13 +3891,16 @@ static void _syscall_handler(isr_params_t *params)
  * handlers (`syscall_unlock`): read, write, pread64, pwrite64, ioctl, fstat
  * and close run a descriptor's operations without the big lock only for a
  * type that declares FILE_OPS_UNLOCKED (`fd_call_lock`, `file_ops_lock`),
+ * and read, pread64 and close for a snapshot of /proc or /sys, whose
+ * making again alone takes it (`procfs_fd_unlocked`),
  * and readv and writev for a pipe end or Unix socket (`vec_call_lock`),
  * or for a file or directory of a type that sets `reads_unlocked`
  * (`file_vfs_unlocked`); getdents64 lists such a directory, fstatat and
  * newfstatat stat a path the name cache finishes (`stat_at_unlocked`), and
  * open and openat make a read-only descriptor of such a file
- * (`open_unlocked`), and access, faccessat and faccessat2 check a path the
- * name cache finishes (`access_unlocked`), and readlink and readlinkat
+ * (`open_unlocked`), or of a snapshot of /proc, taking it only to make the
+ * text (`proc_open_unlocked`), and access, faccessat and faccessat2 check a
+ * path the name cache finishes (`access_unlocked`), and readlink and readlinkat
  * read a link it finds (`readlink_unlocked`), each taking the big lock for
  * anything else; poll and
  * ppoll scan their descriptors the same way and sleep without it, taking it

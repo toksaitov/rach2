@@ -346,7 +346,9 @@ for a path relative to a descriptor, one that begins with
 .Ql .. ,
 or a working directory outside the root;
 .Ql device
-for a path under /proc or /dev, or the frame buffer's or the mouse's node;
+for a path under /dev, or under /proc but for a read-only open of a file
+whose text the open makes, by an absolute path whose walk the name cache
+takes, or the frame buffer's or the mouse's node;
 .Ql miss
 for a name the name cache does not finish, a type it does not keep among
 them;
