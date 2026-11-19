@@ -104,7 +104,11 @@ $(HOST_FIXTURE_PREFIX)/pagecache-sources/syscall_sync.inc: rach2/sys/syscall_fs.
 	@mkdir -p $(@D)
 	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c pc_sync_wait sys_sync
 
-$(HOST_FIXTURE_PREFIX)/pagecache: tests/host/pagecache_hosttest.c $(HOST_FIXTURE_PREFIX)/pagecache-sources/syscall_sync.inc $(HOST_EXTRACT) rach2/sys/syscall_fs.c $(HOST_KERNEL_FIXTURE_INPUTS)
+$(HOST_FIXTURE_PREFIX)/pagecache-sources/disk_recovery.inc: rach2/kernel.c rach2/sys/fs/bcache.c $(HOST_EXTRACT)
+	@mkdir -p $(@D)
+	$(HOST_EXTRACT) $@ -f rach2/kernel.c krffs_disk_write krffs_root_mark_and_reap -f rach2/sys/fs/bcache.c flush_firsts
+
+$(HOST_FIXTURE_PREFIX)/pagecache: tests/host/pagecache_hosttest.c $(HOST_FIXTURE_PREFIX)/pagecache-sources/disk_recovery.inc $(HOST_FIXTURE_PREFIX)/pagecache-sources/syscall_sync.inc $(HOST_EXTRACT) rach2/sys/syscall_fs.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_FIXTURE_PREFIX)/pagecache-sources
 	$(HOSTCC) $(HOST_KERNEL_COMMON) -Wall -Wextra -Werror -I $(HOST_FIXTURE_PREFIX)/pagecache-sources -DRACH2_HOSTTEST -ffreestanding -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -iquote rach2/sys -iquote rach2/sys/lib -iquote rach2/sys/proc -DPAGECACHE_SYNC_HOSTTEST -Wno-empty-body -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I utils -I krffs -I tests/host/compat -MMD -MP -MF $(HOST_FIXTURE_PREFIX)/pagecache-sources/00-pagecache_hosttest.o.d -MT $@ -c tests/host/pagecache_hosttest.c -o $(HOST_FIXTURE_PREFIX)/pagecache-sources/00-pagecache_hosttest.o
 	$(HOSTCC) $(filter -fsanitize=% -g -pthread -static,$(HOST_KERNEL_COMMON) $(HOST_KERNEL_THREADS)) $(HOST_KERNEL_REPRODUCIBLE) -o $@ $(HOST_FIXTURE_PREFIX)/pagecache-sources/00-pagecache_hosttest.o
