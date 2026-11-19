@@ -166,6 +166,28 @@ static const struct e1000_io *io = &mmio_io;
 /* Driver state. */
 
 static struct e1000 e1000s[E1000_MAX];
+
+/* Each card's mapped window and the address it maps, kept from one
+ * bring-up to the next, as the pages are, so that a card whose driver lets
+ * it go and takes it back is not mapped again each time. */
+static uintptr_t e1000_window[E1000_MAX];
+static uint64_t e1000_window_at[E1000_MAX];
+
+/** The window of card `nth` at `addr`, mapped now or at an earlier
+ * bring-up of the card at the same address; 0 when it would not map. */
+static uintptr_t e1000_window_map(int nth, uint64_t addr)
+{
+    if (e1000_window[nth] == 0 || e1000_window_at[nth] != addr) {
+        uintptr_t mapped = map_mmio((uintptr_t)addr, E1000_BAR_WINDOW);
+
+        if (mapped == 0) {
+            return 0;
+        }
+        e1000_window[nth] = mapped;
+        e1000_window_at[nth] = addr;
+    }
+    return e1000_window[nth];
+}
 static const char *e1000_err = "no e1000 present"; /* the last init's reason */
 
 static void e1000_irq(isr_params_t *params);
@@ -555,7 +577,7 @@ static int e1000_init(struct netdev *nd, int nth)
         e1000_err = "the e1000 has no I/O window, which its reset needs";
         return NETDEV_FAILED;
     }
-    mapped = map_mmio((uintptr_t)addr, E1000_BAR_WINDOW);
+    mapped = e1000_window_map(nth, addr);
     if (mapped == 0) {
         e1000_err = "the e1000 window would not map";
         return NETDEV_FAILED;
