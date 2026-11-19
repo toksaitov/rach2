@@ -127,6 +127,10 @@ struct mm {
      * MEMBARRIER_STATE_ bits (proc/membarrier.h); 0 for a new space and
      * for an image an exec builds, and a fork's copy takes them. */
     uint32_t membarrier;
+    /* Whether PR_SET_THP_DISABLE turned huge pages off in the space
+     * (thp.h): 0 for a new space; a fork's copy and an exec's new image
+     * take it, as Linux's MMF_DISABLE_THP is in MMF_INIT_MASK. */
+    uint32_t thp_disable;
     /* The ranges drivers registered to hear of changes to the pages
      * (notify.h), among them those of the pins charged to the address
      * space (pin.h); a fork's copy has none. */

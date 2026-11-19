@@ -124,13 +124,19 @@
  * vmsplice's, which Linux takes by its fast path, unless the page is
  * present and not the zero page (`paging_pin_allows`). */
 #define VM_PROT_NOREAD      0x400000u
+/* Kept the same way: MADV_HUGEPAGE asked for huge pages in the region, as
+ * Linux's VM_HUGEPAGE, or MADV_NOHUGEPAGE refused them, as VM_NOHUGEPAGE;
+ * each clears the other (thp.h, `thp_region_allows`). A fork's child keeps
+ * them. */
+#define VM_PROT_HUGEPAGE    0x1000000u
+#define VM_PROT_NOHUGEPAGE  0x2000000u
 /* Whether the protection `prot` has Linux's VM_READ: PROT_READ was asked. */
 #define VM_READABLE(prot)   (((prot) & (VM_PROT_READ | VM_PROT_NOREAD)) == VM_PROT_READ)
 /* The bits a change of the access bits keeps. */
 #define VM_PROT_KEPT                                                                             \
     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
      VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY | VM_PROT_ACCOUNT |     \
-     VM_PROT_NORESERVE | VM_PROT_VVAR)
+     VM_PROT_NORESERVE | VM_PROT_VVAR | VM_PROT_HUGEPAGE | VM_PROT_NOHUGEPAGE)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -562,10 +568,13 @@ int vm_protect_key(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
 
 /**
  * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK,
- * VM_PROT_SEALED and VM_PROT_WIPEONFORK in the protection of
- * each region of [start, end), which regions must cover without a gap,
- * splitting and merging as `vm_protect` does. Returns 0; -1 for a gap; -2 when
- * a split has no room. An error leaves the regions as they were.
+ * VM_PROT_SEALED, VM_PROT_WIPEONFORK, VM_PROT_HUGEPAGE and VM_PROT_NOHUGEPAGE
+ * in the protection of each region of [start, end), which regions must
+ * cover without a gap, splitting and merging as `vm_protect` does; the two
+ * of huge pages leave device memory and the vDSO's data page as they are,
+ * as Linux's hugepage_madvise passes over VM_SPECIAL. Returns 0; -1 for a
+ * gap; -2 when a split has no room. An error leaves the regions as they
+ * were.
  */
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear);
 
