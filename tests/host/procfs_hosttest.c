@@ -200,6 +200,36 @@ int64_t rtc_seconds_of(const rtc_time_t *t)
     return clock_now;
 }
 
+/** The monotonic clock, which /proc/PID/sched reads twice for its
+ * clock-delta; it moves 25 ns at each reading. */
+int64_t rtc_monotonic_ns(void)
+{
+    static int64_t now;
+
+    now += 25;
+    return now;
+}
+
+/* Whether the model's scheduler keeps its statistics, kernel.sched_schedstats,
+ * and the depth of its run queues' lock, which every reading of a thread's
+ * entity takes and gives back. */
+int fair_schedstats;
+static int sched_lock_depth;
+
+/** Take the run queues' lock of the model. */
+uint32_t sched_lock_take(void)
+{
+    sched_lock_depth++;
+    return 0x200u;
+}
+
+/** Give back the run queues' lock of the model. */
+void sched_lock_give(uint32_t flags)
+{
+    (void)flags;
+    sched_lock_depth--;
+}
+
 /** The alarm set, -1 for none. */
 int64_t devfs_rtc_wakealarm(void)
 {
@@ -479,6 +509,13 @@ process_t *get_process(uint32_t pid)
         return reading;
     }
     return pid == 7 ? &process : NULL;
+}
+
+/** The model's threads have no signal pending or blocked. */
+void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uint64_t *blocked)
+{
+    (void)t;
+    *pending = *shared = *blocked = 0;
 }
 
 /** Whether `p` is a kernel thread, as process.c judges it. */
@@ -1347,6 +1384,32 @@ static int stat_faults(const char *line, unsigned minor, unsigned cminor, unsign
            f[0] == minor && f[1] == cminor && f[2] == major && f[3] == cmajor;
 }
 
+/** Field `n`, from the third on, of the stat line `line` as a number in
+ * `*v`: 1, or 0 when the line has fewer fields. The fields counted from the
+ * third follow the last ')'. */
+static int stat_field(const char *line, int n, long long *v)
+{
+    const char *at = __builtin_strrchr(line, ')');
+    int i;
+
+    if (!at) {
+        return 0;
+    }
+    at++;
+    for (i = 3; i < n; i++) {
+        while (*at == ' ') {
+            at++;
+        }
+        while (*at && *at != ' ' && *at != '\n') {
+            at++;
+        }
+        if (*at != ' ') {
+            return 0;
+        }
+    }
+    return sscanf(at, " %lld", v) == 1;
+}
+
 /* The processors' idle ticks summed, which the uptime row sets. */
 static uint64_t idle_sum;
 
@@ -1478,6 +1541,7 @@ static void netdev_rows(void)
 static void thread_times(void)
 {
     struct procfs_text text;
+    long long field;
 
     thread.state = PROC_READY;
     thread.tg = &group;
@@ -1512,6 +1576,14 @@ static void thread_times(void)
     check(procfs_gen_stat(&text, 9, 0) > 0 && stat_faults(text.buf, 70, 500, 2, 4),
           "a thread's stat has its own faults and the process's children's");
     kfree(text.buf);
+    thread.cpu = 3;
+    procfs_text_init(&text);
+    check(procfs_gen_stat(&text, 9, 0) > 0 && stat_field(text.buf, 39, &field) && field == 3 &&
+              stat_field(text.buf, 38, &field) && field == -1 && stat_field(text.buf, 52, &field) &&
+              !stat_field(text.buf, 53, &field),
+          "a thread's stat has 52 fields, its processor the 39th and -1 its exit signal");
+    kfree(text.buf);
+    thread.cpu = 0;
     process.utime = process.stime = thread.utime = thread.stime = 0;
     process.min_flt = process.maj_flt = thread.min_flt = thread.maj_flt = 0;
     group.cmin_flt = group.cmaj_flt = 0;
@@ -1536,6 +1608,168 @@ static int pid_file_reads(int pid, int wchan, const char *want)
     return ok;
 }
 
+/* The text Linux's proc_sched_show_task prints, built here with its own
+ * formats (kernel/sched/debug.c:1133-1138), so that each line of procfs's
+ * is checked against the printf it stands for. */
+static char sched_want[4096];
+static int sched_want_len;
+
+/** Append Linux's `__PS` line of `name` and `v`. */
+static void want_ps(const char *name, long long v)
+{
+    sched_want_len += __builtin_snprintf(sched_want + sched_want_len,
+                                         sizeof(sched_want) - (unsigned long)sched_want_len,
+                                         "%-45s:%21lld\n", name, v);
+}
+
+/** Append Linux's `__PSN` line of `name` and `ns`, split as `SPLIT_NS`. */
+static void want_psn(const char *name, long long ns)
+{
+    long long high = ns < 0 ? -(-ns / 1000000) : ns / 1000000;
+    long low = (long)((ns < 0 ? -ns : ns) % 1000000);
+
+    sched_want_len += __builtin_snprintf(sched_want + sched_want_len,
+                                         sizeof(sched_want) - (unsigned long)sched_want_len,
+                                         "%-45s:%14lld.%06ld\n", name, high, low);
+}
+
+/** Whether /proc/`pid`/sched reads `sched_want`. */
+static int sched_reads(int pid)
+{
+    struct procfs_text text;
+    int len, ok;
+
+    procfs_text_init(&text);
+    len = procfs_gen_sched(&text, pid);
+    ok = len == sched_want_len && text.buf &&
+         __builtin_memcmp(text.buf, sched_want, (unsigned long)len) == 0;
+    if (!ok) {
+        printf("procfs-hosttest: /proc/%d/sched read\n%.*s\nwanted\n%s", pid, len > 0 ? len : 0,
+               text.buf ? text.buf : "", sched_want);
+    }
+    kfree(text.buf);
+    return ok;
+}
+
+/** The lines of /proc/7/sched after its schedstats, for the entity the
+ * rows of `sched_rows` give process 7. */
+static void want_sched_tail(void)
+{
+    want_ps("nr_switches", 7);
+    want_ps("nr_voluntary_switches", 5);
+    want_ps("nr_involuntary_switches", 2);
+    want_ps("se.load.weight", 1024);
+    want_ps("se.avg.load_sum", 47000);
+    want_ps("se.avg.runnable_sum", 46000);
+    want_ps("se.avg.util_sum", 45000);
+    want_ps("se.avg.load_avg", 1023);
+    want_ps("se.avg.runnable_avg", 1022);
+    want_ps("se.avg.util_avg", 1021);
+    want_ps("se.avg.last_update_time", 1234560000000LL);
+    want_ps("se.avg.util_est", 5);
+    want_ps("policy", 0);
+    want_ps("prio", 118);
+    want_ps("se.slice", 3000000);
+    want_ps("clock-delta", 25);
+}
+
+/** /proc/PID/sched: Linux's proc_sched_show_task for an ordinary thread,
+ * its name, id and thread count, its entity's times as milliseconds with
+ * six places, a time above -1 ms without its sign as Linux's SPLIT_NS
+ * prints it, its switches, weight and averages, util_est without
+ * UTIL_AVG_UNCHANGED, its policy, Linux's prio of nice -2 and its slice; the
+ * schedstats only while kernel.sched_schedstats is 1, with avg_atom and
+ * avg_per_cpu; a write clears the schedstats; and the run queues' lock
+ * given back after each reading. */
+static void sched_rows(void)
+{
+    struct procfs_text text;
+
+    process.se.exec_start = 1234567890123ULL;
+    process.se.vruntime = 5000;
+    process.se.sum_exec_runtime = 2500000;
+    process.se.nr_migrations = 3;
+    process.se.load.weight = 1024;
+    process.se.avg.load_sum = 47000;
+    process.se.avg.runnable_sum = 46000;
+    process.se.avg.util_sum = 45000;
+    process.se.avg.load_avg = 1023;
+    process.se.avg.runnable_avg = 1022;
+    process.se.avg.util_avg = 1021;
+    process.se.avg.last_update_time = 1234560000000ULL;
+    process.se.avg.util_est = 0x80000005u;
+    process.se.slice = 3000000;
+    process.se.stats.sum_sleep_runtime = -1500000;
+    process.se.stats.sum_block_runtime = -500;
+    process.se.stats.wait_sum = 7000000;
+    process.se.stats.wait_count = 4;
+    process.nvcsw = 5;
+    process.nivcsw = 2;
+    process.nice = -2;
+    sched_want_len = __builtin_snprintf(
+        sched_want, sizeof(sched_want), "test (7, #threads: 1)\n%s%s\n",
+        "---------------------------------------------------------", "----------");
+    want_psn("se.exec_start", 1234567890123LL);
+    want_psn("se.vruntime", 5000);
+    want_psn("se.sum_exec_runtime", 2500000);
+    want_ps("se.nr_migrations", 3);
+    want_sched_tail();
+    check(sched_reads(7), "a thread's sched is Linux's text without the schedstats");
+    fair_schedstats = 1;
+    sched_want_len = __builtin_snprintf(
+        sched_want, sizeof(sched_want), "test (7, #threads: 1)\n%s%s\n",
+        "---------------------------------------------------------", "----------");
+    want_psn("se.exec_start", 1234567890123LL);
+    want_psn("se.vruntime", 5000);
+    want_psn("se.sum_exec_runtime", 2500000);
+    want_ps("se.nr_migrations", 3);
+    want_psn("sum_sleep_runtime", -1500000);
+    want_psn("sum_block_runtime", -500);
+    want_psn("wait_start", 0);
+    want_psn("sleep_start", 0);
+    want_psn("block_start", 0);
+    want_psn("sleep_max", 0);
+    want_psn("block_max", 0);
+    want_psn("exec_max", 0);
+    want_psn("slice_max", 0);
+    want_psn("wait_max", 0);
+    want_psn("wait_sum", 7000000);
+    want_ps("wait_count", 4);
+    want_psn("iowait_sum", 0);
+    want_ps("iowait_count", 0);
+    want_ps("nr_migrations_cold", 0);
+    want_ps("nr_failed_migrations_affine", 0);
+    want_ps("nr_failed_migrations_running", 0);
+    want_ps("nr_failed_migrations_hot", 0);
+    want_ps("nr_forced_migrations", 0);
+    want_ps("nr_wakeups", 0);
+    want_ps("nr_wakeups_sync", 0);
+    want_ps("nr_wakeups_migrate", 0);
+    want_ps("nr_wakeups_local", 0);
+    want_ps("nr_wakeups_remote", 0);
+    want_ps("nr_wakeups_affine", 0);
+    want_ps("nr_wakeups_affine_attempts", 0);
+    want_ps("nr_wakeups_passive", 0);
+    want_ps("nr_wakeups_idle", 0);
+    want_psn("avg_atom", 2500000 / 7);
+    want_psn("avg_per_cpu", 2500000 / 3);
+    want_sched_tail();
+    check(sched_reads(7), "and with kernel.sched_schedstats 1 its schedstats, avg_atom and "
+                          "avg_per_cpu");
+    check(procfs_sched_clear(7) == 0 && process.se.stats.wait_sum == 0 &&
+              process.se.stats.sum_sleep_runtime == 0 && process.se.sum_exec_runtime == 2500000,
+          "a write of sched clears the schedstats alone");
+    check(procfs_sched_clear(5) == -ESRCH, "and of a process that is not there is ESRCH");
+    procfs_text_init(&text);
+    check(procfs_gen_sched(&text, 5) == -ENOENT, "which has no sched to read");
+    kfree(text.buf);
+    check(sched_lock_depth == 0, "and each reading gives the run queues' lock back");
+    fair_schedstats = 0;
+    process.nice = 0;
+    process.nvcsw = process.nivcsw = 0;
+    k_memset(&process.se, 0, sizeof(process.se));
+}
+
 /** Whether /proc/`pid`/schedstat reads `want`. */
 static int schedstat_reads(int pid, const char *want)
 {
@@ -1554,16 +1788,16 @@ static int schedstat_reads(int pid, const char *want)
     return ok;
 }
 
-/** /proc/PID/schedstat: a thread's own time on a processor in ns, its wait
- * on the run queues in ns and its switches onto a processor, as Linux's
- * proc_pid_schedstat, which the selftest steal_time reads; the leader's
- * file is the leader's, not the group's. */
+/** /proc/PID/schedstat: a thread's run time in ns, its entity's
+ * `sum_exec_runtime`, its wait on the run queues in ns and its switches onto
+ * a processor, as Linux's proc_pid_schedstat, which the selftest steal_time
+ * reads; the leader's file is the leader's, not the group's. Then
+ * /proc/PID/sched's rows (`sched_rows`). */
 static void schedstat_rows(void)
 {
     struct procfs_text text;
 
-    thread.utime = 2;
-    thread.stime = 3;
+    thread.se.sum_exec_runtime = 5000000;
     thread.run_delay = 123456789;
     thread.pcount = 42;
     process.run_delay = 1000;
@@ -1574,9 +1808,11 @@ static void schedstat_rows(void)
     procfs_text_init(&text);
     check(procfs_gen_schedstat(&text, 5) == -ENOENT, "a process that is not there has none");
     kfree(text.buf);
-    thread.utime = thread.stime = 0;
+    check(sched_lock_depth == 0, "and each reading gives the run queues' lock back");
+    thread.se.sum_exec_runtime = 0;
     thread.run_delay = process.run_delay = 0;
     thread.pcount = process.pcount = 0;
+    sched_rows();
 }
 
 /**

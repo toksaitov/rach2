@@ -2443,7 +2443,7 @@ static void pid_dir_rows(void)
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
                                 "mem oom_score_adj mounts mountinfo limits uid_map gid_map "
                                 "setgroups ns fdinfo exe cwd root numa_maps syscall wchan "
-                                "schedstat ";
+                                "schedstat sched ";
     static char got[512], want[512], names[4096];
     char dir[40] = "/proc/self/task/";
     int pid = syscall1(SYS_GETPID, 0);

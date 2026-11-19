@@ -80,4 +80,5 @@ ldtprobe ia32
 drmcompatprobe ia32
 musl/lockstressmusl ia32
 musl/wakelatmusl wakelat
+musl/schedsmpmusl sched4
 musl/hvcmusl hvc

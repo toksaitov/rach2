@@ -1,0 +1,135 @@
+.Dd November 19, 2026
+.Dt SCHED 7
+.Os
+.Sh NAME
+.Nm sched
+.Nd thread scheduling policies and processor shares
+.Sh DESCRIPTION
+Scheduling policy, priority, nice value, and affinity belong to a thread.
+.Xr sched_setscheduler 2
+changes policy and priority,
+.Xr sched_setattr 2
+also sets an ordinary thread's slice, and
+.Xr setpriority 2
+changes its nice value.
+.Ss Ordinary policies
+.Dv SCHED_OTHER ,
+.Dv SCHED_BATCH ,
+and
+.Dv SCHED_IDLE
+are the fair class, all with static scheduling priority zero.
+Each processor has its own fair queue.
+The scheduler charges a running thread for processor time, excluding
+interrupt service and steal time reported by the hypervisor.
+Virtual runtime advances by the charged time scaled inversely to the
+thread's weight.
+A thread with a lower nice value has more weight.
+For example, nice 0, 5, and 19 have weights 1024, 335, and 15.
+.Dv SCHED_IDLE
+has weight 3 regardless of its nice value.
+.Pp
+The fair class uses earliest eligible virtual deadline first (EEVDF),
+as in Linux 6.12.
+A thread is eligible when its virtual runtime is at or below the
+queue's weighted average.
+Among eligible threads the scheduler chooses by earliest virtual
+deadline, subject to the running thread's slice protection.
+A shorter slice gives an earlier deadline at the same virtual runtime
+and weight.
+If an ineligible thread sleeps, its dequeue can be delayed so that the
+other threads can catch up to its virtual runtime.
+The sleeping thread cannot be selected to run.
+.Pp
+A waking
+.Dv SCHED_OTHER
+thread can preempt a fair thread if selection favors it.
+A wake of a thread outside
+.Dv SCHED_IDLE
+can preempt a thread of that policy.
+Otherwise wakes of
+.Dv SCHED_BATCH
+and
+.Dv SCHED_IDLE
+do not preempt the running fair thread.
+.Pp
+The base slice at boot is 700,000 ns multiplied by one plus the
+integer base-2 logarithm of the online processor count capped at eight,
+2.1 ms with four processors, as in Linux 6.12.
+A thread without a slice of its own takes the base slice at each
+placement and each new deadline.
+.Xr debugfs 5
+describes the file that reads and sets the base slice.
+.Pp
+Wake placement and balancing honor the thread's affinity and use
+processor load and topology.
+The fair queues balance at periodic ticks and on a processor about to
+go idle.
+A processor whose idle tick has stopped can be kicked to balance.
+.Ss Real-time policies
+.Dv SCHED_FIFO
+and
+.Dv SCHED_RR
+have static priorities from 1 to 99, highest first.
+A real-time thread normally runs ahead of fair threads.
+.Dv SCHED_FIFO
+keeps the processor against threads of equal priority until it blocks
+or yields.
+.Dv SCHED_RR
+also rotates behind its peers when its slice expires, 100 ms by default.
+Preemption by a higher priority leaves the remaining slice and place
+among equal priorities intact.
+A priority-inheriting futex waiter can temporarily give its effective
+priority to the owner.
+.Pp
+A fair server on each processor reserves 50 ms of every 1,000 ms by
+default for ordinary work, as on Debian's Linux 6.12 kernel.
+Time the ordinary threads already ran counts toward the budget.
+When the remaining time in the period is needed to meet the budget,
+the fair server allows ordinary work to run ahead of real-time work.
+Rach2 gives a futex owner whose priority was raised by a real-time
+donation precedence over the fair server.
+Linux runs the fair server in the deadline class, above real-time
+priorities.
+The real-time bandwidth sysctls do not throttle real-time threads on
+either system.
+.Pp
+Linux's
+.Dv SCHED_DEADLINE
+class schedules admitted threads by deadline and limits them to their
+runtime in each period.
+Rach2 checks the arguments, privilege, and affinity, and then refuses
+admission with
+.Er EBUSY .
+.Dv SCHED_EXT
+is also unavailable on Rach2.
+.Ss Autogroup
+Autogroup scheduling is enabled by default.
+.Xr setsid 2
+creates an autogroup for the caller's new session, and children inherit
+their parent's group.
+On a processor, runnable autogroups compete by group weight.
+Within a group, runnable ordinary threads compete by thread weight.
+Two equally weighted autogroups pinned to one processor get comparable
+shares under sustained contention, even if one has more runnable
+threads.
+Real-time scheduling is independent of autogroup membership.
+.Pp
+The
+.Pa /proc/PID/autogroup
+file sets the group's nice value.
+Disabling
+.Pa /proc/sys/kernel/sched_autogroup_enabled
+makes threads compete without the session weights.
+Their group assignments persist and are used again when the switch is
+enabled.
+Rach2 has no CPU cgroup controller; on Linux a CPU cgroup other than
+the root group takes precedence over autogroup.
+.Sh SEE ALSO
+.Xr sched_getaffinity 2 ,
+.Xr sched_rr_get_interval 2 ,
+.Xr sched_setattr 2 ,
+.Xr sched_setscheduler 2 ,
+.Xr setpriority 2 ,
+.Xr setsid 2 ,
+.Xr debugfs 5 ,
+.Xr proc 5

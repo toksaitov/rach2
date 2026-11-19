@@ -723,10 +723,10 @@ static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq)
 
 static void clear_buddies(struct cfs_rq *cfs_rq, struct sched_entity *se);
 
-/*
- * A new deadline once the entity has run its request, vd = ve + r / w, the
- * request being the base slice unless a custom one is set. Returns whether
- * it did, so the processor should select again.
+/**
+ * Give `se` a new deadline once it has run its request, vd = ve + r / w, the
+ * request being the base slice unless a custom one is set (update_deadline).
+ * Returns whether it did, so the processor should select again.
  */
 static int update_deadline(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
@@ -961,15 +961,17 @@ static void account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *s
     }
 }
 
-/*
- * Place `se` at V less its lag, with a deadline a slice of virtual time on.
+/**
+ * Place `se` on `cfs_rq` at V less its lag, with a deadline a slice of
+ * virtual time on (place_entity).
  *
  * Adding an entity of virtual lag vl moves V to V - w * vl / (W + w), which
- * would leave it only vl - w * vl / (W + w) of lag; so the lag is first
- * inflated to (W + w) * vl / W, which leaves exactly vl after placement.
- * A deadline kept relative across a dequeue that was not a sleep is
- * restored as it was; a new thread starts with half a slice, as the others
- * are on average halfway through theirs.
+ * would leave it only vl - w * vl / (W + w) of lag; so with PLACE_LAG the
+ * lag is first inflated to (W + w) * vl / W, which leaves exactly vl after
+ * placement. With PLACE_REL_DEADLINE, a deadline kept relative across a
+ * dequeue that was not a sleep is restored as it was; with
+ * PLACE_DEADLINE_INITIAL, a new thread (ENQUEUE_INITIAL in `flags`) starts
+ * with half a slice, as the others are on average halfway through theirs.
  */
 static void place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 {

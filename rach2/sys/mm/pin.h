@@ -29,6 +29,16 @@
  * file reaches them, as Linux's pin holds a page cache folio. `unpin` only
  * drops the hold; the mapping's release, which writes back what the
  * process stored in its pages and may sleep, waits for `vm_file_reap`.
+ *
+ * A pin made with PIN_FOLLOW holds no frame at first and is filled a page
+ * at a time (`pin_refill`); every change the range hears, an unmap, a
+ * change of protection, a copy-on-write break, a page `madvise` drops, a
+ * truncation, lets go of the pages it touches, after the holder's `forget`
+ * has seen the last use of their frames end, so that the frames the pin
+ * gives are always the ones the address space maps, as Linux's vhost reaches
+ * a guest's memory by copies through the owner's tables. Its pages are
+ * charged to no one, since each is one the address space maps. The end of
+ * the address space takes it back as any other.
  * Every call is made under the big kernel lock.
  */
 #ifndef _PIN_H_
@@ -54,6 +64,10 @@ struct pin;
  * writeback finds the file's dirty pages by their table entries and would
  * never see a device's stores, as Linux's writable_file_mapping_allowed. */
 #define PIN_LONGTERM 0x8u
+/* A pin that follows the address space, as above: nothing is pinned by the
+ * call, which only checks the range, and each page by `pin_refill`. Not
+ * with PIN_IO or PIN_LONGTERM; the holder must have a `forget`. */
+#define PIN_FOLLOW   0x10u
 
 /* A flag of `pin_holder`: the end of the address space leaves the pin live,
  * with its frames and its device pages, and drops only the charge, as
@@ -71,11 +85,18 @@ struct pin;
  * from an unmap or the end of an address space, must not sleep, and must
  * not unpin or pin. A NULL holder, or a NULL `release`, is told nothing.
  * `flags` is 0 or PIN_KEEP_PAST_END.
+ *
+ * `forget`, for a pin made with PIN_FOLLOW, is called when `pin_phys` has
+ * stopped giving some of the pin's frames, before they go: it returns once
+ * every use of a frame `pin_phys` gave before the call has ended, as a
+ * reader's lock taken and let go does. It runs under the big kernel lock,
+ * from the change, and must not sleep, pin or unpin.
  */
 struct pin_holder {
     void (*release)(struct pin *pin, void *owner);
     void *owner;
     uint32_t flags;
+    void (*forget)(struct pin *pin, void *owner);
 };
 
 /**
@@ -96,7 +117,8 @@ struct pin_holder {
  * are also accepted without a RAM pin or charge; a device revocation or
  * protection change takes back a pin that includes such pages. With
  * PIN_SLOW, a read of a region mapped without PROT_READ is -EFAULT even for
- * a present page.
+ * a present page. With PIN_FOLLOW nothing is brought in, pinned or
+ * charged, and only the empty, wrapping or kernel range is refused.
  */
 int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
              const struct pin_holder *holder, struct pin **out);
@@ -114,6 +136,18 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
 int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,
                const struct pin_holder *holder, struct pin **out);
 
+/**
+ * Pin page `i` of `pin`, a pin made with PIN_FOLLOW, again: bring it in as
+ * a fault would, for a write when the pin was made with PIN_WRITE, and pin
+ * the frame the address space maps there, which `pin_phys` then gives
+ * until the next change of the page. May sleep; takes a user's count of the
+ * address space for the call, so it may be made from any thread. 0, also
+ * for a page already held; -EFAULT for a pin taken back, a page past its
+ * end, or a page `pin_user` would refuse, in no region or without the
+ * access; -ENOMEM.
+ */
+int pin_refill(struct pin *pin, uint32_t i);
+
 /** Drop what `pin` still holds, its frames, its charge and its files, and
  * free the record; NULL is ignored. Does not sleep: a file whose last
  * reference the pin held waits on the list `vm_file_reap` empties, which a
@@ -128,8 +162,9 @@ int pin_live(const struct pin *pin);
 /** The pages `pin` holds, or held. */
 uint32_t pin_count(const struct pin *pin);
 
-/** The physical address of page `i` of `pin`, or 0 past its end or once
- * it is no longer live. */
+/** The physical address of page `i` of `pin`, or 0 past its end, once it
+ * is no longer live, or for a page of a PIN_FOLLOW pin it does not hold.
+ * Any context; does not sleep. */
 uintptr_t pin_phys(const struct pin *pin, uint32_t i);
 
 /**

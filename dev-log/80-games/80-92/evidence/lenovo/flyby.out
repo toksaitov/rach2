@@ -1,0 +1,18 @@
+crysis-case: /dev/disk0p6 read-only on /data/owner
+crysis-case: private game: 2374 links, copies of compat saves steam cache accept.json, 1321904 KiB reserved
+wm: result: mode: ok output eDP-1 mode 1366x768 by name
+crysis: session: output eDP-1, renderer Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+crysis: volume: vol 1:1
+CRYSIS PREPARED
+crysis: started: crysis.sh run -devmode +map island +exec benchmark_gpu
+crysis: loaded in 20.88 s
+crysis: loop 0 finished at frame 2366
+crysis: loop 1 finished at frame 4367
+crysis: ended after 166 s, status 0
+crysis: check: loop0: ok 43.81 fps (gate 24) linux 45.17, play 45.65 s, median 22.5 p99 34.3 max 63.8 >50ms 2 >100ms 0
+crysis: check: loop1: ok 40.80 fps (gate 24) linux 46.54, play 49.02 s, median 24.8 p99 35.9 max 46.9 >50ms 0 >100ms 0
+crysis: check: loops: ok 2 of 2 loops finished
+crysis: check: wined3d: ok WineD3D's OpenGL renderer
+crysis: check: fsync: ok Wine's fsync
+crysis: result: flyby-direct: ok
+crysis-case: result: pass

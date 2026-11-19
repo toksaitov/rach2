@@ -3,6 +3,7 @@
 #include "pidfd.h"
 #include "ptrace.h"
 #include "sched.h"
+#include "autogroup.h"
 #include "smp.h"
 #include "tgroup.h"
 #include "../fs/vfs.h"
@@ -52,7 +53,10 @@
  * adjustments, detaches its tracees, ends the rest of a PID namespace whose
  * init it is, gives the children to init, and gives the process its
  * status, the group's when exit_group or a fatal signal ended it and the
- * leader's own otherwise. Each thread wakes the pidfds of its own id, and
+ * leader's own otherwise. Each thread leaves its session's scheduling group
+ * for the root group, the last letting the group go (`autogroup_exit`), as
+ * Linux's do_exit calls sched_autogroup_exit_task. Each thread wakes the
+ * pidfds of its own id, and
  * the last those of the leader's, which are the process's too
  * (`pidfd_exit`), as Linux's exit_notify and do_notify_parent call
  * do_notify_pidfd; the last then tells the parent; or, when a process
@@ -84,6 +88,7 @@ int proc_exit_cleanup(int32_t status)
     proc_vfork_release(self);
     self->exit_code = tg->exiting ? tg->exit_code : status;
     tg->live--;
+    autogroup_exit(self);
     if (tg->live == 0) {
         ptimer_delete_all(tg);
         sysv_exit(tg);

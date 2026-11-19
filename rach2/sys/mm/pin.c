@@ -12,7 +12,9 @@
 #include "paging.h"
 #include "vm.h"
 #include "../lib/kerrno.h"
+#include "../lib/kstring.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 
 /* A pin: the frames it holds, the address space they are charged to, and
  * the range it hears of unmaps on. */
@@ -20,10 +22,13 @@ struct pin {
     struct mmn_range note; /* first, so that the range is the record */
     struct mm *mm;         /* charged to, or NULL for no one */
     const struct pin_holder *holder;
-    uintptr_t *frames; /* the physical address of each page */
+    /* The physical address of each page; with PIN_FOLLOW, 0 for a page not
+     * held, and the address with bit 0 set while a change lets it go. */
+    uintptr_t *frames;
     uint32_t count;
     uint32_t ram_pages; /* frames pinned and charged, excluding device pages */
     uint32_t live;      /* 1 while the frames are held */
+    uint32_t flags;     /* pin_user's PIN_WRITE, PIN_SLOW and PIN_FOLLOW */
     /* Of a holder with PIN_KEEP_PAST_END: the shared mappings of disk files
      * the range met, each held while the pin is live, or NULL for none. */
     struct vm_file **files;
@@ -43,7 +48,10 @@ static void pin_drop(struct pin *pin)
     pin->live = 0;
     mmn_unregister(&pin->note);
     for (i = 0; i < pin->count; i++) {
-        frame_unpin(pin->frames[i]);
+        if (pin->frames[i] != 0) {
+            frame_unpin(pin->frames[i] & ~(uintptr_t)1);
+            pin->frames[i] = 0;
+        }
     }
     if (pin->mm) {
         pin->mm->pinned -= pin->ram_pages;
@@ -119,18 +127,62 @@ static int pin_meets_tracked_file(struct mm *mm, uintptr_t start, uintptr_t end)
     return 0;
 }
 
+/**
+ * Let go of the pages of the PIN_FOLLOW pin `pin` that [start, end) meets:
+ * mark each held one going, so that `pin_phys` no longer gives it, wait in
+ * the holder's `forget` for the uses of the frames it gave, and unpin them.
+ */
+static void pin_follow_forget(struct pin *pin, uintptr_t start, uintptr_t end)
+{
+    uint32_t i, first, last;
+    int any = 0;
+
+    if (start < pin->note.start) {
+        start = pin->note.start;
+    }
+    if (end > pin->note.end) {
+        end = pin->note.end;
+    }
+    if (start >= end) {
+        return;
+    }
+    first = (uint32_t)((start - pin->note.start) / PAGE_SIZE);
+    last = (uint32_t)((end - pin->note.start + PAGE_SIZE - 1u) / PAGE_SIZE);
+    for (i = first; i < last && i < pin->count; i++) {
+        if (pin->frames[i] != 0) {
+            pin->frames[i] |= 1u;
+            any = 1;
+        }
+    }
+    if (!any) {
+        return;
+    }
+    if (pin->holder && pin->holder->forget) {
+        pin->holder->forget(pin, pin->holder->owner);
+    }
+    for (i = first; i < last && i < pin->count; i++) {
+        if (pin->frames[i] != 0) {
+            frame_unpin(pin->frames[i] & ~(uintptr_t)1);
+            pin->frames[i] = 0;
+        }
+    }
+}
+
 /** The pin's range heard of a change: an unmap of a page of a user range,
  * or the end of the address space, takes the pin back after the holder
  * has stopped the device. A pin with device pages also ends before their
  * revocation or protection change; RAM pins survive those changes. At the
  * end, a pin whose holder keeps it past the end, device pages and all,
- * loses only its charge, its range already off the list. */
+ * loses only its charge, its range already off the list. A PIN_FOLLOW pin
+ * lets go of the pages any change but the end touches, and stays live. */
 static void pin_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
 {
     struct pin *pin = (struct pin *)r;
 
-    (void)start;
-    (void)end;
+    if ((pin->flags & PIN_FOLLOW) && event != MMN_RELEASE) {
+        pin_follow_forget(pin, start, end);
+        return;
+    }
     if (event != MMN_UNMAP && event != MMN_RELEASE &&
         !(pin->ram_pages != pin->count && (event == MMN_TRUNCATE || event == MMN_PROTECT))) {
         return;
@@ -198,6 +250,18 @@ static int pin_user_locked(struct mm *mm, uintptr_t start, uintptr_t end, uint32
     struct pin *pin;
     int rc;
 
+    if (flags & PIN_FOLLOW) {
+        rc = pin_new(NULL, (uint32_t)pages, holder, &pin);
+        if (rc != 0) {
+            return rc;
+        }
+        k_memset(pin->frames, 0, (size_t)pages * sizeof(uintptr_t));
+        pin->ram_pages = 0;
+        pin->flags = flags & (PIN_WRITE | PIN_SLOW | PIN_FOLLOW);
+        pin_start(pin, mm, start, end);
+        *out = pin;
+        return 0;
+    }
     if ((flags & (PIN_LONGTERM | PIN_WRITE)) == (PIN_LONGTERM | PIN_WRITE) &&
         pin_meets_tracked_file(mm, start, end)) {
         return -EFAULT;
@@ -234,6 +298,7 @@ static int pin_user_locked(struct mm *mm, uintptr_t start, uintptr_t end, uint32
         kfree(pin);
         return rc;
     }
+    pin->flags = flags & (PIN_WRITE | PIN_SLOW);
     pin_start(pin, mm, start, end);
     *out = pin;
     return 0;
@@ -252,7 +317,9 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     uintptr_t pages;
     int rc;
 
-    if (len == 0 || end < addr) {
+    if (len == 0 || end < addr ||
+        ((flags & PIN_FOLLOW) &&
+         ((flags & (PIN_IO | PIN_LONGTERM)) || !holder || !holder->forget))) {
         return -EINVAL;
     }
     end = (end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
@@ -302,6 +369,60 @@ int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,
     return 0;
 }
 
+/**
+ * The page is pinned under the regions' lock held to read, which keeps an
+ * unmap, a change of protection and a `madvise` out, and stored only while
+ * no change counted by `mmn_change_begin`, a copy-on-write break, a
+ * truncation's cut or a write-back's taking of write access, is under way
+ * or has finished since the count was read, as KVM's fault checks
+ * (kvm/tdp.c): a change that began before the store tells the pin after
+ * it, and one that ended in between sends the call round again, after the
+ * big lock has had a chance to go to the change's thread.
+ */
+int pin_refill(struct pin *pin, uint32_t i)
+{
+    uintptr_t page, frame;
+    uint32_t changes;
+    struct mm *mm;
+    int rc;
+
+    for (;;) {
+        if (!pin->live || !(pin->flags & PIN_FOLLOW) || i >= pin->count || !pin->mm) {
+            return -EFAULT;
+        }
+        if (pin->frames[i] != 0) {
+            return 0;
+        }
+        mm = pin->mm;
+        if (!mm_get_live(mm)) {
+            return -EFAULT;
+        }
+        page = pin->note.start + (uintptr_t)i * PAGE_SIZE;
+        mm_read_begin(mm);
+        changes = mm->changes;
+        k_barrier();
+        rc = paging_pin_range(mm, page, page + PAGE_SIZE, pin->flags & (PIN_WRITE | PIN_SLOW),
+                              &frame);
+        if (rc == 0) {
+            k_barrier();
+            if (!pin->live || pin->frames[i] != 0) {
+                frame_unpin(frame);
+            } else if (mm->changing || mm->changes != changes) {
+                frame_unpin(frame);
+                rc = -EAGAIN;
+            } else {
+                pin->frames[i] = frame;
+            }
+        }
+        mm_read_end(mm);
+        mm_put(mm);
+        if (rc != -EAGAIN) {
+            return rc;
+        }
+        sched_give_way();
+    }
+}
+
 void unpin(struct pin *pin)
 {
     if (!pin) {
@@ -329,5 +450,11 @@ uint32_t pin_ram_count(const struct pin *pin)
 
 uintptr_t pin_phys(const struct pin *pin, uint32_t i)
 {
-    return pin->live && i < pin->count ? pin->frames[i] : 0;
+    uintptr_t f;
+
+    if (!pin->live || i >= pin->count) {
+        return 0;
+    }
+    f = ((volatile const uintptr_t *)pin->frames)[i];
+    return (f & 1u) ? 0 : f;
 }

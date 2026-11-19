@@ -583,6 +583,11 @@ struct tap *tap_of(const struct fd_entry *e)
     return tap_is(e) ? tap_file_of(e) : 0;
 }
 
+const char *tap_name(const struct tap *t)
+{
+    return t->nd.name;
+}
+
 int tap_backend_set(struct tap *t, struct tap_backend *b)
 {
     uint32_t flags = spin_lock_irqsave(&tap_lock);

@@ -1461,14 +1461,6 @@ uint32_t procfs_ino_irq(int vector, int attr)
     return 0;
 }
 
-/** The inode number of a /proc/asound file, which no row stats: 0. */
-uint32_t procfs_ino_asound(int file, int card)
-{
-    (void)file;
-    (void)card;
-    return 0;
-}
-
 /** The mode of a /proc/asound file, which no row stats. */
 int asound_mode(int file)
 {

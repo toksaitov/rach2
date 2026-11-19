@@ -309,8 +309,11 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * (watchdog.h); the write-back's thresholds and periods (bcache.h,
  * writeback.h); whether the sleeping locks time their holds
  * (fs/sleeplock.h); the loopback backlog's limit (ip.h); the last
- * process ID the reader's PID namespace gave out (proc/ns.h); and the
- * budgets of a drain of the loopback backlog (ip.h). An entry
+ * process ID the reader's PID namespace gave out (proc/ns.h); the
+ * budgets of a drain of the loopback backlog (ip.h); whether the
+ * scheduler keeps its statistics (proc/fair.h); and whether it schedules
+ * sessions as groups, RR's slice and the real-time bandwidth
+ * (proc/autogroup.h, proc/sched.h). An entry
  * whose text is empty is procfs's, which reads its value when the file is
  * opened. A new entry goes at the end, so that the indices SYNTH_SYS_ names
  * stay the same. */
@@ -407,7 +410,12 @@ static const struct {
                {85, "netdev_max_backlog", ""},
                {6, "ns_last_pid", ""},
                {85, "netdev_budget", ""},
-               {85, "netdev_budget_usecs", ""}};
+               {85, "netdev_budget_usecs", ""},
+               {6, "sched_schedstats", ""},
+               {6, "sched_autogroup_enabled", ""},
+               {6, "sched_rr_timeslice_ms", ""},
+               {6, "sched_rt_period_us", ""},
+               {6, "sched_rt_runtime_us", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -440,21 +448,16 @@ int synth_sys_ipv6(int entry, const char **dir, int *key)
 }
 
 /* The entries outside a range of `synth_sys_writable`'s that take a write. */
-static const int sys_writable_lone[] = {SYNTH_SYS_HOSTNAME,
-                                        SYNTH_SYS_DOMAINNAME,
-                                        SYNTH_SYS_IP_FORWARD,
-                                        SYNTH_SYS_NR_OPEN,
-                                        SYNTH_SYS_FILE_MAX,
-                                        SYNTH_SYS_RANDOMIZE_VA_SPACE,
-                                        SYNTH_SYS_MAX_MNT_NAMESPACES,
-                                        SYNTH_SYS_PANIC,
-                                        SYNTH_SYS_PANIC_ON_OOPS,
-                                        SYNTH_SYS_LOCK_STAT,
-                                        SYNTH_SYS_NETDEV_MAX_BACKLOG,
-                                        SYNTH_SYS_NS_LAST_PID,
-                                        SYNTH_SYS_NETDEV_BUDGET,
-                                        SYNTH_SYS_NETDEV_BUDGET_USECS,
-                                        SYNTH_SYS_PID_MAX};
+static const int sys_writable_lone[] = {SYNTH_SYS_HOSTNAME,           SYNTH_SYS_DOMAINNAME,
+                                        SYNTH_SYS_IP_FORWARD,         SYNTH_SYS_NR_OPEN,
+                                        SYNTH_SYS_FILE_MAX,           SYNTH_SYS_RANDOMIZE_VA_SPACE,
+                                        SYNTH_SYS_MAX_MNT_NAMESPACES, SYNTH_SYS_PANIC,
+                                        SYNTH_SYS_PANIC_ON_OOPS,      SYNTH_SYS_LOCK_STAT,
+                                        SYNTH_SYS_NETDEV_MAX_BACKLOG, SYNTH_SYS_NS_LAST_PID,
+                                        SYNTH_SYS_NETDEV_BUDGET,      SYNTH_SYS_NETDEV_BUDGET_USECS,
+                                        SYNTH_SYS_SCHED_SCHEDSTATS,   SYNTH_SYS_PID_MAX,
+                                        SYNTH_SYS_SCHED_AUTOGROUP,    SYNTH_SYS_SCHED_RR_TIMESLICE,
+                                        SYNTH_SYS_SCHED_RT_PERIOD,    SYNTH_SYS_SCHED_RT_RUNTIME};
 
 int synth_sys_writable(int entry)
 {
@@ -704,13 +707,17 @@ static int synth_pid_file(struct comp name, int task)
                  {"setgroups", SYNTH_PROC_SETGROUPS},
                  {"syscall", SYNTH_PROC_SYSCALL},
                  {"wchan", SYNTH_PROC_WCHAN},
-                 {"schedstat", SYNTH_PROC_SCHEDSTAT}};
+                 {"schedstat", SYNTH_PROC_SCHEDSTAT},
+                 {"sched", SYNTH_PROC_SCHED}};
     uint32_t i;
 
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         if (comp_eq(name, files[i].name)) {
             return files[i].kind;
         }
+    }
+    if (task && comp_eq(name, "autogroup")) {
+        return SYNTH_PROC_AUTOGROUP;
     }
     return !task && comp_eq(name, "children") ? SYNTH_PROC_CHILDREN : 0;
 }

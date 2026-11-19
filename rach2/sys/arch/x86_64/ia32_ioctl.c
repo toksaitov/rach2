@@ -893,6 +893,7 @@ static const struct family families[] = {
     {0x8B, wext},    /* wireless extensions */
     {0x94, NULL},    /* FICLONE and FICLONERANGE */
     {0xAE, kvm},     /* KVM */
+    {0xAF, NULL},    /* vhost */
     {0xB7, NULL},    /* namespaces */
 };
 

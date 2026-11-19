@@ -1395,6 +1395,45 @@ on the boot line sets it, 30 without, and a write of any int sets it;
 on the boot line and 0 without, which a write of any int sets; an
 exception the kernel takes in its own code panics whatever the value, as
 Linux's oops does with it set;
+.Pa kernel/sched_schedstats ,
+0 at boot, whether the scheduler keeps the schedstats that
+.Pa /proc/PID/sched
+and
+.Pa /sys/kernel/debug/sched/debug
+show; a privileged write of 0 or 1 sets it, and any other value fails with
+.Er EINVAL ;
+.Pa kernel/sched_autogroup_enabled ,
+1 at boot, whether the scheduler shares the processors between sessions
+before the threads of each, as
+.Xr sched 7
+describes; a privileged write of 0 or 1 sets it, and any other value fails
+with
+.Er EINVAL .
+Every thread keeps its session's group while it is 0, and the threads of
+each group move to their group's queues or out of them at the write,
+where Linux moves a thread only at its next change of group;
+.Pa kernel/sched_rr_timeslice_ms ,
+100, the slice of a
+.Dv SCHED_RR
+thread in milliseconds, counted in whole ticks of 4 ms rounded up; a
+privileged write of any int sets it, and one at or below 0 restores 100;
+.Pa kernel/sched_rt_period_us
+and
+.Pa kernel/sched_rt_runtime_us ,
+1000000 and 950000, which a privileged write sets as Linux checks them:
+the period from 1 to 2147483647 and the runtime from \-1, for none, to the
+period, a write that would leave the runtime above the period failing with
+.Er EINVAL ,
+and one whose share of each processor, runtime over period, would fall
+below the fair servers' with
+.Er EBUSY ,
+as Linux's
+.Fn sched_dl_global_validate
+refuses it.
+As on a Linux built without real-time group scheduling, they throttle
+nothing; the fair server keeps ordinary threads their share, as
+.Xr sched 7
+describes;
 .Pa kernel/lock_stat ,
 0 at boot, which a write of any int sets: while it is not 0 each hold of
 a sleeping lock is timed for
@@ -1728,9 +1767,9 @@ translation, as Linux's
 .Va tlb_single_page_flush_ceiling
 has it; a page mapped where none was needs none.
 .It Li scheduler_picks , scheduler_steps
-Scheduler selection attempts and ready-list entries examined by local selection and
-stealing since boot, modulo 2^32.
-Blocked threads add no entries to examine.
+Scheduler selections since boot, and the entries of the real-time threads'
+ready lists they examined, modulo 2^32.
+Blocked and ordinary threads add no entries to examine.
 .It Li vm_gap_steps
 Candidate gaps examined by the virtual memory free-range search since boot,
 modulo 2^32.
@@ -2140,7 +2179,7 @@ there, and the IDs in the files are as the reader's user and PID
 namespaces see them; see
 .Xr unshare 2 .
 .It Pa /proc/PID/stat
-One line of 24 space-separated fields:
+One line of 52 space-separated fields, as Linux 6.12 writes it:
 .Bd -literal -offset indent
 1 pid           2 (comm)         3 state         4 ppid
 5 pgrp          6 session        7 tty_nr        8 tpgid
@@ -2148,6 +2187,13 @@ One line of 24 space-separated fields:
 13 cmajflt     14 utime         15 stime        16 cutime
 17 cstime      18 priority      19 nice         20 num_threads
 21 itrealvalue 22 starttime     23 vsize        24 rss
+25 rsslim      26 startcode     27 endcode      28 startstack
+29 kstkesp     30 kstkeip       31 signal       32 blocked
+33 sigignore   34 sigcatch      35 wchan        36 nswap
+37 cnswap      38 exit_signal   39 processor    40 rt_priority
+41 policy      42 blkio_ticks   43 guest_time   44 cguest_time
+45 start_data  46 end_data      47 start_brk    48 arg_start
+49 arg_end     50 env_start     51 env_end      52 exit_code
 .Ed
 .Pp
 The command name is parenthesized; parentheses within it become
@@ -2170,6 +2216,9 @@ line of
 .Pa /proc/PID/status
 says in words and as in Linux.
 The parent, process group, and session IDs are recorded values.
+Field 9 has Linux's
+.Dv PF_KTHREAD ,
+0x200000, for a kernel thread, and no other flag.
 Fields 14 through 17 are the user and system time of all the process's
 threads and its reaped children's, in 1/100 second ticks, as
 .Xr times 2
@@ -2181,8 +2230,15 @@ In
 fields 10, 12, 14 and 15 are the thread's own faults and time, as on Linux.
 Field 19 is the nice value
 .Xr setpriority 2
-keeps, and field 18 the priority Linux reports for it, 20 more than the
-nice value.
+keeps, and field 18 the priority Linux reports: 20 more than the nice
+value for an ordinary thread, \-101 for
+.Dv SCHED_DEADLINE ,
+and \-1 less the effective real-time priority of a thread that has one,
+its own under
+.Dv SCHED_FIFO
+or
+.Dv SCHED_RR
+or one a priority-inheriting futex lends it.
 Field 7 is the device number of the session's controlling terminal, 5:1
 for the console and 136:N for
 .Pa /dev/pts/N ,
@@ -2190,7 +2246,7 @@ and field 8 that terminal's foreground process group, which
 .Xr ps 1
 reads to list a terminal's processes; a session with no terminal has 0
 and -1.
-Field 20 is the number of threads.
+Field 20 is the number of threads, and field 21 is 0, as on Linux.
 Field 22 is the time, in hundredths of a second, the process or thread was made
 at, counted from boot, which
 .Xr ps 1
@@ -2198,7 +2254,36 @@ subtracts from the uptime for the elapsed time; field 23 is the address
 space's size in bytes and field 24 its pages in memory, as
 .Pa /proc/PID/statm
 gives them.
-Fields 9 through 13 and the interval timer are zero.
+Field 25 is
+.Dv RLIMIT_RSS ,
+which the kernel does not keep, so it is the largest unsigned long, Linux's
+default.
+Fields 31 through 34 are the first 31 signals of the thread's own pending
+set, its blocked set, and the signals the process ignores and catches.
+Field 35 is 1 for a thread that is neither running nor ready, and for the
+process's file only when the process has one thread.
+Field 38 is the signal the process's end sends its parent,
+.Dv SIGCHLD
+or 0, and \-1 in a thread's file of any thread but the first.
+Field 39 is the processor the thread last ran on, which
+.Xr top 1
+and
+.Xr ps 1
+show; fields 40 and 41 are its own real-time priority, without a
+futex's donation, and its policy, without
+.Dv SCHED_RESET_ON_FORK .
+Fields 26 through 28 and 45 through 51 are the bounds of the program's
+code and data as its ELF headers place them, its first break, its stack
+pointer at entry, and where its arguments and environment lie, and field 52
+is the wait status of a thread that has ended.
+A reader that may not trace the process, as
+.Pa /proc/PID/mem
+judges it, sees 1 in fields 26 and 27 and 0 in fields 28, 35, 45 through 51
+and 52, as on Linux.
+Fields 29, 30, 36, 37, 42, 43 and 44 are 0: Linux shows the stack and
+instruction pointers only of a thread dumping core, counts no swap, has the
+block I/O delay off by default, and counts guest time only for a KVM
+virtual processor, which this kernel does not.
 .It Pa /proc/PID/cmdline
 The arguments as the program's initial stack has them, each ended by a
 NUL; a process with no address space, as one that has ended has none,
@@ -2945,10 +3030,37 @@ Any other wait reads as Rach2's
 .Ql wq_wait_event_nointr
 or
 .Ql wq_wait_event_idle .
+.It Pa /proc/PID/autogroup
+The process's session group, as Linux's autogroup shows it:
+.Dq Li /autogroup-ID nice N ,
+with the group's number, given from 1 in order of creation, and its nice
+value, which weighs the group against the others as a thread's weighs it
+against its peers; nothing for a process in no group, as the processes
+that never called
+.Xr setsid 2
+are.
+The file has mode 0644 and is the process's alone, with no copy under
+.Pa task .
+A write of an int from \-20 to 19, read with the white space around it
+taken off and in C's bases, sets the group's nice value, as on Linux.
+A lower value than the writer's
+.Dv RLIMIT_NICE
+allows fails with
+.Er EPERM ,
+a value out of range with
+.Er EINVAL ,
+and a write by a caller without privilege within 100 ms of the last
+change by anyone with
+.Er EAGAIN ;
+a write for a process in no group changes nothing and succeeds.
 .It Pa /proc/PID/schedstat
 Three numbers on one line, as Linux prints the thread's scheduler
-statistics: its time on a processor in nanoseconds, counted here in the
-timer's ticks of user and system time; the nanoseconds it waited ready on a
+statistics: its time on a processor in nanoseconds, the run time the
+scheduler charges it, which
+.Ql se.sum_exec_runtime
+in
+.Pa /proc/PID/sched
+shows; the nanoseconds it waited ready on a
 run queue for a processor, to the microsecond; and the times it was
 switched onto a processor.
 The file of a process is its leader's, and the file under
@@ -2956,6 +3068,61 @@ The file of a process is its leader's, and the file under
 a thread's own.
 .Xr kvm 4
 adds the second number's growth to a guest's steal time.
+.It Pa /proc/PID/sched
+The thread's scheduler state, as Linux 6.12 prints it: a header line of
+its name, its id in the reader's PID namespace and its process's thread
+count, a line of dashes, then one line for each value, its name in 45
+places and a colon.
+A count fills the 21 places after the colon; a time is milliseconds with
+six decimals, the whole milliseconds in 14 places, rounded toward zero, so
+that a time above \-1 ms shows no sign.
+The lines are
+.Ql se.exec_start ,
+.Ql se.vruntime ,
+.Ql se.sum_exec_runtime
+and
+.Ql se.nr_migrations ;
+while
+.Pa kernel/sched_schedstats
+is 1, the 28 schedstats of Linux's
+.Vt struct sched_statistics ,
+from
+.Ql sum_sleep_runtime
+to
+.Ql nr_wakeups_idle ,
+then
+.Ql avg_atom ,
+the run time per switch, and
+.Ql avg_per_cpu ,
+the run time per migration, each \-1 for none;
+.Ql nr_switches ,
+.Ql nr_voluntary_switches
+and
+.Ql nr_involuntary_switches ;
+.Ql se.load.weight
+and the seven
+.Ql se.avg.*
+load averages;
+.Ql policy
+and
+.Ql prio ,
+the priority of field 18 of
+.Pa stat
+plus 100;
+.Ql se.slice ,
+in nanoseconds, for an ordinary, batch or idle thread, or
+.Ql dl.runtime
+and
+.Ql dl.deadline
+for
+.Dv SCHED_DEADLINE ;
+and
+.Ql clock-delta ,
+the nanoseconds between two readings of the clock.
+Linux's NUMA balancing lines are left out, since Rach2 balances no NUMA
+memory.
+The file is mode 0644: its owner's write of anything clears the thread's
+schedstats, as on Linux.
 .It Pa /proc/PID/fdinfo
 A file for each open descriptor, named by its number, beginning with two lines:
 .Ql pos: ,

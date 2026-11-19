@@ -23,6 +23,7 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/autogroup.h"
 #include "proc/futex.h"
 #include "proc/seccomp.h"
 #include "proc/ns.h"
@@ -2081,6 +2082,12 @@ static int32_t exec_build(struct exec_state *s)
     s->mm->arg_end = s->args.env_start;
     s->mm->env_start = s->args.env_start;
     s->mm->env_end = s->args.env_end;
+    s->mm->start_code = s->img.start_code;
+    s->mm->end_code = s->img.end_code;
+    s->mm->start_data = s->img.start_data;
+    s->mm->end_data = s->img.end_data;
+    s->mm->start_brk = s->mm->vm.heap_start;
+    s->mm->start_stack = s->args.sp;
     k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->mm->auxv));
     if (s->layout.interp[0] != '\0') {
         mm_set_interp(s->mm, s->layout.interp);
@@ -3263,6 +3270,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->affinity = parent->affinity;
     child->bkl_depth = 1;
     child->bkl_frames = 1u;
+    sched_fork(child, parent);
     fork_start(child, parent, &pending);
     if (event) {
         ptrace_event(event, pid);
@@ -6953,7 +6961,10 @@ static uint64_t pgrp_serial_in_session(uint32_t pgid, uint32_t sid)
  * its group for another while members stayed in it cannot make a second
  * group of that id. Returns the new session id (the caller's pid). The new
  * session has no controlling terminal, and the caller is no longer detached
- * from one (`tty_detached` in tgroup.h).
+ * from one (`tty_detached` in tgroup.h). The session has a scheduling group
+ * of its own, into which every thread of the caller's process moves
+ * (`autogroup_setsid`), as Linux's ksys_setsid calls
+ * sched_autogroup_create_attach (kernel/sys.c:1252).
  */
 long sys_setsid(isr_params_t *params)
 {
@@ -6967,6 +6978,7 @@ long sys_setsid(isr_params_t *params)
     }
     group_set_ids(current_proc, current_proc->tgid, current_proc->tgid, current_proc->tg->serial);
     current_proc->tg->tty_detached = 0;
+    autogroup_setsid(current_proc);
     return (int32_t)pid_seen(current_proc->tgid);
 }
 
@@ -9980,6 +9992,7 @@ long sys_setpriority(isr_params_t *params)
             rc = 0;
         }
         p->nice = nice;
+        sched_priority_changed(p);
     }
     return rc;
 }
@@ -10182,13 +10195,16 @@ static int sched_may_change(const process_t *p)
 /**
  * Give way to the other ready processes (sched_yield).
  *
- * The caller is put behind them in the round-robin order and runs again when
- * its turn comes, at once when no other process is ready, which needs no
- * selection and takes no lock (`sched_yield_alone`). Returns 0.
+ * A real-time caller goes behind its peers of the same priority; an
+ * ordinary one has its virtual runtime moved to its deadline, as Linux's
+ * yield_task_fair (`fair_yield`), and runs again when EEVDF picks it. With
+ * no other thread ready it returns at once, which needs no selection and
+ * takes no lock (`sched_yield_alone`). Returns 0.
  */
 long sys_sched_yield(isr_params_t *params)
 {
     (void)params;
+    sched_note_yield();
     if (sched_yield_alone()) {
         return 0;
     }
@@ -10238,9 +10254,8 @@ struct sched_attr {
 
 /* The slice an ordinary thread may ask for, Linux's clamp of 0.1 to 100 ms,
  * and the default one before its scaling by the processors. */
-#define SCHED_SLICE_MIN  100000u
-#define SCHED_SLICE_MAX  100000000u
-#define SCHED_SLICE_BASE 750000u
+#define SCHED_SLICE_MIN 100000u
+#define SCHED_SLICE_MAX 100000000u
 
 /* What a call asks of a thread's scheduling, as Linux's struct sched_attr
  * reaches __sched_setscheduler. */
@@ -10367,6 +10382,7 @@ static void sched_store(process_t *p, const struct sched_req *a, int policy)
                          : a->runtime < SCHED_SLICE_MIN ? SCHED_SLICE_MIN
                          : a->runtime > SCHED_SLICE_MAX ? SCHED_SLICE_MAX
                                                         : (uint32_t)a->runtime;
+        sched_set_slice(p, p->sched_slice);
     }
     p->sched_policy = (uint8_t)policy;
     p->rt_priority = (uint8_t)a->priority;
@@ -10481,24 +10497,6 @@ long sys_sched_setparam(isr_params_t *params)
     return sched_set((int)SC_ARG(params, 0), -1, (const void __user *)SC_ARG(params, 1));
 }
 
-/** The slice an ordinary thread has, in nanoseconds: the one it asked for,
- * or Linux's default, 0.75 ms times one more than the log of the
- * processors started, eight at most (sysctl_sched_base_slice). */
-static uint32_t sched_slice_of(const process_t *p)
-{
-    int cpus = smp_cpu_count();
-    uint32_t factor = 1;
-
-    if (p->sched_slice != 0) {
-        return p->sched_slice;
-    }
-    while (cpus > 1 && factor < 4) {
-        cpus >>= 1;
-        factor++;
-    }
-    return SCHED_SLICE_BASE * factor;
-}
-
 /** Fill in `k` the parameters of `p`'s present policy, as Linux's
  * get_params: a deadline thread's parameters and flags, a real-time
  * thread's priority, or an ordinary thread's nice value and slice. */
@@ -10514,7 +10512,7 @@ static void sched_get_params(const process_t *p, struct sched_attr *k)
         k->sched_priority = p->rt_priority;
     } else {
         k->sched_nice = p->nice;
-        k->sched_runtime = sched_slice_of(p);
+        k->sched_runtime = sched_slice_ns(p);
     }
 }
 
@@ -10738,15 +10736,14 @@ long sys_sched_get_priority_min(isr_params_t *params)
 
 /**
  * A process's round-robin time slice (sched_rr_get_interval, a timespec of
- * two longs): one tick, since the tick takes the processor from a process
- * switched in at the last one (`sched_tick`), and 0 for SCHED_FIFO and
- * SCHED_DEADLINE, which Linux gives no slice. -EINVAL for a negative pid,
- * -ESRCH, -EFAULT.
+ * two longs), as `sched_rr_interval_ns` gives it. -EINVAL for a negative
+ * pid, -ESRCH, -EFAULT.
  */
 long sys_sched_rr_get_interval(isr_params_t *params)
 {
     int pid = (int)SC_ARG(params, 0);
     struct kernel_timespec slice;
+    uint64_t ns, rem;
     process_t *p;
 
     if (pid < 0) {
@@ -10756,10 +10753,9 @@ long sys_sched_rr_get_interval(isr_params_t *params)
     if (!p) {
         return -ESRCH;
     }
-    slice.tv_sec = 0;
-    slice.tv_nsec = p->sched_policy == SCHED_FIFO || p->sched_policy == SCHED_DEADLINE
-                        ? 0
-                        : (long)SCHED_INTERVAL_NS;
+    ns = sched_rr_interval_ns(p);
+    slice.tv_sec = (long)tick_div64(ns, 1000000000u, &rem);
+    slice.tv_nsec = (long)rem;
     if (copy_to_user((void __user *)SC_ARG(params, 1), &slice, sizeof(slice)) != 0) {
         return -EFAULT;
     }

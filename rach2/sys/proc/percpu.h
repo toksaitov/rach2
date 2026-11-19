@@ -87,8 +87,12 @@ struct percpu {
     volatile uint64_t switches;                 /* switches from one thread to another */
     volatile uint64_t steal_ns;                 /* the steal time its counts reach, ns */
     volatile int64_t accounted_ns;              /* the monotonic time its counts reach, ns */
-    int idle_short;            /* last halt ended before a scheduler period without a tick */
-    volatile int tick_stopped; /* idle span projected by sched_cpu_ticks */
+    volatile uint32_t irq_seq;    /* odd while its interrupt's end adds to `irq_cycles` */
+    volatile uint64_t irq_cycles; /* cycles spent in its interrupts' handlers */
+    uint64_t irq_entry_cycles;    /* cycle count at the outermost interrupt's entry */
+    uint32_t irq_depth;           /* interrupts under way, nested ones included */
+    int idle_short;               /* last halt ended before a scheduler period without a tick */
+    volatile int tick_stopped;    /* idle span projected by sched_cpu_ticks */
     volatile uint32_t tick_stop_period; /* its scheduler period, in ticks, as it stopped */
     uint64_t user_cycles;               /* cycle count at its last return to user mode */
     uint64_t entry_cycles;              /* cycle count at its last entry from user mode */

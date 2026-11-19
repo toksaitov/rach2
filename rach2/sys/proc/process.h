@@ -637,9 +637,18 @@ struct process {
     uint8_t rt_priority;
     uint8_t pi_priority;
     uint8_t ready_rt;            /* the queued entry counts in its queue's rt_count */
-    uint8_t sched_yielded;       /* allow an equal FIFO peer at the next selection */
+    uint8_t sched_yielded;       /* go behind its real-time peers at the next selection */
     uint8_t futex_exit_state;    /* 0 live, 1 releasing futexes, 2 released */
     struct futex_pi *pi_blocked; /* PI lock this thread waits for, or NULL */
+    /* The ticks a SCHED_RR thread has run of its slice, which it keeps
+     * across a preemption and a sleep, as Linux's rt.time_slice counts
+     * down; 0 at fork, and again once the slice has run out
+     * (`sched_tick`). */
+    uint32_t rr_used;
+    /* Set while a suspend to idle holds the ordinary thread off its fair
+     * queue, on the scheduler's list linked by `held_next`. */
+    uint8_t sched_held;
+    struct process *held_next;
     /* SCHED_DEADLINE's runtime, deadline and period in nanoseconds, the
      * period never 0, and its flags SCHED_FLAG_RECLAIM and
      * SCHED_FLAG_DL_OVERRUN, as sched_setattr last set them; meaningful

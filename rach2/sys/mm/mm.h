@@ -102,6 +102,11 @@ struct mm {
     uintptr_t arg_end;
     uintptr_t env_start;
     uintptr_t env_end;
+    /* The program's code and data bounds (elf.h's elf_image_t), its first
+     * break and the entry stack pointer, as Linux's mm_struct keeps them
+     * for /proc/PID/stat; 0 before an exec. */
+    uintptr_t start_code, end_code, start_data, end_data;
+    uintptr_t start_brk, start_stack;
     /* The auxiliary vector as the image's stack has it: in words of a
      * pointer's width, or for an i386 image (`compat`) in 4-byte words
      * packed from the start of the array, as Linux's saved_auxv keeps a

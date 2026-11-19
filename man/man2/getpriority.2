@@ -1,9 +1,10 @@
-.Dd November 11, 2026
+.Dd November 19, 2026
 .Dt GETPRIORITY 2
 .Os
 .Sh NAME
 .Nm getpriority ,
-.Nm setpriority
+.Nm setpriority ,
+.Nm nice
 .Nd get or set the nice value of threads
 .Sh SYNOPSIS
 .In sys/resource.h
@@ -11,6 +12,9 @@
 .Fn getpriority "int which" "id_t who"
 .Ft int
 .Fn setpriority "int which" "id_t who" "int prio"
+.In unistd.h
+.Ft int
+.Fn nice "int inc"
 .Sh DESCRIPTION
 Each thread has a nice value from -20 to 19, 0 at boot, as on Linux.
 .Xr fork 2
@@ -59,10 +63,22 @@ only raise it.
 When some selected threads may not be changed, the others are changed
 and the call fails with the error of the last refusal.
 .Pp
-The scheduler does not read the nice value: every ready thread takes
-its turn in the same round-robin order.
-.Pa /proc/ Ns Ar pid Ns Pa /stat
-reports the first thread's as field 19, and field 18 as 20 more than it.
+.Fn nice
+adds
+.Fa inc
+to the caller's nice value, with the same range for the result.
+.Pp
+As on Linux, a lower nice value gives an ordinary thread a larger
+weight, and hence a larger share of a processor when runnable threads
+compete in the same scheduling group.
+.Dv SCHED_IDLE
+uses a fixed weight of 3 for any nice value.
+The real-time policies use their real-time priorities.
+Changing a thread's nice value leaves its autogroup's nice value alone.
+See
+.Xr sched 7 .
+.Pa /proc/PID/stat
+reports the first thread's nice value as field 19.
 .Ss System call interface
 The i386 system call numbers are 96 for
 .Fn getpriority
@@ -90,7 +106,9 @@ does not allow fails without privilege with
 .Er EPERM ,
 as on Linux, whose default of 0 allows none.
 The i686 kernel has no
-.Nm nice ;
+.Nm nice
+system call, which Linux has on i386.
+On both of Rach2's architectures,
 musl implements
 .Fn nice
 through
@@ -107,7 +125,11 @@ an error from a nice value of -1 sets
 to 0 first and reads it afterwards.
 .Fn setpriority
 returns 0.
-On failure both return -1 and set
+.Fn nice
+returns the new nice value through the C library; set
+.Va errno
+to 0 first to tell a successful return of -1 from an error.
+On failure these functions return -1 and set
 .Va errno .
 The kernel returns the negative error number.
 .Sh EXAMPLES
@@ -137,4 +159,5 @@ No thread was selected.
 .Xr fork 2 ,
 .Xr ioprio_set 2 ,
 .Xr sched_setscheduler 2 ,
-.Xr proc 5
+.Xr proc 5 ,
+.Xr sched 7

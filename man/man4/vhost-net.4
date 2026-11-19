@@ -1,0 +1,202 @@
+.Dd November 19, 2026
+.Dt VHOST-NET 4
+.Os
+.Sh NAME
+.Nm vhost-net
+.Nd in-kernel virtio network backend for a tap interface
+.Sh SYNOPSIS
+.Pa /dev/vhost-net
+.Sh DESCRIPTION
+The character device
+.Pa /dev/vhost-net ,
+10:238 as on Linux, moves the frames of a virtio network device of a
+virtual machine between the guest's virtqueues and a
+.Xr tap 4
+interface inside the kernel, so that the program that runs the machine
+reads and writes none of them.
+QEMU's
+.Ql -netdev tap,...,vhost=on
+is its user.
+Each open is a device of its own.
+.Pp
+The owner, the process that calls
+.Dv VHOST_SET_OWNER ,
+gives the device the guest's memory as a table of regions, each a
+guest-physical range and the address of the owner's mapping of it; the
+size, base and addresses of the receive ring, ring 0, and the transmit
+ring, ring 1; for each ring an eventfd the guest's doorbell signals, the
+kick, which QEMU makes a KVM ioeventfd, an eventfd the device signals to
+raise the ring's interrupt, the call, which QEMU makes a KVM irqfd, and an
+eventfd signalled when the guest gives a bad descriptor; and last the tap
+descriptor, with
+.Dv VHOST_NET_SET_BACKEND .
+The device holds the tap's descriptor and each kick's while it uses them,
+as Linux holds their files, so the owner may close its own.
+.Pp
+The device reaches a page of the guest's memory through a pin of the
+frame the owner maps there, taken by the kernel thread at the page's first
+use and kept until the page changes: a discard by
+.Xr madvise 2 ,
+as QEMU's balloon makes, a write-back's taking of write access from a
+shared mapping of a file, a copy-on-write, a truncation or an unmap.
+The change lets the pin go, and the thread takes the page again at its
+next use, so the device always writes the frame the owner maps, as Linux's
+device copies through the owner's mappings.
+Any memory the owner maps may be the guest's, a shared mapping of a disk
+file among it; nothing is charged to
+.Dv RLIMIT_MEMLOCK .
+.Pp
+A frame the stack sends on the tap goes into the next buffer the guest
+offers on its receive ring at once, in the sender's context, after a
+virtio header of no offload with num_buffers 1; a frame that does not fit
+the buffer is dropped and the buffer stays the guest's, and a frame that
+finds no buffer waits in the tap, which holds 1024, until the guest's next
+kick.
+A frame whose ring or buffer is on a page the device does not hold waits
+in the tap too, while the thread takes the page, and goes after it.
+A frame the guest puts on its transmit ring is taken by the kernel thread
+.Li vhost-net ,
+which the kick wakes, and given to the stack as a
+.Xr write 2
+of the tap would give it, its virtio header stripped; a pass takes at
+most 128 frames before the thread gives way.
+The device asks the guest for no kicks while it can go on without them,
+and raises a ring's interrupt unless the guest asks for none.
+.Ss Requests
+A request's argument is a pointer, as in
+.In linux/vhost.h .
+A ring's state is a
+.Vt struct vhost_vring_state ,
+its index and a number; a ring's file a
+.Vt struct vhost_vring_file ,
+its index and a descriptor, \-1 for none.
+.Bl -tag -width VHOST_SET_BACKEND_FEATURES
+.It Dv VHOST_SET_OWNER
+Makes the caller's address space the owner.
+Every request below but the features' then comes from it.
+.It Dv VHOST_RESET_OWNER
+Stops both rings and lets go of the tap, the eventfds, the pins and the
+owner.
+.It Dv VHOST_GET_FEATURES
+Writes the features the device offers:
+.Dv VHOST_NET_F_VIRTIO_NET_HDR ,
+bit 27, the virtio header added and stripped here, which the guest sees as
+.Dv VIRTIO_F_ANY_LAYOUT ;
+.Dv VIRTIO_F_NOTIFY_ON_EMPTY ,
+bit 24; and
+.Dv VIRTIO_F_VERSION_1 ,
+bit 32.
+.It Dv VHOST_SET_FEATURES
+Takes the features negotiated.
+With
+.Dv VHOST_NET_F_VIRTIO_NET_HDR
+the header is 12 bytes with
+.Dv VIRTIO_F_VERSION_1
+and 10 without; without it the frames carry none.
+.It Dv VHOST_GET_BACKEND_FEATURES , VHOST_SET_BACKEND_FEATURES
+None are offered, and only 0 is taken.
+.It Dv VHOST_SET_MEM_TABLE
+Takes a
+.Vt struct vhost_memory
+of up to 64 regions, keeping what the device holds of a region the old
+table has whole.
+A ring or buffer at an address the owner does not map, or maps without
+write access, stops its ring when the device first uses it.
+.It Dv VHOST_SET_VRING_NUM
+The ring's size, a power of two up to 32768.
+.It Dv VHOST_SET_VRING_BASE , VHOST_GET_VRING_BASE
+The next entry of the available ring the device takes.
+.It Dv VHOST_SET_VRING_ADDR
+Takes a
+.Vt struct vhost_vring_addr :
+the descriptor table on 16 bytes, the used ring on 4 and the available
+ring on 2, at the owner's addresses.
+.It Dv VHOST_SET_VRING_KICK , VHOST_SET_VRING_CALL , VHOST_SET_VRING_ERR
+The ring's eventfds; a refused one leaves the ring the one it had.
+.It Dv VHOST_SET_VRING_BUSYLOOP_TIMEOUT , VHOST_GET_VRING_BUSYLOOP_TIMEOUT
+The time in microseconds Linux's device polls a ring before it sleeps,
+kept and given back; the thread here never polls.
+.It Dv VHOST_NET_SET_BACKEND
+Gives the ring the interface of the tap descriptor, or takes it away
+with \-1; the tap is let go once neither ring has it.
+.El
+.Pp
+When the owner's address space ends, both rings stop until a new table.
+When the device lets the tap go it logs the frames it moved since it took
+it, as
+.Ql vhost-net: detached: tap0: 22 frames to the guest, 21 from it .
+The last close of the device's descriptor stops it and lets everything go.
+.Sh LIMITS
+The split ring alone: no indirect descriptors, no event index
+.Pq Dv VIRTIO_RING_F_EVENT_IDX ,
+no mergeable receive buffers
+.Pq Dv VIRTIO_NET_F_MRG_RXBUF ,
+no offload, no dirty log for migration, no IOTLB and one queue pair.
+Both rings take the same tap, where Linux lets each have its own.
+One kernel thread serves every device, where Linux has one for each, and
+it does not poll.
+.Sh FILES
+.Bl -tag -width /dev/vhost-net
+.It Pa /dev/vhost-net
+The device, mode 0666, as
+.Pa /dev/kvm
+is; a root that runs udev gives both the group and mode its rules name,
+Debian's group
+.Li kvm
+and mode 0660.
+.El
+.Sh EXAMPLES
+Give a QEMU guest the interface
+.Li tap0
+with its frames moved in the kernel:
+.Bd -literal -offset indent
+# qemu-system-x86_64 -enable-kvm \e
+    -netdev tap,id=n0,ifname=tap0,script=no,downscript=no,vhost=on \e
+    -device virtio-net-pci,netdev=n0 ...
+# ifconfig tap0 192.168.100.1 netmask 255.255.255.0 up
+.Ed
+.Sh ERRORS
+.Bl -tag -width Er
+.It Er E2BIG
+A table of more than 64 regions.
+.It Er EBADF
+A ring's file names no descriptor.
+.It Er EBUSY
+A second
+.Dv VHOST_SET_OWNER ;
+a ring's size or base changed while it has the tap; a tap another device
+has, or one other than the other ring's.
+.It Er EFAULT
+An argument is not the caller's; a region of the table that is empty,
+wraps or leaves user space; a ring given the tap has no size or address,
+or lies outside the table's regions.
+.It Er EINVAL
+A ring size that is no power of two up to 32768, a base past 65535, a
+ring not aligned, or a ring's file that is no eventfd.
+.It Er ENOBUFS
+A ring index past 1.
+.It Er ENOMEM
+No memory; the old table stays.
+.It Er ENOTSOCK
+.Dv VHOST_NET_SET_BACKEND
+of a descriptor that is no tap with an interface.
+.It Er ENOTTY
+An unknown request.
+.It Er EOPNOTSUPP
+A feature or backend feature not offered, or a ring address flag other
+than the log's.
+.It Er EPERM
+A request but the features' before
+.Dv VHOST_SET_OWNER ,
+or from a process whose address space is not the owner's.
+.El
+.Sh SEE ALSO
+.Xr eventfd 2 ,
+.Xr ioctl 2 ,
+.Xr madvise 2 ,
+.Xr kvm 4 ,
+.Xr tap 4 ,
+.Xr virtio-net 4
+.Sh HISTORY
+The device follows Linux's drivers/vhost/net.c and drivers/vhost/vhost.c
+and the numbers of linux/vhost.h.

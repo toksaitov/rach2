@@ -1,4 +1,4 @@
-.Dd November 15, 2026
+.Dd November 19, 2026
 .Dt DEBUGFS 5
 .Os
 .Sh NAME
@@ -499,6 +499,108 @@ millisecond later, which no reading of the clock may see; it fails with
 for a thread of another process.
 Another text fails with
 .Er EINVAL .
+.It Pa sched/base_slice_ns
+Mode 0644, as on Linux: the base slice in nanoseconds, the time ahead of
+its eligible time at which an ordinary thread without a slice of its own
+.Pq Xr sched_setattr 2
+takes its deadline: at boot 700000 times 1 plus the base-2 logarithm of
+the processors started, eight at most, as Linux scales it, so 2100000 on
+four.
+Reads the value in decimal and a newline.
+A write sets it to a number as Linux's
+.Fn debugfs_create_u32
+reads one: an optional
+.Ql + ,
+then hexadecimal after
+.Ql 0x ,
+octal after another leading 0, or decimal, and at most one newline, whose
+low 32 bits are kept.
+Other text, a minus sign among it, fails with
+.Er EINVAL ,
+and a number past 63 bits with
+.Er ERANGE .
+.It Pa sched/features
+Mode 0644, as on Linux: the scheduler's features, in the order of Linux
+6.12's kernel/sched/features.h, from
+.Ql PLACE_LAG
+to
+.Ql NI_RANDOM ,
+each with
+.Ql NO_
+before it when it is off and a space after it, then a newline.
+A write of a feature's name turns it on, and of
+.Ql NO_
+and the name off; white space around the name is taken off, and text that
+names no feature whole fails with
+.Er EINVAL .
+.It Pa sched/migration_cost_ns
+Mode 0644, as on Linux: 500000 at boot, the time since a thread last ran
+within which the balance takes its cache to be warm and leaves it where
+it is until balancing has failed often, and the base of an idle
+processor's average idle time and of the cost a newly idle balance may
+take.
+.It Pa sched/nr_migrate
+Mode 0644, as on Linux: 32 at boot, the most threads one balance looks at
+on the busiest processor.
+.Pp
+Both read in decimal with a newline and take writes as
+.Pa sched/base_slice_ns
+does.
+.It Pa sched/fair_server/cpuN/runtime , sched/fair_server/cpuN/period
+Mode 0644, as on Linux, for each processor N started: its fair server's
+budget and period in nanoseconds, 50000000 and 1000000000 at boot, in
+decimal with a newline.
+A write is a decimal number, with an optional
+.Ql +
+and at most one newline after it, as Linux's
+.Fn kstrtoull_from_user
+reads one, which stops the server and starts it again with the new
+value; a runtime of 0 turns the server off.
+A runtime above the period, a period below 100 us or above 2^22 us, or
+other text fails with
+.Er EINVAL ,
+a number past 64 bits with
+.Er ERANGE ,
+and a write for a processor that is offline, or one that would give the
+fair servers together more of the processors than
+.Pa /proc/sys/kernel/sched_rt_runtime_us
+over
+.Pa sched_rt_period_us
+allows, with
+.Er EBUSY .
+.It Pa sched/debug
+Mode 0444, as on Linux: the whole state of the scheduler in the layout of
+Linux 6.12's kernel/sched/debug.c.
+A header names the version,
+.Ql Sched Debug Version: v0.11,
+and the release, then the clocks
+.Ql ktime ,
+.Ql sched_clk ,
+.Ql cpu_clk
+and
+.Ql jiffies
+and the base slice, the features and the tunable scaling.
+For each online processor follow, after
+.Ql cpu#N, MHZ MHz ,
+its run queue's counts, clocks, next balance, idle averages and the
+schedstats
+.Ql yld_count ,
+.Ql sched_count ,
+.Ql sched_goidle ,
+.Ql ttwu_count
+and
+.Ql ttwu_local ;
+each fair queue, the processor's and each autogroup's as
+.Ql cfs_rq[N]:/autogroup-ID ,
+with its virtual times, counts and load averages; the real-time and
+deadline queues, the latter always empty; and every thread whose
+processor it is, one a line with its state, name, PID, virtual runtime,
+eligibility, deadline, slice, run time, switches, priority, schedstats
+and group, the running one marked
+.Ql >R .
+Times print as Linux's
+.Fn SPLIT_NS ,
+milliseconds with six decimals.
 .It Pa exits
 Mode 0444, on a PC booted with
 .Ql rach2.exits ,

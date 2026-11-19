@@ -182,3 +182,4 @@ vgpu|qemu|full||256
 browser|qemu|full|browser-test*|8192|x86_64
 gpucompat|qemu|full||640|i686
 wakelat|qemu|full||512|i686,x86_64|
+sched4|qemu|full||512||

@@ -9746,13 +9746,14 @@ static int32_t synth_fd_visible(int rpid, int fd, int info, int follow)
 }
 
 /** Whether the file `procfile` of a process's directory takes a write,
- * mode 0644 as Linux gives it: oom_score_adj, the ID maps, setgroups and
- * comm. */
+ * mode 0644 as Linux gives it: oom_score_adj, the ID maps, setgroups,
+ * comm, sched and autogroup. */
 static int synth_proc_writable(int procfile)
 {
     return procfile == SYNTH_PROC_OOM_ADJ || procfile == SYNTH_PROC_UID_MAP ||
            procfile == SYNTH_PROC_GID_MAP || procfile == SYNTH_PROC_SETGROUPS ||
-           procfile == SYNTH_PROC_COMM;
+           procfile == SYNTH_PROC_COMM || procfile == SYNTH_PROC_SCHED ||
+           procfile == SYNTH_PROC_AUTOGROUP;
 }
 
 /**
@@ -19322,7 +19323,8 @@ static void synth_u32_str(char *out, uint32_t v)
  * of, is gone, which leaves the directory with "." and ".." alone. A thread's
  * directory has the files of the thread with no `task` among them, and its
  * fd directory the thread's descriptors, and `children` takes the place of
- * `task`, the last entry, in a thread's directory. `task` lists the process's
+ * `task`, the last entry, in a thread's directory, which has no `autogroup`,
+ * the process's alone as on Linux. `task` lists the process's
  * threads, the leader first, without a thread that has ended and is not yet
  * reaped unless it is the leader.
  *
@@ -19347,7 +19349,7 @@ static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, ui
                  {"ns", DT_DIR},      {"fdinfo", DT_DIR},    {"exe", DT_LNK},
                  {"cwd", DT_LNK},     {"root", DT_LNK},      {"numa_maps", DT_REG},
                  {"syscall", DT_REG}, {"wchan", DT_REG},     {"schedstat", DT_REG},
-                 {"task", DT_DIR}};
+                 {"sched", DT_REG},   {"autogroup", DT_REG}, {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
     int n = *at;
@@ -19363,6 +19365,9 @@ static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, ui
         int last = (int)(sizeof(files) / sizeof(files[0])) - 1;
         const char *entry;
 
+        if (sd->tid != 0 && n >= last - 1) {
+            n++; /* a thread's directory has no autogroup */
+        }
         if (n > last) {
             return 0;
         }

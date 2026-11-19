@@ -8,24 +8,26 @@
  * and sched_getparam: SCHED_OTHER and SCHED_BATCH with a nice value,
  * SCHED_IDLE, SCHED_FIFO and SCHED_RR with a priority, and
  * SCHED_FLAG_RESET_ON_FORK beside one. An ordinary thread must read back
- * Linux's default slice for the processors started, or the one it asked
- * for, clamped to 0.1 to 100
- * ms. The structure's size rules must hold: E2BIG for a size below 48, past
- * 4096, or larger than 56 with a byte past 56 that is not 0, with 56
- * written back; and sched_getattr must write as many bytes as its size
- * holds, at most 56. SCHED_FLAG_KEEP_POLICY and SCHED_FLAG_KEEP_PARAMS must
- * keep what they name. Valid deadline requests must be refused with EBUSY,
- * as Linux's sched_dl_overflow refuses unavailable bandwidth, without
- * changing the caller's policy. On more than one processor a thread bound
- * to one must first get EPERM. A fork must keep the parent's policy, or
- * reset it with SCHED_RESET_ON_FORK.
- * sched_rr_get_interval must give 0 for SCHED_FIFO. A
- * child that has dropped root must be refused with EPERM what Linux refuses
- * without CAP_SYS_NICE. RLIMIT_NICE and RLIMIT_RTPRIO must read 0, and a
- * child that has raised them before dropping root must be given the nice
- * values and real-time priorities they allow, and no more. The other
- * refusals are EINVAL, EOPNOTSUPP for the utilization clamps, as from a
- * kernel built without them, and ESRCH.
+ * Linux's default slice for the processors started, which
+ * /sys/kernel/debug/sched/base_slice_ns shows, or the one it asked for,
+ * clamped to 0.1 to 100 ms. The structure's size rules must hold: E2BIG
+ * for a size below 48, past 4096, or larger than 56 with a byte past 56
+ * that is not 0, with 56 written back; and sched_getattr must write as many
+ * bytes as its size holds, at most 56. SCHED_FLAG_KEEP_POLICY and
+ * SCHED_FLAG_KEEP_PARAMS must keep what they name. Valid deadline requests
+ * must be refused with EBUSY, as Linux's sched_dl_overflow refuses
+ * unavailable bandwidth, without changing the caller's policy. On more than
+ * one processor a thread bound to one must first get EPERM. A fork must
+ * keep the parent's policy, or reset it with SCHED_RESET_ON_FORK.
+ * sched_rr_get_interval must give 0 for SCHED_FIFO, RR's 100 ms for
+ * SCHED_RR, and for an ordinary thread its slice in whole ticks of 4 ms, as
+ * Linux's `get_rr_interval_fair` gives it. A child that has dropped root
+ * must be refused with EPERM what Linux refuses without CAP_SYS_NICE.
+ * RLIMIT_NICE and RLIMIT_RTPRIO must read 0, and a child that has raised
+ * them before dropping root must be given the nice values and real-time
+ * priorities they allow, and no more. The other refusals are EINVAL,
+ * EOPNOTSUPP for the utilization clamps, as from a kernel built without
+ * them, and ESRCH.
  *
  * The probe writes etude's report records (probe_report.h) for the case
  * ETUDE_CASE names, an assertion for each check, as `assertion_id` lists
@@ -258,7 +260,7 @@ static long getparam(void)
 }
 
 /* The processors started, from sched_getaffinity, and Linux's default
- * slice for them: 0.75 ms times one more than the base-2 logarithm of
+ * slice for them: 0.7 ms times one more than the base-2 logarithm of
  * their number, eight at most. */
 static int cpus;
 static unsigned long long base_slice;
@@ -278,7 +280,7 @@ static void count_cpus(void)
     for (n = cpus < 8 ? cpus : 8; n > 1; n >>= 1) {
         factor++;
     }
-    base_slice = 750000ULL * (unsigned long long)factor;
+    base_slice = 700000ULL * (unsigned long long)factor;
 }
 
 /** The size rules of the structure sched_setattr reads. */
@@ -461,6 +463,9 @@ static void run_slice(void)
                   "a slice of 200 ms did not read back as 100 ms");
     set_and_check(mk(SCHED_OTHER, 0, -30, 0), with_runtime(mk(SCHED_OTHER, 0, -20, 0), base_slice),
                   SCHED_OTHER, "nice -30 did not read back as -20 with the default slice");
+    if (probe_procfield("/sys/kernel/debug/sched/base_slice_ns", "") != base_slice) {
+        fail("/sys/kernel/debug/sched/base_slice_ns is not the default slice");
+    }
     ordinary();
     report_held();
 }
@@ -590,7 +595,23 @@ static void run_fork(void)
     report_held();
 }
 
-/** sched_rr_get_interval for SCHED_FIFO and SCHED_RR. */
+/** Whether sched_rr_get_interval of the caller gives `ns` nanoseconds,
+ * less than a second. */
+static int interval_is(unsigned long ns)
+{
+    struct timespec ts;
+
+    ts.tv_sec = ts.tv_nsec = 7;
+    return syscall2(SYS_SCHED_RR_GET_INTERVAL, 0, (long)&ts) == 0 && ts.tv_sec == 0 &&
+           (unsigned long)ts.tv_nsec == ns;
+}
+
+/**
+ * sched_rr_get_interval for SCHED_FIFO, 0; for SCHED_RR, RR's 100 ms; and
+ * for an ordinary thread, whose own load is on its queue, its slice cut to
+ * whole ticks of 4 ms (`get_rr_interval_fair`, kernel/sched/fair.c:13716):
+ * the default slice, a custom 10 ms as 8 ms, 3 ms as 0 and 100 ms whole.
+ */
 static void run_rr_interval(void)
 {
     struct timespec ts;
@@ -601,11 +622,19 @@ static void run_rr_interval(void)
         ts.tv_nsec != 0) {
         fail("sched_rr_get_interval of a SCHED_FIFO thread did not give 0");
     }
-    ts.tv_sec = ts.tv_nsec = 0;
-    if (set(0, mk(SCHED_RR, 0, 0, 10)) != 0 ||
-        syscall2(SYS_SCHED_RR_GET_INTERVAL, 0, (long)&ts) != 0 ||
-        (ts.tv_sec == 0 && ts.tv_nsec == 0)) {
-        fail("sched_rr_get_interval of a SCHED_RR thread gave 0");
+    if (set(0, mk(SCHED_RR, 0, 0, 10)) != 0 || !interval_is(100 * MS)) {
+        fail("sched_rr_get_interval of a SCHED_RR thread did not give 100 ms");
+    }
+    if (set(0, mk(SCHED_OTHER, 0, 0, 0)) != 0 ||
+        !interval_is((unsigned long)base_slice / 4000000ul * 4000000ul)) {
+        fail("sched_rr_get_interval of an ordinary thread was not its default slice in whole "
+             "ticks of 4 ms");
+    }
+    if (set(0, with_runtime(mk(SCHED_OTHER, 0, 0, 0), 10 * MS)) != 0 || !interval_is(8 * MS) ||
+        set(0, with_runtime(mk(SCHED_BATCH, 0, 0, 0), 3 * MS)) != 0 || !interval_is(0) ||
+        set(0, with_runtime(mk(SCHED_OTHER, 0, 0, 0), 100 * MS)) != 0 || !interval_is(100 * MS)) {
+        fail("sched_rr_get_interval of a slice of 10 ms, 3 ms and 100 ms did not give 8 ms, 0 "
+             "and 100 ms");
     }
     ordinary();
     report_held();

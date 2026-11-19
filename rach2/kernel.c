@@ -46,6 +46,7 @@
 #include "sys/tty/pty.h"
 #include "sys/ipc/pipe.h"
 #include "sys/proc/sched.h"
+#include "sys/proc/sched_debug.h"
 #include "sys/proc/smp.h"
 #include "sys/power.h"
 #include "sys/evdev.h"
@@ -82,6 +83,7 @@
 #include "sys/block/recovery.h"
 #include "sys/network/driver/netdev.h"
 #include "sys/network/driver/tap.h"
+#include "sys/network/driver/vhost_net.h"
 #include "sys/network/driver/virtio_net.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
@@ -845,9 +847,11 @@ void timer_idle_work(void)
  * runs with interrupts off, which the network stack's shared buffers
  * require, and nothing it calls waits on hardware.
  *
- * Then the handler reschedules through `sched_tick`, with the lock let go,
- * once the current thread has run its slice or a woken thread waits: at
- * once when the current process is in user mode, and at the call's exit
+ * Then the handler counts the tick against the current thread's slice
+ * (`sched_tick`), with the lock let go, and asks for a switch once the
+ * slice has run out or a thread should run first; the interrupt's end takes
+ * it (`sched_irq_exit`): at once when the current process is in user mode,
+ * and at the call's exit
  * when it is inside a system call, since a switch in the middle of one is
  * unsafe; timer IRQs stay enabled during a call to keep the clock, the
  * timers and the HDA service's wake requests going. A kernel thread defers
@@ -906,7 +910,6 @@ static void timer_handler(isr_params_t *params)
         timer_idle_notify();
         bkl_exit();
     }
-    sched_idle_balance();
     sched_tick();
 }
 
@@ -4624,11 +4627,11 @@ static void start_audio(void)
 /**
  * Start the network unless `rach2.nonet` is given: the wired card, the
  * network console's targets with `netconsole=` and its frames with
- * `rach2.netconsole`, /dev/net/tun and the cards' drivers in /sys, then the
- * simulated radios and the ath9k card, which needs the wireless registry,
- * logging what each start found. Of several `netconsole=`, the last is
- * read, as Linux's `option_setup` keeps the last one it is called with
- * (drivers/net/netconsole.c).
+ * `rach2.netconsole`, /dev/net/tun, /dev/vhost-net and its thread, and the
+ * cards' drivers in /sys, then the simulated radios and the ath9k card,
+ * which needs the wireless registry, logging what each start found. Of
+ * several `netconsole=`, the last is read, as Linux's `option_setup` keeps
+ * the last one it is called with (drivers/net/netconsole.c).
  */
 static void start_network(void)
 {
@@ -4654,6 +4657,7 @@ static void start_network(void)
         klog(KLOG_WARN, "net", "absent: %s", net_error());
     }
     tap_start();
+    vhost_net_start();
     netdev_sys_start();
     radios = wlan_init();
     if (radios > 0) {
@@ -4683,8 +4687,9 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
  * (`virtio_net_cpus_started`), and start the lockup detectors on all of them
  * (`watchdog_init`), the grace-period thread (`rcu_init`), the flusher
  * (`writeback_init`) and khugepaged (`thp_init`), then register bkl/calls,
- * bkl/profile, bkl/long, bkl/tick, cputime_test and, with the checker,
- * lockdep/inject in debugfs; a failure there is logged. */
+ * bkl/profile, bkl/long, bkl/tick, cputime_test, the scheduler's files
+ * (`sched_debugfs_init`) and, with the checker, lockdep/inject in debugfs;
+ * a failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4704,6 +4709,7 @@ static void start_processors(void)
     if (debugfs_create_text("cputime_test", 0600u, &cputime_test_ops, NULL) != 0) {
         klog(KLOG_WARN, "cputime", "debugfs: cputime_test not registered");
     }
+    sched_debugfs_init();
 #ifdef RACH2_LOCKDEP
     if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {
         klog(KLOG_WARN, "lockdep", "debugfs: inject not registered");

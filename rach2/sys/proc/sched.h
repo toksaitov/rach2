@@ -48,12 +48,11 @@ void sched_disable(void);
 int sched_is_enabled(void);
 
 /**
- * Switch to the highest-priority eligible real-time thread, or the next
- * ordinary thread from this processor's ready-list head. Ordinary selection
- * prefers a wait-queue wake at most every second time. With no candidate, it
- * continues the current process if that can run; otherwise it tries other
- * queues by their ready counts, busiest first, and takes an eligible entry
- * or switches to its idle task.
+ * Switch to the highest-priority eligible real-time thread, or, ahead of it
+ * while the fair server's turn lasts and without one, the ordinary thread
+ * EEVDF picks on this processor's fair queue (fair.h). With no candidate,
+ * it continues the current process if that can run; otherwise it pulls an
+ * ordinary thread from a busier processor or switches to its idle task.
  *
  * The current process leaves when it is not RUNNING; when its affinity no
  * longer has this processor, made ready on a processor it has; and when a
@@ -67,27 +66,23 @@ int sched_is_enabled(void);
 void schedule(void);
 
 /**
- * Make `p`, blocked or stopped, ready to run, on the queue of the processor
- * Linux's choice for a wake gives it (`sched_wake_choose`): of the waker's
- * processor and the one `p` last ran on, the target, by which is idle and
- * shares the other's last-level cache, or by their loads; then the target
- * when it is idle, else the last one when it shares the target's cache and
- * is idle, else an idle processor sharing the target's cache, one of a
- * core whose SMT siblings are all idle first, else the target. A processor
- * its affinity does not have gives way to an idle one it has, else to the
- * first it has; a process still current on its processor, woken before its
- * switch away, stays there. A real-time `p` that does not outrank the
+ * Make `p`, new, blocked or stopped, ready to run: an ordinary thread on the
+ * fair queue of the processor Linux's select_task_rq_fair gives it
+ * (`fair_select_cpu`), a new one placed as wake_up_new_task places it, a
+ * real-time one on the list of the processor it last ran on, or of one its
+ * affinity has. A process still current on its processor, woken before its
+ * switch away, stays there, and one whose dequeue EEVDF delayed is
+ * requeued where it is. A real-time `p` that does not outrank the
  * real-time thread running there, or that thread may run nowhere else, goes
  * instead to the processor it may run on whose highest real-time priority,
  * of its current thread and its queue, is lowest, when it outranks every
  * thread there. Its processor is kicked so that it selects now rather than
  * at its tick when it is idle, halted in place with `p` current, or runs a
- * thread `p` outranks, or runs an ordinary thread that ordinary `p` should
- * run before by Linux's check_preempt_wakeup_fair, which is every one but
- * a SCHED_BATCH or SCHED_IDLE `p`, or a SCHED_IDLE `p` over a SCHED_IDLE
- * thread (`sched_wake_preempt`). The thread there has its `need_resched`
- * set, once, so that the interrupt switches it in user mode and a call on
- * that processor switches at its exit; a kernel thread is sent no kick and
+ * thread `p` outranks, or runs an ordinary thread that EEVDF would preempt
+ * for ordinary `p` (`fair_wake_preempt`). The thread there has its
+ * `need_resched` set, once, so that the interrupt switches it in user mode
+ * and a call on that processor switches at its exit; a kernel thread is
+ * sent no kick and
  * switches at its next sleep or service point. An idle target records its
  * reschedule request for the idle loop, which checks it before halting.
  * The state is not tested again: this is for a new thread, and for a
@@ -188,28 +183,13 @@ void sched_set_affinity(process_t *p, uint64_t mask);
 
 /**
  * The body of each processor's idle task, which does not return: switch to
- * whatever its queue, or the busiest other queue, has to run, and with
- * nothing, wait for an interrupt with the big lock let go
+ * whatever its queues have to run, or a busier processor's fair queue
+ * gives, and with nothing, wait for an interrupt with the big lock let go
  * (`idle_wait_irq_off`), which stops the tick until the next event.
  * Entered holding no big lock, which the idle task never holds but to drain
  * the loopback backlog.
  */
 void sched_idle_loop(void);
-
-/**
- * Kick a processor whose tick is stopped in its idle wait
- * (`percpu.tick_stopped`) when this processor's queue holds a thread it may
- * take, so that it steals it (`sched_steal`) at once, as Linux's busy
- * processor kicks an idle one into NO_HZ balancing (nohz_balancer_kick,
- * kernel/sched/fair.c:12426-12540): a processor that ticked took such a
- * thread at its next tick. The kick claims the idle task's request
- * (`need_resched`) under the run queues' lock, as a wake's does, and skips
- * a processor whose request is already set, so that two balancers that
- * choose one idle processor before its selection kick it once, as Linux's
- * kick_ilb sends nothing when the flags it would set are set
- * (fair.c:12403-12404). From the tick, with interrupts off.
- */
-void sched_idle_balance(void);
 
 /**
  * Mark this processor's idle task awake when an interrupt ends its halt:
@@ -276,19 +256,92 @@ void sched_wait_off_cpu(const process_t *p);
  */
 void sched_preempt(void);
 
-/** From the end of an interrupt, the tick's or a device's: switch this
- * processor as `sched_preempt` does, once its current thread has run its
- * slice since it was switched in, or sooner when a queued real-time thread
- * that selection here could take, from any processor's queue, outranks it,
- * or, under an ordinary current thread, a woken thread waits on this
- * processor's queue. Called with interrupts off. */
+/** From the end of the periodic tick's handler alone, with interrupts off:
+ * count the tick against the current thread's slice and ask for a switch
+ * (`need_resched`), which `sched_irq_exit` takes, when the slice has run
+ * out or a queued thread should run first (sched.c). */
 void sched_tick(void);
 
-/* The independent slice interval, in nanoseconds. */
-#define SCHED_INTERVAL_NS 1000000u
+/** From the end of a device's interrupt, or of the timer's interrupt
+ * between ticks, with interrupts off: switch this processor as
+ * `sched_preempt` does when a wake or a priority change asked it to
+ * (`need_resched`). */
+void sched_irq_exit(void);
 
-/** Arm a slice for an eligible queued competitor, or request selection
- * once its time has passed. Interrupts are off; no scheduler lock is held. */
+/* Linux's RR_TIMESLICE, the default slice of a SCHED_RR thread. */
+#define SCHED_RR_TIMESLICE_MS 100
+
+/** /proc/sys/kernel/sched_rr_timeslice_ms: the value read, and a write,
+ * of which one at or below 0 restores the default. */
+int sched_rr_timeslice_ms(void);
+void sched_set_rr_timeslice_ms(int ms);
+
+/** A SCHED_RR thread's slice in nanoseconds, a whole number of ticks. */
+uint64_t sched_rr_slice_ns(void);
+
+/** The slice sched_rr_get_interval reports for `p`, in nanoseconds. Takes
+ * the run queues' lock. */
+uint64_t sched_rr_interval_ns(const process_t *p);
+
+/** The slice sched_getattr reports for the ordinary thread `p`, in
+ * nanoseconds: its entity's, as Linux's get_params reads se.slice, which
+ * the base slice renews at each deadline and placement unless the thread
+ * asked for its own; before the thread has an entity, the slice it asked
+ * for or the base slice. Takes the run queues' lock. */
+uint64_t sched_slice_ns(const process_t *p);
+
+/*
+ * What /sys/kernel/debug/sched/debug shows of processor `c`'s run queue, the
+ * members of Linux's struct rq it prints (kernel/sched/debug.c:950-990):
+ * the threads queued or running there, the idle task left out; the
+ * switches; the threads in an uninterruptible sleep that last ran there;
+ * the running thread's pid, 0 for the idle task; the monotonic and task
+ * clocks at its last update, in ns; the real-time threads queued or
+ * running there; and the counts Linux keeps while kernel.sched_schedstats
+ * is 1: sched_yield calls, selections, selections of the idle task, and
+ * wakes made on the processor, `ttwu_local` those that placed the thread
+ * on it.
+ */
+struct sched_rq_debug {
+    unsigned int nr_running;
+    uint64_t nr_switches;
+    unsigned int nr_uninterruptible;
+    int curr_pid;
+    uint64_t clock, clock_task;
+    unsigned int rt_nr_running;
+    unsigned int yld_count, sched_count, sched_goidle, ttwu_count, ttwu_local;
+};
+
+/** Fill `out` for processor `c` under the run queues' lock, which the
+ * caller holds (`sched_lock_take`). */
+void sched_rq_debug(int c, struct sched_rq_debug *out);
+
+/** Count a sched_yield call in the caller's processor's `yld_count`, as
+ * Linux's do_sched_yield does, while kernel.sched_schedstats is 1. */
+void sched_note_yield(void);
+
+/** /sys/kernel/debug/sched/fair_server/cpuN/runtime and period: processor
+ * `c`'s fair server's budget and period in nanoseconds, and a write of
+ * both, -EINVAL unless the runtime is at most the period and the period is
+ * from 100 us to 2^22 us, -EBUSY for a processor not online or when the
+ * servers would take more than the real-time runtime's share of the online
+ * processors. */
+void sched_fair_server(int c, uint64_t *runtime, uint64_t *period);
+int sched_set_fair_server(int c, uint64_t runtime, uint64_t period);
+
+/** /proc/sys/kernel/sched_rt_period_us and sched_rt_runtime_us: the values
+ * read, and a write of both, -EINVAL unless the period is at least 1 and
+ * the runtime is -1 or between 0 and the period, -EBUSY when the runtime's
+ * share of the online processors would be less than the fair servers'.
+ * Nothing is throttled by them; the fair server keeps ordinary threads
+ * their share. */
+void sched_rt_bandwidth(int *period_us, int *runtime_us);
+int sched_set_rt_bandwidth(int period_us, int runtime_us);
+
+/** Arm the slice event at the next moment that changes what this processor
+ * should run, the current ordinary thread's deadline or the fair server's
+ * turn, or request selection once it has passed. Interrupts are off; no
+ * scheduler lock is held. */
 void sched_slice_rearm(void);
 
 /** Take the switch an interrupt asked for (`need_resched`), if one did;
@@ -329,6 +382,16 @@ void sched_adopt(process_t *p);
  * queued thread's wait again: a suspend to idle's bounds, as Linux's frozen
  * tasks leave their run queues and their sched_info stops. */
 void sched_hold_waits(int hold);
+
+/** Give `child`, a thread fork or clone has just made from `parent` and
+ * placed on `child->cpu`, its scheduling group and its fair entity, once
+ * the fork can no longer fail and before the child is made ready. The big
+ * lock is held; sched_lock is not. */
+void sched_fork(process_t *child, process_t *parent);
+
+/** Give the ordinary thread `p` the slice `ns` sched_setattr asked for, or
+ * the base slice for 0 (`fair_set_slice`). */
+void sched_set_slice(process_t *p, uint64_t ns);
 
 /** Read selection attempts (index 0) or ready entries examined (1), modulo
  * 2^32. Other indices return zero. The caller holds the big lock. */
@@ -447,9 +510,10 @@ void sched_account_start(void);
 
 /** Record that this processor, now online, shares its last-level cache
  * with the processors of `shared` and its core with those of `core`, its
- * SMT siblings, a bit each, and they with it, for the placement of a wake
- * (`sched_wake_choose`). Called by each application processor as it comes
- * online; the boot processor learns its peers from theirs. */
+ * SMT siblings, a bit each, and they with it, and scale the fair class's
+ * base slice to the processors online. Called by each application
+ * processor as it comes online; the boot processor learns its peers from
+ * theirs. */
 void sched_cache_join(uint64_t shared, uint64_t core);
 
 /** Fold the processes running or ready to run into the load averages every

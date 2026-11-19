@@ -36,7 +36,9 @@
  * drop the frames and the charge, while a pin charged to no one stays;
  * a pin whose holder keeps it past the end, of RAM or device pages,
  * loses only its charge, and holds each shared mapping of a disk file its
- * range meets until unpin.
+ * range meets until unpin; a pin that follows the address space holds a
+ * page from its refill to the next change of it, which the holder's
+ * forget sees first, and stays live through an unmap.
  * Device pages accepted by VFIO carry no RAM charge; mixed ranges,
  * protection, revocation and cleanup preserve that distinction.
  * mlock's regions split and merge, count in VmLck, lose their lock in a
@@ -181,9 +183,25 @@ static void on_release(struct pin *pin, void *owner)
 }
 
 static uint32_t holder_count;
-static const struct pin_holder holder = {on_release, &holder_count, 0};
+static const struct pin_holder holder = {on_release, &holder_count, 0, NULL};
 /* VFIO's holder, whose pins outlive the end of the address space. */
-static const struct pin_holder keeper = {on_release, &holder_count, PIN_KEEP_PAST_END};
+static const struct pin_holder keeper = {on_release, &holder_count, PIN_KEEP_PAST_END, NULL};
+
+/* The calls of the follower's `forget`, and the frame `pin_phys` gave for
+ * page 0 of its pin when the last came. */
+static uint32_t forgets;
+static uintptr_t forget_saw;
+
+/** Count the call, and read what `pin_phys` gives for page 0 now. */
+static void on_forget(struct pin *pin, void *owner)
+{
+    (void)owner;
+    forgets++;
+    forget_saw = pin_phys(pin, 0);
+}
+
+/* vhost-net's holder, whose pins follow the address space. */
+static const struct pin_holder follower = {on_release, &holder_count, 0, on_forget};
 
 /** Make A unprivileged with RLIMIT_MEMLOCK `pages` pages, or privileged
  * with no limit when `pages` is 0xFFFFFFFF. */
@@ -254,6 +272,78 @@ static void pin_rows(void)
     unpin(p);
     memlock(0xFFFFFFFFu);
     check(mm_a.pinned == 3 && holder_count == 0, "the refusals left the charge and told no one");
+}
+
+/* The follower's pin, and the frame its first page had. */
+static struct pin *p_follow;
+static uintptr_t f_follow;
+
+/**
+ * A pin that follows the address space (PIN_FOLLOW) brings nothing in and
+ * is charged nothing, and a refill pins the frame the page has. One without
+ * a `forget`, or with PIN_LONGTERM, is refused.
+ */
+static void follow_rows(void)
+{
+    struct pin *p;
+    uintptr_t f0 = 0;
+
+    check(vm_insert(&mm_a.vm, VA + 20 * P, VA + 23 * P, RW, VM_ANON) == 0,
+          "the follower's region is made");
+    check(pin_user(&mm_a, VA + 20 * P, 3 * P, PIN_WRITE | PIN_FOLLOW, &holder, &p) == -EINVAL,
+          "a follower without a forget is refused");
+    check(pin_user(&mm_a, VA + 20 * P, 3 * P, PIN_WRITE | PIN_FOLLOW | PIN_LONGTERM, &follower,
+                   &p) == -EINVAL,
+          "a long-term follower is refused");
+    check(pin_user(&mm_a, VA + 20 * P, 3 * P, PIN_WRITE | PIN_FOLLOW, &follower, &p) == 0 &&
+              pin_live(p) && pin_count(p) == 3 && pin_phys(p, 0) == 0 && mm_a.pinned == 3 &&
+              pte_of(&dir_a, VA + 20 * P) == 0,
+          "a follower brings nothing in and is charged nothing");
+    check(pin_refill(p, 0) == 0 && (f0 = pin_phys(p, 0)) != 0 &&
+              PTE_ADDR(pte_of(&dir_a, VA + 20 * P)) == f0 &&
+              (pte_of(&dir_a, VA + 20 * P) & PTE_W) && frame_word(f0) == 1 + FRAME_PIN_BIAS,
+          "a refill brings the page in for a write and pins its frame");
+    check(pin_refill(p, 0) == 0 && pin_phys(p, 0) == f0, "a refill of a page held changes nothing");
+    check(pin_refill(p, 3) == -EFAULT, "a refill past the end is refused");
+    p_follow = p;
+    f_follow = f0;
+}
+
+/**
+ * A page `madvise` drops, a change of protection and an unmap each let the
+ * follower's page go after the holder's `forget`, which no longer sees its
+ * frame, and the pin stays live; a refill then takes the frame the page
+ * has, and of no region is refused.
+ */
+static void follow_change_rows(void)
+{
+    struct pin *p = p_follow;
+    uintptr_t f1 = 0;
+
+    forgets = 0;
+    mmn_notify(&mm_a, MMN_DROP, VA + 20 * P, VA + 21 * P);
+    unmap_user_range(&dir_a, VA + 20 * P, VA + 21 * P);
+    check(forgets == 1 && forget_saw == 0 && pin_phys(p, 0) == 0 && pin_live(p) &&
+              frame_word(f_follow) == 0 && released == 0,
+          "a dropped page is let go after the forget, which no longer sees it");
+    check(pin_refill(p, 0) == 0 && (f1 = pin_phys(p, 0)) != 0 &&
+              PTE_ADDR(pte_of(&dir_a, VA + 20 * P)) == f1,
+          "a refill takes the page the next touch made");
+    mmn_notify(&mm_a, MMN_DROP, VA + 21 * P, VA + 22 * P);
+    check(forgets == 1 && pin_phys(p, 0) == f1, "a change of a page not held calls no forget");
+    mmn_notify(&mm_a, MMN_PROTECT, VA + 20 * P, VA + 23 * P);
+    check(forgets == 2 && pin_phys(p, 0) == 0 && frame_word(f1) == 1,
+          "a change of protection lets the page go and leaves its mapping");
+    check(pin_refill(p, 0) == 0 && pin_phys(p, 0) == f1, "a refill takes the same frame again");
+    vm_remove(&mm_a.vm, VA + 20 * P, VA + 23 * P);
+    mmn_notify(&mm_a, MMN_UNMAP, VA + 20 * P, VA + 23 * P);
+    unmap_user_range(&dir_a, VA + 20 * P, VA + 23 * P);
+    check(forgets == 3 && pin_phys(p, 0) == 0 && pin_live(p) && released == 0 &&
+              frame_word(f1) == 0,
+          "an unmap lets the page go and leaves the pin live");
+    check(pin_refill(p, 0) == -EFAULT && pin_phys(p, 0) == 0, "a refill of no region is refused");
+    unpin(p);
+    check(mm_a.pinned == 3 && holder_count == 0, "the follower left the charge and told no one");
 }
 
 /** A pin of an object's frames refuses a frame the allocator does not count
@@ -912,6 +1002,8 @@ int main(void)
 {
     model_start(NAME);
     pin_rows();
+    follow_rows();
+    follow_change_rows();
     frame_rows();
     ram_frame_rows();
     ram_run_rows();

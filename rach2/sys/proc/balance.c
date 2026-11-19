@@ -77,6 +77,14 @@ static struct {
 static const struct balance_ops *bops;
 static struct balance_rq brq[NR_CPUS];
 
+void balance_rq_debug(int cpu, uint64_t *next_balance, uint64_t *avg_idle,
+                      uint64_t *max_idle_balance_cost)
+{
+    *next_balance = brq[cpu].next_balance;
+    *avg_idle = brq[cpu].avg_idle;
+    *max_idle_balance_cost = brq[cpu].max_idle_balance_cost;
+}
+
 /* The masks each processor recorded as it started, itself included. */
 static uint64_t smt_mask[NR_CPUS];
 static uint64_t llc_mask[NR_CPUS];

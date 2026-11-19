@@ -4,12 +4,55 @@
 # kernel chose, then the token KVMGUEST OK, and powers the
 # machine off; a QEMU run with -no-reboot also ends if the power-off fails,
 # since the kernel's panic at init's end restarts the machine.
-/bin/busybox mkdir -p /proc /sys
-/bin/busybox mount -t proc proc /proc
-/bin/busybox mount -t sysfs sysfs /sys
-echo "kvmguest: kernel: $(/bin/busybox uname -r)"
-echo "kvmguest: cpus: $(/bin/busybox grep -c '^processor' /proc/cpuinfo)"
-echo "kvmguest: flags:$(/bin/busybox sed -n 's/^flags[^:]*://p' /proc/cpuinfo | /bin/busybox head -n 1)"
-echo "kvmguest: clocksource: $(/bin/busybox cat /sys/devices/system/clocksource/clocksource0/current_clocksource)"
+#
+# With guestnet=ADDRESS:PEER on the kernel's command line it first loads
+# virtio_net, gives eth0 ADDRESS/24 and pings PEER ten times with small
+# frames and ten times with large ones, then prints GUESTNET OK when all
+# twenty were answered, or GUESTNET FAIL and powers off without KVMGUEST OK.
+bb=/bin/busybox
+$bb mkdir -p /proc /sys
+$bb mount -t proc proc /proc
+$bb mount -t sysfs sysfs /sys
+echo "kvmguest: kernel: $($bb uname -r)"
+echo "kvmguest: cpus: $($bb grep -c '^processor' /proc/cpuinfo)"
+echo "kvmguest: flags:$($bb sed -n 's/^flags[^:]*://p' /proc/cpuinfo | $bb head -n 1)"
+echo "kvmguest: clocksource: $($bb cat /sys/devices/system/clocksource/clocksource0/current_clocksource)"
+
+# guestnet ADDRESS PEER: bring up eth0 and ping PEER; 0 when each batch of
+# ten has all ten answered, since BusyBox's ping succeeds on one reply. The
+# host may give its end its address after the guest starts, so the first
+# ping is tried for 30 s.
+guestnet()
+{
+    for m in failover net_failover virtio_net; do
+        $bb insmod /lib/modules/$m.ko || return 1
+    done
+    $bb ip link set lo up
+    $bb ip addr add "$1/24" dev eth0 || return 1
+    $bb ip link set eth0 up || return 1
+    n=0
+    until $bb ping -c 1 -W 1 "$2" > /dev/null; do
+        n=$((n + 1))
+        [ $n -lt 30 ] || return 1
+    done
+    for size in 56 1400; do
+        out=$($bb ping -c 10 -i 0.2 -s $size "$2") || return 1
+        echo "$out"
+        case $out in
+            *" 10 packets received,"*) ;;
+            *) return 1 ;;
+        esac
+    done
+    echo "guestnet: eth0: $($bb cat /sys/class/net/eth0/statistics/rx_packets) received, $($bb cat /sys/class/net/eth0/statistics/tx_packets) sent"
+}
+net=$($bb sed -n 's/.*guestnet=\([^ ]*\).*/\1/p' /proc/cmdline)
+if [ -n "$net" ]; then
+    if guestnet "${net%%:*}" "${net#*:}"; then
+        echo "GUESTNET OK"
+    else
+        echo "GUESTNET FAIL"
+        $bb poweroff -f
+    fi
+fi
 echo "KVMGUEST OK"
-/bin/busybox poweroff -f
+$bb poweroff -f

@@ -128,6 +128,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/pelt.c \
     sys/proc/balance.c \
     sys/proc/autogroup.c \
+    sys/proc/sched_debug.c \
     sys/proc/waketime.c \
     sys/proc/smp.c \
     sys/proc/suspend.c \
@@ -214,6 +215,7 @@ C_SRC_SHARED = kernel.c \
     sys/network/driver/rtl8139.c \
     sys/network/driver/rtl8168.c \
     sys/network/driver/tap.c \
+    sys/network/driver/vhost_net.c \
     sys/network/driver/virtio_net.c \
     sys/network/driver/ath9k/io.c \
     sys/network/driver/ath9k/chips.c \
