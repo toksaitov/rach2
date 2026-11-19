@@ -76,11 +76,10 @@ typedef char vdso_data_fits
  * kernel's map, NULL until it is whole, the page's counts in a tick its
  * rate was made for, the rate measured, the monotonic and raw clocks at
  * the page's base in nanoseconds whole, the monotonic clock at the tick's
- * last edge, which the coarse clocks read, never past the base, and real
- * time's offset over the monotonic clock in nanoseconds, which may be
- * negative. The page's fields
- * and these change under `vclock_lock`, the page's between the increments
- * of its sequence count.
+ * last edge, which the coarse clocks read even while the fine clock
+ * is stopped, and real time's offset over the monotonic clock. These and
+ * the page's fields change under `vclock_lock`, the page's fields between
+ * increments of its sequence count.
  *
  * The page's count is the TSC in VCLOCK_TSC and KVM's clock in
  * nanoseconds in VCLOCK_PVCLOCK, the TSC converted through a clock page,
@@ -102,7 +101,8 @@ static uint32_t mult_measured;
 static uint64_t mono_base_ns;
 static uint64_t raw_base_ns;
 static uint64_t coarse_base_ns;
-static int64_t wall_ns;
+static int64_t wall_sec;
+static uint32_t wall_nsec;
 static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 
 /*
@@ -247,25 +247,37 @@ static uint64_t vclock_raw_at(uint64_t cycles)
     return raw_base_ns + vclock_scale(vclock_since(cycles), data->raw_mult, data->shift);
 }
 
-/** Write the page's times for the bases `mono_base_ns` and `raw_base_ns`,
- * and real time, the first plus `wall_ns`, in seconds and nanoseconds, and
- * the coarse clocks' for `coarse_base_ns`, real time's plus `wall_ns`
- * likewise; and real time's rate, the monotonic clock's. */
+/** Add the wall offset to normalized monotonic time under `vclock_lock`. */
+static void vclock_real_time(int64_t sec, uint64_t nsec, int64_t *real_sec, uint64_t *real_nsec)
+{
+    nsec += wall_nsec;
+    *real_sec = sec + wall_sec;
+    if (nsec >= NSEC_PER_SEC) {
+        (*real_sec)++;
+        nsec -= NSEC_PER_SEC;
+    }
+    *real_nsec = nsec;
+}
+
+/** Write the coarse clocks from the tick's edge, in every clock mode.
+ * Hold `vclock_lock`; keep the sequence count odd after publication. */
+static void vclock_write_coarse(struct vdso_data *page)
+{
+    page->coarse_mono_sec = (int64_t)(coarse_base_ns / NSEC_PER_SEC);
+    page->coarse_mono_nsec = coarse_base_ns % NSEC_PER_SEC;
+    vclock_real_time(page->coarse_mono_sec, page->coarse_mono_nsec, &page->coarse_real_sec,
+                     &page->coarse_real_nsec);
+}
+
+/** Write the fine clocks for the bases `mono_base_ns` and `raw_base_ns`,
+ * with the real clock at the monotonic clock's rate. */
 static void vclock_write_times(void)
 {
-    uint64_t real_ns = mono_base_ns + (uint64_t)wall_ns;
-    uint64_t coarse_real_ns = coarse_base_ns + (uint64_t)wall_ns;
-
     data->mono_sec = (int64_t)(mono_base_ns / NSEC_PER_SEC);
     data->mono_nsec = mono_base_ns % NSEC_PER_SEC;
-    data->real_sec = (int64_t)(real_ns / NSEC_PER_SEC);
-    data->real_nsec = real_ns % NSEC_PER_SEC;
+    vclock_real_time(data->mono_sec, data->mono_nsec, &data->real_sec, &data->real_nsec);
     data->raw_sec = (int64_t)(raw_base_ns / NSEC_PER_SEC);
     data->raw_nsec = raw_base_ns % NSEC_PER_SEC;
-    data->coarse_mono_sec = (int64_t)(coarse_base_ns / NSEC_PER_SEC);
-    data->coarse_mono_nsec = coarse_base_ns % NSEC_PER_SEC;
-    data->coarse_real_sec = (int64_t)(coarse_real_ns / NSEC_PER_SEC);
-    data->coarse_real_nsec = coarse_real_ns % NSEC_PER_SEC;
     data->real_mult = data->mult;
 }
 
@@ -347,8 +359,8 @@ static uint64_t vclock_count(const struct vclock_sample *s)
 /**
  * Put the page's base at the count `cycles`, with the monotonic and raw
  * clocks there `mono` and `raw`: the only writer of the base's count and
- * the clocks' times there, which the page's times, real time's and the
- * coarse clocks' among them, follow (`vclock_write_times`). With the
+ * the clocks' times there, which the page's fine clocks follow
+ * (`vclock_write_times`). With the
  * page's count odd, under `vclock_lock`.
  */
 static void vclock_anchor(uint64_t cycles, uint64_t mono, uint64_t raw)
@@ -417,7 +429,8 @@ static void vclock_rate(uint32_t per_tick, uint32_t *mult, uint32_t *shift)
 /**
  * Build the data page, from the kernel's window, so that the kernel
  * reaches it at a fixed address, and publish it in `data` only once it is
- * whole, its count even and its mode VCLOCK_NONE, as Linux clears the clock
+ * whole, with the coarse clocks initialized, its count even and its mode
+ * VCLOCK_NONE, as Linux clears the clock
  * pages in kvmclock_init_mem before kvmclock_setup_percpu publishes one
  * (arch/x86/kernel/kvmclock.c:202-239, 264-285): a timer interrupt reads
  * the page through `data` (`vclock_read`), and the frame comes uncleared,
@@ -427,6 +440,8 @@ static void vclock_rate(uint32_t per_tick, uint32_t *mult, uint32_t *shift)
 static int vclock_page(void)
 {
     struct vdso_data *page = (struct vdso_data *)alloc_kernel_frame();
+    uint64_t edge_ns;
+    uint32_t flags;
 
     if (!page) {
         return -1;
@@ -434,11 +449,16 @@ static int vclock_page(void)
     k_memset(page, 0, PAGE_SIZE);
     page->coarse_ns = TICK_NS;
     page->getcpu = (uint32_t)tsc_has_rdtscp();
+    data_phys = virt_to_phys(page);
+    edge_ns = rtc_tick_coarse_ns();
+    flags = spin_lock_irqsave(&vclock_lock);
+    coarse_base_ns = edge_ns;
+    vclock_write_coarse(page);
     page->tz_minuteswest = tz_minuteswest;
     page->tz_dsttime = tz_dsttime;
-    data_phys = virt_to_phys(page);
     __asm__ __volatile__("" : : : "memory");
     data = page;
+    spin_unlock_irqrestore(&vclock_lock, flags);
     return 0;
 }
 
@@ -544,12 +564,16 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     pv_counted = kvm;
     per_tick_used = vclock_counts_per_tick();
     vclock_rate(per_tick_used, &mult_measured, &data->shift);
+    if (mono < coarse_base_ns) {
+        mono = coarse_base_ns;
+    }
     vclock_anchor(cycles, mono > *mono_ns ? mono : *mono_ns, raw > *raw_ns ? raw : *raw_ns);
     coarse_base_ns = mono_base_ns;
     data->mult = (uint32_t)rtc_slewed(mult_measured, rate);
     data->raw_mult = mult_measured;
     data->res_ns = vclock_resolution_ns();
     vclock_write_times();
+    vclock_write_coarse(data);
     generation++;
     vclock_write_end();
     running = 1;
@@ -571,16 +595,17 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
 }
 
 /**
- * Stop the clock, so that the vDSO makes the system call and the kernel's
- * clock calls read the tick's clocks, as Linux's vDSO falls back once
+ * Stop the fine clock, so that fine readings fall back to the tick's
+ * clocks, as Linux's vDSO falls back once
  * KVM's clock page withdraws PVCLOCK_TSC_STABLE_BIT (vread_pvclock,
  * arch/x86/include/asm/vdso/gettimeofday.h:219-229). The page's count goes
  * odd first, and the clock's last times are read at a moment after it,
  * past every reading a reader has finished, the base advanced to it by
  * KVM's clock (`vclock_advance`), and go into `*mono_ns` and `*raw_ns`
  * while readers still wait, so that clock.c's
- * floors hold the tick's clocks after the stop at or past them. Given to
- * `rtc_vclock_change`.
+ * floors hold the tick's clocks after the stop at or past them. Coarse
+ * readings take the new monotonic floor until the tick passes it.
+ * Given to `rtc_vclock_change`.
  */
 static void vclock_stop(uint64_t *mono_ns, uint64_t *raw_ns)
 {
@@ -596,6 +621,8 @@ static void vclock_stop(uint64_t *mono_ns, uint64_t *raw_ns)
     if (raw_base_ns > *raw_ns) {
         *raw_ns = raw_base_ns;
     }
+    coarse_base_ns = *mono_ns;
+    vclock_write_coarse(data);
     vclock_write_end();
     running = 0;
     kvm_stopped = 1;
@@ -1020,15 +1047,19 @@ void vclock_tick_edge(uint64_t edge_ns)
     uint64_t clock_ns;
 
     spin_lock(&vclock_lock);
-    if (running && edge_ns > coarse_base_ns) {
-        vclock_sample(&s);
-        clock_ns = vclock_at(vclock_count(&s));
+    if (data && edge_ns > coarse_base_ns) {
+        clock_ns = edge_ns;
+        if (running) {
+            vclock_sample(&s);
+            clock_ns = vclock_at(vclock_count(&s));
+        }
         vclock_write_begin();
         if (edge_ns > clock_ns) {
             vclock_advance(edge_ns - clock_ns, 0);
+            vclock_write_times();
         }
         coarse_base_ns = edge_ns;
-        vclock_write_times();
+        vclock_write_coarse(data);
         vclock_write_end();
     }
     spin_unlock(&vclock_lock);
@@ -1068,9 +1099,9 @@ static void vclock_fields(int which, int coarse, int64_t *sec, uint64_t *nsec, u
 
 /**
  * A reading of the clock `which` as the vDSO makes it: Linux's do_hres,
- * and do_coarse with `coarse`, each pass checking the mode as do_hres does
- * (lib/vdso/gettimeofday.c:130-179, 218-242), and in VCLOCK_PVCLOCK the
- * count read as vread_pvclock reads it, the TSC converted through KVM's
+ * and do_coarse with `coarse`, which reads the base even in VCLOCK_NONE
+ * (lib/vdso/gettimeofday.c:130-179, 218-242). Fine readings in
+ * VCLOCK_PVCLOCK read the count as vread_pvclock does, through KVM's
  * page for the boot processor while that page has its stable bit
  * (`kvmclock_boot_read`; arch/x86/include/asm/vdso/gettimeofday.h:
  * 197-232). The base's seconds go into `*sec`, the nanoseconds since them,
@@ -1091,7 +1122,7 @@ static int vclock_pass(int which, int coarse, int64_t *sec, uint64_t *ns, uint64
         }
         __asm__ __volatile__("" : : : "memory");
         mode = data->mode;
-        if (mode == VCLOCK_NONE) {
+        if (!coarse && mode == VCLOCK_NONE) {
             return VREAD_STOPPED;
         }
         vclock_fields(which, coarse, sec, ns, &mult);
@@ -1191,21 +1222,22 @@ int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
     return 1;
 }
 
-/** The bases go on to the moment of the change (`vclock_advance`), by
- * KVM's clock where its pages are kept, so that a change made once KVM has
- * withdrawn its stable bit moves no clock by a TSC that may not agree with
- * the base's. */
+/** Update the wall offset, with `nsec` in [0, 10^9), and publish coarse
+ * real time in every mode. The fine bases advance by KVM's clock where its
+ * pages are kept, including after the stable bit is withdrawn. */
 void vclock_set_wall(int64_t sec, int32_t nsec)
 {
     uint32_t flags = spin_lock_irqsave(&vclock_lock);
 
-    if (running) {
+    wall_sec = sec;
+    wall_nsec = (uint32_t)nsec;
+    if (data) {
         vclock_write_begin();
-        vclock_advance(0, 0);
-    }
-    wall_ns = sec * (int64_t)NSEC_PER_SEC + nsec;
-    if (running) {
-        vclock_write_times();
+        if (running) {
+            vclock_advance(0, 0);
+            vclock_write_times();
+        }
+        vclock_write_coarse(data);
         vclock_write_end();
     }
     spin_unlock_irqrestore(&vclock_lock, flags);

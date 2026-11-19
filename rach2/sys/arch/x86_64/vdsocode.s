@@ -6,8 +6,9 @@
 # below the image, and KVM's clock page for the boot processor, one page
 # below that, through %rip, so it runs wherever the image is placed. Where
 # the data page says the clock does not run from the TSC, where KVM's page
-# has withdrawn its stable bit, or for a clock or an argument it does not
-# serve, each function makes the system call it stands for and returns
+# has withdrawn its stable bit, fine time takes the system call. Coarse
+# time and time() read the data page in every mode. For a clock or an
+# argument it does not serve, the vDSO makes the system call and returns
 # what the kernel returned, -errno for an error, as Linux's vDSO does; the
 # C library turns that into errno.
 
@@ -52,7 +53,6 @@
 .set VCLOCK_NONE,        0
 .set VCLOCK_PVCLOCK,     2
 .set SYS_gettimeofday,   96
-.set SYS_time,           201
 .set SYS_clock_gettime,  228
 .set SYS_clock_getres,   229
 .set SYS_getcpu,         309
@@ -164,26 +164,20 @@ vdso_fine:
     jmp 6b
 
 # A coarse clock, the seconds at the offset in %edi and the nanoseconds 8
-# bytes after them, the time at the tick's last edge, without the TSC: %rax
-# and %rdx and the carry as `vdso_fine` gives them. Changes %r11.
+# bytes after them, the time at the tick's last edge, in %rax and %rdx.
+# The page's address is in %r8. Changes %r11.
 vdso_coarse:
     movl D_SEQ(%r8), %r11d
     testl $1, %r11d
     jnz 1f
-    cmpl $VCLOCK_NONE, D_MODE(%r8)
-    je 2f
     movq (%r8,%rdi), %rax
     movq 8(%r8,%rdi), %rdx
     cmpl D_SEQ(%r8), %r11d
     jne vdso_coarse
-    clc
     ret
 1:
     pause
     jmp vdso_coarse
-2:
-    stc
-    ret
 
 # int clock_gettime(clockid_t clk, struct timespec *ts)
 #
@@ -194,8 +188,6 @@ vdso_coarse:
 .globl vdso_clock_gettime
 vdso_clock_gettime:
     leaq vdso_text_start-VDSO_BACK(%rip), %r8
-    cmpl $VCLOCK_NONE, D_MODE(%r8)
-    je 9f
     testl %edi, %edi
     je 1f
     cmpl $1, %edi
@@ -230,11 +222,8 @@ vdso_clock_gettime:
 4:
     movl $D_COARSE_MONO_SEC, %eax
 8:
-    pushq %rdi
     movl %eax, %edi
     call vdso_coarse
-    popq %rdi
-    jc 9f
 5:
     movq %rax, (%rsi)
     movq %rdx, 8(%rsi)
@@ -295,27 +284,17 @@ vdso_gettimeofday_end:
 
 # time_t time(time_t *t)
 #
-# Real time's seconds, as the kernel's time reads them, also stored at t
-# when it is not null.
+# Real time's seconds at the last tick, also stored at t when it is not null.
 .globl vdso_time
 vdso_time:
     leaq vdso_text_start-VDSO_BACK(%rip), %r8
-    cmpl $VCLOCK_NONE, D_MODE(%r8)
-    je 9f
     movq %rdi, %rsi
-    movl $D_REAL_SEC, %edi
-    call vdso_fine
-    jc 8f
+    movl $D_COARSE_REAL_SEC, %edi
+    call vdso_coarse
     testq %rsi, %rsi
     je 1f
     movq %rax, (%rsi)
 1:
-    ret
-8:
-    movq %rsi, %rdi
-9:
-    movl $SYS_time, %eax
-    syscall
     ret
 .globl vdso_time_end
 vdso_time_end:

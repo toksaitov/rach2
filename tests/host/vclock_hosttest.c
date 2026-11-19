@@ -46,15 +46,16 @@
  * kernel and in both vDSOs (`recovery_rows`, `abi_rows`); that the code of
  * both vDSOs, the x86-64 one and the 32-bit one, converts the TSC through
  * KVM's page, its stamp, rate, shift either way and system time, while the
- * page has its stable bit, and makes the system call once it is withdrawn
- * (`abi_rows`); that both vDSOs' gettimeofday give the time zone
+ * page has its stable bit, and makes the fine clock system calls once it
+ * is withdrawn, while the coarse clocks and seconds still come from the
+ * data page (`abi_rows`); that both vDSOs' gettimeofday give the time zone
  * settimeofday set from the data page, with no system call even where the
  * time needs one (`abi_rows`); and that a boot whose start finds the bit
- * withdrawn starts the clock at the tick once the bit is back, with a time
- * zone set before the page was built on it (`boot_rows`). Without KVM's
- * pages and with a TSC no rate vouches for, the watch sets the TSC against
- * the tick's clock (`watch_rows`): a second processor, idle but for the
- * kicks the tick sends it, whose TSC drifts 500 parts in a million while
+ * withdrawn updates coarse time on the tick and starts the fine clock
+ * once the bit is back, with the time zone set at boot (`boot_rows`).
+ * With no KVM pages and a TSC of unconfirmed rate, the watch sets the
+ * TSC against the tick's clock (`watch_rows`): a second processor, idle
+ * but for the tick's kicks, whose TSC drifts 500 parts in a million while
  * the boot processor's keeps time, parts its span from the clock and stops
  * it, which a watch of the boot processor alone never does; and with every
  * 25th tick's reads of the tick's clock held up 200 us, the tick's own and
@@ -392,6 +393,12 @@ void rtc_tick_both(uint64_t *mono_ns, uint64_t *raw_ns)
         held++;
         now_ns += hold_ns;
     }
+}
+
+/** The model's monotonic time at the last tick. */
+uint64_t rtc_tick_coarse_ns(void)
+{
+    return (now_ns - tick_lag_ns) / TICK_NS * TICK_NS;
 }
 
 /** The NTP state slews nothing. */
@@ -1057,6 +1064,20 @@ static int gate_works(void)
     return (status & 0x7F) == 0 && ((status >> 8) & 0xFF) == 0;
 }
 
+/** Check the x86-64 vDSO's coarse clocks and seconds with KVM's bit clear. */
+static void abi64_coarse(uint32_t cgt, uint32_t tm)
+{
+    struct ts64 ts;
+    int ok;
+
+    ok = vhost_call64(cgt, 5, (uint64_t)(uintptr_t)&ts) == 0 && ts.sec == data->coarse_real_sec &&
+         (uint64_t)ts.nsec == data->coarse_real_nsec;
+    ok = ok && vhost_call64(cgt, 6, (uint64_t)(uintptr_t)&ts) == 0 &&
+         ts.sec == data->coarse_mono_sec && (uint64_t)ts.nsec == data->coarse_mono_nsec;
+    ok = ok && (int64_t)vhost_call64(tm, 0, 0) == data->coarse_real_sec;
+    CHECK(ok, "with the bit withdrawn the x86-64 vDSO reads coarse clocks and seconds");
+}
+
 /**
  * The x86-64 vDSO's clock_gettime of the monotonic, real and raw clocks,
  * gettimeofday and time, run from the code of vdsocode.s over the kernel's
@@ -1064,13 +1085,13 @@ static int gate_works(void)
  * system time is a second past the base, each reads its base and a second;
  * through the two pages that convert the TSC, the monotonic clock reads
  * what they convert the TSC to before and after the call, or between; and
- * with the bit withdrawn each makes its system call, so that a vdsocode.s
- * that counted the TSC or did not check the bit fails a row. 1 when the
- * code is in its layout, for `abi_tz_rows`.
+ * with the bit withdrawn the fine clocks make their system calls while
+ * time and the coarse clocks still read the data page. 1 when the code
+ * is in its layout, for `abi_tz_rows`.
  */
 static int abi64_rows(void)
 {
-    static const uint32_t calls[] = {96u, 201u, 228u, 229u, 309u};
+    static const uint32_t calls[] = {96u, 228u, 229u, 309u};
     uint32_t cgt = abi_fn(LOW_ABI64, vdso_text_start, vdso_clock_gettime);
     uint32_t gtod = abi_fn(LOW_ABI64, vdso_text_start, vdso_gettimeofday);
     uint32_t tm = abi_fn(LOW_ABI64, vdso_text_start, vdso_time);
@@ -1078,8 +1099,8 @@ static int abi64_rows(void)
     struct ts64 ts, tv;
     int k, ok;
 
-    ok = abi_code64(LOW_ABI64, vdso_text_start, vdso_text_end, calls, 5) == 5;
-    CHECK(ok, "the x86-64 vDSO's code fits and its five system calls are found and replaced");
+    ok = abi_code64(LOW_ABI64, vdso_text_start, vdso_text_end, calls, 4) == 4;
+    CHECK(ok, "the x86-64 vDSO's code fits and its four system calls are found and replaced");
     if (!ok) {
         return 0;
     }
@@ -1096,8 +1117,7 @@ static int abi64_rows(void)
          (uint64_t)ts.nsec == data->raw_nsec;
     ok = ok && vhost_call64(gtod, (uint64_t)(uintptr_t)&tv, 0) == 0 &&
          tv.sec == data->real_sec + 1 && (uint64_t)tv.nsec == data->real_nsec / 1000u;
-    ok = ok && (int64_t)vhost_call64(tm, 0, 0) == data->real_sec + 1;
-    CHECK(ok, "with KVM's stable bit the x86-64 vDSO reads each clock by KVM's system time, "
+    CHECK(ok, "with KVM's stable bit the x86-64 vDSO reads fine time by KVM's system time, "
               "a second past the base with the TSC counting nothing");
     for (k = 1; k < 3; k++) {
         abi_pages(LOW_ABI64, 1, &abi_fields[k]);
@@ -1114,8 +1134,8 @@ static int abi64_rows(void)
     ok = ok && (uint32_t)vhost_call64(cgt, 0, (uint64_t)(uintptr_t)&ts) == ~228u;
     ok = ok && (uint32_t)vhost_call64(cgt, 4, (uint64_t)(uintptr_t)&ts) == ~228u;
     ok = ok && (uint32_t)vhost_call64(gtod, (uint64_t)(uintptr_t)&tv, 0) == ~96u;
-    ok = ok && (uint32_t)vhost_call64(tm, 0, 0) == ~201u;
-    CHECK(ok, "with the bit withdrawn the x86-64 vDSO makes the system call for each");
+    CHECK(ok, "with the bit withdrawn the x86-64 vDSO makes the fine clock system calls");
+    abi64_coarse(cgt, tm);
     return 1;
 }
 
@@ -1166,8 +1186,7 @@ static int abi32_rows(void)
          (uint64_t)t64->nsec == data->raw_nsec;
     ok = ok && gate_call(gtod, out, 0, 0, 0) == 0 && t32->sec == (int32_t)data->real_sec + 1 &&
          (uint64_t)t32->nsec == data->real_nsec / 1000u;
-    ok = ok && gate_call(tm, 0, 0, 0, 0) == (uint32_t)data->real_sec + 1u;
-    CHECK(ok, "with KVM's stable bit the 32-bit vDSO reads each clock by KVM's system time, "
+    CHECK(ok, "with KVM's stable bit the 32-bit vDSO reads fine time by KVM's system time, "
               "a second past the base with the TSC counting nothing");
     for (k = 1; k < 3; k++) {
         abi_pages(LOW_ABI32, 1, &abi_fields[k]);
@@ -1183,8 +1202,13 @@ static int abi32_rows(void)
     ok = gate_call(cgt, 1, out, 0, 0) == ~265u;
     ok = ok && gate_call(cgt64, 4, out, 0, 0) == ~403u;
     ok = ok && gate_call(gtod, out, 0, 0, 0) == ~78u;
-    ok = ok && gate_call(tm, 0, 0, 0, 0) == ~13u;
-    CHECK(ok, "with the bit withdrawn the 32-bit vDSO makes the system call for each");
+    CHECK(ok, "with the bit withdrawn the 32-bit vDSO makes the fine clock system calls");
+    ok = gate_call(cgt, 5, out, 0, 0) == 0 && t32->sec == (int32_t)data->coarse_real_sec &&
+         (uint64_t)t32->nsec == data->coarse_real_nsec;
+    ok = ok && gate_call(cgt64, 6, out, 0, 0) == 0 && t64->sec == data->coarse_mono_sec &&
+         (uint64_t)t64->nsec == data->coarse_mono_nsec;
+    ok = ok && gate_call(tm, 0, 0, 0, 0) == (uint32_t)data->coarse_real_sec;
+    CHECK(ok, "with the bit withdrawn the 32-bit vDSO reads coarse clocks and seconds");
     return 1;
 }
 
@@ -1310,9 +1334,14 @@ static void boot_rows(void)
           "stopped");
     CHECK(data && data->tz_minuteswest == 300 && data->tz_dsttime == 0,
           "a time zone set before the data page is built is on the page");
+    CHECK(vclock_read(VCLOCK_READ_MONO, 1, &sec, &nsec) && sec == 7 && nsec == 0,
+          "a page built in VCLOCK_NONE has the coarse time at the last tick");
     now_ns += TICK_NS;
+    vclock_tick_edge(now_ns);
     vclock_tick();
     CHECK(!vclock_running(), "and the tick leaves it stopped while the bit stays withdrawn");
+    CHECK(vclock_read(VCLOCK_READ_MONO, 1, &sec, &nsec) && sec == 7 && nsec == TICK_NS,
+          "the tick updates coarse time while the fine clock is stopped");
     kvm_boot_withdrawn = 0;
     now_ns += TICK_NS;
     vclock_tick();

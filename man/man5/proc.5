@@ -1678,8 +1678,8 @@ A container shared by groups is counted once.
 .It Li msi_vectors_free
 Free message vectors in the host's interrupt pool, on x86-64.
 .It Li vdso_tsc
-1 when the vDSO reads the clock from the TSC, so that its clock calls make
-no system call, and 0 when they make one
+1 when the vDSO reads fine time from the TSC or KVM's clock page, and 0
+when fine readings make a system call
 .Pq Xr vdso 7 .
 .It Li sleeps_interrupted
 Sleeps in
