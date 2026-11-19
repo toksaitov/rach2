@@ -194,8 +194,9 @@ static syscall_fn_t _ia32_syscall_table[IA32_SYSCALL_TABLE_SIZE];
  * (`syscall_restartable`). */
 long compat_sys_ioctl(isr_params_t *params);
 
-/* i386's rt_sigprocmask (arch/x86_64/ia32_signal.c), which calls the native
- * handler and runs without the big lock as it does (`init_syscall`). */
+/* These i386 entries (arch/x86_64/ia32_signal.c) call the native handlers
+ * and enter without the big lock as they do (`init_syscall`). */
+long compat_sys_ptrace(isr_params_t *params);
 long compat_sys_rt_sigprocmask(isr_params_t *params);
 /* i386 socketcall uses the same per-family lock dispatch as native calls. */
 long compat_sys_socketcall(isr_params_t *params);
@@ -716,7 +717,7 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *id, uint64_t
         return -EINVAL;
     }
     *tg = c.proc->tg;
-    (*tg)->refs++;
+    tgroup_get(*tg);
     *id = c.thread ? c.proc->pid : c.proc->tgid;
     *serial = c.proc->serial;
     *thread = c.thread;
@@ -4005,11 +4006,21 @@ void init_syscall(void)
     /* getrusage takes the big lock itself for any target but the thread. */
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_getrusage);
     syscall_unlock(SYSCALL_ABI_IA32, sys_getrusage);
+    /* The waits look under the list lock and the signal state's, and take
+     * the big lock themselves for an end they take (`wait_find`). */
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_wait4);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_wait4);
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_waitid);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_waitid);
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_waitpid);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_waitpid);
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_ptrace);
     /* rt_sigprocmask takes the signal state's lock, and the big lock only
      * for a change that lock alone cannot make. */
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_rt_sigprocmask);
 #if defined(IA32_SYSCALL_TABLE_SIZE)
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_rt_sigprocmask);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ptrace);
 #endif
     unlock_file_calls();
     syscall_epoll_unlock();

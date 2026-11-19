@@ -2106,14 +2106,14 @@ void i915_irq_sync(struct drm_i915_private *i915);
 /* ---- i915_ring.c ---- */
 
 /**
- * Set up and start the render, blitter, video and video enhancement
- * rings, as Linux's xcs_resume: for each a status page and a ring in the
+ * Set up and start the render, blitter, video and video enhancement rings, as
+ * Linux's xcs_resume: the GT's record cleared and each engine's lock made, of
+ * one class for every engine; then for each a status page and a ring in the
  * global GTT; the aliasing PPGTT made (`i915_ppgtt_init`); then each ring
- * stopped and emptied, the status page's address written and the TLB
- * flushed, the PPGTT's registers (`i915_ppgtt_enable_ring`), and the ring
- * started with RING_VALID, each wait bounded; then its user interrupt
- * registered in its bank, masked until a waiter needs it. Holds forcewake
- * throughout.
+ * stopped and emptied, the status page's address written and the TLB flushed,
+ * the PPGTT's registers (`i915_ppgtt_enable_ring`), and the ring started with
+ * RING_VALID, each wait bounded; then its user interrupt registered in its
+ * bank, masked until a waiter needs it. Holds forcewake throughout.
  *
  * @return 0; -ENOMEM; -ENOSPC when the GTT has no room at its top; -EIO
  *         when a ring would not stop or start, its wait named in
@@ -2413,11 +2413,12 @@ int32_t i915_pcode_write(struct drm_i915_private *i915, uint32_t mbox, uint32_t 
 
 /**
  * Read the frequency limits, as Linux's gen6_rps_init and intel_rps_init on
- * Haswell: RP0, RP1 and RPn from GEN6_RP_STATE_CAP, RPe from the pcode's
- * duty cycle control, the overclocking limit from its parameters, the
- * softlimits the whole range, 95 and 85 percent as the up and down
- * thresholds, and the start at RPe; then RPS's interrupts off. Registers
- * the up and down interrupts' handler, masked.
+ * Haswell, into a record cleared and its lock made: RP0, RP1 and RPn from
+ * GEN6_RP_STATE_CAP, RPe from the pcode's duty cycle control, the
+ * overclocking limit from its parameters, the softlimits the whole range,
+ * 95 and 85 percent as the up and down thresholds, and the start at RPe;
+ * then RPS's interrupts off. Registers the up and down interrupts'
+ * handler, masked.
  */
 void i915_rps_init(struct drm_i915_private *i915);
 

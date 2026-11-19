@@ -1,6 +1,6 @@
 /*
- * process.c: indexed process records, user counts, active timers and
- * reparenting.
+ * process.c: indexed process records, their list lock and references, user
+ * counts, active timers and reparenting.
  */
 #include "process.h"
 #include "../lib/kerrno.h"
@@ -32,11 +32,37 @@ static process_t *proc_tail; /* the last record of proc_list */
  * hashes by process group and by session have as many buckets and come in
  * the same allocation, after it: they keep the ids that groups and
  * sessions hold, as Linux's struct pid keeps its tasks by type, so that
- * neither the allocator nor setsid walks every record. */
+ * neither the allocator nor setsid walks every record. The hashes by parent
+ * and by tracer follow them, and keep each chain in the order its records
+ * took their key, so that a wait looks at its own children and tracees
+ * alone, as Linux's do_wait walks `children` and `ptraced`
+ * (kernel/exit.c:1488-1530), and not at every record of the system. */
 static process_t **pid_table;
 static process_t **pgid_table;
 static process_t **sid_table;
+static process_t **ppid_table;
+static process_t **tracer_table;
 static uint32_t pid_capacity, pid_records;
+
+/* The five hashes' one allocation, whose header the lookup without a lock
+ * reads (`get_process_ref`): the `pid_table` and `pid_capacity` of the
+ * same growth in one pointer, so that a reader never pairs a table with
+ * another's width. A growth frees the old one a grace period later. */
+struct pid_index {
+    struct rcu_head rcu; /* first, so that the callback's head is the block */
+    process_t **pid;
+    uint32_t capacity;
+};
+static struct pid_index *volatile pid_index;
+
+/* Odd while a writer moves records of the pid index from one chain to
+ * another, by a growth or an exchange of ids, and counted up at the start
+ * and at the end of each: a lookup without a lock that finds nothing while
+ * it was odd, or that sees it changed, walks again. */
+static volatile uint32_t pid_seq;
+
+/* The list lock (process.h). */
+static struct spinlock tasklist_lock = SPINLOCK_INIT_NAMED("tasklist_lock");
 #define USER_BUCKETS 256
 struct proc_user_count {
     uint32_t uid;
@@ -57,6 +83,70 @@ static process_t *tick_post_head;
 static volatile int tick_posts_due;
 static struct spinlock tick_post_lock = SPINLOCK_INIT_NAMED("tick_post");
 static uint32_t work_count[4];
+
+uint32_t tasklist_read_lock(void)
+{
+    return spin_lock_irqsave(&tasklist_lock);
+}
+
+void tasklist_read_unlock(uint32_t flags)
+{
+    spin_unlock_irqrestore(&tasklist_lock, flags);
+}
+
+uint32_t tasklist_write_lock(void)
+{
+    bkl_assert_held();
+    return spin_lock_irqsave(&tasklist_lock);
+}
+
+void tasklist_write_unlock(uint32_t flags)
+{
+    spin_unlock_irqrestore(&tasklist_lock, flags);
+}
+
+/** Panic, in a kernel with the lock-order checker, unless the caller holds
+ * the big lock or the list lock, under one of which the indexes are read. */
+static void index_assert_held(void)
+{
+#ifdef RACH2_LOCKDEP
+    if (!bkl_held()) {
+        lockdep_assert_held(&tasklist_lock);
+    }
+#endif
+}
+
+/** Begin or end a move of records between chains of the pid index, under
+ * the list lock as a writer (`pid_seq`). */
+static void pid_move(void)
+{
+    k_barrier();
+    pid_seq++;
+    k_barrier();
+}
+
+/** Replace `*w` with `value` if it holds `old`, in one locked operation, a
+ * full barrier: the value `*w` held. A host test has the compiler's own. */
+static unsigned int ref_cmpxchg(volatile unsigned int *w, unsigned int old, unsigned int value)
+{
+#ifdef RACH2_HOSTTEST
+    return __sync_val_compare_and_swap(w, old, value);
+#else
+    return arch_atomic_cmpxchg(w, old, value);
+#endif
+}
+
+/** Add `delta` to the count `*w`, which no writer changes but by these
+ * operations: the count it held before. */
+static unsigned int ref_add(volatile unsigned int *w, unsigned int delta)
+{
+    unsigned int old;
+
+    do {
+        old = *w;
+    } while (ref_cmpxchg(w, old, old + delta) != old);
+    return old;
+}
 
 /** Read one process-index work counter. */
 uint32_t proc_work_count(unsigned int index)
@@ -83,6 +173,7 @@ static void pid_insert(process_t *p)
     uint32_t slot = p->pid & (pid_capacity - 1);
 
     p->pid_next = pid_table[slot];
+    k_barrier();
     pid_table[slot] = p;
 }
 
@@ -115,22 +206,185 @@ static void group_remove(process_t *p)
     *link = p->sid_next;
 }
 
+/* The indexes by key, by parent and by tracer, and the list of each
+ * process's threads, which shares their chains' code. */
+#define KEY_PARENT 0
+#define KEY_TRACER 1
+#define KEY_GROUP  2
+
+/** The key of `p` in the index `index`: its tracer, or the parent of a
+ * process's leader, since a wait looks for leaders alone among its
+ * children, as Linux's `children` list holds leaders alone. */
+static uint32_t key_of(const process_t *p, int index)
+{
+    if (index == KEY_TRACER) {
+        return p->tracer;
+    }
+    return p->pid == p->tgid ? p->parent_pid : 0;
+}
+
+/** The links of `p` in the index `index`. */
+static struct proc_link *key_link(process_t *p, int index)
+{
+    if (index == KEY_GROUP) {
+        return &p->group_link;
+    }
+    return index == KEY_TRACER ? &p->tracer_link : &p->ppid_link;
+}
+
+/** The head of the chain of `key` in the index `index`. */
+static process_t **key_head(uint32_t key, int index)
+{
+    process_t **table = index == KEY_TRACER ? tracer_table : ppid_table;
+
+    return &table[key & (pid_capacity - 1)];
+}
+
+/** Put `p` at the end of the chain at `head`, by its links of `index`. A
+ * record in a chain has a back link; one in none has NULL there. */
+static void chain_append(process_t **head, process_t *p, int index)
+{
+    struct proc_link *l = key_link(p, index);
+
+    l->next = NULL;
+    if (*head == NULL) {
+        l->prev = p;
+        *head = p;
+        return;
+    }
+    l->prev = key_link(*head, index)->prev;
+    key_link(l->prev, index)->next = p;
+    key_link(*head, index)->prev = p;
+}
+
+/** Put `p` at the end of its key's chain in the index `index`; a record
+ * whose key is 0 is in no chain. */
+static void key_insert(process_t *p, int index)
+{
+    uint32_t key = key_of(p, index);
+    struct proc_link *l = key_link(p, index);
+
+    l->next = NULL;
+    l->prev = NULL;
+    if (key != 0) {
+        chain_append(key_head(key, index), p, index);
+    }
+}
+
+/** Take `p` out of the chain at `head`, by its links of `index`. */
+static void chain_unlink(process_t **head, process_t *p, int index)
+{
+    struct proc_link *l = key_link(p, index);
+
+    if (*head == p) {
+        *head = l->next;
+    } else {
+        key_link(l->prev, index)->next = l->next;
+    }
+    if (l->next) {
+        key_link(l->next, index)->prev = l->prev;
+    } else if (*head) {
+        key_link(*head, index)->prev = l->prev;
+    }
+    l->next = NULL;
+    l->prev = NULL;
+}
+
+/** Take `p` out of its key's chain in the index `index`, before its key
+ * changes or it is freed. */
+static void key_remove(process_t *p, int index)
+{
+    uint32_t key = key_of(p, index);
+
+    if (key != 0) {
+        chain_unlink(key_head(key, index), p, index);
+    }
+}
+
+/** Give the thread `to` the place the leader `from` had in the index by
+ * parent, once the two have exchanged their ids and `to` leads, as Linux
+ * 6.12.115's de_thread moves the leader's place in its parent's `children`
+ * to the thread (`list_replace_init`, fs/exec.c:1123); `to` is in no chain
+ * of that index. */
+static void key_hand(process_t *from, process_t *to)
+{
+    uint32_t key = from->parent_pid;
+    struct proc_link *f = key_link(from, KEY_PARENT);
+    struct proc_link *t = key_link(to, KEY_PARENT);
+    process_t **head;
+
+    if (key == 0 || to->parent_pid != key) {
+        if (key != 0) {
+            chain_unlink(key_head(key, KEY_PARENT), from, KEY_PARENT);
+        }
+        key_insert(to, KEY_PARENT);
+        return;
+    }
+    head = key_head(key, KEY_PARENT);
+    t->next = f->next;
+    t->prev = f->prev == from ? to : f->prev;
+    if (*head == from) {
+        *head = to;
+    } else {
+        key_link(f->prev, KEY_PARENT)->next = to;
+    }
+    if (f->next) {
+        key_link(f->next, KEY_PARENT)->prev = to;
+    } else {
+        key_link(*head, KEY_PARENT)->prev = to;
+    }
+    f->next = NULL;
+    f->prev = NULL;
+}
+
+void proc_set_parent(process_t *p, uint32_t ppid)
+{
+    uint32_t flags = tasklist_write_lock();
+
+    key_remove(p, KEY_PARENT);
+    p->parent_pid = ppid;
+    key_insert(p, KEY_PARENT);
+    tasklist_write_unlock(flags);
+}
+
+void proc_set_tracer(process_t *p, uint32_t tgid)
+{
+    uint32_t flags = tasklist_write_lock();
+
+    key_remove(p, KEY_TRACER);
+    p->tracer = tgid;
+    key_insert(p, KEY_TRACER);
+    tasklist_write_unlock(flags);
+}
+
+process_t *proc_children(uint32_t ppid)
+{
+    index_assert_held();
+    return ppid != 0 && pid_capacity != 0 ? *key_head(ppid, KEY_PARENT) : NULL;
+}
+
+process_t *proc_tracees(uint32_t tgid)
+{
+    index_assert_held();
+    return tgid != 0 && pid_capacity != 0 ? *key_head(tgid, KEY_TRACER) : NULL;
+}
+
 void proc_set_group(process_t *p, uint32_t sid, uint32_t pgid)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = tasklist_write_lock();
 
     group_remove(p);
     p->sid = sid;
     p->pgid = pgid;
     group_insert(p);
-    kirq_restore(flags);
+    tasklist_write_unlock(flags);
 }
 
 int proc_group_held(uint32_t id, int sessions, int unused, const process_t *gone)
 {
     const process_t *p;
 
-    bkl_assert_held();
+    index_assert_held();
     if (!pid_capacity) {
         return 0;
     }
@@ -147,37 +401,68 @@ int proc_group_held(uint32_t id, int sessions, int unused, const process_t *gone
     return 0;
 }
 
-/** Grow the pid index for one more record; -1 leaves the old index intact. */
+/** Free a pid index a growth replaced, a grace period after it: its `rcu`
+ * is its first member, so `head` is the block. */
+static void pid_index_free(struct rcu_head *head)
+{
+    kfree(head);
+}
+
+/** Grow the pid index for one more record; -1 leaves the old index intact.
+ * The chains by parent and by tracer move whole, in their order. The old
+ * index is freed a grace period later, since a lookup without a lock may
+ * still walk it (`get_process_ref`). */
 static int pid_reserve(void)
 {
     process_t **table, **old;
-    process_t *p;
-    uint32_t flags;
+    process_t *p, *next;
+    struct pid_index *index_new, *index_old = pid_index;
+    uint32_t flags, i, old_capacity = pid_capacity;
     uint32_t capacity = pid_capacity != 0 ? pid_capacity * 2 : 64;
+    int index;
 
     if (pid_records < pid_capacity) {
         return 0;
     }
-    if (capacity <= pid_capacity || capacity > (uint32_t)(~(size_t)0 / (3 * sizeof(*table)))) {
+    if (capacity <= pid_capacity ||
+        capacity > (uint32_t)((~(size_t)0 - sizeof(*index_new)) / (5 * sizeof(*table)))) {
         return -1;
     }
-    table = kzalloc(3 * capacity * sizeof(*table));
-    if (!table) {
+    index_new = kzalloc(sizeof(*index_new) + 5 * capacity * sizeof(*table));
+    if (!index_new) {
         return -1;
     }
-    flags = kirq_save();
+    table = (process_t **)(index_new + 1);
+    index_new->pid = table;
+    index_new->capacity = capacity;
+    flags = tasklist_write_lock();
+    pid_move();
     old = pid_table;
     pid_table = table;
     pgid_table = table + capacity;
     sid_table = table + 2 * capacity;
+    ppid_table = table + 3 * capacity;
+    tracer_table = table + 4 * capacity;
     pid_capacity = capacity;
     for (p = proc_list; p; p = p->next) {
         work_count[0]++;
         pid_insert(p);
         group_insert(p);
     }
-    kirq_restore(flags);
-    kfree(old);
+    for (index = KEY_PARENT; old && index <= KEY_TRACER; index++) {
+        for (i = 0; i < old_capacity; i++) {
+            for (p = old[(3u + (uint32_t)index) * old_capacity + i]; p; p = next) {
+                next = key_link(p, index)->next;
+                key_insert(p, index);
+            }
+        }
+    }
+    pid_index = index_new;
+    pid_move();
+    tasklist_write_unlock(flags);
+    if (index_old) {
+        call_rcu(&index_old->rcu, pid_index_free);
+    }
     return 0;
 }
 
@@ -191,9 +476,11 @@ void proc_exchange_pids(process_t *a, process_t *b)
     uint32_t pid = a->pid;
     uint64_t serial = a->serial;
     uint32_t told = a->pidfd_told;
-    uint32_t flags = kirq_save();
+    uint32_t flags = tasklist_write_lock();
+    process_t *led = key_of(a, KEY_PARENT) != 0 ? a : key_of(b, KEY_PARENT) != 0 ? b : NULL;
     uint32_t i;
 
+    pid_move();
     pid_remove(a);
     pid_remove(b);
     a->pid = b->pid;
@@ -209,7 +496,11 @@ void proc_exchange_pids(process_t *a, process_t *b)
     }
     pid_insert(a);
     pid_insert(b);
-    kirq_restore(flags);
+    if (led != NULL && key_of(led, KEY_PARENT) == 0) {
+        key_hand(led, led == a ? b : a);
+    }
+    pid_move();
+    tasklist_write_unlock(flags);
 }
 
 /** Release one user's count, deleting its bucket entry at the last record. */
@@ -707,7 +998,8 @@ void proc_reclaim_boot_pids(void)
     uint32_t flags;
 
     if (p && p->tgid == 1 && !p->page_dir && !p->space_root) {
-        flags = kirq_save();
+        flags = tasklist_write_lock();
+        pid_move();
         pid_remove(p);
         group_remove(p);
         next_pid = 2;
@@ -719,7 +1011,8 @@ void proc_reclaim_boot_pids(void)
         p->pgid = p->pid;
         pid_insert(p);
         group_insert(p);
-        kirq_restore(flags);
+        pid_move();
+        tasklist_write_unlock(flags);
     }
     next_pid = 1;
 }
@@ -755,10 +1048,14 @@ static struct fs_struct *fs_new(void)
     return fs;
 }
 
-/** Put the new record `p` at the end of the list and in the indexes, and
- * count it as a fork. */
+/** Put the new record `p` at the end of the list and in the indexes, with
+ * the list's reference, and count it as a fork. */
 static void proc_publish(process_t *p)
 {
+    uint32_t flags;
+
+    p->refs = 1;
+    flags = tasklist_write_lock();
     p->prev = proc_tail;
     p->next = NULL;
     if (proc_tail) {
@@ -769,7 +1066,9 @@ static void proc_publish(process_t *p)
     proc_tail = p;
     pid_insert(p);
     group_insert(p);
+    chain_append(&p->tg->threads, p, KEY_GROUP);
     pid_records++;
+    tasklist_write_unlock(flags);
     process_count_fork();
 }
 
@@ -820,7 +1119,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
         return NULL;
     }
     if (group) {
-        group->refs++;
+        tgroup_get(group);
     }
     p->sigacts = p->tg->action;
     p->pid = pid;
@@ -895,6 +1194,30 @@ process_t *alloc_process_fork(const process_t *parent, int thread, int share_fs,
     return process_alloc(parent, thread, share_fs, error);
 }
 
+/** Free the record `head` is in, a grace period after its last reference
+ * went (`proc_ref_put`), with its floating-point area and its hold on its
+ * thread group, which a holder of a reference may read. */
+static void proc_free_rcu(struct rcu_head *head)
+{
+    process_t *p = (process_t *)(void *)((char *)head - offsetof(process_t, rcu));
+
+    tgroup_put(p->tg);
+    fpu_area_free(p->fpu);
+    kfree(p);
+}
+
+void proc_ref_get(process_t *p)
+{
+    (void)ref_add(&p->refs, 1u);
+}
+
+void proc_ref_put(process_t *p)
+{
+    if (ref_add(&p->refs, ~0u) == 1u) {
+        call_rcu(&p->rcu, proc_free_rcu);
+    }
+}
+
 void free_process(process_t *proc)
 {
     uint32_t flags;
@@ -908,14 +1231,22 @@ void free_process(process_t *proc)
     flags = spin_lock_irqsave(&tick_post_lock);
     (void)tick_post_unlink(proc);
     spin_unlock_irqrestore(&tick_post_lock, flags);
+    flags = tasklist_write_lock();
     pid_remove(proc);
     group_remove(proc);
+    key_remove(proc, KEY_PARENT);
+    key_remove(proc, KEY_TRACER);
+    if (proc->tg && proc->group_link.prev != NULL) {
+        chain_unlink(&proc->tg->threads, proc, KEY_GROUP);
+    }
+    tasklist_write_unlock(flags);
     if (proc->tg) {
         pidfd_id_gone(proc);
     }
-    pid_records--;
     user_put(proc->user_count);
     sched_forget(proc);
+    flags = tasklist_write_lock();
+    pid_records--;
     if (proc->prev) {
         proc->prev->next = proc->next;
     } else {
@@ -926,6 +1257,7 @@ void free_process(process_t *proc)
     } else {
         proc_tail = proc->prev;
     }
+    tasklist_write_unlock(flags);
     if (proc == proc_idle) {
         proc_idle = NULL;
     }
@@ -938,14 +1270,12 @@ void free_process(process_t *proc)
         kfree(proc->fs->cwd_long);
         kfree(proc->fs);
     }
-    tgroup_put(proc->tg);
     seccomp_release(proc);
     ns_release(proc);
     kfree(proc->exec_ws);
     path_bufs_free(proc);
-    fpu_area_free(proc->fpu);
     smp_record_quiesce();
-    kfree(proc);
+    proc_ref_put(proc);
 }
 
 /* The sleepers one hold of the run queues' lock wakes, at most, before it
@@ -1184,13 +1514,18 @@ struct tgroup *tgroup_new(struct process *leader)
     return tg;
 }
 
+void tgroup_get(struct tgroup *tg)
+{
+    (void)ref_add(&tg->refs, 1u);
+}
+
 /** An epoll registration of a signalfd keeps a record on the signalfd
  * queue of the group that added it, which may outlast the group, so the
  * records are taken off before the group goes (`wq_wake_free`), as
  * Linux's `signalfd_cleanup` (fs/signalfd.c:36-39). */
 void tgroup_put(struct tgroup *tg)
 {
-    if (tg && --tg->refs == 0) {
+    if (tg && ref_add(&tg->refs, ~0u) == 1u) {
         wq_wake_free(&tg->sigfd);
         kfree(tg);
     }
@@ -1216,11 +1551,9 @@ void tgroup_cpu_time_locked(const struct tgroup *tg, uint64_t *user, uint64_t *s
 
     *user = tg->utime;
     *sys = tg->stime;
-    for (t = proc_list; t; t = t->next) {
-        if (t->tg == tg) {
-            *user += t->utime;
-            *sys += t->stime;
-        }
+    for (t = tg->threads; t; t = t->group_link.next) {
+        *user += t->utime;
+        *sys += t->stime;
     }
 }
 
@@ -1239,11 +1572,9 @@ void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major)
 
     *minor = tg->min_flt;
     *major = tg->maj_flt;
-    for (t = proc_list; t; t = t->next) {
-        if (t->tg == tg) {
-            *minor += t->min_flt;
-            *major += t->maj_flt;
-        }
+    for (t = tg->threads; t; t = t->group_link.next) {
+        *minor += t->min_flt;
+        *major += t->maj_flt;
     }
 }
 
@@ -1254,11 +1585,9 @@ void proc_switches(const process_t *p, unsigned long *voluntary, unsigned long *
 
     *voluntary = tg->nvcsw;
     *involuntary = tg->nivcsw;
-    for (t = proc_list; t; t = t->next) {
-        if (t->tg == tg) {
-            *voluntary += t->nvcsw;
-            *involuntary += t->nivcsw;
-        }
+    for (t = tg->threads; t; t = t->group_link.next) {
+        *voluntary += t->nvcsw;
+        *involuntary += t->nivcsw;
     }
 }
 
@@ -1282,7 +1611,7 @@ process_t *get_process(uint32_t pid)
 {
     process_t *p;
 
-    bkl_assert_held();
+    index_assert_held();
     if (!pid_capacity) {
         return NULL;
     }
@@ -1293,6 +1622,54 @@ process_t *get_process(uint32_t pid)
         }
     }
     return NULL;
+}
+
+/**
+ * The walk without a lock: a writer that inserts a record sets its link
+ * before the bucket's head, and one that removes a record leaves the
+ * record's own link, so a walk that is on a record that leaves goes on along
+ * its old chain, and the record stays in the heap until the walk's read
+ * section ends (`proc_ref_put`). A growth or an exchange of ids moves
+ * records between chains, which may take a walk off the chain it began on;
+ * it marks `pid_seq`, and a walk that found nothing then walks again. A
+ * record found is taken only while its count is above 0, as Linux's
+ * get_task_struct is taken only on a task still in the pid's list.
+ */
+process_t *get_process_ref(uint32_t pid)
+{
+    const struct pid_index *index;
+    process_t *p;
+    uint32_t seq;
+    unsigned int refs;
+
+    rcu_read_lock();
+    for (;;) {
+        seq = pid_seq;
+        k_barrier();
+        index = pid_index;
+        p = NULL;
+        if (index != NULL && (seq & 1u) == 0) {
+            for (p = index->pid[pid & (index->capacity - 1)]; p != NULL; p = p->pid_next) {
+                if (p->pid == pid) {
+                    break;
+                }
+            }
+        }
+        k_barrier();
+        if (p != NULL || ((seq & 1u) == 0 && seq == pid_seq)) {
+            break;
+        }
+    }
+    while (p != NULL) {
+        refs = p->refs;
+        if (refs == 0) {
+            p = NULL;
+        } else if (ref_cmpxchg(&p->refs, refs, refs + 1u) == refs) {
+            break;
+        }
+    }
+    rcu_read_unlock();
+    return p;
 }
 
 int proc_tid_gone(const process_t *t)
@@ -1376,7 +1753,7 @@ void reparent_children(uint32_t dead_pid)
             init = subreaper;
         }
         if (init != NULL) {
-            p->parent_pid = init->pid;
+            proc_set_parent(p, init->pid);
             if (p->pid == p->tgid) {
                 p->tg->no_child_signal = 0;
             }

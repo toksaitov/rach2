@@ -377,6 +377,12 @@ void sched_forget(process_t *p);
  * processor. */
 void sched_adopt(process_t *p);
 
+/** Take `p`, this processor's current process, off the scheduler without a
+ * switch, as process 0 gives the processor to the program the debug shell
+ * enters: off any ready list, no longer the fair class's current, and not
+ * running here: `sched_adopt` undone. */
+void sched_disown(process_t *p);
+
 /** With `hold` set, add each queued thread's wait so far to its `run_delay`
  * and count no wait until called with `hold` clear, which starts each
  * queued thread's wait again: a suspend to idle's bounds, as Linux's frozen

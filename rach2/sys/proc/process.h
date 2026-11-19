@@ -8,6 +8,7 @@
 #include "../lib/kdef.h"
 #include "../lib/kint.h"
 #include "../lib/ksignal.h"
+#include "../lib/rcu.h"
 #include "../fs/fd.h"
 #include "../mm/vm.h"
 #include "../fpu.h"
@@ -206,6 +207,15 @@ struct restart_block {
     uint8_t wide;    /* the remainder is two 64-bit words, not two 32-bit */
 };
 
+/* A record's place in a chain of an index by key (process.c): the next
+ * record, NULL for the last, and the record before it, or for the first
+ * the last, so that a record goes on the end and comes off in constant
+ * time. */
+struct proc_link {
+    struct process *next;
+    struct process *prev;
+};
+
 /*
  * The record of one thread, from the heap (`alloc_process`), on `proc_list`
  * while it lives. The threads of a process share their thread group
@@ -218,7 +228,7 @@ struct process {
     cpu_regs_t regs;        /* What switch_context saves (cpu.h) */
     uintptr_t space_root;   /* Page directory physical address, or 0 */
     uintptr_t kernel_stack; /* Top of kernel stack for this process */
-    uint32_t parent_pid;    /* Parent process ID */
+    uint32_t parent_pid;    /* Parent process ID; changed by proc_set_parent */
     int32_t exit_code;      /* Encoded wait status it ended with */
     fd_table_t *fds;        /* Descriptor table, shared under CLONE_FILES */
     struct fs_struct *fs;   /* Directories and umask, shared under CLONE_FS */
@@ -266,7 +276,9 @@ struct process {
     uint64_t pgrp_serial;
     /* Job-control status pending for the parent's wait4: 0 = none, a Linux
      * WIFSTOPPED value ((stopsig<<8)|0x7f) when stopped, or 0xffff when
-     * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED).
+     * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED)
+     * with a compare-and-exchange, since the wait runs without the big lock
+     * under which a stop or an exit writes it.
      * This single slot has one event: a second transition (a stop just after
      * an unreaped continue, or the reverse) supersedes the first, so a parent
      * that does not reap promptly can miss one stop or continue report. */
@@ -679,7 +691,10 @@ struct process {
      * the stop's or the one PTRACE_SETSIGINFO gave; the system call a
      * stop is in, -1 for none; whether the tracer has seen the process end;
      * and the debug registers DR0 to DR7 as the tracer set them, DR6 as the
-     * last debug exception left it. */
+     * last debug exception left it. `tracer` is changed by proc_set_tracer.
+     * A stop sets `ptrace_status` and clears `ptrace_reported` under the
+     * signal state's lock (`ptrace_stop`), under which the tracer's
+     * wait reads them and sets `ptrace_reported`. */
     uint32_t ptrace;
     uint32_t tracer;
     uint32_t ptrace_opts;
@@ -767,10 +782,15 @@ struct process {
     struct process *ready_prev, *ready_next;
     int ready_linked;
     /* Index links, owned by process.c under the big kernel lock: by pid,
-     * by process group and by session (`proc_set_group`). */
+     * by process group and by session (`proc_set_group`), and by parent
+     * of a leader and by tracer (`proc_set_parent`, `proc_set_tracer`),
+     * which a record whose key is 0 is not in. */
     struct process *pid_next;
     struct process *pgid_next;
     struct process *sid_next;
+    struct proc_link ppid_link;
+    struct proc_link tracer_link;
+    struct proc_link group_link; /* in tg->threads */
     struct proc_user_count *user_count;
     /* Active timed waits and real alarms only; timer_linked marks
      * membership. Under the timer list's spinlock in process.c. */
@@ -848,6 +868,16 @@ struct process {
      * from any processor (`proc_work_set`), and cleared only by the thread
      * itself at that return, before it tests what each bit stands for. */
     volatile unsigned int work;
+    /* The references that keep the record in the heap, changed by atomic
+     * operations alone: one that the list holds from the record's
+     * publication until `free_process`, and one for each holder that
+     * `get_process_ref` or `proc_ref_get` gave one. The last
+     * `proc_ref_put` frees the record, its floating-point area and its
+     * hold on its thread group a grace period later, through `rcu`, as
+     * Linux 6.12's put_task_struct and delayed_put_task_struct do. A record
+     * whose count is 0 is being freed, and no lookup takes it. */
+    volatile unsigned int refs;
+    struct rcu_head rcu;
 #ifdef RACH2_LOCKDEP
     /* The sleeping locks this thread holds, which it keeps across its
      * sleeps, for the lock-order checker (lib/lockdep.c); its spinlocks are
@@ -969,10 +999,63 @@ uint32_t proc_last_pid(void);
  * allocator's cursor. The caller holds the big kernel lock. */
 void proc_set_last_pid(uint32_t pid);
 
+/*
+ * The list lock, Linux 6.12's tasklist_lock: it covers `proc_list`, the
+ * pid index, the indexes by process group, by session, by parent and by
+ * tracer, and each thread group's list of its threads. Every change of
+ * them, a record's publication and its free, a change of parent, tracer,
+ * group or session, and the exchange of ids at exec, is made under the big
+ * lock and under this lock as a writer, so a walk under the big lock alone
+ * stays correct, and a walk under this lock as a reader needs no big lock.
+ * It is held with interrupts off, for a walk or a change that does not
+ * sleep. It comes after the big lock and before `sig_lock`, the timer
+ * list's lock and the run queues' lock. Readers exclude each other as
+ * writers do, so a reader must not take it again or call a function that
+ * changes what it covers.
+ */
+
+/** Take the list lock as a reader, with interrupts off: the flags for
+ * `tasklist_read_unlock`. */
+uint32_t tasklist_read_lock(void);
+
+/** Let the list lock go as a reader and put back the interrupt flag. */
+void tasklist_read_unlock(uint32_t flags);
+
+/** Take the list lock as a writer, with interrupts off: the flags for
+ * `tasklist_write_unlock`. The caller holds the big lock. */
+uint32_t tasklist_write_lock(void);
+
+/** Let the list lock go as a writer and put back the interrupt flag. */
+void tasklist_write_unlock(uint32_t flags);
+
 /** Make `sid` and `pgid` the session and the process group of the record
  * `p`, keeping the index by group and by session (`proc_group_held`). The
  * caller holds the big kernel lock. */
 void proc_set_group(process_t *p, uint32_t sid, uint32_t pgid);
+
+/** Make `ppid` the parent of the record `p`, keeping the index by parent
+ * that a wait walks (`proc_children`). The caller holds the big kernel
+ * lock. */
+void proc_set_parent(process_t *p, uint32_t ppid);
+
+/** Make the process `tgid` the tracer of the record `p`, 0 for none,
+ * keeping the index by tracer that a wait walks (`proc_tracees`). The
+ * caller holds the big kernel lock. */
+void proc_set_tracer(process_t *p, uint32_t tgid);
+
+/** The first record of the chain that holds every process leader whose
+ * parent is `ppid`, NULL when there is none; the chain, followed by
+ * `ppid_link.next`, holds them in the order each took that parent, among
+ * records of other parents, which the caller passes over. As Linux's
+ * `children` list, it lets a wait look at its own children alone. `ppid` 0
+ * has no chain. The caller holds the big kernel lock, and the chain is
+ * valid until it is let go or a record changes parent or is freed. */
+process_t *proc_children(uint32_t ppid);
+
+/** The first record of the chain that holds every record the process
+ * `tgid` traces, as `proc_children` gives the children, followed by
+ * `tracer_link.next`; Linux's `ptraced` list. */
+process_t *proc_tracees(uint32_t tgid);
 
 /** Whether a record other than `gone`, and in a state other than
  * PROC_UNUSED unless `unused` is nonzero, has `id` as its process group,
@@ -1034,18 +1117,54 @@ uintptr_t kstack_alloc(void);
  * syscall_proc.c. */
 void kstack_free(uintptr_t top);
 
-/** Take a record off the list and give it back to the heap with its exec
- * workspace, path pages and floating-point area, dropping its references
- * to its thread group, its directories, its seccomp filters and its
- * namespaces, and freeing its descriptor table when this was the table's
- * last reference and its descriptors were released; the caller drops the
- * address space (`mm_drop`) and frees the kernel stack first. Nothing may
- * refer to the record afterwards. A NULL `proc` is ignored. */
+/** Take a record off the list and the indexes, under the list lock, and
+ * give back its exec workspace and path pages, dropping its references to
+ * its directories, its seccomp filters and its namespaces, and freeing its
+ * descriptor table when this was the table's last reference and its
+ * descriptors were released; then drop the list's reference to the record
+ * (`proc_ref_put`), whose last one frees the record, its floating-point area
+ * and its hold on its thread group a grace period later. The caller holds
+ * the big lock, and drops the address space (`mm_drop`) and frees the
+ * kernel stack first. Only a holder of a reference may refer to the record
+ * afterwards. A NULL `proc` is ignored. */
 void free_process(process_t *proc);
 
 /** The record whose `pid` is `pid`, a thread's id in the kernel's
- * numbering, that of the first PID namespace; NULL for none. */
+ * numbering, that of the first PID namespace; NULL for none. The caller
+ * holds the big lock or the list lock, and the record stays while it does;
+ * `get_process_ref` serves a caller with neither. */
 process_t *get_process(uint32_t pid);
+
+/**
+ * The record whose `pid` is `pid`, as `get_process` finds it, with a
+ * reference that keeps it in the heap until `proc_ref_put`; NULL for none,
+ * and for a record whose last reference has gone. It needs neither the big
+ * lock nor the list lock: it walks the pid index under `rcu_read_lock`, as
+ * Linux 6.12's find_get_task_by_vpid does, and takes no lock and does not
+ * sleep, so it may be called in any context but an NMI.
+ *
+ * The record may end, be reaped and leave the list while the reference is
+ * held. The holder may then still read the fields that do not change after
+ * the record is made, `tgid`, `serial`, `tg` and the thread group it names,
+ * and the floating-point area `fpu` names, and may take `sig_lock` and read
+ * the signal sets; `state` PROC_UNUSED says the record has been freed from
+ * the list, and every other part, its address space, descriptors,
+ * directories and kernel stack, may be gone. The id in `pid` is the
+ * thread's until an exec of another thread of its process exchanges it
+ * (`proc_exchange_pids`).
+ */
+process_t *get_process_ref(uint32_t pid);
+
+/** Take one more reference to `p`, which the caller keeps already: by a
+ * reference of its own, or by the big lock or the list lock while `p` is
+ * on the list. Any context. */
+void proc_ref_get(process_t *p);
+
+/** Drop a reference to `p`. The last one, which `free_process` drops when
+ * no holder is left, queues the record's free for a grace period later
+ * (`call_rcu`), after any lookup that may have found it has ended. Any
+ * context but an NMI, under any lock. */
+void proc_ref_put(process_t *p);
 
 /**
  * Whether the thread `t` no longer has its id as Linux counts ids: no
@@ -1539,6 +1658,14 @@ uint64_t proc_alarm_at(uint64_t now, uint64_t ticks);
  * held. Defined in syscall_proc.c.
  */
 int signal_pending(void);
+
+/** Lock the signal state and disable interrupts. Returns the flags for
+ * `signal_state_unlock`. Callers outside the big lock must not nest this
+ * lock. A caller with the big lock may nest it in a signal-state region. */
+uint32_t signal_state_lock(void);
+
+/** Release the signal state and restore interrupts to `flags`. */
+void signal_state_unlock(uint32_t flags);
 
 /**
  * Act on the current thread's pending signals on a return to user mode

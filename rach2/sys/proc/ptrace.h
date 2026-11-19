@@ -13,14 +13,15 @@
  */
 
 /* The PT_ flags of a thread's `ptrace`. */
-#define PT_TRACED    0x01u /* a tracer has it */
-#define PT_SEIZED    0x02u /* the tracer attached with PTRACE_SEIZE */
-#define PT_SYSCALL   0x04u /* it stops at each system call's entry and exit */
-#define PT_STEP      0x08u /* the kernel set TF for PTRACE_SINGLESTEP */
-#define PT_INTERRUPT 0x10u /* PTRACE_INTERRUPT, or a change of its group stop, requests a stop */
-#define PT_START     0x20u /* a seized thread's first stop is still to come */
-#define PT_LISTEN    0x40u /* PTRACE_LISTEN keeps it in its group stop until that changes */
-#define PT_NOINFO    0x80u /* its ptrace stop, a group stop not seized, has no siginfo */
+#define PT_TRACED    0x01u  /* a tracer has it */
+#define PT_SEIZED    0x02u  /* the tracer attached with PTRACE_SEIZE */
+#define PT_SYSCALL   0x04u  /* it stops at each system call's entry and exit */
+#define PT_STEP      0x08u  /* the kernel set TF for PTRACE_SINGLESTEP */
+#define PT_INTERRUPT 0x10u  /* PTRACE_INTERRUPT, or a change of its group stop, requests a stop */
+#define PT_START     0x20u  /* a seized thread's first stop is still to come */
+#define PT_LISTEN    0x40u  /* PTRACE_LISTEN keeps it in its group stop until that changes */
+#define PT_NOINFO    0x80u  /* its ptrace stop, a group stop not seized, has no siginfo */
+#define PT_FROZEN    0x100u /* a tracer's request owns the stop, even across a sleep */
 
 /* The events of a stop, in bits 16-23 of its wait status, and the option bit
  * that enables each, 1 << event. */
@@ -45,7 +46,7 @@
  * sets, and the architecture's requests (`arch_ptrace`). A read of memory
  * stores the word at the datum's address. 0 or the request's result; -ESRCH for
  * a thread that does not exist or has ended, that the caller's process does not
- * trace, or that is not stopped for a request that needs the stop; -EPERM for
+ * trace, or whose stop the request cannot take; -EPERM for
  * an attach the caller may not make; -EIO or -EINVAL for a signal, an option or
  * a stop the request does not take.
  */
@@ -89,7 +90,8 @@ int ptrace_group_stop(int signo);
  * begun, or that a SIGCONT came, whether or not it ended a stop, as Linux's
  * JOBCTL_TRAP_NOTIFY tells them: each makes a new
  * PTRACE_EVENT_STOP, at once when PTRACE_LISTEN keeps it in its stop, else
- * when its tracer next resumes it, or as it returns to user mode.
+ * when its tracer next resumes it, or as it returns to user mode. The
+ * caller holds the process list stable and the signal state locked.
  */
 void ptrace_group_change(struct tgroup *tg);
 
@@ -148,15 +150,5 @@ void ptrace_tracer_gone(uint32_t tgid);
 /** Whether the process tracing `t` is privileged: every live thread of it,
  * since each may make the tracer's requests. 0 for no tracer. */
 int ptrace_tracer_privileged(const process_t *t);
-
-/**
- * The thread `pid`, a kernel id, when the caller's process traces it and it
- * is in a ptrace stop, which the requests other than the attaching ones,
- * PTRACE_KILL and PTRACE_INTERRUPT need; NULL otherwise. A request calls it
- * again after a copy from the caller's memory, which may sleep for a page:
- * meanwhile another thread of the tracer may resume the thread and reap it
- * when it ends, or SIGKILL may end it, and its record may be gone.
- */
-process_t *ptrace_tracee(uint32_t pid);
 
 #endif /* _PTRACE_H_ */

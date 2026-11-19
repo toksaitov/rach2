@@ -405,6 +405,9 @@ struct ext2_writeback {
 struct ext2_mount {
     block_device_t *dev;
     struct vfs_mount *mnt;
+#ifdef RACH2_LOCKDEP
+    int lockdep_depth; /* the device's backing depth, fixed at mount */
+#endif
     uint32_t block_size;
     uint32_t block_shift; /* log2 of the block size: the kernel has no 64-bit division */
     uint64_t file_limit;  /* the largest regular file the pointers and i_blocks address */
@@ -614,7 +617,7 @@ struct ext2_node *ext2_node_find(struct ext2_mount *em, uint32_t ino);
 uint32_t ext2_node_ref(struct ext2_node *n, int delta);
 void ext2_node_size_set(struct ext2_node *n, uint64_t size);
 void ext2_node_size_batch(struct ext2_node *n, uint64_t size);
-struct ext2_node *ext2_node_make(void);
+struct ext2_node *ext2_node_make(struct ext2_mount *em);
 void ext2_node_publish(struct ext2_mount *em, struct ext2_node *n, uint32_t ino);
 void ext2_node_unhold(struct ext2_mount *em, struct ext2_node *n);
 void ext2_node_settle(struct ext2_mount *em, struct ext2_node *n, int rc);

@@ -890,6 +890,26 @@ void sched_adopt(process_t *p)
 }
 
 /**
+ * Left queued, process 0 would be picked at the program's first sleep and
+ * switched to on a context it never saved, since it never switched away.
+ */
+void sched_disown(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int me = (int)arch_cpu_id();
+
+    if (p->se.on_rq) {
+        (void)sched_clock_task(p->cpu);
+    }
+    (void)sched_dequeue(p, FAIR_DEQ_FORCED);
+    if (fair_rqs[me].curr == p) {
+        fair_put_prev(p);
+    }
+    p->on_cpu = 0;
+    spin_unlock_irqrestore(&sched_lock, flags);
+}
+
+/**
  * The new thread joins its thread group's autogroup (`autogroup_fork`)
  * and takes its entity from its parent's (`fair_fork`), its weight, slice
  * and averages, with its queue in its group on the processor it starts on,

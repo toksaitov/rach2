@@ -1,14 +1,13 @@
 /**
- * Host test of ptrace requests across a copy that sleeps and a listening
- * stop.
+ * Host test of ptrace requests across a copy that sleeps and a listening stop.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/proc/child_signal.c rach2/sys/proc/siginfo.c
  *
- * The copy of a register-set request's iovec can sleep, and the tracee can
- * be resumed meanwhile; the request, in either direction, must then answer
- * -ESRCH without reaching its registers. The test's `schedule` records a
- * stop and ends it, so that the status and siginfo of a single step over a
+ * A register-set request holds the stop across its iovec and payload
+ * copies. During either copy a sibling request cannot resume the tracee,
+ * and a pending SIGKILL cannot wake it before the hold ends. `schedule`
+ * records and ends a stop, so the status and siginfo of a single step over a
  * system call can be checked without a guest; the guest test ptracemusl
  * checks the system call's result and the next instruction as well. The
  * namespace stubs translate an id by adding a different amount for the
@@ -23,12 +22,11 @@ extern void free(void *ptr);
 static process_t self, tracee;
 static struct tgroup self_group, tracee_group;
 static struct mm space;
+struct pidns init_pidns;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
 uint32_t proc_dead_threads;
-static int failures, resume_on_copy, register_reads, register_sizes, wakes;
-static int resize_on_copy;
-static uint32_t register_bytes;
+static int failures, resume_on_copy, kill_on_copy, register_reads, wakes;
 static int stops, listen_interrupts, kill_on_resume, resume_signo;
 static unsigned notifications_woken;
 static uint32_t stop_status;
@@ -51,18 +49,90 @@ process_t *get_process(uint32_t pid)
     return pid == self.pid ? &self : pid == tracee.pid ? &tracee : NULL;
 }
 
+/** The model puts all threads in the first PID namespace. */
+struct pidns *proc_pidns(const process_t *p)
+{
+    (void)p;
+    return &init_pidns;
+}
+
+/** The records are static, so a PID lookup needs no reference count. */
+process_t *get_process_ref(uint32_t pid)
+{
+    return get_process(pid);
+}
+
+/** The records stay alive throughout a row. */
+void proc_ref_get(process_t *p)
+{
+    (void)p;
+}
+
+/** The records stay alive throughout a row. */
+void proc_ref_put(process_t *p)
+{
+    (void)p;
+}
+
+/** The model's process list is static. */
+uint32_t tasklist_read_lock(void)
+{
+    return 0;
+}
+
+/** The model's process list is static. */
+void tasklist_read_unlock(uint32_t flags)
+{
+    (void)flags;
+}
+
+/** No signaling can occur in the model while the signal state is locked. */
+uint32_t signal_state_lock(void)
+{
+    return 0;
+}
+
+/** Restore the model's empty interrupt flags. */
+void signal_state_unlock(uint32_t flags)
+{
+    (void)flags;
+}
+
+/** The model invokes the handler without the big lock. */
+void bkl_enter(void)
+{}
+
+/** The model invokes the handler without the big lock. */
+void bkl_exit(void)
+{}
+
+/** The model runs the tracee only during its own simulated stops. */
+void sched_wait_off_cpu(const process_t *t)
+{
+    check(t->state == PROC_STOPPED && (t->ptrace & PT_FROZEN), "wait for frozen tracee");
+}
+
+/** Issue a ptrace request against the model's tracee. */
+static long request_tracee(unsigned long request, uintptr_t addr, uintptr_t data)
+{
+    return ptrace_request(request, tracee.pid, addr, data);
+}
+
 /** Copy `len` bytes from the host address `src` and return 0. The copy
- * that brings `resume_on_copy` down to 0 resumes the tracee, as another
- * thread of the tracer could while it sleeps, and the one that brings
- * `resize_on_copy` down to 0 doubles the register set's size. */
+ * that brings `resume_on_copy` down to 0 tries to resume the tracee, as
+ * another thread of the tracer could while it sleeps. With `kill_on_copy`,
+ * it instead leaves SIGKILL pending behind the hold. */
 int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     k_memcpy(dst, src, len);
-    if (resize_on_copy && --resize_on_copy == 0) {
-        register_bytes *= 2;
+    if (kill_on_copy && --kill_on_copy == 0) {
+        check(tracee.state == PROC_STOPPED && (tracee.ptrace & PT_FROZEN),
+              "SIGKILL during a frozen copy");
+        tracee.sig_pending |= KSIG_BIT(SIGKILL);
     }
     if (resume_on_copy && --resume_on_copy == 0) {
-        tracee.ptrace_status = 0;
+        check(request_tracee(PTRACE_CONT, 0, 0) == -ESRCH && tracee.ptrace_status != 0,
+              "a concurrent resume cannot take a frozen stop");
     }
     return 0;
 }
@@ -91,16 +161,15 @@ long arch_regset_size(const process_t *t, unsigned long type, uint32_t *unit)
 {
     (void)t;
     (void)type;
-    register_sizes++;
     *unit = sizeof(unsigned long);
-    return register_bytes;
+    return sizeof(unsigned long);
 }
 
 /** Zero the set's word in `out` and count an access to the registers,
- * which a resumed tracee must never reach. */
+ * which must still have its stop held. */
 void arch_regset_get(const process_t *t, unsigned long type, uint8_t *out)
 {
-    (void)t;
+    check(t->state == PROC_STOPPED && (t->ptrace & PT_FROZEN), "read frozen registers");
     (void)type;
     k_memset(out, 0, sizeof(unsigned long));
     register_reads++;
@@ -109,7 +178,7 @@ void arch_regset_get(const process_t *t, unsigned long type, uint8_t *out)
 /** Count an access to the registers, as `arch_regset_get` does; 0. */
 long arch_regset_set(process_t *t, unsigned long type, const uint8_t *in, uint32_t len)
 {
-    (void)t;
+    check(t->state == PROC_STOPPED && (t->ptrace & PT_FROZEN), "write frozen registers");
     (void)type;
     (void)in;
     (void)len;
@@ -191,8 +260,7 @@ static void setup(void)
     tracee.tracer = self.tgid;
     tracee.ptrace_status = (PTRACE_EVENT_STOP << 16) | (SIGSTOP << 8) | 0x7f;
     cpu_table[0].current = &self;
-    wakes = register_reads = register_sizes = resume_on_copy = resize_on_copy = 0;
-    register_bytes = sizeof(unsigned long);
+    wakes = register_reads = resume_on_copy = kill_on_copy = 0;
     stops = listen_interrupts = kill_on_resume = resume_signo = 0;
     posted_to = child_info_receiver = NULL;
     notifications_woken = 0;
@@ -317,10 +385,9 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
 
 /**
  * Run every row; 0 when each passes, 1 otherwise. A register-set request
- * rechecks the tracee after each copy that may sleep, the iovec's and a
- * write's payload; PTRACE_INTERRUPT releases a
- * listening tracee; PTRACE_SETOPTIONS and PTRACE_SEIZE fail with -EINVAL
- * for an option above bit 31; a single step over a system call reports
+ * holds the tracee across the iovec and data copies. PTRACE_INTERRUPT
+ * releases a listening tracee. PTRACE_SETOPTIONS and PTRACE_SEIZE fail with
+ * -EINVAL for an option above bit 31. A single step over a system call reports
  * TRAP_TRACE with no TRACESYSGOOD mark; the stops on the way back to user
  * mode; and the ids of the siginfo records ptrace sends.
  */
@@ -335,29 +402,27 @@ int main(void)
         setup();
         iov.iov_base = (uintptr_t)&word;
         iov.iov_len = sizeof(word);
-        check(regset_access(tracee.pid, &tracee, 1, (uintptr_t)&iov, set) == 0 &&
-                  register_reads == 1,
+        check(request_tracee(set ? PTRACE_SETREGSET : PTRACE_GETREGSET, 1, (uintptr_t)&iov) == 0 &&
+                  register_reads == 1 && !(tracee.ptrace & PT_FROZEN),
               "stopped regset access");
-        register_reads = register_sizes = 0;
+        register_reads = 0;
         resume_on_copy = 1;
-        check(regset_access(tracee.pid, &tracee, 1, (uintptr_t)&iov, set) == -ESRCH &&
-                  register_reads == 0 && register_sizes == 0,
-              "regset revalidates before reading the tracee to size the set");
+        check(request_tracee(set ? PTRACE_SETREGSET : PTRACE_GETREGSET, 1, (uintptr_t)&iov) == 0 &&
+                  resume_on_copy == 0 && register_reads == 1,
+              "regset holds the stop through its iovec copy");
     }
     setup();
     iov.iov_base = (uintptr_t)&word;
     iov.iov_len = sizeof(word);
     resume_on_copy = 2;
-    check(regset_access(tracee.pid, &tracee, 1, (uintptr_t)&iov, 1) == -ESRCH &&
-              resume_on_copy == 0 && register_reads == 0 && register_sizes == 1,
-          "a register-set write finds the tracee resumed during its payload copy");
+    check(request_tracee(PTRACE_SETREGSET, 1, (uintptr_t)&iov) == 0 && resume_on_copy == 0 &&
+              register_reads == 1,
+          "regset holds the stop through its payload copy");
     setup();
-    iov.iov_base = (uintptr_t)&word;
-    iov.iov_len = sizeof(word);
-    resize_on_copy = 2;
-    check(regset_access(tracee.pid, &tracee, 1, (uintptr_t)&iov, 1) == -EIO &&
-              register_reads == 0 && register_sizes == 2,
-          "a set whose view changes during the payload copy is refused");
+    kill_on_copy = 2;
+    check(request_tracee(PTRACE_SETREGSET, 1, (uintptr_t)&iov) == 0 && kill_on_copy == 0 &&
+              register_reads == 1 && tracee.state == PROC_READY && wakes == 1,
+          "SIGKILL wakes the tracee when the request releases the stop");
     setup();
     check(ptrace_listen(&tracee) == 0, "listen accepts group event");
     k_memset(&frame, 0, sizeof(frame));
@@ -367,7 +432,7 @@ int main(void)
               !(tracee.ptrace & PT_LISTEN) && wakes == 1,
           "interrupt releases listening tracee");
     setup();
-    check(ptrace_stopped(&tracee, tracee.pid, PTRACE_SETOPTIONS, 0, 0x100000000UL) == -EINVAL,
+    check(request_tracee(PTRACE_SETOPTIONS, 0, 0x100000000UL) == -EINVAL,
           "setoptions refuses upper bits");
     tracee.ptrace = 0;
     check(ptrace_attach(&tracee, 1, 0x100000000UL) == -EINVAL && tracee.ptrace == 0,
@@ -397,6 +462,18 @@ struct userns *proc_userns(const process_t *p)
 uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t id)
 {
     return id + (ns == &tracee_ns ? 1000 : 2000);
+}
+
+/** Make `tgid` the tracer of `p`; the model keeps no index. */
+void proc_set_tracer(process_t *p, uint32_t tgid)
+{
+    p->tracer = tgid;
+}
+
+/** The tracee, when `tgid` traces it, as the index by tracer gives it. */
+process_t *proc_tracees(uint32_t tgid)
+{
+    return tgid != 0 && tracee.tracer == tgid ? &tracee : NULL;
 }
 
 /** The process the PID `pid` names, its kernel id in the model. */
@@ -476,10 +553,9 @@ void arch_ptrace_step(process_t *p, int on)
 }
 
 /** -EIO: no row makes a request of the architecture's own. */
-long arch_ptrace(process_t *p, uint32_t pid, long request, uintptr_t addr, unsigned long data)
+long arch_ptrace(process_t *p, long request, uintptr_t addr, unsigned long data)
 {
     (void)p;
-    (void)pid;
     (void)request;
     (void)addr;
     (void)data;
