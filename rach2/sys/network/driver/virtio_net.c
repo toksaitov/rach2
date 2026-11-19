@@ -654,6 +654,7 @@ static void vnet_removed(struct virtio_dev *d)
     if (v->nd) {
         klog(KLOG_INFO, "virtio_net", "removed: %s: %s", d->name, v->nd->name);
         netdev_withdraw(v->nd);
+        v->nd->dev = 0; /* a pointer kept to it reaches no later device */
         v->nd = 0;
     } else {
         klog(KLOG_INFO, "virtio_net", "removed: %s", d->name);
