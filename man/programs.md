@@ -35,6 +35,7 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `play` | [play(1)](man1/play.1) | sox_ng (`mode`) |  |  |
 | `rec` | [rec(1)](man1/rec.1) | sox_ng (`mode`) |  |  |
 | `setleds` | [setleds(1)](man1/setleds.1) | kbd |  | yes |
+| `setterm` | [setterm(1)](man1/setterm.1) | in-house | yes | yes |
 | `sh` | [sh(1)](man1/sh.1) | BusyBox | in-house (`ish`) | BusyBox (`busybox`) |
 | `showkey` | [showkey(1)](man1/showkey.1) | kbd |  |  |
 | `sox` | [sox(1)](man1/sox.1) | sox_ng |  |  |
@@ -149,7 +150,7 @@ Besides the ports, [the root's manifest](../krffs/manifests/os-real-gnu.manifest
 | `wall` | `/usr/bin/wall` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
 | `write` | `/usr/bin/write` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
 
-It does not stage `/bin/dropbearmulti`, `/bin/iw`, `/bin/sh`, `/bin/wpa_cli`, `/bin/wpa_passphrase` and `/bin/wpa_supplicant`, which os-real does; and `/sbin/init` is `init-metal`, where os-real has `init-login`.
+It does not stage `/bin/dropbearmulti`, `/bin/iw`, `/bin/setterm`, `/bin/sh`, `/bin/wpa_cli`, `/bin/wpa_passphrase` and `/bin/wpa_supplicant`, which os-real does; and `/sbin/init` is `init-metal`, where os-real has `init-login`.
 
 ### Desktop packages
 
