@@ -43,6 +43,12 @@
 #define NET_IP_MASK_DEFAULT    0xFFFFFF00UL /* 255.255.255.0 */
 #define NET_IP_GATEWAY_DEFAULT 0x0A000202UL /* 10.0.2.2      */
 
+/* The ephemeral ports, which TCP and UDP give a socket that bound none:
+   Linux's ip_local_port_range, 32768 to 60999. */
+#define NET_PORT_LOW  32768u
+#define NET_PORT_HIGH 60999u
+#define NET_PORTS     (NET_PORT_HIGH - NET_PORT_LOW + 1u)
+
 /* The first interface's station address, which `netdev_probe` copies in; all
    zeros with no card. */
 extern uint8_t net_mac[6];
@@ -94,6 +100,7 @@ struct net_mib {
      * segments of data received again whole (DelayedACKLost), the
      * retransmission timeouts, the connections ended by data no program
      * will read, by a close with data unread and by the timeouts, the
+     * connections that skipped TIME_WAIT for a full table of them, the
      * challenge acknowledgements of
      * RFC 5961 sent, the SYNs challenged, the answers of a handshake not
      * yet ended, of a segment outside the receive window and of a challenge
@@ -104,6 +111,7 @@ struct net_mib {
     uint32_t tcp_abort_on_data;
     uint32_t tcp_abort_on_close;
     uint32_t tcp_abort_on_timeout;
+    uint32_t tcp_time_wait_overflow;
     uint32_t tcp_challenge_ack;
     uint32_t tcp_syn_challenge;
     uint32_t tcp_ack_skipped_syn_recv;

@@ -191,16 +191,6 @@ void socket_unref(struct socket *sock)
     (void)sock;
 }
 
-/* The one port another socket has bound, which an ephemeral port must pass
-   over; 0 for none. */
-static uint16_t bound_elsewhere;
-
-/** Report whether `port` is the one another socket has bound. */
-int socket_port_bound(uint16_t port)
-{
-    return bound_elsewhere != 0 && port == bound_elsewhere;
-}
-
 /* A passive open's socket, from a pool of four, which the listener rows
    need no more of. */
 static struct socket sock_pool[4];
@@ -949,17 +939,218 @@ static void half_close_rows(void)
 }
 
 /**
- * Check that an ephemeral port passes over one another socket has bound, as it
- * passes over a port a control block uses.
+ * Hold or give back, as a bound stream socket does, every port of the
+ * ephemeral range from `first` to `last` whose parity is `parity`'s, or of
+ * either parity when `parity` is 2.
+ */
+static void hold_ports(uint32_t first, uint32_t last, unsigned parity, int hold)
+{
+    uint32_t p;
+
+    for (p = first; p <= last; p++) {
+        if (parity == 2 || (p & 1u) == parity) {
+            if (hold) {
+                tcp_port_hold((uint16_t)p);
+            } else {
+                tcp_port_unhold((uint16_t)p);
+            }
+        }
+    }
+}
+
+/**
+ * Make the next connection from `from` to PEER:`dport` start its search for
+ * a port at `port`, an even one of the range, by setting the place of
+ * `port_perturb` its hash picks.
+ */
+static void aim_connect(net_addr_t from, uint16_t dport, uint16_t port)
+{
+    net_addr_t to = net_addr4(PEER);
+    uint32_t h = tcp_tuple_hash(&from, &to, 0, dport);
+
+    port_perturb[h & (TCP_PERTURB_SIZE - 1u)] =
+        ((uint32_t)(port - NET_PORT_LOW) + NET_PORTS - (h >> 8) % NET_PORTS) % NET_PORTS;
+}
+
+/**
+ * Open a connection to PEER:`port` from the peer's `*peer_seq`, close it,
+ * and have the peer acknowledge the FIN and send its own, which leaves the
+ * block detached in TIME_WAIT; returns the block, with its port in `*lport`.
+ */
+static struct tcb *time_wait_conn(struct socket *sock, uint16_t port, uint32_t *peer_seq,
+                                  uint16_t *lport)
+{
+    struct tcb *conn = open_conn(sock, port, peer_seq, lport);
+
+    tcp_close(sock);
+    rx(port, *lport, *peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    rx(port, *lport, *peer_seq, conn->snd_nxt, (uint8_t)(F_FIN | F_ACK), 65535, (const char *)0, 0);
+    (*peer_seq)++;
+    return conn;
+}
+
+/**
+ * Check the ephemeral ports against Linux's: the range 32768 to 60999 of
+ * ip_local_port_range; a bind's port odd and a connection's even while both
+ * halves have room, each search then taking the other half; a port a bound
+ * socket holds passed over by both; a connection's search that wraps from
+ * the top of the range to its bottom; and none at all, EADDRNOTAVAIL for a
+ * connection and 0 for a bind, when every port is held.
  */
 static void ephemeral_rows(void)
 {
+    struct socket sock, other;
+    struct tcb *conn;
+    net_addr_t from;
+    uint16_t port;
+    unsigned i, ok = 1;
+
     reset_all();
-    next_ephemeral = 50000;
-    bound_elsewhere = 50000;
-    CHECK("an ephemeral port passes over a port another socket has bound",
-          tcp_bind_ephemeral() == 50001);
-    bound_elsewhere = 0;
+    for (i = 0; i < 64; i++) {
+        port = tcp_bind_ephemeral();
+        ok &= port >= 32768u && port <= 60999u && (port & 1u) == 1u;
+    }
+    CHECK("a bind's ephemeral port is an odd one from 32768 to 60999", ok);
+    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 1, 1);
+    hold_ports(40001, 40001, 1, 0);
+    CHECK("a bind passes over every port a bound socket holds", tcp_bind_ephemeral() == 40001);
+    hold_ports(40001, 40001, 1, 1);
+    port = tcp_bind_ephemeral();
+    CHECK("and with every odd port held takes an even one",
+          port >= 32768u && port <= 60999u && (port & 1u) == 0u);
+
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("a connection can still be opened", tcp_connect(&sock, net_addr4(PEER), 80) == 0);
+    conn = sock.tcb;
+    CHECK("from an even port of the range",
+          conn && conn->local_port >= 32768u && conn->local_port <= 60999u &&
+              (conn->local_port & 1u) == 0u && conn->port_held == TCP_PORT_AUTO);
+    from = conn ? conn->local_ip : net_addr4(0);
+    tcp_close(&sock);
+    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 1, 0);
+
+    hold_ports(60996, 60998, 0, 1);
+    aim_connect(from, 80, 60996);
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("a connection whose search starts at 60996 with 60996 and 60998 held wraps to 32768",
+          tcp_connect(&sock, net_addr4(PEER), 80) == 0 && sock.tcb &&
+              sock.tcb->local_port == 32768u);
+    tcp_close(&sock);
+    hold_ports(60996, 60998, 0, 0);
+
+    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 2, 1);
+    hold_ports(32771, 32771, 2, 0);
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("with every even port held a connection takes the one odd port free",
+          tcp_connect(&sock, net_addr4(PEER), 80) == 0 && sock.tcb &&
+              sock.tcb->local_port == 32771u);
+    tcp_close(&sock);
+    hold_ports(32771, 32771, 2, 1);
+    k_memset(&other, 0, sizeof(other));
+    CHECK("with every port held a connection is EADDRNOTAVAIL and a bind gets none",
+          tcp_connect(&other, net_addr4(PEER), 80) == -EADDRNOTAVAIL && other.tcb == 0 &&
+              tcp_bind_ephemeral() == 0);
+    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 2, 0);
+    for (i = 0, ok = 1; i < NET_PORTS; i++) {
+        ok &= port_fixed[i] == 0 && port_auto[i] == 0;
+    }
+    reset_all();
+    for (i = 0; i < NET_PORTS; i++) {
+        ok &= port_fixed[i] == 0 && port_auto[i] == 0;
+    }
+    CHECK("and every count is back to 0 once the holds and the blocks are gone", ok);
+}
+
+/**
+ * Check TIME_WAIT against Linux's: a block there for 60 s, in the run at
+ * the list's end that the tick reads only the head of, keeps its port from
+ * the next connection to its peer and from a bind, while a connection to
+ * another peer shares the port, as __inet_hash_connect shares it; and the
+ * port comes back when the TIME_WAIT ends.
+ */
+static void time_wait_rows(void)
+{
+    struct socket sock, next, shared;
+    struct tcb *tw;
+    uint32_t peer_seq = 41000, start;
+    uint16_t lport;
+
+    reset_all();
+    tw = time_wait_conn(&sock, 82, &peer_seq, &lport);
+    CHECK("an active close the peer answers leaves the block in TIME_WAIT, in the run",
+          tw->state == TCP_TIME_WAIT && tw->sock == 0 && tw->tw_listed && tw_first == tw &&
+              tw_count == 1 && tw->send_buf == 0 && tw->recv_buf == 0 &&
+              tw->timewait_until == (uint32_t)kernel_ticks + TCP_MS(60000));
+    start = (uint32_t)kernel_ticks;
+
+    aim_connect(tw->local_ip, 82, lport);
+    k_memset(&next, 0, sizeof(next));
+    CHECK("the next connection to the peer passes over the TIME_WAIT block's port",
+          tcp_connect(&next, net_addr4(PEER), 82) == 0 && next.tcb &&
+              next.tcb->local_port == lport + 2u && tcbs == next.tcb && tcb_last == tw);
+    aim_connect(tw->local_ip, 83, lport);
+    k_memset(&shared, 0, sizeof(shared));
+    CHECK("a connection to another port of the peer shares it, as on Linux",
+          tcp_connect(&shared, net_addr4(PEER), 83) == 0 && shared.tcb &&
+              shared.tcb->local_port == lport && port_auto[lport - NET_PORT_LOW] == 2);
+    tcp_close(&shared);
+    tcp_close(&next);
+
+    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 2, 1);
+    hold_ports(lport, lport, 2, 0);
+    CHECK("a bind does not get a port only a TIME_WAIT block holds", tcp_bind_ephemeral() == 0);
+
+    while ((uint32_t)kernel_ticks - start < TCP_MS(60000) - 1u) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("the block is still in TIME_WAIT a tick before 60 s", tw_first == tw && tw_count == 1);
+    kernel_ticks++;
+    tcp_tick();
+    CHECK("and is freed at 60 s", tw_first == 0 && tw_count == 0 && tcbs == 0);
+    CHECK("which gives its port back to a bind", tcp_bind_ephemeral() == lport);
+    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 2, 0);
+    reset_all();
+}
+
+/**
+ * Check that a FIN the peer sends again restarts TIME_WAIT's 60 s and keeps
+ * the block last in the run, and that a full table of TIME_WAIT blocks
+ * makes a connection skip TIME_WAIT, counted in TCPTimeWaitOverflow, as
+ * Linux's tcp_time_wait does.
+ */
+static void time_wait_more_rows(void)
+{
+    struct socket sock, third;
+    struct tcb *tw, *conn;
+    uint32_t peer_seq = 43000, overflows, fin;
+    uint16_t lport, lport2;
+    unsigned ok;
+
+    reset_all();
+    tw = time_wait_conn(&sock, 84, &peer_seq, &lport);
+    fin = peer_seq - 1u;
+    conn = open_conn(&third, 85, &peer_seq, &lport2);
+    kernel_ticks += 100;
+    rx(84, lport, fin, tw->snd_nxt, (uint8_t)(F_FIN | F_ACK), 65535, (const char *)0, 0);
+    CHECK("a FIN sent again restarts the 60 s and keeps the block last in the run",
+          tw->timewait_until == (uint32_t)kernel_ticks + TCP_MS(60000) && tcb_last == tw &&
+              tw_first == tw && tcbs == conn);
+    tcp_close(&third);
+
+    reset_all();
+    tw_max = 1;
+    overflows = net_mib.tcp_time_wait_overflow;
+    tw = time_wait_conn(&sock, 86, &peer_seq, &lport);
+    conn = time_wait_conn(&third, 87, &peer_seq, &lport2);
+    ok = tw->tw_listed && tw_count == 1 && conn->state == TCP_TIME_WAIT && !conn->tw_listed &&
+         net_mib.tcp_time_wait_overflow == overflows + 1;
+    CHECK("with the table full the next connection skips TIME_WAIT, counted", ok);
+    kernel_ticks++;
+    tcp_tick();
+    CHECK("and is freed at the next tick", tcbs == tw && tw->next == 0 && tw_count == 1);
+    tw_max = 0;
+    reset_all();
 }
 
 /**
@@ -2100,8 +2291,8 @@ static void blackhole_rows(void)
  *     it to the retransmission timer; and a connection whose driver refuses
  *     every transmit is given up after the bound rather than kept for ever;
  *   * the rows of peer_mss_row, window_scale_rows, sack_rows, half_close_rows,
- *     ephemeral_rows, path_mtu_row, keepalive_rows, giveup_rows and
- *     blackhole_rows;
+ *     ephemeral_rows, time_wait_rows, time_wait_more_rows, path_mtu_row,
+ *     keepalive_rows, giveup_rows and blackhole_rows;
  *   * a zero window that closes over a refused segment is flow control, not a
  *     continuing refusal: the connection is kept past the bound and the segment
  *     goes when the window reopens. A connection last in the list behind four
@@ -2379,6 +2570,8 @@ int main(void)
     sack_rows();
     half_close_rows();
     ephemeral_rows();
+    time_wait_rows();
+    time_wait_more_rows();
     path_mtu_row();
     keepalive_rows();
     skipped_tick_rows();

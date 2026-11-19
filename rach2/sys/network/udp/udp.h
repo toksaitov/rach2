@@ -77,9 +77,10 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
  * every such socket, regardless of its owner. Takes `net_lock` itself. */
 int udp_bind(uint16_t port, struct socket *sock);
 
-/** Bind `sock` to the next port from 49152 to 65535 that no binding has, at
- * any address, and record it in `sock->local_port`: the port, or 0 when every
- * one is taken or there is no memory for a binding. */
+/** Bind `sock` to a port of the ephemeral range, NET_PORT_LOW to
+ * NET_PORT_HIGH, that no binding has, at any address, from a random start,
+ * and record it in `sock->local_port`: the port, or 0 when every one is
+ * taken or there is no memory for a binding. */
 uint16_t udp_bind_ephemeral(struct socket *sock);
 
 /** Remove every binding `sock` has, when the socket closes or binds again.

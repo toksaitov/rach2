@@ -146,19 +146,6 @@ void net_ns_gone(struct netns *ns)
     unix_ns_gone(ns);
 }
 
-int socket_port_bound(uint16_t port)
-{
-    const socket_t *s;
-
-    for (s = sockets; s; s = s->next) {
-        if (s->type == SOCK_STREAM && (s->family == AF_INET || s->family == AF_INET6) &&
-            s->local_port == port) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /** Whether `s` is one of the sockets of `family` and `type` asked for, or
  * with `type` 0 a socket of any family and type. */
 static int socket_counted(const socket_t *s, int family, int type)
@@ -270,6 +257,10 @@ void socket_unref(struct socket *sock)
         udp_unbind(sock);
     } else if (sock->type == SOCK_STREAM && sock->tcb) {
         tcp_close(sock);
+    }
+    if (sock->type == SOCK_STREAM && sock->port_held) {
+        tcp_port_unhold(sock->port_held);
+        sock->port_held = 0;
     }
 
     if (sock->type == SOCK_STREAM && sock->listening) {
