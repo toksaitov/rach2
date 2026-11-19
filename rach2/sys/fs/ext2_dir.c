@@ -1505,7 +1505,7 @@ static int inode_make(struct ext2_mount *em, const struct ext2_node *dir, uint32
 {
     uint32_t parent_ino = dir->ino;
     int is_dir = (mode & S_IFMT_) == S_IFDIR_;
-    struct ext2_node *n = ext2_node_make();
+    struct ext2_node *n = ext2_node_make(em);
     uint32_t missed;
     int tries, rc;
 
