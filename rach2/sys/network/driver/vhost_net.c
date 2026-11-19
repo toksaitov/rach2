@@ -1556,8 +1556,10 @@ static void vn_close(fd_entry_t *e)
 
 static const struct file_ops vn_ops = {NULL, NULL, NULL, vn_ioctl, vn_close, NULL, NULL, 0};
 
-/* Linux's numbers for the device, 10:238, read and written by root. */
-static struct devfs_node vn_node = {"vhost-net", 10, 238, 0600, &vn_ops, vn_open, NULL, 0};
+/* Linux's numbers for the device, 10:238, read and written by everyone, as
+ * /dev/kvm is; a root that runs udev gives both the group and mode its
+ * rules name. */
+static struct devfs_node vn_node = {"vhost-net", 10, 238, 0666, &vn_ops, vn_open, NULL, 0};
 
 void vhost_net_start(void)
 {
