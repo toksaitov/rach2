@@ -3821,11 +3821,11 @@ static int repair_sync(void *ctx)
 }
 
 /**
- * Fail each I/O of a dirty-volume repair once. The fixture needs a link
+ * Fail each I/O of a boot or volume repair once. The fixture needs a link
  * repair, a parent repair, duplicate resolution, and a reap with free
  * space on both sides. A later I/O would succeed.
  */
-static void repair_io_rows(void)
+static void repair_io_rows(int boot)
 {
     static const krffs_backend_t backend = {repair_read, repair_store, repair_sync, 0};
     static const struct unlink_extent layout[] = {
@@ -3834,6 +3834,7 @@ static void repair_io_rows(void)
 
     for (i = 0; i <= n; i++) {
         krffs_mount_t mount = mount_over(&backend, disk_image, DISK_IMAGE_SIZE);
+        krffs_mount_t *fs = boot ? &krffs_root_mount : &mount;
         int rc;
 
         make_unlink_image(layout, 6);
@@ -3841,13 +3842,15 @@ static void repair_io_rows(void)
         ((krffs_node_t *)(disk_image + 3000))->parent_id = 77;
         io_at = io_late = io_broken = 0;
         io_fail = i;
-        rc = krffs_repair_at(&mount, NULL, NULL, NULL);
+        rc = boot ? init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend)
+                  : krffs_repair_at(&mount, NULL, NULL, NULL);
         if (i == 0) {
-            check(rc == 0 && !mount.halted, "the complete repair succeeds before injection");
+            check(rc == 0 && !fs->halted, "the complete repair succeeds before injection");
             n = io_at;
-        } else if (!(io_broken && rc != 0 && mount.halted && mount.check_owed && !io_late)) {
-            printf("krffs-hosttest: repair I/O %d: return %d, halt %d, late writes or syncs %d\n",
-                   i, rc, mount.halted, io_late);
+        } else if (!(io_broken && rc != 0 && fs->halted && fs->check_owed && !io_late &&
+                     (!boot || !krffs_fs))) {
+            printf("krffs-hosttest: %s I/O %d: return %d, halt %d, late writes or syncs %d\n",
+                   boot ? "boot" : "volume", i, rc, fs->halted, io_late);
             check(0, "the first repair error halts before any more stores or barriers");
         }
     }
@@ -3957,7 +3960,8 @@ static void withdrawn_sync_row(void)
 /** Run the disk failure rows in isolation or as part of the host suite. */
 static void disk_failure_rows(void)
 {
-    repair_io_rows();
+    repair_io_rows(0);
+    repair_io_rows(1);
     last_extent_row();
     withdrawn_sync_row();
     extent_decision_rows();
