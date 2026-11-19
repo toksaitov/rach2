@@ -1214,6 +1214,69 @@ static void row_dp_override_detect(void)
 }
 
 /**
+ * A DisplayPort monitor on C whose DPCD reads but whose DDC does not
+ * answer, with an override of 10 bits a colour: connected, the override's
+ * depth published, and 1080p set at 30 bits a pixel, as Linux's
+ * compute_sink_pipe_bpp takes display_info.bpc; then the pipe off and the
+ * monitor's own EDID back.
+ */
+static void row_dp_override_depth(void)
+{
+    struct intel_ddi_port *port = &disp->ddi[1];
+    struct drm_connector *dp = &port->dp_connector;
+    struct i915_model_dp_sink *sink = &ddi->sink[INTEL_PORT_C - 1];
+    struct drm_mode_modeinfo m;
+    uint8_t edid[256];
+    uint32_t len = make_edid(edid, &dtd_1080p, 1, NULL, 0);
+
+    edid[0x14] = 0xb5;
+    sum_block(edid);
+    plug_dp_sink();
+    sink->edid_len = 0;
+    CHECK(drm_edid_override_set(dp, edid, len) == 0, "dp depth: override installed");
+    CHECK(find_mode(dp, 1920, 1080, 60, &m) && dp->status == DRM_CONNECTOR_CONNECTED &&
+              dp->bpc == 10 && port->dp.edid_len == 0,
+          "dp depth: no DDC reply, the override's mode and 10 bits a colour published");
+    log_text[0] = 0;
+    CHECK(setcrtc(2, dp, &m, fb_c) == 0 && logged("1920x1080@60, 148500 kHz, 30 bpp, "),
+          "dp depth: 1080p set at the override's 30 bits a pixel");
+    frame();
+    CHECK(setcrtc(2, NULL, NULL, 0) == 0 && !(reg(TRANSCONF(2)) & TRANSCONF_ENABLE),
+          "dp depth: pipe C off");
+    frame();
+    drm_edid_override_reset(dp);
+    plug_dp_sink();
+    (void)drm_helper_probe_single_connector_modes(dp, 8192, 8192);
+}
+
+/**
+ * A DisplayPort branch on C with no DDC reply whose first port, a non-EDID
+ * one, names 1280x720@60: of unknown status, with CEA VIC 4 its one mode
+ * in place of the core's modes for a sink without an EDID, as Linux's
+ * intel_dp_get_modes adds drm_dp_downstream_mode; then the monitor back.
+ */
+static void row_dp_downstream_mode(void)
+{
+    struct drm_connector *dp = &disp->ddi[1].dp_connector;
+    struct i915_model_dp_sink *sink = &ddi->sink[INTEL_PORT_C - 1];
+    struct drm_mode_modeinfo modes[32];
+    uint32_t n;
+
+    plug_dp_sink();
+    sink->dpcd[DP_DOWNSTREAMPORT_PRESENT] = DP_DWN_STRM_PORT_PRESENT;
+    sink->dpcd[DP_DOWN_STREAM_PORT_COUNT] = 1;
+    sink->dpcd[DP_DOWNSTREAM_PORT_0] = DP_DS_PORT_TYPE_NON_EDID | DP_DS_NON_EDID_1280x720_60;
+    sink->edid_len = 0;
+    n = probe_list(dp, modes);
+    CHECK(dp->status == DRM_CONNECTOR_UNKNOWN && !dp->edid && n == 1 &&
+              in_list(modes, n, 1280, 720, 60) && modes[0].clock == 74250 &&
+              modes[0].htotal == 1650 && modes[0].vtotal == 750,
+          "dp downstream: a non-EDID branch port's 1280x720@60 its one mode, no 1024x768");
+    plug_dp_sink();
+    (void)drm_helper_probe_single_connector_modes(dp, 8192, 8192);
+}
+
+/**
  * IGT's kms_hdmi_inject: HDMI-A-2, with no monitor, forced on with a 4K
  * EDID override; its modes those of the override, and 3840x2160@30 set on
  * pipe C from WRPLL 2 at Linux's 297 MHz with the HDMI VIC in the vendor
@@ -1495,6 +1558,8 @@ int main(void)
     row_dp();
     row_hdmi_override_detect();
     row_dp_override_detect();
+    row_dp_override_depth();
+    row_dp_downstream_mode();
     row_inject();
     row_3d();
     row_fini();

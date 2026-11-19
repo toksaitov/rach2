@@ -43,21 +43,28 @@
 
 /* ---- A branch device's downstream ports, DPCD 0x080 to 0x08f ---- */
 
-#define DP_DOWNSTREAM_PORT_0        0x080
-#define DP_MAX_DOWNSTREAM_PORTS     0x10
-#define DP_DS_PORT_TYPE_MASK        (7 << 0)
-#define DP_DS_PORT_TYPE_DP          0
-#define DP_DS_PORT_TYPE_VGA         1
-#define DP_DS_PORT_TYPE_DVI         2
-#define DP_DS_PORT_TYPE_HDMI        3
-#define DP_DS_PORT_TYPE_NON_EDID    4
-#define DP_DS_PORT_TYPE_DP_DUALMODE 5
-#define DP_DS_PORT_HPD              (1 << 3)
-#define DP_DS_MAX_BPC_MASK          (3 << 0)
-#define DP_DS_8BPC                  0
-#define DP_DS_10BPC                 1
-#define DP_DS_12BPC                 2
-#define DP_DS_16BPC                 3
+#define DP_DOWNSTREAM_PORT_0         0x080
+#define DP_MAX_DOWNSTREAM_PORTS      0x10
+#define DP_DS_PORT_TYPE_MASK         (7 << 0)
+#define DP_DS_PORT_TYPE_DP           0
+#define DP_DS_PORT_TYPE_VGA          1
+#define DP_DS_PORT_TYPE_DVI          2
+#define DP_DS_PORT_TYPE_HDMI         3
+#define DP_DS_PORT_TYPE_NON_EDID     4
+#define DP_DS_PORT_TYPE_DP_DUALMODE  5
+#define DP_DS_PORT_HPD               (1 << 3)
+#define DP_DS_NON_EDID_MASK          (0xf << 4)
+#define DP_DS_NON_EDID_720x480i_60   (1 << 4)
+#define DP_DS_NON_EDID_720x480i_50   (2 << 4)
+#define DP_DS_NON_EDID_1920x1080i_60 (3 << 4)
+#define DP_DS_NON_EDID_1920x1080i_50 (4 << 4)
+#define DP_DS_NON_EDID_1280x720_60   (5 << 4)
+#define DP_DS_NON_EDID_1280x720_50   (7 << 4)
+#define DP_DS_MAX_BPC_MASK           (3 << 0)
+#define DP_DS_8BPC                   0
+#define DP_DS_10BPC                  1
+#define DP_DS_12BPC                  2
+#define DP_DS_16BPC                  3
 
 /* The link rates DP_MAX_LINK_RATE and DP_LINK_BW_SET name, in 0.27 Gb/s. */
 #define DP_LINK_BW_1_62 0x06

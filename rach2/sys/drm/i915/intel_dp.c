@@ -341,10 +341,16 @@ static uint32_t max_data_rate(uint32_t rate, uint32_t lanes)
 /** The pipe's bits a pixel the connector allows, Linux's
  * compute_baseline_pipe_bpp and compute_sink_pipe_bpp: 36 on Haswell, cut
  * to the sink's colour depth, 8 bits when its EDID says none, and to "max
- * bpc". */
+ * bpc". A monitor's depth is the connector's published one, as Linux's
+ * display_info.bpc, which an override sets when the sink's DDC does not
+ * answer; the panel's is the EDID read at init. */
 static uint32_t sink_pipe_bpp(const struct intel_dp *dp, const struct drm_connector_state *conn)
 {
-    uint32_t bpc = dp->edid_bpc ? dp->edid_bpc : 8u, bpp = 36u;
+    uint32_t bpc = dp->edp ? dp->edid_bpc : dp->connector->bpc, bpp = 36u;
+
+    if (bpc == 0) {
+        bpc = 8;
+    }
 
     if (conn->max_requested_bpc && conn->max_requested_bpc < bpc) {
         bpc = conn->max_requested_bpc;
@@ -968,13 +974,57 @@ static void intel_dp_ext_force(struct drm_connector *connector)
     }
 }
 
+/** The mode a branch's first port names when it has no EDID, Linux's
+ * drm_dp_downstream_mode: one of six CEA modes of a non-EDID port, into
+ * `out`; 0 for none. */
+static int downstream_mode(const struct intel_dp *dp, struct drm_mode_modeinfo *out)
+{
+    uint32_t vic;
+
+    if (!is_branch(dp->dpcd) || dp->dpcd[DP_DPCD_REV] < DP_DPCD_REV_11 ||
+        (dp->downstream_ports[0] & DP_DS_PORT_TYPE_MASK) != DP_DS_PORT_TYPE_NON_EDID) {
+        return 0;
+    }
+    switch (dp->downstream_ports[0] & DP_DS_NON_EDID_MASK) {
+    case DP_DS_NON_EDID_720x480i_60:
+        vic = 6;
+        break;
+    case DP_DS_NON_EDID_720x480i_50:
+        vic = 21;
+        break;
+    case DP_DS_NON_EDID_1920x1080i_60:
+        vic = 5;
+        break;
+    case DP_DS_NON_EDID_1920x1080i_50:
+        vic = 20;
+        break;
+    case DP_DS_NON_EDID_1280x720_60:
+        vic = 4;
+        break;
+    case DP_DS_NON_EDID_1280x720_50:
+        vic = 19;
+        break;
+    default:
+        return 0;
+    }
+    return drm_display_mode_from_cea_vic(vic, out);
+}
+
 /** The modes of a monitor's EDID, Linux's intel_dp_get_modes for an
- * external port; without one the core's modes stand in. */
+ * external port; without an EDID a branch's port's mode, and without that
+ * the core's modes stand in. */
 static int intel_dp_ext_get_modes(struct drm_connector *connector)
 {
     struct intel_dp *dp = ext_dp(connector);
+    struct drm_mode_modeinfo mode;
+    int n;
 
-    return drm_connector_update_edid(connector, dp->edid_len ? dp->edid : NULL, dp->edid_len);
+    n = drm_connector_update_edid(connector, dp->edid_len ? dp->edid : NULL, dp->edid_len);
+    if (n == 0 && dp->edid_len == 0 && downstream_mode(dp, &mode) &&
+        drm_mode_probed_add(connector, &mode) == 0) {
+        n = 1;
+    }
+    return n;
 }
 
 /** A mode a monitor shows, Linux's intel_dp_mode_valid with
