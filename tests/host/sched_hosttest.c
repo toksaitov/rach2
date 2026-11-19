@@ -4,6 +4,10 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/tick.c
  * host-deps: tests/host/compat/bkl_held.c tests/host/compat/rcu_none.c
+ * host-deps: rach2/sys/lib/rbtree.c rach2/sys/proc/fair.c
+ * host-deps: rach2/sys/proc/fair_group.c rach2/sys/proc/pelt.c
+ * host-deps: rach2/sys/proc/balance.c rach2/sys/proc/autogroup.c
+ * host-deps: tests/host/compat/kheap_host.c
  * host-cflags: -DRACH2_HOST_CPU
  *
  * The interrupt flag, the floating-point saves and the switch of stacks are
@@ -221,6 +225,35 @@ int klog_inside(void)
     return 0;
 }
 
+/** Count a kernel log record, which no row reads. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
+/** Privileged: no row here sets an autogroup's nice value. */
+int cred_privileged(void)
+{
+    return 1;
+}
+
+/** Any nice value is allowed, as `cred_privileged` says. */
+int proc_nice_allowed(const process_t *p, int32_t nice)
+{
+    (void)p;
+    (void)nice;
+    return 1;
+}
+
+/** No modeled process is a kernel thread. */
+int proc_is_kthread(const process_t *p)
+{
+    (void)p;
+    return 0;
+}
+
 /** 0: the model's counter is not measured, so an idle wait does not poll. */
 uint32_t timer_calibrate(void)
 {
@@ -338,7 +371,8 @@ void arch_debug_switch(const struct process *next)
 /** Check the states of a dispatch from `old` to `next` and count it; the
  * test stays on its own stack. An affinity row runs what comes next on the
  * processors here, after the incoming thread's tail, which on the machine
- * runs first and lets `old` be switched to again. */
+ * runs first and lets `old` be switched to again, each thread running a
+ * slice until the woken caller runs. */
 void switch_context(process_t *old, process_t *next)
 {
     CHECK(!irq_flags, "switch with interrupts on");
@@ -372,7 +406,10 @@ void switch_context(process_t *old, process_t *next)
         }
         CHECK(affinity_waits == NULL && old->state == PROC_READY,
               "completion drops the task pointer and wakes the caller");
-        schedule();
+        for (step = 0; step < 4 && current_proc != old; step++) {
+            clock_ns += sysctl_sched_base_slice;
+            schedule();
+        }
         CHECK(current_proc == old, "affinity caller resumes");
     }
 }
@@ -527,10 +564,12 @@ void ip_loop_drain_from(int from)
     loop_drains++;
 }
 
-/** Reset seven processes, 0 running and the rest ready, on one list, with
- * interrupts on and the scheduler started, and no request left on 0: the
- * six are queued as if 0 had been asked already, so that their starts ask
- * it nothing (`sched_wake_preempt`). */
+/** Reset seven processes, 0 running as the fair class's current thread
+ * (`sched_adopt`) and the rest ready, on one list, with interrupts on, the
+ * scheduler started, each processor its own core and cache and no domains
+ * to balance, and no request left on 0:
+ * the six are queued as if 0 had been asked already, so that their starts
+ * ask it nothing (`sched_wake_preempt`). */
 static void setup(void)
 {
     unsigned i;
@@ -557,6 +596,11 @@ static void setup(void)
     switches = 0;
     irq_flags = 0x200;
     init_sched();
+    for (i = 0; i < 4; i++) {
+        balance_cpu_topology((int)i, (uint64_t)1 << i, (uint64_t)1 << i);
+    }
+    balance_build_domains(1);
+    sched_adopt(&procs[0]);
     procs[0].need_resched = 1;
     for (i = 1; i < 7; i++) {
         sched_make_ready(&procs[i]);
@@ -614,6 +658,14 @@ static void affinity_rows(void)
     setup();
 }
 
+/** Take `p`, which is not running, off its queue and give it `state`, as
+ * its own switch away would leave it. */
+static void block(process_t *p, int state)
+{
+    sched_forget(p);
+    p->state = state;
+}
+
 /** Block `p` on a queue and wake it with `wq_wake_all`, as a device's
  * completion does; check that it is ready, marked woken, and off the
  * queue. */
@@ -630,34 +682,76 @@ static void wake(process_t *p)
     CHECK(!queue.head, "wake empties queue");
 }
 
-/** Without wakes the selection rotates through the list. A woken process
- * is chosen ahead of the next in turn once; the selection after it is
- * ordinary, and a second woken process waits for the one after that. */
+/** A periodic tick's interrupt: the tick's part (`sched_tick`), then the
+ * interrupt's end, which takes a request the tick made
+ * (`sched_irq_exit`). */
+static void tick(void)
+{
+    sched_tick();
+    sched_irq_exit();
+}
+
+/** Make process 0, which runs, processor 0's idle task: off the fair
+ * class, as an idle task always is. */
+static void become_idle(void)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+
+    if (fair_rqs[0].curr == &procs[0]) {
+        fair_put_prev(&procs[0]);
+    }
+    if (procs[0].se.on_rq) {
+        (void)fair_dequeue(&procs[0], FAIR_DEQ_FORCED);
+    }
+    cpu_table[0].idle = &procs[0];
+    spin_unlock_irqrestore(&sched_lock, flags);
+}
+
+/** Let the running thread run one base slice of the modeled clock. */
+static void run_slice(void)
+{
+    clock_ns += sysctl_sched_base_slice;
+}
+
+static void wake_quiet(void);
+
+/**
+ * Seven equal ordinary threads, each of which runs a base slice before
+ * every selection, run in turn: EEVDF picks the earliest deadline among the
+ * eligible, and a slice run moves the runner's deadline a slice on, so each
+ * thread runs twice in fourteen selections. A wake while the running thread
+ * is within its slice asks it nothing, as RUN_TO_PARITY keeps the processor
+ * to it (kernel/sched/fair.c:930-931); one after it has run past its slice
+ * asks it to switch, and the woken threads run next.
+ */
 static void priority(void)
 {
-    unsigned i;
+    unsigned i, runs[7] = {0, 0, 0, 0, 0, 0, 0};
 
     setup();
     for (i = 1; i <= 14; i++) {
+        run_slice();
         schedule();
-        CHECK(current_proc == &procs[i % 7], "ordinary rotation without wakes");
+        runs[current_proc->pid]++;
+    }
+    for (i = 0; i < 7; i++) {
+        CHECK(runs[i] == 2, "each of seven equal threads runs twice in fourteen slices");
     }
     setup();
-    schedule();
-    CHECK(current_proc == &procs[1], "ordinary first selection");
+    wake_quiet();
     wake(&procs[6]);
-    schedule();
-    CHECK(current_proc == &procs[6], "woken sleeper precedes spinner");
+    CHECK(!procs[0].need_resched, "a wake within the running thread's slice asks it nothing");
+    clock_ns += 2u * sysctl_sched_base_slice;
     wake(&procs[5]);
+    CHECK(procs[0].need_resched, "a wake after the running thread's slice asks it to switch");
     schedule();
-    CHECK(current_proc == &procs[2], "ordinary turn follows preferred wake");
-    schedule();
-    CHECK(current_proc == &procs[5], "pending wake follows ordinary turn");
+    CHECK(current_proc == &procs[5] || current_proc == &procs[6], "and a woken thread runs next");
     CHECK(irq_flags == 0x200, "enabled interrupts restored");
 }
 
-/** Two processes woken before every selection never keep one of the other
- * five from running for fourteen selections, two rotations. */
+/** Two processes woken before every selection, each slice run, never keep
+ * one of the other five from running for fourteen selections, two
+ * rotations: a wake keeps the lag the sleeper left with and gains none. */
 static void fairness(void)
 {
     unsigned step, i;
@@ -667,6 +761,7 @@ static void fairness(void)
     for (step = 1; step <= 200; step++) {
         wake(&procs[5]);
         wake(&procs[6]);
+        run_slice();
         schedule();
         if (current_proc->pid < 5) {
             last[current_proc->pid] = step;
@@ -705,18 +800,22 @@ static void states(void)
     CHECK(wq_wait_event(&queue, ready, NULL) == 0, "ready wait returns");
     CHECK(!current_proc->woken, "wait return consumes wake mark");
     current_proc->woken = 1;
-    procs[1].state = PROC_BLOCKED;
-    procs[2].state = PROC_STOPPED;
-    procs[3].state = PROC_ZOMBIE;
+    block(&procs[1], PROC_BLOCKED);
+    block(&procs[2], PROC_STOPPED);
+    block(&procs[3], PROC_ZOMBIE);
     for (i = 1; i < 4; i++) {
         procs[i].woken = 1;
     }
+    run_slice();
     schedule();
-    CHECK(current_proc == &procs[4], "only ready records are selected");
+    CHECK(current_proc->pid >= 4, "only ready records are selected");
     CHECK(!procs[0].woken, "running process cannot keep an idle wake");
     for (i = 0; i < 7; i++) {
-        procs[i].state = PROC_BLOCKED;
+        if (&procs[i] != current_proc) {
+            block(&procs[i], PROC_BLOCKED);
+        }
     }
+    current_proc->state = PROC_BLOCKED;
     switches = 0;
     irq_flags = 0;
     schedule();
@@ -730,7 +829,7 @@ static void states(void)
 /**
  * A stopped scheduler selects nothing. In a system call a preemption only
  * marks the process, and the exit from the call takes it with interrupts
- * still off. A removed ready entry leaves the next entry selectable.
+ * still off. A thread taken off its queue is not selected, and another is.
  * A selection over an empty list restores the interrupt flag, and one with
  * no current process returns. A kernel thread (`no_tick_switch`) keeps the
  * tick's request in its record for its next sleep or service point, and a
@@ -746,12 +845,13 @@ static void lifecycle(void)
     CHECK(!switches, "disabled scheduler does nothing");
     sched_enable();
     current_proc->in_syscall = 1;
+    run_slice();
     wake(&procs[6]);
     sched_preempt();
     CHECK(!switches && current_proc->need_resched, "syscall defers preemption");
     irq_flags = 0;
     sched_take_preempt();
-    CHECK(current_proc == &procs[6] && !procs[0].need_resched, "syscall exit takes wake");
+    CHECK(current_proc != &procs[0] && !procs[0].need_resched, "syscall exit takes the request");
     CHECK(!irq_flags, "syscall exit keeps interrupts off");
     setup();
     current_proc->no_tick_switch = 1;
@@ -760,20 +860,17 @@ static void lifecycle(void)
     CHECK(!switches && current_proc == &procs[0] && procs[0].need_resched,
           "kernel thread keeps the tick's request for its service point");
     for (i = 1; i < 7; i++) {
-        procs[i].state = PROC_BLOCKED;
+        block(&procs[i], PROC_BLOCKED);
     }
     schedule();
     CHECK(!switches && current_proc == &procs[0] && !procs[0].need_resched,
           "schedule that keeps the thread clears its request");
     setup();
-    schedule();
     sched_forget(&procs[1]);
-    procs[0].next = &procs[2];
-    procs[2].prev = &procs[0];
-    current_proc = &procs[0];
-    current_proc->state = PROC_RUNNING;
+    run_slice();
     schedule();
-    CHECK(current_proc == &procs[2], "ready removal preserves the next entry");
+    CHECK(current_proc != &procs[1] && current_proc != &procs[0],
+          "a thread taken off its queue is not selected, and the next one is");
     init_sched();
     sched_enable();
     proc_list = NULL;
@@ -799,6 +896,7 @@ static void big_lock(void)
     bkl_takes = 0;
     procs[0].on_cpu = 1;
     this_cpu()->bkl_depth = 2;
+    run_slice();
     schedule();
     CHECK(current_proc != &procs[0] && procs[0].bkl_depth == 2,
           "a switch saves the outgoing thread's depth");
@@ -807,6 +905,7 @@ static void big_lock(void)
     CHECK(!procs[0].on_cpu && current_proc->on_cpu,
           "the tail clears the outgoing thread's on_cpu and the incoming one's is set");
     for (i = 0; i < 7 && current_proc != &procs[0]; i++) {
+        run_slice();
         schedule();
     }
     CHECK(current_proc == &procs[0] && this_cpu()->bkl_depth == 2 && bkl_takes == 1 &&
@@ -1025,27 +1124,26 @@ static void ready_lists(void)
     CHECK(sched_work_count(1) - before == baseline, "blocked records add no pick entries");
     sched_make_ready(&procs[3]);
     sched_make_ready(&procs[3]);
-    CHECK(run_queues[0].count == 6, "repeated wake has one ready entry");
+    CHECK(sched_queued(0) == 6 && procs[3].se.on_rq, "repeated wake has one ready entry");
     CHECK(!current_proc->ready_linked, "current process is off the ready list");
     sched_forget(&procs[3]);
     sched_forget(&procs[3]);
-    CHECK(run_queues[0].count == 5, "removal is idempotent");
+    CHECK(sched_queued(0) == 5 && !procs[3].se.on_rq, "removal is idempotent");
 }
 
 /**
- * Of two wakes of one blocked record, the first makes it ready, marks it
- * woken and asks for an interrupt to the processor it outranks the current
- * thread of, whose `need_resched` it sets, as Linux's resched_curr
- * (kernel/sched/core.c:1094-1116), and so does an ordinary record woken
- * where an ordinary thread runs (`sched_wake_preempt`); the second,
- * finding it ready under the run queues' lock, asks for none and leaves it
- * where it is in its list,
- * ahead of a record made ready after the first, as Linux's `try_to_wake_up`
- * leaves a task whose state no longer matches (kernel/sched/core.c:4191-
- * 4193). A running or a stopped record is left as it was. A signal's wake
- * clears the deadline and marks the record woken; the tick's wakes a
- * sleeper only once its deadline is due, and marks it woken too, so that
- * the slice gives way to either.
+ * Of two wakes of one blocked real-time record, the first makes it ready,
+ * marks it woken and asks for an interrupt to the processor it outranks the
+ * current thread of, whose `need_resched` it sets, as Linux's resched_curr
+ * (kernel/sched/core.c:1094-1116); an ordinary record woken where an
+ * ordinary thread runs within its slice asks nothing (`sched_wake_preempt`);
+ * the second wake, finding the first record ready under the run queues'
+ * lock, asks for none and leaves it where it is in its list, as Linux's
+ * `try_to_wake_up` leaves a task whose state no longer matches
+ * (kernel/sched/core.c:4191-4193). A running or a stopped record is left
+ * as it was. A signal's wake clears the deadline, queues the record and
+ * marks it woken; the tick's wakes a sleeper only once its deadline is due,
+ * and marks it woken too.
  */
 static void wake_twice(void)
 {
@@ -1063,14 +1161,14 @@ static void wake_twice(void)
     CHECK(current_proc->need_resched, "and asks the thread it outranks to switch");
     current_proc->need_resched = 0;
     CHECK(p->state == PROC_READY && p->woken && p->ready_linked, "the first wake queues and marks");
-    CHECK(run_queues[0].count == 5 && run_queues[0].tail == p, "the first wake queues at the tail");
-    CHECK(sched_wake_blocked(&procs[4]) == 0 && current_proc->need_resched,
-          "an equal ordinary record asks the ordinary thread to switch, with an interrupt");
+    CHECK(run_queues[0].count == 1 && run_queues[0].tail == p, "the first wake queues at the tail");
+    CHECK(sched_wake_blocked(&procs[4]) == -1 && !current_proc->need_resched && procs[4].se.on_rq,
+          "an ordinary record woken within the running thread's slice asks nothing");
     CHECK(sched_wake_blocked(p) == -1, "the second wake asks for no interrupt");
     CHECK(wakes == 1, "only the wake making the sleeper ready is counted");
     p->wait_wakeups = NULL;
-    CHECK(run_queues[0].count == 6 && run_queues[0].tail == &procs[4],
-          "the second wake leaves the record ahead of a later one");
+    CHECK(run_queues[0].count == 1 && run_queues[0].tail == p,
+          "the second wake leaves the record where it is");
     p->rt_priority = 0;
     CHECK(sched_wake_blocked(current_proc) == -1, "a running record asks for nothing");
     CHECK(current_proc->state == PROC_RUNNING && !current_proc->woken &&
@@ -1092,7 +1190,7 @@ static void wake_twice(void)
           "the tick leaves a sleeper not yet due");
     sched_wake_signal(&procs[5]);
     CHECK(procs[5].state == PROC_READY && procs[5].wakeup_tick == 0 && procs[5].woken &&
-              run_queues[0].tail == &procs[5],
+              procs[5].se.on_rq,
           "a signal's wake queues the sleeper, clears its deadline and marks it");
     CHECK(wakes == 1, "a signal's wake leaves the wait's wake counter alone");
     sched_forget(&procs[4]);
@@ -1102,18 +1200,21 @@ static void wake_twice(void)
     procs[4].wakeup_tick = 9;
     sched_wake_due(&procs[4], 9);
     CHECK(procs[4].state == PROC_READY && procs[4].wakeup_tick == 0 && procs[4].woken &&
-              run_queues[0].tail == &procs[4],
+              procs[4].se.on_rq,
           "the tick's wake queues a due sleeper, clears its deadline and marks it");
     procs[5].wakeup_tick = 9;
     sched_wake_signal(&procs[5]);
     sched_wake_due(&procs[5], 9);
-    CHECK(procs[5].wakeup_tick == 9 && run_queues[0].tail == &procs[4],
+    CHECK(procs[5].wakeup_tick == 9 && procs[5].se.on_rq && sched_queued(0) == 5,
           "a ready record is left in place, its deadline as it was");
     CHECK(wakes == 2, "a deadline that makes a sleeper ready is counted once");
     procs[4].wait_wakeups = procs[5].wait_wakeups = NULL;
 }
 
-/** Affinity moves queued work, and an idle processor steals eligible work. */
+/** Affinity moves queued work, and a processor whose queue empties pulls
+ * work its affinity allows from a busier one (`fair_balance_newidle`), one
+ * that has not run there for longer than migration_cost_ns, with the
+ * newly idle balance's random skip (NI_RANDOM) off for the row. */
 static void migration(void)
 {
     unsigned int i;
@@ -1121,15 +1222,20 @@ static void migration(void)
     setup();
     cpu_table[1].online = 1;
     cpu_table[1].current = cpu_table[1].idle = NULL;
+    balance_build_domains(3);
     for (i = 1; i < 7; i++) {
         sched_set_affinity(&procs[i], 2);
     }
-    CHECK(run_queues[0].count == 0 && run_queues[1].count == 6, "affinity transfers queue counts");
+    CHECK(sched_queued(0) == 0 && sched_queued(1) == 6, "affinity transfers queue counts");
     sched_set_affinity(&procs[4], 3);
+    clock_ns += 2u * sysctl_sched_migration_cost;
     current_proc->state = PROC_BLOCKED;
+    sched_features &= ~(1ul << FEAT_NI_RANDOM);
     schedule();
-    CHECK(current_proc == &procs[4], "idle processor steals an allowed donor entry");
-    CHECK(run_queues[1].count == 5 && !procs[4].ready_linked, "steal unlinks before dispatch");
+    sched_features |= 1ul << FEAT_NI_RANDOM;
+    CHECK(current_proc == &procs[4], "a processor going idle pulls an allowed thread");
+    CHECK(sched_queued(1) == 5 && procs[4].cpu == 0 && fair_rqs[0].curr == &procs[4],
+          "the pulled thread leaves the busy processor's queue for this one's");
     sched_make_ready(current_proc);
     sched_make_ready(current_proc);
     CHECK(!current_proc->ready_linked, "wake before switching keeps current unqueued");
@@ -1138,6 +1244,7 @@ static void migration(void)
           "in-place wake continues when no other local process is ready");
     cpu_table[1].online = 0;
     init_sched();
+    balance_build_domains(1);
 }
 
 /** Block procs[1] to procs[6] off every list and clear the request and the
@@ -1158,10 +1265,11 @@ static void wake_quiet(void)
 }
 
 /**
- * A wake of an ordinary thread where an ordinary thread runs asks that
- * thread to switch and kicks its processor, as Linux's
- * check_preempt_wakeup_fair calls resched_curr (kernel/sched/fair.c:
- * 8862-8951), once: a second wake before the switch sends no second kick.
+ * A wake of an ordinary thread where an ordinary thread runs past its slice
+ * asks that thread to switch and kicks its processor, as Linux's
+ * check_preempt_wakeup_fair calls resched_curr when EEVDF would pick the
+ * woken thread (kernel/sched/fair.c:8862-8951), once: a second wake before
+ * the switch sends no second kick.
  * A SCHED_BATCH or SCHED_IDLE thread preempts nothing; a SCHED_IDLE thread
  * gives way to an ordinary one and not to another SCHED_IDLE one
  * (fair.c:8911-8925); and a kernel thread (`no_tick_switch`) is asked with
@@ -1174,6 +1282,7 @@ static void wake_preempt(void)
 {
     setup();
     wake_quiet();
+    clock_ns += 2u * sysctl_sched_base_slice;
     CHECK(sched_wake_blocked(&procs[1]) == 0 && procs[0].need_resched &&
               (procs[0].work & WORK_RESCHED),
           "an ordinary wake asks the ordinary thread running to switch, with a kick");
@@ -1199,20 +1308,23 @@ static void wake_preempt(void)
     wake_quiet();
     procs[0].sched_policy = SCHED_OTHER;
     procs[0].no_tick_switch = 1;
+    clock_ns += 2u * sysctl_sched_base_slice;
     CHECK(sched_wake_blocked(&procs[1]) == -1 && procs[0].need_resched,
           "a kernel thread is asked to switch, with no kick");
     procs[0].no_tick_switch = 0;
 
     wake_quiet();
     cpu_table[1].online = 1;
-    cpu_table[1].current = &procs[3];
-    procs[3].state = PROC_RUNNING;
-    procs[3].cpu = 1;
-    CHECK(sched_wake_blocked(&procs[1]) == 0 && procs[1].cpu == 0 && procs[1].woken,
+    host_cpu = 1;
+    sched_adopt(&procs[3]);
+    host_cpu = 0;
+    (void)sched_wake_blocked(&procs[1]);
+    CHECK(procs[1].cpu == 0 && procs[1].woken,
           "a wake queues on the waker's processor, which shares no cache with another");
     procs[0].need_resched = 0;
+    clock_ns += 2u * sysctl_sched_base_slice;
     sched_set_affinity(&procs[1], 2);
-    CHECK(procs[1].cpu == 1 && run_queues[1].count == 1 && procs[3].need_resched &&
+    CHECK(procs[1].cpu == 1 && sched_queued(1) == 1 && procs[3].need_resched &&
               (procs[3].work & WORK_RESCHED) && cpu_kicks[1] == 1,
           "an affinity move onto a busy processor asks its ordinary thread to switch, with a kick");
     cpu_table[1].online = 0;
@@ -1221,11 +1333,14 @@ static void wake_preempt(void)
 
 /**
  * Of four processors sharing a cache, 0 and 1 one core and 2 and 3 another,
- * a wake whose last processor, 0, is busy goes to the idle core before 0's
- * idle sibling, as Linux's select_idle_cpu takes a whole idle core first
- * (select_idle_core, kernel/sched/fair.c:7720-7748, 7843-7848); with no
- * core all idle, it goes to 0's idle sibling (select_idle_smt,
- * fair.c:7751-7768, 8035-8041).
+ * once each idle one has selected its idle task, which records a core all
+ * idle (`update_idle_core`), and 0's periodic balance has measured how many
+ * of the cache domain a wake scans (SIS_UTIL's `nr_idle_scan`,
+ * fair.c:7807-7815, 11024-11093), a wake whose last processor, 0, is busy goes
+ * to the idle core before 0's idle sibling, as Linux's select_idle_cpu
+ * takes a whole idle core first (select_idle_core, kernel/sched/fair.c:
+ * 7720-7748, 7843-7848); with no core all idle, it goes to 0's idle
+ * sibling (select_idle_smt, fair.c:7751-7768, 8035-8041).
  */
 static void wake_place_core(void)
 {
@@ -1243,19 +1358,30 @@ static void wake_place_core(void)
         host_cpu = (unsigned int)c;
         sched_cache_join(0xF, c < 2 ? 0x3 : 0xC);
     }
+    for (c = 1; c < 4; c++) {
+        host_cpu = (unsigned int)c;
+        schedule();
+    }
+    for (c = 0; c < 32; c++) {
+        if (c % 4 == 0) {
+            kernel_ticks += TICK_HZ;
+        }
+        host_cpu = (unsigned int)(c % 4);
+        sched_tick();
+    }
     host_cpu = 0;
+    procs[0].need_resched = 0;
+    procs[0].work = 0;
     CHECK(sched_wake_blocked(&procs[1]) == 2 && procs[1].cpu == 2 && procs[5].need_resched &&
               !procs[4].need_resched,
           "a wake goes to an idle core before the busy core's idle sibling");
     CHECK(sched_wake_blocked(&procs[2]) == 1 && procs[2].cpu == 1 && procs[4].need_resched,
           "with no core all idle, a wake goes to its last processor's idle sibling");
-    k_memset(cache_peers, 0, sizeof(cache_peers));
-    k_memset(core_peers, 0, sizeof(core_peers));
-    smt_active = 0;
     for (c = 1; c < 4; c++) {
         cpu_table[c].online = 0;
     }
     init_sched();
+    balance_build_domains(1);
 }
 
 /**
@@ -1264,46 +1390,59 @@ static void wake_place_core(void)
  * sched_info, and each switch onto a processor counts in pcount: a wait of
  * 2^32 + 10^6 microseconds, past any 32-bit count of microseconds, counts
  * whole; a wait begun before the scheduler is on counts nothing; a move to
- * another processor's queue keeps the wait, which counts whole when an idle
- * processor steals the thread; and a suspend's hold adds the wait so far,
+ * another processor's queue keeps the wait, which counts whole when a
+ * processor going idle pulls the thread; and a suspend's hold adds the wait
+ * so far,
  * counts none while it lasts, and starts each queued thread's wait again.
  */
 static void run_delay(void)
 {
     const uint64_t wait = ((uint64_t)1 << 32) * 1000u + 1000000000u;
+    const uint64_t cold = 2u * (uint64_t)sysctl_sched_migration_cost;
+    uint64_t slices;
+    process_t *first, *second;
     unsigned int i;
 
     clock_ns = (uint64_t)7 * 1000000000u + 123u;
     setup();
+    for (i = 2; i < 7; i++) {
+        block(&procs[i], PROC_BLOCKED);
+    }
+    clock_ns += wait;
+    schedule();
+    CHECK(current_proc == &procs[1] && procs[1].run_delay == 0 && procs[1].pcount == 1,
+          "a wait begun before the scheduler was on counts nothing");
     wake(&procs[6]);
     clock_ns += wait;
     schedule();
     CHECK(current_proc == &procs[6] && procs[6].run_delay == wait && procs[6].pcount == 1,
           "a wait past 2^32 microseconds counts whole in run_delay");
-    clock_ns += 5000u;
-    schedule();
-    CHECK(current_proc == &procs[1] && procs[1].run_delay == 0 && procs[1].pcount == 1,
-          "a wait begun before the scheduler was on counts nothing");
 
     setup();
     cpu_table[1].online = 1;
     cpu_table[1].current = cpu_table[1].idle = NULL;
+    balance_build_domains(3);
     wake(&procs[4]);
     clock_ns += 1000u;
     for (i = 1; i < 7; i++) {
         sched_set_affinity(&procs[i], 2);
     }
-    clock_ns += 2000u;
+    clock_ns += cold;
     sched_set_affinity(&procs[4], 3);
     current_proc->state = PROC_BLOCKED;
+    sched_features &= ~(1ul << FEAT_NI_RANDOM);
     schedule();
-    CHECK(current_proc == &procs[4] && procs[4].run_delay == 3000u && procs[4].pcount == 1,
-          "a wait moved to another queue counts whole when an idle processor steals it");
+    sched_features |= 1ul << FEAT_NI_RANDOM;
+    CHECK(current_proc == &procs[4] && procs[4].run_delay == 1000u + cold && procs[4].pcount == 1,
+          "a wait moved to another queue counts whole when an idle processor pulls it");
     cpu_table[1].online = 0;
     init_sched();
+    balance_build_domains(1);
 
     setup();
+    wake_quiet();
     wake(&procs[6]);
+    wake(&procs[1]);
     clock_ns += 1000u;
     sched_hold_waits(1);
     CHECK(procs[6].run_delay == 1000u && !procs[6].run_queued,
@@ -1312,24 +1451,31 @@ static void run_delay(void)
     sched_hold_waits(0);
     clock_ns += 500u;
     schedule();
-    CHECK(current_proc == &procs[6] && procs[6].run_delay == 1500u,
+    first = current_proc;
+    second = first == &procs[6] ? &procs[1] : &procs[6];
+    CHECK((first == &procs[6] || first == &procs[1]) && first->run_delay == 1500u,
           "the suspend counts nothing and the wait starts again at its end");
-    clock_ns += 700u;
+    slices = 2u * sysctl_sched_base_slice;
+    clock_ns += slices;
     schedule();
-    CHECK(current_proc == &procs[1] && procs[1].run_delay == 1200u,
+    CHECK(current_proc == second && second->run_delay == 1500u + slices,
           "every queued thread's wait starts at the suspend's end");
     clock_ns = 0;
 }
 
 /**
- * The tick switches a thread for another of its processor's queue only once
- * it has run SCHED_SLICE_NS, 0.75 ms, since it was switched in, unless a
- * woken or real-time thread waits there. So a thread that a yield runs for
- * 200 us, as KVM's steal_time selftest runs one, ends before the yielder
+ * The tick switches an ordinary thread for another of its processor's
+ * queue only once it has run its slice, 0.75 ms, as Linux's update_deadline
+ * asks for a switch only when the virtual runtime reaches the deadline
+ * (kernel/sched/fair.c:1022-1045, 1245-1273). So a thread that a yield runs
+ * for 200 us, as KVM's steal_time selftest runs one, ends before the yielder
  * runs again although a tick falls inside its run, and the yielder's
- * run_delay grows by the whole of it; a thread that has run its slice gives
- * way at the tick, and a real-time thread made ready with no wake's mark
- * takes the processor at the next tick within the slice.
+ * run_delay grows by the whole of it. Of two fresh equal threads, the
+ * running one keeps the processor at a tick 1 ns short of its slice and
+ * gives way at the tick that ends it. A real-time thread made ready asks
+ * the ordinary thread running to switch at once, as wakeup_preempt does for
+ * a higher class (kernel/sched/core.c:2151-2157), and takes the processor at
+ * the end of the next interrupt.
  */
 static void tick_slice(void)
 {
@@ -1338,15 +1484,14 @@ static void tick_slice(void)
     clock_ns = 1000000000u;
     setup();
     for (i = 2; i < 7; i++) {
-        sched_forget(&procs[i]);
-        procs[i].state = PROC_BLOCKED;
+        block(&procs[i], PROC_BLOCKED);
     }
     procs[0].sched_yielded = 1;
     schedule();
     CHECK(current_proc == &procs[1] && procs[0].run_delay == 0, "the yield runs the other thread");
     clock_ns += 100000u;
     irq_flags = 0;
-    sched_tick();
+    tick();
     CHECK(current_proc == &procs[1] && switches == 1,
           "a tick 100 us into a thread's run leaves it running");
     clock_ns += 150000u;
@@ -1354,71 +1499,80 @@ static void tick_slice(void)
     schedule();
     CHECK(current_proc == &procs[0] && procs[0].run_delay == 250000u,
           "the yielder waits the whole run of the thread it yielded to");
-    sched_make_ready(&procs[1]);
-    clock_ns += 749999u;
-    sched_tick();
+
+    setup();
+    for (i = 2; i < 7; i++) {
+        block(&procs[i], PROC_BLOCKED);
+    }
+    clock_ns += sysctl_sched_base_slice - 1u;
+    tick();
     CHECK(current_proc == &procs[0], "a thread 1 ns short of its slice keeps the processor");
     clock_ns += 1u;
-    sched_tick();
+    tick();
     CHECK(current_proc == &procs[1], "a thread that has run its slice gives way at the tick");
-    wake(&procs[2]);
-    sched_tick();
-    CHECK(current_proc == &procs[2], "a woken thread takes the processor at the tick at once");
     procs[3].sched_policy = SCHED_FIFO;
     procs[3].rt_priority = 10;
     sched_make_ready(&procs[3]);
-    CHECK(current_proc == &procs[2] && !procs[3].woken,
-          "a real-time thread made ready, unmarked, waits for the tick");
-    sched_tick();
-    CHECK(current_proc == &procs[3],
-          "and takes the processor at the tick within the current thread's slice");
+    CHECK(current_proc == &procs[1] && procs[1].need_resched,
+          "a real-time thread made ready asks the ordinary thread running to switch");
+    sched_irq_exit();
+    CHECK(current_proc == &procs[3], "and takes the processor at the interrupt's end");
     clock_ns = 0;
 }
 
-/** A lower-priority queue never arms RR's slice, an expired slice asks
- * once for selection, and selection that keeps the current thread renews
- * its slice even when its competitor became ineligible. */
+/**
+ * The slice event, Linux's hrtick, is armed at the moment the running
+ * ordinary thread reaches its deadline while another competes
+ * (`fair_next_event_ns`, as hrtick_start_fair arms it only with more than
+ * one thread queued, kernel/sched/fair.c:6875-6893), and not for a lone
+ * thread; at that moment it charges the slice and asks for a switch, arming
+ * nothing again, and the competitor runs. A real-time thread arms none,
+ * even with an equal RR peer queued: RR's slice is the tick's.
+ */
 static void slice_events(void)
 {
     unsigned i, armed;
 
     clock_ns = 1000000000u;
     setup();
-    for (i = 2; i < 7; i++) {
-        sched_forget(&procs[i]);
-        procs[i].state = PROC_BLOCKED;
+    for (i = 1; i < 7; i++) {
+        block(&procs[i], PROC_BLOCKED);
     }
-    procs[0].sched_policy = procs[1].sched_policy = SCHED_RR;
-    procs[0].rt_priority = 50;
-    procs[1].rt_priority = 40;
-    sched_priority_changed(&procs[1]);
-    procs[0].slice_ns = clock_ns;
     irq_flags = 0;
     slice_arms = 0;
     sched_slice_rearm();
-    clock_ns += 2u * SCHED_INTERVAL_NS;
+    CHECK(!slice_arms && !procs[0].need_resched, "a lone ordinary thread arms no slice event");
+    sched_make_ready(&procs[1]);
+    procs[0].need_resched = 0;
+    procs[0].work = 0;
     sched_slice_rearm();
-    CHECK(!slice_arms && !procs[0].need_resched,
-          "lower-priority work arms no RR event, even after expiry");
-    schedule();
-    CHECK(current_proc == &procs[0] && procs[0].slice_ns == clock_ns,
-          "selection that keeps RR consumes the old slice");
-
-    procs[1].rt_priority = 50;
-    sched_slice_rearm();
-    CHECK(slice_arms == 1 && slice_event == (int64_t)(clock_ns + SCHED_INTERVAL_NS),
-          "an eligible equal RR peer arms the slice once");
-    clock_ns += SCHED_INTERVAL_NS;
+    CHECK(slice_arms == 1 && slice_event >= (int64_t)(clock_ns + sysctl_sched_base_slice) &&
+              slice_event <= (int64_t)(clock_ns + sysctl_sched_base_slice + 1u),
+          "a competitor arms the event at the running thread's deadline, rounded up");
+    clock_ns = (uint64_t)slice_event;
     armed = slice_arms;
     sched_slice_rearm();
-    sched_slice_rearm();
     CHECK(procs[0].need_resched && (procs[0].work & WORK_RESCHED) && slice_arms == armed,
-          "expiry requests selection without an immediate event");
-    procs[1].affinity = 2;
+          "the event's moment charges the slice and asks for a switch, arming nothing");
     schedule();
-    CHECK(current_proc == &procs[0] && !procs[0].need_resched && procs[0].slice_ns == clock_ns &&
-              slice_arms == armed,
-          "an ineligible peer leaves a fresh slice and no repeated event");
+    CHECK(current_proc == &procs[1], "and the competitor runs");
+
+    setup();
+    for (i = 2; i < 7; i++) {
+        block(&procs[i], PROC_BLOCKED);
+    }
+    procs[0].sched_policy = procs[1].sched_policy = SCHED_RR;
+    procs[0].rt_priority = procs[1].rt_priority = 50;
+    sched_priority_changed(&procs[0]);
+    sched_priority_changed(&procs[1]);
+    procs[0].need_resched = 0;
+    procs[0].work = 0;
+    slice_arms = 0;
+    sched_slice_rearm();
+    clock_ns += 2u * sysctl_sched_base_slice;
+    sched_slice_rearm();
+    CHECK(!slice_arms && !procs[0].need_resched,
+          "a real-time thread arms no slice event, even with an equal RR peer queued");
     clock_ns = 0;
 }
 
@@ -1452,25 +1606,25 @@ static void tick_rr(void)
     procs[0].slice_ns = clock_ns;
     clock_ns += 100000u;
     irq_flags = 0;
-    sched_tick();
+    tick();
     CHECK(current_proc == &procs[0] && switches == 0,
           "an equal SCHED_RR peer waits for the slice at the tick");
     wake(&procs[2]);
-    sched_tick();
+    tick();
     CHECK(current_proc == &procs[0] && switches == 0 && procs[2].woken && !procs[0].need_resched,
           "an ordinary woken thread under the RR pair lets no tick rotate it");
     procs[1].rt_priority = 11;
     sched_priority_changed(&procs[1]);
     CHECK(procs[0].need_resched && !procs[1].need_resched,
           "a raise of the queued peer asks the running thread to switch");
-    sched_tick();
+    tick();
     CHECK(current_proc == &procs[1] && switches == 1 && !procs[0].need_resched,
           "a higher real-time thread takes the processor at the tick within the slice");
     procs[1].rt_priority = 9;
     sched_priority_changed(&procs[1]);
     CHECK(procs[1].need_resched && !procs[0].need_resched,
           "a running thread lowered below a queued one asks itself to switch");
-    sched_tick();
+    tick();
     CHECK(current_proc == &procs[0] && switches == 2,
           "and the tick gives the processor to the queued one");
     clock_ns = 0;
@@ -1538,7 +1692,7 @@ static void tick_rt(void)
     sched_set_affinity(&procs[2], 3);
     CHECK(run_queues[1].count == 1 && !procs[0].need_resched,
           "an affinity that keeps processor 1 leaves it queued there");
-    sched_tick();
+    tick();
     CHECK(current_proc == &procs[2] && procs[2].cpu == 0 && switches == 1,
           "processor 0's tick within an ordinary slice takes it from processor 1's queue");
 
@@ -1597,9 +1751,11 @@ static void count_out(void *arg, int preempted)
 /**
  * A thread's `sched_out` is called at each switch away from it, and only
  * then, saying whether the thread can still run: not when selection keeps
- * a SCHED_FIFO thread over ordinary or equal ones, once, preempted, when a
- * SCHED_RR thread gives way to an equal one, and once, not preempted, when
- * a thread blocks.
+ * a SCHED_FIFO thread over ordinary or equal ones, nor a SCHED_RR thread
+ * within its slice over an equal one; once, preempted, when the SCHED_RR
+ * thread's slice runs out at the tick and it gives way to the equal one, as
+ * Linux's task_tick_rt requeues it (kernel/sched/rt.c:2586-2602); and
+ * once, not preempted, when a thread blocks.
  */
 static void sched_out_rows(void)
 {
@@ -1628,11 +1784,17 @@ static void sched_out_rows(void)
           "a SCHED_FIFO thread kept over an equal one is not told either");
     current_proc->sched_policy = SCHED_RR;
     current_proc->need_resched = 1;
+    sched_take_preempt();
+    CHECK(current_proc == &procs[0] && !switches && !out_calls,
+          "a SCHED_RR thread within its slice is kept over an equal one, nor told");
     nivcsw = procs[0].nivcsw;
+    procs[0].rr_used = (uint32_t)rr_timeslice - 1u;
+    tick();
+    CHECK(procs[0].need_resched && procs[0].rr_used == 0, "the tick ends the RR slice");
     sched_take_preempt();
     CHECK(current_proc == &procs[3] && switches == 1 && out_calls == 1 && out_preempted == 1 &&
               out_arg == &procs[0] && procs[0].nivcsw == nivcsw + 1,
-          "a SCHED_RR thread that gives way to an equal one is told once, at the switch");
+          "a SCHED_RR thread whose slice ran out gives way to an equal one, told once");
     procs[3].sched_out = count_out;
     procs[3].sched_out_arg = &procs[3];
     procs[3].state = PROC_BLOCKED;
@@ -1776,7 +1938,7 @@ static void nohz_switch(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     clock_ns = 4000000000u;
     this_cpu()->accounted_ns = clock_ns;
     this_cpu()->steal_ns = steal_clock_ns;
@@ -1809,7 +1971,7 @@ static void nohz_ready_entry(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     irq_flags = 0;
     idle_timer_ready = 1;
     idle_timer_enters = idle_halts = 0;
@@ -1833,7 +1995,7 @@ static void nohz_ready_entry(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     irq_flags = 0;
     idle_timer_enters = idle_halts = 0;
     idle_wake_on_enter = 1;
@@ -1854,7 +2016,7 @@ static void cancel_setup(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     irq_flags = 0;
     idle_timer_ready = 1;
     idle_timer_enters = idle_halts = 0;
@@ -1977,7 +2139,7 @@ static void nohz_poll_before_stop(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     procs[1].affinity = 1;
     irq_flags = 0;
     this_cpu()->idle_poll_us = 20;
@@ -2017,7 +2179,7 @@ static void nohz_short_waits(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     this_cpu()->idle_short = 1;
     this_cpu()->idle_poll_us = 0;
     poll_rate = TICK_US;
@@ -2052,7 +2214,7 @@ static void nohz_poll_tick(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     this_cpu()->idle_short = 1;
     this_cpu()->idle_poll_us = 20;
     poll_rate = TICK_US;
@@ -2074,7 +2236,7 @@ static void nohz_dirty_poll(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     this_cpu()->idle_short = 1;
     this_cpu()->idle_poll_us = 20;
     poll_rate = TICK_US;
@@ -2098,7 +2260,7 @@ static void nohz_absorbed_service(void)
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
     }
-    this_cpu()->idle = &procs[0];
+    become_idle();
     this_cpu()->idle_short = 1;
     sched_idle_awake();
     service_pending = 1;
@@ -2138,7 +2300,7 @@ static void nohz_absorbed_service(void)
 static void idle_kicked(void)
 {
     setup();
-    cpu_table[0].idle = current_proc;
+    become_idle();
     irq_flags = 0;
     idle_halts = irq_windows = 0;
     sched_idle_awake();
@@ -2160,10 +2322,14 @@ static void idle_kicked(void)
 
 /**
  * Two busy processors whose ticks choose one idle processor with a stopped
- * tick, before that processor's selection, kick it once: the first claims
- * its idle task's request (`need_resched`), and the second finds it set, as
- * a wake's kick finds it (`sched_preempt_cpu`). Processors 0 and 1 each
- * queue a thread that processor 2, idle, may take.
+ * tick kick it once, as Linux's kick_ilb leaves a processor already asked
+ * (kernel/sched/fair.c:12384-12412): processors 0 and 1 each run a thread
+ * and have another woken onto their queue, and processor 2, idle with its
+ * tick stopped (`fair_balance_idle_enter`), is kicked by the first tick and
+ * not the second. Its idle loop's balance (`fair_nohz_balance`) then pulls a
+ * thread and asks its idle task to select it. The woken threads may run only
+ * on their own processor or on 2, since processor 1, its utilization low,
+ * would otherwise pull processor 0's thread at its own tick.
  */
 static void balance_once(void)
 {
@@ -2171,38 +2337,48 @@ static void balance_once(void)
 
     setup();
     for (i = 1; i < 7; i++) {
-        sched_forget(&procs[i]);
-        procs[i].state = PROC_BLOCKED;
+        block(&procs[i], PROC_BLOCKED);
     }
     cpu_table[1].online = 1;
-    cpu_table[1].current = &procs[1];
-    procs[1].state = PROC_RUNNING;
-    procs[1].cpu = procs[3].cpu = 1;
-    procs[2].cpu = 0;
-    sched_make_ready(&procs[2]);
-    sched_make_ready(&procs[3]);
-    CHECK(run_queues[0].count == 1 && run_queues[1].count == 1,
-          "each busy processor queues a thread");
     cpu_table[2].online = 1;
     cpu_table[2].current = cpu_table[2].idle = &procs[6];
     procs[6].state = PROC_RUNNING;
     procs[6].cpu = 2;
-    procs[6].need_resched = 0;
-    cpu_table[2].tick_stopped = 1;
-    k_memset(cpu_kicks, 0, sizeof(cpu_kicks));
-    irq_flags = 0;
-    sched_idle_balance();
     host_cpu = 1;
+    sched_adopt(&procs[1]);
+    host_cpu = 0;
+    balance_build_domains(7);
+    procs[2].cpu = 0;
+    procs[3].cpu = 1;
+    procs[2].pcount = procs[3].pcount = 1;
+    procs[2].affinity = 5;
+    procs[3].affinity = 6;
+    sched_make_ready(&procs[2]);
+    sched_make_ready(&procs[3]);
+    CHECK(procs[2].cpu == 0 && procs[3].cpu == 1 && sched_queued(0) == 1 && sched_queued(1) == 1,
+          "each busy processor queues a thread");
+    fair_balance_idle_enter(2);
+    cpu_table[2].tick_stopped = 1;
+    procs[0].need_resched = procs[1].need_resched = procs[6].need_resched = 0;
+    k_memset(cpu_kicks, 0, sizeof(cpu_kicks));
+    kernel_ticks += TICK_HZ;
+    clock_ns += 2u * (uint64_t)sysctl_sched_migration_cost;
+    irq_flags = 0;
+    sched_tick();
+    host_cpu = 1;
+    sched_tick();
+    host_cpu = 0;
+    CHECK(cpu_kicks[2] == 1, "two balancers that choose one idle processor kick it once");
+    host_cpu = 2;
     sched_idle_balance();
     host_cpu = 0;
-    CHECK(cpu_kicks[2] == 1 && procs[6].need_resched,
-          "two balancers that choose one idle processor kick it once");
-    CHECK(run_queues[0].count == 1 && run_queues[1].count == 1,
-          "the balancers leave the threads for the idle processor to take");
+    CHECK(sched_queued(2) == 1 && procs[6].need_resched,
+          "the kicked processor's balance pulls a thread and asks its idle task to select it");
     cpu_table[2].tick_stopped = 0;
     cpu_table[2].online = 0;
     cpu_table[1].online = 0;
     init_sched();
+    balance_build_domains(1);
     irq_flags = 0x200;
 }
 

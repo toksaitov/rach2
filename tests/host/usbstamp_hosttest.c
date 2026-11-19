@@ -1,7 +1,11 @@
 /**
  * Drive the production USB recorder and scheduler with explicit event order.
  *
- * host-deps: tests/host/compat/rcu_none.c
+ * host-deps: tests/host/compat/rcu_none.c rach2/sys/lib/rbtree.c
+ * host-deps: rach2/sys/proc/fair.c rach2/sys/proc/fair_group.c
+ * host-deps: rach2/sys/proc/pelt.c rach2/sys/proc/balance.c
+ * host-deps: rach2/sys/proc/autogroup.c tests/host/compat/kheap_host.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The clock, interrupt mask and CPU switch are substituted. An optional
  * argument emits one record for the USB suite's own AWK checker.
@@ -497,6 +501,27 @@ static void finish(void)
 /** One processor: nothing to answer. */
 void smp_service(void)
 {}
+
+/** Privileged: no row here sets an autogroup's nice value. */
+int cred_privileged(void)
+{
+    return 1;
+}
+
+/** Any nice value is allowed, as `cred_privileged` says. */
+int proc_nice_allowed(const process_t *p, int32_t nice)
+{
+    (void)p;
+    (void)nice;
+    return 1;
+}
+
+/** Neither modelled process is a kernel thread. */
+int proc_is_kthread(const process_t *p)
+{
+    (void)p;
+    return 0;
+}
 
 /** Store `value` at `p` and return what was there: one thread. */
 unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
