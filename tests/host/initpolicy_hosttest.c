@@ -7,8 +7,9 @@
  *
  * initpolicy_hosttest.c: init's redirection of its services' output, its
  * SSH policy lines and server arguments, the environment it starts the
- * console's login with, and its finding wpa_supplicant and wpa_cli where
- * each image with a Wi-Fi configuration stages them.
+ * console's login with, its finding wpa_supplicant and wpa_cli where each
+ * image with a Wi-Fi configuration stages them, and its reading of the
+ * mixer's and the backlights' kept files.
  *
  * `utils/init.c` is included whole, as the metal build with the console
  * login, with fopen, dup2, unlink, the execs, fork, waitpid, reboot, access
@@ -622,6 +623,73 @@ static void wifi_case(const char *manifest, const char *port, const char *name)
  * arguments, every redirection failure, the signal rows, the login's
  * environment and the Wi-Fi programs of each image. 0 when every check
  * passed, 1 otherwise. */
+/** Write the `n` bytes of `text` to the file `path`. */
+static void put_file(const char *path, const char *text, size_t n)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    check(fd >= 0 && write(fd, text, n) == (ssize_t)n, "kept: a file of the row written");
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
+/**
+ * The kept levels' files: the mixer's channel lines with mixer(1)'s record
+ * of a mute as its `mute` line, `mute none`, an older init's file with no
+ * such line, and mute lines cut short or out of range; and a settings file
+ * read from its replacement when it is missing, as a stop inside KRFFS's
+ * rename leaves it, but not from a replacement cut short, nor while the
+ * file itself is there. The files are made in a directory of TMPDIR's and
+ * removed at the row's end.
+ */
+static void kept_rows(void)
+{
+    const char *tmp = getenv("TMPDIR");
+    char dir[PATH_MAX], kept[PATH_MAX + 8], fresh[PATH_MAX + 8], text[24];
+    char mute[MUTE_RECORD_MAX];
+    int levels[MIXER_CHANNELS], has, from_fresh;
+
+    check(parse_mixer("vol 5:6\npcm 100:0\nmute 40:41\n", levels, mute, &has) == 0 &&
+              levels[0] == (5 | 6 << 8) && levels[4] == 100 && levels[1] == -1 && has &&
+              strcmp(mute, "40:41\n") == 0,
+          "kept: the mixer's levels and its record of a mute in one file");
+    check(parse_mixer("vol 0:0\nmute none\n", levels, mute, &has) == 0 && has && mute[0] == '\0' &&
+              levels[0] == 0,
+          "kept: mute none is no record");
+    check(parse_mixer("vol 1:1\n", levels, mute, &has) == 0 && !has && mute[0] == '\0',
+          "kept: an older init's file has no mute line");
+    check(parse_mixer("vol 1:1\nmute 40\n", levels, mute, &has) != 0 &&
+              parse_mixer("vol 1:1\nmute 101:0\n", levels, mute, &has) != 0,
+          "kept: a mute line cut short or out of range is malformed");
+    check(mute_record("40:41\n") && !mute_record("40:41") && !mute_record("101:0\n") &&
+              !mute_record("4:4\nx"),
+          "kept: a record of a mute is L:R and a newline alone");
+
+    snprintf(dir, sizeof(dir), "%s/initkept.XXXXXX", tmp != NULL && *tmp != '\0' ? tmp : "/tmp");
+    if (mkdtemp(dir) == NULL) {
+        check(0, "kept: a directory for the row made");
+        return;
+    }
+    snprintf(kept, sizeof(kept), "%s/b", dir);
+    snprintf(fresh, sizeof(fresh), "%s/b.new", dir);
+    check(read_kept(kept, fresh, text, sizeof(text), &from_fresh) < 0,
+          "kept: neither file is no level");
+    put_file(fresh, "37\n", 3);
+    check(read_kept(kept, fresh, text, sizeof(text), &from_fresh) == 3 && from_fresh &&
+              strcmp(text, "37\n") == 0,
+          "kept: the replacement read when the file is missing");
+    put_file(fresh, "3", 1);
+    check(read_kept(kept, fresh, text, sizeof(text), &from_fresh) < 0,
+          "kept: a replacement cut short is not read");
+    put_file(kept, "40\n", 3);
+    check(read_kept(kept, fresh, text, sizeof(text), &from_fresh) == 3 && !from_fresh &&
+              strcmp(text, "40\n") == 0,
+          "kept: the file read while it is there, its replacement not");
+    check(unlink(kept) == 0 && unlink(fresh) == 0 && rmdir(dir) == 0,
+          "kept: the row's files removed");
+}
+
 int main(void)
 {
     static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};
@@ -690,6 +758,7 @@ int main(void)
               "the recovery system runs its wpa_supplicant");
     wifi_case("krffs/manifests/os-real-gnu.manifest", "vendor/gnu/ports/wpa_supplicant.sh",
               "the GNU root runs its wpa_supplicant");
+    kept_rows();
     fclose(log);
     close(nullfd);
     printf("initpolicy-hosttest: result: %s\n", Failed ? "fail" : "pass");
