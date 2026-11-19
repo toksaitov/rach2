@@ -2204,6 +2204,12 @@ int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t fr
  * override if connected, and add its modes to the probed modes. Return
  * the number added. Clear the property when no EDID is available. */
 int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len);
+/** Set `connector`'s EDID property, size, bits a colour and refresh range
+ * from `edid` of `len` bytes as given, with no override taken and no mode
+ * added, or clear them for NULL, as Linux's drm_edid_connector_update does
+ * from a driver's detect. Under the device's mode_lock. */
+void drm_connector_update_edid_property(struct drm_connector *connector, const uint8_t *edid,
+                                        uint32_t len);
 
 /** The VIC of the CEA-861 mode `mode` is, Linux's drm_match_cea_mode: its
  * timings, a clock of the same period in picoseconds as the table's or its

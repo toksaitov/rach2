@@ -1830,7 +1830,11 @@ static int add_probed(const struct drm_mode_modeinfo *mode, void *arg)
     return drm_mode_probed_add((struct drm_connector *)arg, mode) == 0 ? 0 : -1;
 }
 
-int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len)
+/** Set `connector`'s EDID property and what it says from `edid` of `len`
+ * bytes, cleaned; the cleaned copy into `*out` with its blocks when `out`
+ * is not NULL, which the caller frees. */
+static void update_property(struct drm_connector *connector, const uint8_t *edid, uint32_t len,
+                            uint8_t **out, uint32_t *out_blocks)
 {
     struct drm_device *dev = connector->dev;
     struct drm_property_blob *blob = NULL;
@@ -1838,12 +1842,7 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
     uint32_t blocks = 0;
     uint8_t *clean;
     int32_t err = 0;
-    int n = 0;
 
-    if (connector->status == DRM_CONNECTOR_CONNECTED && connector->edid_override) {
-        edid = connector->edid_override;
-        len = connector->edid_override_len;
-    }
     clean = edid_clean(edid, len, &blocks);
     /* A new blob each time, made before the old one goes, as Linux's
      * drm_property_replace_global_blob makes it. */
@@ -1860,6 +1859,31 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
     connector->bpc = info.bpc;
     connector->min_vfreq = info.min_vfreq;
     connector->max_vfreq = info.max_vfreq;
+    if (out) {
+        *out = clean;
+        *out_blocks = blocks;
+    } else {
+        kfree(clean);
+    }
+}
+
+void drm_connector_update_edid_property(struct drm_connector *connector, const uint8_t *edid,
+                                        uint32_t len)
+{
+    update_property(connector, edid, len, NULL, NULL);
+}
+
+int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len)
+{
+    uint32_t blocks = 0;
+    uint8_t *clean;
+    int n = 0;
+
+    if (connector->status == DRM_CONNECTOR_CONNECTED && connector->edid_override) {
+        edid = connector->edid_override;
+        len = connector->edid_override_len;
+    }
+    update_property(connector, edid, len, &clean, &blocks);
     if (clean) {
         n = drm_edid_parse_modes(clean, blocks * EDID_LENGTH, add_probed, connector);
     }

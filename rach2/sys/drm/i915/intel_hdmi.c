@@ -251,7 +251,9 @@ static int32_t hdmi_read_edid(struct intel_ddi_port *p, const struct intel_i2c_b
 
 /**
  * Read the EDID over GMBUS and try again by bit-banging on failure,
- * as intel_hdmi_set_edid does. Return 1 for a digital sink.
+ * as intel_hdmi_set_edid does, and set the connector's EDID property from
+ * what was read, the override, the sink's or none, so that a probe that
+ * finds no sink clears it. Return 1 for a digital sink. Under mode_lock.
  */
 static int hdmi_set_edid(struct intel_ddi_port *p)
 {
@@ -274,7 +276,14 @@ static int hdmi_set_edid(struct intel_ddi_port *p)
         intel_gmbus_force_bit(i915, hdmi->ddc_pin, 0);
     }
     if (err != 0) {
+        drm_connector_update_edid_property(connector, NULL, 0);
         return 0;
+    }
+    if (connector->edid_override) {
+        drm_connector_update_edid_property(connector, connector->edid_override,
+                                           connector->edid_override_len);
+    } else {
+        drm_connector_update_edid_property(connector, hdmi->edid, hdmi->edid_len);
     }
     drm_edid_hdmi_info(connector, hdmi->edid, hdmi->edid_len, &hdmi->info);
     if (!hdmi->info.digital) {
