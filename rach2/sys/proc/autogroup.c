@@ -92,12 +92,18 @@ static struct autogroup *autogroup_set_thread(struct process *p, struct autogrou
     return old;
 }
 
-/** Whether `t` is a thread of `tg` that runs, or will run, in user mode: one
- * that has not ended or begun to, Linux's test of PF_EXITING. A thread that
- * fork is still building is one. */
+/** Whether `t` is a thread of `tg` that runs in user mode: one that has
+ * not ended or begun to, Linux's test of PF_EXITING. A thread that a clone
+ * still builds, PROC_UNUSED, is none: it has no group until the clone's
+ * `autogroup_fork`, after the clone's last failure, joins it to its thread
+ * group's, as Linux's autogroup_move_group moves only the threads on the
+ * thread group's list, which a clone joins after its last failure
+ * (kernel/sched/autogroup.c:184-185, kernel/fork.c:2578-2626). A clone that
+ * fails therefore leaves no group a member it never gives back. */
 static int autogroup_member(const struct process *t, const struct tgroup *tg)
 {
-    return t->tg == tg && t->state != PROC_ZOMBIE && t->futex_exit_state == 0;
+    return t->tg == tg && t->state != PROC_ZOMBIE && t->state != PROC_UNUSED &&
+           t->futex_exit_state == 0;
 }
 
 void autogroup_setsid(struct process *p)
