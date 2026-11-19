@@ -2413,6 +2413,16 @@ uint64_t sched_rr_interval_ns(const process_t *p)
     return loaded ? tick_div64(slice, TICK_NS, NULL) * TICK_NS : 0;
 }
 
+uint64_t sched_slice_ns(const process_t *p)
+{
+    uint64_t slice;
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+
+    slice = p->se.cfs_rq ? p->se.slice : p->sched_slice ? p->sched_slice : sysctl_sched_base_slice;
+    spin_unlock_irqrestore(&sched_lock, flags);
+    return slice;
+}
+
 void sched_rt_bandwidth(int *period_us, int *runtime_us)
 {
     *period_us = rt_period_us;
