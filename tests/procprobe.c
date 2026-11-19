@@ -83,7 +83,7 @@
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
 
-#define CLOCK_MONOTONIC 1
+#define CLOCK_THREAD_CPUTIME_ID 3
 
 #define O_RDONLY     0
 #define O_WRONLY     1
@@ -685,25 +685,28 @@ static void nap(long ms)
     syscall3(SYS_NANOSLEEP, (long)&req, 0, 0);
 }
 
-/** Spin for `ms` of wall time in user code, which keeps the processor busy.
+/** Spin in user code until the thread has run for `ms`, which keeps the
+ * processor busy.
  *
- * Bounded by the monotonic clock rather than by an iteration count, so the
- * two halves of the idle test cost the same wall time on any host, and by a
- * source independent of the counters being measured. */
+ * Bounded by the thread's own CPU time rather than by an iteration count or
+ * the monotonic clock: a tick a hypervisor stole is counted as steal and
+ * charged to no thread, in Linux as here, so a spin of 600 ms of the clock
+ * on a loaded host can be charged a dozen busy ticks, too few to measure,
+ * while one of 600 ms of the thread's time is charged its 600. */
 static void spin(long ms)
 {
     struct timespec_probe start, now;
     volatile int x = 0;
     long elapsed = 0;
 
-    syscall3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&start, 0);
+    syscall3(SYS_CLOCK_GETTIME, CLOCK_THREAD_CPUTIME_ID, (long)&start, 0);
     while (elapsed < ms) {
         int i;
 
         for (i = 0; i < 20000; i++) {
             x = x + 1;
         }
-        syscall3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&now, 0);
+        syscall3(SYS_CLOCK_GETTIME, CLOCK_THREAD_CPUTIME_ID, (long)&now, 0);
         elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_nsec - start.tv_nsec) / 1000000L;
     }
 }
@@ -724,20 +727,27 @@ static int processors(void)
 }
 
 /**
- * Busy ticks, read out of /proc/stat's cpu line.
+ * Busy ticks, read out of /proc/stat's cpu line, and into `*other`, when it
+ * is not null, the ticks of the columns that are neither busy nor idle.
  *
- * The line is `cpu user nice system idle ...`, and a busy tick is charged to
- * user, nice or system, so the busy figure is the sum of the first three.
- * Read from a different file than the idle count on purpose: the two must
- * agree, and they cannot be checked against each other if one is derived from
- * the other.
+ * The line is `cpu user nice system idle iowait irq softirq steal ...`, and
+ * a busy tick is charged to user, nice or system, so the busy figure is the
+ * sum of the first three. iowait, irq, softirq and steal are the rest of a
+ * processor's time that is not idle: Linux's columns, user to steal, sum to
+ * the time each processor has been up, and guest and guest_nice are already
+ * in user and nice. Read from a different file than the idle count on
+ * purpose: the two must agree, and they cannot be checked against each other
+ * if one is derived from the other.
  */
-static int busy_ticks_now(void)
+static int busy_ticks_now(int *other)
 {
     char t[320];
-    int n, i, seen = 0, v, sum = 0;
+    int n, i, seen = 0, v, sum = 0, rest = 0;
 
     n = slurp("/proc/stat", t, (int)sizeof(t));
+    if (other != 0) {
+        *other = -1;
+    }
     if (n <= 0) {
         return -1;
     }
@@ -748,8 +758,17 @@ static int busy_ticks_now(void)
                 v = v * 10 + (t[i] - '0');
                 i++;
             }
-            sum += v;
-            if (++seen == 3) {
+            ++seen;
+            if (seen <= 3) {
+                sum += v;
+            } else if (seen >= 5) {
+                rest += v;
+            }
+            if (seen == 3 && other == 0) {
+                return sum;
+            }
+            if (seen == 8) {
+                *other = rest;
                 return sum;
             }
         }
@@ -3437,16 +3456,20 @@ static void btime_rows(void)
 }
 
 /**
- * Idle against busy, over two intervals of the same length: sleeping leaves
- * the processors idle and running does not, so the halves must move in
- * opposite directions; and the two together must account for every tick the
- * timer delivered, which is the boot processor's count in /proc/uptime for
- * each processor. A spinner runs on every processor, so that busy is ahead
- * of idle however many there are. Busy is read from /proc/stat's own
- * columns, user, nice and system, rather than worked out as the total less
- * the idle: defined that way the sum is an identity and holds however wrong
- * both counters are. The total comes from /proc/uptime and the busy columns
- * from /proc/stat, which are two reads, and a tick that lands between them
+ * Idle against busy, over a sleep of 600 ms and a spin of 600 ms of each
+ * spinner's own time: sleeping leaves the processors idle and running does
+ * not, so the halves must move in opposite directions; and the two together
+ * must account for every tick the timer delivered, which is the boot
+ * processor's count in /proc/uptime for each processor, once the ticks of
+ * /proc/stat's other columns are added: iowait, irq, softirq and steal, the
+ * last the time a hypervisor kept the processor from running, which a loaded
+ * host makes large under KVM and which counts as neither idle nor busy, in
+ * Linux as here. A spinner runs on every processor, so that busy is ahead of
+ * idle however many there are. Busy is read from /proc/stat's own columns,
+ * user, nice and system, rather than worked out as the total less the idle:
+ * defined that way the sum is an identity and holds however wrong both
+ * counters are. The total comes from /proc/uptime and the rest from
+ * /proc/stat, which are two reads, and a tick that lands between them
  * belongs to one sample and not the other; the slack of four ticks for each
  * processor is the ticks those system calls can span on a loaded machine.
  */
@@ -3454,15 +3477,15 @@ static void tick_rows(void)
 {
     int n;
     int t0, i0, t1, i1, t2, i2;
-    int b0, b1, b2;
+    int b0, b1, b2, o0, o2;
     int idle_slept, busy_slept, idle_spun, busy_spun;
     int cpus = processors(), k;
 
     ticks_now(&t0, &i0);
-    b0 = busy_ticks_now();
+    b0 = busy_ticks_now(&o0);
     nap(600);
     ticks_now(&t1, &i1);
-    b1 = busy_ticks_now();
+    b1 = busy_ticks_now(0);
     for (k = 1; k < cpus; k++) {
         if (syscall1(SYS_FORK, 0) == 0) {
             spin(600);
@@ -3471,14 +3494,15 @@ static void tick_rows(void)
     }
     spin(600);
     ticks_now(&t2, &i2);
-    b2 = busy_ticks_now();
+    b2 = busy_ticks_now(&o2);
     for (k = 1; k < cpus; k++) {
         syscall3(SYS_WAITPID, -1, 0, 0);
     }
 
     check("ticks-uptime-parses", t0 >= 0 && i0 >= 0 && t1 >= 0 && i1 >= 0 && t2 >= 0 && i2 >= 0,
           "/proc/uptime parses on every read");
-    check("ticks-stat-parses", b0 >= 0 && b1 >= 0 && b2 >= 0, "/proc/stat's busy columns parse");
+    check("ticks-stat-parses", b0 >= 0 && b1 >= 0 && b2 >= 0 && o0 >= 0 && o2 >= 0,
+          "/proc/stat's busy columns and those up to steal parse");
     idle_slept = i1 - i0;
     busy_slept = b1 - b0;
     idle_spun = i2 - i1;
@@ -3492,18 +3516,19 @@ static void tick_rows(void)
     check("ticks-busy-enough", busy_spun >= 20, "and enough of them to be a measurement");
     {
         /* A tick between the reads of two files counts in one alone. */
-        int drift = (t2 - t0) * cpus - ((i2 - i0) + (b2 - b0));
+        int drift = (t2 - t0) * cpus - ((i2 - i0) + (b2 - b0) + (o2 - o0));
 
         if (drift < 0) {
             drift = -drift;
         }
         check("ticks-counted-once", drift <= 4 * cpus,
-              "every delivered tick was counted once, as idle or as busy");
+              "every delivered tick was counted once, as idle, busy or another column");
         if (drift > 4 * cpus) {
             say_number("  ticks: uptime ", t2 - t0);
             say_number(", processors ", cpus);
             say_number(", idle ", i2 - i0);
             say_number(", busy ", b2 - b0);
+            say_number(", other ", o2 - o0);
             puts("; /proc/stat now:");
             n = slurp("/proc/stat", buf, (int)sizeof(buf));
             syscall3(SYS_WRITE, STDOUT_FILENO, (long)buf, n > 0 ? n : 0);
