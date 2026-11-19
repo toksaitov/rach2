@@ -104,17 +104,20 @@ and data in a closing state are acknowledged at once.
 The largest window is the smaller of the receive buffer and what the
 window scale can offer.
 Every segment with ACK and without SYN before TIME_WAIT offers the window
-as it stands when it is sent, by three rules.
-While less than half the largest window is free, less than a sixteenth of
-it or than a full segment is taken as zero, and the quick acknowledgements
-end, whatever window is offered, as in Linux's
-.Fn __tcp_select_window .
+as it stands when it is sent.
+While less than half the largest window is free, a window less than a
+sixteenth of it or than a full segment is taken as zero, and the quick
+acknowledgements end, whatever window is offered; Linux's
+.Fn __tcp_select_window
+likewise turns to a zero window and ends them when space is low, by
+measures of its own.
 A window less than the bytes left below the furthest right edge an earlier
 segment with ACK was built with, one IP refused among them, is raised to
-them, and then rounded down to the window scale's unit, so that the edge
-moves back by less than that unit; Linux's
+them; Linux's
 .Fn tcp_select_window
-rounds it up instead.
+rounds such a floor up to the window scale's unit.
+Every scaled window is sent rounded down to that unit, so that the edge
+can move back by less than one unit.
 In TIME_WAIT an acknowledgement offers the window saved, selected before
 or on entering it, even after a read and when the first acknowledgement of
 the FIN was not sent.
