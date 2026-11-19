@@ -7,10 +7,14 @@
  * host-deps: tests/native/deploy_remote.c tests/native/collection_lock.c
  * host-deps: tests/host/compat/fixdir_host.c
  * host-cflags: -I tests/native -I tools/etude/include -Wall -Wextra -Werror
+ * host-cflags: -Dmkdir=nd_test_mkdir -Dunlink=nd_test_unlink
  *
- * nd_ssh is replaced by one that keeps the command; the test cuts out the
- * machine's identity guard and the collection's exec, and points the kernel's
- * boot_id, the etude boot token and /proc/$$/stat at files of its own.
+ * mkdir and unlink in the linked sources call this program's, which can end
+ * the process just after a named call, so that the collection's lock is
+ * stopped between its steps. nd_ssh is replaced by one that keeps the
+ * command; the test cuts out the machine's identity guard and the
+ * collection's exec, and points the kernel's boot_id, the etude boot token
+ * and /proc/$$/stat at files of its own.
  *
  * A controller claim or a collection lock of this boot, recorded with the
  * kernel's boot_id or, by an older deployment, with the etude boot token,
@@ -50,6 +54,13 @@
 #include "deploy.h"
 #include "fixdir_host.h"
 
+/* The sources call nd_test_mkdir and nd_test_unlink; this file, the C
+ * library's. */
+#undef mkdir
+#undef unlink
+int mkdir(const char *path, mode_t mode);
+int unlink(const char *path);
+
 #define BOOT_ID  "6c3e0f4a-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
 #define OTHER_ID "11111111-2222-4333-8444-555555555555"
 #define TOKEN    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -58,7 +69,9 @@
 #define RECEIPT  " 4321 " BOOT_ID /* how the new receipt ends */
 
 static int failures;
-static char sent[32768]; /* the command nd_ssh was given last */
+static const char *stop_mkdir;  /* a path ending that ends the process at its mkdir */
+static const char *stop_unlink; /* likewise at its unlink */
+static char sent[32768];        /* the command nd_ssh was given last */
 
 #define CHECK(cond, what)                                                   \
     do {                                                                    \
@@ -89,6 +102,33 @@ int nd_ssh(struct nd_deploy *d, const char *name, const char *command, const cha
     *process = NULL;
     snprintf(sent, sizeof(sent), "%s", command);
     return 0;
+}
+
+/** Whether `path` ends with `end`, which may be NULL. */
+static int ends(const char *path, const char *end)
+{
+    size_t n = strlen(path);
+    return end && n >= strlen(end) && !strcmp(path + n - strlen(end), end);
+}
+
+/** mkdir(2), then the end of the process with status 9 when `path` ends
+ * with stop_mkdir. */
+int nd_test_mkdir(const char *path, mode_t mode)
+{
+    int status = mkdir(path, mode);
+    if (ends(path, stop_mkdir))
+        _exit(9);
+    return status;
+}
+
+/** unlink(2), then the end of the process with status 9 when `path` ends
+ * with stop_unlink. */
+int nd_test_unlink(const char *path)
+{
+    int status = unlink(path);
+    if (ends(path, stop_unlink))
+        _exit(9);
+    return status;
 }
 
 /** Write `text` to `path`, ending the test when it cannot. */
@@ -347,40 +387,65 @@ static int self_start(char *out, size_t size)
  * collection, as on Linux and Rach2. */
 static void live_rows(const char *plain)
 {
-    char out[1024], start[32], identity[256], state[1024];
+    char out[1024], start[32], identity[256];
     const char *t;
     pid_t pid;
-    int status, gate[2];
+    int status, gate[2], hold[2];
     char byte;
 
     if (!self_start(start, sizeof(start)))
         return;
     t = tree("liveclaim");
+    fix_format(identity, sizeof(identity), "%ld %s " OLDTOKEN "\n", (long)getpid(), start);
+    claim(t, "old", identity);
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a live claim of an old token fails the setup");
+    CHECK(claimed(t, "old") && !says(out, "cleared"), "the setup clears a live claim of a token");
+
+    t = tree("liveother");
     fix_format(identity, sizeof(identity), "%ld %s " OTHER_ID "\n", (long)getpid(), start);
     claim(t, "old", identity);
     fix_format(out, sizeof(out), "%s/out", t);
-    CHECK(setup(t, plain, out) == 0, "a live claim of another boot fails the setup");
-    CHECK(claimed(t, "old") && !says(out, "cleared"), "the setup clears a live claim");
+    CHECK(setup(t, plain, out) == 0, "a claim of another boot_id fails the setup");
+    CHECK(!claimed(t, "old"), "the setup keeps a claim of another boot_id for a reused PID");
 
+    t = tree("livelock");
+    fix_format(identity, sizeof(identity), "%ld %s " OLDTOKEN "\n", (long)getpid(), start);
+    lock(t, identity);
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) != 0, "a live lock of an old token passes the setup");
+    CHECK(locked(t), "the setup clears a live lock of a token");
+
+    t = tree("lockother");
+    fix_format(identity, sizeof(identity), "%ld %s " OTHER_ID "\n", (long)getpid(), start);
+    lock(t, identity);
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a lock of another boot_id fails the setup");
+    CHECK(!locked(t), "the setup keeps a lock of another boot_id for a reused PID");
+
+    /* A collection's command line, one shell blocked reading a pipe. */
     t = tree("running");
-    fix_format(state, sizeof(state), "%s/state", t);
     lock(t, NULL);
     journal(t, "release 1 2 " OTHER_ID "\n");
     fflush(NULL);
-    if (pipe(gate))
+    if (pipe(gate) || pipe(hold))
         exit(2);
+    fcntl(hold[1], F_SETFD, FD_CLOEXEC);
     pid = fork();
     if (pid < 0)
         exit(2);
     if (pid == 0) {
         close(gate[0]);
+        close(hold[1]);
         fcntl(gate[1], F_SETFD, FD_CLOEXEC);
-        execl("/bin/sh", "sh", "-c", "sleep 60; exit 0", "run", "native", "--state", state, "x",
-              (char *)NULL);
+        if (dup2(hold[0], 0) < 0)
+            _exit(127);
+        execl("/bin/sh", "sh", "-c", "read x", "etude", "run", "native", "x", (char *)NULL);
         _exit(127);
     }
     /* The pipe's end closes at the child's exec, once procfs shows its
      * arguments. */
+    close(hold[0]);
     close(gate[1]);
     while (read(gate[0], &byte, 1) > 0)
         ;
@@ -389,7 +454,7 @@ static void live_rows(const char *plain)
     CHECK(setup(t, plain, out) != 0, "a journal beside a running collection passes the setup");
     CHECK(locked(t) && !no_journal(t) && says(out, "a collection runs: pid "),
           "the setup clears a lock beside a running collection");
-    kill(pid, SIGKILL);
+    close(hold[1]);
     while (waitpid(pid, &status, 0) < 0)
         ;
 }
@@ -561,6 +626,67 @@ static void journal_rows(const char *plain)
           "the setup refuses a lock with no owner record without naming it");
 }
 
+/** Run `take`, then `release` when it is set, on the lock of STATE `state` in
+ * a child, which ends just after the mkdir or unlink of a path ending with
+ * `at_mkdir` or `at_unlink`; whether it ended so. */
+static int stopped(const char *state, const char *lockdir, int release, const char *at_mkdir,
+                   const char *at_unlink)
+{
+    pid_t pid;
+    int status;
+    fflush(NULL);
+    pid = fork();
+    if (pid < 0)
+        exit(2);
+    if (pid == 0) {
+        stop_mkdir = at_mkdir;
+        stop_unlink = release ? NULL : at_unlink;
+        if (!nc_lock_take(state, lockdir))
+            _exit(1);
+        stop_unlink = at_unlink;
+        if (release)
+            nc_lock_release(state, lockdir);
+        _exit(0);
+    }
+    while (waitpid(pid, &status, 0) < 0)
+        ;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 9;
+}
+
+/** Stop the collection's lock between its steps and clear what it left. */
+static void stop_rows(const char *plain)
+{
+    char state[1024], lockdir[1024], owner[1024], line[256], out[1024];
+    const char *t = tree("stopmake");
+
+    fix_format(state, sizeof(state), "%s/state", t);
+    fix_format(lockdir, sizeof(lockdir), "%s/collection.lock", state);
+    fix_format(owner, sizeof(owner), "%s/owner", lockdir);
+    CHECK(stopped(state, lockdir, 0, "/collection.lock", NULL), "the take did not stop");
+    fix_format(line, sizeof(line), "%s/collection.journal", state);
+    CHECK(locked(t) && !exists(owner) && first(line, line, sizeof(line)) &&
+              !strncmp(line, "make ", 5),
+          "a take stopped after its mkdir leaves no make journal beside an ownerless lock");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a setup after a stopped take fails");
+    CHECK(!locked(t) && no_journal(t) && says(out, "left by a stopped change: make "),
+          "a setup after a stopped take does not clear its lock by name");
+
+    t = tree("stoprelease");
+    fix_format(state, sizeof(state), "%s/state", t);
+    fix_format(lockdir, sizeof(lockdir), "%s/collection.lock", state);
+    fix_format(owner, sizeof(owner), "%s/owner", lockdir);
+    CHECK(stopped(state, lockdir, 1, NULL, "/collection.lock/owner"), "the release did not stop");
+    fix_format(line, sizeof(line), "%s/collection.journal", state);
+    CHECK(locked(t) && !exists(owner) && first(line, line, sizeof(line)) &&
+              !strncmp(line, "release ", 8),
+          "a release stopped after its unlink leaves no release journal beside an ownerless lock");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a setup after a stopped release fails");
+    CHECK(!locked(t) && no_journal(t) && says(out, "left by a stopped change: release "),
+          "a setup after a stopped release does not clear its lock by name");
+}
+
 /** Take and release the collection's lock, and clear one it took. */
 static void collection_rows(const char *plain)
 {
@@ -607,6 +733,7 @@ int main(void)
     lock_rows(plain, killer);
     journal_rows(plain);
     collection_rows(plain);
+    stop_rows(plain);
     live_rows(plain);
     if (failures)
         return failures > 255 ? 255 : failures;
