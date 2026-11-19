@@ -200,6 +200,13 @@ void sched_kick_cpus(uint64_t cpus)
     (void)cpus;
 }
 
+/** The killable wait, which no row kills: the uninterruptible one. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event_nointr(wq, cond, arg);
+}
+
 /** The sleeping wait, which fails the test and exits with status 1: one
  *  process runs here, so a wait would never end. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)

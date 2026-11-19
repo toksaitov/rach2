@@ -32,6 +32,9 @@
 #include "fs/krffs.c"
 #include "fs/vfs.h"
 #include "proc/process.h"
+#include "lib/kerrno.h"
+#include "lib/ksignal.h"
+#include "proc/tgroup.h"
 
 extern int printf(const char *format, ...);
 extern void exit(int status);
@@ -212,6 +215,18 @@ void wq_wake_all(wait_queue_t *wq)
 /* kernel.lock_stat, off as at boot: the extracted lock times no hold. */
 int sleep_lock_stat;
 
+/** The killable wait of the sleeping lock, which no row takes: a call
+ * fails the run. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    printf("%s: fail: a killable take of a sleeping lock\n", name);
+    exit(2);
+    return 0;
+}
+
 /** The clock, which the lock reads for its record of holds; these rows
  * make no disk wait, so no hold is recorded. */
 uint32_t timer_now_us(void)
@@ -263,6 +278,12 @@ static krffs_node_t *watched_next_node(krffs_file_system_t *fs, krffs_node_t *no
 
 /* The lock over the sleeping locks' records, which sleeplock.c defines. */
 static struct spinlock records_lock = SPINLOCK_INIT;
+
+/* The table of the places killed takers left, which sleeplock.c defines;
+ * no row leaves one. */
+static struct sleep_left left[SLEEP_LEFT_MAX];
+static volatile unsigned int left_count;
+static struct spinlock left_lock = SPINLOCK_INIT;
 
 /* A waiter of the sleeping lock always sleeps here: the threads take turns,
  * so a holder never runs beside it (proc/sched.h). */

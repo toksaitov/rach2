@@ -24,6 +24,7 @@
  */
 #include "fs/vfs.h"
 #include "arch/arch.h"
+#include "proc/tgroup.h"
 
 static unsigned int row_xchg(volatile unsigned int *p, unsigned int value);
 #define arch_atomic_xchg row_xchg
@@ -56,7 +57,9 @@ static block_device_t device;
 /* The one group's descriptor, then its byte that marks its block bitmap
  * checked (`bitmap_check`), set so that the rows' reads are the plans'. */
 static uint8_t descriptors[33], payload[8192], result[8192];
-static process_t process;
+/* The process's thread group, whose pending signals a killable wait reads. */
+static struct tgroup group;
+static process_t process = {.tg = &group};
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static int failures, writes;
 
@@ -221,6 +224,13 @@ int wq_active(const wait_queue_t *wq)
 {
     (void)wq;
     return 0;
+}
+
+/** The killable wait, which no row kills: the uninterruptible one. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event_nointr(wq, cond, arg);
 }
 
 /** Fail the test, unless a row armed `wait_hook`: any other wait here would
@@ -415,6 +425,13 @@ void bcache_wait_unheld(block_device_t *dev, uint64_t block)
         busy_waits += !alloc_locks_held();
         busy[block] = 0;
     }
+}
+
+/** `bcache_wait_unheld`, which no row kills. */
+int bcache_wait_unheld_killable(block_device_t *dev, uint64_t block)
+{
+    bcache_wait_unheld(dev, block);
+    return 0;
 }
 
 /**

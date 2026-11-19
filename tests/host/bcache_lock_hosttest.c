@@ -192,6 +192,13 @@ static void delayed_progress(void)
     }
 }
 
+/** The killable wait, which no row kills: the uninterruptible one. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event_nointr(wq, cond, arg);
+}
+
 /** Sleep until `cond(arg)` holds, yielding the processor meanwhile. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
