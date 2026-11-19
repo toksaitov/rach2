@@ -203,6 +203,7 @@ C_SRC_SHARED = kernel.c \
     sys/network/driver/e1000.c \
     sys/network/driver/rtl8139.c \
     sys/network/driver/rtl8168.c \
+    sys/network/driver/tap.c \
     sys/network/driver/virtio_net.c \
     sys/network/driver/ath9k/io.c \
     sys/network/driver/ath9k/chips.c \
