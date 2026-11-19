@@ -3017,6 +3017,10 @@ for a negative value and gets
 .Er EAGAIN
 while the system-wide rate limit of one update per tenth of a second
 is in effect.
+An otherwise permitted write for the root group returns success on Rach2
+and fails with
+.Er EINVAL
+on Linux.
 See
 .Xr sched 7 .
 .It Pa /proc/PID/schedstat
@@ -3024,6 +3028,9 @@ Three decimal numbers on one line, as on Linux.
 They are the thread's execution time as of the last scheduler charge
 in nanoseconds, the time spent runnable waiting for a processor in
 nanoseconds, and the number of times it was switched onto a processor.
+Rach2 keeps these counters with detailed scheduler statistics disabled.
+Linux prints three zeros when neither scheduler statistics nor task
+delay accounting is enabled.
 .Xr kvm 4
 adds the second number's growth to a guest's steal time.
 .Pp
