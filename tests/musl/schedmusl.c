@@ -27,7 +27,7 @@
  * a priority that
  * does not suit its policy, and an unknown policy with EINVAL. The priority
  * ranges are Linux's. sched_rr_get_interval gives what Linux 6.12 gives: for
- * an ordinary thread its slice in whole ticks of 4 ms, so 0 for the 0.75 ms
+ * an ordinary thread its slice in whole ticks of 4 ms, so 0 for the 0.7 ms
  * base slice of one processor, and for a SCHED_RR thread RR's slice, 100 ms,
  * which /proc/sys/kernel/sched_rr_timeslice_ms shows and sets in
  * milliseconds rounded up to whole ticks, a write of 0 or less putting back
