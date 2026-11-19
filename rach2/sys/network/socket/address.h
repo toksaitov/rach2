@@ -32,8 +32,9 @@ int net_addr_local(net_addr_t a);
  * Returns zero or a negative errno before a transport allocates state.
  * The caller holds net_lock. */
 int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *src);
-/** Whether the card a datagram to `dst` leaves by reports its link down,
+/** Whether the card a datagram to `dst` leaves by, among the routes of the
+ * card of index `ifindex` alone when it is not 0, reports its link down,
  * so that what it refuses says nothing of the path; 0 for an address no
  * card routes to and for one of this machine's. The caller holds net_lock. */
-int net_addr_link_down(net_addr_t dst);
+int net_addr_link_down(net_addr_t dst, int ifindex);
 #endif

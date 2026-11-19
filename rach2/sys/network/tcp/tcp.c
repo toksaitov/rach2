@@ -480,7 +480,7 @@ static uint32_t tcp_mtus(const struct tcb *tcb, uint32_t *link)
 
     if (tcb->remote_ip.family == AF_INET6) {
         nd = ip6_route_find(tcb->remote_ip.v6,
-                            tcb->remote_ip.scope ? (int)tcb->remote_ip.scope : tcb->ifindex, via6);
+                            tcb->ifindex ? tcb->ifindex : (int)tcb->remote_ip.scope, via6);
         if (!nd) {
             *link = IP6_MTU_MIN;
             return IP6_MTU_MIN;
@@ -935,8 +935,8 @@ static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t rem
     }
     ip_ns = ns;
     if (remote_ip.family == AF_INET6) {
-        rc = ip6_tx(local_ip.v6, remote_ip.v6, remote_ip.scope ? (int)remote_ip.scope : ifindex,
-                    IP6_NH_TCP, tcp_tx_buf, seg_len, IP6_HOP_LIMIT_DEFAULT);
+        rc = ip6_tx(local_ip.v6, remote_ip.v6, ifindex ? ifindex : (int)remote_ip.scope, IP6_NH_TCP,
+                    tcp_tx_buf, seg_len, IP6_HOP_LIMIT_DEFAULT);
     } else {
         rc = ip_tx_opts(local_ip.v4, remote_ip.v4, IP_PROTO_TCP, tcp_tx_buf, seg_len,
                         IP_TTL_DEFAULT, IP_PMTUDISC_WANT, ifindex);
@@ -1327,7 +1327,7 @@ static void tcp_blackhole(struct tcb *tcb)
 
     if (tcp_mtu_probing == 0 || tcb->rto_backoff < TCP_RETRIES1 || tcb->refused_since != 0 ||
         tcb->state < TCP_ESTABLISHED || tcb->snd_mss <= floor || sent_end - tcb->snd_una <= floor ||
-        net_addr_link_down(tcb->remote_ip)) {
+        net_addr_link_down(tcb->remote_ip, tcb->ifindex)) {
         return;
     }
     mss = tcb->mtup_on ? tcb->snd_mss / 2u : TCP_BASE_MSS;
@@ -1892,11 +1892,13 @@ static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr
  * segment occupied, its SYN and FIN one each, so that the peer accepts it.
  * The callers never pass a reset, since a reset is not answered with one.
  * The same reset answers a SYN to a full backlog or one the machine has no
- * memory for, and a handshake that completes after its listener closed.
+ * memory for, and a handshake that completes after its listener closed,
+ * and a connection's own resets; `ifindex` is the card such a connection or
+ * listener is bound to, which the reset leaves by, and 0 for none.
  */
-static void tcp_send_rst_unmatched(net_addr_t local_ip, net_addr_t remote_ip, uint16_t local_port,
-                                   uint16_t remote_port, uint8_t seg_flags, uint32_t seg_seq,
-                                   uint32_t seg_ack, uint32_t seg_occupied)
+static void tcp_send_rst_unmatched(int ifindex, net_addr_t local_ip, net_addr_t remote_ip,
+                                   uint16_t local_port, uint16_t remote_port, uint8_t seg_flags,
+                                   uint32_t seg_seq, uint32_t seg_ack, uint32_t seg_occupied)
 {
     uint8_t flags;
     uint32_t seq, ack;
@@ -1921,7 +1923,7 @@ static void tcp_send_rst_unmatched(net_addr_t local_ip, net_addr_t remote_ip, ui
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
     write16be(tcp_tx_buf + 16, tcp_checksum(local_ip, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
-    tcp_ip_tx(ip_ns, local_ip, remote_ip, 0, TCP_HDR_SIZE);
+    tcp_ip_tx(ip_ns, local_ip, remote_ip, ifindex, TCP_HDR_SIZE);
 }
 
 void tcp_ns_gone(const struct netns *ns, const struct netns *to)
@@ -1940,13 +1942,22 @@ void tcp_ns_gone(const struct netns *ns, const struct netns *to)
  * namespace `ip_ns`: the one bound to that address, else the one bound to
  * any, else NULL.
  */
+/** Whether a segment that came by the card `ip_rx_ifindex` is for `t`: one
+ * bound to a card takes only what came by it, or off the loopback backlog,
+ * as Linux's socket lookup compares the binding with the arriving card. */
+static int tcp_rx_card_ok(const struct tcb *t)
+{
+    return t->ifindex == 0 || ip_rx_ifindex == 0 || t->ifindex == ip_rx_ifindex;
+}
+
 static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
 {
     struct tcb *t;
     struct tcb *any = NULL;
 
     for (t = tcbs; t && t != tw_first; t = t->next) {
-        if (t->state != TCP_LISTEN || t->local_port != local_port || t->ns != ip_ns)
+        if (t->state != TCP_LISTEN || t->local_port != local_port || t->ns != ip_ns ||
+            !tcp_rx_card_ok(t))
             continue;
         if (net_addr_equal(t->local_ip, local_ip))
             return t;
@@ -1960,7 +1971,8 @@ static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
  * Find the TCB for an incoming segment in the network namespace `ip_ns`: a
  * block in any state but LISTEN with the same local address and port,
  * remote address and remote port, from its bucket of `tcp_hash`, else the
- * listener for its local address and port.
+ * listener for its local address and port; of those bound to a card, only
+ * one the segment came by (`tcp_rx_card_ok`).
  */
 static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
                             uint16_t remote_port)
@@ -1970,7 +1982,7 @@ static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t
     for (t = tcp_hash[tcp_hash_index(local_port, &remote_ip, remote_port)]; t; t = t->hash_next) {
         if (t->local_port == local_port && t->ns == ip_ns &&
             net_addr_equal(t->local_ip, local_ip) && net_addr_equal(t->remote_ip, remote_ip) &&
-            t->remote_port == remote_port) {
+            t->remote_port == remote_port && tcp_rx_card_ok(t)) {
             return t;
         }
     }
@@ -2075,7 +2087,7 @@ static int tcp_tick_pump(struct tcb *tcb)
     if (tcp_send_more(tcb) != 1 || tcb->refused_since == 0) {
         return 0;
     }
-    if (net_addr_link_down(tcb->remote_ip)) {
+    if (net_addr_link_down(tcb->remote_ip, tcb->ifindex)) {
         tcb->refused_since = TCP_NOW() + 1;
         return 0;
     }
@@ -2710,6 +2722,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
     tcb->family = sock->family;
     tcb->ns = sock->ns;
     tcb->local_ip = sock->local_ip;
+    tcb->ifindex = sock->bound_device;
     tcb_take_port(tcb, port, TCP_PORT_FIXED);
     tcb->state = TCP_LISTEN;
     tcb->sock = sock;
@@ -2743,7 +2756,8 @@ int tcp_listen(struct socket *sock, uint16_t port)
  * can come back to. An address in 127/8 to a peer that is not this machine
  * is refused, since no card may send from one. A socket bound to a card with
  * SO_BINDTODEVICE takes its source, route and MTU from that card's routes
- * alone (`netdev_route_on`), and its segments leave by that card.
+ * alone (`netdev_route_on`), and its segments leave by that card; an IPv6
+ * peer whose scope names another card is -EINVAL, as on Linux.
  */
 int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
 {
@@ -2753,6 +2767,10 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
     net_addr_t from;
     int rc;
 
+    if (dst_ip.family == AF_INET6 && dst_ip.scope && sock->bound_device &&
+        dst_ip.scope != (uint32_t)sock->bound_device) {
+        return -EINVAL; /* a link's scope other than the card bound to */
+    }
     flags = net_lock();
     rc = net_addr_source(sock->local_ip, dst_ip, sock->bound_device, &from);
     if (rc < 0) {
@@ -4144,8 +4162,8 @@ static void tcp_abort_on_data(struct tcb *tcb, uint8_t flags, uint32_t seq, uint
                               uint32_t ack_num)
 {
     net_mib.tcp_abort_on_data++;
-    tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port, tcb->remote_port, flags,
-                           seq, ack_num, len + ((flags & TCP_FIN) != 0));
+    tcp_send_rst_unmatched(tcb->ifindex, tcb->local_ip, tcb->remote_ip, tcb->local_port,
+                           tcb->remote_port, flags, seq, ack_num, len + ((flags & TCP_FIN) != 0));
     tcp_reset(tcb);
 }
 
@@ -4598,8 +4616,8 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
             return 0;
         }
         if ((flags & TCP_ACK) && ack_num != tcb->snd_nxt) {
-            tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port, tcb->remote_port,
-                                   flags, seq, ack_num, end - seq);
+            tcp_send_rst_unmatched(tcb->ifindex, tcb->local_ip, tcb->remote_ip, tcb->local_port,
+                                   tcb->remote_port, flags, seq, ack_num, end - seq);
             return 0;
         }
         if (!tcp_syn_rcvd_in_window(tcb, seq, end)) {
@@ -4611,7 +4629,7 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
         }
         if (flags & TCP_SYN) {
             if (seq != tcb->irs) {
-                tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port,
+                tcp_send_rst_unmatched(tcb->ifindex, tcb->local_ip, tcb->remote_ip, tcb->local_port,
                                        tcb->remote_port, flags, seq, ack_num, end - seq);
                 tcp_reset(tcb);
                 return 0;
@@ -4640,8 +4658,8 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
         return 0;
     }
     if ((int32_t)(ack_num - tcb->snd_una) < 0 || (int32_t)(ack_num - tcb->snd_nxt) > 0) {
-        tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port, tcb->remote_port,
-                               flags, seq, ack_num, end - seq);
+        tcp_send_rst_unmatched(tcb->ifindex, tcb->local_ip, tcb->remote_ip, tcb->local_port,
+                               tcb->remote_port, flags, seq, ack_num, end - seq);
         return 0;
     }
     return 1;
@@ -4780,7 +4798,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                 occupied++;
             if (flags & TCP_FIN)
                 occupied++;
-            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num,
+            tcp_send_rst_unmatched(0, dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num,
                                    occupied);
         }
         return;
@@ -4813,7 +4831,8 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                      "later refusals are not recorded",
                      (int)dst_port);
             }
-            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num, 1);
+            tcp_send_rst_unmatched(tcb->ifindex, dst_ip, src_ip, dst_port, src_port, flags, seq,
+                                   ack_num, 1);
             return;
         }
         if (frame_free_count() <= mem_reserve_frames()) {
@@ -4827,14 +4846,16 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         if (!conn_tcb) {
             klog(KLOG_WARN, "tcp", "accept: no control block for a connection to port %d",
                  (int)dst_port);
-            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num, 1);
+            tcp_send_rst_unmatched(tcb->ifindex, dst_ip, src_ip, dst_port, src_port, flags, seq,
+                                   ack_num, 1);
             return;
         }
         conn_sock = socket_alloc(SOCK_STREAM);
         if (!conn_sock) {
             tcb_free(conn_tcb);
             klog(KLOG_WARN, "tcp", "accept: no socket for a connection to port %d", (int)dst_port);
-            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num, 1);
+            tcp_send_rst_unmatched(tcb->ifindex, dst_ip, src_ip, dst_port, src_port, flags, seq,
+                                   ack_num, 1);
             return;
         }
 
@@ -4846,13 +4867,13 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             conn_sock->keepcnt = tcb->sock->keepcnt;
             conn_sock->user_timeout = tcb->sock->user_timeout;
             conn_sock->bound_device = tcb->sock->bound_device;
-            conn_tcb->ifindex = tcb->sock->bound_device;
         }
 
         conn_tcb->family = tcb->family;
         conn_tcb->ns = tcb->ns;
         conn_tcb->passive = 1;
         conn_tcb->listener = tcb;
+        conn_tcb->ifindex = tcb->ifindex;
         conn_tcb->local_ip = dst_ip;
         tcb_take_port(conn_tcb, tcb->local_port, TCP_PORT_FIXED);
         conn_tcb->remote_ip = src_ip;

@@ -477,6 +477,8 @@ static int loop_put(const uint8_t *hdr, const uint8_t *payload, uint16_t plen)
     return r;
 }
 
+int ip_rx_ifindex;
+
 int ip_is_local(uint32_t ip)
 {
     return IP_IS_LOOPBACK(ip) || netdev_owns(ip);
@@ -820,7 +822,9 @@ static void loop_deliver(unsigned cpu, int from)
     struct loop_dgram *d = loop_first;
     const uint8_t *dg = (const uint8_t *)(d + 1);
     struct netdev *lo;
+    int was = ip_rx_ifindex;
 
+    ip_rx_ifindex = 0;
     ip_ns = d->ns;
     lo = d->len == 0 ? 0 : ip_ns ? ip_ns->lo : netdev_loopback();
     if (lo) {
@@ -835,6 +839,7 @@ static void loop_deliver(unsigned cpu, int from)
         ip_rx(dg, (uint16_t)d->len, 1);
     }
     ip_ns = 0;
+    ip_rx_ifindex = was;
     loop_first = d->next;
     if (!loop_first) {
         loop_last = 0;

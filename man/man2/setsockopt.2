@@ -82,7 +82,11 @@ An address of the machine's own is still reached through loopback.
 A TCP connection takes its source address and MTU from that route; an
 accepted connection inherits its listener's setting, and setting it on a
 connected socket moves the connection's later segments.
-The setting does not restrict what the socket receives.
+A bound TCP socket receives only segments that came by its interface or
+through loopback, and its connect to an IPv6 address whose scope names
+another interface fails with
+.Er EINVAL .
+The setting does not restrict what a datagram socket receives.
 .It Dv SO_RCVBUF
 Set the bytes a datagram socket's receive queue may hold, as Linux does:
 the value, at most 212992, is doubled to cover each datagram's record, and

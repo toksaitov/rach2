@@ -63,16 +63,16 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *s
     return 0;
 }
 
-int net_addr_link_down(net_addr_t dst)
+int net_addr_link_down(net_addr_t dst, int ifindex)
 {
     struct netdev *nd;
     uint8_t via[16];
     uint32_t via4;
 
     if (dst.family == AF_INET6) {
-        nd = ip6_route(dst.v6, (int)dst.scope, via);
+        nd = ip6_route(dst.v6, ifindex ? ifindex : (int)dst.scope, via);
     } else {
-        nd = ip_is_local(dst.v4) ? 0 : netdev_route(dst.v4, &via4);
+        nd = ip_is_local(dst.v4) ? 0 : netdev_route_on(dst.v4, ifindex, &via4);
     }
     return nd && !nd->loopback && !netdev_running(nd);
 }

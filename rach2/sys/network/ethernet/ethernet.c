@@ -33,6 +33,7 @@ static uint8_t eth_tx_frame[ETH_HDR_SIZE + ETH_MTU];
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     uint16_t etype;
+    int was;
 
     bkl_assert_held();
     if (len < ETH_HDR_SIZE) {
@@ -59,11 +60,17 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
         break;
     case ETH_TYPE_IP:
         packet_rx(nd, etype, data, len);
+        was = ip_rx_ifindex;
+        ip_rx_ifindex = nd->index;
         ip_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE), 0);
+        ip_rx_ifindex = was;
         break;
     case ETH_TYPE_IPV6:
         packet_rx(nd, etype, data, len);
+        was = ip_rx_ifindex;
+        ip_rx_ifindex = nd->index;
         ip6_rx(nd, data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
+        ip_rx_ifindex = was;
         break;
     default:
         break;
