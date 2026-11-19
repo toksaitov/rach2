@@ -373,8 +373,10 @@ static uint32_t tcp_rcv_window(const struct tcb *tcb)
  *
  * Under `tcp_delack` an acknowledgement after the handshake offers the
  * window selected now (`tcp_rcv_window`), data's and probes' too, as
- * Linux's tcp_transmit_skb selects it for each, but in TIME_WAIT, whose
- * ring is gone, the window last selected, as Linux's tw_rcv_wnd keeps it;
+ * Linux's tcp_transmit_skb selects it for each, but in TIME_WAIT, which
+ * takes no more data and may have freed its ring, the window last
+ * selected, as Linux's tw_rcv_wnd keeps it, a read of what is left unread
+ * there notwithstanding;
  * and it ends quick mode while less than half the largest window is free,
  * as __tcp_select_window does.
  */
