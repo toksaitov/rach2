@@ -2412,7 +2412,8 @@ void ptimer_delete_all(struct tgroup *tg)
  * (kernel/signal.c:483-516), so that the new image takes no signal of a
  * timer it never made; a signal whose siginfo is another sender's stays.
  * The thread's mark of signal work may stay set, as Linux leaves
- * TIF_SIGPENDING, and finds nothing.
+ * TIF_SIGPENDING, and finds nothing. The sets change under the signal
+ * state's lock, which a post without the big lock holds.
  */
 void ptimer_exec(process_t *self)
 {
@@ -2420,7 +2421,7 @@ void ptimer_exec(process_t *self)
     int signo;
 
     ptimer_delete_all(self->tg);
-    irq = kirq_save();
+    irq = signal_state_lock();
     for (signo = 1; signo <= KSIG_MAX; signo++) {
         if (self->tg->info[signo].code == SI_TIMER) {
             self->tg->pending &= ~KSIG_BIT(signo);
@@ -2429,7 +2430,7 @@ void ptimer_exec(process_t *self)
             self->sig_pending &= ~KSIG_BIT(signo);
         }
     }
-    kirq_restore(irq);
+    signal_state_unlock(irq);
 }
 
 /** Return the poll deadline of notifying timers deferred to whole ticks. */

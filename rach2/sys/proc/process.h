@@ -1552,8 +1552,17 @@ void signal_post(process_t *target, int signo);
  * `target` may be a leader that has ended while other threads run: its
  * mask decides whether an ignored signal is kept, and another thread takes
  * the signal. SIGKILL also wakes a thread in execve's wait for the other
- * threads. An interrupt handler may call it. The signal is delivered at a
- * return to user mode (`deliver_signals`).
+ * threads. The signal is delivered at a return to user mode
+ * (`deliver_signals`).
+ *
+ * The caller holds the big lock, and may be an interrupt handler; or it
+ * holds `target` by a reference (`get_process_ref`), in process context,
+ * with neither the list lock nor the signal state's lock, as Linux's
+ * send_signal_locked runs under the target's siglock alone: the post then
+ * takes the list lock as a reader and the signal state's lock, and the big
+ * lock first for a stop signal, SIGCONT or a SIGKILL to an init, whose job
+ * control reaches what the big lock covers. A parent's SIGCHLD and a
+ * tracer's notice of a stop are posted the same way.
  */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info);
 
@@ -1579,7 +1588,7 @@ process_t *signal_process_target(process_t *p);
 
 /** Post signal `signo` to the thread `t` alone, as tkill and tgkill do,
  * with the siginfo `info`, and wake it. A thread that has ended takes
- * nothing. */
+ * nothing. The caller holds what `signal_post_info` says. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info);
 
 /** Mark the current thread as ending (`exit_begun`), and wake another
@@ -1626,6 +1635,12 @@ int signal_change_blocked_unlocked(int how, uint64_t set);
  * Defined in syscall_proc.c. */
 uint64_t signal_blocked_now(void);
 
+/** Make `mask` the current thread's `sig_real_blocked`, the mask a wait
+ * for signals puts back, under `sig_lock`, since a post reads it there to
+ * judge whether a signal ends the process (`sig_fatal_now`) and it is two
+ * words on i686. */
+void signal_set_real_blocked(uint64_t mask);
+
 /** Copy the pending set of thread `t`, its process's pending set and its
  * blocked mask under the signal state's lock, as Linux 6.12.115's task_sig
  * reads them under the signal lock (fs/proc/array.c:278), for a reader of
@@ -1659,9 +1674,12 @@ uint64_t proc_alarm_at(uint64_t now, uint64_t ticks);
  */
 int signal_pending(void);
 
-/** Lock the signal state and disable interrupts. Returns the flags for
- * `signal_state_unlock`. Callers outside the big lock must not nest this
- * lock. A caller with the big lock may nest it in a signal-state region. */
+/** Open a region of the signal state's lock, `sig_lock`, with interrupts
+ * off, for a reader or writer of the signal sets, masks, dispositions or
+ * stops outside syscall_proc.c, with or without the big lock. Regions nest
+ * on one processor, and the lock is taken at the outermost. Returns the
+ * flags for `signal_state_unlock`. The caller holds no lock that comes after
+ * `sig_lock` (the lock order in proc/Readme.md). */
 uint32_t signal_state_lock(void);
 
 /** Release the signal state and restore interrupts to `flags`. */
