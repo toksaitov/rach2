@@ -79,6 +79,9 @@ A write, or a
 whose vector is gathered into one, is one frame of 14 to 1514 bytes; a
 longer one is taken unread and counted as dropped, so that the writer goes
 on.
+A
+.Xr writev 2
+of no bytes returns 0 and sends nothing, as Linux's.
 .Xr poll 2
 reports the descriptor readable while a frame waits and always
 writable.

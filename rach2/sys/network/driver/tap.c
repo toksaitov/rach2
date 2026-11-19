@@ -198,8 +198,9 @@ static struct tap *tap_named(const char *name)
 /**
  * Make the interface `name` in a free record and register it: the record,
  * or NULL with `*err` set to -ENOSPC when every record is used, -ENOMEM
- * for a record whose ring `tap_rings_ready` could not take, or
- * `netdev_register`'s error. It does not sleep. The interface
+ * for a ring the heap cannot give, or `netdev_register`'s error. A record
+ * keeps its ring once made. It does not sleep, since the heap takes a
+ * spinlock and waits for nothing. The interface
  * starts down, with a random station address that has the locally
  * administered bit, as Linux gives a tap.
  */
@@ -216,6 +217,9 @@ static struct tap *tap_make(const char *name, int32_t *err)
     if (!t) {
         *err = -ENOSPC;
         return 0;
+    }
+    if (!t->frames) {
+        t->frames = (uint8_t *)kalloc_pages(TAP_PAGES, 0);
     }
     if (!t->frames) {
         *err = -ENOMEM;
@@ -240,24 +244,6 @@ static struct tap *tap_make(const char *name, int32_t *err)
     }
     t->used = 1;
     return t;
-}
-
-/** Give each free record its ring, which it keeps: 0, or -ENOMEM. It may
- * sleep, so TUNSETIFF calls it before the checks it must make in one hold
- * of the big lock. */
-static int32_t tap_rings_ready(void)
-{
-    int i;
-
-    for (i = 0; i < TAP_MAX; i++) {
-        if (!taps[i].used && !taps[i].frames) {
-            taps[i].frames = (uint8_t *)kalloc_pages(TAP_PAGES, 0);
-            if (!taps[i].frames) {
-                return -ENOMEM;
-            }
-        }
-    }
-    return 0;
 }
 
 /**
@@ -332,8 +318,10 @@ static int tap_name_ok(const char *name)
 /**
  * The name TUNSETIFF's `name` asks for, in `out`: an empty name, or one
  * that ends in `%d`, takes the first free `tapN` or stem and digit. 0;
- * -EINVAL for a name the kernel's interfaces cannot hold; -ENFILE when no
- * digit is free. `*fresh` is 1 for a name made from a stem.
+ * -EINVAL for a name the kernel's interfaces cannot hold, or a template
+ * that dev_valid_name refuses, as Linux judges the template before it
+ * fills it in; -ENFILE when no digit is free. `*fresh` is 1 for a name made
+ * from a stem.
  */
 static int32_t tap_pick_name(const char *name, char *out, int *fresh)
 {
@@ -355,7 +343,7 @@ static int32_t tap_pick_name(const char *name, char *out, int *fresh)
         stem[len - 2] = '\0';
     }
     len = (int)k_strlen(stem);
-    if (len == 0 || len > (int)sizeof(taps[0].nd.name) - 2 || !tap_name_ok(stem)) {
+    if (len > (int)sizeof(taps[0].nd.name) - 2 || !tap_name_ok(name)) {
         return -EINVAL;
     }
     for (i = 0; i < 10; i++) {
@@ -381,9 +369,10 @@ static int32_t tap_pick_name(const char *name, char *out, int *fresh)
  * interface another descriptor holds, or any that exists under
  * IFF_TUN_EXCL; else `tap_make`'s error.
  *
- * The request is copied in and the rings made first, since either may
- * sleep and let another call on a descriptor of the same open run; from
- * the checks to the record's interface nothing sleeps.
+ * The request is copied in first, since the copy may sleep and let
+ * another call on a descriptor of the same open run; from the checks to
+ * the record's interface nothing sleeps. The ring is made only for a
+ * request that passed them, so a refused one takes no memory.
  */
 static int32_t tap_set_iff(fd_entry_t *e, uintptr_t arg)
 {
@@ -401,10 +390,6 @@ static int32_t tap_set_iff(fd_entry_t *e, uintptr_t arg)
     }
     k_memcpy(&flags, ifr + TAP_IFNAME, 2);
     ifr[TAP_IFNAME - 1] = 0;
-    err = tap_rings_ready();
-    if (err != 0) {
-        return err;
-    }
     if (tap_file_of(e)) {
         return -EEXIST;
     }
@@ -421,11 +406,14 @@ static int32_t tap_set_iff(fd_entry_t *e, uintptr_t arg)
     if (err != 0) {
         return err;
     }
+    if (!fresh && netdev_by_name(name) && (flags & TAP_IFF_TUN_EXCL)) {
+        return -EBUSY;
+    }
     t = fresh ? 0 : tap_named(name);
     if (!t && netdev_by_name(name)) {
         return -EINVAL;
     }
-    if (t && (t->attached || (flags & TAP_IFF_TUN_EXCL))) {
+    if (t && t->attached) {
         return -EBUSY;
     }
     if (!t) {
@@ -479,6 +467,7 @@ static int32_t tap_take(fd_entry_t *e, struct tap **tp, uint8_t **bp, uint32_t *
     }
     for (;;) {
         int got = 0, gone;
+        int32_t r;
 
         flags = spin_lock_irqsave(&tap_lock);
         if (t->count) {
@@ -495,10 +484,13 @@ static int32_t tap_take(fd_entry_t *e, struct tap **tp, uint8_t **bp, uint32_t *
             *bp = b;
             return 0;
         }
-        if (gone || (e->ofd->status_flags & OFD_NONBLOCK) ||
-            wq_wait_event(&t->wq, tap_readable, t) < 0) {
+        r = gone ? -EBADFD : (e->ofd->status_flags & OFD_NONBLOCK) ? -EAGAIN : 0;
+        if (r == 0 && wq_wait_event(&t->wq, tap_readable, t) < 0) {
+            r = -EINTR;
+        }
+        if (r != 0) {
             buf_give(t, b);
-            return gone ? -EBADFD : (e->ofd->status_flags & OFD_NONBLOCK) ? -EAGAIN : -EINTR;
+            return r;
         }
     }
 }
