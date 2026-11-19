@@ -252,24 +252,25 @@ int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
 
 /**
  * A native transfer of `size` bytes at DPCD `addr`, Linux's
- * drm_dp_dpcd_access: up to 32 tries, 500 us apart but after a timeout,
- * until the sink acknowledges the whole. 0 is `size`; the first error of
- * the tries otherwise: -EPROTO for a short reply, -EIO for a NAK or a
- * DEFER, or the transfer's.
+ * drm_dp_dpcd_access: up to 32 tries until the sink acknowledges the
+ * whole, 500 us apart except after a timeout. Return `size` on success,
+ * or the first error: -EPROTO for a short reply, -EIO for a NAK or DEFER,
+ * or the transfer's error. A diagnostic read that leaves VDD alone tries
+ * once, so a register the sink rejects does not delay the other samples.
  */
 static int32_t dpcd_access(struct intel_dp *dp, uint8_t request, uint32_t addr, uint8_t *buf,
                            uint32_t size, int hold_vdd)
 {
     struct intel_dp_aux_msg msg;
     int32_t ret = 0, err = 0;
-    int retry;
+    int retry, tries = hold_vdd ? DPCD_TRIES : 1;
 
     k_memset(&msg, 0, sizeof(msg));
     msg.address = addr;
     msg.request = request;
     msg.buffer = buf;
     msg.size = size;
-    for (retry = 0; retry < DPCD_TRIES; retry++) {
+    for (retry = 0; retry < tries; retry++) {
         if (ret != 0 && ret != -ETIMEDOUT) {
             i915_delay_us(&dp->i915->hw, AUX_RETRY_US);
         }
