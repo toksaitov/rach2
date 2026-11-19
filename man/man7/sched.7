@@ -55,7 +55,7 @@ do not preempt the running fair thread.
 The default base slice at boot is 750,000 ns multiplied by one plus the
 integer base-2 logarithm of the online processor count capped at eight.
 Linux 6.12 starts from 700,000 ns with the same default scaling.
-.Xr proc 5
+.Xr debugfs 5
 describes the file that reads and sets the base slice.
 .Pp
 Wake placement and balancing honor the thread's affinity and use
@@ -129,4 +129,5 @@ the root group takes precedence over autogroup.
 .Xr sched_setscheduler 2 ,
 .Xr setpriority 2 ,
 .Xr setsid 2 ,
+.Xr debugfs 5 ,
 .Xr proc 5
