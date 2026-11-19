@@ -566,6 +566,16 @@ void mm_put(struct mm *mm)
     (void)mm;
 }
 
+/** A user's count of a space that has a user, which is nothing here. */
+int mm_get_live(struct mm *mm)
+{
+    return mm->users != 0;
+}
+
+/** No other thread to give way to. */
+void sched_give_way(void)
+{}
+
 /** Release the files whose last region went, as mm.c's does with no lock
  * held. */
 void mm_reap(void)
