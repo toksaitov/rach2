@@ -49,6 +49,15 @@ A frame received may span buffers.
 .It Dv VIRTIO_NET_F_CTRL_VQ , Dv VIRTIO_NET_F_CTRL_RX
 The control queue, through which the driver asks for every multicast
 frame and no promiscuous mode.
+.It Dv VIRTIO_NET_F_MQ
+Several pairs of a receive and a transmit queue, QEMU's
+.Ql mq=on .
+The driver uses one pair for each processor, up to the device's, and
+tells the device their count through the control queue, as Linux's
+virtio_net does; the device spreads the frames it receives over them, and
+each processor sends on a pair of its own.
+The kernel logs
+.Ql virtio_net: virtioN: P of M queue pairs, T carrying sends .
 .It Dv VIRTIO_NET_F_SPEED_DUPLEX
 The link's speed and duplex.
 Without it
@@ -95,7 +104,8 @@ for the lowest
 free, with a new index, down, as Linux leaves a new interface until it is
 set up.
 .Sh LIMITS
-One receive and one transmit queue.
+The pairs in use change only as processors start; there is no
+.Ql ethtool -L .
 .Sh FILES
 .Bl -tag -width /sys/bus/virtio/drivers/virtio_net
 .It Pa /sys/class/net/ethN
