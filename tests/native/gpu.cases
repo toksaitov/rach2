@@ -238,8 +238,6 @@ case gpu/gate-probe.firefox alone log \
 
 # The test bed's harness on the GPU, the rung native-rach2, each scene under
 # a headless Weston of its own, set beside Linux's native-linux line (83-7).
-# The webgl scene waits for its fault, Chromium's lost context on Rach2's
-# Mesa (dev-log/83-testbed/83-7.md, "The WebGL scene").
 case testbed/glmark2 alone log \
     file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
@@ -255,6 +253,12 @@ case testbed/game alone log \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
     file:bed/measure/ref/lenovo-linux.lines \
     -- native/testbed.sh game lenovo-linux.lines
+case testbed/webgl alone log \
+    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
+    file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py \
+    file:bed/measure/ref/lenovo-linux.lines \
+    -- native/testbed.sh webgl lenovo-linux.lines
 
 # Video on the GPU against Linux's decodes, browser plays and hangs (78-14b,
 # native/gpuvideo.sh); the clips and vahash are on the data partition, under
