@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.virtionet.probe",
-      "behavior": "a virtio network device as QEMU makes it becomes eth0 with a vector for each queue, mergeable receive buffers, the event index and the control queue; vnetprobe reads its link files, pings the gateway, lets the driver go and binds it again through /sys and pings again; and the cable pulled out and put back through QMP is logged at each, with a ping answered after",
+      "behavior": "a virtio network device as QEMU makes it becomes eth0 with a vector for each queue, mergeable receive buffers, the event index and the control queue; vnetprobe reads its link files, pings the gateway, lets the driver go, which takes the interface away, binds it again through /sys, which makes a new one, configures that and pings again; and the cable pulled out and put back through QMP is logged at each, with a ping answered after",
       "units": [
         "virtionet",
         "vnetprobe"
@@ -127,13 +127,18 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "no-carrier",
-          "checks": "the interface stays with its carrier reading 0 and no device link, and a ping to the gateway fails",
+          "assertion_id": "no-interface",
+          "checks": "the interface goes with the device, as Linux's virtnet_remove unregisters it: /sys/class/net has it no more, SIOCGIFINDEX of its name fails with ENODEV, and a ping to the gateway fails",
           "source": "scenario"
         },
         {
           "assertion_id": "bind",
-          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, the interface's carrier reads 1 and its device link leads to the device",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link and a new interface of the same name, the lowest free, with an ifindex that is not the old one's, down, as Linux leaves a new interface, whose device link leads to the device",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configure",
+          "checks": "the new interface set up, given 10.0.2.15/24 and a default route through the gateway with SIOCSIFFLAGS, SIOCSIFADDR, SIOCSIFNETMASK and SIOCADDRT reads a carrier of 1",
           "source": "scenario"
         },
         {
@@ -343,13 +348,18 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "no-carrier",
-          "checks": "the interface stays with its carrier reading 0 and no device link, and a ping to the gateway fails",
+          "assertion_id": "no-interface",
+          "checks": "the interface goes with the device, as Linux's virtnet_remove unregisters it: /sys/class/net has it no more, SIOCGIFINDEX of its name fails with ENODEV, and a ping to the gateway fails",
           "source": "scenario"
         },
         {
           "assertion_id": "bind",
-          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, the interface's carrier reads 1 and its device link leads to the device",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link and a new interface of the same name, the lowest free, with an ifindex that is not the old one's, down, as Linux leaves a new interface, whose device link leads to the device",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configure",
+          "checks": "the new interface set up, given 10.0.2.15/24 and a default route through the gateway with SIOCSIFFLAGS, SIOCSIFADDR, SIOCSIFNETMASK and SIOCADDRT reads a carrier of 1",
           "source": "scenario"
         },
         {
@@ -551,13 +561,18 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "no-carrier",
-          "checks": "the interface stays with its carrier reading 0 and no device link, and a ping to the gateway fails",
+          "assertion_id": "no-interface",
+          "checks": "the interface goes with the device, as Linux's virtnet_remove unregisters it: /sys/class/net has it no more, SIOCGIFINDEX of its name fails with ENODEV, and a ping to the gateway fails",
           "source": "scenario"
         },
         {
           "assertion_id": "bind",
-          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, the interface's carrier reads 1 and its device link leads to the device",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link and a new interface of the same name, the lowest free, with an ifindex that is not the old one's, down, as Linux leaves a new interface, whose device link leads to the device",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configure",
+          "checks": "the new interface set up, given 10.0.2.15/24 and a default route through the gateway with SIOCSIFFLAGS, SIOCSIFADDR, SIOCSIFNETMASK and SIOCADDRT reads a carrier of 1",
           "source": "scenario"
         },
         {
@@ -757,13 +772,18 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "no-carrier",
-          "checks": "the interface stays with its carrier reading 0 and no device link, and a ping to the gateway fails",
+          "assertion_id": "no-interface",
+          "checks": "the interface goes with the device, as Linux's virtnet_remove unregisters it: /sys/class/net has it no more, SIOCGIFINDEX of its name fails with ENODEV, and a ping to the gateway fails",
           "source": "scenario"
         },
         {
           "assertion_id": "bind",
-          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link, the interface's carrier reads 1 and its device link leads to the device",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link and a new interface of the same name, the lowest free, with an ifindex that is not the old one's, down, as Linux leaves a new interface, whose device link leads to the device",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configure",
+          "checks": "the new interface set up, given 10.0.2.15/24 and a default route through the gateway with SIOCSIFFLAGS, SIOCSIFADDR, SIOCSIFNETMASK and SIOCADDRT reads a carrier of 1",
           "source": "scenario"
         },
         {
