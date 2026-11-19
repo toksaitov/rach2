@@ -50,7 +50,9 @@ block_device_t *loop_node_device(int index, int write, int32_t *err);
  * already attached, open, or mapped shared, or its path moved to another
  * mount meanwhile; `EINVAL` when the file is not a regular file or its length
  * is not a positive whole number of sectors; `ELOOP` when the file is on a
- * chain of devices as deep as the buffer cache can serve; and whatever the
+ * loop device, whose cache blocks the phase of a second loop device could
+ * not place, or on a chain of devices as deep as the buffer cache can
+ * serve; and whatever the
  * resolve, the open or the sync answered otherwise.
  */
 int loop_attach(int index, const char *path, int writable);

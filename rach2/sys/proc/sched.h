@@ -113,6 +113,17 @@ int sched_yield_alone(void);
  */
 int sched_wake_blocked(process_t *p);
 
+/**
+ * Make `p` ready as `sched_make_ready` does if it is stopped, testing the
+ * state under the run queues' lock, as Linux's `signal_wake_up_state` wakes
+ * a TASK_WAKEKILL sleeper through `try_to_wake_up`'s test: a SIGKILL posted
+ * without the big lock and a holder of the big lock that ends the stop may
+ * both try, and one makes it ready. A thread in any other state is left as
+ * it is. Interrupts may be on or off; the caller holds no spinlock that
+ * comes after `sched_lock`.
+ */
+void sched_wake_stopped(process_t *p);
+
 /** Turn interrupts off and take the run queues' lock, for a caller that
  * must keep the records it wakes from being freed across several wakes, as
  * the timer pass does (`proc_wake_sleepers`): `free_process` takes the lock
@@ -376,6 +387,12 @@ void sched_forget(process_t *p);
  * on, whichever that is: off any ready list, running, and placed on this
  * processor. */
 void sched_adopt(process_t *p);
+
+/** Take `p`, this processor's current process, off the scheduler without a
+ * switch, as process 0 gives the processor to the program the debug shell
+ * enters: off any ready list, no longer the fair class's current, and not
+ * running here: `sched_adopt` undone. */
+void sched_disown(process_t *p);
 
 /** With `hold` set, add each queued thread's wait so far to its `run_delay`
  * and count no wait until called with `hold` clear, which starts each

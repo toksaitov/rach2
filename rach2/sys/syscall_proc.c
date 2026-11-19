@@ -249,6 +249,9 @@ extern void panic_init_died(uint32_t pid);
 
 static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info);
 static void sig_recalc(void);
+/* The regions of the signal state's lock, defined with the signal code. */
+static uint32_t sig_irq_save(void);
+static void sig_irq_restore(uint32_t flags);
 
 /**
  * Each descriptor drops its socket reference and its open file description
@@ -489,12 +492,12 @@ static void sig_group_end(struct tgroup *tg, int32_t code, int self_too)
 void proc_group_exit(int32_t code)
 {
     struct tgroup *tg = current_proc->tg;
-    uint32_t flags = kirq_save();
+    uint32_t flags = sig_irq_save();
 
     if (!tg->exiting && !tg->exec_task) {
         sig_group_end(tg, code, 0);
     }
-    kirq_restore(flags);
+    sig_irq_restore(flags);
 }
 
 /**
@@ -2260,6 +2263,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     int ids_moved = current_proc->euid != s->euid || current_proc->egid != s->egid ||
                     proc_fsuid(current_proc) != s->euid || proc_fsgid(current_proc) != s->egid;
     int was_privileged = proc_privileged(current_proc);
+    uint32_t sig_flags;
     int sig;
 
     proc_thread_gone(current_proc);
@@ -2287,13 +2291,17 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     proc_set_comm(current_proc, s->script[0] ? s->script : s->path);
     /* Linux's flush_signal_handlers: a caught signal reverts to its
      * default, an ignored one stays ignored, and each loses its flags,
-     * restorer and mask, which rt_sigaction reports afterwards. */
+     * restorer and mask, which rt_sigaction reports afterwards. A post
+     * reads them under `sig_lock`, so it sees no ignored one at its default
+     * for a moment. */
+    sig_flags = sig_irq_save();
     for (sig = 1; sig <= KSIG_MAX; sig++) {
         uintptr_t handler = current_proc->sigacts[sig].handler == KSIG_IGN ? KSIG_IGN : KSIG_DFL;
 
         k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
         current_proc->sigacts[sig].handler = handler;
     }
+    sig_irq_restore(sig_flags);
     current_proc->clear_child_tid = 0;
     rseq_exec(current_proc);
     current_proc->altstack_on = 0;
@@ -2881,10 +2889,12 @@ static void fork_ids(process_t *child, const process_t *parent)
  * before any construction can sleep, unless `flags` has CLONE_THREAD,
  * as Linux 6.12.115's copy_process does (kernel/fork.c:2234-2244). Recompute
  * the caller's signal work and return nonzero when it must be taken before
- * the fork. The big lock is held; an interrupt may post a group signal. */
+ * the fork. The big lock is held; an interrupt may post a group signal, and
+ * a post without the big lock may mark the caller, so the work is recomputed
+ * under `sig_lock`. */
 static int fork_delay_begin(process_t *parent, struct fork_pending *pending, uint32_t flags)
 {
-    uint32_t f = kirq_save();
+    uint32_t f = sig_irq_save();
     int work;
 
     pending->pending = 0;
@@ -2895,7 +2905,7 @@ static int fork_delay_begin(process_t *parent, struct fork_pending *pending, uin
     }
     sig_recalc();
     work = parent->sig_woken != 0;
-    kirq_restore(f);
+    sig_irq_restore(f);
     return work;
 }
 
@@ -2905,14 +2915,14 @@ static int fork_delay_begin(process_t *parent, struct fork_pending *pending, uin
 static void fork_delay_end(process_t *parent, struct fork_pending *pending)
 {
     struct fork_pending **at;
-    uint32_t f = kirq_save();
+    uint32_t f = sig_irq_save();
 
     for (at = &parent->tg->forks; *at && *at != pending; at = &(*at)->next) {
     }
     if (*at) {
         *at = pending->next;
     }
-    kirq_restore(f);
+    sig_irq_restore(f);
 }
 
 /**
@@ -2931,7 +2941,7 @@ static void fork_delay_end(process_t *parent, struct fork_pending *pending)
 static void fork_start(process_t *child, process_t *parent, struct fork_pending *pending)
 {
     struct k_siginfo info;
-    uint32_t f = kirq_save();
+    uint32_t f = sig_irq_save();
 
     if (child->tg != parent->tg) {
         child->tg->pending = pending->pending;
@@ -2946,7 +2956,7 @@ static void fork_start(process_t *child, process_t *parent, struct fork_pending 
         info.code = SI_KERNEL;
         sig_post_own(child, SIGKILL, &info);
     }
-    kirq_restore(f);
+    sig_irq_restore(f);
 }
 
 /**
@@ -3651,9 +3661,10 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
  * the si_code and si_status waitid stores, and the child's usage, which is
  * filled only when the caller sets `want_ru`, since it gives no buffer for
- * it otherwise; and the event the wait holds for the caller while the
- * caller copies these out, the record and what taking it does
- * (`wait_hold`), NULL and WAIT_KEEP for none. */
+ * it otherwise; the event the wait holds for the caller while the caller
+ * copies these out, the record and what taking it does (`wait_hold`), NULL
+ * and WAIT_KEEP for none; and whether the wait took the big lock itself
+ * (`big`), to take an end, which `wait_done` lets go. */
 struct wait_report {
     uint32_t pid;
     uint32_t uid;
@@ -3664,6 +3675,7 @@ struct wait_report {
     struct kernel_rusage ru;
     process_t *p;
     int take;
+    int big;
 };
 
 /* What taking a held event does (`wait_done`): nothing, since none is held;
@@ -3682,13 +3694,23 @@ struct wait_report {
 
 #define WAIT_TRAP 5
 
-/* Interrupts-off helpers (defined below with the signal code); used here for
- * the lost-wakeup-safe sleep in wait_find. */
-static uint32_t sig_irq_save(void);
-
-static void sig_irq_restore(uint32_t flags);
-
+/* An idle wait inside a region of the signal state's lock (defined below with
+ * the signal code); used here for the lost-wakeup-safe sleep in wait_find. */
 static void sig_idle_wait(void);
+
+/* The big lock for the IDs a namespace maps, defined with the ID calls. */
+static int ids_lock(int lookup);
+
+static void ids_unlock(int taken);
+
+/* What a wait's look at one child found (`wait_tracee`, `wait_child`): no
+ * event; an event, held for the caller; or an end, which only a holder of
+ * the big lock takes. */
+#define LOOK_NONE 0
+
+#define LOOK_HELD 1
+
+#define LOOK_BIG 2
 
 /**
  * Whether `p` is a child of the caller's process that `idtype` and `id`
@@ -3719,7 +3741,7 @@ static int wait_selects(int idtype, uint32_t id, int options, const process_t *p
 }
 
 /** Fill `r` with the report of child `p` and the `code` and `info_status`
- * a waitid gives it. */
+ * a waitid gives it; the usage is filled after the look (`wait_scan`). */
 static void wait_fill(struct wait_report *r, const process_t *p, int32_t status, int32_t code,
                       int32_t info_status)
 {
@@ -3728,9 +3750,6 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
     r->status = status;
     r->code = code;
     r->info_status = info_status;
-    if (r->want_ru) {
-        rusage_of_child(&r->ru, p);
-    }
 }
 
 /**
@@ -3810,13 +3829,25 @@ static void wait_fill_exit(struct wait_report *r, const process_t *p, int32_t st
  * of the process's end, the stop or continue report, or the ptrace stop
  * report taken, as `take` says. `wait_done` then finishes the event or gives
  * it back. WNOWAIT holds nothing, since it leaves every event where it is.
+ *
+ * The caller holds the list and signal locks, under which every wait looks,
+ * so no other wait takes the event meanwhile; a reap, a free and a
+ * tracer's view of an end are held under the big lock too (`wait_tracee`,
+ * `wait_child`). A stop or a continue is taken by an exchange that finds
+ * the report the look read, since a process's end clears `jc_status`
+ * (`sig_group_end`), and a report given back restores it (`wait_done`):
+ * a report that changed meanwhile is left, and its writer wakes the wait to
+ * look again. A held stop, continue or end seen keeps a reference to `p`
+ * (`proc_ref_get`), which `wait_done` drops, so that a give-back finds the
+ * record it held. Returns 1 when the event is the caller's, 0 when it
+ * changed.
  */
-static void wait_hold(struct wait_report *r, process_t *p, int take, int options)
+static int wait_hold(struct wait_report *r, process_t *p, int take, int options)
 {
     r->p = NULL;
     r->take = WAIT_KEEP;
     if (options & WNOWAIT) {
-        return;
+        return 1;
     }
     switch (take) {
     case WAIT_REAP:
@@ -3827,14 +3858,21 @@ static void wait_hold(struct wait_report *r, process_t *p, int take, int options
         p->ptrace_exit_seen = 1;
         break;
     case WAIT_JOB:
-        p->jc_status = 0;
+        if (arch_atomic_cmpxchg(&p->jc_status, (unsigned int)r->status, 0u) !=
+            (unsigned int)r->status) {
+            return 0;
+        }
         break;
     default:
         p->ptrace_reported = 1;
         break;
     }
+    if (take != WAIT_REAP && take != WAIT_FREE) {
+        proc_ref_get(p);
+    }
     r->p = p;
     r->take = take;
+    return 1;
 }
 
 /**
@@ -3843,7 +3881,8 @@ static void wait_hold(struct wait_report *r, process_t *p, int take, int options
  * no other wait could take meanwhile, or let go the process whose end its
  * tracer has now seen, which its parent may then reap (`ptrace_exit_release`),
  * when no other part of the kernel freed it meanwhile. The other events were
- * taken when they were held.
+ * taken when they were held. Those three are held only under the big lock,
+ * which the caller still holds.
  */
 static void wait_take(const struct wait_report *r)
 {
@@ -3862,37 +3901,50 @@ static void wait_take(const struct wait_report *r)
 /**
  * Finish the event the wait holds in `r` (`wait_hold`): take it when the
  * caller copied the report out, `ok` (`wait_take`), and otherwise give it
- * back.
+ * back; then drop the reference the hold took, and the big lock when the
+ * wait took it itself (`big`).
  *
  * A copy fails when another thread unmapped or protected the caller's buffer
  * while the wait slept. The event is then given back as if it had not been
- * reported, and the caller's other waiting threads, which passed it over,
- * are woken. A report of a record that may have ended meanwhile, a stop, a
- * continue, a ptrace stop or the end a tracer sees, is given back only when
- * the record is still there and has no newer report.
+ * reported, under the locks a look holds, and the caller's other waiting
+ * threads, which passed it over, are woken. A report of a record that may
+ * have ended meanwhile, a stop, a continue, a ptrace stop or the end a
+ * tracer sees, is given back only when the record is still there and has
+ * no newer report; the reference keeps the record from being given to
+ * another thread meanwhile, so that the test of its id is sound.
  */
 static void wait_done(struct wait_report *r, int ok)
 {
     process_t *p = r->p;
+    uint32_t list, flags;
     int there;
 
-    if (p == NULL || ok) {
-        if (p != NULL) {
-            wait_take(r);
+    if (p != NULL && ok) {
+        wait_take(r);
+    } else if (p != NULL) {
+        list = tasklist_read_lock();
+        flags = signal_state_lock();
+        there = get_process(r->pid) == p;
+        if (r->take == WAIT_REAP || r->take == WAIT_FREE) {
+            p->state = PROC_ZOMBIE;
+        } else if (r->take == WAIT_SEEN && there) {
+            p->ptrace_exit_seen = 0;
+        } else if (r->take == WAIT_JOB && there) {
+            (void)arch_atomic_cmpxchg(&p->jc_status, 0u, (unsigned int)r->status);
+        } else if (r->take == WAIT_TRAP && there && p->ptrace_status == (uint32_t)r->status) {
+            p->ptrace_reported = 0;
         }
-        return;
+        signal_state_unlock(flags);
+        tasklist_read_unlock(list);
+        wq_wake_all(&current_proc->tg->chld);
     }
-    there = get_process(r->pid) == p;
-    if (r->take == WAIT_REAP || r->take == WAIT_FREE) {
-        p->state = PROC_ZOMBIE;
-    } else if (r->take == WAIT_SEEN && there) {
-        p->ptrace_exit_seen = 0;
-    } else if (r->take == WAIT_JOB && there && p->jc_status == 0) {
-        p->jc_status = (uint32_t)r->status;
-    } else if (r->take == WAIT_TRAP && there && p->ptrace_status == (uint32_t)r->status) {
-        p->ptrace_reported = 0;
+    if (p != NULL && r->take != WAIT_REAP && r->take != WAIT_FREE) {
+        proc_ref_put(p);
     }
-    wq_wake_all(&current_proc->tg->chld);
+    if (r->big) {
+        r->big = 0;
+        bkl_exit();
+    }
 }
 
 /**
@@ -3903,30 +3955,42 @@ static void wait_done(struct wait_report *r, int ok)
  * report lets the process go to the parent (`wait_take`). A stop's si_status
  * is its wait status shifted right by 8 bits, the signal with the event
  * above it, as Linux's `wait_task_stopped` gives it, so waitid tells an
- * event stop from a plain SIGTRAP. Returns 1 with `out` filled and the event
- * held (`wait_hold`), or 0.
+ * event stop from a plain SIGTRAP.
+ *
+ * The caller holds the list and signal locks. Publishing, taking and
+ * clearing a stop all use the signal lock. Returns LOOK_HELD
+ * with `out` filled and the event held (`wait_hold`); LOOK_BIG for an end,
+ * which is taken only under the big lock, when the caller does not hold
+ * it; or LOOK_NONE.
  */
 static int wait_tracee(process_t *p, int options, struct wait_report *out)
 {
-    if (p->ptrace_status != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
-        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED, (int32_t)(p->ptrace_status >> 8));
-        wait_hold(out, p, WAIT_TRAP, options);
-        return 1;
+    uint32_t stop = p->ptrace_status;
+
+    if (stop != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
+        wait_fill(out, p, (int32_t)stop, CLD_TRAPPED, (int32_t)(stop >> 8));
+        return wait_hold(out, p, WAIT_TRAP, options) ? LOOK_HELD : LOOK_NONE;
     }
     if (p->state != PROC_ZOMBIE || !(options & WEXITED)) {
-        return 0;
+        return LOOK_NONE;
     }
     if (p->pid != p->tgid) {
+        if (!bkl_held()) {
+            return LOOK_BIG;
+        }
         wait_fill_exit(out, p, p->tg->exiting ? p->tg->exit_code : p->exit_code);
-        wait_hold(out, p, WAIT_FREE, options);
-        return 1;
+        (void)wait_hold(out, p, WAIT_FREE, options);
+        return LOOK_HELD;
     }
     if (p->tg->live == 0 && p->parent_pid != current_proc->tgid && !p->ptrace_exit_seen) {
+        if (!bkl_held()) {
+            return LOOK_BIG;
+        }
         wait_fill_exit(out, p, p->exit_code);
-        wait_hold(out, p, WAIT_SEEN, options);
-        return 1;
+        (void)wait_hold(out, p, WAIT_SEEN, options);
+        return LOOK_HELD;
     }
-    return 0;
+    return LOOK_NONE;
 }
 
 /**
@@ -3936,29 +4000,103 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
  * SIGKILL ended stays recorded; or a continue (WCONTINUED), reported once.
  * A process another process traces is reaped only after its tracer's wait
  * has reported its end and let it go (`wait_tracee`), as Linux has it, so
- * that the tracer learns of the end first. Returns 1 with `out` filled and
- * the event held (`wait_hold`), or 0.
+ * that the tracer learns of the end first.
+ *
+ * The caller holds the list lock and `signal_state_lock`; the stop or continue
+ * report is read once, and taken by an exchange (`wait_hold`).
+ * Returns LOOK_HELD with `out` filled and the event held (`wait_hold`);
+ * LOOK_BIG for an end, which is taken only under the big lock, when the
+ * caller does not hold it; or LOOK_NONE.
  */
 static int wait_child(process_t *p, int options, struct wait_report *out)
 {
     int traced = (p->ptrace & PT_TRACED) && p->tracer != current_proc->tgid;
     int stopped = p->tg->stop != 0 && p->tg->live != 0 && !p->tg->exiting;
+    uint32_t job = *(volatile uint32_t *)&p->jc_status;
 
     if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED) && !traced) {
+        if (!bkl_held()) {
+            return LOOK_BIG;
+        }
         wait_fill_exit(out, p, p->exit_code);
-        wait_hold(out, p, WAIT_REAP, options);
-        return 1;
+        (void)wait_hold(out, p, WAIT_REAP, options);
+        return LOOK_HELD;
     }
-    if ((options & WUNTRACED) && stopped && (p->jc_status & 0xff) == 0x7f) {
-        wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
-                  (int32_t)((p->jc_status >> 8) & 0xff));
-    } else if ((options & WCONTINUED) && p->jc_status == 0xffff) {
+    if ((options & WUNTRACED) && stopped && (job & 0xff) == 0x7f) {
+        wait_fill(out, p, (int32_t)job, CLD_STOPPED, (int32_t)((job >> 8) & 0xff));
+    } else if ((options & WCONTINUED) && job == 0xffff) {
         wait_fill(out, p, 0xffff, CLD_CONTINUED, SIGCONT);
     } else {
-        return 0;
+        return LOOK_NONE;
     }
-    wait_hold(out, p, WAIT_JOB, options);
-    return 1;
+    return wait_hold(out, p, WAIT_JOB, options) ? LOOK_HELD : LOOK_NONE;
+}
+
+/**
+ * Look once at every child `idtype` and `id` select until one has an event
+ * `options` asks for: the leaders whose parent is the caller's process, in
+ * the order they took it, and then the other threads it traces, in the
+ * order it took them, as Linux's do_wait looks at `children` and then at
+ * `ptraced` (kernel/exit.c:1488-1530). The indexes by parent and by tracer
+ * (`proc_children`, `proc_tracees`) give them, so the look costs what the
+ * caller has and not what the system has.
+ *
+ * The walk is under the list lock as a reader, as Linux's do_wait holds
+ * `tasklist_lock`, and each child's events are read and held under
+ * `signal_state_lock` too, as Linux's wait_task_stopped takes the child's
+ * `siglock`; the list lock is one spinlock, so the looks of two waits do
+ * not overlap. The usage of the child whose event is held is summed after
+ * dropping the signal lock, since the sum takes `timer_lock`. Sets `*have`
+ * when a child is selected, and returns the first result that is not
+ * LOOK_NONE (`wait_tracee`, `wait_child`).
+ */
+static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *out, int *have)
+{
+    uint32_t tgid = current_proc->tgid, list = tasklist_read_lock(), flags;
+    int look = LOOK_NONE;
+    process_t *p;
+
+    for (p = proc_children(tgid); p; p = p->ppid_link.next) {
+        if (p->parent_pid != tgid) {
+            continue;
+        }
+        if (wait_selects_tracee(idtype, id, options, p)) {
+            *have = 1;
+            flags = signal_state_lock();
+            look = wait_tracee(p, options, out);
+            signal_state_unlock(flags);
+            if (look != LOOK_NONE) {
+                break;
+            }
+        }
+        if (wait_selects(idtype, id, options, p)) {
+            *have = 1;
+            flags = signal_state_lock();
+            look = wait_child(p, options, out);
+            signal_state_unlock(flags);
+            if (look != LOOK_NONE) {
+                break;
+            }
+        }
+    }
+    for (p = look == LOOK_NONE ? proc_tracees(tgid) : p; look == LOOK_NONE && p;
+         p = p->tracer_link.next) {
+        if ((p->pid != p->tgid || p->parent_pid != tgid) &&
+            wait_selects_tracee(idtype, id, options, p)) {
+            *have = 1;
+            flags = signal_state_lock();
+            look = wait_tracee(p, options, out);
+            signal_state_unlock(flags);
+            if (look != LOOK_NONE) {
+                break;
+            }
+        }
+    }
+    if (look == LOOK_HELD && out->want_ru) {
+        rusage_of_child(&out->ru, p);
+    }
+    tasklist_read_unlock(list);
+    return look;
 }
 
 /**
@@ -3977,30 +4115,35 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  * CLD_DUMPED with the signal; a stop's is CLD_STOPPED with the stop signal,
  * and a continue's CLD_CONTINUED with SIGCONT.
  *
- * Every selected child is looked at until one has an event: the leaders
- * whose parent is the caller's process, in the order they took it, and then
- * the other threads it traces, in the order it took them, as Linux's
- * do_wait looks at `children` and then at `ptraced` (kernel/exit.c:
- * 1488-1530). The indexes by parent and by tracer (`proc_children`,
- * `proc_tracees`) give them, so the look costs what the caller has and not
- * what the system has. Without WNOHANG
- * the caller then sleeps on its process's child queue, which an exit, a stop
- * or a continue wakes, until a child has an event or a signal interrupts. As
- * Linux's `do_wait` (kernel/exit.c), the caller joins the queue, with a
- * record on its stack, and is marked PROC_BLOCKED before it looks at the
- * children and tests `signal_pending`, so a wake or a signal posted after
- * the look finds it blocked and makes it ready; a child's release that
- * sleeps meanwhile leaves it RUNNING, and it returns what it found.
+ * The wait runs without the big lock, as Linux's do_wait runs under
+ * `tasklist_lock` and the child's `siglock` (`wait_scan`), and takes it
+ * only for an end, a reap or the free of a traced thread or a tracer's
+ * view of a process's end: its release sleeps and frees what the big lock
+ * guards, and the ending thread holds the big lock from its zombie's
+ * publication until it has left the processor. A look that meets such an
+ * end without the big lock leaves the queue, takes the lock and looks
+ * again (`big` in `out`), so that the order of the reports stays the
+ * walk's; a later sleep of that call keeps the lock, which `schedule` lets
+ * go while it sleeps.
+ *
+ * Without WNOHANG the caller then sleeps on its process's child queue, which
+ * an exit, a stop or a continue wakes, until a child has an event or a
+ * signal interrupts, as Linux's do_wait sleeps on `wait_chldexit`. The
+ * caller joins the queue, with a record on its stack, and is marked
+ * PROC_BLOCKED before it looks at the children and tests `signal_pending`,
+ * so a wake or a signal posted after the look finds it blocked and makes
+ * it ready; a child's release that sleeps meanwhile leaves it RUNNING, and
+ * it returns what it found.
  *
  * Returns the pid; 0 with WNOHANG when a selected child has nothing to
  * report; -ECHILD when no child is selected; or -EINTR when a signal the
- * caller acts on arrives while it waits.
+ * caller acts on arrives while it waits. The big lock the wait took is let
+ * go before a return of no event, and by `wait_done` after one.
  */
 static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_report *out)
 {
     struct wq_waiter self;
-    process_t *p;
-    uint32_t flags, tgid = current_proc->tgid;
+    uint32_t flags;
     int32_t rc;
 
     self.proc = current_proc;
@@ -4008,8 +4151,11 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
     self.func = NULL;
     self.wq = NULL;
     self.flags = 0;
+    out->p = NULL;
+    out->take = WAIT_KEEP;
+    out->big = 0;
     for (;;) {
-        int have_child = 0;
+        int have_child = 0, look;
 
         flags = sig_irq_save();
         if (!(options & WNOHANG)) {
@@ -4018,35 +4164,17 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             sched_set_current_state(PROC_BLOCKED);
         }
         sig_irq_restore(flags);
-        rc = 0;
-        for (p = proc_children(tgid); p && rc == 0; p = p->ppid_link.next) {
-            if (p->parent_pid != tgid) {
-                continue;
-            }
-            if (wait_selects_tracee(idtype, id, options, p)) {
-                have_child = 1;
-                if (wait_tracee(p, options, out)) {
-                    rc = (int32_t)out->pid;
-                    break;
-                }
-            }
-            if (wait_selects(idtype, id, options, p)) {
-                have_child = 1;
-                if (wait_child(p, options, out)) {
-                    rc = (int32_t)out->pid;
-                }
-            }
-        }
-        for (p = proc_tracees(tgid); p && rc == 0; p = p->tracer_link.next) {
-            if ((p->pid != p->tgid || p->parent_pid != tgid) &&
-                wait_selects_tracee(idtype, id, options, p)) {
-                have_child = 1;
-                if (wait_tracee(p, options, out)) {
-                    rc = (int32_t)out->pid;
-                }
-            }
-        }
+        look = wait_scan(idtype, id, options, out, &have_child);
+        rc = look == LOOK_HELD ? (int32_t)out->pid : 0;
         flags = sig_irq_save();
+        if (look == LOOK_BIG) {
+            wq_poll_remove(&current_proc->tg->chld, &self);
+            current_proc->state = PROC_RUNNING;
+            sig_irq_restore(flags);
+            bkl_enter();
+            out->big = 1;
+            continue;
+        }
         if (rc == 0 && !have_child) {
             rc = -ECHILD;
         } else if (rc == 0 && !(options & WNOHANG) && signal_pending()) {
@@ -4056,6 +4184,10 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             wq_poll_remove(&current_proc->tg->chld, &self);
             current_proc->state = PROC_RUNNING;
             sig_irq_restore(flags);
+            if (rc <= 0 && out->big) {
+                out->big = 0;
+                bkl_exit();
+            }
             return rc;
         }
         sig_irq_restore(flags);
@@ -4068,6 +4200,30 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         current_proc->state = PROC_RUNNING;
         sig_irq_restore(flags);
     }
+}
+
+/** The kernel's thread id that the caller's id `pid` names (`pid_named`),
+ * under the big lock only in a namespace below the first, whose lookups it
+ * guards (`ids_lock`). */
+static uint32_t wait_id_named(uint32_t pid)
+{
+    int taken = ids_lock(0);
+    uint32_t kid = pid_named(pid);
+
+    ids_unlock(taken);
+    return kid;
+}
+
+/** The caller's id of the kernel's thread id `kid`, or of the kernel's user
+ * id `kid` when `user` is set (`pid_seen`, `uid_seen`), under the lock
+ * `wait_id_named` takes. */
+static uint32_t wait_id_seen(uint32_t kid, int user)
+{
+    int taken = ids_lock(0);
+    uint32_t id = user ? uid_seen(kid) : pid_seen(kid);
+
+    ids_unlock(taken);
+    return id;
 }
 
 /**
@@ -4107,14 +4263,14 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
     }
     if (pid > 0) {
         idtype = P_PID;
-        id = pid_named((uint32_t)pid);
+        id = wait_id_named((uint32_t)pid);
     } else if (pid == -1) {
         idtype = P_ALL;
         id = 0;
     } else if (pid == 0) {
         id = current_proc->pgid;
     } else {
-        id = pid_named(0u - (uint32_t)pid);
+        id = wait_id_named(0u - (uint32_t)pid);
     }
     options &= (int)(WNOHANG | WUNTRACED | WCONTINUED | W_NOTHREAD | W_ALL | W_CLONE);
     r.want_ru = rusage_ptr != 0;
@@ -4122,7 +4278,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
     if (rc <= 0) {
         return rc;
     }
-    seen = pid_seen((uint32_t)rc);
+    seen = wait_id_seen((uint32_t)rc, 0);
     ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
          (!rusage_ptr || rusage_put(rusage_ptr, &r.ru) == 0);
     wait_done(&r, ok);
@@ -4152,6 +4308,42 @@ long sys_wait4(isr_params_t *params)
                    SC_ARG(params, 3));
 }
 
+/** The bytes of a siginfo_t through si_status, which waitid writes: 24 for
+ * an i386 caller on x86-64, as Linux's compat waitid writes, and
+ * SIGINFO_CHLD_BYTES for a native one. */
+static uint32_t siginfo_chld_bytes(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (in_compat_syscall()) {
+        return SIGINFO32_CHLD_BYTES;
+    }
+#endif
+    return SIGINFO_CHLD_BYTES;
+}
+
+/** The thread id `*id` of the process the pidfd `fd` names, for waitid's
+ * P_PIDFD, and in `*nonblock` whether the pidfd is non-blocking, under the
+ * big lock, which the pidfd's look-up needs; 0, -EINVAL for a negative
+ * `fd`, -EBADF for a descriptor that is no pidfd, or -ECHILD for a process
+ * already reaped. */
+static int32_t waitid_pidfd(int32_t fd, uint32_t *id, int *nonblock)
+{
+    process_t *named = NULL;
+    int32_t rc;
+
+    if (fd < 0) {
+        return -EINVAL;
+    }
+    bkl_enter();
+    rc = pidfd_lookup((int)fd, &named, nonblock);
+    *id = rc == 0 && named ? named->pid : 0;
+    bkl_exit();
+    if (rc == 0 && *id == 0) {
+        rc = -ECHILD;
+    }
+    return rc;
+}
+
 /**
  * Wait for a child to change state (waitid).
  *
@@ -4162,7 +4354,8 @@ long sys_wait4(isr_params_t *params)
  * pidfd waits for as WNOHANG does, with -EAGAIN for no event, as on Linux.
  * At least one of WEXITED, WSTOPPED and WCONTINUED must be given,
  * beside which WNOHANG, WNOWAIT and Linux's three thread bits are accepted;
- * `wait_find` has what each means.
+ * `wait_find` has what each means, and when the call takes the big lock: for
+ * an end it takes, and for the look-up of a pidfd (`waitid_pidfd`).
  *
  * Returns 0 when a child was reported, with the siginfo's si_signo SIGCHLD,
  * si_code, si_pid, si_uid (the child's real uid) and si_status filled and
@@ -4177,19 +4370,6 @@ long sys_wait4(isr_params_t *params)
  * the wait or after it with the child's event left in place, as `do_wait`
  * finds it.
  */
-/** The bytes of a siginfo_t through si_status, which waitid writes: 24 for
- * an i386 caller on x86-64, as Linux's compat waitid writes, and
- * SIGINFO_CHLD_BYTES for a native one. */
-static uint32_t siginfo_chld_bytes(void)
-{
-#if defined(IA32_SYSCALL_TABLE_SIZE)
-    if (in_compat_syscall()) {
-        return SIGINFO32_CHLD_BYTES;
-    }
-#endif
-    return SIGINFO_CHLD_BYTES;
-}
-
 long sys_waitid(isr_params_t *params)
 {
     int idtype = (int)SC_ARG(params, 0);
@@ -4200,7 +4380,6 @@ long sys_waitid(isr_params_t *params)
     uint8_t info[SIGINFO_SIZE];
     struct k_siginfo ki;
     struct wait_report r;
-    process_t *named;
     uint32_t id = 0;
     int nonblock = 0;
     int32_t rc;
@@ -4220,27 +4399,20 @@ long sys_waitid(isr_params_t *params)
         if (upid <= 0) {
             return -EINVAL;
         }
-        id = pid_named((uint32_t)upid);
+        id = wait_id_named((uint32_t)upid);
         break;
     case P_PGID:
         if (upid < 0) {
             return -EINVAL;
         }
-        id = upid != 0 ? pid_named((uint32_t)upid) : current_proc->pgid;
+        id = upid != 0 ? wait_id_named((uint32_t)upid) : current_proc->pgid;
         break;
     case P_PIDFD:
-        if (upid < 0) {
-            return -EINVAL;
-        }
-        rc = pidfd_lookup((int)upid, &named, &nonblock);
+        rc = waitid_pidfd(upid, &id, &nonblock);
         if (rc != 0) {
             return rc;
         }
-        if (!named) {
-            return -ECHILD;
-        }
         idtype = P_PID;
-        id = named->pid;
         if (nonblock) {
             options |= WNOHANG;
         }
@@ -4266,8 +4438,8 @@ long sys_waitid(isr_params_t *params)
     if (rc > 0) {
         k_memset(&ki, 0, sizeof(ki));
         ki.code = r.code;
-        ki.pid = pid_seen(r.pid);
-        ki.uid = uid_seen(r.uid);
+        ki.pid = wait_id_seen(r.pid, 0);
+        ki.uid = wait_id_seen(r.uid, 1);
         ki.status = r.info_status;
         siginfo_to_caller(info, SIGCHLD, &ki);
     }
@@ -4513,34 +4685,36 @@ static uint64_t sigact_mask(const struct k_sigaction *sa)
 }
 
 /* The lock of the signal state, as Linux 6.12.115's sighand->siglock
- * (kernel/signal.c): the signal sets, the masks and the signal-work flags of
- * every thread. The holder of the big lock takes it for each region of
- * `sig_irq_save`, and rt_sigprocmask takes it alone, without the big lock
- * (`signal_change_blocked_unlocked`). Every other holder holds the big lock,
- * which orders them, and the one holder without it takes nothing under it,
- * so no order through this lock can close a cycle: the holders of the big
- * lock take it without the checker (`raw_spin_lock`), which would otherwise
- * see it both above and below `timer_lock`, whose holder posts a timer's
- * signal (io/timerfd.c). */
+ * (kernel/signal.c): the signal sets, the masks, the signal-work flags and
+ * the dispositions of every thread, and each process's stop and end. Every
+ * reader and writer of them takes it for each region of `sig_irq_save`,
+ * once at the outermost of the regions it nests on its processor, with or
+ * without the big lock: a post to one process or thread runs without the big
+ * lock (`sig_hold_take`), and so do rt_sigprocmask, the waits and ptrace's
+ * requests on a stopped tracee (`signal_state_lock`). It comes after the
+ * list lock, which a post without the big lock takes first, and before the
+ * wait queues' and the run queues' locks, which a post takes to wake. A
+ * holder of the big lock takes timerfd's `timer_lock` under it to discard
+ * or rearm a timer's signal, and the holder of `timer_lock` posts a timer's
+ * signal under the big lock, so the two orders meet only under the big
+ * lock, and a post without it takes no `timer_lock`: a job-control signal,
+ * whose discard reaches the timers, is posted under the big lock
+ * (`sig_post_needs_bkl`). It is taken without the lock-order checker
+ * (`raw_spin_lock`), which would see it both above and below `timer_lock`. */
 static struct spinlock sig_lock = SPINLOCK_INIT_NAMED("sig_lock");
 
-/* The depth of the big lock's holder in the regions of `sig_irq_save`, which
- * nest, as a post sends a parent SIGCHLD; under the big lock. */
-static uint32_t sig_lock_depth;
-
-/** Turn interrupts off for a change of the signal sets, and take `sig_lock`
- * at the outermost region when the caller holds the big lock. The signal
- * masks are 64-bit, so a read-modify-write is two stores on i386; signal_post
- * runs from IRQ context (Ctrl-C) as well as from a syscall, so a mutation an
- * interrupt can meet half done is made with interrupts off. A caller
- * without the big lock only reads its own thread's sets, as a wait's test
- * of `signal_pending` does, and takes no lock. Returns the prior IF so the
+/** Turn interrupts off for a reading or a change of the signal state, and
+ * take `sig_lock` at this processor's outermost region (`sig_depth` in
+ * percpu.h). The signal masks are 64-bit, so a read-modify-write is two
+ * stores on i386, and a post may come from an interrupt (Ctrl-C) as well as
+ * from a call, so the region has interrupts off. Regions nest, as a post
+ * sends a parent SIGCHLD from inside its own. Returns the prior IF so the
  * caller can restore it. */
 static uint32_t sig_irq_save(void)
 {
     uint32_t flags = kirq_save();
 
-    if (bkl_held() && sig_lock_depth++ == 0) {
+    if (this_cpu()->sig_depth++ == 0) {
         raw_spin_lock(&sig_lock);
     }
     return flags;
@@ -4550,10 +4724,20 @@ static uint32_t sig_irq_save(void)
  * go at the outermost region. */
 static void sig_irq_restore(uint32_t flags)
 {
-    if (bkl_held() && --sig_lock_depth == 0) {
+    if (--this_cpu()->sig_depth == 0) {
         raw_spin_unlock(&sig_lock);
     }
     kirq_restore(flags);
+}
+
+uint32_t signal_state_lock(void)
+{
+    return sig_irq_save();
+}
+
+void signal_state_unlock(uint32_t flags)
+{
+    sig_irq_restore(flags);
 }
 
 /** Let `sig_lock` go for a switch or an idle wait made inside a region of
@@ -4561,24 +4745,31 @@ static void sig_irq_restore(uint32_t flags)
  * `sig_relock` to give back: 0 when the caller has no region open. */
 static uint32_t sig_unlock_all(void)
 {
-    uint32_t depth = 0;
+    uint32_t depth = this_cpu()->sig_depth;
 
-    if (bkl_held() && sig_lock_depth != 0) {
-        depth = sig_lock_depth;
-        sig_lock_depth = 0;
+    if (depth != 0) {
+        this_cpu()->sig_depth = 0;
         raw_spin_unlock(&sig_lock);
     }
     return depth;
 }
 
-/** Take `sig_lock` back at the depth `sig_unlock_all` returned, once the big
- * lock is back, which a switch and an idle wait take again first. */
+/** Take `sig_lock` back at the depth `sig_unlock_all` returned, with
+ * interrupts off, on the processor the switch or the wait returned on. */
 static void sig_relock(uint32_t depth)
 {
     if (depth != 0) {
         raw_spin_lock(&sig_lock);
-        sig_lock_depth = depth;
+        this_cpu()->sig_depth = depth;
     }
+}
+
+void signal_set_real_blocked(uint64_t mask)
+{
+    uint32_t flags = sig_irq_save();
+
+    current_proc->sig_real_blocked = mask;
+    sig_irq_restore(flags);
 }
 
 /** `schedule` inside a region of `sig_irq_save`, without `sig_lock`. */
@@ -4693,7 +4884,7 @@ static void sig_job_control(process_t *target, int signo)
                     continue;
                 }
                 t->stop_seen = 0;
-                if (t->state == PROC_STOPPED && t->ptrace_status == 0) {
+                if (t->state == PROC_STOPPED && t->ptrace_status == 0 && !(t->ptrace & PT_FROZEN)) {
                     sched_make_ready(t);
                 }
             }
@@ -4711,8 +4902,8 @@ static void sig_job_control(process_t *target, int signo)
         ptrace_group_change(tg);
     } else if (signo == SIGKILL) {
         for (t = proc_list; t; t = t->next) {
-            if (t->tg == tg && t->state == PROC_STOPPED) {
-                sched_make_ready(t);
+            if (t->tg == tg && !(t->ptrace & PT_FROZEN)) {
+                sched_wake_stopped(t);
             }
         }
     } else if (KSIG_BIT(signo) & SIG_STOPS) {
@@ -4738,7 +4929,8 @@ static int sig_wants(const process_t *t, uint64_t bits)
  * The thread of `target`'s process to wake for `signo`, as Linux's
  * `complete_signal` chooses it: `target` when it can take the signal
  * (`sig_wants`), or else the first thread that can; `target` itself when no
- * thread can, and nothing when `target` has ended.
+ * thread can, and nothing when `target` has ended or been reaped, which a
+ * post without the big lock may meet.
  */
 static process_t *sig_taker(process_t *target, int signo)
 {
@@ -4752,7 +4944,7 @@ static process_t *sig_taker(process_t *target, int signo)
             return t;
         }
     }
-    return target->state != PROC_ZOMBIE ? target : NULL;
+    return target->state != PROC_ZOMBIE && target->state != PROC_UNUSED ? target : NULL;
 }
 
 /**
@@ -4798,7 +4990,7 @@ void signal_set_blocked(uint64_t mask)
 int signal_change_blocked_unlocked(int how, uint64_t set)
 {
     process_t *self = current_proc;
-    uint32_t flags = spin_lock_irqsave(&sig_lock);
+    uint32_t flags = sig_irq_save();
     uint64_t old = self->sig_blocked;
     uint64_t mask = how == KSIG_BLOCK ? old | set : how == KSIG_UNBLOCK ? old & ~set : set;
     int done;
@@ -4812,38 +5004,27 @@ int signal_change_blocked_unlocked(int how, uint64_t set)
             proc_work_set(self, WORK_SIGNAL);
         }
     }
-    spin_unlock_irqrestore(&sig_lock, flags);
+    sig_irq_restore(flags);
     return done;
 }
 
 uint64_t signal_blocked_now(void)
 {
-    uint32_t flags;
-    uint64_t mask;
+    uint32_t flags = sig_irq_save();
+    uint64_t mask = current_proc->sig_blocked;
 
-    if (bkl_held()) {
-        return current_proc->sig_blocked;
-    }
-    flags = spin_lock_irqsave(&sig_lock);
-    mask = current_proc->sig_blocked;
-    spin_unlock_irqrestore(&sig_lock, flags);
+    sig_irq_restore(flags);
     return mask;
 }
 
 void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uint64_t *blocked)
 {
-    uint32_t flags;
-    int big = bkl_held();
+    uint32_t flags = sig_irq_save();
 
-    flags = big ? sig_irq_save() : spin_lock_irqsave(&sig_lock);
     *pending = t->sig_pending;
     *shared = t->tg->pending;
     *blocked = t->sig_blocked;
-    if (big) {
-        sig_irq_restore(flags);
-    } else {
-        spin_unlock_irqrestore(&sig_lock, flags);
-    }
+    sig_irq_restore(flags);
 }
 
 void signal_exit_begin(void)
@@ -4954,8 +5135,8 @@ static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
         t->sig_info[signo] = *info;
     }
     t->sig_pending |= KSIG_BIT(signo);
-    if (signo == SIGKILL && t->state == PROC_STOPPED) {
-        sched_make_ready(t);
+    if (signo == SIGKILL && !(t->ptrace & PT_FROZEN)) {
+        sched_wake_stopped(t);
     }
     sig_wake(t, KSIG_BIT(signo));
     sig_irq_restore(f);
@@ -5098,6 +5279,69 @@ static void sig_fork_pending(struct tgroup *tg, int signo)
     }
 }
 
+/* What a post holds, from `sig_hold_take` to `sig_hold_give`. */
+struct sig_hold {
+    uint32_t list; /* the interrupt flag `tasklist_read_lock` returned */
+    uint32_t irq;  /* the interrupt flag `sig_irq_save` returned */
+    int listed;    /* the list lock is held as a reader */
+    int big;       /* the big lock was taken for the post */
+};
+
+/**
+ * Whether a post of `signo` to `target` needs the big lock: a stop signal or
+ * SIGCONT, whose job control discards the POSIX timers' signals under
+ * `timer_lock` (`ptimer_discard`), changes the tracer's stops
+ * (`ptrace_group_change`) and tells the parent of a continue; a SIGKILL to
+ * an init (`unkillable`), whose test of the sender's namespace reads the
+ * kept ids (`sig_forced`); and a send to several processes (`multi`), which
+ * keeps the signal for the forks under way (`sig_fork_pending`), a list
+ * the big lock covers.
+ */
+static int sig_post_needs_bkl(const process_t *target, int signo, int multi)
+{
+    return multi || (KSIG_BIT(signo) & (SIG_STOPS | KSIG_BIT(SIGCONT))) != 0 ||
+           (signo == SIGKILL && target->tg != NULL && target->tg->unkillable);
+}
+
+/**
+ * Take what a post of `signo` to `target` needs into `h`, as Linux 6.12's
+ * kill paths hold the target's siglock under RCU or tasklist_lock: a holder
+ * of the big lock takes `sig_lock` alone, since the list and the indexes
+ * change under the big lock; a caller without it takes the list lock as a
+ * reader and then `sig_lock`, so that the threads the post walks stay on the
+ * list and none it wakes is reaped under it. A post that needs the big lock
+ * (`sig_post_needs_bkl`) takes it first when the caller does not hold it;
+ * such a caller is in process context and holds no spinlock. A caller
+ * without the big lock holds neither the list lock nor `sig_lock`, and keeps
+ * `target` by a reference (`get_process_ref`).
+ */
+static void sig_hold_take(struct sig_hold *h, const process_t *target, int signo, int multi)
+{
+    h->listed = 0;
+    h->big = 0;
+    if (!bkl_held() && sig_post_needs_bkl(target, signo, multi)) {
+        bkl_enter();
+        h->big = 1;
+    }
+    if (!bkl_held()) {
+        h->list = tasklist_read_lock();
+        h->listed = 1;
+    }
+    h->irq = sig_irq_save();
+}
+
+/** Let go what `sig_hold_take` took into `h`, in the reverse order. */
+static void sig_hold_give(struct sig_hold *h)
+{
+    sig_irq_restore(h->irq);
+    if (h->listed) {
+        tasklist_read_unlock(h->list);
+    }
+    if (h->big) {
+        bkl_exit();
+    }
+}
+
 /**
  * Post signal `signo` to the process `target` is a thread of, with the
  * siginfo `info`: unless `sig_prepare` drops it, set the process's pending
@@ -5110,24 +5354,22 @@ static void sig_fork_pending(struct tgroup *tg, int signo)
  * caught, so a pending SIGKILL is honored even before delivery by leaving
  * it pending for the default path. A multiprocess send (`multi`) also
  * reaches children being built (`sig_fork_pending`); a single-process
- * send does not. The caller holds the big lock, and may be an interrupt.
+ * send does not. The caller holds the big lock, and may be an interrupt, or
+ * holds `target` by a reference and no spinlock (`sig_hold_take`).
  */
 static void sig_post_process(process_t *target, int signo, const struct k_siginfo *info, int multi)
 {
     struct tgroup *tg;
     process_t *taker;
-    uint32_t f;
+    struct sig_hold h;
 
-    if (!target || signo < 1 || signo > KSIG_MAX || target->state == PROC_UNUSED ||
-        proc_is_kthread(target)) {
+    if (!target || signo < 1 || signo > KSIG_MAX) {
         return;
     }
     tg = target->tg;
-    if (tg->live == 0) {
-        return;
-    }
-    f = sig_irq_save();
-    if (sig_prepare(target, signo, info) && !(tg->pending & KSIG_BIT(signo))) {
+    sig_hold_take(&h, target, signo, multi);
+    if (target->state != PROC_UNUSED && !proc_is_kthread(target) && tg->live != 0 &&
+        sig_prepare(target, signo, info) && !(tg->pending & KSIG_BIT(signo))) {
         taker = sig_fatal_taker(target, signo, 1);
         tg->info[signo] = *info;
         tg->pending |= KSIG_BIT(signo);
@@ -5137,7 +5379,7 @@ static void sig_post_process(process_t *target, int signo, const struct k_siginf
         sig_notify_fd(tg);
         sig_complete(target, taker, signo, 1);
     }
-    sig_irq_restore(f);
+    sig_hold_give(&h);
 }
 
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
@@ -5163,25 +5405,26 @@ process_t *signal_process_target(process_t *p)
  * process when the signal is fatal to it and `t` can take it now, as
  * Linux's `complete_signal` does for a signal sent to one thread
  * (`sig_complete`). A kernel thread takes nothing (`proc_is_kthread`).
+ * The caller holds the big lock, or `t` by a reference and no spinlock
+ * (`sig_hold_take`).
  */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
-    uint32_t f;
+    struct sig_hold h;
     process_t *taker;
 
-    bkl_assert_held();
-    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED ||
-        proc_is_kthread(t)) {
+    if (!t || signo < 1 || signo > KSIG_MAX) {
         return;
     }
-    f = sig_irq_save();
-    if (sig_prepare(t, signo, info) && !(t->sig_pending & KSIG_BIT(signo))) {
+    sig_hold_take(&h, t, signo, 0);
+    if (t->state != PROC_ZOMBIE && t->state != PROC_UNUSED && !proc_is_kthread(t) &&
+        sig_prepare(t, signo, info) && !(t->sig_pending & KSIG_BIT(signo))) {
         taker = sig_fatal_taker(t, signo, 0);
         sig_post_own(t, signo, info);
         sig_notify_fd(t->tg);
         sig_complete(t, taker, signo, 0);
     }
-    sig_irq_restore(f);
+    sig_hold_give(&h);
 }
 
 void signal_post(process_t *target, int signo)
@@ -5424,49 +5667,115 @@ static int32_t kill_all(int signo)
     return found ? 0 : -ESRCH;
 }
 
+/** Whether `p` is in the first PID and user namespaces, where a pid is the
+ * kernel's and an id the record's own word, read without the big lock. */
+static int sig_first_ns(const process_t *p)
+{
+    return proc_pidns(p) == &init_pidns && proc_userns(p) == &init_userns;
+}
+
+/**
+ * The process or thread that `pid`, in the caller's PID namespace, names for
+ * a signal, with a reference that keeps its record until `sig_target_put`;
+ * NULL for none. A caller without the big lock is in the first namespaces,
+ * as `ids_lock` leaves it, and finds a target of the same namespaces without
+ * the lock (`get_process_ref`), as Linux 6.12's kill finds its target under
+ * RCU (kernel/signal.c, kill_proc_info): the sender's siginfo is then the
+ * records' own words (`sender_info`) and the post takes the locks it needs
+ * (`sig_hold_take`). For a target in another namespace, whose numbers the
+ * big lock guards, the big lock is taken, and `*locked` says so. A caller
+ * that holds the big lock keeps it.
+ */
+static process_t *sig_target_get(int pid, int *locked)
+{
+    process_t *t;
+
+    *locked = 0;
+    if (pid <= 0) {
+        return NULL;
+    }
+    if (!bkl_held()) {
+        t = get_process_ref((uint32_t)pid);
+        if (t == NULL || sig_first_ns(t)) {
+            return t;
+        }
+        proc_ref_put(t);
+        bkl_enter();
+        *locked = 1;
+    }
+    t = proc_named((uint32_t)pid);
+    if (t != NULL) {
+        proc_ref_get(t);
+    }
+    return t;
+}
+
+/** Drop the reference `sig_target_get` gave to `t`, which may be NULL, and
+ * the big lock when `locked` says it took it. */
+static void sig_target_put(process_t *t, int locked)
+{
+    if (t != NULL) {
+        proc_ref_put(t);
+    }
+    if (locked) {
+        bkl_exit();
+    }
+}
+
+/** kill(2) of several processes: pid == 0 the caller's process group, pid
+ * < -1 the group (-pid), pid == -1 every process the caller sees but its own
+ * and its PID namespace's init (`kill_all`). The walks hold the big lock.
+ * 0, -ESRCH or -EPERM. */
+static int32_t kill_many(int pid, int signo)
+{
+    int32_t rc;
+
+    bkl_enter();
+    if (pid == 0) {
+        rc = kill_group((int)current_proc->pgid, signo, NULL, 0);
+    } else if (pid == -1) {
+        rc = kill_all(signo);
+    } else if (pid == -2147483647 - 1) {
+        rc = -ESRCH; /* INT_MIN: -pid would overflow */
+    } else {
+        rc = pid_named((uint32_t)-pid) ? kill_group((int)pid_named((uint32_t)-pid), signo, NULL, 0)
+                                       : -ESRCH;
+    }
+    bkl_exit();
+    return rc;
+}
+
 /** kill(2): pid > 0 a single process, which the id of any of its threads
- * names; pid == 0 the caller's process group; pid < -1 the group (-pid);
- * pid == -1 every process the caller sees but its own and its PID
- * namespace's init, posting only to those it may signal (`kill_all`).
+ * names, looked up and posted to without the big lock in the first
+ * namespaces (`sig_target_get`); pid 0 or below several (`kill_many`).
  * signo 0 just probes existence and permission. A process whose threads
  * have all ended exists until its parent reaps it, and takes a signal and
  * discards it, as on Linux, where `kill -0` of a zombie succeeds. 0,
- * -EINVAL, -ESRCH or -EPERM. */
+ * -EINVAL, -ESRCH or -EPERM. The caller holds the lock `ids_lock` takes. */
 static int32_t do_kill(int pid, int signo)
 {
     process_t *target;
     struct k_siginfo info;
+    int32_t rc = 0;
+    int locked;
 
     if (signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
-    if (pid == 0) {
-        return current_proc ? kill_group((int)current_proc->pgid, signo, NULL, 0) : -ESRCH;
+    if (pid <= 0) {
+        return kill_many(pid, signo);
     }
-    if (pid < -1) {
-        if (pid == -2147483647 - 1) {
-            return -ESRCH; /* INT_MIN: -pid would overflow */
-        }
-        return pid_named((uint32_t)-pid)
-                   ? kill_group((int)pid_named((uint32_t)-pid), signo, NULL, 0)
-                   : -ESRCH;
-    }
-    if (pid == -1) {
-        return current_proc ? kill_all(signo) : -ESRCH;
-    }
-    target = proc_named((uint32_t)pid);
+    target = sig_target_get(pid, &locked);
     if (!target || target->state == PROC_UNUSED) {
-        return -ESRCH;
+        rc = -ESRCH;
+    } else if (!cred_may_signal(target, signo)) {
+        rc = -EPERM;
+    } else if (signo != 0 && target->tg->live != 0) {
+        sender_info(&info, SI_USER, target);
+        signal_post_info(target, signo, &info);
     }
-    if (!cred_may_signal(target, signo)) {
-        return -EPERM;
-    }
-    if (signo == 0 || target->tg->live == 0) {
-        return 0;
-    }
-    sender_info(&info, SI_USER, target);
-    signal_post_info(target, signo, &info);
-    return 0;
+    sig_target_put(target, locked);
+    return rc;
 }
 
 /**
@@ -5478,54 +5787,71 @@ static int32_t do_kill(int pid, int signo)
  * the order of Linux 6.12's do_tkill: -EINVAL for the ids, -ESRCH for no
  * such thread of that process, as do_send_specific finds and matches it,
  * and only then -EINVAL for a signal out of range and -EPERM from the
- * permission, as check_kill_permission tests them.
+ * permission, as check_kill_permission tests them. The thread is found and
+ * posted to without the big lock in the first namespaces
+ * (`sig_target_get`); the caller holds the lock `ids_lock` takes.
  */
 static int32_t do_tkill(int tgid, int tid, int signo)
 {
     process_t *t;
     struct k_siginfo info;
+    int32_t rc = 0;
+    int locked;
 
     if (tid <= 0 || tgid < 0) {
         return -EINVAL;
     }
-    t = proc_named((uint32_t)tid);
+    t = sig_target_get(tid, &locked);
     if (proc_tid_gone(t) || (tgid != 0 && t->tgid != pid_named((uint32_t)tgid))) {
-        return -ESRCH;
+        rc = -ESRCH;
+    } else if (signo < 0 || signo > KSIG_MAX) {
+        rc = -EINVAL;
+    } else if (!cred_may_signal(t, signo)) {
+        rc = -EPERM;
+    } else if (signo != 0) {
+        sender_info(&info, SI_TKILL, t);
+        signal_post_thread(t, signo, &info);
     }
-    if (signo < 0 || signo > KSIG_MAX) {
-        return -EINVAL;
-    }
-    if (!cred_may_signal(t, signo)) {
-        return -EPERM;
-    }
-    if (signo == 0) {
-        return 0;
-    }
-    sender_info(&info, SI_TKILL, t);
-    signal_post_thread(t, signo, &info);
-    return 0;
+    sig_target_put(t, locked);
+    return rc;
 }
 
-/** kill takes pid and signal (`do_kill`). */
+/** kill takes pid and signal (`do_kill`). It runs without the big lock
+ * (`syscall_signal_unlock` in syscall.c), and takes it for a caller outside
+ * the first namespaces (`ids_lock`). */
 long sys_kill(isr_params_t *params)
 {
-    return do_kill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
+    int taken = ids_lock(0);
+    long rc = do_kill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
+
+    ids_unlock(taken);
+    return rc;
 }
 
-/** tkill takes tid and signal. */
+/** tkill takes tid and signal; it runs as kill does. */
 long sys_tkill(isr_params_t *params)
 {
-    return do_tkill(0, (int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
+    int taken = ids_lock(0);
+    long rc = do_tkill(0, (int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
+
+    ids_unlock(taken);
+    return rc;
 }
 
 /** tgkill takes tgid, tid and signal; a tgid that is not positive is
- * -EINVAL. */
+ * -EINVAL. It runs as kill does. */
 long sys_tgkill(isr_params_t *params)
 {
+    int taken;
+    long rc;
+
     if ((int)SC_ARG(params, 0) <= 0) {
         return -EINVAL;
     }
-    return do_tkill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2));
+    taken = ids_lock(0);
+    rc = do_tkill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2));
+    ids_unlock(taken);
+    return rc;
 }
 
 void siginfo_to_caller(uint8_t *out, int signo, const struct k_siginfo *info)
@@ -5587,7 +5913,8 @@ static int queued_reserved(const struct k_siginfo *info)
 }
 
 /** Whether `pid`, in the caller's PID namespace, names the calling thread,
- * as Linux's `task_pid_vnr(current) == pid`; the big lock is held. */
+ * as Linux's `task_pid_vnr(current) == pid`, under the lock `ids_lock`
+ * takes: none in the first namespaces, where a pid is the kernel's. */
 static int named_self(int pid)
 {
     return pid > 0 && pid_named((uint32_t)pid) == current_proc->pid;
@@ -5606,6 +5933,7 @@ static int named_self(int pid)
  * exists, as do_rt_sigqueueinfo compares them; then -ESRCH for no such
  * process, and only then -EINVAL for a signal out of range and -EPERM from
  * the permission, as group_send_sig_info's check_kill_permission tests them.
+ * It runs as kill does, without the big lock in the first namespaces.
  */
 long sys_rt_sigqueueinfo(isr_params_t *params)
 {
@@ -5614,28 +5942,30 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
     process_t *target;
     struct k_siginfo info;
     int32_t rc;
+    int taken, locked;
 
     rc = siginfo_from_caller(SC_ARG(params, 2), signo, NULL, &info);
     if (rc != 0) {
         return rc;
     }
+    taken = ids_lock(0);
     if (queued_reserved(&info) && !named_self(pid)) {
+        ids_unlock(taken);
         return -EPERM;
     }
-    target = pid > 0 ? proc_named((uint32_t)pid) : NULL;
+    target = sig_target_get(pid, &locked);
     if (!target || target->state == PROC_UNUSED) {
-        return -ESRCH;
-    }
-    if (signo < 0 || signo > KSIG_MAX) {
-        return -EINVAL;
-    }
-    if (!cred_may_signal(target, signo)) {
-        return -EPERM;
-    }
-    if (signo != 0 && target->tg->live != 0) {
+        rc = -ESRCH;
+    } else if (signo < 0 || signo > KSIG_MAX) {
+        rc = -EINVAL;
+    } else if (!cred_may_signal(target, signo)) {
+        rc = -EPERM;
+    } else if (signo != 0 && target->tg->live != 0) {
         signal_post_info(target, signo, &info);
     }
-    return 0;
+    sig_target_put(target, locked);
+    ids_unlock(taken);
+    return rc;
 }
 
 /* pidfd_send_signal's flags since Linux 6.9, at most one of which is given:
@@ -5762,7 +6092,8 @@ out:
  * and -EPERM from the permission, as do_send_specific's
  * check_kill_permission tests them. A thread that has ended but keeps its
  * id (`proc_tid_gone`), an unreaped process's leader among them, is checked
- * and discards the signal.
+ * and discards the signal. It runs as kill does, without the big lock in
+ * the first namespaces.
  */
 long sys_rt_tgsigqueueinfo(isr_params_t *params)
 {
@@ -5772,6 +6103,7 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
     process_t *t;
     struct k_siginfo info;
     int32_t rc;
+    int taken, locked;
 
     rc = siginfo_from_caller(SC_ARG(params, 3), signo, NULL, &info);
     if (rc != 0) {
@@ -5780,23 +6112,24 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
     if (tgid <= 0 || tid <= 0) {
         return -EINVAL;
     }
+    taken = ids_lock(0);
     if (queued_reserved(&info) && !named_self(tid)) {
+        ids_unlock(taken);
         return -EPERM;
     }
-    t = proc_named((uint32_t)tid);
+    t = sig_target_get(tid, &locked);
     if (proc_tid_gone(t) || t->tgid != pid_named((uint32_t)tgid)) {
-        return -ESRCH;
-    }
-    if (signo < 0 || signo > KSIG_MAX) {
-        return -EINVAL;
-    }
-    if (!cred_may_signal(t, signo)) {
-        return -EPERM;
-    }
-    if (signo != 0) {
+        rc = -ESRCH;
+    } else if (signo < 0 || signo > KSIG_MAX) {
+        rc = -EINVAL;
+    } else if (!cred_may_signal(t, signo)) {
+        rc = -EPERM;
+    } else if (signo != 0) {
         signal_post_thread(t, signo, &info);
     }
-    return 0;
+    sig_target_put(t, locked);
+    ids_unlock(taken);
+    return rc;
 }
 
 /**
@@ -5899,6 +6232,8 @@ long signal_action(int signo, const struct k_sigaction *act, struct k_sigaction 
         old->flags &= ~(unsigned long)SA_IA32_ABI;
     }
     if (act) {
+        uint32_t f = sig_irq_save();
+
         current_proc->sigacts[signo] = *act;
 #if defined(IA32_SYSCALL_TABLE_SIZE)
         current_proc->sigacts[signo].flags &= ~(unsigned long)SA_IA32_ABI;
@@ -5907,10 +6242,9 @@ long signal_action(int signo, const struct k_sigaction *act, struct k_sigaction 
         }
 #endif
         if (sig_handler_ignored(act->handler, signo)) {
-            uint32_t f = sig_irq_save();
             sig_discard(current_proc, KSIG_BIT(signo));
-            sig_irq_restore(f);
         }
+        sig_irq_restore(f);
     }
     return 0;
 }
@@ -6312,18 +6646,24 @@ static void reap_threads(void)
  * as Linux 6.12.115's do_signal_stop does (kernel/signal.c:2499-2511).
  * The real init (PID 1) is unstoppable, like Unix init: stopping
  * it would freeze the system with no reaper and no way back, so a
- * job-control stop aimed at it is dropped.
+ * job-control stop aimed at it is dropped. The stop is made under
+ * `sig_lock`, and not once the process's end has begun, which a fatal
+ * signal's post without the big lock may begin meanwhile, as Linux's
+ * do_signal_stop tests SIGNAL_GROUP_EXIT under siglock.
  */
 static void sig_group_stop(int signo)
 {
     struct tgroup *tg = current_proc->tg;
     process_t *parent;
     process_t *t;
+    uint32_t flags;
 
     if (current_proc->tgid == init_pid && !debug_shell_is_home) {
         return;
     }
-    if (tg->stop) {
+    flags = sig_irq_save();
+    if (tg->stop || tg->exiting) {
+        sig_irq_restore(flags);
         return;
     }
     tg->stop = (uint32_t)signo;
@@ -6337,6 +6677,7 @@ static void sig_group_stop(int signo)
     }
     tg->leader->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
     ptrace_group_change(tg);
+    sig_irq_restore(flags);
     parent = get_process(tg->leader->parent_pid);
     if (parent) {
         struct k_siginfo child;
@@ -6745,11 +7086,11 @@ long signal_timedwait(unsigned long setsize, uintptr_t uset, uintptr_t uinfo, ui
     }
     set &= ~(uint64_t)KSIG_UNCATCHABLE;
     saved = current_proc->sig_blocked;
-    current_proc->sig_real_blocked = saved;
+    signal_set_real_blocked(saved);
     signal_set_blocked(saved & ~set);
     rc = sigwait_set(set, timed, deadline, (void __user *)uinfo);
     signal_set_blocked(saved);
-    current_proc->sig_real_blocked = 0;
+    signal_set_real_blocked(0);
     return rc;
 }
 

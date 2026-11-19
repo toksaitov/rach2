@@ -11,6 +11,7 @@
 #include "lib/kerrno.h"
 #include "lib/kstd.h"
 #include "proc/percpu.h"
+#include "proc/sched.h"
 #include "rtc.h"
 #include "timer.h"
 
@@ -83,6 +84,7 @@ static uint32_t due_in_ms(const struct pm_runtime *rpm, int64_t now)
 void pm_runtime_init(struct pm_runtime *rpm, const struct pm_runtime_ops *ops, void *owner)
 {
     spin_lock_init(&rpm->lock, "pm_runtime");
+    wait_queue_init_named(&rpm->wait, "pm_runtime_wait");
     rpm->ops = ops;
     rpm->owner = owner;
     rpm->usage = 1;
@@ -142,6 +144,17 @@ static void record_error(struct pm_runtime *rpm, const char *what, int32_t err)
     klog(KLOG_ERR, "pm", "runtime: %s failed: error %d; sleeps stopped", what, (int)err);
 }
 
+/** Whether the transition a synchronous getter is waiting for has ended. */
+static int transition_done(void *arg)
+{
+    struct pm_runtime *rpm = (struct pm_runtime *)arg;
+    uint32_t flags = spin_lock_irqsave(&rpm->lock);
+    int done = rpm->mover == NULL;
+
+    spin_unlock_irqrestore(&rpm->lock, flags);
+    return done;
+}
+
 /** Have the device awake when this returns, waking it if it sleeps, as
  * Linux's rpm_resume; `take` is 1 to take a hold with it, 0 when the caller
  * has taken one already under the record's lock. Called without the lock,
@@ -149,25 +162,25 @@ static void record_error(struct pm_runtime *rpm, const char *what, int32_t err)
 static int32_t resume(struct pm_runtime *rpm, int take)
 {
     uint32_t flags;
-    int32_t err;
+    int32_t err, ms;
 
-    for (;;) {
-        flags = spin_lock_irqsave(&rpm->lock);
-        if (rpm->status == RPM_ACTIVE || rpm->mover == rpm_current()) {
-            rpm->usage += take;
-            spin_unlock_irqrestore(&rpm->lock, flags);
-            return 0;
-        }
-        if (rpm->status == RPM_SUSPENDED) {
-            break;
-        }
-        /* Another process suspends or resumes it; neither sleeps. */
+    flags = spin_lock_irqsave(&rpm->lock);
+    rpm->usage += take;
+    while (rpm->mover && rpm->mover != rpm_current()) {
         spin_unlock_irqrestore(&rpm->lock, flags);
-        arch_relax();
+        if (current_proc && sched_is_enabled()) {
+            (void)wq_wait_event_nointr(&rpm->wait, transition_done, rpm);
+        } else {
+            arch_relax();
+        }
+        flags = spin_lock_irqsave(&rpm->lock);
+    }
+    if (rpm->status != RPM_SUSPENDED) {
+        spin_unlock_irqrestore(&rpm->lock, flags);
+        return 0;
     }
     set_status(rpm, RPM_RESUMING);
     rpm->mover = rpm_current();
-    rpm->usage += take;
     spin_unlock_irqrestore(&rpm->lock, flags);
     err = rpm->ops->resume(rpm->owner);
     flags = spin_lock_irqsave(&rpm->lock);
@@ -178,7 +191,10 @@ static int32_t resume(struct pm_runtime *rpm, int take)
     if (err != 0) {
         record_error(rpm, "resume", err);
     }
+    ms = idle_after(rpm);
     spin_unlock_irqrestore(&rpm->lock, flags);
+    wq_wake_all(&rpm->wait);
+    schedule_idle(rpm, ms);
     return err;
 }
 
@@ -259,8 +275,11 @@ int32_t pm_runtime_forbid(struct pm_runtime *rpm)
 
     rpm->forbidden = 1;
     rpm->error = 0;
+    if (!was) {
+        rpm->usage++;
+    }
     spin_unlock_irqrestore(&rpm->lock, flags);
-    return was ? 0 : pm_runtime_get_sync(rpm);
+    return was ? 0 : resume(rpm, 0);
 }
 
 void pm_runtime_set_delay(struct pm_runtime *rpm, int32_t ms)
@@ -355,6 +374,7 @@ void pm_runtime_idle(struct pm_runtime *rpm)
         }
     }
     spin_unlock_irqrestore(&rpm->lock, flags);
+    wq_wake_all(&rpm->wait);
     schedule_idle(rpm, again);
 }
 

@@ -158,8 +158,11 @@ struct block_device {
     uint64_t firsts_unflushed;
     uint64_t firsts_flushed;
     /* Odd while `block_set_sectors` sets `sector_count`; moved on by each
-     * change. Last, so that the tests' positional initializers stay right. */
+     * change. */
     volatile uint32_t size_seq;
+    /* Byte offset of sector zero within a sector of the backing medium.
+     * Zero for a disk, or fixed for the lifetime of a view or attachment. */
+    uint32_t sector_phase;
 };
 
 /**

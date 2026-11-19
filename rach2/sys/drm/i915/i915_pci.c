@@ -469,19 +469,15 @@ static void bind_unwind(struct drm_i915_private *i915, uint16_t command, int cla
 }
 
 /** Make the locks of a new device record, each of one class for every
- * device (lib/spinlock.h, proc/mutex.h). */
+ * device (lib/spinlock.h, proc/mutex.h). The frequency's lock and the
+ * engines' are made by `i915_rps_init` and `i915_gt_init`, which clear
+ * the records that hold them. */
 static void i915_locks_init(struct drm_i915_private *i915)
 {
-    unsigned e;
-
     mutex_init(&i915->gem.lock, "i915_gem");
     spin_lock_init(&i915->gem.userptr_lock, "i915_userptr");
     spin_lock_init(&i915->uncore.lock, "i915_uncore");
     spin_lock_init(&i915->irq.lock, "i915_irq");
-    spin_lock_init(&i915->rps.lock, "i915_rps");
-    for (e = 0; e < I915_NUM_ENGINES; e++) {
-        spin_lock_init(&i915->gt.engine[e].lock, "i915_engine");
-    }
 }
 
 /**

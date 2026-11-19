@@ -262,6 +262,15 @@ int krffs_sync_mapping(void *address, size_t size)
 #endif
 }
 
+int krffs_sync_file(int file_descriptor)
+{
+#ifdef WINDOWS
+    return FlushFileBuffers((HANDLE)_get_osfhandle(file_descriptor)) ? 0 : -1;
+#else
+    return fsync(file_descriptor);
+#endif
+}
+
 int krffs_unmap_file(void *address, size_t size)
 {
 #ifdef WINDOWS

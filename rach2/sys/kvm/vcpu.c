@@ -1194,7 +1194,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
     if (v->has_sigmask) {
         kvm_bkl_enter(v);
         old = current_proc->sig_blocked;
-        current_proc->sig_real_blocked = old;
+        signal_set_real_blocked(old);
         signal_set_blocked(v->sigmask);
         bkl_exit();
     }
@@ -1214,7 +1214,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
     if (v->has_sigmask) {
         kvm_bkl_enter(v);
         signal_set_blocked(old);
-        current_proc->sig_real_blocked = 0;
+        signal_set_real_blocked(0);
         bkl_exit();
     }
     kvm_exitstat_done(v);

@@ -1364,11 +1364,14 @@ static void hda_setup_rirb(void)
 static int verb_debug_count = 3;
 
 /* One verb at a time on the immediate command interface: its holder owns
- * ICW, IRR and ICS from the wait for an idle interface to the response. */
+ * ICW, IRR and ICS from the wait for an idle interface to the response. The
+ * tick takes it, so it is held with interrupts off. */
 static struct spinlock verb_lock = SPINLOCK_INIT_NAMED("verb_lock");
 
 /* The longest a verb waits on the interface, in ticks of the 24 MHz wall
- * clock: 1 ms. A codec answers in the next link frame, 21 us at 48 kHz. */
+ * clock: 1 ms, each for the idle interface and for the response, with
+ * interrupts off. A codec answers in the next link frame, 21 us at 48 kHz;
+ * Linux's limit is 50 polls of a microsecond. */
 #define HDA_VERB_TICKS 24000u
 
 /* The polls after which a verb gives up when the wall clock does not run;
@@ -1376,19 +1379,17 @@ static struct spinlock verb_lock = SPINLOCK_INIT_NAMED("verb_lock");
  * limit. */
 #define HDA_VERB_POLLS 1000
 
-/* A verb's wait on the interface: when it began, the polls made, and the
- * interrupt flags of the caller, which are put back between polls. */
+/* A verb's wait on the interface: when it began and the polls made. */
 struct hda_verb_wait {
     uint32_t start;
     int polls;
-    uint32_t flags;
 };
 
 /**
- * Wait one poll's interval of a verb, with interrupts as the caller had
- * them. Return false, without waiting, once the verb has waited 1 ms by the
- * wall clock or HDA_VERB_POLLS polls. The first call reads the clock to
- * start the count, so a verb that never waits does not read it.
+ * Wait one poll's interval of a verb. Return false, without waiting, once
+ * the verb has waited 1 ms by the wall clock or HDA_VERB_POLLS polls. The
+ * first call reads the clock to start the count, so a verb that never waits
+ * does not read it.
  */
 static bool hda_verb_wait(struct hda_verb_wait *w)
 {
@@ -1398,9 +1399,7 @@ static bool hda_verb_wait(struct hda_verb_wait *w)
         w->start = now;
     else if ((uint32_t)(now - w->start) >= HDA_VERB_TICKS || w->polls > HDA_VERB_POLLS)
         return false;
-    kirq_restore(w->flags);
     hda_delay(1);
-    w->flags = kirq_save();
     return true;
 }
 
@@ -1416,14 +1415,16 @@ static bool hda_verb_wait(struct hda_verb_wait *w)
  *
  * ICI is simpler than CORB/RIRB, and with one verb at a time it is as fast.
  * The command packs the codec address, node ID and verb. The verb lock is
- * held from the wait for an idle interface to the response's read, with
- * interrupts off only while a register is read or written: the waits between
- * polls run with the caller's interrupts, so a verb sent from a system call
- * does not hold off the tick. The tick may stop such a verb half-way, so a
- * caller in the tick or another interrupt, or in a service that may run
- * there, passes HDA_VERB_TRY, which gives up when the lock is held or the
- * interface is still busy with a command before it; waiting there would
- * never end, or end too late for the tick.
+ * held with interrupts off from the wait for an idle interface to the
+ * response's read, as Linux holds bus->reg_lock with spin_lock_irq in
+ * snd_hdac_bus_send_cmd_pio (sound/hda/hdac_controller.c:170). The tick takes
+ * the lock, and an interrupt taken under it would take the big lock in
+ * _irq_router, which another processor may hold while it spins here. A verb
+ * holds off the tick for a link frame, 21 us, and for about 2 ms when the
+ * codec does not answer. A caller in the tick or another interrupt, or in a
+ * service that may run there, passes HDA_VERB_TRY, which gives up when the
+ * lock is held or the interface is still busy with a command before it,
+ * since a wait there would end too late for the tick.
  *
  * Return 0 with the response; -EBUSY in HDA_VERB_TRY mode when the interface
  * is in use, having sent nothing; -EIO when the controller is not mapped or
@@ -1434,6 +1435,7 @@ static bool hda_verb_wait(struct hda_verb_wait *w)
 static int hda_verb(uint8_t caddr, uint8_t nid, uint32_t verb, int mode, uint32_t *response)
 {
     struct hda_verb_wait w;
+    uint32_t flags;
     uint32_t cmd = ((uint32_t)caddr << 28) | ((uint32_t)nid << 20) | (verb & 0xFFFFF);
     uint16_t ics;
     int err = -ETIMEDOUT;
@@ -1445,15 +1447,15 @@ static int hda_verb(uint8_t caddr, uint8_t nid, uint32_t verb, int mode, uint32_
         return -EIO;
     w.start = 0;
     w.polls = 0;
-    w.flags = kirq_save();
+    flags = kirq_save();
     if (mode == HDA_VERB_TRY) {
         if (!spin_trylock(&verb_lock)) {
-            kirq_restore(w.flags);
+            kirq_restore(flags);
             return -EBUSY;
         }
         if (hda_read16(HDA_ICS) & HDA_ICS_ICB) {
             spin_unlock(&verb_lock);
-            kirq_restore(w.flags);
+            kirq_restore(flags);
             return -EBUSY;
         }
     } else {
@@ -1503,7 +1505,7 @@ static int hda_verb(uint8_t caddr, uint8_t nid, uint32_t verb, int mode, uint32_
     }
 out:
     spin_unlock(&verb_lock);
-    kirq_restore(w.flags);
+    kirq_restore(flags);
     return err;
 }
 

@@ -151,6 +151,14 @@ void *krffs_map_file_readonly(int file_descriptor, off_t offset, size_t size);
 int krffs_sync_mapping(void *address, size_t size);
 
 /**
+ * Writes what the file `file_descriptor` holds in the system's cache to
+ * its medium and waits: `fsync` on Unix, `FlushFileBuffers` on Windows,
+ * whose `FlushViewOfFile` does not wait for the medium. Returns 0, or -1
+ * on failure.
+ */
+int krffs_sync_file(int file_descriptor);
+
+/**
  * Unmaps a mapping from `krffs_map_file` or `krffs_map_file_readonly`:
  * `munmap` on Unix, `UnmapViewOfFile` on Windows, which ignores `size` and
  * needs the address the map returned. Returns 0, or -1 on failure.

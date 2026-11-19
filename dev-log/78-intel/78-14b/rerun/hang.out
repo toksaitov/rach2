@@ -1,0 +1,9 @@
+video-gpu: hang: alone: 300 frames, status 0
+video-gpu: hang: triggers: 8 run, 8 failed with status 1, from 1795113025 to 1795113087
+video-gpu: hang: decode: 2 loops, 600 frames, 0 differ, status 0, last loop ended at 1795113093
+video-gpu: hang: kernel: 8 hangs, 8 resets of rcs0, 0 of vcs0, 0 of the chip, 0 wedged
+gpuvideo: linux: video-gpu: hang: alone: 300 frames, status 0
+gpuvideo: linux: video-gpu: hang: triggers: 8 run, 8 failed with status 1, from 1794386986 to 1794387035
+gpuvideo: linux: video-gpu: hang: decode: 1 loops, 300 frames, 0 differ, status 0, last loop ended at 1794387035
+gpuvideo: linux: video-gpu: hang: kernel: 8 hangs, 8 resets of rcs0, 0 of vcs0, 0 of the chip, 0 wedged
+gpuvideo: result: hang: pass

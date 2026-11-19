@@ -1,0 +1,8 @@
+webgl: result: firefox 2.0.1 chunk 0 of 12 pages 250 pass 247 fail 3 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 3 subtests passed 18193 failed 70
+judge: result: pass webgl 250 pages, 0 worse than Debian's
+exit 0
+[  101.312000] i915: gmbus dpc: NAK on first message, retry
+[  101.312000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  101.312000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  101.312000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  101.312000] i915: gmbus dpc: disabling bit-banging, force_bit 0

@@ -518,11 +518,20 @@ within the first 4096 directory slots; long-name and deleted slots
 count toward that position.
 Exceeding any bound makes the mount read-only and logs the reason.
 .Pp
-KRFFS repair compares at most 4096 named reserved nodes.
-A dirty volume with more fails a writable mount with
-.Er EIO
-before repair writes begin.
+KRFFS repair rebuilds the backward links, puts a file a stopped rename
+left in no directory back in one, frees nameless nodes and resolves a
+name on two nodes on any dirty volume, in passes when the volume has
+more named nodes than its index of 262144 holds.
+A volume the kernel has no memory to index, or with more nodes of one
+name hash than the index holds, mounts read-only after the rest of the
+repair, logs that
+.Ql fsck.krffs
+is owed, and keeps its dirty flag, since a write could act on one of
+two nodes of one name.
 A read-only mount skips repair.
+A KRFFS volume whose core cannot undo a failed move halts: the volume and
+its bind mounts turn read-only until the next mount repairs it, as ext4
+does after an error, and its dirty flag stays set.
 .Pp
 An ext2 volume with its valid bit clear or error bit set is checked
 before a writable mount or remount.
@@ -605,7 +614,9 @@ cache buffers, flushes the device, and drops its cached buffers.
 A tmpfs has no device and writes nothing; its unmount frees its files.
 For a writable KRFFS volume, preparation flushes earlier writes to the
 medium before clearing and separately flushing the dirty flag.
-A KRFFS volume made read-only before preparation keeps that flag set.
+A KRFFS volume made read-only before preparation, or with an open file
+that lost its name, as at a shutdown, keeps that flag set; the next
+mount frees the file.
 Only then does it release the file system, covered directory, and claim.
 .Pp
 A write that fails does not keep the mount, as on Linux:

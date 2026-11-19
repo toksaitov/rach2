@@ -553,7 +553,11 @@ static void stdio_allocations(void)
     }
 }
 
-/** Release a fixture process and its standard descriptions. */
+static void grace(void);
+
+/** Release a fixture process and its standard descriptions, and run the
+ * grace periods after which the record and what it kept are freed
+ * (`proc_ref_put`). */
 static void close_process(process_t *p)
 {
     int i;
@@ -562,6 +566,7 @@ static void close_process(process_t *p)
         fd_free(p->fds, i);
     }
     free_process(p);
+    grace();
 }
 
 /**
@@ -668,6 +673,9 @@ static void child_allocations(void)
         check(allocations == before + 2 && parent->tg->refs == 2 && parent->tg->live == 1,
               "only the record and floating-point area are allocated");
         free_process(child);
+        check(allocations == before + 2 && parent->tg->refs == 2,
+              "a freed record and its hold on its group stay until a grace period has passed");
+        grace();
         check(allocations == before && parent->tg->refs == 1 && parent->fs->refs == 1,
               "unfinished thread releases its references");
     }

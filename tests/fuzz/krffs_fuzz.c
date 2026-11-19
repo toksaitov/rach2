@@ -11,6 +11,20 @@
 #include "../../rach2/sys/fs/krffs.h"
 #include "fuzz.h"
 
+/* The repair in krffs.c indexes names with these; the harness runs no
+   repair, so the index is never had. */
+void *kmalloc(size_t size)
+{
+    (void)size;
+    return (void *)0;
+}
+
+/** Nothing to give back, since `kmalloc` gives nothing. */
+void kfree(void *p)
+{
+    (void)p;
+}
+
 /** The kernel log: discarded. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
@@ -90,7 +104,14 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     mount.ctx = 0;
     mount.size = image_size;
     mount.grain = 0;
+    mount.sector = 0;
+    mount.sector_phase = 0;
     mount.stale_links = 0;
+    mount.check_owed = 0;
+    mount.unsettled = 0;
+    mount.halted = 0;
+    mount.withdrawn = 0;
+    mount.on_halt = 0;
     for (i = 0; i < 64; i++) {
         uint64_t node;
         unsigned j;
