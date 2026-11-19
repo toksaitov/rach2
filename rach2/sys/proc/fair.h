@@ -188,6 +188,14 @@ struct sched_statistics {
  * `runnable_weight` is a group entity's count of runnable threads below,
  * cached for PELT. `tasks_prev` and `tasks_next` link a queued thread on
  * its processor's `cfs_tasks`.
+ *
+ * The rest are task_struct's members for wake placement and balancing,
+ * which only balance.c writes: `last_wakee`, the thread this one last woke,
+ * and `wakee_flips`, how often that changed, halved each second from
+ * `wakee_flip_decay_ts` in ticks (record_wakee); `recent_used_cpu`, the
+ * processor it last woke on, set to its parent's by a fork's placement
+ * (select_idle_sibling); `sched_task_hot`, set while a balance moves it
+ * though cache-hot.
  */
 struct sched_entity {
     struct load_weight load;
@@ -214,6 +222,11 @@ struct sched_entity {
     struct sched_entity *tasks_prev, *tasks_next;
     struct sched_avg avg;
     struct sched_statistics stats;
+    struct process *last_wakee;
+    unsigned int wakee_flips;
+    uint64_t wakee_flip_decay_ts;
+    int recent_used_cpu;
+    uint8_t sched_task_hot;
 };
 
 /*
@@ -395,9 +408,10 @@ extern const uint32_t sched_prio_to_wmult[40];
  *
  * `load_update`: PELT's update_load_avg of `se` on `cfs_rq` at the task
  * clock, with FAIR_LOAD_* flags, and se_update_runnable. `load_reweight`:
- * after `se->load` changed, take the entity's old load average out of
- * `cfs_rq`'s, compute it again from the new weight, and add it back
- * (reweight_entity's dequeue_load_avg and enqueue_load_avg). `load_remove`:
+ * after `se->load` changed from `old_weight`, take the entity's load out of
+ * `cfs_rq`'s sums at the old weight, compute its load average again from the
+ * new one, and add it back (reweight_entity's dequeue_load_avg and
+ * enqueue_load_avg, which Linux runs before the weight changes). `load_remove`:
  * the entity leaves its queue's sums without a queue update, by migration
  * or death (remove_entity_load_avg). `load_init`: a new thread's averages
  * (init_entity_runnable_average and post_init_entity_util_avg).
@@ -411,7 +425,7 @@ extern const uint32_t sched_prio_to_wmult[40];
  */
 struct fair_hooks {
     void (*load_update)(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags);
-    void (*load_reweight)(struct cfs_rq *cfs_rq, struct sched_entity *se);
+    void (*load_reweight)(struct cfs_rq *cfs_rq, struct sched_entity *se, unsigned long old_weight);
     void (*load_remove)(struct sched_entity *se);
     void (*load_init)(struct sched_entity *se);
     void (*group_update)(struct sched_entity *se);
