@@ -721,9 +721,10 @@ static void cpu_timer_charge(struct ktimer *t)
  * clock by the arming's end; and the thread, by its `serial`, 0 for none,
  * whose ticks write each count in two halves with a wait between them where
  * the upper half changes, as the i686's add of 64 bits writes them, and its
- * process, how many such carries there were, and in how many of them a
- * read of that thread's clock or its process's was under way while the
- * halves were apart.
+ * process, how many such carries there were, in how many of them a read of
+ * that thread's clock or its process's was under way while the halves were
+ * apart, how many carries were given up for want of such a read, and the
+ * ticks those owe the count.
  */
 static uint32_t test_arm_waits, test_arm_landed;
 
@@ -735,12 +736,22 @@ struct arm_test {
 };
 static uint64_t test_split_serial;
 static const struct tgroup *test_split_tg;
-static uint32_t test_split_carries, test_split_contested;
+static uint32_t test_split_carries, test_split_contested, test_split_given_up;
+static uint32_t test_split_owed;
+
+/* The longest a forced carry waits for a read, in microseconds: five ticks,
+ * where a read on a processor that runs its reader begins within one. */
+#define SPLIT_WAIT_US (5u * ((uint32_t)NS_PER_TICK / 1000u))
 
 /* Set without a lock while a forced torn write is between its halves
  * (`split_add`), and set by a read of the tested thread's clock or its
  * process's that begins meanwhile (`ptimer_test_read`). */
 static volatile int test_split_open, test_split_reader;
+
+/* Set by the tested thread's tick, under `timer_lock`, while its user time's
+ * lower half is all ones, so that its next user tick carries; read without
+ * a lock by `ptimer_test_read`. */
+static volatile int test_split_due;
 
 /* Set without a lock, for each processor, while a read of the tested
  * thread's clock or its process's that began there has yet to take
@@ -762,50 +773,87 @@ static int split_begun_elsewhere(void)
     return 0;
 }
 
-/** Add one to the count `count` of the thread `test_split_serial` names,
- * the lower half first and, where the upper half changes, the upper half
- * once a read of that thread's clock or its process's is under way on
- * another processor, or 100 ms have passed, and a millisecond more, so that
- * such a read without `timer_lock` would see the two halves apart. A read is
- * under way when it begins while the halves are apart, or began before and
- * still waits for `timer_lock`, which this tick holds until the upper half
- * is written; a carry with such a read counts in `test_split_contested`.
- * The caller holds `timer_lock`, on the tick, with interrupts off. */
+/**
+ * Add one to the count `count` of the thread `test_split_serial` names, the
+ * lower half first and, where the upper half changes, the upper half once a
+ * read of that thread's clock or its process's is under way on another
+ * processor, and a millisecond more, so that such a read without
+ * `timer_lock` would see the two halves apart. A read is under way when it
+ * begins while the halves are apart, or began before and still waits for
+ * `timer_lock`, which this tick holds until the upper half is written; such
+ * a carry counts in `test_split_contested`.
+ *
+ * When no read is under way within SPLIT_WAIT_US, as the stopwatch measures
+ * it, the carry is given up: the lower half is put back, and the tick is
+ * owed to the count and added with the carry that a later tick makes. A
+ * processor whose own tick comes late, past `split_settle`'s wait, spins on
+ * `timer_lock` with interrupts off and can begin no read until this tick
+ * lets go, and the host of a virtual machine may run none of its processors
+ * for many ticks; in either case no read can begin in the window.
+ * The caller holds `timer_lock`, on the tick, with interrupts off.
+ */
 static void split_add(uint64_t *count)
 {
     volatile uint32_t *half = (volatile uint32_t *)count; /* x86: low half first */
     uint64_t v = *count + 1u;
-    uint32_t waited;
+    struct timer_watch w;
 
     half[0] = (uint32_t)v;
-    if ((uint32_t)(v >> 32) != half[1]) {
-        test_split_reader = 0;
-        test_split_open = 1;
-        for (waited = 0; !test_split_reader && waited < 100000u; waited += 10u) {
-            if (split_begun_elsewhere()) {
-                test_split_reader = 1;
-                break;
-            }
-            k_udelay(10u);
-        }
-        k_udelay(1000u);
-        half[1] = (uint32_t)(v >> 32);
-        test_split_open = 0;
-        test_split_carries++;
-        if (test_split_reader) {
-            test_split_contested++;
-        }
+    if ((uint32_t)(v >> 32) == half[1]) {
+        return;
     }
+    test_split_reader = 0;
+    test_split_open = 1;
+    timer_watch_start(&w);
+    while (!test_split_reader && timer_watch_us(&w) < SPLIT_WAIT_US) {
+        if (split_begun_elsewhere()) {
+            test_split_reader = 1;
+            break;
+        }
+        k_udelay(10u);
+    }
+    if (!test_split_reader) {
+        test_split_open = 0;
+        half[0] = (uint32_t)(v - 1u);
+        test_split_given_up++;
+        test_split_owed++;
+        return;
+    }
+    k_udelay(1000u);
+    half[1] = (uint32_t)(v >> 32);
+    test_split_open = 0;
+    test_split_carries++;
+    test_split_contested++;
+    *count = v + test_split_owed;
+    test_split_owed = 0;
 }
 
+/**
+ * Mark a read of the tested thread's clock or its process's as begun on
+ * this processor, and while that thread's next user tick carries
+ * (`test_split_due`), wait for the carry's halves to come apart, at most
+ * SPLIT_WAIT_US, with interrupts as the caller has them, on, so that the
+ * read is under way in the carry however the host of a virtual machine runs
+ * its processors: the tick that carries sees the mark and writes the upper
+ * half only after it (`split_add`).
+ */
 void ptimer_test_read(const process_t *p, int thread)
 {
-    if (test_split_serial != 0 &&
-        (thread ? p->serial == test_split_serial : p->tg == test_split_tg)) {
-        test_split_begun[arch_cpu_id()] = 1;
-        if (test_split_open) {
-            test_split_reader = 1;
+    struct timer_watch w;
+
+    if (test_split_serial == 0 ||
+        !(thread ? p->serial == test_split_serial : p->tg == test_split_tg)) {
+        return;
+    }
+    test_split_begun[arch_cpu_id()] = 1;
+    if (!test_split_open && test_split_due) {
+        timer_watch_start(&w);
+        while (!test_split_open && test_split_due && timer_watch_us(&w) < SPLIT_WAIT_US) {
+            k_udelay(10u);
         }
+    }
+    if (test_split_open) {
+        test_split_reader = 1;
     }
 }
 
@@ -850,6 +898,7 @@ void ptimer_cpu_tick(process_t *p, int user)
     spin_lock(&timer_lock);
     if (test_split_serial != 0 && p->serial == test_split_serial) {
         split_add(user ? &p->utime : &p->stime);
+        test_split_due = (uint32_t)p->utime == 0xFFFFFFFFu;
     } else if (user) {
         ++p->utime;
     } else {
@@ -2421,14 +2470,15 @@ int32_t ptimer_test_show(void *data, char *buf, uint32_t cap)
 {
     uint32_t irq = spin_lock_irqsave(&timer_lock);
     uint32_t waits = test_arm_waits, landed = test_arm_landed, carries = test_split_carries;
-    uint32_t contested = test_split_contested, at = 0;
+    uint32_t contested = test_split_contested, given_up = test_split_given_up, at = 0;
 
     spin_unlock_irqrestore(&timer_lock, irq);
     (void)data;
     test_put(buf, cap, &at, waits, " ");
     test_put(buf, cap, &at, landed, " ");
     test_put(buf, cap, &at, carries, " ");
-    test_put(buf, cap, &at, contested, "\n");
+    test_put(buf, cap, &at, contested, " ");
+    test_put(buf, cap, &at, given_up, "\n");
     return (int32_t)at;
 }
 
@@ -2450,6 +2500,9 @@ static int32_t test_split(uint32_t tid)
     test_split_tg = p->tg;
     test_split_carries = 0;
     test_split_contested = 0;
+    test_split_given_up = 0;
+    test_split_owed = 0;
+    test_split_due = 0;
     spin_unlock_irqrestore(&timer_lock, irq);
     return 0;
 }
