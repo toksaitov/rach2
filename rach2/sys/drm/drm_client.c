@@ -1042,6 +1042,20 @@ void drm_client_dev_lastclose(struct drm_device *dev)
 }
 
 /**
+ * Probe each connector of `dev` once, under its commit lock, which the
+ * caller holds. May sleep.
+ */
+static void con_probe_locked(struct drm_device *dev)
+{
+    struct drm_mode_config *mc = &dev->mode_config;
+    uint32_t i;
+
+    for (i = 0; i < mc->num_connector; i++) {
+        drm_helper_probe_single_connector_modes(mc->connectors[i], mc->max_width, mc->max_height);
+    }
+}
+
+/**
  * Probe each connector of `dev` once, as Linux's fbdev client does in its
  * initial configuration, so that sysfs and GETCONNECTOR give the displays'
  * status and modes while the console stays on the boot screen, and note
@@ -1050,13 +1064,8 @@ void drm_client_dev_lastclose(struct drm_device *dev)
  */
 static void con_probe(struct drm_device *dev)
 {
-    struct drm_mode_config *mc = &dev->mode_config;
-    uint32_t i;
-
     drm_modeset_lock_nointr(dev);
-    for (i = 0; i < mc->num_connector; i++) {
-        drm_helper_probe_single_connector_modes(mc->connectors[i], mc->max_width, mc->max_height);
-    }
+    con_probe_locked(dev);
     con.lit = con_any_active(dev);
     drm_modeset_unlock(dev);
 }
@@ -1068,7 +1077,17 @@ void drm_client_dev_register(struct drm_device *dev)
     uint32_t gen, flags;
     int32_t rc;
 
-    if (con.dev || !drm_core_check_feature(dev, DRIVER_MODESET) || !dev->driver->dumb_create) {
+    if (!drm_core_check_feature(dev, DRIVER_MODESET) || !dev->driver->dumb_create) {
+        return;
+    }
+    /* Linux gives every such device an fbdev client of its own, whose
+     * first configuration probes the device's connectors; a card the
+     * console does not take is probed here instead, so that its sysfs
+     * `status` says connected before any master asks. */
+    if (con.dev) {
+        drm_modeset_lock_nointr(dev);
+        con_probe_locked(dev);
+        drm_modeset_unlock(dev);
         return;
     }
     if (!con_listening) {
