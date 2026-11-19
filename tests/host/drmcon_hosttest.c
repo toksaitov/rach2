@@ -43,8 +43,10 @@
  * framebuffer that goes with its device is forgotten once and not drawn on
  * again, and the next device is set at once; a master that comes while
  * the console waits for the commit lock keeps the screen; a device that
- * leaves while the console's commit sleeps leaves it no buffer; and every
- * allocation and reference is given back.
+ * leaves while the console's commit sleeps leaves it no buffer; a second
+ * connector through the first's encoder is left out of the console's
+ * placement, which lights the first; and every allocation and reference is
+ * given back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1008,6 +1010,29 @@ static void row_leave_in_commit(void)
     CHECK(dev.refs == 0, "the device is let go");
 }
 
+/** A second connector, connected, through the first's encoder, which now
+ * reaches both CRTCs, as DisplayPort and HDMI share a DDI port's: the
+ * console places the first alone, since one commit cannot route two
+ * connectors through one encoder, and its placement lights it. */
+static void row_shared_encoder(void)
+{
+    static struct drm_connector second;
+
+    CHECK(drm_connector_init(&dev, &second, &conn_funcs, DRM_MODE_CONNECTOR_VIRTUAL) == 0,
+          "a second connector is made");
+    drm_connector_attach_encoder(&second, &encoder);
+    encoder.possible_crtcs = 3;
+    drm_client_dev_register(&dev);
+    CHECK(con.fb && con.on_buffer && crtc.state->active && primary.state->fb == con.fb &&
+              connector.state->crtc == &crtc && !second.state->crtc &&
+              !(crtc2.state && crtc2.state->enable),
+          "the console lights the first connector and leaves the second, which shares its "
+          "encoder");
+    drm_client_dev_unregister(&dev);
+    CHECK(dev.refs == 0, "the device is let go");
+    encoder.possible_crtcs = 1;
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -1044,6 +1069,7 @@ int main(void)
     row_screen_gone();
     row_late_master();
     row_leave_in_commit();
+    row_shared_encoder();
     drm_mode_config_cleanup(&dev);
     CHECK(allocations == base, "every allocation freed");
     for (i = 0; i < MAX_GEM; i++) {
