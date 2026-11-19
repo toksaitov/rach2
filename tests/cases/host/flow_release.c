@@ -617,6 +617,17 @@ static int ssh_mock(int argc, char **argv)
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         return 1;
     }
+    /* bootscreen.sh on the trial boot: term's lit login, or with
+     * RELEASE_TEST_SCREEN=dark a session that holds the console. */
+    if (!strcmp(command, "sh -s")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine read bootscreen\n");
+        if (!strcmp(ev("RELEASE_TEST_SCREEN"), "dark")) {
+            puts("bootscreen: weston: 1 running\nbootscreen: result: fail: 1 weston running");
+            return 1;
+        }
+        puts("bootscreen: weston: 0 running\nbootscreen: result: pass");
+        return 0;
+    }
     if (!strcmp(command, "sh -s -- free")) {
         append(ev("RELEASE_TEST_CALLS"), "machine write stop term\n");
         puts("aaaa");
@@ -901,6 +912,7 @@ struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
         *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing,
         *cmdline, *open, *slots;
+    const char *screen; /* "dark": the trial boot's bootscreen.sh fails */
     const char *detach; /* the Mac's run waits until the release has ended */
     const char *again;  /* the machine of -a, or NULL for a release */
     int rerun, preparing, only;
@@ -990,6 +1002,7 @@ static void run(struct release *r, const struct release_row *spec)
         flow_put(f, "state/wt/build/x86_64/images/os-real-gnu.ext2.gz", PACKED);
     flow_put(f, "state/wt/build/x86_64/utils/sbin/bootctl", BOOTCTL);
     flow_put(f, "state/wt/tests/system/accept/metal_accept.sh", "# native acceptance fixture\n");
+    flow_put(f, "state/wt/tests/graphics/bootscreen.sh", "# boot screen fixture\n");
     flow_put(f, "calls", "");
     flow_put(f, "tree/tools/flow/machines", spec->machines ? spec->machines : "# none\n");
     if (spec->record)
@@ -1014,6 +1027,7 @@ static void run(struct release *r, const struct release_row *spec)
     spec_env("RELEASE_TEST_CMDLINE", spec->cmdline);
     spec_env("RELEASE_TEST_OPEN", spec->open);
     spec_env("RELEASE_TEST_SLOTS", spec->slots);
+    spec_env("RELEASE_TEST_SCREEN", spec->screen);
     spec_env("RELEASE_TEST_DETACH", spec->detach);
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
@@ -1629,8 +1643,9 @@ static int trial_rows(struct release *r)
     ok = check(r,
                !f->status && archived(r, "7-11111111-") &&
                    count(r->retired, "^trial done .* the new kernel runs from the candidate slot "
-                                     "with term as its console$") == 1 &&
-                   before(r, "identity ", "accept 192.168.0.106\n") &&
+                                     "with term's lit login as its console$") == 1 &&
+                   before(r, "identity ", "machine read bootscreen\n") &&
+                   before(r, "machine read bootscreen\n", "accept 192.168.0.106\n") &&
                    before(r, "accept 192.168.0.106\n", "machine write bootctl commit\n"),
                "a trial boot with the candidate slot and term goes on to its commit") &&
          ok;
@@ -1646,6 +1661,21 @@ static int trial_rows(struct release *r)
                                       "root=/dev/disk0p3 rach2.slot=candidate") &&
                    !called(r, "^(identity|accept|machine write)") && !called(r, " push "),
                "a trial boot without rach2.console=term fails trial and is not committed") &&
+         ok;
+    run(r, &(struct release_row){.record = installed,
+                                 .git = "yes",
+                                 .writes = "yes",
+                                 .accept = "pass",
+                                 .screen = "dark",
+                                 .cmdline = "root=/dev/disk0p3 rach2.slot=candidate "
+                                            "rach2.console=term"});
+    ok = check(r,
+               f->status == 1 &&
+                   last_is(record(r), "failed trial: the trial boot's screen is not term's lit "
+                                      "login: bootscreen: weston: 1 running; bootscreen: result: "
+                                      "fail: 1 weston running") &&
+                   !called(r, "^(accept|machine write)") && !called(r, " push "),
+               "a trial boot whose screen bootscreen.sh fails fails trial and is not committed") &&
          ok;
     return ok;
 }
