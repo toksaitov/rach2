@@ -37,6 +37,16 @@ uintptr_t vm_locked(const vm_space_t *vm)
     return total;
 }
 
+/** Give `r` the model's one anonymous identity, 1, if it has none; the
+ * model merges no regions. */
+void vm_anon_prepare(vm_space_t *vm, vma_t *r)
+{
+    (void)vm;
+    if (!r->anon) {
+        r->anon = 1;
+    }
+}
+
 /** Drop a reference to a policy; the model's regions and threads hold none. */
 void vm_policy_put(struct vm_policy *p)
 {
