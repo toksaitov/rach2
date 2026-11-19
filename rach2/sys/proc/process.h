@@ -379,6 +379,9 @@ struct process {
      * (`sched_tick`), and the flag clears when the scheduler selects the
      * process or the process blocks again. */
     uint32_t woken;
+    /* A counted wait's wake counter, or NULL. The run queues' lock guards
+     * its lifetime and increments when an event or deadline wakes it. */
+    uint64_t *wait_wakeups;
     /* The switches away from it while it was blocked or stopped, and while
      * it could still run, counted by `schedule`: /proc's
      * voluntary_ctxt_switches and nonvoluntary_ctxt_switches, and getrusage. */

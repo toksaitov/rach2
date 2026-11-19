@@ -1728,9 +1728,9 @@ static int signalled(void)
  * caller ends KVM_RUN with KVM_EXIT_INTR, as Linux's vcpu_run takes the
  * signal after vcpu_block in kvm_handle_signal_exit
  * (include/linux/kvm_host.h:2405-2409, kernel/entry/kvm.c:11-13), and
- * leaves the signal to the system call's return. `*waited` is 1 when
- * nothing ended the wait before it began, as Linux's kvm_vcpu_block
- * answers whether it scheduled; `blocking` reads 1 throughout. */
+ * leaves the signal to the system call's return. If `waited` is supplied,
+ * it records whether the thread slept, as Linux's kvm_vcpu_block answers
+ * whether it scheduled. `blocking` reads 1 throughout. */
 static int32_t block(struct kvm_vcpu *v, int *waited)
 {
     struct lapic *l = apic_of(v);
@@ -1744,9 +1744,9 @@ static int32_t block(struct kvm_vcpu *v, int *waited)
         now = kvm_host_ns();
         l->wake_tick = tick_count() + (next > now ? (next - now + TICK_NS - 1u) / TICK_NS : 0) + 1u;
     }
-    *waited = !wake_cond(v) && !signalled();
     proc_wait_set(l->wake_tick, kvm_timer_deadline(next), 0, 0);
-    r = wq_wait_event_sigflag(&l->wq, wake_cond, v, "kvm_vcpu_block");
+    r = wq_wait_event_sigflag_counted(&l->wq, wake_cond, v, "kvm_vcpu_block", waited,
+                                      &v->stat[KVM_VCPU_STAT_HALT_WAKEUP]);
     proc_wait_set(0, 0, 0, 0);
     l->wake_tick = 0;
     v->stat[KVM_VCPU_STAT_BLOCKING] = 0;
@@ -1818,7 +1818,8 @@ static void shrink_poll(struct kvm_vcpu *v)
  * is left. The poll counts in halt_attempted_poll and either
  * halt_successful_poll and halt_poll_success_ns, when the vCPU never
  * slept, or halt_poll_fail_ns, with their histograms; a sleep counts in
- * halt_wait_ns and its histogram, and halt_wakeup when a wake ended it.
+ * halt_wait_ns and its histogram. A guest event or deadline that makes
+ * the thread runnable counts in halt_wakeup, as in kvm_vcpu_wake_up.
  * 0, or -EINTR as `block`'s. Called by the vCPU's thread with no lock held.
  */
 static int32_t halt(struct kvm_vcpu *v)
@@ -1852,9 +1853,6 @@ static int32_t halt(struct kvm_vcpu *v)
     if (waited) {
         v->stat[KVM_VCPU_STAT_HALT_WAIT_NS] += cur - poll_end;
         log_hist(&v->stat[KVM_VCPU_STAT_HALT_WAIT_HIST], cur - poll_end);
-        if (r == 0) {
-            v->stat[KVM_VCPU_STAT_HALT_WAKEUP]++;
-        }
     }
 out:
     halt_ns = cur - start;
@@ -1889,7 +1887,6 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
     int32_t r;
-    int waited;
 
     for (;;) {
         if (kvm_vcpu_test_clear(v, KVM_REQ_IRQFD)) {
@@ -1933,7 +1930,7 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
         if (v->mp_state == KVM_MP_STATE_HALTED) {
             r = halt(v);
         } else {
-            r = block(v, &waited);
+            r = block(v, NULL);
         }
         if (r != 0) {
             v->run->exit_reason = KVM_EXIT_INTR;

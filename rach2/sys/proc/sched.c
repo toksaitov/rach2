@@ -941,14 +941,25 @@ void sched_priority_changed(process_t *p)
     }
 }
 
+/** Make the blocked thread `p` ready after a queue or deadline wake, and
+ * count the wake if its wait asked for it. The run queues' lock is held.
+ * Return the processor to interrupt, or -1, as `sched_ready_locked` does. */
+static int sched_wait_ready_locked(process_t *p)
+{
+    if (p->wait_wakeups) {
+        (*p->wait_wakeups)++;
+    }
+    p->woken = 1;
+    return sched_ready_locked(p);
+}
+
 int sched_wake_blocked(process_t *p)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
     int kick = -1;
 
     if (p->state == PROC_BLOCKED) {
-        p->woken = 1;
-        kick = sched_ready_locked(p);
+        kick = sched_wait_ready_locked(p);
     }
     spin_unlock_irqrestore(&sched_lock, flags);
     return kick;
@@ -989,8 +1000,7 @@ int sched_wake_due_locked(process_t *p, uint64_t now)
     }
     waketime_expire(p, p->wakeup_tick);
     p->wakeup_tick = 0;
-    p->woken = 1;
-    return sched_ready_locked(p);
+    return sched_wait_ready_locked(p);
 }
 
 int sched_wake_time_locked(process_t *p)
@@ -999,8 +1009,7 @@ int sched_wake_time_locked(process_t *p)
         return -1;
     }
     p->wakeup_tick = 0;
-    p->woken = 1;
-    return sched_ready_locked(p);
+    return sched_wait_ready_locked(p);
 }
 
 void sched_wake_due(process_t *p, uint64_t now)

@@ -873,9 +873,9 @@ the divisor a long halt shrinks it by, 0 to empty it.
 and the four of halt polling
 have mode 0644 and take a write from root: an integer as
 .Xr strtol 3
-reads it with base 0 for the first, an unsigned integer so read, with no
-sign, for halt polling's, and for the others a boolean whose
-first character is
+reads it with base 0 for the first, a base-0 unsigned integer with an
+optional leading plus sign for halt polling's, and for the others a
+boolean whose first character is
 .Ql y ,
 .Ql t
 or

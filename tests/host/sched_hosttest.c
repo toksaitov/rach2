@@ -1050,11 +1050,13 @@ static void ready_lists(void)
 static void wake_twice(void)
 {
     process_t *p = &procs[3];
+    uint64_t wakes = 0;
 
     setup();
     sched_forget(p);
     sched_forget(&procs[4]);
     p->state = PROC_BLOCKED;
+    p->wait_wakeups = &wakes;
     procs[4].state = PROC_BLOCKED;
     p->rt_priority = 1;
     CHECK(sched_wake_blocked(p) == 0, "the first wake asks for the outranked processor");
@@ -1065,6 +1067,8 @@ static void wake_twice(void)
     CHECK(sched_wake_blocked(&procs[4]) == 0 && current_proc->need_resched,
           "an equal ordinary record asks the ordinary thread to switch, with an interrupt");
     CHECK(sched_wake_blocked(p) == -1, "the second wake asks for no interrupt");
+    CHECK(wakes == 1, "only the wake making the sleeper ready is counted");
+    p->wait_wakeups = NULL;
     CHECK(run_queues[0].count == 6 && run_queues[0].tail == &procs[4],
           "the second wake leaves the record ahead of a later one");
     p->rt_priority = 0;
@@ -1080,6 +1084,7 @@ static void wake_twice(void)
 
     sched_forget(&procs[5]);
     procs[5].state = PROC_BLOCKED;
+    procs[5].wait_wakeups = &wakes;
     procs[5].woken = 0;
     procs[5].wakeup_tick = 9;
     sched_wake_due(&procs[5], 8);
@@ -1089,8 +1094,10 @@ static void wake_twice(void)
     CHECK(procs[5].state == PROC_READY && procs[5].wakeup_tick == 0 && procs[5].woken &&
               run_queues[0].tail == &procs[5],
           "a signal's wake queues the sleeper, clears its deadline and marks it");
+    CHECK(wakes == 1, "a signal's wake leaves the wait's wake counter alone");
     sched_forget(&procs[4]);
     procs[4].state = PROC_BLOCKED;
+    procs[4].wait_wakeups = &wakes;
     procs[4].woken = 0;
     procs[4].wakeup_tick = 9;
     sched_wake_due(&procs[4], 9);
@@ -1102,6 +1109,8 @@ static void wake_twice(void)
     sched_wake_due(&procs[5], 9);
     CHECK(procs[5].wakeup_tick == 9 && run_queues[0].tail == &procs[4],
           "a ready record is left in place, its deadline as it was");
+    CHECK(wakes == 2, "a deadline that makes a sleeper ready is counted once");
+    procs[4].wait_wakeups = procs[5].wait_wakeups = NULL;
 }
 
 /** Affinity moves queued work, and an idle processor steals eligible work. */
