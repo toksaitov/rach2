@@ -10514,7 +10514,7 @@ static void stop_rows(void)
  * (fs/ext2/dir.c:440-447 and namei.c:376-390 in Linux 6.12.115); the same
  * rename retried after attempts whose store of the grown inode failed
  * (`retry_row`); a symlink
- * whose name reached the device and whose directory's times then fail
+ * whose name is made and whose directory's times then fail
  * (`symlink_kept_row`); and a block freed by a truncate and taken again
  * by a directory under reclaim (`reuse_row`).
  */
@@ -10601,6 +10601,7 @@ static const struct {
     {"--fence-only", fence_rows},
     {"--matrix-only", matrix_rows},
     {"--async-only", async_rows},
+    {"--creates-only", async_create_row},
 };
 
 /**
