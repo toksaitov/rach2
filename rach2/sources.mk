@@ -122,6 +122,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/process.c \
     sys/proc/exit.c \
     sys/proc/child_signal.c \
+    sys/proc/orphan.c \
     sys/proc/sched.c \
     sys/proc/fair.c \
     sys/proc/fair_group.c \
