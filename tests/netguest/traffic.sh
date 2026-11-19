@@ -71,9 +71,17 @@ report_deny()
 
 # The SYNs each of drop's attempts sends before Rach2's TCP gives the
 # handshake up with ETIMEDOUT: the first and TCP_SYN_RETRIES (7) more
-# (rach2/sys/network/tcp/tcp.h). A count of the connection's own, not of the
-# machine's, which other traffic would add to.
+# (rach2/sys/network/tcp/tcp.h), less any a full queue refused to send.
 syns_each=8
+
+# syns_sent: the connections Rach2's TCP has opened and the segments it has
+# sent again, summed, as /proc/net/snmp counts them; a retransmission the
+# driver refused is not among them.
+syns_sent()
+{
+    awk '$1 == "Tcp:" { if (!h) { for (i = 2; i <= NF; i++) c[$i] = i; h = 1; next }
+        print $(c["ActiveOpens"]) + $(c["RetransSegs"]); exit }' /proc/net/snmp
+}
 
 transfers()
 {
@@ -95,21 +103,23 @@ case ${1:-} in
             echo "traffic: the guest's report after the transfers has no deny9 count" >&2
             exit 1
         }
+        sent=$(syns_sent)
         "$nettput" -c "$peer" -p 9 -n 10 drop || exit 1
-        sent=$((10 * syns_each))
-        # More than nine attempts' SYNs: an attempt the guest let through
-        # gives it none of its own, so every one was dropped, while a SYN a
-        # full queue refused to send leaves the count short of all of them.
-        least=$((9 * syns_each + 1))
+        sent=$(($(syns_sent) - sent))
+        # Every SYN the attempts sent: the machine's count, which leaves out
+        # a retransmission the driver refused, and is no more than the
+        # attempts can send, so that other connections cannot raise it.
+        least=$((10 * syns_each))
+        [ "$sent" -ge "$least" ] || least=$sent
         report_after "$(reports)"
         after=$(report_deny "$judged")
         [ -n "$after" ] || {
             echo "traffic: the guest's report after the attempts has no deny9 count" >&2
             exit 1
         }
-        echo "traffic: port 9: $sent SYNs sent, $((after - before)) counted by the guest"
+        echo "traffic: port 9: $least SYNs sent, $((after - before)) counted by the guest"
         [ $((after - before)) -ge "$least" ] || {
-            echo "traffic: the guest counted $((after - before)) of the $sent SYNs sent to port 9, fewer than $least" >&2
+            echo "traffic: the guest counted $((after - before)) of the $least SYNs sent to port 9" >&2
             exit 1
         }
         ;;

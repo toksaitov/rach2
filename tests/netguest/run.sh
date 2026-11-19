@@ -120,17 +120,21 @@ nettput=$here/nettput
 
 # Until finish's traps, a signal removes only the scratch made here.
 new_out=0 early=''
-# A detached run started from here ($!) keeps OUT, which it may hold its
-# recovery record in, and has it named.
-trap 'if [ -z "$early" ]; then :; elif [ -n "$!" ] && kill -0 "$!" 2> /dev/null; then
+# A detached run started from here keeps OUT once it has written its process
+# ID there, since it may hold its recovery record, and has it named.
+trap 'if [ -z "$early" ]; then :; elif [ -s "$early/pid" ]; then
     echo "netguest: started: log $early/log" >&2; else rm -rf "$early"; fi' EXIT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 trap 'exit 130' INT
 if [ -z "$out" ]; then
-    # Made in the assignment itself, so that no signal comes between the
-    # directory and the trap's knowing it.
-    early=$(mktemp -d "${TMPDIR:-/tmp}/rach2-netguest.XXXXXX") || exit 1
+    # Named before it is made, so that no signal comes between the directory
+    # and the trap's knowing it.
+    early=${TMPDIR:-/tmp}/rach2-netguest.$$
+    mkdir "$early" || {
+        early=''
+        exit 1
+    }
     new_out=1 out=$early
 fi
 mkdir -p "$out" || exit 1
@@ -293,24 +297,11 @@ stopped()
     done
 }
 
-# tree_of PID: print PID and every process under it, parents first.
-# shellcheck disable=SC2329 # finish calls it
-tree_of()
-{
-    all='' new=$1
-    while [ -n "$new" ]; do
-        all="$all $new"
-        new=$(children_of "$new" | tr '\n' ' ')
-    done
-    echo "$all"
-}
-
-# kill_tree PID: stop PID and every process under it, each stopped before
-# its children are looked for, so that none starts another meanwhile, then
-# kill them, the deepest first, so that none is orphaned while a process
-# above it still lives, and reap PID.
-# shellcheck disable=SC2329 # finish and in_time call it
-kill_tree()
+# stop_tree PID: stop PID and every process under it, each stopped before
+# its children are looked for, so that none starts another meanwhile, and
+# print them, the deepest first.
+# shellcheck disable=SC2329 # finish and kill_tree call it
+stop_tree()
 {
     all='' new=$1
     while [ -n "$new" ]; do
@@ -321,7 +312,16 @@ kill_tree()
         all="$new $all"
         new=$(children_of "$new" | tr '\n' ' ')
     done
-    for x in $all; do
+    echo "$all"
+}
+
+# kill_tree PID: stop PID and every process under it (stop_tree), then
+# kill them, the deepest first, so that none is orphaned while a process
+# above it still lives, and reap PID.
+# shellcheck disable=SC2329 # finish and in_time call it
+kill_tree()
+{
+    for x in $(stop_tree "$1"); do
         kill -KILL "$x" 2> /dev/null
         kill -CONT "$x" 2> /dev/null
     done
@@ -499,12 +499,18 @@ finish()
     # A case's child, netguest.sh, puts the card back at SIGTERM; then every
     # process left under this one, a child started just before a signal
     # whose process ID was not kept among them, is killed.
+    # The child's tree is read stopped, so that none of it starts another
+    # meanwhile, then the child is told and the tree goes on; what outlives
+    # the child is orphaned and killed.
     kept=''
-    [ -z "$child" ] || kept=$(tree_of "$child")
-    [ -z "$child" ] || kill -TERM "$child" 2> /dev/null
-    [ -z "$child" ] || wait "$child" 2> /dev/null
-    # What was under the child when it was told to stop, and is orphaned
-    # now if it outlived it.
+    if [ -n "$child" ]; then
+        kept=$(stop_tree "$child")
+        kill -TERM "$child" 2> /dev/null
+        for x in $kept; do
+            kill -CONT "$x" 2> /dev/null
+        done
+        wait "$child" 2> /dev/null
+    fi
     for x in $kept; do
         kill -KILL "$x" 2> /dev/null
     done
