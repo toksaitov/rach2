@@ -1,0 +1,158 @@
+.Dd November 19, 2026
+.Dt TMPFS 5
+.Os
+.Sh NAME
+.Nm tmpfs
+.Nd a file system in memory
+.Sh DESCRIPTION
+A tmpfs keeps its files in memory: it has no device, nothing of it is
+written to a disk, and its files go when it is unmounted or the machine
+stops.
+It has every kind of node: regular files, directories, symbolic links,
+hard links, FIFOs, socket files and device nodes, as Linux's tmpfs has.
+.Pp
+The kernel mounts one at
+.Pa /dev/shm
+at boot, mode 1777 with
+.Ql nosuid
+and
+.Ql nodev ,
+where the C libraries'
+.Fn shm_open
+and
+.Fn sem_open
+make their files, and keeps another, which no path reaches, for the files
+of
+.Xr memfd_create 2
+and the segments of System V shared memory.
+The metal and recovery builds of
+.Xr init 8
+mount one at
+.Pa /tmp
+with the options of Debian 13's
+.Pa tmp.mount :
+mode 1777, strictatime, nosuid and nodev, at most half the machine's
+memory and 1048576 inodes.
+What a program must keep across a reboot belongs in
+.Pa /var/tmp ,
+on the root.
+.Pp
+.Xr mount 2
+places another, of type
+.Ql tmpfs ,
+with any source, conventionally
+.Ql tmpfs
+or
+.Ql none .
+It takes these options, comma-separated:
+.Bl -tag -width "nr_inodes=N"
+.It Ql mode= Ns Ar M
+The root directory's mode, in octal; 1777 without the option.
+.It Ql size= Ns Ar N
+The most the files may hold: bytes, with
+.Ql k ,
+.Ql m
+or
+.Ql g
+after them, or a percentage of the machine's memory with
+.Ql % ,
+rounded up to whole pages; 0 is no limit, and without the option the
+limit is half the machine's memory.
+A write past it fails with
+.Er ENOSPC .
+.It Ql nr_inodes= Ns Ar N
+The most inodes the mount may have, the root's among them: a count, with
+.Ql k ,
+.Ql m ,
+.Ql g ,
+.Ql t ,
+.Ql p
+or
+.Ql e
+after it for a power of 1024; 0 is no limit, and without the option the
+limit is half the machine's pages.
+As on Linux, the limit is kept as space of 1024 bytes for each inode:
+each node takes one, each name of a file past its first another, and an
+extended attribute 40 bytes and the bytes of its name and value.
+What does not fit fails with
+.Er ENOSPC .
+.El
+.Pp
+A value of
+.Ql size=
+or
+.Ql nr_inodes=
+that is no number fails the mount with
+.Er EINVAL ;
+the other options Linux's tmpfs takes are accepted and change nothing.
+A remount takes a new
+.Ql size=
+and
+.Ql nr_inodes= ,
+and changes neither and fails with
+.Er EINVAL
+when either is smaller than what the files hold or sets a limit on a
+mount that has none; 0 lifts its limit for good.
+.Xr statfs 2
+reports
+.Dv TMPFS_MAGIC ,
+0x01021994, blocks of a page, the size limit as the blocks and the pages
+the files hold as those in use, and the inode limit and the whole inodes
+left of its space as
+.Va f_files
+and
+.Va f_ffree ,
+or 0 for both on a mount with no inode limit.
+.Pp
+A regular file's pages are made when it is first written or mapped, so a
+hole costs nothing, and a file reaches 16 TiB less a page.
+.Xr fallocate 2
+makes pages and punches holes, and
+.Xr fcntl 2
+seals a file, as on Linux.
+.Pp
+A file or a directory keeps the inode flags of
+.Xr ioctl 2 Ns 's
+.Dv FS_IOC_SETFLAGS
+that Linux's tmpfs keeps: immutable, 0x10, append-only, 0x20, no-dump,
+0x40, and no-access-time, 0x80; any other fails with
+.Er EOPNOTSUPP .
+A new node takes the last two from its directory, and a read of a file
+with no-access-time leaves its access time.
+.Dv FS_IOC_GETVERSION
+fails with
+.Er ENOTTY ,
+since a tmpfs keeps no generation.
+.Pp
+Every node keeps extended attributes of the
+.Li user. ,
+.Li trusted.
+and
+.Li security.
+namespaces, as
+.Xr getxattr 2
+gives them, in the order they were made; the
+.Li system.
+namespace, Linux's POSIX ACLs, fails with
+.Er EOPNOTSUPP .
+.Sh EXAMPLES
+As root:
+.Bd -literal -offset indent
+# mkdir /mnt/scratch
+# mount -t tmpfs -o size=64m,nr_inodes=4k tmpfs /mnt/scratch
+# stat -f -c '%c inodes, %d free' /mnt/scratch
+4096 inodes, 4095 free
+# umount /mnt/scratch
+.Ed
+.Sh SEE ALSO
+.Xr fallocate 2 ,
+.Xr getxattr 2 ,
+.Xr ioctl 2 ,
+.Xr memfd_create 2 ,
+.Xr mount 2 ,
+.Xr statfs 2 ,
+.Xr debugfs 5 ,
+.Xr proc 5 ,
+.Xr sysfs 5 ,
+.Xr init 8 ,
+.Xr mount 8
