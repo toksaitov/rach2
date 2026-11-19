@@ -787,7 +787,7 @@ static int con_blank_commits(struct drm_device *dev, int off, uint32_t gen, int 
     uint32_t k;
     int32_t rc;
 
-    for (k = 0; k < mc->num_crtc && k < 32u; k++) {
+    for (k = 0; k < mc->num_crtc && k < DRM_MAX_CRTCS; k++) {
         struct drm_crtc *crtc = mc->crtcs[k];
 
         if (con.dev != dev || con.gen != gen || dev->master) {
