@@ -846,9 +846,11 @@ void timer_idle_work(void)
  * runs with interrupts off, which the network stack's shared buffers
  * require, and nothing it calls waits on hardware.
  *
- * Then the handler reschedules through `sched_tick`, with the lock let go,
- * once the current thread has run its slice or a woken thread waits: at
- * once when the current process is in user mode, and at the call's exit
+ * Then the handler counts the tick against the current thread's slice
+ * (`sched_tick`), with the lock let go, and asks for a switch once the
+ * slice has run out or a thread should run first; the interrupt's end takes
+ * it (`sched_irq_exit`): at once when the current process is in user mode,
+ * and at the call's exit
  * when it is inside a system call, since a switch in the middle of one is
  * unsafe; timer IRQs stay enabled during a call to keep the clock, the
  * timers and the HDA service's wake requests going. A kernel thread defers
@@ -907,7 +909,6 @@ static void timer_handler(isr_params_t *params)
         timer_idle_notify();
         bkl_exit();
     }
-    sched_idle_balance();
     sched_tick();
 }
 

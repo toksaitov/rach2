@@ -3263,6 +3263,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->affinity = parent->affinity;
     child->bkl_depth = 1;
     child->bkl_frames = 1u;
+    sched_fork(child, parent);
     fork_start(child, parent, &pending);
     if (event) {
         ptrace_event(event, pid);
@@ -9980,6 +9981,7 @@ long sys_setpriority(isr_params_t *params)
             rc = 0;
         }
         p->nice = nice;
+        sched_priority_changed(p);
     }
     return rc;
 }
@@ -10238,9 +10240,8 @@ struct sched_attr {
 
 /* The slice an ordinary thread may ask for, Linux's clamp of 0.1 to 100 ms,
  * and the default one before its scaling by the processors. */
-#define SCHED_SLICE_MIN  100000u
-#define SCHED_SLICE_MAX  100000000u
-#define SCHED_SLICE_BASE 750000u
+#define SCHED_SLICE_MIN 100000u
+#define SCHED_SLICE_MAX 100000000u
 
 /* What a call asks of a thread's scheduling, as Linux's struct sched_attr
  * reaches __sched_setscheduler. */
@@ -10367,6 +10368,7 @@ static void sched_store(process_t *p, const struct sched_req *a, int policy)
                          : a->runtime < SCHED_SLICE_MIN ? SCHED_SLICE_MIN
                          : a->runtime > SCHED_SLICE_MAX ? SCHED_SLICE_MAX
                                                         : (uint32_t)a->runtime;
+        sched_set_slice(p, p->sched_slice);
     }
     p->sched_policy = (uint8_t)policy;
     p->rt_priority = (uint8_t)a->priority;
@@ -10482,21 +10484,15 @@ long sys_sched_setparam(isr_params_t *params)
 }
 
 /** The slice an ordinary thread has, in nanoseconds: the one it asked for,
- * or Linux's default, 0.75 ms times one more than the log of the
- * processors started, eight at most (sysctl_sched_base_slice). */
+ * or the base slice the scheduler uses, 0.75 ms times one more than the log
+ * of the processors online, eight at most (`sysctl_sched_base_slice`), as
+ * Linux's get_params reports se.slice. */
 static uint32_t sched_slice_of(const process_t *p)
 {
-    int cpus = smp_cpu_count();
-    uint32_t factor = 1;
-
     if (p->sched_slice != 0) {
         return p->sched_slice;
     }
-    while (cpus > 1 && factor < 4) {
-        cpus >>= 1;
-        factor++;
-    }
-    return SCHED_SLICE_BASE * factor;
+    return (uint32_t)sysctl_sched_base_slice;
 }
 
 /** Fill in `k` the parameters of `p`'s present policy, as Linux's
@@ -10738,15 +10734,14 @@ long sys_sched_get_priority_min(isr_params_t *params)
 
 /**
  * A process's round-robin time slice (sched_rr_get_interval, a timespec of
- * two longs): one tick, since the tick takes the processor from a process
- * switched in at the last one (`sched_tick`), and 0 for SCHED_FIFO and
- * SCHED_DEADLINE, which Linux gives no slice. -EINVAL for a negative pid,
- * -ESRCH, -EFAULT.
+ * two longs), as `sched_rr_interval_ns` gives it. -EINVAL for a negative
+ * pid, -ESRCH, -EFAULT.
  */
 long sys_sched_rr_get_interval(isr_params_t *params)
 {
     int pid = (int)SC_ARG(params, 0);
     struct kernel_timespec slice;
+    uint64_t ns, rem;
     process_t *p;
 
     if (pid < 0) {
@@ -10756,10 +10751,9 @@ long sys_sched_rr_get_interval(isr_params_t *params)
     if (!p) {
         return -ESRCH;
     }
-    slice.tv_sec = 0;
-    slice.tv_nsec = p->sched_policy == SCHED_FIFO || p->sched_policy == SCHED_DEADLINE
-                        ? 0
-                        : (long)SCHED_INTERVAL_NS;
+    ns = sched_rr_interval_ns(p);
+    slice.tv_sec = (long)tick_div64(ns, 1000000000u, &rem);
+    slice.tv_nsec = (long)rem;
     if (copy_to_user((void __user *)SC_ARG(params, 1), &slice, sizeof(slice)) != 0) {
         return -EFAULT;
     }
