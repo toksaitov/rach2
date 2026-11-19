@@ -1890,7 +1890,9 @@ static int tcp_addr_is(net_addr_t a, net_addr_t b, int bound)
  * A block and the new connection, bound to `ifindex` or 0, are on one card
  * unless both name a card, by a binding or else an IPv6 peer's scope, and
  * the cards differ, as Linux compares bindings; their addresses are then
- * compared without scopes (`tcp_addr_is`).
+ * compared without scopes (`tcp_addr_is`). A peer that is this machine is on
+ * no card, since its segments come off the loopback backlog, which every
+ * binding takes (`tcp_rx_card_ok`).
  */
 static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr_t remote_ip,
                            uint16_t remote_port, int ifindex)
@@ -1898,6 +1900,11 @@ static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr
     const struct tcb *t;
     uint32_t mine = ifindex ? (uint32_t)ifindex : remote_ip.scope, its;
 
+    if (net_addr_local(remote_ip) ||
+        (remote_ip.family == AF_INET6 ? ip6_is_loopback(remote_ip.v6)
+                                      : IP_IS_LOOPBACK(remote_ip.v4))) {
+        mine = 0;
+    }
     for (t = tcp_hash[tcp_hash_index(local_port, &remote_ip, remote_port)]; t; t = t->hash_next) {
         if (t->local_port != local_port || t->ns != ns || t->remote_port != remote_port) {
             continue;
