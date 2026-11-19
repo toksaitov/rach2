@@ -178,6 +178,44 @@ static void pi_priority_rows(void)
           "last owner unlocks without retained state");
 }
 
+/** An owner of two PI locks, each with a priority-80 waiter, keeps 80 when
+ * one lock's last waiter leaves and when it hands the other off: it is
+ * never given less on the way, as Linux's rt_mutex_setprio leaves a task
+ * whose priority does not change on its queue. */
+static void pi_two_lock_rows(void)
+{
+    struct futex_pi *pi;
+
+    pi_reset();
+    high.rt_priority = 80;
+    low.rt_priority = 80;
+    word_set(32, owner.pid);
+    word_set(36, owner.pid);
+    pi = pi_file(&high, &high_q, &high_s, 32);
+    (void)pi_file(&low, &low_q, &low_s, 36);
+    CHECK(owner.pi_priority == 80, "two held locks donate 80");
+    prio_watch = &owner;
+    prio_watch_low = 255;
+    pi_unfile(&low_q);
+    CHECK(owner.pi_priority == 80 && prio_watch_low == 80,
+          "a lock's last waiter leaving keeps another lock's donation throughout");
+    (void)pi_file(&low, &low_q, &low_s, 36);
+    prio_watch_low = 255;
+    cpu_table[0].current = &owner;
+    CHECK(futex_unlock_pi(32, FUTEX_PRIVATE_FLAG) == 0 && pi->owner == &high,
+          "owner of two locks hands one off");
+    CHECK(owner.pi_priority == 80 && prio_watch_low == 80,
+          "a handoff keeps another lock's donation throughout");
+    prio_watch = NULL;
+    pi_unfile(&low_q);
+    CHECK(owner.pi_priority == 0, "the last donation's end deboosts the owner");
+    CHECK(futex_unlock_pi(36, FUTEX_PRIVATE_FLAG) == 0, "owner unlocks the second lock");
+    cpu_table[0].current = &high;
+    pi_unfile(&high_q);
+    CHECK(futex_unlock_pi(32, FUTEX_PRIVATE_FLAG) == 0 && !pi_states,
+          "two-lock rows release all state");
+}
+
 /** A dying owner transfers the lock; the waiter repairs its own mapping. */
 static void pi_death_rows(void)
 {
@@ -273,6 +311,7 @@ int main(void)
     pi_basic_rows();
     pi_error_rows();
     pi_priority_rows();
+    pi_two_lock_rows();
     pi_death_rows();
     pi_requeue_rows();
     pi_requeue_priority_rows();
