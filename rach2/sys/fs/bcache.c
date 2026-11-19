@@ -18,11 +18,12 @@
  * again after, as the big lock it replaces was given up at each, so a step
  * between two sleeps sees the lists whole and the code after a sleep looks
  * again. A field a holder of `cache_spin` alone reads, a buffer's dirty bit,
- * failed write and level, a device's `BLOCK_WRITE_FAILED` and the blocks it
- * writes last, changes under both locks. Linux's `mark_buffer_dirty` takes
- * no global lock either: it sets the buffer's bit, the folio's under the
- * mapping's `i_pages` lock, and the inode's place on the writeback list
- * under `wb->list_lock` (fs/buffer.c:1179-1210, mm/page-writeback.c:2789-2802,
+ * failed write and level, a device's `BLOCK_WRITE_FAILED` and
+ * `BLOCK_WRITES_HALTED` and the blocks it writes last, changes under both
+ * locks. Linux's `mark_buffer_dirty` takes no global lock either: it sets
+ * the buffer's bit, the folio's under the mapping's `i_pages` lock, and the
+ * inode's place on the writeback list under `wb->list_lock`
+ * (fs/buffer.c:1179-1210, mm/page-writeback.c:2789-2802,
  * fs/fs-writeback.c:2654), and writeback lets `list_lock` go around each
  * inode's write (fs/fs-writeback.c:2003-2016). The block layer's requests
  * need no lock of the cache's: a miss reads with neither, and a driver that
@@ -1266,11 +1267,12 @@ static struct bbuf *way_to(const struct bbuf *b)
 }
 
 /** Whether a write of `b` is kept from an eviction, a shrink or a reserve:
- * its own last write failed, or a write of its device did and it is a block
- * that names others, which may name the block that failed. */
+ * its own last write failed, its device's writes are halted, or a write of
+ * its device failed and it is a block that names others, which may name the
+ * block that failed. */
 static int write_barred(const struct bbuf *b)
 {
-    return b->write_failed ||
+    return b->write_failed || (b->dev->flags & BLOCK_WRITES_HALTED) ||
            ((b->dev->flags & BLOCK_WRITE_FAILED) && (names_blocks(b) || ordered(b)));
 }
 
@@ -1470,9 +1472,15 @@ static void count_firsts(block_device_t *dev, struct bbuf *const *run, int n, ui
  * buffer dirty and marked failed. */
 static int write_buffer_flags(struct bbuf *b, uint32_t flags)
 {
-    int held = wb_out();
-    int rc = block_request_flags(b->dev, 1, b->blk * BCACHE_BLOCK_SECTORS,
-                                 b->bytes / BLOCK_SECTOR_SIZE, b->data, flags & ~WRITE_ORDER_ONLY);
+    int held;
+    int rc;
+
+    if (b->dev->flags & BLOCK_WRITES_HALTED) {
+        return -EIO;
+    }
+    held = wb_out();
+    rc = block_request_flags(b->dev, 1, b->blk * BCACHE_BLOCK_SECTORS, b->bytes / BLOCK_SECTOR_SIZE,
+                             b->data, flags & ~WRITE_ORDER_ONLY);
 
     wb_back(held);
     if (rc == 0) {
@@ -1875,6 +1883,13 @@ static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
             let_go(run[i]);
         }
         return rc;
+    }
+    if (dev->flags & BLOCK_WRITES_HALTED) {
+        stage_free();
+        for (i = 0; i < n; i++) {
+            let_go(run[i]);
+        }
+        return -EIO;
     }
     for (i = 0; i < n; i++) {
         k_memcpy(run_stage + bytes, run[i]->data, run[i]->bytes);
@@ -3503,7 +3518,7 @@ int bcache_sync_unflushed(block_device_t *dev)
  * again: the flusher's turns would otherwise try them every few seconds. */
 int bcache_writeback(block_device_t *dev, uint64_t since)
 {
-    if (since == 0 || (dev->flags & BLOCK_WRITE_FAILED)) {
+    if (since == 0 || (dev->flags & (BLOCK_WRITE_FAILED | BLOCK_WRITES_HALTED))) {
         return 0;
     }
     return sync_device(dev, 0, since);
@@ -3521,6 +3536,9 @@ static int sync_device(block_device_t *dev, int durable, uint64_t since)
     struct sync_scope scope;
     int rc, flushed;
 
+    if (dev->flags & BLOCK_WRITES_HALTED) {
+        return -EIO;
+    }
     k_memset(&scope, 0, sizeof(scope));
     wb_take();
     scope.since = since && since < marks ? since : marks;
@@ -3540,6 +3558,19 @@ static int sync_device(block_device_t *dev, int durable, uint64_t since)
     return rc != 0 ? rc : flushed;
 }
 
+/* Set under both locks, as the failed-write mark is: a release reads it
+ * under `cache_spin` (`write_barred`), a sync under `wb_lock`. */
+void bcache_halt_writes(block_device_t *dev)
+{
+    uint32_t flags;
+
+    wb_take();
+    flags = cache_lock();
+    dev->flags |= BLOCK_WRITES_HALTED;
+    cache_unlock(flags);
+    wb_give();
+}
+
 /* A `first` keeps its flush here, unlike in `bcache_sync_unflushed`: nothing
  * says that the caller's flush comes before another caller's `after`, and a
  * file's sync is no reason to give up the order the marks promise. */
@@ -3549,6 +3580,9 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner)
 
     int rc;
 
+    if (dev->flags & BLOCK_WRITES_HALTED) {
+        return -EIO;
+    }
     k_memset(&scope, 0, sizeof(scope));
     wb_take();
     scope.owner = owner;
@@ -4007,7 +4041,7 @@ int bcache_drop(block_device_t *dev)
         }
         make_empty(b);
     }
-    dev->flags &= ~BLOCK_WRITE_FAILED;
+    dev->flags &= ~(BLOCK_WRITE_FAILED | BLOCK_WRITES_HALTED);
     cache_unlock(flags);
     wb_give();
     buffers_reap(&reap);
@@ -4048,7 +4082,7 @@ int bcache_invalidate(block_device_t *dev)
             make_empty(b);
         }
     }
-    dev->flags &= ~BLOCK_WRITE_FAILED;
+    dev->flags &= ~(BLOCK_WRITE_FAILED | BLOCK_WRITES_HALTED);
     cache_unlock(flags);
     return 0;
 }
