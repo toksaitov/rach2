@@ -88,6 +88,9 @@ shift $((OPTIND - 1))
 [ $# -eq 1 ] || usage
 command=$1
 case $command in stage | run | fetch | clean) ;; *) usage ;; esac
+# The cases one space apart, as the matches below read them.
+# shellcheck disable=SC2086 # split on any white space
+cases=$(printf '%s ' $cases)
 case $port$deadline in '' | *[!0-9]*) usage ;; esac
 
 peerpid='' denypid=''
