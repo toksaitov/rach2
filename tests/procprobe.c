@@ -1866,16 +1866,6 @@ static int user_opened_ok(void)
     return ok;
 }
 
-/** Whether the kernel is x86-64's, by uname(2)'s machine, which an i386
- * program on the x86-64 kernel reads as x86_64, as on Linux. */
-static int kernel_wide(void)
-{
-    static char uts[6 * 65];
-
-    return syscall1(SYS_UNAME, (long)uts) == 0 && uts[4 * 65] == 'x' && uts[4 * 65 + 1] == '8' &&
-           uts[4 * 65 + 2] == '6' && uts[4 * 65 + 3] == '_';
-}
-
 /** Whether kernel/hung_task_timeout_secs and hung_task_check_interval_secs,
  * unsigned long as on Linux, take 8589935 on the x86-64 kernel, within its
  * LONG_MAX / HZ, for an i386 program too, and refuse it with EINVAL on the
@@ -1890,8 +1880,8 @@ static int hung_range_ok(void)
         {"/proc/sys/kernel/hung_task_timeout_secs", "8589935\n", -EINVAL, 0},
         {"/proc/sys/kernel/hung_task_check_interval_secs", "8589935\n", -EINVAL, 0}};
 
-    return kernel_wide() ? sysctl_tries(wide, SYSCTL_TRIES(wide))
-                         : sysctl_tries(narrow, SYSCTL_TRIES(narrow));
+    return probe_kernel_wide() ? sysctl_tries(wide, SYSCTL_TRIES(wide))
+                               : sysctl_tries(narrow, SYSCTL_TRIES(narrow));
 }
 
 /** The /proc/sys files read and write as Linux 6.12's handler of each
@@ -1946,10 +1936,10 @@ static void sysctl_handler_rows(void)
           "reads the first namespace's limit and refuses a write with EPERM, as Linux keeps "
           "the table its open found");
     check("sysctl-hung-range", hung_range_ok(),
-          kernel_wide() ? "kernel/hung_task_timeout_secs and hung_task_check_interval_secs "
-                          "take 8589935, within the x86-64 kernel's LONG_MAX / HZ"
-                        : "kernel/hung_task_timeout_secs and hung_task_check_interval_secs "
-                          "refuse 8589935, past the i686 kernel's LONG_MAX / HZ");
+          probe_kernel_wide() ? "kernel/hung_task_timeout_secs and hung_task_check_interval_secs "
+                                "take 8589935, within the x86-64 kernel's LONG_MAX / HZ"
+                              : "kernel/hung_task_timeout_secs and hung_task_check_interval_secs "
+                                "refuse 8589935, past the i686 kernel's LONG_MAX / HZ");
 }
 
 /**

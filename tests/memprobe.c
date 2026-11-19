@@ -69,15 +69,14 @@
 #define PAGE 4096u
 
 /* The KiB of page tables a mapping of `pages` pages keeps until the process
- * exits: on i386 a table for each 4 MiB, and on x86-64 a table for each
- * 2 MiB, a directory for each GiB and a pointer table for the 512 GiB the
- * mapping is in, each a page and one more of each for a mapping across a
+ * exits, by the kernel's architecture, which an i386 program on the x86-64
+ * kernel has too: on i686 a table for each 4 MiB, and on x86-64 a table for
+ * each 2 MiB, a directory for each GiB and a pointer table for the 512 GiB
+ * the mapping is in, each a page and one more of each for a mapping across a
  * boundary. */
-#if defined __x86_64__
-#define TABLE_KIB(pages) (((pages) / 512 + (pages) / (512ul * 512) + 4) * 4)
-#else
-#define TABLE_KIB(pages) (((pages) / 1024 + 1) * 4)
-#endif
+#define TABLE_KIB(pages)                                                     \
+    (probe_kernel_wide() ? ((pages) / 512 + (pages) / (512ul * 512) + 4) * 4 \
+                         : ((pages) / 1024 + 1) * 4)
 
 /** An anonymous mapping of `len` bytes; its address, or a negated errno. */
 static unsigned long mmap_anon(unsigned long len)
