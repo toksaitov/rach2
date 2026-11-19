@@ -1,0 +1,236 @@
+5496: WineD3D's 1,000 GL round trips in QEMU on the testing PC.
+2026-11-19, 22:09-22:17 UTC+6, one guest at a time. QEMU 10.2.1,
+KVM with -cpu host,invtsc=on, q35, std VGA, no display, 4 CPUs, 8192 MiB.
+
+Inputs (SHA-256):
+  Rach2 before the wait fix (a4fe27cf4)
+    3687a82a1029276ddd778088d7ffa54720ee3464212540024b962b700e0a40c8
+  Rach2 after the wait fix (built at 8f5376db89, kernel tree at 0f85834fc8)
+    f0f6ecda47243cbd7c2b9890c953158043ecdcab5b833ee54cb6948f90455faf
+  3984's GNU trial root, used by both Rach2 boots
+    5ed936d79361e924b634c3b528f586aa9044ed609b2064b8c8e59f1c1b685e96
+  Games probe bundle from the same build, used by all three boots
+    b1b25a19ecf132b77cae19e567b45e06b18d9e46a3247850f1e0d36b9b045ee6
+  Bundle's probes/trip64.exe
+    c67ddfa5c67b4702208a7f13f9b6d357cc81b8b9d08dc0e8056dc41f3bbbe496
+  The trial root's strace 7.2, also installed in Debian's overlay
+    d74694873a7f5c61b751bfd0f13bc9f999e78550b771c18b29898fbdc17d9266
+  GE-Proton11-12-x86_64.tar.gz installed in Debian's overlay
+    0595159e417c3dbbfb7cc3ae0d3ed15a617cc607aa23ef756ea79029d7af5d70
+
+Each Rach2 boot used the GNU root as an image on the data partition
+with rach2.rootimage= and rach2.cycleaccount. The guest ran
+sh /data/trip5496/probes/trip.sh -r llvmpipe /data/trip5496/result-N
+three times with a fresh Wine prefix each time. Debian's prepared
+graphics reference guest ran the same bundle with -u gfx and -p
+/opt/trip5496/ge. Each invocation ran three plain loops and one loop
+under each trace mode. These are the time and scheduler lines from the
+run, with the big-lock counters on Rach2.
+
+
+== Rach2 at the milestone head ==
+5496: booting kernel
+2026-11-19T16:09:45Z
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trip5496/root-5ed936d79361e924.img rach2.slot=trialroot rach2.cycleaccount rach2.console=term
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 99.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 91.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 84.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1851.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1870.1 ms
+games: trip-gl-strace: ctxt 494140
+games: trip-gl-strace: bkl_wait_us 1354806
+games: trip-gl-strace: hold syscall 101: 433894 holds, 979013 us, 2.3 us each
+games: trip-gl-strace: hold syscall 61: 287693 holds, 240426 us, 0.8 us each
+games: trip-gl-strace: thread 926 wined3d_cs: ran 345.4 ms, waited ready 221.5 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1746.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1762.8 ms
+games: trip-gl-ioctl: ctxt 485920
+games: trip-gl-ioctl: bkl_wait_us 1418147
+games: trip-gl-ioctl: hold syscall 101: 322950 holds, 933622 us, 2.9 us each
+games: trip-gl-ioctl: hold syscall 61: 286646 holds, 201850 us, 0.7 us each
+games: trip-gl-ioctl: thread 1078 wined3d_cs: ran 337.9 ms, waited ready 210.5 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-1/trip
+5496: trip.sh run 2
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 82.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 92.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 85.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1836.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1847.3 ms
+games: trip-gl-strace: ctxt 492397
+games: trip-gl-strace: bkl_wait_us 1346123
+games: trip-gl-strace: hold syscall 101: 433280 holds, 975058 us, 2.3 us each
+games: trip-gl-strace: hold syscall 61: 286816 holds, 238119 us, 0.8 us each
+games: trip-gl-strace: thread 1943 wined3d_cs: ran 342.2 ms, waited ready 212.7 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1732.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1747.4 ms
+games: trip-gl-ioctl: ctxt 483057
+games: trip-gl-ioctl: bkl_wait_us 1409954
+games: trip-gl-ioctl: hold syscall 101: 321764 holds, 930345 us, 2.9 us each
+games: trip-gl-ioctl: hold syscall 61: 285423 holds, 200309 us, 0.7 us each
+games: trip-gl-ioctl: thread 2095 wined3d_cs: ran 339.6 ms, waited ready 215.1 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-2/trip
+5496: trip.sh run 3
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 97.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 95.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 86.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1812.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1824.8 ms
+games: trip-gl-strace: ctxt 490771
+games: trip-gl-strace: bkl_wait_us 1330081
+games: trip-gl-strace: hold syscall 101: 431167 holds, 963381 us, 2.2 us each
+games: trip-gl-strace: hold syscall 61: 285806 holds, 236555 us, 0.8 us each
+games: trip-gl-strace: thread 2964 wined3d_cs: ran 341.6 ms, waited ready 212.1 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1732.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1747.4 ms
+games: trip-gl-ioctl: ctxt 482878
+games: trip-gl-ioctl: bkl_wait_us 1406396
+games: trip-gl-ioctl: hold syscall 101: 320999 holds, 928175 us, 2.9 us each
+games: trip-gl-ioctl: hold syscall 61: 284745 holds, 200581 us, 0.7 us each
+games: trip-gl-ioctl: thread 3117 wined3d_cs: ran 338.4 ms, waited ready 209.9 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-3/trip
+2026-11-19T16:11:58Z
+5496: fix exit 0
+
+== Rach2 before the wait fix ==
+5496: booting kernel-base
+2026-11-19T16:12:11Z
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+kernel-base rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trip5496/root-5ed936d79361e924.img rach2.slot=trialroot rach2.cycleaccount rach2.console=term
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 98.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 89.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 89.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 2477.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 2504.2 ms
+games: trip-gl-strace: ctxt 525276
+games: trip-gl-strace: bkl_wait_us 1791039
+games: trip-gl-strace: hold syscall 101: 462899 holds, 1033416 us, 2.2 us each
+games: trip-gl-strace: hold syscall 61: 299508 holds, 755549 us, 2.5 us each
+games: trip-gl-strace: thread 931 wined3d_cs: ran 472.7 ms, waited ready 233.4 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 2409.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 2432.8 ms
+games: trip-gl-ioctl: ctxt 508835
+games: trip-gl-ioctl: bkl_wait_us 1868958
+games: trip-gl-ioctl: hold syscall 101: 339897 holds, 993372 us, 2.9 us each
+games: trip-gl-ioctl: hold syscall 61: 292518 holds, 729456 us, 2.5 us each
+games: trip-gl-ioctl: thread 1086 wined3d_cs: ran 454.5 ms, waited ready 240.9 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-1/trip
+5496: trip.sh run 2
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 86.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 88.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 88.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 2500.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 2520.2 ms
+games: trip-gl-strace: ctxt 525739
+games: trip-gl-strace: bkl_wait_us 1780861
+games: trip-gl-strace: hold syscall 101: 463232 holds, 1037727 us, 2.2 us each
+games: trip-gl-strace: hold syscall 61: 298847 holds, 767257 us, 2.6 us each
+games: trip-gl-strace: thread 1953 wined3d_cs: ran 449.9 ms, waited ready 236.4 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 2410.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 2428.7 ms
+games: trip-gl-ioctl: ctxt 512927
+games: trip-gl-ioctl: bkl_wait_us 1867249
+games: trip-gl-ioctl: hold syscall 101: 343130 holds, 993712 us, 2.9 us each
+games: trip-gl-ioctl: hold syscall 61: 295152 holds, 742442 us, 2.5 us each
+games: trip-gl-ioctl: thread 2108 wined3d_cs: ran 444.5 ms, waited ready 236.9 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-2/trip
+5496: trip.sh run 3
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 86.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 91.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 104.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 2507.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 2524.3 ms
+games: trip-gl-strace: ctxt 526819
+games: trip-gl-strace: bkl_wait_us 1783590
+games: trip-gl-strace: hold syscall 101: 464828 holds, 1048817 us, 2.3 us each
+games: trip-gl-strace: hold syscall 61: 299307 holds, 768689 us, 2.6 us each
+games: trip-gl-strace: thread 2977 wined3d_cs: ran 453.2 ms, waited ready 236.3 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 2443.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 2457.8 ms
+games: trip-gl-ioctl: ctxt 513263
+games: trip-gl-ioctl: bkl_wait_us 1928418
+games: trip-gl-ioctl: hold syscall 101: 343449 holds, 1007255 us, 2.9 us each
+games: trip-gl-ioctl: hold syscall 61: 295340 holds, 744250 us, 2.5 us each
+games: trip-gl-ioctl: thread 3132 wined3d_cs: ran 464.1 ms, waited ready 238.4 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-3/trip
+2026-11-19T16:14:39Z
+5496: base exit 0
+
+== Debian Linux 6.12.115 ==
+5496: booting Debian
+2026-11-19T16:14:51Z
+Linux debian-ref 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux
+libegl-mesa0:amd64	25.0.7-2+deb13u1
+libgl1-mesa-dri:amd64	25.0.7-2+deb13u1
+weston	14.0.2-1
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 77.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 88.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 54.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1098.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1103.1 ms
+games: trip-gl-strace: ctxt 359768
+games: trip-gl-strace: thread 1617 wined3d_cs: ran 207.3 ms, waited ready 23.5 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 988.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1006.0 ms
+games: trip-gl-ioctl: ctxt 343007
+games: trip-gl-ioctl: thread 1752 wined3d_cs: ran 216.1 ms, waited ready 29.9 ms
+TRIPS OK
+trip: result: status 0, results in /opt/trip5496/result-1/trip
+5496: trip.sh run 2
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 68.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 61.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 69.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1119.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1124.1 ms
+games: trip-gl-strace: ctxt 365838
+games: trip-gl-strace: thread 2575 wined3d_cs: ran 210.5 ms, waited ready 21.0 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 982.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 990.9 ms
+games: trip-gl-ioctl: ctxt 342641
+games: trip-gl-ioctl: thread 2709 wined3d_cs: ran 212.8 ms, waited ready 25.8 ms
+TRIPS OK
+trip: result: status 0, results in /opt/trip5496/result-2/trip
+5496: trip.sh run 3
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 52.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 48.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 49.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1106.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1113.3 ms
+games: trip-gl-strace: ctxt 358982
+games: trip-gl-strace: thread 3521 wined3d_cs: ran 214.2 ms, waited ready 18.9 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1017.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1023.4 ms
+games: trip-gl-ioctl: ctxt 345972
+games: trip-gl-ioctl: thread 3654 wined3d_cs: ran 213.6 ms, waited ready 30.3 ms
+TRIPS OK
+trip: result: status 0, results in /opt/trip5496/result-3/trip
+2026-11-19T16:17:11Z
+5496: Debian exit 0
