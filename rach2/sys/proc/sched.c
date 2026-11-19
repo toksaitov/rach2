@@ -597,10 +597,13 @@ static void sched_unhold(process_t *p)
  * processor's first thread's, taken from `kernel_parent`, an ordinary
  * thread at nice 0 in the root group, as Linux's kernel threads are forked
  * from kthreadd. A thread a fork made has its entity from `sched_fork`.
- * With sched_lock held.
+ * The run time a real-time thread was charged before (`sched_charge_rt`)
+ * is kept. With sched_lock held.
  */
 static void sched_entity_init(process_t *p)
 {
+    uint64_t ran = p->se.sum_exec_runtime;
+
     if (p->se.cfs_rq) {
         return;
     }
@@ -608,6 +611,7 @@ static void sched_entity_init(process_t *p)
     fair_set_task_rq(&kernel_parent, p->cpu);
     fair_fork(p, &kernel_parent);
     fair_set_task_rq(p, p->cpu);
+    p->se.sum_exec_runtime = ran;
 }
 
 /**
@@ -1459,9 +1463,27 @@ void sched_make_ready(process_t *p)
     }
 }
 
+/** Charge the real-time thread `p`, current on processor `c`, its run since
+ * `se.exec_start` on the task clock, into `se.sum_exec_runtime`, and start
+ * its next interval now, as Linux's update_curr_rt charges a real-time
+ * task through update_curr_se (kernel/sched/rt.c:989-1000, fair.c:
+ * 1150-1160); the fair class charges its own threads. The run queues' lock
+ * is held and the processor's task clock is current. */
+static void sched_charge_rt(process_t *p, int c)
+{
+    uint64_t now = fair_rqs[c].clock_task;
+
+    if (now > p->se.exec_start) {
+        p->se.sum_exec_runtime += now - p->se.exec_start;
+    }
+    p->se.exec_start = now;
+}
+
 /** The part of `sched_priority_changed` for `p`, running on processor `c`,
  * whose class is now the fair one when `fair` is set: it leaves or joins
- * the fair class as its current thread, and asks itself to switch when it
+ * the fair class as its current thread, its run time charged by the class
+ * it leaves and counted from now by the one it joins, and asks itself to
+ * switch when it
  * becomes ordinary or a queued real-time thread outranks it. Returns the
  * processor to kick, or -1. The run queues' lock is held. */
 static int sched_class_running(process_t *p, int c, int fair)
@@ -1472,7 +1494,9 @@ static int sched_class_running(process_t *p, int c, int fair)
         fair_put_prev(p);
         (void)sched_dequeue(p, FAIR_DEQ_MOVE);
         fair_server_spend(c);
+        p->se.exec_start = fair_rqs[c].clock_task;
     } else if (fair && fair_rqs[c].curr != p) {
+        sched_charge_rt(p, c);
         sched_entity_init(p);
         if (!p->se.on_rq) {
             fair_enqueue(p, FAIR_ENQ_RESTORE);
@@ -1894,12 +1918,20 @@ static void sched_stay(process_t *old, int me)
  * (`fair_set_next`); the fair server spends what was charged. The
  * real-time average counts a real-time thread's run to the switch away
  * from it, and none before one starts (`pelt_update_rt`), as Linux's
- * put_prev_task_rt and set_next_task_rt. The run queues' lock is held. */
+ * put_prev_task_rt and set_next_task_rt; so does the outgoing real-time
+ * thread's run time (`sched_charge_rt`), and an incoming one's starts
+ * here. The run queues' lock is held. */
 static void sched_follow(int me, process_t *next)
 {
     process_t *old = cpu_table[me].current;
     uint64_t now = fair_rqs[me].clock_task;
 
+    if (old != next && old != cpu_table[me].idle && !sched_fair_class(old)) {
+        sched_charge_rt(old, me);
+    }
+    if (old != next && next != cpu_table[me].idle && !sched_fair_class(next)) {
+        next->se.exec_start = now;
+    }
     if (old != next && old != cpu_table[me].idle && !sched_fair_class(old)) {
         (void)pelt_update_rt(me, now, 1);
     } else if (old != next && next != cpu_table[me].idle && !sched_fair_class(next)) {
@@ -2479,6 +2511,7 @@ void sched_tick(void)
     if (p == this_cpu()->idle) {
         /* An idle processor balances and selects what it pulled. */
     } else if (!sched_fair_class(p)) {
+        sched_charge_rt(p, me);
         (void)pelt_update_rt(me, fair_rqs[me].clock_task, 1);
         due = sched_rr_tick(p, me) || sched_rt_outranks(me, p) ||
               (sched_fair_runnable(me) != 0 && fair_server_takes(me, p));

@@ -1732,6 +1732,35 @@ static void tick_rt(void)
     clock_ns = 0;
 }
 
+/**
+ * A real-time thread's run time goes into `se.sum_exec_runtime`, which
+ * /proc reports, at the tick and at the switch away from it, from the task
+ * clock, as Linux's update_curr_rt charges it (kernel/sched/rt.c:989-1000).
+ */
+static void rt_run_time(void)
+{
+    uint64_t ran;
+
+    setup();
+    procs[5].sched_policy = SCHED_FIFO;
+    procs[5].rt_priority = 40;
+    sched_priority_changed(&procs[5]);
+    schedule();
+    CHECK(current_proc == &procs[5], "a FIFO thread runs before ordinary ones");
+    ran = procs[5].se.sum_exec_runtime;
+    clock_ns += 3000000u;
+    tick();
+    CHECK(current_proc == &procs[5] && procs[5].se.sum_exec_runtime == ran + 3000000u,
+          "the tick charges a real-time thread its run");
+    clock_ns += 1000000u;
+    block(&procs[5], PROC_BLOCKED);
+    schedule();
+    CHECK(current_proc != &procs[5] && procs[5].se.sum_exec_runtime == ran + 4000000u,
+          "the switch away charges it the rest");
+    init_sched();
+    clock_ns = 0;
+}
+
 /* The calls of the `sched_out` that `sched_out_rows` gives its threads,
  * and those of them for a switch that left the thread able to run. */
 static int out_calls, out_preempted;
@@ -2424,6 +2453,7 @@ int main(int argc, char **argv)
     slice_events();
     tick_rr();
     tick_rt();
+    rt_run_time();
     affinity_rows();
     nohz_accounting();
     nohz_switch();
@@ -2440,13 +2470,15 @@ int main(int argc, char **argv)
     if (failures) {
         return 1;
     }
-    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, big lock, "
-               "preempt due, "
-               "accounting, "
-               "load phase, "
-               "idle machine, ready lists, wake twice, migration, wake preempt, wake place core, "
-               "run delay, tick slice, tick rr, "
-               "tick rt, idle cancel drains, idle cancel ready, idle kicked, balance once\n");
+    dprintf(
+        1,
+        "sched-hosttest: result: pass: priority, fairness, states, lifecycle, big lock, "
+        "preempt due, "
+        "accounting, "
+        "load phase, "
+        "idle machine, ready lists, wake twice, migration, wake preempt, wake place core, "
+        "run delay, tick slice, tick rr, "
+        "tick rt, rt run time, idle cancel drains, idle cancel ready, idle kicked, balance once\n");
     return 0;
 }
 
