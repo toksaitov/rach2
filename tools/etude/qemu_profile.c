@@ -1424,6 +1424,17 @@ static int display_cpu(const struct etude_qemu_profile *p, const struct etude_qe
     return 0;
 }
 
+/** Whether a card of profile `p` has a tap. */
+static int has_tap(const struct etude_qemu_profile *p)
+{
+    size_t i;
+
+    for (i = 0; i < device_count(p->devices); i++)
+        if (p->devices[i].tap_queues != 0)
+            return 1;
+    return 0;
+}
+
 /**
  * Check profile `p` against site `s`, the audio file `audio` and the size of
  * `out`, and write the -cpu value into `cpu`, of `size` bytes.
@@ -1448,6 +1459,10 @@ static int argv_check(const struct etude_qemu_profile *p, const struct etude_qem
         return ENOENT;
 #ifdef _WIN32
     if (display_env(p) != NULL)
+        return ENOTSUP;
+#endif
+#ifndef __linux__
+    if (has_tap(p))
         return ENOTSUP;
 #endif
     if (out->max < 1 || out->size < 1 ||
@@ -1533,17 +1548,13 @@ static void add_firmware(struct line *l, const struct etude_qemu_profile *p, con
  * the queues the card asks for, gives its end ETUDE_TAP_HOST, brings it up,
  * and becomes QEMU, whose words follow. The namespace's root is the user's
  * own identity, so no privilege is needed, and the namespace ends with
- * QEMU. Returns 0, or ENOTSUP on a host other than Linux.
+ * QEMU. argv_check refuses a tap on a host other than Linux.
  */
-static int add_tap_namespace(struct line *l, const struct etude_qemu_profile *p)
+static void add_tap_namespace(struct line *l, const struct etude_qemu_profile *p)
 {
-    size_t i;
-
-    for (i = 0; i < device_count(p->devices) && p->devices[i].tap_queues == 0; i++)
-        ;
-    if (i == device_count(p->devices))
-        return 0;
 #ifdef __linux__
+    if (!has_tap(p))
+        return;
     add(l, 0, "%s", ETUDE_TAP_UNSHARE);
     add(l, 0, "--user");
     add(l, 0, "--map-root-user");
@@ -1556,9 +1567,9 @@ static int add_tap_namespace(struct line *l, const struct etude_qemu_profile *p)
         ETUDE_TAP_IP, ETUDE_TAP_NAME, ETUDE_TAP_IP, ETUDE_TAP_HOST, ETUDE_TAP_NAME, ETUDE_TAP_IP,
         ETUDE_TAP_NAME);
     add(l, 0, "etude-tap");
-    return 0;
 #else
-    return ENOTSUP;
+    (void)l;
+    (void)p;
 #endif
 }
 
@@ -1578,8 +1589,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     if ((e = argv_check(p, s, audio, out, cpu, sizeof cpu)) != 0)
         return e;
     out->argv[0] = NULL;
-    if ((e = add_tap_namespace(&l, p)) != 0)
-        return e;
+    add_tap_namespace(&l, p);
     add(&l, 0, "%s", program);
     add(&l, 0, "-accel");
     add(&l, 0, "%s", accel_option(s->accel));
