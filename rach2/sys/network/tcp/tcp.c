@@ -653,6 +653,8 @@ static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_
  * address and port. The local address is left out, so that
  * `tcp_pair_in_use`, which asks about every local address at once, reads one
  * bucket; the key keeps a peer from choosing ports that fill one bucket.
+ * An IPv6 address's scope is left out too, since a connection bound to a
+ * card is matched by its addresses without their scopes (`tcp_addr_is`).
  */
 static uint32_t tcp_hash_index(uint16_t local_port, const net_addr_t *remote, uint16_t remote_port)
 {
@@ -661,7 +663,7 @@ static uint32_t tcp_hash_index(uint16_t local_port, const net_addr_t *remote, ui
 
     if (remote->family == AF_INET6) {
         a = read32be(remote->v6) ^ read32be(remote->v6 + 4) ^ read32be(remote->v6 + 8) ^
-            read32be(remote->v6 + 12) ^ remote->scope;
+            read32be(remote->v6 + 12);
     }
     h ^= a * 0x9E3779B1u;
     h ^= h >> 15;
@@ -684,19 +686,12 @@ static void tcb_hash_add(struct tcb *tcb)
     tcb->hashed = 1;
 }
 
-int tcp_bind_device(struct socket *sock, int ifindex)
+void tcp_bind_device(struct socket *sock, int ifindex)
 {
-    struct tcb *tcb = sock->tcb;
-
-    if (tcb && tcb->state != TCP_LISTEN && tcb->remote_ip.family == AF_INET6 &&
-        tcb->remote_ip.scope && ifindex && tcb->remote_ip.scope != (uint32_t)ifindex) {
-        return -EINVAL;
-    }
     sock->bound_device = ifindex;
-    if (tcb) {
-        tcb->ifindex = ifindex;
+    if (sock->tcb) {
+        sock->tcb->ifindex = ifindex;
     }
-    return 0;
 }
 
 /** Take `tcb` out of `tcp_hash`, if it is there. */
@@ -1982,6 +1977,16 @@ static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
     return any;
 }
 
+/** Whether `a` and `b` are one address, their IPv6 scopes compared unless
+ * `bound`: a connection bound to a card is on that card's link whatever
+ * scope it connected with, as Linux compares the binding, not a scope. */
+static int tcp_addr_is(net_addr_t a, net_addr_t b, int bound)
+{
+    if (bound && a.family == AF_INET6 && b.family == AF_INET6)
+        return ip6_equal(a.v6, b.v6);
+    return net_addr_equal(a, b);
+}
+
 /**
  * Find the TCB for an incoming segment in the network namespace `ip_ns`: a
  * block in any state but LISTEN with the same local address and port,
@@ -1996,8 +2001,9 @@ static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t
 
     for (t = tcp_hash[tcp_hash_index(local_port, &remote_ip, remote_port)]; t; t = t->hash_next) {
         if (t->local_port == local_port && t->ns == ip_ns &&
-            net_addr_equal(t->local_ip, local_ip) && net_addr_equal(t->remote_ip, remote_ip) &&
-            t->remote_port == remote_port && tcp_rx_card_ok(t)) {
+            tcp_addr_is(t->local_ip, local_ip, t->ifindex) &&
+            tcp_addr_is(t->remote_ip, remote_ip, t->ifindex) && t->remote_port == remote_port &&
+            tcp_rx_card_ok(t)) {
             return t;
         }
     }

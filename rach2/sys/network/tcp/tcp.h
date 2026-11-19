@@ -735,11 +735,10 @@ void tcp_window_update(struct socket *sock);
  * Bind the stream socket `sock`, and its connection or listener, to the
  * card of index `ifindex`, 0 for none (SO_BINDTODEVICE), so that the
  * connection's later segments leave by that card and only those that come
- * by it are its own. Returns 0, or -EINVAL for a connection to an IPv6 peer
- * of another card's link scope, whose addresses belong to that link, as
- * connect refuses such a peer. The caller holds net_lock.
+ * by it are its own, matched by their addresses without IPv6 scopes, as
+ * Linux matches a bound socket. The caller holds net_lock.
  */
-int tcp_bind_device(struct socket *sock, int ifindex);
+void tcp_bind_device(struct socket *sock, int ifindex);
 
 /** Set TCP_QUICKACK on the stream socket `sock`: 0 holds acknowledgements
  * for this side's answers to carry, any other value acknowledges as a read
