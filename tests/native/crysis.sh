@@ -41,10 +41,10 @@
 # every exit the script ends the game's mounts, puts back the session's
 # weston.ini and rach2-session, which crysis.py's `prepare` writes, and leaves
 # the session as it found it: started again by SIGHUP, with the files put back,
-# when it ran, and otherwise ended by SIGUSR2. `private`, all the case makes on
-# the root besides `out`, is the fixture's: etude-guest removes it once every
-# process of the case has ended, after a pass, a failure or a kill that skips
-# this trap alike.
+# when it ran, and otherwise ended by SIGUSR2, and waits for the new Weston or
+# for none. `private`, all the case makes on the root besides `out`, is the
+# fixture's: etude-guest removes it once every process of the case has ended,
+# after a pass, a failure or a kill that skips this trap alike.
 #
 # Prints crysis.py's lines and `crysis-case: result: pass` or `fail: why`, and
 # exits 0 on a pass.
@@ -74,6 +74,34 @@ mounted_at()
         (mode == "ro" || $3 == "ext2") { ok = 1 } END { exit !ok }' /proc/mounts
 }
 
+# session_restore: have the supervisor start the session again, on the files
+# put back, when it ran, and otherwise end it, and wait, 600 tries of 0.1 s
+# at most, for a Weston other than the one that ran, or for none, so that
+# the next case does not draw in a session about to end.
+session_restore()
+{
+    old=$(pgrep -x weston | tr '\n' ' ')
+    [ -f "$pidfile" ] || return 1
+    if [ "$found" = 1 ]; then
+        kill -HUP "$(cat "$pidfile")" 2> /dev/null || return 1
+    else
+        [ -n "$old" ] || return 0
+        kill -USR2 "$(cat "$pidfile")" 2> /dev/null || return 1
+    fi
+    tries=0
+    while :; do
+        now=$(pgrep -x weston | tr '\n' ' ')
+        if [ "$found" = 1 ]; then
+            [ -z "$now" ] || [ "$now" = "$old" ] || [ ! -S "/run/user/$uid/wayland-0" ] || return 0
+        else
+            [ -n "$now" ] || return 0
+        fi
+        tries=$((tries + 1))
+        [ "$tries" -lt 600 ] || return 1
+        sleep 0.1
+    done
+}
+
 # shellcheck disable=SC2329 # the exit trap runs it
 cleanup()
 {
@@ -82,11 +110,7 @@ cleanup()
     if [ "$kept" = 1 ]; then
         cp -p "$here/weston.ini" "$ini" && cp -p "$here/rach2-session" "$session" ||
             failed="$failed session-files"
-        if [ "$found" = 1 ]; then
-            [ ! -f "$pidfile" ] || kill -HUP "$(cat "$pidfile")" 2> /dev/null || :
-        else
-            [ ! -f "$pidfile" ] || kill -USR2 "$(cat "$pidfile")" 2> /dev/null || :
-        fi
+        session_restore || say "session: not left as it was found" >&2
     fi
     # A process of the game's that has not yet ended may hold either mount;
     # the namespace's mounts go with the case's last process.
