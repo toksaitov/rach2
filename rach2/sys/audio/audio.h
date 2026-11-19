@@ -96,7 +96,12 @@ typedef struct audio_stream {
                                 over, set before the next `transfer` */
     void (*transfer)(struct audio_stream *s, uint8_t *buf, size_t size);
     void (*period)(struct audio_stream *s);
-    void *owner; /* the caller's, for `transfer` and `period` */
+    /* The device went while the stream was open, in process context: no
+     * `transfer` or `period` call follows, `stream_start` fails, and the
+     * stream is the caller's to close. NULL when the caller needs no
+     * word; a driver whose device cannot go calls it never. */
+    void (*gone)(struct audio_stream *s);
+    void *owner; /* the caller's, for `transfer`, `period` and `gone` */
 } audio_stream_t;
 
 /* The sources a device can record, for the mixer's record source. */
