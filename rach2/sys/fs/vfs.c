@@ -3731,6 +3731,13 @@ int vfs_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, v
     return mnt->type->ops->tmpfile(mount_base(mnt), dir, mode, linkable, node);
 }
 
+void vfs_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len)
+{
+    if (!vfs_mount_gone(mnt) && mnt->type->ops->uncache) {
+        mnt->type->ops->uncache(mount_base(mnt), handle, offset, len);
+    }
+}
+
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct vfs_stat was, parent;

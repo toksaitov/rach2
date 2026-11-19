@@ -109,6 +109,36 @@ A failed sync is the write's error.
 End each successful write with
 .Xr fsync 2
 of the file, its metadata included.
+.It Dv O_DIRECT
+Read and write around the caches.
+On ext2, FAT32 and exFAT, as on Linux, the file offset, the length and
+the buffer's address of each read and write must each be a multiple of
+the 512-byte sector, or the call returns
+.Er EINVAL ;
+a read at or past the end of the file returns 0 first, and a length of
+0 is never refused.
+A read goes around the file page cache to the file system, and a write
+ends as with
+.Dv O_DSYNC ,
+its data on the medium when the call returns.
+On ext2 neither leaves the file's blocks in the buffer cache, which
+.Xr cachestat 2
+shows; FAT32 and exFAT keep them there.
+An unaligned read of a hole is refused, where Linux reads zeros.
+On tmpfs the flag changes nothing, as on Linux, whose tmpfs keeps its
+files in memory.
+A directory of ext2, FAT32 or exFAT opens with it.
+Any other file returns
+.Er EINVAL ,
+as on Linux: a FIFO, a character device, a file of
+.Pa /proc
+or
+.Pa /sys ,
+a directory of tmpfs, and a file of a type without direct I/O.
+A block device takes the flag and reads and writes as without it.
+.Xr fcntl 2
+.Dv F_SETFL
+sets and clears it.
 .It Dv O_CLOEXEC
 Close the descriptor on successful
 .Xr execve 2 .
@@ -184,7 +214,9 @@ belong to the open file description, which keeps them whatever kind of
 file it opens, a device, a FIFO or a file of
 .Pa /proc
 among them, as Linux does, and are shared by duplicated or inherited
-descriptors.
+descriptors; so does
+.Dv O_DIRECT ,
+on the files that take it.
 The close-on-exec flag belongs to the individual descriptor.
 .Pp
 By default, a final symbolic link is followed.
@@ -714,6 +746,8 @@ were given together without
 .Dv O_TMPFILE
 was given with
 .Dv O_RDONLY ,
+.Dv O_DIRECT
+was given for a file that cannot take it,
 a file system rejects the new name, required attributes cannot be
 obtained, truncation selects an ext2 object that is not a regular file,
 or a FIFO was opened with the access mode 3;

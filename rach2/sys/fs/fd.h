@@ -110,6 +110,7 @@ typedef enum {
 #define OFD_NONBLOCK 04000    /* O_NONBLOCK: a would-block returns -EAGAIN */
 #define OFD_DSYNC    010000   /* O_DSYNC: a write ends with an fdatasync */
 #define OFD_SYNC     04010000 /* O_SYNC, O_DSYNC's bit with __O_SYNC: an fsync */
+#define OFD_DIRECT   040000   /* O_DIRECT: reads and writes go around the cache */
 
 /* The status flags an open with Linux's open flags `f` gives the
  * description it makes, before the description is published, whatever the

@@ -2706,7 +2706,7 @@ int devfs_open(const char *name, int flags)
         e->flags |= FD_FLAG_CLOEXEC;
     }
     if (e->ofd) {
-        e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
+        e->ofd->status_flags |= OFD_OPEN_STATUS(flags) | ((uint32_t)flags & OFD_DIRECT);
     }
     devfs_note_open(dev, e);
     fd_install(current_proc->fds, fd);

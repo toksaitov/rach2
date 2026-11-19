@@ -1531,6 +1531,10 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
  * -EPERM when `dir` is immutable, -EOPNOTSUPP for a type without `tmpfile`,
  * or the type's error. */
 int vfs_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node);
+/** The type's `uncache` of bytes [`offset`, `offset` + `len`) of the file
+ * the open handle `handle` holds, after an O_DIRECT read or write; nothing
+ * on a type without it or a mount whose device has gone. */
+void vfs_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len);
 /** The type's unlink of `name` in `dir`: 0, -EROFS for a type without
  * `unlink`, -EPERM when the directory or the file is immutable or
  * append-only, or the type's error. A file that backs a loop device loses
