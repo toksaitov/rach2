@@ -110,8 +110,8 @@ pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va);
 pte_t mmu_user_huge_change(page_dir_t *dir, uintptr_t va, pte_t clear, pte_t set);
 
 /** Whether the processor may hold a 2 MiB and a 4 KiB translation of one
- * address that agree, as a split leaves them until the range is flushed:
- * 0 on AMD's family 0x10 (Erratum 383). */
+ * address that agree, as a split or a promotion leaves them until its
+ * flush: 0 on AMD's family 0x10 (Erratum 383). */
 int mmu_huge_usable(void);
 
 /**

@@ -59,8 +59,8 @@ uint32_t thp_mapped(void)
  * Linux's hugepage_init turns every flag off on a machine of less than
  * 512 MiB, where a huge page is too large a share of memory: `enabled` and
  * `defrag` read never and the huge zero page is off. AMD's family 0x10 takes
- * no huge page, since a split leaves the 2 MiB translation beside the 4 KiB
- * ones until the range is flushed (paging.c).
+ * no huge page, since a split or a promotion leaves a 2 MiB and a 4 KiB
+ * translation of one address side by side until its flush (paging.c).
  */
 void thp_boot(void)
 {
@@ -80,6 +80,14 @@ void thp_boot(void)
 void thp_refuse(void)
 {
     _refused = 1;
+    thp_policy.enabled = THP_NEVER;
+    thp_policy.defrag = THP_DEFRAG_NEVER;
+    thp_policy.zero_page = 0;
+}
+
+int thp_refused(void)
+{
+    return _refused;
 }
 
 int thp_region_allows(const struct mm *mm, const struct vma *vma, uintptr_t start, int how)

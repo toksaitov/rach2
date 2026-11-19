@@ -145,8 +145,9 @@ static pte_t *table_for(pte_t *pml4, uintptr_t va, int level, int create, pte_t 
 
     for (l = 4; l > level; l--) {
         pte_t *e = &table[LEVEL_INDEX(va, l)];
+        pte_t v = *(volatile pte_t *)e; /* read once: a fault may make it huge */
 
-        if (!(*e & PTE_P)) {
+        if (!(v & PTE_P)) {
             uintptr_t phys = 0;
             pte_t keeps = 0;
 
@@ -163,14 +164,15 @@ static pte_t *table_for(pte_t *pml4, uintptr_t va, int level, int create, pte_t 
             if (!phys) {
                 return NULL;
             }
-            *e = phys | PTE_P | flags | keeps;
-        } else if (*e & PTE_PS) {
+            v = phys | PTE_P | flags | keeps;
+            *e = v;
+        } else if (v & PTE_PS) {
             if (l == 2 && level == 1 && va < USER_ADDR_MAX) {
                 return kept_table(e);
             }
             return NULL;
         }
-        table = MMU_VIRT(PTE_ADDR(*e));
+        table = MMU_VIRT(PTE_ADDR(v));
     }
     return table;
 }

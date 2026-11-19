@@ -300,6 +300,10 @@ int mmap_read_trylock(struct mm *mm);
  * it; a thread that holds it to write already only counts the hold. */
 void mmap_write_lock(struct mm *mm);
 
+/** `mmap_write_lock` that SIGKILL ends, as Linux's
+ * `mmap_write_lock_killable`: 0 once held, or -EINTR with no hold taken. */
+int mmap_write_lock_killable(struct mm *mm);
+
 /** Take `mm`'s regions' lock to write if that needs no wait: 1 when held
  * now, as a thread that holds it to write already always is, or 0, as a
  * thread that holds it only to read always gets. */

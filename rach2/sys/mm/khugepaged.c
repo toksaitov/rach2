@@ -47,10 +47,10 @@ static int khugepaged_due(void *arg)
 }
 
 /** Whether khugepaged has work: `enabled` is always or madvise, as Linux's
- * hugepage_pmd_enabled asks. */
+ * hugepage_pmd_enabled asks, and huge pages are not refused. */
 static int khugepaged_on(void)
 {
-    return thp_policy.enabled != THP_NEVER;
+    return !thp_refused() && thp_policy.enabled != THP_NEVER;
 }
 
 /** The first address space on the process list that this pass has not

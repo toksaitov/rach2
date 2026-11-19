@@ -6747,8 +6747,9 @@ static int thp_shmem_word(char *text, uint32_t count)
  * Linux 6.12's stores parse it: `enabled` and `defrag` a policy word with
  * at most one newline after it, `use_zero_page` 0 or 1 as kstrtoul reads
  * it (`thp_flag`), `shmem_enabled` as `thp_shmem_word` reads it, and
- * `shrink_underused` as `thp_bool` does. `count`, or -EINVAL or -ERANGE
- * with nothing changed.
+ * `shrink_underused` as `thp_bool` does. Once huge pages are refused
+ * (`thp_refuse`), `enabled` and `defrag` take only never and `use_zero_page`
+ * only 0. `count`, or -EINVAL or -ERANGE with nothing changed.
  */
 static int32_t thp_store(int attr, char *text, uint32_t count)
 {
@@ -6767,6 +6768,12 @@ static int32_t thp_store(int attr, char *text, uint32_t count)
                     : thp_bool(text);
     if (v < 0) {
         return v;
+    }
+    if (thp_refused() && attr <= 2 &&
+        v != (attr == 0   ? THP_NEVER
+              : attr == 1 ? THP_DEFRAG_NEVER
+                          : 0)) {
+        return -EINVAL;
     }
     *flags[attr] = v;
     thp_policy_changed();
