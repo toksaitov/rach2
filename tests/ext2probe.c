@@ -1430,6 +1430,37 @@ static void take_loop(void)
 #define XA_SET 226
 #endif
 
+/** The attribute calls on KRFFS, at /, and on tmpfs, at /dev/shm, which
+ * keep no attributes: getxattr is EOPNOTSUPP and flistxattr lists nothing,
+ * as Linux answers for a file system without xattr handlers. */
+static void xattr_unsupported(const char *name)
+{
+    const char *path;
+    char value[64] = {0};
+    long fd, rc;
+    int form;
+
+    for (form = 0; form < 2; form++) {
+        path = form ? "/dev/shm/xa-unsupported" : "/xa-unsupported";
+        fd = syscall3(SYS_OPEN, (long)path, O_CREAT | O_RDWR, 0600);
+        if (fd < 0) {
+            fail_with("creating an unsupported attribute file", (int)fd);
+        }
+        rc = syscall4(XA_SET + 3, (long)path, (long)name, (long)value, sizeof(value));
+        if (rc != -95)
+            fail_with(form ? "getxattr on tmpfs is not EOPNOTSUPP"
+                           : "getxattr on KRFFS is not EOPNOTSUPP",
+                      (int)rc);
+        rc = syscall3(XA_SET + 8, fd, (long)value, sizeof(value));
+        if (rc != 0)
+            fail_with(form ? "flistxattr on tmpfs does not list nothing"
+                           : "flistxattr on KRFFS does not list nothing",
+                      (int)rc);
+        syscall1(SYS_CLOSE, fd);
+        expect_ok(syscall1(SYS_UNLINK, (long)path), "removing an unsupported attribute file");
+    }
+}
+
 /** Exercise all twelve attribute calls on ext2 and unsupported file systems.
  * The fixture is private to this case. Each descriptor and scratch name is
  * removed before success; a failed case keeps its disk as evidence. */
@@ -1480,18 +1511,7 @@ static void xattr_rows(void)
         fail("following and not following the final link");
     expect_ok(syscall1(SYS_UNLINK, (long)"/e2/xa-link"), "removing the attribute link");
     expect_ok(syscall1(SYS_UNLINK, (long)path), "removing the attribute file");
-    for (form = 0; form < 2; form++) {
-        path = form ? "/dev/shm/xa-unsupported" : "/xa-unsupported";
-        fd = syscall3(SYS_OPEN, (long)path, O_CREAT | O_RDWR, 0600);
-        if (fd < 0) {
-            fail_with("creating an unsupported attribute file", (int)fd);
-        }
-        if (syscall4(XA_SET + 3, (long)path, (long)name, (long)value, sizeof(value)) != -95 ||
-            syscall3(XA_SET + 8, fd, (long)value, sizeof(value)) != 0)
-            fail("KRFFS and tmpfs keep their unsupported answers");
-        syscall1(SYS_CLOSE, fd);
-        expect_ok(syscall1(SYS_UNLINK, (long)path), "removing an unsupported attribute file");
-    }
+    xattr_unsupported(name);
 }
 
 #define O_DIRECT        040000
