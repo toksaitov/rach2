@@ -1317,6 +1317,9 @@ static void write_failed_mark(block_device_t *dev, struct bbuf *b)
     uint32_t flags = cache_lock();
 
     dev->flags |= BLOCK_WRITE_FAILED;
+    if (dev->flags & BLOCK_RECOVERING) {
+        dev->flags |= BLOCK_WRITES_HALTED;
+    }
     if (b) {
         b->write_failed = 1;
     }
@@ -3571,6 +3574,25 @@ void bcache_halt_writes(block_device_t *dev)
     wb_take();
     flags = cache_lock();
     dev->flags |= BLOCK_WRITES_HALTED;
+    cache_unlock(flags);
+    wb_give();
+}
+
+/** Serialize the recovery interval with the failed-write mark and syncs. */
+void bcache_recovering(block_device_t *dev, int active)
+{
+    uint32_t flags;
+
+    wb_take();
+    flags = cache_lock();
+    if (active) {
+        dev->flags |= BLOCK_RECOVERING;
+        if (dev->flags & BLOCK_WRITE_FAILED) {
+            dev->flags |= BLOCK_WRITES_HALTED;
+        }
+    } else {
+        dev->flags &= ~BLOCK_RECOVERING;
+    }
     cache_unlock(flags);
     wb_give();
 }

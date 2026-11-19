@@ -50,6 +50,7 @@ static int failures, depth, sync_error, flush_error, sync_calls, flush_calls;
 static int check_clean_order, clean_writes, reuse_fd, truncating;
 static int fail_after_move, syncs_after_free, fail_flush_at;
 static int refuse_block = -1;
+static int reclaim_error, recovery_active;
 static int refuse_skip; /* matching gets before the one to fail */
 /* Blocks copied from the cache to the device cache, by any of the syncs. */
 static int block_writes;
@@ -206,6 +207,13 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 {
     check(dev == &disk && blk < IMAGE_BLOCKS, "cache block in volume");
+    if (reclaim_error) {
+        reclaim_error = 0;
+        dev->flags |= BLOCK_WRITE_FAILED;
+        if (recovery_active) {
+            dev->flags |= BLOCK_WRITES_HALTED;
+        }
+    }
     if (refuse_block >= 0 && blk == (uint64_t)refuse_block && refuse_skip-- == 0) {
         refuse_skip = 0;
         refuse_block = -1;
@@ -287,8 +295,15 @@ static int writes_halted;
 /** The core halted the volume: no sync writes a block after this. */
 void bcache_halt_writes(block_device_t *dev)
 {
-    (void)dev;
+    dev->flags |= BLOCK_WRITES_HALTED;
     writes_halted = 1;
+}
+
+/** Mark the interval in which a failed cache victim stops the device. */
+void bcache_recovering(block_device_t *dev, int active)
+{
+    check(dev == &disk, "set recovery on the claimed device");
+    recovery_active = active;
 }
 
 /**
@@ -299,13 +314,13 @@ void bcache_halt_writes(block_device_t *dev)
  * requires the earlier data on the medium, and is counted in
  * `clean_writes`.
  */
-int bcache_sync(block_device_t *dev)
+int bcache_sync_unflushed(block_device_t *dev)
 {
     unsigned i;
 
     (void)dev;
     sync_calls++;
-    if (writes_halted) {
+    if (writes_halted || (dev->flags & BLOCK_WRITES_HALTED)) {
         return -EIO;
     }
     if (fail_after_move &&
@@ -329,6 +344,19 @@ int bcache_sync(block_device_t *dev)
         }
     }
     return 0;
+}
+
+/** A durable cache sync also flushes a write-through device on error. */
+int bcache_sync(block_device_t *dev)
+{
+    int rc = bcache_sync_unflushed(dev);
+
+    if (dev->flags & BLOCK_WRITE_THROUGH) {
+        int flushed = bcache_flush(dev);
+
+        return rc ? rc : flushed;
+    }
+    return rc;
 }
 
 /**
@@ -371,6 +399,7 @@ int bcache_drop(block_device_t *dev)
     }
     k_memcpy(cached, device, sizeof(cached));
     writes_halted = 0;
+    dev->flags &= ~(BLOCK_WRITE_FAILED | BLOCK_WRITES_HALTED);
     return dirty;
 }
 
@@ -1774,6 +1803,36 @@ static void close_during_unlink_row(int replace)
     teardown();
 }
 
+/** Fail a buffered repair write on a disk whose normal sync always flushes. */
+static void repair_flush_row(void)
+{
+    setup();
+    disk.flags |= BLOCK_WRITE_THROUGH;
+    sync_error = 1;
+    check(volume_sync(vol_of(&mount)) != 0 && flush_calls == 0,
+          "a failed ordered write issues no trailing drive flush");
+    teardown();
+}
+
+/** Fail reclaim while fetching the victim header at the last close. */
+static void reclaim_during_reap(void)
+{
+    void *node, *handle;
+    krffs_node_t *h;
+
+    setup();
+    node = create("held");
+    h = (krffs_node_t *)(cached + offset_of(&mount, node));
+    check(kv_open(&mount, node, 0, &handle) == 0 &&
+              kv_unlink(&mount, mount.root, "held") == 0, "hold an unlinked node");
+    reclaim_error = 1;
+    kv_release(&mount, handle);
+    check(!reclaim_error && !recovery_active && vol_of(&mount)->fs.halted &&
+              h->type == KRFFS_RESERVED_NODE,
+          "a failed cache victim halts the reap even when the requested block is supplied");
+    teardown();
+}
+
 /** Run the independent volume failure rows. */
 static void volume_failure_rows(void)
 {
@@ -1784,6 +1843,8 @@ static void volume_failure_rows(void)
     last_close_failure();
     close_during_unlink_row(0);
     close_during_unlink_row(1);
+    repair_flush_row();
+    reclaim_during_reap();
 }
 
 /**

@@ -573,9 +573,11 @@ static void test_sync_wait(void)
 
 #include "block/block.h"
 #include "fs/krffs.h"
+#include "fs/bcache.h"
 #include "lib/kerrno.h"
 
 static block_partition_t _krffs_disk_part;
+static int _krffs_on_disk;
 static int root_stopped, device_calls, reap_calls;
 
 #ifndef KLOG_WARN
@@ -622,6 +624,16 @@ static int halt_during_write(block_device_t *dev, uint64_t lba, uint32_t count, 
     return 0;
 }
 
+/** Fail only the first device request. Any later request would succeed. */
+static int fail_first_write(block_device_t *dev, uint64_t lba, uint32_t count, const void *data)
+{
+    (void)dev;
+    (void)lba;
+    (void)count;
+    (void)data;
+    return ++device_calls == 1 ? -EIO : 0;
+}
+
 /** This single-threaded block-cache fixture has no competing lock holder. */
 static uint32_t cache_lock(void)
 {
@@ -644,12 +656,42 @@ int block_flush(block_device_t *dev)
 
 #include "disk_recovery.inc"
 
+/** The first failed device write ends boot recovery even within one sync. */
+static void recovery_write_rows(void)
+{
+    block_device_t *dev = &_krffs_disk_part.device;
+
+    init_pagecache();
+    dev->write = fail_first_write;
+    pc_set_backing(fake_read, krffs_disk_write, sizeof(fake_disk));
+    root_stopped = device_calls = _krffs_on_disk = 0;
+    touch(0, 1, 77);
+    touch(2, 1, 88);
+    CHECK(pc_sync() == PC_SYNC_FAILED && device_calls == 1 && root_stopped &&
+          pc_dirty_count() == 2);
+    root_stopped = device_calls = 0;
+    _krffs_on_disk = 1;
+    CHECK(pc_sync() == PC_SYNC_FAILED && !root_stopped);
+    _krffs_on_disk = 0;
+    pc_set_backing(NULL, NULL, 0);
+
+    dev->flags = 0;
+#ifdef BLOCK_RECOVERING
+    dev->flags |= BLOCK_RECOVERING;
+#endif
+    write_failed_mark(dev, NULL);
+    device_calls = 0;
+    CHECK(flush_firsts(dev) == -EIO && !device_calls);
+    dev->flags = 0;
+}
+
 /** Check device submissions, the boot dirty mark and final repair sync. */
 static void disk_recovery_rows(void)
 {
     static uint8_t pages[2 * PC_PAGE_SIZE];
     block_device_t *dev = &_krffs_disk_part.device;
 
+    recovery_write_rows();
     dev->write = halt_during_write;
     root_stopped = device_calls = 0;
     CHECK(krffs_disk_write(0, pages, 2) == -EIO && device_calls == 1);
@@ -668,6 +710,10 @@ static void disk_recovery_rows(void)
     root_stopped = 0;
     fake_write_fail = 1;
     CHECK(krffs_root_mark_and_reap() == 0 && root_stopped && pc_dirty_count() == 1);
+    fake_write_fail = 0;
+    root_stopped = 0;
+    pc_set_backing(fake_read, fake_write, sizeof(fake_disk));
+    CHECK(krffs_root_mark_and_reap() < 0 && root_stopped);
     fake_write_fail = FAKE_NO_FAIL;
     root_stopped = 0;
     pc_set_backing(NULL, NULL, 0);

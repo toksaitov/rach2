@@ -3905,9 +3905,14 @@ static void header_failure_rows(void)
           "truncate preserves a header I/O error");
     check(krffs_resize_err(&mount, node, 0, &live) == KRFFS_EIO,
           "a failed resize header read is an I/O error");
+    read_fails_at = (uint64_t)-1;
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) == 0,
+          "publish a root before refusing its replacement");
+    read_fails_at = node + KRFFS_FIELD_TYPE;
     read_fails_once = 1;
-    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) != 0,
-          "a transient read failure in the strict walk refuses the dirty root");
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) != 0 &&
+              krffs_root_halted() && !krffs_fs,
+          "a transient validation read error stops root writeback and clears the published root");
     read_fails_at = (uint64_t)-1;
     read_fails_once = 0;
     check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) == 0 &&

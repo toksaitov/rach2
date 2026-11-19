@@ -61,6 +61,8 @@ struct block_request;
  * flusher alike, as Linux's ext4 writes nothing after a shutdown. Cleared
  * when the cache drops the device at unmount. */
 #define BLOCK_WRITES_HALTED 0x200u
+/* While repairing metadata, the first cache write error halts the device. */
+#define BLOCK_RECOVERING    0x400u
 
 /**
  * A sector-addressed storage device behind a small table of functions.
