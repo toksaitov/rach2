@@ -9,6 +9,7 @@
 
 #include "lib/kint.h"
 #include "lib/spinlock.h"
+#include "proc/wait_queue.h"
 
 /* A device's runtime state, as runtime_status names it. */
 #define RPM_ACTIVE     0
@@ -26,10 +27,9 @@
  * sleep. 0, or -EAGAIN or -EBUSY to have the suspend tried again 10 or
  * 100 ms later.
  *
- * `suspend` puts the device to sleep and `resume` wakes it. Each runs with
- * the count at its value then, the record's state RPM_SUSPENDING or
- * RPM_RESUMING, and no lock of the core's held, and neither sleeps: its
- * waits spin, so that a get may wake the device in any process context.
+ * `suspend` puts the device to sleep and `resume` wakes it. Both may
+ * sleep, with the state RPM_SUSPENDING or RPM_RESUMING and no lock of
+ * the core's held. No other process can finish a synchronous get then.
  * `suspend` returns 0; -EAGAIN for a race that passes at once or -EBUSY
  * for a state that lasts a while, to stay awake and be tried again 10 or
  * 100 ms later; or another -errno, which leaves the device awake and
@@ -49,11 +49,12 @@ struct pm_runtime_ops {
 };
 
 /*
- * A device's runtime power management. Every field but `ops`, `owner` and
- * `dir` is under `lock`, taken with interrupts off.
+ * A device's runtime power management. Fields other than `ops`, `owner`,
+ * `dir` and `wait` are under `lock`, taken with interrupts off.
  */
 struct pm_runtime {
     struct spinlock lock;
+    wait_queue_t wait; /* synchronous getters wait for a transition */
     const struct pm_runtime_ops *ops;
     void *owner;
     int32_t usage;         /* holds that keep the device awake; the driver's
@@ -107,9 +108,9 @@ int32_t pm_runtime_disable(struct pm_runtime *rpm);
  * Take a hold and have the device awake when this returns, waking it if it
  * sleeps, as Linux's pm_runtime_get_sync. Process context, outside the
  * driver's `suspend` and `resume` but for the process that runs them,
- * whose get only counts, and with no spinlock held that they take. A get
- * meeting a sleep or a wake under way in another process spins until it
- * ends. 0, or the wake's -errno, with the hold taken either way.
+ * whose get only counts. May sleep. A get meeting a sleep or wake under
+ * way in another process waits on `wait` until the transition ends. 0,
+ * or the wake's -errno, with the hold taken either way.
  */
 int32_t pm_runtime_get_sync(struct pm_runtime *rpm);
 
