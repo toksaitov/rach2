@@ -3,6 +3,7 @@
  * against tables no disk would have.
  *
  * host-deps: rach2/sys/block/gpt.c
+ * host-deps: rach2/sys/lib/crc32.c
  *
  * A table gives the place of its own entry array, the number of entries and
  * the size of each, and a reader that used those numbers unchecked would

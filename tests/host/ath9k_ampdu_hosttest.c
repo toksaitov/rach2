@@ -22,6 +22,7 @@
  * host-deps: rach2/sys/network/wireless/crypto/tkip.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: rach2/sys/lib/crc32.c
  *
  * The station's data path sends through a radio whose transmit and
  * BlockAck operations are the driver's, xmit.c and ampdu.c, on the model;

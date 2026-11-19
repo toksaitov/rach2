@@ -19,6 +19,7 @@
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: rach2/sys/lib/crc32.c
  * host-cflags: -DTICK_HZ=1000
  */
 #include "network/wireless/data.h"
