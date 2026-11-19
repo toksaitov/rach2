@@ -83,10 +83,16 @@ void *kalloc_cache_page(void)
     return kalloc_pages(1, 0);
 }
 
-/** `free`; the count is not needed. */
+/* Called with each run `kfree_pages` is given, before it is freed, when a
+ * test sets it, so that a row can check what was given back. */
+void (*kheap_host_pages_freeing)(void *p, uint32_t count);
+
+/** `free`, after `kheap_host_pages_freeing` when it is set. */
 void kfree_pages(void *p, uint32_t count)
 {
-    (void)count;
+    if (p && kheap_host_pages_freeing) {
+        kheap_host_pages_freeing(p, count);
+    }
     free(p);
 }
 
