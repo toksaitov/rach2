@@ -528,11 +528,11 @@ static int dsp_configure(struct dsp *d, audio_format_t format, int channels, uin
 }
 
 /** Set direction `c` of the new open `d` up as `dir`, at OSS's defaults,
- * over the buffer `ring`: playback on a virtual channel of the mix, and
- * capture on a virtual reader of the shared input. */
-static void dsp_chan_init(struct dsp *d, struct dsp_chan *c, audio_dir_t dir, uint8_t *ring)
+ * over the buffer `ring`, on the stream operations of `drv`. */
+static void dsp_chan_init(struct dsp *d, struct dsp_chan *c, audio_dir_t dir, uint8_t *ring,
+                          audio_driver_t *drv)
 {
-    c->drv = &vchan_driver;
+    c->drv = drv;
     c->ring = ring;
     c->stream.dir = dir;
     c->stream.format = AUDIO_U8;
@@ -578,14 +578,19 @@ static int dsp_take(struct dsp *d)
 
 int32_t dspdev_open(fd_entry_t *e, int flags)
 {
+    if (!dspdev_present()) {
+        return -ENODEV;
+    }
+    return dspdev_open_driver(e, flags, &vchan_driver);
+}
+
+int32_t dspdev_open_driver(fd_entry_t *e, int flags, audio_driver_t *drv)
+{
     int mode = flags & 3; /* O_RDONLY, O_WRONLY or O_RDWR */
     struct dsp *d;
     uint8_t *out = NULL, *in = NULL;
     int rc;
 
-    if (!dspdev_present()) {
-        return -ENODEV;
-    }
     if (mode == 3) {
         return -EINVAL;
     }
@@ -606,10 +611,10 @@ int32_t dspdev_open(fd_entry_t *e, int flags)
     spin_lock_init(&d->lock, "dsp");
     d->trigger = PCM_ENABLE_INPUT | PCM_ENABLE_OUTPUT;
     if (out) {
-        dsp_chan_init(d, &d->play, AUDIO_PLAYBACK, out);
+        dsp_chan_init(d, &d->play, AUDIO_PLAYBACK, out, drv);
     }
     if (in) {
-        dsp_chan_init(d, &d->rec, AUDIO_CAPTURE, in);
+        dsp_chan_init(d, &d->rec, AUDIO_CAPTURE, in, drv);
     }
     rc = dsp_take(d);
     if (rc != 0) {
