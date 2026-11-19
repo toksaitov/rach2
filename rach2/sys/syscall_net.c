@@ -2145,6 +2145,17 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     return stream_recv(entry, buf_ptr, len, flags);
 }
 
+/** `a` with the scope of the card a stream socket `sock` is bound to, when
+ * it is an IPv6 address of a link's scope: a bound connection is on that
+ * card's link whatever scope it connected with, as Linux reports it. */
+static net_addr_t stream_scoped(const struct socket *sock, net_addr_t a)
+{
+    if (sock->type == SOCK_STREAM && sock->bound_device && a.family == AF_INET6 && a.scope) {
+        a.scope = (uint32_t)sock->bound_device;
+    }
+    return a;
+}
+
 /**
  * Report the local address: a TCP control block's, else the address the
  * socket bound, except that a connected datagram socket bound to any address
@@ -2232,7 +2243,8 @@ static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
         local_ip = entry->sock->local_ip;
     }
     net_unlock(flags);
-    return copy_sockaddr_to_user(sa_ptr, salen_ptr, local_port, local_ip, entry->sock->family);
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, local_port,
+                                 stream_scoped(entry->sock, local_ip), entry->sock->family);
 }
 
 /** getpeername: the connected peer's address (an established stream socket
@@ -2273,7 +2285,8 @@ static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
         return -EFAULT;
     }
     return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->remote_port,
-                                 entry->sock->remote_ip, entry->sock->family);
+                                 stream_scoped(entry->sock, entry->sock->remote_ip),
+                                 entry->sock->family);
 }
 
 /* The `how` of shutdown(2), Linux's values. */
@@ -2814,6 +2827,53 @@ static int socket_flag_get(const struct socket *sock, int optname)
 }
 
 /**
+ * setsockopt's SO_BINDTODEVICE on `sock`: the interface whose name is at
+ * `optval_ptr`, of which at most IFNAMSIZ of `optlen` bytes are read, or
+ * none for an empty name. Returns 0, -EINVAL for no bytes, -EFAULT,
+ * -ENODEV for an unknown interface, or -EPERM for an unprivileged change of
+ * a binding the socket has, as Linux's CAP_NET_RAW check in
+ * sock_bindtoindex_locked refuses it.
+ */
+static int32_t bind_device_set(struct socket *sock, uintptr_t optval_ptr, int optlen)
+{
+    char name[IFNAMSIZ];
+    struct netdev *nd;
+    uint32_t flags;
+    uint32_t take = (optlen < 0) ? 0u : (uint32_t)optlen;
+
+    if (take == 0) {
+        return -EINVAL;
+    }
+    if (take > IFNAMSIZ) {
+        take = IFNAMSIZ;
+    }
+    k_memset(name, 0, sizeof(name));
+    if (!optval_ptr || copy_from_user(name, (const void __user *)optval_ptr, take) != 0) {
+        return -EFAULT;
+    }
+    name[IFNAMSIZ - 1] = '\0';
+    nd = 0;
+    if (name[0] != '\0') {
+        nd = netdev_by_name(name);
+        if (!nd) {
+            return -ENODEV;
+        }
+    }
+    if (sock->bound_device && (nd ? nd->index : 0) != sock->bound_device &&
+        (!current_proc || !proc_privileged(current_proc))) {
+        return -EPERM;
+    }
+    flags = net_lock();
+    if (sock->type == SOCK_STREAM) {
+        tcp_bind_device(sock, nd ? nd->index : 0);
+    } else {
+        sock->bound_device = nd ? nd->index : 0; /* an empty name unbinds */
+    }
+    net_unlock(flags);
+    return 0;
+}
+
+/**
  * setsockopt: keep SO_BROADCAST, SO_REUSEADDR and SO_KEEPALIVE, the hop limit
  * IP_TTL (1 to 255), SO_BINDTODEVICE, an interface by name or none for an empty
  * name, SO_RCVBUF, which Linux doubles and bounds by SOCK_RCVBUF_MAX and
@@ -2867,37 +2927,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
     }
     (void)optname;
     if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
-        char name[IFNAMSIZ];
-        struct netdev *nd;
-        uint32_t flags;
-        uint32_t take = (optlen < 0) ? 0u : (uint32_t)optlen;
-
-        if (take == 0) {
-            return -EINVAL;
-        }
-        if (take > IFNAMSIZ) {
-            take = IFNAMSIZ;
-        }
-        k_memset(name, 0, sizeof(name));
-        if (!optval_ptr || copy_from_user(name, (const void __user *)optval_ptr, take) != 0) {
-            return -EFAULT;
-        }
-        name[IFNAMSIZ - 1] = '\0';
-        nd = 0;
-        if (name[0] != '\0') {
-            nd = netdev_by_name(name);
-            if (!nd) {
-                return -ENODEV;
-            }
-        }
-        flags = net_lock();
-        if (entry->sock->type == SOCK_STREAM) {
-            tcp_bind_device(entry->sock, nd ? nd->index : 0);
-        } else {
-            entry->sock->bound_device = nd ? nd->index : 0; /* an empty name unbinds */
-        }
-        net_unlock(flags);
-        return 0;
+        return bind_device_set(entry->sock, optval_ptr, optlen);
     }
 
     if (optlen >= (int)sizeof(int)) {
