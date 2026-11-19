@@ -507,14 +507,12 @@ static uint32_t fb_new(int i, uint32_t w, uint32_t h)
     return drm_mode_addfb2_ioctl(&gpu.drm, &r, &fa) == 0 ? r.fb_id : 0;
 }
 
-/** Probe `connector` as GETCONNECTOR does and find its mode of `w` by `h`
- * at `hz` into `out`: 1, or 0 when it has none. */
-static int find_mode(struct drm_connector *connector, uint32_t w, uint32_t h, uint32_t hz,
-                     struct drm_mode_modeinfo *out)
+/** Probe `connector` as GETCONNECTOR does, a call with no room for modes
+ * and one that takes them, into `modes`, room for 32; how many it gave, 0
+ * when a request fails. */
+static uint32_t probe_list(struct drm_connector *connector, struct drm_mode_modeinfo *modes)
 {
     struct drm_mode_get_connector gc;
-    struct drm_mode_modeinfo modes[32];
-    uint32_t i;
 
     k_memset(&gc, 0, sizeof(gc));
     gc.connector_id = connector->base.id;
@@ -528,13 +526,49 @@ static int find_mode(struct drm_connector *connector, uint32_t w, uint32_t h, ui
     if (drm_mode_getconnector(&gpu.drm, &gc, &fa) != 0) {
         return 0;
     }
-    for (i = 0; i < gc.count_modes && i < 32; i++) {
+    return gc.count_modes < 32 ? gc.count_modes : 32;
+}
+
+/** The mode of `w` by `h` at `hz` among the `n` of `modes`, or NULL. */
+static const struct drm_mode_modeinfo *in_list(const struct drm_mode_modeinfo *modes, uint32_t n,
+                                               uint32_t w, uint32_t h, uint32_t hz)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
         if (modes[i].hdisplay == w && modes[i].vdisplay == h && modes[i].vrefresh == hz) {
-            *out = modes[i];
-            return 1;
+            return &modes[i];
         }
     }
-    return 0;
+    return NULL;
+}
+
+/** Probe `connector` as GETCONNECTOR does and find its mode of `w` by `h`
+ * at `hz` into `out`: 1, or 0 when it has none. */
+static int find_mode(struct drm_connector *connector, uint32_t w, uint32_t h, uint32_t hz,
+                     struct drm_mode_modeinfo *out)
+{
+    struct drm_mode_modeinfo modes[32];
+    const struct drm_mode_modeinfo *m = in_list(modes, probe_list(connector, modes), w, h, hz);
+
+    if (m) {
+        *out = *m;
+    }
+    return m != NULL;
+}
+
+/** Whether `connector`'s EDID blob and the EDID property naming it hold
+ * the `len` bytes of `edid`, or are both gone when `len` is 0. */
+static int blob_is(struct drm_connector *connector, const uint8_t *edid, uint32_t len)
+{
+    uint64_t v = ~(uint64_t)0;
+
+    (void)drm_object_property_get_value(&connector->base, gpu.drm.mode_config.edid_property, &v);
+    if (len == 0) {
+        return !connector->edid && v == 0;
+    }
+    return connector->edid && connector->edid->length == len &&
+           memcmp(connector->edid->data, edid, len) == 0 && v == connector->edid->base.id;
 }
 
 /** SETCRTC of pipe `pipe` with `mode` and `fb_id` on `connector`, or off
@@ -981,6 +1015,8 @@ static void row_hotplug(void)
     CHECK(drm_atomic_commit_work() >= 1 && hdmi->status == DRM_CONNECTOR_DISCONNECTED &&
               model_hotplugs == 1 && logged("hotplug: HDMI-A-1: disconnected"),
           "hotplug: unplugged, disconnected with an event");
+    CHECK(blob_is(hdmi, NULL, 0),
+          "hotplug: the disconnect's detect clears the EDID blob without a full probe");
     pass_us(200000u);
     ddi->ddc[PIN_B].present = 1;
     pulse(HPD_PORT_B, 1, 1);
@@ -988,6 +1024,8 @@ static void row_hotplug(void)
     CHECK(drm_atomic_commit_work() >= 1 && hdmi->status == DRM_CONNECTOR_CONNECTED &&
               model_hotplugs == 1,
           "hotplug: plugged again, connected with an event");
+    CHECK(blob_is(hdmi, ddi->ddc[PIN_B].edid, ddi->ddc[PIN_B].edid_len),
+          "hotplug: the connect's detect sets the sink's EDID blob without a full probe");
     pass_us(1100000u);
     pulse(HPD_PORT_B, 1, 1);
     model_hotplugs = 0;
@@ -1091,8 +1129,9 @@ static void row_hdmi_override_detect(void)
     struct drm_connector *hdmi = &disp->ddi[0].hdmi_connector;
     struct i915_model_ddc *ddc = &ddi->ddc[PIN_B];
     uint8_t edid[256];
-    struct drm_mode_modeinfo mode;
-    uint32_t bytes, len = make_edid(edid, &dtd_2160p30, 0, cea_2160p30, sizeof(cea_2160p30));
+    struct drm_mode_modeinfo mode, modes[32];
+    uint32_t bytes, bits, n;
+    uint32_t len = make_edid(edid, &dtd_2160p30, 0, cea_2160p30, sizeof(cea_2160p30));
 
     ddc->present = 0;
     CHECK(drm_edid_override_set(hdmi, edid, len) == 0, "hdmi override: installed");
@@ -1105,21 +1144,32 @@ static void row_hdmi_override_detect(void)
           "hdmi override: detect clears modes and EDID with no sink, retaining the override");
     ddc->present = 1;
     bytes = ddc->gmbus_bytes;
-    CHECK(find_mode(hdmi, 3840, 2160, 30, &mode) && hdmi->status == DRM_CONNECTOR_CONNECTED &&
-              hdmi->edid && hdmi->edid->length == len && memcmp(hdmi->edid->data, edid, len) == 0 &&
-              ddc->gmbus_bytes == bytes + 1,
-          "hdmi override: one DDC byte read from the sink, override EDID and mode returned");
-    CHECK(!find_mode(hdmi, 1280, 720, 60, &mode), "hdmi override: none of the sink's own modes");
+    bits = ddc->bit_bytes;
+    n = probe_list(hdmi, modes);
+    CHECK(hdmi->status == DRM_CONNECTOR_CONNECTED && hdmi->edid && hdmi->edid->length == len &&
+              memcmp(hdmi->edid->data, edid, len) == 0 && ddc->gmbus_bytes == bytes + 1 &&
+              ddc->bit_bytes == bits,
+          "hdmi override: one DDC byte read from the sink, by GMBUS alone, override EDID returned");
+    CHECK(in_list(modes, n, 3840, 2160, 30) && !in_list(modes, n, 1280, 720, 60),
+          "hdmi override: one list with the override's 3840x2160@30 and without the sink's "
+          "1280x720@60");
     bytes = ddc->gmbus_bytes;
+    bits = ddc->bit_bytes;
     hdmi->force = DRM_FORCE_OFF;
     CHECK(drm_helper_probe_single_connector_modes(hdmi, 8192, 8192) == 0 && !hdmi->edid &&
-              hdmi->status == DRM_CONNECTOR_DISCONNECTED && ddc->gmbus_bytes == bytes,
+              hdmi->status == DRM_CONNECTOR_DISCONNECTED && ddc->gmbus_bytes == bytes &&
+              ddc->bit_bytes == bits,
           "hdmi override: forced off leaves no modes or EDID and reads no DDC bytes");
     drm_edid_override_reset(hdmi);
     hdmi->force = DRM_FORCE_UNSPECIFIED;
-    CHECK(find_mode(hdmi, 1920, 1080, 60, &mode) && find_mode(hdmi, 1280, 720, 60, &mode) &&
-              !find_mode(hdmi, 3840, 2160, 30, &mode) && hdmi->status == DRM_CONNECTOR_CONNECTED,
-          "hdmi override: reset, the sink's own EDID and modes back");
+    n = probe_list(hdmi, modes);
+    CHECK(in_list(modes, n, 1920, 1080, 60) && in_list(modes, n, 1280, 720, 60) &&
+              !in_list(modes, n, 3840, 2160, 30) && hdmi->status == DRM_CONNECTOR_CONNECTED,
+          "hdmi override: reset, one list with the sink's 1920x1080@60 and 1280x720@60 and "
+          "without the override's 3840x2160@30");
+    CHECK(hdmi->edid && hdmi->edid->length == ddc->edid_len &&
+              memcmp(hdmi->edid->data, ddc->edid, ddc->edid_len) == 0,
+          "hdmi override: reset, the EDID blob the sink's own, its length and bytes");
 }
 
 /** Check DP overrides after row_dp has read the sink's link rates. */
