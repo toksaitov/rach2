@@ -54,3 +54,13 @@ lenovo gateway 192.168.0.1
 lenovo far 1.1.1.1
 lenovo empty 192.168.0.250
 lenovo silent 192.168.0.252
+
+# The installed root's lines, which the trial and every later boot of the
+# release use, get the words of `boot` and the netconsole that sends the log
+# from the machine's UDP port 6665 to this computer's port `netconsole`,
+# where the release keeps it. `boot` is ramoops's region, a megabyte at 1 GiB
+# in the Lenovo's usable RAM, which its firmware keeps across a warm reset
+# (dev-log/78-intel/78-23.md), so that a reset leaves the log of the boot
+# before it in /sys/fs/pstore.
+lenovo boot ramoops.mem_address=0x40000000 ramoops.mem_size=0x100000 ramoops.record_size=0x10000 ramoops.console_size=0x10000 ramoops.ecc=1
+lenovo netconsole 6666

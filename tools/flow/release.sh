@@ -225,10 +225,21 @@
 #   While the record has its `install started` line and no `install done`,
 #   every later start of the script stops before it changes anything; the
 #   person checks the machine's root by hand and then deletes that line.
+#   Once the installer has passed, tools/flow/bootwords.sh gives those lines
+#   the words of the `lenovo boot` setting in tools/flow/machines, ramoops's
+#   region, and `netconsole=6665@MACHINE/,PORT@PEER/STATION`, PORT being the
+#   `lenovo netconsole` setting, PEER this computer's address on the way to
+#   the machine and STATION the station address that the machine's
+#   /proc/net/arp holds for PEER, so that a reset during the release, or
+#   later, leaves the log of the boot it ended: in the next boot's
+#   /sys/fs/pstore, and, from the release's steps on the machine to its end,
+#   in STATE/netconsole.log, which a process of the release writes and which
+#   a passed release keeps beside its record.
 # * trial: the machine boots the trial, its /proc/cmdline must have
 #   rach2.slot=candidate and rach2.console=term, which the install's
-#   `--console term` puts in the menu, and rach2.i915 when the install was
-#   given `--i915`; machine_identity.sh must find the new kernel running from
+#   `--console term` puts in the menu, rach2.i915 when the install was given
+#   `--i915`, the words of `lenovo boot` and a netconsole word to PORT on
+#   this computer; machine_identity.sh must find the new kernel running from
 #   the candidate slot. A line without one of these words fails the step,
 #   naming the line, and commits nothing, so the next boot falls back to the
 #   release the machine had.
@@ -1097,6 +1108,11 @@ install()
         sleep 15
     done
     lenovo 'cat /dev/shm/install.log' >> "$state/log" 2>&1
+    boot_words
+    lenovo "sh -s /dev/disk${disk}p1 '$bwords'" < "$repo/tools/flow/bootwords.sh" \
+        > "$state/bootwords.log" 2>&1 ||
+        fail install "the root's lines could not be given their words: $(tr '\n' ' ' < "$state/bootwords.log")"
+    cat "$state/bootwords.log" >> "$state/log"
     if i915; then
         p1=/dev/disk${disk}p1
         menu=$(lenovo "mkdir -p /mnt/p1 && mount -t vfat -o ro $p1 /mnt/p1 || exit 1
@@ -1116,6 +1132,35 @@ install()
             }') || fail install "the installed menu on $p1 lacks rach2.i915: $bare"
     fi
     mark install "root $(digest images/os-real-gnu.ext2)"
+}
+
+# boot_words: set `bwords` to the words that the installed root's lines get:
+# those of the `lenovo boot` setting and the netconsole from the machine's
+# UDP port 6665 to this computer's port of `lenovo netconsole`, with the
+# station address that the machine's /proc/net/arp holds for this computer,
+# since most of the broadcast datagrams that a netconsole sends without one
+# never arrive. Fail the install when either address cannot be read.
+boot_words()
+{
+    bpeer=$(peer_address)
+    case $bpeer in
+        *[!0-9.]* | '') fail install "this computer has no IPv4 address on the way to $address: ${bpeer:-none}" ;;
+    esac
+    bstation=$(lenovo "awk '\$1 == \"$bpeer\" { print \$4 }' /proc/net/arp") ||
+        later "the machine does not answer"
+    case $bstation in
+        00:00:00:00:00:00) fail install "the machine's /proc/net/arp has no complete entry for $bpeer" ;;
+        [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
+        *) fail install "the machine's /proc/net/arp has no station address for $bpeer: ${bstation:-none}" ;;
+    esac
+    bwords="$(setting lenovo boot | tr '\n' ' ')$(netconsole_word)$bpeer/$bstation"
+}
+
+# netconsole_word: print the netconsole word of the root's lines up to this
+# computer's address, which the trial checks.
+netconsole_word()
+{
+    echo "netconsole=6665@$address/,$(setting lenovo netconsole)@"
 }
 
 # i915: succeed when the build's installer takes --i915, which puts rach2.i915
@@ -2505,6 +2550,55 @@ route_address()
         while read -r interface; do ipconfig getifaddr "$interface"; done
 }
 
+# peer_address: print this computer's address on the way to the machine, the
+# `lenovo peer` setting or, for `route`, the one route_address reads, or
+# nothing.
+peer_address()
+{
+    pa=$(setting lenovo peer)
+    [ "$pa" != route ] || pa=$(route_address "$address")
+    printf '%s\n' "$pa"
+}
+
+# listen: keep each UDP datagram that reaches this computer's port of
+# `lenovo netconsole` in STATE/netconsole.log, the log of each boot of the
+# machine that the release makes and of any reset, from a process that ends
+# within five seconds of this script. A port that another program holds is
+# said, and the release goes on, since ramoops keeps the log too.
+listen()
+{
+    [ -z "$listening" ] || return 0
+    listening=1
+    # shellcheck disable=SC2016 # the dollars are perl's
+    if lmsg=$(perl -MIO::Socket::INET -MPOSIX=setsid -e '
+        my ($port, $pid, $file) = @ARGV;
+        my $s = IO::Socket::INET->new(Proto => "udp", LocalPort => $port)
+            or die "cannot listen on UDP port $port: $!\n";
+        open(my $out, ">>", $file) or die "cannot open $file: $!\n";
+        $out->autoflush(1);
+        defined(my $child = fork) or die "cannot fork: $!\n";
+        exit 0 if $child;
+        open(STDIN, "<", "/dev/null");
+        open(STDOUT, ">", "/dev/null");
+        open(STDERR, ">", "/dev/null");
+        # A lock that the script holds on an inherited descriptor is let go.
+        for my $fd (3 .. 1023) {
+            POSIX::close($fd) unless $fd == fileno($s) || $fd == fileno($out);
+        }
+        setsid();
+        my $in = "";
+        vec($in, fileno($s), 1) = 1;
+        my ($ready, $d);
+        while (kill(0, $pid)) {
+            next unless select($ready = $in, undef, undef, 5) > 0;
+            print $out $d if defined($s->recv($d, 65536));
+        }' "$(setting lenovo netconsole)" "$$" "$state/netconsole.log" 2>&1 < /dev/null); then
+        say "lenovo: the machine's netconsole log goes to $state/netconsole.log"
+    else
+        say "lenovo: no netconsole log is kept: $lmsg"
+    fi
+}
+
 # lenovo_run: run the native cases on the trial boot, every case or those of
 # the record's `again lenovo` line, with native-deploy from this computer, and
 # mark it done or end the release on its failure.
@@ -2528,8 +2622,7 @@ lenovo_run()
         say "lenovo: staged $staged"
     fi
     screen_free
-    peer=$(setting lenovo peer)
-    [ "$peer" != route ] || peer=$(route_address "$address")
+    peer=$(peer_address)
     [ -n "$peer" ] || fail lenovo "this computer has no address on the way to $address"
     id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-lenovo-$(date -u '+%m%d-%H%M%S')
     note "lenovo started $id"
@@ -3138,6 +3231,7 @@ main()
     state=
     lock=
     lenovo_mine=
+    listening=
     macrun=
     rerun=
     prepare=
@@ -3332,6 +3426,7 @@ main()
     enter_lenovo
     cd "$state/wt" || fail build "no worktree"
     chmod 600 krffs/rach2_demo_ed25519
+    listen
 
     if ! done_ install; then
         step=recovery
@@ -3372,6 +3467,13 @@ main()
         if i915 && ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.i915'; then
             fail trial "the trial boot's command line lacks rach2.i915: ${cmdline:-none read}"
         fi
+        for w in $(setting lenovo boot) "$(netconsole_word)*"; do
+            # shellcheck disable=SC2254 # the netconsole word is a pattern
+            case " $cmdline " in
+                *\ $w\ *) ;;
+                *) fail trial "the trial boot's command line lacks $w: ${cmdline:-none read}" ;;
+            esac
+        done
         RACH2_MEASURE_SLOT=candidate RACH2_MEASURE_KERNEL=$files/../rach2/kernel \
             sh tools/dev/machine_identity.sh "$state/identity" ssh -i "$repo/krffs/rach2_demo_ed25519" \
             -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR -o UserKnownHostsFile=/dev/null \
@@ -3442,6 +3544,7 @@ main()
     note "closed $(date -u '+%FT%TZ')"
     old=$milestone-$(echo "$sha" | cut -c 1-8)-$(date -u '+%m%d-%H%M%S')
     mv "$state/record" "$state/$old"
+    [ ! -f "$state/netconsole.log" ] || mv "$state/netconsole.log" "$state/$old.netconsole"
     if ! cp "$files/release.sha256" "$state/$old.sha256"; then
         say "the digests could not be copied, so the worktree $state/wt stays"
     else
