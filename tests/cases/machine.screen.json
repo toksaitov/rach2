@@ -589,7 +589,7 @@
     },
     {
       "case_id": "machine.screen.levels",
-      "behavior": "init keeps the backlight's and the mixer's levels across a reboot and a reset, as systemd-backlight and alsactl keep them, and the console blanks with the backlight off: acpi_video0 at 7 and vol 5 read 7 and vol 5:5 after a reboot, 9 and vol 6 kept by init within a second read 9 and vol 6:6 after reboot -f, and under consoleblank=4 the blank gives the backlight 0 and a key gives it 9 again",
+      "behavior": "init keeps the backlight's and the mixer's levels across a reboot and an abrupt stop: acpi_video0 at 7 and vol 5 read 7 and vol 5:5 after a reboot, 9 and vol 6 kept by init while running read 9 and vol 6:6 after QMP quit, and under consoleblank=4 the blank gives the backlight 0 and a key gives it 9 again",
       "units": [
         "backlight",
         "audio",
@@ -647,7 +647,7 @@
           "step_id": "restored",
           "stage": "execute",
           "machine": "fixture",
-          "does": "boot the same copy, read the levels, the kept files and _BQC, set the backlight to 9 and run mixer vol 6, wait until init has kept both, and reboot -f, past init, and wait for the reset"
+          "does": "boot the same copy, read the levels, the kept files and _BQC, set the backlight to 9 and run mixer vol 6, wait until init has kept both, and send QMP quit while the guest is still running"
         },
         {
           "step_id": "blank",
@@ -739,8 +739,8 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "reset-unsaved",
-          "checks": "reboot -f ends the machine by QEMU's reset",
+          "assertion_id": "power-cut",
+          "checks": "QEMU exits on QMP quit without a guest shutdown",
           "source": "scenario"
         },
         {

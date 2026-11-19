@@ -392,18 +392,20 @@ kept between a twentieth of its
 .Pa max_brightness ,
 and at least 1, and that maximum, so that a level saved at 0 does not
 start the machine with its screen dark.
-It saves each backlight's level there within a second of each change, so
-that a reset or a power cut keeps the level set, and again when it stops
-the machine, each time only when the level differs from what the file
-holds: written to
+It checks for changes once a second and saves the final levels at shutdown.
+Each save writes and flushes a temporary file and flushes the directory
+before renaming it into place.
+Before it replaces an old file, it also flushes a separate copy at
 .Ar NAME Ns Pa .new
-and flushed, renamed into place, and the directory flushed.
+as a fallback.
+It flushes the directory again before it records the save as complete.
 A volume whose rename removes the old file before the new one takes its
 name, as KRFFS's, can be stopped between the two, so when
 .Ar NAME
 is missing the level is read from
 .Ar NAME Ns Pa .new ,
 if that ends in a newline.
+The next save leaves the fallback in place until the new file is durable.
 It keeps at most four backlights, those present at boot.
 .Pp
 Every build keeps the mixer's levels across a reboot, as alsactl store and
@@ -446,8 +448,12 @@ A missing file leaves the driver's levels alone, and so does a malformed
 one, after the diagnostic below; a machine with no mixer keeps nothing.
 Within a second of each change of a level or of the record, as alsactl's
 daemon mode does, and again when it stops the machine, it saves each
-channel's level and the record there, as it saves a backlight's, and
-reads
+channel's level and the record there, as it saves a backlight's.
+It reads the levels and record under a shared lock on
+.Pa /dev/mixer .
+.Xr mixer 1
+holds an exclusive lock while it changes them.
+It reads
 .Pa /var/lib/mixer.new
 as it reads a backlight's replacement.
 .Pp
@@ -605,9 +611,9 @@ Each start of either server is reported on the console as
 .Ql init: sshd: started as pid N .
 .Pp
 .Nm
-handles the signals sent by the BusyBox shutdown applets, each by saving
-the backlights' and the mixer's levels, ending every other process, and
-stopping the machine.
+handles the signals sent by the BusyBox shutdown applets by ending every
+other process, saving the backlights' and the mixer's levels, and stopping
+the machine.
 It sends them
 .Dv SIGTERM
 and waits up to a second for them to end, then

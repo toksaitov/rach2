@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -384,7 +385,7 @@ static int run(int fd, int argc, char **argv, int ch)
  *  usage error. */
 int main(int argc, char **argv)
 {
-    int fd, status, ch = parse(argc, argv);
+    int fd, lock, status, ch = parse(argc, argv);
 
     if (ch == -2) {
         fputs("usage: mixer [NAME [N | L:R | +N | -N] | =rec NAME | mute | unmute]\n", stderr);
@@ -393,6 +394,12 @@ int main(int argc, char **argv)
     fd = open(MIXER_DEVICE, O_RDWR);
     if (fd < 0) {
         fprintf(stderr, "mixer: " MIXER_DEVICE ": %s\n", strerror(errno));
+        return 1;
+    }
+    lock = argc == 1 || (argc == 2 && ch >= 0) ? LOCK_SH : LOCK_EX;
+    if (flock(fd, lock) != 0) {
+        perror("mixer: " MIXER_DEVICE ": lock");
+        close(fd);
         return 1;
     }
     status = run(fd, argc, argv, ch);
