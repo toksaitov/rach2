@@ -648,6 +648,9 @@ struct process {
     uint8_t sched_reset;
     uint8_t rt_priority;
     uint8_t pi_priority;
+    /* While `futex_pi_recalculate` builds the donations, one more than the
+     * donation built so far for an owner of a PI state; 0 otherwise. */
+    uint8_t pi_next;
     uint8_t ready_rt;            /* the queued entry counts in its queue's rt_count */
     uint8_t sched_yielded;       /* go behind its real-time peers at the next selection */
     uint8_t futex_exit_state;    /* 0 live, 1 releasing futexes, 2 released */
