@@ -109,15 +109,16 @@ step() {
     return "$rc"
 }
 
-# Run tests/run with ARGS, and append to DIR/failed the suites it failed, with
-# `runner` for a fault of its own, or NAME when it failed without naming a
-# suite of the registry or `runner`; return 0 when it passed and 1 when it
-# failed. The suites are on the runner's `run: result: failed: SUITE...` line,
-# the last line of its standard error that begins `run: `. The launcher passes
-# standard output and standard error through pipes of their own, so the two
-# are not in order in the log. tests/run runs on the ARCH names, its failed
-# suites are `ARCH:SUITE` words, and each other name, `runner` and NAME among
-# them, is written as `ARCH:NAME` for each architecture it ran on. Under
+# Run tests/run with ARGS, or set_runner's command with them, and append to
+# DIR/failed the suites it failed, with `runner` for a fault of its own, or
+# NAME when it failed without naming a suite of the registry or `runner`;
+# return 0 when it passed and 1 when it failed. The suites are on the
+# runner's `run: result: failed: SUITE...` line, the last line of its
+# standard error that begins `run: `. The launcher passes standard output and
+# standard error through pipes of their own, so the two are not in order in
+# the log. tests/run runs on the ARCH names, its failed suites are
+# `ARCH:SUITE` words, and each other name, `runner` and NAME among them, is
+# written as `ARCH:NAME` for each architecture it ran on. Under
 # RACH2_KERNEL=ia32 each is written as `ia32:NAME` instead.
 run_set() { # run_set NAME ARGS...
     name=$1; shift
@@ -125,7 +126,8 @@ run_set() { # run_set NAME ARGS...
     : > "$out/set.log"
     : > "$out/set.err"
     rm -f "$out/rc"
-    { started tests/run "$@" 2>&1 1>&3 3>&- | copy "$out/set.err" |
+    # shellcheck disable=SC2086 # set_runner is a command and its words
+    { started ${set_runner:-tests/run} "$@" 2>&1 1>&3 3>&- | copy "$out/set.err" |
         copy -a "$errs"; } 3>&1 | copy "$out/set.log" | copy -a "$out/log"
     ended
     [ "$rc" = 0 ] && return 0
@@ -331,13 +333,21 @@ if [ -n "$ARCH" ]; then
     done
     [ -n "${SUITES:-}" ] || rest=$(for w in $rest; do echo "${w#*:}"; done | awk '!seen[$0]++')
     # The suites of tools/ci/kvm-suites leave the site's run for one of their
-    # own under KVM.
+    # own under KVM, and those of tools/ci/loaded-suites for one after it,
+    # beside loaded.py's fixed load on Linux.
     kvm=""
+    loaded=""
     if [ -f tools/ci/kvm-suites ]; then
         listed=$(sed -e 's/#.*//' -e '/^ *$/d' tools/ci/kvm-suites)
+        heavy=""
+        if [ "$(uname -s)" = Linux ] && [ -f tools/ci/loaded-suites ]; then
+            heavy=$(sed -e 's/#.*//' -e '/^ *$/d' tools/ci/loaded-suites)
+        fi
         others=""
         for w in $rest; do
-            if echo "$listed" | grep -qx "${w#*:}"; then
+            if [ -n "$heavy" ] && echo "$heavy" | grep -qx "${w#*:}"; then
+                loaded="$loaded $w"
+            elif echo "$listed" | grep -qx "${w#*:}"; then
                 kvm="$kvm $w"
             else
                 others="$others $w"
@@ -353,6 +363,16 @@ if [ -n "$ARCH" ]; then
         export RACH2_QEMU_ACCEL
         # shellcheck disable=SC2086 # a suite name is one word by format
         run_set all $kvm
+        RACH2_QEMU_ACCEL=$accel
+    fi
+    if [ -n "$loaded" ]; then
+        accel=${RACH2_QEMU_ACCEL-}
+        RACH2_QEMU_ACCEL=kvm
+        export RACH2_QEMU_ACCEL
+        set_runner="python3 tests/graphics/browser/loaded.py $out/load -- tests/run -j1 -C4"
+        # shellcheck disable=SC2086 # a suite name is one word by format
+        run_set all $loaded
+        set_runner=""
         RACH2_QEMU_ACCEL=$accel
     fi
     if [ -n "$bigmem" ]; then

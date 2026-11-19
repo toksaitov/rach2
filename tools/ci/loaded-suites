@@ -1,0 +1,13 @@
+# loaded-suites: the suites of kvm-suites that the release's full run runs
+# last under KVM, as one run of tests/run, one case at a time on four
+# processors, beside the fixed load the Debian guest's video references were
+# taken beside: tests/graphics/browser/loaded.py's three bound guests of
+# eight processors (tests/graphics/Readme.md, Admission). Their video cases
+# judge Rach2's dropped frames against those references. Chromium's
+# h264-720p clip dropped at most 1 frame in a play, on Rach2 and on Debian
+# alike, both quiet and beside that load, but on Rach2 a median of 2 to 8
+# beside 48 busy loops on the host's 32 threads, where Debian dropped a
+# median of 0 to 2: the frames a run beside the other suites drops depend on
+# what they load the host with, which differs from run to run.
+browser
+video
