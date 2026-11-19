@@ -84,8 +84,10 @@ default for ordinary work, as on Debian's Linux 6.12 kernel.
 Time the ordinary threads already ran counts toward the budget.
 When the remaining time in the period is needed to meet the budget,
 the fair server allows ordinary work to run ahead of real-time work.
-A futex owner running at a donated real-time priority can still run
-to release the futex.
+Rach2 gives a futex owner whose priority was raised by a real-time
+donation precedence over the fair server.
+Linux runs the fair server in the deadline class, above real-time
+priorities.
 The real-time bandwidth sysctls do not throttle real-time threads on
 either system.
 .Pp
