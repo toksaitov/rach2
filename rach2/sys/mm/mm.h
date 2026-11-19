@@ -135,6 +135,10 @@ struct mm {
      * pass that finished the space, and the address it goes on from. */
     uint32_t thp_pass;
     uintptr_t thp_next;
+    /* The number of the last shrink of underused huge pages that visited
+     * the space (paging.c, `huge_shrink_underused`), so that each visits it
+     * once however many of its threads the process list holds. */
+    uint32_t thp_shrink;
     /* The ranges drivers registered to hear of changes to the pages
      * (notify.h), among them those of the pins charged to the address
      * space (pin.h); a fork's copy has none. */

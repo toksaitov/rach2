@@ -191,8 +191,8 @@ static void cow_rows(void)
     page_at(&dir_a, A + 7 * P)[0] = 0x5a;
     check(paging_fork_copy(&mm_a, &dir_b) == 0 && vm_copy(&mm_b.vm, &mm_a.vm) == 0, "fork copies");
     check(is_huge(&dir_a, A) && is_huge(&dir_b, A) && PTE_ADDR(mmu_user_huge(&dir_b, A)) == base &&
-              thp_mapped() == 2,
-          "a fork keeps the huge page in the parent and the child");
+              thp_mapped() == 1,
+          "a fork keeps the huge page in the parent and the child, counted once");
     check(!(mmu_user_huge(&dir_a, A) & PTE_W) && (pte_of(&dir_b, A + 7 * P) & PTE_COW) &&
               frame_maps(base / P) == 2,
           "copy-on-write in both");
@@ -204,10 +204,24 @@ static void cow_rows(void)
           "and copies the one page written");
     check(frame_maps((base + 8 * P) / P) == 2 && frame_maps((base + 7 * P) / P) == 1,
           "the other pages stay shared");
-    drop(&mm_b, A, A + H);
     check(resolve_held(&mm_a, A + 8 * P, 1, LIM) == 1 && mmu_user_huge(&dir_a, A) == 0 &&
-              PTE_ADDR(pte_of(&dir_a, A + 8 * P)) == base + 8 * P,
-          "the parent's write splits its page and takes the frame it alone holds");
+              PTE_ADDR(pte_of(&dir_a, A + 8 * P)) != base + 8 * P,
+          "the parent's write splits its page and copies the page it shares");
+    drop(&mm_a, A, A + H);
+    drop(&mm_b, A, A + H);
+
+    region(&mm_a, A, A + H, RW);
+    check(resolve_held(&mm_a, A, 1, LIM) == 1 && is_huge(&dir_a, A), "a huge page again");
+    base = (uintptr_t)PTE_ADDR(mmu_user_huge(&dir_a, A));
+    check(paging_fork_copy(&mm_a, &dir_b) == 0 && vm_copy(&mm_b.vm, &mm_a.vm) == 0 &&
+              is_huge(&dir_b, A),
+          "a fork");
+    drop(&mm_b, A, A + H);
+    check(resolve_held(&mm_a, A + 8 * P, 1, LIM) == 1 && is_huge(&dir_a, A) &&
+              (mmu_user_huge(&dir_a, A) & (PTE_W | PTE_COW)) == PTE_W &&
+              (pte_of(&dir_a, A + 9 * P) & (PTE_W | PTE_COW)) == PTE_W &&
+              PTE_ADDR(mmu_user_huge(&dir_a, A)) == base,
+          "once the child is gone the parent's write makes its page writable whole, in place");
     drop(&mm_a, A, A + H);
 }
 
@@ -319,7 +333,7 @@ static void collapse_rows(void)
     mmu_user_table(&dir_a, A, 0)[1] |= PTE_ACCESSED;
     mm_a.thp_next = 0;
     mm_a.thp_pass = 0;
-    check(thp_scan_mm(&mm_a, 4096, 7, &nomem) == 1 + HUGE_PAGES && !nomem && is_huge(&dir_a, A),
+    check(thp_scan_mm(&mm_a, 4096, 7, &nomem) == HUGE_PAGES && !nomem && is_huge(&dir_a, A),
           "a scan of the space collapses its range");
     check(mm_a.thp_pass == 7 && mm_a.thp_next == 0, "and finishes the space for the pass");
     drop(&mm_a, A, A + H);
@@ -352,12 +366,64 @@ static void underused_rows(void)
     drop(&mm_a, A, A + H);
 }
 
-/** Store `value` at `*p` if `*p` is `old`, and return what was there, as
- * the kernel's exchange of a word as wide as a pointer does. */
-uintptr_t arch_atomic_cmpxchg_ptr(volatile uintptr_t *p, uintptr_t old, uintptr_t value)
+/** A scan of one page, a range a fork left copy-on-write, a locked region,
+ * the huge zero page's resident pages and a directory that keeps no table. */
+static void edge_rows(void)
 {
-    __atomic_compare_exchange_n(p, &old, value, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-    return old;
+    uint32_t allocs, i;
+    long before;
+    int nomem = 0;
+    pte_t *t;
+
+    small_pages(3);
+    mmu_user_table(&dir_a, A, 0)[1] |= PTE_ACCESSED;
+    mm_a.thp_next = 0;
+    mm_a.thp_pass = 0;
+    check(thp_scan_mm(&mm_a, 1, 8, &nomem) == HUGE_PAGES && is_huge(&dir_a, A),
+          "a scan of one page collapses one range, as Linux's scans one at least");
+    drop(&mm_a, A, A + H);
+
+    small_pages(3);
+    t = mmu_user_table(&dir_a, A, 0);
+    for (i = 0; i < HUGE_PAGES; i++) {
+        if (t[i] & PTE_P) {
+            t[i] = (t[i] & ~(pte_t)PTE_W) | PTE_COW | PTE_ACCESSED;
+        }
+    }
+    check(paging_collapse(&mm_a, A, THP_COLLAPSE) == -EINVAL && !mmu_user_huge(&dir_a, A),
+          "a range a fork left copy-on-write, with no page writable, is not collapsed");
+    drop(&mm_a, A, A + H);
+
+    region(&mm_a, A, A + H, RW | VM_PROT_LOCKED);
+    check(resolve_held(&mm_a, A, 1, LIM) == 1 && is_huge(&dir_a, A), "a locked huge page");
+    thp_policy.shrink_underused = 1;
+    thp_policy.max_ptes_none = 100;
+    check(huge_shrink_underused(4096) == 0 && is_huge(&dir_a, A),
+          "the shrinker leaves a locked region's page whole");
+    thp_policy.max_ptes_none = 511;
+    drop(&mm_a, A, A + H);
+
+    thp_policy.zero_page = 1;
+    region(&mm_a, A, A + H, RW);
+    before = dir_a.resident;
+    check(resolve_held(&mm_a, A, 0, LIM) == 1 && (mmu_user_huge(&dir_a, A) & PTE_ZEROFILL) &&
+              dir_a.resident == before,
+          "a read of the huge zero page adds no resident page");
+    check(resolve_held(&mm_a, A + 3 * P, 1, LIM) == 1 && dir_a.resident == before + 1 &&
+              !dir_a.hidden[0],
+          "a write adds the one page it copies, and the split shows the table again");
+    drop(&mm_a, A, A + H);
+    check(dir_a.resident == before, "the unmap takes that page away alone");
+
+    model_no_keep = 1;
+    allocs = thp_count(THP_FAULT_ALLOC);
+    region(&mm_a, A, A + H, RW);
+    check(resolve_held(&mm_a, A, 1, LIM) == 1 && !mmu_user_huge(&dir_a, A) &&
+              pte_of(&dir_a, A + P) == 0 && thp_count(THP_FAULT_ALLOC) == allocs,
+          "a directory that keeps no table takes one small page at a fault");
+    check(paging_collapse(&mm_a, A, THP_COLLAPSE) == -EINVAL, "and collapses nothing");
+    drop(&mm_a, A, A + H);
+    model_no_keep = 0;
 }
 
 /** The protection keys are off in the host test, as on a processor without
@@ -387,11 +453,13 @@ int main(void)
     /* The device window is the first 2 MiB, which huge pages never take. */
     _window_frames = HUGE_PAGES;
     _free_window_frames = HUGE_PAGES - USER_FRAME0;
+    paging_thp_init();
     fault_rows();
     split_rows();
     cow_rows();
     zero_rows();
     collapse_rows();
     underused_rows();
+    edge_rows();
     return model_end();
 }

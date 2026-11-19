@@ -95,11 +95,47 @@ pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va);
 int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf);
 
 /**
- * Put back the leaf table the huge page of `dir` over `va` replaced, and
- * return the page's entry as it was at the exchange, with the accessed and
- * dirty bits the processor set in it; 0 when there was no huge page.
+ * Replace the huge page of `dir` over `va` with the leaf table it replaced,
+ * hidden (`mmu_user_table_hide`), and return the page's entry as it was at
+ * the exchange, with the accessed and dirty bits the processor set in it; 0
+ * when there was no huge page.
  */
 pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va);
+
+/**
+ * Clear the bits `clear` of the huge page of `dir` over `va` and set the
+ * bits `set`, in one exchange, and return the entry as it is after; 0 when
+ * there is no huge page. The caller holds the page-table lock and flushes
+ * where the change takes a right away.
+ */
+pte_t mmu_user_huge_change(page_dir_t *dir, uintptr_t va, pte_t clear, pte_t set);
+
+/**
+ * Whether the directory of `dir` over `va` keeps its tables, so that a
+ * huge page may be made there, or is not made yet and will keep them when
+ * two consecutive frames are free for it then.
+ */
+int mmu_user_keeps(page_dir_t *dir, uintptr_t va);
+
+/**
+ * Hide the leaf table that the directory entry of `dir` over `va` names
+ * from the processor, which then faults on the range, while software walks
+ * it still; `mmu_user_huge_set` takes a hidden table as it takes one
+ * present. 1 when hidden, 0 when the entry names no table or its directory
+ * keeps none. Under the regions' lock to write or the page-table lock.
+ */
+int mmu_user_table_hide(page_dir_t *dir, uintptr_t va);
+
+/** Show the processor the hidden leaf table of `dir` over `va` again; the
+ * caller has flushed the range since it hid it. */
+void mmu_user_table_show(page_dir_t *dir, uintptr_t va);
+
+/**
+ * Count the huge page that the directory entry `leaf` maps as mapped by one
+ * more entry (`delta` 1) or one fewer (-1): `thp_mapped` counts a block of
+ * frames while any entry maps it whole, and never the huge zero page.
+ */
+void paging_huge_mapped(pte_t leaf, int delta);
 #endif
 
 /** The kernel directory's leaf table that covers the kernel address `va`,
@@ -434,6 +470,14 @@ void paging_thp_init(void);
  * map, the huge zero page aside: AnonHugePages of a region's smaps. 0
  * where no entry maps one. */
 unsigned long paging_user_huge(page_dir_t *dir, uintptr_t start, uintptr_t end);
+
+/**
+ * Split each huge page of `mm` across an edge of [start, end), page-aligned,
+ * before a change splits the region there, as Linux's vma_adjust_trans_huge
+ * splits one, so that no huge page spans two regions. Under the regions'
+ * lock held to write. Nothing where no entry maps a huge page.
+ */
+void paging_huge_split_edges(struct mm *mm, uintptr_t start, uintptr_t end);
 
 #if MMU_HUGE
 /**

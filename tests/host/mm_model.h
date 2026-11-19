@@ -82,6 +82,8 @@ static int resolve_held(struct mm *mm, uintptr_t addr, int write, uintptr_t as_l
 struct page_dir {
     pte_t *tables[WIN_TABLES];
     pte_t huge[WIN_TABLES]; /* the 2 MiB page over each table, 0 for none */
+    int hidden[WIN_TABLES]; /* whether the processor would find the table */
+    long resident;          /* the pages `mm_resident_add` counted */
 };
 
 /** The leaf table of `dir` for `va`, made with `create`; NULL outside the
@@ -137,10 +139,11 @@ int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf)
         return -1;
     }
     dir->huge[i] = leaf | PTE_PS;
+    dir->hidden[i] = 0;
     return 0;
 }
 
-/** The page as it was, its table back. */
+/** The page as it was, its table back and hidden. */
 pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
 {
     int i = model_span(va);
@@ -151,7 +154,57 @@ pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
     }
     was = dir->huge[i];
     dir->huge[i] = 0;
+    dir->hidden[i] = was != 0;
     return was;
+}
+
+/** As x86-64's mmu.c, without the exchange. */
+pte_t mmu_user_huge_change(page_dir_t *dir, uintptr_t va, pte_t clear, pte_t set)
+{
+    int i = model_span(va);
+
+    if (i < 0 || !dir->huge[i]) {
+        return 0;
+    }
+    dir->huge[i] = (dir->huge[i] & ~clear) | set;
+    return dir->huge[i];
+}
+
+/** Store `value` at `*p` if `*p` is `old`, and return what was there, as
+ * the kernel's exchange of a word as wide as a pointer does. */
+uintptr_t arch_atomic_cmpxchg_ptr(volatile uintptr_t *p, uintptr_t old, uintptr_t value)
+{
+    __atomic_compare_exchange_n(p, &old, value, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return old;
+}
+
+/** Whether the window keeps its tables, as x86-64's directories do. */
+int mmu_user_keeps(page_dir_t *dir, uintptr_t va)
+{
+    (void)dir;
+    return model_span(va) >= 0 && !model_no_keep;
+}
+
+/** As x86-64's mmu.c: the entry must name a table. */
+int mmu_user_table_hide(page_dir_t *dir, uintptr_t va)
+{
+    int i = model_span(va);
+
+    if (i < 0 || model_no_keep || !dir->tables[i] || dir->huge[i]) {
+        return 0;
+    }
+    dir->hidden[i] = 1;
+    return 1;
+}
+
+/** The table shown again. */
+void mmu_user_table_show(page_dir_t *dir, uintptr_t va)
+{
+    int i = model_span(va);
+
+    if (i >= 0) {
+        dir->hidden[i] = 0;
+    }
 }
 #endif
 
@@ -341,11 +394,10 @@ void bkl_enter(void)
 void bkl_exit(void)
 {}
 
-/** Nothing: the test has no address space that counts its resident pages. */
+/** Count `pages` in the directory's own count, which a row may read. */
 void mm_resident_add(const struct page_dir *dir, long pages)
 {
-    (void)dir;
-    (void)pages;
+    ((struct page_dir *)dir)->resident += pages;
 }
 
 /** Nothing. */

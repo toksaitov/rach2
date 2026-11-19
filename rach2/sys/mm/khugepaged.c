@@ -74,8 +74,10 @@ static struct mm *khugepaged_next(void)
  * One wake of khugepaged, Linux's khugepaged_do_scan: scan the address
  * spaces in the order of the process list for `pages_to_scan` pages,
  * going on from where the last wake stopped, and begin a new pass
- * (`full_scans`) when every space is finished. 1 when no huge page could
- * be had, or 0.
+ * (`full_scans`) when every space is finished. A space whose regions'
+ * lock is held is passed over for this pass, as Linux's
+ * khugepaged_scan_mm_slot passes over one whose lock it cannot try. 1 when
+ * no huge page could be had, or 0.
  */
 static int khugepaged_wake(void)
 {
@@ -93,9 +95,14 @@ static int khugepaged_wake(void)
             break;
         }
         bkl_exit();
-        mmap_write_lock(mm);
-        done = thp_scan_mm(mm, budget, _pass, &nomem);
-        mmap_unlock(mm);
+        if (mmap_write_trylock(mm)) {
+            done = thp_scan_mm(mm, budget, _pass, &nomem);
+            mmap_unlock(mm);
+        } else { /* busy: passed over until the next pass, as Linux's trylock */
+            mm->thp_pass = _pass;
+            mm->thp_next = 0;
+            done = 1;
+        }
         bkl_enter();
         mm_put(mm);
         bkl_exit();
