@@ -15,6 +15,26 @@ static struct sleep_lock_record batch_record = SLEEP_LOCK_RECORD("ext2 batch");
 static struct sleep_lock_record group_record = SLEEP_LOCK_RECORD("ext2 group");
 static struct sleep_lock_record super_record = SLEEP_LOCK_RECORD("ext2 super");
 
+#ifdef RACH2_LOCKDEP
+static struct lockdep_key node_layer[BLOCK_MAX_DEPTH];
+static struct lockdep_key batch_layer[BLOCK_MAX_DEPTH];
+static struct lockdep_key group_layer[BLOCK_MAX_DEPTH];
+static struct lockdep_key super_layer[BLOCK_MAX_DEPTH];
+
+/**
+ * Give the locks of a mounted ext2 volume the classes for its backing
+ * depth. Loop I/O can take locks on the volume below while holding locks
+ * on the volume above. Keep each layer's internal order in the graph,
+ * and keep the edges between layers. The lock has not been published.
+ */
+static void ext2_lock_layer(struct sleep_lock *lock, int depth, const struct lockdep_key *keys)
+{
+    if (depth > 0 && depth <= BLOCK_MAX_DEPTH) {
+        lockdep_init_map(&lock->dep, lock->record->kind, &keys[depth - 1]);
+    }
+}
+#endif
+
 /* The nodes every mount's hash has read in its searches, for /proc/stat. */
 static uint32_t node_visits;
 
@@ -158,19 +178,23 @@ static uint64_t node_size(const struct ext2_node *n)
     return size;
 }
 
-/** A new node from the heap, zeroed, N_LOADING and held once by the caller,
+/** A new node for `em`, zeroed, N_LOADING and held once by the caller,
  * on no list and with no number, or NULL when the heap has none. The heap
  * may sleep, so a caller that looked a number up looks again afterwards. */
-struct ext2_node *ext2_node_make(void)
+struct ext2_node *ext2_node_make(struct ext2_mount *em)
 {
     struct ext2_node *n = kzalloc(sizeof(*n));
 
+    (void)em;
     if (n) {
         n->refs = 1;
         n->state = N_LOADING;
         n->dirty_meta = 1;
         sleep_lock_init(&n->lock, &node_record, SLEEP_LOCK_FILE);
         sleep_lock_init(&n->write_lock, &write_record, 0);
+#ifdef RACH2_LOCKDEP
+        ext2_lock_layer(&n->lock, em->lockdep_depth, node_layer);
+#endif
     }
     return n;
 }
@@ -330,10 +354,19 @@ static void em_locks_init(struct ext2_mount *em)
     int i;
 
     sleep_lock_init(&em->batch, &batch_record, SLEEP_LOCK_FILE);
+#ifdef RACH2_LOCKDEP
+    ext2_lock_layer(&em->batch, em->lockdep_depth, batch_layer);
+#endif
     for (i = 0; i < EXT2_GROUP_LOCKS; i++) {
         sleep_lock_init(&em->group_locks[i], &group_record, SLEEP_LOCK_FILE);
+#ifdef RACH2_LOCKDEP
+        ext2_lock_layer(&em->group_locks[i], em->lockdep_depth, group_layer);
+#endif
     }
     sleep_lock_init(&em->super, &super_record, SLEEP_LOCK_FILE);
+#ifdef RACH2_LOCKDEP
+    ext2_lock_layer(&em->super, em->lockdep_depth, super_layer);
+#endif
     spin_lock_init(&em->count_lock, "ext2 counts");
     spin_lock_init(&em->admit_lock, "ext2 admission");
     spin_lock_init(&em->share_lock, "ext2 shared lists");
@@ -1424,7 +1457,7 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
         if (n || fresh) {
             break;
         }
-        fresh = ext2_node_make();
+        fresh = ext2_node_make(em);
         if (!fresh) {
             klog(KLOG_WARN, "ext2", "node: no memory");
             *rc = -ENOMEM;
@@ -3819,6 +3852,9 @@ int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const
     if (!em) {
         return -ENOMEM;
     }
+#ifdef RACH2_LOCKDEP
+    em->lockdep_depth = block_depth(dev);
+#endif
     em_locks_init(em);
     rc = errors_option(options, &em->errors);
     if (rc == 0) {
