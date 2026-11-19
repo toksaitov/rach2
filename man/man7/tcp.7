@@ -84,8 +84,9 @@ Linux's
 .Dv TCP_DELACK_MIN ,
 is the longest one is held here.
 A full segment is the largest received, at least 536 bytes; two shorter
-segments in a row of one length, at least 536 bytes of data, or 88 without
-FIN, SYN, URG or PSH, make that length the full one.
+segments in a row whose length with the header is the same, at least 556
+bytes, or 108 without FIN, SYN, URG or PSH, make that length less 20 the
+full one, whatever options each carries.
 .Pp
 A read that empties the receive buffer after a segment that ended a write
 of the peer's sends the held acknowledgement at once.
@@ -97,6 +98,11 @@ that mode, and an acknowledgement held for the whole 40 ms ends the mode.
 Data past a hole, the segment that fills it, data received before, a FIN,
 and data in a closing state are acknowledged at once.
 .Pp
+While less than half the buffer is free, less than a sixteenth of it or
+than a full segment is offered as zero, and no window offered is taken
+back, as Linux's
+.Fn __tcp_select_window
+offers it.
 A read announces the window it reopened only while the peer has no more
 than half the buffer left, and only when the window as it stands, in whole
 units of the window scale and at least a full segment and a sixteenth of
