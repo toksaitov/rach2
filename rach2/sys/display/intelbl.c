@@ -176,10 +176,20 @@ static int pch_is_lpt(const char *name)
     return 0;
 }
 
+/** The class's `panic_on` with the sequencer's switch: the level, then the
+ * switch on. Plain register writes, with no lock. */
+static void intelbl_panic_on(void *ctx, int level)
+{
+    intelbl_set(ctx, level);
+    intelbl_power(ctx, 1);
+}
+
 /* The ops with the sequencer's switch, and without it, where off is a
  * duty cycle of 0. */
-static const struct backlight_ops intelbl_ops = {intelbl_get, intelbl_set, intelbl_power};
-static const struct backlight_ops intelbl_ops_noswitch = {intelbl_get, intelbl_set, NULL};
+static const struct backlight_ops intelbl_ops = {intelbl_get, intelbl_set, intelbl_power,
+                                                 intelbl_panic_on};
+static const struct backlight_ops intelbl_ops_noswitch = {intelbl_get, intelbl_set, NULL,
+                                                          intelbl_set};
 
 /**
  * Register "intel_backlight" when the graphics device at 0:2.0 is Intel's,
