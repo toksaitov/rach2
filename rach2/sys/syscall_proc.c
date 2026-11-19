@@ -11214,6 +11214,34 @@ static long prctl_ambient(unsigned long op, unsigned long cap, unsigned long res
 }
 
 /**
+ * prctl's PR_SET_THP_DISABLE: set the address space's `thp_disable` to `on`
+ * under the regions' lock held to write, taken without the big lock, as the
+ * regions' lock comes first, and ended by SIGKILL, as Linux's
+ * `mmap_write_lock_killable`, so that no fault or collapse maps a huge page
+ * across the change. 0, or -EINTR, which restarts nothing, when SIGKILL
+ * ended the wait.
+ */
+static long prctl_thp_disable(int on)
+{
+    uint32_t flags = kirq_save();
+    int depth = bkl_drop();
+    long rc;
+
+    kirq_restore(flags);
+    rc = mmap_write_lock_killable(current_proc->mm);
+    if (rc == 0) {
+        current_proc->mm->thp_disable = on;
+        mmap_unlock(current_proc->mm);
+    } else {
+        current_proc->restart_kind = RESTART_NONE;
+    }
+    flags = kirq_save();
+    bkl_take(depth);
+    kirq_restore(flags);
+    return rc;
+}
+
+/**
  * prctl's PR_CAPBSET_READ and PR_CAPBSET_DROP, for the option `option` with
  * the capability `cap`. PR_CAPBSET_READ answers whether `cap` is in the
  * bounding set, 1 or 0, and PR_CAPBSET_DROP takes it out for good, for a
@@ -11357,23 +11385,7 @@ long sys_prctl(isr_params_t *params)
         if (rest != 0) {
             return -EINVAL;
         }
-        {
-            uint32_t flags = kirq_save();
-            int depth = bkl_drop(), rc;
-
-            /* the regions' lock before the big lock, and SIGKILL ends the
-             * wait, as Linux's; no fault maps a huge page across it */
-            kirq_restore(flags);
-            rc = mmap_write_lock_killable(current_proc->mm);
-            if (rc == 0) {
-                current_proc->mm->thp_disable = arg2 != 0;
-                mmap_unlock(current_proc->mm);
-            }
-            flags = kirq_save();
-            bkl_take(depth);
-            kirq_restore(flags);
-            return rc;
-        }
+        return prctl_thp_disable(arg2 != 0);
     case PR_GET_THP_DISABLE:
         if (arg2 != 0 || rest != 0) {
             return -EINVAL;
