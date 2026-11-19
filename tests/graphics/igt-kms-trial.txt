@@ -6,8 +6,9 @@
 # `igt@TEST@PATTERN`, its subtests that the shell pattern PATTERN matches in
 # the IGT stage's subtest-list.txt. The list leaves out kms_pipe_crc_basic's
 # suspend-read-crc, which suspends the machine, and hang-read-crc, which
-# hangs the GPU on purpose, and kms_hdmi_inject's inject-audio, since Rach2
-# has no HDMI audio. kms_cursor_crc runs one size, 64 by 64. The panel takes
+# hangs the GPU on purpose, and kms_hdmi_inject's inject-audio, whose first
+# run on the Lenovo waits for the owner's sitting with 78-48's check of the
+# HDMI infoframes. kms_cursor_crc runs one size, 64 by 64. The panel takes
 # every test that sets a mode; the order puts the tests that only check
 # requests first and the ones that read CRCs last.
 igt@kms_addfb_basic
