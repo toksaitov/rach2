@@ -275,6 +275,9 @@ static void collapse_rows(void)
     int kept = 1, nomem = 0;
 
     small_pages(300);
+    check(resolve_held(&mm_a, A + 401 * P, 0, LIM) == 1, "a page read, then stored into");
+    page_at(&dir_a, A + 401 * P)[1] = 0x5a;
+    mmu_user_table(&dir_a, A, 0)[401] |= PTE_DIRTY;
     first = (uintptr_t)PTE_ADDR(pte_of(&dir_a, A));
     check(paging_collapse(&mm_a, A, THP_SCAN) == -EINVAL,
           "khugepaged leaves a range none of whose pages is referenced");
@@ -289,9 +292,12 @@ static void collapse_rows(void)
     check(paging_collapse(&mm_a, A, THP_SCAN) == 0 && is_huge(&dir_a, A),
           "khugepaged collapses the range into a huge page");
     for (i = 0; i < HUGE_PAGES; i++) {
-        kept &= page_at(&dir_a, A + i * P)[1] == (i < 300 ? (unsigned char)(i + 1) : 0);
+        kept &= page_at(&dir_a, A + i * P)[1] == (i < 300    ? (unsigned char)(i + 1)
+                                                  : i == 401 ? 0x5a
+                                                             : 0);
     }
-    check(kept, "each page keeps its bytes, and an empty or unwritten one reads zero");
+    check(kept, "each page keeps its bytes, a page read and then stored into among them, and "
+                "an empty or unwritten one reads zero");
     check(frame_maps(first / P) == 0 && thp_mapped() == 1 &&
               thp_count(THP_PAGES_COLLAPSED) == collapsed + 1,
           "the small pages' frames are freed, counted as pages_collapsed");
@@ -344,6 +350,14 @@ static void underused_rows(void)
     check(resolve_held(&mm_a, A + 4 * P, 0, LIM) == 1 && page_at(&dir_a, A + 4 * P)[0] == 0,
           "a page freed reads zero again");
     drop(&mm_a, A, A + H);
+}
+
+/** Store `value` at `*p` if `*p` is `old`, and return what was there, as
+ * the kernel's exchange of a word as wide as a pointer does. */
+uintptr_t arch_atomic_cmpxchg_ptr(volatile uintptr_t *p, uintptr_t old, uintptr_t value)
+{
+    __atomic_compare_exchange_n(p, &old, value, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return old;
 }
 
 /** The protection keys are off in the host test, as on a processor without

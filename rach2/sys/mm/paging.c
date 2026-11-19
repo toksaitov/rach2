@@ -4893,6 +4893,23 @@ void paging_leave_kernel(uintptr_t saved)
 }
 
 #if MMU_HUGE
+/**
+ * Take the present bit from the user entry `e`, marking it going
+ * (PTE_GOING), in one exchange, so that a dirty bit another processor
+ * sets through its translation meanwhile stays in the entry; the caller
+ * flushes the page after.
+ */
+static void huge_entry_going(pte_t *e)
+{
+    pte_t old;
+
+    do {
+        old = *e;
+    } while (arch_atomic_cmpxchg_ptr((volatile uintptr_t *)e, (uintptr_t)old,
+                                     (uintptr_t)((old & ~(pte_t)PTE_P) | PTE_NONE | PTE_U)) !=
+             (uintptr_t)old);
+}
+
 /* What `collapse_scan` found in the entries of a 2 MiB range. */
 struct collapse_scan {
     uint32_t mapped;     /* entries that hold a page */
@@ -4903,16 +4920,16 @@ struct collapse_scan {
 };
 
 /**
- * Read the entries of `table`, the 2 MiB of `mm` from `start`, for a
- * collapse by `how`, as Linux 6.12's hpage_collapse_scan_pmd reads them,
- * filling `*sc`: an entry with no page, or a page a read fault left zeroed
- * (PTE_ZEROFILL), counts as none, and khugepaged takes at most
- * `max_ptes_none` of those and `max_ptes_shared` pages another mapping
- * holds; a page of a device, a pinned page or an entry that holds no page
- * but is not empty (a guard's or one being taken away) refuses the range.
- * 0, or the negative errno MADV_COLLAPSE returns for the refusal
- * (madvise_collapse_errno): -EBUSY past `max_ptes_none`, -EAGAIN for a
- * pinned page, -EINVAL for any other.
+ * Read the entries of `table`, the 2 MiB of `mm` from `start`, for a collapse
+ * by `how`, as Linux 6.12's hpage_collapse_scan_pmd reads them, filling `*sc`:
+ * an entry with no page, or a page a read fault left zeroed that nothing has
+ * stored into (PTE_IS_ZERO), counts as none, and khugepaged takes at most
+ * `max_ptes_none` of those and `max_ptes_shared` pages another mapping holds; a
+ * page of a device, a pinned page or an entry that holds no page but is not
+ * empty (a guard's or one being taken away) refuses the range. 0, or the
+ * negative errno MADV_COLLAPSE returns for the refusal
+ * (madvise_collapse_errno): -EBUSY past `max_ptes_none`, -EAGAIN for a pinned
+ * page, -EINVAL for any other.
  */
 static int collapse_scan(struct mm *mm, const pte_t *table, uintptr_t start, int how,
                          struct collapse_scan *sc)
@@ -4928,7 +4945,7 @@ static int collapse_scan(struct mm *mm, const pte_t *table, uintptr_t start, int
         pte_t e = table[i];
         uintptr_t phys = PTE_ADDR(e);
 
-        if (e == 0 || (e & PTE_ZEROFILL)) {
+        if (e == 0 || PTE_IS_ZERO(e)) {
             if (++sc->none > none_max) {
                 return -EBUSY;
             }
@@ -4943,7 +4960,7 @@ static int collapse_scan(struct mm *mm, const pte_t *table, uintptr_t start, int
             return -EAGAIN;
         }
         sc->mapped++;
-        if (!(e & PTE_ZEROFILL) && frame_maps(phys / PAGE_SIZE) > 1 && ++sc->shared > shared_max) {
+        if (!PTE_IS_ZERO(e) && frame_maps(phys / PAGE_SIZE) > 1 && ++sc->shared > shared_max) {
             return -EINVAL;
         }
         sc->writable |= (e & (PTE_W | PTE_COW)) != 0;
@@ -4994,7 +5011,7 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
     for (i = 0, addr = start; i < HUGE_PAGES; i++, addr += PAGE_SIZE) {
         if (table[i] & PTE_P) {
             batch_add(&b, addr);
-            table[i] = (table[i] & ~(pte_t)PTE_P) | PTE_NONE | PTE_U;
+            huge_entry_going(&table[i]);
         }
     }
     bkl_exit();
@@ -5003,9 +5020,8 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
         uintptr_t to = base + (uintptr_t)i * PAGE_SIZE;
 
         frame_make_anon(to);
-        if ((table[i] == 0 || (table[i] & PTE_ZEROFILL))
-                ? paging_zero_frame(to)
-                : paging_copy_frame(to, PTE_ADDR(table[i]))) {
+        if ((table[i] == 0 || PTE_IS_ZERO(table[i])) ? paging_zero_frame(to)
+                                                     : paging_copy_frame(to, PTE_ADDR(table[i]))) {
             break;
         }
     }
@@ -5097,7 +5113,7 @@ static uint32_t huge_underused_split(struct mm *mm, uintptr_t start)
     for (i = 0, addr = start; i < HUGE_PAGES; i++, addr += PAGE_SIZE) {
         if (table[i] & PTE_P) {
             batch_add(&b, addr);
-            table[i] = (table[i] & ~(pte_t)PTE_P) | PTE_NONE | PTE_U;
+            huge_entry_going(&table[i]);
         }
     }
     batch_flush(&b);
