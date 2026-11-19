@@ -68,7 +68,7 @@ static void psr_status(struct drm_i915_private *i915, struct emit *e)
 
     emitf(e, "SRD_CTL 0x%08x %s\n", ctl, enabled(ctl & EDP_PSR_ENABLE));
     emitf(e, "SRD_STATUS 0x%08x %s\n", status, states[status >> EDP_PSR_STATE_SHIFT]);
-    emitf(e, "SRD_PERF_CNT 0x%08x entries=%u\n", perf, perf & EDP_PSR_PERF_CNT_MASK);
+    emitf(e, "SRD_PERF_CNT 0x%08x count=%u\n", perf, perf & EDP_PSR_PERF_CNT_MASK);
     psr_sink(e, dp, DP_PSR_EN_CFG, "DP_PSR_EN_CFG");
     psr_sink(e, dp, DP_PSR_STATUS, "DP_PSR_STATUS");
     psr_sink(e, dp, DP_PSR_ERROR_STATUS, "DP_PSR_ERROR_STATUS");
@@ -102,8 +102,8 @@ static void panel_timings(struct drm_i915_private *i915, struct emit *e)
           div >> PP_REFERENCE_DIVIDER_SHIFT, cycle ? (cycle - 1u) * 100u : 0u);
 }
 
-/** Sample the backlight PWM with the commit lock, a wakeref and bl_lock.
- * Lynx Point takes the CPU duty when both blocks are on without override. */
+/** Sample both backlight PWM blocks with the commit lock, a wakeref and
+ * bl_lock. Lynx Point's override selects the duty source for its pin. */
 static void backlight_pwm(struct drm_i915_private *i915, struct emit *e)
 {
     static const char *const transcoders[] = {"A", "B", "C", "eDP"};
@@ -112,29 +112,43 @@ static void backlight_pwm(struct drm_i915_private *i915, struct emit *e)
     uint32_t cpu = i915_read(hw, BLC_PWM_CPU_CTL), cpu_ctl = i915_read(hw, BLC_PWM_CPU_CTL2);
     uint32_t pch_ctl = i915_read(hw, BLC_PWM_PCH_CTL1), pch = i915_read(hw, BLC_PWM_PCH_CTL2);
     uint32_t chicken = i915_read(hw, SOUTH_CHICKEN2);
-    uint32_t step = LPT_PWM_STEP(chicken), period = pch >> 16;
-    uint32_t clock = LPT_PWM_CLOCK_HZ(i915->id && i915->id->ult);
+    uint32_t pch_step = LPT_PWM_STEP(chicken), pch_period = pch >> 16;
+    uint32_t pch_clock = LPT_PWM_CLOCK_HZ(i915->id && i915->id->ult);
+    uint32_t cpu_period = cpu >> 16, cpu_clock = i915->display.cdclk * 1000u;
+    uint32_t cpu_step = cpu_ctl & BLM_CPU_PWM_GRANULARITY ? 8u : 128u;
+    uint32_t cpu_clocks = cpu_period * cpu_step, pch_clocks = pch_period * pch_step;
     int override = (pch_ctl & BLM_PCH_OVERRIDE_ENABLE) != 0;
     int pch_on = (pch_ctl & BLM_PCH_PWM_ENABLE) != 0;
     int cpu_on = (cpu_ctl & BLM_PWM_ENABLE) != 0;
-    int use_cpu = pch_on && !override && cpu_on;
     uint32_t cpu_duty = cpu & BACKLIGHT_DUTY_CYCLE_MASK, pch_duty = pch & BACKLIGHT_DUTY_CYCLE_MASK;
-    uint32_t duty = use_cpu ? cpu_duty : pch_duty, clocks = period * step;
 
     spin_unlock_irqrestore(&i915->display.bl_lock, flags);
-    emitf(e, "BLC_PWM_CPU_CTL 0x%08x duty=%u\n", cpu, cpu_duty);
-    emitf(e, "BLC_PWM_CPU_CTL2 0x%08x %s transcoder=%s\n", cpu_ctl, enabled(cpu_on),
-          transcoders[(cpu_ctl >> BLM_TRANSCODER_SHIFT) & BLM_TRANSCODER_MASK]);
+    emitf(e, "BLC_PWM_CPU_CTL 0x%08x cpu_pin_period=%u cpu_duty=%u", cpu, cpu_period, cpu_duty);
+    if (cpu_clocks != 0 && cpu_clock != 0) {
+        emitf(e, " cpu_pin_frequency=%u Hz", (cpu_clock + cpu_clocks / 2u) / cpu_clocks);
+    } else {
+        emit_s(e, " cpu_pin_frequency=unavailable");
+    }
+    emitf(e, "\nBLC_PWM_CPU_CTL2 0x%08x %s transcoder=%s blinking=%u\n", cpu_ctl, enabled(cpu_on),
+          transcoders[(cpu_ctl >> BLM_TRANSCODER_SHIFT) & BLM_TRANSCODER_MASK],
+          (unsigned)!!(cpu_ctl & BLM_PWM_BLINK_ENABLE));
     emitf(e, "BLC_PWM_PCH_CTL1 0x%08x %s override=%u polarity=%s\n", pch_ctl, enabled(pch_on),
           (unsigned) override, pch_ctl & BLM_PCH_POLARITY ? "active-low" : "active-high");
-    emitf(e, "BLC_PWM_PCH_CTL2 0x%08x period=%u pch_duty=%u", pch, period, pch_duty);
-    if (period != 0) {
-        emitf(e, " frequency=%u Hz duty_source=%s duty=%u/%u", (clock + clocks / 2u) / clocks,
-              use_cpu ? "CPU" : "PCH", duty, period);
+    emitf(e, "BLC_PWM_PCH_CTL2 0x%08x period=%u pch_duty=%u", pch, pch_period, pch_duty);
+    if (pch_clocks != 0) {
+        emitf(e, " frequency=%u Hz", (pch_clock + pch_clocks / 2u) / pch_clocks);
     } else {
         emit_s(e, " frequency=unavailable (zero period)");
     }
-    emitf(e, "\nSOUTH_CHICKEN2 0x%08x pwm_step=%u clocks\n", chicken, step);
+    if (!pch_on) {
+        emit_s(e, " output=disabled");
+    } else if (!override && !cpu_on) {
+        emit_s(e, " duty_source=CPU (inactive)");
+    } else if (pch_period != 0) {
+        emitf(e, " duty_source=%s duty=%u/%u", override ? "PCH" : "CPU",
+              override ? pch_duty : cpu_duty, pch_period);
+    }
+    emitf(e, "\nSOUTH_CHICKEN2 0x%08x pwm_step=%u clocks\n", chicken, pch_step);
 }
 
 /** Sample Haswell's frame buffer compression control and segment count. */

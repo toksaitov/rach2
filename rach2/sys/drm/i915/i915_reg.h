@@ -1144,6 +1144,8 @@
 #define BLM_PWM_ENABLE            (1u << 31)
 #define BLM_TRANSCODER_SHIFT      29
 #define BLM_TRANSCODER_MASK       3u
+#define BLM_PWM_BLINK_ENABLE      (1u << 28)
+#define BLM_CPU_PWM_GRANULARITY   (1u << 27)
 #define BLC_PWM_CPU_CTL           0x48254
 #define HSW_BLC_PWM2_CTL          0x48350
 #define UTIL_PIN_CTL              0x48400
