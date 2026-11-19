@@ -561,7 +561,12 @@ other text fails with
 .Er EINVAL ,
 a number past 64 bits with
 .Er ERANGE ,
-and a write for a processor that is offline with
+and a write for a processor that is offline, or one that would give the
+fair servers together more of the processors than
+.Pa /proc/sys/kernel/sched_rt_runtime_us
+over
+.Pa sched_rt_period_us
+allows, with
 .Er EBUSY .
 .It Pa sched/debug
 Mode 0444, as on Linux: the whole state of the scheduler in the layout of
