@@ -20,9 +20,12 @@
 /* The bytes of its serial with its terminator, Linux's `hid->uniq`. */
 #define HID_UNIQ_MAX 64
 
+struct hid_dev;
+
 /* One input device, Linux's `struct hid_input`, with the capabilities its
  * usages were mapped to before its event device is registered. */
 struct hid_input {
+    struct hid_dev *hid;
     uint32_t application; /* the application collection's usage */
     char name[HID_NAME_MAX];
     struct evdev *dev;        /* its event device, or NULL */
@@ -48,7 +51,6 @@ struct hid_input {
     unsigned int mt_button_fields; /* button sources present in this packet */
     unsigned int mt_frame_buttons; /* precision buttons from the first packet */
     unsigned int mt_button_codes;  /* mapped codes handled at frame end */
-    uint8_t mt_button_target[32];  /* per-source code, relative to BTN_LEFT */
     uint8_t mt_precision;          /* uses the Microsoft multitouch profile */
     uint8_t mt_drop_unused;        /* the device omits lifted contacts */
 };
@@ -76,6 +78,7 @@ struct hid_dev {
     int mt_feature;                  /* report of the last request, or -1 */
     int mt_feature_write;            /* the last request was a SET_REPORT */
     int mt_mode_failed;              /* the required Input Mode could not be set */
+    unsigned int mt_surfaces;        /* touch application types carrying contacts */
     uint8_t mt_precision;            /* the descriptor's Microsoft MT profile */
     uint8_t mt_drop_unused;          /* model whose reports omit lifted contacts */
     struct hid_input inputs[HID_MAX_INPUTS];

@@ -1573,6 +1573,9 @@ static const uint8_t mixed_pad[] = {0x05, 1,
                                     2,    0x25,
                                     1,    0x95,
                                     1,    0x81,
+                                    2,    0x85,
+                                    4,    0x09,
+                                    3,    0x81,
                                     2,    0x05,
                                     0x0d, 0x85,
                                     3,    0x09,
@@ -1590,13 +1593,21 @@ static void mt_mixed_rows(void)
 {
     static const uint8_t first[] = {1, 1, 1, 100, 0, 120, 0, 1, 1, 17, 1};
     struct hid_dev *hid;
+    struct evdev_keymap_entry ke;
     int inputs, value = 0, write = 0;
     uint8_t feature[3];
+    uint16_t old;
 
     ndevs = 0;
     hid = connect(mixed_pad, sizeof(mixed_pad), "Keyboard with touchpad", &inputs);
     CHECK("shared report maps into two applications",
           inputs == 2 && devs[0].keyboard && devs[1].slots > 0 && bit(devs[1].keys, BTN_LEFT));
+    k_memset(&ke, 0, sizeof(ke));
+    ke.scancode = 0x70004;
+    ke.keycode = KEY_B;
+    CHECK("the touchpad cannot remap the keyboard key",
+          devs[1].km.set && devs[1].km.set(devs[1].km.ctx, &ke, &old) == -EINVAL &&
+              !devs[1].km.maps(devs[1].km.ctx, KEY_A));
     feed(hid, first, sizeof(first));
     CHECK("shared report gives the keyboard key and touchpad click",
           bit(devs[0].down, KEY_A) && bit(devs[1].down, BTN_LEFT) && devs[1].id[0] == 0);
@@ -1613,7 +1624,8 @@ static void mt_mixed_rows(void)
                   sizeof(feature) &&
               value == 0x303 && !write);
     hidinput_mt_feature_answer(hid, NULL, -1);
-    CHECK("failed mode leaves one keyboard", hidinput_connect(hid) == 1 && devs[0].keyboard);
+    CHECK("failed mode leaves only the keyboard, even with a separate button report",
+          hidinput_connect(hid) == 1 && ndevs == 1 && devs[0].keyboard);
     feed(hid, first, sizeof(first));
     CHECK("the shared report still sends the key", bit(devs[0].down, KEY_A));
     drop(hid);
