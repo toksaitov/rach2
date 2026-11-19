@@ -1,0 +1,10 @@
+lenovo: session: stopped
+igt: result: 1 tests, 41 results: pass 39 skip 2 fail 0 other 0
+judge: result: pass results 41 in the reference, 41 here, 0 worse than Debian's
+lenovo: session: started
+exit 0
+[   67.128000] i915: gmbus dpc: NAK on first message, retry
+[   67.128000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[   67.128000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[   67.128000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[   67.128000] i915: gmbus dpc: disabling bit-banging, force_bit 0

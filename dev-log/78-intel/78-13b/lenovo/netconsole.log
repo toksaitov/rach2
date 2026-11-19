@@ -1,0 +1,2052 @@
+<6>[0.000000] boot: Rach2 Booting
+<6>[0.000000] boot: loader: GRUB 2.12-1ubuntu7.3, by multiboot2 on UEFI
+<6>[0.000000] boot: screen: framebuffer, rgb, 1366x768, 32 bits, pitch 5504, at 0xb0000000
+<7>[0.000000] module: none: the loader carried no module
+<6>[0.000000] console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells
+<6>[0.000000] console: font: drawn: code page 437 box drawing with Cyrillic
+<7>[0.000000] boot: Initializing system components
+<6>[0.000000] cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining
+<7>[0.000000] boot: gdt: ready
+<7>[0.000000] boot: tss: ready
+<7>[0.000000] boot: idt: ready
+<7>[0.000000] boot: isr: ready
+<7>[0.000000] fpu: fxsr: on, sse: on, xsave: on, xcr0: 0x7, area: 832 bytes, pkeys: off
+<7>[0.000000] boot: memory manager: ready
+<7>[0.000000] memory: map: 0x0000000000000000-0x000000000006F000 available
+<7>[0.000000] memory: map: 0x000000000006F000-0x0000000000070000 reserved
+<7>[0.000000] memory: map: 0x0000000000070000-0x0000000000088000 available
+<7>[0.000000] memory: map: 0x0000000000088000-0x00000000000A0000 reserved
+<7>[0.000000] memory: map: 0x0000000000100000-0x00000000A56B0000 available
+<7>[0.000000] memory: map: 0x00000000A56B0000-0x00000000A5EB0000 reserved
+<7>[0.000000] memory: map: 0x00000000A5EB0000-0x00000000AA6BF000 available
+<7>[0.000000] memory: map: 0x00000000AA6BF000-0x00000000AAEBF000 reserved
+<7>[0.000000] memory: map: 0x00000000AAEBF000-0x00000000AAFBF000 nvs
+<7>[0.000000] memory: map: 0x00000000AAFBF000-0x00000000AAFFF000 acpi
+<7>[0.000000] memory: map: 0x00000000AAFFF000-0x00000000AB000000 available
+<7>[0.000000] memory: map: 0x0000000100000000-0x000000044F600000 available
+<7>[0.000000] memory: map: 0x00000000000A0000-0x00000000000C0000 reserved
+<7>[0.000000] memory: map: 0x00000000AB000000-0x00000000AFA00000 reserved
+<7>[0.000000] memory: map: 0x00000000E0000000-0x00000000F0000000 reserved
+<7>[0.000000] memory: map: 0x00000000FE101000-0x00000000FE113000 reserved
+<7>[0.000000] memory: map: 0x00000000FEB00000-0x00000000FEB10000 reserved
+<7>[0.000000] memory: map: 0x00000000FEC00000-0x00000000FEC01000 reserved
+<7>[0.000000] memory: map: 0x00000000FED00000-0x00000000FEE01000 reserved
+<7>[0.000000] memory: map: 0x00000000FFC00000-0x0000000100000000 reserved
+<6>[0.000000] i915: stolen: reserving [mem 0xaba00000-0xaf9fffff], 0 KiB of it usable memory
+<6>[0.000000] memory: usable 16666908 KiB, unreachable 0 KiB, reserved 29276 KiB, managed 16637632 KiB
+<7>[0.000000] boot: paging: ready
+<7>[0.000000] pci: list: 14 functions
+<7>[0.000000] boot: page cache: ready
+<7>[0.000000] acpi: rsdp: at 0x9f894c, from the boot record
+<6>[0.000000] acpi: tables: xsdt at 0xaaffe210, revision 2, LENOVO: FACP SLIC UEFI FPDT POAT ASF? HPET APIC MCFG WDAT SSDT BOOT LPIT ASPT DBGP SSDT SSDT SSDT DMAR BGRT DSDT
+<6>[0.000000] acpi: madt: 4 processors (4 usable), 1 ioapics, 2 overrides, 0 nmi inputs, an 8259 pair
+<7>[0.000000] acpi: madt: override: isa 0 to gsi 2, flags 0x0
+<7>[0.000000] acpi: madt: override: isa 9 to gsi 9, flags 0xd
+<6>[0.000000] acpi: fadt: revision 5, pm1a 0x1804, pm timer 0x1808 (24-bit), reset register, 8042 yes, century 0
+<6>[0.000000] acpi: dsdt: \_S5 sleep types 7 and 0
+<6>[0.000000] acpi: hpet: at 0xfed00000
+<6>[0.000000] acpi: mcfg: segment 0, buses 0 to 255 at 0xe0000000
+<6>[0.000000] pci: ecam: buses 0 to 2 of segment 0 at 0xe0000000
+<7>[0.000000] pci: ecam: 0:1b.0: extended capability 0x2, version 1, at 0x100
+<7>[0.000000] pci: ecam: 0:1c.0: extended capability 0x0, version 0, at 0x100
+<7>[0.000000] pci: ecam: 0:1c.3: extended capability 0x0, version 0, at 0x100
+<7>[0.000000] pci: ecam: 1:0.0: extended capability 0x1, version 2, at 0x100
+<7>[0.000000] pci: ecam: 2:0.0: extended capability 0x1, version 1, at 0x100
+<6>[0.000000] pci: ecam: 5 functions with extended capabilities
+<6>[0.000000] hpet: ready: 14318179 Hz, period 69841279 fs
+<7>[0.000000] lapic: ready: id 0, version 0x15, xapic mode
+<6>[0.000000] ioapic: ready: id 2 at 0xfec00000, version 0x20, gsi 0 to 39
+<6>[0.000000] lapic: tick: 24942 counts, measured against the hpet
+<6>[0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
+<6>[0.064000] lapic: timer: vector 32 for ticks and events
+<7>[0.064000] boot: timer: ready
+<6>[0.064000] rtc: 2026-11-19 19:00:17 UTC
+<7>[0.064000] clock: ready
+<6>[0.064000] entropy: ready: RDRAND, trusted
+<6>[0.064000] board: lynxpoint-lp: ACPI enabled
+<6>[0.068000] board: lynxpoint-lp: masked the SCI on IRQ 9
+<6>[0.072000] board: ready: lynxpoint-lp
+<6>[0.076000] watchdog: boot: TCO1_STS 0, TCO2_STS 0
+<6>[0.076000] watchdog: ready: TCO version 2 at 1860, halted, heartbeat 30 s, nowayout 0
+<7>[0.080000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+<6>[0.080000] console: blank: after 600 seconds without input
+<6>[0.084000] backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937, off by the panel's enable
+<7>[0.088000] boot: keyboard: ready
+<7>[0.088000] boot: syscall: ready
+<7>[0.088000] boot: process: ready
+<7>[0.088000] boot: scheduler: ready
+<7>[0.088000] acpi: acpica: RSDP 0x00000000009F894C 000024 (v02 LENOVO)
+<7>[0.088000] acpi: acpica: XSDT 0x00000000AAFFE210 0000C4 (v01 LENOVO CB-01    00000001      01000013)
+<7>[0.088000] acpi: acpica: FACP 0x00000000AAFF7000 00010C (v05 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.092000] acpi: acpica: DSDT 0x00000000AAFE4000 00F4BB (v02 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.092000] acpi: acpica: FACS 0x00000000AAFBA000 000040
+<7>[0.092000] acpi: acpica: SLIC 0x00000000AAFFD000 000176 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.092000] acpi: acpica: UEFI 0x00000000AAFFC000 000236 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.092000] acpi: acpica: FPDT 0x00000000AAFFA000 000044 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: POAT 0x00000000AAFF9000 000055 (v03 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: ASF! 0x00000000AAFF8000 0000A5 (v32 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: HPET 0x00000000AAFF6000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: APIC 0x00000000AAFF5000 00008C (v03 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: MCFG 0x00000000AAFF4000 00003C (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: WDAT 0x00000000AAFE3000 000224 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: SSDT 0x00000000AAFE0000 002028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: BOOT 0x00000000AAFDE000 000028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: LPIT 0x00000000AAFDD000 000094 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: ASPT 0x00000000AAFDB000 000034 (v07 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: DBGP 0x00000000AAFDA000 000034 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: SSDT 0x00000000AAFD2000 0004D6 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: SSDT 0x00000000AAFD1000 000AD8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: SSDT 0x00000000AAFCD000 0034F8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: DMAR 0x00000000AAFCB000 0000B0 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.096000] acpi: acpica: BGRT 0x00000000AAFCC000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.124000] acpi: acpica: 5 ACPI AML tables successfully acquired and loaded
+<7>[0.128000] acpi: ec: \_SB.PCI0.LPCB.EC0 at ports 0x62 and 0x66, gpe 0x7
+<7>[0.128000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+<7>[0.128000] acpi: sci: line 9
+<7>[0.132000] acpi: ec: gpe 0x7 enabled, status 0x00
+<7>[0.132000] acpi: video: bus \_SB.PCI0.GFX0, outputs 16
+<7>[0.140000] acpi: ideapad: \_SB.PCI0.LPCB.EC0.VPC0: cfg 0xfde104, wifi 0, ideapad_wlan
+<7>[0.140000] acpi: ideapad: radio switch 1
+<6>[0.140000] acpi: pnp: i8042 kbd: PNP: PNP0303
+<6>[0.144000] acpi: pnp: i8042 aux: PNP: SYN2b37 PNP0f13 SYN0002 SYN2b00
+<7>[0.148000] acpi: acpica: Enabled 8 GPEs in block 00 to 7F
+<7>[0.148000] acpi: ec: query 0x42
+<6>[0.148000] acpi: acpica: 2872 objects, 0 errors
+<7>[0.152000] vtd: dmar: host address width 39, flags 0x1
+<7>[0.152000] vtd: dmar: unit at 0xfed90000, segment 0, flags 0x0
+<7>[0.152000] vtd: dmar: device 0:2.0
+<7>[0.152000] vtd: dmar: unit at 0xfed91000, segment 0, flags 0x1
+<7>[0.152000] vtd: dmar: ioapic id 2 at f0:1f.0
+<7>[0.152000] vtd: dmar: hpet id 0 at f0:f.0
+<7>[0.152000] vtd: dmar: reserved region 0xaae11000 to 0xaae30fff
+<7>[0.152000] vtd: dmar: reserved region 0xab800000 to 0xaf9fffff
+<6>[0.152000] vtd: dmar0: at 0xfed90000, version 1.0, cap 0xc0000020660462, ecap 0xf0101a
+<6>[0.156000] vtd: dmar1: at 0xfed91000, version 1.0, cap 0xd2008020660462, ecap 0xf010da
+<7>[0.156000] vtd: irte: dmar1 index 0: ioapic 2, vector 33 to apic 0, edge, sid 0xf0f8 svt 1
+<7>[0.156000] vtd: irte: dmar1 index 1: ioapic 2, vector 41 to apic 0, level, sid 0xf0f8 svt 1
+<6>[0.156000] lapic: x2apic mode: id 0, 0 register(s) written again
+<6>[0.160000] vtd: interrupt remapping: on, x2apic format, compatibility format refused
+<6>[0.160000] vtd: ready: 2 units, interrupt remapping on, translation on for assigned devices only
+<7>[0.164000] mouse: started
+<6>[0.164000] synaptics: found: touchpad model 1, fw 8.1, id 0x1e2b1, caps 0xd00123/0x840300/0x2a800/0x0, board id 2848, fw id 1581875
+<7>[0.164000] vtd: irte: dmar1 index 2: ioapic 2, vector 44 to apic 0, edge, sid 0xf0f8 svt 1
+<7>[0.164000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+<7>[1.716000] mouse: ready
+<7>[1.716000] audio: started
+<7>[1.832000] vtd: irte: dmar1 index 3: msi of 0:1b.0, vector 49 to apic 0, edge, sid 0x00d8 svt 1
+<7>[1.832000] pci: msi: 0:1b.0 on vector 49, remapped
+<6>[1.832000] audio: interrupts: messages on vector 49
+<6>[1.836000] audio: ready: Intel HD Audio, codec 0x14f1510f
+<6>[1.836000] disk: policy: read-write
+<6>[1.840000] modules: none
+<6>[1.840000] block: started
+<7>[1.844000] ahci: found: 8086:9C03 at 0:31.2, prog-if 1, BAR5 C061B000
+<7>[2.464000] ahci: port 1: signature EB140101 is not a disk; skipped
+<7>[2.772000] ahci: port 2: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.080000] ahci: port 3: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<6>[3.084000] disk: disk0: ahci 0: 488397168 sectors, model Samsung SSD 870 EVO 250GB
+<6>[3.088000] ahci: port 0: 488397168 sectors, 238475 MiB
+<6>[3.088000] nvme: none: no NVMe controller on the bus
+<6>[3.092000] virtio-blk: none: no virtio block device
+<7>[3.096000] vtd: irte: dmar1 index 4: ioapic 2, vector 46 to apic 0, edge, sid 0xf0f8 svt 1
+<7>[3.096000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+<7>[3.096000] vtd: irte: dmar1 index 5: ioapic 2, vector 47 to apic 0, edge, sid 0xf0f8 svt 1
+<7>[3.096000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+<6>[3.096000] devfs: /dev/grubcore: BIOS boot partition 4, 2014 sectors at LBA 34
+<6>[3.100000] ext2: mounted: 35850496 blocks of 4096, 2242560 inodes, 1095 groups
+<6>[3.104000] ext2: root: /dev/disk0p6
+<6>[3.108000] loop: loop0: /trial2663/root-48c0882d318edd99.img, 33554432 sectors, read-write
+<6>[3.112000] ext2: mounted: 4194304 blocks of 4096, 1048576 inodes, 128 groups
+<6>[3.116000] root: image: /trial2663/root-48c0882d318edd99.img on /dev/disk0p6, ext2 through /dev/loop0; /data is /dev/disk0p6
+<6>[3.120000] usb: started
+<6>[3.124000] usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+<6>[3.124000] usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF, as the firmware left it
+<6>[3.128000] usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
+<6>[3.132000] usb: handoff: ehci at 00:1d.0: taken from the firmware, halted
+<6>[3.136000] usb: routing: usb2 0x1FF of 0x1FF, usb3 0xF of 0xF, taken
+<6>[3.140000] usb: found: xhci0: 8086:9c31 at 0:20.0, aperture 0xC0600000
+<6>[3.140000] usb: unsupported: ehci at 00:1d.0
+<7>[3.144000] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
+<7>[3.144000] usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
+<7>[3.144000] usb: handoff: legsup 0x10801 legctl 0xC0012000 before
+<7>[3.148000] usb: handoff: legsup 0x1000801 legctl 0x0 after
+<6>[3.148000] usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte contexts
+<7>[3.252000] usb: port: xhci0.2: a device; its reset tells full from high speed
+<7>[3.252000] usb: port: xhci0.4: a device; its reset tells full from high speed
+<7>[3.252000] usb: port: xhci0.6: a device; its reset tells full from high speed
+<7>[3.252000] usb: port: xhci0.7: a device; its reset tells full from high speed
+<7>[3.252000] usb: port: xhci0.10: a device; its reset tells full from high speed
+<6>[3.312000] usb: device: port 10: 35d6:3510, class 9 protocol 0, endpoint 1, a hub
+<6>[3.432000] usb: device: port 2: 35d6:2510, class 9 protocol 1, endpoint 1, a hub
+<6>[3.544000] usb: device: port 4: bda:129, class 0: no driver for it here
+<6>[3.696000] usb: device: port 6: bda:579a, class 0: no driver for it here
+<6>[3.812000] usb: device: port 7: cf3:3004, class 0: no driver for it here
+<7>[3.816000] usb: slot: 3: given back
+<7>[3.816000] usb: slot: 4: given back
+<7>[3.820000] usb: slot: 5: given back
+<6>[3.924000] usb: hub: device 2: 4 ports, power mode 0, think time 1
+<6>[3.924000] usb: hub: device 1: 4 ports, power mode 0, think time 0
+<6>[4.112000] usb: hid: device 3 interface 0: Logitech USB Keyboard on usb-3/input0, input devices: 1
+<6>[4.120000] usb: hid: device 3 interface 1: Logitech USB Keyboard on usb-3/input1, input devices: 1
+<6>[4.120000] usb: device: port 2.1: 46d:c34b, class 3 protocol 1, endpoint 1, HID interfaces 2 of 2
+<6>[4.224000] usb: hid: device 4 interface 0: Logitech USB Optical Mouse on usb-4/input0, input devices: 1
+<6>[4.224000] usb: device: port 2.3: 46d:c077, class 3 protocol 2, endpoint 1, HID interfaces 1 of 1
+<6>[4.236000] usb: devices: 4 configured
+<7>[4.236000] vtd: irte: dmar1 index 6: msi of 0:14.0, vector 50 to apic 0, edge, sid 0x00a0 svt 1
+<7>[4.236000] pci: msi: 0:14.0 on vector 50, remapped
+<6>[4.236000] usb: interrupts: xhci0: messages on vector 50
+<7>[4.240000] vtd: irte: dmar1 index 7: msi of 0:1f.2, vector 51 to apic 0, edge, sid 0x00fa svt 1
+<7>[4.240000] pci: msi: 0:1f.2 on vector 51, remapped
+<6>[4.240000] ahci: interrupts: messages on vector 51, 1 disks queued
+<6>[4.244000] net: started
+<7>[4.256000] vtd: irte: dmar1 index 8: msi of 1:0.0, vector 52 to apic 0, edge, sid 0x0100 svt 1
+<7>[4.256000] pci: msi: 1:0.0 on vector 52, remapped
+<6>[4.256000] rtl8168: interrupts: messages on vector 52
+<6>[4.256000] net: eth0: IPv6 LINKLOCAL/64 added
+<6>[4.260000] net: ready: RTL8168GU
+<6>[4.264000] netconsole: udp: 6665@ADDR/eth0,6667@ADDR/D0:11:E5:C8:0D:59
+<6>[4.264000] netconsole: started: network logging, targets 1
+<6>[4.268000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
+<7>[4.272000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48E000, MAC 28:D2:44:7E:E0:AF
+<6>[4.272000] rtl8168: no link yet
+<6>[4.272000] rtl8168: messages on vector 52: none yet, 0 by the tick
+<6>[4.276000] net: eth0: no address
+<6>[4.280000] netconsole: broadcast, ethertype 0x88b5, boot id 0xf2be9a5f, 0 frames, 0 characters dropped
+<6>[4.284000] netconsole: udp: port 6667 of eth0: 0 datagrams, held, 0 characters dropped
+<7>[4.296000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
+<7>[4.296000] pci: msi: 2:0.0 on vector 56, remapped
+<6>[4.296000] ath9k: interrupts: messages on vector 56
+<6>[4.300000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac STATION subsys 17aa:4026
+<6>[4.308000] drm: start
+<6>[4.308000] i915: uncore: an unclaimed access before the bind, cleared
+<6>[4.312000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it
+<6>[4.320000] i915: gtt: pipe A's firmware surface at 0x0, 4128 KiB, kept
+<6>[4.324000] i915: gtt: 2048 MiB, 256 MiB of it through the aperture; 523256 entries to the scratch page, 1032 kept
+<6>[4.328000] i915: opregion: version 2.0.0 at 0xaafb4018, mailboxes 0x1f; VBT in mailbox 4
+<6>[4.332000] i915: vbt: "$VBT HASWELL        " from the OpRegion (Mailbox #4), version 177, 3 outputs
+<6>[4.340000] i915: gem: 32 fences, swizzle 9/10 for X tiles and 9 for Y
+<7>[4.340000] vtd: irte: dmar0 index 0: msi of 0:2.0, vector 53 to apic 0, edge, sid 0x0010 svt 1
+<7>[4.340000] pci: msi: 0:2.0 on vector 53, remapped
+<6>[4.340000] i915: interrupts: messages on vector 53
+<6>[4.344000] i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
+<6>[4.348000] i915: ppgtt: aliasing, 2048 MiB shared, directory at 0x7fde0000
+<6>[4.352000] i915: rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each at 0x7fffb000, 0x7fff6000, 0x7fff1000 and 0x7ffec000, status pages at 0x7ffff000, 0x7fffa000, 0x7fff5000 and 0x7fff0000
+<6>[4.360000] i915: workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost
+<7>[4.364000] i915: pcode: read of command 0x5: error -6
+<6>[4.364000] i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
+<6>[4.372000] i915: cdclk: 450000 kHz, the most 450000 kHz, pixel clocks to 450000 kHz
+<6>[4.376000] i915: wm: latencies 20, 4, 36, 90 and 160 (level 0 in 0.1 us, then 0.5 us)
+<6>[4.380000] i915: pps: power up 200 ms, down 50 ms, cycle 500 ms, backlight on 1 ms, off 200 ms
+<6>[4.388000] i915: panel: the EDID's preferred fixed mode 1366x768@60, 76300 kHz
+<6>[4.392000] i915: edp: DPCD 1.1, eDP 1, 1 lane, rates 162000 to 270000 kHz, 6 bpc, EDID 128 bytes
+<6>[4.396000] i915: hdmi B: DDC pin 5, level 9, 300000 kHz TMDS
+<6>[4.400000] i915: display: port B: HDMI
+<6>[4.404000] i915: hdmi C: DDC pin 4, level 6, 300000 kHz TMDS, DP++
+<6>[4.408000] i915: display: port C: DP+HDMI
+<6>[4.408000] i915: display: pipe A adopted: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz, the firmware's framebuffer at GTT 0x0, stride 5504
+<7>[4.416000] backlight: intel_backlight: rebound: level 937 of 937
+<6>[4.416000] i915: backlight: intel_backlight: levels 0 to 937, at 937, off with the pipe
+<7>[4.420000] drm: worker: kdrm is pid 2
+<6>[4.420000] drm: i915: card0
+<6>[4.424000] console: card0: a native display
+<7>[4.424000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[4.424000] i915: gmbus dpb: NAK on first message, retry
+<7>[4.428000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[4.428000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[4.428000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[4.428000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[4.428000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[4.428000] i915: gmbus dpc: NAK on first message, retry
+<7>[4.428000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[4.428000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[4.428000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[4.428000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[4.428000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+<6>[4.436000] hdmi-audio: ready: codec 80862807 at 0, 3 pins
+<6>[4.440000] fbdrm: framebuffer at 0xb0000000 is a native driver's
+<6>[4.444000] drm: vgem: card1
+<6>[4.448000] vgem: registered: vgem, card 1
+<6>[4.448000] kvm: ready: vmx
+<6>[4.452000] vfio: ready: 12 groups of 14 functions
+<6>[4.728000] timing: tick 250 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2014 us
+<6>[4.728000] clock: reference: the hpet; a tick the timer misses or delays is counted
+<6>[4.744000] smp: cpu1: tsc: synchronized with cpu0
+<6>[4.760000] smp: cpu2: tsc: synchronized with cpu0
+<6>[4.776000] smp: cpu3: tsc: synchronized with cpu0
+<6>[4.780000] smp: processors: 4 online of 4
+<7>[4.784000] msr: registered: 4 processors
+<6>[4.784000] nmi_watchdog: counter: intel arch version 3, fixed counter 1, 48 bits, 1895 MHz
+<6>[4.784000] nmi_watchdog: enabled: permanently consumes one hw-PMU counter
+<6>[4.788000] vdso: clock: the tsc, 7582437 counts a tick
+<6>[4.796000] boot: starting /sbin/init
+<7>[4.796000] acpi: thread: kacpid is pid 9
+<7>[4.796000] wlan: worker: kwlan is pid 10
+<7>[4.796000] mouse: worker: kpsmoused is pid 11
+<7>[4.796000] watchdog: worker: watchdogd is pid 12
+<7>[4.796000] audio: thread: khda is pid 13
+<7>[4.796000] tty: echo: kconsoled is pid 14
+<7>[4.796000] input: sysfs: worker: kinputd is pid 16
+<6>[4.800000] vfs: mounted: tmpfs on /tmp (tmpfs)
+<6>[7.248000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+<6>[7.896000] net: eth0: IPv4 ADDR/24
+<6>[8.116000] net: wlan0: IPv6 LINKLOCAL/64 added
+<6>[8.624000] net: eth0: IPv6 ULA/64 added
+<6>[8.624000] net: eth0: IPv6 ULA/64 added
+<6>[9.256000] netconsole: settled: held records sent after 2000 ms of link
+<7>[11.668000] i915: worker: ki915 is pid 264
+<6>[16.248000] console: card0: handed to a master, the keyboard off
+<7>[16.276000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[16.276000] i915: gmbus dpb: NAK on first message, retry
+<7>[16.276000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[16.276000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[16.276000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[16.280000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[16.280000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[16.280000] i915: gmbus dpc: NAK on first message, retry
+<7>[16.280000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[16.280000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[16.280000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[16.280000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[16.316000] console: card0: taken back from a master, the keyboard on
+<6>[16.316000] console: card0: 1366x768, the font at 2x
+<6>[51.828000] console: card0: handed to a master, the keyboard off
+<7>[51.828000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[51.828000] i915: gmbus dpb: NAK on first message, retry
+<7>[51.828000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[51.828000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[51.832000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[51.832000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[51.832000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[51.832000] i915: gmbus dpc: NAK on first message, retry
+<7>[51.832000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[51.832000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[51.832000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[51.832000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[51.868000] console: card0: taken back from a master, the keyboard on
+<6>[51.868000] console: card0: 1366x768, the font at 2x
+<6>[51.884000] console: card0: handed to a master, the keyboard off
+<7>[51.892000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[51.892000] i915: gmbus dpb: NAK on first message, retry
+<7>[51.892000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[51.892000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[51.892000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[51.892000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[51.892000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[51.892000] i915: gmbus dpc: NAK on first message, retry
+<7>[51.892000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[51.892000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[51.892000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[51.892000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[51.932000] console: card0: taken back from a master, the keyboard on
+<6>[51.932000] console: card0: 1366x768, the font at 2x
+<6>[51.952000] console: card0: handed to a master, the keyboard off
+<7>[51.960000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[51.960000] i915: gmbus dpb: NAK on first message, retry
+<7>[51.960000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[51.960000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[51.960000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[51.960000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[51.960000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[51.960000] i915: gmbus dpc: NAK on first message, retry
+<7>[51.960000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[51.960000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[51.960000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[51.960000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[51.992000] console: card0: taken back from a master, the keyboard on
+<6>[51.992000] console: card0: 1366x768, the font at 2x
+<6>[52.012000] console: card0: handed to a master, the keyboard off
+<7>[52.032000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[52.032000] i915: gmbus dpb: NAK on first message, retry
+<7>[52.032000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[52.032000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[52.032000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[52.032000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[52.032000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[52.032000] i915: gmbus dpc: NAK on first message, retry
+<7>[52.032000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[52.032000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[52.032000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[52.032000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[52.060000] console: card0: taken back from a master, the keyboard on
+<6>[52.060000] console: card0: 1366x768, the font at 2x
+<6>[57.880000] console: card0: handed to a master, the keyboard off
+<7>[58.076000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[58.076000] i915: gmbus dpb: NAK on first message, retry
+<7>[58.076000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[58.076000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[58.076000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[58.076000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[58.080000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[58.080000] i915: gmbus dpc: NAK on first message, retry
+<7>[58.080000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[58.080000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[58.080000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[58.080000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[62.892000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[62.892000] i915: gmbus dpb: NAK on first message, retry
+<7>[62.892000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[62.892000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[62.892000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[62.892000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[62.892000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[62.892000] i915: gmbus dpc: NAK on first message, retry
+<7>[62.892000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[62.892000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[62.892000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[62.892000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[62.900000] console: card0: taken back from a master, the keyboard on
+<6>[62.900000] console: card0: 1366x768, the font at 2x
+<6>[63.660000] console: card0: handed to a master, the keyboard off
+<7>[63.664000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.664000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.664000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.664000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.664000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.664000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.664000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.664000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.664000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.664000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.664000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.664000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.664000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.664000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.664000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.664000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.664000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.668000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.668000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.668000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.668000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.668000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.668000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.668000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.668000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.668000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.668000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.668000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.668000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.668000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.672000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.672000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.672000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.672000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.672000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.672000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[63.708000] console: card0: taken back from a master, the keyboard on
+<6>[63.708000] console: card0: 1366x768, the font at 2x
+<6>[63.728000] console: card0: handed to a master, the keyboard off
+<7>[63.736000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.736000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.736000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.736000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.736000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.736000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.736000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.736000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.736000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.736000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.736000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.736000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.740000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.740000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.740000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.740000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.740000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.740000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.740000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.740000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.740000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.740000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.740000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.740000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.744000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.744000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.744000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.744000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.744000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.744000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.744000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.744000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.744000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.744000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.744000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.744000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[63.768000] console: card0: taken back from a master, the keyboard on
+<6>[63.768000] console: card0: 1366x768, the font at 2x
+<6>[63.788000] console: card0: handed to a master, the keyboard off
+<7>[63.808000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.808000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.808000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.808000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.808000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.808000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.808000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.808000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.808000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.808000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.808000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.812000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.812000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.812000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.812000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.812000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.812000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.812000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.812000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.812000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.812000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.812000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.812000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.812000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.816000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.816000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.816000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.816000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.816000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.816000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.816000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.816000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.816000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.816000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.816000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.816000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[63.852000] console: card0: taken back from a master, the keyboard on
+<6>[63.852000] console: card0: 1366x768, the font at 2x
+<6>[63.868000] console: card0: handed to a master, the keyboard off
+<7>[63.892000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.892000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.892000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.892000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.892000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.892000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.892000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.892000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.892000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.892000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.892000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.896000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.896000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.896000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.896000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.896000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.896000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.896000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.896000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.896000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.896000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.896000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.896000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.896000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.900000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.900000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.900000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.900000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.900000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.900000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.900000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.900000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.900000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.900000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.900000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.900000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[63.940000] console: card0: taken back from a master, the keyboard on
+<6>[63.940000] console: card0: 1366x768, the font at 2x
+<6>[63.960000] console: card0: handed to a master, the keyboard off
+<7>[63.968000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.968000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.968000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.968000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.968000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.968000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.968000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.968000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.968000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.968000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.968000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.972000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.972000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.972000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.972000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.972000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.972000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.972000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.972000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.972000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.972000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.972000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.972000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.972000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[63.972000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.972000] i915: gmbus dpb: NAK on first message, retry
+<7>[63.976000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[63.976000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.976000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[63.976000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[63.976000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.976000] i915: gmbus dpc: NAK on first message, retry
+<7>[63.976000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[63.976000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[63.976000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[63.976000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.008000] console: card0: taken back from a master, the keyboard on
+<6>[64.008000] console: card0: 1366x768, the font at 2x
+<6>[64.024000] console: card0: handed to a master, the keyboard off
+<7>[64.040000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.040000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.040000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.040000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.040000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.040000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.040000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.040000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.040000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.040000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.040000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.044000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.044000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.044000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.044000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.044000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.044000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.044000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.044000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.044000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.044000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.044000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.044000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.044000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.044000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.044000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.044000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.044000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.044000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.048000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.048000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.048000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.048000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.048000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.048000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.048000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.068000] console: card0: taken back from a master, the keyboard on
+<6>[64.068000] console: card0: 1366x768, the font at 2x
+<6>[64.084000] console: card0: handed to a master, the keyboard off
+<7>[64.116000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.116000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.116000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.116000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.116000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.116000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.116000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.116000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.116000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.116000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.116000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.116000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.120000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.120000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.120000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.120000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.120000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.120000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.120000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.120000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.120000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.120000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.120000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.120000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.120000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.120000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.120000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.120000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.120000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.124000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.124000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.124000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.124000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.124000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.124000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.124000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.156000] console: card0: taken back from a master, the keyboard on
+<6>[64.156000] console: card0: 1366x768, the font at 2x
+<6>[64.176000] console: card0: handed to a master, the keyboard off
+<7>[64.192000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.192000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.192000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.192000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.192000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.192000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.192000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.192000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.192000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.192000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.192000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.192000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.196000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.196000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.196000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.196000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.196000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.196000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.196000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.196000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.196000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.196000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.196000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.196000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.196000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.196000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.196000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.196000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.196000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.200000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.200000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.200000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.200000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.200000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.200000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.200000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.240000] console: card0: taken back from a master, the keyboard on
+<6>[64.240000] console: card0: 1366x768, the font at 2x
+<6>[64.260000] console: card0: handed to a master, the keyboard off
+<7>[64.268000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.268000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.268000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.268000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.268000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.268000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.268000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.268000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.268000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.268000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.268000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.268000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.272000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.272000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.272000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.272000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.272000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.272000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.272000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.272000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.272000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.272000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.272000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.272000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.272000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.272000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.272000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.272000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.272000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.276000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.276000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.276000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.276000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.276000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.276000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.276000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.308000] console: card0: taken back from a master, the keyboard on
+<6>[64.308000] console: card0: 1366x768, the font at 2x
+<6>[64.324000] console: card0: handed to a master, the keyboard off
+<7>[64.340000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.340000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.340000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.340000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.340000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.340000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.340000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.340000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.340000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.340000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.340000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.340000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.344000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.344000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.344000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.344000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.344000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.344000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.344000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.344000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.344000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.344000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.344000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.344000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.348000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.348000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.348000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.348000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.348000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.348000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.348000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.348000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.348000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.348000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.348000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.348000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.392000] console: card0: taken back from a master, the keyboard on
+<6>[64.392000] console: card0: 1366x768, the font at 2x
+<6>[64.408000] console: card0: handed to a master, the keyboard off
+<7>[64.424000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.424000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.424000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.424000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.424000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.424000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.424000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.424000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.424000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.424000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.424000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.428000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.428000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.428000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.428000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.428000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.428000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.428000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.428000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.428000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.428000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.428000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.428000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.428000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.432000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.432000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.432000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.432000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.432000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.432000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.432000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.432000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.432000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.432000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.432000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.432000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.472000] console: card0: taken back from a master, the keyboard on
+<6>[64.472000] console: card0: 1366x768, the font at 2x
+<6>[64.492000] console: card0: handed to a master, the keyboard off
+<7>[64.508000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.508000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.508000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.508000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.508000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.508000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.508000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.508000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.508000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.508000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.508000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.512000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.512000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.512000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.512000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.512000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.512000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.512000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.512000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.512000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.512000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.512000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.512000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.512000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.512000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.512000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.516000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.516000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.516000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.516000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.516000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.516000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.516000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.516000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.516000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.516000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.556000] console: card0: taken back from a master, the keyboard on
+<6>[64.556000] console: card0: 1366x768, the font at 2x
+<6>[64.576000] console: card0: handed to a master, the keyboard off
+<7>[64.592000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.592000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.592000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.592000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.592000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.592000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.592000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.592000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.592000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.592000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.592000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.596000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.596000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.596000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.596000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.596000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.596000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.596000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.596000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.596000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.596000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.596000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.596000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.596000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.596000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.596000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.600000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.600000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.600000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.600000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.600000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.600000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.600000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.600000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.600000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.600000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.640000] console: card0: taken back from a master, the keyboard on
+<6>[64.640000] console: card0: 1366x768, the font at 2x
+<6>[64.660000] console: card0: handed to a master, the keyboard off
+<7>[64.672000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.672000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.672000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.672000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.672000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.672000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.672000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.672000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.672000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.672000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.672000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.676000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.676000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.676000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.676000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.676000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.676000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.676000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.676000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.676000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.676000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.676000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.676000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.676000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.676000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.676000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.680000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.680000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.680000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.680000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.680000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.680000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.680000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.680000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.680000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.680000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.708000] console: card0: taken back from a master, the keyboard on
+<6>[64.708000] console: card0: 1366x768, the font at 2x
+<6>[64.724000] console: card0: handed to a master, the keyboard off
+<7>[64.740000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.740000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.740000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.740000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.740000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.740000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.740000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.740000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.740000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.740000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.740000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.744000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.744000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.744000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.744000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.744000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.744000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.744000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.744000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.744000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.744000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.744000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.744000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.744000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.744000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.748000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.748000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.748000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.748000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.748000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.748000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.748000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.748000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.748000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.748000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.748000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.788000] console: card0: taken back from a master, the keyboard on
+<6>[64.788000] console: card0: 1366x768, the font at 2x
+<6>[64.808000] console: card0: handed to a master, the keyboard off
+<7>[64.824000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.824000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.824000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.824000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.824000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.824000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.824000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.824000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.824000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.824000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.824000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.828000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.828000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.828000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.828000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.828000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.828000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.828000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.828000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.828000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.828000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.828000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.828000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.828000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.832000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.832000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.832000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.832000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.832000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.832000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.832000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.832000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.832000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.832000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.832000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.832000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.872000] console: card0: taken back from a master, the keyboard on
+<6>[64.872000] console: card0: 1366x768, the font at 2x
+<6>[64.892000] console: card0: handed to a master, the keyboard off
+<7>[64.908000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.908000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.908000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.908000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.908000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.908000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.908000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.908000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.908000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.908000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.908000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.912000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.912000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.912000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.912000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.912000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.912000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.912000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.912000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.912000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.912000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.912000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.912000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.912000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.912000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.912000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.916000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.916000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.916000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.916000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.916000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.916000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.916000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.916000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.916000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.916000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[64.956000] console: card0: taken back from a master, the keyboard on
+<6>[64.956000] console: card0: 1366x768, the font at 2x
+<6>[64.976000] console: card0: handed to a master, the keyboard off
+<7>[64.988000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.988000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.988000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.988000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.988000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.988000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.988000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.988000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.988000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.988000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.988000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.992000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.992000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.992000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.992000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.992000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.992000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.992000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.992000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.992000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.992000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.992000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.992000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.992000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[64.992000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.992000] i915: gmbus dpb: NAK on first message, retry
+<7>[64.992000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[64.992000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.992000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[64.992000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[64.992000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.992000] i915: gmbus dpc: NAK on first message, retry
+<7>[64.992000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[64.992000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[64.992000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[64.992000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.020000] console: card0: taken back from a master, the keyboard on
+<6>[65.020000] console: card0: 1366x768, the font at 2x
+<6>[65.040000] console: card0: handed to a master, the keyboard off
+<7>[65.048000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.048000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.048000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.048000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.048000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.048000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.048000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.048000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.048000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.048000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.048000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.052000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.052000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.052000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.052000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.052000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.052000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.052000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.052000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.052000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.052000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.052000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.052000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.052000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.056000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.056000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.056000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.056000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.056000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.056000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.056000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.056000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.056000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.056000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.056000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.056000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.088000] console: card0: taken back from a master, the keyboard on
+<6>[65.088000] console: card0: 1366x768, the font at 2x
+<6>[65.108000] console: card0: handed to a master, the keyboard off
+<7>[65.116000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.116000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.116000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.116000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.116000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.116000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.116000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.116000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.116000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.116000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.116000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.120000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.120000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.120000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.120000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.120000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.120000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.120000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.120000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.120000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.120000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.120000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.120000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.120000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.124000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.124000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.124000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.124000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.124000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.124000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.124000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.124000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.124000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.124000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.124000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.124000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.148000] console: card0: taken back from a master, the keyboard on
+<6>[65.148000] console: card0: 1366x768, the font at 2x
+<6>[65.168000] console: card0: handed to a master, the keyboard off
+<7>[65.188000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.188000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.188000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.188000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.188000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.188000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.188000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.188000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.188000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.188000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.188000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.192000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.192000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.192000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.192000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.192000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.192000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.192000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.192000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.192000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.192000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.192000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.192000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.192000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.192000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.192000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.192000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.196000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.196000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.196000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.196000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.196000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.196000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.196000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.196000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.196000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.232000] console: card0: taken back from a master, the keyboard on
+<6>[65.232000] console: card0: 1366x768, the font at 2x
+<6>[65.248000] console: card0: handed to a master, the keyboard off
+<7>[65.264000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.264000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.264000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.264000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.264000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.264000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.264000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.264000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.264000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.264000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.264000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.268000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.268000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.268000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.268000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.268000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.268000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.268000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.268000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.268000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.268000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.268000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.268000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.268000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.268000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.268000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.268000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.272000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.272000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.272000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.272000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.272000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.272000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.272000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.272000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.272000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.304000] console: card0: taken back from a master, the keyboard on
+<6>[65.304000] console: card0: 1366x768, the font at 2x
+<6>[65.324000] console: card0: handed to a master, the keyboard off
+<7>[65.332000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.332000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.332000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.332000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.332000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.332000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.332000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.332000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.332000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.332000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.332000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.336000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.336000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.336000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.336000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.336000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.336000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.336000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.336000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.336000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.336000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.336000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.336000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.336000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.336000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.336000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.336000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.336000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.336000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.340000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.340000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.340000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.340000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.340000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.340000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.340000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.364000] console: card0: taken back from a master, the keyboard on
+<6>[65.364000] console: card0: 1366x768, the font at 2x
+<6>[65.380000] console: card0: handed to a master, the keyboard off
+<7>[65.404000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.404000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.404000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.404000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.404000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.404000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.404000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.404000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.404000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.404000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.404000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.408000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.408000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.408000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.408000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.408000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.408000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.408000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.408000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.408000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.408000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.408000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.408000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.408000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.408000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.408000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.408000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.408000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.408000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.412000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.412000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.412000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.412000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.412000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.412000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.412000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.448000] console: card0: taken back from a master, the keyboard on
+<6>[65.448000] console: card0: 1366x768, the font at 2x
+<6>[65.464000] console: card0: handed to a master, the keyboard off
+<7>[65.488000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.488000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.488000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.488000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.488000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.488000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.488000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.488000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.488000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.488000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.488000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.488000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.492000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.492000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.492000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.492000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.492000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.492000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.492000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.492000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.492000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.492000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.492000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.492000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.492000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.492000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.492000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.492000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.492000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.496000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.496000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.496000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.496000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.496000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.496000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.496000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.532000] console: card0: taken back from a master, the keyboard on
+<6>[65.532000] console: card0: 1366x768, the font at 2x
+<6>[65.548000] console: card0: handed to a master, the keyboard off
+<7>[65.564000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.564000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.564000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.564000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.564000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.564000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.564000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.564000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.564000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.564000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.564000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.568000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.568000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.568000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.568000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.568000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.568000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.568000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.568000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.568000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.568000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.568000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.568000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.568000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.572000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.572000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.572000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.572000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.572000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.572000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.572000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.572000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.572000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.572000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.572000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.572000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.604000] console: card0: taken back from a master, the keyboard on
+<6>[65.604000] console: card0: 1366x768, the font at 2x
+<6>[65.624000] console: card0: handed to a master, the keyboard off
+<7>[65.632000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.632000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.632000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.632000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.632000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.632000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.632000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.632000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.632000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.632000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.632000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.636000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.636000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.636000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.636000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.636000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.636000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.636000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.636000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.636000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.636000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.636000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.636000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.636000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.640000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.640000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.640000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.640000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.640000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.640000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.640000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.640000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.640000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.640000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.640000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.640000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.664000] console: card0: taken back from a master, the keyboard on
+<6>[65.664000] console: card0: 1366x768, the font at 2x
+<6>[65.680000] console: card0: handed to a master, the keyboard off
+<7>[65.704000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.704000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.704000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.704000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.704000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.704000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.704000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.704000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.704000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.704000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.704000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.708000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.708000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.708000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.708000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.708000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.708000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.708000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.708000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.708000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.708000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.708000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.708000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.708000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.708000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.708000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.712000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.712000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.712000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.712000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.712000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.712000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.712000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.712000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.712000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.712000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.748000] console: card0: taken back from a master, the keyboard on
+<6>[65.748000] console: card0: 1366x768, the font at 2x
+<6>[65.764000] console: card0: handed to a master, the keyboard off
+<7>[65.780000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.780000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.780000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.780000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.780000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.780000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.780000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.780000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.780000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.780000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.780000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.784000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.784000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.784000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.784000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.784000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.784000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.784000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.784000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.784000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.784000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.784000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.784000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.784000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.784000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.784000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.784000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.784000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.784000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.788000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.788000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.788000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.788000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.788000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.788000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.788000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.820000] console: card0: taken back from a master, the keyboard on
+<6>[65.820000] console: card0: 1366x768, the font at 2x
+<6>[65.840000] console: card0: handed to a master, the keyboard off
+<7>[65.848000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.848000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.848000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.848000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.848000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.848000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.848000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.848000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.848000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.848000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.848000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.852000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.852000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.852000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.852000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.852000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.852000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.852000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.852000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.852000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.852000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.852000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.852000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.852000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.852000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.852000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.852000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.852000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.852000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.856000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.856000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.856000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.856000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.856000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.856000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.856000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.880000] console: card0: taken back from a master, the keyboard on
+<6>[65.880000] console: card0: 1366x768, the font at 2x
+<6>[65.896000] console: card0: handed to a master, the keyboard off
+<7>[65.920000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.920000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.920000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.920000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.920000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.920000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.920000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.920000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.920000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.920000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.920000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.920000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.924000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.924000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.924000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.924000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.924000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.924000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.924000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.924000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.924000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.924000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.924000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.924000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[65.924000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.924000] i915: gmbus dpb: NAK on first message, retry
+<7>[65.924000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[65.924000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.924000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[65.928000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[65.928000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.928000] i915: gmbus dpc: NAK on first message, retry
+<7>[65.928000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[65.928000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[65.928000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[65.928000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[65.964000] console: card0: taken back from a master, the keyboard on
+<6>[65.964000] console: card0: 1366x768, the font at 2x
+<6>[65.980000] console: card0: handed to a master, the keyboard off
+<7>[66.004000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.004000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.004000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.004000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.004000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.004000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.004000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.004000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.004000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.004000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.004000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.004000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.008000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.008000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.008000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.008000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.008000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.008000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.008000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.008000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.008000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.008000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.008000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.008000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.008000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.008000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.008000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.008000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.008000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.012000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.012000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.012000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.012000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.012000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.012000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.012000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.048000] console: card0: taken back from a master, the keyboard on
+<6>[66.048000] console: card0: 1366x768, the font at 2x
+<6>[66.064000] console: card0: handed to a master, the keyboard off
+<7>[66.080000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.080000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.080000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.080000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.080000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.080000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.080000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.080000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.080000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.080000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.080000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.080000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.080000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.080000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.084000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.084000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.084000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.084000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.084000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.084000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.084000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.084000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.084000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.084000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.084000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.084000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.084000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.084000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.084000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.088000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.088000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.088000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.088000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.088000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.088000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.088000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.120000] console: card0: taken back from a master, the keyboard on
+<6>[66.120000] console: card0: 1366x768, the font at 2x
+<6>[66.140000] console: card0: handed to a master, the keyboard off
+<7>[66.148000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.148000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.148000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.148000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.148000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.148000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.148000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.148000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.148000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.148000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.148000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.148000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.148000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.148000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.152000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.152000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.152000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.152000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.152000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.152000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.152000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.152000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.152000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.152000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.152000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.152000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.152000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.152000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.152000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.156000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.156000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.156000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.156000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.156000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.156000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.156000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.180000] console: card0: taken back from a master, the keyboard on
+<6>[66.180000] console: card0: 1366x768, the font at 2x
+<6>[66.200000] console: card0: handed to a master, the keyboard off
+<7>[66.220000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.220000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.220000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.220000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.220000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.220000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.220000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.220000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.220000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.220000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.220000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.224000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.224000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.224000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.224000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.224000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.224000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.224000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.224000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.224000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.224000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.224000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.224000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.224000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.228000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.228000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.228000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.228000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.228000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.228000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.228000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.228000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.228000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.228000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.228000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.228000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.264000] console: card0: taken back from a master, the keyboard on
+<6>[66.264000] console: card0: 1366x768, the font at 2x
+<6>[66.284000] console: card0: handed to a master, the keyboard off
+<7>[66.304000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.304000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.304000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.304000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.304000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.304000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.304000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.304000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.304000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.304000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.304000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.308000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.308000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.308000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.308000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.308000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.308000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.308000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.308000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.308000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.308000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.308000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.308000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.308000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.312000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.312000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.312000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.312000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.312000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.312000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.312000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.312000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.312000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.312000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.312000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.312000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.352000] console: card0: taken back from a master, the keyboard on
+<6>[66.352000] console: card0: 1366x768, the font at 2x
+<6>[66.372000] console: card0: handed to a master, the keyboard off
+<7>[66.380000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.380000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.380000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.380000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.380000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.380000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.380000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.380000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.380000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.380000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.380000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.384000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.384000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.384000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.384000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.384000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.384000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.384000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.384000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.384000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.384000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.384000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.384000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.384000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.384000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.384000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.388000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.388000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.388000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.388000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.388000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.388000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.388000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.388000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.388000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.388000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.420000] console: card0: taken back from a master, the keyboard on
+<6>[66.420000] console: card0: 1366x768, the font at 2x
+<6>[66.436000] console: card0: handed to a master, the keyboard off
+<7>[66.452000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.452000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.452000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.452000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.452000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.452000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.452000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.452000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.452000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.452000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.452000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.456000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.456000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.456000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.456000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.456000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.456000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.456000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.456000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.456000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.456000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.456000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.456000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.456000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.456000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.456000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.456000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.456000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.456000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.460000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.460000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.460000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.460000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.460000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.460000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.460000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.480000] console: card0: taken back from a master, the keyboard on
+<6>[66.480000] console: card0: 1366x768, the font at 2x
+<6>[66.496000] console: card0: handed to a master, the keyboard off
+<7>[66.520000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.520000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.520000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.520000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.520000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.520000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.520000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.520000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.520000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.520000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.520000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.520000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.524000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.524000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.524000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.524000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.524000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.524000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.524000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.524000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.524000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.524000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.524000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.524000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.524000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.524000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.524000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.524000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.524000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.528000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.528000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.528000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.528000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.528000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.528000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.528000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.568000] console: card0: taken back from a master, the keyboard on
+<6>[66.568000] console: card0: 1366x768, the font at 2x
+<6>[66.588000] console: card0: handed to a master, the keyboard off
+<7>[66.604000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.604000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.604000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.604000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.604000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.604000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.604000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.604000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.604000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.604000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.604000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.604000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.608000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.608000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.608000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.608000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.608000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.608000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.608000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.608000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.608000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.608000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.608000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.608000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.608000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.608000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.608000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.608000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.608000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.612000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.612000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.612000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.612000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.612000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.612000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.612000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.652000] console: card0: taken back from a master, the keyboard on
+<6>[66.652000] console: card0: 1366x768, the font at 2x
+<6>[66.672000] console: card0: handed to a master, the keyboard off
+<7>[66.680000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.680000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.680000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.680000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.680000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.680000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.680000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.680000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.680000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.680000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.680000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.680000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.684000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.684000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.684000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.684000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.684000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.684000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.684000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.684000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.684000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.684000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.684000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.684000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[66.684000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.684000] i915: gmbus dpb: NAK on first message, retry
+<7>[66.684000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[66.684000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.684000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[66.688000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[66.688000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.688000] i915: gmbus dpc: NAK on first message, retry
+<7>[66.688000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[66.688000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[66.688000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[66.688000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[66.720000] console: card0: taken back from a master, the keyboard on
+<6>[66.720000] console: card0: 1366x768, the font at 2x
+<6>[67.000000] console: card0: handed to a master, the keyboard off
+<7>[67.124000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[67.124000] i915: gmbus dpb: NAK on first message, retry
+<7>[67.124000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[67.124000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[67.124000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[67.128000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[67.128000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[67.128000] i915: gmbus dpc: NAK on first message, retry
+<7>[67.128000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[67.128000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[67.128000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[67.128000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<7>[100.864000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[100.864000] i915: gmbus dpb: NAK on first message, retry
+<7>[100.864000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[100.864000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[100.864000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[100.868000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[100.868000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[100.868000] i915: gmbus dpc: NAK on first message, retry
+<7>[100.868000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[100.868000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[100.868000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[100.868000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[100.872000] console: card0: taken back from a master, the keyboard on
+<6>[100.872000] console: card0: 1366x768, the font at 2x
+<6>[101.192000] console: card0: handed to a master, the keyboard off
+<7>[101.312000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[101.312000] i915: gmbus dpb: NAK on first message, retry
+<7>[101.312000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[101.312000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[101.312000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[101.312000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[101.312000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[101.312000] i915: gmbus dpc: NAK on first message, retry
+<7>[101.312000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[101.312000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[101.312000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[101.312000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[768.608000] net: eth0: IPv4 none
+<7>[768.672000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[768.672000] i915: gmbus dpb: NAK on first message, retry
+<7>[768.672000] i915: gmbus dpb: NAK for addr 0050 w(1)
+<7>[768.672000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[768.672000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+<7>[768.672000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+<7>[768.672000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[768.672000] i915: gmbus dpc: NAK on first message, retry
+<7>[768.672000] i915: gmbus dpc: NAK for addr 0050 w(1)
+<7>[768.672000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+<7>[768.672000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+<7>[768.672000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+<6>[768.688000] console: card0: taken back from a master, the keyboard on
+<6>[768.688000] console: card0: 1366x768, the font at 2x
