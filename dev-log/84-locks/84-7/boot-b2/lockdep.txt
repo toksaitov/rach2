@@ -1,0 +1,546 @@
+all lock classes:
+0xffffffff804f41a8 FD: 5 BD: 0 +.: console_spin
+ -> heap_lock
+ -> wq_head->lock
+ -> input_lock
+ -> kd_lock
+ -> mmio_lock
+0xffffffff804f7028 FD: 0 BD: 2 +.: isr_handlers
+0xffffffff804f71e8 FD: 0 BD: 0 ..: pci_config
+0xffffffff804f4ce8 FD: 0 BD: 8 +.: frame_lock
+0xffffffff804f4d68 FD: 0 BD: 1 ..: mmio_lock
+0xffffffff804f4de8 FD: 2 BD: 24 +.: heap_lock
+ -> ipi_lock
+ -> frame_lock
+0xffffffff804f50a8 FD: 0 BD: 19 ..: bkl_profile
+0xffffffff804f40a8 FD: 1 BD: 34 +.: rtc_mono_lock
+ -> vclock_lock
+0xffffffff804f4088 FD: 3 BD: 0 +.: clock_pass
+ -> pit_now_lock
+ -> vclock_lock
+ -> rtc_realtime_lock
+0xffffffff804f40e8 FD: 2 BD: 10 +.: rtc_realtime_lock
+ -> rtc_mono_lock
+ -> vclock_lock
+0xffffffff804f6e28 FD: 0 BD: 3 +.: vclock_lock
+0xffffffff804f70e8 FD: 0 BD: 11 +.: pit_now_lock
+0xffffffff804f4fc8 FD: 2 BD: 11 +.: sched_lock
+ -> rtc_mono_lock
+ -> timer_list
+0xffffffff804f4f88 FD: 1 BD: 1 +.: timer_list
+ -> rtc_mono_lock
+0xffffffff804f6328 FD: 2 BD: 1 +.: timer_lock
+ -> wq_head->lock
+ -> rtc_mono_lock
+0xffffffff804f4a48 FD: 1 BD: 2 +.: hda_stream
+ -> lock@0xffffffff806774f8
+0xffffffff804f43e8 FD: 0 BD: 0 +.: block_lag_lock
+0xffffffff804f43a8 FD: 5 BD: 9 +.: block_req_lock
+ -> block_count_lock
+ -> wq_head->lock
+ -> pit_now_lock
+ -> frame_lock
+ -> heap_lock
+0xffffffff804f7448 FD: 2 BD: 0 +.: i915_devices_lock
+ -> service_fine
+ -> i915_uncore
+0xffffffff804f4248 FD: 3 BD: 1 +.: input_lock
+ -> rtc_realtime_lock
+ -> rtc_mono_lock
+ -> evdev_lock
+0xffffffff80ab8008 FD: 0 BD: 0 +.: lock@0xffffffff80ab8008
+0xffffffff80ac8008 FD: 0 BD: 0 +.: lock@0xffffffff80ac8008
+0xffffffff804f71c8 FD: 0 BD: 0 +.: speaker_lock
+0xffffffff804f49c8 FD: 1 BD: 1 +.: cap_lock
+ -> hda_stream
+0xffffffff804f6548 FD: 0 BD: 1 ..: devfs_owned_lock
+0xffffffff804f42a8 FD: 0 BD: 1 +.: evdev_lock
+0xffffffff807efac8 FD: 2 BD: 31 +.: wq_head->lock
+ -> ep->lock
+ -> sched_lock
+0xffffffff804f4c88 FD: 1 BD: 0 ..: backlight_lock
+ -> intel_backlight_lock
+0xffffffff804f4f48 FD: 0 BD: 1 ..: cred_id
+0xffffffff807f6961 FD: 1 BD: 1 ..: fd_table->lock
+ -> heap_lock
+0xffffffff804f64e8 FD: 0 BD: 3 ..: lock@0xffffffff804f64e8
+0xffffffff804f7828 FD: 0 BD: 0 ..: acpi_sem_lock
+0xffffffff80b42820 FD: 3 BD: 0 +.: acpi_lock
+ -> acpi_line_lock
+ -> wq_head->lock
+ -> acpi_queue_lock
+0xffffffff804f77c8 FD: 0 BD: 1 ..: acpi_line_lock
+0xffffffff806ef990 FD: 0 BD: 0 +.: tg->cpu_lock
+0xffffffff804f77e8 FD: 0 BD: 1 +.: acpi_queue_lock
+0xffffffff804f42c8 FD: 0 BD: 0 ..: rfkill_lock
+0xffffffff804f4a08 FD: 0 BD: 1 +.: verb_lock
+0xffffffff804f7048 FD: 0 BD: 0 ..: vector_lock
+0xffffffff804f4148 FD: 0 BD: 0 ..: msi_lock
+0xffffffff80632000 FD: 9 BD: 0 .-: hda_stream_mutex
+ -> service_fine
+ -> lock@0xffffffff80677468
+ -> cap_lock
+ -> bkl_profile
+ -> rtc_mono_lock
+ -> lock@0xffffffff806774f8
+ -> hda_stream
+ -> verb_lock
+ -> jack_lock
+0xffffffff8062e2c0 FD: 2 BD: 0 .-: acomp
+ -> devfs_owned_lock
+ -> hdmi_audio
+0xffffffff804f4988 FD: 0 BD: 1 +.: jack_lock
+0xffffffff805d1200 FD: 4 BD: 6 +.: ahci_port
+ -> wq_head->lock
+ -> block_req_lock
+ -> pit_now_lock
+ -> block_count_lock
+0xffffffff804f4348 FD: 0 BD: 6 +.: block_count_lock
+0xffffffff80ab0800 FD: 0 BD: 0 +.: ata_port_lock
+0xffffffff804f4548 FD: 0 BD: 3 ..: lock@0xffffffff804f4548
+0xffffffff804f4588 FD: 0 BD: 2 ..: sleep_lock_records
+0xffffffff804f4488 FD: 2 BD: 12 ..: bcache
+ -> wq_head->lock
+ -> heap_lock
+0xffffffff805b0f20 FD: 0 BD: 10 ..: ext2 shared lists
+0xffffffff805b0f22 FD: 0 BD: 7 ..: ext2 counts
+0xffffffff804f4654 FD: 10 BD: 0 .-: ext2 super
+ -> bkl_profile
+ -> rtc_mono_lock
+ -> block_count_lock
+ -> ahci_port
+ -> block_req_lock
+ -> pit_now_lock
+ -> bcache_wb
+ -> ext2 batch lists
+ -> bcache
+ -> ext2 counts
+0xffffffff805b0f2c FD: 0 BD: 11 ..: ext2 batch lists
+0xffffffff804f4468 FD: 6 BD: 10 .-: bcache_wb
+ -> bkl_profile
+ -> rtc_mono_lock
+ -> ext2 shared lists
+ -> heap_lock
+ -> wq_head->lock
+ -> bcache
+0xffffffff806ef991 FD: 0 BD: 0 ..: fs->lock
+0xffffffff804f4608 FD: 0 BD: 5 ..: lock@0xffffffff804f4608
+0xffffffff804f4714 FD: 20 BD: 6 .-: ext2 node
+ -> bkl_profile
+ -> sched_lock
+ -> rtc_mono_lock
+ -> filecache
+ -> ext2 batch
+ -> ext2 counts
+ -> ext2 admission
+ -> lock@0xffffffff804f64e8
+ -> wq_head->lock
+ -> bcache_wb
+ -> ext2 shared lists
+ -> wb_err_lock
+ -> loop_lock
+ -> block_count_lock
+ -> ahci_port
+ -> block_req_lock
+ -> pit_now_lock
+ -> bcache
+ -> ext2 batch lists
+ -> heap_lock
+0xffffffff804f4368 FD: 0 BD: 8 ..: loop_lock
+0xffffffff804f44c8 FD: 0 BD: 5 ..: wb_err_lock
+0xffffffff805b0f28 FD: 16 BD: 0 .-: ext2 super
+ -> bkl_profile
+ -> wb_err_lock
+ -> wq_head->lock
+ -> rtc_mono_lock
+ -> block_count_lock
+ -> ahci_port
+ -> ext2 shared lists
+ -> ext2 batch
+ -> ext2 node
+ -> loop_lock
+ -> block_req_lock
+ -> pit_now_lock
+ -> bcache_wb
+ -> ext2 batch lists
+ -> bcache
+ -> ext2 counts
+0xffffffff805b0f21 FD: 0 BD: 4 ..: ext2 admission
+0xffffffff804f46d4 FD: 6 BD: 4 .-: ext2 batch
+ -> bkl_profile
+ -> bcache_wb
+ -> rtc_realtime_lock
+ -> rtc_mono_lock
+ -> ext2 batch lists
+ -> bcache
+0xffffffff804f4e88 FD: 2 BD: 2 ..: filecache
+ -> frame_lock
+ -> heap_lock
+0xffffffff804f66a8 FD: 0 BD: 0 +.: wlan_queue_lock
+0xffffffff80b3f5a0 FD: 3 BD: 3 +.: i915_irq
+ -> submit_lock
+ -> wq_head->lock
+ -> i915_engine
+0xffffffff80b3f5e0 FD: 0 BD: 1 .-: i915_power
+0xffffffff80b3f5a1 FD: 1 BD: 4 +.: i915_uncore
+ -> rtc_mono_lock
+0xffffffff80510ca0 FD: 1 BD: 3 ..: pm_runtime
+ -> rtc_mono_lock
+0xffffffff804f4068 FD: 0 BD: 5 +.: service_fine
+0xffffffff80b3f681 FD: 2 BD: 3 +.: i915_rps
+ -> service_fine
+ -> i915_uncore
+0xffffffff804f6a28 FD: 0 BD: 2 +.: drm_work_lock
+0xffffffff80a3a681 FD: 2 BD: 2 +.: drm_vbl_lock
+ -> i915_irq
+ -> rtc_mono_lock
+0xffffffff80a3a683 FD: 0 BD: 2 ..: drm_object_lock
+0xffffffff80a3a685 FD: 0 BD: 2 ..: drm_table_lock
+0xffffffff80a3a682 FD: 4 BD: 1 +.: drm_event_lock
+ -> heap_lock
+ -> wq_head->lock
+ -> i915_rps
+ -> drm_vbl_lock
+0xffffffff80b3f728 FD: 0 BD: 1 ..: intel_backlight_lock
+0xffffffff80a3a680 FD: 19 BD: 0 .-: drm_mode_lock
+ -> bkl_profile
+ -> lock@0xffffffff80b3f158
+ -> drm_vbl_lock
+ -> drm_object_lock
+ -> i915_rps
+ -> dma_resv
+ -> sched_lock
+ -> i915_engine
+ -> dma_fence
+ -> drm_event_lock
+ -> i915_gem
+ -> drm_table_lock
+ -> rtc_mono_lock
+ -> wq_head->lock
+ -> drm_work_lock
+ -> i915_irq
+ -> gmbus
+ -> heap_lock
+ -> pm_runtime
+0xffffffff80b42540 FD: 2 BD: 1 .-: gmbus
+ -> bkl_profile
+ -> rtc_mono_lock
+0xffffffff80664a80 FD: 5 BD: 1 .-: hdmi_audio
+ -> i915_audio
+ -> bkl_profile
+ -> rtc_mono_lock
+ -> i915_power
+ -> pm_runtime
+0xffffffff80b42541 FD: 0 BD: 1 .-: i915_audio
+0xffffffff804f7128 FD: 2 BD: 0 .-: tsc_sync_lock
+ -> bkl_profile
+ -> rtc_mono_lock
+0xffffffff805b0f2b FD: 32 BD: 3 .-: ext2 node
+ -> dshare.bits
+ -> ext2 batch
+ -> dshare
+ -> names
+ -> lock@0xffffffff804f4608
+ -> ext2 node/4
+ -> ext2 batch
+ -> ext2 counts
+ -> rtc_realtime_lock
+ -> ext2 group
+ -> bcache_wb
+ -> wb_err_lock
+ -> ext2 admission
+ -> ext2 node/2
+ -> ext2 shared lists
+ -> sleep_lock_records
+ -> lock@0xffffffff804f4548
+ -> filecache
+ -> sched_lock
+ -> wq_head->lock
+ -> frame_lock
+ -> bkl_profile
+ -> rtc_mono_lock
+ -> block_count_lock
+ -> ahci_port
+ -> ext2 node
+ -> loop_lock
+ -> block_req_lock
+ -> pit_now_lock
+ -> bcache
+ -> ext2 batch lists
+ -> heap_lock
+0xffffffff804f4e48 FD: 1 BD: 1 ..: mm_dir_lock
+ -> mm_rss_lock
+0xffffffff804f4e68 FD: 0 BD: 2 ..: dshare
+0xffffffff8067e722 FD: 0 BD: 3 ..: mm_rss_lock
+0xffffffff804f5088 FD: 0 BD: 3 +.: ipi_lock
+0xffffffff8067e720 FD: 13 BD: 5 .-: mmap_lock
+ -> vm_dead_lock
+ -> rwsem.spin
+ -> sched_lock
+ -> wq_head->lock
+ -> futex_hb
+ -> bkl_profile
+ -> rtc_mono_lock
+ -> heap_lock
+ -> mm_dir_lock
+ -> ipi_lock
+ -> mm_rss_lock
+ -> frame_lock
+ -> mm_ptl
+0xffffffff8067e721 FD: 3 BD: 1 ..: mm_ptl
+ -> ipi_lock
+ -> frame_lock
+ -> mm_rss_lock
+0xffffffff804f4ec8 FD: 0 BD: 0 ..: thp_count_lock
+0xffffffff80a41ba8 FD: 0 BD: 0 ..: khvcd
+0xffffffff804f4208 FD: 0 BD: 0 ..: sig_lock
+0xffffffff804f4534 FD: 14 BD: 1 .-: mount
+ -> bkl_profile
+ -> frame_lock
+ -> dshare
+ -> loop_lock
+ -> names
+ -> ext2 node
+ -> fd_table->lock
+ -> lock@0xffffffff804f64e8
+ -> wb_err_lock
+ -> lock@0xffffffff804f4608
+ -> lock@0xffffffff804f4548
+ -> rtc_realtime_lock
+ -> rtc_mono_lock
+ -> heap_lock
+0xffffffff804f45e8 FD: 0 BD: 4 ..: names
+0xffffffff805b0f2b FD: 18 BD: 1 .-: ext2 node/2
+ -> ext2 node/3
+ -> sched_lock
+ -> wq_head->lock
+ -> ahci_port
+ -> ext2 shared lists
+ -> rtc_realtime_lock
+ -> rtc_mono_lock
+ -> ext2 node
+ -> loop_lock
+ -> block_req_lock
+ -> pit_now_lock
+ -> bcache_wb
+ -> ext2 admission
+ -> lock@0xffffffff804f4608
+ -> names
+ -> bcache
+ -> ext2 batch lists
+ -> heap_lock
+0xffffffff805b0f29 FD: 12 BD: 3 .-: ext2 group
+ -> sched_lock
+ -> wq_head->lock
+ -> bkl_profile
+ -> heap_lock
+ -> rtc_realtime_lock
+ -> rtc_mono_lock
+ -> mmap_lock
+ -> ext2 shared lists
+ -> ext2 counts
+ -> bcache_wb
+ -> ext2 batch lists
+ -> bcache
+0xffffffff804f6288 FD: 0 BD: 1 ..: ep_files_lock
+0xffffffff805b0f2b FD: 13 BD: 1 .-: ext2 node/4
+ -> ext2 node
+ -> loop_lock
+ -> block_req_lock
+ -> pit_now_lock
+ -> ext2 shared lists
+ -> ext2 group
+ -> ext2 counts
+ -> rtc_realtime_lock
+ -> rtc_mono_lock
+ -> bcache
+ -> ext2 batch lists
+ -> heap_lock
+ -> bcache_wb
+0xffffffff804f6a48 FD: 0 BD: 0 ..: lock@0xffffffff804f6a48
+0xffffffff804f4754 FD: 1 BD: 0 .-: ext2 write
+ -> ext2 node
+0xffffffff805b0f2a FD: 19 BD: 2 .-: ext2 batch
+ -> bkl_profile
+ -> wb_err_lock
+ -> sched_lock
+ -> wq_head->lock
+ -> ahci_port
+ -> ext2 batch
+ -> ext2 node
+ -> loop_lock
+ -> block_req_lock
+ -> pit_now_lock
+ -> rtc_realtime_lock
+ -> rtc_mono_lock
+ -> mmap_lock
+ -> ext2 shared lists
+ -> bcache_wb
+ -> ext2 group
+ -> ext2 counts
+ -> ext2 batch lists
+ -> bcache
+0xffffffff806774f8 FD: 2 BD: 2 ..: lock@0xffffffff806774f8
+ -> wq_head->lock
+ -> dsp
+0xffffffff807f6960 FD: 1 BD: 1 ..: fd_table->lock
+ -> heap_lock
+0xffffffff804f4e08 FD: 0 BD: 1 ..: vm_dead_lock
+0xffffffff8067e960 FD: 0 BD: 1 ..: dshare.bits
+0xffffffff804f4f68 FD: 0 BD: 0 ..: tick_post
+0xffffffff804f52e8 FD: 2 BD: 1 ..: wq_free_lock
+ -> ep->poll_wait
+ -> wq_head->lock
+0xffffffff804f4288 FD: 0 BD: 1 ..: kd_lock
+0xffffffff804f6208 FD: 0 BD: 1 ..: pipes_lock
+0xffffffff804f61f4 FD: 8 BD: 0 .-: pipe
+ -> pipe/1
+ -> pipes_lock
+ -> bkl_profile
+ -> rtc_mono_lock
+ -> mmap_lock
+ -> isr_handlers
+ -> heap_lock
+ -> wq_head->lock
+0xffffffff804f6248 FD: 1 BD: 1 +.: unix_table
+ -> unix_state
+0xffffffff804f6508 FD: 0 BD: 0 ..: flc_lock
+0xffffffff805b0f2b FD: 18 BD: 1 .-: ext2 node/3
+ -> ext2 batch
+ -> sched_lock
+ -> wq_head->lock
+ -> bkl_profile
+ -> ext2 node
+ -> loop_lock
+ -> block_req_lock
+ -> pit_now_lock
+ -> ext2 shared lists
+ -> bcache_wb
+ -> rtc_realtime_lock
+ -> rtc_mono_lock
+ -> ext2 admission
+ -> lock@0xffffffff804f4608
+ -> names
+ -> bcache
+ -> ext2 batch lists
+ -> heap_lock
+0xffffffff807eff15 FD: 12 BD: 0 .-: unix_bind
+ -> mount
+ -> wq_head->lock
+ -> bcache
+ -> ext2 batch lists
+ -> ext2 shared lists
+ -> sleep_lock_records
+ -> heap_lock
+ -> unix_table
+ -> ext2 node
+ -> lock@0xffffffff804f4608
+ -> lock@0xffffffff804f4548
+ -> rtc_mono_lock
+0xffffffff807eff17 FD: 3 BD: 3 ..: unix_state
+ -> wq_head->lock
+ -> unix_state/1
+ -> unix_queue
+0xffffffff807eff16 FD: 1 BD: 3 ..: unix_queue
+ -> unix_flight
+0xffffffff807eff14 FD: 7 BD: 0 .-: unix_io
+ -> service_fine
+ -> rtc_mono_lock
+ -> unix_flight
+ -> heap_lock
+ -> wq_head->lock
+ -> unix_queue
+ -> unix_state
+0xffffffff807eff17 FD: 2 BD: 1 ..: unix_state/1
+ -> unix_state/2
+ -> unix_queue
+0xffffffff807efe40 FD: 1 BD: 1 ..: futex_hb
+ -> wq_head->lock
+0xffffffff807f05ab FD: 14 BD: 1 .-: ep->mtx
+ -> bkl_profile
+ -> ep->poll_wait
+ -> ep->mtx/1
+ -> eventfd
+ -> rtc_mono_lock
+ -> mmap_lock
+ -> isr_handlers
+ -> timer_lock
+ -> heap_lock
+ -> wq_free_lock
+ -> ep->lock
+ -> wq_head->lock
+ -> unix_state
+ -> ep_files_lock
+0xffffffff807f05a9 FD: 1 BD: 1 +.: ep->wq
+ -> sched_lock
+0xffffffff808207f0 FD: 0 BD: 0 +.: wlan_rxq
+0xffffffff805a2e60 FD: 1 BD: 0 .-: sleep_lock
+ -> mmap_lock
+0xffffffff807eff17 FD: 0 BD: 1 ..: unix_state/2
+0xffffffff807f05aa FD: 1 BD: 3 +.: ep->lock
+ -> ep->wq
+0xffffffff804f62e8 FD: 1 BD: 0 .-: epnested_mutex
+ -> ep->mtx
+0xffffffff804f7168 FD: 0 BD: 0 ..: rtc_cmos_lock
+0xffffffff807f0588 FD: 0 BD: 1 ..: eventfd
+0xffffffff80b3f5a3 FD: 24 BD: 1 .-: i915_gem
+ -> i915_ctx_ce
+ -> bkl_profile
+ -> drm_syncobj
+ -> submit_lock
+ -> rtc_mono_lock
+ -> dma_fence_context
+ -> wq_head->lock
+ -> i915_irq
+ -> i915_rps
+ -> i915_engine
+ -> sched_lock
+ -> lock@0xffffffff804f64e8
+ -> fd_table->lock
+ -> cred_id
+ -> pool_lock
+ -> pm_runtime
+ -> frame_lock
+ -> dma_resv
+ -> drm_table_lock
+ -> drm_object_lock
+ -> heap_lock
+ -> i915_userptr
+ -> service_fine
+ -> i915_uncore
+0xffffffff80b3f5a2 FD: 0 BD: 1 ..: i915_userptr
+0xffffffff804f6228 FD: 0 BD: 2 ..: unix_flight
+0xffffffff80677468 FD: 2 BD: 1 ..: lock@0xffffffff80677468
+ -> wq_head->lock
+ -> dsp
+0xffffffff80631f98 FD: 0 BD: 2 ..: dsp
+0xffffffff80b3f683 FD: 2 BD: 0 .-: i915_ctx_list
+ -> rtc_mono_lock
+ -> heap_lock
+0xffffffff804f7468 FD: 0 BD: 1 ..: i915_ctx_ce
+0xffffffff80a41710 FD: 4 BD: 2 .-: dma_resv
+ -> wq_head->lock
+ -> dma_fence
+ -> rtc_mono_lock
+ -> heap_lock
+0xffffffff80a3a684 FD: 0 BD: 0 ..: drm_syncobj_table_lock
+0xffffffff807efae0 FD: 0 BD: 1 ..: rwsem.spin
+0xffffffff807f05ab FD: 1 BD: 1 .-: ep->mtx/1
+ -> ep->lock
+0xffffffff807f05a8 FD: 0 BD: 2 ..: ep->poll_wait
+0xffffffff804f74a8 FD: 0 BD: 1 ..: pool_lock
+0xffffffff80b3f680 FD: 5 BD: 3 +.: i915_engine
+ -> drm_work_lock
+ -> wq_head->lock
+ -> dma_fence
+ -> i915_uncore
+ -> submit_lock
+0xffffffff804f7488 FD: 0 BD: 3 +.: submit_lock
+0xffffffff804f6b08 FD: 0 BD: 1 ..: dma_fence_context
+0xffffffff80a41720 FD: 1 BD: 3 +.: dma_fence
+ -> rtc_mono_lock
+0xffffffff80a3ea20 FD: 0 BD: 1 ..: drm_syncobj
+0xffffffff804f6a88 FD: 0 BD: 0 ..: dma_buf_ino
+0xffffffff804f61f4 FD: 1 BD: 1 .-: pipe/1
+ -> wq_head->lock
+0xffffffff80b3f158 FD: 0 BD: 1 ..: lock@0xffffffff80b3f158
