@@ -4005,6 +4005,14 @@ void init_syscall(void)
     /* getrusage takes the big lock itself for any target but the thread. */
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_getrusage);
     syscall_unlock(SYSCALL_ABI_IA32, sys_getrusage);
+    /* The waits look under the list lock and the signal state's, and take
+     * the big lock themselves for an end they take (`wait_find`). */
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_wait4);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_wait4);
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_waitid);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_waitid);
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_waitpid);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_waitpid);
     /* rt_sigprocmask takes the signal state's lock, and the big lock only
      * for a change that lock alone cannot make. */
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_rt_sigprocmask);

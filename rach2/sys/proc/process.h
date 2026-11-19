@@ -276,7 +276,9 @@ struct process {
     uint64_t pgrp_serial;
     /* Job-control status pending for the parent's wait4: 0 = none, a Linux
      * WIFSTOPPED value ((stopsig<<8)|0x7f) when stopped, or 0xffff when
-     * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED).
+     * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED)
+     * with a compare-and-exchange, since the wait runs without the big lock
+     * under which a stop or an exit writes it.
      * This single slot has one event: a second transition (a stop just after
      * an unreaped continue, or the reverse) supersedes the first, so a parent
      * that does not reap promptly can miss one stop or continue report. */
@@ -689,7 +691,10 @@ struct process {
      * the stop's or the one PTRACE_SETSIGINFO gave; the system call a
      * stop is in, -1 for none; whether the tracer has seen the process end;
      * and the debug registers DR0 to DR7 as the tracer set them, DR6 as the
-     * last debug exception left it. `tracer` is changed by proc_set_tracer. */
+     * last debug exception left it. `tracer` is changed by proc_set_tracer.
+     * A stop sets `ptrace_status` and clears `ptrace_reported` under the
+     * signal state's lock (`signal_trap_publish`), under which the tracer's
+     * wait reads them and sets `ptrace_reported`. */
     uint32_t ptrace;
     uint32_t tracer;
     uint32_t ptrace_opts;
@@ -1627,6 +1632,15 @@ uint64_t signal_blocked_now(void);
  * another thread's sets: `rt_sigprocmask` changes a mask without the big
  * lock, and a mask is two words on i686. Defined in syscall_proc.c. */
 void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uint64_t *blocked);
+
+/** Put the current thread `self` in the ptrace stop whose wait status is
+ * `status`, not yet reported: `ptrace_reported` and `ptrace_status` change
+ * together under the signal state's lock, under which a wait without the
+ * big lock reads a stop and takes its report (`wait_tracee`), as Linux's
+ * ptrace_stop sets the stop under the tracee's `siglock`. The caller holds
+ * the big lock, or holds neither it nor `sig_lock`. Defined in
+ * syscall_proc.c. */
+void signal_trap_publish(process_t *self, uint32_t status);
 
 /** The siginfo of the SIGCHLD a child's end sends to `receiver`, its parent
  * or its tracer: CLD_EXITED with the exit code, or CLD_KILLED or CLD_DUMPED

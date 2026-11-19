@@ -3651,9 +3651,10 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
  * the si_code and si_status waitid stores, and the child's usage, which is
  * filled only when the caller sets `want_ru`, since it gives no buffer for
- * it otherwise; and the event the wait holds for the caller while the
- * caller copies these out, the record and what taking it does
- * (`wait_hold`), NULL and WAIT_KEEP for none. */
+ * it otherwise; the event the wait holds for the caller while the caller
+ * copies these out, the record and what taking it does (`wait_hold`), NULL
+ * and WAIT_KEEP for none; and whether the wait took the big lock itself
+ * (`big`), to take an end, which `wait_done` lets go. */
 struct wait_report {
     uint32_t pid;
     uint32_t uid;
@@ -3664,6 +3665,7 @@ struct wait_report {
     struct kernel_rusage ru;
     process_t *p;
     int take;
+    int big;
 };
 
 /* What taking a held event does (`wait_done`): nothing, since none is held;
@@ -3689,6 +3691,26 @@ static uint32_t sig_irq_save(void);
 static void sig_irq_restore(uint32_t flags);
 
 static void sig_idle_wait(void);
+
+/* The signal state's lock for a wait's look at a child (defined below with
+ * the signal code), and the big lock for the ids a namespace maps (defined
+ * with the identity calls). */
+static uint32_t wait_lock(void);
+
+static void wait_unlock(uint32_t flags);
+
+static int ids_lock(int lookup);
+
+static void ids_unlock(int taken);
+
+/* What a wait's look at one child found (`wait_tracee`, `wait_child`): no
+ * event; an event, held for the caller; or an end, which only a holder of
+ * the big lock takes. */
+#define LOOK_NONE 0
+
+#define LOOK_HELD 1
+
+#define LOOK_BIG 2
 
 /**
  * Whether `p` is a child of the caller's process that `idtype` and `id`
@@ -3719,7 +3741,7 @@ static int wait_selects(int idtype, uint32_t id, int options, const process_t *p
 }
 
 /** Fill `r` with the report of child `p` and the `code` and `info_status`
- * a waitid gives it. */
+ * a waitid gives it; the usage is filled after the look (`wait_scan`). */
 static void wait_fill(struct wait_report *r, const process_t *p, int32_t status, int32_t code,
                       int32_t info_status)
 {
@@ -3728,9 +3750,6 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
     r->status = status;
     r->code = code;
     r->info_status = info_status;
-    if (r->want_ru) {
-        rusage_of_child(&r->ru, p);
-    }
 }
 
 /**
@@ -3810,13 +3829,25 @@ static void wait_fill_exit(struct wait_report *r, const process_t *p, int32_t st
  * of the process's end, the stop or continue report, or the ptrace stop
  * report taken, as `take` says. `wait_done` then finishes the event or gives
  * it back. WNOWAIT holds nothing, since it leaves every event where it is.
+ *
+ * The caller holds the list lock and `wait_lock`, under which every wait
+ * looks, so no other wait takes the event meanwhile; a reap, a free and a
+ * tracer's view of an end are held under the big lock too (`wait_tracee`,
+ * `wait_child`). A stop or a continue is taken by an exchange that finds
+ * the report the look read, since a stop and the end of a process write
+ * `jc_status` under the big lock alone (`sig_group_stop`, `sig_group_end`):
+ * a report that changed meanwhile is left, and its writer wakes the wait to
+ * look again. A held stop, continue or end seen keeps a reference to `p`
+ * (`proc_ref_get`), which `wait_done` drops, so that a give-back finds the
+ * record it held. Returns 1 when the event is the caller's, 0 when it
+ * changed.
  */
-static void wait_hold(struct wait_report *r, process_t *p, int take, int options)
+static int wait_hold(struct wait_report *r, process_t *p, int take, int options)
 {
     r->p = NULL;
     r->take = WAIT_KEEP;
     if (options & WNOWAIT) {
-        return;
+        return 1;
     }
     switch (take) {
     case WAIT_REAP:
@@ -3827,14 +3858,21 @@ static void wait_hold(struct wait_report *r, process_t *p, int take, int options
         p->ptrace_exit_seen = 1;
         break;
     case WAIT_JOB:
-        p->jc_status = 0;
+        if (arch_atomic_cmpxchg(&p->jc_status, (unsigned int)r->status, 0u) !=
+            (unsigned int)r->status) {
+            return 0;
+        }
         break;
     default:
         p->ptrace_reported = 1;
         break;
     }
+    if (take != WAIT_REAP && take != WAIT_FREE) {
+        proc_ref_get(p);
+    }
     r->p = p;
     r->take = take;
+    return 1;
 }
 
 /**
@@ -3843,7 +3881,8 @@ static void wait_hold(struct wait_report *r, process_t *p, int take, int options
  * no other wait could take meanwhile, or let go the process whose end its
  * tracer has now seen, which its parent may then reap (`ptrace_exit_release`),
  * when no other part of the kernel freed it meanwhile. The other events were
- * taken when they were held.
+ * taken when they were held. Those three are held only under the big lock,
+ * which the caller still holds.
  */
 static void wait_take(const struct wait_report *r)
 {
@@ -3862,37 +3901,50 @@ static void wait_take(const struct wait_report *r)
 /**
  * Finish the event the wait holds in `r` (`wait_hold`): take it when the
  * caller copied the report out, `ok` (`wait_take`), and otherwise give it
- * back.
+ * back; then drop the reference the hold took, and the big lock when the
+ * wait took it itself (`big`).
  *
  * A copy fails when another thread unmapped or protected the caller's buffer
  * while the wait slept. The event is then given back as if it had not been
- * reported, and the caller's other waiting threads, which passed it over,
- * are woken. A report of a record that may have ended meanwhile, a stop, a
- * continue, a ptrace stop or the end a tracer sees, is given back only when
- * the record is still there and has no newer report.
+ * reported, under the locks a look holds, and the caller's other waiting
+ * threads, which passed it over, are woken. A report of a record that may
+ * have ended meanwhile, a stop, a continue, a ptrace stop or the end a
+ * tracer sees, is given back only when the record is still there and has
+ * no newer report; the reference keeps the record from being given to
+ * another thread meanwhile, so that the test of its id is sound.
  */
 static void wait_done(struct wait_report *r, int ok)
 {
     process_t *p = r->p;
+    uint32_t list, flags;
     int there;
 
-    if (p == NULL || ok) {
-        if (p != NULL) {
-            wait_take(r);
+    if (p != NULL && ok) {
+        wait_take(r);
+    } else if (p != NULL) {
+        list = tasklist_read_lock();
+        flags = wait_lock();
+        there = get_process(r->pid) == p;
+        if (r->take == WAIT_REAP || r->take == WAIT_FREE) {
+            p->state = PROC_ZOMBIE;
+        } else if (r->take == WAIT_SEEN && there) {
+            p->ptrace_exit_seen = 0;
+        } else if (r->take == WAIT_JOB && there) {
+            (void)arch_atomic_cmpxchg(&p->jc_status, 0u, (unsigned int)r->status);
+        } else if (r->take == WAIT_TRAP && there && p->ptrace_status == (uint32_t)r->status) {
+            p->ptrace_reported = 0;
         }
-        return;
+        wait_unlock(flags);
+        tasklist_read_unlock(list);
+        wq_wake_all(&current_proc->tg->chld);
     }
-    there = get_process(r->pid) == p;
-    if (r->take == WAIT_REAP || r->take == WAIT_FREE) {
-        p->state = PROC_ZOMBIE;
-    } else if (r->take == WAIT_SEEN && there) {
-        p->ptrace_exit_seen = 0;
-    } else if (r->take == WAIT_JOB && there && p->jc_status == 0) {
-        p->jc_status = (uint32_t)r->status;
-    } else if (r->take == WAIT_TRAP && there && p->ptrace_status == (uint32_t)r->status) {
-        p->ptrace_reported = 0;
+    if (p != NULL && r->take != WAIT_REAP && r->take != WAIT_FREE) {
+        proc_ref_put(p);
     }
-    wq_wake_all(&current_proc->tg->chld);
+    if (r->big) {
+        r->big = 0;
+        bkl_exit();
+    }
 }
 
 /**
@@ -3903,30 +3955,43 @@ static void wait_done(struct wait_report *r, int ok)
  * report lets the process go to the parent (`wait_take`). A stop's si_status
  * is its wait status shifted right by 8 bits, the signal with the event
  * above it, as Linux's `wait_task_stopped` gives it, so waitid tells an
- * event stop from a plain SIGTRAP. Returns 1 with `out` filled and the event
- * held (`wait_hold`), or 0.
+ * event stop from a plain SIGTRAP.
+ *
+ * The caller holds the list lock and `wait_lock`, under which the tracee
+ * publishes its stop (`signal_trap_publish`); a resume clears the status
+ * under the big lock alone, so the status is read once. Returns LOOK_HELD
+ * with `out` filled and the event held (`wait_hold`); LOOK_BIG for an end,
+ * which is taken only under the big lock, when the caller does not hold
+ * it; or LOOK_NONE.
  */
 static int wait_tracee(process_t *p, int options, struct wait_report *out)
 {
-    if (p->ptrace_status != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
-        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED, (int32_t)(p->ptrace_status >> 8));
-        wait_hold(out, p, WAIT_TRAP, options);
-        return 1;
+    uint32_t stop = *(volatile uint32_t *)&p->ptrace_status;
+
+    if (stop != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
+        wait_fill(out, p, (int32_t)stop, CLD_TRAPPED, (int32_t)(stop >> 8));
+        return wait_hold(out, p, WAIT_TRAP, options) ? LOOK_HELD : LOOK_NONE;
     }
     if (p->state != PROC_ZOMBIE || !(options & WEXITED)) {
-        return 0;
+        return LOOK_NONE;
     }
     if (p->pid != p->tgid) {
+        if (!bkl_held()) {
+            return LOOK_BIG;
+        }
         wait_fill_exit(out, p, p->tg->exiting ? p->tg->exit_code : p->exit_code);
-        wait_hold(out, p, WAIT_FREE, options);
-        return 1;
+        (void)wait_hold(out, p, WAIT_FREE, options);
+        return LOOK_HELD;
     }
     if (p->tg->live == 0 && p->parent_pid != current_proc->tgid && !p->ptrace_exit_seen) {
+        if (!bkl_held()) {
+            return LOOK_BIG;
+        }
         wait_fill_exit(out, p, p->exit_code);
-        wait_hold(out, p, WAIT_SEEN, options);
-        return 1;
+        (void)wait_hold(out, p, WAIT_SEEN, options);
+        return LOOK_HELD;
     }
-    return 0;
+    return LOOK_NONE;
 }
 
 /**
@@ -3936,29 +4001,103 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
  * SIGKILL ended stays recorded; or a continue (WCONTINUED), reported once.
  * A process another process traces is reaped only after its tracer's wait
  * has reported its end and let it go (`wait_tracee`), as Linux has it, so
- * that the tracer learns of the end first. Returns 1 with `out` filled and
- * the event held (`wait_hold`), or 0.
+ * that the tracer learns of the end first.
+ *
+ * The caller holds the list lock and `wait_lock`; the stop or continue
+ * report is read once, since a stop writes it under the big lock alone.
+ * Returns LOOK_HELD with `out` filled and the event held (`wait_hold`);
+ * LOOK_BIG for an end, which is taken only under the big lock, when the
+ * caller does not hold it; or LOOK_NONE.
  */
 static int wait_child(process_t *p, int options, struct wait_report *out)
 {
     int traced = (p->ptrace & PT_TRACED) && p->tracer != current_proc->tgid;
     int stopped = p->tg->stop != 0 && p->tg->live != 0 && !p->tg->exiting;
+    uint32_t job = *(volatile uint32_t *)&p->jc_status;
 
     if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED) && !traced) {
+        if (!bkl_held()) {
+            return LOOK_BIG;
+        }
         wait_fill_exit(out, p, p->exit_code);
-        wait_hold(out, p, WAIT_REAP, options);
-        return 1;
+        (void)wait_hold(out, p, WAIT_REAP, options);
+        return LOOK_HELD;
     }
-    if ((options & WUNTRACED) && stopped && (p->jc_status & 0xff) == 0x7f) {
-        wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
-                  (int32_t)((p->jc_status >> 8) & 0xff));
-    } else if ((options & WCONTINUED) && p->jc_status == 0xffff) {
+    if ((options & WUNTRACED) && stopped && (job & 0xff) == 0x7f) {
+        wait_fill(out, p, (int32_t)job, CLD_STOPPED, (int32_t)((job >> 8) & 0xff));
+    } else if ((options & WCONTINUED) && job == 0xffff) {
         wait_fill(out, p, 0xffff, CLD_CONTINUED, SIGCONT);
     } else {
-        return 0;
+        return LOOK_NONE;
     }
-    wait_hold(out, p, WAIT_JOB, options);
-    return 1;
+    return wait_hold(out, p, WAIT_JOB, options) ? LOOK_HELD : LOOK_NONE;
+}
+
+/**
+ * Look once at every child `idtype` and `id` select until one has an event
+ * `options` asks for: the leaders whose parent is the caller's process, in
+ * the order they took it, and then the other threads it traces, in the
+ * order it took them, as Linux's do_wait looks at `children` and then at
+ * `ptraced` (kernel/exit.c:1488-1530). The indexes by parent and by tracer
+ * (`proc_children`, `proc_tracees`) give them, so the look costs what the
+ * caller has and not what the system has.
+ *
+ * The walk is under the list lock as a reader, as Linux's do_wait holds
+ * `tasklist_lock`, and each child's events are read and held under
+ * `wait_lock` too, as Linux's wait_task_stopped takes the child's
+ * `siglock`; the list lock is one spinlock, so the looks of two waits do
+ * not overlap. The usage of the child whose event is held is summed after
+ * `wait_lock` is let go, since the sum takes `timer_lock`, which comes
+ * before `sig_lock`. Sets `*have` when a child is selected, and returns the
+ * first result that is not LOOK_NONE (`wait_tracee`, `wait_child`).
+ */
+static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *out, int *have)
+{
+    uint32_t tgid = current_proc->tgid, list = tasklist_read_lock(), flags;
+    int look = LOOK_NONE;
+    process_t *p;
+
+    for (p = proc_children(tgid); p; p = p->ppid_link.next) {
+        if (p->parent_pid != tgid) {
+            continue;
+        }
+        if (wait_selects_tracee(idtype, id, options, p)) {
+            *have = 1;
+            flags = wait_lock();
+            look = wait_tracee(p, options, out);
+            wait_unlock(flags);
+            if (look != LOOK_NONE) {
+                break;
+            }
+        }
+        if (wait_selects(idtype, id, options, p)) {
+            *have = 1;
+            flags = wait_lock();
+            look = wait_child(p, options, out);
+            wait_unlock(flags);
+            if (look != LOOK_NONE) {
+                break;
+            }
+        }
+    }
+    for (p = look == LOOK_NONE ? proc_tracees(tgid) : p; look == LOOK_NONE && p;
+         p = p->tracer_link.next) {
+        if ((p->pid != p->tgid || p->parent_pid != tgid) &&
+            wait_selects_tracee(idtype, id, options, p)) {
+            *have = 1;
+            flags = wait_lock();
+            look = wait_tracee(p, options, out);
+            wait_unlock(flags);
+            if (look != LOOK_NONE) {
+                break;
+            }
+        }
+    }
+    if (look == LOOK_HELD && out->want_ru) {
+        rusage_of_child(&out->ru, p);
+    }
+    tasklist_read_unlock(list);
+    return look;
 }
 
 /**
@@ -3977,30 +4116,35 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  * CLD_DUMPED with the signal; a stop's is CLD_STOPPED with the stop signal,
  * and a continue's CLD_CONTINUED with SIGCONT.
  *
- * Every selected child is looked at until one has an event: the leaders
- * whose parent is the caller's process, in the order they took it, and then
- * the other threads it traces, in the order it took them, as Linux's
- * do_wait looks at `children` and then at `ptraced` (kernel/exit.c:
- * 1488-1530). The indexes by parent and by tracer (`proc_children`,
- * `proc_tracees`) give them, so the look costs what the caller has and not
- * what the system has. Without WNOHANG
- * the caller then sleeps on its process's child queue, which an exit, a stop
- * or a continue wakes, until a child has an event or a signal interrupts. As
- * Linux's `do_wait` (kernel/exit.c), the caller joins the queue, with a
- * record on its stack, and is marked PROC_BLOCKED before it looks at the
- * children and tests `signal_pending`, so a wake or a signal posted after
- * the look finds it blocked and makes it ready; a child's release that
- * sleeps meanwhile leaves it RUNNING, and it returns what it found.
+ * The wait runs without the big lock, as Linux's do_wait runs under
+ * `tasklist_lock` and the child's `siglock` (`wait_scan`), and takes it
+ * only for an end, a reap or the free of a traced thread or a tracer's
+ * view of a process's end: its release sleeps and frees what the big lock
+ * guards, and the ending thread holds the big lock from its zombie's
+ * publication until it has left the processor. A look that meets such an
+ * end without the big lock leaves the queue, takes the lock and looks
+ * again (`big` in `out`), so that the order of the reports stays the
+ * walk's; a later sleep of that call keeps the lock, which `schedule` lets
+ * go while it sleeps.
+ *
+ * Without WNOHANG the caller then sleeps on its process's child queue, which
+ * an exit, a stop or a continue wakes, until a child has an event or a
+ * signal interrupts, as Linux's do_wait sleeps on `wait_chldexit`. The
+ * caller joins the queue, with a record on its stack, and is marked
+ * PROC_BLOCKED before it looks at the children and tests `signal_pending`,
+ * so a wake or a signal posted after the look finds it blocked and makes
+ * it ready; a child's release that sleeps meanwhile leaves it RUNNING, and
+ * it returns what it found.
  *
  * Returns the pid; 0 with WNOHANG when a selected child has nothing to
  * report; -ECHILD when no child is selected; or -EINTR when a signal the
- * caller acts on arrives while it waits.
+ * caller acts on arrives while it waits. The big lock the wait took is let
+ * go before a return of no event, and by `wait_done` after one.
  */
 static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_report *out)
 {
     struct wq_waiter self;
-    process_t *p;
-    uint32_t flags, tgid = current_proc->tgid;
+    uint32_t flags;
     int32_t rc;
 
     self.proc = current_proc;
@@ -4008,8 +4152,11 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
     self.func = NULL;
     self.wq = NULL;
     self.flags = 0;
+    out->p = NULL;
+    out->take = WAIT_KEEP;
+    out->big = 0;
     for (;;) {
-        int have_child = 0;
+        int have_child = 0, look;
 
         flags = sig_irq_save();
         if (!(options & WNOHANG)) {
@@ -4018,35 +4165,17 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             sched_set_current_state(PROC_BLOCKED);
         }
         sig_irq_restore(flags);
-        rc = 0;
-        for (p = proc_children(tgid); p && rc == 0; p = p->ppid_link.next) {
-            if (p->parent_pid != tgid) {
-                continue;
-            }
-            if (wait_selects_tracee(idtype, id, options, p)) {
-                have_child = 1;
-                if (wait_tracee(p, options, out)) {
-                    rc = (int32_t)out->pid;
-                    break;
-                }
-            }
-            if (wait_selects(idtype, id, options, p)) {
-                have_child = 1;
-                if (wait_child(p, options, out)) {
-                    rc = (int32_t)out->pid;
-                }
-            }
-        }
-        for (p = proc_tracees(tgid); p && rc == 0; p = p->tracer_link.next) {
-            if ((p->pid != p->tgid || p->parent_pid != tgid) &&
-                wait_selects_tracee(idtype, id, options, p)) {
-                have_child = 1;
-                if (wait_tracee(p, options, out)) {
-                    rc = (int32_t)out->pid;
-                }
-            }
-        }
+        look = wait_scan(idtype, id, options, out, &have_child);
+        rc = look == LOOK_HELD ? (int32_t)out->pid : 0;
         flags = sig_irq_save();
+        if (look == LOOK_BIG) {
+            wq_poll_remove(&current_proc->tg->chld, &self);
+            current_proc->state = PROC_RUNNING;
+            sig_irq_restore(flags);
+            bkl_enter();
+            out->big = 1;
+            continue;
+        }
         if (rc == 0 && !have_child) {
             rc = -ECHILD;
         } else if (rc == 0 && !(options & WNOHANG) && signal_pending()) {
@@ -4056,6 +4185,10 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             wq_poll_remove(&current_proc->tg->chld, &self);
             current_proc->state = PROC_RUNNING;
             sig_irq_restore(flags);
+            if (rc <= 0 && out->big) {
+                out->big = 0;
+                bkl_exit();
+            }
             return rc;
         }
         sig_irq_restore(flags);
@@ -4068,6 +4201,30 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         current_proc->state = PROC_RUNNING;
         sig_irq_restore(flags);
     }
+}
+
+/** The kernel's thread id that the caller's id `pid` names (`pid_named`),
+ * under the big lock only in a namespace below the first, whose lookups it
+ * guards (`ids_lock`). */
+static uint32_t wait_id_named(uint32_t pid)
+{
+    int taken = ids_lock(0);
+    uint32_t kid = pid_named(pid);
+
+    ids_unlock(taken);
+    return kid;
+}
+
+/** The caller's id of the kernel's thread id `kid`, or of the kernel's user
+ * id `kid` when `user` is set (`pid_seen`, `uid_seen`), under the lock
+ * `wait_id_named` takes. */
+static uint32_t wait_id_seen(uint32_t kid, int user)
+{
+    int taken = ids_lock(0);
+    uint32_t id = user ? uid_seen(kid) : pid_seen(kid);
+
+    ids_unlock(taken);
+    return id;
 }
 
 /**
@@ -4107,14 +4264,14 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
     }
     if (pid > 0) {
         idtype = P_PID;
-        id = pid_named((uint32_t)pid);
+        id = wait_id_named((uint32_t)pid);
     } else if (pid == -1) {
         idtype = P_ALL;
         id = 0;
     } else if (pid == 0) {
         id = current_proc->pgid;
     } else {
-        id = pid_named(0u - (uint32_t)pid);
+        id = wait_id_named(0u - (uint32_t)pid);
     }
     options &= (int)(WNOHANG | WUNTRACED | WCONTINUED | W_NOTHREAD | W_ALL | W_CLONE);
     r.want_ru = rusage_ptr != 0;
@@ -4122,7 +4279,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
     if (rc <= 0) {
         return rc;
     }
-    seen = pid_seen((uint32_t)rc);
+    seen = wait_id_seen((uint32_t)rc, 0);
     ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
          (!rusage_ptr || rusage_put(rusage_ptr, &r.ru) == 0);
     wait_done(&r, ok);
@@ -4152,6 +4309,42 @@ long sys_wait4(isr_params_t *params)
                    SC_ARG(params, 3));
 }
 
+/** The bytes of a siginfo_t through si_status, which waitid writes: 24 for
+ * an i386 caller on x86-64, as Linux's compat waitid writes, and
+ * SIGINFO_CHLD_BYTES for a native one. */
+static uint32_t siginfo_chld_bytes(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (in_compat_syscall()) {
+        return SIGINFO32_CHLD_BYTES;
+    }
+#endif
+    return SIGINFO_CHLD_BYTES;
+}
+
+/** The thread id `*id` of the process the pidfd `fd` names, for waitid's
+ * P_PIDFD, and in `*nonblock` whether the pidfd is non-blocking, under the
+ * big lock, which the pidfd's look-up needs; 0, -EINVAL for a negative
+ * `fd`, -EBADF for a descriptor that is no pidfd, or -ECHILD for a process
+ * already reaped. */
+static int32_t waitid_pidfd(int32_t fd, uint32_t *id, int *nonblock)
+{
+    process_t *named = NULL;
+    int32_t rc;
+
+    if (fd < 0) {
+        return -EINVAL;
+    }
+    bkl_enter();
+    rc = pidfd_lookup((int)fd, &named, nonblock);
+    *id = rc == 0 && named ? named->pid : 0;
+    bkl_exit();
+    if (rc == 0 && *id == 0) {
+        rc = -ECHILD;
+    }
+    return rc;
+}
+
 /**
  * Wait for a child to change state (waitid).
  *
@@ -4162,7 +4355,8 @@ long sys_wait4(isr_params_t *params)
  * pidfd waits for as WNOHANG does, with -EAGAIN for no event, as on Linux.
  * At least one of WEXITED, WSTOPPED and WCONTINUED must be given,
  * beside which WNOHANG, WNOWAIT and Linux's three thread bits are accepted;
- * `wait_find` has what each means.
+ * `wait_find` has what each means, and when the call takes the big lock: for
+ * an end it takes, and for the look-up of a pidfd (`waitid_pidfd`).
  *
  * Returns 0 when a child was reported, with the siginfo's si_signo SIGCHLD,
  * si_code, si_pid, si_uid (the child's real uid) and si_status filled and
@@ -4177,19 +4371,6 @@ long sys_wait4(isr_params_t *params)
  * the wait or after it with the child's event left in place, as `do_wait`
  * finds it.
  */
-/** The bytes of a siginfo_t through si_status, which waitid writes: 24 for
- * an i386 caller on x86-64, as Linux's compat waitid writes, and
- * SIGINFO_CHLD_BYTES for a native one. */
-static uint32_t siginfo_chld_bytes(void)
-{
-#if defined(IA32_SYSCALL_TABLE_SIZE)
-    if (in_compat_syscall()) {
-        return SIGINFO32_CHLD_BYTES;
-    }
-#endif
-    return SIGINFO_CHLD_BYTES;
-}
-
 long sys_waitid(isr_params_t *params)
 {
     int idtype = (int)SC_ARG(params, 0);
@@ -4200,7 +4381,6 @@ long sys_waitid(isr_params_t *params)
     uint8_t info[SIGINFO_SIZE];
     struct k_siginfo ki;
     struct wait_report r;
-    process_t *named;
     uint32_t id = 0;
     int nonblock = 0;
     int32_t rc;
@@ -4220,27 +4400,20 @@ long sys_waitid(isr_params_t *params)
         if (upid <= 0) {
             return -EINVAL;
         }
-        id = pid_named((uint32_t)upid);
+        id = wait_id_named((uint32_t)upid);
         break;
     case P_PGID:
         if (upid < 0) {
             return -EINVAL;
         }
-        id = upid != 0 ? pid_named((uint32_t)upid) : current_proc->pgid;
+        id = upid != 0 ? wait_id_named((uint32_t)upid) : current_proc->pgid;
         break;
     case P_PIDFD:
-        if (upid < 0) {
-            return -EINVAL;
-        }
-        rc = pidfd_lookup((int)upid, &named, &nonblock);
+        rc = waitid_pidfd(upid, &id, &nonblock);
         if (rc != 0) {
             return rc;
         }
-        if (!named) {
-            return -ECHILD;
-        }
         idtype = P_PID;
-        id = named->pid;
         if (nonblock) {
             options |= WNOHANG;
         }
@@ -4266,8 +4439,8 @@ long sys_waitid(isr_params_t *params)
     if (rc > 0) {
         k_memset(&ki, 0, sizeof(ki));
         ki.code = r.code;
-        ki.pid = pid_seen(r.pid);
-        ki.uid = uid_seen(r.uid);
+        ki.pid = wait_id_seen(r.pid, 0);
+        ki.uid = wait_id_seen(r.uid, 1);
         ki.status = r.info_status;
         siginfo_to_caller(info, SIGCHLD, &ki);
     }
@@ -4844,6 +5017,35 @@ void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uin
     } else {
         spin_unlock_irqrestore(&sig_lock, flags);
     }
+}
+
+/** Take the signal state's lock for a wait's look at a child, as Linux's
+ * wait_task_stopped takes the child's `siglock`: in a region of
+ * `sig_irq_save` for a holder of the big lock, else directly. Interrupts
+ * are off until `wait_unlock`. The caller holds the list lock, which comes
+ * first, and takes nothing under this one. */
+static uint32_t wait_lock(void)
+{
+    return bkl_held() ? sig_irq_save() : spin_lock_irqsave(&sig_lock);
+}
+
+/** Let go what `wait_lock` took, with its flags. */
+static void wait_unlock(uint32_t flags)
+{
+    if (bkl_held()) {
+        sig_irq_restore(flags);
+    } else {
+        spin_unlock_irqrestore(&sig_lock, flags);
+    }
+}
+
+void signal_trap_publish(process_t *self, uint32_t status)
+{
+    uint32_t flags = wait_lock();
+
+    self->ptrace_reported = 0;
+    self->ptrace_status = status;
+    wait_unlock(flags);
 }
 
 void signal_exit_begin(void)
