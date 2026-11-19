@@ -196,7 +196,8 @@ At an interrupt of the line,
 masks it by the function's Interrupt Disable bit and signals its eventfd;
 an unmask, by ioctl or by an eventfd given to
 .Dv VFIO_IRQ_SET_ACTION_UNMASK ,
-lifts the mask.
+lifts the mask, or while the function still asserts the line keeps it and
+signals the eventfd again.
 The line is offered only to a function that masks it that way.
 MSI-X entries can be set and cleared while MSI-X is on.
 .Ss Release

@@ -59,7 +59,7 @@ The configuration space is the device's but for what VFIO keeps, as Linux's `vfi
 
 ### Interrupts
 
-The line's handler is on the device's platform line from the first time it is used and stays there, passing over a device that is not VFIO's now. At each interrupt it masks the asserting device by Interrupt Disable and signals its eventfd; an unmask, by ioctl or by the unmask eventfd, lifts the mask unless the device still asserts the line. Each message and each MSI-X entry given an eventfd takes a vector of its own, whose handler signals the eventfd; with interrupt remapping each goes through a remapping entry of its own (`pci_msix_entry_set`). MSI-X entries are set and cleared while MSI-X is on, as Linux's dynamic MSI-X lets them be. A reset loses the messages, which VFIO programs again after it.
+The line's handler is on the device's platform line from the first time it is used and stays there, passing over a device that is not VFIO's now. At each interrupt it masks the asserting device by Interrupt Disable and signals its eventfd; an unmask, by ioctl or by the unmask eventfd, lifts the mask, or while the device still asserts the line keeps it and signals the eventfd again, as Linux's `__vfio_pci_intx_unmask` and its virqfd. Each message and each MSI-X entry given an eventfd takes a vector of its own, whose handler signals the eventfd; with interrupt remapping each goes through a remapping entry of its own (`pci_msix_entry_set`). MSI-X entries are set and cleared while MSI-X is on, as Linux's dynamic MSI-X lets them be. A reset loses the messages, which VFIO programs again after it.
 
 ### Release
 

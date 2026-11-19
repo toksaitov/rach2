@@ -1783,10 +1783,13 @@ static void intx_rows(void)
           "an unmask eventfd, its descriptor above a byte read whole");
     m->cfg[6] |= 0x08;
     raise(IRQ_VECTOR(11));
+    eventfd_signal(&evs[1]);
+    CHECK((m->cfg[5] & 0x04) && evs[0].count == 4 && evs[1].count == 0,
+          "a write of it while the line is asserted keeps the mask and signals again");
     m->cfg[6] &= (uint8_t)~0x08;
     eventfd_signal(&evs[1]);
     CHECK((m->cfg[5] & 0x04) == 0 && evs[1].count == 0, "a write of it unmasks the line");
-    CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 1, NULL) == 0 && evs[0].count == 4,
+    CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 1, NULL) == 0 && evs[0].count == 5,
           "a trigger without data signals the eventfd");
     CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, &fd) == -EINVAL,
           "MSI while the line is on is refused");
