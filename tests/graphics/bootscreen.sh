@@ -14,6 +14,10 @@
 #   session    with rach2.console=term on the boot line, init's console
 #              session, the child of init that leads a session on
 #              /dev/console, is `term -l`
+#   login      and that term has started its login: a child of term's that
+#              leads a session of its own and has left term's image, by its
+#              exec of /bin/login, which term makes only once it has loaded
+#              its font and opened the screen and the keyboard
 #   backlight  every backlight of /sys/class/backlight has brightness and
 #              actual_brightness above 0 and bl_power 0, on
 #
@@ -38,6 +42,26 @@ console_session()
             [ "$4" = "$pid" ] && [ "$5" = $(((5 << 8) | 1)) ] || continue
         printf '%s %s %s\n' "$pid" "${comm#*\(}" \
             "$(tr '\0' ' ' < "/proc/$pid/cmdline" 2> /dev/null | sed 's/ $//')"
+        return
+    done
+}
+
+# login_child PID: print the pid and name of the child of PID that leads a
+# session of its own and has left PID's image by an exec, so that its name
+# is no longer term; a zombie is left out. Prints nothing when none has.
+login_child()
+{
+    parent=$1
+    for file in /proc/[0-9]*/stat; do
+        IFS= read -r line 2> /dev/null < "$file" || continue
+        pid=${line%% *}
+        comm=${line%\)*}
+        comm=${comm#*\(}
+        # shellcheck disable=SC2086 # /proc's fields are separate words
+        set -- ${line##*\) }
+        [ "$#" -ge 4 ] && [ "$1" != Z ] && [ "$2" = "$parent" ] &&
+            [ "$4" = "$pid" ] && [ "$comm" != term ] || continue
+        printf '%s %s\n' "$pid" "$comm"
         return
     done
 }
@@ -100,7 +124,11 @@ check()
     echo "bootscreen: session: ${current:-none}"
     if tr ' ' '\n' < /proc/cmdline | grep -qx 'rach2\.console=term'; then
         case $current in
-            *' term term -l') ;;
+            *' term term -l')
+                login=$(login_child "${current%% *}")
+                echo "bootscreen: login: ${login:-none}"
+                [ -n "$login" ] || [ -n "$why" ] || why="term -l has started no login"
+                ;;
             *) [ -n "$why" ] || why="init's console session is ${current:-none}, not term -l" ;;
         esac
     fi
