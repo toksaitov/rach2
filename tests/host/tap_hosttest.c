@@ -62,6 +62,7 @@ static struct {
     int other_ns;              /* the caller is in a network namespace not the first */
     int ip6_forgets;           /* interfaces whose IPv6 state was forgotten */
     void (*during_copy)(void); /* run once inside the next copy from the user */
+    void (*during_wait)(void); /* run once inside the next wait, before a signal */
     struct netdev *iface[4];   /* the interfaces registered */
     int registered, unregistered;
     int rx, rx_len; /* frames given to ethernet_rx, and the last one's length */
@@ -263,7 +264,13 @@ void wq_wake_all(wait_queue_t *wq)
 /** Not reached: every read of the test that would wait does not block. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    void (*hook)(void) = k.during_wait;
+
     (void)wq;
+    k.during_wait = 0;
+    if (hook) {
+        hook();
+    }
     return cond(arg) ? 0 : -EINTR;
 }
 
@@ -435,7 +442,8 @@ static void check_before(void)
     CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EOPNOTSUPP,
           "a network namespace other than the first has no tap");
     k.other_ns = 0;
-    CHECK(k.registered == 0, "and no interface is made by a refusal");
+    CHECK(k.registered == 0 && !taps[0].frames && !taps[1].frames,
+          "and no interface or ring is made by a refusal");
 }
 
 /** TUNSETIFF names and makes interfaces, and a descriptor of the same open
@@ -476,10 +484,21 @@ static void check_setiff(void)
           "an interface another descriptor holds is busy");
     CHECK(set_iff(2, "eth0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL,
           "the name of an interface that is no tap is refused");
+    CHECK(set_iff(2, "eth0", TAP_IFF_TAP | TAP_IFF_NO_PI | TAP_IFF_TUN_EXCL, 0) == -EBUSY,
+          "but is busy under IFF_TUN_EXCL, as Linux checks that first");
     CHECK(set_iff(2, "vm%d", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 && same_str(name, "vm0") == 0,
           "a stem with %d takes its first free digit");
     CHECK(open_tap(3, 2) == 0 && set_iff(3, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC,
           "a third interface finds both records taken");
+    CHECK(set_iff(3, ".%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC &&
+              set_iff(3, "%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC,
+          "the templates .%d and %d pass the checks of a name, as dev_valid_name allows them");
+}
+
+/** Set O_NONBLOCK on the first open, as another thread's fcntl does. */
+static void set_nonblock(void)
+{
+    ofd[0].status_flags = OFD_NONBLOCK;
 }
 
 /** The ring: TAP_RING frames held in order, one more dropped, a read of
@@ -533,6 +552,10 @@ static void check_ring(void)
     }
     CHECK(k.node->ops->read(&fds[0], (char *)buf, sizeof(buf)) == -EAGAIN,
           "an empty ring is EAGAIN without blocking");
+    ofd[0].status_flags = 0;
+    k.during_wait = set_nonblock;
+    CHECK(k.node->ops->read(&fds[0], (char *)buf, sizeof(buf)) == -EINTR,
+          "a blocking read a signal ends is EINTR, though O_NONBLOCK was set as it slept");
     ofd[0].status_flags = 0;
 }
 
