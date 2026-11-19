@@ -2764,8 +2764,9 @@ static int krffs_window_sync(void *ctx)
     return 0;
 }
 
+/* A store inside one page is whole or not at all (`pc_copy_in`). */
 static const krffs_backend_t krffs_window_backend = {krffs_window_read, krffs_window_write,
-                                                     krffs_window_sync};
+                                                     krffs_window_sync, PAGE_SIZE};
 
 /** The page cache's backing on the disk: read the page at byte `off` of the
  * KRFFS partition. Returns 0, or the device's error. */
@@ -2780,6 +2781,11 @@ static int krffs_disk_read(uint32_t off, void *page)
  * in as few writes of the device as its limit allows, each of which is on
  * the medium when it returns. Returns 0, or the device's error, after which
  * the pages are in no known state.
+ *
+ * A halted root (`krffs_root_halted`) takes no write, from the flusher, an
+ * eviction or a sync alike: -EIO, and the pages stay dirty in the cache, as
+ * Linux's ext4_writepages answers -EIO after a shutdown. What the cache
+ * holds then is a state only the next mount's repair may put on the disk.
  */
 static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
 {
@@ -2789,6 +2795,9 @@ static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
     uint32_t chunk;
     int rc;
 
+    if (krffs_root_halted()) {
+        return -EIO;
+    }
     if (most == 0) {
         most = 1;
     }
@@ -3152,6 +3161,42 @@ static int init_krffs_disk(void)
 }
 
 /**
+ * The disk root's start once it is mounted: set the dirty flag and write it
+ * through, logging one an unclean shutdown left, and then free the orphans,
+ * as `krffs_root_mount` describes. -1 when the flag cannot be read, set or
+ * written, which refuses the mount; 0 otherwise, a scan that halted the
+ * root included, which keeps the flag and refuses writes until the next
+ * mount.
+ */
+static int krffs_root_mark_and_reap(void)
+{
+    uint32_t reaped;
+    uint16_t mode = 0;
+    int read = pc_copy_out(KRFFS_FIELD_MODE, &mode, sizeof(mode));
+
+    if (read == 0 && (mode & KRFFS_MODE_DIRTY)) {
+        klog(KLOG_WARN, "krffs", "not cleanly unmounted last time; run fsck.krffs");
+    }
+    mode |= KRFFS_MODE_DIRTY;
+    if (read != 0 || pc_copy_in(KRFFS_FIELD_MODE, &mode, sizeof(mode)) != 0 || pc_sync() != 0) {
+        klog(KLOG_WARN, "krffs", "mount: refused: dirty flag or repair writeback failed");
+        return -1;
+    }
+
+    reaped = krffs_reap_orphans();
+    if (reaped != 0) {
+        klog(KLOG_INFO, "krffs", "reaped %d orphan(s) with no descriptor left", (int)reaped);
+    }
+    if (krffs_root_halted()) {
+        klog(KLOG_WARN, "krffs",
+             "orphan scan: a read or a free failed; writes refused until the next mount");
+    } else if (reaped != 0 && pc_sync() != 0) {
+        klog(KLOG_WARN, "krffs", "the orphan repair did not reach the disk");
+    }
+    return 0;
+}
+
+/**
  * Mount the KRFFS root at `start_lba` of `disk`, `sector_count` sectors,
  * through the page-cache window. `found` is the entry of `disc_parts` that
  * `init_krffs_disk` chose, or -1 for a root named by identity, whose overlap
@@ -3229,33 +3274,10 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
         return -1;
     }
 
-    {
-        uint32_t reaped;
-        uint16_t mode = 0;
-        int read = pc_copy_out(KRFFS_FIELD_MODE, &mode, sizeof(mode));
-
-        if (read == 0 && (mode & KRFFS_MODE_DIRTY)) {
-            klog(KLOG_WARN, "krffs", "not cleanly unmounted last time; run fsck.krffs");
-        }
-        mode |= KRFFS_MODE_DIRTY;
-        if (read != 0 || pc_copy_in(KRFFS_FIELD_MODE, &mode, sizeof(mode)) != 0 || pc_sync() != 0) {
-            klog(KLOG_WARN, "krffs", "mount: refused: dirty flag or repair writeback failed");
-            krffs_fs = 0;
-            pc_set_backing(0, 0, 0);
-            return -1;
-        }
-
-        reaped = krffs_reap_orphans();
-        if (reaped != 0) {
-            klog(KLOG_INFO, "krffs", "reaped %d orphan(s) with no descriptor left", (int)reaped);
-            if (pc_sync() != 0) {
-                klog(KLOG_WARN, "krffs", "the orphan repair did not reach the disk");
-            }
-        }
-        if (krffs_root_halted()) {
-            klog(KLOG_WARN, "krffs",
-                 "orphan scan: a read failed; writes refused until the next mount");
-        }
+    if (krffs_root_mark_and_reap() != 0) {
+        krffs_fs = 0;
+        pc_set_backing(0, 0, 0);
+        return -1;
     }
     _krffs_on_disk = 1;
 
