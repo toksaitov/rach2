@@ -23,7 +23,8 @@
 #
 # A native run, on a Rach2 that is already up, gives ARGUMENTs of the form
 # NAME=VALUE, as tests/native/Readme.md says: `work=DIR` and `home=DIR`,
-# relative to the starting directory, in place of /tmp/gnu/NAME and /root;
+# relative to the starting directory, in place of the row's directory and
+# /root;
 # `stage=DIR` for the files the case stages in /tmp/gnu; `ports=OLD:NEW,...`
 # for the ports a row listens on; `ifname=`, `addr=` and `gateway=` for the
 # machine's interface, its ADDRESS/PREFIX and its gateway in place of QEMU's
@@ -37,7 +38,7 @@ export HOME=/root LC_ALL=C
 
 ROW=${1:-}
 MACHINE=i686
-WORK=/tmp/gnu/$ROW
+WORK=
 STAGE=/tmp/gnu
 PORTS=
 IFNAME=eth0
@@ -57,6 +58,15 @@ for arg in "${@:2}"; do
         machine=native) NATIVE=1 ;;
     esac
 done
+# A row works in /tmp/gnu/NAME, on the tmpfs init mounts at /tmp, but for
+# the rows that test ext2's own flags, allocation and page cache, which work
+# on the root's ext2, in /var/tmp/gnu/NAME.
+if [ -z "$WORK" ]; then
+    case "$ROW" in
+        chattr | fallocate | filecache) WORK=/var/tmp/gnu/$ROW ;;
+        *) WORK=/tmp/gnu/$ROW ;;
+    esac
+fi
 mkdir -p "$HOME"
 case "$MACHINE" in
     x86_64)
