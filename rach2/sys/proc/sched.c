@@ -20,12 +20,9 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "fair.h"
-
-/* Placement and balancing, balance.c's (dev-log/87-fair-scheduler). */
-int fair_select_cpu(struct process *p, int prev, int wf);
-int fair_balance_newidle(int cpu);
-void fair_balance_tick(int cpu);
-int fair_nohz_kick(int cpu);
+#include "autogroup.h"
+#include "balance.h"
+#include "pelt.h"
 
 #include "../lib/kirq.h"
 #include "../lib/rcu.h"
@@ -250,13 +247,15 @@ static uint64_t sched_irq_ns(int c)
  * (kernel/sched/core.c:746-801): the time since the last move, less the
  * interrupts' time and the steal time that came in it, each taken at most
  * to what is left, the interrupts' rest kept for the next move and the
- * steal time's dropped, as Linux keeps and drops them. Returns the task
- * clock. The run queues' lock is held.
+ * steal time's dropped, as Linux keeps and drops them; the time taken out
+ * goes to the interrupts' average (`pelt_update_irq`), as Linux's
+ * update_irq_load_avg takes it. Returns the task clock. The run queues'
+ * lock is held.
  */
 static uint64_t sched_clock_task(int c)
 {
     struct task_clock *tc = &task_clocks[c];
-    uint64_t now = sched_clock_ns(), delta, irq, steal, cut;
+    uint64_t now = sched_clock_ns(), delta, irq, steal, cut, lost;
 
     if (!tc->started) {
         tc->started = 1;
@@ -279,6 +278,7 @@ static uint64_t sched_clock_task(int c)
     }
     tc->irq_ns += cut;
     delta -= cut;
+    lost = cut;
     steal = arch_cpu_steal_ns(c);
     cut = steal - tc->steal_ns;
     if (cut > delta) {
@@ -286,8 +286,12 @@ static uint64_t sched_clock_task(int c)
     }
     tc->steal_ns = steal;
     delta -= cut;
+    lost += cut;
     tc->task += delta;
     fair_clock(c, tc->mono, tc->task);
+    if (lost) {
+        (void)pelt_update_irq(c, now, lost);
+    }
     return tc->task;
 }
 
@@ -782,15 +786,17 @@ void sched_adopt(process_t *p)
 }
 
 /**
- * The new thread takes its entity from its parent's (`fair_fork`), its
- * weight, slice, group and averages, with its queue on the processor it
- * starts on, as Linux's sched_fork and sched_cgroup_fork
- * (kernel/sched/core.c:4730-4840). Its RR slice is whole.
+ * The new thread joins its thread group's autogroup (`autogroup_fork`)
+ * and takes its entity from its parent's (`fair_fork`), its weight, slice
+ * and averages, with its queue in its group on the processor it starts on,
+ * as Linux's sched_fork and sched_cgroup_fork (kernel/sched/core.c:
+ * 4730-4840). Its RR slice is whole.
  */
 void sched_fork(process_t *child, process_t *parent)
 {
     uint32_t flags;
 
+    autogroup_fork(child, parent);
     flags = spin_lock_irqsave(&sched_lock);
     child->rr_used = 0;
     (void)sched_clock_task(parent->cpu);
@@ -872,11 +878,16 @@ uint32_t sched_work_count(unsigned int index)
     return index == 0 ? pick_count : index == 1 ? pick_steps : 0;
 }
 
+static void sched_balance_start(void);
+static void sched_group_clock(int cpu);
+
 /**
  * The fair class is set up for every processor the kernel may start, with
  * the base slice of one processor; `sched_cache_join` scales it as each
  * other one comes online, as Linux's sched_init_smp sets it from the
- * processors online (update_sysctl, kernel/sched/fair.c:191-220). Each
+ * processors online (update_sysctl, kernel/sched/fair.c:191-220). The root
+ * group, PELT's hooks and the balance's operations follow it, and a group
+ * change charges by this file's clocks (`fair_group_clock`). Each
  * processor's fair server has Linux's 50 ms of every second.
  */
 void init_sched(void)
@@ -892,6 +903,10 @@ void init_sched(void)
     pick_count = pick_steps = 0;
     rt_queued = 0;
     fair_init(NR_CPUS);
+    fair_group_init();
+    pelt_init();
+    sched_balance_start();
+    fair_group_clock = sched_group_clock;
     sysctl_sched_base_slice = FAIR_BASE_SLICE_NS;
     k_memset(&kernel_parent, 0, sizeof(kernel_parent));
     kernel_parent.sched_policy = SCHED_OTHER;
@@ -949,43 +964,170 @@ static int sched_cpu_free(int cpu)
     return idle && cpu_table[cpu].current == idle && sched_queued(cpu) == 0 && !idle->need_resched;
 }
 
-/* The processors that share each processor's last-level cache, and those
- * that share its core, its SMT siblings, a bit each, itself left out;
- * written by `sched_cache_join` as each one starts, under sched_lock, and
- * read under it. `smt_active` is 1 once any processor has a sibling, as
- * Linux's sched_smt_present. */
-static uint64_t cache_peers[NR_CPUS];
-static uint64_t core_peers[NR_CPUS];
-static int smt_active;
-
+/**
+ * The scheduling domains are built again over the processors online each
+ * time one starts, as Linux's sched_cpu_activate rebuilds them, from the
+ * masks each records as it comes online (`balance_cpu_topology`): the boot
+ * processor, which never calls this, learns its siblings from theirs.
+ */
 void sched_cache_join(uint64_t shared, uint64_t core)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
-    uint64_t me_bit;
-    int me = (int)arch_cpu_id(), c, online = 0, factor = 1;
+    uint64_t me_bit, online = 0;
+    int me = (int)arch_cpu_id(), c, n = 0, factor = 1;
 
-    /* The base slice of the processors online: 1 + log2(min(n, 8)). */
     for (c = 0; c < NR_CPUS; c++) {
-        online += cpu_table[c].online != 0;
+        if (cpu_table[c].online) {
+            online |= (uint64_t)1 << c;
+            n++;
+        }
     }
-    for (online = online < 8 ? online : 8; online > 1; online >>= 1) {
+    /* The base slice of the processors online: 1 + log2(min(n, 8)). */
+    for (n = n < 8 ? n : 8; n > 1; n >>= 1) {
         factor++;
     }
     sysctl_sched_base_slice = (uint64_t)FAIR_BASE_SLICE_NS * (uint32_t)factor;
-
     me_bit = (uint64_t)1 << me;
-    shared &= ~me_bit;
-    core &= ~me_bit;
-    cache_peers[me] |= shared;
-    core_peers[me] |= core;
-    smt_active |= core != 0;
-    for (c = 0; c < NR_CPUS; c++) {
-        if ((shared >> c) & 1u) {
-            cache_peers[c] |= me_bit;
+    balance_cpu_topology(me, core | me_bit, shared | core | me_bit);
+    balance_build_domains(online);
+    spin_unlock_irqrestore(&sched_lock, flags);
+}
+
+/*
+ * What the balance asks of the scheduler (`balance_ops`), each with
+ * sched_lock held. `balance_active` is set for a processor the balance
+ * asked to push a thread away (BALANCE_KICK_ACTIVE), which it does at its
+ * next selection; `balance_stopped` is set on a processor while it does,
+ * where Linux's stopper thread would be current, so that the thread that
+ * ran there may move.
+ */
+static uint8_t balance_active[NR_CPUS];
+static uint8_t balance_stopped[NR_CPUS];
+
+static int sched_resched_cur(process_t *cur, int cpu);
+
+/** The threads on processor `cpu`'s queues, a running one included and the
+ * idle task left out (rq->nr_running). */
+static unsigned int sched_balance_nr(int cpu)
+{
+    const process_t *cur = cpu_table[cpu].current;
+    unsigned int n = run_queues[cpu].count + fair_rqs[cpu].cfs.h_nr_queued;
+
+    if (cur && cur != cpu_table[cpu].idle && !sched_fair_class(cur)) {
+        n++;
+    }
+    return n;
+}
+
+/** The thread running on processor `cpu`, NULL for its idle task or while
+ * it pushes its thread away. */
+static process_t *sched_balance_curr(int cpu)
+{
+    process_t *cur = cpu_table[cpu].current;
+
+    if (!cur || cur == cpu_table[cpu].idle || balance_stopped[cpu]) {
+        return NULL;
+    }
+    return cur;
+}
+
+/** Move `p`, queued and not running, to processor `to`, as detach_task and
+ * attach_task do, and ask `to` to select if `p` should run there now. */
+static void sched_balance_move(process_t *p, int to)
+{
+    int kick;
+
+    (void)sched_dequeue(p, FAIR_DEQ_MOVE);
+    sched_move(p, to);
+    (void)sched_clock_task(to);
+    sched_enqueue(p, FAIR_ENQ_MIGRATED, 0);
+    kick = sched_wake_preempt(p, to, 0);
+    if (kick >= 0) {
+        smp_kick(kick);
+    }
+}
+
+/** Ask processor `cpu` to run the balance's code: an idle one's loop runs
+ * `fair_nohz_balance` (`sched_idle_balance`), and a busy one pushes a
+ * thread away at its next selection (`sched_balance_push`). */
+static void sched_balance_kick(int cpu, int why)
+{
+    process_t *cur = cpu_table[cpu].current;
+
+    if (why == BALANCE_KICK_ACTIVE) {
+        balance_active[cpu] = 1;
+        if (cur && cur != cpu_table[cpu].idle && sched_resched_cur(cur, cpu) < 0) {
+            return;
         }
-        if ((core >> c) & 1u) {
-            core_peers[c] |= me_bit;
+    }
+    smp_kick(cpu);
+}
+
+/** The monotonic clock in nanoseconds. */
+static uint64_t sched_balance_clock(void)
+{
+    return sched_clock_ns();
+}
+
+/** Give processor `cpu` its clocks as of now. */
+static void sched_group_clock(int cpu)
+{
+    (void)sched_clock_task(cpu);
+}
+
+static const struct balance_ops sched_balance_ops = {
+    sched_balance_nr,   sched_balance_curr,  sched_cpu_free,    sched_balance_move,
+    sched_balance_kick, sched_balance_clock, sched_group_clock,
+};
+
+/** Give the balance its operations, at boot. */
+static void sched_balance_start(void)
+{
+    k_memset(balance_active, 0, sizeof(balance_active));
+    k_memset(balance_stopped, 0, sizeof(balance_stopped));
+    balance_init(&sched_balance_ops);
+}
+
+/**
+ * Push a thread from processor `me`, which the balance asked to, now that
+ * `old` stops running there, as Linux's stopper thread runs
+ * active_load_balance_cpu_stop (kernel/sched/fair.c:11718-11800): an
+ * ordinary `old` is put back on its queue and counted ready, so that it may
+ * be the one moved; if it stays, it runs on. The run queues' lock is held.
+ */
+static void sched_balance_push(int me, process_t *old)
+{
+    int ran = old != cpu_table[me].idle && old->state == PROC_RUNNING && sched_fair_class(old);
+
+    if (!balance_active[me]) {
+        return;
+    }
+    balance_active[me] = 0;
+    if (ran) {
+        if (fair_rqs[me].curr == old) {
+            fair_put_prev(old);
         }
+        old->state = PROC_READY;
+    }
+    balance_stopped[me] = 1;
+    fair_balance_active(me);
+    balance_stopped[me] = 0;
+    if (ran && old->cpu == me) {
+        old->state = PROC_RUNNING;
+    }
+}
+
+/** On processor `me`'s way into its idle wait: the idle balance it was
+ * kicked for, or the decay a newly idle balance left it
+ * (`fair_nohz_balance`), whatever that pulls selected at once. */
+static void sched_idle_balance(void)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int me = (int)arch_cpu_id();
+
+    if (cpu_table[me].current == cpu_table[me].idle) {
+        (void)sched_clock_task(me);
+        fair_nohz_balance(me);
     }
     spin_unlock_irqrestore(&sched_lock, flags);
 }
@@ -1236,11 +1378,13 @@ static int sched_rt_place(const process_t *p, int target)
  *
  * An ordinary thread goes to the processor Linux's select_task_rq_fair
  * gives it (`fair_select_cpu`), its entity moving there with its lag and
- * load (`sched_move`). A real-time thread stays where it ran, unless its
- * affinity has left that processor, or goes to a processor running and
- * holding lower work when it does not outrank the real-time thread running
- * there, or that thread may run nowhere else (`sched_rt_place`), as
- * select_task_rq_rt (kernel/sched/rt.c:1535-1600).
+ * load (`sched_move`); a processor idle since its newly idle balance folds
+ * that idle time into its average (`fair_balance_woken`). A real-time
+ * thread stays where it ran, unless its affinity has left that processor,
+ * or goes to a processor running and holding lower work when it does not
+ * outrank the real-time thread running there, or that thread may run
+ * nowhere else (`sched_rt_place`), as select_task_rq_rt
+ * (kernel/sched/rt.c:1535-1600).
  *
  * A `p` still current on its processor, between its marking as blocked and
  * its switch away, finds itself ready at its own selection, which takes
@@ -1300,6 +1444,7 @@ static int sched_ready_locked(process_t *p, int wf)
     }
     (void)sched_clock_task(target);
     sched_enqueue(p, why, 0);
+    fair_balance_woken(target);
     return sched_wake_preempt(p, target, wf);
 }
 
@@ -1592,9 +1737,12 @@ static process_t *sched_select(int me, process_t *old)
     if (next || rt) {
         return next ? next : rt;
     }
-    if ((old == cpu->idle || old->state != PROC_RUNNING) && fair_balance_newidle(me) > 0) {
+    if ((old == cpu->idle || old->state != PROC_RUNNING) && fair_balance_newidle(me) != 0) {
         (void)sched_clock_task(me);
         next = fair_pick(me);
+        if (!next) {
+            next = sched_find_rt(me);
+        }
     }
     return next;
 }
@@ -1743,10 +1891,20 @@ static void sched_stay(process_t *old, int me)
 /** Make the fair class's current thread on processor `me` follow the
  * selection of `next`: the one that was is charged and put back
  * (`fair_put_prev`), and an ordinary `next` becomes current
- * (`fair_set_next`); the fair server spends what was charged. The run
- * queues' lock is held. */
+ * (`fair_set_next`); the fair server spends what was charged. The
+ * real-time average counts a real-time thread's run to the switch away
+ * from it, and none before one starts (`pelt_update_rt`), as Linux's
+ * put_prev_task_rt and set_next_task_rt. The run queues' lock is held. */
 static void sched_follow(int me, process_t *next)
 {
+    process_t *old = cpu_table[me].current;
+    uint64_t now = fair_rqs[me].clock_task;
+
+    if (old != next && old != cpu_table[me].idle && !sched_fair_class(old)) {
+        (void)pelt_update_rt(me, now, 1);
+    } else if (old != next && next != cpu_table[me].idle && !sched_fair_class(next)) {
+        (void)pelt_update_rt(me, now, 0);
+    }
     if (fair_rqs[me].curr && fair_rqs[me].curr != next) {
         fair_put_prev(fair_rqs[me].curr);
     }
@@ -1893,6 +2051,7 @@ void schedule(void)
     watchdog_sched();
     (void)sched_clock_task(me);
     kick = sched_prepare_old(old, cpu, me);
+    sched_balance_push(me, old);
     yielded = old->sched_yielded;
     next = sched_select(me, old);
     old->need_resched = 0;
@@ -2090,13 +2249,16 @@ void sched_wait_off_cpu(const process_t *p)
  * are let go). The
  * idle task holds no big lock: its selection and its halt need none, and a
  * thread it switches to takes the lock in its tail when it holds it.
- *
+ * Before each wait it runs the idle balance it was kicked for, or the decay
+ * of blocked load a newly idle balance left it (`sched_idle_balance`), as
+ * Linux's do_idle runs nohz_run_idle_balance.
  */
 void sched_idle_loop(void)
 {
     for (;;) {
         arch_irq_disable();
         schedule();
+        sched_idle_balance();
         idle_wait_irq_off();
     }
 }
@@ -2292,9 +2454,9 @@ static int sched_rr_tick(process_t *p, int me)
  * ordinary thread runs on until the class says otherwise (`fair_tick`,
  * Linux's task_tick_fair), or a real-time thread waits that the fair
  * server does not hold back. Then the periodic balance runs
- * (`fair_balance_tick`), and a processor whose tick has stopped in its
- * idle wait is kicked to balance when this one is busy
- * (`fair_nohz_kick`), as sched_tick calls sched_balance_trigger
+ * (`fair_balance_tick`), which kicks a processor whose tick has stopped in
+ * its idle wait to balance when this one is busy, as sched_tick calls
+ * sched_balance_trigger
  * (kernel/sched/fair.c:12426-12540, 12976-12990).
  */
 void sched_tick(void)
@@ -2311,6 +2473,7 @@ void sched_tick(void)
     if (p == this_cpu()->idle) {
         /* An idle processor balances and selects what it pulled. */
     } else if (!sched_fair_class(p)) {
+        (void)pelt_update_rt(me, fair_rqs[me].clock_task, 1);
         due = sched_rr_tick(p, me) || sched_rt_outranks(me, p) ||
               (sched_fair_runnable(me) != 0 && fair_server_takes(me, p));
     } else {
@@ -2323,9 +2486,9 @@ void sched_tick(void)
             due = 1;
         }
     }
-    fair_balance_tick(me);
-    kick = fair_nohz_kick(me);
-    if (sched_fair_kick(me) == me && p != this_cpu()->idle) {
+    fair_balance_tick(me, p == this_cpu()->idle);
+    kick = sched_fair_kick(me);
+    if (kick == me && p != this_cpu()->idle) {
         due = 1;
     }
     spin_unlock_irqrestore(&sched_lock, flags);
@@ -2847,8 +3010,10 @@ uint32_t sched_load_idle_ticks(void)
     return wait < TICK_HZ ? wait : TICK_HZ;
 }
 
-/** Stop the idle task's tick immediately before a halt. IRQs are off and
- * no lock is held; return zero when a wake requires another selection. */
+/** Stop the idle task's tick immediately before a halt, and leave the
+ * processor to the idle balance of others (`fair_balance_idle_enter`).
+ * IRQs are off and no lock is held; return zero when a wake requires
+ * another selection. */
 static int idle_stop_tick(void)
 {
     struct percpu *cpu = this_cpu();
@@ -2862,6 +3027,11 @@ static int idle_stop_tick(void)
     cpu->ticks_seq++;
     cpu->tick_stopped = stopped;
     cpu->ticks_seq++;
+    if (stopped) {
+        spin_lock(&sched_lock);
+        fair_balance_idle_enter((int)(cpu - cpu_table));
+        spin_unlock(&sched_lock);
+    }
     return !current_proc->need_resched;
 }
 
