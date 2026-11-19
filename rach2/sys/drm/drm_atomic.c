@@ -2880,25 +2880,19 @@ static int32_t update_output_state(struct drm_atomic_state *state, struct drm_mo
     return 0;
 }
 
-int32_t drm_atomic_helper_set_config(struct drm_mode_set *set)
+int32_t drm_atomic_set_config_state(struct drm_mode_set *set, struct drm_atomic_state *state)
 {
     struct drm_crtc *crtc = set->crtc;
-    struct drm_atomic_state *state = drm_atomic_state_alloc(crtc->dev);
     struct drm_crtc_state *cs;
     struct drm_plane_state *ps;
     uint32_t w, h;
     int32_t rc;
 
-    if (!state) {
-        return -ENOMEM;
-    }
     cs = drm_atomic_get_crtc_state(state, crtc);
     ps = crtc->primary ? drm_atomic_get_plane_state(state, crtc->primary) : NULL;
     if (!cs || (crtc->primary && !ps)) {
-        drm_atomic_state_free(state);
         return -ENOMEM;
     }
-    /* Linux's __drm_atomic_helper_set_config. */
     if (!set->mode) {
         rc = drm_atomic_set_mode_for_crtc(cs, NULL);
         cs->active = 0;
@@ -2932,6 +2926,18 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set)
     if (rc == 0) {
         rc = update_output_state(state, set);
     }
+    return rc;
+}
+
+int32_t drm_atomic_helper_set_config(struct drm_mode_set *set)
+{
+    struct drm_atomic_state *state = drm_atomic_state_alloc(set->crtc->dev);
+    int32_t rc;
+
+    if (!state) {
+        return -ENOMEM;
+    }
+    rc = drm_atomic_set_config_state(set, state);
     if (rc == 0) {
         rc = conflicting_encoders(state, 1);
     }

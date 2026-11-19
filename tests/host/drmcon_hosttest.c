@@ -7,9 +7,12 @@
  * host-deps: tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
- * A fake device has one CRTC, its primary plane of XRGB8888 and a virtual
- * connector, connected, with 1280x800 preferred, 1024x768 and 800x600; its
- * dumb buffers are model objects whose `vmap` is memory of the test's. The
+ * A fake device has two CRTCs, each with a primary plane of XRGB8888, and a
+ * virtual connector, connected, with 1280x800 preferred, 1024x768 and
+ * 800x600, whose encoder drives only the first CRTC; the second has no
+ * output, and its check can be made to fail once, as a commit the
+ * hardware refuses. The dumb buffers are model objects whose `vmap` is
+ * memory of the test's. The
  * console, the /fb device and the keyboard are records of what the client
  * asked of them. The loader's screen is 1024x768.
  *
@@ -25,7 +28,12 @@
  * back on the same buffer; a master that comes while the console's commit
  * runs keeps the screen; `video=` and a hotplug move the console to a
  * buffer of the size named; the console's blank turns its CRTC off and
- * on again with its mode and buffer kept; a hotplug after DROP_MASTER gives the
+ * on again with its mode and buffer kept, a commit of the blank that fails
+ * is tried again, a half-failed blank or wake leaves work for either ask,
+ * and a placement that ends a try leaves the worker's armed wait to end at
+ * its tick; a placement while blank whose one commit fails on the second
+ * CRTC changes no output and leaves the console on its buffer, though the
+ * placement wanted one of another size; a hotplug after DROP_MASTER gives the
  * screen back while one under a master does not; a buffer that cannot be
  * mapped when the master leaves is
  * forgotten until the next place, or, on a device whose framebuffers are
@@ -237,8 +245,9 @@ void console_poke(void)
 static struct drm_device dev;
 static struct drm_plane primary, primary2;
 static struct drm_crtc crtc;
-/* A second CRTC with no output, which only the half-failed placement's row
- * lights, so that the placement turns it off after lighting the first. */
+/* A second CRTC with no output, which the failed placement's row leaves
+ * enabled, so that the placement's commit turns it off with the first
+ * CRTC's change and fails there. */
 static struct drm_crtc crtc2;
 static struct drm_encoder encoder;
 static struct drm_connector connector;
@@ -597,25 +606,30 @@ static void row_blank(void)
 }
 
 /** A wake whose commit fails leaves the CRTC off with its mark and the
- * blank not done, and the worker tries it again CON_BLANK_RETRY_MS later
- * until it succeeds; a hotplug's placement while the console is blank
- * lights the outputs and wakes the worker, which turns them off again. */
+ * blank half done, and the worker tries it again CON_BLANK_RETRY_MS later,
+ * at the deadline its wait armed, until it succeeds; a hotplug's placement
+ * while the console is blank lights the outputs and wakes the worker,
+ * which turns them off again. */
 static void row_blank_retry(void)
 {
+    uint64_t due;
+
     drm_client_blank(1);
     con_blank_service();
     CHECK(!crtc.state->active && con_blank_crtcs != 0, "the blank turns the CRTC off");
     fail_checks = 1;
     drm_client_blank(0);
     con_blank_service();
-    CHECK(fail_checks == 0 && !crtc.state->active && con_blank_crtcs != 0 && con_blank_done &&
-              con_blank_retry != 0,
-          "a failed wake keeps the CRTC's mark and the blank not done");
-    CHECK(!con_flush_ready(NULL), "the worker waits for the try again");
+    CHECK(fail_checks == 0 && !crtc.state->active && con_blank_crtcs != 0 && con_blank_done == -1 &&
+              con_blank_retry_ask == 0,
+          "a failed wake keeps the CRTC's mark and the blank half done");
+    due = con_wait_due();
+    CHECK(due != 0 && !con_flush_ready(&due), "the worker waits for the try again");
     model_now_ns += (int64_t)CON_BLANK_RETRY_MS * 1000000ll;
-    CHECK(con_flush_ready(NULL), "the try again is due a second later");
+    CHECK(con_flush_ready(&due), "the try again is due a second later");
     con_blank_service();
-    CHECK(crtc.state->active && con_blank_crtcs == 0 && !con_blank_done && con_blank_retry == 0,
+    CHECK(crtc.state->active && con_blank_crtcs == 0 && con_blank_done == 0 &&
+              con_blank_retry_ask == -1 && con_wait_due() == 0,
           "the try again turns the CRTC on");
     drm_client_blank(1);
     con_blank_service();
@@ -630,58 +644,111 @@ static void row_blank_retry(void)
     CHECK(crtc.state->active && con_blank_crtcs == 0, "the unblank turns them on");
 }
 
-/** A blank that turned the CRTC off and failed on another, which the model
- * has not, so the row sets the worker's record as that failure leaves it:
- * the CRTC marked, the blank not done and its try again pending. A key
- * before the try turns the CRTC on again, and a try whose tick has passed
- * wakes the worker whatever the ask, which then clears it. */
-static void row_blank_half(void)
+/** Set the worker's record as a run whose commit of the ask `off` failed
+ * on the second CRTC leaves it: the blank half done, `crtcs` marked, and
+ * the try again a second away. The model's second CRTC has no output for
+ * the console to light, so the rows set the record, not the failure. */
+static void half_failed(int off, uint32_t crtcs)
 {
-    drm_client_blank(1);
-    con_blank_service();
-    CHECK(!crtc.state->active && con_blank_crtcs != 0 && con_blank_done,
-          "the blank turns the CRTC off");
-    con_blank_done = 0;
-    con_blank_retry_ask = 1;
+    con_blank_done = -1;
+    con_blank_crtcs = crtcs;
+    con_blank_retry_ask = off;
     con_blank_retry = rtc_ticks_now() + MS_TO_TICKS(CON_BLANK_RETRY_MS);
-    CHECK(!con_flush_ready(NULL), "the worker waits for the half-failed blank's try again");
-    drm_client_blank(0);
-    CHECK(con_flush_ready(NULL), "a key before the try wakes the worker");
-    con_blank_service();
-    CHECK(crtc.state->active && con_blank_crtcs == 0 && !con_blank_done && con_blank_retry == 0 &&
-              !con_flush_ready(NULL),
-          "the key turns on the CRTC the half-failed blank turned off");
-    con_blank_retry_ask = 1;
-    con_blank_retry = rtc_ticks_now() + MS_TO_TICKS(CON_BLANK_RETRY_MS);
-    model_now_ns += (int64_t)CON_BLANK_RETRY_MS * 1000000ll;
-    CHECK(con_flush_ready(NULL), "a try whose tick has passed is due with nothing left to do");
-    con_blank_service();
-    CHECK(con_blank_retry == 0 && !con_flush_ready(NULL) && crtc.state->active,
-          "the worker clears the try, so its wait is not armed past its tick again");
 }
 
-/** A placement while the console is blank that lights its output and then
- * fails to turn off the second CRTC, left enabled and dark as a program
- * could leave it, still wakes the worker, which turns the lit output off
- * again; the unblank lights it. */
-static void row_blank_place_fail(void)
+/** A blank that turned the CRTC off and failed on another: a key before
+ * the try turns the CRTC on again. A wake that turned the CRTC on and
+ * failed on another: a blank before the try turns the CRTC off again. A
+ * placement that ends a try while the worker sleeps: the deadline the
+ * worker armed still ends its wait, after which the worker arms none. */
+static void row_blank_half(void)
 {
+    uint64_t due;
+
     drm_client_blank(1);
     con_blank_service();
-    CHECK(!crtc.state->active && con_blank_done, "the blank turns the CRTC off");
-    crtc2.state->enable = 1;
-    fail_crtc2 = 1;
-    drm_client_dev_hotplug(&dev);
-    CHECK(fail_crtc2 == 0 && crtc.state->active && crtc2.state->enable && !con_blank_done &&
-              con_flush_ready(NULL),
-          "a placement that lit the output and then failed wakes the worker");
+    CHECK(!crtc.state->active && con_blank_crtcs != 0 && con_blank_done == 1,
+          "the blank turns the CRTC off");
+    half_failed(1, con_blank_crtcs);
+    due = con_wait_due();
+    CHECK(!con_flush_ready(&due), "the worker waits for the half-failed blank's try again");
+    drm_client_blank(0);
+    CHECK(con_flush_ready(&due), "a key before the try wakes the worker");
     con_blank_service();
-    CHECK(!crtc.state->active && con_blank_done, "the worker turns the lit output off again");
+    CHECK(crtc.state->active && con_blank_crtcs == 0 && con_blank_done == 0 &&
+              con_blank_retry_ask == -1 && !con_flush_ready(NULL),
+          "the key turns on the CRTC the half-failed blank turned off");
+
+    half_failed(0, 1u << 1);
+    due = con_wait_due();
+    CHECK(!con_flush_ready(&due), "the worker waits for the half-failed wake's try again");
+    drm_client_blank(1);
+    CHECK(con_flush_ready(&due), "a blank before the try wakes the worker");
+    con_blank_service();
+    CHECK(!crtc.state->active && con_blank_done == 1 && con_blank_retry_ask == -1,
+          "the blank turns off the CRTC the half-failed wake lit");
     drm_client_blank(0);
     con_blank_service();
-    CHECK(crtc.state->active, "the unblank lights the output");
+    CHECK(crtc.state->active && con_blank_crtcs == 0 && con_blank_done == 0,
+          "the unblank turns it on again");
+
+    fail_checks = 1;
+    drm_client_blank(1);
+    con_blank_service();
+    CHECK(crtc.state->active && con_blank_done == -1 && con_blank_retry_ask == 1,
+          "a blank whose commit fails is tried again");
+    drm_client_blank(0);
+    con_blank_service();
+    CHECK(con_blank_done == 0 && con_blank_retry_ask == -1, "a key ends the try");
+    half_failed(0, 1u << 1);
+    due = con_wait_due();
     drm_client_dev_hotplug(&dev);
-    CHECK(crtc.state->active && !crtc2.state->enable, "a placement turns the second CRTC off");
+    CHECK(crtc.state->active && con_blank_retry_ask == -1 && con_blank_done == 0 &&
+              !con_flush_ready(&due),
+          "a placement ends the try while the worker sleeps");
+    model_now_ns += (int64_t)CON_BLANK_RETRY_MS * 1000000ll;
+    CHECK(con_flush_ready(&due), "the deadline the worker armed still ends its wait");
+    con_blank_service();
+    due = con_wait_due();
+    CHECK(due == 0 && !con_flush_ready(&due) && crtc.state->active,
+          "the worker then arms no deadline and waits for an ask");
+}
+
+/** A placement while the console is blank, of a new size, whose one
+ * commit fails on the second CRTC, left enabled and dark as a program
+ * could leave it, changes no output: the console's CRTC stays off on the
+ * buffer it had, which the console still draws on, and the blank stays
+ * done. After the unblank, the next placement lights the output on a
+ * buffer of the size named and turns the second CRTC off, in one commit. */
+static void row_blank_place_fail(void)
+{
+    struct drm_framebuffer *fb;
+    int creates;
+
+    drm_client_blank(1);
+    con_blank_service();
+    CHECK(!crtc.state->active && con_blank_done == 1, "the blank turns the CRTC off");
+    fb = con.fb;
+    crtc2.state->enable = 1;
+    fail_crtc2 = 1;
+    video_option = fb->width == 1280 ? "1024x768" : "1280x800";
+    creates = dumb_creates;
+    drm_client_dev_hotplug(&dev);
+    CHECK(fail_crtc2 == 0 && dumb_creates == creates + 1,
+          "the placement made a buffer of the new size, and its commit failed");
+    CHECK(!crtc.state->active && primary.state->fb == fb && con.fb == fb && crtc2.state->enable &&
+              con_blank_done == 1 && !con_flush_ready(NULL),
+          "the failed commit changes no output and leaves the blank done");
+    CHECK(con.on_buffer && attached.width == fb->width && attached_base == con_base(),
+          "the console draws on the buffer the CRTC still scans out");
+    drm_client_blank(0);
+    con_blank_service();
+    CHECK(crtc.state->active && primary.state->fb == fb, "the unblank lights the output");
+    drm_client_dev_hotplug(&dev);
+    CHECK(crtc.state->active && !crtc2.state->enable && con.fb != fb &&
+              primary.state->fb == con.fb && attached.width == con.fb->width,
+          "a placement lights the new buffer and turns the second CRTC off");
+    video_option = NULL;
 }
 
 /** A hotplug under a master leaves the screen to it; one after
