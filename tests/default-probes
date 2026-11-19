@@ -153,6 +153,8 @@ musl/pselectmusl
 musl/netlinkmusl
 # inotify's events of a directory and a file, and its refusals.
 musl/inotifymusl
+# /dev/vhost-net driven as QEMU's vhost=on drives it, on a tap of its own.
+musl/vhostmusl
 # AF_UNIX: pairs, descriptors and credentials in messages, and names in the
 # file system and the abstract namespace.
 musl/unixmusl

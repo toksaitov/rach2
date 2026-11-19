@@ -112,6 +112,7 @@ case musl/unixmusl root:krffs ids:1000,65534 -- musl/unixmusl
 case musl/vdsomusl -- musl/vdsomusl clock=tsc
 case musl/vfiomusl -- musl/vfiomusl
 case musl/vforkmusl -- musl/vforkmusl
+case musl/vhostmusl -- musl/vhostmusl
 case musl/vmamusl -- musl/vmamusl
 case musl/waitidmusl -- musl/waitidmusl
 case musl/wchanmusl ids:1000 -- musl/wchanmusl
