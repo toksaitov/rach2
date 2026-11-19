@@ -1760,6 +1760,53 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
 }
 
 /**
+ * The `tmpfile` of `vfs_ops`: a new regular file with no name on the volume
+ * of `dir`, the root for NULL, as O_TMPFILE makes it and Linux's
+ * `ext2_tmpfile` does: the inode allocated and written whole, then its link
+ * count dropped to 0 and stored, so that it is freed at its last put, or
+ * after a crash by e2fsck, which finds an inode in use that no entry names.
+ * No entry names it, so nothing is ordered after its table block
+ * (`inode_commit`) until `ext2_link` gives it a name.
+ * A `linkable` file may be named by `ext2_link`, once. The caller holds the
+ * directory's lock. 0 with the node held, -ENOENT for a removed directory,
+ * -EROFS, -ENOSPC, -ENOMEM, or -errno.
+ */
+int ext2_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node)
+{
+    struct ext2_mount *em = ext2_em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node *n;
+    int rc;
+
+    rc = ext2_assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    ext2_assert_node_locked(d);
+    if (d->unlinked) {
+        return -ENOENT;
+    }
+    rc = inode_new(em, d, S_IFREG_ | (mode & 07777u), 1, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    sleep_lock_subclass(4);
+    ext2_node_lock(n);
+    sleep_lock_subclass(0);
+    ext2_node_nlink_set(n, 0);
+    n->unlinked = 1;
+    rc = ext2_inode_store(em, n);
+    if (rc != 0) {
+        inode_abandon(em, n);
+        return rc;
+    }
+    n->linkable = linkable;
+    ext2_node_unlock(n);
+    *node = n;
+    return 0;
+}
+
+/**
  * The `mknod` of `vfs_ops`: a FIFO, a socket or a device node `name` in
  * `dir`, in the order `create` keeps: the inode's bit, then the inode written
  * whole, then the entry that names it, which on a mount that writes back
@@ -2052,17 +2099,20 @@ int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
  * The name `name` in directory `d` for the file `n`, for `ext2_link`, whose
  * caller holds both locks: the count raised and stored, then the name
  * written, then the directory's times, whose failed store, once the name is
- * there, fails nothing and keeps the directory's mark. 0, -ENOENT for a file
- * with no name left, -EMLINK, -EEXIST, or -errno.
+ * there, fails nothing and keeps the directory's mark. A file with no name
+ * that `ext2_tmpfile` made linkable takes its first name here and stops
+ * being linkable, as Linux's `vfs_link` clears I_LINKABLE. 0, -ENOENT for a
+ * file with no name left otherwise, -EMLINK, -EEXIST, or -errno.
  */
 static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
                     struct ext2_node *n)
 {
     struct ext2_scan sc;
     uint32_t at, prev;
+    int first = n->linkable && n->nlink == 0;
     int rc;
 
-    if (n->unlinked || n->nlink == 0) {
+    if ((n->unlinked || n->nlink == 0) && !first) {
         return -ENOENT;
     }
     if (n->nlink >= 65000) {
@@ -2076,6 +2126,7 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
         return -EEXIST;
     }
     ext2_node_nlink_set(n, n->nlink + 1);
+    n->unlinked = 0;
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_store(em, n);
     if (rc == 0) {
@@ -2083,14 +2134,17 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
     }
     if (rc != 0) {
         ext2_node_nlink_set(n, n->nlink - 1);
+        n->unlinked = n->nlink == 0;
         return rc;
     }
     rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode), DIR_BACK);
     bcache_order_end();
     if (rc != 0) {
         ext2_node_nlink_set(n, n->nlink - 1);
+        n->unlinked = n->nlink == 0;
         return rc;
     }
+    n->linkable = 0;
     ext2_stamp(d, T_MTIME | T_CTIME);
     (void)ext2_inode_times_later(em, d);
     return 0;

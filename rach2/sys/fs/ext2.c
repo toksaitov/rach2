@@ -3978,6 +3978,18 @@ static int admit_create(struct vfs_mount *mnt, void *dir, const char *name, uint
     return rc;
 }
 
+/** The `tmpfile` of `vfs_ops`: `ext2_tmpfile`, admitted, without the big
+ * lock (`names_begin`). */
+static int admit_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node)
+{
+    int gave, rc;
+
+    gave = names_begin(ext2_em_of(mnt));
+    rc = ext2_tmpfile(mnt, dir, mode, linkable, node);
+    names_end(ext2_em_of(mnt), gave);
+    return rc;
+}
+
 /** The `unlink` of `vfs_ops`: `ext2_unlink`, admitted, without the big lock
  * (`names_begin`). */
 static int admit_unlink(struct vfs_mount *mnt, void *dir, const char *name)
@@ -4353,7 +4365,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_lock_write,
     ext2_unlock_write,
     0, /* rename_flags */
-    0, /* tmpfile */
+    admit_tmpfile,
     0, /* uncache */
 };
 

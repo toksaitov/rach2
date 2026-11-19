@@ -280,11 +280,56 @@ static void rename_order_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "the rename volume is clean");
 }
 
+/**
+ * O_TMPFILE's file: made with no name and a link count of 0, named once by
+ * a link when linkable, refused by a link once named and unlinked again or
+ * when made with O_EXCL, and freed at its last put, which leaves the volume
+ * clean.
+ */
+static void tmpfile_row(void)
+{
+    struct vfs_stat st;
+    uint64_t before;
+    void *t = 0, *u = 0, *n;
+    int err;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the tmpfile volume mounts writable");
+    before = lock_free_inodes();
+    check(OPS->tmpfile(&mnt, mnt.root, 0600, 1, &t) == 0 && OPS->getattr(&mnt, t, &st) == 0 &&
+              st.nlink == 0 && st.mode == (0100000u | 0600u) && lock_free_inodes() == before - 1,
+          "a linkable file with no name takes an inode and has no link");
+    check(t && OPS->link(&mnt, mnt.root, "named", t) == 0 && OPS->getattr(&mnt, t, &st) == 0 &&
+              st.nlink == 1,
+          "a link names it once");
+    n = t ? walk("/named", &err) : 0;
+    check(n && n == t, "and the name reaches its node");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(t && OPS->unlink(&mnt, mnt.root, "named") == 0 &&
+              OPS->link(&mnt, mnt.root, "again", t) == -ENOENT,
+          "once unlinked again it takes no name");
+    if (t) {
+        OPS->put(&mnt, t);
+    }
+    check(OPS->tmpfile(&mnt, mnt.root, 0600, 0, &u) == 0 &&
+              OPS->link(&mnt, mnt.root, "excl", u) == -ENOENT,
+          "a file made with O_EXCL takes no name");
+    if (u) {
+        OPS->put(&mnt, u);
+    }
+    check(lock_free_inodes() == before, "and both inodes are free at their last put");
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "the tmpfile volume is clean");
+}
+
 /** The rows of this file. */
 static void lock_rows(void)
 {
     user_copy_row();
     removal_race_row();
+    tmpfile_row();
     rename_order_row();
 }
 

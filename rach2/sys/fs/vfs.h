@@ -1525,6 +1525,12 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
 /** The type's create of the regular file `name` in `dir`, held in `*node`:
  * 0, -EROFS for a type without `create`, or the type's error. */
 int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node);
+/** The type's `tmpfile`: a regular file of `mode` with no name, on the
+ * file system of the directory `dir`, held in `*node`, which a link may name
+ * only when `linkable`, as O_TMPFILE makes. 0, -EROFS on a read-only mount,
+ * -EPERM when `dir` is immutable, -EOPNOTSUPP for a type without `tmpfile`,
+ * or the type's error. */
+int vfs_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node);
 /** The type's unlink of `name` in `dir`: 0, -EROFS for a type without
  * `unlink`, -EPERM when the directory or the file is immutable or
  * append-only, or the type's error. A file that backs a loop device loses
