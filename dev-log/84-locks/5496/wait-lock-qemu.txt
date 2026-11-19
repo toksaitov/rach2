@@ -1,0 +1,487 @@
+5496: WineD3D's 1,000 GL round trips, QEMU on the testing PC.
+Each boot used KVM, -cpu host,invtsc=on, q35, std VGA, four CPUs,
+8 GiB and no display. Each ran the three invocations of trip.sh
+-r llvmpipe on the snapshot of 3984's trial root. The retained
+root and probe bundle are those in wine-qemu-fix.txt. Timestamps
+from the run are UTC. Linux's figures are in wine-qemu.txt.
+
+== Baseline, milestone at b4a006e70b ==
+5496: booting kernel
+2026-11-19T22:36:31Z
+2818a7433fcf5ab421dbc57a328a7276301ea9a3ed171d06218bc95dbd86b4e5  kernel
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: trip-gl-0: tripprobe: 1000 round trips in 83.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 87.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 84.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1470.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1484.1 ms
+games: trip-gl-strace: ctxt 454760
+games: trip-gl-strace: bkl_wait_us 19298
+games: trip-gl-strace: hold syscall 61: 1 holds, 17 us, 17.0 us each
+games: trip-gl-strace: call syscall 61: 293556 calls, 1502508 us, 5.1 us each
+games: trip-gl-strace: call syscall 101: 426002 calls, 882903 us, 2.1 us each
+games: trip-gl-strace: thread 934 wined3d_cs: ran 361.0 ms, waited ready 188.4 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1362.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1374.1 ms
+games: trip-gl-ioctl: ctxt 434964
+games: trip-gl-ioctl: bkl_wait_us 24662
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 9 us, 9.0 us each
+games: trip-gl-ioctl: call syscall 61: 290114 calls, 1466556 us, 5.1 us each
+games: trip-gl-ioctl: call syscall 101: 310911 calls, 825744 us, 2.7 us each
+games: trip-gl-ioctl: thread 1086 wined3d_cs: ran 338.1 ms, waited ready 193.6 ms
+TRIPS OK
+5496: trip.sh run 2
+games: trip-gl-0: tripprobe: 1000 round trips in 90.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 95.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 92.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1456.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1469.7 ms
+games: trip-gl-strace: ctxt 452494
+games: trip-gl-strace: bkl_wait_us 20032
+games: trip-gl-strace: hold syscall 61: 2 holds, 12 us, 6.0 us each
+games: trip-gl-strace: call syscall 61: 293165 calls, 2493857 us, 8.5 us each
+games: trip-gl-strace: call syscall 101: 421866 calls, 879448 us, 2.1 us each
+games: trip-gl-strace: thread 1954 wined3d_cs: ran 361.9 ms, waited ready 189.2 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1387.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1396.7 ms
+games: trip-gl-ioctl: ctxt 440630
+games: trip-gl-ioctl: bkl_wait_us 26291
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 8 us, 8.0 us each
+games: trip-gl-ioctl: call syscall 61: 293688 calls, 1479462 us, 5.0 us each
+games: trip-gl-ioctl: call syscall 101: 313831 calls, 837201 us, 2.7 us each
+games: trip-gl-ioctl: thread 2106 wined3d_cs: ran 342.1 ms, waited ready 199.3 ms
+TRIPS OK
+5496: trip.sh run 3
+games: trip-gl-0: tripprobe: 1000 round trips in 91.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 84.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 89.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1448.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1460.3 ms
+games: trip-gl-strace: ctxt 450064
+games: trip-gl-strace: bkl_wait_us 21016
+games: trip-gl-strace: hold syscall 61: 1 holds, 8 us, 8.0 us each
+games: trip-gl-strace: call syscall 61: 292120 calls, 1490956 us, 5.1 us each
+games: trip-gl-strace: call syscall 101: 420818 calls, 875640 us, 2.1 us each
+games: trip-gl-strace: thread 2974 wined3d_cs: ran 357.3 ms, waited ready 188.8 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1364.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1374.0 ms
+games: trip-gl-ioctl: ctxt 438765
+games: trip-gl-ioctl: bkl_wait_us 25771
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 7 us, 7.0 us each
+games: trip-gl-ioctl: call syscall 61: 291765 calls, 1469980 us, 5.0 us each
+games: trip-gl-ioctl: call syscall 101: 312187 calls, 826077 us, 2.6 us each
+games: trip-gl-ioctl: thread 3125 wined3d_cs: ran 337.1 ms, waited ready 195.8 ms
+TRIPS OK
+2026-11-19T22:38:42Z
+5496: base exit 0
+
+== Synchronous hint on the child wake, trial ==
+5496: booting kernel
+2026-11-19T22:38:52Z
+0006170bd15938dff2b0385bdda21e2bab14a3e2ac8a63fd88ffaf01583c8941  kernel
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: trip-gl-0: tripprobe: 1000 round trips in 102.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 75.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 80.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1465.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1478.8 ms
+games: trip-gl-strace: ctxt 449435
+games: trip-gl-strace: bkl_wait_us 22352
+games: trip-gl-strace: hold syscall 61: 2 holds, 34 us, 17.0 us each
+games: trip-gl-strace: call syscall 61: 292512 calls, 2489534 us, 8.5 us each
+games: trip-gl-strace: call syscall 101: 421764 calls, 885618 us, 2.1 us each
+games: trip-gl-strace: thread 929 wined3d_cs: ran 359.6 ms, waited ready 192.2 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1381.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1393.5 ms
+games: trip-gl-ioctl: ctxt 437464
+games: trip-gl-ioctl: bkl_wait_us 23231
+games: trip-gl-ioctl: hold syscall 61: 2 holds, 14 us, 7.0 us each
+games: trip-gl-ioctl: call syscall 61: 290109 calls, 2476427 us, 8.5 us each
+games: trip-gl-ioctl: call syscall 101: 310504 calls, 831626 us, 2.7 us each
+games: trip-gl-ioctl: thread 1081 wined3d_cs: ran 338.1 ms, waited ready 195.7 ms
+TRIPS OK
+5496: trip.sh run 2
+games: trip-gl-0: tripprobe: 1000 round trips in 97.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 87.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 102.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1461.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1472.6 ms
+games: trip-gl-strace: ctxt 451857
+games: trip-gl-strace: bkl_wait_us 20524
+games: trip-gl-strace: hold syscall 61: 1 holds, 7 us, 7.0 us each
+games: trip-gl-strace: call syscall 61: 293899 calls, 1494364 us, 5.1 us each
+games: trip-gl-strace: call syscall 101: 423874 calls, 884086 us, 2.1 us each
+games: trip-gl-strace: thread 1949 wined3d_cs: ran 359.3 ms, waited ready 190.6 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1385.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1394.2 ms
+games: trip-gl-ioctl: ctxt 437522
+games: trip-gl-ioctl: bkl_wait_us 25545
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 8 us, 8.0 us each
+games: trip-gl-ioctl: call syscall 61: 290877 calls, 1478281 us, 5.1 us each
+games: trip-gl-ioctl: call syscall 101: 311695 calls, 838779 us, 2.7 us each
+games: trip-gl-ioctl: thread 2100 wined3d_cs: ran 338.4 ms, waited ready 201.5 ms
+TRIPS OK
+5496: trip.sh run 3
+games: trip-gl-0: tripprobe: 1000 round trips in 85.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 92.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 91.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1446.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1456.8 ms
+games: trip-gl-strace: ctxt 448804
+games: trip-gl-strace: bkl_wait_us 19958
+games: trip-gl-strace: hold syscall 61: 2 holds, 15 us, 7.5 us each
+games: trip-gl-strace: call syscall 61: 291498 calls, 2490036 us, 8.5 us each
+games: trip-gl-strace: call syscall 101: 420238 calls, 874130 us, 2.1 us each
+games: trip-gl-strace: thread 2964 wined3d_cs: ran 357.8 ms, waited ready 188.2 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1373.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1380.3 ms
+games: trip-gl-ioctl: ctxt 436757
+games: trip-gl-ioctl: bkl_wait_us 26601
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 9 us, 9.0 us each
+games: trip-gl-ioctl: call syscall 61: 290715 calls, 1471918 us, 5.1 us each
+games: trip-gl-ioctl: call syscall 101: 311338 calls, 830113 us, 2.7 us each
+games: trip-gl-ioctl: thread 3115 wined3d_cs: ran 339.4 ms, waited ready 194.6 ms
+TRIPS OK
+2026-11-19T22:41:01Z
+5496: sync exit 0
+
+== Wait changes before the commit's final arrangement ==
+5496: booting kernel
+2026-11-19T22:42:08Z
+ff0bbf9f74c816554f055f7bfc15bd3074cd597953e2ad31525ba8d24f836b3f  kernel
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: trip-gl-0: tripprobe: 1000 round trips in 92.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 81.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 87.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1374.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1387.6 ms
+games: trip-gl-strace: ctxt 447125
+games: trip-gl-strace: bkl_wait_us 23191
+games: trip-gl-strace: hold syscall 61: 1 holds, 8 us, 8.0 us each
+games: trip-gl-strace: call syscall 61: 293475 calls, 1436169 us, 4.9 us each
+games: trip-gl-strace: call syscall 101: 411382 calls, 848628 us, 2.1 us each
+games: trip-gl-strace: thread 923 wined3d_cs: ran 352.8 ms, waited ready 194.9 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1316.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1328.7 ms
+games: trip-gl-ioctl: ctxt 438670
+games: trip-gl-ioctl: bkl_wait_us 29052
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 9 us, 9.0 us each
+games: trip-gl-ioctl: call syscall 61: 292035 calls, 1433081 us, 4.9 us each
+games: trip-gl-ioctl: call syscall 101: 304629 calls, 804913 us, 2.6 us each
+games: trip-gl-ioctl: thread 1074 wined3d_cs: ran 353.0 ms, waited ready 202.3 ms
+TRIPS OK
+5496: trip.sh run 2
+games: trip-gl-0: tripprobe: 1000 round trips in 84.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 93.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 83.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1378.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1391.8 ms
+games: trip-gl-strace: ctxt 447331
+games: trip-gl-strace: bkl_wait_us 24011
+games: trip-gl-strace: hold syscall 61: 2 holds, 15 us, 7.5 us each
+games: trip-gl-strace: call syscall 61: 293035 calls, 2438652 us, 8.3 us each
+games: trip-gl-strace: call syscall 101: 410326 calls, 853270 us, 2.1 us each
+games: trip-gl-strace: thread 1938 wined3d_cs: ran 352.2 ms, waited ready 192.9 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1321.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1334.7 ms
+games: trip-gl-ioctl: ctxt 439254
+games: trip-gl-ioctl: bkl_wait_us 28633
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 9 us, 9.0 us each
+games: trip-gl-ioctl: call syscall 61: 292528 calls, 1442090 us, 4.9 us each
+games: trip-gl-ioctl: call syscall 101: 304588 calls, 806383 us, 2.6 us each
+games: trip-gl-ioctl: thread 2089 wined3d_cs: ran 357.8 ms, waited ready 204.5 ms
+TRIPS OK
+5496: trip.sh run 3
+games: trip-gl-0: tripprobe: 1000 round trips in 94.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 88.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 91.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1378.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1387.9 ms
+games: trip-gl-strace: ctxt 444615
+games: trip-gl-strace: bkl_wait_us 20284
+games: trip-gl-strace: hold syscall 61: 2 holds, 14 us, 7.0 us each
+games: trip-gl-strace: call syscall 61: 291668 calls, 2439964 us, 8.4 us each
+games: trip-gl-strace: call syscall 101: 409170 calls, 852569 us, 2.1 us each
+games: trip-gl-strace: thread 2954 wined3d_cs: ran 350.0 ms, waited ready 191.4 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1327.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1335.5 ms
+games: trip-gl-ioctl: ctxt 439711
+games: trip-gl-ioctl: bkl_wait_us 27625
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 13 us, 13.0 us each
+games: trip-gl-ioctl: call syscall 61: 292352 calls, 1441444 us, 4.9 us each
+games: trip-gl-ioctl: call syscall 101: 305045 calls, 811284 us, 2.7 us each
+games: trip-gl-ioctl: thread 3106 wined3d_cs: ran 353.7 ms, waited ready 205.8 ms
+TRIPS OK
+2026-11-19T22:44:17Z
+5496: wait exit 0
+
+== Wait changes on c7440843f2, with lock counters ==
+5496: booting kernel
+2026-11-19T22:46:03Z
+19746a6ef123a036cf92b6dc136eb3a0e932b51e2c7d7b44aa4e36a74d08c4f5  kernel
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: trip-gl-0: tripprobe: 1000 round trips in 100.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 98.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 92.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1416.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1425.4 ms
+games: trip-gl-strace: ctxt 445764
+games: trip-gl-strace: bkl_wait_us 21728
+games: trip-gl-strace: hold syscall 61: 1 holds, 9 us, 9.0 us each
+games: trip-gl-strace: call syscall 61: 293853 calls, 1442651 us, 4.9 us each
+games: trip-gl-strace: call syscall 101: 413140 calls, 887085 us, 2.1 us each
+games: trip-gl-strace: thread 935 wined3d_cs: ran 356.2 ms, waited ready 192.7 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1381.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1391.0 ms
+games: trip-gl-ioctl: ctxt 441087
+games: trip-gl-ioctl: bkl_wait_us 28345
+games: trip-gl-ioctl: hold syscall 61: 2 holds, 23 us, 11.5 us each
+games: trip-gl-ioctl: call syscall 61: 293502 calls, 2459190 us, 8.4 us each
+games: trip-gl-ioctl: call syscall 101: 306745 calls, 849014 us, 2.8 us each
+games: trip-gl-ioctl: thread 1088 wined3d_cs: ran 362.7 ms, waited ready 205.7 ms
+TRIPS OK
+5496: trip.sh run 2
+games: trip-gl-0: tripprobe: 1000 round trips in 99.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 91.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 92.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1420.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1436.3 ms
+games: trip-gl-strace: ctxt 445347
+games: trip-gl-strace: bkl_wait_us 21775
+games: trip-gl-strace: hold syscall 61: 2 holds, 12 us, 6.0 us each
+games: trip-gl-strace: call syscall 61: 293350 calls, 2436973 us, 8.3 us each
+games: trip-gl-strace: call syscall 101: 412686 calls, 888650 us, 2.2 us each
+games: trip-gl-strace: thread 1961 wined3d_cs: ran 361.6 ms, waited ready 193.9 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1367.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1379.6 ms
+games: trip-gl-ioctl: ctxt 440350
+games: trip-gl-ioctl: bkl_wait_us 28402
+games: trip-gl-ioctl: hold syscall 61: 2 holds, 12 us, 6.0 us each
+games: trip-gl-ioctl: call syscall 61: 292339 calls, 2453125 us, 8.4 us each
+games: trip-gl-ioctl: call syscall 101: 305075 calls, 837370 us, 2.7 us each
+games: trip-gl-ioctl: thread 2113 wined3d_cs: ran 359.5 ms, waited ready 205.9 ms
+TRIPS OK
+5496: trip.sh run 3
+games: trip-gl-0: tripprobe: 1000 round trips in 92.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 88.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 89.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1427.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1436.4 ms
+games: trip-gl-strace: ctxt 445192
+games: trip-gl-strace: bkl_wait_us 20443
+games: trip-gl-strace: hold syscall 61: 1 holds, 7 us, 7.0 us each
+games: trip-gl-strace: call syscall 61: 293397 calls, 1445879 us, 4.9 us each
+games: trip-gl-strace: call syscall 101: 411820 calls, 892699 us, 2.2 us each
+games: trip-gl-strace: thread 2979 wined3d_cs: ran 363.5 ms, waited ready 198.7 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1392.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1401.9 ms
+games: trip-gl-ioctl: ctxt 437070
+games: trip-gl-ioctl: bkl_wait_us 28131
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 10 us, 10.0 us each
+games: trip-gl-ioctl: call syscall 61: 291771 calls, 1462840 us, 5.0 us each
+games: trip-gl-ioctl: call syscall 101: 305010 calls, 852294 us, 2.8 us each
+games: trip-gl-ioctl: thread 3132 wined3d_cs: ran 364.8 ms, waited ready 209.5 ms
+TRIPS OK
+2026-11-19T22:48:13Z
+5496: profile exit 0
+
+== Wait changes on c7440843f2 ==
+5496: booting kernel
+2026-11-19T22:48:38Z
+66a86ac62b69faed9a53d24ab2eced4fb74bb5f90a62db7305cec72e684a055d  kernel
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: trip-gl-0: tripprobe: 1000 round trips in 87.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 83.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 86.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1390.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1403.9 ms
+games: trip-gl-strace: ctxt 445124
+games: trip-gl-strace: bkl_wait_us 23836
+games: trip-gl-strace: hold syscall 61: 2 holds, 17 us, 8.5 us each
+games: trip-gl-strace: call syscall 61: 292706 calls, 2440555 us, 8.3 us each
+games: trip-gl-strace: call syscall 101: 410490 calls, 857469 us, 2.1 us each
+games: trip-gl-strace: thread 930 wined3d_cs: ran 359.9 ms, waited ready 199.8 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1328.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1341.7 ms
+games: trip-gl-ioctl: ctxt 436766
+games: trip-gl-ioctl: bkl_wait_us 28162
+games: trip-gl-ioctl: hold syscall 61: 2 holds, 13 us, 6.5 us each
+games: trip-gl-ioctl: call syscall 61: 291627 calls, 2442721 us, 8.4 us each
+games: trip-gl-ioctl: call syscall 101: 304130 calls, 809518 us, 2.7 us each
+games: trip-gl-ioctl: thread 1082 wined3d_cs: ran 356.3 ms, waited ready 206.3 ms
+TRIPS OK
+5496: trip.sh run 2
+games: trip-gl-0: tripprobe: 1000 round trips in 87.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 76.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 82.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1389.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1401.0 ms
+games: trip-gl-strace: ctxt 445092
+games: trip-gl-strace: bkl_wait_us 22477
+games: trip-gl-strace: hold syscall 61: 2 holds, 33 us, 16.5 us each
+games: trip-gl-strace: call syscall 61: 293115 calls, 2434829 us, 8.3 us each
+games: trip-gl-strace: call syscall 101: 411378 calls, 865586 us, 2.1 us each
+games: trip-gl-strace: thread 1949 wined3d_cs: ran 359.3 ms, waited ready 189.7 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1332.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1344.0 ms
+games: trip-gl-ioctl: ctxt 438487
+games: trip-gl-ioctl: bkl_wait_us 31307
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 4 us, 4.0 us each
+games: trip-gl-ioctl: call syscall 61: 291825 calls, 1447288 us, 5.0 us each
+games: trip-gl-ioctl: call syscall 101: 304506 calls, 810889 us, 2.7 us each
+games: trip-gl-ioctl: thread 2101 wined3d_cs: ran 356.5 ms, waited ready 202.7 ms
+TRIPS OK
+5496: trip.sh run 3
+games: trip-gl-0: tripprobe: 1000 round trips in 93.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 79.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 84.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1405.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1414.8 ms
+games: trip-gl-strace: ctxt 444852
+games: trip-gl-strace: bkl_wait_us 20780
+games: trip-gl-strace: hold syscall 61: 1 holds, 10 us, 10.0 us each
+games: trip-gl-strace: call syscall 61: 292461 calls, 1443846 us, 4.9 us each
+games: trip-gl-strace: call syscall 101: 411064 calls, 873533 us, 2.1 us each
+games: trip-gl-strace: thread 2968 wined3d_cs: ran 358.4 ms, waited ready 196.3 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1354.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1363.1 ms
+games: trip-gl-ioctl: ctxt 439587
+games: trip-gl-ioctl: bkl_wait_us 29556
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 8 us, 8.0 us each
+games: trip-gl-ioctl: call syscall 61: 292877 calls, 1456015 us, 5.0 us each
+games: trip-gl-ioctl: call syscall 101: 304964 calls, 826214 us, 2.7 us each
+games: trip-gl-ioctl: thread 3120 wined3d_cs: ran 363.6 ms, waited ready 212.8 ms
+TRIPS OK
+2026-11-19T22:50:47Z
+5496: final exit 0
+
+== Tracee's first sleep without a second signal-lock acquisition ==
+5496: booting kernel-stop
+2026-11-19T22:50:54Z
+5abc49f3afbfb37e0a93f0b57d0b9806337dcde70b3bf662a84657456b48fd78  kernel-stop
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5496: trip.sh run 1
+games: trip-gl-0: tripprobe: 1000 round trips in 89.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 90.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 89.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1382.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1396.6 ms
+games: trip-gl-strace: ctxt 443753
+games: trip-gl-strace: bkl_wait_us 22048
+games: trip-gl-strace: hold syscall 61: 1 holds, 8 us, 8.0 us each
+games: trip-gl-strace: call syscall 61: 291160 calls, 1438085 us, 4.9 us each
+games: trip-gl-strace: call syscall 101: 409354 calls, 856689 us, 2.1 us each
+games: trip-gl-strace: thread 932 wined3d_cs: ran 352.3 ms, waited ready 195.3 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1354.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1367.5 ms
+games: trip-gl-ioctl: ctxt 440522
+games: trip-gl-ioctl: bkl_wait_us 26363
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 10 us, 10.0 us each
+games: trip-gl-ioctl: call syscall 61: 292513 calls, 1452025 us, 5.0 us each
+games: trip-gl-ioctl: call syscall 101: 305512 calls, 826341 us, 2.7 us each
+games: trip-gl-ioctl: thread 1084 wined3d_cs: ran 360.8 ms, waited ready 208.2 ms
+TRIPS OK
+5496: trip.sh run 2
+games: trip-gl-0: tripprobe: 1000 round trips in 93.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 83.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 87.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1384.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1394.8 ms
+games: trip-gl-strace: ctxt 445760
+games: trip-gl-strace: bkl_wait_us 19562
+games: trip-gl-strace: hold syscall 61: 1 holds, 5 us, 5.0 us each
+games: trip-gl-strace: call syscall 61: 292809 calls, 1437676 us, 4.9 us each
+games: trip-gl-strace: call syscall 101: 411554 calls, 859327 us, 2.1 us each
+games: trip-gl-strace: thread 1949 wined3d_cs: ran 350.8 ms, waited ready 194.8 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1356.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1365.4 ms
+games: trip-gl-ioctl: ctxt 443377
+games: trip-gl-ioctl: bkl_wait_us 27752
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 7 us, 7.0 us each
+games: trip-gl-ioctl: call syscall 61: 295035 calls, 1457147 us, 4.9 us each
+games: trip-gl-ioctl: call syscall 101: 307476 calls, 828360 us, 2.7 us each
+games: trip-gl-ioctl: thread 2103 wined3d_cs: ran 359.6 ms, waited ready 209.2 ms
+TRIPS OK
+5496: trip.sh run 3
+games: trip-gl-0: tripprobe: 1000 round trips in 97.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: tripprobe: 1000 round trips in 90.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: tripprobe: 1000 round trips in 79.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: tripprobe: 1000 round trips in 1420.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1433.3 ms
+games: trip-gl-strace: ctxt 444986
+games: trip-gl-strace: bkl_wait_us 20323
+games: trip-gl-strace: hold syscall 61: 2 holds, 13 us, 6.5 us each
+games: trip-gl-strace: call syscall 61: 292880 calls, 2454470 us, 8.4 us each
+games: trip-gl-strace: call syscall 101: 411036 calls, 877796 us, 2.1 us each
+games: trip-gl-strace: thread 2969 wined3d_cs: ran 360.7 ms, waited ready 203.1 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1434.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1440.8 ms
+games: trip-gl-ioctl: ctxt 442118
+games: trip-gl-ioctl: bkl_wait_us 34621
+games: trip-gl-ioctl: hold syscall 61: 1 holds, 5 us, 5.0 us each
+games: trip-gl-ioctl: call syscall 61: 294360 calls, 1489291 us, 5.1 us each
+games: trip-gl-ioctl: call syscall 101: 307007 calls, 863717 us, 2.8 us each
+games: trip-gl-ioctl: thread 3121 wined3d_cs: ran 366.1 ms, waited ready 227.9 ms
+TRIPS OK
+2026-11-19T22:53:08Z
+5496: stop exit 0
+
+== Lock counters, from the trip loop snapshots of the instrumented boot ==
+Each total is the change between two readings, summed over the four
+processors. The cycle count is read before and after the take.
+sched_wait covers irqsave takes of sched_lock, signal_wait outer
+takes of sig_lock, tasklist_wait read-side takes of tasklist_lock,
+and timer_list_wait takes by proc_timer_update.
+1 trip-gl-0 sched_wait: 83801 takes, 52082930 cycles, 12425 us, 0.148 us/take
+1 trip-gl-0 signal_wait: 59830 takes, 2345593 cycles, 560 us, 0.009 us/take
+1 trip-gl-0 tasklist_wait: 11 takes, 631 cycles, 0 us, 0.000 us/take
+1 trip-gl-0 timer_list_wait: 37327 takes, 1607249 cycles, 383 us, 0.010 us/take
+1 trip-gl-strace sched_wait: 1191803 takes, 1241463040 cycles, 296148 us, 0.248 us/take
+1 trip-gl-strace signal_wait: 3214684 takes, 3659651158 cycles, 873002 us, 0.272 us/take
+1 trip-gl-strace tasklist_wait: 928106 takes, 188437401 cycles, 44951 us, 0.048 us/take
+1 trip-gl-strace timer_list_wait: 702765 takes, 36594786 cycles, 8729 us, 0.012 us/take
+1 trip-gl-ioctl sched_wait: 1185484 takes, 1287195811 cycles, 307058 us, 0.259 us/take
+1 trip-gl-ioctl signal_wait: 3018263 takes, 3694018451 cycles, 881201 us, 0.292 us/take
+1 trip-gl-ioctl tasklist_wait: 823596 takes, 187163026 cycles, 44647 us, 0.054 us/take
+1 trip-gl-ioctl timer_list_wait: 701170 takes, 35858646 cycles, 8554 us, 0.012 us/take
+2 trip-gl-0 sched_wait: 87300 takes, 58469322 cycles, 13948 us, 0.160 us/take
+2 trip-gl-0 signal_wait: 61790 takes, 2473442 cycles, 590 us, 0.010 us/take
+2 trip-gl-0 tasklist_wait: 13 takes, 672 cycles, 0 us, 0.000 us/take
+2 trip-gl-0 timer_list_wait: 39026 takes, 1746590 cycles, 417 us, 0.011 us/take
+2 trip-gl-strace sched_wait: 1190396 takes, 1250478356 cycles, 298299 us, 0.251 us/take
+2 trip-gl-strace signal_wait: 3211560 takes, 3684515814 cycles, 878934 us, 0.274 us/take
+2 trip-gl-strace tasklist_wait: 927119 takes, 192233729 cycles, 45857 us, 0.049 us/take
+2 trip-gl-strace timer_list_wait: 702015 takes, 36605332 cycles, 8732 us, 0.012 us/take
+2 trip-gl-ioctl sched_wait: 1182934 takes, 1280189007 cycles, 305386 us, 0.258 us/take
+2 trip-gl-ioctl signal_wait: 3007834 takes, 3617456193 cycles, 862937 us, 0.287 us/take
+2 trip-gl-ioctl tasklist_wait: 820215 takes, 182861511 cycles, 43621 us, 0.053 us/take
+2 trip-gl-ioctl timer_list_wait: 699547 takes, 34614299 cycles, 8257 us, 0.012 us/take
+3 trip-gl-0 sched_wait: 83724 takes, 52551689 cycles, 12536 us, 0.150 us/take
+3 trip-gl-0 signal_wait: 58825 takes, 2343385 cycles, 559 us, 0.010 us/take
+3 trip-gl-0 tasklist_wait: 7 takes, 336 cycles, 0 us, 0.000 us/take
+3 trip-gl-0 timer_list_wait: 37169 takes, 1705256 cycles, 406 us, 0.011 us/take
+3 trip-gl-strace sched_wait: 1190338 takes, 1260838565 cycles, 300771 us, 0.253 us/take
+3 trip-gl-strace signal_wait: 3208670 takes, 3705625074 cycles, 883970 us, 0.275 us/take
+3 trip-gl-strace tasklist_wait: 926085 takes, 193165876 cycles, 46079 us, 0.050 us/take
+3 trip-gl-strace timer_list_wait: 701672 takes, 36427527 cycles, 8689 us, 0.012 us/take
+3 trip-gl-ioctl sched_wait: 1176304 takes, 1311311125 cycles, 312811 us, 0.266 us/take
+3 trip-gl-ioctl signal_wait: 3002560 takes, 3692563056 cycles, 880854 us, 0.293 us/take
+3 trip-gl-ioctl tasklist_wait: 818958 takes, 192839265 cycles, 46001 us, 0.056 us/take
+3 trip-gl-ioctl timer_list_wait: 696094 takes, 35503629 cycles, 8470 us, 0.012 us/take
