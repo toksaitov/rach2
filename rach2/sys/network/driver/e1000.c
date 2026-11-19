@@ -174,10 +174,16 @@ static uintptr_t e1000_window[E1000_MAX];
 static uint64_t e1000_window_at[E1000_MAX];
 
 /** The window of card `nth` at `addr`, mapped now or at an earlier
- * bring-up of the card at the same address; 0 when it would not map. */
+ * bring-up of the card at the same address; 0 when it would not map. One
+ * at an address the BAR left is unmapped: the card is stopped, so nothing
+ * reads it. */
 static uintptr_t e1000_window_map(int nth, uint64_t addr)
 {
-    if (e1000_window[nth] == 0 || e1000_window_at[nth] != addr) {
+    if (e1000_window[nth] != 0 && e1000_window_at[nth] != addr) {
+        mmio_unmap(e1000_window[nth], E1000_BAR_WINDOW);
+        e1000_window[nth] = 0;
+    }
+    if (e1000_window[nth] == 0) {
         uintptr_t mapped = map_mmio((uintptr_t)addr, E1000_BAR_WINDOW);
 
         if (mapped == 0) {

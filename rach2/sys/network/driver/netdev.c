@@ -642,6 +642,14 @@ static int away_link(void *dev, struct netdev_link *out)
     return 1;
 }
 
+/** The `set_up` of a card that is away: it may go down, not up, since
+ * nothing would carry what it sends. */
+static int away_set_up(void *dev, int up)
+{
+    (void)dev;
+    return up ? -ENODEV : 0;
+}
+
 /** The number of the probe's card `nd` in `ifaces`, or -1 for an interface
  * that is no card of the probe's. */
 static int card_of(const struct netdev *nd)
@@ -672,6 +680,7 @@ int netdev_release(struct netdev *nd)
     away_ops[i].name = card_ops[i]->name;
     away_ops[i].tx = away_tx;
     away_ops[i].link = away_link;
+    away_ops[i].set_up = away_set_up;
     nd->ops = &away_ops[i];
     card_away[i] = 1;
     netdev_carrier_changed(nd);
@@ -743,14 +752,24 @@ int netdev_reclaim(struct netdev *nd, const char *driver)
         }
         k_udelay(100000u);
     }
+    if (driver) {
+        int r = sysfs_pci_bind(key, driver);
+
+        if (r != 0) {
+            klog(KLOG_WARN, "net", "%s: not taken back: /sys would not show it bound: error %d",
+                 nd->name, r);
+            card_ops[i]->stop(nd->dev);
+            nd->pci_key = key;
+            pci_unclaim(bus, devfn, PCI_OWNER_KERNEL);
+            return r;
+        }
+        (void)sysfs_pci_uevent(key, "bind");
+    }
     flags = net_lock();
     nd->ops = card_ops[i];
     card_away[i] = 0;
     netdev_carrier_changed(nd);
     net_unlock(flags);
-    if (driver && sysfs_pci_bind(nd->pci_key, driver) == 0) {
-        (void)sysfs_pci_uevent(nd->pci_key, "bind");
-    }
     klog(KLOG_INFO, "net", "%s: taken back by its driver", nd->name);
     return 0;
 }
@@ -807,6 +826,45 @@ static struct netdev *card_named(int n, const char *buf, uint32_t len)
     return 0;
 }
 
+/** Whether the `n` bytes at `text` are the string `word`. */
+static int text_is(const char *text, uint32_t n, const char *word)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (word[i] == '\0' || text[i] != word[i]) {
+            return 0;
+        }
+    }
+    return word[n] == '\0';
+}
+
+/**
+ * Whether the driver_override of the function `key` lets the driver
+ * `name` have it, as Linux's driver_match_device reads it: none, which the
+ * file shows as "(null)", or `name`. A function without the file, which
+ * VFIO adds to the functions the IOMMU has in groups, has none.
+ */
+static int override_allows(int key, const char *name)
+{
+    char text[SYSFS_NAME_MAX + 8];
+    int pci = sysfs_anchor_find(SYSFS_PCI_DEVICE, key);
+    int file = pci > 0 ? sysfs_node_child(pci, "driver_override", 15) : 0;
+    int32_t n;
+
+    if (file <= 0) {
+        return 1;
+    }
+    n = sysfs_node_show(file, text, (uint32_t)sizeof(text));
+    if (n <= 0 || n > (int32_t)sizeof(text)) {
+        return n <= 0;
+    }
+    if (text[n - 1] == '\n') {
+        n--;
+    }
+    return text_is(text, (uint32_t)n, "(null)") || text_is(text, (uint32_t)n, name);
+}
+
 /** /sys/bus/pci/drivers/DRIVER/unbind: let go of the card named
  * (`netdev_release`); -ENODEV for a function the driver does not have. */
 static int32_t store_unbind(void *obj, int arg, const char *buf, uint32_t len)
@@ -823,16 +881,17 @@ static int32_t store_unbind(void *obj, int arg, const char *buf, uint32_t len)
 }
 
 /** /sys/bus/pci/drivers/DRIVER/bind: take back the card named
- * (`netdev_reclaim`); -ENODEV for a function that was never the driver's
- * or that a driver has, vfio-pci among them, as Linux's bind_store answers
- * for a device with a driver (drivers/base/bus.c). */
+ * (`netdev_reclaim`); -ENODEV for a function that was never the driver's,
+ * whose driver_override names another driver, or that a driver has,
+ * vfio-pci among them, as Linux's bind_store answers for a device that
+ * does not match or has a driver (drivers/base/bus.c). */
 static int32_t store_bind(void *obj, int arg, const char *buf, uint32_t len)
 {
     struct netdev *nd = card_named(arg, buf, len);
     int r;
 
     (void)obj;
-    if (!nd) {
+    if (!nd || !override_allows(nd->pci_key, sys_drivers[arg].name)) {
         return -ENODEV;
     }
     r = netdev_reclaim(nd, sys_drivers[arg].name);

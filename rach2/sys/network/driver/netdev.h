@@ -607,8 +607,9 @@ int netdev_running(const struct netdev *nd);
 /**
  * Let go of the card of `nd`, an interface of the probe's, so that another
  * driver, vfio-pci above all, can take the function: the interface is set
- * down and stays, with its name, index and addresses, without a carrier and
- * dropping what is sent on it; the driver stops the card, and the function
+ * down and stays, with its name, index and the addresses a down interface
+ * keeps, without a carrier, dropping what is sent on it and refusing to be
+ * set up; the driver stops the card, and the function
  * has no owner. 0, or -ENODEV for an interface that is no card, a card that
  * is away already or a driver that cannot stop. Called under the big kernel
  * lock with interrupts on; it waits while the card drains.
@@ -616,12 +617,14 @@ int netdev_running(const struct netdev *nd);
 int netdev_release(struct netdev *nd);
 
 /**
- * Take back the card `netdev_release` let go: the driver starts it again
- * from whatever state its last owner left, and the interface, still down,
- * is the card's once more. `driver` is the name /sys shows the function
- * bound to, or NULL for none. 0; -ENODEV for a card that is not away; -EBUSY
- * while another driver has the function; -EIO, with the card left away,
- * when it does not start. Called as `netdev_release`.
+ * Take back the card `netdev_release` let go: the function is brought to
+ * D0, the driver starts it again from whatever state its last owner left,
+ * with a second try after 100 ms, and the interface, still down, is the
+ * card's once more. `driver` is the name /sys shows the function bound to,
+ * or NULL for none. 0; -ENODEV for a card that is not away; -EBUSY while
+ * another driver has the function; -EIO when it does not start, or the
+ * error of `sysfs_pci_bind` when /sys cannot show it bound, with the card
+ * stopped and left away either way. Called as `netdev_release`.
  */
 int netdev_reclaim(struct netdev *nd, const char *driver);
 
