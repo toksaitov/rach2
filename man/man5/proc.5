@@ -398,8 +398,13 @@ lists.
 .It Pa /proc/vmstat
 Linux's names and values of the counters the kernel keeps: nr_free_pages,
 nr_file_pages, the pages of the page and buffer caches, pgpgin and pgpgout,
-the kibibytes read from and written to the whole disks since boot, and
-pswpin and pswpout, 0, since nothing is swapped.
+the kibibytes read from and written to the whole disks since boot,
+nr_anon_transparent_hugepages, the transparent huge pages mapped, the huge
+zero page's mappings aside, and pswpin and pswpout, 0, since nothing is
+swapped; then the events of transparent huge pages the kernel counts:
+thp_fault_alloc, thp_fault_fallback, thp_collapse_alloc,
+thp_collapse_alloc_failed, thp_split_page, thp_underused_split_page,
+thp_split_pmd, thp_zero_page_alloc and thp_zero_page_alloc_failed.
 procps-ng's
 .Xr vmstat 8
 reads it, and takes a counter it does not find as 0.
@@ -688,6 +693,9 @@ and
 .Li SwapFree
 are both
 .Ql 0 kB .
+.Li AnonHugePages
+is the memory transparent huge pages map, 2 MiB for each mapping of one,
+the huge zero page's aside.
 .Li KReclaimable
 is the kernel heap's freed runs, kept mapped for reuse, which reclaim gives
 back.
@@ -2497,7 +2505,10 @@ Each region's
 line, followed by lines of a name, a colon and a size in kilobytes, as
 Linux writes them: Size, KernelPageSize and MMUPageSize, Rss, Pss,
 Shared_Clean, Shared_Dirty, Private_Clean, Private_Dirty, Referenced,
-Anonymous, Swap, SwapPss and Locked; where the protection keys are on, a
+Anonymous, AnonHugePages, the memory transparent huge pages map in the
+region, the huge zero page's aside, Swap, SwapPss and Locked; a
+THPeligible line, 1 when a fault may map a huge page in the region and 0
+otherwise, a plain number; where the protection keys are on, a
 ProtectionKey line with the region's key, a plain number
 .Pq see Xr pkeys 7 ;
 and a VmFlags line of
@@ -2553,7 +2564,15 @@ marked,
 .Ql dd
 for a mapping of a device object or
 .Xr memfd_secret 2 ,
-which a core file leaves out, and
+which a core file leaves out,
+.Ql hg
+and
+.Ql nh
+for a range
+.Dv MADV_HUGEPAGE
+and
+.Dv MADV_NOHUGEPAGE
+marked, and
 .Ql sl
 for a region
 .Xr mseal 2

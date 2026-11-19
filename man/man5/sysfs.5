@@ -806,6 +806,8 @@ link to the input device.
 A link for each event device, by its numbers, to its directory.
 .It Pa /sys/kernel/mm/transparent_hugepage
 The transparent huge-page policy and page-directory mapping size.
+.It Pa /sys/kernel/mm/transparent_hugepage/khugepaged
+khugepaged's settings and counts.
 .It Pa /sys/kernel/debug
 The directory where the kernel mounts debugfs; see
 .Xr debugfs 5 .
@@ -1511,11 +1513,12 @@ is
 .Pp
 The files under
 .Pa /sys/kernel/mm/transparent_hugepage
-are Linux 6.12's, as it boots with the transparent huge-page policy
-.Ql never :
+are Linux 6.12's, as Debian's kernel boots with the transparent huge-page
+policy
+.Ql madvise :
 .Pa enabled
 reads
-.Ql always madvise [never] ,
+.Ql always [madvise] never ,
 .Pa defrag
 .Ql always defer defer+madvise [madvise] never ,
 .Pa shmem_enabled
@@ -1526,8 +1529,10 @@ and
 .Pa shrink_underused
 read 1.
 With less than 512 MiB of memory, as Linux leaves them then,
-.Pa defrag
+.Pa enabled
 reads
+.Ql always madvise [never] ,
+.Pa defrag
 .Ql always defer defer+madvise madvise [never]
 and
 .Pa use_zero_page
@@ -1558,8 +1563,69 @@ reads its first letters.
 Anything else is
 .Er EINVAL
 and changes nothing.
-A written policy reads back, but no page is ever huge: memory is mapped
-in 4 KiB pages under every policy, which each of Linux's permits.
+On x86-64 the policy is the kernel's: with
+.Pa enabled
+.Ql always ,
+or
+.Ql madvise
+for a mapping marked
+.Dv MADV_HUGEPAGE ,
+a fault in private anonymous memory maps a 2 MiB page where an aligned
+2 MiB of the mapping has no page yet, a read maps the huge zero page
+while
+.Pa use_zero_page
+is 1, and khugepaged collapses small pages into huge ones; see
+.Xr madvise 2 .
+.Pa defrag
+reads back and changes nothing, since there is no compaction.
+On i686, which Linux gives no huge pages, every policy reads back and
+memory is mapped in 4 KiB pages.
+.Pp
+The files under
+.Pa /sys/kernel/mm/transparent_hugepage/khugepaged
+are Linux 6.12's, a decimal number and a newline each:
+.Pa pages_to_scan ,
+4096, the pages khugepaged scans at each wake;
+.Pa scan_sleep_millisecs ,
+10000, the time between wakes;
+.Pa alloc_sleep_millisecs ,
+60000, the time it waits after no huge page could be had;
+.Pa max_ptes_none ,
+511, the entries with no page, or with a page never written, it fills in
+a range it collapses;
+.Pa max_ptes_shared ,
+256, the pages another process shares that it copies;
+.Pa max_ptes_swap ,
+64, which nothing reads, since there is no swap;
+.Pa defrag ,
+1;
+and the read-only
+.Pa full_scans ,
+its passes over every process, and
+.Pa pages_collapsed ,
+the huge pages it and
+.Dv MADV_COLLAPSE
+made.
+Root's write of a number as Linux's
+.Fn kstrtouint
+reads it sets the first six, each waking khugepaged:
+.Pa pages_to_scan
+not 0, the three
+.Pa max_ptes_
+files at most 511, and
+.Pa defrag
+0 or 1 as
+.Pa use_zero_page
+takes it.
+Anything else is
+.Er EINVAL .
+When
+.Pa shrink_underused
+is 1 and
+.Pa max_ptes_none
+is below 511, reclaim splits each huge page with more than
+.Pa max_ptes_none
+pages of zeros and frees those pages.
 .Sh LIMITS
 Linux's tree has much more: the other device classes, the attribute files
 beside a USB device's
@@ -1586,8 +1652,6 @@ here only the one the kernel found is listed.
 A DMI string is cut at 63 bytes.
 .Pa /sys/kernel/mm/transparent_hugepage
 has no
-.Pa khugepaged
-directory and no
 .Pa hugepages- Ns Ar N Ns Pa kB
 directories of the sizes Linux's multi-size huge pages add.
 .Pa /sys/dev/char
@@ -1696,6 +1760,8 @@ The vfio-pci driver's files.
 The Intel graphics driver's files.
 .It Pa /sys/kernel/mm/transparent_hugepage
 The transparent huge-page policy and page-directory mapping size.
+.It Pa /sys/kernel/mm/transparent_hugepage/khugepaged
+khugepaged's settings and counts.
 .It Pa /sys/kernel/debug
 Where debugfs is mounted.
 .It Pa /sys/fs/pstore
