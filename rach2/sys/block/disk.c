@@ -44,7 +44,7 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
     if (!dev) {
         return 0;
     }
-    if (dev->sector_count > ~(uint64_t)0 / BLOCK_SECTOR_SIZE) {
+    if (block_sectors(dev) > ~(uint64_t)0 / BLOCK_SECTOR_SIZE) {
         klog(KLOG_WARN, "disk", "%s %d: not registered: more sectors than 64 bits of bytes count",
              transport, location);
         return 0;
@@ -74,6 +74,7 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
     d->present = 1;
     d->released = 0;
     d->removable = 0;
+    d->size_lock = 0;
     d->dev = dev;
     d->transport = transport;
     d->location = location;
@@ -258,7 +259,7 @@ int disk_scan(struct disk *d, block_device_t *backing)
         wq_wait_event_nointr(&scan_wq, scan_free, 0);
     }
     scan_busy = 1;
-    rc = part_scan(&d->table, read_backing, d->dev, d->dev->sector_count, scan_work);
+    rc = part_scan(&d->table, read_backing, d->dev, block_sectors(d->dev), scan_work);
     scan_busy = 0;
     wq_wake_all(&scan_wq);
     if (rc != 0) {
