@@ -1,0 +1,5 @@
+dir 0755 /sbin
+file 0755 /sbin/init build/tmp/t5496/bench
+file 0755 /bench build/tmp/t5496/bench
+file 0755 /strace build/tmp/t5496/strace
+dir 01777 /tmp
