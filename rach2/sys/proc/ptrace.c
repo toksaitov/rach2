@@ -62,6 +62,25 @@ static int kill_pending(const process_t *t)
 }
 
 /**
+ * Untrace the current thread `self`, whose tracer `tpid` has gone, unless a
+ * detach has untraced it since it read `tpid` and another tracer may have
+ * attached. The caller holds the big lock, under which every change of a
+ * tracing link is made.
+ */
+static void ptrace_unlink_gone(process_t *self, uint32_t tpid)
+{
+    uint32_t flags;
+
+    if (self->tracer != tpid) {
+        return;
+    }
+    flags = signal_state_lock();
+    self->ptrace = 0;
+    signal_state_unlock(flags);
+    proc_set_tracer(self, 0);
+}
+
+/**
  * Stop the current thread for its tracer with the wait status `status` until
  * the tracer resumes it, or SIGKILL ends the stop, and return the signal the
  * resume gave, 0 for none or after SIGKILL.
@@ -102,13 +121,7 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
         big = 1;
     }
     if (gone) {
-        /* A detach under the big lock may have come since `tpid` was read. */
-        if (*(volatile uint32_t *)&self->tracer == tpid) {
-            flags = signal_state_lock();
-            self->ptrace = 0;
-            signal_state_unlock(flags);
-            proc_set_tracer(self, 0);
-        }
+        ptrace_unlink_gone(self, tpid);
         sig = (int)((status >> 8) & 0x7F);
         goto out;
     }
