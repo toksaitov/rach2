@@ -17,10 +17,10 @@
 # check lets a clip's median of dropped frames exceed Linux's most, by
 # browser.
 #
-# The script mounts the partition read-only, copies the clips into the
-# workspace, checks each against SUMS and unmounts it, lays out the kit as
-# video-gpu.sh expects, runs `video-gpu.sh CHECK desktop CLIPS rach2`, and
-# judges as 78-14b's step does:
+# The script mounts the partition read-only, or reads it where it is mounted
+# already, copies the clips into the workspace, checks each against SUMS and
+# unmounts what it mounted, lays out the kit as video-gpu.sh expects, runs
+# `video-gpu.sh CHECK desktop CLIPS rach2`, and judges as 78-14b's step does:
 #
 #   decode    each clip's frames, in software and through VA-API, the same
 #             MD5s line for line as Linux's
@@ -73,15 +73,24 @@ esac
 [ -f "$sums" ] && [ -f "$linux" ] || fail "no $2 or $3"
 [ -z "$spread" ] || [ -f "$spread" ] || fail "no $4"
 
-# The clips, from the data partition, each as SUMS has it.
+# The clips, from the data partition, each as SUMS has it. A trial root
+# boots from an image on that partition, which then stays mounted on /data,
+# and the kernel refuses a second mount of a mounted device, so the clips are
+# read through the mount that holds it.
 rm -rf clips data kit rach2 ref
 mkdir -p data clips
-mount -t ext2 -o ro "$data" data || fail "$data would not mount read-only"
-mounted=$here/data
-[ -d data/native/video/clips ] || fail "no native/video/clips on $data"
-cp -R data/native/video/clips/. clips/
-umount data
-mounted=''
+from=$(awk -v d="$data" '$1 == d { print $2; exit }' /proc/mounts)
+if [ -z "$from" ]; then
+    mount -t ext2 -o ro "$data" data || fail "$data would not mount read-only"
+    mounted=$here/data
+    from=$here/data
+fi
+[ -d "$from/native/video/clips" ] || fail "no native/video/clips on $data"
+cp -R "$from/native/video/clips/." clips/
+if [ -n "$mounted" ]; then
+    umount "$mounted"
+    mounted=''
+fi
 (cd clips && grep -v '^#' "$sums" | sha256sum -c) > clips.check 2>&1 || {
     cat clips.check
     fail "a clip differs from $2"

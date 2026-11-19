@@ -1,0 +1,880 @@
+[    0.000000] boot: Rach2 Booting
+[    0.000000] boot: loader: GRUB 2.12-1ubuntu7.3, by multiboot2 on UEFI
+[    0.000000] boot: screen: framebuffer, rgb, 1366x768, 32 bits, pitch 5504, at 0xb0000000
+[    0.000000] module: none: the loader carried no module
+[    0.000000] console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells
+[    0.000000] console: font: drawn: code page 437 box drawing with Cyrillic
+[    0.000000] boot: Initializing system components
+[    0.000000] cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining
+[    0.000000] boot: gdt: ready
+[    0.000000] boot: tss: ready
+[    0.000000] boot: idt: ready
+[    0.000000] boot: isr: ready
+[    0.000000] fpu: fxsr: on, sse: on, xsave: on, xcr0: 0x7, area: 832 bytes, pkeys: off
+[    0.000000] boot: memory manager: ready
+[    0.000000] memory: map: 0x0000000000000000-0x000000000006F000 available
+[    0.000000] memory: map: 0x000000000006F000-0x0000000000070000 reserved
+[    0.000000] memory: map: 0x0000000000070000-0x0000000000088000 available
+[    0.000000] memory: map: 0x0000000000088000-0x00000000000A0000 reserved
+[    0.000000] memory: map: 0x0000000000100000-0x00000000A56B0000 available
+[    0.000000] memory: map: 0x00000000A56B0000-0x00000000A5EB0000 reserved
+[    0.000000] memory: map: 0x00000000A5EB0000-0x00000000AA6BF000 available
+[    0.000000] memory: map: 0x00000000AA6BF000-0x00000000AAEBF000 reserved
+[    0.000000] memory: map: 0x00000000AAEBF000-0x00000000AAFBF000 nvs
+[    0.000000] memory: map: 0x00000000AAFBF000-0x00000000AAFFF000 acpi
+[    0.000000] memory: map: 0x00000000AAFFF000-0x00000000AB000000 available
+[    0.000000] memory: map: 0x0000000100000000-0x000000044F600000 available
+[    0.000000] memory: map: 0x00000000000A0000-0x00000000000C0000 reserved
+[    0.000000] memory: map: 0x00000000AB000000-0x00000000AFA00000 reserved
+[    0.000000] memory: map: 0x00000000E0000000-0x00000000F0000000 reserved
+[    0.000000] memory: map: 0x00000000FE101000-0x00000000FE113000 reserved
+[    0.000000] memory: map: 0x00000000FEB00000-0x00000000FEB10000 reserved
+[    0.000000] memory: map: 0x00000000FEC00000-0x00000000FEC01000 reserved
+[    0.000000] memory: map: 0x00000000FED00000-0x00000000FEE01000 reserved
+[    0.000000] memory: map: 0x00000000FFC00000-0x0000000100000000 reserved
+[    0.000000] i915: stolen: reserving [mem 0xaba00000-0xaf9fffff], 0 KiB of it usable memory
+[    0.000000] memory: usable 16666908 KiB, unreachable 0 KiB, reserved 29244 KiB, managed 16637664 KiB
+[    0.000000] boot: paging: ready
+[    0.000000] pci: list: 14 functions
+[    0.000000] boot: page cache: ready
+[    0.000000] acpi: rsdp: at 0x9f094c, from the boot record
+[    0.000000] acpi: tables: xsdt at 0xaaffe210, revision 2, LENOVO: FACP SLIC UEFI FPDT POAT ASF? HPET APIC MCFG WDAT SSDT BOOT LPIT ASPT DBGP SSDT SSDT SSDT DMAR BGRT DSDT
+[    0.000000] acpi: madt: 4 processors (4 usable), 1 ioapics, 2 overrides, 0 nmi inputs, an 8259 pair
+[    0.000000] acpi: madt: override: isa 0 to gsi 2, flags 0x0
+[    0.000000] acpi: madt: override: isa 9 to gsi 9, flags 0xd
+[    0.000000] acpi: fadt: revision 5, pm1a 0x1804, pm timer 0x1808 (24-bit), reset register, 8042 yes, century 0
+[    0.000000] acpi: dsdt: \_S5 sleep types 7 and 0
+[    0.000000] acpi: hpet: at 0xfed00000
+[    0.000000] acpi: mcfg: segment 0, buses 0 to 255 at 0xe0000000
+[    0.000000] pci: ecam: buses 0 to 2 of segment 0 at 0xe0000000
+[    0.000000] pci: ecam: 0:1b.0: extended capability 0x2, version 1, at 0x100
+[    0.000000] pci: ecam: 0:1c.0: extended capability 0x0, version 0, at 0x100
+[    0.000000] pci: ecam: 0:1c.3: extended capability 0x0, version 0, at 0x100
+[    0.000000] pci: ecam: 1:0.0: extended capability 0x1, version 2, at 0x100
+[    0.000000] pci: ecam: 2:0.0: extended capability 0x1, version 1, at 0x100
+[    0.000000] pci: ecam: 5 functions with extended capabilities
+[    0.000000] hpet: ready: 14318179 Hz, period 69841279 fs
+[    0.000000] lapic: ready: id 0, version 0x15, xapic mode
+[    0.000000] ioapic: ready: id 2 at 0xfec00000, version 0x20, gsi 0 to 39
+[    0.000000] lapic: tick: 24942 counts, measured against the hpet
+[    0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
+[    0.064000] lapic: timer: vector 32 for ticks and events
+[    0.064000] boot: timer: ready
+[    0.064000] rtc: 2026-11-19 18:20:14 UTC
+[    0.064000] clock: ready
+[    0.064000] entropy: ready: RDRAND, trusted
+[    0.064000] board: lynxpoint-lp: ACPI enabled
+[    0.068000] board: lynxpoint-lp: masked the SCI on IRQ 9
+[    0.072000] board: ready: lynxpoint-lp
+[    0.076000] watchdog: boot: TCO1_STS 0, TCO2_STS 0
+[    0.076000] watchdog: ready: TCO version 2 at 1860, halted, heartbeat 30 s, nowayout 0
+[    0.080000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+[    0.080000] console: blank: after 600 seconds without input
+[    0.084000] backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937, off by the panel's enable
+[    0.088000] boot: keyboard: ready
+[    0.088000] boot: syscall: ready
+[    0.088000] boot: process: ready
+[    0.088000] boot: scheduler: ready
+[    0.088000] acpi: acpica: RSDP 0x00000000009F094C 000024 (v02 LENOVO)
+[    0.088000] acpi: acpica: XSDT 0x00000000AAFFE210 0000C4 (v01 LENOVO CB-01    00000001      01000013)
+[    0.088000] acpi: acpica: FACP 0x00000000AAFF7000 00010C (v05 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.092000] acpi: acpica: DSDT 0x00000000AAFE4000 00F4BB (v02 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.092000] acpi: acpica: FACS 0x00000000AAFBA000 000040
+[    0.092000] acpi: acpica: SLIC 0x00000000AAFFD000 000176 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: UEFI 0x00000000AAFFC000 000236 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: FPDT 0x00000000AAFFA000 000044 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: POAT 0x00000000AAFF9000 000055 (v03 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: ASF! 0x00000000AAFF8000 0000A5 (v32 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: HPET 0x00000000AAFF6000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: APIC 0x00000000AAFF5000 00008C (v03 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: MCFG 0x00000000AAFF4000 00003C (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: WDAT 0x00000000AAFE3000 000224 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: SSDT 0x00000000AAFE0000 002028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: BOOT 0x00000000AAFDE000 000028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: LPIT 0x00000000AAFDD000 000094 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: ASPT 0x00000000AAFDB000 000034 (v07 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: DBGP 0x00000000AAFDA000 000034 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: SSDT 0x00000000AAFD2000 0004D6 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: SSDT 0x00000000AAFD1000 000AD8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: SSDT 0x00000000AAFCD000 0034F8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: DMAR 0x00000000AAFCB000 0000B0 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.096000] acpi: acpica: BGRT 0x00000000AAFCC000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.124000] acpi: acpica: 5 ACPI AML tables successfully acquired and loaded
+[    0.128000] acpi: ec: \_SB.PCI0.LPCB.EC0 at ports 0x62 and 0x66, gpe 0x7
+[    0.128000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+[    0.128000] acpi: sci: line 9
+[    0.132000] acpi: ec: gpe 0x7 enabled, status 0x00
+[    0.132000] acpi: video: bus \_SB.PCI0.GFX0, outputs 16
+[    0.136000] acpi: ideapad: \_SB.PCI0.LPCB.EC0.VPC0: cfg 0xfde104, wifi 0, ideapad_wlan
+[    0.140000] acpi: ideapad: radio switch 1
+[    0.140000] acpi: pnp: i8042 kbd: PNP: PNP0303
+[    0.144000] acpi: pnp: i8042 aux: PNP: SYN2b37 PNP0f13 SYN0002 SYN2b00
+[    0.148000] acpi: acpica: Enabled 8 GPEs in block 00 to 7F
+[    0.148000] acpi: ec: query 0x42
+[    0.148000] acpi: acpica: 2872 objects, 0 errors
+[    0.152000] vtd: dmar: host address width 39, flags 0x1
+[    0.152000] vtd: dmar: unit at 0xfed90000, segment 0, flags 0x0
+[    0.152000] vtd: dmar: device 0:2.0
+[    0.152000] vtd: dmar: unit at 0xfed91000, segment 0, flags 0x1
+[    0.152000] vtd: dmar: ioapic id 2 at f0:1f.0
+[    0.152000] vtd: dmar: hpet id 0 at f0:f.0
+[    0.152000] vtd: dmar: reserved region 0xaae11000 to 0xaae30fff
+[    0.152000] vtd: dmar: reserved region 0xab800000 to 0xaf9fffff
+[    0.152000] vtd: dmar0: at 0xfed90000, version 1.0, cap 0xc0000020660462, ecap 0xf0101a
+[    0.156000] vtd: dmar1: at 0xfed91000, version 1.0, cap 0xd2008020660462, ecap 0xf010da
+[    0.156000] vtd: irte: dmar1 index 0: ioapic 2, vector 33 to apic 0, edge, sid 0xf0f8 svt 1
+[    0.156000] vtd: irte: dmar1 index 1: ioapic 2, vector 41 to apic 0, level, sid 0xf0f8 svt 1
+[    0.156000] lapic: x2apic mode: id 0, 0 register(s) written again
+[    0.160000] vtd: interrupt remapping: on, x2apic format, compatibility format refused
+[    0.160000] vtd: ready: 2 units, interrupt remapping on, translation on for assigned devices only
+[    0.164000] mouse: started
+[    0.164000] synaptics: found: touchpad model 1, fw 8.1, id 0x1e2b1, caps 0xd00123/0x840300/0x2a800/0x0, board id 2848, fw id 1581875
+[    0.164000] vtd: irte: dmar1 index 2: ioapic 2, vector 44 to apic 0, edge, sid 0xf0f8 svt 1
+[    0.164000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+[    1.716000] mouse: ready
+[    1.716000] audio: started
+[    1.832000] vtd: irte: dmar1 index 3: msi of 0:1b.0, vector 49 to apic 0, edge, sid 0x00d8 svt 1
+[    1.832000] pci: msi: 0:1b.0 on vector 49, remapped
+[    1.832000] audio: interrupts: messages on vector 49
+[    1.836000] audio: ready: Intel HD Audio, codec 0x14f1510f
+[    1.840000] disk: policy: read-write
+[    1.840000] modules: none
+[    1.844000] block: started
+[    1.848000] ahci: found: 8086:9C03 at 0:31.2, prog-if 1, BAR5 C061B000
+[    2.464000] ahci: port 1: signature EB140101 is not a disk; skipped
+[    2.776000] ahci: port 2: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+[    3.084000] ahci: port 3: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+[    3.088000] disk: disk0: ahci 0: 488397168 sectors, model Samsung SSD 870 EVO 250GB
+[    3.088000] ahci: port 0: 488397168 sectors, 238475 MiB
+[    3.092000] nvme: none: no NVMe controller on the bus
+[    3.096000] virtio-blk: none: no virtio block device
+[    3.096000] vtd: irte: dmar1 index 4: ioapic 2, vector 46 to apic 0, edge, sid 0xf0f8 svt 1
+[    3.096000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+[    3.096000] vtd: irte: dmar1 index 5: ioapic 2, vector 47 to apic 0, edge, sid 0xf0f8 svt 1
+[    3.096000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+[    3.096000] devfs: /dev/grubcore: BIOS boot partition 4, 2014 sectors at LBA 34
+[    3.104000] ext2: mounted: 35850496 blocks of 4096, 2242560 inodes, 1095 groups
+[    3.104000] ext2: root: /dev/disk0p6
+[    3.108000] loop: loop0: /trial2661/root-3b5210d45796087e.img, 33554432 sectors, read-write
+[    3.116000] ext2: mounted: 4194304 blocks of 4096, 1048576 inodes, 128 groups
+[    3.116000] root: image: /trial2661/root-3b5210d45796087e.img on /dev/disk0p6, ext2 through /dev/loop0; /data is /dev/disk0p6
+[    3.124000] usb: started
+[    3.124000] usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+[    3.128000] usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF, as the firmware left it
+[    3.132000] usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
+[    3.136000] usb: handoff: ehci at 00:1d.0: taken from the firmware, halted
+[    3.136000] usb: routing: usb2 0x1FF of 0x1FF, usb3 0xF of 0xF, taken
+[    3.140000] usb: found: xhci0: 8086:9c31 at 0:20.0, aperture 0xC0600000
+[    3.144000] usb: unsupported: ehci at 00:1d.0
+[    3.144000] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
+[    3.144000] usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
+[    3.144000] usb: handoff: legsup 0x10801 legctl 0xC0012000 before
+[    3.148000] usb: handoff: legsup 0x1000801 legctl 0x0 after
+[    3.148000] usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte contexts
+[    3.252000] usb: port: xhci0.2: a device; its reset tells full from high speed
+[    3.252000] usb: port: xhci0.4: a device; its reset tells full from high speed
+[    3.252000] usb: port: xhci0.6: a device; its reset tells full from high speed
+[    3.252000] usb: port: xhci0.7: a device; its reset tells full from high speed
+[    3.252000] usb: port: xhci0.10: a device; its reset tells full from high speed
+[    3.312000] usb: device: port 10: 35d6:3510, class 9 protocol 0, endpoint 1, a hub
+[    3.432000] usb: device: port 2: 35d6:2510, class 9 protocol 1, endpoint 1, a hub
+[    3.548000] usb: device: port 4: bda:129, class 0: no driver for it here
+[    3.696000] usb: device: port 6: bda:579a, class 0: no driver for it here
+[    3.812000] usb: device: port 7: cf3:3004, class 0: no driver for it here
+[    3.816000] usb: slot: 3: given back
+[    3.820000] usb: slot: 4: given back
+[    3.820000] usb: slot: 5: given back
+[    3.924000] usb: hub: device 2: 4 ports, power mode 0, think time 1
+[    3.924000] usb: hub: device 1: 4 ports, power mode 0, think time 0
+[    4.112000] usb: hid: device 3 interface 0: Logitech USB Keyboard on usb-3/input0, input devices: 1
+[    4.120000] usb: hid: device 3 interface 1: Logitech USB Keyboard on usb-3/input1, input devices: 1
+[    4.120000] usb: device: port 2.1: 46d:c34b, class 3 protocol 1, endpoint 1, HID interfaces 2 of 2
+[    4.224000] usb: hid: device 4 interface 0: Logitech USB Optical Mouse on usb-4/input0, input devices: 1
+[    4.224000] usb: device: port 2.3: 46d:c077, class 3 protocol 2, endpoint 1, HID interfaces 1 of 1
+[    4.236000] usb: devices: 4 configured
+[    4.236000] vtd: irte: dmar1 index 6: msi of 0:14.0, vector 50 to apic 0, edge, sid 0x00a0 svt 1
+[    4.236000] pci: msi: 0:14.0 on vector 50, remapped
+[    4.236000] usb: interrupts: xhci0: messages on vector 50
+[    4.240000] vtd: irte: dmar1 index 7: msi of 0:1f.2, vector 51 to apic 0, edge, sid 0x00fa svt 1
+[    4.240000] pci: msi: 0:1f.2 on vector 51, remapped
+[    4.240000] ahci: interrupts: messages on vector 51, 1 disks queued
+[    4.244000] net: started
+[    4.256000] vtd: irte: dmar1 index 8: msi of 1:0.0, vector 52 to apic 0, edge, sid 0x0100 svt 1
+[    4.256000] pci: msi: 1:0.0 on vector 52, remapped
+[    4.256000] rtl8168: interrupts: messages on vector 52
+[    4.256000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    4.260000] net: ready: RTL8168GU
+[    4.264000] netconsole: udp: 6665@ADDR/eth0,6667@ADDR/D0:11:E5:C8:0D:59
+[    4.264000] netconsole: started: network logging, targets 1
+[    4.268000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
+[    4.272000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48E000, MAC 28:D2:44:7E:E0:AF
+[    4.272000] rtl8168: no link yet
+[    4.272000] rtl8168: messages on vector 52: none yet, 0 by the tick
+[    4.276000] net: eth0: no address
+[    4.280000] netconsole: broadcast, ethertype 0x88b5, boot id 0xc7e9904e, 0 frames, 0 characters dropped
+[    4.284000] netconsole: udp: port 6667 of eth0: 0 datagrams, held, 0 characters dropped
+[    4.296000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
+[    4.296000] pci: msi: 2:0.0 on vector 56, remapped
+[    4.296000] ath9k: interrupts: messages on vector 56
+[    4.300000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac STATION subsys 17aa:4026
+[    4.308000] drm: start
+[    4.308000] i915: uncore: an unclaimed access before the bind, cleared
+[    4.312000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it
+[    4.320000] i915: gtt: pipe A's firmware surface at 0x0, 4128 KiB, kept
+[    4.324000] i915: gtt: 2048 MiB, 256 MiB of it through the aperture; 523256 entries to the scratch page, 1032 kept
+[    4.328000] i915: opregion: version 2.0.0 at 0xaafb4018, mailboxes 0x1f; VBT in mailbox 4
+[    4.332000] i915: vbt: "$VBT HASWELL        " from the OpRegion (Mailbox #4), version 177, 3 outputs
+[    4.340000] i915: gem: 32 fences, swizzle 9/10 for X tiles and 9 for Y
+[    4.340000] vtd: irte: dmar0 index 0: msi of 0:2.0, vector 53 to apic 0, edge, sid 0x0010 svt 1
+[    4.340000] pci: msi: 0:2.0 on vector 53, remapped
+[    4.340000] i915: interrupts: messages on vector 53
+[    4.344000] i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
+[    4.348000] i915: ppgtt: aliasing, 2048 MiB shared, directory at 0x7fde0000
+[    4.352000] i915: rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each at 0x7fffb000, 0x7fff6000, 0x7fff1000 and 0x7ffec000, status pages at 0x7ffff000, 0x7fffa000, 0x7fff5000 and 0x7fff0000
+[    4.360000] i915: workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost
+[    4.364000] i915: pcode: read of command 0x5: error -6
+[    4.364000] i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
+[    4.372000] i915: cdclk: 450000 kHz, the most 450000 kHz, pixel clocks to 450000 kHz
+[    4.376000] i915: wm: latencies 20, 4, 36, 90 and 160 (level 0 in 0.1 us, then 0.5 us)
+[    4.380000] i915: pps: power up 200 ms, down 50 ms, cycle 500 ms, backlight on 1 ms, off 200 ms
+[    4.388000] i915: panel: the EDID's preferred fixed mode 1366x768@60, 76300 kHz
+[    4.392000] i915: edp: DPCD 1.1, eDP 1, 1 lane, rates 162000 to 270000 kHz, 6 bpc, EDID 128 bytes
+[    4.396000] i915: hdmi B: DDC pin 5, level 9, 300000 kHz TMDS
+[    4.400000] i915: display: port B: HDMI
+[    4.404000] i915: hdmi C: DDC pin 4, level 6, 300000 kHz TMDS, DP++
+[    4.408000] i915: display: port C: DP+HDMI
+[    4.408000] i915: display: pipe A adopted: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz, the firmware's framebuffer at GTT 0x0, stride 5504
+[    4.416000] backlight: intel_backlight: rebound: level 937 of 937
+[    4.416000] i915: backlight: intel_backlight: levels 0 to 937, at 937, off with the pipe
+[    4.420000] drm: worker: kdrm is pid 2
+[    4.420000] drm: i915: card0
+[    4.424000] console: card0: a native display
+[    4.424000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[    4.424000] i915: gmbus dpb: NAK on first message, retry
+[    4.424000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[    4.424000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[    4.424000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[    4.428000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[    4.428000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[    4.428000] i915: gmbus dpc: NAK on first message, retry
+[    4.428000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[    4.428000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[    4.428000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[    4.428000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[    4.428000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+[    4.436000] hdmi-audio: ready: codec 80862807 at 0, 3 pins
+[    4.440000] fbdrm: framebuffer at 0xb0000000 is a native driver's
+[    4.444000] drm: vgem: card1
+[    4.448000] vgem: registered: vgem, card 1
+[    4.448000] kvm: ready: vmx
+[    4.452000] vfio: ready: 12 groups of 14 functions
+[    4.728000] timing: tick 250 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2011 us
+[    4.728000] clock: reference: the hpet; a tick the timer misses or delays is counted
+[    4.744000] smp: cpu1: tsc: synchronized with cpu0
+[    4.760000] smp: cpu2: tsc: synchronized with cpu0
+[    4.776000] smp: cpu3: tsc: synchronized with cpu0
+[    4.780000] smp: processors: 4 online of 4
+[    4.784000] msr: registered: 4 processors
+[    4.784000] nmi_watchdog: counter: intel arch version 3, fixed counter 1, 48 bits, 1895 MHz
+[    4.784000] nmi_watchdog: enabled: permanently consumes one hw-PMU counter
+[    4.788000] vdso: clock: the tsc, 7582459 counts a tick
+[    4.796000] boot: starting /sbin/init
+[    4.796000] acpi: thread: kacpid is pid 9
+[    4.796000] wlan: worker: kwlan is pid 10
+[    4.796000] mouse: worker: kpsmoused is pid 11
+[    4.796000] watchdog: worker: watchdogd is pid 12
+[    4.796000] audio: thread: khda is pid 13
+[    4.796000] tty: echo: kconsoled is pid 14
+[    4.796000] input: sysfs: worker: kinputd is pid 16
+[    4.800000] vfs: mounted: tmpfs on /tmp (tmpfs)
+[    7.372000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+[    7.900000] net: eth0: IPv4 ADDR/24
+[    8.120000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    8.820000] net: eth0: IPv6 fd91:381e:e667:4a0c:dd40:c198:5021:48b2/64 added
+[    8.820000] net: eth0: IPv6 fd91:381e:e667:4a0c:ed33:143f:f349:499d/64 added
+[    9.380000] netconsole: settled: held records sent after 2000 ms of link
+[   15.712000] i915: worker: ki915 is pid 247
+[   49.408000] syscall: 444: not implemented (asked for by chromium)
+[   94.160000] syscall: 444: not implemented (asked for by chromium)
+[  137.520000] syscall: 444: not implemented (asked for by chromium)
+[  181.032000] syscall: 444: not implemented (asked for by chromium)
+[  223.908000] syscall: 444: not implemented (asked for by chromium)
+[  266.752000] syscall: 444: not implemented (asked for by chromium)
+[  311.144000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  311.264000] syscall: 179: not implemented (asked for by firefox-esr)
+[  311.544000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  311.544000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  312.416000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  312.420000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  313.380000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  313.404000] syscall: 179: not implemented (asked for by IndexedDB IO #2)
+[  313.428000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  314.120000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  315.800000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  315.804000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  315.816000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  315.928000] syscall: 179: not implemented (asked for by firefox-esr)
+[  315.952000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  316.584000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  316.592000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  316.612000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  316.820000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  316.944000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  316.948000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  316.948000] syscall: 179: not implemented (asked for by IndexedDB IO #2)
+[  316.968000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  316.968000] syscall: 179: not implemented (asked for by IndexedDB IO #2)
+[  316.980000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  317.112000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  317.360000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  318.492000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  318.824000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  320.340000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  320.344000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  320.348000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  332.552000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  332.560000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  332.648000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  333.276000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  333.660000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  333.776000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  334.060000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  334.072000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  334.148000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  335.196000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  335.336000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  335.424000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  335.924000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  335.932000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.008000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  336.008000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.092000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  336.108000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  336.116000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.196000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  336.312000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  336.312000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.392000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  336.392000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.404000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  336.476000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.564000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  336.664000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  336.668000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.748000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  336.844000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  336.848000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.928000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  336.928000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  336.956000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  337.072000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  337.160000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  337.272000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  337.276000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  337.356000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  337.364000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  337.380000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  337.460000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  337.668000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  337.676000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  337.752000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  337.756000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  337.960000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  342.148000] syscall: 179: not implemented (asked for by Indexed~ IO #11)
+[  342.160000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  357.916000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  357.992000] syscall: 179: not implemented (asked for by firefox-esr)
+[  358.208000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  358.212000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  358.836000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  358.840000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  359.644000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  359.712000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  359.740000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  360.352000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  361.604000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  361.608000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  361.616000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  361.728000] syscall: 179: not implemented (asked for by firefox-esr)
+[  361.800000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  361.892000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  362.264000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  362.272000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  362.620000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  362.628000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  362.632000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  362.836000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  362.840000] syscall: 179: not implemented (asked for by IndexedDB IO #2)
+[  362.868000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  362.956000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  362.976000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  362.980000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  363.832000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  364.696000] syscall: 179: not implemented (asked for by IndexedDB IO #2)
+[  364.936000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  366.224000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  366.228000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  366.324000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  378.680000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  378.808000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  379.280000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  379.296000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  379.396000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  380.024000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  380.400000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  380.536000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  380.832000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  380.844000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  380.940000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  382.040000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  382.176000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  382.280000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  382.888000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  382.892000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  382.988000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  383.100000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  383.108000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  383.204000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  383.208000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  383.308000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  383.328000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  383.332000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  383.424000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  383.432000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  383.508000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  383.604000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  383.720000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  383.724000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  383.816000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  383.936000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  383.936000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  384.028000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  384.032000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  384.052000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  384.212000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  384.316000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  384.440000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  384.448000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  384.540000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  384.540000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  384.548000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  384.564000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  384.656000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  384.660000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  384.760000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  384.880000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  384.884000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  384.976000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  384.976000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  385.192000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  388.724000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  388.724000] syscall: 179: not implemented (asked for by Indexed~ IO #11)
+[  388.748000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  403.628000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  403.700000] syscall: 179: not implemented (asked for by firefox-esr)
+[  403.912000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  403.912000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  404.516000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  404.520000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  405.324000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  405.372000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  405.448000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  406.012000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  406.528000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  406.532000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  406.672000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  406.712000] syscall: 179: not implemented (asked for by firefox-esr)
+[  406.748000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  406.768000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  407.336000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  407.480000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  407.500000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  407.500000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  407.656000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  407.660000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  407.724000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  407.736000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  407.784000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  407.792000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  407.796000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  408.376000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  410.116000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  410.320000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  412.024000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  412.028000] syscall: 179: not implemented (asked for by IndexedDB IO #2)
+[  412.104000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  424.276000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  424.388000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  424.836000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  424.856000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  424.940000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  425.312000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  425.724000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  425.852000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  426.132000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  426.144000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  426.224000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  427.288000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  427.428000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  427.520000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  428.060000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  428.064000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  428.144000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  428.144000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  428.228000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  428.244000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  428.252000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  428.336000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  428.336000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  428.428000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  428.448000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  428.452000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  428.532000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  428.532000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  428.540000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  428.612000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  428.696000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  428.796000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  428.800000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  428.880000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  428.980000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  428.984000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.064000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  429.064000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.084000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  429.192000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.276000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  429.392000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  429.396000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.476000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  429.476000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.484000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  429.500000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.576000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  429.580000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.668000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  429.780000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  429.784000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.864000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  429.864000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[  429.996000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  434.416000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  434.416000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  434.520000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  448.708000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  448.780000] syscall: 179: not implemented (asked for by firefox-esr)
+[  448.992000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  448.996000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  449.588000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  449.592000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  450.408000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  450.460000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  450.520000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  451.100000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  451.576000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  451.580000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  451.736000] syscall: 179: not implemented (asked for by firefox-esr)
+[  451.808000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  451.920000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  452.596000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  452.600000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  452.604000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  452.756000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  452.848000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  452.852000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  452.912000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  452.920000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  452.956000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  452.968000] syscall: 179: not implemented (asked for by IndexedDB IO #2)
+[  453.192000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  453.940000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  455.872000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  456.000000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  457.552000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  457.560000] syscall: 179: not implemented (asked for by IndexedDB IO #5)
+[  457.648000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  470.400000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  470.412000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  470.632000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  471.124000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  471.544000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  471.760000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  472.076000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  472.088000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  472.268000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  473.948000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  474.092000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  474.332000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  475.408000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  475.412000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  475.568000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  475.568000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  475.824000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  475.840000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  475.848000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  476.088000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  476.288000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  476.292000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  476.572000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  476.572000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  476.576000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  476.656000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  476.844000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  477.016000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  477.020000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  477.184000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  477.188000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  477.476000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  477.492000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  477.496000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  477.672000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  477.676000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  477.700000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  477.816000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  477.980000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  478.212000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  478.216000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  478.388000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  478.388000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  478.392000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  478.412000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  478.540000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  478.540000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  478.736000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  478.912000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  478.916000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  479.048000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  479.048000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  479.208000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  479.536000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[  479.536000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  479.576000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  494.296000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  494.372000] syscall: 179: not implemented (asked for by firefox-esr)
+[  494.592000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  494.596000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  495.204000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  495.208000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  496.004000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  496.048000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  496.108000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  496.660000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  497.168000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  497.176000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  497.272000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  497.320000] syscall: 179: not implemented (asked for by firefox-esr)
+[  497.340000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  497.412000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  497.776000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  498.056000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  498.112000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  498.120000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  498.124000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  498.240000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  498.336000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  498.344000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  498.396000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  498.408000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  498.408000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  498.420000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  499.264000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  500.780000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  501.068000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  502.732000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  502.736000] syscall: 179: not implemented (asked for by IndexedDB IO #2)
+[  502.804000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  515.624000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  515.636000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  515.728000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  516.100000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  516.508000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  516.636000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  516.944000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  516.956000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  517.188000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  517.192000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  517.348000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  518.292000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  518.440000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  518.536000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  519.080000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  519.084000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  519.172000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  519.276000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  519.284000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  519.368000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  519.372000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  519.464000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  519.488000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  519.492000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  519.576000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  519.580000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  519.584000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  519.664000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  519.756000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  519.860000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  519.864000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  519.952000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  520.056000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  520.060000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  520.144000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  520.144000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  520.164000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  520.284000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  520.380000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  520.544000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  520.548000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  520.632000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  520.636000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  520.644000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  520.656000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  520.740000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  520.744000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  520.836000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  520.952000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  520.956000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  521.040000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  521.040000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[  521.168000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  525.092000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  525.096000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  525.204000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  538.888000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  538.960000] syscall: 179: not implemented (asked for by firefox-esr)
+[  539.172000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  539.176000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  539.784000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  539.788000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  540.612000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  540.672000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  540.740000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  541.320000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  541.764000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  541.772000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  541.924000] syscall: 179: not implemented (asked for by firefox-esr)
+[  542.000000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  542.104000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  542.784000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  542.792000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  542.804000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  542.980000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  542.992000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  543.048000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  543.056000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  543.120000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  543.128000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[  543.364000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  543.716000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  546.192000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  546.476000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  547.900000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  547.908000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  547.980000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  560.156000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  560.168000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  560.252000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  560.716000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  561.192000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  561.312000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  561.624000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  561.636000] syscall: 179: not implemented (asked for by Indexed~ IO #10)
+[  561.720000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  562.836000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  562.996000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  563.088000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  563.608000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  563.612000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  563.692000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  563.696000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  563.776000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  563.792000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  563.804000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  563.880000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  564.000000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  564.004000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  564.084000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  564.088000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  564.096000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  564.176000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  564.260000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  564.368000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  564.372000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  564.452000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  564.560000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  564.564000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  564.592000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  564.644000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  564.668000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  564.796000] syscall: 179: not implemented (asked for by IndexedDB IO #9)
+[  564.880000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  565.044000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  565.052000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  565.132000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  565.136000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  565.156000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  565.240000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  565.436000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[  565.440000] syscall: 179: not implemented (asked for by IndexedDB IO #3)
+[  565.516000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  569.716000] syscall: 179: not implemented (asked for by Indexed~ IO #11)
+[  569.720000] syscall: 179: not implemented (asked for by Indexed~ IO #12)
+[  569.836000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[  604.860000] console: blanked: 1, after the time without input
+[  605.136000] i915: dpll: disable LCPLL 1350 for pipe A (active 0x0)
+[  605.136000] console: card0: display off for the blank
+[  619.528000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 30984 of 30988, ACTHD 0x0220f480, was 0x0220f480
+[  619.528000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [5417]
+[  619.620000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  619.620000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  619.620000] i915: reset: read-front[5417] context reset due to GPU hang
+[  619.620000] i915: reset: context read-front[5417]: guilty 1, banned
+[  619.620000] i915: reset: client read-front[5417]: gained 3 ban score, now 3
+[  627.220000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 30996 of 31000, ACTHD 0x0073f480, was 0x0073f480
+[  627.220000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [5438]
+[  627.312000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  627.312000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  627.312000] i915: reset: read-front[5438] context reset due to GPU hang
+[  627.312000] i915: reset: context read-front[5438]: guilty 1, banned
+[  627.312000] i915: reset: client read-front[5438]: gained 3 ban score, now 3
+[  634.916000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 31011 of 31015, ACTHD 0x00744480, was 0x00744480
+[  634.916000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [5459]
+[  635.012000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  635.012000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  635.012000] i915: reset: read-front[5459] context reset due to GPU hang
+[  635.012000] i915: reset: context read-front[5459]: guilty 1, banned
+[  635.012000] i915: reset: client read-front[5459]: gained 3 ban score, now 3
+[  642.608000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 31026 of 31030, ACTHD 0x0074f480, was 0x0074f480
+[  642.608000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [5479]
+[  642.700000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  642.700000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  642.700000] i915: reset: read-front[5479] context reset due to GPU hang
+[  642.700000] i915: reset: context read-front[5479]: guilty 1, banned
+[  642.700000] i915: reset: client read-front[5479]: gained 3 ban score, now 3
+[  650.300000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 31041 of 31045, ACTHD 0x00743480, was 0x00743480
+[  650.300000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [5516]
+[  650.396000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  650.396000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  650.396000] i915: reset: read-front[5516] context reset due to GPU hang
+[  650.396000] i915: reset: context read-front[5516]: guilty 1, banned
+[  650.396000] i915: reset: client read-front[5516]: gained 3 ban score, now 3
+[  657.996000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 31056 of 31060, ACTHD 0x0074f480, was 0x0074f480
+[  657.996000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [5537]
+[  658.088000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  658.088000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  658.088000] i915: reset: read-front[5537] context reset due to GPU hang
+[  658.088000] i915: reset: context read-front[5537]: guilty 1, banned
+[  658.088000] i915: reset: client read-front[5537]: gained 3 ban score, now 3
+[  665.692000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 31072 of 31076, ACTHD 0x00732480, was 0x00732480
+[  665.692000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [5557]
+[  665.788000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  665.788000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  665.788000] i915: reset: read-front[5557] context reset due to GPU hang
+[  665.788000] i915: reset: context read-front[5557]: guilty 1, banned
+[  665.788000] i915: reset: client read-front[5557]: gained 3 ban score, now 3
+[  673.384000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 31089 of 31093, ACTHD 0x0074f480, was 0x0074f480
+[  673.384000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [5594]
+[  673.480000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  673.480000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  673.480000] i915: reset: read-front[5594] context reset due to GPU hang
+[  673.480000] i915: reset: context read-front[5594]: guilty 1, banned
+[  673.480000] i915: reset: client read-front[5594]: gained 3 ban score, now 3

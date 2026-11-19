@@ -7059,6 +7059,8 @@ static int lost_block_reported(void)
            ext2_fixture_contains(fix_path("fsck.out"), "-4000");
 }
 
+/** Whether e2fsck's output counts inode `ino` as unattached and reports no
+ * block claimed twice. */
 static int orphan_reported(long ino)
 {
     char text[128];

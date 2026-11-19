@@ -1,0 +1,31 @@
+vainfo: Driver version: Intel i965 driver for Intel(R) Haswell Mobile - 2.4.1
+      VAProfileMPEG2Simple            :	VAEntrypointVLD
+      VAProfileMPEG2Main              :	VAEntrypointVLD
+      VAProfileH264ConstrainedBaseline:	VAEntrypointVLD
+      VAProfileH264Main               :	VAEntrypointVLD
+      VAProfileH264High               :	VAEntrypointVLD
+      VAProfileH264MultiviewHigh      :	VAEntrypointVLD
+      VAProfileH264StereoHigh         :	VAEntrypointVLD
+      VAProfileVC1Simple              :	VAEntrypointVLD
+      VAProfileVC1Main                :	VAEntrypointVLD
+      VAProfileVC1Advanced            :	VAEntrypointVLD
+      VAProfileJPEGBaseline           :	VAEntrypointVLD
+video-gpu: decode: h264-720p.mp4 frames 300 va 300, 0 differ from sw; decoder h264 format nv12 vahash: loop 0: 300 frames, ended at 1795112432
+video-gpu: decode: h264-1080p.mp4 frames 300 va 300, 0 differ from sw; decoder h264 format nv12 vahash: loop 0: 300 frames, ended at 1795112446
+video-gpu: decode: mpeg2-720p.m2v frames 60 va 60, 60 differ from sw; decoder mpeg2video format nv12 vahash: loop 0: 60 frames, ended at 1795112447
+video-gpu: decode: jpeg-720p.mkv frames 60 va 60, 60 differ from sw; decoder mjpeg format yuv420p vahash: loop 0: 60 frames, ended at 1795112448
+video-gpu: decode: SA10091.vc1 frames 30 va 30, 0 differ from sw; decoder vc1 format nv12 vahash: loop 0: 30 frames, ended at 1795112448
+video-gpu: decode: SMM0005.rcv frames 24 va 24, 7 differ from sw; decoder wmv3 format nv12 vahash: loop 0: 24 frames, ended at 1795112449
+gpuvideo: h264-720p.mp4 sw: as Linux's
+gpuvideo: h264-720p.mp4 va: as Linux's
+gpuvideo: h264-1080p.mp4 sw: as Linux's
+gpuvideo: h264-1080p.mp4 va: as Linux's
+gpuvideo: mpeg2-720p.m2v sw: as Linux's
+gpuvideo: mpeg2-720p.m2v va: as Linux's
+gpuvideo: jpeg-720p.mkv sw: as Linux's
+gpuvideo: jpeg-720p.mkv va: as Linux's
+gpuvideo: SA10091.vc1 sw: as Linux's
+gpuvideo: SA10091.vc1 va: as Linux's
+gpuvideo: SMM0005.rcv sw: as Linux's
+gpuvideo: SMM0005.rcv va: as Linux's
+gpuvideo: result: decode: pass

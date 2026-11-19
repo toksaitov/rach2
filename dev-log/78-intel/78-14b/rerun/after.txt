@@ -1,0 +1,11 @@
+0
+	Reset count: 8 (global 0)
+	Reset count: 0 (global 0)
+	Reset count: 0 (global 0)
+	Reset count: 0 (global 0)
+Runtime power status: enabled
+GPU idle: yes
+IRQs disabled: no
+OpenGL core profile renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+OpenGL compatibility profile renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+OpenGL ES profile renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)

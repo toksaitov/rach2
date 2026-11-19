@@ -1,0 +1,29 @@
+video: result: chromium h264-720p.mp4 codec h264 size 1280x720 frames 300,300,300 dropped 29,0,15 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+video: result: chromium h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 0,2,0 corrupted 0,0,0 decoder FFmpegVideoDecoder errors 0 browser done
+video: result: chromium vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 21,8,29 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+video: result: chromium vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 0,0,0 corrupted 0,0,0 decoder VpxVideoDecoder errors 0 browser done
+video: result: chromium av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 28,13,8 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+video: result: chromium av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 0,0,0 corrupted 0,0,0 decoder Dav1dVideoDecoder errors 0 browser done
+video-gpu: browsers: chromium status 0
+video: result: firefox h264-720p.mp4 codec h264 size 1280x720 frames 300,300,300 dropped 1,19,5 corrupted -,-,- decoder ffmpeg_video_decoder_(RDD_remote)_with_VA-API errors 0 browser done
+video: result: firefox h264-1080p.mp4 codec h264 size 1920x1080 frames 300,300,300 dropped 0,15,11 corrupted -,-,- decoder ffmpeg_video_decoder_(RDD_remote)_with_VA-API errors 0 browser done
+video: result: firefox vp9-720p.webm codec vp9 size 1280x720 frames 300,300,300 dropped 0,13,10 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+video: result: firefox vp9-1080p.webm codec vp9 size 1920x1080 frames 300,300,300 dropped 0,19,8 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+video: result: firefox av1-720p.webm codec av1 size 1280x720 frames 300,300,300 dropped 0,16,8 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+video: result: firefox av1-1080p.webm codec av1 size 1920x1080 frames 300,300,300 dropped 0,18,17 corrupted -,-,- decoder ffvpx_video_decoder_(RDD_remote) errors 0 browser done
+video-gpu: browsers: firefox status 0
+judge: spread: chromium-h264-720p.mp4: dropped a median of 15 frames, the reference at most 8, within Linux's spread of 21
+judge: result: pass video 3 plays, dropped 29,0,15 here and 0,8,0 in the reference, within Linux's spread, decoder kVideoDecoderName=FFmpegVideoDecoder
+judge: result: pass video 3 plays, dropped 0,2,0 here and 0,0,0 in the reference, decoder kVideoDecoderName=FFmpegVideoDecoder
+judge: spread: chromium-vp9-720p.webm: dropped a median of 21 frames, the reference at most 12, within Linux's spread of 21
+judge: result: pass video 3 plays, dropped 21,8,29 here and 12,5,2 in the reference, within Linux's spread, decoder kVideoDecoderName=VpxVideoDecoder
+judge: result: pass video 3 plays, dropped 0,0,0 here and 2,6,0 in the reference, decoder kVideoDecoderName=VpxVideoDecoder
+judge: result: pass video 3 plays, dropped 28,13,8 here and 24,24,3 in the reference, decoder kVideoDecoderName=Dav1dVideoDecoder
+judge: result: pass video 3 plays, dropped 0,0,0 here and 0,7,6 in the reference, decoder kVideoDecoderName=Dav1dVideoDecoder
+judge: result: pass video 3 plays, dropped 1,19,5 here and 1,18,3 in the reference, decoder ffmpeg video decoder (RDD remote) with VA-API, process: rdd, codec: h264
+judge: result: pass video 3 plays, dropped 0,15,11 here and 0,15,5 in the reference, decoder ffmpeg video decoder (RDD remote) with VA-API, process: rdd, codec: h264
+judge: result: pass video 3 plays, dropped 0,13,10 here and 1,19,2 in the reference, decoder ffvpx video decoder (RDD remote), process: rdd, codec: vp9
+judge: result: pass video 3 plays, dropped 0,19,8 here and 0,22,3 in the reference, decoder ffvpx video decoder (RDD remote), process: rdd, codec: vp9
+judge: result: pass video 3 plays, dropped 0,16,8 here and 0,19,2 in the reference, decoder ffvpx video decoder (RDD remote), process: rdd, codec: av1
+judge: result: pass video 3 plays, dropped 0,18,17 here and 0,22,2 in the reference, decoder ffvpx video decoder (RDD remote), process: rdd, codec: av1
+gpuvideo: result: browsers: pass
