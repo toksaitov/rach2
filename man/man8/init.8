@@ -261,7 +261,9 @@ Neither path starts a shell without a login.
 The sealed disk's menu carries the option, and no test image's does, so
 the machine cases keep their login on COM1.
 .Pp
-The metal and recovery builds first mount a tmpfs at
+The metal and recovery builds first mount a
+.Xr tmpfs 5
+at
 .Pa /tmp
 with the options of Debian 13's tmp.mount, mode 1777, strictatime, nosuid
 and nodev, holding at most half the machine's memory and 1048576 inodes:
@@ -704,6 +706,7 @@ init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
 .Xr proc 5 ,
 .Xr sshd.conf 5 ,
 .Xr sysfs 5 ,
+.Xr tmpfs 5 ,
 .Xr limits 7 ,
 .Xr recovery 7 ,
 .Xr bootctl 8 ,
