@@ -36,14 +36,18 @@ struct hid_input {
     uint8_t abs[8];
     uint8_t led[2];
     uint8_t msc[1];
-    unsigned int buttons;       /* the mouse queue's packet under way: its buttons, */
-    int dx;                     /* its motion to the right, */
-    int dy;                     /* and toward the user */
-    unsigned int mt_flags;      /* INPUT_MT_* for a multitouch application */
-    uint16_t mt_first, mt_last; /* the contact groups in this packet */
-    int mt_count;               /* frame size in the packet, or -1 if absent */
-    int mt_left;                /* contacts still due in a counted frame */
-    unsigned int mt_buttons;    /* the buttons described by the touch application */
+    unsigned int buttons;          /* the mouse queue's packet under way: its buttons, */
+    int dx;                        /* its motion to the right, */
+    int dy;                        /* and toward the user */
+    unsigned int mt_flags;         /* INPUT_MT_* for a multitouch application */
+    uint16_t mt_first, mt_last;    /* the contact groups in this packet */
+    int mt_count;                  /* frame size in the packet, or -1 if absent */
+    int mt_left;                   /* contacts still due in a counted frame */
+    unsigned int mt_buttons;       /* the buttons described by the touch application */
+    unsigned int mt_pressed;       /* button bits read in this packet */
+    unsigned int mt_frame_buttons; /* precision buttons from the first packet */
+    uint8_t mt_precision;          /* uses the Microsoft multitouch profile */
+    uint8_t mt_drop_unused;        /* the device omits lifted contacts */
 };
 
 struct hid_mt_contact;
@@ -63,7 +67,13 @@ struct hid_dev {
     uint8_t *outbuf;                 /* two of the longest output or Feature report, for hid.c */
     uint32_t outsize;                /* the longest output or Feature report with its ID */
     int multiplier;                  /* a Resolution Multiplier report to send, or -1 */
-    struct hid_mt_contact *contacts; /* one per collection, only for multitouch */
+    struct hid_mt_contact *contacts; /* workspace for one multitouch report */
+    unsigned int mt_next_feature;    /* next feature report to examine */
+    int mt_set_feature;              /* the report to write after its GET, or -1 */
+    int mt_feature;                  /* report of the last request, or -1 */
+    int mt_feature_write;            /* the last request was a SET_REPORT */
+    uint8_t mt_precision;            /* the descriptor's Microsoft MT profile */
+    uint8_t mt_drop_unused;          /* model whose reports omit lifted contacts */
     struct hid_input inputs[HID_MAX_INPUTS];
 };
 
@@ -81,6 +91,19 @@ struct hid_dev {
  * none.
  */
 int hidinput_connect(struct hid_dev *hid);
+
+/** Identify the reports of touch surfaces and whether they have features
+ * to fetch before registering their event devices. */
+int hidinput_mt_features(struct hid_dev *hid);
+
+/** Prepare the next multitouch feature request. `data` holds up to `size`
+ * bytes, including an ID byte. Return its length, 0 when done, with the
+ * request's wValue and whether it is a SET in `*value` and `*write`. */
+int hidinput_mt_feature_request(struct hid_dev *hid, uint8_t *data, int size, int *value,
+                                int *write);
+
+/** Finish a feature request with `len` response bytes, or -1 on refusal. */
+void hidinput_mt_feature_answer(struct hid_dev *hid, const uint8_t *data, int len);
 
 /** Take the input devices of `hid` away, releasing what they hold down. */
 void hidinput_disconnect(struct hid_dev *hid);

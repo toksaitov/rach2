@@ -118,6 +118,35 @@ int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *
     return 0;
 }
 
+/** The model's boot devices have no multitouch feature requests. */
+int hid_setup_request(int device, int iface, uint8_t *data, int size, int *value, int *write)
+{
+    (void)device;
+    (void)iface;
+    (void)data;
+    (void)size;
+    (void)value;
+    (void)write;
+    return 0;
+}
+
+/** The model has no multitouch feature responses. */
+void hid_setup_answer(int device, int iface, const uint8_t *data, int length)
+{
+    (void)device;
+    (void)iface;
+    (void)data;
+    (void)length;
+}
+
+/** The model's report interfaces are published at attach. */
+int hid_setup_finish(int device, int iface)
+{
+    (void)device;
+    (void)iface;
+    return 0;
+}
+
 /** Take it: no row checks a device in the boot protocol. */
 int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids)
 {

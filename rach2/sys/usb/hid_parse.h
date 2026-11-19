@@ -61,7 +61,7 @@ struct hid_usage {
     uint8_t size;        /* the size of its Usage item, during the parse */
     int8_t hat_dir;      /* a D-pad direction, 1 to 8, or 0 */
     uint8_t hat;         /* a hat switch, whose value is a direction */
-    uint16_t mt_group;   /* one-based contact collection, set by hid-input */
+    uint16_t mt_group;   /* one-based contact record, set by hid-input */
     int16_t multiplier;  /* a wheel's Resolution Multiplier, 1 without one */
     int32_t value;       /* element's value in the last report */
     int32_t new_value;   /* element's value in the report being read */
@@ -94,11 +94,14 @@ struct hid_field {
 
 /* One report, Linux's `struct hid_report`. */
 struct hid_report {
-    uint8_t type;         /* HID_*_REPORT */
-    uint8_t id;           /* its ID, 0 on a device that numbers none */
-    uint8_t multitouch;   /* an input report with a Contact Identifier */
-    uint32_t size;        /* its bits, without the ID byte */
-    uint32_t application; /* the application its first field is in */
+    uint8_t type;           /* HID_*_REPORT */
+    uint8_t id;             /* its ID, 0 on a device that numbers none */
+    uint8_t multitouch;     /* an input report with a Contact Identifier */
+    uint16_t mt_groups;     /* contact records in this input report */
+    uint16_t mt_collection; /* current contact's collection during mapping */
+    uint32_t mt_fields;     /* fields already seen in that contact */
+    uint32_t size;          /* its bits, without the ID byte */
+    uint32_t application;   /* the application its first field is in */
 };
 
 /* One collection, Linux's `struct hid_collection`. */

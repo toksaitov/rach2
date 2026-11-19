@@ -506,13 +506,6 @@ int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *
     hid->vendor = ids->vendor;
     hid->product = ids->product;
     hid->version = ids->version;
-    if (hidinput_connect(hid) < 0) {
-        klog(KLOG_INFO, "usb", "hid: device %d interface %d: %s: no input device in its descriptor",
-             device, ids->interface, hid->name);
-        free_tables(hid);
-        state_free(device, iface);
-        return -ENODEV;
-    }
     state->hid = hid;
     state->mode = HID_REPORT;
     state->number = ids->interface;
@@ -523,8 +516,48 @@ int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *
     state->offered = hid->outbuf;
     state->shown = hid->outbuf + hid->outsize;
     state->out_cap = (int)hid->outsize;
+    if (hidinput_mt_features(hid)) {
+        return 1;
+    }
+    return hid_setup_finish(device, iface);
+}
+
+int hid_setup_request(int device, int iface, uint8_t *data, int size, int *value, int *write)
+{
+    struct hid_state *state = state_of(device, iface);
+
+    return state && state->mode == HID_REPORT
+               ? hidinput_mt_feature_request(state->hid, data, size, value, write)
+               : 0;
+}
+
+void hid_setup_answer(int device, int iface, const uint8_t *data, int length)
+{
+    struct hid_state *state = state_of(device, iface);
+
+    if (state && state->mode == HID_REPORT) {
+        hidinput_mt_feature_answer(state->hid, data, length);
+    }
+}
+
+int hid_setup_finish(int device, int iface)
+{
+    struct hid_state *state = state_of(device, iface);
+    struct hid_dev *hid;
+
+    if (!state || state->mode != HID_REPORT) {
+        return -ENODEV;
+    }
+    hid = state->hid;
+    if (hidinput_connect(hid) < 0) {
+        klog(KLOG_INFO, "usb", "hid: device %d interface %d: %s: no input device in its descriptor",
+             device, state->number, hid->name);
+        free_tables(hid);
+        state_free(device, iface);
+        return -ENODEV;
+    }
     klog(KLOG_INFO, "usb", "hid: device %d interface %d: %s on %s, input devices: %d", device,
-         ids->interface, hid->name, state->phys, (int)hid->ninputs);
+         state->number, hid->name, state->phys, (int)hid->ninputs);
     return 0;
 }
 

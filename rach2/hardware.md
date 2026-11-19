@@ -56,7 +56,7 @@ Every disk has 512-byte sectors: a drive or namespace of 4096-byte sectors is no
 
 * Host controllers: xHCI, PCI class 0C:03 interface 30. UHCI, OHCI and EHCI controllers are logged as unsupported and not driven; an EHCI is taken from the firmware and halted. On an Intel xHCI, every USB 2 port the chipset's masks allow is routed from its companion EHCI to the xHCI, so the sockets wired to the EHCI work. The i686 kernel does not drive a controller whose registers are above 4 GiB.
 * Hubs: USB 2 and USB 3 hubs, interface class 09. Low- and full-speed devices behind a high-speed hub go through its transaction translator.
-* Human interface devices: keyboards, mice, tablets and other devices of interface class 03, read by their report descriptors as Linux's usbhid reads them, with the boot protocol for a keyboard or mouse whose descriptor cannot be read. The digitizer page is not mapped, so a touchscreen or pen is not driven.
+* Human interface devices: keyboards, mice, tablets and other devices of interface class 03, read by their report descriptors as Linux's usbhid reads them, with the boot protocol for a keyboard or mouse whose descriptor cannot be read. Touchscreens and touchpads with HID contact reports use evdev multitouch slots. Pen reports are unsupported.
 * Mass storage, as under Storage.
 
 There are no isochronous transfers, so no USB audio or video, and no class driver for any other device. [USB](sys/usb/Readme.md) has the stack.

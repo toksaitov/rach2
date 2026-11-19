@@ -89,25 +89,32 @@
 #define HID_DG_FINGER                 0x000D0022u
 #define HID_DG_TIPPRESSURE            0x000D0030u
 #define HID_DG_AZIMUTH                0x000D003fu
+#define HID_DG_INRANGE                0x000D0032u
 #define HID_DG_TIPSWITCH              0x000D0042u
+#define HID_DG_CONFIDENCE             0x000D0047u
 #define HID_DG_WIDTH                  0x000D0048u
 #define HID_DG_HEIGHT                 0x000D0049u
 #define HID_DG_CONTACTID              0x000D0051u
+#define HID_DG_INPUTMODE              0x000D0052u
 #define HID_DG_CONTACTCOUNT           0x000D0054u
 #define HID_DG_CONTACTMAX             0x000D0055u
+#define HID_MS_MT_FEATURE             0xff0000c5u
 
 #define HID_MT_COUNT   0xffffu /* marks the frame's Contact Count usage */
+#define HID_MT_BUTTON  0xfffeu /* a precision touchpad's frame button */
 #define HID_MT_DEFAULT 10
 #define HID_MT_AXES    (ABS_MT_LAST - ABS_MT_FIRST + 1)
 
 /* One contact in a HID packet. `next` and the input's head are one-based
- * descriptor collection numbers, 0 at the end. */
+ * contact record numbers, 0 at the end. */
 struct hid_mt_contact {
     uint16_t next;
     uint16_t axes; /* values present in the packet, from ABS_MT_FIRST */
     uint8_t seen;
     uint8_t identified;
     uint8_t tip;
+    uint8_t in_range;
+    uint8_t confidence;
     int32_t id;
     int32_t value[HID_MT_AXES];
 };
@@ -837,8 +844,65 @@ static unsigned mt_axis(const struct hid_usage *u, int duplicate)
         return ABS_MT_TOUCH_MINOR;
     case HID_DG_AZIMUTH:
         return ABS_MT_ORIENTATION;
+    case HID_DG_INRANGE:
+        return ABS_MT_DISTANCE;
+    case HID_DG_CONFIDENCE:
+        return ABS_MT_TOOL_TYPE;
     default:
         return 0;
+    }
+}
+
+/* Contact fields that do not use an axis code. */
+#define MT_ID_BIT  (1u << HID_MT_AXES)
+#define MT_TIP_BIT (MT_ID_BIT << 1)
+#define MT_COORDS \
+    ((1u << (ABS_MT_POSITION_X - ABS_MT_FIRST)) | (1u << (ABS_MT_POSITION_Y - ABS_MT_FIRST)))
+#define MT_COMPLETE (MT_COORDS | MT_ID_BIT)
+
+/** Give a field its contact record. A collection change or a repetition
+ * after X, Y and Contact ID begins another record. */
+static uint16_t mt_group(struct hid_report *r, uint16_t collection, uint32_t bit)
+{
+    if (!collection || !bit) {
+        return 0;
+    }
+    if (r->mt_collection != collection ||
+        ((r->mt_fields & bit) && (r->mt_fields & MT_COMPLETE) == MT_COMPLETE)) {
+        if (r->mt_groups >= EVDEV_MT_SLOTS) {
+            return 0;
+        }
+        r->mt_collection = collection;
+        r->mt_fields = 0;
+        r->mt_groups++;
+    }
+    if (r->mt_fields & bit) {
+        return 0;
+    }
+    r->mt_fields |= bit;
+    return r->mt_groups;
+}
+
+/** Map a touch-surface button, including the Precision Touchpad's two
+ * sources of BTN_LEFT and its external BTN_RIGHT. */
+static void mt_map_button(struct hid_input *in, const struct hid_field *f, struct hid_usage *u)
+{
+    unsigned code = BTN_LEFT + ((u->hid - 1) & HID_USAGE);
+
+    if (in->mt_precision && f->application == HID_DG_TOUCHPAD && code > BTN_LEFT) {
+        code--;
+    }
+    if (code >= KEY_CNT) {
+        return;
+    }
+    in->mt_buttons++;
+    in->mt_flags |= INPUT_MT_POINTER;
+    in->ev |= 1u << EV_KEY;
+    set_bit(in->keys, code);
+    u->type = EV_KEY;
+    u->code = (uint16_t)code;
+    if (in->mt_precision && code - BTN_LEFT < 32) {
+        u->mt_group = HID_MT_BUTTON;
     }
 }
 
@@ -847,6 +911,8 @@ static unsigned mt_axis(const struct hid_usage *u, int duplicate)
 static int configure_mt(struct hid_dev *hid, struct hid_input *in, struct hid_field *f,
                         struct hid_usage *u)
 {
+    struct hid_report *r = &hid->desc.reports[f->report];
+    uint32_t bit = 0;
     unsigned code;
     int i;
 
@@ -856,15 +922,7 @@ static int configure_mt(struct hid_dev *hid, struct hid_input *in, struct hid_fi
     }
     in->mt_flags |= f->application == HID_DG_TOUCHPAD ? INPUT_MT_POINTER : INPUT_MT_DIRECT;
     if ((u->hid & HID_USAGE_PAGE) == HID_UP_BUTTON) {
-        code = BTN_LEFT + ((u->hid - 1) & HID_USAGE);
-        if (code < KEY_CNT) {
-            in->mt_buttons++;
-            in->mt_flags |= INPUT_MT_POINTER;
-            in->ev |= 1u << EV_KEY;
-            set_bit(in->keys, code);
-            u->type = EV_KEY;
-            u->code = (uint16_t)code;
-        }
+        mt_map_button(in, f, u);
         return 1;
     }
     if (u->hid == HID_DG_CONTACTCOUNT) {
@@ -873,17 +931,24 @@ static int configure_mt(struct hid_dev *hid, struct hid_input *in, struct hid_fi
     }
     i = (int)(u - usages_of(hid, f));
     code = mt_axis(u, i > 0 && u[-1].hid == u->hid && u[-1].collection == u->collection);
-    if (code || u->hid == HID_DG_CONTACTID || u->hid == HID_DG_TIPSWITCH) {
-        u->mt_group = mt_collection(hid, u);
-        if (u->mt_group && code) {
-            in->ev |= 1u << EV_ABS;
-            set_bit(in->abs, code);
-            u->type = EV_ABS;
-            u->code = (uint16_t)code;
-        }
+    if (!in->mt_precision && (code == ABS_MT_DISTANCE || code == ABS_MT_TOOL_TYPE)) {
         return 1;
     }
-    return 0;
+    if (code) {
+        bit = 1u << (code - ABS_MT_FIRST);
+    } else if (u->hid == HID_DG_CONTACTID) {
+        bit = MT_ID_BIT;
+    } else if (u->hid == HID_DG_TIPSWITCH) {
+        bit = MT_TIP_BIT;
+    }
+    u->mt_group = mt_group(r, mt_collection(hid, u), bit);
+    if (u->mt_group && code) {
+        in->ev |= 1u << EV_ABS;
+        set_bit(in->abs, code);
+        u->type = EV_ABS;
+        u->code = (uint16_t)code;
+    }
+    return bit != 0;
 }
 
 /**
@@ -1107,6 +1172,8 @@ static struct hid_input *allocate_input(struct hid_dev *hid, uint32_t applicatio
     in = &hid->inputs[hid->ninputs++];
     k_memset(in, 0, sizeof(*in));
     in->application = application;
+    in->mt_precision = hid->mt_precision;
+    in->mt_drop_unused = hid->mt_drop_unused;
     if (hid->desc.maxapplication > 1) {
         suffix = suffix_of(application);
     }
@@ -1387,9 +1454,15 @@ static int setup_mt_slots(struct hid_dev *hid, struct hid_input *in, struct evde
             continue;
         }
         for (j = 0; j < f->maxusage; j++) {
-            if (u[j].hid == HID_DG_CONTACTMAX && f->logical_maximum > 0 &&
-                f->logical_maximum <= EVDEV_MT_SLOTS) {
-                slots = f->logical_maximum;
+            if (u[j].hid == HID_DG_CONTACTMAX) {
+                int32_t reported = u[j].value;
+
+                if (reported <= 0 || reported > EVDEV_MT_SLOTS) {
+                    reported = f->logical_maximum;
+                }
+                if (reported > 0 && reported <= EVDEV_MT_SLOTS) {
+                    slots = reported;
+                }
             }
         }
     }
@@ -1421,7 +1494,9 @@ static void register_axes(struct hid_dev *hid, struct hid_input *in, struct evde
             if (u->type != EV_ABS) {
                 continue;
             }
-            if (u->mt_group && u->code == ABS_MT_ORIENTATION) {
+            if (u->mt_group && u->code == ABS_MT_TOOL_TYPE) {
+                evdev_set_abs(dev, u->code, MT_TOOL_FINGER, MT_TOOL_PALM, 0, 0);
+            } else if (u->mt_group && u->code == ABS_MT_ORIENTATION) {
                 evdev_set_abs(dev, u->code, -(b / 4), b / 4, 0, 0);
             } else if (f->application == HID_GD_GAMEPAD || f->application == HID_GD_JOYSTICK) {
                 evdev_set_abs(dev, u->code, a, b, wrap_sub(b, a) >> 8, wrap_sub(b, a) >> 4);
@@ -1498,9 +1573,35 @@ static int register_input(struct hid_dev *hid, struct hid_input *in)
     return 1;
 }
 
-/** Mark input reports carrying Contact Identifier and allocate their
- * packet workspace. Return 0 or -ENOMEM. */
-static int prepare_mt_reports(struct hid_dev *hid)
+/** Whether this USB device reports its active contacts without explicit
+ * lifts, as specified in Linux 6.12's hid-multitouch device table. */
+static int mt_drop_unused(const struct hid_dev *hid)
+{
+    static const uint32_t ids[] = {
+        0x06030600u,                           /* Novatek PCT */
+        0x0fb81109u,                           /* Wistron optical touch */
+        0x14771006u, 0x14771007u, 0x1477100eu, /* Xiroku */
+        0x14771021u, 0x14771022u, 0x14771023u, 0x14771024u,
+        0x14771025u, 0x14771026u, 0x1aad000fu, /* GoodTouch */
+        0x1e5e0313u,                           /* Touch International */
+        0x222a0001u,                           /* Ilitek dual touch */
+        0x227d0709u, 0x227d0a19u,              /* Unitec */
+        0x25050220u,                           /* XAT CSR */
+        0x25b50002u,                           /* Flatfrog 3200 */
+    };
+    uint32_t id = ((uint32_t)hid->vendor << 16) | hid->product;
+    unsigned int i;
+
+    for (i = 0; i < COUNT(ids); i++) {
+        if (id == ids[i]) {
+            return 1;
+        }
+    }
+    return hid->mt_precision && (id == 0x17ef60feu || id == 0x17ef61aeu || id == 0x046dc548u);
+}
+
+/** Mark reports carrying Contact Identifier and identify the profile. */
+static int detect_mt_reports(struct hid_dev *hid)
 {
     uint32_t i, j;
     int any = 0;
@@ -1510,6 +1611,9 @@ static int prepare_mt_reports(struct hid_dev *hid)
         struct hid_report *r = &hid->desc.reports[f->report];
         const struct hid_usage *u = usages_of(hid, f);
 
+        if (r->type == HID_FEATURE_REPORT && f->count && u[0].hid == HID_MS_MT_FEATURE) {
+            hid->mt_precision = 1;
+        }
         if (r->type != HID_INPUT_REPORT || !touch_surface(f->application) ||
             (f->flags & HID_MAIN_ITEM_CONSTANT) || !(f->flags & HID_MAIN_ITEM_VARIABLE)) {
             continue;
@@ -1521,8 +1625,191 @@ static int prepare_mt_reports(struct hid_dev *hid)
             }
         }
     }
-    if (any) {
-        hid->contacts = kzalloc(hid->desc.ncollections * sizeof(*hid->contacts));
+    hid->mt_drop_unused = mt_drop_unused(hid);
+    return any;
+}
+
+/* Feature reports to read, and whether their value can be built from
+ * zero when the device refuses GET_REPORT. */
+#define MT_FEATURE_READ  1u
+#define MT_FEATURE_MODE  2u
+#define MT_FEATURE_OTHER 4u
+
+/** The relevant fields in feature report `report`, including fields that
+ * must be preserved by a SET_REPORT. */
+static unsigned mt_feature_fields(struct hid_dev *hid, unsigned report)
+{
+    unsigned int i, j, flags = 0;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        const struct hid_field *f = field_at(hid, i);
+        const struct hid_usage *u = usages_of(hid, f);
+
+        if (f->report != report || (f->flags & HID_MAIN_ITEM_CONSTANT)) {
+            continue;
+        }
+        for (j = 0; j < f->count; j++) {
+            if ((f->flags & HID_MAIN_ITEM_VARIABLE) && u[j].hid == HID_DG_INPUTMODE) {
+                flags |= MT_FEATURE_MODE;
+            } else {
+                flags |= MT_FEATURE_OTHER;
+                if (u[j].hid == HID_DG_CONTACTMAX || u[j].hid == HID_MS_MT_FEATURE) {
+                    flags |= MT_FEATURE_READ;
+                }
+            }
+        }
+    }
+    return flags;
+}
+
+int hidinput_mt_features(struct hid_dev *hid)
+{
+    unsigned int r;
+
+    hid->mt_feature = hid->mt_set_feature = -1;
+    if (!detect_mt_reports(hid)) {
+        return 0;
+    }
+    for (r = 0; r < hid->desc.nreports; r++) {
+        if (hid->desc.reports[r].type == HID_FEATURE_REPORT &&
+            (mt_feature_fields(hid, r) & (MT_FEATURE_READ | MT_FEATURE_MODE))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int hidinput_mt_feature_request(struct hid_dev *hid, uint8_t *data, int size, int *value,
+                                int *write)
+{
+    const struct hid_report *r;
+    unsigned int i;
+    int len;
+
+    *write = hid->mt_set_feature >= 0;
+    if (*write) {
+        i = (unsigned int)hid->mt_set_feature;
+        hid->mt_set_feature = -1;
+    } else {
+        for (i = hid->mt_next_feature; i < hid->desc.nreports; i++) {
+            r = &hid->desc.reports[i];
+            if (r->type == HID_FEATURE_REPORT && hid_report_len(r) <= (uint32_t)size &&
+                (mt_feature_fields(hid, i) & (MT_FEATURE_READ | MT_FEATURE_MODE))) {
+                break;
+            }
+        }
+        if (i == hid->desc.nreports) {
+            return 0;
+        }
+        hid->mt_next_feature = i + 1;
+    }
+    r = &hid->desc.reports[i];
+    len = (int)hid_report_len(r);
+    if (*write && len <= size) {
+        k_memcpy(data, hid->outbuf, (uint32_t)len);
+    }
+    hid->mt_feature = (int)i;
+    hid->mt_feature_write = *write;
+    *value = (HID_FEATURE_REPORT + 1) << 8 | r->id;
+    return len <= size ? len : 0;
+}
+
+/** The Input Mode value of a touchscreen (2) or a touchpad (3). */
+static int mt_input_mode(struct hid_dev *hid)
+{
+    unsigned int i, j;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        const struct hid_field *f = field_at(hid, i);
+        const struct hid_usage *u = usages_of(hid, f);
+
+        if (!hid->desc.reports[f->report].multitouch || (f->flags & HID_MAIN_ITEM_CONSTANT)) {
+            continue;
+        }
+        if (f->application == HID_DG_TOUCHPAD) {
+            return 3;
+        }
+        for (j = 0; f->application == HID_DG_TOUCHSCREEN && j < f->count; j++) {
+            if ((u[j].hid & HID_USAGE_PAGE) == HID_UP_BUTTON) {
+                return 3;
+            }
+        }
+    }
+    return 2;
+}
+
+/** Read a contact limit or replace Input Mode in the saved feature
+ * packet. Return whether an Input Mode field was set. */
+static int mt_update_feature(struct hid_dev *hid, unsigned int report, uint8_t *data, int got)
+{
+    const uint32_t mode = (uint32_t)mt_input_mode(hid);
+    unsigned int i, j;
+    int set = 0;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        struct hid_field *f = field_at(hid, i);
+        struct hid_usage *u = usages_of(hid, f);
+
+        if (f->report != report || !(f->flags & HID_MAIN_ITEM_VARIABLE) ||
+            (f->flags & HID_MAIN_ITEM_CONSTANT)) {
+            continue;
+        }
+        for (j = 0; j < f->count; j++) {
+            unsigned int offset = f->offset + j * f->size;
+
+            if (got && u[j].hid == HID_DG_CONTACTMAX) {
+                uint32_t raw = hid_field_extract(data, offset, f->size);
+
+                u[j].value = f->logical_minimum < 0 ? hid_snto32(raw, f->size) : (int32_t)raw;
+            } else if (u[j].hid == HID_DG_INPUTMODE && f->size >= 2) {
+                hid_field_implement(data, offset, f->size, mode);
+                set = 1;
+            }
+        }
+    }
+    return set;
+}
+
+void hidinput_mt_feature_answer(struct hid_dev *hid, const uint8_t *data, int len)
+{
+    int index = hid->mt_feature;
+    const struct hid_report *r;
+    int got, bytes;
+
+    hid->mt_feature = -1;
+    if (index < 0 || hid->mt_feature_write) {
+        return;
+    }
+    r = &hid->desc.reports[index];
+    bytes = (int)hid_report_len(r);
+    got = len >= bytes && (!r->id || data[0] == r->id);
+    if (got) {
+        k_memcpy(hid->outbuf, data, (uint32_t)bytes);
+    } else if (mt_feature_fields(hid, (unsigned int)index) == MT_FEATURE_MODE) {
+        k_memset(hid->outbuf, 0, (uint32_t)bytes);
+        if (r->id) {
+            hid->outbuf[0] = r->id;
+        }
+    } else {
+        return;
+    }
+    if (mt_update_feature(hid, (unsigned int)index, hid->outbuf + (r->id != 0), got)) {
+        hid->mt_set_feature = index;
+    }
+}
+
+/** Set aside enough contact records for the largest multitouch report. */
+static int mt_workspace(struct hid_dev *hid)
+{
+    unsigned int i, contacts = 0;
+
+    for (i = 0; i < hid->desc.nreports; i++) {
+        if (hid->desc.reports[i].mt_groups > contacts) {
+            contacts = hid->desc.reports[i].mt_groups;
+        }
+    }
+    if (contacts) {
+        hid->contacts = kzalloc(contacts * sizeof(*hid->contacts));
         if (!hid->contacts) {
             return -ENOMEM;
         }
@@ -1546,9 +1833,10 @@ int hidinput_connect(struct hid_dev *hid)
             break;
         }
     }
-    if (i == hid->desc.ncollections || prepare_mt_reports(hid) != 0) {
+    if (i == hid->desc.ncollections) {
         return -1;
     }
+    (void)detect_mt_reports(hid);
     setup_multipliers(hid, 0);
 
     for (k = HID_INPUT_REPORT; k <= HID_OUTPUT_REPORT; k++) {
@@ -1588,6 +1876,9 @@ int hidinput_connect(struct hid_dev *hid)
         }
     }
 
+    if (mt_workspace(hid) != 0) {
+        return -1;
+    }
     for (i = 0; i < hid->ninputs; i++) {
         struct hid_input *it = &hid->inputs[i];
 
@@ -1789,9 +2080,16 @@ static void mt_collect(struct hid_dev *hid, struct hid_input *in, const struct h
         in->mt_count = value >= 0 && value <= EVDEV_MT_SLOTS ? value : -1;
         return;
     }
+    if (u->mt_group == HID_MT_BUTTON) {
+        if (value) {
+            in->mt_pressed |= 1u << (u->code - BTN_LEFT);
+        }
+        return;
+    }
     c = &hid->contacts[u->mt_group - 1];
     if (!c->seen) {
         c->seen = 1;
+        c->confidence = 1;
         if (in->mt_last) {
             hid->contacts[in->mt_last - 1].next = u->mt_group;
         } else {
@@ -1804,6 +2102,10 @@ static void mt_collect(struct hid_dev *hid, struct hid_input *in, const struct h
         c->identified = 1;
     } else if (u->hid == HID_DG_TIPSWITCH) {
         c->tip = value != 0;
+    } else if (u->hid == HID_DG_CONFIDENCE) {
+        c->confidence = value != 0;
+    } else if (u->hid == HID_DG_INRANGE) {
+        c->in_range = value != 0;
     } else {
         if (u->hid == HID_DG_AZIMUTH) {
             full = (f->logical_maximum / 4) * 4;
@@ -1834,8 +2136,12 @@ static void mt_contact(struct hid_input *in, struct hid_mt_contact *c)
         return;
     }
     evdev_report(dev, EV_ABS, ABS_MT_SLOT, slot);
-    if (!evdev_mt_report_slot_state(dev, MT_TOOL_FINGER, c->tip)) {
+    if (!evdev_mt_report_slot_state(dev, c->confidence ? MT_TOOL_FINGER : MT_TOOL_PALM,
+                                    c->tip || c->in_range)) {
         return;
+    }
+    if (test_bit(in->abs, ABS_MT_DISTANCE)) {
+        evdev_report(dev, EV_ABS, ABS_MT_DISTANCE, !c->tip);
     }
     if (c->axes & (1u << (ABS_MT_TOUCH_MINOR - ABS_MT_FIRST))) {
         width = c->value[ABS_MT_TOUCH_MAJOR - ABS_MT_FIRST];
@@ -1863,9 +2169,12 @@ static int mt_packet(struct hid_dev *hid, struct hid_input *in)
     struct hid_mt_contact *c;
     unsigned int i = in->mt_first;
 
+    if (in->mt_count > 0 || !in->mt_left) {
+        in->mt_frame_buttons = in->mt_pressed;
+    }
     if (in->mt_count > 0) {
         if (in->mt_left > 0) {
-            evdev_mt_drop_unused(in->dev);
+            evdev_mt_end_frame(in->dev);
         }
         in->mt_left = in->mt_count;
     }
@@ -1883,10 +2192,18 @@ static int mt_packet(struct hid_dev *hid, struct hid_input *in)
     if (in->mt_left > 0) {
         return 0;
     }
-    if (in->mt_count >= 0) {
+    if (in->mt_drop_unused) {
         evdev_mt_drop_unused(in->dev);
     } else {
         evdev_mt_end_frame(in->dev);
+    }
+    if (in->mt_precision && in->mt_buttons) {
+        for (i = 0; i < 32; i++) {
+            if (test_bit(in->keys, BTN_LEFT + i)) {
+                evdev_report(in->dev, EV_KEY, (uint16_t)(BTN_LEFT + i),
+                             (in->mt_frame_buttons >> i) & 1u);
+            }
+        }
     }
     evdev_mt_report_pointer_emulation(in->dev, (in->mt_flags & INPUT_MT_POINTER) != 0);
     return 1;
@@ -2064,6 +2381,7 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
         hid->inputs[i].mt_first = 0;
         hid->inputs[i].mt_last = 0;
         hid->inputs[i].mt_count = -1;
+        hid->inputs[i].mt_pressed = 0;
     }
     for (i = 0; i < hid->desc.nfields; i++) {
         struct hid_field *f = field_at(hid, i);
