@@ -3,6 +3,16 @@
  * display/intel_audio.c: the ELD a pipe's codec reads, the transcoder's
  * audio enable and clocks, and the audio component that the HD Audio
  * driver of the HDMI codec binds to (sys/audio/acomp.h).
+ *
+ * Linux 6.12.115's lines, in display/intel_audio.c: the clocks,
+ * audio_config_hdmi_pixel_clock (197), audio_config_hdmi_get_n (227) and
+ * hsw_audio_config_update (389); the codec's enable and disable,
+ * hsw_audio_codec_enable (542), hsw_audio_codec_disable (398),
+ * intel_audio_codec_enable (726) and intel_audio_codec_disable (785);
+ * intel_audio_compute_config (693); and the component,
+ * i915_audio_component_get_power (981), _put_power (1013),
+ * _get_cdclk_freq (1057), find_audio_state (1077), _sync_audio_rate (1116)
+ * and _get_eld (1158).
  */
 
 #include "i915.h"
