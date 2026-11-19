@@ -26,7 +26,12 @@
  * SCHED_FIFO and SCHED_RR keep their real-time priority, and SCHED_DEADLINE,
  * a priority that
  * does not suit its policy, and an unknown policy with EINVAL. The priority
- * ranges are Linux's, and the time slice is one 1 ms tick. The affinity is the
+ * ranges are Linux's. sched_rr_get_interval gives what Linux 6.12 gives: for
+ * an ordinary thread its slice in whole ticks of 4 ms, so 0 for the 0.75 ms
+ * base slice of one processor, and for a SCHED_RR thread RR's slice, 100 ms,
+ * which /proc/sys/kernel/sched_rr_timeslice_ms shows and sets in
+ * milliseconds rounded up to whole ticks, a write of 0 or less putting back
+ * 100. The affinity is the
  * processors /proc/cpuinfo lists, by their ids, which need not run without a
  * gap, read raw as the bytes of the longs the highest takes, four on i386 to 32
  * processors and eight past them and on x86-64; a mask of the last processor
@@ -153,7 +158,9 @@ static const char *const assertion_id[] = {"gettid-pid",
                                            "setparam-einval",
                                            "priority-ranges",
                                            "range-einval",
-                                           "time-slice",
+                                           "time-slice-fair",
+                                           "time-slice-rr",
+                                           "rr-timeslice-sysctl",
                                            "cpuinfo",
                                            "affinity-cpuinfo",
                                            "affinity-raw-bytes",
@@ -674,14 +681,85 @@ static int policy_refusals(void)
     return 0;
 }
 
+/* RR's slice in milliseconds, as Linux shows and sets it. */
+#define RR_TIMESLICE_MS "/proc/sys/kernel/sched_rr_timeslice_ms"
+
 /**
- * Check the priority ranges, which are Linux's, and the time slice, one
- * tick. Returns 0, or 1 after the failure is printed.
+ * Write `text` to /proc/sys/kernel/sched_rr_timeslice_ms and read the file
+ * back into `back`, of `cap` bytes, NUL-terminated. Returns 0, or -1 when
+ * either fails.
  */
-static int ranges(void)
+static int rr_timeslice_set(const char *text, char *back, size_t cap)
+{
+    ssize_t n;
+    int fd = open(RR_TIMESLICE_MS, O_WRONLY);
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = write(fd, text, strlen(text));
+    close(fd);
+    fd = open(RR_TIMESLICE_MS, O_RDONLY);
+    if (n != (ssize_t)strlen(text) || fd < 0) {
+        if (fd >= 0) {
+            close(fd);
+        }
+        return -1;
+    }
+    n = read(fd, back, cap - 1);
+    close(fd);
+    back[n > 0 ? n : 0] = '\0';
+    return n > 0 ? 0 : -1;
+}
+
+/** Whether sched_rr_get_interval of the caller gives `ns` nanoseconds. */
+static int interval_is(long ns)
 {
     struct timespec slice;
 
+    return sched_rr_get_interval(0, &slice) == 0 && slice.tv_sec == ns / 1000000000L &&
+           slice.tv_nsec == ns % 1000000000L;
+}
+
+/**
+ * Check RR's slice through /proc/sys/kernel/sched_rr_timeslice_ms, as the
+ * caller runs under SCHED_RR: 100 at first; 10 kept, which is three ticks,
+ * 12 ms; 0 and -5 each putting back 100 and 100 ms, as Linux's
+ * `sched_rr_handler` does (kernel/sched/rt.c:2966). The file is left at 100
+ * on every path. Returns 0, or 1 after the failure is printed.
+ */
+static int rr_timeslice(void)
+{
+    char back[16] = "";
+    int fd = open(RR_TIMESLICE_MS, O_RDONLY);
+    ssize_t n = fd < 0 ? -1 : read(fd, back, sizeof(back) - 1);
+    int ok;
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    back[n > 0 ? n : 0] = '\0';
+    ok = strcmp(back, "100\n") == 0 && rr_timeslice_set("10\n", back, sizeof(back)) == 0 &&
+         strcmp(back, "10\n") == 0 && interval_is(12000000L) &&
+         rr_timeslice_set("0", back, sizeof(back)) == 0 && strcmp(back, "100\n") == 0 &&
+         interval_is(100000000L) && rr_timeslice_set("10", back, sizeof(back)) == 0 &&
+         rr_timeslice_set("-5", back, sizeof(back)) == 0 && strcmp(back, "100\n") == 0 &&
+         interval_is(100000000L);
+    if (!ok) {
+        (void)rr_timeslice_set("0", back, sizeof(back));
+        return fail("sched_rr_timeslice_ms did not read 100, keep 10 as 12 ms, and put back "
+                    "100 for 0 and -5");
+    }
+    return 0;
+}
+
+/**
+ * Check the priority ranges, which are Linux's, and the time slices
+ * sched_rr_get_interval gives an ordinary thread on one processor and a
+ * SCHED_RR thread. Returns 0, or 1 after the failure is printed.
+ */
+static int ranges(void)
+{
     if (sched_get_priority_max(SCHED_FIFO) != 99 || sched_get_priority_min(SCHED_FIFO) != 1 ||
         sched_get_priority_max(SCHED_RR) != 99 || sched_get_priority_min(SCHED_RR) != 1 ||
         sched_get_priority_max(SCHED_OTHER) != 0 || sched_get_priority_min(SCHED_OTHER) != 0 ||
@@ -693,10 +771,23 @@ static int ranges(void)
         return fail("the range of an unknown policy was not refused with EINVAL");
     }
     row_held();
-    if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 || slice.tv_nsec != 1000000L) {
-        return fail("the time slice is not one 1 ms tick");
+    if (!interval_is(0)) {
+        return fail("the time slice of an ordinary thread on one processor is not 0");
     }
     row_held();
+    if (set_policy(0, SCHED_RR, 10) != 0 || !interval_is(100000000L)) {
+        (void)set_policy(0, SCHED_OTHER, 0);
+        return fail("the time slice of a SCHED_RR thread is not 100 ms");
+    }
+    row_held();
+    if (rr_timeslice() != 0) {
+        (void)set_policy(0, SCHED_OTHER, 0);
+        return 1;
+    }
+    row_held();
+    if (set_policy(0, SCHED_OTHER, 0) != 0) {
+        return fail("the policy did not go back to SCHED_OTHER");
+    }
     return 0;
 }
 
