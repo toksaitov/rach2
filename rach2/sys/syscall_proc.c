@@ -9415,6 +9415,47 @@ static int madvise_mark(vm_space_t *vm, uintptr_t addr, uintptr_t end, uint32_t 
     return 0;
 }
 
+/**
+ * MADV_COLLAPSE over [start, end), which regions of `mm` cover, as Linux
+ * 6.12's madvise_collapse: a region that cannot hold a huge page whatever
+ * `enabled` says (`thp_region_allows`, THP_COLLAPSE), or that has no 2 MiB
+ * from a boundary inside it, stops the advice with -EINVAL; otherwise each
+ * 2 MiB from a boundary inside both the region and the range is collapsed
+ * into a huge page (`paging_collapse`). 0 when each is a huge page after,
+ * or the errno of the last that is not: -ENOMEM when no huge page could be
+ * had, -EAGAIN for a pinned page, -EINVAL for any other refusal. 0 where
+ * the page directory maps no huge page, which leaves the pages as they are.
+ */
+static int madvise_collapse(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+#if MMU_HUGE
+    const vma_t *r;
+    uintptr_t lo, hi, addr;
+    int rc, last = 0;
+
+    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
+        addr = (r->start + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
+        if (addr < r->start || addr >= r->end || r->end - addr < HUGE_SPAN ||
+            !thp_region_allows(mm, r, addr, THP_COLLAPSE)) {
+            return -EINVAL;
+        }
+        lo = r->start > start ? r->start : start;
+        hi = r->end < end ? r->end : end;
+        lo = (lo + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
+        for (addr = lo; addr >= lo && addr < hi && hi - addr >= HUGE_SPAN; addr += HUGE_SPAN) {
+            rc = paging_collapse(mm, addr, THP_COLLAPSE);
+            last = rc != 0 ? rc : last;
+        }
+    }
+    return last;
+#else
+    (void)mm;
+    (void)start;
+    (void)end;
+    return 0;
+#endif
+}
+
 /** The change of `sys_madvise` in the regions `vm`, under their lock held
  * to write. */
 static long madvise_locked(isr_params_t *params, vm_space_t *vm)
@@ -9448,6 +9489,8 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
             mmn_notify(current_proc->mm, MMN_DROP, addr, end);
             unmap_user_range(_curr_dir, addr, end);
         }
+    } else if (advice == MADV_COLLAPSE) {
+        return madvise_collapse(current_proc->mm, addr, end);
     } else if (madvise_mark_bit(advice) != 0 || advice == MADV_HUGEPAGE ||
                advice == MADV_NOHUGEPAGE) {
         if (madvise_mark(vm, addr, end, advice) != 0) {
@@ -9485,7 +9528,10 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
  * while `enabled` is madvise, and MADV_NOHUGEPAGE marks them so that
  * neither does, each clearing the other's mark and leaving device memory as
  * it is (VM_PROT_HUGEPAGE, vm.h); either is ENOMEM when a region cannot be
- * split, and leaves the huge pages there. MADV_GUARD_INSTALL
+ * split, and leaves the huge pages there. MADV_COLLAPSE makes each 2 MiB
+ * of private anonymous memory in the range one huge page now, whatever
+ * `enabled` says (`madvise_collapse`); it is EINVAL over a region that
+ * cannot hold one, and changes nothing on i686. MADV_GUARD_INSTALL
  * makes the range's pages guard pages (`vm_guard_set`, vm.h), which lose
  * their frames and whose every access is SIGSEGV with SEGV_MAPERR, and
  * MADV_GUARD_REMOVE makes them ordinary pages again, which read as zeros in

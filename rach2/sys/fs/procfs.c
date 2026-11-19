@@ -6734,6 +6734,95 @@ static int32_t thp_store(int attr, char *text, uint32_t count)
     return (int32_t)count;
 }
 
+/* The words of the khugepaged directory's files, in their order. */
+static uint32_t *const khugepaged_words[] = {&thp_policy.alloc_sleep_ms,
+                                             0,
+                                             0,
+                                             &thp_policy.max_ptes_none,
+                                             &thp_policy.max_ptes_shared,
+                                             &thp_policy.max_ptes_swap,
+                                             0,
+                                             &thp_policy.pages_to_scan,
+                                             &thp_policy.scan_sleep_ms};
+
+/**
+ * Render the attribute `attr` of /sys/kernel/mm/transparent_hugepage/
+ * khugepaged as Linux 6.12 writes it: each a decimal number and a newline,
+ * `defrag` 0 or 1, and `full_scans` and `pages_collapsed` the counts since
+ * the boot (thp.h). The length of the text.
+ */
+static int procfs_gen_khugepaged(struct procfs_text *t, int attr)
+{
+    ap_u32(t, attr == 1                      ? (uint32_t)thp_policy.scan_defrag
+              : attr == SYSFS_KHP_FULL_SCANS ? thp_count(THP_FULL_SCANS)
+              : attr == SYSFS_KHP_COLLAPSED  ? thp_count(THP_PAGES_COLLAPSED)
+                                             : *khugepaged_words[attr]);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/** Parse `s` as Linux's kstrtouint in base 10: an optional `+`, decimal
+ * digits and an optional newline, at most 4294967295; 0 with the value in
+ * `*v`, or -EINVAL. */
+static int thp_uint(const char *s, uint32_t *v)
+{
+    const char *digits;
+    uint32_t val = 0;
+    int n = 0;
+
+    if (*s == '+') {
+        s++;
+    }
+    while (*s == '0' && s[1] >= '0' && s[1] <= '9') {
+        s++;
+    }
+    digits = s;
+    while (s[n] >= '0' && s[n] <= '9') {
+        val = val * 10u + (uint32_t)(s[n] - '0');
+        n++;
+    }
+    if (n == 0 || thp_over(digits, n, "4294967295") ||
+        !(s[n] == '\0' || (s[n] == '\n' && s[n + 1] == '\0'))) {
+        return -EINVAL;
+    }
+    *v = val;
+    return 0;
+}
+
+/**
+ * Take root's write of `count` bytes, `text`, NUL-terminated after them,
+ * to the attribute `attr` of /sys/kernel/mm/transparent_hugepage/
+ * khugepaged, as Linux 6.12's stores parse it: `defrag` 0 or 1 as
+ * kstrtoul reads it (`thp_flag`); the sleeps and `pages_to_scan` a number
+ * as kstrtouint reads it (`thp_uint`), `pages_to_scan` not 0; and the
+ * three `max_ptes_` at most 511. Each wakes khugepaged. `count`, or
+ * -EINVAL or -ERANGE with nothing changed.
+ */
+static int32_t khugepaged_store(int attr, char *text, uint32_t count)
+{
+    uint32_t v;
+    int flag;
+
+    if (attr == 1) {
+        flag = thp_flag(text);
+        if (flag < 0) {
+            return flag;
+        }
+        thp_policy.scan_defrag = flag;
+    } else if (attr < 0 || attr > 8 || !khugepaged_words[attr]) {
+        return -EINVAL;
+    } else {
+        if (thp_uint(text, &v) != 0 ||
+            (khugepaged_words[attr] == &thp_policy.pages_to_scan && v == 0) ||
+            (attr >= 3 && attr <= 5 && v > 511u)) {
+            return -EINVAL;
+        }
+        *khugepaged_words[attr] = v;
+    }
+    thp_policy_changed();
+    return (int32_t)count;
+}
+
 /**
  * Render the attribute `attr` of /sys/class/rtc/rtc0, of its device's power
  * directory, of /sys/power, of /sys/devices/system/cpu or of
@@ -6761,6 +6850,9 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
     }
     if (node == SYSFS_THP) {
         return procfs_gen_thp(t, attr);
+    }
+    if (node == SYSFS_THP_KHUGEPAGED) {
+        return procfs_gen_khugepaged(t, attr);
     }
     if (node == SYSFS_KERNEL) {
         ap_u32(t, sysfs_uevent_seqnum());
@@ -9987,6 +10079,9 @@ static int32_t procfs_sysattr_store(const struct procfs_file *f, char *text, uin
     }
     if (node == SYSFS_THP) {
         return thp_store(attr, text, count);
+    }
+    if (node == SYSFS_THP_KHUGEPAGED) {
+        return khugepaged_store(attr, text, count);
     }
     if (node == SYSFS_BACKLIGHT) {
         rc = backlight_store(f->origin_pid, attr, text, (int)count);

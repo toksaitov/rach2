@@ -170,9 +170,14 @@ size_t frame_total_count(void)
     return model_frames;
 }
 
-/** Nothing: no row reclaims memory. */
-void paging_thp_init(void)
-{}
+/* The policy's changes, which wake khugepaged in the kernel. */
+static int thp_changes;
+
+/** Count a change of the policy. */
+void thp_policy_changed(void)
+{
+    thp_changes++;
+}
 
 /* The clock, which only the wakealarm rows start: whether it reads, the
  * seconds since 1970 it reads, the alarm set, -1 for none, and the alarms
