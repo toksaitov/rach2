@@ -646,6 +646,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_display_status",
+          "checks": "tests/host/i915_display_status_hosttest.c decodes Haswell's panel, PWM, FBC and underrun registers and reads the sink's PSR bytes through native AUX without forcing VDD, reports unavailable data on a sleeping, simulated or unpowered device, and exits 0 under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_edp",
           "checks": "tests/host/i915_edp_hosttest.c drives the eDP panel of the HD 4400's host model: AUX messages with Linux's divider, precharge and timeout, DPCD reads and writes through timeouts, receive errors, DEFER and empty replies within Linux's bounds, VDD forced for a panel without power and let go five power cycles later, and the EDID read over I2C with bad blocks refused or dropped, under ASan and UBSan and exits 0",
           "source": "scenario"

@@ -183,8 +183,20 @@
 #define ERR_INT_FIFO_UNDERRUN(pipe) (1u << ((pipe) * 3))
 
 /* The eDP panel's self refresh (display/intel_psr_regs.h). */
-#define EDP_PSR_IMR 0x64834
-#define EDP_PSR_IIR 0x64838
+#define HSW_SRD_CTL           0x64800
+#define EDP_PSR_ENABLE        (1u << 31)
+#define EDP_PSR_IMR           0x64834
+#define EDP_PSR_IIR           0x64838
+#define HSW_SRD_STATUS        0x64840
+#define EDP_PSR_STATE_SHIFT   29
+#define HSW_SRD_PERF_CNT      0x64844
+#define EDP_PSR_PERF_CNT_MASK 0xffffffu
+
+/* Haswell's one FBC instance (display/intel_fbc_regs.h). */
+#define ILK_DPFC_CONTROL_A     0x43208
+#define DPFC_CTL_EN            (1u << 31)
+#define ILK_DPFC_STATUS2_A     0x43214
+#define DPFC_COMP_SEG_MASK_IVB 0xfffu
 
 #define SDEISR                0xc4000
 #define SDEIMR                0xc4004
@@ -1130,6 +1142,8 @@
 
 #define BLC_PWM_CPU_CTL2          0x48250
 #define BLM_PWM_ENABLE            (1u << 31)
+#define BLM_TRANSCODER_SHIFT      29
+#define BLM_TRANSCODER_MASK       3u
 #define BLC_PWM_CPU_CTL           0x48254
 #define HSW_BLC_PWM2_CTL          0x48350
 #define UTIL_PIN_CTL              0x48400
@@ -1142,10 +1156,11 @@
 #define BLM_PCH_POLARITY          (1u << 29)
 #define BLC_PWM_PCH_CTL2          0xc8254
 #define BACKLIGHT_DUTY_CYCLE_MASK 0xffffu
-/* The PCH's PWM counts in steps of 128 of its clock with this bit, else
- * of 16. */
+/* Lynx Point PWM steps, in periods of the PCH's PWM clock. */
 #define SOUTH_CHICKEN2            0xc2004
 #define LPT_PWM_GRANULARITY       (1u << 5)
+#define LPT_PWM_STEP(reg)         (((reg) & LPT_PWM_GRANULARITY) ? 16u : 128u)
+#define LPT_PWM_CLOCK_HZ(ult)     ((ult) ? 24000000u : 135000000u)
 
 /* The registers of Linux's hsw_init_clock_gating and lpt_init_clock_gating
  * that belong to the display (i915_reg.h). */

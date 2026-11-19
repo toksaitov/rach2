@@ -41,6 +41,16 @@
 #define DP_SUPPORTED_LINK_RATES                0x010 /* eDP 1.4: 8 rates of 200 kHz */
 #define DP_MAX_SUPPORTED_RATES                 8
 
+/* Panel self refresh in the sink's DPCD. */
+#define DP_PSR_EN_CFG                      0x170
+#define DP_PSR_ENABLE                      (1u << 0)
+#define DP_PSR_ERROR_STATUS                0x2006
+#define DP_PSR_LINK_CRC_ERROR              (1u << 0)
+#define DP_PSR_RFB_STORAGE_ERROR           (1u << 1)
+#define DP_PSR_VSC_SDP_UNCORRECTABLE_ERROR (1u << 2)
+#define DP_PSR_STATUS                      0x2008
+#define DP_PSR_SINK_STATE_MASK             0x07u
+
 /* ---- A branch device's downstream ports, DPCD 0x080 to 0x08f ---- */
 
 #define DP_DOWNSTREAM_PORT_0         0x080

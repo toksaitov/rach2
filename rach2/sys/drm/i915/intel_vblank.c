@@ -312,10 +312,13 @@ static void err_int(struct drm_i915_private *i915)
     int pipe;
 
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
-        if ((e & ERR_INT_FIFO_UNDERRUN(pipe)) && !d->crtc[pipe].underrun_off) {
-            d->crtc[pipe].underrun_off = 1;
-            i915_irq_mask_locked(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
-            d->underruns |= 1u << pipe;
+        if (e & ERR_INT_FIFO_UNDERRUN(pipe)) {
+            d->crtc[pipe].underrun_count++;
+            if (!d->crtc[pipe].underrun_off) {
+                d->crtc[pipe].underrun_off = 1;
+                i915_irq_mask_locked(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
+                d->underruns |= 1u << pipe;
+            }
         }
         if ((e & ERR_INT_PIPE_CRC_DONE(pipe)) && d->crtc[pipe].crc_ctl != 0) {
             d->crtc[pipe].crc_res = i915_read(&i915->hw, PIPE_CRC_RES_HSW(pipe));
@@ -342,22 +345,28 @@ void intel_fifo_underrun_reporting(struct intel_crtc *c, int on)
 {
     struct drm_i915_private *i915 = c->i915;
     uint32_t flags = spin_lock_irqsave(&i915->irq.lock);
-    int old = !c->underrun_off, all = 1, pipe;
+    uint32_t bit = ERR_INT_FIFO_UNDERRUN(c->pipe);
+    int old = !c->underrun_off, pending, all = 1, pipe;
 
     c->underrun_off = on ? 0 : 1;
-    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
-        all = all && !i915->display.crtc[pipe].underrun_off;
+    pending = (i915_read(&i915->hw, GEN7_ERR_INT) & bit) != 0;
+    if (on) {
+        if (pending) {
+            c->underrun_count++;
+            i915_write(&i915->hw, GEN7_ERR_INT, bit);
+            i915_posting_read(&i915->hw, GEN7_ERR_INT);
+        }
+        for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+            all = all && !i915->display.crtc[pipe].underrun_off;
+        }
+        if (all) {
+            i915_irq_unmask_locked(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
+        }
+    } else {
+        i915_irq_mask_locked(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
     }
     spin_unlock_irqrestore(&i915->irq.lock, flags);
-    if (on) {
-        i915_write(&i915->hw, GEN7_ERR_INT, ERR_INT_FIFO_UNDERRUN(c->pipe));
-        if (all) {
-            i915_irq_unmask(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
-        }
-        return;
-    }
-    i915_irq_mask(i915, I915_IRQ_DE, DE_ERR_INT_IVB);
-    if (old && (i915_read(&i915->hw, GEN7_ERR_INT) & ERR_INT_FIFO_UNDERRUN(c->pipe))) {
+    if (!on && old && pending) {
         klog(KLOG_ERR, "i915", "display: uncleared FIFO underrun on pipe %c", 'A' + c->pipe);
     }
 }
@@ -370,6 +379,7 @@ void intel_check_cpu_fifo_underruns(struct drm_i915_private *i915)
 
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         if (!i915->display.crtc[pipe].underrun_off && (e & ERR_INT_FIFO_UNDERRUN(pipe))) {
+            i915->display.crtc[pipe].underrun_count++;
             found |= ERR_INT_FIFO_UNDERRUN(pipe);
         }
     }
