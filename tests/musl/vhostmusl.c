@@ -26,6 +26,10 @@
  * has found a frame, reads the call until the calls cover the used index
  * read after them: one missing call would keep them short of it, so a
  * frame passes only with its own call, whichever the program sees first.
+ * Calls read that outnumber the used index read after them are a fault of
+ * their own, since an extra call for one frame could stand in for a call
+ * missing for the next. Every wait blocks on an eventfd, with no clock, so
+ * a frame or a call that never comes leaves the program waiting.
  *
  * Prints `VHOSTMUSL OK` and exits 0 on success, and prints
  * `VHOSTMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -140,7 +144,7 @@ static const struct {
     {"datagram", "the first datagram did not come into the receive ring after the answer"},
     {"direct-send", "could not send the second datagram"},
     {"direct-frame", "the second datagram did not come into the receive ring"},
-    {"direct-call", "the receive ring's call was not signalled for the second datagram"},
+    {"direct-call", "the receive ring's call was not signalled once for the second datagram"},
     {"detach", "VHOST_NET_SET_BACKEND of -1 failed"},
 };
 
@@ -330,8 +334,12 @@ static int arp_match(const unsigned char *f, uint32_t n, const char *text)
     return is_arp_request(f, n);
 }
 
-/** Read the receive ring's call `call`, adding the signals it counted to
- * `rx_calls`: 0, or -1 when the read fails. */
+/**
+ * Read the receive ring's call `call`, adding the signals it counted to
+ * `rx_calls`: 0; -1 when the read fails, or when the calls read outnumber
+ * the used index read after them, which a call signalled once for each
+ * frame after its used index cannot do.
+ */
 static int take_call(int call)
 {
     uint64_t v;
@@ -340,7 +348,8 @@ static int take_call(int call)
         return -1;
     }
     rx_calls += v;
-    return 0;
+    __sync_synchronize();
+    return rx_calls > get16(RX_USED + 2) ? -1 : 0;
 }
 
 /**
@@ -352,8 +361,10 @@ static int take_call(int call)
  * whose call is missing keeps them one short of every used index read
  * later, whatever frames follow it. Calls read that reach a used index
  * read after them therefore include the frame's own, and no call of
- * another frame, earlier or later, stands in for it. The buffer's offset;
- * -1 after NUM calls without the frame; -2 when a read of the call fails.
+ * another frame, earlier or later, stands in for it, since `take_call`
+ * refuses calls that outnumber the used entries. The buffer's offset; -1
+ * after NUM calls without the frame; -2 when a read of the call fails or
+ * reads more calls than frames.
  */
 static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const char *),
                    const char *text)
