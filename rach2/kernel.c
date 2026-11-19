@@ -4611,10 +4611,11 @@ static void start_audio(void)
 /**
  * Start the network unless `rach2.nonet` is given: the wired card, the
  * network console's targets with `netconsole=` and its frames with
- * `rach2.netconsole`, /dev/net/tun, then the simulated radios and the ath9k
- * card, which needs the wireless registry, logging what each start found.
- * Of several `netconsole=`, the last is read, as Linux's `option_setup`
- * keeps the last one it is called with (drivers/net/netconsole.c).
+ * `rach2.netconsole`, /dev/net/tun and the cards' drivers in /sys, then the
+ * simulated radios and the ath9k card, which needs the wireless registry,
+ * logging what each start found. Of several `netconsole=`, the last is
+ * read, as Linux's `option_setup` keeps the last one it is called with
+ * (drivers/net/netconsole.c).
  */
 static void start_network(void)
 {
@@ -4640,6 +4641,7 @@ static void start_network(void)
         klog(KLOG_WARN, "net", "absent: %s", net_error());
     }
     tap_start();
+    netdev_sys_start();
     radios = wlan_init();
     if (radios > 0) {
         klog(KLOG_INFO, "wsim", "ready: %d radios", radios);
