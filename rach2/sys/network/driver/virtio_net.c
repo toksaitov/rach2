@@ -514,19 +514,31 @@ static int vnet_queues(struct vnet *v)
  * Linux's virtnet_probe gives its interface with SET_NETDEV_DEV, where a
  * PCI card's is its function. The interface has no `pci_key`, since that
  * link would stand in this one's place; where the virtio device has no
- * directory or the link cannot be made, the function is the parent after
- * all. Process context, since adding takes heap.
+ * directory, the function is the parent. 0, or the -errno of a link that
+ * could not be made, with `nd` and `v->sys_link` untouched, as Linux's
+ * device_add fails the registration. Process context, since adding takes
+ * heap.
  */
-static void vnet_sysfs_link(struct vnet *v, struct netdev *nd)
+static int vnet_sysfs_link(struct vnet *v, struct netdev *nd)
 {
     int dir = virtio_bus_dir(v->vdev);
+    int anchor, link;
 
-    v->sys_link =
-        dir > 0 ? sysfs_add_link(sysfs_anchor(SYSFS_NET_IF, nd->index), "device", dir) : 0;
-    if (v->sys_link < 0) {
-        v->sys_link = 0;
+    if (dir <= 0) {
+        nd->pci_key = v->key;
+        return 0;
     }
-    nd->pci_key = v->sys_link ? -1 : v->key;
+    anchor = sysfs_anchor(SYSFS_NET_IF, nd->index);
+    if (anchor < 0) {
+        return anchor;
+    }
+    link = sysfs_add_link(anchor, "device", dir);
+    if (link < 0) {
+        return link;
+    }
+    v->sys_link = link;
+    nd->pci_key = -1;
+    return 0;
 }
 
 /**
@@ -535,10 +547,11 @@ static void vnet_sysfs_link(struct vnet *v, struct netdev *nd)
  * the queues set up and the receive queue filled, DRIVER_OK, the device
  * told of its buffers, the receive filter set and the link read. The
  * interface `nd` is given what the device says of itself before a frame
- * moves (`vnet_interface`), and its `device` in /sys once the device is up.
- * On an error the device is reset, its memory given back and the binding
- * taken away, with `nd` as it was; the caller gives the device back. 0 or
- * -errno, with the reason in `vnet_err`.
+ * moves (`vnet_interface`), and its `device` in /sys once the device has
+ * taken DRIVER_OK, before that (`vnet_sysfs_link`), whose failure fails
+ * the bring-up. On an error the device is reset, its memory given back and
+ * the binding taken away, with `nd` as it was; the caller gives the device
+ * back. 0 or -errno, with the reason in `vnet_err`.
  */
 static int vnet_start(struct vnet *v, struct netdev *nd)
 {
@@ -573,6 +586,10 @@ static int vnet_start(struct vnet *v, struct netdev *nd)
         vnet_err = "the virtio network device did not take DRIVER_OK";
         rc = virtio_ready(d);
     }
+    if (rc == 0) {
+        vnet_err = "the virtio network device's interface could not be linked to it in /sys";
+        rc = vnet_sysfs_link(v, nd);
+    }
     if (rc != 0) {
         virtio_teardown(d);
         vnet_free(v);
@@ -585,14 +602,14 @@ static int vnet_start(struct vnet *v, struct netdev *nd)
     vnet_rx_mode(v);
     d->config_changed = vnet_config_changed;
     (void)vnet_link_read(v);
-    vnet_sysfs_link(v, nd);
     virtio_driver_bound(d);
     return 0;
 }
 
 /** Stop the device: no frame is taken or sent from here on, the device is
  * reset, which ends its use of memory, and its buffers are given back. The
- * interface's `device` in /sys goes with it. Process context. */
+ * interface's `device` in /sys goes with it, the link to the virtio device
+ * or the PCI function that stood in for it. Process context. */
 static void vnet_down(struct vnet *v)
 {
     uint32_t flags = net_lock();
@@ -602,6 +619,9 @@ static void vnet_down(struct vnet *v)
     net_unlock(flags);
     sysfs_remove(v->sys_link);
     v->sys_link = 0;
+    if (v->nd) {
+        v->nd->pci_key = -1;
+    }
     v->vdev->config_changed = 0;
     virtio_teardown(v->vdev);
     v->rx = v->tx = v->ctrl = 0;
