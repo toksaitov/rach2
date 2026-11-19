@@ -1,0 +1,13 @@
+4c57594578dd9fc9b545864d91e0f1701e0fba6eb2ae9a19b7377a1cb8463758  /home/testing/rach2/build/worktrees/m2/build/x86_64/rach2/kernel
+measure: result: webgl native-rach2 frames 299 frame_ms 103.133 p50 100.800 p99 118.700 cpu_ms_per_frame 413.077 latency_ms 0.038 copied_bytes 0 exits 0 round_trips - seconds 34.7 passed -
+measure: webgl: exit 0
+measure: result: glmark2 native-rach2 frames 21896 frame_ms 0.909 p50 0.769 p99 2.071 cpu_ms_per_frame 2.131 latency_ms 0.042 copied_bytes 0 exits 0 round_trips - seconds 20.3 passed -
+measure: glmark2: exit 0
+measure: result: piglit native-rach2 frames 9 frame_ms 596.463 p50 127.504 p99 987.225 cpu_ms_per_frame 983.333 latency_ms 0.042 copied_bytes 0 exits 0 round_trips - seconds 9.0 passed 9/9
+measure: piglit: exit 0
+measure: result: game native-rach2 frames 126 frame_ms 40.449 p50 39.290 p99 45.850 cpu_ms_per_frame 185.662 latency_ms 0.040 copied_bytes 0 exits 0 round_trips - seconds 18.3 passed -
+measure: game: exit 0
+measure: result: webgl native-rach2 frames 299 frame_ms 102.842 p50 101.000 p99 118.400 cpu_ms_per_frame 412.910 latency_ms 0.039 copied_bytes 0 exits 0 round_trips - seconds 33.0 passed -
+measure: webgl: exit 0
+renderer ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL ES 3.2)
+webgl size [1280, 800] pixel [25, 25, 64, 255]

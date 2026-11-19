@@ -123,6 +123,17 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: unreported.
 * Next: repeat with Chromium's current stable on Linux with llvmpipe and on another GL driver, read the passthrough decoder's handling of a large `BufferData` to find what marks the context lost, and report it on Chromium's tracker with the page.
 
+## Chromium on llvmpipe loses a WebGL context in its first frames, always with a slow clock
+
+* Project: Chromium 156.0.8078.79 as Debian 13 builds it, its WebGL on ANGLE over Mesa 25.0.7-2+deb13u1's llvmpipe (LLVM 19.1.7, 256 bits), with GPU compositing, under a headless Weston 14.0.2 with Pixman; Chromium's source was not read.
+* Fails: the test bed's WebGL scene, `bed/measure/webgl.html`, which draws from buffers of 864 and 8,192 bytes, loses its context at its second to eleventh frame: `getError` answers `CONTEXT_LOST_WEBGL` (0x9242), the renderer logs `GPU state invalid after WaitForGetOffsetInRange`, and the GPU process neither exits nor logs a reason. With `--disable-gpu-compositing` it draws. How often depends on the clock: on Linux 6.12.115 with the `hpet` clock source, whose every read is an exit to QEMU of some 7 microseconds, it is lost in every run; with `tsc` and `kvm-clock`, whose reads take no exit, in most runs but not all.
+* Found: 2026-11-19, the testing PC, milestone 83, task 83-7.1, while finding why the scene lost its context on Rach2 in QEMU and drew on the Lenovo. The fault on Rach2 came with its clock: until its clock was kept by KVM's clock page under KVM, each `clock_gettime` read the HPET, and Rach2 lost the context in every run, as Debian does with `hpet`.
+* Reproduction: `debian-ref.sh run -p virtio-vga -c 4 -m 8192` with `bed/measure` and the graphics runners in the guest; as root, `echo CLOCK > /sys/devices/system/clocksource/clocksource0/current_clocksource`, then `MEASURE_RUNNERS=/tmp/runners sh measure/measure.sh -r native-linux -u gfx -t 5 -o OUT webgl` three times. In two boots, `hpet` lost it in 6 runs of 6, `tsc` in 4 of 6 and `kvm-clock` in 5 of 6, each at frame 2 or 3. Rach2 under `rach2.notsc`, whose clock calls read the HPET, lost it in 3 of 3.
+* Evidence: [83-7.md](83-7.md#found-on-2026-11-19), with the runs' lines and the clock probes in [83-7/webgl-clock/](83-7/webgl-clock/).
+* Rach2: nothing in Rach2 causes it. Under KVM Rach2's clock reads KVM's clock page without an exit, and at the milestone head the scene drew in every run: 5 of 5 on KVM's clock, and 3 of 3 with `no-kvmclock`, where the vDSO reads the TSC.
+* Status: unreported.
+* Next: run the scene with Chromium's current stable on Linux with llvmpipe and `hpet`, read what in the GPU process ends a channel without an error when a frame's work is slow, and report it on Chromium's tracker with the page. The large vertex buffer of the entry above may be the same fault, a slower frame making it certain; it was not measured again.
+
 ## Linux's i915 writes through a read-only IOMMU mapping in IGT's gem_create hog-create
 
 * Project: Linux 6.12.115 as Debian 13.7 builds it, 6.12.115+deb13.1-amd64, its i915 driver on the Lenovo's HD 4400 (Haswell GT2, PCI 00:02.0) with `intel_iommu=on`; IGT 2.0 as Rach2's GNU root builds it from Debian's intel-gpu-tools 2.0-1 source. Linux's source was not read for this fault.

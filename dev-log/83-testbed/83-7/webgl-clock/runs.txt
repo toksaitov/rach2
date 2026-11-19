@@ -1,0 +1,56 @@
+The WebGL scene and the clock, 2026-11-19, the testing PC under WSL's KVM,
+QEMU 10.2.1, -cpu host -smp 4 -m 8G, virtio-vga. Rach2 on the GNU test disk
+of the release copy (made 2026-11-17) through qemu.sh or boot.sh; Debian in
+debian-ref.sh's guest, -cpu host,invtsc=on, Linux 6.12.115+deb13.1, both with
+Chromium 156.0.8078.79 and Mesa 25.0.7-2+deb13u1. Each "lost N" is
+`measure: webgl: failed: ... GL error 0x9242, the context lost at frame N`;
+each "drew" is a `measure: result: webgl` line of 299 frames.
+
+Rach2, kernel by commit, three runs each unless named
+  2c9d973fe2 (2026-11-12)  GPU process exited unexpectedly: exit_code=256 at
+                           every start, a failure of its own with this root
+  6d620cce4a               lost 4, 5, 5 (and lost 2 in the bisect)
+  c5eb43c7cd               lost 2, 8, 6
+  ec0d393bf9               lost 4, 8, 10
+  3786e08628               lost 2, 9, 9
+  f1395d2bc3               drew, drew, drew
+  1849af54d7               lost 3 once in the bisect; then drew, drew, drew
+  a3078e424f               drew once in the bisect; drew twice without EVENT_IDX
+  7339c72825 (head)        drew 5 of 5; drew twice without EVENT_IDX
+  7339c72825 no-kvmclock   drew 3 of 3 (vDSO on the TSC, watched against the HPET)
+  7339c72825 rach2.notsc   lost 5, 10, 11 (every clock call reads the HPET)
+  6bf89b35b7 rach2.notsc   drew, drew, lost 3 (the clock calls without the big lock)
+
+The bisect, one run a kernel over the 2,679 commits that touch rach2/ from
+2c9d973fe2 to the head: bad at 1339 dbd7210566, 1674 6d620cce4a, 1679
+1849af54d7; good at 2009, 1841, 1757, 1715, 1694, 1684, 1681, 1680
+a3078e424f. Its single runs mislead where the loss is intermittent; the runs
+of three above place the change at f1395d2bc3.
+
+Debian, two boots, the clock source set through sysfs before each three
+  boot 1: hpet lost 3, 3, 3; kvm-clock drew, lost 3, lost 2
+  boot 2: tsc drew, lost 3, lost 3; hpet lost 3, 3, 3; tsc lost 3, lost 3,
+          drew; kvm-clock lost 3, 3, 3
+Each lost run's browser.log has the renderer's "GPU state invalid after
+WaitForGetOffsetInRange" and no "GPU process exited".
+
+clockprobe 8 2 (8 threads, 2 s a clock): no clock went back, within a thread
+or across threads, on either system with any clock source. Reads in 2 s:
+  Debian tsc            monotonic 117,099,084
+  Debian hpet           monotonic 938,149 to 1,056,513
+  Rach2 rach2.notsc     monotonic 149,327 in 3 s, before 247b349049
+  Rach2 rach2.notsc     monotonic 1,038,991, realtime 1,018,029, after
+                        247b349049 and 6bf89b35b7
+
+rate (calls a second, all threads together, each thread timing its second
+with the clock_gettime system call)
+                          threads  clock_gettime  syscall  getpid
+  Debian hpet                1        134,900     136,800   4,927,200
+                             4        527,200     525,700  19,132,200
+                             8        528,100     531,200  19,188,500
+  Rach2 rach2.notsc,         1        129,900     134,300   9,082,600
+  before 247b349049          4         59,000      55,900   5,972,400
+                             8         52,600      51,600   5,440,800
+  Rach2 rach2.notsc,         1        120,000     118,900   8,319,000
+  after 247b349049           4        522,500     476,000  32,825,800
+                             8        495,200     504,300  33,003,500
