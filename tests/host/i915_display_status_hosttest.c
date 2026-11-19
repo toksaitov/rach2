@@ -22,6 +22,7 @@ static struct drm_i915_private gpu;
 static unsigned failures, reads, aux_reads, holds;
 static int have_power = 1, locked, nack_status;
 static uint32_t aux_data, aux_ctl, pch_ctl = 0xc0000000u, pch_pwm = 0x03aa01d5u;
+static uint32_t cpu_ctl = 0xf8000000u;
 static uint32_t granularity;
 
 /** Record one failed assertion. */
@@ -57,9 +58,9 @@ uint32_t i915_read(struct i915_hw *hw, uint32_t reg)
     case PP_DIVISOR:
         return 0x00123406u;
     case BLC_PWM_CPU_CTL:
-        return 0x0000009cu;
+        return 0x00fa009cu;
     case BLC_PWM_CPU_CTL2:
-        return 0xe0000000u;
+        return cpu_ctl;
     case BLC_PWM_PCH_CTL1:
         return pch_ctl;
     case BLC_PWM_PCH_CTL2:
@@ -294,12 +295,14 @@ int main(void)
 
     sample(I915_STATUS_PSR, "SRD_CTL 0x80000000 enabled\n");
     sample(I915_STATUS_PSR, "SRD_STATUS 0x60000000 BUFOFF\n");
-    sample(I915_STATUS_PSR, "SRD_PERF_CNT 0xa000002a entries=42\n");
+    sample(I915_STATUS_PSR, "SRD_PERF_CNT 0xa000002a count=42\n");
     sample(I915_STATUS_PSR, "DP_PSR_EN_CFG 0x01 enabled\n");
     sample(I915_STATUS_PSR, "DP_PSR_STATUS 0x82 active from RFB\n");
     sample(I915_STATUS_PSR, "DP_PSR_ERROR_STATUS 0x05 link_crc_error=1 rfb_storage_error=0");
     nack_status = 1;
+    before = aux_reads;
     sample(I915_STATUS_PSR, "DP_PSR_STATUS unavailable (AUX error -5)\n");
+    check(aux_reads == before + 6u, "a rejected register delayed the snapshot with retries");
     sample(I915_STATUS_PSR, "DP_PSR_ERROR_STATUS 0x05");
     before = aux_reads;
     have_power = 0;
@@ -312,9 +315,15 @@ int main(void)
     sample(I915_STATUS_PPS, "PP_OFF_DELAYS 0x01f407d0 power_down=50000 us backlight_off=200000 us");
     sample(I915_STATUS_PPS, "PP_DIVISOR 0x00123406 reference_divider=4660 power_cycle=500 ms");
     sample(I915_STATUS_PWM, "frequency=200 Hz duty_source=PCH duty=469/938");
+    sample(I915_STATUS_PWM, "cpu_pin_period=250 cpu_duty=156 cpu_pin_frequency=225000 Hz");
+    sample(I915_STATUS_PWM, "transcoder=eDP blinking=1");
     pch_ctl &= ~BLM_PCH_OVERRIDE_ENABLE;
     granularity = LPT_PWM_GRANULARITY;
     sample(I915_STATUS_PWM, "frequency=1599 Hz duty_source=CPU duty=156/938");
+    cpu_ctl &= ~BLM_PWM_ENABLE;
+    sample(I915_STATUS_PWM, "frequency=1599 Hz duty_source=CPU (inactive)");
+    pch_ctl &= ~BLM_PCH_PWM_ENABLE;
+    sample(I915_STATUS_PWM, "frequency=1599 Hz output=disabled");
     pch_pwm = 0;
     sample(I915_STATUS_PWM, "frequency=unavailable (zero period)");
 

@@ -897,6 +897,9 @@ static void row_underrun(void)
 {
     const char *line = "display: CPU pipe A FIFO underrun";
     uint32_t fb = fb_new(7, 1366, 768);
+    uint64_t count = pa->underrun_count;
+    uint64_t count_b = disp->crtc[I915_PIPE_B].underrun_count;
+    uint64_t count_c = disp->crtc[I915_PIPE_C].underrun_count;
 
     CHECK(!pa->underrun_off && !(reg(DEIMR) & DE_ERR_INT_IVB) && times_logged(line) == 0,
           "underrun: reported after the modes' commits, the error interrupt unmasked");
@@ -904,13 +907,16 @@ static void row_underrun(void)
     CHECK(times_logged(line) == 1 && pa->underrun_off && (reg(DEIMR) & DE_ERR_INT_IVB) &&
               !(reg(GEN7_ERR_INT) & ERR_INT_FIFO_UNDERRUN(0)),
           "underrun: logged once, then unreported and masked, GEN7_ERR_INT cleared");
+    CHECK(pa->underrun_count == count + 1u, "underrun: the interrupt counts its latch once");
     i915_model_poke(&model, GEN7_ERR_INT, ERR_INT_FIFO_UNDERRUN(0));
     frame();
     CHECK(times_logged(line) == 1, "underrun: a second one not logged");
+    CHECK(pa->underrun_count == count + 1u, "underrun: the masked latch has not been cleared");
     CHECK(setcrtc(0, NULL, NULL, 0) == 0 && setcrtc(0, &disp->connector, &pa->hw.mode, fb) == 0 &&
               !pa->underrun_off && !(reg(DEIMR) & DE_ERR_INT_IVB) &&
               !(reg(GEN7_ERR_INT) & ERR_INT_FIFO_UNDERRUN(0)),
           "underrun: the pipe off and on again clears the latch and reports again");
+    CHECK(pa->underrun_count == count + 2u, "underrun: re-enabling reporting counts its latch");
     /* Pipe B's reporting off masks the interrupt; A's underrun latches. */
     intel_fifo_underrun_reporting(&disp->crtc[1], 0);
     i915_model_poke(&model, GEN7_ERR_INT,
@@ -925,6 +931,9 @@ static void row_underrun(void)
     intel_fifo_underrun_reporting(&disp->crtc[1], 1);
     CHECK(times_logged(line) == 1 && !(reg(DEIMR) & DE_ERR_INT_IVB),
           "underrun: unmasked again with nothing latched to report");
+    CHECK(pa->underrun_count == count + 3u && disp->crtc[I915_PIPE_B].underrun_count == count_b &&
+              disp->crtc[I915_PIPE_C].underrun_count == count_c,
+          "underrun: the commit counts its cleared latch on pipe A alone");
     CHECK(!timed_out(), "underrun: no wait at its bound");
     frame();
 }

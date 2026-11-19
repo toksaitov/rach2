@@ -3451,7 +3451,7 @@ int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
 int32_t intel_dp_dpcd_read(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size);
 
 /**
- * Read an eDP sink's DPCD as intel_dp_dpcd_read does, leaving the panel
+ * Read an eDP sink's DPCD with one attempt per address, leaving the panel
  * power sequencer alone. -ENXIO if neither panel power nor VDD is on.
  * The caller holds the commit lock and keeps the device awake. May sleep.
  */

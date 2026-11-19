@@ -606,14 +606,18 @@ static int32_t error_state_write(fd_entry_t *e, const char __user *buf, uint32_t
     return (int32_t)count;
 }
 
-/** Move the description's offset in the text, as default_llseek. */
+/** Seek in the snapshot as default_llseek. Refuse a negative offset or
+ * a sum outside the signed file offset range before adding. */
 static int64_t state_llseek(fd_entry_t *e, int64_t offset, int whence)
 {
     struct state_text *t = (struct state_text *)e->priv;
     int64_t base = whence == 0 ? 0 : whence == 1 ? (int64_t)e->ofd->offset : (int64_t)t->len;
 
-    if (whence < 0 || whence > 2 || base + offset < 0) {
+    if (whence < 0 || whence > 2 || base < 0 || offset < -base) {
         return -EINVAL;
+    }
+    if (offset > 0x7fffffffffffffffLL - base) {
+        return -EOVERFLOW;
     }
     return base + offset;
 }
