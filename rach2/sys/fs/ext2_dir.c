@@ -1054,16 +1054,18 @@ static int inode_commit(struct ext2_mount *em, const struct ext2_node *n)
  * Write the new block at byte `off` of the volume, a directory's or a
  * symlink's target's, zeroed, with `head`, its first `len` bytes, over the
  * zeros, and on a mount that writes back to the device before anything
- * names it (`dir_commit`). There the zeros are marked to go after the
- * device's `first` blocks, the pointers and inodes a free cleared, so that
- * a block freed and taken again is not overwritten on the device while an
- * old pointer there still names it; and since a block that names others
- * does not wait for an `after` one (bcache.h), the write is made now, not
- * left to the order of writing back. 0, or -errno.
+ * names it (`dir_commit`), without the disk's flush. The zeros take no
+ * `after` mark: a block freed and taken again cannot be overwritten on the
+ * medium while an old pointer there still names it, since the allocator
+ * sets no bit in a bitmap block that holds a free's cleared bits not yet
+ * on the device, and writes that block first (`bit_turn`), behind the
+ * free's cleared pointers and inodes, which are `first`, with the disk's
+ * flush between when one of them was answered without it (bcache.h). 0, or
+ * -errno.
  */
 static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *head, uint32_t len)
 {
-    int rc = ext2_write_bytes(em, off, 0, em->block_size, ext2_em_strict(em) ? 0 : WRITE_AFTER);
+    int rc = ext2_write_bytes(em, off, 0, em->block_size, 0);
 
     if (rc == 0) {
         rc = ext2_write_bytes(em, off, head, len, WRITE_THROUGH | WRITE_KIND(READ_DATA));
