@@ -2892,8 +2892,8 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
         }
         flags = net_lock();
         entry->sock->bound_device = nd ? nd->index : 0; /* an empty name unbinds */
-        if (entry->sock->tcb) {
-            entry->sock->tcb->ifindex = entry->sock->bound_device;
+        if (entry->sock->type == SOCK_STREAM) {
+            tcp_bind_device(entry->sock);
         }
         net_unlock(flags);
         return 0;
