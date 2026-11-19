@@ -42,6 +42,10 @@ knownConditionTrueFalse:*sys/audio/audio_debug.c
 # cannot see that and treats them as the identical zero-initialized value.
 duplicateExpression:*sys/lib/krandom.c
 
+# rcu.c's per-processor count is a union with a 64-byte array that keeps two
+# processors' counts off one cache line; nothing reads the array.
+unusedStructMember:*sys/lib/rcu.c
+
 # The ABI layout structs in the timestamp probes.
 
 # `struct old_stat` in these two mirrors the kernel's `struct linux_stat` field
