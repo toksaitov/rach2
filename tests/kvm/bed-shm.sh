@@ -32,11 +32,11 @@
 # touch after must raise SIGBUS, and every map and the frames it held must
 # be gone (`revoke`, `leak`).
 #
-# With -w the draw, the doorbells and the death give way to the desktop
-# session on the VM's GPU: once virtio-gpu has bound over the region,
-# rach2-desktop's session runs Weston on its card with GL through virgl in
-# the VM, SIGHUP choosing the card on the headless QEMU boot,
-# and with -g virgl must name the Intel GPU the VM draws on (`session`).
+# With -w the draw, the doorbells and the death give way to the desktop session
+# on the VM's GPU: once virtio-gpu has bound over the region, rach2-desktop's
+# session runs Weston on its card with GL through virgl in the VM, SIGHUP
+# starting it there on the QEMU boot, which starts no session, and with -g virgl
+# must name the Intel GPU the VM draws on (`session`).
 # The load draws as the desktop user while Rach2's driver rings the VM
 # (`load`): LOAD is glmark2-wayland on the session, the default, or the
 # harness's scene `piglit`, surfaceless on the card's render node, `webgl`
@@ -783,14 +783,11 @@ desk_rows()
         return
     fi
     # After a GPU handoff the supervisor moves the session itself. On the
-    # headless QEMU boot, ask it to choose a display after its first start.
+    # QEMU boot, which starts no session, have it start one, which chooses
+    # the card now bound.
     if [ -z "$bdf" ]; then
         sup=$(cat /run/rach2-desktop.pid 2>/dev/null)
-        if [ -n "$sup" ] && until_line "$services" 'rach2-desktop: session: started as ' 30 "$sup"; then
-            case $(grep 'rach2-desktop: session: started as ' "$services" | tail -n 1) in
-                *' on headless - pixman') kill -HUP "$sup" 2>/dev/null ;;
-            esac
-        fi
+        [ -z "$sup" ] || kill -HUP "$sup" 2>/dev/null || :
     fi
     # With the GPU, the VM's virgl draws on its i915, which virgl names.
     gl=virgl

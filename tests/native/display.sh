@@ -11,15 +11,15 @@
 # Run as root by etude-guest in the case's workspace, which holds the
 # programs the case stages:
 #
-#   drm       drmprobe on the panel's card with the desktop's Weston ended
+#   drm       drmprobe on the panel's card with any desktop Weston ended
 #             first, so that the probe takes the card's master: every mode
 #             of the panel set, 1366x768 among them, a flip and the CRC rows,
-#             `DRMPROBE OK`; the session is started again afterwards
-#   weston    SIGKILL to the desktop's Weston: five seconds later no Weston
-#             runs, the session's supervisor runs and has started none, and
-#             the kernel's log has the console's return, `console: cardN:
-#             taken back from a master`; then SIGHUP starts the session again
-#             and its socket comes back
+#             `DRMPROBE OK`
+#   weston    SIGHUP starts the desktop's session, then SIGKILL to its
+#             Weston: five seconds later no Weston runs, the session's
+#             supervisor runs and has started none, and the kernel's log has
+#             the console's return, `console: cardN: taken back from a
+#             master`
 #   touchpad  evprobe touchpad: the Synaptics pad's event device and each
 #             axis as Debian's kernel gives them, `EVPROBE OK`
 #   kept      the data partition, /dev/disk0p6, mounted read-only in the
@@ -28,6 +28,8 @@
 #
 # The session is the desktop's (vendor/gnu/desktop): user `desktop`, socket
 # /run/user/1001/wayland-0, its supervisor's pid in /run/rach2-desktop.pid.
+# Every check leaves the session as it found it: running when it ran, which
+# SIGHUP brings back, and otherwise ended by SIGUSR2.
 # Prints `display: result: CHECK: pass` or `fail: why`, and exits 0 on a pass.
 set -eu
 
@@ -36,7 +38,7 @@ pidfile=/run/rach2-desktop.pid
 data=/dev/disk0p6
 kept_sha256=7bf019a047eae8e02b2cb3a2c6837433c8dc1ac9500b500c10e5c81061f92460
 check=${1:-}
-stopped=0 mounted=''
+found=0 mounted=''
 
 fail()
 {
@@ -48,7 +50,7 @@ fail()
 cleanup()
 {
     [ -z "$mounted" ] || umount "$mounted" 2> /dev/null || :
-    [ "$stopped" = 0 ] || session_start || :
+    session_restore || echo "display: session: not left as it was found" >&2
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -70,27 +72,38 @@ wait_for()
 no_weston() { ! pgrep -x weston > /dev/null; }
 session_up() { [ -S "$socket" ] && pgrep -x weston > /dev/null; }
 
-# session_stop: end the desktop's Weston so that a program may take the
-# card's master, and wait until it has gone.
-session_stop()
+# session_end: have the supervisor end the desktop's session, so that a
+# program may take the card's master, and wait until no Weston runs; 1 when
+# a Weston runs that is not the desktop's or does not end.
+session_end()
 {
     pgrep -x weston > /dev/null || return 0
-    [ -f "$pidfile" ] || fail "a Weston not the desktop's holds the display"
-    stopped=1
-    pkill -TERM -x weston || :
-    wait_for no_weston || fail "weston did not end in 600 tries"
+    [ -f "$pidfile" ] || return 1
+    kill -USR2 "$(cat "$pidfile")"
+    wait_for no_weston
 }
 
-# session_start: have the supervisor start the session again and wait for
-# its socket.
+# session_start: have the supervisor start the session and wait for its
+# socket.
 session_start()
 {
-    stopped=0
     session_up && return 0
     [ -f "$pidfile" ] || return 1
     kill -HUP "$(cat "$pidfile")"
     wait_for session_up
 }
+
+# session_restore: leave the session as the check found it.
+session_restore()
+{
+    if [ "$found" = 1 ]; then
+        session_start
+    else
+        session_end
+    fi
+}
+
+! session_up || found=1
 
 # new_log LAST: the kernel's lines after the line LAST, which the log, a
 # ring, may already have dropped; then every line it has.
@@ -103,11 +116,10 @@ new_log()
 case $check in
     drm)
         [ -x ./drmprobe ] || fail "no drmprobe in the workspace"
-        session_stop
+        session_end || fail "a Weston not the desktop's holds the display, or it did not end"
         status=0
         ./drmprobe > drmprobe.out 2>&1 || status=$?
         cat drmprobe.out
-        session_start || fail "the session did not start again"
         [ "$status" = 0 ] || fail "drmprobe exited $status: $(tail -n 1 drmprobe.out)"
         grep -qx 'DRMPROBE MODE 1366x768' drmprobe.out || fail "no mode 1366x768 was set"
         grep -q '^DRMPROBE FLIP ' drmprobe.out || fail "no flip"
@@ -116,10 +128,10 @@ case $check in
     weston)
         [ -f "$pidfile" ] || fail "no desktop supervisor"
         sup=$(cat "$pidfile")
+        session_start || fail "SIGHUP did not start the session"
         westons=$(pgrep -x weston | tr '\n' ' ')
         [ -n "$westons" ] || fail "no weston runs"
         last=$(dmesg | tail -n 1)
-        stopped=1
         # shellcheck disable=SC2086 # process ids
         kill -KILL $westons
         sleep 5
@@ -130,7 +142,6 @@ case $check in
         kill -0 "$sup" 2> /dev/null || fail "the supervisor $sup has gone"
         grep -q 'console: card[0-9]*: taken back from a master' kill.log ||
             fail "the kernel's log has no console return"
-        session_start || fail "SIGHUP did not start the session again"
         ;;
     touchpad)
         [ -x ./evprobe ] || fail "no evprobe in the workspace"

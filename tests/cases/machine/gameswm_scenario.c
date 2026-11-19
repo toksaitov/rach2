@@ -1,7 +1,8 @@
 /*
  * gameswm_scenario.c: the scenarios of tests/cases/machine.games-wm.json,
  * fullscreen X and Wine windows, raw motion, Wine's sound and DirectInput in
- * the boot session's Weston on kiosk-shell, each row a boot of its own.
+ * the desktop session's Weston on kiosk-shell, which SIGHUP starts, each row
+ * a boot of its own.
  */
 #include <stdio.h>
 #include <stdlib.h>

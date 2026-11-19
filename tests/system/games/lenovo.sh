@@ -5,8 +5,9 @@
 #   sh lenovo.sh [-n RUNS] [-s WxH] [-t SECONDS] [-r RUNNERS] [-u USER]
 #       OUT [GAME...]
 #
-# Run as root on a GNU root whose desktop session runs (vendor/gnu/desktop),
-# by hand or as the native cases games/GAME (tests/native/gpu.cases):
+# Run as root on a GNU root with the desktop's supervisor (vendor/gnu/desktop),
+# by hand or as the native cases games/GAME (tests/native/gpu.cases), in its
+# session, which SIGHUP starts when none runs and SIGUSR2 ends at the exit:
 # Weston's kiosk-shell on the DRM device as USER (desktop), with PulseAudio
 # on /dev/dsp. Each GAME, by default supertuxkart, 0ad and supertuxkart-i386,
 # plays its replay RUNS times (2), one run after another, through RUNNERS'
@@ -82,7 +83,54 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd)
 uid=$(id -u "$user")
 run=/run/user/$uid
-[ -S "$run/wayland-0" ] || { echo "lenovo-games: no desktop session: no $run/wayland-0" >&2; exit 1; }
+pidfile=/run/rach2-desktop.pid
+started=0
+sample=''
+volumes=''
+clock_file=''
+clock_min=''
+# stop: end the samplers.
+stop()
+{
+    for p in $sample $volumes; do
+        kill "$p" 2>/dev/null || :
+        wait "$p" 2>/dev/null || :
+    done
+    sample='' volumes=''
+}
+# cleanup: restore the GPU minimum after ending the samplers, and end the
+# desktop's session when this script started it.
+cleanup()
+{
+    stop
+    if [ -n "$clock_file" ]; then
+        echo "$clock_min" > "$clock_file"
+    fi
+    if [ "$started" = 1 ] && [ -f "$pidfile" ]; then
+        kill -USR2 "$(cat "$pidfile")" 2>/dev/null || :
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# session_up: whether the user's compositor runs and its socket is there.
+session_up()
+{
+    [ -S "$run/wayland-0" ] && pgrep -x weston > /dev/null
+}
+# The desktop's supervisor starts the session on SIGHUP when none runs, and
+# the exit trap ends one started here with SIGUSR2.
+if ! session_up; then
+    [ -f "$pidfile" ] || { echo "lenovo-games: no desktop session and no supervisor" >&2; exit 1; }
+    started=1
+    kill -HUP "$(cat "$pidfile")"
+    tries=0
+    until session_up; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 600 ] || { echo "lenovo-games: no desktop session: no $run/wayland-0" >&2; exit 1; }
+        sleep 0.1
+    done
+fi
 judged=1
 [ "$size" = 1366x768 ] && [ -z "$seconds" ] || judged=0
 
@@ -115,30 +163,6 @@ done
     echo "volume $(mixer vol)"
 } > "$out/session"
 
-sample=''
-volumes=''
-clock_file=''
-clock_min=''
-# stop: end the samplers.
-stop()
-{
-    for p in $sample $volumes; do
-        kill "$p" 2>/dev/null || :
-        wait "$p" 2>/dev/null || :
-    done
-    sample='' volumes=''
-}
-# cleanup: restore the GPU minimum after ending the samplers.
-cleanup()
-{
-    stop
-    if [ -n "$clock_file" ]; then
-        echo "$clock_min" > "$clock_file"
-    fi
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # lock_snapshot: keep counters without resetting another reader's window.
 lock_snapshot()

@@ -41,14 +41,15 @@
 #
 # The session is Rach2's desktop: its user `desktop`, runtime directory
 # /run/user/1001 and display wayland-0, which /run/rach2-desktop.pid's
-# supervisor starts again on SIGHUP. LENOVO_USER, LENOVO_RUNTIME and
-# LENOVO_DISPLAY name another, such as Debian's on the same machine;
+# supervisor starts on SIGHUP and ends on SIGUSR2; the runner leaves it as it
+# found it, running when it ran and otherwise ended. LENOVO_USER, LENOVO_RUNTIME
+# and LENOVO_DISPLAY name another, such as Debian's on the same machine;
 # LENOVO_IGT, the IGT stage's directory, LENOVO_CTS, VK-GL-CTS's, and
 # LENOVO_WEBGL, the WebGL suite's sdk/tests, other copies of those. A run's
 # environment is guest-env.sh's, with Mesa's shader cache emptied first. It
-# prints the runner's lines and the judge's, for igt the end of IGT's own
-# output for each subtest worse than the reference, since the case keeps only
-# what it prints, and exits 0 when both pass.
+# prints the runner's lines and the judge's, for igt the end of IGT's own output
+# for each subtest worse than the reference, since the case keeps only what it
+# prints, and exits 0 when both pass.
 set -eu
 
 here=$(pwd)
@@ -57,7 +58,7 @@ runtime=${LENOVO_RUNTIME:-/run/user/1001}
 display=${LENOVO_DISPLAY:-wayland-0}
 pidfile=/run/rach2-desktop.pid
 out=$here/out
-work='' stopped=0
+work='' found=0
 
 usage()
 {
@@ -75,20 +76,20 @@ die()
 cleanup()
 {
     [ -z "$work" ] || rm -rf "$work"
+    (session_restore) || echo "lenovo: session: not left as it was found" >&2
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# session_stop: end the desktop's compositor, so that a test may take the
-# card's master, and wait until it has gone; session_start brings it back.
+# session_stop: have the desktop's supervisor end its session, so that a
+# test may take the card's master, and wait until its compositor has gone.
 session_stop()
 {
     pgrep -x weston > /dev/null || return 0
-    stopped=1
     [ -f "$pidfile" ] || die "a compositor not the desktop's holds the display: $(pgrep -l -x weston | tr '\n' ' ')"
-    pkill -TERM -x weston || true
+    kill -USR2 "$(cat "$pidfile")"
     tries=0
     while pgrep -x weston > /dev/null; do
         tries=$((tries + 1))
@@ -115,6 +116,19 @@ session_start()
         echo "lenovo: session: started"
     fi
 }
+
+# session_restore: leave the session as the runner found it.
+# shellcheck disable=SC2329 # the exit trap runs it
+session_restore()
+{
+    if [ "$found" = 1 ]; then
+        session_start
+    else
+        session_stop
+    fi
+}
+
+[ ! -S "$runtime/$display" ] || ! pgrep -x weston > /dev/null || found=1
 
 # prepare: a work directory with a copy of the runners, which an ordinary
 # user can read and write, and the empty output directory.
@@ -249,7 +263,6 @@ case $kind in
             run root conformance igt.sh -l "$here/$list" ${LENOVO_IGT:+-t "$LENOVO_IGT"} \
                 -o "$work/out" "$part" || status=$?
         fi
-        [ "$stopped" = 0 ] || session_start
         if [ "$ref" != - ]; then
             sed 's/^/=/' "$out/list" > "$work/scope"
             cat "$out"/*.results > "$work/got" 2> /dev/null || : > "$work/got"
