@@ -81,6 +81,13 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return wq_wait_event(wq, cond, arg);
 }
 
+/** `wq_wait_event`, which fails at once. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event(wq, cond, arg);
+}
+
 /** 0: the caller holds no mount's namespace lock. */
 int vfs_ns_held_by_caller(void)
 {

@@ -46,6 +46,7 @@
 #include "../../rach2/sys/fs/sleeplock.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
+#include "../../rach2/sys/proc/tgroup.h"
 #include "fixdir_host.h"
 #include "command_host.h"
 #include "ext2_fixture.h"
@@ -93,9 +94,12 @@ static void (*write_pause)(void);
 /* What another process does at a service point, while a row sets it. */
 static void (*service_pause)(void);
 
-process_t proc_a;
+/* The processes' thread groups, whose pending signals a killable wait
+ * reads. */
+static struct tgroup group_a, group_b;
+process_t proc_a = {.tg = &group_a};
 /* The second process of a row in which two threads take turns. */
-static process_t proc_b = {.pid = 2};
+static process_t proc_b = {.pid = 2, .tg = &group_b};
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
 /* The one thread, which the descriptor table's growth walks. */
 process_t *proc_list = &proc_a;
@@ -407,6 +411,13 @@ void filemap_evict_unlinked(struct vfs_mount *mnt, uint64_t ino, void *node)
     evict_handle = 0;
     vfs_ext2_type.ops->release(mnt, handle);
     vfs_ext2_type.ops->put(mnt, node);
+}
+
+/** The killable wait, which no row kills: the uninterruptible one. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event_nointr(wq, cond, arg);
 }
 
 /**

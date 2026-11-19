@@ -3052,6 +3052,13 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
     (void)rc;
 }
 
+/** The killable wait, which no row kills: the uninterruptible one. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event_nointr(wq, cond, arg);
+}
+
 /** As `wq_wait_event`. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

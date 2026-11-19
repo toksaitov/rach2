@@ -41,6 +41,7 @@
 #include "../lib/lockdep.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
+#include "../lib/ksignal.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../mm/pressure.h"
@@ -49,6 +50,7 @@
 #include "../proc/process.h"
 #include "../proc/sched.h"
 #include "../proc/smp.h"
+#include "../proc/tgroup.h"
 
 /* Dirty buffers linked both ways, the latest to go dirty at the head. */
 struct dirty_list {
@@ -957,16 +959,36 @@ static int busy_gone(void *arg)
     return gone;
 }
 
-/** Sleep until the hold observed in `wait` ends and drop its waiter pin.
- * No cache spinlock is held. Give up `wb_lock` while sleeping, and take it
- * again afterwards when the caller held it. The caller must look up its
- * block again, since another holder may already have reused the buffer. */
-static void wait_release(struct buffer_wait *wait)
+/** Whether the calling thread has SIGKILL pending, its own or its
+ * process's; 0 with no process. */
+static int caller_killed(void)
+{
+    return current_proc &&
+           ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
+}
+
+/** The condition of a killable wait for a hold's end: `busy_gone`, or
+ * SIGKILL pending, which `wq_wait_event_killable` needs of its condition. */
+static int busy_gone_or_killed(void *arg)
+{
+    return busy_gone(arg) || caller_killed();
+}
+
+/** Sleep until the hold observed in `wait` ends, or, `killable`, until
+ * SIGKILL is pending, and drop its waiter pin. No cache spinlock is held.
+ * Give up `wb_lock` while sleeping, and take it again afterwards when the
+ * caller held it. The caller must look up its block again, since another
+ * holder may already have reused the buffer. */
+static void wait_release(struct buffer_wait *wait, int killable)
 {
     int held = wb_out();
     uint32_t flags;
 
-    wq_wait_event_nointr(&wait->buf->wq, busy_gone, wait);
+    if (killable) {
+        (void)wq_wait_event_killable(&wait->buf->wq, busy_gone_or_killed, wait, "__wait_on_buffer");
+    } else {
+        (void)wq_wait_event_nointr(&wait->buf->wq, busy_gone, wait);
+    }
     flags = cache_lock();
     wait->buf->waiters--;
     cache_unlock(flags);
@@ -975,10 +997,11 @@ static void wait_release(struct buffer_wait *wait)
 
 /** Sleep until the present holder releases `b`, found held under
  * `cache_spin`, taken with `flags`, and counted among its waiters from that
- * look until the wait ends, so that a shrink does not free it meanwhile.
- * Returns with `cache_spin` given back; `wb_lock`, when the caller holds it,
- * is given up for the sleep, since the holder may need it to let `b` go. */
-static void wait_unheld(struct bbuf *b, uint32_t flags)
+ * look until the wait ends, so that a shrink does not free it meanwhile;
+ * `killable`, SIGKILL pending ends the wait too. Returns with `cache_spin`
+ * given back; `wb_lock`, when the caller holds it, is given up for the
+ * sleep, since the holder may need it to let `b` go. */
+static void wait_unheld_how(struct bbuf *b, uint32_t flags, int killable)
 {
     struct buffer_wait wait;
 
@@ -986,7 +1009,13 @@ static void wait_unheld(struct bbuf *b, uint32_t flags)
     wait.releases = b->releases;
     b->waiters++;
     cache_unlock(flags);
-    wait_release(&wait);
+    wait_release(&wait, killable);
+}
+
+/** `wait_unheld_how` that no signal ends. */
+static void wait_unheld(struct bbuf *b, uint32_t flags)
+{
+    wait_unheld_how(b, flags, 0);
 }
 
 /** Hold `b` for the caller when nobody holds it, under `cache_spin`: 1 when
@@ -1419,7 +1448,7 @@ static int met_wait(struct buffer_wait *wait, struct buffer_wait *met)
     if (met) {
         *met = *wait;
     } else if (wait->buf) {
-        wait_release(wait);
+        wait_release(wait, 0);
     }
     return 1;
 }
@@ -2100,7 +2129,10 @@ int bcache_busy(block_device_t *dev, uint64_t blk)
     return busy;
 }
 
-void bcache_wait_unheld(block_device_t *dev, uint64_t blk)
+/** Sleep until nobody holds `dev`'s block `blk`, for `bcache_wait_unheld`
+ * and, `killable`, for `bcache_wait_unheld_killable`: 0, or -EINTR once
+ * SIGKILL is pending in a killable wait. */
+static int wait_block_unheld(block_device_t *dev, uint64_t blk, int killable)
 {
     for (;;) {
         uint32_t flags = cache_lock();
@@ -2108,11 +2140,25 @@ void bcache_wait_unheld(block_device_t *dev, uint64_t blk)
 
         if (!b || b->holder == -1) {
             cache_unlock(flags);
-            return;
+            return 0;
+        }
+        if (killable && caller_killed()) {
+            cache_unlock(flags);
+            return -EINTR;
         }
         stat_waits++;
-        wait_unheld(b, flags);
+        wait_unheld_how(b, flags, killable);
     }
+}
+
+void bcache_wait_unheld(block_device_t *dev, uint64_t blk)
+{
+    (void)wait_block_unheld(dev, blk, 0);
+}
+
+int bcache_wait_unheld_killable(block_device_t *dev, uint64_t blk)
+{
+    return wait_block_unheld(dev, blk, 1);
 }
 
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
