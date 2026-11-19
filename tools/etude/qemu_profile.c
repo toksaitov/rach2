@@ -1551,9 +1551,10 @@ static int add_tap_namespace(struct line *l, const struct etude_qemu_profile *p)
     add(l, 0, "%s", ETUDE_TAP_SHELL);
     add(l, 0, "-c");
     add(l, 0,
-        ETUDE_TAP_IP " tuntap add dev " ETUDE_TAP_NAME " mode tap multi_queue && " ETUDE_TAP_IP
-                     " addr add " ETUDE_TAP_HOST " dev " ETUDE_TAP_NAME " && " ETUDE_TAP_IP
-                     " link set " ETUDE_TAP_NAME " up && exec \"$@\"");
+        "%s tuntap add dev %s mode tap multi_queue && %s addr add %s dev %s && %s link set %s up "
+        "&& exec \"$@\"",
+        ETUDE_TAP_IP, ETUDE_TAP_NAME, ETUDE_TAP_IP, ETUDE_TAP_HOST, ETUDE_TAP_NAME, ETUDE_TAP_IP,
+        ETUDE_TAP_NAME);
     add(l, 0, "etude-tap");
     return 0;
 #else
