@@ -1326,13 +1326,13 @@ static void huge_unref(uintptr_t base)
 /**
  * Split the huge page of `dir` over the user address `va`, when there is
  * one: the directory entry names its kept table again, whose entries take
- * the accessed and dirty bits the processor set in the page, and every
- * processor drops its translation of the page, so that none keeps it beside
- * an entry changed next. The caller holds the regions' lock to write, or the
- * page-table lock, and flushes the entries it then changes. 1 when a page
- * was split, 0 when there was none.
+ * the accessed and dirty bits the processor set in the page. The caller
+ * holds the regions' lock to write, or the page-table lock, and has every
+ * processor drop the page's translation before it changes an entry beneath
+ * it, so that none keeps the page beside the entry changed (`huge_split`,
+ * `huge_chunk_split`). 1 when a page was split, 0 when there was none.
  */
-static int huge_split(page_dir_t *dir, uintptr_t va)
+static int huge_split_held(page_dir_t *dir, uintptr_t va)
 {
     pte_t leaf = mmu_user_huge_clear(dir, va);
     pte_t *table;
@@ -1349,9 +1349,19 @@ static int huge_split(page_dir_t *dir, uintptr_t va)
             }
         }
     }
-    paging_flush_dir(dir, va); /* one address drops the 2 MiB translation */
     paging_huge_mapped(leaf, -1);
     thp_note(THP_SPLIT_PMD);
+    return 1;
+}
+
+/** `huge_split_held`, and every processor drops the page's translation;
+ * the caller then flushes the entries it changes. */
+static int huge_split(page_dir_t *dir, uintptr_t va)
+{
+    if (!huge_split_held(dir, va)) {
+        return 0;
+    }
+    paging_flush_dir(dir, va); /* one address drops the 2 MiB translation */
     return 1;
 }
 
@@ -1374,13 +1384,15 @@ static void huge_split_mm(struct mm *mm, uintptr_t va)
  * when the entries of its table each map a present user page of RAM, the
  * HUGE_PAGES frames from a 2 MiB boundary in order, with the same rights
  * and marks; the page takes the accessed and dirty bits any of them has.
- * Every processor drops its translations of the range first, which may
- * hold the rights the entries had before the caller changed them. The
- * caller holds the regions' lock to write and found a huge page here, or
- * made one. 1 when promoted, 0 when the entries differ or the directory
- * keeps no table (`mmu_user_huge_set`).
+ * With `flush`, every processor drops its translations of the range
+ * first, which may hold the rights or frames the entries had before the
+ * caller changed them; without, the caller has flushed every entry it
+ * changed since the page's translation was dropped, or no entry it changed
+ * was present before. The caller holds the regions' lock to write and found
+ * a huge page here, or made one. 1 when promoted, 0 when the entries differ
+ * or the directory keeps no table (`mmu_user_huge_set`).
  */
-static int huge_promote(page_dir_t *dir, uintptr_t start)
+static int huge_promote(page_dir_t *dir, uintptr_t start, int flush)
 {
     pte_t *table = mmu_user_table(dir, start, 0);
     pte_t first, ad = 0;
@@ -1404,7 +1416,9 @@ static int huge_promote(page_dir_t *dir, uintptr_t start)
             return 0;
         }
     }
-    paging_flush_range(dir, start, start + HUGE_SPAN);
+    if (flush) {
+        paging_flush_range(dir, start, start + HUGE_SPAN);
+    }
     for (i = 0; i < HUGE_PAGES; i++) {
         ad |= table[i] & HUGE_AD;
     }
@@ -4797,7 +4811,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     for (addr = from; addr < end; addr = next) {
 #if MMU_HUGE
         uintptr_t span = addr;
-        int was = 0;
+        int was = 0, over = 0;
 #endif
 
         table = user_span(dir, addr, end, &next);
@@ -4816,6 +4830,9 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
 
                 if (*dst & PTE_P) {
                     batch_add(&replaced, to + (addr - from));
+#if MMU_HUGE
+                    over = 1;
+#endif
                 }
                 gone += pte_resident(*dst);
                 *dst = *e;
@@ -4827,7 +4844,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
         }
 #if MMU_HUGE
         if (was && HUGE_WHOLE(span, next) && ((to - from) & (HUGE_SPAN - 1)) == 0) {
-            huge_promote(dir, to + (span - from));
+            huge_promote(dir, to + (span - from), over);
         }
 #endif
     }
@@ -4837,6 +4854,77 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     mm_resident_add(dir, -gone);
     return 0;
 }
+
+#if MMU_HUGE
+/* The huge pages a walk splits at most before it has their translations
+ * dropped and changes the entries beneath them: 64 MiB. */
+#define HUGE_CHUNK 32
+
+/* A run of a walk over the user pages of one directory, whose huge pages
+ * are split first and their translations dropped together, and which are
+ * made huge again together once the entries changed beneath them are
+ * flushed, as Linux flushes a range of entries once (`huge_chunk_split`,
+ * `huge_chunk_promote`). */
+struct huge_chunk {
+    uintptr_t whole[HUGE_CHUNK]; /* the boundaries of the pages split whole */
+    uint32_t n;                  /* the entries of `whole` */
+};
+
+/**
+ * Split the huge pages of `dir` from `addr` towards `end`, HUGE_CHUNK at
+ * most, noting in `c` each whose 2 MiB lies inside the range, and have
+ * every processor drop their translations at once. Return where the run
+ * ends, for the caller to change the entries up to there and then call
+ * `huge_chunk_promote`. Under the regions' lock held to write.
+ */
+static uintptr_t huge_chunk_split(struct huge_chunk *c, page_dir_t *dir, uintptr_t addr,
+                                  uintptr_t end)
+{
+    uintptr_t next, lo = 0, hi = 0;
+    uint32_t split = 0;
+
+    c->n = 0;
+    for (; addr < end && split < HUGE_CHUNK; addr = next) {
+        pte_t *table = user_span(dir, addr, end, &next);
+
+        if (table && huge_split_held(dir, addr)) {
+            lo = split++ == 0 ? addr : lo;
+            hi = next;
+            if (HUGE_WHOLE(addr, next)) {
+                c->whole[c->n++] = addr;
+            }
+        }
+    }
+    if (split) {
+        paging_flush_range(dir, lo, hi);
+    }
+    return addr;
+}
+
+/**
+ * Make each page that `c` noted huge again (`huge_promote`), once the
+ * entries changed beneath them, which the batch `b` holds, are flushed;
+ * and the same ranges of `child` when it is not NULL, a fork's child's
+ * directory, which no processor has loaded yet.
+ */
+static void huge_chunk_promote(struct huge_chunk *c, struct flush_batch *b, page_dir_t *dir,
+                               page_dir_t *child)
+{
+    uint32_t i;
+
+    if (c->n == 0) {
+        return;
+    }
+    batch_flush(b);
+    for (i = 0; i < c->n; i++) {
+        huge_promote(dir, c->whole[i], 0);
+        if (child) {
+            huge_promote(child, c->whole[i], 0);
+        }
+    }
+    c->n = 0;
+}
+#endif
 
 /** Give the user page `addr`, whose entry is `e`, the protection `prot`,
  * for `paging_protect_range`, and add it to the batch `b` to flush when the
@@ -4891,28 +4979,28 @@ again:
 void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint32_t prot)
 {
     struct flush_batch b;
-    uintptr_t addr, next;
+    uintptr_t addr, next, stop;
     pte_t *table;
+#if MMU_HUGE
+    struct huge_chunk c;
+#endif
 
     bkl_enter();
     batch_start(&b, dir);
-    for (addr = start; addr < end; addr = next) {
+    for (addr = start; addr < end; addr = stop) {
 #if MMU_HUGE
-        uintptr_t span = addr;
-        int was;
+        stop = huge_chunk_split(&c, dir, addr, end);
+#else
+        stop = end;
 #endif
-
-        table = user_span(dir, addr, end, &next);
-#if MMU_HUGE
-        was = table && huge_split(dir, addr);
-#endif
-        for (; table && addr < next; addr += PAGE_SIZE) {
-            protect_page(&b, &table[MMU_INDEX(addr)], addr, prot);
+        for (; addr < stop; addr = next) {
+            table = user_span(dir, addr, stop, &next);
+            for (; table && addr < next; addr += PAGE_SIZE) {
+                protect_page(&b, &table[MMU_INDEX(addr)], addr, prot);
+            }
         }
 #if MMU_HUGE
-        if (was && HUGE_WHOLE(span, next)) {
-            huge_promote(dir, span);
-        }
+        huge_chunk_promote(&c, &b, dir, NULL);
 #endif
     }
     bkl_exit();
@@ -4998,10 +5086,13 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
     const vma_t *region;
     struct flush_batch b;
     int rc = 0;
+#if MMU_HUGE
+    struct huge_chunk c;
+#endif
 
     batch_start(&b, parent_dir);
     for (region = vm_first(&from->vm); region && rc == 0; region = vm_next(region)) {
-        uintptr_t va, next;
+        uintptr_t va, next, stop;
 
         if (region->prot & (VM_PROT_DONTFORK | VM_PROT_WIPEONFORK)) {
             continue; /* a wiped region's child faults in zero pages */
@@ -5009,23 +5100,22 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
         if (region->type != VM_SHARED && (region->prot & VM_PROT_WRITE)) {
             mmn_notify(from, MMN_PROTECT, region->start, region->end);
         }
-        for (va = region->start; va < region->end; va = next) {
-            pte_t *table = user_span(parent_dir, va, region->end, &next);
+        for (va = region->start; va < region->end && rc == 0; va = stop) {
 #if MMU_HUGE
-            uintptr_t span = va;
-            int was = table && huge_split(parent_dir, va);
+            stop = huge_chunk_split(&c, parent_dir, va, region->end);
+#else
+            stop = region->end;
 #endif
+            for (; va < stop && rc == 0; va = next) {
+                pte_t *table = user_span(parent_dir, va, stop, &next);
 
-            for (; table && va < next && rc == 0; va += PAGE_SIZE) {
-                rc = fork_copy_page(&b, child_dir, &table[MMU_INDEX(va)], va, region->type);
-            }
-            if (rc != 0) {
-                break;
+                for (; table && va < next && rc == 0; va += PAGE_SIZE) {
+                    rc = fork_copy_page(&b, child_dir, &table[MMU_INDEX(va)], va, region->type);
+                }
             }
 #if MMU_HUGE
-            if (was && HUGE_WHOLE(span, next)) {
-                huge_promote(parent_dir, span);
-                huge_promote(child_dir, span);
+            if (rc == 0) {
+                huge_chunk_promote(&c, &b, parent_dir, child_dir);
             }
 #endif
         }
