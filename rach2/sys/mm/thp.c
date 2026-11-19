@@ -88,6 +88,19 @@ int thp_region_allows(const struct mm *mm, const struct vma *vma, uintptr_t star
 #endif
 }
 
+int thp_region_eligible(const struct mm *mm, const struct vma *vma)
+{
+#if MMU_HUGE
+    uintptr_t addr = (vma->start + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
+
+    return addr >= vma->start && addr < vma->end && thp_region_allows(mm, vma, addr, THP_FAULT);
+#else
+    (void)mm;
+    (void)vma;
+    return 0;
+#endif
+}
+
 uint32_t thp_scan_mm(struct mm *mm, uint32_t budget, uint32_t pass, int *nomem)
 {
 #if MMU_HUGE
