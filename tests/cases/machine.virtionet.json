@@ -439,6 +439,218 @@
       }
     },
     {
+      "case_id": "machine.virtionet.mq",
+      "behavior": "a virtio network device of four queue pairs, QEMU's mq=on over a tap of four queues, on four processors becomes eth0 with a vector for each of its nine queues, sets up its four pairs, uses one for each processor once the processors have started and has the device take the four, as Linux's virtnet_probe, and passes vnetprobe's rows over the tap, whose end in QEMU's network namespace answers as the gateway",
+      "units": [
+        "virtionet",
+        "vnetprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "gateway": "10.0.2.2"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "linux",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "virtionet_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot the test image to the debug shell"
+        },
+        {
+          "step_id": "log",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "read the boot log for the driver's lines"
+        },
+        {
+          "step_id": "vnetprobe",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run vnetprobe at the debug shell and take its report from the console"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "virtio-net-pci",
+                "tap_queues": 4,
+                "properties": {
+                  "mq": "on"
+                }
+              }
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "eth0",
+          "checks": "the boot log has the virtio device as the first interface, `net: eth0: virtio_net`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vectors",
+          "checks": "the device gets an MSI-X vector for each of its 9 queues: four pairs and the control queue",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pairs",
+          "checks": "the driver logs four of the device's four queue pairs set up, all four carrying sends, which the device took through VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "link-files",
+          "checks": "the interface's carrier reads 1, and its speed, duplex and mtu read what the device says: -1, unknown and 1500 for a device that gives none, as Linux's files read",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bus",
+          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net, and the interface's device link leads to that device below its PCI function, as Linux's does",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ping",
+          "checks": "a ping to the gateway gets a reply",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unbind",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/unbind takes the device off the virtio bus",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-interface",
+          "checks": "the interface goes with the device, as Linux's virtnet_remove unregisters it: /sys/class/net has it no more, SIOCGIFINDEX of its name fails with ENODEV, and a ping to the gateway fails",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bind",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link and a new interface of the same name, the lowest free, with an ifindex that is not the old one's, down, as Linux leaves a new interface, whose device link leads to the device",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configure",
+          "checks": "the new interface set up, given 10.0.2.15/24 and a default route through the gateway with SIOCSIFFLAGS, SIOCSIFADDR, SIOCSIFNETMASK and SIOCADDRT reads a carrier of 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ping-again",
+          "checks": "a ping to the gateway gets a reply over the device bound again",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 360000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 360000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "virtionet_scenario",
+          "node": "tests/cases/machine/virtionet_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "it tests the driver of QEMU's virtio network device, which the Lenovo does not have; the Lenovo's own card is checked by the release's metal_accept.sh"
+      }
+    },
+    {
       "case_id": "machine.virtionet.plain",
       "behavior": "a virtio network device without mergeable receive buffers, the event index and the control queue becomes eth0 with none of them taken and passes vnetprobe's rows",
       "units": [

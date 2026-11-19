@@ -11,7 +11,9 @@
  * and bound again through /sys with a ping after. The `probe` case has the
  * device as QEMU makes it, with a vector for each queue, mergeable
  * receive buffers, the event index and the control queue; `intx` takes its
- * vectors away, so the device raises the function's line; `plain` takes
+ * vectors away, so the device raises the function's line; `mq` has four
+ * queue pairs, over a tap of four queues in QEMU's own network namespace,
+ * on four processors, each with a pair; `plain` takes
  * away the three features, so each frame fills one buffer, the queues are
  * silenced by their flags and no receive mode is set; `legacy` has the
  * device of the legacy interface alone, without mergeable buffers, so the
@@ -79,6 +81,14 @@ static const struct log_row plain_rows[] = {
     {"buffers", BUFFERS, "the driver did not print its buffers"},
 };
 
+static const struct log_row mq_rows[] = {
+    {"eth0", "net: eth0: virtio_net, station ", "the virtio device did not become eth0"},
+    {"vectors", "virtio: interrupts: virtio0: msi-x, a vector for each of 9 queues",
+     "the device did not get a vector for each of its nine queues"},
+    {"pairs", "virtio_net: virtio0: 4 of 4 queue pairs, 4 carrying sends",
+     "the driver did not set up and give the device four queue pairs"},
+};
+
 static const struct log_row legacy_rows[] = {
     {"eth0", "net: eth0: virtio_net, station ", "the virtio device did not become eth0"},
     {"legacy", " net, legacy, io 0x",
@@ -103,6 +113,7 @@ static const struct log_row beside_rows[] = {
 static const struct vnet_case cases[] = {
     {"machine.virtionet.probe", ROWS(probe_rows), "exec /vnetprobe", 0, 1},
     {"machine.virtionet.intx", ROWS(intx_rows), "exec /vnetprobe", 0, 0},
+    {"machine.virtionet.mq", ROWS(mq_rows), "exec /vnetprobe", 0, 0},
     {"machine.virtionet.plain", ROWS(plain_rows), "exec /vnetprobe", 1, 0},
     {"machine.virtionet.legacy", ROWS(legacy_rows), "exec /vnetprobe", 0, 0},
     {"machine.virtionet.speed", ROWS(speed_rows), "exec /vnetprobe speed=1000 duplex=full mtu=1400",
