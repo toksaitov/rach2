@@ -1,0 +1,5 @@
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915
+4
+/opt/proton
+/usr/bin/strace
