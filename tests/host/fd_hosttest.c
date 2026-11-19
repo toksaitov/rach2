@@ -41,6 +41,14 @@ extern void exit(int status);
 volatile uint32_t init_pid;
 volatile uint64_t kernel_ticks;
 
+/** Signal an orphaned process group: none is left orphaned in the model. */
+void pgrp_orphan_signal(const process_t *member, const process_t *parent, const process_t *ignored)
+{
+    (void)member;
+    (void)parent;
+    (void)ignored;
+}
+
 /** The console's count of vhangups: none in the model. */
 uint32_t tty_console_vhangups(void)
 {
