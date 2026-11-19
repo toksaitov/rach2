@@ -286,6 +286,53 @@
       "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
     },
     {
+      "case_id": "machine.ext2.probe-tmpfilemusl",
+      "behavior": "/musl/tmpfilemusl, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made, and on the ext2 root, and on the tmpfs of /dev/shm when the boot mounts one, open with O_TMPFILE makes a file with no name, linkat names it with AT_EMPTY_PATH and through /proc/self/fd and refuses what Linux 6.12 refuses, AT_EMPTY_PATH applies Linux's rule on the opener's credentials and CAP_DAC_READ_SEARCH, and the last close of a file never named frees its inode",
+      "units": ["ext2", "tests/musl/tmpfilemusl"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/musl/tmpfilemusl", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "root, as the transient init runs it, which holds CAP_DAC_READ_SEARCH", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "probes-disk", "bus": "virtio"}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 805306368, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/musl/tmpfilemusl", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
       "case_id": "machine.ext2.links",
       "behavior": "ext2probe links on the fixture volume the host's mke2fs wrote, mounted read-only: the symbolic-link rows the walker must answer, a chain of forty followed and one of forty-one refused, and the hard-link rows of a read-only volume",
       "units": ["ext2", "tests/ext2probe.c", "tests/system/mkext2fixture.sh"],
