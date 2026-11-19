@@ -2388,12 +2388,85 @@ static unsigned ticks_until_sent(unsigned most)
 }
 
 /**
+ * Give the connection `conn` one-byte segments until the quick
+ * acknowledgements its first data granted are used up, each acknowledged at
+ * once, and forget what was sent, so that a row sees the delayed
+ * acknowledgement alone.
+ */
+static void spend_quick(struct tcb *conn, uint16_t port, uint16_t lport, uint32_t *peer_seq)
+{
+    unsigned i;
+
+    rx_data(conn, port, lport, peer_seq, F_ACK, 1);
+    for (i = 0; i < 2u * TCP_DELACK_QUICK && conn->ack_quick != 0; i++) {
+        rx_data(conn, port, lport, peer_seq, F_ACK, 1);
+    }
+    n_segs = 0;
+}
+
+/**
+ * Check Linux's quick acknowledgements (tcp_incr_quickack): the first data
+ * grants 16, each acknowledged at once, after which the delayed
+ * acknowledgement holds; a quiet time longer than the retransmission timeout
+ * grants them again; a segment wholly old grants them, and ping-pong mode
+ * holds them back; a retransmission that fills the whole hole is
+ * acknowledged at once.
+ */
+static void quick_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 40000;
+    uint16_t lport;
+    unsigned i;
+
+    reset_all();
+    tcp_delack = 1;
+    conn = open_conn(&sock, 119, &peer_seq, &lport);
+    for (i = 0; i < TCP_DELACK_QUICK; i++) {
+        rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
+    }
+    CHECK("quick: each of the first 16 data segments is acknowledged at once",
+          n_segs == TCP_DELACK_QUICK && last_ack() == peer_seq && conn->ack_quick == 0);
+    rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
+    CHECK("and the 17th is held", n_segs == TCP_DELACK_QUICK && conn->delack_due != 0);
+    (void)ticks_until_sent(10u * TCP_DELACK_TICKS);
+
+    n_segs = 0;
+    kernel_ticks += conn->rto + 1u;
+    rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
+    CHECK("data after a quiet time longer than the timeout is acknowledged at once",
+          n_segs == 1 && last_ack() == peer_seq && conn->ack_quick == TCP_DELACK_QUICK - 1u);
+    conn->ack_quick = 0;
+
+    n_segs = 0;
+    rx(119, lport, peer_seq - TCP_MSS, conn->snd_nxt, F_ACK, 65535, full_seg, TCP_MSS);
+    CHECK("a segment wholly old is acknowledged at once and grants quick acknowledgements",
+          n_segs == 1 && conn->ack_quick == TCP_DELACK_QUICK);
+    conn->pingpong = 1;
+    n_segs = 0;
+    rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
+    CHECK("ping-pong mode holds an acknowledgement quick mode would send",
+          n_segs == 0 && conn->delack_due != 0);
+    (void)ticks_until_sent(10u * TCP_DELACK_TICKS);
+    conn->ack_quick = 0;
+
+    n_segs = 0;
+    rx(119, lport, peer_seq + 100u, conn->snd_nxt, F_ACK, 65535, full_seg, 100);
+    rx(119, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, full_seg, 200);
+    peer_seq += 200u;
+    CHECK("a retransmission that fills the whole hole is acknowledged at once",
+          n_segs == 2 && last_ack() == peer_seq && conn->delack_due == 0);
+    reset_all();
+}
+
+/**
  * Check Linux's delayed acknowledgement in the receive path: an in-order
  * segment's acknowledgement is held, the second full segment's goes at
  * once and covers both, a lone one's goes TCP_DELACK_TICKS, 40 ms, later,
- * and the idle tick wakes for it; data sent carries a held one; a segment
- * past a hole, the one that fills it, and a FIN are acknowledged at once;
- * and with `tcp_delack` off every segment is.
+ * and the idle tick's query reports that deadline; data sent carries a held
+ * one; a segment past a hole, the one that fills it, and a FIN are
+ * acknowledged at once; and with `tcp_delack` off every segment is.
  */
 static void delack_rows(void)
 {
@@ -2405,6 +2478,7 @@ static void delack_rows(void)
     reset_all();
     tcp_delack = 1;
     conn = open_conn(&sock, 120, &peer_seq, &lport);
+    spend_quick(conn, 120, lport, &peer_seq);
     rx_data(conn, 120, lport, &peer_seq, F_ACK, TCP_MSS);
     CHECK("delayed ACK: a full segment's acknowledgement is held for 40 ms",
           n_segs == 0 && conn->delack_due == (uint32_t)kernel_ticks + TCP_DELACK_TICKS &&
@@ -2415,7 +2489,8 @@ static void delack_rows(void)
 
     n_segs = 0;
     rx_data(conn, 120, lport, &peer_seq, F_ACK, TCP_MSS);
-    CHECK("the idle tick wakes for a held acknowledgement", tcp_idle_ticks() <= TCP_DELACK_TICKS);
+    CHECK("tcp_idle_ticks reports a held acknowledgement's deadline",
+          tcp_idle_ticks() <= TCP_DELACK_TICKS);
     CHECK("a lone segment's acknowledgement goes out at its deadline",
           ticks_until_sent(10u * TCP_DELACK_TICKS) == TCP_DELACK_TICKS && n_segs == 1 &&
               last_ack() == peer_seq && conn->delack_due == 0);
@@ -2450,13 +2525,34 @@ static void delack_rows(void)
 }
 
 /**
- * Check the read's half of Linux's delayed acknowledgement, tcp_cleanup_rbuf:
- * a read that empties the ring after a segment that ended a write of the
- * peer's sends the held acknowledgement; once this side answers within 40
- * ms it is in ping-pong mode, where such a read waits for the answer to
- * carry the acknowledgement unless two such segments came; a deadline that
- * passes in ping-pong mode ends it; and TCP_QUICKACK sets the mode, its 1
- * sending a held acknowledgement.
+ * Give the connection `conn` a segment as `rx_data` does, and leave its `plen`
+ * bytes in the ring for a read, as the socket's delivery would, which this
+ * file's stub does not.
+ */
+static void rx_queued(struct tcb *conn, uint16_t port, uint16_t lport, uint32_t *peer_seq,
+                      uint8_t flags, uint16_t plen)
+{
+    conn->recv_tail += plen;
+    rx_data(conn, port, lport, peer_seq, flags, plen);
+}
+
+/** Read `n` bytes from the ring of `sock`'s connection `conn`, as recv does. */
+static void read_bytes(struct socket *sock, struct tcb *conn, uint32_t n)
+{
+    conn->recv_head += n;
+    tcp_window_update(sock);
+}
+
+static void pingpong_rows(struct socket *sock, struct tcb *conn, uint16_t lport, uint32_t peer_seq);
+
+/**
+ * Check the read's half of Linux's delayed acknowledgement, tcp_cleanup_rbuf,
+ * and the receive MSS it judges by (tcp_measure_rcv_mss): a read that
+ * empties the ring after a segment that ended a write of the peer's sends
+ * the held acknowledgement, and a read that leaves bytes does not; a full
+ * segment ends a write only with PSH, and a shorter one unless it repeats
+ * the length before it, which then becomes the receive MSS. Then the
+ * ping-pong rows go on with the connection (`pingpong_rows`).
  */
 static void delack_read_rows(void)
 {
@@ -2468,27 +2564,71 @@ static void delack_read_rows(void)
     reset_all();
     tcp_delack = 1;
     conn = open_conn(&sock, 122, &peer_seq, &lport);
-    rx_data(conn, 122, lport, &peer_seq, (uint8_t)(F_ACK | F_PSH), 7);
-    CHECK("pushed: a short segment with PSH is held, and ends a write of the peer's",
-          n_segs == 0 && conn->delack_due != 0 && conn->ack_pushed == 1 && conn->pingpong == 0);
-    tcp_window_update(&sock);
-    CHECK("and the read that empties the ring sends its acknowledgement",
+    spend_quick(conn, 122, lport, &peer_seq);
+    rx_queued(conn, 122, lport, &peer_seq, F_ACK, TCP_MSS);
+    CHECK("pushed: a full segment without PSH ends no write of the peer's",
+          n_segs == 0 && conn->delack_due != 0 && conn->ack_pushed == 0 &&
+              conn->rcv_mss == TCP_MSS);
+    read_bytes(&sock, conn, TCP_MSS);
+    CHECK("and the read that empties the ring leaves its acknowledgement held",
+          n_segs == 0 && conn->delack_due != 0);
+    (void)ticks_until_sent(10u * TCP_DELACK_TICKS);
+
+    n_segs = 0;
+    rx_queued(conn, 122, lport, &peer_seq, (uint8_t)(F_ACK | F_PSH), TCP_MSS);
+    CHECK("a full segment with PSH is held, and ends a write of the peer's",
+          n_segs == 0 && conn->delack_due != 0 && conn->ack_pushed == 1);
+    read_bytes(&sock, conn, 1000);
+    CHECK("a read that leaves bytes in the ring sends nothing", n_segs == 0);
+    read_bytes(&sock, conn, TCP_MSS - 1000);
+    CHECK("and the read that empties it sends the acknowledgement",
           n_segs == 1 && last_ack() == peer_seq && conn->delack_due == 0 && conn->ack_pushed == 0);
 
     n_segs = 0;
-    rx_data(conn, 122, lport, &peer_seq, (uint8_t)(F_ACK | F_PSH), 1);
+    rx_queued(conn, 122, lport, &peer_seq, F_ACK, 600);
+    CHECK("a shorter segment of a new length without PSH ends a write",
+          n_segs == 0 && conn->ack_pushed == 1 && conn->rcv_mss == TCP_MSS);
+    read_bytes(&sock, conn, 600);
+    n_segs = 0;
+    rx_queued(conn, 122, lport, &peer_seq, F_ACK, 600);
+    CHECK("the second of that length becomes the receive MSS and ends none",
+          n_segs == 0 && conn->ack_pushed == 0 && conn->rcv_mss == 600u);
+    rx_queued(conn, 122, lport, &peer_seq, (uint8_t)(F_ACK | F_PSH), 300);
+    CHECK("and with 900 bytes unacknowledged past it the next is acknowledged at once",
+          n_segs == 1 && last_ack() == peer_seq);
+    read_bytes(&sock, conn, 900);
+    pingpong_rows(&sock, conn, lport, peer_seq);
+}
+
+/**
+ * Check ping-pong mode on the connection `conn` of `sock`, from the peer's
+ * port 122 to `lport`, whose peer sends next at `peer_seq`: once this side
+ * answers within 40 ms it is in the mode, where a read after a segment that
+ * ended a write of the peer's waits for the answer unless two such segments
+ * came; a deadline that passes in the mode ends it; and TCP_QUICKACK sets
+ * the mode, on a socket with no connection too, its 1 doing what a read
+ * does with the held acknowledgement.
+ */
+static void pingpong_rows(struct socket *sock, struct tcb *conn, uint16_t lport, uint32_t peer_seq)
+{
+    struct socket fresh;
+
+    n_segs = 0;
+    rx_queued(conn, 122, lport, &peer_seq, (uint8_t)(F_ACK | F_PSH), 1);
     CHECK("an answer sent within 40 ms of the data carries the acknowledgement",
-          tcp_send(&sock, (const uint8_t *)"a", 1) == 1 && n_segs == 1 && last_ack() == peer_seq);
+          tcp_send(sock, (const uint8_t *)"a", 1) == 1 && n_segs == 1 && last_ack() == peer_seq);
     CHECK("and puts the connection in ping-pong mode", conn->pingpong == 1);
+    read_bytes(sock, conn, 1);
     n_segs = 0;
     rx(122, lport, peer_seq, conn->snd_nxt, (uint8_t)(F_ACK | F_PSH), 65535, full_seg, 1);
+    conn->recv_tail++;
     peer_seq++;
-    tcp_window_update(&sock);
+    read_bytes(sock, conn, 1);
     CHECK("ping-pong: a read after one pushed segment leaves the acknowledgement held",
           n_segs == 0 && conn->delack_due != 0);
-    rx_data(conn, 122, lport, &peer_seq, (uint8_t)(F_ACK | F_PSH), 1);
+    rx_queued(conn, 122, lport, &peer_seq, (uint8_t)(F_ACK | F_PSH), 1);
     CHECK("a second is held too", n_segs == 0 && conn->ack_pushed == 2);
-    tcp_window_update(&sock);
+    read_bytes(sock, conn, 1);
     CHECK("and the read after two sends it", n_segs == 1 && last_ack() == peer_seq);
 
     n_segs = 0;
@@ -2498,32 +2638,38 @@ static void delack_read_rows(void)
               last_ack() == peer_seq);
     CHECK("and ends the mode", conn->pingpong == 0);
 
-    n_segs = 0;
-    kernel_ticks += 1000;
     rx_data(conn, 122, lport, &peer_seq, (uint8_t)(F_ACK | F_PSH), 1);
-    kernel_ticks += TCP_DELACK_TICKS / 2u;
-    tcp_window_update(&sock);
-    n_segs = 0;
     kernel_ticks += 2u * TCP_DELACK_TICKS;
-    CHECK("data sent 40 ms or more after data came is no answer",
-          tcp_send(&sock, (const uint8_t *)"b", 1) == 1 && conn->pingpong == 0);
-
-    tcp_quickack_set(&sock, 0);
-    CHECK("TCP_QUICKACK 0 puts the connection in ping-pong mode",
-          conn->pingpong == 1 && tcp_quickack_get(&sock) == 0);
-    rx_data(conn, 122, lport, &peer_seq, F_ACK, 200);
     n_segs = 0;
-    tcp_quickack_set(&sock, 1);
-    CHECK("and 1 ends it and sends a held acknowledgement at once",
-          conn->pingpong == 0 && tcp_quickack_get(&sock) == 1 && n_segs == 1 &&
-              last_ack() == peer_seq);
+    CHECK("data sent 40 ms or more after data came is no answer",
+          tcp_send(sock, (const uint8_t *)"b", 1) == 1 && conn->pingpong == 0);
+
+    tcp_quickack_set(sock, 0);
+    CHECK("TCP_QUICKACK 0 puts the connection in ping-pong mode",
+          conn->pingpong == 1 && tcp_quickack_get(sock) == 0);
+    rx_queued(conn, 122, lport, &peer_seq, F_ACK, 600);
+    n_segs = 0;
+    tcp_quickack_set(sock, 1);
+    CHECK("and 1 ends it, leaving a held acknowledgement while the ring holds bytes",
+          conn->pingpong == 0 && tcp_quickack_get(sock) == 1 && n_segs == 0 &&
+              conn->delack_due != 0);
+    conn->recv_head += 600;
+    tcp_quickack_set(sock, 2);
+    CHECK("an even value sends it once the ring is empty, and puts the mode back",
+          n_segs == 1 && last_ack() == peer_seq && conn->pingpong == 1);
+
+    memset(&fresh, 0, sizeof(fresh));
+    tcp_quickack_set(&fresh, 0);
+    CHECK("TCP_QUICKACK 0 on a socket with no connection reads back 0",
+          tcp_quickack_get(&fresh) == 0 && fresh.quickack_off == 1);
+    tcp_quickack_set(&fresh, 1);
+    CHECK("and 1 reads back 1", tcp_quickack_get(&fresh) == 1);
     reset_all();
 }
 
 /**
  * Give the connection `conn` `n` full segments that its reader leaves in the
- * ring, as the socket's delivery would leave them, which this file's stub
- * does not.
+ * ring (`rx_queued`).
  */
 static void rx_unread(struct tcb *conn, uint16_t port, uint16_t lport, uint32_t *peer_seq,
                       unsigned n)
@@ -2531,17 +2677,16 @@ static void rx_unread(struct tcb *conn, uint16_t port, uint16_t lport, uint32_t 
     unsigned i;
 
     for (i = 0; i < n; i++) {
-        conn->recv_tail += TCP_MSS;
-        rx_data(conn, port, lport, peer_seq, F_ACK, TCP_MSS);
+        rx_queued(conn, port, lport, peer_seq, F_ACK, TCP_MSS);
     }
 }
 
 /**
  * Check Linux's window-update rule, from tcp_cleanup_rbuf, on a ring of 64
  * KiB: a read that reopens the window announces it only while the peer has
- * at most half the ring left, and only when the new window is at least twice
- * what the peer has; with `tcp_delack` off the earlier rule, a growth of one
- * segment, holds alone.
+ * at most half the ring left, and only when the window as it stands is at
+ * least twice what the peer has, judged with a segment held too; with
+ * `tcp_delack` off the earlier rule, a growth of one segment, holds alone.
  */
 static void window_update_rows(void)
 {
@@ -2561,8 +2706,7 @@ static void window_update_rows(void)
               conn->recv_size == TCP_RECV_RING_SMALL);
         rx_unread(conn, (uint16_t)(123 + off), lport, &peer_seq, 10);
         n_segs = 0;
-        conn->recv_head += 10u * TCP_MSS;
-        tcp_window_update(&sock);
+        read_bytes(&sock, conn, 10u * TCP_MSS);
         if (off) {
             CHECK("without delayed ACK a read that reopens a segment's worth announces it",
                   n_segs == 1);
@@ -2581,30 +2725,31 @@ static void window_update_rows(void)
     CHECK("with 30 segments unread the peer has less than half the ring",
           conn->delack_due == 0 && conn->rcv_adv - conn->rcv_nxt == 65536u - 30u * TCP_MSS &&
               conn->rcv_adv - conn->rcv_nxt <= 65535u / 2u);
+    rx_unread(conn, 125, lport, &peer_seq, 1);
     n_segs = 0;
-    conn->recv_head += 3u * TCP_MSS;
-    tcp_window_update(&sock);
-    CHECK("a read that grows the window by less than twice what the peer has is quiet",
-          n_segs == 0);
-    conn->recv_head += 20u * TCP_MSS;
-    tcp_window_update(&sock);
-    CHECK("and one that doubles it announces the whole new window",
-          n_segs == 1 && read16be(segs[0].data + 14) == 65536u - 7u * TCP_MSS);
+    read_bytes(&sock, conn, 3u * TCP_MSS);
+    CHECK("with a segment held, a read that leaves less than twice what the peer has is quiet",
+          n_segs == 0 && conn->delack_due != 0);
+    read_bytes(&sock, conn, 11u * TCP_MSS);
+    CHECK("and one that doubles it announces the window as it stands",
+          n_segs == 1 && read16be(segs[0].data + 14) == 65536u - 17u * TCP_MSS &&
+              last_ack() == peer_seq && conn->delack_due == 0);
     reset_all();
 }
 
 /**
  * Check the batch of frames (`tcp_batch_begin`): inside one, in-order data
- * waits for the batch's end, which acknowledges it once, up to 64 KiB, and
- * a batch that ends with no more than a segment's worth unacknowledged
- * holds that as the delayed acknowledgement would; batches nest; a block
- * freed inside a batch leaves its list.
+ * waits for the batch's end, which acknowledges it once, and no
+ * acknowledgement covers more than 64 KiB; a batch that ends with no more
+ * than a segment's worth unacknowledged holds that as the delayed
+ * acknowledgement would, to the deadline its first segment set; batches
+ * nest; a block freed inside a batch leaves its list.
  */
 static void batch_rows(void)
 {
     struct socket sock, sock2;
     struct tcb *conn, *conn2;
-    uint32_t peer_seq = 45000, peer2 = 46000, start;
+    uint32_t peer_seq = 45000, peer2 = 46000, start, ack, most = 0;
     uint16_t lport, lport2;
     unsigned i;
 
@@ -2612,8 +2757,8 @@ static void batch_rows(void)
     tcp_delack = 1;
     tcp_ack_batch = 1;
     conn = open_conn(&sock, 126, &peer_seq, &lport);
+    spend_quick(conn, 126, lport, &peer_seq);
     tcp_batch_begin();
-    start = peer_seq;
     for (i = 0; i < 8; i++) {
         rx_data(conn, 126, lport, &peer_seq, F_ACK, TCP_MSS);
     }
@@ -2628,25 +2773,33 @@ static void batch_rows(void)
 
     n_segs = 0;
     tcp_batch_begin();
-    start = peer_seq;
+    start = ack = peer_seq;
     for (i = 0; i < 50; i++) {
         rx_data(conn, 126, lport, &peer_seq, F_ACK, TCP_MSS);
     }
     tcp_batch_end();
+    for (i = 0; i < n_segs && i < MAX_SEGS; i++) {
+        if (read32be(segs[i].data + 8) - ack > most) {
+            most = read32be(segs[i].data + 8) - ack;
+        }
+        ack = read32be(segs[i].data + 8);
+    }
     CHECK("one acknowledgement covers at most 64 KiB, as Linux's GRO merges",
-          n_segs == 2 && read32be(segs[0].data + 8) - start == 45u * TCP_MSS &&
+          n_segs == 2 && read32be(segs[0].data + 8) - start == 44u * TCP_MSS && most <= 65536u &&
               last_ack() == peer_seq);
 
     n_segs = 0;
     tcp_batch_begin();
     rx_data(conn, 126, lport, &peer_seq, F_ACK, TCP_MSS);
+    CHECK("a batch's first segment sets the deadline when it comes",
+          conn->delack_due == (uint32_t)kernel_ticks + TCP_DELACK_TICKS);
+    kernel_ticks += 3;
     tcp_batch_end();
-    CHECK("a batch of one segment leaves its acknowledgement held",
-          n_segs == 0 && conn->delack_due != 0);
-    (void)ticks_until_sent(10u * TCP_DELACK_TICKS);
+    CHECK("a batch of one segment leaves its acknowledgement held to that deadline",
+          n_segs == 0 && ticks_until_sent(10u * TCP_DELACK_TICKS) == TCP_DELACK_TICKS - 3u);
 
     conn2 = open_conn(&sock2, 127, &peer2, &lport2);
-    n_segs = 0;
+    spend_quick(conn2, 127, lport2, &peer2);
     tcp_batch_begin();
     rx_data(conn2, 127, lport2, &peer2, F_ACK, TCP_MSS);
     rx_data(conn, 126, lport, &peer_seq, F_ACK, TCP_MSS);
@@ -2657,6 +2810,16 @@ static void batch_rows(void)
     CHECK("a block freed in a batch leaves its list, and the others are acknowledged",
           n_segs == 1 && read16be(segs[0].data + 0) == lport && last_ack() == peer_seq);
     reset_all();
+}
+
+/** Run the rows of the acknowledgement rules, `quick_rows` to `batch_rows`. */
+static void ack_rows(void)
+{
+    quick_rows();
+    delack_rows();
+    delack_read_rows();
+    window_update_rows();
+    batch_rows();
 }
 
 int main(void)
@@ -2900,10 +3063,7 @@ int main(void)
     closed_window_rx_rows();
     giveup_rows();
     blackhole_rows();
-    delack_rows();
-    delack_read_rows();
-    window_update_rows();
-    batch_rows();
+    ack_rows();
 
     {
         struct socket socks[6];
