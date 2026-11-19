@@ -29,7 +29,11 @@
  * unused BARs and a ROM, a BAR of 8 GiB and a bridge with its ROM at 0x38,
  * and the rows check the sizes the walk finds, the resources pci_resource
  * gives as Linux's /sys shows them, and the decoding the walk turns off
- * while it sizes a BAR and puts back.
+ * while it sizes a BAR and puts back. A hot plug model adds a card after
+ * the walk: the rows check that its slot's functions join the list in
+ * their place, that its BARs are given the lowest free addresses in the
+ * host bridge's windows, around the BARs taken, and that the slot leaves
+ * the list again.
  */
 
 #include "../../rach2/sys/pci.c"
@@ -713,6 +717,96 @@ static void size_rows(void)
     list_forget();
 }
 
+/** Whether the `n`th function listed is at bus 0's `dev`.`fn`. */
+static int nth_at(int n, int dev, int fn)
+{
+    pci_device_t d;
+
+    return pci_nth(n, &d) && at(&d, 0, dev, fn);
+}
+
+/**
+ * A card put in slot 6 after the walk, as ACPI's hot plug announces it, is
+ * listed by pci_slot_add and given addresses by pci_assign_bars as Linux's
+ * acpiphp has pci_assign_unassigned_bridge_resources give them: an I/O BAR
+ * from PCI_IO_FLOOR, a memory BAR and a 64-bit one at the lowest addresses
+ * aligned to their sizes that no BAR has, in the windows of their kinds;
+ * a BAR that fits no window keeps no address. pci_slot_remove takes the
+ * slot off the list.
+ */
+static void hotplug_rows(void)
+{
+    static const struct pci_aperture ap[] = {
+        {0x0D00u, 0xFFFFu, 1}, {0xFE000000u, 0xFEBFFFFFu, 0}, {0x100000000ull, 0x17FFFFFFFull, 0}};
+    static const struct pci_aperture small[] = {{0xFE000000u, 0xFE003FFFu, 0}};
+    struct func *nic, *f1;
+    struct func *taken;
+
+    model_reset();
+    (void)model_add(0, 0, 0, 0x12378086u, 0x0600u, 0x00);
+    taken = model_add(0, 3, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(taken, 0x10, 0x0000C001u, 0xFFFFFFE0u);
+    model_bar(taken, 0x14, 0xFE000000u, 0xFFFFC000u);
+    list_forget();
+    check(pci_list_count() == 2, "hotplug: the walk lists two functions");
+    check(pci_slot_add(0, 6) == 0, "hotplug: an empty slot adds nothing");
+    nic = model_add(0, 6, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(nic, 0x10, 0x00000001u, 0xFFFFFFE0u);
+    model_bar(nic, 0x14, 0, 0xFFFFF000u);
+    model_bar(nic, 0x20, 0x0000000Cu, 0xFFFFC000u);
+    model_bar(nic, 0x24, 0, 0xFFFFFFFFu);
+    model_add(0, 9, 0, 0x29188086u, 0x0601u, 0x00);
+    check(pci_slot_add(0, 6) == 1 && pci_list_count() == 3 && nth_at(1, 3, 0) && nth_at(2, 6, 0),
+          "hotplug: the card's function joins the list in its place, and no other");
+    check(pci_slot_add(0, 6) == 0, "hotplug: a slot listed already adds nothing");
+    check(pci_assign_bars(0, 6, 0, ap, 3) == 0, "hotplug: every BAR of the card fits");
+    check(get32(nic, 0x10) == 0x0000C021u,
+          "hotplug: the I/O BAR of 32 ports is placed after the 32 a BAR has at 0xC000");
+    check(get32(nic, 0x14) == 0xFE004000u,
+          "hotplug: the memory BAR of 4 KiB is placed after the 16 KiB a BAR has");
+    check(get32(nic, 0x20) == 0xFE00800Cu && get32(nic, 0x24) == 0,
+          "hotplug: the 64-bit BAR of 16 KiB is placed past the card's own, aligned, in the "
+          "first window");
+    check(res_is(6, 4, 0xFE008000ull, 0xFE00BFFFull, 0x14220Cu),
+          "hotplug: pci_resource gives the 64-bit BAR placed");
+    check(pci_assign_bars(0, 9, 0, ap, 3) == -ENODEV, "hotplug: an unlisted function is refused");
+    check(pci_slot_remove(0, 6) == 1 && pci_list_count() == 2 && nth_at(1, 3, 0) &&
+              !nth_at(2, 6, 0),
+          "hotplug: the slot leaves the list");
+
+    model_reset();
+    (void)model_add(0, 0, 0, 0x12378086u, 0x0600u, 0x00);
+    taken = model_add(0, 3, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(taken, 0x14, 0xFE000000u, 0xFFFFC000u);
+    list_forget();
+    (void)pci_list_count();
+    nic = model_add(0, 6, 0, 0x10001AF4u, 0x0200u, 0x80);
+    model_bar(nic, 0x14, 0, 0xFFFFF000u);
+    f1 = model_add(0, 6, 1, 0x10011AF4u, 0x0100u, 0x00);
+    model_bar(f1, 0x10, 0, 0xFFFFF000u);
+    check(pci_slot_add(0, 6) == 2 && nth_at(2, 6, 0) && nth_at(3, 6, 1),
+          "hotplug: both functions of a multi-function card join the list");
+    check(pci_assign_bars(0, 6, 1, small, 1) == -ENOSPC && get32(f1, 0x10) == 0,
+          "hotplug: a BAR that fits no window keeps no address");
+    check(pci_slot_remove(0, 6) == 2 && pci_list_count() == 2,
+          "hotplug: both functions leave the list with their slot");
+
+    model_reset();
+    (void)model_add(0, 0, 0, 0x12378086u, 0x0600u, 0x00);
+    taken = model_bridge(0, 2, 0, 0x01, 1, 1);
+    put32(taken, 0x20, 0xFE00FE00u);
+    put32(taken, 0x24, 0x0000FFF0u);
+    list_forget();
+    (void)pci_list_count();
+    nic = model_add(0, 6, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(nic, 0x14, 0, 0xFFFFF000u);
+    check(pci_slot_add(0, 6) == 1 && pci_assign_bars(0, 6, 0, ap, 3) == 0 &&
+              get32(nic, 0x14) == 0xFE100000u,
+          "hotplug: a BAR is placed past a bridge's memory window, and a closed window is "
+          "not in the way");
+    list_forget();
+}
+
 /** Run the rows. */
 /** 0: no row maps a window of a BAR (pci_bar_map). */
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
@@ -738,6 +832,7 @@ int main(void)
     low_rows();
     heap_rows();
     size_rows();
+    hotplug_rows();
     if (fails) {
         printf("pciwalk_hosttest: %d failed\n", fails);
         return 1;
