@@ -419,6 +419,22 @@ int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, con
     return r;
 }
 
+void frag6_forget(const struct netdev *nd)
+{
+    int i;
+
+    for (i = 0; i < FRAG6_QUEUES; i++) {
+        struct frag6_queue *q = &frag6_queues[i];
+
+        if (q->used && q->nd == nd) {
+            if (!q->dead) {
+                net_mib6.ip6_reasm_fails++;
+            }
+            frag6_free(q);
+        }
+    }
+}
+
 void frag6_tick(void)
 {
     int i;
