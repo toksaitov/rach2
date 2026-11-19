@@ -338,34 +338,43 @@ static const char *tap_percent(const char *s)
  * The name TUNSETIFF's `name` asks for, in `out`. An empty name is
  * "tap%d", as Linux's; a name with a '%' is a template, whose one `%d`
  * takes the first digit no interface has, as Linux's dev_alloc_name fills
- * it in. 0; -EINVAL for a name longer than the kernel's interfaces hold, one
+ * it in. Linux finds the numbers in use by reading each interface's name
+ * back through the template with sscanf, which takes a digit after the
+ * `%d` into the number, so with such a digit no number is in use and the
+ * name is 0's, or ENFILE when that one exists. 0; -EINVAL for a name, or
+ * a template once filled in, longer than the kernel's interfaces hold, one
  * dev_valid_name refuses, or a '%' that is not one `%d`; -ENFILE when no
  * digit is free. `*fresh` is 1 for a name made from a template.
  */
 static int32_t tap_pick_name(const char *name, char *out, int *fresh)
 {
     const char *pct, *tail;
-    int i, head;
+    uint32_t max = (uint32_t)sizeof(taps[0].nd.name) - 1;
+    int i, last, head;
 
     if (name[0] == '\0') {
         name = "tap%d";
     }
-    if (k_strlen(name) > sizeof(taps[0].nd.name) - 1 || !tap_name_ok(name)) {
+    if (!tap_name_ok(name)) {
         return -EINVAL;
     }
     pct = tap_percent(name);
     *fresh = pct != 0;
     if (!pct) {
+        if (k_strlen(name) > max) {
+            return -EINVAL;
+        }
         k_strncpy(out, name, TAP_IFNAME - 1);
         out[TAP_IFNAME - 1] = '\0';
         return 0;
     }
     tail = pct + 2;
-    if (pct[1] != 'd' || tap_percent(tail)) {
+    if (pct[1] != 'd' || tap_percent(tail) || k_strlen(name) - 1 > max) {
         return -EINVAL;
     }
     head = (int)(pct - name);
-    for (i = 0; i < 10; i++) {
+    last = *tail >= '0' && *tail <= '9' ? 0 : 9;
+    for (i = 0; i <= last; i++) {
         k_memcpy(out, name, (size_t)head);
         out[head] = (char)('0' + i);
         k_memcpy(out + head + 1, tail, k_strlen(tail) + 1);

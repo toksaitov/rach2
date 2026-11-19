@@ -64,7 +64,10 @@ static struct {
     void (*during_copy)(void); /* run once inside the next copy from the user */
     void (*during_wait)(void); /* run once inside the next wait, before a signal */
     int register_error;        /* what netdev_register answers, when set */
-    struct netdev *iface[4];   /* the interfaces registered */
+    void *refused_ring;        /* the ring of the record a refused registration had */
+    void *freed_ring;          /* the last run kfree_pages was given, and its pages */
+    uint32_t freed_pages;
+    struct netdev *iface[4]; /* the interfaces registered */
     int registered, unregistered;
     int rx, rx_len; /* frames given to ethernet_rx, and the last one's length */
     int wakes, carrier, set_ups, last_up, locks;
@@ -102,6 +105,7 @@ int netdev_register(struct netdev *nd)
     int i;
 
     if (k.register_error) {
+        k.refused_ring = ((struct tap *)nd->dev)->frames;
         return k.register_error;
     }
     for (i = 0; i < 4; i++) {
@@ -406,6 +410,15 @@ static void be_gone(struct tap_backend *b)
 /* The rows.                                                           */
 /* ------------------------------------------------------------------ */
 
+extern void (*kheap_host_pages_freeing)(void *p, uint32_t count);
+
+/** Note the run `kfree_pages` was given. */
+static void note_freed(void *p, uint32_t count)
+{
+    k.freed_ring = p;
+    k.freed_pages = count;
+}
+
 /** Before TUNSETIFF: the requests that need no interface, the refusals of
  * TUNSETIFF, and EBADFD for the rest. */
 static void check_before(void)
@@ -446,8 +459,11 @@ static void check_before(void)
               set_iff(0, "a%x", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL,
           "and a template with a second %d or another conversion, as dev_alloc_name");
     k.register_error = -ENOSPC;
-    CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC,
-          "a registration that fails is the call's error");
+    kheap_host_pages_freeing = note_freed;
+    CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC && k.refused_ring &&
+              k.freed_ring == k.refused_ring && k.freed_pages == TAP_PAGES,
+          "a registration that fails is the call's error, and gives its new ring back");
+    kheap_host_pages_freeing = 0;
     k.register_error = 0;
     k.other_ns = 1;
     CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EOPNOTSUPP,
@@ -701,6 +717,15 @@ static void check_race(void)
     CHECK(open_tap(3, 2) == 0 && set_iff(3, "a%db", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 &&
               same_str(name, "a0b") == 0,
           "a template's %d may have text after it, as dev_alloc_name fills it in");
+    k.node->ops->close(&fds[3]);
+    CHECK(open_tap(3, 2) == 0 && set_iff(3, "abcdef%d", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 &&
+              same_str(name, "abcdef0") == 0,
+          "a template is held to the name's length once filled in");
+    k.node->ops->close(&fds[3]);
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "a01", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0 &&
+              open_tap(3, 2) == 0 && set_iff(3, "a%d1", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENFILE,
+          "a digit after %d is read into the number, as Linux's sscanf, so a01 leaves a%d1 none");
+    k.node->ops->close(&fds[2]);
     k.node->ops->close(&fds[3]);
 }
 
