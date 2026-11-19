@@ -100,8 +100,9 @@ uint32_t pit_wait_counts(uint32_t counts);
 
 /**
  * Wait `usec` microseconds on channel 0, and return the microseconds
- * waited: `usec`, or, when the counter stops, what it measured before then.
- * `k_udelay`'s wait where `udelay_wait` is NULL. Defined in udelay.c.
+ * waited: `usec`, or, when the counter stops or its latch stays held, what
+ * it measured before then and the HPET or the PM timer measured of the
+ * rest. `k_udelay`'s wait where `udelay_wait` is NULL. Defined in udelay.c.
  */
 uint32_t pit_wait_us(uint32_t usec);
 
