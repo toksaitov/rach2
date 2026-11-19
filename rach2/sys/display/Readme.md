@@ -149,7 +149,7 @@ The backlight's switch is the panel power sequencer's backlight enable, bit 2 of
 * The kernel's debug shell runs with the scheduler stopped, so a shadow, as on virtio-gpu, is not flushed while it waits for a key: what it prints shows when a program runs.
 * The native backlight is driven only through an Intel PCH's PWM, Lynx Point or Wildcat Point. The ACPI video bus's `_BCM` is `acpi_video0` only on a machine where no native backlight is registered once the native display drivers have probed ([`sys/acpi/`](../acpi/Readme.md)); on the Lenovo it asks the graphics driver through its OpRegion and is not used.
 * The serial port does not blank. A program's picture on `/fb` on a screen with neither a backlight that goes dark nor a DRM display of the console's, such as QEMU's VGA, does not blank, since nothing but painting over it, which the console could not undo, would darken it.
-* A panic while the blank has a native display off draws its report on a dark panel: turning the CRTC on again is an atomic commit, which may sleep, and the panic runs with interrupts off and the other processors stopped. The report still reaches the log, ramoops and netconsole, and the panic resets the machine as it would otherwise.
+* A panic while the blank has a native display off draws its report on a dark panel: turning the CRTC on again is an atomic commit, which may sleep, and the panic runs with interrupts off and the other processors stopped. Linux has the same limit: its `drm_fb_helper_blank` refuses with `-EBUSY` while `oops_in_progress`, and its DRM panic screen draws only on a visible plane, which a CRTC turned off has not. The report still reaches the log, ramoops and netconsole, and the panic resets the machine as it would otherwise.
 
 ## Tests
 
