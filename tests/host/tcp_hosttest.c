@@ -2408,9 +2408,10 @@ static void spend_quick(struct tcb *conn, uint16_t port, uint16_t lport, uint32_
  * Check Linux's quick acknowledgements (tcp_incr_quickack): the first data
  * grants 16, each acknowledged at once, after which the delayed
  * acknowledgement holds; a quiet time longer than the retransmission timeout
- * grants them again; a segment wholly old grants them, and ping-pong mode
- * holds them back; a retransmission that fills the whole hole is
- * acknowledged at once.
+ * grants them again, counted from the window last offered; a segment wholly
+ * old, within the window or before it, grants them and ends ping-pong mode,
+ * which otherwise holds them back; a retransmission that fills the whole
+ * hole is acknowledged at once.
  */
 static void quick_rows(void)
 {
@@ -2434,15 +2435,28 @@ static void quick_rows(void)
 
     n_segs = 0;
     kernel_ticks += conn->rto + 1u;
+    conn->rcv_wnd = 4000;
     rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
     CHECK("data after a quiet time longer than the timeout is acknowledged at once",
-          n_segs == 1 && last_ack() == peer_seq && conn->ack_quick == TCP_DELACK_QUICK - 1u);
-    conn->ack_quick = 0;
+          n_segs == 1 && last_ack() == peer_seq);
+    rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
+    CHECK("with the one grant a 4000-byte window offered, as Linux counts it",
+          n_segs == 1 && conn->delack_due != 0 && conn->ack_quick == 0);
+    (void)ticks_until_sent(10u * TCP_DELACK_TICKS);
 
     n_segs = 0;
+    conn->pingpong = 1;
     rx(119, lport, peer_seq - TCP_MSS, conn->snd_nxt, F_ACK, 65535, full_seg, TCP_MSS);
-    CHECK("a segment wholly old is acknowledged at once and grants quick acknowledgements",
-          n_segs == 1 && conn->ack_quick == TCP_DELACK_QUICK);
+    CHECK("a segment wholly old is acknowledged at once and enters quick mode",
+          n_segs == 1 && conn->ack_quick == TCP_DELACK_QUICK && conn->pingpong == 0);
+    rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
+    CHECK("so the next segment is acknowledged at once", n_segs == 2 && last_ack() == peer_seq);
+    conn->ack_quick = 0;
+    conn->pingpong = 1;
+    n_segs = 0;
+    rx(119, lport, peer_seq - 3u * TCP_MSS, conn->snd_nxt, F_ACK, 65535, full_seg, TCP_MSS);
+    CHECK("a resend that ends before the window is answered and enters quick mode too",
+          n_segs == 1 && conn->ack_quick == TCP_DELACK_QUICK && conn->pingpong == 0);
     conn->pingpong = 1;
     n_segs = 0;
     rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
@@ -2756,7 +2770,11 @@ static void batch_rows(void)
     reset_all();
     tcp_delack = 1;
     tcp_ack_batch = 1;
+    peer_wscale = 7;
     conn = open_conn(&sock, 126, &peer_seq, &lport);
+    peer_wscale = -1;
+    CHECK("batch: the connection scales a window larger than 64 KiB",
+          conn->rcv_wscale != 0 && tcp_rcv_window(conn) > 2u * TCP_BATCH_ACK_MAX);
     spend_quick(conn, 126, lport, &peer_seq);
     tcp_batch_begin();
     for (i = 0; i < 8; i++) {
@@ -2790,6 +2808,17 @@ static void batch_rows(void)
 
     n_segs = 0;
     tcp_batch_begin();
+    start = peer_seq;
+    for (i = 0; i < 50; i++) {
+        rx_data(conn, 126, lport, &peer_seq, F_ACK, (uint16_t)(i == 43 ? 1360 : TCP_MSS));
+    }
+    tcp_batch_end();
+    CHECK("with a shorter segment among them the data before the crossing one is acknowledged",
+          n_segs == 2 && read32be(segs[0].data + 8) - start == 43u * TCP_MSS + 1360u &&
+              last_ack() == peer_seq);
+
+    n_segs = 0;
+    tcp_batch_begin();
     rx_data(conn, 126, lport, &peer_seq, F_ACK, TCP_MSS);
     CHECK("a batch's first segment sets the deadline when it comes",
           conn->delack_due == (uint32_t)kernel_ticks + TCP_DELACK_TICKS);
@@ -2809,6 +2838,16 @@ static void batch_rows(void)
     tcp_batch_end();
     CHECK("a block freed in a batch leaves its list, and the others are acknowledged",
           n_segs == 1 && read16be(segs[0].data + 0) == lport && last_ack() == peer_seq);
+
+    peer2 = 47000;
+    conn2 = open_conn(&sock2, 128, &peer2, &lport2);
+    tcp_batch_begin();
+    for (i = 0; i < 8; i++) {
+        rx_data(conn2, 128, lport2, &peer2, F_ACK, TCP_MSS);
+    }
+    tcp_batch_end();
+    CHECK("a connection's first batch, in quick mode, is acknowledged once and uses one grant",
+          n_segs == 1 && last_ack() == peer2 && conn2->ack_quick == TCP_DELACK_QUICK - 1u);
     reset_all();
 }
 
