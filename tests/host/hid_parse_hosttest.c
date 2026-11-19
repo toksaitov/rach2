@@ -1392,12 +1392,18 @@ static const uint8_t precision_pad[] = {
     1,
     0x09,
     2,
-    0x09,
-    3,
     0x25,
     1,
     0x95,
+    1,
+    0x81,
+    2, /* Button 1, with an unused usage for Button 2 */
+    0x09,
+    2,
+    0x09,
     3,
+    0x95,
+    2,
     0x81,
     2, /* buttons */
     0x05,
@@ -1507,6 +1513,7 @@ static void mt_feature_rows(void)
 /** A refused mode cannot publish a node for contact reports. */
 static void mt_failed_mode_rows(void)
 {
+    static const uint8_t ready[] = {3, 16, 0, 3};
     struct hid_dev *hid = mt_feature_open();
     int value = 0, write = 0;
     uint8_t data[sizeof(pad_feature)];
@@ -1530,6 +1537,85 @@ static void mt_failed_mode_rows(void)
               write);
     hidinput_mt_feature_answer(hid, NULL, -1);
     CHECK("refused SET leaves the touch node unpublished", hidinput_connect(hid) < 0 && ndevs == 0);
+    drop(hid);
+
+    hid = mt_feature_open();
+    if (!hid) {
+        return;
+    }
+    hidinput_mt_feature_answer(hid, ready, sizeof(ready));
+    CHECK("a short GET with the required mode publishes the reported slots",
+          hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) == 0 &&
+              hidinput_connect(hid) == 1 && devs[0].slots == 16);
+    drop(hid);
+}
+
+/* A keyboard and Precision Touchpad sharing an input report ID. */
+static const uint8_t mixed_pad[] = {0x05, 1,
+                                    0x09, 6,
+                                    0xa1, 1,
+                                    0x85, 1,
+                                    0x05, 7,
+                                    0x09, 4,
+                                    0x15, 0,
+                                    0x25, 1,
+                                    0x75, 8,
+                                    0x95, 1,
+                                    0x81, 2,
+                                    0xc0, 0x05,
+                                    0x0d, 0x09,
+                                    5,    0xa1,
+                                    1,    0x09,
+                                    0x22, 0xa1,
+                                    2,    TEST_CONTACT,
+                                    0xc0, 0x05,
+                                    9,    0x09,
+                                    2,    0x25,
+                                    1,    0x95,
+                                    1,    0x81,
+                                    2,    0x05,
+                                    0x0d, 0x85,
+                                    3,    0x09,
+                                    0x52, 0x25,
+                                    3,    0xb1,
+                                    2,    0x06,
+                                    0,    0xff,
+                                    0x09, 0xc5,
+                                    0x26, 0xff,
+                                    0,    0xb1,
+                                    2,    0xc0};
+
+/** A failed mode leaves the shared report's keyboard available. */
+static void mt_mixed_rows(void)
+{
+    static const uint8_t first[] = {1, 1, 1, 100, 0, 120, 0, 1, 1, 17, 1};
+    struct hid_dev *hid;
+    int inputs, value = 0, write = 0;
+    uint8_t feature[3];
+
+    ndevs = 0;
+    hid = connect(mixed_pad, sizeof(mixed_pad), "Keyboard with touchpad", &inputs);
+    CHECK("shared report maps into two applications",
+          inputs == 2 && devs[0].keyboard && devs[1].slots > 0 && bit(devs[1].keys, BTN_LEFT));
+    feed(hid, first, sizeof(first));
+    CHECK("shared report gives the keyboard key and touchpad click",
+          bit(devs[0].down, KEY_A) && bit(devs[1].down, BTN_LEFT) && devs[1].id[0] == 0);
+    drop(hid);
+
+    ndevs = 0;
+    if (parse(mixed_pad, sizeof(mixed_pad), &hid) != 0) {
+        CHECK("the mixed descriptor parses", 0);
+        return;
+    }
+    CHECK("the shared mode feature is read before publishing",
+          hidinput_mt_features(hid) == 1 &&
+              hidinput_mt_feature_request(hid, feature, sizeof(feature), &value, &write) ==
+                  sizeof(feature) &&
+              value == 0x303 && !write);
+    hidinput_mt_feature_answer(hid, NULL, -1);
+    CHECK("failed mode leaves one keyboard", hidinput_connect(hid) == 1 && devs[0].keyboard);
+    feed(hid, first, sizeof(first));
+    CHECK("the shared report still sends the key", bit(devs[0].down, KEY_A));
     drop(hid);
 }
 
@@ -1623,6 +1709,7 @@ int main(void)
     rows_multitouch();
     mt_feature_rows();
     mt_failed_mode_rows();
+    mt_mixed_rows();
     mt_precision_rows();
     mt_implicit_lift_rows();
     if (fails) {
