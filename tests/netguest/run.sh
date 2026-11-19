@@ -120,7 +120,10 @@ nettput=$here/nettput
 
 # Until finish's traps, a signal removes only the scratch made here.
 new_out=0 early=''
-trap '[ -z "$early" ] || rm -rf "$early"' EXIT
+# A detached run started from here ($!) keeps OUT, which it may hold its
+# recovery record in, and has it named.
+trap 'if [ -z "$early" ]; then :; elif [ -n "$!" ] && kill -0 "$!" 2> /dev/null; then
+    echo "netguest: started: log $early/log" >&2; else rm -rf "$early"; fi' EXIT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -143,20 +146,17 @@ if [ "$detach" = 1 ]; then
     [ -z "$bdf" ] || set -- -c "$bdf" "$@"
     [ "$others" = 0 ] || set -- -W "$@"
     [ "$reboot" = 0 ] || set -- -B "$@"
-    # From here OUT is the detached run's, which may have written its
-    # recovery record there, and a signal here leaves it alone.
-    early=''
     setsid nohup sh "$0" "$@" > "$out/log" 2>&1 < /dev/null &
     launched=$!
     until [ -s "$out/pid" ]; do
         if ! kill -0 "$launched" 2> /dev/null && [ ! -s "$out/pid" ]; then
             echo "netguest: the detached run did not start: $(tail -n 1 "$out/log" 2> /dev/null)" >&2
-            [ "$new_out" = 0 ] || rm -rf "$out"
             exit 1
         fi
         sleep 0.2
     done
     echo "netguest: started: process $(cat "$out/pid"), log $out/log, status in $out/status at the end"
+    early=''
     exit 0
 fi
 echo $$ > "$out/pid"
