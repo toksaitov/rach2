@@ -259,7 +259,7 @@ static void q_lock_slow(struct spinlock *lock, unsigned int val)
         return;
     }
     arch_store_u8((volatile unsigned char *)&lock->locked, (unsigned char)Q_LOCKED);
-    while ((next = node->next) == 0) {
+    while (next == 0 && (next = node->next) == 0) {
         q_turn();
     }
     q_node(next)->locked = 1;
