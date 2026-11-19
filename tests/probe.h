@@ -814,13 +814,14 @@ static __inline__ int probe_kernel_wide(void)
 {
     static char uts[6 * 65]; /* struct new_utsname, the machine 5th */
     static const char want[] = "x86_64";
+    char *machine = uts + 4 * 65; /* the kernel writes it through the cast */
     int i;
 
     if (syscall1(SYS_UNAME, (long)uts) != 0) {
         return 0;
     }
     for (i = 0; want[i] != '\0'; i++) {
-        if (uts[4 * 65 + i] != want[i]) {
+        if (machine[i] != want[i]) {
             return 0;
         }
     }
