@@ -1286,19 +1286,31 @@ static int pi_top_priority(struct futex_pi *pi)
     return prio;
 }
 
-/** Rebuild donations along every blocked-owner chain, without recursion,
+/**
+ * Rebuild donations along every blocked-owner chain, without recursion,
  * under the big lock and no bucket's lock. Starting every owner's donation
  * from none also removes a timed-out waiter's boost. The donations are
  * built in `pi_next` and only then given to the owners, each under the
  * run queues' lock (`sched_set_inherited`), so that no selection sees an
  * owner's priority while it is built, as Linux's rt_mutex_setprio changes
- * a task's priority under its run queue's lock. */
-void futex_pi_recalculate(void)
+ * a task's priority under its run queue's lock.
+ *
+ * `released`, or NULL, is a thread that has just stopped owning a PI state
+ * and may own no other: its donation is built from none with the owners'
+ * and given to it once, so that a thread another held lock still boosts
+ * never shows a lower priority meanwhile and keeps its place on its queue,
+ * as rt_mutex_setprio leaves a task whose priority does not change where
+ * it is (kernel/sched/core.c).
+ */
+static void pi_recalculate(process_t *released)
 {
     struct futex_pi *pi;
     uint32_t flags = kirq_save();
     int changed, prio;
 
+    if (released) {
+        released->pi_next = 1;
+    }
     for (pi = pi_states; pi; pi = pi->next) {
         if (pi->owner) {
             pi->owner->pi_next = 1;
@@ -1317,10 +1329,16 @@ void futex_pi_recalculate(void)
             }
         }
     } while (changed);
+    if (released) {
+        sched_set_inherited(released, released->pi_next - 1u);
+    }
     for (pi = pi_states; pi; pi = pi->next) {
         if (pi->owner) {
             sched_set_inherited(pi->owner, pi->owner->pi_next - 1u);
         }
+    }
+    if (released) {
+        released->pi_next = 0;
     }
     for (pi = pi_states; pi; pi = pi->next) {
         if (pi->owner) {
@@ -1328,6 +1346,11 @@ void futex_pi_recalculate(void)
         }
     }
     kirq_restore(flags);
+}
+
+void futex_pi_recalculate(void)
+{
+    pi_recalculate(NULL);
 }
 
 /** Drop a waiter's reference; no state or owner pointer survives its last
@@ -1345,10 +1368,7 @@ static void pi_put(struct futex_pi *pi)
     }
     *pp = pi->next;
     kfree(pi);
-    if (owner) {
-        sched_set_inherited(owner, 0);
-    }
-    futex_pi_recalculate();
+    pi_recalculate(owner);
 }
 
 /** Whether making task wait on owner would close a blocked-owner cycle.
@@ -1485,10 +1505,7 @@ static void pi_handoff(struct futex_pi *pi)
         futex_wake_one(q);
     }
     futex_hb_unlock(hb, flags);
-    if (old) {
-        sched_set_inherited(old, 0);
-    }
-    futex_pi_recalculate();
+    pi_recalculate(old);
 }
 
 /** Parse a PI wait's absolute deadline before any word fault can sleep. */
