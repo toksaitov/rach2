@@ -2869,6 +2869,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
     if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
         char name[IFNAMSIZ];
         struct netdev *nd;
+        uint32_t flags;
         uint32_t take = (optlen < 0) ? 0u : (uint32_t)optlen;
 
         if (take == 0) {
@@ -2882,15 +2883,19 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
             return -EFAULT;
         }
         name[IFNAMSIZ - 1] = '\0';
-        if (name[0] == '\0') {
-            entry->sock->bound_device = 0; /* an empty name unbinds */
-            return 0;
+        nd = 0;
+        if (name[0] != '\0') {
+            nd = netdev_by_name(name);
+            if (!nd) {
+                return -ENODEV;
+            }
         }
-        nd = netdev_by_name(name);
-        if (!nd) {
-            return -ENODEV;
+        flags = net_lock();
+        entry->sock->bound_device = nd ? nd->index : 0; /* an empty name unbinds */
+        if (entry->sock->tcb) {
+            entry->sock->tcb->ifindex = entry->sock->bound_device;
         }
-        entry->sock->bound_device = nd->index;
+        net_unlock(flags);
         return 0;
     }
 
