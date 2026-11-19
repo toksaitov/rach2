@@ -74,6 +74,17 @@ int backlight_register(const char *name, int max, const struct backlight_ops *op
  */
 int backlight_rebind(const char *name, int max, const struct backlight_ops *ops, void *ctx);
 
+/**
+ * Record `level`, in the class's units, as the level of backlight `i`, one
+ * its driver set by itself, as Linux's i915 sets the device's brightness
+ * when it lights a panel whose level was at or below its least; nothing is
+ * written to the hardware, so that brightness reads what the panel shows
+ * and the next blank or unblank keeps it. Nothing for no such backlight; a
+ * level past the highest is clamped. The caller holds none of the locks its
+ * driver's `ops` take. Any context; it does not sleep.
+ */
+void backlight_level_changed(int i, int level);
+
 /** Probe the drivers of the panels' backlights, which register what they
  * find: `intelbl_init` on a PC. Once, at boot, after PCI and paging. */
 void backlight_init(void);
