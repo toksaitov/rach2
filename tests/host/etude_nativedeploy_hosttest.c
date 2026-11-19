@@ -36,8 +36,10 @@
  * and released with no lock or journal left; and the setup must clear a lock
  * that the collection took when a journal names its owner record. Where
  * procfs is, a claim of another boot whose recorded PID runs with the
- * recorded start must be kept, and a journal's lock kept while a process runs
- * `etude run native` on the state directory.
+ * recorded start must be kept when its boot is an etude token and cleared
+ * when it is another boot_id, and a journal's lock kept while a process whose
+ * arguments are `etude run native` runs, but not for a shell whose script
+ * only names them. A journal's lock whose owner file is empty is cleared.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <fcntl.h>
@@ -383,6 +385,47 @@ static int self_start(char *out, size_t size)
     return at && sscanf(at + 1, "%31[0-9]", out) == 1 && size > strlen(out);
 }
 
+/** Start `program` with the arguments `a0`, `a1` and `a2` in the fixture
+ * directory, its standard input the read end of the pipe `hold`, and return
+ * once its exec has succeeded, its PID in `pid`. */
+static void held(const char *program, const char *a0, const char *a1, const char *a2, pid_t *pid,
+                 int hold[2])
+{
+    int gate[2];
+    char byte;
+    fflush(NULL);
+    if (pipe(gate) || pipe(hold))
+        exit(2);
+    fcntl(hold[1], F_SETFD, FD_CLOEXEC);
+    *pid = fork();
+    if (*pid < 0)
+        exit(2);
+    if (*pid == 0) {
+        close(gate[0]);
+        close(hold[1]);
+        fcntl(gate[1], F_SETFD, FD_CLOEXEC);
+        if (dup2(hold[0], 0) < 0 || chdir(fix_dir()))
+            _exit(127);
+        execl(program, a0, a1, a2, (char *)NULL);
+        _exit(127);
+    }
+    /* The gate's end closes at the exec, once procfs shows the arguments. */
+    close(hold[0]);
+    close(gate[1]);
+    while (read(gate[0], &byte, 1) > 0)
+        ;
+    close(gate[0]);
+}
+
+/** End the process of held, which reads to the end of its pipe, and reap it. */
+static void unheld(pid_t pid, int hold[2])
+{
+    int status;
+    close(hold[1]);
+    while (waitpid(pid, &status, 0) < 0)
+        ;
+}
+
 /** Run the setup where procfs shows a live controller and a live
  * collection, as on Linux and Rach2. */
 static void live_rows(const char *plain)
@@ -390,8 +433,7 @@ static void live_rows(const char *plain)
     char out[1024], start[32], identity[256];
     const char *t;
     pid_t pid;
-    int status, gate[2], hold[2];
-    char byte;
+    int hold[2];
 
     if (!self_start(start, sizeof(start)))
         return;
@@ -423,40 +465,25 @@ static void live_rows(const char *plain)
     CHECK(setup(t, plain, out) == 0, "a lock of another boot_id fails the setup");
     CHECK(!locked(t), "the setup keeps a lock of another boot_id for a reused PID");
 
-    /* A collection's command line, one shell blocked reading a pipe. */
+    /* A collection's arguments, and a shell that only names them. */
     t = tree("running");
     lock(t, NULL);
     journal(t, "release 1 2 " OTHER_ID "\n");
-    fflush(NULL);
-    if (pipe(gate) || pipe(hold))
-        exit(2);
-    fcntl(hold[1], F_SETFD, FD_CLOEXEC);
-    pid = fork();
-    if (pid < 0)
-        exit(2);
-    if (pid == 0) {
-        close(gate[0]);
-        close(hold[1]);
-        fcntl(gate[1], F_SETFD, FD_CLOEXEC);
-        if (dup2(hold[0], 0) < 0)
-            _exit(127);
-        execl("/bin/sh", "sh", "-c", "read x", "etude", "run", "native", "x", (char *)NULL);
-        _exit(127);
-    }
-    /* The pipe's end closes at the child's exec, once procfs shows its
-     * arguments. */
-    close(hold[0]);
-    close(gate[1]);
-    while (read(gate[0], &byte, 1) > 0)
-        ;
-    close(gate[0]);
+    held(fix_path("etude"), "etude", "run", "native", &pid, hold);
     fix_format(out, sizeof(out), "%s/out", t);
     CHECK(setup(t, plain, out) != 0, "a journal beside a running collection passes the setup");
     CHECK(locked(t) && !no_journal(t) && says(out, "a collection runs: pid "),
           "the setup clears a lock beside a running collection");
-    close(hold[1]);
-    while (waitpid(pid, &status, 0) < 0)
-        ;
+    unheld(pid, hold);
+
+    t = tree("named");
+    lock(t, NULL);
+    journal(t, "release 1 2 " OTHER_ID "\n");
+    held("/bin/sh", "sh", "-c", "read x; : etude run native", &pid, hold);
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a shell naming a collection fails the setup");
+    CHECK(!locked(t) && no_journal(t), "a shell naming a collection keeps a journal's lock");
+    unheld(pid, hold);
 }
 
 /** Make the files that stand for the machine, the PATH of each setup and
@@ -470,6 +497,10 @@ static void machine(const char *plain, const char *killer)
     put(fix_path("boot_id"), BOOT_ID "\n");
     put(fix_path("stat"), "1 (sh) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 4321 0 0\n");
     dir(fix_path("bin"));
+    /* `etude run native`: sh, named etude, reading the script `run`. */
+    if (symlink("/bin/sh", fix_path("etude")))
+        exit(2);
+    put(fix_path("run"), "read x\n");
     dir(plain);
     dir(killer);
     if (system("command -v flock > /dev/null 2>&1")) {
@@ -603,6 +634,13 @@ static void journal_rows(const char *plain)
     fix_format(out, sizeof(out), "%s/out", t);
     CHECK(setup(t, plain, out) == 0, "a journal of a stopped owner write fails the setup");
     CHECK(!locked(t) && no_journal(t), "the setup keeps a lock its journal's owner began");
+
+    t = tree("emptyowner");
+    lock(t, "");
+    journal(t, "make 4266 96 " BOOT_ID "\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a journal beside an empty owner record fails the setup");
+    CHECK(!locked(t) && no_journal(t), "the setup keeps a lock with an empty owner record");
 
     t = tree("contender");
     lock(t, "4262 92 " BOOT_ID "\n");
