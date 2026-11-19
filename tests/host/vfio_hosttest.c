@@ -737,10 +737,15 @@ struct eventfd {
     int refs;
     struct eventfd_hook *hooks;
 };
-static struct eventfd evs[8]; /* descriptors 100 to 107 */
+static struct eventfd evs[8]; /* descriptors 100 to 107, and 1100 to 1107 */
 
+/** The eventfd of descriptor `fd`; 1100 to 1107 name the same eventfds as
+ * 100 to 107, so that a row sees a descriptor above a byte read whole. */
 struct eventfd *eventfd_get(int fd, int32_t *err)
 {
+    if (fd >= 1100 && fd < 1108) {
+        fd -= 1000;
+    }
     if (fd < 100 || fd >= 108) {
         *err = -EBADF;
         return NULL;
@@ -1613,12 +1618,15 @@ static void config_rows(void)
     CHECK(pread_at(device, (4ull << 40) + 4, b, 1) == 1 && b[0] == 0x5A, "an I/O BAR reads ports");
 }
 
+static int32_t set_irqs(int fd, uint32_t flags, uint32_t index, uint32_t start, uint32_t count,
+                        const int32_t *v);
+
 /** A PCI Express device in a second group of the container. */
 static void pcie_rows(void)
 {
     struct vfio_group_status st = {sizeof(st), 0};
     int g6 = open_node("vfio/6"), wifi;
-    int32_t fd = container;
+    int32_t fd = container, err = 1107;
     uint8_t b = 0x80;
 
     CHECK(ioc(g6, VFIO_GROUP_SET_CONTAINER, (uintptr_t)&fd) == 0 && attaches == 2,
@@ -1630,8 +1638,13 @@ static void pcie_rows(void)
           "Initiate Function Level Reset is taken out of a write");
     CHECK(vfio_device_by_name("0000:02:00.0", 12)->cfg_size == 4096,
           "a PCI Express device has the extended space");
+    CHECK(set_irqs(wifi, VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER,
+                   VFIO_PCI_ERR_IRQ_INDEX, 0, 1, &err) == 0 &&
+              evs[7].refs == 1,
+          "its error eventfd, its descriptor above a byte read whole");
     closefd(wifi);
-    CHECK(fns[8].resets == 2, "the card is reset at its release");
+    CHECK(fns[8].resets == 2 && evs[7].refs == 0,
+          "the card is reset at its release, its error eventfd dropped");
     reaps = 0;
     closefd(g6);
     CHECK(detaches == 1 && domains == 1 && reaps == 1,
@@ -1727,7 +1740,7 @@ static int32_t set_irqs(int fd, uint32_t flags, uint32_t index, uint32_t start, 
 /** The line: its eventfd, its mask at each interrupt, its unmasks. */
 static void intx_rows(void)
 {
-    int32_t fd = 100, un = 101;
+    int32_t fd = 100, un = 1101;
     struct fn *m = &fns[1];
     uint16_t w = 0x0006;
 
@@ -1767,7 +1780,7 @@ static void intx_rows(void)
     CHECK(set_irqs(device, VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_UNMASK, 0, 0, 1, &un) ==
                   0 &&
               evs[1].refs == 1,
-          "an unmask eventfd");
+          "an unmask eventfd, its descriptor above a byte read whole");
     m->cfg[6] |= 0x08;
     raise(IRQ_VECTOR(11));
     m->cfg[6] &= (uint8_t)~0x08;
@@ -1848,12 +1861,12 @@ static void release_rows(void)
 {
     struct vfio_iommu_type1_dma_map map = {sizeof(map), 3, 0x10000, 0x100000, 0x4000};
     struct vfio_device *d = vdev("0000:00:02.0");
-    int32_t fd = 106;
+    int32_t fd = 1106;
 
     CHECK(set_irqs(device, VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER,
                    VFIO_PCI_REQ_IRQ_INDEX, 0, 1, &fd) == 0 &&
               evs[6].refs == 1,
-          "the request eventfd is kept");
+          "the request eventfd is kept, its descriptor above a byte read whole");
     fns[1].cfg[0x0C] = 0x77;
     closefd(device);
     CHECK(d->refs == 1 && fns[1].resets == 2, "the mapping holds the device past its close");
