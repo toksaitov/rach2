@@ -1,0 +1,301 @@
+84-183: mutexmusl in QEMU under KVM on the testing PC, four processors,
+2 GiB, serial console, one machine at a time, 2026-11-19 UTC+6. The run
+lines' clock is the testing host's, an hour behind UTC+6. Other work ran
+on the host meanwhile: a team account's desktop suite under KVM, a TCG
+guest and a demo guest, load average 5 to 6 in the first two rounds and
+rising to 9 in the third.
+
+Kernels (x86-64, SHA-256):
+  base    6fb5a7354, the milestone head this task rebased onto  cc00da3941ca3bab...
+  fix     this task's change on 6fb5a7354                       79a73fb4113157f0...
+  linux   Debian 6.12.107+deb13-cloud-amd64; linuxnm is the same with
+          mitigations=off                                       75d7f9be0da1b6f6...
+mutexmusl ce1cfcde4357b3bb..., the init of a KRFFS root for Rach2 and of
+an initramfs for Linux.
+
+== 10:27, round 1: base, fix, linuxnm ==
+run base.1: 09:27:30
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.111 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.171 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.399 us a call, 11 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.621 us a call, 6 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.1: 09:27:32
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.097 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.137 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.210 us a call, 8 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.421 us a call, 60 voluntary switches (0.07 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run linuxnm.1: 09:27:34
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.072 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.108 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.188 us a call, 0 voluntary switches (0.00 per 1000 calls), 3 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.406 us a call, 2 voluntary switches (0.00 per 1000 calls), 5 involuntary
+MUTEXMUSL OK
+run base.2: 09:27:35
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.108 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.167 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.398 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.663 us a call, 19 voluntary switches (0.02 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.2: 09:27:37
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.098 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.142 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.214 us a call, 11 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.434 us a call, 69 voluntary switches (0.09 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run linuxnm.2: 09:27:39
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.071 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.110 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.129 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.328 us a call, 1 voluntary switches (0.00 per 1000 calls), 8 involuntary
+MUTEXMUSL OK
+run base.3: 09:27:40
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.108 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.169 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.396 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.711 us a call, 16 voluntary switches (0.02 per 1000 calls), 1 involuntary
+MUTEXMUSL OK
+run fix.3: 09:27:42
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.101 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.135 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.223 us a call, 9 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.415 us a call, 88 voluntary switches (0.11 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run linuxnm.3: 09:27:44
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.078 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.109 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.163 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.388 us a call, 43 voluntary switches (0.05 per 1000 calls), 11 involuntary
+MUTEXMUSL OK
+run base.4: 09:27:45
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.109 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.166 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.382 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.606 us a call, 3 voluntary switches (0.00 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.4: 09:27:47
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.098 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.135 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.220 us a call, 16 voluntary switches (0.03 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.417 us a call, 55 voluntary switches (0.07 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run linuxnm.4: 09:27:49
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.080 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.118 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.161 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.404 us a call, 1 voluntary switches (0.00 per 1000 calls), 5 involuntary
+MUTEXMUSL OK
+
+== 10:28, round 2: linux, fix, base, linuxnm ==
+run linux.1: 09:28:00
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.322 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.323 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.327 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.339 us a call, 0 voluntary switches (0.00 per 1000 calls), 4 involuntary
+MUTEXMUSL OK
+run fix.1: 09:28:01
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.153 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.173 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.222 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.421 us a call, 63 voluntary switches (0.08 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.1: 09:28:03
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.106 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.171 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.397 us a call, 6 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.621 us a call, 16 voluntary switches (0.02 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run linuxnm.1: 09:28:05
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.071 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.104 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.155 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.397 us a call, 0 voluntary switches (0.00 per 1000 calls), 3 involuntary
+MUTEXMUSL OK
+run linux.2: 09:28:06
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.320 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.322 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.329 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.333 us a call, 0 voluntary switches (0.00 per 1000 calls), 6 involuntary
+MUTEXMUSL OK
+run fix.2: 09:28:08
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.098 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.136 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.225 us a call, 19 voluntary switches (0.03 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.436 us a call, 39 voluntary switches (0.05 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.2: 09:28:10
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.107 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.165 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.388 us a call, 2 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.656 us a call, 8 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run linuxnm.2: 09:28:12
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.072 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.117 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.188 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.412 us a call, 7 voluntary switches (0.01 per 1000 calls), 7 involuntary
+MUTEXMUSL OK
+run linux.3: 09:28:13
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.325 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.329 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.334 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.342 us a call, 0 voluntary switches (0.00 per 1000 calls), 6 involuntary
+MUTEXMUSL OK
+run fix.3: 09:28:14
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.098 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.138 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.210 us a call, 9 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.505 us a call, 127 voluntary switches (0.16 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.3: 09:28:16
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.112 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.177 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.392 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.645 us a call, 10 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run linuxnm.3: 09:28:18
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.073 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.114 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.170 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.404 us a call, 2 voluntary switches (0.00 per 1000 calls), 12 involuntary
+MUTEXMUSL OK
+
+== 10:28, round 3: fix, base, as the host load rose; not used ==
+run fix.1: 09:28:27
+mutexmusl: 4 processors, 4192.9 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 3.439 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 3.012 us a call, 7 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 2.858 us a call, 43 voluntary switches (0.07 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 7.122 us a call, 434 voluntary switches (0.54 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.1: 09:28:37
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.114 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.183 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.423 us a call, 5 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.982 us a call, 20 voluntary switches (0.03 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.2: 09:28:39
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.096 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.134 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.214 us a call, 7 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.484 us a call, 60 voluntary switches (0.07 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.2: 09:28:41
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.110 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.175 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.417 us a call, 15 voluntary switches (0.03 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 1.098 us a call, 57 voluntary switches (0.07 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.3: 09:28:43
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.099 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.136 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.210 us a call, 8 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.434 us a call, 93 voluntary switches (0.12 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.3: 09:28:45
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.113 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.179 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.406 us a call, 2 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.693 us a call, 7 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.4: 09:28:47
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.103 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.141 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.230 us a call, 21 voluntary switches (0.04 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 1.403 us a call, 420 voluntary switches (0.53 per 1000 calls), 1 involuntary
+MUTEXMUSL OK
+run base.4: 09:28:49
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.116 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.231 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.364 us a call, 11 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 1.054 us a call, 30 voluntary switches (0.04 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.5: 09:28:52
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.107 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.145 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.315 us a call, 12 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 1.401 us a call, 601 voluntary switches (0.75 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.5: 09:28:54
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.173 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.301 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.476 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.992 us a call, 33 voluntary switches (0.04 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.6: 09:28:56
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.110 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.434 us a call, 8 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.270 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.528 us a call, 78 voluntary switches (0.10 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.6: 09:28:58
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.127 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.346 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.573 us a call, 7 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.701 us a call, 14 voluntary switches (0.02 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.7: 09:29:00
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.108 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.165 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.382 us a call, 42 voluntary switches (0.07 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.727 us a call, 271 voluntary switches (0.34 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.7: 09:29:02
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.151 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.600 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.630 us a call, 6 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 1.357 us a call, 20 voluntary switches (0.03 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run fix.8: 09:29:05
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.337 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.493 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 1.254 us a call, 55 voluntary switches (0.09 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 1.870 us a call, 231 voluntary switches (0.29 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+run base.8: 09:29:08
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.425 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.636 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 1.147 us a call, 12 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 1.968 us a call, 32 voluntary switches (0.04 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+ 09:29:11 up 5 days,  8:45,  8 users,  load average: 8.62, 6.64, 6.02
