@@ -19,7 +19,8 @@ The node is mode 0666, so that the console's user plays sound.
 Any number of descriptors play and record at once.
 An open for writing plays, one for reading records, and one for both does
 both at once, full duplex, with one format, channel count, rate and fragment
-size for the two.
+size for the two; on a device of one direction, one for both takes that one
+alone.
 An open sets OSS's defaults, unsigned 8-bit mono at 8000 Hz, and each has
 its own settings, buffer and delay.
 .Pp
@@ -252,8 +253,19 @@ the device plays is given the stream.
 It takes the requests and formats of
 .Pa /dev/dsp ,
 but plays the device's one stream without the mix: one descriptor plays at
-a time, in stereo at a rate the monitor's ELD allows, 32000 to 192000 Hz,
-in 16 bits, or 24 when the monitor takes them, and nothing records.
+a time, and nothing records.
+It grants each format, one or two channels and any rate from 1000 to
+192000 Hz, and converts them to what the monitor's ELD allows: stereo at
+the nearest of its rates from 32000 to 192000 Hz, in 16 bits, or 24 when
+the monitor takes them and the format is wider than 16, its rate changed
+by linear interpolation, as Linux's OSS plugins change it.
+An open for both directions plays alone.
+When the display driver lets the codec go, a write or read in progress
+returns what it moved,
+.Dv SNDCTL_DSP_SYNC
+fails, and every later call but the close fails with
+.Er ENODEV ,
+as on Linux.
 .Pa /proc/asound
 has the card and each monitor's ELD, as
 .Xr proc 5
@@ -269,10 +281,21 @@ On
 another descriptor plays.
 .It Bq Er ENODEV
 .Xr open 2 :
-the driver has no streams, or none for a direction asked for: the Sound
+the driver has no streams, or none for the direction an open for reading or
+writing asks for, or neither direction for an open for both: the Sound
 Blaster 16's driver and
 .Pa /dev/dsp1
 record nothing.
+Any call but
+.Xr close 2 :
+the device has gone, as when the display driver lets
+.Pa /dev/dsp1 Ns 's
+codec go;
+.Xr poll 2
+reports
+.Dv POLLERR
+and
+.Dv POLLNVAL .
 .It Bq Er EBADF
 A write to an open for reading alone, or a read from one for writing alone.
 .It Bq Er EINTR
