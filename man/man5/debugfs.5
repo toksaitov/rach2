@@ -931,6 +931,26 @@ underrun stopped; a false word does nothing, and anything else is
 Haswell's pipe CRCs come through the error interrupt that reports
 underruns, which stays masked while any pipe's reporting is off; IGT
 writes the file before it starts a CRC.
+.It Pa dri/DEVICE/i915_edp_psr_status
+Mode 0444.
+Haswell's source PSR control, state and performance counter, and the eDP
+sink's control, state and error registers read over AUX while powered.
+.It Pa dri/DEVICE/i915_panel_timings
+Mode 0444.
+The panel power sequencer's state, control and delays.
+.It Pa dri/DEVICE/i915_backlight_pwm
+Mode 0444.
+The CPU and PCH backlight PWM registers and the selected frequency and duty.
+.It Pa dri/DEVICE/i915_fbc_status
+Mode 0444.
+Haswell's frame buffer compression enable and compressed segment count.
+.It Pa dri/DEVICE/i915_fifo_underrun_status
+Mode 0444.
+The pending underrun bits and the count of cleared latches since bind,
+by pipe.
+.Pp
+Each of these read-only display files samples its registers at open.
+An unavailable register is reported as such.
 .It Pa dri/DEVICE/i915_wedged
 Mode 0644.
 Reads 1 while the GPU is wedged, else 0.

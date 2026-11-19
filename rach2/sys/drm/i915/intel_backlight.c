@@ -17,8 +17,7 @@
  * and the next setup takes when it finds no period, as after the function's
  * reset of a handoff, so that the levels and the frequency stay the
  * firmware's. The VBT gives only the frequency, which in the PCH's step of
- * the moment may be another range: 7500 levels on the Lenovo after the
- * GPU's return from vfio-pci, where the firmware's were 937. 0 for none. */
+ * the moment may give another range. 0 for none. */
 static int kept_max;
 static int kept_alt;
 
@@ -122,8 +121,8 @@ static const struct backlight_ops gone_ops = {gone_get, gone_set, NULL};
  * and 135 MHz on Lynx Point H. */
 static uint32_t lpt_hz_to_pwm(struct drm_i915_private *i915, uint32_t hz)
 {
-    uint32_t mul = i915->display.bl_alt ? 128u : 16u;
-    uint32_t clock = i915->id && i915->id->ult ? 24000000u : 135000000u;
+    uint32_t mul = LPT_PWM_STEP(i915->display.bl_alt ? LPT_PWM_GRANULARITY : 0);
+    uint32_t clock = LPT_PWM_CLOCK_HZ(i915->id && i915->id->ult);
 
     return (clock + hz * mul / 2u) / (hz * mul);
 }
