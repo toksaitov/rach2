@@ -62,7 +62,9 @@ static const char *const names[SOUND_MIXER_NRDEVICES] = {
  * waits for the lock; root, which holds MIXER_LOCK, tries it every
  * DEVICE_TRY_MS for DEVICE_TRIES tries, a second, and then goes on without
  * it, so that a user who holds it stalls a volume key for a second at
- * most. */
+ * most, and the mute key, whose action runs mixer twice, for two. A user's
+ * command stopped past that between its read and its write writes its
+ * level when it goes on, as that user may write any level at any time. */
 #define DEVICE_TRIES  100
 #define DEVICE_TRY_MS 10
 
