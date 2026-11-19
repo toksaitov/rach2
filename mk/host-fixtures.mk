@@ -41,7 +41,7 @@ $(HOST_FIXTURE_PREFIX)/krffs_open-sources/vfs_open.inc: rach2/sys/fs/vfs.c rach2
 
 $(HOST_FIXTURE_PREFIX)/krffs_open-sources/syscall_open.inc: rach2/sys/syscall_fs.c rach2/sys/syscall_internal.h rach2/sys/syscall_fs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c '#define O_|CRED_|S_IF|RECHECK_' -f rach2/sys/syscall_internal.h '#define CRED_' -f rach2/sys/syscall_fs.c name_is device_name open_device_name open_link_target node_make file_lock file_unlock open_truncate dir_recheck dir_lock open_create open_mounted_node path_starts ofd_record_path open_direct_refused open_install open_synth_node do_open
+	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c '#define O_|CRED_|S_IF|RECHECK_' -f rach2/sys/syscall_internal.h '#define CRED_' -f rach2/sys/syscall_fs.c name_is device_name open_device_name open_link_target node_make file_lock file_unlock open_truncate dir_recheck dir_lock open_create open_mounted_node path_starts ofd_record_path open_direct_refused open_install_kind open_install open_synth_node do_open
 
 $(HOST_FIXTURE_PREFIX)/krffs_open: tests/host/fixtures/krffs_open.c rach2/sys/fs/fd.c tests/host/compat/vfs_name_none.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c tests/host/fixtures/krffs_open_threads.c tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c tests/host/compat/bkl_none.c tests/host/compat/kirq_none.c tests/host/compat/rcu_none.c $(HOST_FIXTURE_PREFIX)/krffs_open-sources/vfs_open.inc $(HOST_FIXTURE_PREFIX)/krffs_open-sources/syscall_open.inc $(HOST_EXTRACT) rach2/sys/fs/vfs.c rach2/sys/fs/nodelock.c rach2/sys/block/loop.c rach2/sys/syscall_fs.c rach2/sys/syscall_internal.h $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_FIXTURE_PREFIX)/krffs_open-sources
@@ -87,7 +87,7 @@ $(HOST_FIXTURE_PREFIX)/krffs_stat-sources/krffs_stat_types.inc: rach2/sys/arch/i
 
 $(HOST_FIXTURE_PREFIX)/krffs_stat-sources/krffs_stat_funcs.inc: rach2/sys/syscall_fs.c rach2/sys/fs/vfs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c path_names_dir stat64_put stat64_node_times stat64_root_times krffs_fill_stat64 stat_times_from_stat64 stat_node_times stat_root_times do_stat64 old_stat_put do_old_stat -f rach2/sys/fs/vfs.c kfs_getattr
+	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c path_names_dir stat64_put stat64_node_times stat64_root_times krffs_fill_stat64 stat_times_from_stat64 stat_node_times stat_root_times do_stat64 old_stat_put old_stat_root_node do_old_stat -f rach2/sys/fs/vfs.c kfs_getattr
 
 $(HOST_FIXTURE_PREFIX)/krffs_stat: tests/host/fixtures/krffs_stat.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c $(HOST_FIXTURE_PREFIX)/krffs_stat-sources/krffs_stat_types.inc $(HOST_FIXTURE_PREFIX)/krffs_stat-sources/krffs_stat_funcs.inc $(HOST_EXTRACT) rach2/sys/arch/i686/uabi.h rach2/sys/fs/vfs.h rach2/sys/syscall_fs.c rach2/sys/fs/vfs.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_FIXTURE_PREFIX)/krffs_stat-sources
