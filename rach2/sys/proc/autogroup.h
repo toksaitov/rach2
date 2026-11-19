@@ -81,9 +81,9 @@ uint32_t autogroup_count(void);
  * The groups' queues and entities, fair_group.c.
  */
 
-/** Give the root group its per-processor arrays, the processors' root
- * queues and no entities, and set `fair_hooks.group_update`. Once, from
- * `fair_init`, before the first enqueue. */
+/** Set `fair_hooks.group_update`, which gives a group entity its weight
+ * from its group's share. Once at boot, after `fair_init`, which gives the
+ * root group the processors' root queues, and before the first enqueue. */
 void fair_group_init(void);
 
 /** A new group under the root group with nice 0's share, its queue and
