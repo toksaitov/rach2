@@ -732,13 +732,14 @@ int tcp_is_connected(struct socket *sock);
 void tcp_window_update(struct socket *sock);
 
 /**
- * Give `sock`'s connection or listener the card its SO_BINDTODEVICE now
- * names (`ifindex`), so that its later segments leave by that card and only
- * those that come by it are its own. A connection to an IPv6 peer of a link's
- * scope moves its addresses to the new card's scope, since the peer is
- * matched by address and binding, as on Linux. The caller holds net_lock.
+ * Bind the stream socket `sock`, and its connection or listener, to the
+ * card of index `ifindex`, 0 for none (SO_BINDTODEVICE), so that the
+ * connection's later segments leave by that card and only those that come
+ * by it are its own. Returns 0, or -EINVAL for a connection to an IPv6 peer
+ * of another card's link scope, whose addresses belong to that link, as
+ * connect refuses such a peer. The caller holds net_lock.
  */
-void tcp_bind_device(struct socket *sock);
+int tcp_bind_device(struct socket *sock, int ifindex);
 
 /** Set TCP_QUICKACK on the stream socket `sock`: 0 holds acknowledgements
  * for this side's answers to carry, any other value acknowledges as a read
