@@ -108,12 +108,13 @@ void console_printf(const char *format, ...)
 }
 
 static int64_t clock_seconds = 1000;
+static int64_t clock_nanoseconds;
 
 /** Report the time set by the row. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = clock_seconds;
-    *nanoseconds = 0;
+    *nanoseconds = clock_nanoseconds;
 }
 
 #ifndef KRFFS_OPEN_TEST
@@ -1692,6 +1693,71 @@ static void stamp_fetch_failure(int skip)
     teardown();
 }
 
+/**
+ * Place the seconds of `field` at 4088 and its nanoseconds at 4096.
+ * Fail a fetch with only the seconds changing, then change both halves
+ * in an overwrite or a same-length truncate and check the durable file.
+ */
+static void split_stamp(uint32_t field, int truncate)
+{
+    uint32_t at = BCACHE_BLOCK_BYTES - sizeof(int64_t) - field;
+    const char *expected = truncate ? "abcdef" : "abXdef";
+    struct open_file *file;
+    const krffs_node_t *head;
+    void *node;
+    int fd, rc;
+
+    setup();
+    fd = open_node(create("spacer"));
+    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, at - 2 * sizeof(*head)) == 0,
+          "place the next node at the timestamp boundary");
+    file = fd_slot(&table, open_node(create("edge")))->ofd;
+    check(kv_write(&mount, file->fhandle, "abcdef", 6, 0) == 6 &&
+              offset_of(&mount, file->vnode) == at,
+          "seed a file with seconds and nanoseconds on opposite blocks");
+    clock_seconds++;
+    refuse_block = 1;
+    refuse_skip = 1; /* fetch the header, then fail the split field's fetch */
+    rc = truncate ? kv_truncate(&mount, file->fhandle, 2)
+                  : kv_write(&mount, file->fhandle, "Y", 1, 2);
+    check(rc == -EIO && refuse_block == -1 && offset_of(&mount, file->vnode) == at,
+          "a failed fetch stops the operation on the original node");
+    head = (const krffs_node_t *)(medium + at);
+    check(kv_fsync(&mount, file->fhandle) == 0 && bcache_flush(&disk) == 0 &&
+              head->data_size == 6 && !__builtin_memcmp(head + 1, "abcdef", 6),
+          "the failed fetch leaves the original length and bytes on disk");
+
+    clock_nanoseconds = 1;
+    rc = truncate ? kv_truncate(&mount, file->fhandle, 6)
+                  : kv_write(&mount, file->fhandle, "X", 1, 2);
+    check(rc == (truncate ? 0 : 1) && kv_lookup(&mount, mount.root, "edge", &node) == 0 &&
+              file->vnode == node && offset_of(&mount, node) != at &&
+              follow_moves(file->fhandle) == offset_of(&mount, node),
+          "the open file and its name reach the relocated node");
+    head = (const krffs_node_t *)(medium + offset_of(&mount, file->vnode));
+    check(kv_fsync(&mount, file->fhandle) == 0 && bcache_flush(&disk) == 0 &&
+              head->type == KRFFS_RESERVED_NODE && head->data_size == 6 &&
+              !__builtin_memcmp(head + 1, expected, 6),
+          "the full file including its untouched tail reaches disk");
+    check(head->modification_time.seconds == clock_seconds &&
+              head->modification_time.nanoseconds == clock_nanoseconds &&
+              head->attribute_change_time.seconds == clock_seconds &&
+              head->attribute_change_time.nanoseconds == clock_nanoseconds,
+          "both timestamps reach disk with the new seconds and nanoseconds");
+    clock_nanoseconds = 0;
+    clock_seconds--;
+    teardown();
+}
+
+/** Exercise an overwrite and a same-length truncate at each split stamp. */
+static void split_stamp_rows(void)
+{
+    split_stamp(KRFFS_FIELD_MTIME, 0);
+    split_stamp(KRFFS_FIELD_MTIME, 1);
+    split_stamp(KRFFS_FIELD_CTIME, 0);
+    split_stamp(KRFFS_FIELD_CTIME, 1);
+}
+
 /** Fail the length store's second block after its comparison read. */
 static void refuse_length_end(void)
 {
@@ -1901,6 +1967,7 @@ static void volume_failure_rows(void)
 {
     stamp_fetch_failure(1);
     stamp_fetch_failure(2);
+    split_stamp_rows();
     split_length_failure();
     field_failure_rows();
     refused_repair_row();
@@ -1926,9 +1993,15 @@ static void volume_failure_rows(void)
  */
 int main(int argc, char **argv)
 {
+    if (argc == 2 && __builtin_strcmp(argv[1], "split-timestamps") == 0) {
+        split_stamp_rows();
+        printf("krffsmount-hosttest: split timestamp rows: %d failures\n", failures);
+        return failures != 0;
+    }
     if (argc == 2 && __builtin_strcmp(argv[1], "timestamps") == 0) {
         stamp_fetch_failure(1);
         stamp_fetch_failure(2);
+        split_stamp_rows();
         failed_relocation(0);
         failed_relocation(1);
         owned_fsync();

@@ -203,6 +203,31 @@ static int krffs_cut_before(const krffs_mount_t *mount, uint32_t at, int all)
 }
 
 /**
+ * Compare a field with its replacement under the mount lock. Return 1 if
+ * no grain edge, or sector edge with `all`, separates two changed bytes.
+ */
+static int krffs_change_fits(const krffs_mount_t *mount, uint32_t at, const void *before,
+                             const void *after, uint32_t size, int all)
+{
+    const uint8_t *old = before, *want = after;
+    uint32_t first = 0;
+    uint32_t i;
+
+    while (first < size && old[first] == want[first]) {
+        first++;
+    }
+    while (size > first && old[size - 1] == want[size - 1]) {
+        size--;
+    }
+    for (i = first + 1; i < size; i++) {
+        if (krffs_cut_before(mount, at + i, all)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
  * Whether the bytes this write changes all fall in one unit of the medium.
  *
  * A backend that puts whole blocks on the medium writes a field that spans
@@ -222,10 +247,7 @@ static int krffs_write_fits(krffs_mount_t *mount, uint64_t at, const void *value
                             int all)
 {
     uint8_t old[16];
-    const uint8_t *want = value;
     uint32_t base = (uint32_t)at;
-    uint32_t first;
-    uint32_t last;
     uint32_t i;
 
     if (size <= 1 || size > sizeof(old)) {
@@ -239,22 +261,7 @@ static int krffs_write_fits(krffs_mount_t *mount, uint64_t at, const void *value
     if (mount->backend->read(mount->ctx, at, old, size) != 0) {
         return 0;
     }
-    first = size;
-    last = 0;
-    for (i = 0; i < size; i++) {
-        if (old[i] != want[i]) {
-            if (first == size) {
-                first = i;
-            }
-            last = i;
-        }
-    }
-    for (i = first + 1; first < size && i <= last; i++) {
-        if (krffs_cut_before(mount, base + i, all)) {
-            return 0;
-        }
-    }
-    return 1;
+    return krffs_change_fits(mount, base, old, value, size, all);
 }
 
 /**
@@ -1164,6 +1171,17 @@ static krffs_node_time_t krffs_now(void)
     return now;
 }
 
+/** Store the selected timestamps from one clock reading. Stop on error. */
+static int krffs_stamp_fields(krffs_mount_t *mount, uint64_t offset, int what,
+                              const krffs_node_time_t *now)
+{
+    if (what == KRFFS_STAMP_DATA &&
+        krffs_put(mount, offset, KRFFS_FIELD_MTIME, now, (uint32_t)sizeof(*now)) != 0) {
+        return -1;
+    }
+    return krffs_put(mount, offset, KRFFS_FIELD_CTIME, now, (uint32_t)sizeof(*now));
+}
+
 int krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what)
 {
     krffs_node_time_t now;
@@ -1172,11 +1190,7 @@ int krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what)
         return 0;
     }
     now = krffs_now();
-    if (what == KRFFS_STAMP_DATA &&
-        krffs_put(mount, offset, KRFFS_FIELD_MTIME, &now, (uint32_t)sizeof(now)) != 0) {
-        return -1;
-    }
-    return krffs_put(mount, offset, KRFFS_FIELD_CTIME, &now, (uint32_t)sizeof(now));
+    return krffs_stamp_fields(mount, offset, what, &now);
 }
 
 /**
@@ -2069,17 +2083,26 @@ static int krffs_grow_in_place(krffs_mount_t *mount, uint64_t offset, uint64_t s
 
 /**
  * Prepare a write or truncate whose resulting file length is `length`.
+ * Decide whether either timestamp needs a copy from the header already
+ * read, before an in-place grow can consume the free extent for the copy.
  * Return 0 once there is room and both timestamps have been stored, 1 when
  * the caller must stamp and fill a copy, or -1 on an I/O error.
  */
 static int krffs_prepare_data(krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head,
                               uint64_t length)
 {
+    krffs_node_time_t now = krffs_now();
     uint32_t mid;
     int rc;
 
     if (length != head->data_size &&
         krffs_length_steps(mount, offset, head->data_size, length, &mid) != 0) {
+        return 1;
+    }
+    if (mount->grain && (!krffs_change_fits(mount, (uint32_t)offset + KRFFS_FIELD_MTIME,
+                                            &head->modification_time, &now, sizeof(now), 0) ||
+                         !krffs_change_fits(mount, (uint32_t)offset + KRFFS_FIELD_CTIME,
+                                            &head->attribute_change_time, &now, sizeof(now), 0))) {
         return 1;
     }
     if (length > head->size - sizeof(*head)) {
@@ -2088,7 +2111,7 @@ static int krffs_prepare_data(krffs_mount_t *mount, uint64_t offset, const krffs
             return rc;
         }
     }
-    return krffs_stamp_at(mount, offset, KRFFS_STAMP_DATA) == 0 ? 0 : -1;
+    return krffs_stamp_fields(mount, offset, KRFFS_STAMP_DATA, &now);
 }
 
 /**
@@ -2228,8 +2251,10 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
     }
 
     new_size = (uint64_t)at + size;
-    rc = krffs_prepare_data(mount, offset, &head,
-                            new_size > old_data_size ? new_size : old_data_size);
+    if (new_size < old_data_size) {
+        new_size = old_data_size;
+    }
+    rc = krffs_prepare_data(mount, offset, &head, new_size);
     if (rc < 0) {
         return KRFFS_EIO;
     }

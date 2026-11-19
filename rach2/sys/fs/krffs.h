@@ -435,13 +435,12 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
  * `*node`, `at` bytes in, growing the node when the data would pass its
  * room.
  *
- * Whether the node must move is decided before any byte is written: when
- * no free node after it gives the room, or when the new length crosses a
- * sector in no order that leaves a length between the old and the new at
- * every stop, the node is copied with the bytes written into the copy, which
- * is published with the new length before the old node is freed. `*node` is
- * where the node is afterwards, which the caller repoints the node's holders
- * to whatever the answer. Otherwise the bytes between the old end of the
+ * Decide whether to move before writing any data. The node moves if it
+ * cannot grow in place, its new length has no safe store order, or either
+ * timestamp would change bytes in two cache blocks. The copy includes the
+ * bytes before and after an overwrite and is published with its final
+ * length before the old node is freed. On return, the caller repoints
+ * holders to `*node` even on error. The bytes between the old end of the
  * data and `at` are zeroed, since they hold whatever the free space held,
  * and they and the bytes written reach the medium before `data_size` is
  * raised to count them, by `krffs_store_length`. Set the modification and
@@ -507,9 +506,9 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
  * medium before the length that counts them.
  *
  * Returns 0; KRFFS_EBAD for KRFFS_NO_NODE, the root, a directory or a node
- * that is not reserved; KRFFS_ENOSPACE when the file had to move, to grow
- * or for its length's sake, and no free node held it; or KRFFS_EIO when a
- * read, a write, a sync or a barrier failed.
+ * that is not reserved; KRFFS_ENOSPACE when the file had to move and no
+ * free node held the copy; or KRFFS_EIO when a read, write, sync or
+ * barrier failed.
  */
 int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
                            uint64_t *node_out);
